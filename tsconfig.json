@@ -1,0 +1,17 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/react-components/tsconfig.json"
+    },
+    {
+      "path": "./packages/react-components/tsconfig.app.json"
+    },
+    {
+      "path": "./packages/react-console/tsconfig.json"
+    },
+    {
+      "path": "./tsconfig.node.json"
+    }
+  ]
+}
