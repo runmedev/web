@@ -1,6 +1,6 @@
 {
     "name": "@runmedev/react-console",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "type": "module",
     "private": false,
     "main": "dist/react-console.cjs",
@@ -29,5 +29,8 @@
     },
     "scripts": {
         "clean": "rimraf dist"
+    },
+    "publishConfig": {
+        "access": "public"
     }
 }
