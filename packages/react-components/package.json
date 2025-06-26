@@ -1,6 +1,7 @@
 {
     "name": "@runmedev/react-components",
     "version": "0.1.1",
+    "license": "Apache-2.0",
     "type": "module",
     "private": false,
     "main": "dist/react-components.cjs",

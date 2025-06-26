@@ -2,6 +2,7 @@
   "name": "runme-web",
   "private": true,
   "version": "0.0.0",
+  "license": "Apache-2.0",
   "type": "module",
   "workspaces": [
     "packages/react-components",

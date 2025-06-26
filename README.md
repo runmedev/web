@@ -1,15 +1,15 @@
-# Runme Web Monorepo
+# Runme Web (monorepo)
 
-This project is now structured as an npm monorepo with two packages:
+This project is structured as an npm monorepo with two packages:
 
-- **@runme/console**: A React component library containing the Runme components (in `packages/console`).
-- **@runme/components**: The main application and supporting code (in `packages/components`).
+- **@runme/console** [@runmedev/react-console](https://www.npmjs.com/package/@runmedev/react-console): A React component library containing the Runme Console component.
+- **@runme/components** [@runmedev/react-components](https://www.npmjs.com/package/@runmedev/react-components): A React component library containing the Runme components plus a example app.
 
 ## Getting Started
 
 Install all dependencies (hoisted to the root):
 
-```sh
+```sh {"name":"setup"}
 npm install
 ```
 
@@ -17,30 +17,36 @@ npm install
 
 Build all packages:
 
-```sh
+```sh {"name":"build"}
 npm run build
 ```
 
 Build a specific package:
 
 ```sh
-npm run build -w packages/react
-npm run build -w packages/components
+npm run build:console
+npm run build:components
+```
+
+Clean up:
+
+```sh {"name":"clean"}
+npm run clean
 ```
 
 ## Development
 
-Start the development server for the components app:
+Start the development server for sample app using the components:
 
 ```sh
-npm run dev -w packages/components
+npm run dev
 ```
 
 ## Linting
 
 Lint all packages:
 
-```sh
+```sh {"terminalRows":"37"}
 npm run lint
 ```
 
