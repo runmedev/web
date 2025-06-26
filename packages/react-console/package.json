@@ -1,8 +1,8 @@
 {
     "name": "@runmedev/react-console",
-    "version": "0.0.0",
+    "version": "0.1.0",
     "type": "module",
-    "private": true,
+    "private": false,
     "main": "dist/react-console.cjs",
     "module": "dist/react-console.mjs",
     "types": "dist/index.d.ts",

@@ -1,8 +1,8 @@
 {
     "name": "@runmedev/react-components",
-    "version": "0.0.0",
+    "version": "0.1.0",
     "type": "module",
-    "private": true,
+    "private": false,
     "main": "dist/react-components.cjs",
     "module": "dist/react-components.mjs",
     "types": "dist/index.d.ts",
