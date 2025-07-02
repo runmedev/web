@@ -83,7 +83,8 @@ const CodeMessage = memo(
   }) => {
     const { runCodeBlock } = useBlock()
     const { settings } = useSettings()
-    const firstLine = block.contents.split(/&&|;|\n|\\n/)[0]
+    const firstLine =
+      block.contents?.split(/&&|;|\n|\\n/)[0]?.substring(0, 50) || ''
 
     const handleClick = () => {
       if (onClick) {
@@ -105,7 +106,7 @@ const CodeMessage = memo(
       <div className={`flex ${justification} items-center h-full`}>
         {isRecentCodeBlock && settings.webApp.invertedOrder && shortcut}
         <div
-          className="flex items-center m-1 p-2 bg-[#1e1e1e] rounded-md max-w-[80%] cursor-pointer"
+          className="flex items-center m-1 p-2 bg-[#1e1e1e] rounded-md max-w-[60%] cursor-pointer"
           onClick={handleClick}
         >
           <svg
@@ -136,7 +137,7 @@ const CodeMessage = memo(
             <polyline points="4 17 10 11 4 5"></polyline>
             <line x1="12" y1="19" x2="20" y2="19"></line>
           </svg>
-          <span className="text-sm text-[#d4d4d4] italic truncate max-w-2/3">
+          <span className="text-sm text-[#d4d4d4] italic truncate max-w-4/5">
             {firstLine}
           </span>
         </div>
