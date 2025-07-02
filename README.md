@@ -38,7 +38,7 @@ npm run clean
 
 Start the development server for sample app using the components:
 
-```sh
+```sh {"name":"dev"}
 npm run dev
 ```
 

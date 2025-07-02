@@ -10,11 +10,6 @@ You can find the full documentation for changesets [here](https://github.com/cha
 npm install
 ```
 
-```sh
-npm run clean
-npm run build
-```
-
 ## Publish
 
 We currently publish the packages manually following these steps. Be sure to complete the previous steps before running this command.
@@ -25,6 +20,11 @@ npx changeset
 
 ```sh
 npm run version-packages
+```
+
+```sh
+npm run clean
+npm run build
 ```
 
 ```sh {"terminalRows":"33"}
