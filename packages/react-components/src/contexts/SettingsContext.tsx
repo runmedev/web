@@ -8,17 +8,17 @@ import {
   useState,
 } from 'react'
 
+import { WebAppConfig } from '@buf/stateful_runme.bufbuild_es/agent/config/webapp_pb'
+import {
+  Heartbeat,
+  StreamError,
+  Streams,
+  genRunID,
+} from '@runmedev/react-console'
+import '@runmedev/react-console/react-console.css'
 import { Subscription } from 'rxjs'
 import { ulid } from 'ulid'
 
-import {
-  Heartbeat,
-  Streams,
-  StreamError,
-  genRunID,
-} from '@runmedev/react-console'
-import { WebAppConfig } from '@buf/stateful_runme.bufbuild_es/agent/config/webapp_pb'
-import '@runmedev/react-console/react-console.css'
 import { getSessionToken } from '../token'
 
 interface Settings {
@@ -64,7 +64,8 @@ export const SettingsProvider = ({
   const defaultSettings: Settings = useMemo(() => {
     const isLocalhost = window.location.hostname === 'localhost'
     const isHttp = window.location.protocol === 'http:'
-    const isVite = window.location.port === '4173' || window.location.port === '5173'
+    const isVite =
+      window.location.port === '4173' || window.location.port === '5173'
     const isDev = isLocalhost && isHttp && isVite
 
     let runnerEndpoint = new URL(window.location.href)

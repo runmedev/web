@@ -1,0 +1,7 @@
+**/dist/**
+**/*.go
+gen/**
+**/*.js
+**/*.d.ts
+**/runme-vscode.css
+**/renderers/**

@@ -14,5 +14,8 @@ declare global {
 const initialState = window.__INITIAL_STATE__ || {}
 
 createRoot(document.getElementById('root')!).render(
-  <App branding={{ name: "Runme Assistant", logo }} initialState={initialState} />
+  <App
+    branding={{ name: 'Runme Assistant', logo }}
+    initialState={initialState}
+  />
 )

@@ -1,7 +1,9 @@
+import {
+  OAuthToken,
+  OAuthTokenSchema,
+} from '@buf/stateful_runme.bufbuild_es/agent/credentials_pb'
 import { fromJson } from '@bufbuild/protobuf'
 import { create } from '@bufbuild/protobuf'
-
-import { OAuthToken, OAuthTokenSchema } from '@buf/stateful_runme.bufbuild_es/agent/credentials_pb'
 
 export const SESSION_COOKIE_NAMES = ['agent-session', 'cassie-session']
 export const OAUTH_COOKIE_NAMES = ['agent-oauth-token', 'cassie-oauth-token']

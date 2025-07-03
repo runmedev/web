@@ -1,10 +1,12 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { Box, Button, Card, ScrollArea, Text } from '@radix-ui/themes'
+import { Console, genRunID } from '@runmedev/react-console'
+import '@runmedev/react-console/react-console.css'
 
 import { Block, BlockOutputKind, useBlock } from '../../contexts/BlockContext'
 import { useSettings } from '../../contexts/SettingsContext'
-import { Console, genRunID } from '@runmedev/react-console'
+import { getSessionToken } from '../../token'
 import Editor from './Editor'
 import {
   ErrorIcon,
@@ -13,9 +15,6 @@ import {
   SpinnerIcon,
   SuccessIcon,
 } from './icons'
-
-import '@runmedev/react-console/react-console.css'
-import { getSessionToken } from '../../token'
 
 const fontSize = 14
 const fontFamily = 'monospace'

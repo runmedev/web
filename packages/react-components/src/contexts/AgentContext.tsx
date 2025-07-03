@@ -7,10 +7,10 @@ import {
 } from 'react'
 import { type FC } from 'react'
 
+import * as blocks_pb from '@buf/stateful_runme.bufbuild_es/agent/blocks_pb'
 import { Code, ConnectError, createClient } from '@connectrpc/connect'
 import { createGrpcWebTransport } from '@connectrpc/connect-web'
 
-import * as blocks_pb from '@buf/stateful_runme.bufbuild_es/agent/blocks_pb'
 import { getSessionToken } from '../token'
 import { useSettings } from './SettingsContext'
 

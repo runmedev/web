@@ -11,13 +11,12 @@ import { create } from '@bufbuild/protobuf'
 import { RendererContext } from 'vscode-notebook-renderer'
 import { VSCodeEvent } from 'vscode-notebook-renderer/events'
 
-import Streams, { Authorization } from '../streams'
 // anything below is required for the webcomponents to work
 import '../renderers/client'
 // @ts-expect-error because the webcomponents are not typed
 import { ClientMessages, setContext } from '../renderers/client'
-
 import '../renderers/runme-vscode.css'
+import Streams, { Authorization } from '../streams'
 
 interface ConsoleSettings {
   rows?: number

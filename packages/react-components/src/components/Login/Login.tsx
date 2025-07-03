@@ -1,9 +1,9 @@
 import { useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
+import { Code } from '@buf/googleapis_googleapis.bufbuild_es/google/rpc/code_pb'
 import { Button, Callout } from '@radix-ui/themes'
 
-import { Code } from '@buf/googleapis_googleapis.bufbuild_es/google/rpc/code_pb'
 import { useSettings } from '../../contexts'
 
 export default function Login() {

@@ -1,8 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { Code } from '@buf/googleapis_googleapis.bufbuild_es/google/rpc/code_pb'
 import {
   ExecuteRequest,
   ExecuteResponse,
 } from '@buf/stateful_runme.bufbuild_es/runme/runner/v2/runner_pb'
+import * as pb from '@buf/stateful_runme.bufbuild_es/runme/stream/v1/websockets_pb'
 import { fromJson, toJson } from '@bufbuild/protobuf'
 import { create } from '@bufbuild/protobuf'
 import {
@@ -37,8 +39,6 @@ import { ulid } from 'ulid'
 import { v4 as uuidv4 } from 'uuid'
 import { VSCodeEvent } from 'vscode-notebook-renderer/events'
 
-import { Code } from '@buf/googleapis_googleapis.bufbuild_es/google/rpc/code_pb'
-import * as pb from '@buf/stateful_runme.bufbuild_es/runme/stream/v1/websockets_pb'
 // @ts-expect-error because the webcomponents are not typed
 import { ClientMessages } from './renderers/client'
 
@@ -649,4 +649,3 @@ export function genRunID() {
 }
 
 export default Streams
-

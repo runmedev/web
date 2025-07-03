@@ -4,10 +4,7 @@ import { defineConfig } from 'vite'
 
 // https://vite.dev/config/ - App build configuration
 export default defineConfig({
-  plugins: [
-    react(),
-    tailwindcss(),
-  ],
+  plugins: [react(), tailwindcss()],
   build: {
     outDir: 'dist/app',
     emptyOutDir: false,

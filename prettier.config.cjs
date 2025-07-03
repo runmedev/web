@@ -7,11 +7,7 @@ module.exports = {
   semi: false,
   singleQuote: true,
   arrowParens: 'always',
-  importOrder: [
-    "^react",
-    "^@?\\w",
-    "^[./]"
-  ],
+  importOrder: ['^react', '^@?\\w', '^[./]'],
   importOrderSeparation: true,
   importOrderSortSpecifiers: true,
   overrides: [

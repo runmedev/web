@@ -7,9 +7,6 @@ import {
   useState,
 } from 'react'
 
-import { clone, create } from '@bufbuild/protobuf'
-import { v4 as uuidv4 } from 'uuid'
-
 import {
   Block,
   BlockKind,
@@ -21,6 +18,9 @@ import {
   GenerateRequest,
   GenerateRequestSchema,
 } from '@buf/stateful_runme.bufbuild_es/agent/blocks_pb'
+import { clone, create } from '@bufbuild/protobuf'
+import { v4 as uuidv4 } from 'uuid'
+
 import { getAccessToken } from '../token'
 import { useClient as useAgentClient } from './AgentContext'
 import { useSettings } from './SettingsContext'

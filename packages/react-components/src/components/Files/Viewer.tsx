@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef } from 'react'
 
+import { BlockSchema } from '@buf/stateful_runme.bufbuild_es/agent/blocks_pb'
+import { FileSearchResult } from '@buf/stateful_runme.bufbuild_es/agent/filesearch_pb'
 import { create } from '@bufbuild/protobuf'
 import { Box, Link, ScrollArea, Text } from '@radix-ui/themes'
 
 import { Block, useBlock } from '../../contexts/BlockContext'
-import { BlockSchema } from '@buf/stateful_runme.bufbuild_es/agent/blocks_pb'
-import { FileSearchResult } from '@buf/stateful_runme.bufbuild_es/agent/filesearch_pb'
 
 const FileViewer = () => {
   // The code below is using "destructuring" assignment to assign certain values from the
