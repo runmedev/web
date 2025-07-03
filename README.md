@@ -59,7 +59,7 @@ npm run lint -w packages/components
 
 ## Structure
 
-- `packages/react`: React component library (Runme)
-- `packages/components`: Main application and supporting code
+- `packages/react-components`: React component library (Runme)
+- `packages/react-console`: Runme Console is a terminal attached to a Runme execution.
 
 All dependencies are hoisted to the root for efficient management.
