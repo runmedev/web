@@ -51,9 +51,19 @@ export default function Settings() {
   }
 
   const runnerErrorMessage = useMemo(() => {
-    if (!(runnerError instanceof Error)) {
+    if (!runnerError) {
       return undefined
     }
+
+    // Check if runnerError is an error-like object with a message property
+    if (
+      !runnerError ||
+      typeof runnerError !== 'object' ||
+      !('message' in runnerError)
+    ) {
+      return undefined
+    }
+
     return runnerError.message
   }, [runnerError])
 

@@ -1,7 +1,6 @@
-import { useEffect } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
-import './index.css'
 
+import { WebAppConfig } from '@buf/stateful_runme.bufbuild_es/agent/config/webapp_pb'
 import { Theme } from '@radix-ui/themes'
 import '@radix-ui/themes/styles.css'
 
@@ -13,9 +12,8 @@ import NotFound from './components/NotFound'
 import Settings from './components/Settings/Settings'
 import { AgentClientProvider } from './contexts/AgentContext'
 import { BlockProvider } from './contexts/BlockContext'
-import { SettingsProvider, useSettings } from './contexts/SettingsContext'
-import { WebAppConfig } from '@buf/stateful_runme.bufbuild_es/agent/config/webapp_pb'
-import { Code } from '@buf/googleapis_googleapis.bufbuild_es/google/rpc/code_pb'
+import { SettingsProvider } from './contexts/SettingsContext'
+import './index.css'
 import Layout from './layout'
 
 export interface AppBranding {
@@ -32,37 +30,6 @@ export interface AppProps {
 }
 
 function AppRouter({ branding }: { branding: AppBranding }) {
-  const { settings, runnerError } = useSettings()
-
-  useEffect(() => {
-    if (!runnerError) {
-      return
-    }
-
-    const settingsPath = '/settings'
-    const currentPath = window.location.pathname
-    if (
-      currentPath === settingsPath ||
-      currentPath === '/login' ||
-      currentPath === '/oidc/login'
-    ) {
-      return
-    }
-
-    const loginUrl = settings.requireAuth ? '/oidc/login' : '/login'
-
-    if (!(runnerError instanceof Error) && !(runnerError instanceof Event)) {
-      const isAuthError =
-        runnerError.code === Code.UNAUTHENTICATED ||
-        runnerError.code === Code.PERMISSION_DENIED
-      const redirectUrl = isAuthError ? loginUrl : settingsPath
-      window.location.href = redirectUrl
-      return
-    }
-
-    window.location.href = settingsPath
-  }, [runnerError, settings.requireAuth])
-
   return (
     <BrowserRouter>
       <Routes>
@@ -103,7 +70,10 @@ function AppRouter({ branding }: { branding: AppBranding }) {
           path="/login"
           element={<Layout branding={branding} left={<Login />} />}
         />
-        <Route path="*" element={<Layout branding={branding} left={<NotFound />} />} />
+        <Route
+          path="*"
+          element={<Layout branding={branding} left={<NotFound />} />}
+        />
       </Routes>
     </BrowserRouter>
   )

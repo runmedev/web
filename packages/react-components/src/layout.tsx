@@ -1,9 +1,12 @@
-import { Link } from 'react-router-dom'
+import { useEffect } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 
+import { Code } from '@buf/googleapis_googleapis.bufbuild_es/google/rpc/code_pb'
 import { Box, Flex, Text } from '@radix-ui/themes'
 
 import { AppBranding } from './App'
 import TopNavigation from './components/TopNavigation'
+import { useSettings } from './contexts/SettingsContext'
 
 function Layout({
   branding,
@@ -16,6 +19,41 @@ function Layout({
   middle?: React.ReactNode
   right?: React.ReactNode
 }) {
+  const navigate = useNavigate()
+  const { settings, runnerError } = useSettings()
+
+  useEffect(() => {
+    if (!runnerError) {
+      return
+    }
+
+    const settingsPath = '/settings'
+    const currentPath = window.location.pathname
+    if (
+      currentPath === settingsPath ||
+      currentPath === '/login' ||
+      currentPath === '/oidc/login'
+    ) {
+      return
+    }
+
+    const loginUrl = settings.requireAuth ? '/oidc/login' : '/login'
+
+    if (!(runnerError instanceof Error) && !(runnerError instanceof Event)) {
+      const isAuthError =
+        runnerError.code === Code.UNAUTHENTICATED ||
+        runnerError.code === Code.PERMISSION_DENIED
+      if (isAuthError) {
+        window.location.href = loginUrl
+      } else {
+        navigate(settingsPath)
+      }
+      return
+    }
+
+    navigate(settingsPath)
+  }, [runnerError, settings.requireAuth, navigate])
+
   return (
     <Box className="w-screen h-[95vh] max-w-[95%] mx-auto flex flex-col">
       {/* Navbar, links are just a facade for now */}
