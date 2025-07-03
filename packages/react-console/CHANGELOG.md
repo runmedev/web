@@ -1,5 +1,11 @@
 # @runmedev/react-console
 
+## 3.14.1
+
+### Patch Changes
+
+- Move routing and error handling from app to layout
+
 ## 3.14.0
 
 ### Minor Changes
