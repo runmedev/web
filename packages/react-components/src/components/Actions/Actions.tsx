@@ -305,10 +305,14 @@ function Actions() {
   const { useColumns, addCodeBlock } = useBlock()
   const { settings } = useSettings()
   const { actions } = useColumns()
+  const actionsStartRef = useRef<HTMLDivElement>(null)
   const actionsEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (settings.webApp.invertedOrder) return
+    if (settings.webApp.invertedOrder) {
+      actionsStartRef.current?.scrollIntoView({ behavior: 'smooth' })
+      return
+    }
     actionsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [actions, settings.webApp.invertedOrder])
 
@@ -328,6 +332,7 @@ function Actions() {
         </Button>
       </div>
       <ScrollArea type="auto" scrollbars="vertical" className="flex-1 p-2">
+        <div ref={actionsStartRef} />
         {actions.map((action) => (
           <Action key={action.id} block={action} />
         ))}
