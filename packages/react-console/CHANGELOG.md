@@ -1,5 +1,11 @@
 # @runmedev/react-console
 
+## 3.14.2
+
+### Patch Changes
+
+- Pick up on upstream API changes
+
 ## 3.14.1
 
 ### Patch Changes
