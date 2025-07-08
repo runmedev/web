@@ -1,6 +1,6 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 
-import { WebAppConfig } from '@buf/stateful_runme.bufbuild_es/agent/config/webapp_pb'
+import { WebAppConfig } from '@buf/stateful_runme.bufbuild_es/agent/v1/webapp_pb'
 import { Theme } from '@radix-ui/themes'
 import '@radix-ui/themes/styles.css'
 
