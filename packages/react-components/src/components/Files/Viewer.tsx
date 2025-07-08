@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 
-import { BlockSchema } from '@buf/stateful_runme.bufbuild_es/agent/blocks_pb'
-import { FileSearchResult } from '@buf/stateful_runme.bufbuild_es/agent/filesearch_pb'
+import { BlockSchema } from '@buf/stateful_runme.bufbuild_es/agent/v1/blocks_pb'
+import { FileSearchResult } from '@buf/stateful_runme.bufbuild_es/agent/v1/filesearch_pb'
 import { create } from '@bufbuild/protobuf'
 import { Box, Link, ScrollArea, Text } from '@radix-ui/themes'
 
@@ -52,7 +52,7 @@ const FileViewer = () => {
         ) : (
           <div className="grow">
             {oneBlock.fileSearchResults.map((b: FileSearchResult) => (
-              <div key={b.FileID} className="mb-2">
+              <div key={b.fileId} className="mb-2">
                 <Box
                   p="2"
                   style={{
@@ -62,11 +62,11 @@ const FileViewer = () => {
                 >
                   <Text size="2" weight="medium">
                     <Link
-                      href={b.Link}
+                      href={b.link}
                       target="_blank"
                       className="text-blue-500 hover:underline"
                     >
-                      {b.FileName}
+                      {b.fileName}
                     </Link>
                   </Text>
                 </Box>

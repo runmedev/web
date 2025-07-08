@@ -1,7 +1,7 @@
 import {
   OAuthToken,
   OAuthTokenSchema,
-} from '@buf/stateful_runme.bufbuild_es/agent/credentials_pb'
+} from '@buf/stateful_runme.bufbuild_es/agent/v1/credentials_pb'
 import { fromJson } from '@bufbuild/protobuf'
 import { create } from '@bufbuild/protobuf'
 

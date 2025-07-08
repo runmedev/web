@@ -17,7 +17,7 @@ import {
   BlockSchema,
   GenerateRequest,
   GenerateRequestSchema,
-} from '@buf/stateful_runme.bufbuild_es/agent/blocks_pb'
+} from '@buf/stateful_runme.bufbuild_es/agent/v1/blocks_pb'
 import { clone, create } from '@bufbuild/protobuf'
 import { v4 as uuidv4 } from 'uuid'
 

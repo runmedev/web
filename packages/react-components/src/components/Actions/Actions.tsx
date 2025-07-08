@@ -173,22 +173,22 @@ function Action({ block }: { block: Block }) {
       ...block,
       outputs: [
         {
-          $typeName: 'BlockOutput',
+          $typeName: 'agent.v1.BlockOutput',
           kind: BlockOutputKind.STDOUT,
           items: [
             {
-              $typeName: 'BlockOutputItem',
+              $typeName: 'agent.v1.BlockOutputItem',
               mime: mimeType || 'text/plain',
               textData: stdout,
             },
           ],
         },
         {
-          $typeName: 'BlockOutput',
+          $typeName: 'agent.v1.BlockOutput',
           kind: BlockOutputKind.STDERR,
           items: [
             {
-              $typeName: 'BlockOutputItem',
+              $typeName: 'agent.v1.BlockOutputItem',
               mime: mimeType || 'text/plain',
               textData: stderr,
             },
