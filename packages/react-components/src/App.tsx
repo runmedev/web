@@ -11,7 +11,7 @@ import Login from './components/Login/Login'
 import NotFound from './components/NotFound'
 import Settings from './components/Settings/Settings'
 import { AgentClientProvider } from './contexts/AgentContext'
-import { BlockProvider } from './contexts/BlockContext'
+import { CellProvider } from './contexts/CellContext'
 import { SettingsProvider } from './contexts/SettingsContext'
 import './index.css'
 import Layout from './layout'
@@ -91,9 +91,9 @@ function App({ branding, initialState = {} }: AppProps) {
           webApp={initialState?.webApp}
         >
           <AgentClientProvider>
-            <BlockProvider>
+            <CellProvider>
               <AppRouter branding={branding} />
-            </BlockProvider>
+            </CellProvider>
           </AgentClientProvider>
         </SettingsProvider>
       </Theme>

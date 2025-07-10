@@ -7,7 +7,7 @@ import {
 } from 'react'
 import { type FC } from 'react'
 
-import * as blocks_pb from '@buf/stateful_runme.bufbuild_es/agent/v1/blocks_pb'
+import * as service_pb from '@buf/stateful_runme.bufbuild_es/agent/v1/service_pb'
 import { Code, ConnectError, createClient } from '@connectrpc/connect'
 import { createGrpcWebTransport } from '@connectrpc/connect-web'
 
@@ -15,7 +15,7 @@ import { getSessionToken } from '../token'
 import { useSettings } from './SettingsContext'
 
 export type AgentClient = ReturnType<
-  typeof createClient<typeof blocks_pb.BlocksService>
+  typeof createClient<typeof service_pb.MessagesService>
 >
 
 type ClientContextType = {
@@ -80,5 +80,5 @@ function createAgentClient(baseURL: string): AgentClient {
   })
   // Here we make the client itself, combining the service
   // definition with the transport.
-  return createClient(blocks_pb.BlocksService, transport)
+  return createClient(service_pb.MessagesService, transport)
 }

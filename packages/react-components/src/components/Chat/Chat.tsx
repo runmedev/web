@@ -11,28 +11,28 @@ import {
 } from '@radix-ui/themes'
 
 import {
-  Block,
-  BlockKind,
-  BlockRole,
-  TypingBlock,
-  useBlock,
-} from '../../contexts/BlockContext'
+  Cell,
+  CellKind,
+  CellRole,
+  TypingCell,
+  useCell,
+} from '../../contexts/CellContext'
 import { useSettings } from '../../contexts/SettingsContext'
 import { SubmitQuestionIcon } from '../Actions/icons'
 
 type MessageProps = {
-  block: Block
+  cell: Cell
 }
 
 const MessageContainer = ({
   role,
   children,
 }: {
-  role: BlockRole
+  role: CellRole
   children: React.ReactNode
 }) => {
-  const self = role === BlockRole.USER ? 'self-end' : 'self-start'
-  const color = role === BlockRole.USER ? 'indigo' : 'gray'
+  const self = role === CellRole.USER ? 'self-end' : 'self-start'
+  const color = role === CellRole.USER ? 'indigo' : 'gray'
 
   return (
     <Callout.Root
@@ -45,15 +45,13 @@ const MessageContainer = ({
   )
 }
 
-const UserMessage = ({ block }: { block: Block }) => {
-  return (
-    <MessageContainer role={BlockRole.USER}>{block.contents}</MessageContainer>
-  )
+const UserMessage = ({ cell }: { cell: Cell }) => {
+  return <MessageContainer role={CellRole.USER}>{cell.value}</MessageContainer>
 }
 
-const AssistantMessage = ({ block }: { block: Block }) => {
+const AssistantMessage = ({ cell }: { cell: Cell }) => {
   return (
-    <MessageContainer role={BlockRole.ASSISTANT}>
+    <MessageContainer role={CellRole.ASSISTANT}>
       <Markdown
         components={{
           code: ({ children, ...props }) => {
@@ -65,7 +63,7 @@ const AssistantMessage = ({ block }: { block: Block }) => {
           },
         }}
       >
-        {block.contents}
+        {cell.value}
       </Markdown>
     </MessageContainer>
   )
@@ -73,24 +71,24 @@ const AssistantMessage = ({ block }: { block: Block }) => {
 
 const CodeMessage = memo(
   ({
-    block,
-    isRecentCodeBlock,
+    cell,
+    isRecentCodeCell,
     onClick,
   }: {
-    block: Block
-    isRecentCodeBlock?: boolean
+    cell: Cell
+    isRecentCodeCell?: boolean
     onClick?: () => void
   }) => {
-    const { runCodeBlock } = useBlock()
+    const { runCodeCell } = useCell()
     const { settings } = useSettings()
     const firstLine =
-      block.contents?.split(/&&|;|\n|\\n/)[0]?.substring(0, 50) || ''
+      cell.value?.split(/&&|;|\n|\\n/)[0]?.substring(0, 50) || ''
 
     const handleClick = () => {
       if (onClick) {
         onClick()
       } else {
-        runCodeBlock(block)
+        runCodeCell(cell)
       }
     }
 
@@ -104,7 +102,7 @@ const CodeMessage = memo(
 
     return (
       <div className={`flex ${justification} items-center h-full`}>
-        {isRecentCodeBlock && settings.webApp.invertedOrder && shortcut}
+        {isRecentCodeCell && settings.webApp.invertedOrder && shortcut}
         <div
           className="flex items-center m-1 p-2 bg-[#1e1e1e] rounded-md max-w-[60%] cursor-pointer"
           onClick={handleClick}
@@ -141,46 +139,46 @@ const CodeMessage = memo(
             {firstLine}
           </span>
         </div>
-        {isRecentCodeBlock && !settings.webApp.invertedOrder && shortcut}
+        {isRecentCodeCell && !settings.webApp.invertedOrder && shortcut}
       </div>
     )
   },
   (prevProps, nextProps) => {
     return (
-      prevProps.block.id === nextProps.block.id &&
-      JSON.stringify(prevProps.block.contents) ===
-        JSON.stringify(nextProps.block.contents) &&
-      prevProps.isRecentCodeBlock === nextProps.isRecentCodeBlock
+      prevProps.cell.refId === nextProps.cell.refId &&
+      JSON.stringify(prevProps.cell.value) ===
+        JSON.stringify(nextProps.cell.value) &&
+      prevProps.isRecentCodeCell === nextProps.isRecentCodeCell
     )
   }
 )
 
 const Message = ({
-  block,
-  isRecentCodeBlock,
-}: MessageProps & { isRecentCodeBlock?: boolean }) => {
-  if (block.kind === BlockKind.CODE) {
+  cell,
+  isRecentCodeCell,
+}: MessageProps & { isRecentCodeCell?: boolean }) => {
+  if (cell.kind === CellKind.CODE) {
     return (
       <CodeMessage
-        key={block.id}
-        block={block}
-        isRecentCodeBlock={isRecentCodeBlock}
+        key={cell.refId}
+        cell={cell}
+        isRecentCodeCell={isRecentCodeCell}
       />
     )
   }
 
-  switch (block.role) {
-    case BlockRole.USER:
-      return <UserMessage block={block} />
-    case BlockRole.ASSISTANT:
-      return <AssistantMessage block={block} />
+  switch (cell.role) {
+    case CellRole.USER:
+      return <UserMessage cell={cell} />
+    case CellRole.ASSISTANT:
+      return <AssistantMessage cell={cell} />
     default:
       return null
   }
 }
 
 const ChatMessages = () => {
-  const { useColumns, isTyping } = useBlock()
+  const { useColumns, isTyping } = useCell()
   const { settings } = useSettings()
   const { chat } = useColumns()
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -196,32 +194,32 @@ const ChatMessages = () => {
 
   const typingJustification = 'justify-start'
 
-  const typingBlock = (
+  const typingCell = (
     <div className={`flex ${typingJustification} items-center h-full`}>
-      <Message block={TypingBlock} />
+      <Message cell={TypingCell} />
     </div>
   )
 
   return (
     <div className="overflow-y-clip p-1 flex flex-col whitespace-pre-wrap">
-      {isTyping && settings.webApp.invertedOrder && typingBlock}
-      {chat.map((msg: Block, index: number) => (
+      {isTyping && settings.webApp.invertedOrder && typingCell}
+      {chat.map((msg: Cell, index: number) => (
         <Message
           key={index}
-          block={msg}
-          isRecentCodeBlock={
-            msg.kind === BlockKind.CODE && index === recentIndex && !isTyping
+          cell={msg}
+          isRecentCodeCell={
+            msg.kind === CellKind.CODE && index === recentIndex && !isTyping
           }
         />
       ))}
-      {isTyping && !settings.webApp.invertedOrder && typingBlock}
+      {isTyping && !settings.webApp.invertedOrder && typingCell}
       <div ref={messagesEndRef} />
     </div>
   )
 }
 
 const ChatInput = () => {
-  const { sendUserBlock, isInputDisabled } = useBlock()
+  const { sendUserCell, isInputDisabled } = useCell()
   const [userInput, setUserInput] = useState('')
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -232,7 +230,7 @@ const ChatInput = () => {
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!userInput.trim()) return
-    sendUserBlock(userInput)
+    sendUserCell(userInput)
     setUserInput('')
   }
 
@@ -270,7 +268,7 @@ const ChatInput = () => {
 }
 
 function Chat() {
-  const { useColumns, runCodeBlock } = useBlock()
+  const { useColumns, runCodeCell } = useCell()
   const { settings } = useSettings()
   const { chat } = useColumns()
   const outerDivRef = useRef<HTMLDivElement>(null)
@@ -278,11 +276,11 @@ function Chat() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey && event.key === 'Enter') {
-        const blockToRun = settings.webApp.invertedOrder
+        const cellToRun = settings.webApp.invertedOrder
           ? chat[0]
           : chat[chat.length - 1]
-        if (blockToRun?.kind === BlockKind.CODE) {
-          runCodeBlock(blockToRun)
+        if (cellToRun?.kind === CellKind.CODE) {
+          runCodeCell(cellToRun)
         }
       }
     }
@@ -292,7 +290,7 @@ function Chat() {
       outerDiv.addEventListener('keydown', handleKeyDown)
       return () => outerDiv.removeEventListener('keydown', handleKeyDown)
     }
-  }, [chat, runCodeBlock, settings.webApp.invertedOrder])
+  }, [chat, runCodeCell, settings.webApp.invertedOrder])
 
   const layout = settings.webApp.invertedOrder ? 'flex-col' : 'flex-col-reverse'
 

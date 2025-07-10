@@ -34,7 +34,7 @@ interface ConsoleRunner {
 }
 
 function Console({
-  blockID,
+  cellID,
   runID,
   sequence,
   commands,
@@ -46,7 +46,7 @@ function Console({
   onPid,
   onMimeType,
 }: {
-  blockID: string
+  cellID: string
   runID: string
   sequence: number
   commands: string[]
@@ -68,13 +68,13 @@ function Console({
   } = settingsProp
 
   const streams = useMemo(() => {
-    if (!blockID || !runID || !runner.endpoint) {
+    if (!cellID || !runID || !runner.endpoint) {
       return undefined
     }
 
-    console.log('Creating stream', blockID, runID, runner.endpoint)
+    console.log('Creating stream', cellID, runID, runner.endpoint)
     return new Streams({
-      knownID: blockID,
+      knownID: cellID,
       runID,
       sequence,
       options: {
@@ -83,7 +83,7 @@ function Console({
         autoReconnect: runner.reconnect,
       },
     })
-  }, [blockID, runID, sequence, runner])
+  }, [cellID, runID, sequence, runner])
 
   useEffect(() => {
     const sub = streams
@@ -114,7 +114,7 @@ function Console({
         languageId: 'sh',
         background: false,
         fileExtension: '',
-        env: [`RUNME_ID=${blockID}`, 'RUNME_RUNNER=v2', 'TERM=xterm-256color'],
+        env: [`RUNME_ID=${cellID}`, 'RUNME_RUNNER=v2', 'TERM=xterm-256color'],
         source: {
           case: 'commands',
           value: {
@@ -124,12 +124,12 @@ function Console({
         interactive: true,
         mode: CommandMode.INLINE,
         runId: runID,
-        knownId: blockID,
-        // knownName: "the-block-name",
+        knownId: cellID,
+        // knownName: "the-cell-name",
       },
       winsize,
     })
-  }, [blockID, commands, winsize])
+  }, [cellID, runID, commands, winsize])
 
   const webComponentDefaults = useMemo(
     () => ({
