@@ -1,5 +1,11 @@
 # @runmedev/react-components
 
+## 3.14.4
+
+### Patch Changes
+
+- Update buf deps
+
 ## 3.14.3
 
 ### Patch Changes

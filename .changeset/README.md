@@ -14,7 +14,7 @@ runme run setup
 
 We currently publish the packages manually following these steps. Be sure to complete the previous steps before running this command.
 
-```sh {"terminalRows":"22"}
+```sh {"terminalRows":"24"}
 npx changeset
 ```
 
@@ -22,11 +22,11 @@ npx changeset
 npm run version-packages
 ```
 
-```sh
+```sh {"terminalRows":"24"}
 npm run clean
 npm run build
 ```
 
-```sh {"terminalRows":"33"}
+```sh {"terminalRows":"24"}
 npm run publish-packages
 ```
