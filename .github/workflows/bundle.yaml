@@ -28,9 +28,7 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install dependencies
         run: npm ci
-      - name: Build
-        run: npm run build
       - name: 📦 Bundle
         uses: stateful/runme-action@v2
         with:
-          workflows: runme run setup build
+          workflows: runme run configure setup build
