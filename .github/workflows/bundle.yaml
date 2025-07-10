@@ -24,10 +24,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: 📦 Bundle
+      - name: Install dependencies
         uses: stateful/runme-action@v2
         with:
           workflows: |
             configure
             setup
-            build
+      - name: 📦 Bundle
+        uses: stateful/runme-action@v2
+        with:
+          workflows: build
