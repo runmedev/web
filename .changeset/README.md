@@ -7,7 +7,7 @@ cwd: ..
 You can find the full documentation for changesets [here](https://github.com/changesets/changesets).
 
 ```sh
-npm install
+runme run setup
 ```
 
 ## Publish

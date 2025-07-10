@@ -1,5 +1,11 @@
 # @runmedev/react-components
 
+## 3.14.3
+
+### Patch Changes
+
+- Refactor of vite configs and Streams constructor signature
+
 ## 3.14.2
 
 ### Patch Changes
