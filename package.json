@@ -22,9 +22,9 @@
     "publish-packages": "changeset publish"
   },
   "dependencies": {
-    "@buf/googleapis_googleapis.bufbuild_es": "^2.5.2-20250411203938-61b203b9a916.1",
-    "@buf/stateful_runme.bufbuild_es": "^2.2.3-20250313184526-2d02c6150545.1",
-    "@bufbuild/protobuf": "^2.2.3",
+    "@buf/googleapis_googleapis.bufbuild_es": "^2.6.0-20250411203938-61b203b9a916.1",
+    "@buf/stateful_runme.bufbuild_es": "^2.6.0-20250708175514-aa6fb4055281.1",
+    "@bufbuild/protobuf": "^2.6.0",
     "@connectrpc/connect": "^2.0.2",
     "@connectrpc/connect-node": "^2.0.2",
     "@connectrpc/connect-web": "^2.0.2",
