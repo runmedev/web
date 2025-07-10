@@ -2,5 +2,5 @@
 
 // Export contexts
 export { AgentClientProvider, useClient } from './AgentContext'
-export { BlockProvider, useBlock } from './BlockContext'
+export { CellProvider, useCell } from './CellContext'
 export { SettingsProvider, useSettings } from './SettingsContext'

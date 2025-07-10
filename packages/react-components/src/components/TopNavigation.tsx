@@ -7,7 +7,7 @@ import { jwtDecode } from 'jwt-decode'
 import md5 from 'md5'
 import { Avatar } from 'radix-ui'
 
-import { useBlock } from '../contexts/BlockContext'
+import { useCell } from '../contexts/CellContext'
 import { getSessionToken } from '../token'
 
 const getGravatarUrl = (size = 24) => {
@@ -59,7 +59,7 @@ const UserAvatar = () => (
 )
 
 const TopNavigation = () => {
-  const { resetSession } = useBlock()
+  const { resetSession } = useCell()
   return (
     <>
       <Link to="/" onClick={resetSession}>

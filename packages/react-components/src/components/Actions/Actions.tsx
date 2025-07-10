@@ -4,7 +4,7 @@ import { Box, Button, Card, ScrollArea, Text } from '@radix-ui/themes'
 import { Console, genRunID } from '@runmedev/react-console'
 import '@runmedev/react-console/react-console.css'
 
-import { Block, BlockOutputKind, useBlock } from '../../contexts/BlockContext'
+import { Cell, useCell } from '../../contexts/CellContext'
 import { useSettings } from '../../contexts/SettingsContext'
 import { getSessionToken } from '../../token'
 import Editor from './Editor'
@@ -44,7 +44,7 @@ function RunActionButton({
 
 const CodeConsole = memo(
   ({
-    blockID,
+    cellID,
     runID,
     sequence,
     value,
@@ -55,7 +55,7 @@ const CodeConsole = memo(
     onPid,
     onMimeType,
   }: {
-    blockID: string
+    cellID: string
     runID: string
     sequence: number
     value: string
@@ -78,7 +78,7 @@ const CodeConsole = memo(
       value != '' &&
       runID != '' && (
         <Console
-          blockID={blockID}
+          cellID={cellID}
           runID={runID}
           sequence={sequence}
           commands={value.split('\n')}
@@ -101,7 +101,7 @@ const CodeConsole = memo(
   },
   (prevProps, nextProps) => {
     return (
-      prevProps.blockID === nextProps.blockID &&
+      prevProps.cellID === nextProps.cellID &&
       JSON.stringify(prevProps.value) === JSON.stringify(nextProps.value) &&
       prevProps.runID === nextProps.runID
     )
@@ -109,12 +109,12 @@ const CodeConsole = memo(
 )
 
 // Action is an editor and an optional Runme console
-function Action({ block }: { block: Block }) {
+function Action({ cell }: { cell: Cell }) {
   const { settings } = useSettings()
   const invertedOrder = settings.webApp.invertedOrder
-  const { createOutputBlock, sendOutputBlock, incrementSequence, sequence } =
-    useBlock()
-  const [editorValue, setEditorValue] = useState(block.contents)
+  const { createOutputCell, sendOutputCell, incrementSequence, sequence } =
+    useCell()
+  const [editorValue, setEditorValue] = useState(cell.value)
   const [takeFocus, setTakeFocus] = useState(false)
   const [exec, setExec] = useState<{ value: string; runID: string }>({
     value: '',
@@ -141,24 +141,24 @@ function Action({ block }: { block: Block }) {
     [editorValue, incrementSequence]
   )
 
-  // Listen for runCodeBlock events
+  // Listen for runCodeCell events
   useEffect(() => {
-    const handleRunCodeBlock = (event: CustomEvent) => {
-      if (event.detail.blockId === block.id) {
+    const handleRunCodeCell = (event: CustomEvent) => {
+      if (event.detail.cellId === cell.refId) {
         runCode()
       }
     }
 
-    window.addEventListener('runCodeBlock', handleRunCodeBlock as EventListener)
+    window.addEventListener('runCodeCell', handleRunCodeCell as EventListener)
     return () => {
       window.removeEventListener(
-        'runCodeBlock',
-        handleRunCodeBlock as EventListener
+        'runCodeCell',
+        handleRunCodeCell as EventListener
       )
     }
-  }, [block.id, runCode])
+  }, [cell.refId, runCode])
 
-  const finalOutputBlock = useMemo(() => {
+  const finalOutputCell = useMemo(() => {
     if (
       pid === null ||
       exitCode === null ||
@@ -169,38 +169,42 @@ function Action({ block }: { block: Block }) {
       return null
     }
 
-    const outputBlock = createOutputBlock({
-      ...block,
+    const textEncoder = new TextEncoder()
+
+    const outputCell = createOutputCell({
+      ...cell,
       outputs: [
         {
-          $typeName: 'agent.v1.BlockOutput',
-          kind: BlockOutputKind.STDOUT,
+          $typeName: 'runme.parser.v1.CellOutput',
+          metadata: {},
           items: [
             {
-              $typeName: 'agent.v1.BlockOutputItem',
-              mime: mimeType || 'text/plain',
-              textData: stdout,
+              $typeName: 'runme.parser.v1.CellOutputItem',
+              mime: mimeType || 'text/plain', // todo(sebastian): use MimeType instead?
+              type: 'Buffer',
+              data: textEncoder.encode(stdout),
             },
           ],
         },
         {
-          $typeName: 'agent.v1.BlockOutput',
-          kind: BlockOutputKind.STDERR,
+          $typeName: 'runme.parser.v1.CellOutput',
+          metadata: {},
           items: [
             {
-              $typeName: 'agent.v1.BlockOutputItem',
-              mime: mimeType || 'text/plain',
-              textData: stderr,
+              $typeName: 'runme.parser.v1.CellOutputItem',
+              mime: mimeType || 'text/plain', // todo(sebastian): use MimeType instead?
+              type: 'Buffer',
+              data: textEncoder.encode(stderr),
             },
           ],
         },
       ],
     })
 
-    return outputBlock
+    return outputCell
   }, [
-    block,
-    createOutputBlock,
+    cell,
+    createOutputCell,
     stdout,
     stderr,
     mimeType,
@@ -211,13 +215,13 @@ function Action({ block }: { block: Block }) {
 
   useEffect(() => {
     // avoid infinite loop
-    if (!finalOutputBlock || lastRunID === exec.runID) {
+    if (!finalOutputCell || lastRunID === exec.runID) {
       return
     }
 
     setLastRunID(exec.runID)
-    sendOutputBlock(finalOutputBlock)
-  }, [sendOutputBlock, finalOutputBlock, exec.runID, lastRunID])
+    sendOutputCell(finalOutputCell)
+  }, [sendOutputCell, finalOutputCell, exec.runID, lastRunID])
 
   useEffect(() => {
     if (lastRunID === exec.runID) {
@@ -227,8 +231,8 @@ function Action({ block }: { block: Block }) {
   }, [sequence, exec.runID, lastRunID])
 
   useEffect(() => {
-    setEditorValue(block.contents)
-  }, [block.contents])
+    setEditorValue(cell.value)
+  }, [cell.value])
 
   const sequenceLabel = useMemo(() => {
     if (!lastSequence) {
@@ -258,8 +262,8 @@ function Action({ block }: { block: Block }) {
           </div>
           <Card className="whitespace-nowrap overflow-hidden flex-1 ml-2">
             <Editor
-              key={block.id}
-              id={block.id}
+              key={cell.refId}
+              id={cell.refId}
               value={editorValue}
               fontSize={fontSize}
               fontFamily={fontFamily}
@@ -273,7 +277,7 @@ function Action({ block }: { block: Block }) {
             <CodeConsole
               key={exec.runID}
               runID={exec.runID}
-              blockID={block.id}
+              cellID={cell.refId}
               sequence={lastSequence || 0}
               value={exec.value}
               settings={{
@@ -302,7 +306,7 @@ function Action({ block }: { block: Block }) {
 }
 
 function Actions() {
-  const { useColumns, addCodeBlock } = useBlock()
+  const { useColumns, addCodeCell } = useCell()
   const { settings } = useSettings()
   const { actions } = useColumns()
   const actionsStartRef = useRef<HTMLDivElement>(null)
@@ -326,7 +330,7 @@ function Actions() {
           variant="ghost"
           size="1"
           className="cursor-pointer"
-          onClick={addCodeBlock}
+          onClick={addCodeCell}
         >
           <PlusIcon />
         </Button>
@@ -334,7 +338,7 @@ function Actions() {
       <ScrollArea type="auto" scrollbars="vertical" className="flex-1 p-2">
         <div ref={actionsStartRef} />
         {actions.map((action) => (
-          <Action key={action.id} block={action} />
+          <Action key={action.refId} cell={action} />
         ))}
         <div ref={actionsEndRef} />
       </ScrollArea>
