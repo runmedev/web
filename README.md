@@ -7,6 +7,12 @@ This project is structured as an npm monorepo with two packages:
 
 ## Getting Started
 
+Set up NPM to use Buf registry:
+
+```sh {"name":"configure","terminalRows":"5"}
+npm config set @buf:registry https://buf.build/gen/npm/v1
+```
+
 Install all dependencies (hoisted to the root):
 
 ```sh {"name":"setup"}
@@ -39,6 +45,7 @@ npm run clean
 Start the development server for sample app using the components:
 
 ```sh {"name":"dev"}
+npm run build:console
 npm run dev
 ```
 

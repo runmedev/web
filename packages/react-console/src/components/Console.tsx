@@ -73,14 +73,16 @@ function Console({
     }
 
     console.log('Creating stream', blockID, runID, runner.endpoint)
-    return new Streams(
-      { knownID: blockID, runID, sequence },
-      {
+    return new Streams({
+      knownID: blockID,
+      runID,
+      sequence,
+      options: {
         runnerEndpoint: runner.endpoint,
         authorization: runner.authorization,
         autoReconnect: runner.reconnect,
-      }
-    )
+      },
+    })
   }, [blockID, runID, sequence, runner])
 
   useEffect(() => {

@@ -70,6 +70,17 @@ type Latency = {
   updatedAt: bigint
 }
 
+type StreamsProps = {
+  knownID: string
+  runID: string
+  sequence: number
+  options: {
+    runnerEndpoint: string
+    authorization: Authorization
+    autoReconnect: boolean
+  }
+}
+
 class Streams {
   private callback: VSCodeEvent<any> | undefined
 
@@ -156,35 +167,16 @@ class Streams {
   private readonly authorization: Authorization
   private readonly autoReconnect: boolean
 
-  constructor(
-    {
-      knownID,
-      runID,
-      sequence,
-    }: {
-      knownID: string
-      runID: string
-      sequence: number
-    },
-    {
-      runnerEndpoint,
-      authorization,
-      autoReconnect,
-    }: {
-      runnerEndpoint: string
-      authorization: Authorization
-      autoReconnect: boolean
-    }
-  ) {
+  constructor({ knownID, runID, sequence, options }: StreamsProps) {
     // Set the identifiers
     this.knownID = knownID
     this.runID = runID
     this.sequence = sequence
 
     // Assign configuration
-    this.runnerEndpoint = runnerEndpoint
-    this.authorization = authorization
-    this.autoReconnect = autoReconnect
+    this.runnerEndpoint = options.runnerEndpoint
+    this.authorization = options.authorization
+    this.autoReconnect = options.autoReconnect
 
     // Turn the connectables into hot observables
     this._latenciesConnectable.connect()

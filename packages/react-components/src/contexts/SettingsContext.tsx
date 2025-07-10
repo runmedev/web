@@ -123,16 +123,18 @@ export const SettingsProvider = ({
     // reset runner error
     setRunnerError(null)
 
-    const stream = new Streams(
-      { knownID: `check_${ulid()}`, runID: genRunID(), sequence: 0 },
-      {
+    const stream = new Streams({
+      knownID: `check_${ulid()}`,
+      runID: genRunID(),
+      sequence: 0,
+      options: {
         runnerEndpoint: settings.webApp.runner,
         authorization: {
           bearerToken: getSessionToken(),
         },
-        autoReconnect: false, // let it fail, we're interested in the error
-      }
-    )
+        autoReconnect: false, // let it fail, the user is interested in the error
+      },
+    })
 
     const subs: Subscription[] = []
     subs.push(
