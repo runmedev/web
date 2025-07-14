@@ -1,5 +1,11 @@
 # @runmedev/react-console
 
+## 3.15.0
+
+### Minor Changes
+
+- Port Block to Runme's Cell protobufs
+
 ## 3.14.4
 
 ### Patch Changes
