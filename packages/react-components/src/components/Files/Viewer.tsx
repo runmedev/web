@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useRef } from 'react'
 
-import { BlockSchema } from '@buf/stateful_runme.bufbuild_es/agent/v1/blocks_pb'
-import { FileSearchResult } from '@buf/stateful_runme.bufbuild_es/agent/v1/filesearch_pb'
+import { DocResult } from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/docresult_pb'
+import { CellSchema } from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb'
 import { create } from '@bufbuild/protobuf'
 import { Box, Link, ScrollArea, Text } from '@radix-ui/themes'
 
-import { Block, useBlock } from '../../contexts/BlockContext'
+import { Cell, useCell } from '../../contexts/CellContext'
 
 const FileViewer = () => {
   // The code below is using "destructuring" assignment to assign certain values from the
-  // context object return by useBlock to local variables.
-  const { useColumns } = useBlock()
+  // context object return by useCell to local variables.
+  const { useColumns } = useCell()
   const { files } = useColumns()
 
   // automatically scroll to bottom of files
@@ -19,24 +19,24 @@ const FileViewer = () => {
     filesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  const oneBlock = useMemo(() => {
-    let block: Block = create(BlockSchema, {})
+  const oneCell = useMemo(() => {
+    let cell: Cell = create(CellSchema, {})
 
-    // N.B. Right now we don't support more than one search block
+    // N.B. Right now we don't support more than one search cell
     if (files.length > 0) {
-      block = files[files.length - 1]
+      cell = files[files.length - 1]
     }
 
-    return block
+    return cell
   }, [files])
 
-  // TODO(jlewi): Why do we pass in chatBlocks as a dependency?
-  // sebastian: because otherwise it won't rerender when the block changes
+  // TODO(jlewi): Why do we pass in chatCells as a dependency?
+  // sebastian: because otherwise it won't rerender when the cell changes
   useEffect(() => {
     scrollToBottom()
-  }, [oneBlock])
+  }, [oneCell])
 
-  const hasSearchResults = oneBlock.fileSearchResults.length > 0
+  const hasSearchResults = oneCell.docResults.length > 0
 
   return (
     <div className="flex flex-col h-full">
@@ -51,7 +51,7 @@ const FileViewer = () => {
           </div>
         ) : (
           <div className="grow">
-            {oneBlock.fileSearchResults.map((b: FileSearchResult) => (
+            {oneCell.docResults.map((b: DocResult) => (
               <div key={b.fileId} className="mb-2">
                 <Box
                   p="2"

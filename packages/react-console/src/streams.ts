@@ -157,7 +157,7 @@ class Streams {
     return this._mimeTypeConnectable
   }
 
-  // Identifiers for the block/console associated with this stream
+  // Identifiers for the cell/console associated with this stream
   private readonly knownID: string
   private readonly runID: string
   private readonly sequence: number
@@ -403,7 +403,7 @@ class Streams {
       const onOpen = () => {
         console.log(
           new Date(),
-          `✅ Connected WebSocket for block ${this.knownID} (#${this.sequence}) with runID ${this.runID}`
+          `✅ Connected WebSocket for cell ${this.knownID} (#${this.sequence}) with runID ${this.runID}`
         )
 
         observer.next(socket)
@@ -418,7 +418,7 @@ class Streams {
       return () => {
         console.log(
           new Date(),
-          `☑️ Cleanly disconnected WebSocket for block ${this.knownID} (#${this.sequence}) with runID ${this.runID}`
+          `☑️ Cleanly disconnected WebSocket for cell ${this.knownID} (#${this.sequence}) with runID ${this.runID}`
         )
         socket.removeEventListener('close', onClose)
         socket.removeEventListener('error', onError)
@@ -615,7 +615,7 @@ function sendWebsocketRequest({
   knownID?: string
   runID?: string
 }) {
-  // knownID tracks the origin cell/block of the request.
+  // knownID tracks the origin cell/cell of the request.
   if (knownID) {
     req.knownId = knownID
   }
