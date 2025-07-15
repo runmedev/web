@@ -20,6 +20,8 @@ import {
   CellSchema,
   NotebookSchema,
   ParserService,
+  SerializeRequestOptionsSchema,
+  SerializeRequestOutputOptionsSchema,
   SerializeRequestSchema,
 } from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb'
 import { clone, create } from '@bufbuild/protobuf'
@@ -316,6 +318,13 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     const editorClient = createEditorClient(settings.agentEndpoint)
     const req = create(SerializeRequestSchema, {
       notebook: notebook,
+      options: create(SerializeRequestOptionsSchema, {
+        outputs: create(SerializeRequestOutputOptionsSchema, {
+          // todo(sebastian): will only work if we populate the outputs
+          enabled: false,
+          summary: false,
+        }),
+      }),
     })
     const resp = await editorClient.serialize(req)
     const blob = new Blob([resp.result], { type: 'text/plain' })
