@@ -24,34 +24,33 @@ import {
   SerializeRequestOutputOptionsSchema,
   SerializeRequestSchema,
 } from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb'
+import { RunnerService } from '@buf/stateful_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { clone, create } from '@bufbuild/protobuf'
 import { createClient } from '@connectrpc/connect'
-import { createGrpcWebTransport } from '@connectrpc/connect-web'
 import { v4 as uuidv4 } from 'uuid'
 
-import { getAccessToken, getSessionToken } from '../token'
+import { getAccessToken } from '../token'
 import { useClient as useAgentClient } from './AgentContext'
 import { useSettings } from './SettingsContext'
+import { SessionStorage, createGrpcClient } from './storage'
 
-export type EditorClient = ReturnType<typeof createClient<typeof ParserService>>
-
-function createEditorClient(baseURL: string): EditorClient {
-  const transport = createGrpcWebTransport({
-    baseUrl: baseURL,
-    interceptors: [
-      (next) => (req) => {
-        const token = getSessionToken()
-        if (token) {
-          req.header.set('Authorization', `Bearer ${token}`)
-        }
-        return next(req).catch((e) => {
-          throw e // allow caller to handle the error
-        })
-      },
-    ],
+// Utility function to get cells in ascending order
+function getAscendingCells(state: CellState, invertedOrder: boolean): Cell[] {
+  const cells = state.positions.map((id) => {
+    const c = state.cells[id]
+    c.languageId = 'sh'
+    return c
   })
-  return createClient(ParserService, transport)
+  if (cells.length === 0) {
+    return []
+  }
+  if (invertedOrder) {
+    return cells.reverse()
+  }
+  return cells
 }
+
+export type ParserClient = ReturnType<typeof createClient<typeof ParserService>>
 
 type CellContextType = {
   // useColumns returns arrays of cells organized by their kind
@@ -99,17 +98,49 @@ interface CellState {
 }
 
 export const CellProvider = ({ children }: { children: ReactNode }) => {
-  const { settings } = useSettings()
+  const { settings, principal } = useSettings()
   const [sequence, setSequence] = useState(0)
   const [isInputDisabled, setIsInputDisabled] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
+  const [activeSession, setActiveSession] = useState<string | undefined>()
   const [previousResponseId, setPreviousResponseId] = useState<
     string | undefined
   >()
 
+  const storage = useMemo(() => {
+    if (!principal) {
+      return
+    }
+    console.log('principal', principal)
+    return new SessionStorage(
+      'agent',
+      principal,
+      createGrpcClient(RunnerService, settings.agentEndpoint)
+    )
+  }, [settings.agentEndpoint, principal])
+
+  useEffect(() => {
+    storage?.listActiveSessions().then((ids) => {
+      console.log('ids', ids)
+    })
+    storage?.createSession().then((id) => setActiveSession(id))
+  }, [storage])
+
+  useEffect(() => {
+    if (!activeSession) {
+      return
+    }
+    console.log('activeSession', activeSession)
+  }, [activeSession])
+
   const incrementSequence = () => {
     setSequence((prev) => prev + 1)
   }
+
+  const invertedOrder = useMemo(
+    () => settings.webApp.invertedOrder,
+    [settings.webApp.invertedOrder]
+  )
 
   const { client } = useAgentClient()
   const [state, setState] = useState<CellState>({
@@ -117,10 +148,16 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     positions: [],
   })
 
-  const invertedOrder = useMemo(
-    () => settings.webApp.invertedOrder,
-    [settings.webApp.invertedOrder]
-  )
+  useEffect(() => {
+    if (!activeSession) {
+      return
+    }
+    const cells = getAscendingCells(state, invertedOrder)
+    const session = create(NotebookSchema, {
+      cells,
+    })
+    storage?.saveNotebook(activeSession, session)
+  }, [activeSession, state, storage, invertedOrder])
 
   useEffect(() => {
     setState((prev) => {
@@ -297,25 +334,16 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
 
   // todo(sebastian): quick and dirty export implementation
   const exportDocument = async () => {
-    let cells = state.positions.map((id) => {
-      const c = state.cells[id]
-      c.languageId = 'sh'
-      return c
-    })
+    const cells = getAscendingCells(state, invertedOrder)
     if (cells.length === 0) {
       return
     }
 
-    if (invertedOrder) {
-      cells = cells.reverse()
-    }
-
     const notebook = create(NotebookSchema, {
-      cells: cells,
+      cells,
     })
 
-    console.log(notebook)
-    const editorClient = createEditorClient(settings.agentEndpoint)
+    const c = createGrpcClient(ParserService, settings.agentEndpoint)
     const req = create(SerializeRequestSchema, {
       notebook: notebook,
       options: create(SerializeRequestOptionsSchema, {
@@ -326,7 +354,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
         }),
       }),
     })
-    const resp = await editorClient.serialize(req)
+    const resp = await c.serialize(req)
     const blob = new Blob([resp.result], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')

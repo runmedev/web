@@ -16,6 +16,7 @@ import {
   genRunID,
 } from '@runmedev/react-console'
 import '@runmedev/react-console/react-console.css'
+import { JwtPayload, jwtDecode } from 'jwt-decode'
 import { Subscription } from 'rxjs'
 import { ulid } from 'ulid'
 
@@ -28,6 +29,7 @@ interface Settings {
 }
 
 interface SettingsContextType {
+  principal: string
   checkRunnerAuth: () => void
   defaultSettings: Settings
   runnerError: StreamError | null
@@ -60,6 +62,21 @@ export const SettingsProvider = ({
   webApp,
 }: SettingsProviderProps) => {
   const [runnerError, setRunnerError] = useState<StreamError | null>(null)
+
+  const principal = useMemo(() => {
+    const token = getSessionToken()
+    if (!token) {
+      return 'unauthenticated'
+    }
+    let decodedToken: JwtPayload & { email?: string }
+    try {
+      decodedToken = jwtDecode(token)
+      return decodedToken.email || decodedToken.sub || 'unauthenticated'
+    } catch (e) {
+      console.error('Error decoding token', e)
+      return 'unauthenticated'
+    }
+  }, [])
 
   const defaultSettings: Settings = useMemo(() => {
     const isLocalhost = window.location.hostname === 'localhost'
@@ -179,6 +196,7 @@ export const SettingsProvider = ({
   return (
     <SettingsContext.Provider
       value={{
+        principal,
         checkRunnerAuth,
         defaultSettings,
         runnerError,
