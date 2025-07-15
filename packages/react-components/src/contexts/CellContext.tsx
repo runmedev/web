@@ -18,13 +18,40 @@ import {
   CellOutputSchema,
   CellRole,
   CellSchema,
+  NotebookSchema,
+  ParserService,
+  SerializeRequestOptionsSchema,
+  SerializeRequestOutputOptionsSchema,
+  SerializeRequestSchema,
 } from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb'
 import { clone, create } from '@bufbuild/protobuf'
+import { createClient } from '@connectrpc/connect'
+import { createGrpcWebTransport } from '@connectrpc/connect-web'
 import { v4 as uuidv4 } from 'uuid'
 
-import { getAccessToken } from '../token'
+import { getAccessToken, getSessionToken } from '../token'
 import { useClient as useAgentClient } from './AgentContext'
 import { useSettings } from './SettingsContext'
+
+export type EditorClient = ReturnType<typeof createClient<typeof ParserService>>
+
+function createEditorClient(baseURL: string): EditorClient {
+  const transport = createGrpcWebTransport({
+    baseUrl: baseURL,
+    interceptors: [
+      (next) => (req) => {
+        const token = getSessionToken()
+        if (token) {
+          req.header.set('Authorization', `Bearer ${token}`)
+        }
+        return next(req).catch((e) => {
+          throw e // allow caller to handle the error
+        })
+      },
+    ],
+  })
+  return createClient(ParserService, transport)
+}
 
 type CellContextType = {
   // useColumns returns arrays of cells organized by their kind
@@ -39,6 +66,7 @@ type CellContextType = {
   // incrementSequence increments the sequence number
   incrementSequence: () => void
 
+  exportDocument: () => Promise<void>
   // Define additional functions to update the state
   // This way they can be set in the provider and passed down to the components
   sendOutputCell: (outputCell: Cell) => Promise<void>
@@ -267,12 +295,56 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     }
   }
 
+  // todo(sebastian): quick and dirty export implementation
+  const exportDocument = async () => {
+    let cells = state.positions.map((id) => {
+      const c = state.cells[id]
+      c.languageId = 'sh'
+      return c
+    })
+    if (cells.length === 0) {
+      return
+    }
+
+    if (invertedOrder) {
+      cells = cells.reverse()
+    }
+
+    const notebook = create(NotebookSchema, {
+      cells: cells,
+    })
+
+    console.log(notebook)
+    const editorClient = createEditorClient(settings.agentEndpoint)
+    const req = create(SerializeRequestSchema, {
+      notebook: notebook,
+      options: create(SerializeRequestOptionsSchema, {
+        outputs: create(SerializeRequestOutputOptionsSchema, {
+          // todo(sebastian): will only work if we populate the outputs
+          enabled: false,
+          summary: false,
+        }),
+      }),
+    })
+    const resp = await editorClient.serialize(req)
+    const blob = new Blob([resp.result], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `Session-${new Date().toISOString()}.md`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <CellContext.Provider
       value={{
         useColumns,
         sequence,
         incrementSequence,
+        exportDocument,
         sendOutputCell,
         createOutputCell,
         sendUserCell,
