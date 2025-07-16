@@ -4,7 +4,7 @@ import { Box, Button, Card, ScrollArea, Text } from '@radix-ui/themes'
 import { Console, genRunID } from '@runmedev/react-console'
 import '@runmedev/react-console/react-console.css'
 
-import { Cell, useCell } from '../../contexts/CellContext'
+import { parser_pb, useCell } from '../../contexts/CellContext'
 import { useSettings } from '../../contexts/SettingsContext'
 import { getSessionToken } from '../../token'
 import Editor from './Editor'
@@ -109,7 +109,7 @@ const CodeConsole = memo(
 )
 
 // Action is an editor and an optional Runme console
-function Action({ cell }: { cell: Cell }) {
+function Action({ cell }: { cell: parser_pb.Cell }) {
   const { settings } = useSettings()
   const invertedOrder = settings.webApp.invertedOrder
   const { createOutputCell, sendOutputCell, incrementSequence, sequence } =
