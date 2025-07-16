@@ -20,25 +20,6 @@ import { getAccessToken } from '../token'
 import { useClient as useAgentClient } from './AgentContext'
 import { useSettings } from './SettingsContext'
 
-// Utility function to get cells in ascending order
-function getAscendingCells(
-  state: CellState,
-  invertedOrder: boolean
-): parser_pb.Cell[] {
-  const cells = state.positions.map((id) => {
-    const c = state.cells[id]
-    c.languageId = 'sh'
-    return c
-  })
-  if (cells.length === 0) {
-    return []
-  }
-  if (invertedOrder) {
-    return cells.reverse()
-  }
-  return cells
-}
-
 type CellContextType = {
   // useColumns returns arrays of cells organized by their kind
   useColumns: () => {
@@ -82,6 +63,25 @@ export const useCell = () => {
 interface CellState {
   cells: Record<string, parser_pb.Cell>
   positions: string[]
+}
+
+// Utility function to always return cells in ascending order
+function getAscendingCells(
+  state: CellState,
+  invertedOrder: boolean
+): parser_pb.Cell[] {
+  const cells = state.positions.map((id) => {
+    const c = state.cells[id]
+    c.languageId = 'sh'
+    return c
+  })
+  if (cells.length === 0) {
+    return []
+  }
+  if (invertedOrder) {
+    return cells.reverse()
+  }
+  return cells
 }
 
 export const CellProvider = ({ children }: { children: ReactNode }) => {
