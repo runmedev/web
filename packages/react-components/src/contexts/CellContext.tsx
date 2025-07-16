@@ -388,4 +388,5 @@ enum MimeType {
   VSCodeNotebookStdErr = 'application/vnd.code.notebook.stderr',
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export { parser_pb, TypingCell, MimeType }
