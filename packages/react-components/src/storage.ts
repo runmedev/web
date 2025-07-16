@@ -8,6 +8,8 @@ import {
 import { create } from '@bufbuild/protobuf'
 import { Code, ConnectError } from '@connectrpc/connect'
 import Dexie, { Table } from 'dexie'
+import { Subject } from 'rxjs'
+import { debounceTime } from 'rxjs/operators'
 
 import { RunnerClient } from './runme/client'
 
@@ -27,6 +29,8 @@ export class SessionStorage extends Dexie {
   readonly principal: string
   readonly client: RunnerClient
 
+  private saveSubject = new Subject<{ id: string; notebook: Notebook }>()
+
   constructor(namespace: string, principal: string, client: RunnerClient) {
     super(namespace)
     this.principal = principal
@@ -34,19 +38,34 @@ export class SessionStorage extends Dexie {
     this.version(1).stores({
       sessions: 'id, principal, name, created, updated',
     })
+
+    // Debounce saves to avoid excessive writes
+    this.saveSubject
+      .pipe(debounceTime(200))
+      .subscribe(async ({ id, notebook }) => {
+        const record: SessionNotebook = {
+          id,
+          principal: this.principal,
+          name: generateSessionName(),
+          created: Date.now(),
+          updated: Date.now(),
+          data: notebook,
+        }
+        console.log(new Date().toISOString(), 'saving Notebook', id, notebook)
+        await this.sessions.put(record)
+      })
   }
 
   // Save or update a session
   async saveNotebook(id: string, notebook: Notebook) {
-    const record: SessionNotebook = {
+    console.log(
+      new Date().toISOString(),
+      'scheduling Notebook save',
       id,
-      principal: this.principal,
-      name: 'Untitled',
-      created: Date.now(),
-      updated: Date.now(),
-      data: notebook,
-    }
-    await this.sessions.put(record)
+      notebook
+    )
+    // schedule a save to allow debouncing to avoid excessive writes
+    this.saveSubject.next({ id, notebook })
   }
 
   // Load a session by id
@@ -125,4 +144,8 @@ export class SessionStorage extends Dexie {
       return undefined
     }
   }
+}
+
+export function generateSessionName(): string {
+  return `Session-${new Date().toISOString()}`
 }

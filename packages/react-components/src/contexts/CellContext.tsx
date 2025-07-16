@@ -15,7 +15,7 @@ import { clone, create } from '@bufbuild/protobuf'
 import { v4 as uuidv4 } from 'uuid'
 
 import { createConnectClient, parser_pb, runner_pb } from '../runme/client'
-import { SessionStorage } from '../storage'
+import { SessionStorage, generateSessionName } from '../storage'
 import { getAccessToken } from '../token'
 import { useClient as useAgentClient } from './AgentContext'
 import { useSettings } from './SettingsContext'
@@ -346,7 +346,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `Session-${new Date().toISOString()}.md`
+    a.download = `${generateSessionName()}.md`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
