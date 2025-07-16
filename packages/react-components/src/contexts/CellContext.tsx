@@ -11,31 +11,20 @@ import {
   GenerateRequest,
   GenerateRequestSchema,
 } from '@buf/stateful_runme.bufbuild_es/agent/v1/service_pb'
-import {
-  Cell,
-  CellKind,
-  CellOutputItemSchema,
-  CellOutputSchema,
-  CellRole,
-  CellSchema,
-  NotebookSchema,
-  ParserService,
-  SerializeRequestOptionsSchema,
-  SerializeRequestOutputOptionsSchema,
-  SerializeRequestSchema,
-} from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb'
-import { RunnerService } from '@buf/stateful_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { clone, create } from '@bufbuild/protobuf'
-import { createClient } from '@connectrpc/connect'
 import { v4 as uuidv4 } from 'uuid'
 
-import { SessionStorage, createGrpcClient } from '../storage'
+import { createConnectClient, parser_pb, runner_pb } from '../runme/client'
+import { SessionStorage } from '../storage'
 import { getAccessToken } from '../token'
 import { useClient as useAgentClient } from './AgentContext'
 import { useSettings } from './SettingsContext'
 
 // Utility function to get cells in ascending order
-function getAscendingCells(state: CellState, invertedOrder: boolean): Cell[] {
+function getAscendingCells(
+  state: CellState,
+  invertedOrder: boolean
+): parser_pb.Cell[] {
   const cells = state.positions.map((id) => {
     const c = state.cells[id]
     c.languageId = 'sh'
@@ -50,14 +39,12 @@ function getAscendingCells(state: CellState, invertedOrder: boolean): Cell[] {
   return cells
 }
 
-export type ParserClient = ReturnType<typeof createClient<typeof ParserService>>
-
 type CellContextType = {
   // useColumns returns arrays of cells organized by their kind
   useColumns: () => {
-    chat: Cell[]
-    actions: Cell[]
-    files: Cell[]
+    chat: parser_pb.Cell[]
+    actions: parser_pb.Cell[]
+    files: parser_pb.Cell[]
   }
 
   // sequence is a monotonically increasing number that is used to track the order of cells
@@ -68,15 +55,15 @@ type CellContextType = {
   exportDocument: () => Promise<void>
   // Define additional functions to update the state
   // This way they can be set in the provider and passed down to the components
-  sendOutputCell: (outputCell: Cell) => Promise<void>
-  createOutputCell: (inputCell: Cell) => Cell
+  sendOutputCell: (outputCell: parser_pb.Cell) => Promise<void>
+  createOutputCell: (inputCell: parser_pb.Cell) => parser_pb.Cell
   sendUserCell: (text: string) => Promise<void>
   addCodeCell: () => void
   // Keep track of whether the input is disabled
   isInputDisabled: boolean
   isTyping: boolean
   // Function to run a code cell
-  runCodeCell: (cell: Cell) => void
+  runCodeCell: (cell: parser_pb.Cell) => void
   // Function to reset the session
   resetSession: () => void
 }
@@ -93,7 +80,7 @@ export const useCell = () => {
 }
 
 interface CellState {
-  cells: Record<string, Cell>
+  cells: Record<string, parser_pb.Cell>
   positions: string[]
 }
 
@@ -115,7 +102,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     return new SessionStorage(
       'agent',
       principal,
-      createGrpcClient(RunnerService, settings.agentEndpoint)
+      createConnectClient(runner_pb.RunnerService, settings.agentEndpoint)
     )
   }, [settings.agentEndpoint, principal])
 
@@ -153,7 +140,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
       return
     }
     const cells = getAscendingCells(state, invertedOrder)
-    const session = create(NotebookSchema, {
+    const session = create(parser_pb.NotebookSchema, {
       cells,
     })
     storage?.saveNotebook(activeSession, session)
@@ -172,9 +159,10 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     return state.positions
       .map((id) => state.cells[id])
       .filter(
-        (cell): cell is Cell =>
+        (cell): cell is parser_pb.Cell =>
           Boolean(cell) &&
-          (cell.kind === CellKind.MARKUP || cell.kind === CellKind.CODE)
+          (cell.kind === parser_pb.CellKind.MARKUP ||
+            cell.kind === parser_pb.CellKind.CODE)
       )
   }, [state.cells, state.positions])
 
@@ -182,7 +170,8 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     return state.positions
       .map((id) => state.cells[id])
       .filter(
-        (cell): cell is Cell => Boolean(cell) && cell.kind === CellKind.CODE
+        (cell): cell is parser_pb.Cell =>
+          Boolean(cell) && cell.kind === parser_pb.CellKind.CODE
       )
   }, [state.cells, state.positions])
 
@@ -190,8 +179,8 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     return state.positions
       .map((id) => state.cells[id])
       .filter(
-        (cell): cell is Cell =>
-          Boolean(cell) && cell.kind === CellKind.DOC_RESULTS
+        (cell): cell is parser_pb.Cell =>
+          Boolean(cell) && cell.kind === parser_pb.CellKind.DOC_RESULTS
       )
   }, [state.cells, state.positions])
 
@@ -203,17 +192,12 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     }
   }
 
-  const createOutputCell = (inputCell: Cell) => {
-    const b = clone(CellSchema, inputCell)
-    b.outputs = inputCell.outputs.map((o) =>
-      create(CellOutputSchema, {
-        items: o.items.map((i) => create(CellOutputItemSchema, i)),
-      })
-    )
+  const createOutputCell = (inputCell: parser_pb.Cell) => {
+    const b = clone(parser_pb.CellSchema, inputCell)
     return b
   }
 
-  const streamGenerateResults = async (cells: Cell[]) => {
+  const streamGenerateResults = async (cells: parser_pb.Cell[]) => {
     const accessToken = getAccessToken()
 
     const req: GenerateRequest = create(GenerateRequestSchema, {
@@ -246,10 +230,10 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   const sendUserCell = async (text: string) => {
     if (!text.trim()) return
 
-    const userCell = create(CellSchema, {
+    const userCell = create(parser_pb.CellSchema, {
       refId: `user_${uuidv4()}`,
-      role: CellRole.USER,
-      kind: CellKind.MARKUP,
+      role: parser_pb.CellRole.USER,
+      kind: parser_pb.CellKind.MARKUP,
       value: text,
     })
 
@@ -261,7 +245,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     await streamGenerateResults([userCell])
   }
 
-  const sendOutputCell = async (outputCell: Cell) => {
+  const sendOutputCell = async (outputCell: parser_pb.Cell) => {
     if (outputCell.outputs.length === 0) {
       return
     }
@@ -278,7 +262,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     await streamGenerateResults([outputCell])
   }
 
-  const updateCell = (cell: Cell) => {
+  const updateCell = (cell: parser_pb.Cell) => {
     setState((prev) => {
       if (!prev.cells[cell.refId]) {
         const newPositions = invertedOrder
@@ -310,17 +294,17 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   }
 
   const addCodeCell = () => {
-    const cell = create(CellSchema, {
+    const cell = create(parser_pb.CellSchema, {
       refId: `code_${uuidv4()}`,
-      role: CellRole.USER,
-      kind: CellKind.CODE,
+      role: parser_pb.CellRole.USER,
+      kind: parser_pb.CellKind.CODE,
       value: '',
     })
 
     updateCell(cell)
   }
 
-  const runCodeCell = (cell: Cell) => {
+  const runCodeCell = (cell: parser_pb.Cell) => {
     // Find the corresponding action cell and trigger its runCode function
     const actionCell = actionCells.find((b) => b.refId === cell.refId)
     if (actionCell) {
@@ -339,15 +323,18 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
       return
     }
 
-    const notebook = create(NotebookSchema, {
+    const notebook = create(parser_pb.NotebookSchema, {
       cells,
     })
 
-    const c = createGrpcClient(ParserService, settings.agentEndpoint)
-    const req = create(SerializeRequestSchema, {
+    const c = createConnectClient(
+      parser_pb.ParserService,
+      settings.agentEndpoint
+    )
+    const req = create(parser_pb.SerializeRequestSchema, {
       notebook: notebook,
-      options: create(SerializeRequestOptionsSchema, {
-        outputs: create(SerializeRequestOutputOptionsSchema, {
+      options: create(parser_pb.SerializeRequestOptionsSchema, {
+        outputs: create(parser_pb.SerializeRequestOutputOptionsSchema, {
           // todo(sebastian): will only work if we populate the outputs
           enabled: false,
           summary: false,
@@ -388,9 +375,9 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   )
 }
 
-const TypingCell = create(CellSchema, {
-  kind: CellKind.MARKUP,
-  role: CellRole.ASSISTANT,
+const TypingCell = create(parser_pb.CellSchema, {
+  kind: parser_pb.CellKind.MARKUP,
+  role: parser_pb.CellRole.ASSISTANT,
   value: '...',
 })
 
@@ -401,4 +388,4 @@ enum MimeType {
   VSCodeNotebookStdErr = 'application/vnd.code.notebook.stderr',
 }
 
-export { type Cell, CellRole, CellKind, TypingCell, MimeType }
+export { parser_pb, TypingCell, MimeType }

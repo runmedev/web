@@ -4,38 +4,12 @@ import {
   GetSessionRequestSchema,
   GetSessionResponse,
   ProjectSchema,
-  RunnerService,
 } from '@buf/stateful_runme.bufbuild_es/runme/runner/v2/runner_pb'
-import { DescService, create } from '@bufbuild/protobuf'
-import { createClient } from '@connectrpc/connect'
+import { create } from '@bufbuild/protobuf'
 import { Code, ConnectError } from '@connectrpc/connect'
-import { createGrpcWebTransport } from '@connectrpc/connect-web'
 import Dexie, { Table } from 'dexie'
 
-import { getSessionToken } from './token'
-
-export function createGrpcClient<T extends DescService>(
-  service: T,
-  baseURL: string
-) {
-  const transport = createGrpcWebTransport({
-    baseUrl: baseURL,
-    interceptors: [
-      (next) => (req) => {
-        const token = getSessionToken()
-        if (token) {
-          req.header.set('Authorization', `Bearer ${token}`)
-        }
-        return next(req).catch((e) => {
-          throw e // allow caller to handle the error
-        })
-      },
-    ],
-  })
-  return createClient(service, transport)
-}
-
-export type RunnerClient = ReturnType<typeof createClient<typeof RunnerService>>
+import { RunnerClient } from './runme/client'
 
 export interface SessionRecord<T> {
   id: string // session ulid

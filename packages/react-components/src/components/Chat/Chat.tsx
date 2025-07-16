@@ -10,29 +10,23 @@ import {
   TextArea,
 } from '@radix-ui/themes'
 
-import {
-  Cell,
-  CellKind,
-  CellRole,
-  TypingCell,
-  useCell,
-} from '../../contexts/CellContext'
+import { TypingCell, parser_pb, useCell } from '../../contexts/CellContext'
 import { useSettings } from '../../contexts/SettingsContext'
 import { SubmitQuestionIcon } from '../Actions/icons'
 
 type MessageProps = {
-  cell: Cell
+  cell: parser_pb.Cell
 }
 
 const MessageContainer = ({
   role,
   children,
 }: {
-  role: CellRole
+  role: parser_pb.CellRole
   children: React.ReactNode
 }) => {
-  const self = role === CellRole.USER ? 'self-end' : 'self-start'
-  const color = role === CellRole.USER ? 'indigo' : 'gray'
+  const self = role === parser_pb.CellRole.USER ? 'self-end' : 'self-start'
+  const color = role === parser_pb.CellRole.USER ? 'indigo' : 'gray'
 
   return (
     <Callout.Root
@@ -45,13 +39,17 @@ const MessageContainer = ({
   )
 }
 
-const UserMessage = ({ cell }: { cell: Cell }) => {
-  return <MessageContainer role={CellRole.USER}>{cell.value}</MessageContainer>
+const UserMessage = ({ cell }: { cell: parser_pb.Cell }) => {
+  return (
+    <MessageContainer role={parser_pb.CellRole.USER}>
+      {cell.value}
+    </MessageContainer>
+  )
 }
 
-const AssistantMessage = ({ cell }: { cell: Cell }) => {
+const AssistantMessage = ({ cell }: { cell: parser_pb.Cell }) => {
   return (
-    <MessageContainer role={CellRole.ASSISTANT}>
+    <MessageContainer role={parser_pb.CellRole.ASSISTANT}>
       <Markdown
         components={{
           code: ({ children, ...props }) => {
@@ -75,7 +73,7 @@ const CodeMessage = memo(
     isRecentCodeCell,
     onClick,
   }: {
-    cell: Cell
+    cell: parser_pb.Cell
     isRecentCodeCell?: boolean
     onClick?: () => void
   }) => {
@@ -157,7 +155,7 @@ const Message = ({
   cell,
   isRecentCodeCell,
 }: MessageProps & { isRecentCodeCell?: boolean }) => {
-  if (cell.kind === CellKind.CODE) {
+  if (cell.kind === parser_pb.CellKind.CODE) {
     return (
       <CodeMessage
         key={cell.refId}
@@ -168,9 +166,9 @@ const Message = ({
   }
 
   switch (cell.role) {
-    case CellRole.USER:
+    case parser_pb.CellRole.USER:
       return <UserMessage cell={cell} />
-    case CellRole.ASSISTANT:
+    case parser_pb.CellRole.ASSISTANT:
       return <AssistantMessage cell={cell} />
     default:
       return null
@@ -203,12 +201,14 @@ const ChatMessages = () => {
   return (
     <div className="overflow-y-clip p-1 flex flex-col whitespace-pre-wrap">
       {isTyping && settings.webApp.invertedOrder && typingCell}
-      {chat.map((msg: Cell, index: number) => (
+      {chat.map((msg: parser_pb.Cell, index: number) => (
         <Message
           key={index}
           cell={msg}
           isRecentCodeCell={
-            msg.kind === CellKind.CODE && index === recentIndex && !isTyping
+            msg.kind === parser_pb.CellKind.CODE &&
+            index === recentIndex &&
+            !isTyping
           }
         />
       ))}
@@ -279,7 +279,7 @@ function Chat() {
         const cellToRun = settings.webApp.invertedOrder
           ? chat[0]
           : chat[chat.length - 1]
-        if (cellToRun?.kind === CellKind.CODE) {
+        if (cellToRun?.kind === parser_pb.CellKind.CODE) {
           runCodeCell(cellToRun)
         }
       }
