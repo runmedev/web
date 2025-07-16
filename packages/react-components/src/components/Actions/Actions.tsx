@@ -6,6 +6,7 @@ import '@runmedev/react-console/react-console.css'
 
 import { parser_pb, useCell } from '../../contexts/CellContext'
 import { useSettings } from '../../contexts/SettingsContext'
+import { RunmeMetadataKey } from '../../runme/client'
 import { getSessionToken } from '../../token'
 import Editor from './Editor'
 import {
@@ -112,8 +113,13 @@ const CodeConsole = memo(
 function Action({ cell }: { cell: parser_pb.Cell }) {
   const { settings } = useSettings()
   const invertedOrder = settings.webApp.invertedOrder
-  const { createOutputCell, sendOutputCell, incrementSequence, sequence } =
-    useCell()
+  const {
+    createOutputCell,
+    sendOutputCell,
+    saveState,
+    incrementSequence,
+    sequence,
+  } = useCell()
   const [editorValue, setEditorValue] = useState(cell.value)
   const [takeFocus, setTakeFocus] = useState(false)
   const [exec, setExec] = useState<{ value: string; runID: string }>({
@@ -233,6 +239,32 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
   useEffect(() => {
     setEditorValue(cell.value)
   }, [cell.value])
+
+  useEffect(() => {
+    // Only save metadata for code cells
+    if (cell.kind !== parser_pb.CellKind.CODE) {
+      return
+    }
+
+    // cell with PIDs are running
+    if (pid) {
+      cell.metadata[RunmeMetadataKey.Pid] = pid.toString()
+    } else {
+      delete cell.metadata[RunmeMetadataKey.Pid]
+    }
+
+    // cell with exit codes are done running, remove PID
+    if (exitCode !== null && Number.isFinite(exitCode)) {
+      delete cell.metadata[RunmeMetadataKey.Pid]
+      cell.metadata[RunmeMetadataKey.ExitCode] = exitCode.toString()
+    } else {
+      delete cell.metadata[RunmeMetadataKey.ExitCode]
+    }
+
+    // cells with neither PID nor exit code never ran
+    // always save the state changes
+    saveState()
+  }, [pid, exitCode, cell, saveState])
 
   const sequenceLabel = useMemo(() => {
     if (!lastSequence) {

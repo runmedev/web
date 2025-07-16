@@ -1,6 +1,7 @@
 import {
   ReactNode,
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -33,6 +34,8 @@ type CellContextType = {
   // incrementSequence increments the sequence number
   incrementSequence: () => void
 
+  // saveState saves the current state to the storage, runs sync because it schedules a debounced save
+  saveState: () => void
   exportDocument: () => Promise<void>
   // Define additional functions to update the state
   // This way they can be set in the provider and passed down to the components
@@ -135,7 +138,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     positions: [],
   })
 
-  useEffect(() => {
+  const saveState = useCallback(() => {
     if (!activeSession) {
       return
     }
@@ -144,7 +147,12 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
       cells,
     })
     storage?.saveNotebook(activeSession, session)
-  }, [activeSession, state, storage, invertedOrder])
+  }, [activeSession, state, invertedOrder, storage])
+
+  // Any time state changes, save the current state
+  useEffect(() => {
+    saveState()
+  }, [activeSession, state, storage, invertedOrder, saveState])
 
   useEffect(() => {
     setState((prev) => {
@@ -359,6 +367,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
         useColumns,
         sequence,
         incrementSequence,
+        saveState,
         exportDocument,
         sendOutputCell,
         createOutputCell,
@@ -381,12 +390,5 @@ const TypingCell = create(parser_pb.CellSchema, {
   value: '...',
 })
 
-enum MimeType {
-  StatefulRunmeOutputItems = 'stateful.runme/output-items',
-  StatefulRunmeTerminal = 'stateful.runme/terminal',
-  VSCodeNotebookStdOut = 'application/vnd.code.notebook.stdout',
-  VSCodeNotebookStdErr = 'application/vnd.code.notebook.stderr',
-}
-
 // eslint-disable-next-line react-refresh/only-export-components
-export { parser_pb, TypingCell, MimeType }
+export { parser_pb, TypingCell }

@@ -34,4 +34,17 @@ export type ParserClient = ReturnType<
   typeof createClient<typeof parser_pb.ParserService>
 >
 
+export enum MimeType {
+  StatefulRunmeOutputItems = 'stateful.runme/output-items',
+  StatefulRunmeTerminal = 'stateful.runme/terminal',
+  VSCodeNotebookStdOut = 'application/vnd.code.notebook.stdout',
+  VSCodeNotebookStdErr = 'application/vnd.code.notebook.stderr',
+}
+
+export enum RunmeMetadataKey {
+  Id = 'runme.dev/id',
+  Pid = 'runme.dev/pid',
+  ExitCode = 'runme.dev/exitCode',
+}
+
 export { parser_pb, runner_pb }
