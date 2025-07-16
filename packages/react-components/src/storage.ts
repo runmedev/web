@@ -12,7 +12,7 @@ import { Code, ConnectError } from '@connectrpc/connect'
 import { createGrpcWebTransport } from '@connectrpc/connect-web'
 import Dexie, { Table } from 'dexie'
 
-import { getSessionToken } from '../token'
+import { getSessionToken } from './token'
 
 export function createGrpcClient<T extends DescService>(
   service: T,

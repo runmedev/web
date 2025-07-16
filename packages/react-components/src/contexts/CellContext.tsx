@@ -29,10 +29,10 @@ import { clone, create } from '@bufbuild/protobuf'
 import { createClient } from '@connectrpc/connect'
 import { v4 as uuidv4 } from 'uuid'
 
+import { SessionStorage, createGrpcClient } from '../storage'
 import { getAccessToken } from '../token'
 import { useClient as useAgentClient } from './AgentContext'
 import { useSettings } from './SettingsContext'
-import { SessionStorage, createGrpcClient } from './storage'
 
 // Utility function to get cells in ascending order
 function getAscendingCells(state: CellState, invertedOrder: boolean): Cell[] {
