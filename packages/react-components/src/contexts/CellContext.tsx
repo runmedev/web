@@ -15,7 +15,13 @@ import {
 import { clone, create } from '@bufbuild/protobuf'
 import { v4 as uuidv4 } from 'uuid'
 
-import { createConnectClient, parser_pb, runner_pb } from '../runme/client'
+import {
+  AgentMetadataKey,
+  RunmeMetadataKey,
+  createConnectClient,
+  parser_pb,
+  runner_pb,
+} from '../runme/client'
 import { SessionStorage, generateSessionName } from '../storage'
 import { getAccessToken } from '../token'
 import { useClient as useAgentClient } from './AgentContext'
@@ -49,7 +55,7 @@ type CellContextType = {
   // Function to run a code cell
   runCodeCell: (cell: parser_pb.Cell) => void
   // Function to reset the session
-  resetSession: () => void
+  resetSession: (options: { attemptRestore: boolean }) => void
 }
 
 const CellContext = createContext<CellContextType | undefined>(undefined)
@@ -64,15 +70,20 @@ export const useCell = () => {
 }
 
 interface CellState {
+  runmeSession: string
   cells: Record<string, parser_pb.Cell>
   positions: string[]
 }
 
 // Utility function to always return cells in ascending order
 function getAscendingCells(
-  state: CellState,
+  state: CellState | undefined,
   invertedOrder: boolean
 ): parser_pb.Cell[] {
+  if (!state) {
+    return []
+  }
+
   const cells = state.positions.map((id) => {
     const c = state.cells[id]
     c.languageId = 'sh'
@@ -92,7 +103,6 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   const [sequence, setSequence] = useState(0)
   const [isInputDisabled, setIsInputDisabled] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
-  const [activeSession, setActiveSession] = useState<string | undefined>()
   const [previousResponseId, setPreviousResponseId] = useState<
     string | undefined
   >()
@@ -109,20 +119,6 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     )
   }, [settings.agentEndpoint, principal])
 
-  useEffect(() => {
-    storage?.listActiveSessions().then((ids) => {
-      console.log('ids', ids)
-    })
-    storage?.createSession().then((id) => setActiveSession(id))
-  }, [storage])
-
-  useEffect(() => {
-    if (!activeSession) {
-      return
-    }
-    console.log('activeSession', activeSession)
-  }, [activeSession])
-
   const incrementSequence = () => {
     setSequence((prev) => prev + 1)
   }
@@ -133,37 +129,122 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   )
 
   const { client } = useAgentClient()
-  const [state, setState] = useState<CellState>({
-    cells: {},
-    positions: [],
-  })
+  const [state, setState] = useState<CellState | undefined>(undefined)
 
   const saveState = useCallback(() => {
-    if (!activeSession) {
+    if (!state) {
       return
     }
     const cells = getAscendingCells(state, invertedOrder)
     const session = create(parser_pb.NotebookSchema, {
       cells,
     })
-    storage?.saveNotebook(activeSession, session)
-  }, [activeSession, state, invertedOrder, storage])
+    if (previousResponseId) {
+      session.metadata[AgentMetadataKey.PreviousResponseId] = previousResponseId
+    }
+    storage?.saveNotebook(state.runmeSession, session)
+  }, [state, invertedOrder, previousResponseId, storage])
+
+  const resetSession = useCallback(
+    async ({ attemptRestore }: { attemptRestore: boolean }) => {
+      if (!storage) {
+        return
+      }
+
+      setSequence(0)
+      setPreviousResponseId(undefined)
+
+      // Create session async, we decide later if we want to use it
+      const newSess = storage.createSession()
+      let activeSessionID: string | undefined
+
+      // Unless we are attempting to restore, short circuit and create a new session
+      if (!attemptRestore) {
+        activeSessionID = await newSess
+      } else {
+        const sessionIds = await storage.listActiveSessions()
+        const sessions = await storage.loadSessions(sessionIds)
+
+        // Filter out sessions that are empty or have only finished cells
+        const activeSessions = sessions.filter((session) => {
+          return session.data.cells.length !== 0
+
+          // todo(sebastian): do we need this? we auto-restore the last session if still active
+          // Check if any cell is still running (has a PID but no exit code)
+          // return session.data.cells.some((cell) => {
+          //   const exitCode = Number(cell.metadata[RunmeMetadataKey.ExitCode])
+          //   const pid = Number(cell.metadata[RunmeMetadataKey.Pid])
+          //   if (pid && Number.isFinite(pid) && !Number.isFinite(exitCode)) {
+          //     return true
+          //   }
+          //   return false
+          // })
+        })
+
+        // If there are no unfinished sessions, create a new session
+        if (activeSessions.length === 0) {
+          activeSessionID = await newSess
+        } else {
+          const recovSess = activeSessions[0]
+          let positions = recovSess.data.cells.map((cell) => cell.refId)
+          if (invertedOrder) {
+            positions = positions.reverse()
+          }
+          const prevRespId =
+            recovSess.data.metadata[AgentMetadataKey.PreviousResponseId]
+          if (prevRespId) {
+            setPreviousResponseId(prevRespId)
+          }
+          setState({
+            runmeSession: recovSess.id,
+            cells: recovSess.data.cells.reduce(
+              (acc, cell) => {
+                acc[cell.refId] = cell
+                return acc
+              },
+              {} as Record<string, parser_pb.Cell>
+            ),
+            positions,
+          })
+          return
+        }
+      }
+
+      setState({
+        runmeSession: activeSessionID!,
+        cells: {},
+        positions: [],
+      })
+    },
+    [invertedOrder, storage]
+  )
 
   // Any time state changes, save the current state
   useEffect(() => {
     saveState()
-  }, [activeSession, state, storage, invertedOrder, saveState])
+  }, [state, storage, invertedOrder, saveState])
 
   useEffect(() => {
     setState((prev) => {
       return {
-        ...prev,
-        positions: [...prev.positions].reverse(),
+        runmeSession: prev?.runmeSession ?? '',
+        cells: prev?.cells ?? {},
+        positions: [...(prev?.positions ?? [])].reverse(),
       }
     })
   }, [invertedOrder])
 
+  useEffect(() => {
+    if (!resetSession) {
+      return
+    }
+    resetSession({ attemptRestore: true })
+  }, [resetSession])
+
   const chatCells = useMemo(() => {
+    if (!state) {
+      return []
+    }
     return state.positions
       .map((id) => state.cells[id])
       .filter(
@@ -172,25 +253,31 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
           (cell.kind === parser_pb.CellKind.MARKUP ||
             cell.kind === parser_pb.CellKind.CODE)
       )
-  }, [state.cells, state.positions])
+  }, [state])
 
   const actionCells = useMemo(() => {
+    if (!state) {
+      return []
+    }
     return state.positions
       .map((id) => state.cells[id])
       .filter(
         (cell): cell is parser_pb.Cell =>
           Boolean(cell) && cell.kind === parser_pb.CellKind.CODE
       )
-  }, [state.cells, state.positions])
+  }, [state])
 
   const fileCells = useMemo(() => {
+    if (!state) {
+      return []
+    }
     return state.positions
       .map((id) => state.cells[id])
       .filter(
         (cell): cell is parser_pb.Cell =>
           Boolean(cell) && cell.kind === parser_pb.CellKind.DOC_RESULTS
       )
-  }, [state.cells, state.positions])
+  }, [state])
 
   const useColumns = () => {
     return {
@@ -210,7 +297,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
 
     const req: GenerateRequest = create(GenerateRequestSchema, {
       cells,
-      previousResponseId: previousResponseId,
+      previousResponseId,
     })
 
     req.openaiAccessToken = accessToken.accessToken
@@ -272,11 +359,15 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
 
   const updateCell = (cell: parser_pb.Cell) => {
     setState((prev) => {
+      if (!prev) {
+        return undefined
+      }
       if (!prev.cells[cell.refId]) {
         const newPositions = invertedOrder
           ? [cell.refId, ...prev.positions]
           : [...prev.positions, cell.refId]
         return {
+          runmeSession: prev.runmeSession,
           cells: {
             ...prev.cells,
             [cell.refId]: cell,
@@ -287,6 +378,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
 
       return {
         ...prev,
+        runmeSession: prev.runmeSession,
         cells: {
           ...prev.cells,
           [cell.refId]: cell,
@@ -295,15 +387,14 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     })
   }
 
-  const resetSession = () => {
-    setState({ cells: {}, positions: [] })
-    setSequence(0)
-    setPreviousResponseId(undefined)
-  }
-
   const addCodeCell = () => {
+    const refID = `code_${uuidv4().replace(/-/g, '')}`
     const cell = create(parser_pb.CellSchema, {
-      refId: `code_${uuidv4()}`,
+      metadata: {
+        [RunmeMetadataKey.ID]: refID,
+        [RunmeMetadataKey.RunmeID]: refID,
+      },
+      refId: refID,
       role: parser_pb.CellRole.USER,
       kind: parser_pb.CellKind.CODE,
       value: '',
@@ -327,7 +418,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   // todo(sebastian): quick and dirty export implementation
   const exportDocument = async () => {
     const cells = getAscendingCells(state, invertedOrder)
-    if (cells.length === 0) {
+    if (!state || cells.length === 0) {
       return
     }
 

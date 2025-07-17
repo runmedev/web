@@ -85,7 +85,7 @@ const TopNavigation = () => {
           <Text>Export</Text>
         </Flex>
       </Link>
-      <Link to="/" onClick={resetSession}>
+      <Link to="/" onClick={() => resetSession({ attemptRestore: false })}>
         <Flex className="cursor-pointer" gap="1" align="center">
           <svg
             width="15"

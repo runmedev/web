@@ -41,10 +41,17 @@ export enum MimeType {
   VSCodeNotebookStdErr = 'application/vnd.code.notebook.stderr',
 }
 
+const privatePrefix = 'runme.dev/'
+
 export enum RunmeMetadataKey {
-  Id = 'runme.dev/id',
-  Pid = 'runme.dev/pid',
-  ExitCode = 'runme.dev/exitCode',
+  ID = 'id',
+  RunmeID = `${privatePrefix}id`,
+  Pid = `${privatePrefix}pid`,
+  ExitCode = `${privatePrefix}exitCode`,
+}
+
+export enum AgentMetadataKey {
+  PreviousResponseId = `${privatePrefix}previousResponseId`,
 }
 
 export { parser_pb, runner_pb }

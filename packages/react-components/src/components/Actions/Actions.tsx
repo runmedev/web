@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Button, Card, ScrollArea, Text } from '@radix-ui/themes'
 import { Console, genRunID } from '@runmedev/react-console'
 import '@runmedev/react-console/react-console.css'
+import { Subject, debounceTime } from 'rxjs'
 
 import { parser_pb, useCell } from '../../contexts/CellContext'
 import { useSettings } from '../../contexts/SettingsContext'
@@ -133,6 +134,7 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
   const [stderr, setStderr] = useState<string>('')
   const [lastRunID, setLastRunID] = useState<string>('')
   const [lastSequence, setLastSequence] = useState<number | null>(null)
+  const valueSubject = useMemo(() => new Subject<string>(), [])
 
   const runCode = useCallback(
     (takeFocus = false) => {
@@ -146,6 +148,20 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
     },
     [editorValue, incrementSequence]
   )
+
+  useEffect(() => {
+    const sub = valueSubject
+      .pipe(debounceTime(100))
+      .subscribe((value) => (cell.value = value))
+    return () => sub.unsubscribe()
+  }, [cell, valueSubject])
+
+  useEffect(() => {
+    if (editorValue !== '' && cell.value === editorValue) {
+      return
+    }
+    valueSubject.next(editorValue)
+  }, [cell.value, editorValue, valueSubject])
 
   // Listen for runCodeCell events
   useEffect(() => {
@@ -262,7 +278,7 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
     }
 
     // cells with neither PID nor exit code never ran
-    // always save the state changes
+    // always save the state changes, if we have cells
     saveState()
   }, [pid, exitCode, cell, saveState])
 

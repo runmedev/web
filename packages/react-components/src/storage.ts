@@ -73,6 +73,12 @@ export class SessionStorage extends Dexie {
     return this.sessions.get(id)
   }
 
+  // Load sessions by an array of ids
+  async loadSessions(ids: string[]): Promise<SessionNotebook[]> {
+    const sessions = await this.sessions.bulkGet(ids)
+    return sessions.filter((s) => !!s) as SessionNotebook[]
+  }
+
   // List all sessions (sorted by updated desc)
   async listSessions(): Promise<SessionNotebook[]> {
     return this.sessions.orderBy('updated').reverse().toArray()
@@ -138,7 +144,7 @@ export class SessionStorage extends Dexie {
             CreateSessionRequest_Config_SessionEnvStoreSeeding.SYSTEM,
         },
       })
-      return resp.session?.id ?? ''
+      return resp.session?.id
     } catch (e) {
       console.error('Error creating session', e)
       return undefined
