@@ -17,6 +17,7 @@ import { v4 as uuidv4 } from 'uuid'
 
 import {
   AgentMetadataKey,
+  MimeType,
   RunmeMetadataKey,
   createConnectClient,
   parser_pb,
@@ -434,8 +435,8 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
       options: create(parser_pb.SerializeRequestOptionsSchema, {
         outputs: create(parser_pb.SerializeRequestOutputOptionsSchema, {
           // todo(sebastian): will only work if we populate the outputs
-          enabled: false,
-          summary: false,
+          enabled: true,
+          summary: true,
         }),
       }),
     })
@@ -472,6 +473,58 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
       {children}
     </CellContext.Provider>
   )
+}
+
+// singleton text encoder for non-streaming output
+const textEncoder = new TextEncoder()
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function createCellOutputs(
+  {
+    pid,
+    exitCode,
+  }: {
+    pid: number | null
+    exitCode: number | null
+  },
+  stdout: string,
+  stderr: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _mimeType: string | null // todo(sebastian): Runme's serializer ignores text/plain
+): parser_pb.CellOutput[] {
+  let processInfo: parser_pb.CellOutputProcessInfo | undefined
+
+  if (pid !== null && exitCode !== null) {
+    processInfo = create(parser_pb.CellOutputProcessInfoSchema, {
+      pid: BigInt(pid),
+      exitReason: create(parser_pb.ProcessInfoExitReasonSchema, {
+        type: 'exit',
+        code: exitCode,
+      }),
+    })
+  }
+
+  return [
+    create(parser_pb.CellOutputSchema, {
+      items: [
+        create(parser_pb.CellOutputItemSchema, {
+          mime: MimeType.VSCodeNotebookStdOut,
+          type: 'Buffer',
+          data: textEncoder.encode(stdout),
+        }),
+      ],
+      processInfo,
+    }),
+    create(parser_pb.CellOutputSchema, {
+      items: [
+        create(parser_pb.CellOutputItemSchema, {
+          mime: MimeType.VSCodeNotebookStdErr,
+          type: 'Buffer',
+          data: textEncoder.encode(stderr),
+        }),
+      ],
+    }),
+  ]
 }
 
 const TypingCell = create(parser_pb.CellSchema, {

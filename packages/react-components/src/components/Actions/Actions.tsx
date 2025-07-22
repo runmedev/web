@@ -1,10 +1,15 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { create } from '@bufbuild/protobuf'
 import { Box, Button, Card, ScrollArea, Text } from '@radix-ui/themes'
 import { Console, genRunID } from '@runmedev/react-console'
 import '@runmedev/react-console/react-console.css'
 
-import { parser_pb, useCell } from '../../contexts/CellContext'
+import {
+  createCellOutputs,
+  parser_pb,
+  useCell,
+} from '../../contexts/CellContext'
 import { useSettings } from '../../contexts/SettingsContext'
 import { RunmeMetadataKey } from '../../runme/client'
 import { getSessionToken } from '../../token'
@@ -113,13 +118,7 @@ const CodeConsole = memo(
 function Action({ cell }: { cell: parser_pb.Cell }) {
   const { settings } = useSettings()
   const invertedOrder = settings.webApp.invertedOrder
-  const {
-    createOutputCell,
-    sendOutputCell,
-    saveState,
-    incrementSequence,
-    sequence,
-  } = useCell()
+  const { sendOutputCell, saveState, incrementSequence, sequence } = useCell()
   const [editorValue, setEditorValue] = useState(cell.value)
   const [takeFocus, setTakeFocus] = useState(false)
   const [exec, setExec] = useState<{ value: string; runID: string }>({
@@ -127,6 +126,7 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
     runID: '',
   })
   const [pid, setPid] = useState<number | null>(null)
+  const [startTime, setStartTime] = useState<bigint | null>(null)
   const [exitCode, setExitCode] = useState<number | null>(null)
   const [mimeType, setMimeType] = useState<string | null>(null)
   const [stdout, setStdout] = useState<string>('')
@@ -136,6 +136,9 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
 
   const runCode = useCallback(
     (takeFocus = false) => {
+      setStartTime(BigInt(Date.now()))
+      cell.executionSummary = undefined
+      cell.outputs = []
       setStdout('')
       setStderr('')
       setPid(null)
@@ -144,7 +147,7 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
       incrementSequence()
       setExec({ value: editorValue, runID: genRunID() })
     },
-    [editorValue, incrementSequence]
+    [cell, editorValue, incrementSequence]
   )
 
   // Listen for runCodeCell events
@@ -164,6 +167,26 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
     }
   }, [cell.refId, runCode])
 
+  const cellOutputs = useMemo(() => {
+    return createCellOutputs({ pid, exitCode }, stdout, stderr, mimeType)
+  }, [pid, exitCode, stdout, stderr, mimeType])
+
+  useEffect(() => {
+    if (startTime === null) {
+      return
+    }
+
+    cell.outputs = cellOutputs
+    cell.executionSummary = create(parser_pb.CellExecutionSummarySchema, {
+      timing: create(parser_pb.ExecutionSummaryTimingSchema, {
+        startTime: startTime,
+        endTime: BigInt(Date.now()),
+      }),
+      executionOrder: sequence,
+      success: Number.isFinite(exitCode) && exitCode === 0,
+    })
+  }, [cell, cellOutputs, exitCode, sequence, startTime])
+
   const finalOutputCell = useMemo(() => {
     if (
       pid === null ||
@@ -175,49 +198,8 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
       return null
     }
 
-    const textEncoder = new TextEncoder()
-
-    const outputCell = createOutputCell({
-      ...cell,
-      outputs: [
-        {
-          $typeName: 'runme.parser.v1.CellOutput',
-          metadata: {},
-          items: [
-            {
-              $typeName: 'runme.parser.v1.CellOutputItem',
-              mime: mimeType || 'text/plain', // todo(sebastian): use MimeType instead?
-              type: 'Buffer',
-              data: textEncoder.encode(stdout),
-            },
-          ],
-        },
-        {
-          $typeName: 'runme.parser.v1.CellOutput',
-          metadata: {},
-          items: [
-            {
-              $typeName: 'runme.parser.v1.CellOutputItem',
-              mime: mimeType || 'text/plain', // todo(sebastian): use MimeType instead?
-              type: 'Buffer',
-              data: textEncoder.encode(stderr),
-            },
-          ],
-        },
-      ],
-    })
-
-    return outputCell
-  }, [
-    cell,
-    createOutputCell,
-    stdout,
-    stderr,
-    mimeType,
-    pid,
-    exitCode,
-    exec.runID,
-  ])
+    return cell
+  }, [cell, exec.runID, exitCode, pid])
 
   useEffect(() => {
     // avoid infinite loop
