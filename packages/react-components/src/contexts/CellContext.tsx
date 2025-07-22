@@ -111,7 +111,6 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     if (!principal) {
       return
     }
-    console.log('principal', principal)
     return new SessionStorage(
       'agent',
       principal,
