@@ -58,12 +58,12 @@ export class SessionStorage extends Dexie {
 
   // Save or update a session
   async saveNotebook(id: string, notebook: Notebook) {
-    console.log(
-      new Date().toISOString(),
-      'scheduling Notebook save',
-      id,
-      notebook
-    )
+    // console.log(
+    //   new Date().toISOString(),
+    //   'scheduling Notebook save',
+    //   id,
+    //   notebook
+    // )
     // schedule a save to allow debouncing to avoid excessive writes
     this.saveSubject.next({ id, notebook })
   }

@@ -124,7 +124,13 @@ const Editor = memo(
               fontFamily,
               lineHeight: 20,
             }}
-            onChange={(v) => v && onChange?.(v)}
+            onChange={(v) => {
+              if (!v) {
+                return
+              }
+              value = v
+              onChange?.(v)
+            }}
             onMount={editorDidMount}
             className="rounded-lg"
             wrapperProps={{ className: 'rounded-lg' }}
