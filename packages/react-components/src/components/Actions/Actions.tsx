@@ -313,6 +313,7 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
               key={cell.refId}
               id={cell.refId}
               value={editorValue}
+              language="shellscript"
               fontSize={fontSize}
               fontFamily={fontFamily}
               onChange={(v) => {
