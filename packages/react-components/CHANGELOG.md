@@ -1,5 +1,11 @@
 # @runmedev/react-components
 
+## 3.15.1
+
+### Patch Changes
+
+- Introduce persistence
+
 ## 3.15.0
 
 ### Minor Changes

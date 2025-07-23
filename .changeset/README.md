@@ -24,6 +24,7 @@ npm run version-packages
 
 ```sh {"terminalRows":"24"}
 npm run clean
+runme run setup
 npm run build
 ```
 
