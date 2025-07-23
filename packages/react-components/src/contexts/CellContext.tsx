@@ -534,4 +534,4 @@ const TypingCell = create(parser_pb.CellSchema, {
 })
 
 // eslint-disable-next-line react-refresh/only-export-components
-export { parser_pb, TypingCell }
+export { parser_pb, TypingCell, MimeType }

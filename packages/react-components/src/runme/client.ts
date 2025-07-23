@@ -46,6 +46,7 @@ const privatePrefix = 'runme.dev/'
 export enum RunmeMetadataKey {
   ID = 'id',
   RunmeID = `${privatePrefix}id`,
+  LastRunID = `${privatePrefix}lastRunID`,
   Pid = `${privatePrefix}pid`,
   ExitCode = `${privatePrefix}exitCode`,
 }

@@ -6,6 +6,7 @@ import { Console, genRunID } from '@runmedev/react-console'
 import '@runmedev/react-console/react-console.css'
 
 import {
+  MimeType,
   createCellOutputs,
   parser_pb,
   useCell,
@@ -24,6 +25,7 @@ import {
 
 const fontSize = 14
 const fontFamily = 'monospace'
+const textDecoder = new TextDecoder()
 
 function RunActionButton({
   pid,
@@ -48,12 +50,14 @@ function RunActionButton({
   )
 }
 
+// todo(sebastian): we should turn this into a CellConsole and mold this component to the Cell type
 const CodeConsole = memo(
   ({
     cellID,
     runID,
     sequence,
     value,
+    content,
     settings = {},
     onStdout,
     onStderr,
@@ -65,6 +69,7 @@ const CodeConsole = memo(
     runID: string
     sequence: number
     value: string
+    content?: string
     settings?: {
       className?: string
       rows?: number
@@ -81,13 +86,13 @@ const CodeConsole = memo(
   }) => {
     const { webApp } = useSettings().settings
     return (
-      value != '' &&
-      runID != '' && (
+      ((value != '' && runID != '') || (content && content.length > 0)) && (
         <Console
           cellID={cellID}
           runID={runID}
           sequence={sequence}
           commands={value.split('\n')}
+          content={content}
           runner={{
             endpoint: webApp.runner,
             reconnect: webApp.reconnect,
@@ -228,6 +233,12 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
       return
     }
 
+    // cells with lastRunID might still be running
+    // never delete lastRunID, only overwrite it
+    if (exec.runID !== '') {
+      cell.metadata[RunmeMetadataKey.LastRunID] = exec.runID
+    }
+
     // cell with PIDs are running
     if (pid) {
       cell.metadata[RunmeMetadataKey.Pid] = pid.toString()
@@ -246,7 +257,39 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
     // cells with neither PID nor exit code never ran
     // always save the state changes, if we have cells
     saveState()
-  }, [pid, exitCode, cell, saveState])
+  }, [pid, exitCode, cell, saveState, exec.runID])
+
+  const content = useMemo(() => {
+    if (cell.kind !== parser_pb.CellKind.CODE) {
+      return undefined
+    }
+
+    if (lastRunID !== '') {
+      return undefined
+    }
+
+    const stdoutItem = cell.outputs
+      .flatMap((output) => output.items)
+      .find((item) => item.mime === MimeType.VSCodeNotebookStdOut)
+
+    if (!stdoutItem) {
+      return undefined
+    }
+
+    return textDecoder.decode(stdoutItem.data)
+  }, [cell.kind, cell.outputs, lastRunID])
+
+  // If the cell has an exit code but no PID, return the last run ID
+  // This will attempt to resume execution of the cell from the last run
+  const recoveredRunID = useMemo(() => {
+    const rePid = cell.metadata[RunmeMetadataKey.Pid] ?? ''
+
+    if (!rePid) {
+      return ''
+    }
+
+    return cell.metadata[RunmeMetadataKey.LastRunID] ?? ''
+  }, [cell.metadata])
 
   const sequenceLabel = useMemo(() => {
     if (!lastSequence) {
@@ -293,10 +336,11 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
             />
             <CodeConsole
               key={exec.runID}
-              runID={exec.runID}
+              runID={exec.runID || recoveredRunID}
               cellID={cell.refId}
               sequence={lastSequence || 0}
               value={exec.value}
+              content={content}
               settings={{
                 takeFocus: takeFocus,
                 scrollToFit: !invertedOrder,
