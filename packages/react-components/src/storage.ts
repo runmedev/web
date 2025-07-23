@@ -153,5 +153,5 @@ export class SessionStorage extends Dexie {
 }
 
 export function generateSessionName(): string {
-  return `Session-${new Date().toISOString()}`
+  return new Date().toISOString()
 }

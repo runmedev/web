@@ -43,7 +43,7 @@ type CellContextType = {
 
   // saveState saves the current state to the storage, runs sync because it schedules a debounced save
   saveState: () => void
-  exportDocument: () => Promise<void>
+  exportDocument: (options: { asSessionRecord: boolean }) => Promise<void>
   // Define additional functions to update the state
   // This way they can be set in the provider and passed down to the components
   sendOutputCell: (outputCell: parser_pb.Cell) => Promise<void>
@@ -416,7 +416,11 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   }
 
   // todo(sebastian): quick and dirty export implementation
-  const exportDocument = async () => {
+  const exportDocument = async ({
+    asSessionRecord,
+  }: {
+    asSessionRecord: boolean
+  }) => {
     const cells = getAscendingCells(state, invertedOrder)
     if (!state || cells.length === 0) {
       return
@@ -434,18 +438,28 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
       notebook: notebook,
       options: create(parser_pb.SerializeRequestOptionsSchema, {
         outputs: create(parser_pb.SerializeRequestOutputOptionsSchema, {
-          // todo(sebastian): will only work if we populate the outputs
-          enabled: true,
-          summary: true,
+          enabled: false,
+          summary: false,
         }),
       }),
     })
+
+    // if it's a session record, we want to include the outputs and session ID
+    if (asSessionRecord && req.options?.outputs) {
+      req.options.outputs.enabled = true
+      req.options.outputs.summary = true
+      req.options.session = create(parser_pb.RunmeSessionSchema, {
+        id: state.runmeSession,
+      })
+    }
+
     const resp = await c.serialize(req)
     const blob = new Blob([resp.result], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${generateSessionName()}.md`
+    const prefix = asSessionRecord ? 'Session' : 'Notebook'
+    a.download = `${prefix}-${generateSessionName()}.md`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
