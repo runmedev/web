@@ -1,11 +1,18 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { create } from '@bufbuild/protobuf'
 import { Box, Button, Card, ScrollArea, Text } from '@radix-ui/themes'
 import { Console, genRunID } from '@runmedev/react-console'
 import '@runmedev/react-console/react-console.css'
 
-import { Cell, useCell } from '../../contexts/CellContext'
+import {
+  MimeType,
+  createCellOutputs,
+  parser_pb,
+  useCell,
+} from '../../contexts/CellContext'
 import { useSettings } from '../../contexts/SettingsContext'
+import { RunmeMetadataKey } from '../../runme/client'
 import { getSessionToken } from '../../token'
 import Editor from './Editor'
 import {
@@ -18,6 +25,7 @@ import {
 
 const fontSize = 14
 const fontFamily = 'monospace'
+const textDecoder = new TextDecoder()
 
 function RunActionButton({
   pid,
@@ -42,12 +50,14 @@ function RunActionButton({
   )
 }
 
+// todo(sebastian): we should turn this into a CellConsole and mold this component to the Cell type
 const CodeConsole = memo(
   ({
     cellID,
     runID,
     sequence,
     value,
+    content,
     settings = {},
     onStdout,
     onStderr,
@@ -59,6 +69,7 @@ const CodeConsole = memo(
     runID: string
     sequence: number
     value: string
+    content?: string
     settings?: {
       className?: string
       rows?: number
@@ -75,13 +86,13 @@ const CodeConsole = memo(
   }) => {
     const { webApp } = useSettings().settings
     return (
-      value != '' &&
-      runID != '' && (
+      ((value != '' && runID != '') || (content && content.length > 0)) && (
         <Console
           cellID={cellID}
           runID={runID}
           sequence={sequence}
           commands={value.split('\n')}
+          content={content}
           runner={{
             endpoint: webApp.runner,
             reconnect: webApp.reconnect,
@@ -109,11 +120,10 @@ const CodeConsole = memo(
 )
 
 // Action is an editor and an optional Runme console
-function Action({ cell }: { cell: Cell }) {
+function Action({ cell }: { cell: parser_pb.Cell }) {
   const { settings } = useSettings()
   const invertedOrder = settings.webApp.invertedOrder
-  const { createOutputCell, sendOutputCell, incrementSequence, sequence } =
-    useCell()
+  const { sendOutputCell, saveState, incrementSequence, sequence } = useCell()
   const [editorValue, setEditorValue] = useState(cell.value)
   const [takeFocus, setTakeFocus] = useState(false)
   const [exec, setExec] = useState<{ value: string; runID: string }>({
@@ -121,6 +131,7 @@ function Action({ cell }: { cell: Cell }) {
     runID: '',
   })
   const [pid, setPid] = useState<number | null>(null)
+  const [startTime, setStartTime] = useState<bigint | null>(null)
   const [exitCode, setExitCode] = useState<number | null>(null)
   const [mimeType, setMimeType] = useState<string | null>(null)
   const [stdout, setStdout] = useState<string>('')
@@ -130,6 +141,9 @@ function Action({ cell }: { cell: Cell }) {
 
   const runCode = useCallback(
     (takeFocus = false) => {
+      setStartTime(BigInt(Date.now()))
+      cell.executionSummary = undefined
+      cell.outputs = []
       setStdout('')
       setStderr('')
       setPid(null)
@@ -138,7 +152,7 @@ function Action({ cell }: { cell: Cell }) {
       incrementSequence()
       setExec({ value: editorValue, runID: genRunID() })
     },
-    [editorValue, incrementSequence]
+    [cell, editorValue, incrementSequence]
   )
 
   // Listen for runCodeCell events
@@ -158,6 +172,26 @@ function Action({ cell }: { cell: Cell }) {
     }
   }, [cell.refId, runCode])
 
+  const cellOutputs = useMemo(() => {
+    return createCellOutputs({ pid, exitCode }, stdout, stderr, mimeType)
+  }, [pid, exitCode, stdout, stderr, mimeType])
+
+  useEffect(() => {
+    if (startTime === null) {
+      return
+    }
+
+    cell.outputs = cellOutputs
+    cell.executionSummary = create(parser_pb.CellExecutionSummarySchema, {
+      timing: create(parser_pb.ExecutionSummaryTimingSchema, {
+        startTime: startTime,
+        endTime: BigInt(Date.now()),
+      }),
+      executionOrder: sequence,
+      success: Number.isFinite(exitCode) && exitCode === 0,
+    })
+  }, [cell, cellOutputs, exitCode, sequence, startTime])
+
   const finalOutputCell = useMemo(() => {
     if (
       pid === null ||
@@ -169,49 +203,8 @@ function Action({ cell }: { cell: Cell }) {
       return null
     }
 
-    const textEncoder = new TextEncoder()
-
-    const outputCell = createOutputCell({
-      ...cell,
-      outputs: [
-        {
-          $typeName: 'runme.parser.v1.CellOutput',
-          metadata: {},
-          items: [
-            {
-              $typeName: 'runme.parser.v1.CellOutputItem',
-              mime: mimeType || 'text/plain', // todo(sebastian): use MimeType instead?
-              type: 'Buffer',
-              data: textEncoder.encode(stdout),
-            },
-          ],
-        },
-        {
-          $typeName: 'runme.parser.v1.CellOutput',
-          metadata: {},
-          items: [
-            {
-              $typeName: 'runme.parser.v1.CellOutputItem',
-              mime: mimeType || 'text/plain', // todo(sebastian): use MimeType instead?
-              type: 'Buffer',
-              data: textEncoder.encode(stderr),
-            },
-          ],
-        },
-      ],
-    })
-
-    return outputCell
-  }, [
-    cell,
-    createOutputCell,
-    stdout,
-    stderr,
-    mimeType,
-    pid,
-    exitCode,
-    exec.runID,
-  ])
+    return cell
+  }, [cell, exec.runID, exitCode, pid])
 
   useEffect(() => {
     // avoid infinite loop
@@ -233,6 +226,70 @@ function Action({ cell }: { cell: Cell }) {
   useEffect(() => {
     setEditorValue(cell.value)
   }, [cell.value])
+
+  useEffect(() => {
+    // Only save metadata for code cells
+    if (cell.kind !== parser_pb.CellKind.CODE) {
+      return
+    }
+
+    // cells with lastRunID might still be running
+    // never delete lastRunID, only overwrite it
+    if (exec.runID !== '') {
+      cell.metadata[RunmeMetadataKey.LastRunID] = exec.runID
+    }
+
+    // cell with PIDs are running
+    if (pid) {
+      cell.metadata[RunmeMetadataKey.Pid] = pid.toString()
+    } else {
+      delete cell.metadata[RunmeMetadataKey.Pid]
+    }
+
+    // cell with exit codes are done running, remove PID
+    if (exitCode !== null && Number.isFinite(exitCode)) {
+      delete cell.metadata[RunmeMetadataKey.Pid]
+      cell.metadata[RunmeMetadataKey.ExitCode] = exitCode.toString()
+    } else {
+      delete cell.metadata[RunmeMetadataKey.ExitCode]
+    }
+
+    // cells with neither PID nor exit code never ran
+    // always save the state changes, if we have cells
+    saveState()
+  }, [pid, exitCode, cell, saveState, exec.runID])
+
+  const content = useMemo(() => {
+    if (cell.kind !== parser_pb.CellKind.CODE) {
+      return undefined
+    }
+
+    if (lastRunID !== '') {
+      return undefined
+    }
+
+    const stdoutItem = cell.outputs
+      .flatMap((output) => output.items)
+      .find((item) => item.mime === MimeType.VSCodeNotebookStdOut)
+
+    if (!stdoutItem) {
+      return undefined
+    }
+
+    return textDecoder.decode(stdoutItem.data)
+  }, [cell.kind, cell.outputs, lastRunID])
+
+  // If the cell has an exit code but no PID, return the last run ID
+  // This will attempt to resume execution of the cell from the last run
+  const recoveredRunID = useMemo(() => {
+    const rePid = cell.metadata[RunmeMetadataKey.Pid] ?? ''
+
+    if (!rePid) {
+      return ''
+    }
+
+    return cell.metadata[RunmeMetadataKey.LastRunID] ?? ''
+  }, [cell.metadata])
 
   const sequenceLabel = useMemo(() => {
     if (!lastSequence) {
@@ -265,21 +322,25 @@ function Action({ cell }: { cell: Cell }) {
               key={cell.refId}
               id={cell.refId}
               value={editorValue}
+              language="shellscript"
               fontSize={fontSize}
               fontFamily={fontFamily}
               onChange={(v) => {
                 setPid(null)
                 setExitCode(null)
                 setEditorValue(v)
+                cell.value = v // only sync cell value on change
+                saveState()
               }}
               onEnter={() => runCode()}
             />
             <CodeConsole
               key={exec.runID}
-              runID={exec.runID}
+              runID={exec.runID || recoveredRunID}
               cellID={cell.refId}
               sequence={lastSequence || 0}
               value={exec.value}
+              content={content}
               settings={{
                 takeFocus: takeFocus,
                 scrollToFit: !invertedOrder,

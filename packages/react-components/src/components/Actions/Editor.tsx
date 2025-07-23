@@ -2,11 +2,14 @@ import { memo, useEffect, useRef, useState } from 'react'
 
 import MonacoEditor from '@monaco-editor/react'
 
+const theme = 'vs-dark'
+
 // Editor component for editing code which won't re-render unless the value changes
 const Editor = memo(
   ({
     id,
     value,
+    language,
     fontSize = 14,
     fontFamily = 'monospace',
     onChange,
@@ -14,6 +17,7 @@ const Editor = memo(
   }: {
     id: string
     value: string
+    language: string
     fontSize?: number
     fontFamily?: string
     onChange: (value: string) => void
@@ -37,7 +41,9 @@ const Editor = memo(
     // Handle resize events
     useEffect(() => {
       const handleMouseMove = (e: MouseEvent) => {
-        if (!isResizing) return
+        if (!isResizing) {
+          return
+        }
 
         const deltaY = e.clientY - startYRef.current
         const newHeight = Math.max(100, startHeightRef.current + deltaY)
@@ -72,7 +78,7 @@ const Editor = memo(
       if (!monaco?.editor) {
         return
       }
-      monaco.editor.setTheme('vs-dark')
+      monaco.editor.setTheme(theme)
 
       if (!editor) {
         return
@@ -105,20 +111,26 @@ const Editor = memo(
             key={id}
             height={height}
             width="100%"
-            defaultLanguage="shellscript"
+            defaultLanguage={language}
             value={value}
             options={{
               scrollbar: {
                 alwaysConsumeMouseWheel: false,
               },
               minimap: { enabled: false },
-              theme: 'vs-dark',
+              theme,
               wordWrap: 'wordWrapColumn',
               fontSize,
               fontFamily,
               lineHeight: 20,
             }}
-            onChange={(v) => v && onChange?.(v)}
+            onChange={(v) => {
+              if (!v) {
+                return
+              }
+              value = v
+              onChange?.(v)
+            }}
             onMount={editorDidMount}
             className="rounded-lg"
             wrapperProps={{ className: 'rounded-lg' }}

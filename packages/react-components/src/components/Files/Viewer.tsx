@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef } from 'react'
 
 import { DocResult } from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/docresult_pb'
-import { CellSchema } from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb'
 import { create } from '@bufbuild/protobuf'
 import { Box, Link, ScrollArea, Text } from '@radix-ui/themes'
 
-import { Cell, useCell } from '../../contexts/CellContext'
+import { parser_pb, useCell } from '../../contexts/CellContext'
 
 const FileViewer = () => {
   // The code below is using "destructuring" assignment to assign certain values from the
@@ -20,7 +19,7 @@ const FileViewer = () => {
   }
 
   const oneCell = useMemo(() => {
-    let cell: Cell = create(CellSchema, {})
+    let cell: parser_pb.Cell = create(parser_pb.CellSchema, {})
 
     // N.B. Right now we don't support more than one search cell
     if (files.length > 0) {

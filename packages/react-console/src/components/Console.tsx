@@ -38,6 +38,7 @@ function Console({
   runID,
   sequence,
   commands,
+  content,
   runner,
   settings: settingsProp = {},
   onStdout,
@@ -50,6 +51,7 @@ function Console({
   runID: string
   sequence: number
   commands: string[]
+  content?: string
   runner: ConsoleRunner
   settings?: ConsoleSettings
   onStdout?: (data: Uint8Array) => void
@@ -66,6 +68,13 @@ function Console({
     takeFocus = true,
     scrollToFit = true,
   } = settingsProp
+
+  const recoveredContent = useMemo(() => {
+    if (!cellID || content === '') {
+      return null
+    }
+    return content
+  }, [cellID, content])
 
   const streams = useMemo(() => {
     if (!cellID || !runID || !runner.endpoint) {
@@ -145,18 +154,19 @@ function Console({
         smoothScrollDuration: 0,
         scrollback: 4000,
         initialRows: rows,
-        content: '',
+        content: recoveredContent || '',
         isAutoSaveEnabled: false,
         isPlatformAuthEnabled: false,
       },
     }),
     [
+      executeRequest.config?.knownId,
       fontFamily,
       fontSize,
       takeFocus,
-      rows,
-      executeRequest.config?.knownId,
       scrollToFit,
+      rows,
+      recoveredContent,
     ]
   )
 
