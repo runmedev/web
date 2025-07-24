@@ -14,7 +14,7 @@ env:
   SHELL: /bin/bash
 
 jobs:
-  build:
+  test:
     strategy:
       matrix:
         os: [ubuntu-latest]
