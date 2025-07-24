@@ -29,7 +29,11 @@
     "@radix-ui/themes": "^3.2.1"
   },
   "scripts": {
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "publishConfig": {
     "access": "public"

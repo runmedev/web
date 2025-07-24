@@ -49,6 +49,12 @@ npm run build:console
 npm run dev
 ```
 
+## Testing
+
+```sh {"name":"test"}
+npm run test:run
+```
+
 ## Linting
 
 Lint all packages:
