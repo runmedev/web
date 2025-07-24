@@ -8,6 +8,7 @@ export default defineConfig(async () => {
   return mergeConfig(base, {
     test: {
       setupFiles: ['../test/setup.ts'],
+      globals: true,
     },
     resolve: {
       alias: {

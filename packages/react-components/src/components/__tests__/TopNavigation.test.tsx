@@ -1,4 +1,3 @@
-import '@testing-library/jest-dom'
 import { fireEvent, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
