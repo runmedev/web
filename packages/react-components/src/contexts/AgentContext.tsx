@@ -8,10 +8,9 @@ import {
 import { type FC } from 'react'
 
 import * as service_pb from '@buf/stateful_runme.bufbuild_es/agent/v1/service_pb'
-import { Code, ConnectError, createClient } from '@connectrpc/connect'
+import { Interceptor, createClient } from '@connectrpc/connect'
 import { createGrpcWebTransport } from '@connectrpc/connect-web'
 
-import { getSessionToken } from '../token'
 import { useSettings } from './SettingsContext'
 
 export type AgentClient = ReturnType<
@@ -39,11 +38,13 @@ export const AgentClientProvider: FC<{ children: ReactNode }> = ({
   children,
 }) => {
   const [client, setClient] = useState<AgentClient | undefined>()
-  const { settings } = useSettings()
+  const { settings, createAuthInterceptors } = useSettings()
 
   useEffect(() => {
-    setClient(createAgentClient(settings.agentEndpoint))
-  }, [settings.agentEndpoint])
+    setClient(
+      createAgentClient(settings.agentEndpoint, createAuthInterceptors(true))
+    )
+  }, [settings.agentEndpoint, createAuthInterceptors])
 
   return (
     <ClientContext.Provider value={{ client, setClient }}>
@@ -52,31 +53,16 @@ export const AgentClientProvider: FC<{ children: ReactNode }> = ({
   )
 }
 
-const redirectOnUnauthError = (error: unknown) => {
-  const connectErr = ConnectError.from(error)
-  if (connectErr.code === Code.Unauthenticated) {
-    window.location.href = `/login?error=${encodeURIComponent(connectErr.name)}&error_description=${encodeURIComponent(connectErr.message)}`
-  }
-}
-
 // CreateAgentClient creates a client to to talk to the backend.
-function createAgentClient(baseURL: string): AgentClient {
+function createAgentClient(
+  baseURL: string,
+  interceptors: Interceptor[]
+): AgentClient {
   console.log(`initializing the client: baseURL ${baseURL}`)
   // We use gRPCWebTransport because we want server side streaming
   const transport = createGrpcWebTransport({
     baseUrl: baseURL,
-    interceptors: [
-      (next) => (req) => {
-        const token = getSessionToken()
-        if (token) {
-          req.header.set('Authorization', `Bearer ${token}`)
-        }
-        return next(req).catch((e) => {
-          redirectOnUnauthError(e)
-          throw e // allow caller to handle the error
-        })
-      },
-    ],
+    interceptors: interceptors,
   })
   // Here we make the client itself, combining the service
   // definition with the transport.

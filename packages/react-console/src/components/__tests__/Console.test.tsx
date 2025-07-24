@@ -31,6 +31,7 @@ describe('Console', () => {
     runner: {
       endpoint: 'ws://localhost:8080/ws',
       reconnect: true,
+      interceptors: [],
       authorization: { bearerToken: 'test-token' },
     },
     settings: {

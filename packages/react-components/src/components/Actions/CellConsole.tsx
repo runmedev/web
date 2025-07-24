@@ -3,7 +3,6 @@ import { memo } from 'react'
 import { Console } from '@runmedev/react-console'
 
 import { useSettings } from '../../contexts/SettingsContext'
-import { getSessionToken } from '../../token'
 
 // todo(sebastian): we should turn this into a CellConsole and mold this component to the Cell type
 const CellConsole = memo(
@@ -39,7 +38,10 @@ const CellConsole = memo(
     onPid: (pid: number) => void
     onMimeType: (mimeType: string) => void
   }) => {
-    const { webApp } = useSettings().settings
+    const {
+      createAuthInterceptors,
+      settings: { webApp },
+    } = useSettings()
     return (
       ((value != '' && runID != '') || (content && content.length > 0)) && (
         <Console
@@ -51,9 +53,7 @@ const CellConsole = memo(
           runner={{
             endpoint: webApp.runner,
             reconnect: webApp.reconnect,
-            authorization: {
-              bearerToken: getSessionToken(),
-            },
+            interceptors: createAuthInterceptors(false),
           }}
           settings={settings}
           onPid={onPid}
