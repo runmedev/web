@@ -1,8 +1,8 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { create } from '@bufbuild/protobuf'
 import { Box, Button, Card, ScrollArea, Text } from '@radix-ui/themes'
-import { Console, genRunID } from '@runmedev/react-console'
+import { genRunID } from '@runmedev/react-console'
 import '@runmedev/react-console/react-console.css'
 
 import {
@@ -13,7 +13,7 @@ import {
 } from '../../contexts/CellContext'
 import { useSettings } from '../../contexts/SettingsContext'
 import { RunmeMetadataKey } from '../../runme/client'
-import { getSessionToken } from '../../token'
+import CellConsole from './CellConsole'
 import Editor from './Editor'
 import {
   ErrorIcon,
@@ -49,75 +49,6 @@ function RunActionButton({
     </Button>
   )
 }
-
-// todo(sebastian): we should turn this into a CellConsole and mold this component to the Cell type
-const CodeConsole = memo(
-  ({
-    cellID,
-    runID,
-    sequence,
-    value,
-    content,
-    settings = {},
-    onStdout,
-    onStderr,
-    onExitCode,
-    onPid,
-    onMimeType,
-  }: {
-    cellID: string
-    runID: string
-    sequence: number
-    value: string
-    content?: string
-    settings?: {
-      className?: string
-      rows?: number
-      fontSize?: number
-      fontFamily?: string
-      takeFocus?: boolean
-      scrollToFit?: boolean
-    }
-    onStdout: (data: Uint8Array) => void
-    onStderr: (data: Uint8Array) => void
-    onExitCode: (code: number) => void
-    onPid: (pid: number) => void
-    onMimeType: (mimeType: string) => void
-  }) => {
-    const { webApp } = useSettings().settings
-    return (
-      ((value != '' && runID != '') || (content && content.length > 0)) && (
-        <Console
-          cellID={cellID}
-          runID={runID}
-          sequence={sequence}
-          commands={value.split('\n')}
-          content={content}
-          runner={{
-            endpoint: webApp.runner,
-            reconnect: webApp.reconnect,
-            authorization: {
-              bearerToken: getSessionToken(),
-            },
-          }}
-          settings={settings}
-          onPid={onPid}
-          onStdout={onStdout}
-          onStderr={onStderr}
-          onExitCode={onExitCode}
-          onMimeType={onMimeType}
-        />
-      )
-    )
-  },
-  (prevProps, nextProps) => {
-    return (
-      prevProps.cellID === nextProps.cellID &&
-      JSON.stringify(prevProps.value) === JSON.stringify(nextProps.value) &&
-      prevProps.runID === nextProps.runID
-    )
-  }
-)
 
 // Action is an editor and an optional Runme console
 function Action({ cell }: { cell: parser_pb.Cell }) {
@@ -334,7 +265,7 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
               }}
               onEnter={() => runCode()}
             />
-            <CodeConsole
+            <CellConsole
               key={exec.runID}
               runID={exec.runID || recoveredRunID}
               cellID={cell.refId}
