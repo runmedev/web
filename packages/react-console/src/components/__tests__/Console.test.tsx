@@ -1,11 +1,12 @@
 import React from 'react'
 
+import '@testing-library/jest-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { render } from '../../../../test/utils'
 import Console from '../Console'
 
-// Mock the streams module
+// Mock the streams module; likely required for disabled tests below
 // vi.mock('../../streams', () => ({
 //   default: vi.fn().mockImplementation(() => ({
 //     connect: vi.fn(() => ({
@@ -45,11 +46,9 @@ describe('Console', () => {
   })
 
   it('renders without crashing', () => {
-    render(<Console {...defaultProps} />)
+    const { container } = render(<Console {...defaultProps} />)
     // The console should render a container element
-    expect(
-      document.querySelector('[data-testid="console-container"]')
-    ).toBeDefined()
+    expect(container).toBeInTheDocument()
   })
 
   // TODO: fix these test cases
