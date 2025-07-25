@@ -108,6 +108,18 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     string | undefined
   >()
 
+  const runnerConnectEndpoint = useMemo(() => {
+    const url = new URL(settings.webApp.runner)
+    if (url.protocol === 'ws:') {
+      url.protocol = 'http:'
+    } else {
+      url.protocol = 'https:'
+    }
+    url.pathname = ''
+
+    return url.toString()
+  }, [settings.webApp.runner])
+
   const storage = useMemo(() => {
     if (!principal) {
       return
@@ -115,7 +127,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     return new SessionStorage(
       'agent',
       principal,
-      createConnectClient(runner_pb.RunnerService, settings.webApp.runner)
+      createConnectClient(runner_pb.RunnerService, runnerConnectEndpoint)
     )
   }, [settings.agentEndpoint, principal])
 
@@ -432,7 +444,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
 
     const c = createConnectClient(
       parser_pb.ParserService,
-      settings.webApp.runner
+      runnerConnectEndpoint
     )
     const req = create(parser_pb.SerializeRequestSchema, {
       notebook: notebook,
