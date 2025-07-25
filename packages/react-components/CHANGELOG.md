@@ -1,5 +1,11 @@
 # @runmedev/react-components
 
+## 3.15.3
+
+### Patch Changes
+
+- New peer dependencies
+
 ## 3.15.2
 
 ### Patch Changes

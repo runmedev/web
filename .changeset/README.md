@@ -19,15 +19,15 @@ npx changeset
 ```
 
 ```sh
-npm run version-packages
+pnpm run version-packages
 ```
 
 ```sh {"terminalRows":"24"}
-npm run clean
+pnpm run clean
 runme run setup
-npm run build
+pnpm run build
 ```
 
 ```sh {"terminalRows":"24"}
-npm run publish-packages
+pnpm run publish-packages
 ```
