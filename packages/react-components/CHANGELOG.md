@@ -1,5 +1,11 @@
 # @runmedev/react-components
 
+## 3.15.4
+
+### Patch Changes
+
+- Fix agent vs runner endpoint mismatch
+
 ## 3.15.3
 
 ### Patch Changes
