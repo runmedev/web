@@ -1,5 +1,11 @@
 # @runmedev/react-components
 
+## 3.15.5
+
+### Patch Changes
+
+- HTTP vs WS handling for Runner endpoints
+
 ## 3.15.4
 
 ### Patch Changes
