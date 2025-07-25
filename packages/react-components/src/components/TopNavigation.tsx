@@ -1,11 +1,11 @@
 import { Link } from 'react-router-dom'
 
+import * as Avatar from '@radix-ui/react-avatar'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { PersonIcon } from '@radix-ui/react-icons'
 import { Flex, Text } from '@radix-ui/themes'
 import { jwtDecode } from 'jwt-decode'
 import md5 from 'md5'
-import { Avatar } from 'radix-ui'
 
 import { useCell } from '../contexts/CellContext'
 import { getSessionToken } from '../token'

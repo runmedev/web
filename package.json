@@ -4,23 +4,19 @@
   "version": "0.0.0",
   "license": "Apache-2.0",
   "type": "module",
-  "workspaces": [
-    "packages/react-components",
-    "packages/react-console"
-  ],
   "scripts": {
-    "clean": "npm run clean -w packages/react-components && npm run clean -w packages/react-console",
-    "build": "npm run clean && npm run build:console && npm run build:components && npm run build:app",
+    "clean": "pnpm --filter @runmedev/react-components run clean && pnpm --filter @runmedev/react-console run clean",
+    "build": "pnpm run clean && pnpm run build:console && pnpm run build:components && pnpm run build:app",
     "build:components": "cd packages/react-components && tsc -b && vite build",
     "build:app": "cd packages/react-components && tsc -b tsconfig.app.json && vite build -c vite.config.app.ts",
     "build:console": "cd packages/react-console && tsc -p tsconfig.json && vite build",
     "dev": "cd packages/react-components && vite -c vite.config.app.ts",
-    "preview": "npm run build:app && cd packages/react-components && vite preview -c vite.config.app.ts",
+    "preview": "pnpm run build:app && cd packages/react-components && vite preview -c vite.config.app.ts",
     "lint": "eslint .",
-    "test": "npm run test -w packages/react-components && npm run test -w packages/react-console",
-    "test:run": "npm run test:run -w packages/react-components && npm run test:run -w packages/react-console",
-    "test:ui": "npm run test:ui -w packages/react-components",
-    "test:coverage": "npm run test:coverage -w packages/react-components && npm run test:coverage -w packages/react-console",
+    "test": "pnpm --filter @runmedev/react-components run test && pnpm --filter @runmedev/react-console run test",
+    "test:run": "pnpm --filter @runmedev/react-components run test:run && pnpm --filter @runmedev/react-console run test:run",
+    "test:ui": "pnpm --filter @runmedev/react-components run test:ui",
+    "test:coverage": "pnpm --filter @runmedev/react-components run test:coverage && pnpm --filter @runmedev/react-console run test:coverage",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "publish-packages": "changeset publish"
@@ -33,6 +29,7 @@
     "@connectrpc/connect-node": "^2.0.2",
     "@connectrpc/connect-web": "^2.0.2",
     "@monaco-editor/react": "^4.7.0",
+    "@radix-ui/react-avatar": "1.1.10",
     "@radix-ui/react-dropdown-menu": "^2.1.15",
     "@radix-ui/react-icons": "^1.3.2",
     "@radix-ui/themes": "^3.2.1",
@@ -46,6 +43,7 @@
     "react-router": "^7.4.0",
     "react-router-dom": "^7.5.0",
     "rxjs": "^7.8.2",
+    "tailwindcss": "4.1.11",
     "ulid": "^3.0.1",
     "uuid": "^11.1.0"
   },
@@ -77,5 +75,6 @@
     "vite": "^6.3.5",
     "vite-plugin-compression": "^0.5.1",
     "vitest": "^2.0.0"
-  }
+  },
+  "packageManager": "pnpm@10.13.1+sha512.37ebf1a5c7a30d5fabe0c5df44ee8da4c965ca0c5af3dbab28c3a1681b70a256218d05c81c9c0dcf767ef6b8551eb5b960042b9ed4300c59242336377e01cfad"
 }
