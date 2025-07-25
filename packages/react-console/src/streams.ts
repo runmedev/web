@@ -8,6 +8,13 @@ import * as pb from '@buf/stateful_runme.bufbuild_es/runme/stream/v1/websockets_
 import { fromJson, toJson } from '@bufbuild/protobuf'
 import { create } from '@bufbuild/protobuf'
 import {
+  Interceptor,
+  StreamRequest,
+  StreamResponse,
+  UnaryRequest,
+  UnaryResponse,
+} from '@connectrpc/connect'
+import {
   Observable,
   Subject,
   Subscription,
@@ -49,6 +56,12 @@ const RECONNECT_THROTTLE_MS = 1_000
 
 export type StreamError = Error | pb.WebsocketStatus
 
+// Interceptor types are imported from @connectrpc/connect
+
+export type NextFunc = (
+  request: UnaryRequest | StreamRequest
+) => Promise<UnaryResponse | StreamResponse>
+
 export enum Heartbeat {
   CONTINUOUS = 'CONTINUOUS',
   INITIAL = 'INITIAL',
@@ -76,7 +89,7 @@ type StreamsProps = {
   sequence: number
   options: {
     runnerEndpoint: string
-    authorization: Authorization
+    interceptors: Interceptor[]
     autoReconnect: boolean
   }
 }
@@ -164,7 +177,7 @@ class Streams {
 
   // Configuration
   private readonly runnerEndpoint: string
-  private readonly authorization: Authorization
+  private readonly interceptors: Interceptor[]
   private readonly autoReconnect: boolean
 
   constructor({ knownID, runID, sequence, options }: StreamsProps) {
@@ -175,7 +188,7 @@ class Streams {
 
     // Assign configuration
     this.runnerEndpoint = options.runnerEndpoint
-    this.authorization = options.authorization
+    this.interceptors = options.interceptors
     this.autoReconnect = options.autoReconnect
 
     // Turn the connectables into hot observables
@@ -284,15 +297,15 @@ class Streams {
     const sender = merged.pipe(
       withLatestFrom(this.client),
       takeWhile(([, socket]) => socket.readyState === WebSocket.OPEN),
-      map(([req, socket]) =>
-        sendWebsocketRequest({
+      mergeMap(async ([req, socket]) => {
+        await sendWebsocketRequest({
           req,
-          authorization: this.authorization,
+          interceptors: this.interceptors,
           socket,
           knownID: this.knownID,
           runID: this.runID,
         })
-      )
+      })
     )
 
     return sender.subscribe({
@@ -477,15 +490,16 @@ class Streams {
           const ping = { timestamp: BigInt(Date.now()) }
           return create(pb.WebsocketRequestSchema, { ping })
         }),
-        tap((req: pb.WebsocketRequest) => {
-          sendWebsocketRequest({
+        mergeMap(async (req: pb.WebsocketRequest) => {
+          await sendWebsocketRequest({
             req,
-            authorization: this.authorization,
+            interceptors: this.interceptors,
             socket,
             // todo(sebastian): not including these saves payload size. do we need them?
             // knownID: this.knownID,
             // runID: this.runID,
           })
+          return req
         }),
         map((req: pb.WebsocketRequest) => req.ping)
       )
@@ -602,15 +616,15 @@ function parseWebsocketResponse(data: string): pb.WebsocketResponse {
 }
 
 // Sends a WebsocketRequest over a WebSocket after adding knownId, runId, and authorization.
-function sendWebsocketRequest({
+async function sendWebsocketRequest({
   req,
-  authorization,
+  interceptors,
   socket,
   knownID,
   runID,
 }: {
   req: pb.WebsocketRequest
-  authorization: Authorization
+  interceptors: Interceptor[]
   socket: WebSocket
   knownID?: string
   runID?: string
@@ -623,9 +637,46 @@ function sendWebsocketRequest({
   if (runID) {
     req.runId = runID
   }
-  const { bearerToken } = authorization
-  if (bearerToken && req) {
-    req.authorization = `Bearer ${bearerToken}`
+
+  // Create a dummy unary request for interceptor compatibility
+  const authzReq: UnaryRequest = {
+    stream: false,
+    message: {} as any, // Dummy message
+    method: {} as any, // Dummy method
+    service: {} as any, // Dummy service
+    requestMethod: 'UPGRADE',
+    url: socket.url,
+    signal: new AbortController().signal,
+    header: new Headers(),
+    contextValues: {} as any,
+  }
+
+  let next: NextFunc = async (
+    request: UnaryRequest | StreamRequest
+  ): Promise<UnaryResponse | StreamResponse> => {
+    return {
+      stream: false,
+      message: {} as any,
+      method: {} as any,
+      service: {} as any,
+      // pass through the headers
+      header: request.header,
+    } as UnaryResponse
+  }
+
+  // Apply interceptors with proper typing
+  for (const i of interceptors.concat().reverse()) {
+    next = i(next as NextFunc)
+  }
+
+  // Call the final interceptor chain
+  const appliedAuthzResp = await next(authzReq)
+
+  // Websockets do not support authorization headers directly, so we add it to the request.
+  // However, going the HTTP header route allows reusing interceptors across Connect and WebSockets.
+  const authorization = appliedAuthzResp.header.get('Authorization')
+  if (authorization && req) {
+    req.authorization = authorization
   }
   socket.send(JSON.stringify(toJson(pb.WebsocketRequestSchema, req)))
 }

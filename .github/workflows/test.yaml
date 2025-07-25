@@ -1,4 +1,4 @@
-name: Bundle
+name: Test
 on:
   pull_request:
   push:
@@ -14,7 +14,7 @@ env:
   SHELL: /bin/bash
 
 jobs:
-  build:
+  test:
     strategy:
       matrix:
         os: [ubuntu-latest]
@@ -40,3 +40,7 @@ jobs:
         uses: stateful/runme-action@v2
         with:
           workflows: build
+      - name: 🧪 Test
+        uses: stateful/runme-action@v2
+        with:
+          workflows: test

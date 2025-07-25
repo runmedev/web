@@ -1,0 +1,22 @@
+{
+    "name": "@runmedev/test-infrastructure",
+    "version": "1.0.0",
+    "description": "Shared testing infrastructure for Runme packages",
+    "private": true,
+    "devDependencies": {
+        "vitest": "^2.0.0",
+        "jsdom": "^25.0.0",
+        "@testing-library/react": "^16.0.0",
+        "@testing-library/jest-dom": "^6.0.0",
+        "@testing-library/user-event": "^14.0.0",
+        "@vitest/ui": "^2.0.0",
+        "@vitejs/plugin-react": "^4.0.0"
+    },
+    "peerDependencies": {
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+        "react-router": "^7.4.0",
+        "react-router-dom": "^7.5.0",
+        "@radix-ui/themes": "^3.2.1"
+    }
+}

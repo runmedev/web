@@ -8,6 +8,7 @@ import {
   WinsizeSchema,
 } from '@buf/stateful_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { create } from '@bufbuild/protobuf'
+import { Interceptor } from '@connectrpc/connect'
 import { RendererContext } from 'vscode-notebook-renderer'
 import { VSCodeEvent } from 'vscode-notebook-renderer/events'
 
@@ -16,7 +17,7 @@ import '../renderers/client'
 // @ts-expect-error because the webcomponents are not typed
 import { ClientMessages, setContext } from '../renderers/client'
 import '../renderers/runme-vscode.css'
-import Streams, { Authorization } from '../streams'
+import Streams from '../streams'
 
 interface ConsoleSettings {
   rows?: number
@@ -30,7 +31,7 @@ interface ConsoleSettings {
 interface ConsoleRunner {
   endpoint: string
   reconnect: boolean
-  authorization: Authorization
+  interceptors: Interceptor[]
 }
 
 function Console({
@@ -88,7 +89,7 @@ function Console({
       sequence,
       options: {
         runnerEndpoint: runner.endpoint,
-        authorization: runner.authorization,
+        interceptors: runner.interceptors,
         autoReconnect: runner.reconnect,
       },
     })

@@ -9,6 +9,7 @@ import {
 } from 'react'
 
 import { WebAppConfig } from '@buf/stateful_runme.bufbuild_es/agent/v1/webapp_pb'
+import { Code, ConnectError, Interceptor } from '@connectrpc/connect'
 import {
   Heartbeat,
   StreamError,
@@ -31,6 +32,7 @@ interface Settings {
 interface SettingsContextType {
   principal: string
   checkRunnerAuth: () => void
+  createAuthInterceptors: (redirect: boolean) => Interceptor[]
   defaultSettings: Settings
   runnerError: StreamError | null
   settings: Settings
@@ -132,6 +134,35 @@ export const SettingsProvider = ({
     localStorage.setItem('cloudAssistantSettings', JSON.stringify(settings))
   }, [settings])
 
+  // createAuthInterceptors creates a list of interceptors that will be used to intercept the requests.
+  const createAuthInterceptors = useCallback(
+    (redirect: boolean): Interceptor[] => {
+      const redirectOnUnauthError = (error: unknown) => {
+        const connectErr = ConnectError.from(error)
+        if (connectErr.code === Code.Unauthenticated) {
+          window.location.href = `/login?error=${encodeURIComponent(connectErr.name)}&error_description=${encodeURIComponent(connectErr.message)}`
+        }
+      }
+      return [
+        (next) => async (req) => {
+          // Single place to change where tokens are coming from
+          const token = getSessionToken()
+          if (token) {
+            req.header.set('Authorization', `Bearer ${token}`)
+          }
+          if (redirect) {
+            return next(req).catch((e) => {
+              redirectOnUnauthError(e)
+              throw e
+            })
+          }
+          return next(req)
+        },
+      ]
+    },
+    []
+  )
+
   const checkRunnerAuth = useCallback(async () => {
     if (!settings.webApp.runner) {
       return
@@ -146,9 +177,7 @@ export const SettingsProvider = ({
       sequence: 0,
       options: {
         runnerEndpoint: settings.webApp.runner,
-        authorization: {
-          bearerToken: getSessionToken(),
-        },
+        interceptors: createAuthInterceptors(false),
         autoReconnect: false, // let it fail, the user is interested in the error
       },
     })
@@ -174,7 +203,7 @@ export const SettingsProvider = ({
     return () => {
       subs.forEach((sub) => sub.unsubscribe())
     }
-  }, [settings.webApp.runner])
+  }, [createAuthInterceptors, settings.webApp.runner])
 
   useEffect(() => {
     checkRunnerAuth()
@@ -198,6 +227,7 @@ export const SettingsProvider = ({
       value={{
         principal,
         checkRunnerAuth,
+        createAuthInterceptors,
         defaultSettings,
         runnerError,
         settings,
