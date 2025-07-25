@@ -115,7 +115,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     return new SessionStorage(
       'agent',
       principal,
-      createConnectClient(runner_pb.RunnerService, settings.agentEndpoint)
+      createConnectClient(runner_pb.RunnerService, settings.webApp.runner)
     )
   }, [settings.agentEndpoint, principal])
 
@@ -432,7 +432,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
 
     const c = createConnectClient(
       parser_pb.ParserService,
-      settings.agentEndpoint
+      settings.webApp.runner
     )
     const req = create(parser_pb.SerializeRequestSchema, {
       notebook: notebook,
