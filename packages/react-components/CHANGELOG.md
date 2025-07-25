@@ -1,5 +1,11 @@
 # @runmedev/react-components
 
+## 3.15.2
+
+### Patch Changes
+
+- Move to pnpm
+
 ## 3.15.1
 
 ### Patch Changes
