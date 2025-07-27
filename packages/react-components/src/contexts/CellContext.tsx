@@ -444,7 +444,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
 
     const c = createConnectClient(
       parser_pb.ParserService,
-      runnerConnectEndpoint
+      settings.agentEndpoint,
     )
     const req = create(parser_pb.SerializeRequestSchema, {
       notebook: notebook,
