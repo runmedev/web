@@ -36,8 +36,24 @@ function RunActionButton({
   exitCode: number | null
   onClick: () => void
 }) {
+  const getButtonLabel = () => {
+    if (exitCode === null && pid === null) {
+      return 'Run code'
+    }
+    if (exitCode === null && pid !== null) {
+      return 'Running...'
+    }
+    if (exitCode !== null && exitCode === 0) {
+      return 'Execution successful'
+    }
+    if (exitCode !== null && exitCode > 0) {
+      return `Execution failed with exit code ${exitCode}`
+    }
+    return 'Run code'
+  }
+
   return (
-    <Button variant="soft" onClick={onClick}>
+    <Button variant="soft" onClick={onClick} aria-label={getButtonLabel()}>
       {exitCode === null && pid === null && <PlayIcon />}
       {exitCode === null && pid !== null && (
         <div className="animate-spin">
@@ -144,7 +160,7 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
     }
 
     setLastRunID(exec.runID)
-    sendOutputCell(finalOutputCell)
+    // sendOutputCell(finalOutputCell)
   }, [sendOutputCell, finalOutputCell, exec.runID, lastRunID])
 
   useEffect(() => {
@@ -213,7 +229,7 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
   // If the cell has an exit code but no PID, return the last run ID
   // This will attempt to resume execution of the cell from the last run
   const recoveredRunID = useMemo(() => {
-    const rePid = cell.metadata[RunmeMetadataKey.Pid] ?? ''
+    const rePid = cell.metadata?.[RunmeMetadataKey.Pid] ?? ''
 
     if (!rePid) {
       return ''
@@ -244,6 +260,7 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
             <Text
               size="2"
               className="mt-1 p-2 font-bold text-gray-400 font-mono"
+              data-testid="sequence-label"
             >
               [{sequenceLabel}]
             </Text>
@@ -323,6 +340,7 @@ function Actions() {
           size="1"
           className="cursor-pointer"
           onClick={addCodeCell}
+          aria-label="Add code cell"
         >
           <PlusIcon />
         </Button>
@@ -338,4 +356,5 @@ function Actions() {
   )
 }
 
+export { Action }
 export default Actions
