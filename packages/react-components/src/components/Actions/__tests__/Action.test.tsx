@@ -1,5 +1,3 @@
-import { CellSchema } from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb'
-import { create } from '@bufbuild/protobuf'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 

@@ -1,7 +1,5 @@
-import { CellSchema } from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb'
-import { create } from '@bufbuild/protobuf'
 import { genRunID } from '@runmedev/react-console'
-import { act, fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { render } from '../../../../../test/utils'
@@ -40,33 +38,31 @@ vi.mock('../../../contexts/SettingsContext', () => ({
 
 vi.mock('@runmedev/react-console', () => ({
   genRunID: vi.fn(() => 'mock-run-id'),
-  Console: vi.fn(
-    ({ onPid, onExitCode, onStdout, onStderr, commands, content }) => {
-      // Always render the Console component for testing purposes
-      // The real component handles the rendering logic, but we want to test the callbacks
+  Console: vi.fn(({ onPid, onExitCode, onStdout, onStderr }) => {
+    // Always render the Console component for testing purposes
+    // The real component handles the rendering logic, but we want to test the callbacks
 
-      // Trigger callbacks in the next tick to simulate async behavior
+    // Trigger callbacks in the next tick to simulate async behavior
+    setTimeout(() => {
+      if (onStdout) {
+        onStdout(new TextEncoder().encode('test stdout'))
+      }
+      if (onStderr) {
+        onStderr(new TextEncoder().encode('test stderr'))
+      }
+      if (onPid) {
+        onPid(12345)
+      }
+      // Delay exit code to allow PID to be set first
       setTimeout(() => {
-        if (onStdout) {
-          onStdout(new TextEncoder().encode('test stdout'))
+        if (onExitCode) {
+          onExitCode(0)
         }
-        if (onStderr) {
-          onStderr(new TextEncoder().encode('test stderr'))
-        }
-        if (onPid) {
-          onPid(12345)
-        }
-        // Delay exit code to allow PID to be set first
-        setTimeout(() => {
-          if (onExitCode) {
-            onExitCode(0)
-          }
-        }, 10)
-      }, 0)
+      }, 10)
+    }, 0)
 
-      return <div data-testid="console">Console Component</div>
-    }
-  ),
+    return <div data-testid="console">Console Component</div>
+  }),
 }))
 
 // Mock window events
@@ -162,6 +158,8 @@ describe('CellConsole Component', () => {
         onExitCode={mockOnExitCode}
       />
     )
+
+    expect(container).toBeDefined()
 
     // The component should not render console for non-code cells
     expect(screen.queryByTestId('console')).not.toBeInTheDocument()
@@ -499,6 +497,8 @@ describe('CellConsole Component', () => {
         onExitCode={mockOnExitCode}
       />
     )
+
+    expect(container).toBeDefined()
 
     // The component should not render console when there are no commands and no content
     expect(screen.queryByTestId('console')).not.toBeInTheDocument()
