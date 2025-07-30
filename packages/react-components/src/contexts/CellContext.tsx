@@ -38,8 +38,6 @@ type CellContextType = {
 
   // sequence is a monotonically increasing number that is used to track the order of cells
   sequence: number
-  // incrementSequence increments the sequence number
-  incrementSequence: () => void
 
   // saveState saves the current state to the storage, runs sync because it schedules a debounced save
   saveState: () => void
@@ -130,10 +128,6 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
       createConnectClient(runner_pb.RunnerService, runnerConnectEndpoint)
     )
   }, [settings.agentEndpoint, principal])
-
-  const incrementSequence = () => {
-    setSequence((prev) => prev + 1)
-  }
 
   const invertedOrder = useMemo(
     () => settings.webApp.invertedOrder,
@@ -416,15 +410,24 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   }
 
   const runCodeCell = (cell: parser_pb.Cell) => {
-    // Find the corresponding action cell and trigger its runCode function
     const actionCell = actionCells.find((b) => b.refId === cell.refId)
-    if (actionCell) {
-      // This will be handled by the Action component
-      const event = new CustomEvent('runCodeCell', {
-        detail: { cellId: cell.refId },
-      })
-      window.dispatchEvent(event)
+    // Return early if corresponding cell is not an action
+    if (!actionCell) {
+      return
     }
+
+    // This will be handled by the Action component
+    const event = new CustomEvent('runCodeCell', {
+      detail: { cellId: cell.refId },
+    })
+    cell.executionSummary = undefined
+    cell.outputs = []
+    setSequence((prev) => {
+      const inc = prev + 1
+      cell.metadata[RunmeMetadataKey.Sequence] = inc.toString()
+      return inc
+    })
+    window.dispatchEvent(event)
   }
 
   // todo(sebastian): quick and dirty export implementation
@@ -444,7 +447,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
 
     const c = createConnectClient(
       parser_pb.ParserService,
-      settings.agentEndpoint,
+      settings.agentEndpoint
     )
     const req = create(parser_pb.SerializeRequestSchema, {
       notebook: notebook,
@@ -483,7 +486,6 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
       value={{
         useColumns,
         sequence,
-        incrementSequence,
         saveState,
         exportDocument,
         sendOutputCell,
