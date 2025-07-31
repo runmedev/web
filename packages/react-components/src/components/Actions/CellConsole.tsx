@@ -26,7 +26,7 @@ const MemoizedConsole = memo(Console, (prevProps, nextProps) => {
   )
 })
 
-// todo(sebastian): we should turn this into a CellConsole and mold this component to the Cell type
+// CellConsole is a component that combines a Runme console with a cell
 const CellConsole = ({
   cell,
   onExitCode,

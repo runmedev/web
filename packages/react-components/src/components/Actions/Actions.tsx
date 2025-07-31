@@ -148,8 +148,8 @@ function Actions() {
       </div>
       <ScrollArea type="auto" scrollbars="vertical" className="flex-1 p-2">
         <div ref={actionsStartRef} />
-        {actions.map((action) => (
-          <Action key={action.refId} cell={action} />
+        {actions.map((actionCell) => (
+          <Action key={`action-${actionCell.refId}`} cell={actionCell} />
         ))}
         <div ref={actionsEndRef} />
       </ScrollArea>
