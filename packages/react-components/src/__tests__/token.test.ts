@@ -54,6 +54,48 @@ describe('token utilities', () => {
       document.cookie = 'agent-session;'
       expect(getSessionToken()).toBe('test-token')
     })
+
+    // New tests for improved reliability
+    it('handles cookies with different separators', () => {
+      document.cookie = 'agent-session=test-token;other-cookie=value'
+      expect(getSessionToken()).toBe('test-token')
+    })
+
+    it('handles cookies with extra whitespace', () => {
+      document.cookie =
+        '  agent-session  =  test-token  ;  other-cookie  =  value  '
+      expect(getSessionToken()).toBe('test-token')
+    })
+
+    it('handles URL-encoded cookie values', () => {
+      document.cookie =
+        'agent-session=' + encodeURIComponent('test-token with spaces')
+      expect(getSessionToken()).toBe('test-token with spaces')
+    })
+
+    it('avoids false positives with similar cookie names', () => {
+      // Clear cookies first
+      document.cookie = ''
+      // Set cookies with proper separation
+      document.cookie = 'agent-session-extra=wrong-token'
+      document.cookie = 'agent-session=correct-token'
+      expect(getSessionToken()).toBe('correct-token')
+    })
+
+    it('handles cookies without values', () => {
+      // Clear all cookies by setting them to expire
+      document.cookie = 'agent-session=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+      document.cookie = 'cassie-session=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+      // Set a cookie without a value
+      document.cookie = 'agent-session='
+      expect(getSessionToken()).toBeUndefined()
+    })
+
+    it('handles malformed cookies without equals sign', () => {
+      document.cookie =
+        'agent-session=test-token;malformed-cookie;other-cookie=value'
+      expect(getSessionToken()).toBe('test-token')
+    })
   })
 
   describe('getAccessToken', () => {
@@ -119,6 +161,44 @@ describe('token utilities', () => {
       expect(consoleSpy).toHaveBeenCalledWith(
         'Failed to parse OAuthToken:',
         expect.any(Error)
+      )
+
+      consoleSpy.mockRestore()
+    })
+
+    // New tests for improved reliability
+    it('handles OAuth tokens with URL-encoded JSON', () => {
+      const mockToken = create(OAuthTokenSchema, {
+        accessToken: 'test-access-token with spaces',
+      })
+
+      const jsonString = toJsonString(OAuthTokenSchema, mockToken)
+      document.cookie = 'agent-oauth-token=' + encodeURIComponent(jsonString)
+
+      const token = getAccessToken()
+      expect(token.accessToken).toBe('test-access-token with spaces')
+    })
+
+    it('handles malformed OAuth cookies gracefully', () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      // Clear all OAuth cookies by setting them to expire
+      document.cookie =
+        'agent-oauth-token=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+      document.cookie =
+        'cassie-oauth-token=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+      // Set a malformed cookie that should be ignored
+      document.cookie = 'agent-oauth-token=invalid-json'
+
+      const token = getAccessToken()
+      expect(token).toEqual(
+        create(OAuthTokenSchema, {
+          accessToken: '',
+          expiresAt: 0n,
+          expiresIn: 0n,
+          refreshToken: '',
+          tokenType: '',
+        })
       )
 
       consoleSpy.mockRestore()
