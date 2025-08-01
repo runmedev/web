@@ -1,4 +1,5 @@
 export { default as Actions } from './Actions/Actions'
+export { default as CellConsole } from './Actions/CellConsole'
 export { default as Chat } from './Chat/Chat'
 export { default as FilesViewer } from './Files/Viewer'
 export { default as Login } from './Login/Login'
