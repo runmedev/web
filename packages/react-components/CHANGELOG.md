@@ -1,5 +1,11 @@
 # @runmedev/react-components
 
+## 3.15.6-next.2
+
+### Patch Changes
+
+- Fix bug
+
 ## 3.15.6-next.1
 
 ### Patch Changes
