@@ -12,7 +12,6 @@ import {
   GenerateRequest,
   GenerateRequestSchema,
 } from '@buf/stateful_runme.bufbuild_es/agent/v1/service_pb'
-import { CellKind } from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb'
 import { clone, create } from '@bufbuild/protobuf'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -27,6 +26,7 @@ import {
 import { SessionStorage, generateSessionName } from '../storage'
 import { getAccessToken } from '../token'
 import { useClient as useAgentClient } from './AgentContext'
+import { useOutput } from './OutputContext'
 import { useSettings } from './SettingsContext'
 
 type CellContextType = {
@@ -106,6 +106,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   const [previousResponseId, setPreviousResponseId] = useState<
     string | undefined
   >()
+  const { getAllRenderers } = useOutput()
 
   const runnerConnectEndpoint = useMemo(() => {
     const url = new URL(settings.webApp.runner)
@@ -365,19 +366,9 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   }
 
   const updateCell = (cell: parser_pb.Cell) => {
-    // All code cells are currently treated as shell
-    if (cell.kind === CellKind.CODE && cell.outputs.length === 0) {
-      cell.outputs = [
-        create(parser_pb.CellOutputSchema, {
-          items: [
-            create(parser_pb.CellOutputItemSchema, {
-              mime: MimeType.StatefulRunmeTerminal,
-              type: 'Buffer',
-              data: new Uint8Array(), // todo(sebastian): terminal settings
-            }),
-          ],
-        }),
-      ]
+    const renderers = getAllRenderers()
+    for (const renderer of renderers.values()) {
+      renderer.onCellUpdate(cell)
     }
 
     setState((prev) => {

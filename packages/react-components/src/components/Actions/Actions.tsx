@@ -1,9 +1,11 @@
-import { JSX, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { create } from '@bufbuild/protobuf'
 import { Box, Button, Card, ScrollArea, Text } from '@radix-ui/themes'
 import '@runmedev/react-console/react-console.css'
 
 import { parser_pb, useCell } from '../../contexts/CellContext'
+import { useOutput } from '../../contexts/OutputContext'
 import { useSettings } from '../../contexts/SettingsContext'
 import { MimeType, RunmeMetadataKey } from '../../runme/client'
 import CellConsole, { fontSettings } from './CellConsole'
@@ -58,6 +60,7 @@ function RunActionButton({
 // Action is an editor and an optional Runme console
 function Action({ cell }: { cell: parser_pb.Cell }) {
   const { saveState, runCodeCell } = useCell()
+  const { getRenderer } = useOutput()
 
   const [pid, setPid] = useState<number | null>(null)
   const [exitCode, setExitCode] = useState<number | null>(null)
@@ -73,19 +76,6 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
     }
     return seq.toString()
   }, [cell, pid, exitCode])
-
-  const cellAction = (
-    <CellConsole
-      key={`console-${cell.refId}`}
-      cell={cell}
-      onPid={setPid}
-      onExitCode={setExitCode}
-    />
-  )
-
-  // todo(sebastian): define interactive interface
-  const interactive = new Map<string, JSX.Element>()
-  interactive.set(MimeType.StatefulRunmeTerminal, cellAction)
 
   return (
     <div>
@@ -117,7 +107,21 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
             />
             {cell.outputs.map((o) =>
               o.items?.map((oi) => {
-                return interactive.get(oi.mime)
+                const renderer = getRenderer(oi.mime)
+                if (!renderer) {
+                  return null
+                }
+
+                const Component = renderer.component
+                return (
+                  <Component
+                    key={`${oi.mime}-${cell.refId}`}
+                    cell={cell}
+                    onPid={setPid}
+                    onExitCode={setExitCode}
+                    {...renderer.props}
+                  />
+                )
               })
             )}
           </Card>
@@ -141,6 +145,59 @@ function Actions() {
     }
     actionsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [actions, settings.webApp.invertedOrder])
+
+  const { registerRenderer, unregisterRenderer } = useOutput()
+
+  // Register renderers, e.g. a terminal for shell cells
+  useEffect(() => {
+    registerRenderer(MimeType.StatefulRunmeTerminal, {
+      onCellUpdate: (cell: parser_pb.Cell) => {
+        if (!cell.languageId.endsWith('sh') && cell.languageId !== '') {
+          return
+        }
+
+        if (cell.kind !== parser_pb.CellKind.CODE || cell.outputs.length > 0) {
+          return
+        }
+
+        // it's basically shell, be prepared to render a terminal
+        cell.outputs = [
+          create(parser_pb.CellOutputSchema, {
+            items: [
+              create(parser_pb.CellOutputItemSchema, {
+                mime: MimeType.StatefulRunmeTerminal,
+                type: 'Buffer',
+                data: new Uint8Array(), // todo(sebastian): terminal settings
+              }),
+            ],
+          }),
+        ]
+      },
+      component: ({
+        cell,
+        onPid,
+        onExitCode,
+      }: {
+        cell: parser_pb.Cell
+        onPid: (pid: number | null) => void
+        onExitCode: (exitCode: number | null) => void
+      }) => {
+        return (
+          <CellConsole
+            key={`console-${cell.refId}`}
+            cell={cell}
+            onPid={onPid}
+            onExitCode={onExitCode}
+          />
+        )
+      },
+    })
+
+    // Cleanup function to unregister when component unmounts
+    return () => {
+      unregisterRenderer(MimeType.StatefulRunmeTerminal)
+    }
+  }, [registerRenderer, unregisterRenderer])
 
   return (
     <div className="flex flex-col h-full">
