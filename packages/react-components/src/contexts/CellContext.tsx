@@ -98,7 +98,7 @@ function getAscendingCells(
 }
 
 export const CellProvider = ({ children }: { children: ReactNode }) => {
-  const { settings, principal } = useSettings()
+  const { settings, createAuthInterceptors, principal } = useSettings()
   const [sequence, setSequence] = useState(0)
   const [isInputDisabled, setIsInputDisabled] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
@@ -107,6 +107,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   >()
 
   const runnerConnectEndpoint = useMemo(() => {
+    console.log('CODE WAS MODIFIED runnerConnectEndpoint', settings.webApp.runner)
     const url = new URL(settings.webApp.runner)
     if (url.protocol === 'ws:') {
       url.protocol = 'http:'
@@ -125,7 +126,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     return new SessionStorage(
       'agent',
       principal,
-      createConnectClient(runner_pb.RunnerService, runnerConnectEndpoint)
+      createConnectClient(runner_pb.RunnerService, runnerConnectEndpoint, createAuthInterceptors(true))
     )
   }, [settings.agentEndpoint, principal])
 

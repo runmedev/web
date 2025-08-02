@@ -1,5 +1,11 @@
 # @runmedev/react-components
 
+## 3.15.6-next.0
+
+### Patch Changes
+
+- Test interceptor support in storage creation
+
 ## 3.15.5
 
 ### Patch Changes

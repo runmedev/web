@@ -7,6 +7,7 @@
     "@runmedev/test-infrastructure": "1.0.0"
   },
   "changesets": [
-    "cute-clowns-ring"
+    "cute-clowns-ring",
+    "young-pandas-sit"
   ]
 }
