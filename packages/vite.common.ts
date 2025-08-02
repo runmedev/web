@@ -36,7 +36,7 @@ export function createSharedConfig({ entry, name, fileName }) {
           '@radix-ui/react-dropdown-menu',
           '@radix-ui/react-icons',
           '@radix-ui/themes',
-          '@monaco-editor/react',
+
           'react-markdown',
           'react-router',
           'react-router-dom',

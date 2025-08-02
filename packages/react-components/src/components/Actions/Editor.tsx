@@ -1,13 +1,13 @@
 import { memo, useEffect, useRef, useState } from 'react'
 
-import MonacoEditor from '@monaco-editor/react'
+import * as monaco from 'monaco-editor'
 
 const theme = 'vs-dark'
 
 // Editor component for editing code which won't re-render unless the value changes
 const Editor = memo(
   ({
-    id,
+    id: _id, // Suppress unused parameter warning
     value,
     language,
     fontSize = 14,
@@ -23,10 +23,8 @@ const Editor = memo(
     onChange: (value: string) => void
     onEnter: () => void
   }) => {
-    // Store the latest onEnter in a ref to ensure late binding
     const onEnterRef = useRef(onEnter)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const editorRef = useRef<any>(null)
+    const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
     const containerRef = useRef<HTMLDivElement>(null)
     const [height, setHeight] = useState('140px')
     const [isResizing, setIsResizing] = useState(false)
@@ -41,61 +39,82 @@ const Editor = memo(
     // Handle resize events
     useEffect(() => {
       const handleMouseMove = (e: MouseEvent) => {
-        if (!isResizing) {
-          return
-        }
-
+        if (!isResizing) return
         const deltaY = e.clientY - startYRef.current
         const newHeight = Math.max(100, startHeightRef.current + deltaY)
         setHeight(`${newHeight}px`)
-
-        // Resize the editor
-        if (editorRef.current) {
-          editorRef.current.layout()
-        }
+        if (editorRef.current) editorRef.current.layout()
       }
-
       const handleMouseUp = () => {
         setIsResizing(false)
         document.body.style.cursor = 'default'
       }
-
       if (isResizing) {
         document.addEventListener('mousemove', handleMouseMove)
         document.addEventListener('mouseup', handleMouseUp)
       }
-
       return () => {
         document.removeEventListener('mousemove', handleMouseMove)
         document.removeEventListener('mouseup', handleMouseUp)
       }
     }, [isResizing])
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const editorDidMount = (editor: any, monaco: any) => {
+    // Initialize Monaco Editor
+    useEffect(() => {
+      if (!containerRef.current) return
+      if (editorRef.current) return
+
+      // Monaco Editor will use bundled workers by default
+
+      const editor = monaco.editor.create(containerRef.current, {
+        value,
+        language,
+        theme,
+        scrollbar: { alwaysConsumeMouseWheel: false },
+        minimap: { enabled: false },
+        wordWrap: 'wordWrapColumn',
+        fontSize,
+        fontFamily,
+        lineHeight: 20,
+      })
       editorRef.current = editor
 
-      if (!monaco?.editor) {
-        return
-      }
+      // Set theme
       monaco.editor.setTheme(theme)
 
-      if (!editor) {
-        return
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      editor.onKeyDown((event: any) => {
+      // onChange
+      const changeDisposable = editor.onDidChangeModelContent(() => {
+        const newValue = editor.getValue()
+        if (newValue !== value) onChange?.(newValue)
+      })
+
+      // onEnter (Ctrl+C)
+      const keydownDisposable = editor.onKeyDown((event) => {
         if (event.ctrlKey && event.keyCode === 3) {
-          // Use the ref to ensure we always have the latest onEnter
           onEnterRef.current()
         }
       })
-      // if the value is empty, focus the editor
-      if (value === '') {
-        editor.focus()
-      }
-    }
 
+      // Focus if value is empty
+      if (value === '') editor.focus()
+
+      return () => {
+        changeDisposable.dispose()
+        keydownDisposable.dispose()
+        editor.dispose()
+      }
+      // Only run once on mount
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+
+    // Update value if prop changes
+    useEffect(() => {
+      if (editorRef.current && editorRef.current.getValue() !== value) {
+        editorRef.current.setValue(value)
+      }
+    }, [value])
+
+    // Resize handler
     const handleResizeStart = (e: React.MouseEvent) => {
       setIsResizing(true)
       startYRef.current = e.clientY
@@ -105,35 +124,12 @@ const Editor = memo(
     }
 
     return (
-      <div className="pb-1 w-full" ref={containerRef}>
+      <div className="pb-1 w-full">
         <div className="rounded-md overflow-hidden">
-          <MonacoEditor
-            key={id}
-            height={height}
-            width="100%"
-            defaultLanguage={language}
-            value={value}
-            options={{
-              scrollbar: {
-                alwaysConsumeMouseWheel: false,
-              },
-              minimap: { enabled: false },
-              theme,
-              wordWrap: 'wordWrapColumn',
-              fontSize,
-              fontFamily,
-              lineHeight: 20,
-            }}
-            onChange={(v) => {
-              if (!v) {
-                return
-              }
-              value = v
-              onChange?.(v)
-            }}
-            onMount={editorDidMount}
+          <div
+            ref={containerRef}
+            style={{ height, width: '100%' }}
             className="rounded-lg"
-            wrapperProps={{ className: 'rounded-lg' }}
           />
         </div>
         <div
@@ -143,9 +139,7 @@ const Editor = memo(
       </div>
     )
   },
-  (prevProps, nextProps) => {
-    return prevProps.value === nextProps.value
-  }
+  (prevProps, nextProps) => prevProps.value === nextProps.value
 )
 
 export default Editor
