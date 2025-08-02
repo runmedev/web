@@ -88,7 +88,7 @@ const Editor = memo(
         if (newValue !== value) onChange?.(newValue)
       })
 
-      // onEnter (Ctrl+C)
+      // onEnter (Ctrl+Enter)
       const keydownDisposable = editor.onKeyDown((event) => {
         if (event.ctrlKey && event.keyCode === 3) {
           onEnterRef.current()

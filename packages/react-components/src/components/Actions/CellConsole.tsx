@@ -101,8 +101,18 @@ const CellConsole = ({
   }, [cell.refId, runCode])
 
   const cellOutputs = useMemo(() => {
-    return createCellOutputs({ pid, exitCode }, stdout, stderr, mimeType)
-  }, [pid, exitCode, stdout, stderr, mimeType])
+    const statefulRunmeTerminalOutputs = cell.outputs.filter((o) =>
+      o.items.some((i) => i.mime === MimeType.StatefulRunmeTerminal)
+    )
+    const newOutputs = createCellOutputs(
+      { pid, exitCode },
+      stdout,
+      stderr,
+      mimeType
+    )
+
+    return [...statefulRunmeTerminalOutputs, ...newOutputs]
+  }, [pid, exitCode, stdout, stderr, mimeType, cell.outputs])
 
   useEffect(() => {
     if (startTime === null) {

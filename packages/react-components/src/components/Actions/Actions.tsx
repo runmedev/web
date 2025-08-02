@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { JSX, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { Box, Button, Card, ScrollArea, Text } from '@radix-ui/themes'
 import '@runmedev/react-console/react-console.css'
 
 import { parser_pb, useCell } from '../../contexts/CellContext'
 import { useSettings } from '../../contexts/SettingsContext'
-import { RunmeMetadataKey } from '../../runme/client'
+import { MimeType, RunmeMetadataKey } from '../../runme/client'
 import CellConsole, { fontSettings } from './CellConsole'
 import Editor from './Editor'
 import {
@@ -74,6 +74,19 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
     return seq.toString()
   }, [cell, pid, exitCode])
 
+  const cellAction = (
+    <CellConsole
+      key={`console-${cell.refId}`}
+      cell={cell}
+      onPid={setPid}
+      onExitCode={setExitCode}
+    />
+  )
+
+  // todo(sebastian): define interactive interface
+  const interactive = new Map<string, JSX.Element>()
+  interactive.set(MimeType.StatefulRunmeTerminal, cellAction)
+
   return (
     <div>
       <Box className="w-full p-2">
@@ -102,12 +115,11 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
               }}
               onEnter={runCode}
             />
-            <CellConsole
-              key={`console-${cell.refId}`}
-              cell={cell}
-              onPid={setPid}
-              onExitCode={setExitCode}
-            />
+            {cell.outputs.map((o) =>
+              o.items?.map((oi) => {
+                return interactive.get(oi.mime)
+              })
+            )}
           </Card>
         </div>
       </Box>

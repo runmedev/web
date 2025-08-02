@@ -12,6 +12,7 @@ import {
   GenerateRequest,
   GenerateRequestSchema,
 } from '@buf/stateful_runme.bufbuild_es/agent/v1/service_pb'
+import { CellKind } from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb'
 import { clone, create } from '@bufbuild/protobuf'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -364,6 +365,21 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   }
 
   const updateCell = (cell: parser_pb.Cell) => {
+    // All code cells are currently treated as shell
+    if (cell.kind === CellKind.CODE && cell.outputs.length === 0) {
+      cell.outputs = [
+        create(parser_pb.CellOutputSchema, {
+          items: [
+            create(parser_pb.CellOutputItemSchema, {
+              mime: MimeType.StatefulRunmeTerminal,
+              type: 'Buffer',
+              data: new Uint8Array(), // todo(sebastian): terminal settings
+            }),
+          ],
+        }),
+      ]
+    }
+
     setState((prev) => {
       if (!prev) {
         return undefined
@@ -394,6 +410,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   }
 
   const addCodeCell = () => {
+    // todo(sebatian): perhaps we should pass the languageID
     const refID = `code_${uuidv4().replace(/-/g, '')}`
     const cell = create(parser_pb.CellSchema, {
       metadata: {
@@ -401,6 +418,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
         [RunmeMetadataKey.RunmeID]: refID,
       },
       refId: refID,
+      languageId: 'sh',
       role: parser_pb.CellRole.USER,
       kind: parser_pb.CellKind.CODE,
       value: '',
@@ -421,7 +439,9 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
       detail: { cellId: cell.refId },
     })
     cell.executionSummary = undefined
-    cell.outputs = []
+    cell.outputs = cell.outputs.filter((o) =>
+      o.items.some((oi) => oi.mime === MimeType.StatefulRunmeTerminal)
+    )
     setSequence((prev) => {
       const inc = prev + 1
       cell.metadata[RunmeMetadataKey.Sequence] = inc.toString()
@@ -540,17 +560,13 @@ export function createCellOutputs(
           type: 'Buffer',
           data: textEncoder.encode(stdout),
         }),
-      ],
-      processInfo,
-    }),
-    create(parser_pb.CellOutputSchema, {
-      items: [
         create(parser_pb.CellOutputItemSchema, {
           mime: MimeType.VSCodeNotebookStdErr,
           type: 'Buffer',
           data: textEncoder.encode(stderr),
         }),
       ],
+      processInfo,
     }),
   ]
 }
