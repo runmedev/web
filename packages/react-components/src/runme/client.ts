@@ -4,8 +4,6 @@ import { DescService } from '@bufbuild/protobuf'
 import { createClient, Interceptor } from '@connectrpc/connect'
 import { createGrpcWebTransport } from '@connectrpc/connect-web'
 
-import { getSessionToken } from '../token'
-
 export function createConnectClient<T extends DescService>(
   service: T,
   baseURL: string,
