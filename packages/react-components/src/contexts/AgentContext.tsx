@@ -58,6 +58,7 @@ function createAgentClient(
   baseURL: string,
   interceptors: Interceptor[]
 ): AgentClient {
+  console.log(`code modified`)
   console.log(`initializing the client: baseURL ${baseURL}`)
   // We use gRPCWebTransport because we want server side streaming
   const transport = createGrpcWebTransport({

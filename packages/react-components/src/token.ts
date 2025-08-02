@@ -11,6 +11,7 @@ export const OAUTH_COOKIE_NAMES = ['agent-oauth-token', 'cassie-oauth-token']
 
 // Returns the value of the session token cookie, or undefined if not found
 export function getSessionToken(): string | undefined {
+  console.log('CODE WAS MODIFIED getSessionToken')
   for (const name of SESSION_COOKIE_NAMES) {
     const value = Cookies.get(name)
     if (value && value.length > 0) {
@@ -22,6 +23,7 @@ export function getSessionToken(): string | undefined {
 
 // Returns the value of the oauth access token.
 export function getAccessToken(): OAuthToken {
+  console.log('CODE WAS MODIFIED getAccessToken')
   let token: OAuthToken = create(OAuthTokenSchema)
   for (const name of OAUTH_COOKIE_NAMES) {
     const value = Cookies.get(name)
