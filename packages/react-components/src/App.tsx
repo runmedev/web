@@ -12,6 +12,7 @@ import NotFound from './components/NotFound'
 import Settings from './components/Settings/Settings'
 import { AgentClientProvider } from './contexts/AgentContext'
 import { CellProvider } from './contexts/CellContext'
+import { getAccessToken } from './token'
 import { SettingsProvider } from './contexts/SettingsContext'
 import './index.css'
 import Layout from './layout'
@@ -91,7 +92,7 @@ function App({ branding, initialState = {} }: AppProps) {
           webApp={initialState?.webApp}
         >
           <AgentClientProvider>
-            <CellProvider>
+            <CellProvider getAccessToken={getAccessToken}>
               <AppRouter branding={branding} />
             </CellProvider>
           </AgentClientProvider>
