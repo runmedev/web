@@ -16,16 +16,25 @@ vi.mock('@runmedev/react-console', () => ({
   Console: vi.fn(() => <div data-testid="console">Console Component</div>),
 }))
 
+// Mock the Editor component to avoid monaco-editor issues
+vi.mock('../Editor', () => ({
+  default: vi.fn(({ value, onChange }) => (
+    <div data-testid="editor">
+      <textarea
+        value={value}
+        onChange={(e) => onChange?.(e.target.value)}
+        data-testid="editor-textarea"
+      />
+    </div>
+  )),
+}))
+
 // Mock the Action component to avoid calling the real one
-vi.mock('../Actions', async () => {
-  const actual = await vi.importActual('../Actions')
-  return {
-    ...actual,
-    Action: vi.fn(({ cell }) => (
-      <div data-testid={`action-${cell.refId}`}>Action Component</div>
-    )),
-  }
-})
+vi.mock('../Action', () => ({
+  default: vi.fn(({ cell }) => (
+    <div data-testid={`action-${cell.refId}`}>Action Component</div>
+  )),
+}))
 
 // Mock the contexts
 const mockUseCell = vi.fn()
