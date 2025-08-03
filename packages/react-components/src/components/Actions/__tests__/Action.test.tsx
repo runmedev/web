@@ -3,30 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { render } from '../../../../../test/utils'
 import { parser_pb } from '../../../contexts/CellContext'
-import { RunmeMetadataKey } from '../../../runme/client'
+import { MimeType, RunmeMetadataKey } from '../../../runme/client'
 import { Action } from '../Actions'
-
-// Mock the contexts
-const mockUseCell = vi.fn()
-const mockUseSettings = vi.fn()
 
 // Mock the protobuf create function
 vi.mock('@bufbuild/protobuf', () => ({
   create: vi.fn(() => ({})),
-}))
-
-vi.mock('../../../contexts/CellContext', () => ({
-  useCell: () => mockUseCell(),
-  parser_pb: {
-    CellKind: {
-      CODE: 'CODE',
-      MARKDOWN: 'MARKDOWN',
-    },
-  },
-}))
-
-vi.mock('../../../contexts/SettingsContext', () => ({
-  useSettings: () => mockUseSettings(),
 }))
 
 // Mock the child components
@@ -62,6 +44,29 @@ vi.mock('../Editor', () => ({
   )),
 }))
 
+// Mock the contexts
+const mockUseCell = vi.fn()
+const mockUseSettings = vi.fn()
+const mockUseOutput = vi.fn()
+
+vi.mock('../../../contexts/CellContext', () => ({
+  useCell: () => mockUseCell(),
+  parser_pb: {
+    CellKind: {
+      CODE: 'CODE',
+      MARKDOWN: 'MARKDOWN',
+    },
+  },
+}))
+
+vi.mock('../../../contexts/SettingsContext', () => ({
+  useSettings: () => mockUseSettings(),
+}))
+
+vi.mock('../../../contexts/OutputContext', () => ({
+  useOutput: () => mockUseOutput(),
+}))
+
 describe('Action Component', () => {
   const mockCell = {
     refId: 'test-cell-id',
@@ -70,7 +75,17 @@ describe('Action Component', () => {
     metadata: {
       [RunmeMetadataKey.Sequence]: '1',
     },
-    outputs: [],
+    outputs: [
+      {
+        items: [
+          {
+            mime: MimeType.StatefulRunmeTerminal,
+            type: 'Buffer',
+            data: new Uint8Array(),
+          },
+        ],
+      },
+    ],
     executionSummary: undefined,
   } as any
 
@@ -87,10 +102,32 @@ describe('Action Component', () => {
     },
   }
 
+  const defaultOutputContext = {
+    getRenderer: vi.fn(() => ({
+      component: vi.fn(({ onPid, onExitCode }) => {
+        // Trigger callbacks in the next tick to simulate async behavior
+        setTimeout(() => {
+          if (onPid) {
+            onPid(12345)
+          }
+          // Delay exit code to allow PID to be set first
+          setTimeout(() => {
+            if (onExitCode) {
+              onExitCode(0)
+            }
+          }, 10)
+        }, 0)
+
+        return <div data-testid="cell-console">CellConsole</div>
+      }),
+    })),
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
     mockUseCell.mockReturnValue(defaultCellContext)
     mockUseSettings.mockReturnValue(defaultSettingsContext)
+    mockUseOutput.mockReturnValue(defaultOutputContext)
   })
 
   describe('RunActionButton', () => {
