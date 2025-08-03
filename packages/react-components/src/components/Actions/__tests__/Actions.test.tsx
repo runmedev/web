@@ -6,14 +6,31 @@ import { parser_pb } from '../../../contexts/CellContext'
 import { RunmeMetadataKey } from '../../../runme/client'
 import Actions from '../Actions'
 
-// Mock the contexts
-const mockUseCell = vi.fn()
-const mockUseSettings = vi.fn()
-
 // Mock the protobuf create function
 vi.mock('@bufbuild/protobuf', () => ({
   create: vi.fn(() => ({})),
 }))
+
+vi.mock('@runmedev/react-console', () => ({
+  genRunID: vi.fn(() => 'mock-run-id'),
+  Console: vi.fn(() => <div data-testid="console">Console Component</div>),
+}))
+
+// Mock the Action component to avoid calling the real one
+vi.mock('../Actions', async () => {
+  const actual = await vi.importActual('../Actions')
+  return {
+    ...actual,
+    Action: vi.fn(({ cell }) => (
+      <div data-testid={`action-${cell.refId}`}>Action Component</div>
+    )),
+  }
+})
+
+// Mock the contexts
+const mockUseCell = vi.fn()
+const mockUseSettings = vi.fn()
+const mockUseOutput = vi.fn()
 
 vi.mock('../../../contexts/CellContext', () => ({
   useCell: () => mockUseCell(),
@@ -35,21 +52,9 @@ vi.mock('../../../contexts/SettingsContext', () => ({
   useSettings: () => mockUseSettings(),
 }))
 
-vi.mock('@runmedev/react-console', () => ({
-  genRunID: vi.fn(() => 'mock-run-id'),
-  Console: vi.fn(() => <div data-testid="console">Console Component</div>),
+vi.mock('../../../contexts/OutputContext', () => ({
+  useOutput: () => mockUseOutput(),
 }))
-
-// Mock the Action component to avoid calling the real one
-vi.mock('../Actions', async () => {
-  const actual = await vi.importActual('../Actions')
-  return {
-    ...actual,
-    Action: vi.fn(({ cell }) => (
-      <div data-testid={`action-${cell.refId}`}>Action Component</div>
-    )),
-  }
-})
 
 // Mock scrollIntoView
 const mockScrollIntoView = vi.fn()
@@ -89,10 +94,16 @@ describe('Actions Component', () => {
     createAuthInterceptors: vi.fn(() => []),
   }
 
+  const defaultOutputContext = {
+    registerRenderer: vi.fn(),
+    unregisterRenderer: vi.fn(),
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
     mockUseCell.mockReturnValue(defaultCellContext)
     mockUseSettings.mockReturnValue(defaultSettingsContext)
+    mockUseOutput.mockReturnValue(defaultOutputContext)
   })
 
   it('renders actions header with add button', () => {
