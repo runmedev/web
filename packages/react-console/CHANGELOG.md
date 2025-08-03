@@ -1,5 +1,11 @@
 # @runmedev/react-console
 
+## 3.15.6
+
+### Patch Changes
+
+- Decoupled Actions->Action->CellConsole
+
 ## 3.15.5
 
 ### Patch Changes

@@ -30,3 +30,7 @@ packages/react-console/gen
 packages/react-components/gen
 
 **/*-01*.md
+
+**/coverage
+
+.changeset/*.md
