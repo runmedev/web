@@ -1,5 +1,11 @@
 # @runmedev/react-console
 
+## 3.15.6-next.3
+
+### Patch Changes
+
+- Make auth interceptors injectable on the provider
+
 ## 3.15.6-next.2
 
 ### Patch Changes

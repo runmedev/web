@@ -29,5 +29,5 @@ pnpm run build
 ```
 
 ```sh {"terminalRows":"24"}
-/usr/local/bin/pnpm run publish-packages
+pnpm run publish-packages
 ```
