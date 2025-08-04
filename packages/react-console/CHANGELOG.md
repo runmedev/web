@@ -1,5 +1,11 @@
 # @runmedev/react-console
 
+## 3.15.6-next.4
+
+### Patch Changes
+
+- Let getAccessToken be injected in the application.
+
 ## 3.15.6-next.3
 
 ### Patch Changes

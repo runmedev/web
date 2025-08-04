@@ -99,17 +99,9 @@ describe('token utilities', () => {
   })
 
   describe('getAccessToken', () => {
-    it('returns default token when no oauth cookies are present', () => {
+    it('returns empty token when no oauth cookies are present', () => {
       const token = getAccessToken()
-      expect(token).toEqual(
-        create(OAuthTokenSchema, {
-          accessToken: '',
-          expiresAt: 0n,
-          expiresIn: 0n,
-          refreshToken: '',
-          tokenType: '',
-        })
-      )
+      expect(token).toEqual('')
     })
 
     it('returns parsed token when agent-oauth-token cookie is present', async () => {
@@ -122,7 +114,7 @@ describe('token utilities', () => {
         encodeURIComponent(toJsonString(OAuthTokenSchema, mockToken))
 
       const token = getAccessToken()
-      expect(token).toEqual(mockToken)
+      expect(token).toEqual(mockToken.accessToken)
     })
 
     it('returns parsed token when cassie-oauth-token cookie is present', async () => {
@@ -134,7 +126,7 @@ describe('token utilities', () => {
       document.cookie = 'cassie-oauth-token=' + v
 
       const token = getAccessToken()
-      expect(token).toEqual(mockToken)
+      expect(token).toEqual(mockToken.accessToken)
     })
 
     it('handles invalid JSON in cookie', () => {
@@ -148,16 +140,8 @@ describe('token utilities', () => {
       document.cookie = 'agent-oauth-token=invalid-json;'
 
       const token = getAccessToken()
-      expect(token).toEqual(
-        create(OAuthTokenSchema, {
-          $typeName: 'agent.v1.OAuthToken',
-          accessToken: 'test-access-token',
-          expiresAt: 0n,
-          expiresIn: 0n,
-          refreshToken: '',
-          tokenType: '',
-        })
-      )
+      // TODO(jlewi): I'm not sure why the value ends up being test-access-token.
+      expect(token).toEqual('test-access-token')
       expect(consoleSpy).toHaveBeenCalledWith(
         'Failed to parse OAuthToken:',
         expect.any(Error)
@@ -176,7 +160,7 @@ describe('token utilities', () => {
       document.cookie = 'agent-oauth-token=' + encodeURIComponent(jsonString)
 
       const token = getAccessToken()
-      expect(token.accessToken).toBe('test-access-token with spaces')
+      expect(token).toBe('test-access-token with spaces')
     })
 
     it('handles malformed OAuth cookies gracefully', () => {
@@ -191,15 +175,7 @@ describe('token utilities', () => {
       document.cookie = 'agent-oauth-token=invalid-json'
 
       const token = getAccessToken()
-      expect(token).toEqual(
-        create(OAuthTokenSchema, {
-          accessToken: '',
-          expiresAt: 0n,
-          expiresIn: 0n,
-          refreshToken: '',
-          tokenType: '',
-        })
-      )
+      expect(token).toEqual('')
 
       consoleSpy.mockRestore()
     })
