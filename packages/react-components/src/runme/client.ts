@@ -8,8 +8,7 @@ export function createConnectClient<T extends DescService>(
   service: T,
   baseURL: string,
   interceptors: Interceptor[] = []
-) {
-  console.log('CODE WAS MODIFIED createConnectClient')
+) {  
   const transport = createGrpcWebTransport({
     baseUrl: baseURL,
     interceptors: interceptors,

@@ -1,42 +1,10 @@
 # @runmedev/react-console
 
-<<<<<<< HEAD
-## 3.15.6-next.4
-
-### Patch Changes
-
-- Let getAccessToken be injected in the application.
-
-## 3.15.6-next.3
-
-### Patch Changes
-
-- Make auth interceptors injectable on the provider
-
-## 3.15.6-next.2
-
-### Patch Changes
-
-- Fix bug
-
-## 3.15.6-next.1
-
-### Patch Changes
-
-- Test interceptor
-
-## 3.15.6-next.0
-
-### Patch Changes
-
-- Test interceptor support in storage creation
-=======
 ## 3.15.6
 
 ### Patch Changes
 
 - Decoupled Actions->Action->CellConsole
->>>>>>> upstream/main
 
 ## 3.15.5
 
