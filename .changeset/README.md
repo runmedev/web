@@ -24,7 +24,7 @@ pnpm run version-packages
 
 ```sh {"terminalRows":"24"}
 pnpm run clean
-#runme run setup
+runme run setup
 pnpm run build
 ```
 

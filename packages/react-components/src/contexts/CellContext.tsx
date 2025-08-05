@@ -25,6 +25,7 @@ import {
 } from '../runme/client'
 import { SessionStorage, generateSessionName } from '../storage'
 import { useClient as useAgentClient } from './AgentContext'
+import { useOutput } from './OutputContext'
 import { useSettings } from './SettingsContext'
 
 type CellContextType = {
@@ -109,6 +110,7 @@ export const CellProvider = ({ children, getAccessToken }: CellProviderProps) =>
   const [previousResponseId, setPreviousResponseId] = useState<
     string | undefined
   >()
+  const { getAllRenderers } = useOutput()
 
   const runnerConnectEndpoint = useMemo(() => {
     console.log('CODE WAS MODIFIED runnerConnectEndpoint', settings.webApp.runner)
@@ -369,6 +371,11 @@ export const CellProvider = ({ children, getAccessToken }: CellProviderProps) =>
   }
 
   const updateCell = (cell: parser_pb.Cell) => {
+    const renderers = getAllRenderers()
+    for (const renderer of renderers.values()) {
+      renderer.onCellUpdate(cell)
+    }
+
     setState((prev) => {
       if (!prev) {
         return undefined
@@ -399,6 +406,7 @@ export const CellProvider = ({ children, getAccessToken }: CellProviderProps) =>
   }
 
   const addCodeCell = () => {
+    // todo(sebatian): perhaps we should pass the languageID
     const refID = `code_${uuidv4().replace(/-/g, '')}`
     const cell = create(parser_pb.CellSchema, {
       metadata: {
@@ -406,6 +414,7 @@ export const CellProvider = ({ children, getAccessToken }: CellProviderProps) =>
         [RunmeMetadataKey.RunmeID]: refID,
       },
       refId: refID,
+      languageId: 'sh',
       role: parser_pb.CellRole.USER,
       kind: parser_pb.CellKind.CODE,
       value: '',
@@ -426,7 +435,9 @@ export const CellProvider = ({ children, getAccessToken }: CellProviderProps) =>
       detail: { cellId: cell.refId },
     })
     cell.executionSummary = undefined
-    cell.outputs = []
+    cell.outputs = cell.outputs.filter((o) =>
+      o.items.some((oi) => oi.mime === MimeType.StatefulRunmeTerminal)
+    )
     setSequence((prev) => {
       const inc = prev + 1
       cell.metadata[RunmeMetadataKey.Sequence] = inc.toString()
@@ -545,17 +556,13 @@ export function createCellOutputs(
           type: 'Buffer',
           data: textEncoder.encode(stdout),
         }),
-      ],
-      processInfo,
-    }),
-    create(parser_pb.CellOutputSchema, {
-      items: [
         create(parser_pb.CellOutputItemSchema, {
           mime: MimeType.VSCodeNotebookStdErr,
           type: 'Buffer',
           data: textEncoder.encode(stderr),
         }),
       ],
+      processInfo,
     }),
   ]
 }

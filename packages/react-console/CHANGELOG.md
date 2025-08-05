@@ -1,5 +1,6 @@
 # @runmedev/react-console
 
+<<<<<<< HEAD
 ## 3.15.6-next.4
 
 ### Patch Changes
@@ -29,6 +30,13 @@
 ### Patch Changes
 
 - Test interceptor support in storage creation
+=======
+## 3.15.6
+
+### Patch Changes
+
+- Decoupled Actions->Action->CellConsole
+>>>>>>> upstream/main
 
 ## 3.15.5
 
