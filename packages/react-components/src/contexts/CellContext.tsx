@@ -112,8 +112,7 @@ export const CellProvider = ({ children, getAccessToken }: CellProviderProps) =>
   >()
   const { getAllRenderers } = useOutput()
 
-  const runnerConnectEndpoint = useMemo(() => {
-    console.log('CODE WAS MODIFIED runnerConnectEndpoint', settings.webApp.runner)
+  const runnerConnectEndpoint = useMemo(() => {    
     const url = new URL(settings.webApp.runner)
     if (url.protocol === 'ws:') {
       url.protocol = 'http:'
