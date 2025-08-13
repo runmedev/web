@@ -25,6 +25,7 @@ export interface AppBranding {
 export interface AppProps {
   branding: AppBranding
   initialState?: {
+    agentEndpoint?: string
     requireAuth?: boolean
     webApp?: WebAppConfig
   }
@@ -88,6 +89,7 @@ function App({ branding, initialState = {} }: AppProps) {
       <link rel="icon" href={branding.logo} />
       <Theme accentColor="gray" scaling="100%" radius="small">
         <SettingsProvider
+          agentEndpoint={initialState?.agentEndpoint}
           requireAuth={initialState?.requireAuth}
           webApp={initialState?.webApp}
         >
