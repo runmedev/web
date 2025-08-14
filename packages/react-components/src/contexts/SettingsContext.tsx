@@ -54,12 +54,14 @@ export const useSettings = () => {
 
 interface SettingsProviderProps {
   children: ReactNode
+  agentEndpoint?: string
   requireAuth?: boolean
   webApp?: WebAppConfig
 }
 
 export const SettingsProvider = ({
   children,
+  agentEndpoint,
   requireAuth,
   webApp,
 }: SettingsProviderProps) => {
@@ -87,27 +89,16 @@ export const SettingsProvider = ({
       window.location.port === '4173' || window.location.port === '5173'
     const isDev = isLocalhost && isHttp && isVite
 
-    let runnerEndpoint = new URL(window.location.href)
-    // Overwrite runner if webApp.runner is provided
-    if (webApp?.runner) {
-      runnerEndpoint = new URL(webApp.runner)
-    }
-
     const baseSettings: Settings = {
-      requireAuth: false,
-      agentEndpoint: isDev ? 'http://localhost:8080' : window.location.origin,
+      requireAuth: requireAuth ?? false,
+      agentEndpoint: agentEndpoint ?? isDev ? 'http://localhost:8080' : window.location.origin,
       webApp: {
-        runner: isDev
+        runner: webApp?.runner ?? isDev
           ? 'ws://localhost:8080/ws'
-          : `${runnerEndpoint.protocol === 'https:' ? 'wss:' : 'ws:'}//${runnerEndpoint.host}/ws`,
+          : `${isHttp ? 'ws:' : 'wss:'}//${window.location.host}/ws`,
         reconnect: webApp?.reconnect ?? true,
         invertedOrder: webApp?.invertedOrder ?? false,
       },
-    }
-
-    // Override requireAuth if provided
-    if (requireAuth !== undefined) {
-      baseSettings.requireAuth = requireAuth
     }
 
     return baseSettings
