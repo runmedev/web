@@ -24,7 +24,6 @@ import {
   runner_pb,
 } from '../runme/client'
 import { SessionStorage, generateSessionName } from '../storage'
-import { getAccessToken } from '../token'
 import { useClient as useAgentClient } from './AgentContext'
 import { useOutput } from './OutputContext'
 import { useSettings } from './SettingsContext'
@@ -98,8 +97,13 @@ function getAscendingCells(
   return cells
 }
 
-export const CellProvider = ({ children }: { children: ReactNode }) => {
-  const { settings, principal } = useSettings()
+export interface CellProviderProps {
+  children: ReactNode
+  /** Function to obtain the access token string or promise thereof */
+  getAccessToken: () => string | Promise<string>
+}
+export const CellProvider = ({ children, getAccessToken }: CellProviderProps) => {
+  const { settings, createAuthInterceptors, principal } = useSettings()
   const [sequence, setSequence] = useState(0)
   const [isInputDisabled, setIsInputDisabled] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
@@ -108,7 +112,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   >()
   const { getAllRenderers } = useOutput()
 
-  const runnerConnectEndpoint = useMemo(() => {
+  const runnerConnectEndpoint = useMemo(() => {    
     const url = new URL(settings.webApp.runner)
     if (url.protocol === 'ws:') {
       url.protocol = 'http:'
@@ -127,7 +131,7 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
     return new SessionStorage(
       'agent',
       principal,
-      createConnectClient(runner_pb.RunnerService, runnerConnectEndpoint)
+      createConnectClient(runner_pb.RunnerService, runnerConnectEndpoint, createAuthInterceptors(true))
     )
   }, [settings.agentEndpoint, principal])
 
@@ -301,15 +305,15 @@ export const CellProvider = ({ children }: { children: ReactNode }) => {
   }
 
   const streamGenerateResults = async (cells: parser_pb.Cell[]) => {
-    const accessToken = getAccessToken()
+    const accessToken = await getAccessToken()
 
     const req: GenerateRequest = create(GenerateRequestSchema, {
       cells,
       previousResponseId,
     })
 
-    req.openaiAccessToken = accessToken.accessToken
-    if (!accessToken.accessToken) {
+    req.openaiAccessToken = accessToken
+    if (!accessToken) {
       console.error('No access token found')
     }
 

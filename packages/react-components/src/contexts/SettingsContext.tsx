@@ -57,6 +57,8 @@ interface SettingsProviderProps {
   agentEndpoint?: string
   requireAuth?: boolean
   webApp?: WebAppConfig
+  /** If provided, this replaces the default implementation entirely */
+  createAuthInterceptors?: (redirect: boolean) => Interceptor[]
 }
 
 export const SettingsProvider = ({
@@ -64,6 +66,7 @@ export const SettingsProvider = ({
   agentEndpoint,
   requireAuth,
   webApp,
+  createAuthInterceptors,
 }: SettingsProviderProps) => {
   const [runnerError, setRunnerError] = useState<StreamError | null>(null)
 
@@ -125,8 +128,8 @@ export const SettingsProvider = ({
     localStorage.setItem('cloudAssistantSettings', JSON.stringify(settings))
   }, [settings])
 
-  // createAuthInterceptors creates a list of interceptors that will be used to intercept the requests.
-  const createAuthInterceptors = useCallback(
+  // defaultCreateAuthInterceptors default interceptors
+  const defaultCreateAuthInterceptors = useCallback(
     (redirect: boolean): Interceptor[] => {
       const redirectOnUnauthError = (error: unknown) => {
         const connectErr = ConnectError.from(error)
@@ -154,6 +157,11 @@ export const SettingsProvider = ({
     []
   )
 
+  const actualCreateAuthInterceptors = useMemo(
+     () => createAuthInterceptors ?? defaultCreateAuthInterceptors,
+      [createAuthInterceptors, defaultCreateAuthInterceptors]
+  )
+
   const checkRunnerAuth = useCallback(async () => {
     if (!settings.webApp.runner) {
       return
@@ -168,7 +176,7 @@ export const SettingsProvider = ({
       sequence: 0,
       options: {
         runnerEndpoint: settings.webApp.runner,
-        interceptors: createAuthInterceptors(false),
+        interceptors: actualCreateAuthInterceptors(false),
         autoReconnect: false, // let it fail, the user is interested in the error
       },
     })
@@ -218,7 +226,7 @@ export const SettingsProvider = ({
       value={{
         principal,
         checkRunnerAuth,
-        createAuthInterceptors,
+        createAuthInterceptors: actualCreateAuthInterceptors,
         defaultSettings,
         runnerError,
         settings,

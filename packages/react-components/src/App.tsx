@@ -12,6 +12,7 @@ import NotFound from './components/NotFound'
 import Settings from './components/Settings/Settings'
 import { AgentClientProvider } from './contexts/AgentContext'
 import { CellProvider } from './contexts/CellContext'
+import { getAccessToken } from './token'
 import { OutputProvider } from './contexts/OutputContext'
 import { SettingsProvider } from './contexts/SettingsContext'
 import './index.css'
@@ -95,7 +96,7 @@ function App({ branding, initialState = {} }: AppProps) {
         >
           <AgentClientProvider>
             <OutputProvider>
-              <CellProvider>
+              <CellProvider getAccessToken={getAccessToken}>
                 <AppRouter branding={branding} />
               </CellProvider>
             </OutputProvider>

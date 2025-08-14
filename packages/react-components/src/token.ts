@@ -21,7 +21,7 @@ export function getSessionToken(): string | undefined {
 }
 
 // Returns the value of the oauth access token.
-export function getAccessToken(): OAuthToken {
+export function getAccessToken(): string {
   let token: OAuthToken = create(OAuthTokenSchema)
   for (const name of OAUTH_COOKIE_NAMES) {
     const value = Cookies.get(name)
@@ -31,11 +31,11 @@ export function getAccessToken(): OAuthToken {
         const parsed = JSON.parse(value)
         // Parse the payload into a Protobuf message
         token = fromJson(OAuthTokenSchema, parsed)
-        return token
+        return token.accessToken
       } catch (err) {
         console.error('Failed to parse OAuthToken:', err)
       }
     }
   }
-  return token
+  return token.accessToken
 }
