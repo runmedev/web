@@ -1,5 +1,11 @@
 # @runmedev/react-components
 
+## 3.15.7
+
+### Patch Changes
+
+- fix bug in settings component
+
 ## 3.15.6
 
 ### Patch Changes
