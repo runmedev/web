@@ -94,11 +94,15 @@ export const SettingsProvider = ({
 
     const baseSettings: Settings = {
       requireAuth: requireAuth ?? false,
-      agentEndpoint: agentEndpoint ?? isDev ? 'http://localhost:8080' : window.location.origin,
+      agentEndpoint:
+        agentEndpoint ??
+        (isDev ? 'http://localhost:8080' : window.location.origin),
       webApp: {
-        runner: webApp?.runner ?? isDev
-          ? 'ws://localhost:8080/ws'
-          : `${isHttp ? 'ws:' : 'wss:'}//${window.location.host}/ws`,
+        runner:
+          webApp?.runner ??
+          (isDev
+            ? 'ws://localhost:8080/ws'
+            : `${isHttp ? 'ws:' : 'wss:'}//${window.location.host}/ws`),
         reconnect: webApp?.reconnect ?? true,
         invertedOrder: webApp?.invertedOrder ?? false,
       },
