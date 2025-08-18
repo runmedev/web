@@ -462,7 +462,8 @@ export const CellProvider = ({ children, getAccessToken }: CellProviderProps) =>
 
     const c = createConnectClient(
       parser_pb.ParserService,
-      settings.agentEndpoint
+      settings.agentEndpoint,
+      createAuthInterceptors(true)
     )
     const req = create(parser_pb.SerializeRequestSchema, {
       notebook: notebook,
