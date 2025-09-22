@@ -40,10 +40,9 @@ function Layout({
     const loginUrl = settings.requireAuth ? '/oidc/login' : '/login'
 
     if (!(runnerError instanceof Error) && !(runnerError instanceof Event)) {
-      const isAuthError =
-        runnerError.code === Code.UNAUTHENTICATED ||
-        runnerError.code === Code.PERMISSION_DENIED
-      if (isAuthError) {
+      // only do this for unauthenticated errors, unauthorized is not an IdP-related error
+      const isAuthnError = runnerError.code === Code.UNAUTHENTICATED
+      if (isAuthnError && window.location.pathname !== loginUrl) {
         window.location.href = loginUrl
       } else {
         navigate(settingsPath)

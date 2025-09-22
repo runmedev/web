@@ -43,6 +43,10 @@ export class SessionStorage extends Dexie {
     this.saveSubject
       .pipe(debounceTime(200))
       .subscribe(async ({ id, notebook }) => {
+        if (!id) {
+          console.warn(new Date().toISOString(), 'no id to save notebook')
+          return
+        }
         const record: SessionNotebook = {
           id,
           principal: this.principal,
@@ -147,7 +151,7 @@ export class SessionStorage extends Dexie {
       return resp.session?.id
     } catch (e) {
       console.error('Error creating session', e)
-      return undefined
+      throw e
     }
   }
 }

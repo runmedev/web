@@ -314,7 +314,7 @@ export const CellProvider = ({ children, getAccessToken }: CellProviderProps) =>
 
     req.openaiAccessToken = accessToken
     if (!accessToken) {
-      console.error('No access token found')
+      console.warn('No access token found (expected if oauth is disabled)')
     }
 
     try {
@@ -485,7 +485,7 @@ export const CellProvider = ({ children, getAccessToken }: CellProviderProps) =>
     }
 
     const resp = await c.serialize(req)
-    const blob = new Blob([resp.result], { type: 'text/plain' })
+    const blob = new Blob([new Uint8Array(resp.result)], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
