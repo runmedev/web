@@ -314,7 +314,7 @@ export const CellProvider = ({ children, getAccessToken }: CellProviderProps) =>
 
     req.openaiAccessToken = accessToken
     if (!accessToken) {
-      console.error('No access token found')
+      console.warn('No access token found (expected if oauth is disabled)')
     }
 
     try {
