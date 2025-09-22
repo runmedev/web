@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import '@testing-library/jest-dom/vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { render, screen } from '../../../../test/utils'
+import { cleanup, render, screen } from '../../../../test/utils'
 import { SettingsProvider, useSettings } from '../SettingsContext'
 
 // Mock dependencies
@@ -48,6 +49,9 @@ const TestComponent = () => {
 }
 
 describe('SettingsContext', () => {
+  afterEach(() => {
+    cleanup()
+  })
   beforeEach(() => {
     vi.clearAllMocks()
 
@@ -62,6 +66,9 @@ describe('SettingsContext', () => {
       },
       writable: true,
     })
+
+    // Ensure no persisted settings leak across tests
+    localStorage.clear()
   })
 
   describe('SettingsProvider', () => {
@@ -150,6 +157,84 @@ describe('SettingsContext', () => {
       )
 
       expect(screen.getByTestId('require-auth')).toHaveTextContent('true')
+    })
+  })
+
+  describe('createAuthInterceptors redirect behavior', () => {
+    it('does not redirect when already on /login during Unauthenticated error', async () => {
+      const { getSessionToken } = await import('../../token')
+      vi.mocked(getSessionToken).mockReturnValue('mock-token')
+
+      const { jwtDecode } = await import('jwt-decode')
+      vi.mocked(jwtDecode).mockReturnValue({ sub: 'test-user' })
+
+      // Ensure current path is /login
+      ;(window.location as any).pathname = '/login'
+      const originalHref = window.location.href
+
+      // Component to capture interceptors
+      const CaptureInterceptors = () => {
+        const { createAuthInterceptors } = useSettings()
+        // store on global for test access
+        ;(window as any).__interceptors__ = createAuthInterceptors(true)
+        return null
+      }
+
+      render(
+        <SettingsProvider>
+          <CaptureInterceptors />
+        </SettingsProvider>
+      )
+
+      const interceptors = (window as any).__interceptors__ as any[]
+      expect(Array.isArray(interceptors)).toBe(true)
+
+      // Create a fake next that rejects with Unauthenticated
+      const { ConnectError, Code } = await import('@connectrpc/connect')
+      const fakeNext = vi
+        .fn()
+        .mockRejectedValue(new ConnectError('no auth', Code.Unauthenticated))
+      const interceptor = interceptors[0]
+      const req: any = { header: { set: vi.fn() } }
+
+      await expect(interceptor(fakeNext)(req)).rejects.toBeInstanceOf(Error)
+
+      // Should not change href when already on /login
+      expect(window.location.href).toBe(originalHref)
+    })
+
+    it('redirects to /login on Unauthenticated error when not on /login', async () => {
+      const { getSessionToken } = await import('../../token')
+      vi.mocked(getSessionToken).mockReturnValue('mock-token')
+
+      const { jwtDecode } = await import('jwt-decode')
+      vi.mocked(jwtDecode).mockReturnValue({ sub: 'test-user' })
+      ;(window.location as any).pathname = '/'
+      ;(window.location as any).href = 'http://localhost:5173/'
+
+      const CaptureInterceptors = () => {
+        const { createAuthInterceptors } = useSettings()
+        ;(window as any).__interceptors__ = createAuthInterceptors(true)
+        return null
+      }
+
+      render(
+        <SettingsProvider>
+          <CaptureInterceptors />
+        </SettingsProvider>
+      )
+
+      const interceptors = (window as any).__interceptors__ as any[]
+      const { ConnectError, Code } = await import('@connectrpc/connect')
+      const fakeNext = vi
+        .fn()
+        .mockRejectedValue(new ConnectError('no auth', Code.Unauthenticated))
+      const interceptor = interceptors[0]
+      const req: any = { header: { set: vi.fn() } }
+
+      await expect(interceptor(fakeNext)(req)).rejects.toBeInstanceOf(Error)
+
+      expect(window.location.href).toMatch(/\/login\?error=/)
     })
   })
 
