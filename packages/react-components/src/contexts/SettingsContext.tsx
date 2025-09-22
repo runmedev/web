@@ -136,8 +136,12 @@ export const SettingsProvider = ({
   const defaultCreateAuthInterceptors = useCallback(
     (redirect: boolean): Interceptor[] => {
       const redirectOnUnauthError = (error: unknown) => {
+        const currentPath = window.location.pathname
         const connectErr = ConnectError.from(error)
-        if (connectErr.code === Code.Unauthenticated) {
+        if (
+          currentPath !== '/login' &&
+          connectErr.code === Code.Unauthenticated
+        ) {
           window.location.href = `/login?error=${encodeURIComponent(connectErr.name)}&error_description=${encodeURIComponent(connectErr.message)}`
         }
       }
