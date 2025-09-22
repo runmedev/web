@@ -485,7 +485,7 @@ export const CellProvider = ({ children, getAccessToken }: CellProviderProps) =>
     }
 
     const resp = await c.serialize(req)
-    const blob = new Blob([resp.result], { type: 'text/plain' })
+    const blob = new Blob([new Uint8Array(resp.result)], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
