@@ -503,4 +503,35 @@ describe('CellConsole Component', () => {
     // The component should not render console when there are no commands and no content
     expect(screen.queryByTestId('console')).not.toBeInTheDocument()
   })
+
+  it('passes languageID to Console based on cell.languageId', async () => {
+    const mockCell2 = {
+      refId: 'lang-cell',
+      value: 'print("hi")',
+      kind: parser_pb.CellKind.CODE,
+      languageId: 'python',
+      metadata: { [RunmeMetadataKey.Sequence]: '1' },
+      outputs: [
+        {
+          items: [
+            {
+              mime: 'application/vnd.code.notebook.stdout',
+              data: new TextEncoder().encode('some previous output'),
+            },
+          ],
+        },
+      ],
+    } as any
+
+    render(
+      <CellConsole cell={mockCell2} onPid={() => {}} onExitCode={() => {}} />
+    )
+
+    const mod = await import('@runmedev/react-console')
+    const ConsoleMock = vi.mocked(mod.Console as any)
+    const calls = ConsoleMock.mock.calls
+    expect(calls.length).toBeGreaterThan(0)
+    const lastProps = calls[calls.length - 1][0]
+    expect(lastProps.languageID).toBe('python')
+  })
 })

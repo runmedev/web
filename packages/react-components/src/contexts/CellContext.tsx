@@ -85,7 +85,9 @@ function getAscendingCells(
 
   const cells = state.positions.map((id) => {
     const c = state.cells[id]
-    c.languageId = 'sh'
+    if (c.kind === parser_pb.CellKind.CODE) {
+      c.languageId = c.languageId || 'sh'
+    }
     return c
   })
   if (cells.length === 0) {

@@ -147,14 +147,10 @@ function Actions() {
 
   const { registerRenderer, unregisterRenderer } = useOutput()
 
-  // Register renderers, e.g. a terminal for shell-ish cells
+  // Register renderers for code cells
   useEffect(() => {
     registerRenderer(MimeType.StatefulRunmeTerminal, {
       onCellUpdate: (cell: parser_pb.Cell) => {
-        if (!cell.languageId.endsWith('sh') && cell.languageId !== '') {
-          return
-        }
-
         if (cell.kind !== parser_pb.CellKind.CODE || cell.outputs.length > 0) {
           return
         }

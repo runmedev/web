@@ -22,6 +22,24 @@ vi.mock('../../renderers/client', () => ({
   setContext: vi.fn(),
 }))
 
+vi.mock('../../streams', () => {
+  const subscribers: any[] = []
+  return {
+    default: vi.fn().mockImplementation(() => ({
+      connect: vi.fn(() => ({ subscribe: vi.fn() })),
+      close: vi.fn(),
+      stdout: { subscribe: vi.fn() },
+      stderr: { subscribe: vi.fn() },
+      exitCode: { subscribe: vi.fn() },
+      pid: { subscribe: vi.fn() },
+      mimeType: { subscribe: vi.fn() },
+      sendExecuteRequest: vi.fn((req: any) => subscribers.push(req)),
+      setCallback: vi.fn(),
+    })),
+    __subscribers: subscribers,
+  }
+})
+
 describe('Console', () => {
   const defaultProps = {
     cellID: 'test-cell-1',
@@ -137,4 +155,39 @@ describe('Console', () => {
   //     // The callback should be available for the streams to use
   //     expect(onExitCode).toBeDefined()
   //   })
+
+  it('builds inline command ExecuteRequest for shellish languages', async () => {
+    const { default: Streams, __subscribers } = (await import(
+      '../../streams'
+    )) as any
+    render(
+      <Console {...defaultProps} languageID="bash" commands={['echo hi']} />
+    )
+    // allow effect
+    await Promise.resolve()
+    expect((Streams as any).mock.calls.length).toBeGreaterThan(0)
+    const sent = (__subscribers as any[]).pop()
+    expect(sent?.config?.languageId).toBe('bash')
+    expect(sent?.config?.mode).toBeDefined()
+    // commands mode -> INLINE, source case commands
+    expect(sent?.config?.source?.case).toBe('commands')
+    expect(sent?.config?.source?.value?.items).toEqual(['echo hi'])
+  })
+
+  it('builds file ExecuteRequest for non-shell languages', async () => {
+    const { __subscribers } = (await import('../../streams')) as any
+    render(
+      <Console
+        {...defaultProps}
+        languageID="python"
+        commands={["print('hi')"]}
+      />
+    )
+    await Promise.resolve()
+    const sent = (__subscribers as any[]).pop()
+    expect(sent?.config?.languageId).toBe('python')
+    expect(sent?.config?.source?.case).toBe('script')
+    expect(sent?.config?.mode).toBeDefined()
+    expect(sent?.config?.fileExtension).toBe('python')
+  })
 })

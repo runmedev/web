@@ -1,7 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo } from 'react'
 
-import { CommandMode } from '@buf/stateful_runme.bufbuild_es/runme/runner/v2/config_pb'
+import {
+  CommandMode,
+  ProgramConfig_CommandListSchema,
+} from '@buf/stateful_runme.bufbuild_es/runme/runner/v2/config_pb'
 import {
   ExecuteRequestSchema,
   SessionStrategy,
@@ -38,6 +41,7 @@ function Console({
   cellID,
   runID,
   sequence,
+  languageID,
   commands,
   content,
   runner,
@@ -51,6 +55,7 @@ function Console({
   cellID: string
   runID: string
   sequence: number
+  languageID?: string
   commands: string[]
   content?: string
   runner: ConsoleRunner
@@ -117,28 +122,59 @@ function Console({
   })
 
   const executeRequest = useMemo(() => {
-    return create(ExecuteRequestSchema, {
+    const lid = languageID || 'sh'
+    const shellish = new Set([
+      'sh',
+      'shell',
+      'bash',
+      'zsh',
+      'fish',
+      'ksh',
+      'csh',
+      'tcsh',
+      'dash',
+      'powershell',
+      'pwsh',
+      'cmd',
+      'ash',
+      'elvish',
+      'xonsh',
+    ])
+    const isShellish = shellish.has(lid)
+    const req = create(ExecuteRequestSchema, {
       sessionStrategy: SessionStrategy.MOST_RECENT, // without this every exec gets its own session
       storeStdoutInEnv: true,
       config: {
-        languageId: 'sh',
+        languageId: lid,
         background: false,
         fileExtension: '',
         env: [`RUNME_ID=${cellID}`, 'RUNME_RUNNER=v2', 'TERM=xterm-256color'],
-        source: {
-          case: 'commands',
-          value: {
-            items: commands,
-          },
-        },
         interactive: true,
-        mode: CommandMode.INLINE,
         runId: runID,
         knownId: cellID,
         // knownName: "the-cell-name",
       },
       winsize,
     })
+
+    if (isShellish) {
+      req.config!.source = {
+        case: 'commands',
+        value: create(ProgramConfig_CommandListSchema, {
+          items: commands,
+        }),
+      }
+      req.config!.mode = CommandMode.INLINE
+    } else {
+      req.config!.source = {
+        case: 'script',
+        value: commands.join('\n'),
+      }
+      req.config!.mode = CommandMode.FILE
+      req.config!.fileExtension = languageID || ''
+    }
+
+    return req
   }, [cellID, runID, commands, winsize])
 
   const webComponentDefaults = useMemo(
