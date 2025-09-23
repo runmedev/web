@@ -179,4 +179,32 @@ describe('Actions Component', () => {
     const sequenceLabels = screen.getAllByTestId('sequence-label')
     expect(sequenceLabels).toHaveLength(2)
   })
+
+  it('registers terminal renderer for any code cell with empty outputs', () => {
+    // Capture the registered renderer
+    const registerCalls = mockUseOutput().registerRenderer.mock.calls
+    // Render to trigger useEffect registration
+    render(<Actions />)
+
+    const callsAfterRender = mockUseOutput().registerRenderer.mock.calls
+    const call = (callsAfterRender.length ? callsAfterRender : registerCalls)[0]
+    expect(call).toBeDefined()
+
+    const rendererConfig = call[1]
+    expect(rendererConfig).toBeDefined()
+    expect(typeof rendererConfig.onCellUpdate).toBe('function')
+
+    const testCell: any = {
+      refId: 'c1',
+      kind: parser_pb.CellKind.CODE,
+      languageId: 'python',
+      outputs: [],
+      metadata: {},
+    }
+
+    rendererConfig.onCellUpdate(testCell)
+
+    expect(Array.isArray(testCell.outputs)).toBe(true)
+    expect(testCell.outputs.length).toBe(1)
+  })
 })
