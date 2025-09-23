@@ -288,6 +288,7 @@ const CellConsole = ({
       cellID={cell.refId}
       runID={runID}
       sequence={sequence}
+      languageID={cell.languageId}
       commands={commands}
       content={content}
       runner={runner}
