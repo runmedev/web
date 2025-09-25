@@ -34,4 +34,5 @@ git add packages/*/package*.json
 git add packages/*/CHANGELOG.md
 git add .changeset/README.md
 git commit -s
+git push && git push --tags
 ```
