@@ -1,5 +1,11 @@
 # @runmedev/react-console
 
+## 3.15.9
+
+### Patch Changes
+
+- Pick up on code and language passed by AI
+
 ## 3.15.6
 
 ### Patch Changes
