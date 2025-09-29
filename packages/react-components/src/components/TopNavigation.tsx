@@ -77,7 +77,13 @@ const TopNavigation = () => {
                 fill="currentColor"
               ></path>
             </svg>
-            <Text>Export</Text>
+            <Text
+              style={{
+                color: 'var(--background-contrast)',
+              }}
+            >
+              Export
+            </Text>
           </Flex>
         </DropdownMenu.Trigger>
         <DropdownMenu.Content
@@ -116,7 +122,13 @@ const TopNavigation = () => {
               fill="currentColor"
             />
           </svg>
-          <Text>New Session</Text>
+          <Text
+            style={{
+              color: 'var(--background-contrast)',
+            }}
+          >
+            New Session
+          </Text>
         </Flex>
       </Link>
       <Link to="/settings">
@@ -135,7 +147,13 @@ const TopNavigation = () => {
               clipRule="evenodd"
             />
           </svg>
-          <Text>Settings</Text>
+          <Text
+            style={{
+              color: 'var(--background-contrast)',
+            }}
+          >
+            Settings
+          </Text>
         </Flex>
       </Link>
       <UserAvatar />

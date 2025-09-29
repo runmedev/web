@@ -12,11 +12,11 @@ import NotFound from './components/NotFound'
 import Settings from './components/Settings/Settings'
 import { AgentClientProvider } from './contexts/AgentContext'
 import { CellProvider } from './contexts/CellContext'
-import { getAccessToken } from './token'
 import { OutputProvider } from './contexts/OutputContext'
 import { SettingsProvider } from './contexts/SettingsContext'
 import './index.css'
 import Layout from './layout'
+import { getAccessToken } from './token'
 
 export interface AppBranding {
   name: string
@@ -88,7 +88,12 @@ function App({ branding, initialState = {} }: AppProps) {
       <title>{branding.name}</title>
       <meta name="description" content="An AI Assistant For Your Cloud" />
       <link rel="icon" href={branding.logo} />
-      <Theme accentColor="gray" scaling="100%" radius="small">
+      <Theme
+        appearance="light"
+        accentColor="violet"
+        scaling="100%"
+        radius="small"
+      >
         <SettingsProvider
           agentEndpoint={initialState?.agentEndpoint}
           requireAuth={initialState?.requireAuth}

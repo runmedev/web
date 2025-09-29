@@ -1,14 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 
-import {
-  Button,
-  Callout,
-  Flex,
-  ScrollArea,
-  Text,
-  TextArea,
-} from '@radix-ui/themes'
+import { Button, Flex, ScrollArea, Text, TextArea } from '@radix-ui/themes'
 
 import { TypingCell, parser_pb, useCell } from '../../contexts/CellContext'
 import { useSettings } from '../../contexts/SettingsContext'
@@ -26,16 +19,29 @@ const MessageContainer = ({
   children: React.ReactNode
 }) => {
   const self = role === parser_pb.CellRole.USER ? 'self-end' : 'self-start'
-  const color = role === parser_pb.CellRole.USER ? 'indigo' : 'gray'
+
+  const messageStyle = {
+    backgroundColor:
+      role === parser_pb.CellRole.USER ? 'var(--accent-9)' : 'var(--gray-4)',
+    color:
+      role === parser_pb.CellRole.USER
+        ? 'var(--accent-contrast)'
+        : 'var(--gray-background)',
+    border:
+      role === parser_pb.CellRole.USER
+        ? '1px solid var(--accent-7)'
+        : '1px solid var(--gray-1)',
+  }
+
+  console.log(messageStyle)
 
   return (
-    <Callout.Root
-      highContrast
-      color={color}
-      className={`${self} max-w-[80%] break-words m-1`}
+    <div
+      className={`${self} max-w-[80%] break-words m-1 p-3 rounded-lg`}
+      style={messageStyle}
     >
-      <Callout.Text>{children}</Callout.Text>
-    </Callout.Root>
+      {children}
+    </div>
   )
 }
 
