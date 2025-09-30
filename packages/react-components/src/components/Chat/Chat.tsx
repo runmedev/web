@@ -31,11 +31,12 @@ const MessageContainer = ({
       role === parser_pb.CellRole.USER
         ? '1px solid var(--accent-7)'
         : '1px solid var(--gray-1)',
+    borderRadius: 'var(--radius-3)',
   }
 
   return (
     <div
-      className={`${self} max-w-[80%] break-words m-1 p-3 rounded-lg`}
+      className={`${self} max-w-[80%] break-words m-1 p-3`}
       style={messageStyle}
     >
       {children}
