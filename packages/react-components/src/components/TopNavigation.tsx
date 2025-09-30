@@ -3,19 +3,31 @@ import { useNavigate } from 'react-router-dom'
 import * as Avatar from '@radix-ui/react-avatar'
 import { PersonIcon } from '@radix-ui/react-icons'
 import { Button, DropdownMenu, Flex, Text } from '@radix-ui/themes'
-import { jwtDecode } from 'jwt-decode'
+import { JwtPayload, jwtDecode } from 'jwt-decode'
 import md5 from 'md5'
 
 import { useCell } from '../contexts/CellContext'
 import { getSessionToken } from '../token'
 
 const getGravatarUrl = (size = 24) => {
-  const token = getSessionToken() || 'unauthenticated'
+  const token = getSessionToken()
+
+  if (!token || token === 'unauthenticated') {
+    return 'unauthenticated'
+  }
 
   try {
-    const decodedToken = jwtDecode(token)
-    const sub = decodedToken.sub || 'unauthenticated'
-    const hash = md5(sub.trim().toLowerCase())
+    const decodedToken: JwtPayload & { email?: string } = jwtDecode(token)
+
+    // Try to get email from various possible fields in the JWT token
+    const email = decodedToken.email || decodedToken.sub || 'unauthenticated'
+
+    // Validate that we have a valid email format
+    if (!email || email === 'unauthenticated' || !email.includes('@')) {
+      return 'unauthenticated'
+    }
+
+    const hash = md5(email.trim().toLowerCase())
     return `https://www.gravatar.com/avatar/${hash}?s=${size}&d=identicon`
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
   } catch (_err) {

@@ -19,6 +19,7 @@ vi.mock('../../token', () => ({
 vi.mock('jwt-decode', () => ({
   jwtDecode: () => ({
     sub: 'test@example.com',
+    email: 'test@example.com', // Add email field for more realistic JWT structure
   }),
 }))
 
