@@ -1,5 +1,11 @@
 # @runmedev/react-console
 
+## 3.15.10
+
+### Patch Changes
+
+- Improve colors to be themeable
+
 ## 3.15.9
 
 ### Patch Changes

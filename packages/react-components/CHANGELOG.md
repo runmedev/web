@@ -1,5 +1,11 @@
 # @runmedev/react-components
 
+## 3.15.11
+
+### Patch Changes
+
+- Improve colors to be themeable
+
 ## 3.15.10
 
 ### Patch Changes
