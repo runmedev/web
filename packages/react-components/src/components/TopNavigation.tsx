@@ -51,14 +51,13 @@ const UserAvatar = () => (
 
 const TopNavigation = () => {
   const { resetSession, exportDocument } = useCell()
-  const styles = {}
   const navigate = useNavigate()
   return (
     <>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger>
-          <Button variant="soft">
-            <Flex gap="1" align="center">
+          <Button variant="soft" className="cursor-pointer">
+            <Flex gap="1" align="center" className="cursor-pointer">
               <svg
                 width="15"
                 height="15"
@@ -71,7 +70,7 @@ const TopNavigation = () => {
                   fill="currentColor"
                 ></path>
               </svg>
-              <Text style={styles}>Export</Text>
+              <Text>Export</Text>
             </Flex>
           </Button>
         </DropdownMenu.Trigger>
@@ -114,7 +113,7 @@ const TopNavigation = () => {
               fill="currentColor"
             />
           </svg>
-          <Text style={styles}>New Session</Text>
+          <Text>New Session</Text>
         </Flex>
       </Button>
       <Button
@@ -140,7 +139,7 @@ const TopNavigation = () => {
               clipRule="evenodd"
             />
           </svg>
-          <Text style={styles}>Settings</Text>
+          <Text>Settings</Text>
         </Flex>
       </Button>
       <UserAvatar />
