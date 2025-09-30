@@ -22,7 +22,7 @@ const MessageContainer = ({
 
   const messageStyle = {
     backgroundColor:
-      role === parser_pb.CellRole.USER ? 'var(--accent-9)' : 'var(--gray-4)',
+      role === parser_pb.CellRole.USER ? 'var(--accent-9)' : 'var(--gray-a5)',
     color:
       role === parser_pb.CellRole.USER
         ? 'var(--accent-contrast)'
