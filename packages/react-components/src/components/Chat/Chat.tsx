@@ -33,8 +33,6 @@ const MessageContainer = ({
         : '1px solid var(--gray-1)',
   }
 
-  console.log(messageStyle)
-
   return (
     <div
       className={`${self} max-w-[80%] break-words m-1 p-3 rounded-lg`}
