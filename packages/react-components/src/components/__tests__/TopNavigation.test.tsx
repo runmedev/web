@@ -4,6 +4,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from '../../../../test/utils'
 import TopNavigation from '../TopNavigation'
 
+// Mock react-router-dom
+const mockNavigate = vi.fn()
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual('react-router-dom')
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+    useLocation: vi.fn(() => ({ pathname: '/' })),
+  }
+})
+
 // Mock the contexts and modules
 vi.mock('../../contexts/CellContext', () => ({
   useCell: () => ({
@@ -70,5 +82,19 @@ describe('TopNavigation', () => {
     render(<TopNavigation />)
     const exportButton = screen.getByText('Export')
     expect(exportButton.closest('div')).toHaveClass('cursor-pointer')
+  })
+
+  it('renders settings button', () => {
+    render(<TopNavigation />)
+    expect(screen.getByText('Settings')).toBeInTheDocument()
+  })
+
+  it('navigates to settings when settings button is clicked from home', () => {
+    render(<TopNavigation />)
+    const settingsButton = screen.getByText('Settings')
+
+    fireEvent.click(settingsButton)
+
+    expect(mockNavigate).toHaveBeenCalledWith('/settings')
   })
 })

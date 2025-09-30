@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import * as Avatar from '@radix-ui/react-avatar'
 import { PersonIcon } from '@radix-ui/react-icons'
@@ -64,6 +64,7 @@ const UserAvatar = () => (
 const TopNavigation = () => {
   const { resetSession, exportDocument } = useCell()
   const navigate = useNavigate()
+  const location = useLocation()
   return (
     <>
       <DropdownMenu.Root>
@@ -131,7 +132,11 @@ const TopNavigation = () => {
       <Button
         type="button"
         onClick={() => {
-          navigate('/settings')
+          if (location.pathname === '/settings') {
+            navigate('/')
+          } else {
+            navigate('/settings')
+          }
         }}
         variant="soft"
         className="cursor-pointer"
