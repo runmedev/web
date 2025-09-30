@@ -61,7 +61,7 @@ function Layout({
           <Link to="/">
             <Flex align="center" gap="2">
               <img src={branding.logo} className="h-6 w-6" />
-              <Text size="5" weight="bold" className="text-black">
+              <Text size="5" weight="bold">
                 {branding.name}
               </Text>
             </Flex>

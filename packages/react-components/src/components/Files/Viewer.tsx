@@ -40,7 +40,7 @@ const FileViewer = () => {
   return (
     <div className="flex flex-col h-full">
       <Text size="5" weight="bold" className="mb-2">
-        Files
+        Docs
       </Text>
       <ScrollArea type="auto" scrollbars="vertical" className="flex-1 pt-4">
         {!hasSearchResults ? (

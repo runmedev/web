@@ -104,7 +104,10 @@ export interface CellProviderProps {
   /** Function to obtain the access token string or promise thereof */
   getAccessToken: () => string | Promise<string>
 }
-export const CellProvider = ({ children, getAccessToken }: CellProviderProps) => {
+export const CellProvider = ({
+  children,
+  getAccessToken,
+}: CellProviderProps) => {
   const { settings, createAuthInterceptors, principal } = useSettings()
   const [sequence, setSequence] = useState(0)
   const [isInputDisabled, setIsInputDisabled] = useState(false)
@@ -114,7 +117,7 @@ export const CellProvider = ({ children, getAccessToken }: CellProviderProps) =>
   >()
   const { getAllRenderers } = useOutput()
 
-  const runnerConnectEndpoint = useMemo(() => {    
+  const runnerConnectEndpoint = useMemo(() => {
     const url = new URL(settings.webApp.runner)
     if (url.protocol === 'ws:') {
       url.protocol = 'http:'
@@ -133,7 +136,11 @@ export const CellProvider = ({ children, getAccessToken }: CellProviderProps) =>
     return new SessionStorage(
       'agent',
       principal,
-      createConnectClient(runner_pb.RunnerService, runnerConnectEndpoint, createAuthInterceptors(true))
+      createConnectClient(
+        runner_pb.RunnerService,
+        runnerConnectEndpoint,
+        createAuthInterceptors(true)
+      )
     )
   }, [settings.agentEndpoint, principal])
 
