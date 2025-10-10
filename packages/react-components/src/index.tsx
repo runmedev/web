@@ -11,6 +11,6 @@ export { default as App } from './App'
 export type { AppProps } from './App'
 
 // Export protobuf types
-export type { WebAppConfig } from '@buf/stateful_runme.bufbuild_es/agent/v1/webapp_pb'
-export * from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb'
-export type { DocResult } from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/docresult_pb'
+export type { WebAppConfig } from '@buf/runmedev_runme.bufbuild_es/agent/v1/webapp_pb'
+export * from '@buf/runmedev_runme.bufbuild_es/runme/parser/v1/parser_pb'
+export type { DocResult } from '@buf/runmedev_runme.bufbuild_es/runme/parser/v1/docresult_pb'

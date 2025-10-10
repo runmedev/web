@@ -7,7 +7,7 @@ import {
 } from 'react'
 import { type FC } from 'react'
 
-import * as service_pb from '@buf/stateful_runme.bufbuild_es/agent/v1/service_pb'
+import * as service_pb from '@buf/runmedev_runme.bufbuild_es/agent/v1/service_pb'
 import { Interceptor, createClient } from '@connectrpc/connect'
 import { createGrpcWebTransport } from '@connectrpc/connect-web'
 

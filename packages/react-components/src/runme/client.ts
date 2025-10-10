@@ -1,14 +1,14 @@
-import * as parser_pb from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb'
-import * as runner_pb from '@buf/stateful_runme.bufbuild_es/runme/runner/v2/runner_pb'
+import * as parser_pb from '@buf/runmedev_runme.bufbuild_es/runme/parser/v1/parser_pb'
+import * as runner_pb from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { DescService } from '@bufbuild/protobuf'
-import { createClient, Interceptor } from '@connectrpc/connect'
+import { Interceptor, createClient } from '@connectrpc/connect'
 import { createGrpcWebTransport } from '@connectrpc/connect-web'
 
 export function createConnectClient<T extends DescService>(
   service: T,
   baseURL: string,
   interceptors: Interceptor[] = []
-) {  
+) {
   const transport = createGrpcWebTransport({
     baseUrl: baseURL,
     interceptors: interceptors,
