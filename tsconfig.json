@@ -17,6 +17,12 @@
       "path": "./packages/react-console/tsconfig.test.json"
     },
     {
+      "path": "./packages/renderers/tsconfig.json"
+    },
+    {
+      "path": "./packages/renderers/tsconfig.test.json"
+    },
+    {
       "path": "./tsconfig.node.json"
     }
   ]

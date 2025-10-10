@@ -1,0 +1,31 @@
+{
+  "name": "@runmedev/renderers",
+  "version": "3.15.10",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": false,
+  "main": "dist/renderers.cjs",
+  "module": "dist/renderers.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/renderers.mjs",
+      "require": "./dist/renderers.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "peerDependencies": {},
+  "scripts": {
+    "clean": "rimraf dist",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
