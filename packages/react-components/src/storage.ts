@@ -1,10 +1,10 @@
-import { Notebook } from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb'
+import { Notebook } from '@buf/runmedev_runme.bufbuild_es/runme/parser/v1/parser_pb'
 import {
   CreateSessionRequest_Config_SessionEnvStoreSeeding,
   GetSessionRequestSchema,
   GetSessionResponse,
   ProjectSchema,
-} from '@buf/stateful_runme.bufbuild_es/runme/runner/v2/runner_pb'
+} from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { create } from '@bufbuild/protobuf'
 import { Code, ConnectError } from '@connectrpc/connect'
 import Dexie, { Table } from 'dexie'

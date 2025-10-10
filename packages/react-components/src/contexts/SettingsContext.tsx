@@ -8,7 +8,7 @@ import {
   useState,
 } from 'react'
 
-import { WebAppConfig } from '@buf/stateful_runme.bufbuild_es/agent/v1/webapp_pb'
+import { WebAppConfig } from '@buf/runmedev_runme.bufbuild_es/agent/v1/webapp_pb'
 import { Code, ConnectError, Interceptor } from '@connectrpc/connect'
 import {
   Heartbeat,
@@ -166,8 +166,8 @@ export const SettingsProvider = ({
   )
 
   const actualCreateAuthInterceptors = useMemo(
-     () => createAuthInterceptors ?? defaultCreateAuthInterceptors,
-      [createAuthInterceptors, defaultCreateAuthInterceptors]
+    () => createAuthInterceptors ?? defaultCreateAuthInterceptors,
+    [createAuthInterceptors, defaultCreateAuthInterceptors]
   )
 
   const checkRunnerAuth = useCallback(async () => {

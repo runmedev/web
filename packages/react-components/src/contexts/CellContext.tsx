@@ -11,7 +11,7 @@ import {
 import {
   GenerateRequest,
   GenerateRequestSchema,
-} from '@buf/stateful_runme.bufbuild_es/agent/v1/service_pb'
+} from '@buf/runmedev_runme.bufbuild_es/agent/v1/service_pb'
 import { clone, create } from '@bufbuild/protobuf'
 import { v4 as uuidv4 } from 'uuid'
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 
-import { DocResult } from '@buf/stateful_runme.bufbuild_es/runme/parser/v1/docresult_pb'
+import { DocResult } from '@buf/runmedev_runme.bufbuild_es/runme/parser/v1/docresult_pb'
 import { create } from '@bufbuild/protobuf'
 import { Box, Link, ScrollArea, Text } from '@radix-ui/themes'
 

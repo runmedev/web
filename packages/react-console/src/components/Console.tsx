@@ -4,12 +4,12 @@ import { useEffect, useMemo } from 'react'
 import {
   CommandMode,
   ProgramConfig_CommandListSchema,
-} from '@buf/stateful_runme.bufbuild_es/runme/runner/v2/config_pb'
+} from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/config_pb'
 import {
   ExecuteRequestSchema,
   SessionStrategy,
   WinsizeSchema,
-} from '@buf/stateful_runme.bufbuild_es/runme/runner/v2/runner_pb'
+} from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { create } from '@bufbuild/protobuf'
 import { Interceptor } from '@connectrpc/connect'
 import { RendererContext } from 'vscode-notebook-renderer'

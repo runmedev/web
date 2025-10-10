@@ -1,4 +1,4 @@
-import { OAuthTokenSchema } from '@buf/stateful_runme.bufbuild_es/agent/v1/credentials_pb'
+import { OAuthTokenSchema } from '@buf/runmedev_runme.bufbuild_es/agent/v1/credentials_pb'
 import { create, toJsonString } from '@bufbuild/protobuf'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
