@@ -11,8 +11,8 @@ import { debounceTime, distinctUntilChanged, filter, map, share } from 'rxjs/ope
 
 import { FitAddon, type ITerminalDimensions } from '../../fitAddon'
 import { ClientMessages, OutputType, TerminalConfiguration, WebViews } from '../../types'
-import { closeOutput, getContext } from '../../utils'
-import { onClientMessage, postClientMessage } from '../../messaging'
+import { closeOutput } from '../../utils'
+import { onClientMessage, postClientMessage, getContext } from '../../messaging'
 import {
   ClientMessage,
 } from '../../types'

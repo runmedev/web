@@ -1,6 +1,9 @@
 import { Disposable } from 'vscode'
 
 import { ClientMessage, ClientMessagePayload } from './types'
+import { RendererContext } from 'vscode-notebook-renderer'
+
+let context: RendererContext<void> | undefined
 
 interface Messaging {
   postMessage(msg: unknown): Thenable<boolean> | Thenable<void> | void
@@ -25,4 +28,15 @@ export function onClientMessage(
   cb: (message: ClientMessage<keyof ClientMessagePayload>) => void,
 ): Disposable {
   return messaging.onDidReceiveMessage?.(cb) ?? { dispose: () => {} }
+}
+
+export function getContext() {
+  if (!context) {
+    throw new Error('Renderer context not defined')
+  }
+  return context
+}
+
+export function setContext(c: RendererContext<void>) {
+  context = c
 }

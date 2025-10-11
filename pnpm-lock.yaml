@@ -259,6 +259,10 @@ importers:
       react-router-dom:
         specifier: ^7.5.0
         version: 7.9.4(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+    devDependencies:
+      '@runmedev/renderers':
+        specifier: workspace:*
+        version: link:../renderers
 
   packages/renderers: {}
 

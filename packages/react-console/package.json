@@ -18,6 +18,9 @@
   "files": [
     "dist"
   ],
+  "devDependencies": {
+    "@runmedev/renderers": "workspace:*"
+  },
   "peerDependencies": {
     "@bufbuild/protobuf": "^2.9.0",
     "react": "^19.0.0",

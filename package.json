@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "clean": "pnpm --filter @runmedev/react-components run clean && pnpm --filter @runmedev/react-console run clean",
-    "build": "pnpm run clean && pnpm run build:console && pnpm run build:components && pnpm run build:app",
+    "build": "pnpm run clean && pnpm run build:renderers && pnpm run build:console && pnpm run build:components && pnpm run build:app",
     "build:components": "cd packages/react-components && tsc -b && vite build",
     "build:app": "cd packages/react-components && tsc -b tsconfig.app.json && vite build -c vite.config.app.ts",
     "build:console": "cd packages/react-console && tsc -p tsconfig.json && vite build",

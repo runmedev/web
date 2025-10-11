@@ -4,14 +4,14 @@
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
-  "main": "dist/renderers.cjs",
-  "module": "dist/renderers.mjs",
+  "main": "dist/runme-renderers.cjs",
+  "module": "dist/runme-renderers.mjs",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/renderers.mjs",
-      "require": "./dist/renderers.cjs"
+      "import": "./dist/runme-renderers.mjs",
+      "require": "./dist/runme-renderers.cjs"
     }
   },
   "files": [

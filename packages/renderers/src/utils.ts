@@ -1,19 +1,4 @@
-import type { RendererContext } from 'vscode-notebook-renderer'
-
 import { OutputType } from './types'
-
-let context: RendererContext<void> | undefined
-
-export function getContext() {
-  if (!context) {
-    throw new Error('Renderer context not defined')
-  }
-  return context
-}
-
-export function setContext(c: RendererContext<void>) {
-  context = c
-}
 
 export function closeOutput({ }: { id: string; outputType: OutputType }) {
   // const ctx = getContext()
