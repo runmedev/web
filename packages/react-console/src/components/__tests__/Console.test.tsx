@@ -5,21 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from '../../../../test/utils'
 import Console from '../Console'
 
-// Mock the streams module; likely required for disabled tests below
-// vi.mock('../../streams', () => ({
-//   default: vi.fn().mockImplementation(() => ({
-//     connect: vi.fn(() => ({
-//       subscribe: vi.fn(),
-//     })),
-//     subscribe: vi.fn(),
-//     unsubscribe: vi.fn(),
-//   })),
-// }))
-
-// Mock the renderers/client module
-vi.mock('../../renderers/client', () => ({
+// Mock the renderers package to avoid web component initialization issues
+vi.mock('@runmedev/renderers', () => ({
   ClientMessages: {},
   setContext: vi.fn(),
+  default: {},
 }))
 
 vi.mock('../../streams', () => {
