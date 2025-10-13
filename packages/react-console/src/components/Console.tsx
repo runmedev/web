@@ -18,7 +18,6 @@ import { ClientMessages, setContext } from '@runmedev/renderers'
 import { RendererContext } from 'vscode-notebook-renderer'
 import { VSCodeEvent } from 'vscode-notebook-renderer/events'
 
-import '../renderers/runme-vscode.css'
 import Streams from '../streams'
 
 interface ConsoleSettings {
@@ -180,6 +179,7 @@ function Console({
     () => ({
       output: {
         'runme.dev/id': executeRequest.config?.knownId,
+        theme: 'dark',
         fontFamily: fontFamily || 'monospace',
         fontSize: fontSize || 12,
         cursorStyle: 'block',
@@ -309,6 +309,7 @@ function Console({
           'id',
           webComponentDefaults.output['runme.dev/id']!
         )
+        terminalElem.setAttribute('theme', webComponentDefaults.output.theme)
         terminalElem.setAttribute(
           'fontFamily',
           webComponentDefaults.output.fontFamily

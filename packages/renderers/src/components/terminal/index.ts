@@ -23,6 +23,7 @@ import './gistCell'
 import './open'
 import './saveButton'
 import './shareButton'
+import { darkStyles, lightStyles } from './vscode.css'
 
 interface IWindowSize {
   width: number
@@ -319,6 +320,7 @@ export class TerminalView extends LitElement {
   protected serializer?: SerializeAddon
   protected windowSize: IWindowSize
   protected rows: number = 10
+  protected themeStyleSheet?: CSSStyleSheet
 
   protected platformId?: string
   protected exitCode?: number | void
@@ -336,6 +338,9 @@ export class TerminalView extends LitElement {
 
   @property({ type: Boolean, converter: (value: string | null) => value !== 'false' })
   takeFocus: boolean = true
+
+  @property({ type: String })
+  theme: 'dark' | 'light' | 'vscode' = 'dark'
 
   @property({ type: String })
   fontFamily?: TerminalConfiguration['fontFamily']
@@ -393,14 +398,53 @@ export class TerminalView extends LitElement {
 
   constructor() {
     super()
+
     this.windowSize = {
       height: window.innerHeight,
       width: window.innerWidth,
     }
   }
 
+  protected applyThemeStyles(): void {
+    if (!this.shadowRoot) {
+      return
+    }
+
+    // Remove existing theme stylesheet if it exists
+    if (this.themeStyleSheet) {
+      const index = this.shadowRoot.adoptedStyleSheets.indexOf(this.themeStyleSheet)
+      if (index !== -1) {
+        this.shadowRoot.adoptedStyleSheets = this.shadowRoot.adoptedStyleSheets.filter(
+          (_, i) => i !== index
+        )
+      }
+      this.themeStyleSheet = undefined
+    }
+
+    // Apply new theme styles
+    if (this.theme === 'dark') {
+      this.themeStyleSheet = new CSSStyleSheet()
+      this.themeStyleSheet.replaceSync(darkStyles.cssText)
+      this.shadowRoot.adoptedStyleSheets = [
+        ...this.shadowRoot.adoptedStyleSheets,
+        this.themeStyleSheet
+      ]
+    } else if (this.theme === 'light') {
+      this.themeStyleSheet = new CSSStyleSheet()
+      this.themeStyleSheet.replaceSync(lightStyles.cssText)
+      this.shadowRoot.adoptedStyleSheets = [
+        ...this.shadowRoot.adoptedStyleSheets,
+        this.themeStyleSheet
+      ]
+    }
+    // For 'vscode' theme, no additional styles are applied
+  }
+
   connectedCallback(): void {
     super.connectedCallback()
+
+    // Apply theme-specific styles
+    this.applyThemeStyles()
 
     if (!this.id) {
       throw new Error('No id provided to terminal!')
@@ -594,6 +638,15 @@ export class TerminalView extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback()
     this.dispose()
+  }
+
+  protected updated(changedProperties: PropertyValues): void {
+    super.updated(changedProperties)
+
+    if (changedProperties.has('theme')) {
+      this.applyThemeStyles()
+      this.#updateTerminalTheme()
+    }
   }
 
   protected firstUpdated(props: PropertyValues): void {
