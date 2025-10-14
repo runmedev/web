@@ -14,6 +14,7 @@ import {
   UnaryRequest,
   UnaryResponse,
 } from '@connectrpc/connect'
+import { ClientMessages } from '@runmedev/renderers'
 import {
   Observable,
   Subject,
@@ -45,9 +46,6 @@ import {
 import { ulid } from 'ulid'
 import { v4 as uuidv4 } from 'uuid'
 import { VSCodeEvent } from 'vscode-notebook-renderer/events'
-
-// @ts-expect-error because the webcomponents are not typed
-import { ClientMessages } from './renderers/client'
 
 const HEARTBEAT_INTERVAL_MS = 5_000
 const MONITOR_INTERVAL_MS = 1_000

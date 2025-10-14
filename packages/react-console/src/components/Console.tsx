@@ -12,14 +12,12 @@ import {
 } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { create } from '@bufbuild/protobuf'
 import { Interceptor } from '@connectrpc/connect'
+// anything below is required for the webcomponents to work
+import '@runmedev/renderers'
+import { ClientMessages, setContext } from '@runmedev/renderers'
 import { RendererContext } from 'vscode-notebook-renderer'
 import { VSCodeEvent } from 'vscode-notebook-renderer/events'
 
-// anything below is required for the webcomponents to work
-import '../renderers/client'
-// @ts-expect-error because the webcomponents are not typed
-import { ClientMessages, setContext } from '../renderers/client'
-import '../renderers/runme-vscode.css'
 import Streams from '../streams'
 
 interface ConsoleSettings {
@@ -181,6 +179,7 @@ function Console({
     () => ({
       output: {
         'runme.dev/id': executeRequest.config?.knownId,
+        theme: 'dark',
         fontFamily: fontFamily || 'monospace',
         fontSize: fontSize || 12,
         cursorStyle: 'block',
@@ -246,7 +245,7 @@ function Console({
     onDidReceiveMessage: (listener: VSCodeEvent<any>) => {
       streams?.setCallback(listener)
     },
-  } as Partial<RendererContext<void>>)
+  } as RendererContext<void>)
 
   useEffect(() => {
     const stdoutSub = streams?.stdout.subscribe((data: Uint8Array) => {
@@ -310,6 +309,7 @@ function Console({
           'id',
           webComponentDefaults.output['runme.dev/id']!
         )
+        terminalElem.setAttribute('theme', webComponentDefaults.output.theme)
         terminalElem.setAttribute(
           'fontFamily',
           webComponentDefaults.output.fontFamily

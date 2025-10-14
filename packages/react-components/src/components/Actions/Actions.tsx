@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { create } from '@bufbuild/protobuf'
 import { Box, Button, Card, ScrollArea, Text } from '@radix-ui/themes'
-import '@runmedev/react-console/react-console.css'
+
+// import '@runmedev/react-console/react-console-light.css'
 
 import { parser_pb, useCell } from '../../contexts/CellContext'
 import { useOutput } from '../../contexts/OutputContext'

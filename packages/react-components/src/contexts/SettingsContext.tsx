@@ -16,7 +16,6 @@ import {
   Streams,
   genRunID,
 } from '@runmedev/react-console'
-import '@runmedev/react-console/react-console.css'
 import { JwtPayload, jwtDecode } from 'jwt-decode'
 import { Subscription } from 'rxjs'
 import { ulid } from 'ulid'

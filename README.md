@@ -45,6 +45,7 @@ pnpm run clean
 Start the development server for sample app using the components:
 
 ```sh {"name":"dev"}
+pnpm run build:renderers
 pnpm run build:console
 pnpm run dev
 ```
