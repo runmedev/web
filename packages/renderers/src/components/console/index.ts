@@ -72,10 +72,10 @@ const ANSI_COLORS = [
   'brightWhite',
 ] satisfies (keyof ITheme)[]
 
-export const TERMINAL_VIEW = 'terminal-view'
+export const CONSOLE_VIEW = 'console-view'
 
-@customElement(TERMINAL_VIEW)
-export class TerminalView extends LitElement {
+@customElement(CONSOLE_VIEW)
+export class ConsoleView extends LitElement {
   protected copyText = 'Copy'
 
   static styles = css`

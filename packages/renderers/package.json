@@ -4,14 +4,19 @@
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
-  "main": "dist/runme-renderers.cjs",
-  "module": "dist/runme-renderers.mjs",
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/runme-renderers.mjs",
-      "require": "./dist/runme-renderers.cjs"
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./components": {
+      "types": "./dist/components.d.ts",
+      "import": "./dist/components.mjs",
+      "require": "./dist/components.cjs"
     }
   },
   "files": [

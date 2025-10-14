@@ -302,45 +302,45 @@ function Console({
         if (!el || el.hasChildNodes()) {
           return
         }
-        const terminalElem = document.createElement('terminal-view')
-        terminalElem.setAttribute('buttons', 'false')
+        const consoleEl = document.createElement('console-view')
+        consoleEl.setAttribute('buttons', 'false')
 
-        terminalElem.setAttribute(
+        consoleEl.setAttribute(
           'id',
           webComponentDefaults.output['runme.dev/id']!
         )
-        terminalElem.setAttribute('theme', webComponentDefaults.output.theme)
-        terminalElem.setAttribute(
+        consoleEl.setAttribute('theme', webComponentDefaults.output.theme)
+        consoleEl.setAttribute(
           'fontFamily',
           webComponentDefaults.output.fontFamily
         )
         if (typeof webComponentDefaults.output.fontSize === 'number') {
-          terminalElem.setAttribute(
+          consoleEl.setAttribute(
             'fontSize',
             webComponentDefaults.output.fontSize.toString()
           )
         }
         if (webComponentDefaults.output.cursorStyle) {
-          terminalElem.setAttribute(
+          consoleEl.setAttribute(
             'cursorStyle',
             webComponentDefaults.output.cursorStyle
           )
         }
         if (typeof webComponentDefaults.output.cursorBlink === 'boolean') {
-          terminalElem.setAttribute(
+          consoleEl.setAttribute(
             'cursorBlink',
             webComponentDefaults.output.cursorBlink ? 'true' : 'false'
           )
         }
         if (typeof webComponentDefaults.output.cursorWidth === 'number') {
-          terminalElem.setAttribute(
+          consoleEl.setAttribute(
             'cursorWidth',
             webComponentDefaults.output.cursorWidth.toString()
           )
         }
 
         if (typeof webComponentDefaults.output.takeFocus === 'boolean') {
-          terminalElem.setAttribute(
+          consoleEl.setAttribute(
             'takeFocus',
             webComponentDefaults.output.takeFocus ? 'true' : 'false'
           )
@@ -349,47 +349,47 @@ function Console({
         if (
           typeof webComponentDefaults.output.smoothScrollDuration === 'number'
         ) {
-          terminalElem.setAttribute(
+          consoleEl.setAttribute(
             'smoothScrollDuration',
             webComponentDefaults.output.smoothScrollDuration.toString()
           )
         }
 
         if (typeof webComponentDefaults.output.scrollback === 'number') {
-          terminalElem.setAttribute(
+          consoleEl.setAttribute(
             'scrollback',
             webComponentDefaults.output.scrollback.toString()
           )
         }
         if (webComponentDefaults.output.initialRows !== undefined) {
-          terminalElem.setAttribute(
+          consoleEl.setAttribute(
             'initialRows',
             webComponentDefaults.output.initialRows.toString()
           )
         }
 
         if (webComponentDefaults.output.content !== undefined) {
-          terminalElem.setAttribute(
+          consoleEl.setAttribute(
             'initialContent',
             webComponentDefaults.output.content
           )
         }
 
         if (webComponentDefaults.output.isAutoSaveEnabled) {
-          terminalElem.setAttribute(
+          consoleEl.setAttribute(
             'isAutoSaveEnabled',
             webComponentDefaults.output.isAutoSaveEnabled.toString()
           )
         }
 
         if (webComponentDefaults.output.isPlatformAuthEnabled) {
-          terminalElem.setAttribute(
+          consoleEl.setAttribute(
             'isPlatformAuthEnabled',
             webComponentDefaults.output.isPlatformAuthEnabled.toString()
           )
         }
 
-        el.appendChild(terminalElem)
+        el.appendChild(consoleEl)
         const terminalEnd = document.createElement('div')
         terminalEnd.setAttribute('className', 'h-1')
         el.appendChild(terminalEnd)
