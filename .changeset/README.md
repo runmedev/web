@@ -18,14 +18,15 @@ We currently publish the packages manually following these steps. Be sure to com
 npx changeset
 ```
 
-```sh
+```sh {"terminalRows":"18"}
 pnpm run version-packages
+git diff
 ```
 
 ```sh {"terminalRows":"24"}
-pnpm run clean
+runme run clean
 runme run setup
-pnpm run build
+runme run build
 ```
 
 ```sh {"terminalRows":"24"}

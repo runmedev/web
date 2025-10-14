@@ -1,5 +1,11 @@
 # @runmedev/react-components
 
+## 3.15.12
+
+### Patch Changes
+
+- Move first batch of lit-based web component renderers into code base
+
 ## 3.15.11
 
 ### Patch Changes
