@@ -1,6 +1,6 @@
 import { ClientMessages } from './types'
-import { setContext } from './messaging'
+import { setContext, getContext } from './messaging'
 
 import './components'
 
-export { setContext, ClientMessages }
+export { setContext, getContext, ClientMessages }
