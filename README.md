@@ -30,6 +30,7 @@ pnpm run build
 Build a specific package:
 
 ```sh
+pnpm run build:renderers
 pnpm run build:console
 pnpm run build:components
 ```
@@ -52,6 +53,8 @@ pnpm run dev
 
 ## Testing
 
+Will fail for a clean project. Be sure to build first.
+
 ```sh {"name":"test"}
 pnpm run test:run
 ```
@@ -64,16 +67,10 @@ Lint all packages:
 pnpm run lint
 ```
 
-Lint a specific package:
-
-```sh
-pnpm --filter @runmedev/react-console run lint
-pnpm --filter @runmedev/react-components run lint
-```
-
 ## Structure
 
-- `packages/react-components`: React component library (Runme)
+- `packages/renderers`: Foundational web component libraries
+- `packages/react-components`: React component library (Runme) & example app
 - `packages/react-console`: Runme Console is a terminal attached to a Runme execution.
 
 All dependencies are managed efficiently through pnpm's workspace features.
