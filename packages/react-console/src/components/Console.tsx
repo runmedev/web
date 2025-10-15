@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 
 import { Interceptor } from '@connectrpc/connect'
 import '@runmedev/renderers'
@@ -57,6 +57,8 @@ function Console({
     scrollToFit = true,
   } = settingsProp
 
+  const elemRef = useRef<any>(null)
+
   const webComponentDefaults = useMemo(
     () => ({
       output: {
@@ -80,9 +82,9 @@ function Console({
     [cellID, fontFamily, fontSize, takeFocus, scrollToFit, rows, content]
   )
 
+  // Set up event listeners when the console element is available and callbacks change
   useEffect(() => {
-    // Wire custom events from web component to React callbacks
-    const el = document.querySelector(`console-view[id="${cellID}"]`) as any
+    const el = elemRef.current
     if (!el) {
       return
     }
@@ -112,45 +114,40 @@ function Console({
         if (!el || el.hasChildNodes()) {
           return
         }
-        const consoleEl = document.createElement('runme-console') as any
-        consoleEl.setAttribute('buttons', 'false')
+        const elem = document.createElement('runme-console') as any
+        elemRef.current = elem
+        elem.setAttribute('buttons', 'false')
 
-        consoleEl.setAttribute(
-          'id',
-          webComponentDefaults.output['runme.dev/id']!
-        )
-        consoleEl.setAttribute('theme', webComponentDefaults.output.theme)
-        consoleEl.setAttribute(
-          'fontFamily',
-          webComponentDefaults.output.fontFamily
-        )
+        elem.setAttribute('id', webComponentDefaults.output['runme.dev/id']!)
+        elem.setAttribute('theme', webComponentDefaults.output.theme)
+        elem.setAttribute('fontFamily', webComponentDefaults.output.fontFamily)
         if (typeof webComponentDefaults.output.fontSize === 'number') {
-          consoleEl.setAttribute(
+          elem.setAttribute(
             'fontSize',
             webComponentDefaults.output.fontSize.toString()
           )
         }
         if (webComponentDefaults.output.cursorStyle) {
-          consoleEl.setAttribute(
+          elem.setAttribute(
             'cursorStyle',
             webComponentDefaults.output.cursorStyle
           )
         }
         if (typeof webComponentDefaults.output.cursorBlink === 'boolean') {
-          consoleEl.setAttribute(
+          elem.setAttribute(
             'cursorBlink',
             webComponentDefaults.output.cursorBlink ? 'true' : 'false'
           )
         }
         if (typeof webComponentDefaults.output.cursorWidth === 'number') {
-          consoleEl.setAttribute(
+          elem.setAttribute(
             'cursorWidth',
             webComponentDefaults.output.cursorWidth.toString()
           )
         }
 
         if (typeof webComponentDefaults.output.takeFocus === 'boolean') {
-          consoleEl.setAttribute(
+          elem.setAttribute(
             'takeFocus',
             webComponentDefaults.output.takeFocus ? 'true' : 'false'
           )
@@ -159,59 +156,59 @@ function Console({
         if (
           typeof webComponentDefaults.output.smoothScrollDuration === 'number'
         ) {
-          consoleEl.setAttribute(
+          elem.setAttribute(
             'smoothScrollDuration',
             webComponentDefaults.output.smoothScrollDuration.toString()
           )
         }
 
         if (typeof webComponentDefaults.output.scrollback === 'number') {
-          consoleEl.setAttribute(
+          elem.setAttribute(
             'scrollback',
             webComponentDefaults.output.scrollback.toString()
           )
         }
         if (webComponentDefaults.output.initialRows !== undefined) {
-          consoleEl.setAttribute(
+          elem.setAttribute(
             'initialRows',
             webComponentDefaults.output.initialRows.toString()
           )
         }
 
         if (webComponentDefaults.output.content !== undefined) {
-          consoleEl.setAttribute(
+          elem.setAttribute(
             'initialContent',
             webComponentDefaults.output.content
           )
         }
 
         if (webComponentDefaults.output.isAutoSaveEnabled) {
-          consoleEl.setAttribute(
+          elem.setAttribute(
             'isAutoSaveEnabled',
             webComponentDefaults.output.isAutoSaveEnabled.toString()
           )
         }
 
         if (webComponentDefaults.output.isPlatformAuthEnabled) {
-          consoleEl.setAttribute(
+          elem.setAttribute(
             'isPlatformAuthEnabled',
             webComponentDefaults.output.isPlatformAuthEnabled.toString()
           )
         }
 
         // Pass-through execution/session config
-        consoleEl.setAttribute('knownId', cellID)
-        consoleEl.setAttribute('runId', runID)
-        consoleEl.setAttribute('sequence', String(sequence))
+        elem.setAttribute('knownId', cellID)
+        elem.setAttribute('runId', runID)
+        elem.setAttribute('sequence', String(sequence))
         if (languageID) {
-          consoleEl.setAttribute('languageId', languageID)
+          elem.setAttribute('languageId', languageID)
         }
-        consoleEl.setAttribute('runnerEndpoint', runner.endpoint)
-        consoleEl.setAttribute('reconnect', runner.reconnect ? 'true' : 'false')
-        consoleEl.interceptors = runner.interceptors
-        consoleEl.commands = commands
+        elem.setAttribute('runnerEndpoint', runner.endpoint)
+        elem.setAttribute('reconnect', runner.reconnect ? 'true' : 'false')
+        elem.interceptors = runner.interceptors
+        elem.commands = commands
 
-        el.appendChild(consoleEl)
+        el.appendChild(elem)
         const terminalEnd = document.createElement('div')
         terminalEnd.setAttribute('className', 'h-1')
         el.appendChild(terminalEnd)
