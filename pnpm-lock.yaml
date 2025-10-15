@@ -264,7 +264,11 @@ importers:
         specifier: workspace:*
         version: link:../renderers
 
-  packages/renderers: {}
+  packages/renderers:
+    dependencies:
+      '@bufbuild/protobuf':
+        specifier: ^2.9.0
+        version: 2.9.0
 
   packages/test:
     dependencies:
