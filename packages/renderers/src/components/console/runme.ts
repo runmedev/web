@@ -8,7 +8,8 @@ import { ConsoleView } from './view'
 import { create } from '@bufbuild/protobuf'
 import { ExecuteRequestSchema, SessionStrategy, WinsizeSchema } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { ProgramConfig_CommandListSchema, CommandMode } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/config_pb'
-import { RendererContext } from 'vscode-notebook-renderer'
+import { type RendererContext } from 'vscode-notebook-renderer'
+import { type VSCodeEvent } from 'vscode-notebook-renderer/events'
 
 // Streams integration specific interfaces and constants
 
@@ -378,54 +379,45 @@ export class RunmeConsole extends LitElement {
     return req
   }
 
-  #sendWinsize() {
-    if (!this.#streams) {
-      return
-    }
-    const req = create(ExecuteRequestSchema, { winsize: this.#winsize })
-    this.#streams.sendExecuteRequest(req)
-  }
-
-  #sendStdin(input: string) {
-    if (!this.#streams) {
-      return
-    }
-    const encoder = new TextEncoder()
-    const inputData = encoder.encode(input)
-    const req = create(ExecuteRequestSchema, { inputData })
-    this.#streams.sendExecuteRequest(req)
-  }
-
   #installContextBridge() {
+    const encoder = new TextEncoder()
     const ctxLike = {
-      postMessage: (message: any) => {
-        if (
-          message?.type === ClientMessages.terminalOpen ||
-          message?.type === ClientMessages.terminalResize
-        ) {
-          const cols = Number(message?.output?.terminalDimensions?.columns)
-          const rows = Number(message?.output?.terminalDimensions?.rows)
-          if (Number.isFinite(cols) && Number.isFinite(rows)) {
-            if (this.#winsize.cols === cols && this.#winsize.rows === rows) {
-              return
-            }
-            this.#winsize = { cols, rows, x: 0, y: 0 }
-            this.#sendWinsize()
+    postMessage: (message: unknown) => {
+      if (
+        (message as any).type === ClientMessages.terminalOpen ||
+        (message as any).type === ClientMessages.terminalResize
+      ) {
+        const cols = Number((message as any).output.terminalDimensions.columns)
+        const rows = Number((message as any).output.terminalDimensions.rows)
+        if (Number.isFinite(cols) && Number.isFinite(rows)) {
+          // If the dimensions are the same, return early
+          if (this.#winsize.cols === cols && this.#winsize.rows === rows) {
+            return
           }
+          this.#winsize = create(WinsizeSchema, {
+            cols,
+            rows,
+            x: 0,
+            y: 0,
+          })
+          const req = create(ExecuteRequestSchema, {
+            winsize: this.#winsize,
+          })
+          this.#streams?.sendExecuteRequest(req)
         }
-        if (message?.type === ClientMessages.terminalStdin) {
-          const input = String(message?.output?.input ?? '')
-          console.log('bridge stdin input', input)
-          this.#sendStdin(input)
-        }
-      },
-      onDidReceiveMessage: (listener: (message: any) => void) => {
-        console.log('function setCallback', typeof (this.#streams as any).setCallback)
-        if (this.#streams && typeof (this.#streams as any).setCallback === 'function') {
-          ;(this.#streams as any).setCallback(listener as any)
-        }
-        return { dispose: () => {} }
-      },
+      }
+
+      if ((message as any).type === ClientMessages.terminalStdin) {
+        const inputData = encoder.encode((message as any).output.input)
+        const req = create(ExecuteRequestSchema, { inputData })
+        // const reqJson = toJson(ExecuteRequestSchema, req)
+        // console.log('terminalStdin', reqJson)
+        this.#streams?.sendExecuteRequest(req)
+      }
+    },
+    onDidReceiveMessage: (listener: VSCodeEvent<any>) => {
+      this.#streams?.setCallback(listener)
+    },
     } as RendererContext<void>
     try {
       setContext(ctxLike)
