@@ -1,5 +1,11 @@
 # @runmedev/react-components
 
+## 3.15.13
+
+### Patch Changes
+
+- Build and link renderers package
+
 ## 3.15.12
 
 ### Patch Changes
