@@ -12,24 +12,6 @@ vi.mock('@runmedev/renderers', () => ({
   default: {},
 }))
 
-vi.mock('../../streams', () => {
-  const subscribers: any[] = []
-  return {
-    default: vi.fn().mockImplementation(() => ({
-      connect: vi.fn(() => ({ subscribe: vi.fn() })),
-      close: vi.fn(),
-      stdout: { subscribe: vi.fn() },
-      stderr: { subscribe: vi.fn() },
-      exitCode: { subscribe: vi.fn() },
-      pid: { subscribe: vi.fn() },
-      mimeType: { subscribe: vi.fn() },
-      sendExecuteRequest: vi.fn((req: any) => subscribers.push(req)),
-      setCallback: vi.fn(),
-    })),
-    __subscribers: subscribers,
-  }
-})
-
 describe('Console', () => {
   const defaultProps = {
     cellID: 'test-cell-1',
@@ -146,38 +128,51 @@ describe('Console', () => {
   //     expect(onExitCode).toBeDefined()
   //   })
 
-  it('builds inline command ExecuteRequest for shellish languages', async () => {
-    const { default: Streams, __subscribers } = (await import(
-      '../../streams'
-    )) as any
-    render(
+  it('sets correct attributes on web component for shell languages', () => {
+    const { container } = render(
       <Console {...defaultProps} languageID="bash" commands={['echo hi']} />
     )
-    // allow effect
-    await Promise.resolve()
-    expect((Streams as any).mock.calls.length).toBeGreaterThan(0)
-    const sent = (__subscribers as any[]).pop()
-    expect(sent?.config?.languageId).toBe('bash')
-    expect(sent?.config?.mode).toBeDefined()
-    // commands mode -> INLINE, source case commands
-    expect(sent?.config?.source?.case).toBe('commands')
-    expect(sent?.config?.source?.value?.items).toEqual(['echo hi'])
+
+    // Find the runme-console web component
+    const webComponent = container.querySelector('runme-console')
+    expect(webComponent).toBeInTheDocument()
+
+    // Verify the web component has the correct attributes
+    expect(webComponent?.getAttribute('languageId')).toBe('bash')
+    expect(webComponent?.getAttribute('knownId')).toBe('test-cell-1')
+    expect(webComponent?.getAttribute('runId')).toBe('test-run-1')
+    expect(webComponent?.getAttribute('sequence')).toBe('1')
+    expect(webComponent?.getAttribute('runnerEndpoint')).toBe(
+      'ws://localhost:8080/ws'
+    )
+
+    // Verify commands are set as a property (not attribute)
+    expect((webComponent as any)?.commands).toEqual(['echo hi'])
   })
 
-  it('builds file ExecuteRequest for non-shell languages', async () => {
-    const { __subscribers } = (await import('../../streams')) as any
-    render(
+  it('sets correct attributes on web component for non-shell languages', () => {
+    const { container } = render(
       <Console
         {...defaultProps}
         languageID="python"
         commands={["print('hi')"]}
       />
     )
-    await Promise.resolve()
-    const sent = (__subscribers as any[]).pop()
-    expect(sent?.config?.languageId).toBe('python')
-    expect(sent?.config?.source?.case).toBe('script')
-    expect(sent?.config?.mode).toBeDefined()
-    expect(sent?.config?.fileExtension).toBe('python')
+
+    // Find the runme-console web component
+    const webComponent = container.querySelector('runme-console')
+    expect(webComponent).toBeInTheDocument()
+
+    // Verify the web component has the correct attributes
+    expect(webComponent?.getAttribute('languageId')).toBe('python')
+    expect(webComponent?.getAttribute('knownId')).toBe('test-cell-1')
+    expect(webComponent?.getAttribute('runId')).toBe('test-run-1')
+    expect(webComponent?.getAttribute('sequence')).toBe('1')
+    expect(webComponent?.getAttribute('runnerEndpoint')).toBe(
+      'ws://localhost:8080/ws'
+    )
+
+    // Verify commands are set as a property (not attribute)
+    expect((webComponent as any)?.commands).toEqual(["print('hi')"])
   })
 })
