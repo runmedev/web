@@ -43,6 +43,9 @@ import {
 } from 'rxjs'
 import { ulid } from 'ulid'
 import { v4 as uuidv4 } from 'uuid'
+import { VSCodeEvent } from 'vscode-notebook-renderer/events'
+
+import { ClientMessages } from './types'
 
 const HEARTBEAT_INTERVAL_MS = 5_000
 const MONITOR_INTERVAL_MS = 1_000
@@ -60,6 +63,10 @@ export type NextFunc = (
 export enum Heartbeat {
   CONTINUOUS = 'CONTINUOUS',
   INITIAL = 'INITIAL',
+}
+
+export type Authorization = {
+  bearerToken: string | undefined
 }
 
 type ReconnectConfig = {
@@ -86,7 +93,10 @@ type StreamsProps = {
 }
 
 class Streams {
+  private callback: VSCodeEvent<any> | undefined
+
   private readonly queue = new Subject<pb.WebsocketRequest>()
+
   private subscriptions: Subscription[] = []
 
   // Transport related
@@ -123,6 +133,7 @@ class Streams {
   // App protocol-level errors
   private _errors = new Subject<StreamError>()
   private _errorsConnectable = connectable(this._errors.asObservable())
+
   public get errors() {
     return this._errorsConnectable
   }
@@ -141,11 +152,21 @@ class Streams {
   private _pidConnectable = connectable(this._pid.asObservable())
   private _mimeTypeConnectable = connectable(this._mimeType.asObservable())
 
-  public get stdout() { return this._stdoutConnectable }
-  public get stderr() { return this._stderrConnectable }
-  public get exitCode() { return this._exitCodeConnectable }
-  public get pid() { return this._pidConnectable }
-  public get mimeType() { return this._mimeTypeConnectable }
+  public get stdout() {
+    return this._stdoutConnectable
+  }
+  public get stderr() {
+    return this._stderrConnectable
+  }
+  public get exitCode() {
+    return this._exitCodeConnectable
+  }
+  public get pid() {
+    return this._pidConnectable
+  }
+  public get mimeType() {
+    return this._mimeTypeConnectable
+  }
 
   // Identifiers for the cell/console associated with this stream
   private readonly knownID: string
@@ -209,7 +230,13 @@ class Streams {
       withLatestFrom(this.reconnect),
       filter(([, reconnect]) => reconnect.heartbeat === Heartbeat.CONTINUOUS),
       withLatestFrom(this.latencies),
-      map(([, latencies]) => Array.from(latencies.values()).filter(l => l.readyState === WebSocket.OPEN && l.latency >= MAX_LATENCY_DEADLINE_MS)),
+      map(([, latencies]) =>
+        Array.from(latencies.values()).filter(
+          (latency) =>
+            latency.readyState === WebSocket.OPEN &&
+            latency.latency >= MAX_LATENCY_DEADLINE_MS
+        )
+      ),
       filter((latencies) => latencies.length > 0),
       // tap((latencies) => console.log('Monitor latencies', latencies)),
       // Throttle the reconnects to avoid overwhelming the server
@@ -233,7 +260,9 @@ class Streams {
 
   private process(): Subscription {
     const socketIsOpen = this.client.pipe(
-      filter((socket) => { return socket?.readyState === WebSocket.OPEN }),
+      filter((socket) => {
+        return socket?.readyState === WebSocket.OPEN
+      }),
       take(1)
     )
 
@@ -267,11 +296,21 @@ class Streams {
       withLatestFrom(this.client),
       takeWhile(([, socket]) => socket.readyState === WebSocket.OPEN),
       mergeMap(async ([req, socket]) => {
-        await sendWebsocketRequest({ req, interceptors: this.interceptors, socket, knownID: this.knownID, runID: this.runID })
+        await sendWebsocketRequest({
+          req,
+          interceptors: this.interceptors,
+          socket,
+          knownID: this.knownID,
+          runID: this.runID,
+        })
       })
     )
 
-    return sender.subscribe({ error: (err) => { this._errors.next(err) } })
+    return sender.subscribe({
+      error: (err) => {
+        this._errors.next(err)
+      },
+    })
   }
 
   // Creates a new socket client for the given streamID.
@@ -334,11 +373,42 @@ class Streams {
         }
 
         const response = message!.payload.value as ExecuteResponse
-        if (response.stdoutData && response.stdoutData.length > 0) { this._stdout.next(response.stdoutData) }
-        if (response.stderrData && response.stderrData.length > 0) { this._stderr.next(response.stderrData) }
-        if (response.exitCode !== undefined) { this._exitCode.next(response.exitCode); observer.complete() }
-        if (response.pid !== undefined) { this._pid.next(response.pid) }
-        if (response.mimeType) { this._mimeType.next(response.mimeType.split(';')[0]) }
+        if (response.stdoutData && response.stdoutData.length > 0) {
+          this.callback?.({
+            type: ClientMessages.terminalStdout,
+            output: {
+              'runme.dev/id': this.knownID,
+              data: response.stdoutData,
+            },
+          } as any)
+          this._stdout.next(response.stdoutData)
+        }
+
+        if (response.stderrData && response.stderrData.length > 0) {
+          this.callback?.({
+            type: ClientMessages.terminalStderr,
+            output: {
+              'runme.dev/id': this.knownID,
+              data: response.stderrData,
+            },
+          } as any)
+          this._stderr.next(response.stderrData)
+        }
+
+        if (response.exitCode !== undefined) {
+          this._exitCode.next(response.exitCode)
+          observer.complete()
+        }
+
+        if (response.pid !== undefined) {
+          this._pid.next(response.pid)
+        }
+
+        if (response.mimeType) {
+          const parts = response.mimeType.split(';')
+          const mimeType = parts[0]
+          this._mimeType.next(mimeType)
+        }
       }
 
       const onOpen = () => {
@@ -370,10 +440,17 @@ class Streams {
     })
   }
 
+  public setCallback(callback: VSCodeEvent<any>) {
+    this.callback = callback
+  }
+
   public sendExecuteRequest(executeRequest: ExecuteRequest) {
     this.queue.next(
       create(pb.WebsocketRequestSchema, {
-        payload: { value: executeRequest, case: 'executeRequest' },
+        payload: {
+          value: executeRequest,
+          case: 'executeRequest',
+        },
       })
     )
   }
@@ -386,12 +463,16 @@ class Streams {
     { streamID, heartbeat }: ReconnectConfig
   ): Observable<WebSocket> {
     return new Observable<WebSocket>((observer) => {
+      // Listen to the websocket's pongs
       const pongsWithReceipt = fromEvent<MessageEvent>(socket, 'message').pipe(
         takeWhile(() => socket.readyState === WebSocket.OPEN),
         map((event) => parseWebsocketResponse(event.data)),
         map((message) => message.pong),
         filter((pong) => pong !== undefined),
-        map((pong) => ({ receivedAt: BigInt(Date.now()), pong }))
+        map((pong) => ({
+          receivedAt: BigInt(Date.now()),
+          pong,
+        }))
       )
 
       // Continuous heartbeat pings every HEARTBEAT_INTERVAL_MS
@@ -427,11 +508,23 @@ class Streams {
         mergeMap((ping) =>
           race(
             pongsWithReceipt.pipe(
-              filter((pongReceipt) => pongReceipt.pong.timestamp === ping!.timestamp),
+              filter(
+                (pongReceipt) => pongReceipt.pong.timestamp === ping!.timestamp
+              ),
               take(1),
-              map((pongReceipt) => Number(pongReceipt.receivedAt - ping!.timestamp!))
+              map((pongReceipt) => {
+                const sent = ping!.timestamp
+                const received = pongReceipt.receivedAt
+                return Number(received - sent)
+              })
             ),
-            timer(MAX_LATENCY_DEADLINE_MS).pipe(map(() => { throw new Error(`Pong not received within ${MAX_LATENCY_DEADLINE_MS}ms for stream ${streamID}`) }))
+            timer(MAX_LATENCY_DEADLINE_MS).pipe(
+              map(() => {
+                throw new Error(
+                  `Pong not received within ${MAX_LATENCY_DEADLINE_MS}ms for stream ${streamID}`
+                )
+              })
+            )
           ).pipe(
             catchError((err) => {
               // Emit a deadline latency to trigger a reconnect
@@ -478,7 +571,10 @@ class Streams {
       )
 
       observer.next(socket)
-      return () => { subs.forEach((sub) => sub.unsubscribe()) }
+
+      return () => {
+        subs.forEach((sub) => sub.unsubscribe())
+      }
     })
   }
 
@@ -487,7 +583,13 @@ class Streams {
   public connect(heartbeat = Heartbeat.CONTINUOUS): Observable<Latency | null> {
     const streamID = genStreamID()
     const latency = this.latencies.pipe(
-      map((latencies) => latencies.get(streamID) ?? null),
+      map((latencies) => {
+        const l = latencies.get(streamID)
+        if (l === undefined) {
+          return null
+        }
+        return l
+      }),
       takeWhile((latency) => latency?.readyState === WebSocket.OPEN)
     )
     this.reconnect.next({ streamID, heartbeat })
@@ -537,9 +639,9 @@ async function sendWebsocketRequest({
   // Create a dummy unary request for interceptor compatibility
   const authzReq: UnaryRequest = {
     stream: false,
-    message: {} as any,
-    method: {} as any,
-    service: {} as any,
+    message: {} as any, // Dummy message
+    method: {} as any, // Dummy method
+    service: {} as any, // Dummy service
     requestMethod: 'UPGRADE',
     url: socket.url,
     signal: new AbortController().signal,
@@ -588,5 +690,3 @@ export function genRunID() {
 }
 
 export default Streams
-
-

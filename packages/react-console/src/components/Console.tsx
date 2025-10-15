@@ -112,7 +112,7 @@ function Console({
         if (!el || el.hasChildNodes()) {
           return
         }
-        const consoleEl = document.createElement('console-view') as any
+        const consoleEl = document.createElement('runme-console') as any
         consoleEl.setAttribute('buttons', 'false')
 
         consoleEl.setAttribute(

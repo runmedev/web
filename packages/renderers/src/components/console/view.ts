@@ -12,11 +12,10 @@ import { debounceTime, distinctUntilChanged, filter, map, share } from 'rxjs/ope
 import { FitAddon, type ITerminalDimensions } from '../../fitAddon'
 import { ClientMessages, OutputType, TerminalConfiguration, WebViews } from '../../types'
 import { closeOutput } from '../../utils'
-import { onClientMessage, postClientMessage, getContext, setContext } from '../../messaging'
+import { onClientMessage, postClientMessage, getContext } from '../../messaging'
 import {
   ClientMessage,
 } from '../../types'
-import Streams from '../../streams'
 import '../closeCellButton'
 import '../copyButton'
 import './actionButton'
@@ -25,10 +24,6 @@ import './open'
 import './saveButton'
 import './shareButton'
 import { darkStyles, lightStyles } from './vscode.css'
-import { create } from '@bufbuild/protobuf'
-import { ExecuteRequestSchema, SessionStrategy, WinsizeSchema } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
-import { ProgramConfig_CommandListSchema, CommandMode } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/config_pb'
-import { RendererContext } from 'vscode-notebook-renderer'
 
 interface IWindowSize {
   width: number
@@ -398,36 +393,11 @@ export class ConsoleView extends LitElement {
   @property({ type: Boolean })
   isPlatformAuthEnabled: boolean = false
 
-  // Execution configuration
-  @property({ type: String })
-  knownId?: string
-  @property({ type: String })
-  runId?: string
-  @property({ type: Number })
-  sequence?: number
-  @property({ type: String })
-  languageId?: string
-  @property({ attribute: false })
-  commands?: string[]
-  @property({ type: String })
-  runnerEndpoint?: string
-  @property({ type: Boolean, converter: (value: string | null) => value !== 'false' })
-  reconnect: boolean = true
-  @property({ attribute: false })
-  interceptors: any[] = []
-
-  // Internal streams state
-  #streams?: Streams
-  #streamsUnsubs: Array<() => void> = []
-  #winsize = { rows: 34, cols: 100, x: 0, y: 0 }
-
   @property({ type: Boolean })
   isDaggerOutput: boolean = false
 
   constructor() {
     super()
-
-    this.#installContextBridge()
 
     this.windowSize = {
       height: window.innerHeight,
@@ -655,7 +625,12 @@ export class ConsoleView extends LitElement {
           }
         }
       }),
-      this.terminal.onData((data) => this.#sendStdin(data)),
+      this.terminal.onData((data) =>
+        postClientMessage(ctx, ClientMessages.terminalStdin, {
+          'runme.dev/id': this.id!,
+          input: data,
+        }),
+      ),
     )
 
     postClientMessage(ctx, ClientMessages.featuresRequest, {})
@@ -672,19 +647,6 @@ export class ConsoleView extends LitElement {
     if (changedProperties.has('theme')) {
       this.applyThemeStyles()
       this.#updateTerminalTheme()
-    }
-
-    if (
-      changedProperties.has('knownId') ||
-      changedProperties.has('runId') ||
-      changedProperties.has('sequence') ||
-      changedProperties.has('runnerEndpoint') ||
-      changedProperties.has('interceptors') ||
-      changedProperties.has('commands') ||
-      changedProperties.has('languageId')
-    ) {
-      this.#maybeInitStreams()
-      this.#maybeSendExecuteRequest()
     }
   }
 
@@ -725,8 +687,6 @@ export class ConsoleView extends LitElement {
         terminalDimensions: convertXTermDimensions(this.fitAddon?.proposeDimensions()),
       })
 
-    this.#maybeInitStreams()
-
     if (this.lastLine) {
       this.terminal!.scrollToLine(this.lastLine)
     }
@@ -737,160 +697,6 @@ export class ConsoleView extends LitElement {
       this.rows = rows
     }
     return this.fitAddon?.fit(this.rows)
-  }
-
-  // Streams integration helpers
-  #maybeInitStreams() {
-    if (this.#streams) {
-      return
-    }
-    const knownId = this.knownId ?? this.id
-    if (!knownId || !this.runId || !this.runnerEndpoint) {
-      return
-    }
-    this.#streams = new Streams({
-      knownID: knownId,
-      runID: this.runId!,
-      sequence: this.sequence ?? 0,
-      options: {
-        runnerEndpoint: this.runnerEndpoint!,
-        interceptors: (this.interceptors as any[]) ?? [],
-        autoReconnect: this.reconnect,
-      },
-    })
-    const latencySub = this.#streams.connect().subscribe()
-    this.#streamsUnsubs.push(() => latencySub.unsubscribe())
-
-    const stdoutSub = this.#streams.stdout.subscribe((data: Uint8Array) => {
-      this.dispatchEvent(new CustomEvent('stdout', { detail: data }))
-      this.terminal?.write(data)
-    })
-    const stderrSub = this.#streams.stderr.subscribe((data: Uint8Array) => {
-      this.dispatchEvent(new CustomEvent('stderr', { detail: data }))
-    })
-    const exitSub = this.#streams.exitCode.subscribe((code: number) => {
-      this.dispatchEvent(new CustomEvent('exitcode', { detail: code }))
-      this.#teardownStreams()
-    })
-    const pidSub = this.#streams.pid.subscribe((pid: number) => {
-      this.dispatchEvent(new CustomEvent('pid', { detail: pid }))
-    })
-    const mimeSub = this.#streams.mimeType.subscribe((mt: string) => {
-      this.dispatchEvent(new CustomEvent('mimetype', { detail: mt }))
-    })
-    this.#streamsUnsubs.push(() => stdoutSub.unsubscribe())
-    this.#streamsUnsubs.push(() => stderrSub.unsubscribe())
-    this.#streamsUnsubs.push(() => exitSub.unsubscribe())
-    this.#streamsUnsubs.push(() => pidSub.unsubscribe())
-    this.#streamsUnsubs.push(() => mimeSub.unsubscribe())
-  }
-
-  #teardownStreams() {
-    this.#streamsUnsubs.forEach((u) => {
-      try {
-        u()
-      } catch {}
-    })
-    this.#streamsUnsubs = []
-    this.#streams?.close()
-    this.#streams = undefined
-  }
-
-  #maybeSendExecuteRequest() {
-    if (!this.#streams) {
-      return
-    }
-    if (!this.commands || !this.runId) {
-      return
-    }
-    const req = this.#buildExecuteRequest()
-    if (!req) {
-      return
-    }
-    this.#streams.sendExecuteRequest(req as any)
-  }
-
-  #buildExecuteRequest(): any {
-    const lid = this.languageId || 'sh'
-    const shellish = new Set(['sh','shell','bash','zsh','fish','ksh','csh','tcsh','dash','powershell','pwsh','cmd','ash','elvish','xonsh'])
-    const isShellish = shellish.has(lid)
-    const req = create(ExecuteRequestSchema, {
-      sessionStrategy: SessionStrategy.MOST_RECENT,
-      storeStdoutInEnv: true,
-      config: {
-        languageId: lid,
-        background: false,
-        fileExtension: '',
-        env: [`RUNME_ID=${this.knownId ?? this.id}`, 'RUNME_RUNNER=v2', 'TERM=xterm-256color'],
-        interactive: true,
-        runId: this.runId,
-        knownId: this.knownId ?? this.id,
-      },
-      winsize: create(WinsizeSchema, this.#winsize),
-    })
-    if (isShellish) {
-      req.config!.source = { case: 'commands', value: create(ProgramConfig_CommandListSchema, { items: this.commands ?? [] }) }
-      req.config!.mode = CommandMode.INLINE
-    } else {
-      req.config!.source = { case: 'script', value: (this.commands ?? []).join('\n') }
-      req.config!.mode = CommandMode.FILE
-      req.config!.fileExtension = this.languageId || ''
-    }
-    return req
-  }
-
-  #sendWinsize() {
-    if (!this.#streams) {
-      return
-    }
-    const req = create(ExecuteRequestSchema, { winsize: this.#winsize })
-    this.#streams.sendExecuteRequest(req)
-  }
-
-  #sendStdin(input: string) {
-    if (!this.#streams) {
-      return
-    }
-    const encoder = new TextEncoder()
-    const inputData = encoder.encode(input)
-    const req = create(ExecuteRequestSchema, { inputData })
-    this.#streams.sendExecuteRequest(req)
-  }
-
-  #installContextBridge() {
-    const ctxLike = {
-      postMessage: (message: any) => {
-        if (
-          message?.type === ClientMessages.terminalOpen ||
-          message?.type === ClientMessages.terminalResize
-        ) {
-          const cols = Number(message?.output?.terminalDimensions?.columns)
-          const rows = Number(message?.output?.terminalDimensions?.rows)
-          if (Number.isFinite(cols) && Number.isFinite(rows)) {
-            if (this.#winsize.cols === cols && this.#winsize.rows === rows) {
-              return
-            }
-            this.#winsize = { cols, rows, x: 0, y: 0 }
-            this.#sendWinsize()
-          }
-        }
-        if (message?.type === ClientMessages.terminalStdin) {
-          const input = String(message?.output?.input ?? '')
-          this.#sendStdin(input)
-        }
-      },
-      onDidReceiveMessage: (listener: (message: any) => void) => {
-        if (this.#streams && typeof (this.#streams as any).setCallback === 'function') {
-          ;(this.#streams as any).setCallback(listener as any)
-        }
-        return { dispose: () => {} }
-      },
-    } as RendererContext<void>
-    try {
-      setContext(ctxLike)
-    } catch {
-      console.error('Failed to set context bridge')
-    }
   }
 
   #createResizeHandle(): HTMLElement {
@@ -1023,16 +829,6 @@ export class ConsoleView extends LitElement {
         'runme.dev/id': this.id!,
         terminalDimensions,
       })
-
-      // Forward winsize to streams if initialized
-      const cols = Number(terminalDimensions?.columns)
-      const rows = Number(terminalDimensions?.rows)
-      if (Number.isFinite(cols) && Number.isFinite(rows)) {
-        if (this.#winsize.cols !== cols || this.#winsize.rows !== rows) {
-          this.#winsize = { cols, rows, x: 0, y: 0 }
-          this.#sendWinsize()
-        }
-      }
     })
 
     this.disposables.push({ dispose: () => sub.unsubscribe() })
@@ -1315,7 +1111,6 @@ export class ConsoleView extends LitElement {
   }
 
   dispose() {
-    this.#teardownStreams()
     this.disposables.forEach(({ dispose }) => dispose())
   }
 
