@@ -1,24 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo } from 'react'
 
-import {
-  CommandMode,
-  ProgramConfig_CommandListSchema,
-} from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/config_pb'
-import {
-  ExecuteRequestSchema,
-  SessionStrategy,
-  WinsizeSchema,
-} from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
-import { create } from '@bufbuild/protobuf'
 import { Interceptor } from '@connectrpc/connect'
-// anything below is required for the webcomponents to work
 import '@runmedev/renderers'
-import { ClientMessages, setContext } from '@runmedev/renderers'
-import { RendererContext } from 'vscode-notebook-renderer'
-import { VSCodeEvent } from 'vscode-notebook-renderer/events'
-
-import Streams from '../streams'
 
 interface ConsoleSettings {
   rows?: number
@@ -73,112 +57,10 @@ function Console({
     scrollToFit = true,
   } = settingsProp
 
-  const recoveredContent = useMemo(() => {
-    if (!cellID || content === '') {
-      return null
-    }
-    return content
-  }, [cellID, content])
-
-  const streams = useMemo(() => {
-    if (!cellID || !runID || !runner.endpoint) {
-      return undefined
-    }
-
-    console.log('Creating stream', cellID, runID, runner.endpoint)
-    return new Streams({
-      knownID: cellID,
-      runID,
-      sequence,
-      options: {
-        runnerEndpoint: runner.endpoint,
-        interceptors: runner.interceptors,
-        autoReconnect: runner.reconnect,
-      },
-    })
-  }, [cellID, runID, sequence, runner])
-
-  useEffect(() => {
-    const sub = streams
-      ?.connect()
-      .subscribe((latency) =>
-        console.log(
-          `Heartbeat latency for streamID ${latency?.streamID} (${latency?.readyState === 1 ? 'open' : 'closed'}): ${latency?.latency}ms`
-        )
-      )
-    return () => {
-      sub?.unsubscribe()
-      streams?.close()
-    }
-  }, [streams])
-
-  let winsize = create(WinsizeSchema, {
-    rows: 34,
-    cols: 100,
-    x: 0,
-    y: 0,
-  })
-
-  const executeRequest = useMemo(() => {
-    const lid = languageID || 'sh'
-    const shellish = new Set([
-      'sh',
-      'shell',
-      'bash',
-      'zsh',
-      'fish',
-      'ksh',
-      'csh',
-      'tcsh',
-      'dash',
-      'powershell',
-      'pwsh',
-      'cmd',
-      'ash',
-      'elvish',
-      'xonsh',
-    ])
-    const isShellish = shellish.has(lid)
-    const req = create(ExecuteRequestSchema, {
-      sessionStrategy: SessionStrategy.MOST_RECENT, // without this every exec gets its own session
-      storeStdoutInEnv: true,
-      config: {
-        languageId: lid,
-        background: false,
-        fileExtension: '',
-        env: [`RUNME_ID=${cellID}`, 'RUNME_RUNNER=v2', 'TERM=xterm-256color'],
-        interactive: true,
-        runId: runID,
-        knownId: cellID,
-        // knownName: "the-cell-name",
-      },
-      winsize,
-    })
-
-    if (isShellish) {
-      req.config!.source = {
-        case: 'commands',
-        value: create(ProgramConfig_CommandListSchema, {
-          items: commands,
-        }),
-      }
-      req.config!.mode = CommandMode.INLINE
-    } else {
-      req.config!.source = {
-        case: 'script',
-        value: commands.join('\n'),
-      }
-      req.config!.mode = CommandMode.FILE
-      req.config!.fileExtension = languageID || ''
-    }
-
-    return req
-  }, [cellID, runID, commands, winsize])
-
   const webComponentDefaults = useMemo(
     () => ({
       output: {
-        'runme.dev/id': executeRequest.config?.knownId,
+        'runme.dev/id': cellID,
         theme: 'dark',
         fontFamily: fontFamily || 'monospace',
         fontSize: fontSize || 12,
@@ -190,110 +72,38 @@ function Console({
         smoothScrollDuration: 0,
         scrollback: 4000,
         initialRows: rows,
-        content: recoveredContent || '',
+        content: content || '',
         isAutoSaveEnabled: false,
         isPlatformAuthEnabled: false,
       },
     }),
-    [
-      executeRequest.config?.knownId,
-      fontFamily,
-      fontSize,
-      takeFocus,
-      scrollToFit,
-      rows,
-      recoveredContent,
-    ]
+    [cellID, fontFamily, fontSize, takeFocus, scrollToFit, rows, content]
   )
 
-  const encoder = new TextEncoder()
-
-  setContext({
-    postMessage: (message: unknown) => {
-      if (
-        (message as any).type === ClientMessages.terminalOpen ||
-        (message as any).type === ClientMessages.terminalResize
-      ) {
-        const cols = Number((message as any).output.terminalDimensions.columns)
-        const rows = Number((message as any).output.terminalDimensions.rows)
-        if (Number.isFinite(cols) && Number.isFinite(rows)) {
-          // If the dimensions are the same, return early
-          if (winsize.cols === cols && winsize.rows === rows) {
-            return
-          }
-          winsize = create(WinsizeSchema, {
-            cols,
-            rows,
-            x: 0,
-            y: 0,
-          })
-          const req = create(ExecuteRequestSchema, {
-            winsize,
-          })
-          streams?.sendExecuteRequest(req)
-        }
-      }
-
-      if ((message as any).type === ClientMessages.terminalStdin) {
-        const inputData = encoder.encode((message as any).output.input)
-        const req = create(ExecuteRequestSchema, { inputData })
-        // const reqJson = toJson(ExecuteRequestSchema, req)
-        // console.log('terminalStdin', reqJson)
-        streams?.sendExecuteRequest(req)
-      }
-    },
-    onDidReceiveMessage: (listener: VSCodeEvent<any>) => {
-      streams?.setCallback(listener)
-    },
-  } as RendererContext<void>)
-
   useEffect(() => {
-    const stdoutSub = streams?.stdout.subscribe((data: Uint8Array) => {
-      onStdout?.(data)
-    })
-    return () => stdoutSub?.unsubscribe()
-  }, [streams, onStdout])
-
-  useEffect(() => {
-    const stderrSub = streams?.stderr.subscribe((data: Uint8Array) => {
-      onStderr?.(data)
-    })
-    return () => stderrSub?.unsubscribe()
-  }, [streams, onStderr])
-
-  useEffect(() => {
-    const exitCodeSub = streams?.exitCode.subscribe((code: number) => {
-      onExitCode?.(code)
-      // close the stream when the exit code is received
-      streams?.close()
-    })
-    return () => exitCodeSub?.unsubscribe()
-  }, [streams, onExitCode])
-
-  useEffect(() => {
-    const pidSub = streams?.pid.subscribe((pid: number) => {
-      onPid?.(pid)
-    })
-    return () => pidSub?.unsubscribe()
-  }, [streams, onPid])
-
-  useEffect(() => {
-    const mimeTypeSub = streams?.mimeType.subscribe((mimeType: string) => {
-      onMimeType?.(mimeType)
-    })
-    return () => mimeTypeSub?.unsubscribe()
-  }, [streams, onMimeType])
-
-  useEffect(() => {
-    if (!streams || !executeRequest) {
+    // Wire custom events from web component to React callbacks
+    const el = document.querySelector(`console-view[id="${cellID}"]`) as any
+    if (!el) {
       return
     }
-    console.log(
-      'useEffect invoked - Commands changed:',
-      JSON.stringify(executeRequest.config!.source!.value)
-    )
-    streams?.sendExecuteRequest(executeRequest)
-  }, [executeRequest, streams])
+    const onStdoutHandler = (e: CustomEvent) => onStdout?.(e.detail)
+    const onStderrHandler = (e: CustomEvent) => onStderr?.(e.detail)
+    const onExitHandler = (e: CustomEvent) => onExitCode?.(e.detail)
+    const onPidHandler = (e: CustomEvent) => onPid?.(e.detail)
+    const onMimeHandler = (e: CustomEvent) => onMimeType?.(e.detail)
+    el.addEventListener('stdout', onStdoutHandler)
+    el.addEventListener('stderr', onStderrHandler)
+    el.addEventListener('exitcode', onExitHandler)
+    el.addEventListener('pid', onPidHandler)
+    el.addEventListener('mimetype', onMimeHandler)
+    return () => {
+      el.removeEventListener('stdout', onStdoutHandler)
+      el.removeEventListener('stderr', onStderrHandler)
+      el.removeEventListener('exitcode', onExitHandler)
+      el.removeEventListener('pid', onPidHandler)
+      el.removeEventListener('mimetype', onMimeHandler)
+    }
+  }, [onStdout, onStderr, onExitCode, onPid, onMimeType])
 
   return (
     <div
@@ -302,7 +112,7 @@ function Console({
         if (!el || el.hasChildNodes()) {
           return
         }
-        const consoleEl = document.createElement('console-view')
+        const consoleEl = document.createElement('console-view') as any
         consoleEl.setAttribute('buttons', 'false')
 
         consoleEl.setAttribute(
@@ -388,6 +198,18 @@ function Console({
             webComponentDefaults.output.isPlatformAuthEnabled.toString()
           )
         }
+
+        // Pass-through execution/session config
+        consoleEl.setAttribute('knownId', cellID)
+        consoleEl.setAttribute('runId', runID)
+        consoleEl.setAttribute('sequence', String(sequence))
+        if (languageID) {
+          consoleEl.setAttribute('languageId', languageID)
+        }
+        consoleEl.setAttribute('runnerEndpoint', runner.endpoint)
+        consoleEl.setAttribute('reconnect', runner.reconnect ? 'true' : 'false')
+        consoleEl.interceptors = runner.interceptors
+        consoleEl.commands = commands
 
         el.appendChild(consoleEl)
         const terminalEnd = document.createElement('div')
