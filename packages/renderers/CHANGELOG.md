@@ -1,5 +1,11 @@
 # @runmedev/renderers
 
+## 3.16.1
+
+### Patch Changes
+
+- Changes in bundling strategies
+
 ## 3.16.0
 
 ### Minor Changes
