@@ -1,21 +1,21 @@
-import { Disposable } from 'vscode'
+import { MonitorEnvStoreResponseSnapshot_SnapshotEnv } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
+import { MonitorEnvStoreResponseSnapshot_Status } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { LitElement, TemplateResult, html } from 'lit'
 import { customElement, property } from 'lit/decorators.js'
-
-import '../table'
-import '../envViewer'
-import '../tooltip'
+import { Disposable } from 'vscode'
 
 import { formatDate, formatDateWithTimeAgo } from '../../utils'
-import { MonitorEnvStoreResponseSnapshot_SnapshotEnv } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
+import '../envViewer'
 import { CustomErrorIcon } from '../icons/error'
-import { MonitorEnvStoreResponseSnapshot_Status } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
+import '../table'
+import '../tooltip'
 
 export interface StringIndexable {
   [key: string]: any
 }
 
-export type SnapshotEnv = MonitorEnvStoreResponseSnapshot_SnapshotEnv & StringIndexable
+export type SnapshotEnv = MonitorEnvStoreResponseSnapshot_SnapshotEnv &
+  StringIndexable
 
 const RUNME_ENV_VARS_NAME = '__'
 
@@ -105,15 +105,21 @@ export default class Table extends LitElement {
         .renderer="${(row: SnapshotEnv, field: string) => {
           switch (field) {
             case 'originalValue':
-              const displaySecret = row.status === MonitorEnvStoreResponseSnapshot_Status.LITERAL
+              const displaySecret =
+                row.status === MonitorEnvStoreResponseSnapshot_Status.LITERAL
               let val =
                 row.status === MonitorEnvStoreResponseSnapshot_Status.MASKED
                   ? `${row.resolvedValue} [masked]`
                   : row.resolvedValue
 
-              if (row.status === MonitorEnvStoreResponseSnapshot_Status.UNSPECIFIED) {
+              if (
+                row.status ===
+                MonitorEnvStoreResponseSnapshot_Status.UNSPECIFIED
+              ) {
                 val = '[unset]'
-              } else if (row.status === MonitorEnvStoreResponseSnapshot_Status.HIDDEN) {
+              } else if (
+                row.status === MonitorEnvStoreResponseSnapshot_Status.HIDDEN
+              ) {
                 val = '[hidden]'
               }
               val = val.replace(/\n/g, ' ').replace(/\r/g, '')
@@ -133,7 +139,7 @@ export default class Table extends LitElement {
             //   )
             case 'updatedAt':
               return this.#renderValue(row, field, () =>
-                row[field] ? formatDateWithTimeAgo(new Date(row[field])) : '',
+                row[field] ? formatDateWithTimeAgo(new Date(row[field])) : ''
               )
             case 'spec':
               return this.#renderValue(row, field, () => {
@@ -150,7 +156,7 @@ export default class Table extends LitElement {
   #renderValue(
     row: SnapshotEnv,
     field: string,
-    format: () => TemplateResult<1> | string,
+    format: () => TemplateResult<1> | string
   ): TemplateResult<1> {
     const icon = field === 'name' ? html`${CustomErrorIcon(10, 10)}` : html``
 
@@ -158,7 +164,9 @@ export default class Table extends LitElement {
       return html`<div class="flex">
         <tooltip-text
           .tooltipText="${html`<div class="flex">
-            ${row.errors.map((error) => html`<span>${icon}${error.message}</span>`)}
+            ${row.errors.map(
+              (error) => html`<span>${icon}${error.message}</span>`
+            )}
           </div>`}"
           .value="${html`${icon} ${format()}`}"
         ></tooltip-text>
@@ -172,7 +180,9 @@ export default class Table extends LitElement {
       // }
       return html`<div class="flex">
         <tooltip-text
-          .tooltipText="${html`<div class="flex">Info: Variable is ${row.specClass}</div>`}"
+          .tooltipText="${html`<div class="flex">
+            Info: Variable is ${row.specClass}
+          </div>`}"
           .value="${format()}"
         ></tooltip-text>
       </div>`

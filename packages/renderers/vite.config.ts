@@ -7,5 +7,5 @@ export default createSharedConfig({
   name: 'RunmeRenderers',
   fileName: (format, entryName) => {
     return format === 'es' ? `${entryName}.mjs` : `${entryName}.cjs`
-  }
+  },
 })

@@ -1,6 +1,4 @@
-import {
-  type TerminalDimensions,
-} from 'vscode'
+import { type TerminalDimensions } from 'vscode'
 
 export enum ClientMessages {
   infoMessage = 'common:infoMessage',
@@ -65,7 +63,7 @@ export type ClientMessage<T extends keyof ClientMessagePayload> = T extends any
     }
   : never
 
-  export interface ClientMessagePayload {
+export interface ClientMessagePayload {
   [ClientMessages.mutateAnnotations]: {
     annotations: any
   }
@@ -190,26 +188,26 @@ export type ClientMessage<T extends keyof ClientMessagePayload> = T extends any
     location: string
     project: string
   }
-//   [ClientMessages.gcpVMInstanceAction]: {
-//     cellId: string
-//     instance: string
-//     zone: string
-//     project: string
-//     status: InstanceStatusType
-//     action: GceActionType
-//   }
-//   [ClientMessages.awsEC2Instances]: {
-//     cellId: string
-//     region: string
-//     view: AWSSupportedView
-//   }
-//   [ClientMessages.awsEC2InstanceAction]: {
-//     cellId: string
-//     instance: string
-//     osUser: string
-//     region: string
-//     action: AWSActionType
-//   }
+  //   [ClientMessages.gcpVMInstanceAction]: {
+  //     cellId: string
+  //     instance: string
+  //     zone: string
+  //     project: string
+  //     status: InstanceStatusType
+  //     action: GceActionType
+  //   }
+  //   [ClientMessages.awsEC2Instances]: {
+  //     cellId: string
+  //     region: string
+  //     view: AWSSupportedView
+  //   }
+  //   [ClientMessages.awsEC2InstanceAction]: {
+  //     cellId: string
+  //     instance: string
+  //     osUser: string
+  //     region: string
+  //     action: AWSActionType
+  //   }
   [ClientMessages.onAuthorModeChange]: {
     isAuthorMode: boolean
   }
@@ -219,49 +217,49 @@ export type ClientMessage<T extends keyof ClientMessagePayload> = T extends any
     telemetryEvent: string
   }
 
-//   [ClientMessages.gcpCloudRunAction]: {
-//     cellId: string
-//     resource?: string | undefined
-//     project: string
-//     resourceType?: 'revisions' | 'services'
-//     region?: string
-//     action: GCPCloudRunActionType
-//   }
+  //   [ClientMessages.gcpCloudRunAction]: {
+  //     cellId: string
+  //     resource?: string | undefined
+  //     project: string
+  //     resourceType?: 'revisions' | 'services'
+  //     region?: string
+  //     action: GCPCloudRunActionType
+  //   }
 
-//   [ClientMessages.gcpLoadServices]: {
-//     cellId: string
-//     project: string
-//   }
+  //   [ClientMessages.gcpLoadServices]: {
+  //     cellId: string
+  //     project: string
+  //   }
 
-//   [ClientMessages.gcpServicesLoaded]: {
-//     cellId: string
-//     services?: GcpCloudRunService[] | undefined
-//     region?: string | undefined
-//     allRegionsLoaded: boolean
-//     hasError: boolean
-//     error?: string | undefined
-//   }
+  //   [ClientMessages.gcpServicesLoaded]: {
+  //     cellId: string
+  //     services?: GcpCloudRunService[] | undefined
+  //     region?: string | undefined
+  //     allRegionsLoaded: boolean
+  //     hasError: boolean
+  //     error?: string | undefined
+  //   }
 
-//   [ClientMessages.awsEKSClusterAction]: {
-//     cellId: string
-//     cluster: string
-//     region: string
-//     action: AWSActionType
-//   }
+  //   [ClientMessages.awsEKSClusterAction]: {
+  //     cellId: string
+  //     cluster: string
+  //     region: string
+  //     action: AWSActionType
+  //   }
 
-//   [ClientMessages.daggerSyncState]: {
-//     id: string
-//     cellId: string
-//     text?: string
-//     json?: any
-//     state?: DaggerState
-//   }
+  //   [ClientMessages.daggerSyncState]: {
+  //     id: string
+  //     cellId: string
+  //     text?: string
+  //     json?: any
+  //     state?: DaggerState
+  //   }
 
-//   [ClientMessages.daggerCliAction]: {
-//     cellId: string
-//     command: string
-//     argument?: string
-//   }
+  //   [ClientMessages.daggerCliAction]: {
+  //     cellId: string
+  //     command: string
+  //     argument?: string
+  //   }
 
   [ClientMessages.featuresUpdateAction]: {
     snapshot: string

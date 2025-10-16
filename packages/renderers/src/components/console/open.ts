@@ -47,10 +47,14 @@ export class OpenCell extends LitElement {
       this.disabled,
       () => {},
       () => html`
-        <vscode-button class=${className} appearance="secondary" @click=${this.onOpenClick}>
+        <vscode-button
+          class=${className}
+          appearance="secondary"
+          @click=${this.onOpenClick}
+        >
           ${EyeIcon} ${this.openText}
         </vscode-button>
-      `,
+      `
     )
   }
 }

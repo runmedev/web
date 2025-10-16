@@ -2,7 +2,13 @@ import { html } from 'lit'
 
 /* eslint-disable max-len */
 export const PassIcon = html`
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <svg
+    width="16"
+    height="16"
+    viewBox="0 0 16 16"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
     <g clip-path="url(#clip0)">
       <path
         d="M6.27014 10.8698H6.98014L11.54 6.30996L10.83 5.59996L6.63014 9.80985L4.71024 7.88994L4.00024 8.59994L6.27014 10.8698Z"
@@ -17,7 +23,12 @@ export const PassIcon = html`
     </g>
     <defs>
       <clipPath id="clip0">
-        <rect width="16" height="16" fill="white" transform="translate(0.000244141)" />
+        <rect
+          width="16"
+          height="16"
+          fill="white"
+          transform="translate(0.000244141)"
+        />
       </clipPath>
     </defs>
   </svg>

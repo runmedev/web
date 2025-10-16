@@ -18,7 +18,12 @@ export const ClusterIcon = html`
     </g>
     <defs>
       <clipPath id="clip0">
-        <rect width="24" height="24" fill="white" transform="translate(0.000244141)" />
+        <rect
+          width="24"
+          height="24"
+          fill="white"
+          transform="translate(0.000244141)"
+        />
       </clipPath>
     </defs>
   </svg>

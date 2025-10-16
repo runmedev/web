@@ -16,7 +16,10 @@ export const CloudLogsIcon = html`
   >
     <path d="M5 18h7.467v-2H5zm0 10h7.467v-2H5z" fill="#424242"></path>
     <path d="M5 27h2V9.632H5z" fill="#424242"></path>
-    <path d="M12 10h18V4H12zm0 10h18v-6H12zm0 10h18v-6H12z" fill="#616161"></path>
+    <path
+      d="M12 10h18V4H12zm0 10h18v-6H12zm0 10h18v-6H12z"
+      fill="#616161"
+    ></path>
     <path d="M2 11h8V3H2z" fill="#757575"></path>
   </svg>
 `

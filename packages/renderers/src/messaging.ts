@@ -1,7 +1,7 @@
 import { Disposable } from 'vscode'
+import { RendererContext } from 'vscode-notebook-renderer'
 
 import { ClientMessage, ClientMessagePayload } from './types'
-import { RendererContext } from 'vscode-notebook-renderer'
 
 let context: RendererContext<void> | undefined
 
@@ -13,7 +13,7 @@ interface Messaging {
 export async function postClientMessage<T extends keyof ClientMessagePayload>(
   messaging: Partial<Messaging>,
   type: T,
-  payload: ClientMessagePayload[T],
+  payload: ClientMessagePayload[T]
 ) {
   const msg = {
     type,
@@ -25,7 +25,7 @@ export async function postClientMessage<T extends keyof ClientMessagePayload>(
 
 export function onClientMessage(
   messaging: Partial<Messaging>,
-  cb: (message: ClientMessage<keyof ClientMessagePayload>) => void,
+  cb: (message: ClientMessage<keyof ClientMessagePayload>) => void
 ): Disposable {
   return messaging.onDidReceiveMessage?.(cb) ?? { dispose: () => {} }
 }

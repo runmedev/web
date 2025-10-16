@@ -2,7 +2,13 @@ import { html } from 'lit'
 
 /* eslint-disable max-len */
 export const SyncIcon = html`
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <svg
+    width="16"
+    height="16"
+    viewBox="0 0 16 16"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
     <g clip-path="url(#clip0)">
       <path
         fill-rule="evenodd"
@@ -13,7 +19,12 @@ export const SyncIcon = html`
     </g>
     <defs>
       <clipPath id="clip0">
-        <rect width="16" height="16" fill="white" transform="translate(0.000244141)" />
+        <rect
+          width="16"
+          height="16"
+          fill="white"
+          transform="translate(0.000244141)"
+        />
       </clipPath>
     </defs>
   </svg>

@@ -10,6 +10,7 @@ module.exports = {
   importOrder: ['^react', '^@?\\w', '^[./]'],
   importOrderSeparation: true,
   importOrderSortSpecifiers: true,
+  importOrderParserPlugins: ['typescript', 'decorators-legacy'],
   overrides: [
     {
       files: 'Routes.*',

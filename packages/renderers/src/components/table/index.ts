@@ -16,7 +16,10 @@ export class Table extends LitElement {
   rows?: Record<string, string>[] = []
 
   @property({ type: Object })
-  renderer?: (row: any, field: string) => TemplateResult<1> = (row: any, field: string) => {
+  renderer?: (row: any, field: string) => TemplateResult<1> = (
+    row: any,
+    field: string
+  ) => {
     return html`${row[field]}`
   }
   displayable?: (row: any, field: string) => boolean = () => true
@@ -201,17 +204,17 @@ export class Table extends LitElement {
               class="${when(
                 this.hasErrors && this.hasErrors(row),
                 () => 'row-error',
-                () => '',
+                () => ''
               )}"
             >
               ${Object.keys(row).map((key) =>
                 when(
                   this.displayable?.(row, key),
                   () => html`<td>${this.renderer?.(row, key) || row[key]}</td>`,
-                  () => nothing,
-                ),
+                  () => nothing
+                )
               )}
-            </tr>`,
+            </tr>`
         )}
       </tbody>
     </table>`

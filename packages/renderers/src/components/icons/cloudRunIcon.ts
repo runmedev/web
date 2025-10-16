@@ -19,7 +19,11 @@ export const CloudRunIcon = html`
       fill="#434343"
       sandboxuid="2"
     ></path>
-    <path d="M2.31 1l3.74 15h4.996L7.304 3.503z" fill="#757575" sandboxuid="2"></path>
+    <path
+      d="M2.31 1l3.74 15h4.996L7.304 3.503z"
+      fill="#757575"
+      sandboxuid="2"
+    ></path>
   </svg>
 `
 
