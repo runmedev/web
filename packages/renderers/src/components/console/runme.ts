@@ -19,8 +19,6 @@ import Streams from '../../streams'
 import { ClientMessages, TerminalConfiguration } from '../../types'
 import { ConsoleView } from './view'
 
-// Streams integration specific interfaces and constants
-
 export const RUNME_CONSOLE = 'runme-console'
 
 @customElement(RUNME_CONSOLE)
