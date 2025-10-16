@@ -27,6 +27,7 @@ git diff
 runme run clean
 runme run setup
 runme run build
+runme run test
 ```
 
 ```sh {"terminalRows":"24"}
