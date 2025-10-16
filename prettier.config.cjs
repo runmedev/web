@@ -18,6 +18,12 @@ module.exports = {
         printWidth: 999,
       },
     },
+    {
+      files: ['*.tsx', '*.jsx'],
+      options: {
+        parser: 'babel-ts',
+      },
+    },
   ],
   // tailwindConfig: './web/config/tailwind.config.js',
   // plugins: [require('prettier-plugin-tailwindcss')],
