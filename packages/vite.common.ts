@@ -25,11 +25,7 @@ export function createSharedConfig({ entry, name, fileName }) {
       },
       rollupOptions: {
         external: [
-          '@buf/bufbuild_protovalidate.bufbuild_es',
           '@buf/googleapis_googleapis.bufbuild_es',
-          '@bufbuild/protobuf',
-          '@bufbuild/protobuf/codegenv1',
-          '@bufbuild/protobuf/wkt',
           'react',
           'react-dom',
           'react/jsx-runtime',
