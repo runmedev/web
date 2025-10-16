@@ -32,7 +32,8 @@ export class Tooltip extends LitElement {
       margin-left: -5px;
       border-width: 5px;
       border-style: solid;
-      border-color: transparent transparent var(--vscode-notifications-background) transparent;
+      border-color: transparent transparent
+        var(--vscode-notifications-background) transparent;
     }
 
     .tooltip .tooltiptext {
@@ -67,7 +68,7 @@ export class Tooltip extends LitElement {
         .class="${when(
           this.classList,
           () => this.classList,
-          () => '',
+          () => ''
         )}"
       >
         ${this.value}

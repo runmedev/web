@@ -79,12 +79,15 @@ export class DropdownList extends LitElement {
         <label slot="label">${this.label}</label>
         <div class="select-container">
           <select @change=${this.onSelectedValueHandler}>
-            ${this.options?.map(({ text, value, enumNum }: DropdownListOption) => {
-              enumNum ??= Number.POSITIVE_INFINITY
-              return value === this.defaultValue || enumNum === Number(this.defaultValue)
-                ? html`<option value="${value}" selected>${text}</option>`
-                : html`<option value="${value}">${text}</option>`
-            })}
+            ${this.options?.map(
+              ({ text, value, enumNum }: DropdownListOption) => {
+                enumNum ??= Number.POSITIVE_INFINITY
+                return value === this.defaultValue ||
+                  enumNum === Number(this.defaultValue)
+                  ? html`<option value="${value}" selected>${text}</option>`
+                  : html`<option value="${value}">${text}</option>`
+              }
+            )}
           </select>
         </div>
       </div>

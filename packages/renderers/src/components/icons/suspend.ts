@@ -12,7 +12,11 @@ export const SuspendIcon = html`
     sandboxuid="1"
     fill="currentColor"
   >
-    <path d="M3 3h4v12H3V3zm8 0h4v12h-4V3z" fill-rule="evenodd" sandboxuid="1"></path>
+    <path
+      d="M3 3h4v12H3V3zm8 0h4v12h-4V3z"
+      fill-rule="evenodd"
+      sandboxuid="1"
+    ></path>
   </svg>
 `
 

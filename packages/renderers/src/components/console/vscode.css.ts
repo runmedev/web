@@ -4,7 +4,7 @@ export const darkStyles = css`
   :host {
     --vscode-font-weight: normal;
     --vscode-font-size: 13px;
-    --vscode-editor-font-family: "Operator Mono Lig", "Cascadia Code";
+    --vscode-editor-font-family: 'Operator Mono Lig', 'Cascadia Code';
     --vscode-editor-font-weight: normal;
     --vscode-editor-font-size: 15px;
     --vscode-foreground: #cccccc;
@@ -193,7 +193,12 @@ export const darkStyles = css`
     --vscode-editorGutter-background: #1f1f1f;
     --vscode-editorUnnecessaryCode-opacity: rgba(0, 0, 0, 0.67);
     --vscode-editorGhostText-foreground: rgba(255, 255, 255, 0.34);
-    --vscode-editorOverviewRuler-rangeHighlightForeground: rgba(0, 122, 204, 0.6);
+    --vscode-editorOverviewRuler-rangeHighlightForeground: rgba(
+      0,
+      122,
+      204,
+      0.6
+    );
     --vscode-editorOverviewRuler-errorForeground: rgba(255, 18, 18, 0.7);
     --vscode-editorOverviewRuler-warningForeground: #ffe45e;
     --vscode-editorOverviewRuler-infoForeground: #5eadf2;
@@ -296,7 +301,12 @@ export const darkStyles = css`
     --vscode-peekViewResult-matchHighlightBackground: #bb800966;
     --vscode-peekViewEditor-matchHighlightBackground: #bb800966;
     --vscode-editorMarkerNavigationError-background: #f85149;
-    --vscode-editorMarkerNavigationError-headerBackground: rgba(254, 74, 73, 0.1);
+    --vscode-editorMarkerNavigationError-headerBackground: rgba(
+      254,
+      74,
+      73,
+      0.1
+    );
     --vscode-editorMarkerNavigationWarning-background: #ffe45e;
     --vscode-editorMarkerNavigationWarning-headerBackground: rgba(
       255,
@@ -305,7 +315,12 @@ export const darkStyles = css`
       0.1
     );
     --vscode-editorMarkerNavigationInfo-background: #5eadf2;
-    --vscode-editorMarkerNavigationInfo-headerBackground: rgba(94, 173, 242, 0.1);
+    --vscode-editorMarkerNavigationInfo-headerBackground: rgba(
+      94,
+      173,
+      242,
+      0.1
+    );
     --vscode-editorMarkerNavigation-background: #1f1f1f;
     --vscode-tab-activeBackground: #222222;
     --vscode-tab-unfocusedActiveBackground: #1f1f1f;
@@ -507,7 +522,12 @@ export const darkStyles = css`
     --vscode-notebook-selectedCellBorder: rgba(243, 239, 245, 0.13);
     --vscode-notebook-focusedCellBorder: #263354;
     --vscode-notebook-inactiveFocusedCellBorder: rgba(243, 239, 245, 0.13);
-    --vscode-notebook-cellStatusBarItemHoverBackground: rgba(255, 255, 255, 0.15);
+    --vscode-notebook-cellStatusBarItemHoverBackground: rgba(
+      255,
+      255,
+      255,
+      0.15
+    );
     --vscode-notebook-cellInsertionIndicator: #263354;
     --vscode-notebookScrollbarSlider-background: rgba(121, 121, 121, 0.4);
     --vscode-notebookScrollbarSlider-hoverBackground: rgba(100, 100, 100, 0.7);
@@ -576,7 +596,12 @@ export const darkStyles = css`
       94,
       0.8
     );
-    --vscode-gitDecoration-stageDeletedResourceForeground: rgba(254, 74, 73, 0.8);
+    --vscode-gitDecoration-stageDeletedResourceForeground: rgba(
+      254,
+      74,
+      73,
+      0.8
+    );
     --vscode-gitDecoration-conflictingResourceForeground: #e4676b;
     --vscode-gitDecoration-submoduleResourceForeground: rgba(94, 173, 242, 0.8);
     --vscode-testExplorer-errorDecorationBackground: #5a1d1d;
@@ -589,7 +614,7 @@ export const lightStyles = css`
   :host {
     --vscode-font-weight: normal;
     --vscode-font-size: 13px;
-    --vscode-editor-font-family: "Operator Mono Lig", "Cascadia Code";
+    --vscode-editor-font-family: 'Operator Mono Lig', 'Cascadia Code';
     --vscode-editor-font-weight: normal;
     --vscode-editor-font-size: 15px;
     --vscode-foreground: #3b3b3b;

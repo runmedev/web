@@ -1,15 +1,13 @@
-import { Disposable } from 'vscode'
+import { MonitorEnvStoreResponseSnapshot_Status } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { LitElement, TemplateResult, css, html } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import { when } from 'lit/directives/when.js'
+import { Disposable } from 'vscode'
 
-import { MonitorEnvStoreResponseSnapshot_Status } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
-
-import { CopyIcon } from './icons/copy'
-import { EyeClosedIcon } from './icons/eyeClosed'
-import { EyeIcon } from './icons/eye'
 import { CheckIcon } from './icons/check'
-
+import { CopyIcon } from './icons/copy'
+import { EyeIcon } from './icons/eye'
+import { EyeClosedIcon } from './icons/eyeClosed'
 import './tooltip'
 
 @customElement('env-viewer')
@@ -100,14 +98,16 @@ export class EnvViewer extends LitElement implements Disposable {
             when(
               this.maskedValue,
               () => {
-                return html`<span class="secret-text">${this.maskedValue}</span>`
+                return html`<span class="secret-text"
+                  >${this.maskedValue}</span
+                >`
               },
               () => {
                 return Array.from({ length: 20 }, (_, index) => index + 1)
                   .map(() => '*')
                   .join('')
-              },
-            ),
+              }
+            )
         )}
         <div class="actions">
           ${when(
@@ -133,9 +133,9 @@ export class EnvViewer extends LitElement implements Disposable {
                   >
                     ${EyeIcon}
                   </vscode-button>`
-                },
+                }
               )
-            },
+            }
           )}
           ${when(
             [
@@ -150,13 +150,13 @@ export class EnvViewer extends LitElement implements Disposable {
                 >${when(
                   this._copied,
                   () => html`${CheckIcon}`,
-                  () => html`${CopyIcon}`,
+                  () => html`${CopyIcon}`
                 )}</vscode-button
               >`
             },
             () => {
               return html``
-            },
+            }
           )}
         </div>
       </div>

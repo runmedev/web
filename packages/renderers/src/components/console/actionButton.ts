@@ -2,8 +2,8 @@ import { LitElement, css, html } from 'lit'
 import { customElement, property } from 'lit/decorators.js'
 import { when } from 'lit/directives/when.js'
 
-import { ShareIcon } from '../icons/share'
 import { SaveIcon } from '../icons/save'
+import { ShareIcon } from '../icons/share'
 
 @customElement('action-button')
 export class ActionButton extends LitElement {
@@ -67,11 +67,12 @@ export class ActionButton extends LitElement {
         appearance="secondary"
         @click=${this.onClick}
       >
-        ${when(this.shareIcon, () => ShareIcon)} ${when(this.saveIcon, () => SaveIcon)}
+        ${when(this.shareIcon, () => ShareIcon)}
+        ${when(this.saveIcon, () => SaveIcon)}
         ${when(
           this.loading,
           () => html`${this.loadingText}`,
-          () => html`${this.text}`,
+          () => html`${this.text}`
         )}
       </vscode-button>
     `

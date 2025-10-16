@@ -1,15 +1,23 @@
-import { LitElement, html, PropertyValues } from 'lit'
+import {
+  CommandMode,
+  ProgramConfig_CommandListSchema,
+} from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/config_pb'
+import {
+  ExecuteRequestSchema,
+  SessionStrategy,
+  WinsizeSchema,
+} from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
+import { create } from '@bufbuild/protobuf'
+import { LitElement, PropertyValues, html } from 'lit'
 import { customElement, property } from 'lit/decorators.js'
 import { Disposable } from 'vscode'
-import { ClientMessages, TerminalConfiguration } from '../../types'
-import { setContext } from '../../messaging'
-import Streams from '../../streams'
-import { ConsoleView } from './view'
-import { create } from '@bufbuild/protobuf'
-import { ExecuteRequestSchema, SessionStrategy, WinsizeSchema } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
-import { ProgramConfig_CommandListSchema, CommandMode } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/config_pb'
 import { type RendererContext } from 'vscode-notebook-renderer'
 import { type VSCodeEvent } from 'vscode-notebook-renderer/events'
+
+import { setContext } from '../../messaging'
+import Streams from '../../streams'
+import { ClientMessages, TerminalConfiguration } from '../../types'
+import { ConsoleView } from './view'
 
 // Streams integration specific interfaces and constants
 
@@ -31,10 +39,16 @@ export class RunmeConsole extends LitElement {
   @property({ type: String })
   id!: string
 
-  @property({ type: Boolean, converter: (value: string | null) => value !== 'false' })
+  @property({
+    type: Boolean,
+    converter: (value: string | null) => value !== 'false',
+  })
   buttons: boolean = true
 
-  @property({ type: Boolean, converter: (value: string | null) => value !== 'false' })
+  @property({
+    type: Boolean,
+    converter: (value: string | null) => value !== 'false',
+  })
   takeFocus: boolean = true
 
   @property({ type: String })
@@ -103,11 +117,14 @@ export class RunmeConsole extends LitElement {
   sequence?: number
   @property({ type: String })
   languageId?: string
-  @property({ attribute: false })
+  @property({ type: Array, attribute: false })
   commands?: string[]
   @property({ type: String })
   runnerEndpoint?: string
-  @property({ type: Boolean, converter: (value: string | null) => value !== 'false' })
+  @property({
+    type: Boolean,
+    converter: (value: string | null) => value !== 'false',
+  })
   reconnect: boolean = true
   @property({ attribute: false })
   interceptors: any[] = []
@@ -120,7 +137,7 @@ export class RunmeConsole extends LitElement {
   // Delegate theme styles to ConsoleView
   protected applyThemeStyles(): void {
     if (this.consoleView) {
-      (this.consoleView as any).applyThemeStyles()
+      ;(this.consoleView as any).applyThemeStyles()
     }
   }
 
@@ -219,7 +236,10 @@ export class RunmeConsole extends LitElement {
       this.consoleView.setAttribute('cursorWidth', this.cursorWidth.toString())
     }
     if (this.smoothScrollDuration !== undefined) {
-      this.consoleView.setAttribute('smoothScrollDuration', this.smoothScrollDuration.toString())
+      this.consoleView.setAttribute(
+        'smoothScrollDuration',
+        this.smoothScrollDuration.toString()
+      )
     }
     if (this.scrollback !== undefined) {
       this.consoleView.setAttribute('scrollback', this.scrollback.toString())
@@ -237,7 +257,10 @@ export class RunmeConsole extends LitElement {
       this.consoleView.setAttribute('isLoading', this.isLoading.toString())
     }
     if (this.isCreatingEscalation !== undefined) {
-      this.consoleView.setAttribute('isCreatingEscalation', this.isCreatingEscalation.toString())
+      this.consoleView.setAttribute(
+        'isCreatingEscalation',
+        this.isCreatingEscalation.toString()
+      )
     }
     if (this.shareUrl) {
       this.consoleView.setAttribute('shareUrl', this.shareUrl)
@@ -246,16 +269,28 @@ export class RunmeConsole extends LitElement {
       this.consoleView.setAttribute('escalationUrl', this.escalationUrl)
     }
     if (this.isUpdatedReady !== undefined) {
-      this.consoleView.setAttribute('isUpdatedReady', this.isUpdatedReady.toString())
+      this.consoleView.setAttribute(
+        'isUpdatedReady',
+        this.isUpdatedReady.toString()
+      )
     }
     if (this.isAutoSaveEnabled !== undefined) {
-      this.consoleView.setAttribute('isAutoSaveEnabled', this.isAutoSaveEnabled.toString())
+      this.consoleView.setAttribute(
+        'isAutoSaveEnabled',
+        this.isAutoSaveEnabled.toString()
+      )
     }
     if (this.isPlatformAuthEnabled !== undefined) {
-      this.consoleView.setAttribute('isPlatformAuthEnabled', this.isPlatformAuthEnabled.toString())
+      this.consoleView.setAttribute(
+        'isPlatformAuthEnabled',
+        this.isPlatformAuthEnabled.toString()
+      )
     }
     if (this.isDaggerOutput !== undefined) {
-      this.consoleView.setAttribute('isDaggerOutput', this.isDaggerOutput.toString())
+      this.consoleView.setAttribute(
+        'isDaggerOutput',
+        this.isDaggerOutput.toString()
+      )
     }
   }
 
@@ -266,7 +301,9 @@ export class RunmeConsole extends LitElement {
 
     // Listen to ConsoleView events and dispatch them on this element
     const eventHandler = (eventName: string) => (e: Event) => {
-      this.dispatchEvent(new CustomEvent(eventName, { detail: (e as CustomEvent).detail }))
+      this.dispatchEvent(
+        new CustomEvent(eventName, { detail: (e as CustomEvent).detail })
+      )
     }
 
     this.consoleView.addEventListener('stdout', eventHandler('stdout'))
@@ -302,7 +339,7 @@ export class RunmeConsole extends LitElement {
       this.dispatchEvent(new CustomEvent('stdout', { detail: data }))
       // Write to ConsoleView's terminal
       if (this.consoleView && (this.consoleView as any).terminal) {
-        (this.consoleView as any).terminal.write(data)
+        ;(this.consoleView as any).terminal.write(data)
       }
     })
     const stderrSub = this.#streams.stderr.subscribe((data: Uint8Array) => {
@@ -352,7 +389,23 @@ export class RunmeConsole extends LitElement {
 
   #buildExecuteRequest(): any {
     const lid = this.languageId || 'sh'
-    const shellish = new Set(['sh','shell','bash','zsh','fish','ksh','csh','tcsh','dash','powershell','pwsh','cmd','ash','elvish','xonsh'])
+    const shellish = new Set([
+      'sh',
+      'shell',
+      'bash',
+      'zsh',
+      'fish',
+      'ksh',
+      'csh',
+      'tcsh',
+      'dash',
+      'powershell',
+      'pwsh',
+      'cmd',
+      'ash',
+      'elvish',
+      'xonsh',
+    ])
     const isShellish = shellish.has(lid)
     const req = create(ExecuteRequestSchema, {
       sessionStrategy: SessionStrategy.MOST_RECENT,
@@ -361,18 +414,38 @@ export class RunmeConsole extends LitElement {
         languageId: lid,
         background: false,
         fileExtension: '',
-        env: [`RUNME_ID=${this.knownId ?? this.id}`, 'RUNME_RUNNER=v2', 'TERM=xterm-256color'],
+        env: [
+          `RUNME_ID=${this.knownId ?? this.id}`,
+          'RUNME_RUNNER=v2',
+          'TERM=xterm-256color',
+        ],
         interactive: true,
         runId: this.runId,
         knownId: this.knownId ?? this.id,
       },
       winsize: create(WinsizeSchema, this.#winsize),
     })
-    if (isShellish) {
-      req.config!.source = { case: 'commands', value: create(ProgramConfig_CommandListSchema, { items: this.commands ?? [] }) }
+    if (this.commands?.length === 0) {
+      req.config!.mode = CommandMode.INLINE
+      req.config!.source = {
+        case: 'commands',
+        value: create(ProgramConfig_CommandListSchema, {
+          items: ['zsh -l'],
+        }),
+      }
+    } else if (isShellish) {
+      req.config!.source = {
+        case: 'commands',
+        value: create(ProgramConfig_CommandListSchema, {
+          items: this.commands ?? [],
+        }),
+      }
       req.config!.mode = CommandMode.INLINE
     } else {
-      req.config!.source = { case: 'script', value: (this.commands ?? []).join('\n') }
+      req.config!.source = {
+        case: 'script',
+        value: (this.commands ?? []).join('\n'),
+      }
       req.config!.mode = CommandMode.FILE
       req.config!.fileExtension = this.languageId || ''
     }
@@ -382,42 +455,44 @@ export class RunmeConsole extends LitElement {
   #installContextBridge() {
     const encoder = new TextEncoder()
     const ctxLike = {
-    postMessage: (message: unknown) => {
-      if (
-        (message as any).type === ClientMessages.terminalOpen ||
-        (message as any).type === ClientMessages.terminalResize
-      ) {
-        const cols = Number((message as any).output.terminalDimensions.columns)
-        const rows = Number((message as any).output.terminalDimensions.rows)
-        if (Number.isFinite(cols) && Number.isFinite(rows)) {
-          // If the dimensions are the same, return early
-          if (this.#winsize.cols === cols && this.#winsize.rows === rows) {
-            return
+      postMessage: (message: unknown) => {
+        if (
+          (message as any).type === ClientMessages.terminalOpen ||
+          (message as any).type === ClientMessages.terminalResize
+        ) {
+          const cols = Number(
+            (message as any).output.terminalDimensions.columns
+          )
+          const rows = Number((message as any).output.terminalDimensions.rows)
+          if (Number.isFinite(cols) && Number.isFinite(rows)) {
+            // If the dimensions are the same, return early
+            if (this.#winsize.cols === cols && this.#winsize.rows === rows) {
+              return
+            }
+            this.#winsize = create(WinsizeSchema, {
+              cols,
+              rows,
+              x: 0,
+              y: 0,
+            })
+            const req = create(ExecuteRequestSchema, {
+              winsize: this.#winsize,
+            })
+            this.#streams?.sendExecuteRequest(req)
           }
-          this.#winsize = create(WinsizeSchema, {
-            cols,
-            rows,
-            x: 0,
-            y: 0,
-          })
-          const req = create(ExecuteRequestSchema, {
-            winsize: this.#winsize,
-          })
+        }
+
+        if ((message as any).type === ClientMessages.terminalStdin) {
+          const inputData = encoder.encode((message as any).output.input)
+          const req = create(ExecuteRequestSchema, { inputData })
+          // const reqJson = toJson(ExecuteRequestSchema, req)
+          // console.log('terminalStdin', reqJson)
           this.#streams?.sendExecuteRequest(req)
         }
-      }
-
-      if ((message as any).type === ClientMessages.terminalStdin) {
-        const inputData = encoder.encode((message as any).output.input)
-        const req = create(ExecuteRequestSchema, { inputData })
-        // const reqJson = toJson(ExecuteRequestSchema, req)
-        // console.log('terminalStdin', reqJson)
-        this.#streams?.sendExecuteRequest(req)
-      }
-    },
-    onDidReceiveMessage: (listener: VSCodeEvent<any>) => {
-      this.#streams?.setCallback(listener)
-    },
+      },
+      onDidReceiveMessage: (listener: VSCodeEvent<any>) => {
+        this.#streams?.setCallback(listener)
+      },
     } as RendererContext<void>
     try {
       setContext(ctxLike)
@@ -425,7 +500,6 @@ export class RunmeConsole extends LitElement {
       console.error('Failed to set context bridge')
     }
   }
-
 
   // Render the UI - just render ConsoleView which handles everything
   render() {

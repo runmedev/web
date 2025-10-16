@@ -2,7 +2,13 @@ import { html } from 'lit'
 
 /* eslint-disable max-len */
 export const GCloudIcon = html`
-  <svg width="24" height="20" viewBox="0 0 24 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <svg
+    width="24"
+    height="20"
+    viewBox="0 0 24 20"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
     <path
       d="M15.2336 5.30684H15.9552L18.0398 3.22226L18.1467 2.34033C14.2715 -1.08052 8.33849 -0.706361 4.91765 3.16881C3.95553 4.23783 3.2874 5.52064 2.88652 6.91036C3.12705 6.80346 3.36758 6.80346 3.6081 6.85691L7.77726 6.16205C7.77726 6.16205 7.99106 5.81462 8.09796 5.84135C9.96874 3.81022 13.0956 3.56969 15.2336 5.30684Z"
       fill="#EA4335"

@@ -1,15 +1,21 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
   <head>
     <script type="module" src="../../../out/client.js"></script>
+  </head>
   <body>
     <div id="shell">
       <h1>Shell Output</h1>
     </div>
     <script type="text/javascript">
       const shell = document.querySelector('#shell')
-      const outputs = [{ id: "01JBMNPWRYRFP68BEZ06GG27TQ", content: "30.4 GiB gs://runme-artifacts-41eac6\n" }]
-      outputs.forEach(output => {
+      const outputs = [
+        {
+          id: '01JBMNPWRYRFP68BEZ06GG27TQ',
+          content: '30.4 GiB gs://runme-artifacts-41eac6\n',
+        },
+      ]
+      outputs.forEach((output) => {
         const o = document.createElement('shell-output')
         o.innerHTML = output.content
         shell.appendChild(o)
@@ -19,6 +25,5 @@
         shell.appendChild(oi)
       })
     </script>
-  </head>
   </body>
 </html>

@@ -1,21 +1,30 @@
-import { LitElement, css, html, PropertyValues, unsafeCSS } from 'lit'
-import { customElement, property } from 'lit/decorators.js'
-import { when } from 'lit/directives/when.js'
-import { Disposable, TerminalDimensions } from 'vscode'
-import { ITheme, Terminal as XTermJS } from '@xterm/xterm'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { ITheme, Terminal as XTermJS } from '@xterm/xterm'
+import { LitElement, PropertyValues, css, html, unsafeCSS } from 'lit'
+import { customElement, property } from 'lit/decorators.js'
+import { when } from 'lit/directives/when.js'
 import { Observable } from 'rxjs'
-import { debounceTime, distinctUntilChanged, filter, map, share } from 'rxjs/operators'
+import {
+  debounceTime,
+  distinctUntilChanged,
+  filter,
+  map,
+  share,
+} from 'rxjs/operators'
+import { Disposable, TerminalDimensions } from 'vscode'
 
 import { FitAddon, type ITerminalDimensions } from '../../fitAddon'
-import { ClientMessages, OutputType, TerminalConfiguration, WebViews } from '../../types'
-import { closeOutput } from '../../utils'
-import { onClientMessage, postClientMessage, getContext } from '../../messaging'
+import { getContext, onClientMessage, postClientMessage } from '../../messaging'
 import {
-  ClientMessage,
+  ClientMessages,
+  OutputType,
+  TerminalConfiguration,
+  WebViews,
 } from '../../types'
+import { ClientMessage } from '../../types'
+import { closeOutput } from '../../utils'
 import '../closeCellButton'
 import '../copyButton'
 import './actionButton'
@@ -36,7 +45,8 @@ enum MessageOptions {
   Cancel = 'Cancel',
 }
 
-const vscodeCSS = (...identifiers: string[]) => `--vscode-${identifiers.join('-')}`
+const vscodeCSS = (...identifiers: string[]) =>
+  `--vscode-${identifiers.join('-')}`
 const terminalCSS = (id: string) => vscodeCSS('terminal', id)
 const toAnsi = (id: string) => `ansi${id.charAt(0).toUpperCase() + id.slice(1)}`
 const LISTEN_TO_EVENTS = [
@@ -166,15 +176,21 @@ export class ConsoleView extends LitElement {
     }
 
     .xterm:hover .xterm-viewport::-webkit-scrollbar-thumb {
-      background-color: var(${unsafeCSS(vscodeCSS('scrollbarSlider', 'background'))});
+      background-color: var(
+        ${unsafeCSS(vscodeCSS('scrollbarSlider', 'background'))}
+      );
     }
 
     .xterm:hover .xterm-viewport::-webkit-scrollbar-thumb:hover {
-      background-color: var(${unsafeCSS(vscodeCSS('scrollbarSlider', 'hoverBackground'))});
+      background-color: var(
+        ${unsafeCSS(vscodeCSS('scrollbarSlider', 'hoverBackground'))}
+      );
     }
 
     .xterm:hover .xterm-viewport::-webkit-scrollbar-thumb:active {
-      background-color: var(${unsafeCSS(vscodeCSS('scrollbarSlider', 'activeBackground'))});
+      background-color: var(
+        ${unsafeCSS(vscodeCSS('scrollbarSlider', 'activeBackground'))}
+      );
     }
 
     .xterm .xterm-scroll-area {
@@ -333,10 +349,16 @@ export class ConsoleView extends LitElement {
   @property({ type: String })
   id!: string
 
-  @property({ type: Boolean, converter: (value: string | null) => value !== 'false' })
+  @property({
+    type: Boolean,
+    converter: (value: string | null) => value !== 'false',
+  })
   buttons: boolean = true
 
-  @property({ type: Boolean, converter: (value: string | null) => value !== 'false' })
+  @property({
+    type: Boolean,
+    converter: (value: string | null) => value !== 'false',
+  })
   takeFocus: boolean = true
 
   @property({ type: String })
@@ -412,11 +434,12 @@ export class ConsoleView extends LitElement {
 
     // Remove existing theme stylesheet if it exists
     if (this.themeStyleSheet) {
-      const index = this.shadowRoot.adoptedStyleSheets.indexOf(this.themeStyleSheet)
+      const index = this.shadowRoot.adoptedStyleSheets.indexOf(
+        this.themeStyleSheet
+      )
       if (index !== -1) {
-        this.shadowRoot.adoptedStyleSheets = this.shadowRoot.adoptedStyleSheets.filter(
-          (_, i) => i !== index
-        )
+        this.shadowRoot.adoptedStyleSheets =
+          this.shadowRoot.adoptedStyleSheets.filter((_, i) => i !== index)
       }
       this.themeStyleSheet = undefined
     }
@@ -427,14 +450,14 @@ export class ConsoleView extends LitElement {
       this.themeStyleSheet.replaceSync(darkStyles.cssText)
       this.shadowRoot.adoptedStyleSheets = [
         ...this.shadowRoot.adoptedStyleSheets,
-        this.themeStyleSheet
+        this.themeStyleSheet,
       ]
     } else if (this.theme === 'light') {
       this.themeStyleSheet = new CSSStyleSheet()
       this.themeStyleSheet.replaceSync(lightStyles.cssText)
       this.shadowRoot.adoptedStyleSheets = [
         ...this.shadowRoot.adoptedStyleSheets,
-        this.themeStyleSheet
+        this.themeStyleSheet,
       ]
     }
     // For 'vscode' theme, no additional styles are applied
@@ -445,7 +468,6 @@ export class ConsoleView extends LitElement {
 
     // Apply theme-specific styles
     this.applyThemeStyles()
-
 
     if (!this.id) {
       throw new Error('No id provided to terminal!')
@@ -539,7 +561,11 @@ export class ConsoleView extends LitElement {
               }
               this.isLoading = false
               if (e.output.hasErrors) {
-                return postClientMessage(ctx, ClientMessages.errorMessage, e.output.data)
+                return postClientMessage(
+                  ctx,
+                  ClientMessages.errorMessage,
+                  e.output.data
+                )
               }
 
               if (
@@ -552,7 +578,10 @@ export class ConsoleView extends LitElement {
               const data = (e.output.data?.data || {}) as any
               // TODO: Remove createCellExecution once the transition is complete and tested enough.
               if (data.createExtensionCellOutput || data.createCellExecution) {
-                const objData = data.createCellExecution || data.createExtensionCellOutput || {}
+                const objData =
+                  data.createCellExecution ||
+                  data.createExtensionCellOutput ||
+                  {}
                 const { exitCode, id, htmlUrl, isSlackReady } = objData
                 this.platformId = id
                 this.shareUrl = htmlUrl || ''
@@ -592,16 +621,24 @@ export class ConsoleView extends LitElement {
               this.isLoading = false
               switch (answer) {
                 case MessageOptions.OpenLink: {
-                  return postClientMessage(ctx, ClientMessages.openExternalLink, {
-                    link: this.shareUrl!,
-                    telemetryEvent: 'app.openLink',
-                  })
+                  return postClientMessage(
+                    ctx,
+                    ClientMessages.openExternalLink,
+                    {
+                      link: this.shareUrl!,
+                      telemetryEvent: 'app.openLink',
+                    }
+                  )
                 }
                 case MessageOptions.CopyToClipboard: {
-                  return postClientMessage(ctx, ClientMessages.copyTextToClipboard, {
-                    id: this.id!,
-                    text: this.shareUrl!,
-                  })
+                  return postClientMessage(
+                    ctx,
+                    ClientMessages.copyTextToClipboard,
+                    {
+                      id: this.id!,
+                      text: this.shareUrl!,
+                    }
+                  )
                 }
               }
             }
@@ -610,7 +647,11 @@ export class ConsoleView extends LitElement {
             if (e.output.id !== this.id) {
               return
             }
-            return postClientMessage(ctx, ClientMessages.infoMessage, 'Link copied!')
+            return postClientMessage(
+              ctx,
+              ClientMessages.infoMessage,
+              'Link copied!'
+            )
           }
           case ClientMessages.onProgramClose: {
             const { 'runme.dev/id': id, code } = e.output
@@ -629,8 +670,8 @@ export class ConsoleView extends LitElement {
         postClientMessage(ctx, ClientMessages.terminalStdin, {
           'runme.dev/id': this.id!,
           input: data,
-        }),
-      ),
+        })
+      )
     )
 
     postClientMessage(ctx, ClientMessages.featuresRequest, {})
@@ -673,8 +714,12 @@ export class ConsoleView extends LitElement {
 
     const resizeDragHandle = this.#createResizeHandle()
     const dims = new Observable<TerminalDimensions | undefined>((observer) => {
-      window.addEventListener('resize', () => observer.next(this.#getDimensions(true)))
-      terminalContainer.addEventListener('mouseup', () => observer.next(this.#getDimensions(false)))
+      window.addEventListener('resize', () =>
+        observer.next(this.#getDimensions(true))
+      )
+      terminalContainer.addEventListener('mouseup', () =>
+        observer.next(this.#getDimensions(false))
+      )
     }).pipe(share())
     this.#subscribeResizeTerminal(dims)
     this.#subscribeSetTerminalRows(dims)
@@ -684,7 +729,9 @@ export class ConsoleView extends LitElement {
     ctx.postMessage &&
       postClientMessage(ctx, ClientMessages.terminalOpen, {
         'runme.dev/id': this.id!,
-        terminalDimensions: convertXTermDimensions(this.fitAddon?.proposeDimensions()),
+        terminalDimensions: convertXTermDimensions(
+          this.fitAddon?.proposeDimensions()
+        ),
       })
 
     if (this.lastLine) {
@@ -766,15 +813,25 @@ export class ConsoleView extends LitElement {
 
     const terminalTheme: ITheme = {
       foreground: foregroundColor,
-      cursor: this.#getThemeHexColor(vscodeCSS('terminalCursor', 'foreground')) || foregroundColor,
-      cursorAccent: this.#getThemeHexColor(vscodeCSS('terminalCursor', 'background')),
-      selectionForeground: this.#getThemeHexColor(terminalCSS('selectionForeground')),
-      selectionBackground: this.#getThemeHexColor(terminalCSS('selectionBackground')),
+      cursor:
+        this.#getThemeHexColor(vscodeCSS('terminalCursor', 'foreground')) ||
+        foregroundColor,
+      cursorAccent: this.#getThemeHexColor(
+        vscodeCSS('terminalCursor', 'background')
+      ),
+      selectionForeground: this.#getThemeHexColor(
+        terminalCSS('selectionForeground')
+      ),
+      selectionBackground: this.#getThemeHexColor(
+        terminalCSS('selectionBackground')
+      ),
       selectionInactiveBackground: this.#getThemeHexColor(
-        terminalCSS('inactiveSelectionBackground'),
+        terminalCSS('inactiveSelectionBackground')
       ),
       ...Object.fromEntries(
-        ANSI_COLORS.map((k) => [k, this.#getThemeHexColor(terminalCSS(toAnsi(k)))] as const),
+        ANSI_COLORS.map(
+          (k) => [k, this.#getThemeHexColor(terminalCSS(toAnsi(k)))] as const
+        )
       ),
     }
     this.terminal!.options.theme = terminalTheme
@@ -782,7 +839,10 @@ export class ConsoleView extends LitElement {
 
   #getThemeHexColor(variableName: string): string | undefined {
     const terminalContainer = this.shadowRoot?.querySelector('#terminal')
-    return getComputedStyle(terminalContainer!).getPropertyValue(variableName) ?? undefined
+    return (
+      getComputedStyle(terminalContainer!).getPropertyValue(variableName) ??
+      undefined
+    )
   }
 
   #getDimensions(checkWindowSize: boolean): TerminalDimensions | undefined {
@@ -811,12 +871,12 @@ export class ConsoleView extends LitElement {
   }
 
   async #subscribeResizeTerminal(
-    proposedDimensions: Observable<TerminalDimensions | undefined>,
+    proposedDimensions: Observable<TerminalDimensions | undefined>
   ): Promise<void> {
     const debounced$ = proposedDimensions.pipe(
       filter((x) => !!x),
       distinctUntilChanged(),
-      debounceTime(100),
+      debounceTime(100)
     )
 
     const sub = debounced$.subscribe(async (terminalDimensions) => {
@@ -835,13 +895,13 @@ export class ConsoleView extends LitElement {
   }
 
   async #subscribeSetTerminalRows(
-    proposedDimensions: Observable<TerminalDimensions | undefined>,
+    proposedDimensions: Observable<TerminalDimensions | undefined>
   ): Promise<void> {
     const debounced$ = proposedDimensions.pipe(
       map((x) => x?.rows),
       filter((x) => !!x),
       distinctUntilChanged(),
-      debounceTime(100),
+      debounceTime(100)
     )
 
     const sub = debounced$.subscribe(async (terminalRows) => {
@@ -954,7 +1014,9 @@ export class ConsoleView extends LitElement {
   /**
    * @param isUserAction Indicates if the user clicked the save button directly
    */
-  async #shareCellOutput(_isUserAction: boolean): Promise<boolean | void | undefined> {
+  async #shareCellOutput(
+    _isUserAction: boolean
+  ): Promise<boolean | void | undefined> {
     const ctx = getContext()
     if (!ctx.postMessage) {
       return
@@ -1005,7 +1067,8 @@ export class ConsoleView extends LitElement {
   }
 
   #onEscalateDisabled(): void {
-    const message = 'There is no Slack integration configured yet. \nOpen Dashboard to configure it'
+    const message =
+      'There is no Slack integration configured yet. \nOpen Dashboard to configure it'
     postClientMessage(getContext(), ClientMessages.errorMessage, message)
   }
 
@@ -1034,9 +1097,11 @@ export class ConsoleView extends LitElement {
         ${when(
           isGistEnabled,
           () => {
-            return html`<gist-cell @onGist="${this.#openSessionOutput}"></gist-cell>`
+            return html`<gist-cell
+              @onGist="${this.#openSessionOutput}"
+            ></gist-cell>`
           },
-          () => {},
+          () => {}
         )}
         ${when(
           this.shouldRenderSaveButton(),
@@ -1048,7 +1113,7 @@ export class ConsoleView extends LitElement {
             >
             </save-button>`
           },
-          () => {},
+          () => {}
         )}
         ${when(
           this.shouldRenderShareButton(),
@@ -1059,7 +1124,7 @@ export class ConsoleView extends LitElement {
             >
             </share-button>`
           },
-          () => {},
+          () => {}
         )}
         ${when(
           isEscalateEnabled &&
@@ -1077,7 +1142,7 @@ export class ConsoleView extends LitElement {
             >
             </action-button>`
           },
-          () => {},
+          () => {}
         )}
         ${when(
           isEscalateEnabled && this.escalationUrl,
@@ -1089,7 +1154,7 @@ export class ConsoleView extends LitElement {
             >
             </action-button>`
           },
-          () => {},
+          () => {}
         )}
         ${when(
           this.platformId && !this.isLoading,
@@ -1099,7 +1164,7 @@ export class ConsoleView extends LitElement {
               @onOpen="${this.#triggerOpenCellOutput}"
             ></open-cell>`
           },
-          () => {},
+          () => {}
         )}
       </div>
     `
@@ -1120,7 +1185,10 @@ export class ConsoleView extends LitElement {
       return
     }
     const content = stripANSI(
-      this.serializer?.serialize({ excludeModes: true, excludeAltBuffer: true }) ?? '',
+      this.serializer?.serialize({
+        excludeModes: true,
+        excludeAltBuffer: true,
+      }) ?? ''
     )
     return navigator.clipboard
       .writeText(content)
@@ -1132,8 +1200,8 @@ export class ConsoleView extends LitElement {
         postClientMessage(
           ctx,
           ClientMessages.infoMessage,
-          `Failed to copy to clipboard: ${err.message}!`,
-        ),
+          `Failed to copy to clipboard: ${err.message}!`
+        )
       )
   }
 
@@ -1152,12 +1220,16 @@ export class ConsoleView extends LitElement {
   }
 }
 
-function convertXTermDimensions(dimensions: ITerminalDimensions): TerminalDimensions
+function convertXTermDimensions(
+  dimensions: ITerminalDimensions
+): TerminalDimensions
 function convertXTermDimensions(dimensions: undefined): undefined
 function convertXTermDimensions(
-  dimensions: ITerminalDimensions | undefined,
+  dimensions: ITerminalDimensions | undefined
 ): TerminalDimensions | undefined
-function convertXTermDimensions(dimensions?: ITerminalDimensions): TerminalDimensions | undefined {
+function convertXTermDimensions(
+  dimensions?: ITerminalDimensions
+): TerminalDimensions | undefined {
   if (!dimensions) {
     return undefined
   }
@@ -1169,6 +1241,6 @@ function convertXTermDimensions(dimensions?: ITerminalDimensions): TerminalDimen
 function stripANSI(src: string): string {
   return src.replace(
     /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
-    '',
+    ''
   )
 }

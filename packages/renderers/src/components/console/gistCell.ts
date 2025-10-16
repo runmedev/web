@@ -53,10 +53,14 @@ export class GistCell extends LitElement {
         </vscode-button>
       `,
       () => html`
-        <vscode-button class=${className} appearance="secondary" @click=${this.onGistClick}>
+        <vscode-button
+          class=${className}
+          appearance="secondary"
+          @click=${this.onGistClick}
+        >
           ${GistIcon} ${this.text}
         </vscode-button>
-      `,
+      `
     )
   }
 }

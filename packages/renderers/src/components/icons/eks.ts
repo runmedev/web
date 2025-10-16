@@ -2,7 +2,13 @@ import { html } from 'lit'
 
 /* eslint-disable max-len */
 export const EKSIcon = html`
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <svg
+    width="16"
+    height="16"
+    viewBox="0 0 16 16"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
     <g clip-path="url(#clip0_10_2)">
       <path d="M16 0H0V16H16V0Z" fill="url(#paint0_linear_10_2)" />
       <path

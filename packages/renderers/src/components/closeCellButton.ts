@@ -1,5 +1,6 @@
 import { LitElement, css, html } from 'lit'
 import { customElement } from 'lit/decorators.js'
+
 @customElement('close-cell-button')
 export class CloseCellButton extends LitElement {
   /* eslint-disable */
@@ -61,7 +62,8 @@ export class CloseCellButton extends LitElement {
       margin-left: -5px;
       border-width: 5px;
       border-style: solid;
-      border-color: transparent transparent var(--tooltip-background) transparent;
+      border-color: transparent transparent var(--tooltip-background)
+        transparent;
     }
 
     .tooltip .tooltiptext {

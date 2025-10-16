@@ -1,6 +1,6 @@
 import { OutputType } from './types'
 
-export function closeOutput({ }: { id: string; outputType: OutputType }) {
+export function closeOutput({}: { id: string; outputType: OutputType }) {
   // const ctx = getContext()
   // ctx.postMessage &&
   //   postClientMessage(ctx, ClientMessages.closeCellOutput, {
