@@ -1,5 +1,11 @@
 # @runmedev/react-console
 
+## 3.16.0
+
+### Minor Changes
+
+- react-console is now a thin wrapper around the respective renderer
+
 ## 3.15.12
 
 ### Patch Changes

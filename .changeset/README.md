@@ -18,7 +18,7 @@ We currently publish the packages manually following these steps. Be sure to com
 npx changeset
 ```
 
-```sh {"terminalRows":"18"}
+```sh {"terminalRows":"35"}
 pnpm run version-packages
 git diff
 ```
