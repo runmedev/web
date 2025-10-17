@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef } from 'react'
 
 import { Interceptor } from '@connectrpc/connect'
 import '@runmedev/renderers'
-import { type ConsoleViewConfig } from '@runmedev/renderers'
+import type { RunmeConsoleStream, ConsoleViewConfig } from '@runmedev/renderers'
 
 interface ConsoleSettings {
   rows?: number
@@ -20,6 +20,22 @@ interface ConsoleRunner {
   interceptors: Interceptor[]
 }
 
+export interface ConsoleProps {
+  cellID: string
+  runID: string
+  sequence: number
+  languageID?: string
+  commands: string[]
+  content?: string
+  runner: ConsoleRunner
+  settings?: ConsoleSettings
+  onStdout?: (data: Uint8Array) => void
+  onStderr?: (data: Uint8Array) => void
+  onExitCode?: (code: number) => void
+  onPid?: (pid: number) => void
+  onMimeType?: (mimeType: string) => void
+}
+
 function Console({
   cellID,
   runID,
@@ -34,21 +50,7 @@ function Console({
   onExitCode,
   onPid,
   onMimeType,
-}: {
-  cellID: string
-  runID: string
-  sequence: number
-  languageID?: string
-  commands: string[]
-  content?: string
-  runner: ConsoleRunner
-  settings?: ConsoleSettings
-  onStdout?: (data: Uint8Array) => void
-  onStderr?: (data: Uint8Array) => void
-  onExitCode?: (code: number) => void
-  onPid?: (pid: number) => void
-  onMimeType?: (mimeType: string) => void
-}) {
+}: ConsoleProps) {
   const {
     rows = 20,
     className,
@@ -86,14 +88,14 @@ function Console({
     [cellID, fontFamily, fontSize, takeFocus, scrollToFit, rows, content]
   )
 
-  const webComponentStream = useMemo(
+  const webComponentStream: RunmeConsoleStream = useMemo(
     () => ({
-      knownId: cellID,
-      runId: runID,
-      sequence: sequence.toString(),
-      languageId: languageID,
+      knownID: cellID,
+      runID,
+      sequence,
+      languageID,
       runnerEndpoint: runner.endpoint,
-      reconnect: runner.reconnect ? 'true' : 'false',
+      reconnect: runner.reconnect,
     }),
     [cellID, runID, sequence, languageID, runner.endpoint, runner.reconnect]
   )

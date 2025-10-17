@@ -21,10 +21,10 @@ import { ClientMessages } from '../../types'
 import { ConsoleView, ConsoleViewConfig } from './view'
 
 export interface RunmeConsoleStream {
-  knownId?: string
-  runId?: string
-  sequence?: number
-  languageId?: string
+  knownID: string
+  runID: string
+  sequence: number
+  languageID?: string
   runnerEndpoint: string
   reconnect: boolean
 }
@@ -77,10 +77,10 @@ export class RunmeConsole extends LitElement {
   // Streams-specific properties
   @property({ type: Object })
   stream: RunmeConsoleStream = {
-    knownId: this.id,
-    runId: genRunID(),
+    knownID: this.id,
+    runID: genRunID(),
     sequence: 0,
-    languageId: 'sh',
+    languageID: 'sh',
     runnerEndpoint: 'ws://localhost:8080/ws',
     reconnect: true,
   }
@@ -242,16 +242,16 @@ export class RunmeConsole extends LitElement {
     if (this.#streams) {
       return
     }
-    const knownId = this.stream.knownId ?? this.id
-    if (!knownId || !this.stream.runId || !this.stream.runnerEndpoint) {
-      return
+    const knownID = this.stream.knownID ?? this.id
+    if (!knownID || !this.stream.runID || !this.stream.runnerEndpoint) {
+      console.warn('Missing required stream properties')
     }
     this.#streams = new Streams({
-      knownID: knownId,
-      runID: this.stream.runId!,
+      knownID: knownID,
+      runID: this.stream.runID!,
       sequence: this.stream.sequence ?? 0,
       options: {
-        runnerEndpoint: this.stream.runnerEndpoint!,
+        runnerEndpoint: this.stream.runnerEndpoint,
         autoReconnect: this.stream.reconnect,
         interceptors: this.interceptors ?? [],
       },
@@ -301,7 +301,7 @@ export class RunmeConsole extends LitElement {
     if (!this.#streams) {
       return
     }
-    if (!this.commands.length || !this.stream.runId) {
+    if (!this.commands.length || !this.stream.runID) {
       return
     }
     const req = this.#buildExecuteRequest()
@@ -312,7 +312,7 @@ export class RunmeConsole extends LitElement {
   }
 
   #buildExecuteRequest(): any {
-    const lid = this.stream.languageId || 'sh'
+    const lid = this.stream.languageID || 'sh'
     const shellish = new Set([
       'sh',
       'shell',
@@ -339,13 +339,13 @@ export class RunmeConsole extends LitElement {
         background: false,
         fileExtension: '',
         env: [
-          `RUNME_ID=${this.stream.knownId ?? this.id}`,
+          `RUNME_ID=${this.stream.knownID ?? this.id}`,
           'RUNME_RUNNER=v2',
           'TERM=xterm-256color',
         ],
         interactive: true,
-        runId: this.stream.runId,
-        knownId: this.stream.knownId ?? this.id,
+        runId: this.stream.runID,
+        knownId: this.stream.knownID ?? this.id,
       },
       winsize: create(WinsizeSchema, this.#winsize),
     })
@@ -371,7 +371,7 @@ export class RunmeConsole extends LitElement {
         value: this.commands.join('\n'),
       }
       req.config!.mode = CommandMode.FILE
-      req.config!.fileExtension = this.stream.languageId || ''
+      req.config!.fileExtension = this.stream.languageID || ''
     }
     return req
   }
