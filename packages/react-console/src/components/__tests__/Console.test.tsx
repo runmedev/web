@@ -1,9 +1,7 @@
-import React from 'react'
-
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { render } from '../../../../test/utils'
-import Console from '../Console'
+import Console, { ConsoleProps } from '../Console'
 
 // Mock the renderers package to avoid web component initialization issues
 vi.mock('@runmedev/renderers', () => ({
@@ -13,7 +11,7 @@ vi.mock('@runmedev/renderers', () => ({
 }))
 
 describe('Console', () => {
-  const defaultProps = {
+  const defaultProps: ConsoleProps = {
     cellID: 'test-cell-1',
     runID: 'test-run-1',
     sequence: 1,
@@ -22,7 +20,6 @@ describe('Console', () => {
       endpoint: 'ws://localhost:8080/ws',
       reconnect: true,
       interceptors: [],
-      authorization: { bearerToken: 'test-token' },
     },
     settings: {
       rows: 20,
@@ -138,13 +135,21 @@ describe('Console', () => {
     expect(webComponent).toBeInTheDocument()
 
     // Verify the web component has the correct attributes
-    expect(webComponent?.getAttribute('languageId')).toBe('bash')
-    expect(webComponent?.getAttribute('knownId')).toBe('test-cell-1')
-    expect(webComponent?.getAttribute('runId')).toBe('test-run-1')
-    expect(webComponent?.getAttribute('sequence')).toBe('1')
-    expect(webComponent?.getAttribute('runnerEndpoint')).toBe(
-      'ws://localhost:8080/ws'
-    )
+    expect(webComponent?.getAttribute('id')).toBe('test-cell-1')
+    expect(webComponent?.getAttribute('takeFocus')).toBe('true')
+    expect(webComponent?.getAttribute('initialRows')).toBe('20')
+    expect(webComponent?.getAttribute('initialContent')).toBe('')
+
+    // Verify the stream attribute contains the execution config
+    const streamAttr = webComponent?.getAttribute('stream')
+    expect(streamAttr).toBeTruthy()
+    const streamConfig = JSON.parse(streamAttr!)
+    expect(streamConfig.knownID).toBe('test-cell-1')
+    expect(streamConfig.runID).toBe('test-run-1')
+    expect(streamConfig.sequence).toBe(1)
+    expect(streamConfig.languageID).toBe('bash')
+    expect(streamConfig.runnerEndpoint).toBe('ws://localhost:8080/ws')
+    expect(streamConfig.reconnect).toBe(true)
 
     // Verify commands are set as a property (not attribute)
     expect((webComponent as any)?.commands).toEqual(['echo hi'])
@@ -164,13 +169,21 @@ describe('Console', () => {
     expect(webComponent).toBeInTheDocument()
 
     // Verify the web component has the correct attributes
-    expect(webComponent?.getAttribute('languageId')).toBe('python')
-    expect(webComponent?.getAttribute('knownId')).toBe('test-cell-1')
-    expect(webComponent?.getAttribute('runId')).toBe('test-run-1')
-    expect(webComponent?.getAttribute('sequence')).toBe('1')
-    expect(webComponent?.getAttribute('runnerEndpoint')).toBe(
-      'ws://localhost:8080/ws'
-    )
+    expect(webComponent?.getAttribute('id')).toBe('test-cell-1')
+    expect(webComponent?.getAttribute('takeFocus')).toBe('true')
+    expect(webComponent?.getAttribute('initialRows')).toBe('20')
+    expect(webComponent?.getAttribute('initialContent')).toBe('')
+
+    // Verify the stream attribute contains the execution config
+    const streamAttr = webComponent?.getAttribute('stream')
+    expect(streamAttr).toBeTruthy()
+    const streamConfig = JSON.parse(streamAttr!)
+    expect(streamConfig.knownID).toBe('test-cell-1')
+    expect(streamConfig.runID).toBe('test-run-1')
+    expect(streamConfig.sequence).toBe(1)
+    expect(streamConfig.languageID).toBe('python')
+    expect(streamConfig.runnerEndpoint).toBe('ws://localhost:8080/ws')
+    expect(streamConfig.reconnect).toBe(true)
 
     // Verify commands are set as a property (not attribute)
     expect((webComponent as any)?.commands).toEqual(["print('hi')"])

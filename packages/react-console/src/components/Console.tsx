@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from 'react'
 
 import { Interceptor } from '@connectrpc/connect'
 import '@runmedev/renderers'
+import type { RunmeConsoleStream, ConsoleViewConfig } from '@runmedev/renderers'
 
 interface ConsoleSettings {
   rows?: number
@@ -19,6 +20,22 @@ interface ConsoleRunner {
   interceptors: Interceptor[]
 }
 
+export interface ConsoleProps {
+  cellID: string
+  runID: string
+  sequence: number
+  languageID?: string
+  commands: string[]
+  content?: string
+  runner: ConsoleRunner
+  settings?: ConsoleSettings
+  onStdout?: (data: Uint8Array) => void
+  onStderr?: (data: Uint8Array) => void
+  onExitCode?: (code: number) => void
+  onPid?: (pid: number) => void
+  onMimeType?: (mimeType: string) => void
+}
+
 function Console({
   cellID,
   runID,
@@ -33,21 +50,7 @@ function Console({
   onExitCode,
   onPid,
   onMimeType,
-}: {
-  cellID: string
-  runID: string
-  sequence: number
-  languageID?: string
-  commands: string[]
-  content?: string
-  runner: ConsoleRunner
-  settings?: ConsoleSettings
-  onStdout?: (data: Uint8Array) => void
-  onStderr?: (data: Uint8Array) => void
-  onExitCode?: (code: number) => void
-  onPid?: (pid: number) => void
-  onMimeType?: (mimeType: string) => void
-}) {
+}: ConsoleProps) {
   const {
     rows = 20,
     className,
@@ -59,27 +62,42 @@ function Console({
 
   const elemRef = useRef<any>(null)
 
-  const webComponentDefaults = useMemo(
+  const webComponentDefaults: {
+    id: string
+    takeFocus: boolean
+    initialContent: string
+    initialRows: number
+    view: ConsoleViewConfig
+  } = useMemo(
     () => ({
-      output: {
-        'runme.dev/id': cellID,
+      id: cellID,
+      takeFocus,
+      initialContent: content || '',
+      initialRows: rows,
+      view: {
         theme: 'dark',
         fontFamily: fontFamily || 'monospace',
         fontSize: fontSize || 12,
         cursorStyle: 'block',
         cursorBlink: true,
         cursorWidth: 1,
-        takeFocus,
-        scrollToFit,
         smoothScrollDuration: 0,
         scrollback: 4000,
-        initialRows: rows,
-        content: content || '',
-        isAutoSaveEnabled: false,
-        isPlatformAuthEnabled: false,
       },
     }),
     [cellID, fontFamily, fontSize, takeFocus, scrollToFit, rows, content]
+  )
+
+  const webComponentStream: RunmeConsoleStream = useMemo(
+    () => ({
+      knownID: cellID,
+      runID,
+      sequence,
+      languageID,
+      runnerEndpoint: runner.endpoint,
+      reconnect: runner.reconnect,
+    }),
+    [cellID, runID, sequence, languageID, runner.endpoint, runner.reconnect]
   )
 
   // Set up event listeners when the console element is available and callbacks change
@@ -116,95 +134,38 @@ function Console({
         }
         const elem = document.createElement('runme-console') as any
         elemRef.current = elem
-        elem.setAttribute('buttons', 'false')
 
-        elem.setAttribute('id', webComponentDefaults.output['runme.dev/id']!)
-        elem.setAttribute('theme', webComponentDefaults.output.theme)
-        elem.setAttribute('fontFamily', webComponentDefaults.output.fontFamily)
-        if (typeof webComponentDefaults.output.fontSize === 'number') {
-          elem.setAttribute(
-            'fontSize',
-            webComponentDefaults.output.fontSize.toString()
-          )
-        }
-        if (webComponentDefaults.output.cursorStyle) {
-          elem.setAttribute(
-            'cursorStyle',
-            webComponentDefaults.output.cursorStyle
-          )
-        }
-        if (typeof webComponentDefaults.output.cursorBlink === 'boolean') {
-          elem.setAttribute(
-            'cursorBlink',
-            webComponentDefaults.output.cursorBlink ? 'true' : 'false'
-          )
-        }
-        if (typeof webComponentDefaults.output.cursorWidth === 'number') {
-          elem.setAttribute(
-            'cursorWidth',
-            webComponentDefaults.output.cursorWidth.toString()
-          )
-        }
+        elem.setAttribute('id', webComponentDefaults.id)
 
-        if (typeof webComponentDefaults.output.takeFocus === 'boolean') {
+        if (typeof webComponentDefaults.takeFocus === 'boolean') {
           elem.setAttribute(
             'takeFocus',
-            webComponentDefaults.output.takeFocus ? 'true' : 'false'
+            webComponentDefaults.takeFocus ? 'true' : 'false'
           )
         }
 
-        if (
-          typeof webComponentDefaults.output.smoothScrollDuration === 'number'
-        ) {
-          elem.setAttribute(
-            'smoothScrollDuration',
-            webComponentDefaults.output.smoothScrollDuration.toString()
-          )
+        if (webComponentDefaults.view) {
+          elem.setAttribute('view', JSON.stringify(webComponentDefaults.view))
         }
 
-        if (typeof webComponentDefaults.output.scrollback === 'number') {
-          elem.setAttribute(
-            'scrollback',
-            webComponentDefaults.output.scrollback.toString()
-          )
-        }
-        if (webComponentDefaults.output.initialRows !== undefined) {
+        if (webComponentDefaults.initialRows !== undefined) {
           elem.setAttribute(
             'initialRows',
-            webComponentDefaults.output.initialRows.toString()
+            webComponentDefaults.initialRows.toString()
           )
         }
 
-        if (webComponentDefaults.output.content !== undefined) {
+        if (webComponentDefaults.initialContent !== undefined) {
           elem.setAttribute(
             'initialContent',
-            webComponentDefaults.output.content
-          )
-        }
-
-        if (webComponentDefaults.output.isAutoSaveEnabled) {
-          elem.setAttribute(
-            'isAutoSaveEnabled',
-            webComponentDefaults.output.isAutoSaveEnabled.toString()
-          )
-        }
-
-        if (webComponentDefaults.output.isPlatformAuthEnabled) {
-          elem.setAttribute(
-            'isPlatformAuthEnabled',
-            webComponentDefaults.output.isPlatformAuthEnabled.toString()
+            webComponentDefaults.initialContent
           )
         }
 
         // Pass-through execution/session config
-        elem.setAttribute('knownId', cellID)
-        elem.setAttribute('runId', runID)
-        elem.setAttribute('sequence', String(sequence))
-        if (languageID) {
-          elem.setAttribute('languageId', languageID)
-        }
-        elem.setAttribute('runnerEndpoint', runner.endpoint)
-        elem.setAttribute('reconnect', runner.reconnect ? 'true' : 'false')
+        elem.setAttribute('stream', JSON.stringify(webComponentStream))
+
+        // Bypass attributes because serialization of funcs won't work
         elem.interceptors = runner.interceptors
         elem.commands = commands
 

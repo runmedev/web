@@ -17,12 +17,7 @@ import { Disposable, TerminalDimensions } from 'vscode'
 
 import { FitAddon, type ITerminalDimensions } from '../../fitAddon'
 import { getContext, onClientMessage, postClientMessage } from '../../messaging'
-import {
-  ClientMessages,
-  OutputType,
-  TerminalConfiguration,
-  WebViews,
-} from '../../types'
+import { ClientMessages, OutputType, WebViews } from '../../types'
 import { ClientMessage } from '../../types'
 import { closeOutput } from '../../utils'
 import '../closeCellButton'
@@ -33,6 +28,17 @@ import './open'
 import './saveButton'
 import './shareButton'
 import { darkStyles, lightStyles } from './vscode.css'
+
+export interface ConsoleViewConfig {
+  theme: 'dark' | 'light' | 'vscode'
+  fontFamily?: string
+  fontSize?: number
+  cursorStyle?: 'block' | 'underline' | 'bar'
+  cursorBlink?: boolean
+  cursorWidth?: number
+  smoothScrollDuration?: number
+  scrollback?: number
+}
 
 interface IWindowSize {
   width: number
@@ -365,25 +371,25 @@ export class ConsoleView extends LitElement {
   theme: 'dark' | 'light' | 'vscode' = 'dark'
 
   @property({ type: String })
-  fontFamily?: TerminalConfiguration['fontFamily']
+  fontFamily?: ConsoleViewConfig['fontFamily']
 
   @property({ type: Number })
-  fontSize?: TerminalConfiguration['fontSize']
+  fontSize?: ConsoleViewConfig['fontSize']
 
   @property({ type: String })
-  cursorStyle?: TerminalConfiguration['cursorStyle']
+  cursorStyle?: ConsoleViewConfig['cursorStyle']
 
   @property({ type: Boolean })
-  cursorBlink?: TerminalConfiguration['cursorBlink']
+  cursorBlink?: ConsoleViewConfig['cursorBlink']
 
   @property({ type: Number })
-  cursorWidth?: TerminalConfiguration['cursorWidth']
+  cursorWidth?: ConsoleViewConfig['cursorWidth']
 
   @property({ type: Number })
-  smoothScrollDuration?: TerminalConfiguration['smoothScrollDuration']
+  smoothScrollDuration?: ConsoleViewConfig['smoothScrollDuration']
 
   @property({ type: Number })
-  scrollback?: TerminalConfiguration['scrollback']
+  scrollback?: ConsoleViewConfig['scrollback']
 
   @property({ type: String })
   initialContent?: string

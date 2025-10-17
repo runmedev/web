@@ -8,6 +8,7 @@ import {
   WinsizeSchema,
 } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { create } from '@bufbuild/protobuf'
+import { Interceptor } from '@connectrpc/connect'
 import { LitElement, PropertyValues, html } from 'lit'
 import { customElement, property } from 'lit/decorators.js'
 import { Disposable } from 'vscode'
@@ -15,9 +16,18 @@ import { type RendererContext } from 'vscode-notebook-renderer'
 import { type VSCodeEvent } from 'vscode-notebook-renderer/events'
 
 import { setContext } from '../../messaging'
-import Streams from '../../streams'
-import { ClientMessages, TerminalConfiguration } from '../../types'
-import { ConsoleView } from './view'
+import Streams, { genRunID } from '../../streams'
+import { ClientMessages } from '../../types'
+import { ConsoleView, ConsoleViewConfig } from './view'
+
+export interface RunmeConsoleStream {
+  knownID: string
+  runID: string
+  sequence: number
+  languageID?: string
+  runnerEndpoint: string
+  reconnect: boolean
+}
 
 export const RUNME_CONSOLE = 'runme-console'
 
@@ -41,37 +51,22 @@ export class RunmeConsole extends LitElement {
     type: Boolean,
     converter: (value: string | null) => value !== 'false',
   })
-  buttons: boolean = true
-
-  @property({
-    type: Boolean,
-    converter: (value: string | null) => value !== 'false',
-  })
   takeFocus: boolean = true
 
-  @property({ type: String })
-  theme: 'dark' | 'light' | 'vscode' = 'dark'
+  @property({ type: Object })
+  view: ConsoleViewConfig = {
+    theme: 'dark',
+    fontFamily: 'monospace',
+    fontSize: 12,
+    cursorStyle: 'block',
+    cursorBlink: true,
+    cursorWidth: 1,
+    smoothScrollDuration: 0,
+    scrollback: 4000,
+  }
 
-  @property({ type: String })
-  fontFamily?: TerminalConfiguration['fontFamily']
-
-  @property({ type: Number })
-  fontSize?: TerminalConfiguration['fontSize']
-
-  @property({ type: String })
-  cursorStyle?: TerminalConfiguration['cursorStyle']
-
-  @property({ type: Boolean })
-  cursorBlink?: TerminalConfiguration['cursorBlink']
-
-  @property({ type: Number })
-  cursorWidth?: TerminalConfiguration['cursorWidth']
-
-  @property({ type: Number })
-  smoothScrollDuration?: TerminalConfiguration['smoothScrollDuration']
-
-  @property({ type: Number })
-  scrollback?: TerminalConfiguration['scrollback']
+  @property({ type: Array })
+  commands: string[] = []
 
   @property({ type: String })
   initialContent?: string
@@ -79,53 +74,19 @@ export class RunmeConsole extends LitElement {
   @property({ type: Number })
   initialRows?: number
 
-  @property({ type: Number })
-  lastLine?: number // TODO: Get the last line of the terminal and store it.
-
-  @property({ type: Boolean })
-  isLoading: boolean = false
-
-  @property({ type: Boolean })
-  isCreatingEscalation: boolean = false
-
-  @property()
-  shareUrl?: string
-
-  @property()
-  escalationUrl?: string
-
-  @property({ type: Boolean })
-  isUpdatedReady: boolean = false
-
-  @property({ type: Boolean })
-  isAutoSaveEnabled: boolean = false
-
-  @property({ type: Boolean })
-  isPlatformAuthEnabled: boolean = false
-
-  @property({ type: Boolean })
-  isDaggerOutput: boolean = false
-
   // Streams-specific properties
-  @property({ type: String })
-  knownId?: string
-  @property({ type: String })
-  runId?: string
-  @property({ type: Number })
-  sequence?: number
-  @property({ type: String })
-  languageId?: string
-  @property({ type: Array, attribute: false })
-  commands?: string[]
-  @property({ type: String })
-  runnerEndpoint?: string
-  @property({
-    type: Boolean,
-    converter: (value: string | null) => value !== 'false',
-  })
-  reconnect: boolean = true
+  @property({ type: Object })
+  stream: RunmeConsoleStream = {
+    knownID: this.id,
+    runID: genRunID(),
+    sequence: 0,
+    languageID: 'sh',
+    runnerEndpoint: 'ws://localhost:8080/ws',
+    reconnect: true,
+  }
+
   @property({ attribute: false })
-  interceptors: any[] = []
+  interceptors: Interceptor[] = []
 
   constructor() {
     super()
@@ -170,13 +131,9 @@ export class RunmeConsole extends LitElement {
 
     // Handle Streams-specific property changes
     if (
-      changedProperties.has('knownId') ||
-      changedProperties.has('runId') ||
-      changedProperties.has('sequence') ||
-      changedProperties.has('runnerEndpoint') ||
-      changedProperties.has('interceptors') ||
-      changedProperties.has('commands') ||
-      changedProperties.has('languageId')
+      changedProperties.has('id') ||
+      changedProperties.has('stream') ||
+      changedProperties.has('commands')
     ) {
       this.#maybeInitStreams()
       this.#maybeSendExecuteRequest()
@@ -214,81 +171,50 @@ export class RunmeConsole extends LitElement {
 
     // Delegate all standard terminal properties to ConsoleView
     this.consoleView.setAttribute('id', this.id)
-    this.consoleView.setAttribute('buttons', this.buttons.toString())
+    // Always disable buttons by default
+    this.consoleView.setAttribute('buttons', 'false')
     this.consoleView.setAttribute('takeFocus', this.takeFocus.toString())
-    this.consoleView.setAttribute('theme', this.theme)
+    this.consoleView.setAttribute('theme', this.view.theme)
 
-    if (this.fontFamily) {
-      this.consoleView.setAttribute('fontFamily', this.fontFamily)
+    if (this.view.fontFamily) {
+      this.consoleView.setAttribute('fontFamily', this.view.fontFamily)
     }
-    if (this.fontSize !== undefined) {
-      this.consoleView.setAttribute('fontSize', this.fontSize.toString())
+    if (this.view.fontSize) {
+      this.consoleView.setAttribute('fontSize', this.view.fontSize.toString())
     }
-    if (this.cursorStyle) {
-      this.consoleView.setAttribute('cursorStyle', this.cursorStyle)
+    if (this.view.cursorStyle) {
+      this.consoleView.setAttribute('cursorStyle', this.view.cursorStyle)
     }
-    if (this.cursorBlink !== undefined) {
-      this.consoleView.setAttribute('cursorBlink', this.cursorBlink.toString())
-    }
-    if (this.cursorWidth !== undefined) {
-      this.consoleView.setAttribute('cursorWidth', this.cursorWidth.toString())
-    }
-    if (this.smoothScrollDuration !== undefined) {
+    if (this.view.cursorBlink) {
       this.consoleView.setAttribute(
-        'smoothScrollDuration',
-        this.smoothScrollDuration.toString()
+        'cursorBlink',
+        this.view.cursorBlink.toString()
       )
     }
-    if (this.scrollback !== undefined) {
-      this.consoleView.setAttribute('scrollback', this.scrollback.toString())
+    if (this.view.cursorWidth) {
+      this.consoleView.setAttribute(
+        'cursorWidth',
+        this.view.cursorWidth.toString()
+      )
     }
+    if (this.view.smoothScrollDuration) {
+      this.consoleView.setAttribute(
+        'smoothScrollDuration',
+        this.view.smoothScrollDuration.toString()
+      )
+    }
+    if (this.view.scrollback) {
+      this.consoleView.setAttribute(
+        'scrollback',
+        this.view.scrollback.toString()
+      )
+    }
+
     if (this.initialContent) {
       this.consoleView.setAttribute('initialContent', this.initialContent)
     }
     if (this.initialRows !== undefined) {
       this.consoleView.setAttribute('initialRows', this.initialRows.toString())
-    }
-    if (this.lastLine !== undefined) {
-      this.consoleView.setAttribute('lastLine', this.lastLine.toString())
-    }
-    if (this.isLoading !== undefined) {
-      this.consoleView.setAttribute('isLoading', this.isLoading.toString())
-    }
-    if (this.isCreatingEscalation !== undefined) {
-      this.consoleView.setAttribute(
-        'isCreatingEscalation',
-        this.isCreatingEscalation.toString()
-      )
-    }
-    if (this.shareUrl) {
-      this.consoleView.setAttribute('shareUrl', this.shareUrl)
-    }
-    if (this.escalationUrl) {
-      this.consoleView.setAttribute('escalationUrl', this.escalationUrl)
-    }
-    if (this.isUpdatedReady !== undefined) {
-      this.consoleView.setAttribute(
-        'isUpdatedReady',
-        this.isUpdatedReady.toString()
-      )
-    }
-    if (this.isAutoSaveEnabled !== undefined) {
-      this.consoleView.setAttribute(
-        'isAutoSaveEnabled',
-        this.isAutoSaveEnabled.toString()
-      )
-    }
-    if (this.isPlatformAuthEnabled !== undefined) {
-      this.consoleView.setAttribute(
-        'isPlatformAuthEnabled',
-        this.isPlatformAuthEnabled.toString()
-      )
-    }
-    if (this.isDaggerOutput !== undefined) {
-      this.consoleView.setAttribute(
-        'isDaggerOutput',
-        this.isDaggerOutput.toString()
-      )
     }
   }
 
@@ -316,18 +242,18 @@ export class RunmeConsole extends LitElement {
     if (this.#streams) {
       return
     }
-    const knownId = this.knownId ?? this.id
-    if (!knownId || !this.runId || !this.runnerEndpoint) {
-      return
+    const knownID = this.stream.knownID ?? this.id
+    if (!knownID || !this.stream.runID || !this.stream.runnerEndpoint) {
+      console.warn('Missing required stream properties')
     }
     this.#streams = new Streams({
-      knownID: knownId,
-      runID: this.runId!,
-      sequence: this.sequence ?? 0,
+      knownID: knownID,
+      runID: this.stream.runID!,
+      sequence: this.stream.sequence ?? 0,
       options: {
-        runnerEndpoint: this.runnerEndpoint!,
-        interceptors: (this.interceptors as any[]) ?? [],
-        autoReconnect: this.reconnect,
+        runnerEndpoint: this.stream.runnerEndpoint,
+        autoReconnect: this.stream.reconnect,
+        interceptors: this.interceptors ?? [],
       },
     })
     const latencySub = this.#streams.connect().subscribe()
@@ -375,7 +301,7 @@ export class RunmeConsole extends LitElement {
     if (!this.#streams) {
       return
     }
-    if (!this.commands || !this.runId) {
+    if (!this.commands.length || !this.stream.runID) {
       return
     }
     const req = this.#buildExecuteRequest()
@@ -386,7 +312,7 @@ export class RunmeConsole extends LitElement {
   }
 
   #buildExecuteRequest(): any {
-    const lid = this.languageId || 'sh'
+    const lid = this.stream.languageID || 'sh'
     const shellish = new Set([
       'sh',
       'shell',
@@ -413,17 +339,17 @@ export class RunmeConsole extends LitElement {
         background: false,
         fileExtension: '',
         env: [
-          `RUNME_ID=${this.knownId ?? this.id}`,
+          `RUNME_ID=${this.stream.knownID ?? this.id}`,
           'RUNME_RUNNER=v2',
           'TERM=xterm-256color',
         ],
         interactive: true,
-        runId: this.runId,
-        knownId: this.knownId ?? this.id,
+        runId: this.stream.runID,
+        knownId: this.stream.knownID ?? this.id,
       },
       winsize: create(WinsizeSchema, this.#winsize),
     })
-    if (this.commands?.length === 0) {
+    if (this.commands.length === 0) {
       req.config!.mode = CommandMode.INLINE
       req.config!.source = {
         case: 'commands',
@@ -435,17 +361,17 @@ export class RunmeConsole extends LitElement {
       req.config!.source = {
         case: 'commands',
         value: create(ProgramConfig_CommandListSchema, {
-          items: this.commands ?? [],
+          items: this.commands,
         }),
       }
       req.config!.mode = CommandMode.INLINE
     } else {
       req.config!.source = {
         case: 'script',
-        value: (this.commands ?? []).join('\n'),
+        value: this.commands.join('\n'),
       }
       req.config!.mode = CommandMode.FILE
-      req.config!.fileExtension = this.languageId || ''
+      req.config!.fileExtension = this.stream.languageID || ''
     }
     return req
   }

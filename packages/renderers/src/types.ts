@@ -293,13 +293,3 @@ export enum WebViews {
   RunmeSearch = 'runme.search',
   NotebookEnvStore = 'runme.notebook.envStore',
 }
-
-export interface TerminalConfiguration {
-  fontFamily?: string
-  fontSize?: number
-  cursorStyle?: 'block' | 'underline' | 'bar'
-  cursorBlink?: boolean
-  cursorWidth?: number
-  smoothScrollDuration?: number
-  scrollback?: number
-}
