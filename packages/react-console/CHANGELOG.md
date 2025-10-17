@@ -1,5 +1,11 @@
 # @runmedev/react-console
 
+## 3.16.2
+
+### Patch Changes
+
+- Group view and stream related attributes for cleaner web component props
+
 ## 3.16.1
 
 ### Patch Changes
