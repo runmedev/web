@@ -16,7 +16,7 @@ import { type RendererContext } from 'vscode-notebook-renderer'
 import { type VSCodeEvent } from 'vscode-notebook-renderer/events'
 
 import { setContext } from '../../messaging'
-import Streams, { genRunID } from '../../streams'
+import Streams from '../../streams'
 import { ClientMessages } from '../../types'
 import { ConsoleView, ConsoleViewConfig } from './view'
 
@@ -76,14 +76,7 @@ export class RunmeConsole extends LitElement {
 
   // Streams-specific properties
   @property({ type: Object })
-  stream: RunmeConsoleStream = {
-    knownID: this.id,
-    runID: genRunID(),
-    sequence: 0,
-    languageID: 'sh',
-    runnerEndpoint: 'ws://localhost:8080/ws',
-    reconnect: true,
-  }
+  stream?: RunmeConsoleStream
 
   @property({ attribute: false })
   interceptors: Interceptor[] = []
@@ -239,12 +232,12 @@ export class RunmeConsole extends LitElement {
 
   // Streams integration helpers
   #maybeInitStreams() {
-    if (this.#streams) {
+    if (this.#streams || !this.stream) {
       return
     }
     const knownID = this.stream.knownID ?? this.id
     if (!knownID || !this.stream.runID || !this.stream.runnerEndpoint) {
-      console.warn('Missing required stream properties')
+      throw new Error('Missing required stream properties')
     }
     this.#streams = new Streams({
       knownID: knownID,
@@ -301,7 +294,7 @@ export class RunmeConsole extends LitElement {
     if (!this.#streams) {
       return
     }
-    if (!this.commands.length || !this.stream.runID) {
+    if (!this.commands.length || !this.stream?.runID) {
       return
     }
     const req = this.#buildExecuteRequest()
@@ -312,7 +305,7 @@ export class RunmeConsole extends LitElement {
   }
 
   #buildExecuteRequest(): any {
-    const lid = this.stream.languageID || 'sh'
+    const lid = this.stream?.languageID || 'sh'
     const shellish = new Set([
       'sh',
       'shell',
@@ -339,13 +332,13 @@ export class RunmeConsole extends LitElement {
         background: false,
         fileExtension: '',
         env: [
-          `RUNME_ID=${this.stream.knownID ?? this.id}`,
+          `RUNME_ID=${this.stream?.knownID ?? this.id}`,
           'RUNME_RUNNER=v2',
           'TERM=xterm-256color',
         ],
         interactive: true,
-        runId: this.stream.runID,
-        knownId: this.stream.knownID ?? this.id,
+        runId: this.stream?.runID,
+        knownId: this.stream?.knownID ?? this.id,
       },
       winsize: create(WinsizeSchema, this.#winsize),
     })
@@ -371,7 +364,7 @@ export class RunmeConsole extends LitElement {
         value: this.commands.join('\n'),
       }
       req.config!.mode = CommandMode.FILE
-      req.config!.fileExtension = this.stream.languageID || ''
+      req.config!.fileExtension = this.stream?.languageID ?? ''
     }
     return req
   }

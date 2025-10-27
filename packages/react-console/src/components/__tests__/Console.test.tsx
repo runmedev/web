@@ -188,4 +188,80 @@ describe('Console', () => {
     // Verify commands are set as a property (not attribute)
     expect((webComponent as any)?.commands).toEqual(["print('hi')"])
   })
+
+  it('sets stream attribute when runID is provided', () => {
+    const { container } = render(
+      <Console
+        {...defaultProps}
+        runID="valid-run-id"
+        languageID="bash"
+        commands={['echo hi']}
+      />
+    )
+
+    const webComponent = container.querySelector('runme-console')
+    const streamAttr = webComponent?.getAttribute('stream')
+
+    expect(streamAttr).toBeTruthy()
+    const streamConfig = JSON.parse(streamAttr!)
+    expect(streamConfig.runID).toBe('valid-run-id')
+  })
+
+  it('does not set stream attribute when runID is empty string', () => {
+    const { container } = render(
+      <Console
+        {...defaultProps}
+        runID=""
+        languageID="bash"
+        commands={['echo hi']}
+      />
+    )
+
+    const webComponent = container.querySelector('runme-console')
+    const streamAttr = webComponent?.getAttribute('stream')
+
+    expect(streamAttr).toBeNull()
+  })
+
+  it('does not set stream attribute when runID is undefined', () => {
+    const { container } = render(
+      <Console
+        cellID="test-cell-1"
+        runID={undefined as any}
+        sequence={1}
+        commands={['echo hi']}
+        runner={{
+          endpoint: 'ws://localhost:8080/ws',
+          reconnect: true,
+          interceptors: [],
+        }}
+        languageID="bash"
+      />
+    )
+
+    const webComponent = container.querySelector('runme-console')
+    const streamAttr = webComponent?.getAttribute('stream')
+
+    expect(streamAttr).toBeNull()
+  })
+
+  it('prevents setting stream attribute with empty runID', () => {
+    const { container } = render(
+      <Console
+        {...defaultProps}
+        runID=""
+        languageID="bash"
+        commands={['echo hi']}
+      />
+    )
+
+    const webComponent = container.querySelector('runme-console')
+
+    // Stream attribute should not be set when runID is empty
+    const streamAttr = webComponent?.getAttribute('stream')
+    expect(streamAttr).toBeNull()
+
+    // Verify the component still renders other attributes correctly
+    expect(webComponent?.getAttribute('id')).toBe('test-cell-1')
+  })
 })
