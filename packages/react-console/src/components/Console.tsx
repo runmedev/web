@@ -162,8 +162,10 @@ function Console({
           )
         }
 
-        // Pass-through execution/session config
-        elem.setAttribute('stream', JSON.stringify(webComponentStream))
+        // If runID is set it means the cell needs execution, pass through execution/session config
+        if (!!webComponentStream.runID) {
+          elem.setAttribute('stream', JSON.stringify(webComponentStream))
+        }
 
         // Bypass attributes because serialization of funcs won't work
         elem.interceptors = runner.interceptors
