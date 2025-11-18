@@ -206,6 +206,7 @@ export class RunmeConsole extends LitElement {
     if (this.initialContent) {
       this.consoleView.setAttribute('initialContent', this.initialContent)
     }
+
     if (this.initialRows !== undefined) {
       this.consoleView.setAttribute('initialRows', this.initialRows.toString())
     }

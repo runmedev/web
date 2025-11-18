@@ -40,7 +40,7 @@ export interface ConsoleViewConfig {
   scrollback?: number
 }
 
-interface IWindowSize {
+interface IContainerSize {
   width: number
   height: number
 }
@@ -340,7 +340,10 @@ export class ConsoleView extends LitElement {
   protected terminal?: XTermJS
   protected fitAddon?: FitAddon
   protected serializer?: SerializeAddon
-  protected windowSize: IWindowSize
+  protected containerSize: IContainerSize = {
+    height: 0,
+    width: 0,
+  }
   protected rows: number = 10
   protected themeStyleSheet?: CSSStyleSheet
 
@@ -423,15 +426,6 @@ export class ConsoleView extends LitElement {
 
   @property({ type: Boolean })
   isDaggerOutput: boolean = false
-
-  constructor() {
-    super()
-
-    this.windowSize = {
-      height: window.innerHeight,
-      width: window.innerWidth,
-    }
-  }
 
   protected applyThemeStyles(): void {
     if (!this.shadowRoot) {
@@ -716,6 +710,7 @@ export class ConsoleView extends LitElement {
       this.terminal!.focus()
     }
     this.#resizeTerminal()
+    this.#updateContainerSizeFromTerminal()
     this.#updateTerminalTheme()
 
     const resizeDragHandle = this.#createResizeHandle()
@@ -814,6 +809,25 @@ export class ConsoleView extends LitElement {
     return this.shadowRoot?.querySelector('#terminal')!
   }
 
+  #measureTerminalContainer(): IContainerSize | undefined {
+    const terminalElement = this.#getTerminalElement() as HTMLElement
+    if (!terminalElement) {
+      return
+    }
+
+    const { width, height } = terminalElement.getBoundingClientRect()
+    return { width, height }
+  }
+
+  #updateContainerSizeFromTerminal(): void {
+    const containerSize = this.#measureTerminalContainer()
+    if (!containerSize) {
+      return
+    }
+
+    this.containerSize = containerSize
+  }
+
   #updateTerminalTheme(): void {
     const foregroundColor = this.#getThemeHexColor(terminalCSS('foreground'))
 
@@ -856,18 +870,23 @@ export class ConsoleView extends LitElement {
       return
     }
 
-    const { innerWidth, innerHeight } = window
+    const containerSize = this.#measureTerminalContainer()
+    if (!containerSize) {
+      return
+    }
 
     // Prevent adjusting the terminal size if window width & height remain the same
     if (
       checkWindowSize &&
-      Math.abs(this.windowSize.width - innerWidth) <= Number.EPSILON &&
-      Math.abs(this.windowSize.height - innerHeight) <= Number.EPSILON
+      Math.abs(this.containerSize.width - containerSize.width) <=
+        Number.EPSILON &&
+      Math.abs(this.containerSize.height - containerSize.height) <=
+        Number.EPSILON
     ) {
       return
     }
 
-    this.windowSize.width = innerWidth
+    this.containerSize = containerSize
 
     const proposedDimensions = this.#resizeTerminal()
 

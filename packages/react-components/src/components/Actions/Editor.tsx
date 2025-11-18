@@ -106,11 +106,11 @@ const Editor = memo(
 
     return (
       <div className="pb-1 w-full" ref={containerRef}>
-        <div className="rounded-md overflow-hidden">
+        <div className="rounded-md overflow-hidden relative">
           <MonacoEditor
             key={id}
             height={height}
-            width="100%"
+            // width="100%"
             defaultLanguage={language}
             value={value}
             options={{
@@ -123,6 +123,7 @@ const Editor = memo(
               fontSize,
               fontFamily,
               lineHeight: 20,
+              automaticLayout: true,
             }}
             onChange={(v) => {
               if (!v) {
