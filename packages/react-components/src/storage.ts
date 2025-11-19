@@ -55,7 +55,7 @@ export class SessionStorage extends Dexie {
           updated: Date.now(),
           data: notebook,
         }
-        console.log(new Date().toISOString(), 'saving Notebook', id, notebook)
+        // console.log(new Date().toISOString(), 'saving Notebook', id, notebook)
         await this.sessions.put(record)
       })
   }

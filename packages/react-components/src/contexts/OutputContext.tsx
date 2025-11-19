@@ -3,11 +3,16 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
 } from 'react'
 import { JSX } from 'react'
 
 import * as parser_pb from '@buf/runmedev_runme.bufbuild_es/runme/parser/v1/parser_pb'
+import { create } from '@bufbuild/protobuf'
+
+import CellConsole from '../components/Actions/CellConsole'
+import { MimeType } from '../runme/client'
 
 export interface OutputRenderer {
   onCellUpdate: (cell: parser_pb.Cell) => void
@@ -74,6 +79,52 @@ export const OutputProvider = ({ children }: OutputProviderProps) => {
     }),
     [registerRenderer, unregisterRenderer, getRenderer, getAllRenderers]
   )
+
+  // Register renderers for code cells
+  useEffect(() => {
+    registerRenderer(MimeType.StatefulRunmeTerminal, {
+      onCellUpdate: (cell: parser_pb.Cell) => {
+        if (cell.kind !== parser_pb.CellKind.CODE || cell.outputs.length > 0) {
+          return
+        }
+
+        // it's basically shell, be prepared to render a terminal
+        cell.outputs = [
+          create(parser_pb.CellOutputSchema, {
+            items: [
+              create(parser_pb.CellOutputItemSchema, {
+                mime: MimeType.StatefulRunmeTerminal,
+                type: 'Buffer',
+                data: new Uint8Array(), // todo(sebastian): pass terminal settings
+              }),
+            ],
+          }),
+        ]
+      },
+      component: ({
+        cell,
+        onPid,
+        onExitCode,
+      }: {
+        cell: parser_pb.Cell
+        onPid: (pid: number | null) => void
+        onExitCode: (exitCode: number | null) => void
+      }) => {
+        return (
+          <CellConsole
+            key={`console-${cell.refId}`}
+            cell={cell}
+            onPid={onPid}
+            onExitCode={onExitCode}
+          />
+        )
+      },
+    })
+
+    return () => {
+      unregisterRenderer(MimeType.StatefulRunmeTerminal)
+    }
+  }, [registerRenderer, unregisterRenderer])
 
   return (
     <OutputContext.Provider value={contextValue}>

@@ -24,6 +24,7 @@ import {
   runner_pb,
 } from '../runme/client'
 import { SessionStorage, generateSessionName } from '../storage'
+import { areCellsSimilar } from '../simhash'
 import { useClient as useAgentClient } from './AgentContext'
 import { useOutput } from './OutputContext'
 import { useSettings } from './SettingsContext'
@@ -34,20 +35,33 @@ type CellContextType = {
     chat: parser_pb.Cell[]
     actions: parser_pb.Cell[]
     files: parser_pb.Cell[]
+    all: parser_pb.Cell[]
   }
-
+  // ascendingCells are the cells in chronological ascending order
+  ascendingCells: parser_pb.Cell[]
   // sequence is a monotonically increasing number that is used to track the order of cells
   sequence: number
-
   // saveState saves the current state to the storage, runs sync because it schedules a debounced save
   saveState: () => void
+  // serializeNotebook serializes the notebook into markdown
+  serializeNotebook: (
+    cells: parser_pb.Cell[],
+    asSessionRecord: boolean
+  ) => Promise<Uint8Array<ArrayBufferLike>>
+  // exportDocument exports the notebook as a markdown file
   exportDocument: (options: { asSessionRecord: boolean }) => Promise<void>
   // Define additional functions to update the state
-  // This way they can be set in the provider and passed down to the components
   sendOutputCell: (outputCell: parser_pb.Cell) => Promise<void>
   createOutputCell: (inputCell: parser_pb.Cell) => parser_pb.Cell
   sendUserCell: (text: string) => Promise<void>
-  addCodeCell: () => void
+  addCodeCell: ({
+    value,
+    languageId,
+  }: {
+    value?: string
+    languageId?: string
+  }) => void
+  updateCell: (cell: parser_pb.Cell) => void
   // Keep track of whether the input is disabled
   isInputDisabled: boolean
   isTyping: boolean
@@ -86,7 +100,7 @@ function getAscendingCells(
   const cells = state.positions.map((id) => {
     const c = state.cells[id]
     if (c.kind === parser_pb.CellKind.CODE) {
-      c.languageId = c.languageId || 'sh'
+      c.languageId = c.languageId || 'txt'
     }
     return c
   })
@@ -152,19 +166,25 @@ export const CellProvider = ({
   const { client } = useAgentClient()
   const [state, setState] = useState<CellState | undefined>(undefined)
 
+  const ascendingCells = useMemo(() => {
+    if (!state) {
+      return []
+    }
+    return getAscendingCells(state, invertedOrder)
+  }, [state, invertedOrder])
+
   const saveState = useCallback(() => {
     if (!state) {
       return
     }
-    const cells = getAscendingCells(state, invertedOrder)
     const session = create(parser_pb.NotebookSchema, {
-      cells,
+      cells: ascendingCells,
     })
     if (previousResponseId) {
       session.metadata[AgentMetadataKey.PreviousResponseId] = previousResponseId
     }
     storage?.saveNotebook(state.runmeSession, session)
-  }, [state, invertedOrder, previousResponseId, storage])
+  }, [ascendingCells, previousResponseId, storage])
 
   const resetSession = useCallback(
     async ({ attemptRestore }: { attemptRestore: boolean }) => {
@@ -272,6 +292,7 @@ export const CellProvider = ({
         (cell): cell is parser_pb.Cell =>
           Boolean(cell) &&
           (cell.kind === parser_pb.CellKind.MARKUP ||
+            cell.kind === parser_pb.CellKind.TOOL ||
             cell.kind === parser_pb.CellKind.CODE)
       )
   }, [state])
@@ -292,12 +313,24 @@ export const CellProvider = ({
     if (!state) {
       return []
     }
-    return state.positions
+    const f = state.positions
       .map((id) => state.cells[id])
       .filter(
         (cell): cell is parser_pb.Cell =>
-          Boolean(cell) && cell.kind === parser_pb.CellKind.DOC_RESULTS
+          Boolean(cell) &&
+          cell.kind === parser_pb.CellKind.TOOL &&
+          cell.value.trim() === 'file_search'
       )
+    return f
+  }, [state])
+
+  const allCells = useMemo(() => {
+    if (!state) {
+      return []
+    }
+    return state.positions
+      .map((id) => state.cells[id])
+      .filter((cell): cell is parser_pb.Cell => Boolean(cell))
   }, [state])
 
   const useColumns = () => {
@@ -305,6 +338,7 @@ export const CellProvider = ({
       chat: chatCells,
       actions: actionCells,
       files: fileCells,
+      all: allCells,
     }
   }
 
@@ -378,7 +412,7 @@ export const CellProvider = ({
     await streamGenerateResults([outputCell])
   }
 
-  const updateCell = (cell: parser_pb.Cell) => {
+  const updateCell = (cell: parser_pb.Cell): void => {
     const renderers = getAllRenderers()
     for (const renderer of renderers.values()) {
       renderer.onCellUpdate(cell)
@@ -389,6 +423,29 @@ export const CellProvider = ({
         return undefined
       }
       if (!prev.cells[cell.refId]) {
+        // Check for duplicate: if the last CODE cell is similar to the new cell
+        if (
+          cell.kind === parser_pb.CellKind.CODE &&
+          prev.positions.length > 0
+        ) {
+          // Get cells in ascending order
+          const cellsInOrder = getAscendingCells(prev, invertedOrder)
+          // Find the last CODE cell (if any)
+          let lastCodeCell: parser_pb.Cell | undefined
+          for (let i = cellsInOrder.length - 1; i >= 0; i--) {
+            if (cellsInOrder[i]?.kind === parser_pb.CellKind.CODE) {
+              lastCodeCell = cellsInOrder[i]
+              break
+            }
+          }
+
+          // Check if the last CODE cell is similar to the new cell
+          if (lastCodeCell && areCellsSimilar(lastCodeCell, cell, 2)) {
+            // Skip adding the duplicate cell
+            return prev
+          }
+        }
+
         const newPositions = invertedOrder
           ? [cell.refId, ...prev.positions]
           : [...prev.positions, cell.refId]
@@ -413,8 +470,13 @@ export const CellProvider = ({
     })
   }
 
-  const addCodeCell = () => {
-    // todo(sebatian): perhaps we should pass the languageID
+  const addCodeCell = ({
+    value,
+    languageId,
+  }: {
+    value?: string
+    languageId?: string
+  } = {}) => {
     const refID = `code_${uuidv4().replace(/-/g, '')}`
     const cell = create(parser_pb.CellSchema, {
       metadata: {
@@ -422,10 +484,10 @@ export const CellProvider = ({
         [RunmeMetadataKey.RunmeID]: refID,
       },
       refId: refID,
-      languageId: 'sh',
+      languageId: languageId ?? 'txt',
       role: parser_pb.CellRole.USER,
       kind: parser_pb.CellKind.CODE,
-      value: '',
+      value: value ?? '',
     })
 
     updateCell(cell)
@@ -454,47 +516,62 @@ export const CellProvider = ({
     window.dispatchEvent(event)
   }
 
-  // todo(sebastian): quick and dirty export implementation
+  // Internal function to serialize notebook content
+  const serializeNotebook = useCallback(
+    async (
+      cells: parser_pb.Cell[],
+      asSessionRecord: boolean
+    ): Promise<Uint8Array<ArrayBufferLike>> => {
+      const notebook = create(parser_pb.NotebookSchema, {
+        cells,
+      })
+
+      const c = createConnectClient(
+        parser_pb.ParserService,
+        settings.agentEndpoint,
+        createAuthInterceptors(true)
+      )
+      const req = create(parser_pb.SerializeRequestSchema, {
+        notebook: notebook,
+        options: create(parser_pb.SerializeRequestOptionsSchema, {
+          outputs: create(parser_pb.SerializeRequestOutputOptionsSchema, {
+            enabled: false,
+            summary: false,
+          }),
+        }),
+      })
+
+      // if it's a session record, we want to include the outputs and session ID
+      if (asSessionRecord && req.options?.outputs) {
+        req.options.outputs.enabled = true
+        req.options.outputs.summary = true
+        req.options.session = create(parser_pb.RunmeSessionSchema, {
+          id: state?.runmeSession ?? '',
+        })
+      }
+
+      const resp = await c.serialize(req)
+      return resp.result
+    },
+    [settings.agentEndpoint, createAuthInterceptors, state?.runmeSession]
+  )
+
+  // exportDocument exports the notebook as a markdown file
   const exportDocument = async ({
     asSessionRecord,
   }: {
     asSessionRecord: boolean
   }) => {
-    const cells = getAscendingCells(state, invertedOrder)
-    if (!state || cells.length === 0) {
+    if (!state || ascendingCells.length === 0) {
       return
     }
 
-    const notebook = create(parser_pb.NotebookSchema, {
-      cells,
-    })
-
-    const c = createConnectClient(
-      parser_pb.ParserService,
-      settings.agentEndpoint,
-      createAuthInterceptors(true)
+    const serializedResult = await serializeNotebook(
+      ascendingCells,
+      asSessionRecord
     )
-    const req = create(parser_pb.SerializeRequestSchema, {
-      notebook: notebook,
-      options: create(parser_pb.SerializeRequestOptionsSchema, {
-        outputs: create(parser_pb.SerializeRequestOutputOptionsSchema, {
-          enabled: false,
-          summary: false,
-        }),
-      }),
-    })
-
-    // if it's a session record, we want to include the outputs and session ID
-    if (asSessionRecord && req.options?.outputs) {
-      req.options.outputs.enabled = true
-      req.options.outputs.summary = true
-      req.options.session = create(parser_pb.RunmeSessionSchema, {
-        id: state.runmeSession,
-      })
-    }
-
-    const resp = await c.serialize(req)
-    const blob = new Blob([new Uint8Array(resp.result)], { type: 'text/plain' })
+    const serializedContent = new Uint8Array(serializedResult)
+    const blob = new Blob([serializedContent], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -510,13 +587,16 @@ export const CellProvider = ({
     <CellContext.Provider
       value={{
         useColumns,
+        ascendingCells,
         sequence,
         saveState,
+        serializeNotebook,
         exportDocument,
         sendOutputCell,
         createOutputCell,
         sendUserCell,
         addCodeCell,
+        updateCell,
         isInputDisabled,
         isTyping,
         runCodeCell,
@@ -557,20 +637,27 @@ export function createCellOutputs(
     })
   }
 
+  const items = [
+    create(parser_pb.CellOutputItemSchema, {
+      mime: MimeType.VSCodeNotebookStdOut,
+      type: 'Buffer',
+      data: textEncoder.encode(stdout),
+    }),
+  ]
+
+  if (stderr.length > 0) {
+    items.push(
+      create(parser_pb.CellOutputItemSchema, {
+        mime: MimeType.VSCodeNotebookStdErr,
+        type: 'Buffer',
+        data: textEncoder.encode(stderr),
+      })
+    )
+  }
+
   return [
     create(parser_pb.CellOutputSchema, {
-      items: [
-        create(parser_pb.CellOutputItemSchema, {
-          mime: MimeType.VSCodeNotebookStdOut,
-          type: 'Buffer',
-          data: textEncoder.encode(stdout),
-        }),
-        create(parser_pb.CellOutputItemSchema, {
-          mime: MimeType.VSCodeNotebookStdErr,
-          type: 'Buffer',
-          data: textEncoder.encode(stderr),
-        }),
-      ],
+      items,
       processInfo,
     }),
   ]

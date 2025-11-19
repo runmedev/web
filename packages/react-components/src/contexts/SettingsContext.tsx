@@ -24,6 +24,7 @@ import { getSessionToken } from '../token'
 
 interface Settings {
   agentEndpoint: string
+  systemShell?: string
   requireAuth: boolean
   webApp: Required<Omit<WebAppConfig, '$typeName' | '$unknown'>>
 }
@@ -54,8 +55,9 @@ export const useSettings = () => {
 interface SettingsProviderProps {
   children: ReactNode
   agentEndpoint?: string
+  systemShell?: string
   requireAuth?: boolean
-  webApp?: WebAppConfig
+  webApp?: Partial<Omit<WebAppConfig, '$typeName' | '$unknown'>>
   /** If provided, this replaces the default implementation entirely */
   createAuthInterceptors?: (redirect: boolean) => Interceptor[]
 }
@@ -63,6 +65,7 @@ interface SettingsProviderProps {
 export const SettingsProvider = ({
   children,
   agentEndpoint,
+  systemShell,
   requireAuth,
   webApp,
   createAuthInterceptors,
@@ -88,17 +91,20 @@ export const SettingsProvider = ({
     const isLocalhost = window.location.hostname === 'localhost'
     const isHttp = window.location.protocol === 'http:'
     const isVite =
-      window.location.port === '4173' || window.location.port === '5173'
+      window.location.port === '4173' ||
+      window.location.port === '5173' ||
+      window.location.port === '4321'
     const isDev = isLocalhost && isHttp && isVite
 
     const baseSettings: Settings = {
       requireAuth: requireAuth ?? false,
       agentEndpoint:
-        agentEndpoint ??
+        agentEndpoint ||
         (isDev ? 'http://localhost:8080' : window.location.origin),
+      systemShell: systemShell,
       webApp: {
         runner:
-          webApp?.runner ??
+          webApp?.runner ||
           (isDev
             ? 'ws://localhost:8080/ws'
             : `${isHttp ? 'ws:' : 'wss:'}//${window.location.host}/ws`),

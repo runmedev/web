@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { create } from '@bufbuild/protobuf'
 import { Box, Button, Card, ScrollArea, Text } from '@radix-ui/themes'
 
 // import '@runmedev/react-console/react-console-light.css'
@@ -8,8 +7,8 @@ import { Box, Button, Card, ScrollArea, Text } from '@radix-ui/themes'
 import { parser_pb, useCell } from '../../contexts/CellContext'
 import { useOutput } from '../../contexts/OutputContext'
 import { useSettings } from '../../contexts/SettingsContext'
-import { MimeType, RunmeMetadataKey } from '../../runme/client'
-import CellConsole, { fontSettings } from './CellConsole'
+import { RunmeMetadataKey } from '../../runme/client'
+import { fontSettings } from './CellConsole'
 import Editor from './Editor'
 import {
   ErrorIcon,
@@ -79,10 +78,10 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
   }, [cell, pid, exitCode])
 
   return (
-    <div>
+    <div className="w-full min-w-0">
       <Box className="w-full p-2">
-        <div className="flex justify-between items-top">
-          <div className="flex flex-col items-center">
+        <div className="flex justify-between items-start gap-2 w-full">
+          <div className="flex flex-col items-center flex-shrink-0">
             <RunActionButton pid={pid} exitCode={exitCode} onClick={runCode} />
             <Text
               size="2"
@@ -92,14 +91,15 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
               [{sequenceLabel}]
             </Text>
           </div>
-          <Card className="whitespace-nowrap overflow-hidden flex-1 ml-2">
+          <Card className="flex-1 ml-2 min-w-0">
             <Editor
               key={`editor-${cell.refId}`}
               id={cell.refId}
               value={cell.value}
-              language="shellscript"
+              language={cell.languageId}
               fontSize={fontSettings.fontSize}
               fontFamily={fontSettings.fontFamily}
+              showLanguageSelector={true}
               onChange={(v) => {
                 cell.value = v // only sync cell value on change
                 saveState()
@@ -131,7 +131,13 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
   )
 }
 
-function Actions() {
+function Actions({
+  headline,
+  scrollToLatest = true,
+}: {
+  headline?: string
+  scrollToLatest?: boolean
+}) {
   const { useColumns, addCodeCell } = useCell()
   const { settings } = useSettings()
   const { actions } = useColumns()
@@ -139,6 +145,9 @@ function Actions() {
   const actionsEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    if (!scrollToLatest) {
+      return
+    }
     if (settings.webApp.invertedOrder) {
       actionsStartRef.current?.scrollIntoView({ behavior: 'smooth' })
       return
@@ -146,65 +155,19 @@ function Actions() {
     actionsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [actions, settings.webApp.invertedOrder])
 
-  const { registerRenderer, unregisterRenderer } = useOutput()
-
-  // Register renderers for code cells
-  useEffect(() => {
-    registerRenderer(MimeType.StatefulRunmeTerminal, {
-      onCellUpdate: (cell: parser_pb.Cell) => {
-        if (cell.kind !== parser_pb.CellKind.CODE || cell.outputs.length > 0) {
-          return
-        }
-
-        // it's basically shell, be prepared to render a terminal
-        cell.outputs = [
-          create(parser_pb.CellOutputSchema, {
-            items: [
-              create(parser_pb.CellOutputItemSchema, {
-                mime: MimeType.StatefulRunmeTerminal,
-                type: 'Buffer',
-                data: new Uint8Array(), // todo(sebastian): pass terminal settings
-              }),
-            ],
-          }),
-        ]
-      },
-      component: ({
-        cell,
-        onPid,
-        onExitCode,
-      }: {
-        cell: parser_pb.Cell
-        onPid: (pid: number | null) => void
-        onExitCode: (exitCode: number | null) => void
-      }) => {
-        return (
-          <CellConsole
-            key={`console-${cell.refId}`}
-            cell={cell}
-            onPid={onPid}
-            onExitCode={onExitCode}
-          />
-        )
-      },
-    })
-
-    return () => {
-      unregisterRenderer(MimeType.StatefulRunmeTerminal)
-    }
-  }, [registerRenderer, unregisterRenderer])
-
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full w-full">
       <div className="flex items-center mb-2">
-        <Text size="5" weight="bold" className="pr-2">
-          Actions
-        </Text>
+        {headline && (
+          <Text size="5" weight="bold" className="pr-2">
+            {headline}
+          </Text>
+        )}
         <Button
           variant="ghost"
           size="1"
           className="cursor-pointer"
-          onClick={addCodeCell}
+          onClick={() => addCodeCell({ languageId: 'sh' })}
           aria-label="Add code cell"
         >
           <PlusIcon />
