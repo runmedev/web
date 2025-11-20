@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@buf/googleapis_googleapis.bufbuild_es": "2.9.0-20251009205305-72c8614f3bd0.1",
-    "@buf/runmedev_runme.bufbuild_es": "2.9.0-20251009190022-068cc6f56f01.1",
+    "@buf/runmedev_runme.bufbuild_es": "2.9.0-20251120010649-1098d5833c44.1",
     "@bufbuild/protobuf": "2.9.0",
     "@connectrpc/connect": "^2.1.0",
     "@connectrpc/connect-node": "^2.1.0",
