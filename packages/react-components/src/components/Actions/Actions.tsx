@@ -132,7 +132,7 @@ function Action({ cell }: { cell: parser_pb.Cell }) {
 }
 
 function Actions({
-  headline,
+  headline = 'Actions',
   scrollToLatest = true,
 }: {
   headline?: string
@@ -158,11 +158,9 @@ function Actions({
   return (
     <div className="flex flex-col h-full w-full">
       <div className="flex items-center mb-2">
-        {headline && (
-          <Text size="5" weight="bold" className="pr-2">
-            {headline}
-          </Text>
-        )}
+        <Text size="5" weight="bold" className="pr-2">
+          {headline}
+        </Text>
         <Button
           variant="ghost"
           size="1"

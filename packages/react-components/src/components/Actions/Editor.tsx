@@ -166,7 +166,9 @@ const Editor = memo(
 
     // Normalize language identifier (handle shorthands)
     const normalizedLanguage =
-      LANGUAGE_ALIASES[currentLanguage.toLowerCase()] || currentLanguage
+      currentLanguage && LANGUAGE_ALIASES[currentLanguage.toLowerCase()]
+        ? LANGUAGE_ALIASES[currentLanguage.toLowerCase()]
+        : currentLanguage || 'plaintext'
 
     // Find the display label for the current language
     const currentLanguageLabel =
