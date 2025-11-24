@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@buf/googleapis_googleapis.bufbuild_es": "2.9.0-20251009205305-72c8614f3bd0.1",
-    "@buf/runmedev_runme.bufbuild_es": "2.9.0-20251009190022-068cc6f56f01.1",
+    "@buf/runmedev_runme.bufbuild_es": "2.9.0-20251120010649-1098d5833c44.1",
     "@bufbuild/protobuf": "2.9.0",
     "@connectrpc/connect": "^2.1.0",
     "@connectrpc/connect-node": "^2.1.0",
@@ -88,5 +88,5 @@
     "vite-plugin-compression": "^0.5.1",
     "vitest": "^2.1.9"
   },
-  "packageManager": "pnpm@10.13.1+sha512.37ebf1a5c7a30d5fabe0c5df44ee8da4c965ca0c5af3dbab28c3a1681b70a256218d05c81c9c0dcf767ef6b8551eb5b960042b9ed4300c59242336377e01cfad"
+  "packageManager": "pnpm@10.23.0+sha512.21c4e5698002ade97e4efe8b8b4a89a8de3c85a37919f957e7a0f30f38fbc5bbdd05980ffe29179b2fb6e6e691242e098d945d1601772cad0fef5fb6411e2a4b"
 }

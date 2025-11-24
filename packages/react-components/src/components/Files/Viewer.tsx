@@ -6,7 +6,13 @@ import { Box, Link, ScrollArea, Text } from '@radix-ui/themes'
 
 import { parser_pb, useCell } from '../../contexts/CellContext'
 
-const FileViewer = () => {
+const FileViewer = ({
+  headline,
+  scrollToLatest = true,
+}: {
+  headline?: string
+  scrollToLatest?: boolean
+}) => {
   // The code below is using "destructuring" assignment to assign certain values from the
   // context object return by useCell to local variables.
   const { useColumns } = useCell()
@@ -32,17 +38,26 @@ const FileViewer = () => {
   // TODO(jlewi): Why do we pass in chatCells as a dependency?
   // sebastian: because otherwise it won't rerender when the cell changes
   useEffect(() => {
+    if (!scrollToLatest) {
+      return
+    }
     scrollToBottom()
-  }, [oneCell])
+  }, [oneCell, scrollToLatest])
 
   const hasSearchResults = oneCell.docResults.length > 0
 
   return (
-    <div className="flex flex-col h-full">
-      <Text size="5" weight="bold" className="mb-2">
-        Docs
-      </Text>
-      <ScrollArea type="auto" scrollbars="vertical" className="flex-1 pt-4">
+    <div className="flex flex-col h-full w-full">
+      {headline && (
+        <Text size="5" weight="bold" className="mb-2">
+          {headline}
+        </Text>
+      )}
+      <ScrollArea
+        type="auto"
+        scrollbars="vertical"
+        className="flex-1 w-min-content"
+      >
         {!hasSearchResults ? (
           <div>
             <div>No search results yet</div>

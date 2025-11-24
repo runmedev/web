@@ -24,6 +24,7 @@ export type ParserClient = ReturnType<
 >
 
 export enum MimeType {
+  TextPlain = 'text/plain',
   StatefulRunmeOutputItems = 'stateful.runme/output-items',
   StatefulRunmeTerminal = 'stateful.runme/terminal',
   VSCodeNotebookStdOut = 'application/vnd.code.notebook.stdout',

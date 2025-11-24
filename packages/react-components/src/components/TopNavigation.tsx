@@ -61,12 +61,13 @@ const UserAvatar = () => (
   </DropdownMenu.Root>
 )
 
-const TopNavigation = () => {
+const TopNavigation = ({ actions }: { actions?: React.ReactNode[] }) => {
   const { resetSession, exportDocument } = useCell()
   const navigate = useNavigate()
   const location = useLocation()
   return (
     <>
+      {actions?.map((button) => button)}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger>
           <Button variant="soft" className="cursor-pointer">

@@ -2,12 +2,15 @@
 export * from './components'
 export * from './contexts'
 export * from './runme/client'
+export { TypingCell, ChatSequence } from './components/Chat/Chat'
+export * from './components/Actions/icons'
+export { generateSessionName } from './storage'
 
 // Export layout
 export { default as Layout } from './layout'
 
 // Export App
-export { default as App } from './App'
+export { default as App, AppProviders } from './App'
 export type { AppProps } from './App'
 
 // Export protobuf types

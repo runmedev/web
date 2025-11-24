@@ -25,6 +25,7 @@ export default function Settings() {
   const handleSave = () => {
     updateSettings({
       agentEndpoint: endpoint,
+      systemShell: settings.systemShell,
       webApp: {
         runner: runnerEndpoint,
         reconnect: settings.webApp.reconnect,
