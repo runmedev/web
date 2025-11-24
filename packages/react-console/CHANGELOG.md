@@ -1,5 +1,11 @@
 # @runmedev/react-console
 
+## 3.16.3
+
+### Patch Changes
+
+- Expose tools and export more underlying components
+
 ## 3.16.2
 
 ### Patch Changes
