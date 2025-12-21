@@ -3,7 +3,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { ITheme, Terminal as XTermJS } from '@xterm/xterm'
 import { LitElement, PropertyValues, css, html, unsafeCSS } from 'lit'
-import { customElement, property } from 'lit/decorators.js'
+import { property } from 'lit/decorators.js'
 import { when } from 'lit/directives/when.js'
 import { Observable } from 'rxjs'
 import {
@@ -15,6 +15,7 @@ import {
 } from 'rxjs/operators'
 import { Disposable, TerminalDimensions } from 'vscode'
 
+import { safeCustomElement } from '../../decorators'
 import { FitAddon, type ITerminalDimensions } from '../../fitAddon'
 import { getContext, onClientMessage, postClientMessage } from '../../messaging'
 import { ClientMessages, OutputType, WebViews } from '../../types'
@@ -90,7 +91,7 @@ const ANSI_COLORS = [
 
 export const CONSOLE_VIEW = 'console-view'
 
-@customElement(CONSOLE_VIEW)
+@safeCustomElement(CONSOLE_VIEW)
 export class ConsoleView extends LitElement {
   protected copyText = 'Copy'
 

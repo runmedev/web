@@ -1,9 +1,10 @@
 import { MonitorEnvStoreResponseSnapshot_SnapshotEnv } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { MonitorEnvStoreResponseSnapshot_Status } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { LitElement, TemplateResult, html } from 'lit'
-import { customElement, property } from 'lit/decorators.js'
+import { property } from 'lit/decorators.js'
 import { Disposable } from 'vscode'
 
+import { safeCustomElement } from '../../decorators'
 import { formatDate, formatDateWithTimeAgo } from '../../utils'
 import '../envViewer'
 import { CustomErrorIcon } from '../icons/error'
@@ -45,7 +46,7 @@ const COLUMNS = [
 
 const HIDDEN_COLUMNS = ['resolvedValue', 'errors', 'status', 'specClass']
 
-@customElement('env-store')
+@safeCustomElement('env-store')
 export default class Table extends LitElement {
   protected disposables: Disposable[] = []
 

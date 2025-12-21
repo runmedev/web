@@ -10,11 +10,12 @@ import {
 import { create } from '@bufbuild/protobuf'
 import { Interceptor } from '@connectrpc/connect'
 import { LitElement, PropertyValues, html } from 'lit'
-import { customElement, property } from 'lit/decorators.js'
+import { property } from 'lit/decorators.js'
 import { Disposable } from 'vscode'
 import { type RendererContext } from 'vscode-notebook-renderer'
 import { type VSCodeEvent } from 'vscode-notebook-renderer/events'
 
+import { safeCustomElement } from '../../decorators'
 import { setContext } from '../../messaging'
 import Streams from '../../streams'
 import { ClientMessages } from '../../types'
@@ -31,7 +32,7 @@ export interface RunmeConsoleStream {
 
 export const RUNME_CONSOLE = 'runme-console'
 
-@customElement(RUNME_CONSOLE)
+@safeCustomElement(RUNME_CONSOLE)
 export class RunmeConsole extends LitElement {
   protected disposables: Disposable[] = []
 
