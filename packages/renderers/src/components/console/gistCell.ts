@@ -1,10 +1,10 @@
 import { LitElement, css, html } from 'lit'
-import { property } from 'lit/decorators.js'
+import { customElement, property } from 'lit/decorators.js'
 import { when } from 'lit/directives/when.js'
 
-import { defineCustomElement } from '../../utils/defineCustomElement'
 import { GistIcon } from '../icons/gistIcon'
 
+@customElement('gist-cell')
 export class GistCell extends LitElement {
   @property({ type: String })
   text: string = 'Preview & Gist'
@@ -64,5 +64,3 @@ export class GistCell extends LitElement {
     )
   }
 }
-
-defineCustomElement('gist-cell', GistCell)

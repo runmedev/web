@@ -1,9 +1,9 @@
 import { LitElement, css, html } from 'lit'
-import { property } from 'lit/decorators.js'
+import { customElement, property } from 'lit/decorators.js'
 
 import { CopyIcon } from './icons/copy'
-import { defineCustomElement } from '../utils/defineCustomElement'
 
+@customElement('copy-button')
 export class CopyButton extends LitElement {
   @property({ type: String })
   copyText: string = 'Copy'
@@ -43,5 +43,3 @@ export class CopyButton extends LitElement {
     `
   }
 }
-
-defineCustomElement('copy-button', CopyButton)

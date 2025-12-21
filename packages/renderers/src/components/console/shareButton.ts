@@ -1,9 +1,9 @@
 import { LitElement, html } from 'lit'
-import { property } from 'lit/decorators.js'
+import { customElement, property } from 'lit/decorators.js'
 
-import { defineCustomElement } from '../../utils/defineCustomElement'
 import './actionButton'
 
+@customElement('share-button')
 export class ShareButton extends LitElement {
   @property({ type: Boolean, reflect: true })
   loading: boolean = false
@@ -28,5 +28,3 @@ export class ShareButton extends LitElement {
     `
   }
 }
-
-defineCustomElement('share-button', ShareButton)

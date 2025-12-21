@@ -1,9 +1,8 @@
 import { LitElement, TemplateResult, css, html } from 'lit'
-import { property } from 'lit/decorators.js'
+import { customElement, property } from 'lit/decorators.js'
 import { when } from 'lit/directives/when.js'
 
-import { defineCustomElement } from '../utils/defineCustomElement'
-
+@customElement('tooltip-text')
 export class Tooltip extends LitElement {
   @property({ type: String })
   tooltipText: string | TemplateResult<1> | undefined
@@ -78,5 +77,3 @@ export class Tooltip extends LitElement {
     </div>`
   }
 }
-
-defineCustomElement('tooltip-text', Tooltip)
