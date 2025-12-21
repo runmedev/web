@@ -47,7 +47,7 @@ export default function AppConsole() {
               type: ClientMessages.terminalStdout,
               output: {
                 'runme.dev/id': consoleId,
-                data: 'Welcome to the Runme console\n',
+                data: 'Welcome to the app console\n',
               },
             } as any)
             return {
