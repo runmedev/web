@@ -37,17 +37,28 @@ export default function AppConsole() {
         elem.addEventListener('pid', eventHandler('pid'))
         elem.addEventListener('mimetype', eventHandler('mimetype'))
 
+        let messageListener: ((message: unknown) => void) | undefined
+
         setContext({
-          postMessage: (message: unknown) => {
-            // Only need this if, e.g., we received stdin
-            console.log('message', message)
+          postMessage: (message: any) => {
+            if (message?.type === ClientMessages.terminalStdin) {
+              const input = (message.output?.input as string) ?? ''
+              messageListener?.({
+                type: ClientMessages.terminalStdout,
+                output: {
+                  'runme.dev/id': consoleId,
+                  data: `\r\nGot input: ${input.trim()}\r\n> `,
+                },
+              })
+            }
           },
           onDidReceiveMessage: (listener: (message: unknown) => void) => {
+            messageListener = listener
             listener({
               type: ClientMessages.terminalStdout,
               output: {
                 'runme.dev/id': consoleId,
-                data: 'Welcome to the app console\n',
+                data: '> ',
               },
             } as any)
             return {
@@ -59,7 +70,7 @@ export default function AppConsole() {
         // Keep the element id in sync with messages dispatched via setContext
         elem.setAttribute('id', consoleId)
         elem.setAttribute('buttons', 'false')
-        elem.setAttribute('initialContent', 'Welcome to the Runme console\r\n')
+        elem.setAttribute('initialContent', '')
         elem.setAttribute('theme', 'dark')
         elem.setAttribute('fontFamily', 'monospace')
         elem.setAttribute('fontSize', '12')
