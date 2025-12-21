@@ -39,7 +39,7 @@ export default function AppConsole() {
         let messageListener: ((message: unknown) => void) | undefined
         let inputBuffer = ''
 
-        setContext({
+        const ctxBridge = {
           postMessage: (message: any) => {
             if (message?.type === ClientMessages.terminalStdin) {
               const input = (message.output?.input as string) ?? ''
@@ -94,7 +94,12 @@ export default function AppConsole() {
               dispose: () => {},
             }
           },
-        } as RendererContext<void>)
+        } as RendererContext<void>
+
+        setContext(ctxBridge)
+        // Attach the per-instance context directly so this ConsoleView
+        // doesn't rely on the module-level singleton.
+        ;(elem as any).context = ctxBridge
 
         // Keep the element id in sync with messages dispatched via setContext
         elem.setAttribute('id', consoleId)

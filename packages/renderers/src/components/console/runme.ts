@@ -15,7 +15,7 @@ import { Disposable } from 'vscode'
 import { type RendererContext } from 'vscode-notebook-renderer'
 import { type VSCodeEvent } from 'vscode-notebook-renderer/events'
 
-import { setContext } from '../../messaging'
+import { getContext, setContext } from '../../messaging'
 import { defineCustomElement } from '../../utils/defineCustomElement'
 import Streams from '../../streams'
 import { ClientMessages } from '../../types'
@@ -146,6 +146,8 @@ export class RunmeConsole extends LitElement {
 
     // Create ConsoleView element
     this.consoleView = document.createElement('console-view') as ConsoleView
+    // Share the messaging context with the child ConsoleView
+    this.consoleView.context = getContext()
 
     // Set all properties on ConsoleView
     this.#updateConsoleViewProperties()
