@@ -3,7 +3,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { ITheme, Terminal as XTermJS } from '@xterm/xterm'
 import { LitElement, PropertyValues, css, html, unsafeCSS } from 'lit'
-import { customElement, property } from 'lit/decorators.js'
+import { property } from 'lit/decorators.js'
 import { when } from 'lit/directives/when.js'
 import { Observable } from 'rxjs'
 import {
@@ -28,6 +28,7 @@ import './open'
 import './saveButton'
 import './shareButton'
 import { darkStyles, lightStyles } from './vscode.css'
+import { defineCustomElement } from '../../utils/defineCustomElement'
 
 export interface ConsoleViewConfig {
   theme: 'dark' | 'light' | 'vscode'
@@ -90,7 +91,6 @@ const ANSI_COLORS = [
 
 export const CONSOLE_VIEW = 'console-view'
 
-@customElement(CONSOLE_VIEW)
 export class ConsoleView extends LitElement {
   protected copyText = 'Copy'
 
@@ -1244,6 +1244,8 @@ export class ConsoleView extends LitElement {
     return false
   }
 }
+
+defineCustomElement(CONSOLE_VIEW, ConsoleView)
 
 function convertXTermDimensions(
   dimensions: ITerminalDimensions

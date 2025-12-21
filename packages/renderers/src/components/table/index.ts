@@ -1,13 +1,14 @@
 import { LitElement, TemplateResult, css, html, nothing } from 'lit'
-import { customElement, property } from 'lit/decorators.js'
+import { property } from 'lit/decorators.js'
 import { when } from 'lit/directives/when.js'
+
+import { defineCustomElement } from '../../utils/defineCustomElement'
 
 export interface Column {
   text: string
   colspan?: number | undefined
 }
 
-@customElement('table-view')
 export class Table extends LitElement {
   @property({ type: Array })
   columns?: Column[] = []
@@ -220,3 +221,5 @@ export class Table extends LitElement {
     </table>`
   }
 }
+
+defineCustomElement('table-view', Table)

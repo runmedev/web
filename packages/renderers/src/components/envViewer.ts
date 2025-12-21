@@ -1,6 +1,6 @@
 import { MonitorEnvStoreResponseSnapshot_Status } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { LitElement, TemplateResult, css, html } from 'lit'
-import { customElement, property, state } from 'lit/decorators.js'
+import { property, state } from 'lit/decorators.js'
 import { when } from 'lit/directives/when.js'
 import { Disposable } from 'vscode'
 
@@ -9,8 +9,8 @@ import { CopyIcon } from './icons/copy'
 import { EyeIcon } from './icons/eye'
 import { EyeClosedIcon } from './icons/eyeClosed'
 import './tooltip'
+import { defineCustomElement } from '../utils/defineCustomElement'
 
-@customElement('env-viewer')
 export class EnvViewer extends LitElement implements Disposable {
   protected disposables: Disposable[] = []
 
@@ -163,3 +163,5 @@ export class EnvViewer extends LitElement implements Disposable {
     `
   }
 }
+
+defineCustomElement('env-viewer', EnvViewer)

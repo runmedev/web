@@ -1,9 +1,9 @@
 import { LitElement, html } from 'lit'
-import { customElement, property } from 'lit/decorators.js'
+import { property } from 'lit/decorators.js'
 
+import { defineCustomElement } from '../../utils/defineCustomElement'
 import './actionButton'
 
-@customElement('save-button')
 export class SaveButton extends LitElement {
   @property({ type: Boolean, reflect: true })
   loading: boolean = false
@@ -33,3 +33,5 @@ export class SaveButton extends LitElement {
     `
   }
 }
+
+defineCustomElement('save-button', SaveButton)

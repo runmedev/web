@@ -1,11 +1,11 @@
 import { LitElement, css, html } from 'lit'
-import { customElement, property } from 'lit/decorators.js'
+import { property } from 'lit/decorators.js'
 import { when } from 'lit/directives/when.js'
 
+import { defineCustomElement } from '../../utils/defineCustomElement'
 import { SaveIcon } from '../icons/save'
 import { ShareIcon } from '../icons/share'
 
-@customElement('action-button')
 export class ActionButton extends LitElement {
   @property({ type: String })
   text: string = 'Copy'
@@ -78,3 +78,5 @@ export class ActionButton extends LitElement {
     `
   }
 }
+
+defineCustomElement('action-button', ActionButton)

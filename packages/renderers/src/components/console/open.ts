@@ -1,10 +1,10 @@
 import { LitElement, css, html } from 'lit'
-import { customElement, property } from 'lit/decorators.js'
+import { property } from 'lit/decorators.js'
 import { when } from 'lit/directives/when.js'
 
+import { defineCustomElement } from '../../utils/defineCustomElement'
 import { EyeIcon } from '../icons/eye'
 
-@customElement('open-cell')
 export class OpenCell extends LitElement {
   @property({ type: String })
   openText: string = 'Open'
@@ -58,3 +58,5 @@ export class OpenCell extends LitElement {
     )
   }
 }
+
+defineCustomElement('open-cell', OpenCell)
