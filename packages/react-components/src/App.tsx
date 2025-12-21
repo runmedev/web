@@ -17,6 +17,7 @@ import './index.css'
 import Layout from './layout'
 import { getAccessToken } from './token'
 import { NotFound } from './components'
+import DemoConsole from './components/Actions/DemoConsole'
 
 export interface AppBranding {
   name: string
@@ -47,6 +48,19 @@ function AppRoutes({ branding }: { branding: AppBranding }) {
             left={<Chat />}
             middle={actions}
             right={files}
+          />
+        }
+      />
+      <Route
+        path="/demo"
+        element={
+          <Layout
+            branding={branding}
+            middle={
+              <DemoConsole
+                consoleID={Math.random().toString(36).substring(2, 9)}
+              />
+            }
           />
         }
       />

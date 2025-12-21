@@ -19,7 +19,8 @@
     "dist"
   ],
   "devDependencies": {
-    "@runmedev/react-console": "workspace:*"
+    "@runmedev/react-console": "workspace:*",
+    "@runmedev/renderers": "workspace:*"
   },
   "scripts": {
     "clean": "rimraf dist",
