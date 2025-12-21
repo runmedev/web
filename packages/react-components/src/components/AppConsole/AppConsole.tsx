@@ -5,9 +5,8 @@ import type { RendererContext } from 'vscode-notebook-renderer'
 /**
  * AppConsole console panel rendered with Runme's ConsoleView web component.
  *
- * @runmedev/react-console (imported at app entry) registers the custom
- * elements (console-view, close-cell-button, etc.) as a side effect, so
- * by the time this renders the elements should already be defined.
+ * Intended to provide a console for interacting with the app iteself.
+ * Right now its just a stub that echoes input.
  */
 export default function AppConsole() {
   const elemRef = useRef<any>(null)
@@ -38,18 +37,48 @@ export default function AppConsole() {
         elem.addEventListener('mimetype', eventHandler('mimetype'))
 
         let messageListener: ((message: unknown) => void) | undefined
+        let inputBuffer = ''
 
         setContext({
           postMessage: (message: any) => {
             if (message?.type === ClientMessages.terminalStdin) {
               const input = (message.output?.input as string) ?? ''
-              messageListener?.({
-                type: ClientMessages.terminalStdout,
-                output: {
-                  'runme.dev/id': consoleId,
-                  data: `\r\nGot input: ${input.trim()}\r\n> `,
-                },
-              })
+              for (const ch of input) {
+                if (ch === '\r' || ch === '\n') {
+                  const trimmed = inputBuffer.trim()
+                  messageListener?.({
+                    type: ClientMessages.terminalStdout,
+                    output: {
+                      'runme.dev/id': consoleId,
+                      data: `\r\nGot input: ${trimmed}\r\n> `,
+                    },
+                  })
+                  inputBuffer = ''
+                  continue
+                }
+
+                // handle backspace/delete
+                if (ch === '\u0008' || ch === '\u007f') {
+                  inputBuffer = inputBuffer.slice(0, -1)
+                  messageListener?.({
+                    type: ClientMessages.terminalStdout,
+                    output: {
+                      'runme.dev/id': consoleId,
+                      data: '\b \b',
+                    },
+                  })
+                  continue
+                }
+
+                inputBuffer += ch
+                messageListener?.({
+                  type: ClientMessages.terminalStdout,
+                  output: {
+                    'runme.dev/id': consoleId,
+                    data: ch,
+                  },
+                })
+              }
             }
           },
           onDidReceiveMessage: (listener: (message: unknown) => void) => {
@@ -58,7 +87,7 @@ export default function AppConsole() {
               type: ClientMessages.terminalStdout,
               output: {
                 'runme.dev/id': consoleId,
-                data: '> ',
+                data: 'Welcome to the app console\n> ',
               },
             } as any)
             return {
@@ -85,9 +114,3 @@ export default function AppConsole() {
     ></div>
   )
 }
-
-// let context: RendererContext<void> | undefined
-
-// export function setContext(c: RendererContext<void>) {
-//   context = c
-// }
