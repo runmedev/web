@@ -15,7 +15,7 @@ import { Disposable } from 'vscode'
 import { type RendererContext } from 'vscode-notebook-renderer'
 import { type VSCodeEvent } from 'vscode-notebook-renderer/events'
 
-import { getContext, setContext } from '../../messaging'
+import { setContext } from '../../messaging'
 import Streams from '../../streams'
 import { ClientMessages } from '../../types'
 import { ConsoleView, ConsoleViewConfig } from './view'
