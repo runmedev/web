@@ -42,6 +42,7 @@ export class RunmeConsole extends LitElement {
   #streams?: Streams
   #streamsUnsubs: Array<() => void> = []
   #winsize = { rows: 34, cols: 100, x: 0, y: 0 }
+  #contextBridge?: RendererContext<void>
 
   // Properties delegated to ConsoleView
   @property({ type: String })
@@ -83,7 +84,7 @@ export class RunmeConsole extends LitElement {
 
   constructor() {
     super()
-    this.#installContextBridge()
+    this.#contextBridge = this.#installContextBridge()
   }
 
   // Delegate theme styles to ConsoleView
@@ -146,8 +147,10 @@ export class RunmeConsole extends LitElement {
 
     // Create ConsoleView element
     this.consoleView = document.createElement('console-view') as ConsoleView
-    // Share the messaging context with the child ConsoleView
-    this.consoleView.context = getContext()
+    // Share the per-instance messaging context with the child ConsoleView
+    if (this.#contextBridge) {
+      this.consoleView.context = this.#contextBridge
+    }
 
     // Set all properties on ConsoleView
     this.#updateConsoleViewProperties()
@@ -415,10 +418,16 @@ export class RunmeConsole extends LitElement {
       },
     } as RendererContext<void>
     try {
+      // Retain legacy behavior of setting the module-level context so
+      // existing consumers continue to work, but also return the instance
+      // bridge for per-instance use.
       setContext(ctxLike)
+      this.consoleView && (this.consoleView.context = ctxLike)
+      this.#contextBridge = ctxLike
     } catch {
       console.error('Failed to set context bridge')
     }
+    return ctxLike
   }
 
   // Render the UI - just render ConsoleView which handles everything
