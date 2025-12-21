@@ -16,6 +16,10 @@ import { type RendererContext } from 'vscode-notebook-renderer'
 import { type VSCodeEvent } from 'vscode-notebook-renderer/events'
 
 import { setContext } from '../../messaging'
+import {
+  RunmeRenderContext,
+  type RunmeTransport,
+} from '../../messaging/runmeRenderContext'
 import Streams from '../../streams'
 import { ClientMessages } from '../../types'
 import { ConsoleView, ConsoleViewConfig } from './view'
@@ -389,47 +393,21 @@ export class RunmeConsole extends LitElement {
   }
 
   #installContextBridge() {
-    const encoder = new TextEncoder()
-    const ctxLike = {
-      postMessage: (message: unknown) => {
-        if (
-          (message as any).type === ClientMessages.terminalOpen ||
-          (message as any).type === ClientMessages.terminalResize
-        ) {
-          const cols = Number(
-            (message as any).output.terminalDimensions.columns
-          )
-          const rows = Number((message as any).output.terminalDimensions.rows)
-          if (Number.isFinite(cols) && Number.isFinite(rows)) {
-            // If the dimensions are the same, return early
-            if (this.#winsize.cols === cols && this.#winsize.rows === rows) {
-              return
-            }
-            this.#winsize = create(WinsizeSchema, {
-              cols,
-              rows,
-              x: 0,
-              y: 0,
-            })
-            const req = create(ExecuteRequestSchema, {
-              winsize: this.#winsize,
-            })
-            this.#streams?.sendExecuteRequest(req)
-          }
-        }
-
-        if ((message as any).type === ClientMessages.terminalStdin) {
-          const inputData = encoder.encode((message as any).output.input)
-          const req = create(ExecuteRequestSchema, { inputData })
-          // const reqJson = toJson(ExecuteRequestSchema, req)
-          // console.log('terminalStdin', reqJson)
-          this.#streams?.sendExecuteRequest(req)
-        }
-      },
-      onDidReceiveMessage: (listener: VSCodeEvent<any>) => {
+    const transport: RunmeTransport = {
+      sendExecuteRequest: (req: any) => this.#streams?.sendExecuteRequest(req),
+      setCallback: (listener: VSCodeEvent<any>) => {
         this.#streams?.setCallback(listener)
       },
-    } as RendererContext<void>
+    }
+
+    const ctxLike = new RunmeRenderContext({
+      transport,
+      winsize: this.#winsize as any,
+      onWinsizeChange: (winsize) => {
+        this.#winsize = winsize as any
+      },
+    }) as RendererContext<void>
+
     try {
       // Retain legacy behavior of setting the module-level context so
       // existing consumers continue to work, but also return the instance
