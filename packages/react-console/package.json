@@ -22,6 +22,7 @@
     "@runmedev/renderers": "workspace:*"
   },
   "peerDependencies": {
+    "@runmedev/renderers": "workspace:*",
     "@bufbuild/protobuf": "^2.9.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
