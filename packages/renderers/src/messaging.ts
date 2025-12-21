@@ -4,6 +4,12 @@ import { RendererContext } from 'vscode-notebook-renderer'
 import { ClientMessage, ClientMessagePayload } from './types'
 
 let context: RendererContext<void> | undefined
+const noopDisposable: Disposable = { dispose: () => {} }
+const fallbackContext: RendererContext<void> = {
+  postMessage: () => {},
+  onDidReceiveMessage: () => noopDisposable,
+}
+let warnedMissingContext = false
 
 interface Messaging {
   postMessage(msg: unknown): Thenable<boolean> | Thenable<void> | void
@@ -32,7 +38,11 @@ export function onClientMessage(
 
 export function getContext() {
   if (!context) {
-    throw new Error('Renderer context not defined')
+    if (!warnedMissingContext) {
+      console.warn('Renderer context not defined, using fallback messaging')
+      warnedMissingContext = true
+    }
+    return fallbackContext
   }
   return context
 }
