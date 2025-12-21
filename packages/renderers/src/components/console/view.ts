@@ -14,6 +14,7 @@ import {
   share,
 } from 'rxjs/operators'
 import { Disposable, TerminalDimensions } from 'vscode'
+import { RendererContext } from 'vscode-notebook-renderer'
 
 import { safeCustomElement } from '../../decorators'
 import { FitAddon, type ITerminalDimensions } from '../../fitAddon'
@@ -464,6 +465,14 @@ export class ConsoleView extends LitElement {
     // For 'vscode' theme, no additional styles are applied
   }
 
+  protected getContext(): RendererContext<void> {
+    try {
+      return getContext(this.id)
+    } catch {
+      return getContext()
+    }
+  }
+
   connectedCallback(): void {
     super.connectedCallback()
 
@@ -526,7 +535,7 @@ export class ConsoleView extends LitElement {
     this.terminal.unicode.activeVersion = '11'
     this.terminal.options.drawBoldTextInBrightColors
 
-    const ctx = getContext()
+    const ctx = this.getContext()
 
     this.disposables.push(
       // todo(sebastian): what's the type of e?
@@ -727,7 +736,7 @@ export class ConsoleView extends LitElement {
     this.#subscribeSetTerminalRows(dims)
     terminalContainer.appendChild(resizeDragHandle)
 
-    const ctx = getContext()
+    const ctx = this.getContext()
     ctx.postMessage &&
       postClientMessage(ctx, ClientMessages.terminalOpen, {
         'runme.dev/id': this.id!,
@@ -906,7 +915,7 @@ export class ConsoleView extends LitElement {
     )
 
     const sub = debounced$.subscribe(async (terminalDimensions) => {
-      const ctx = getContext()
+      const ctx = this.getContext()
       if (!ctx.postMessage) {
         return
       }
@@ -931,7 +940,7 @@ export class ConsoleView extends LitElement {
     )
 
     const sub = debounced$.subscribe(async (terminalRows) => {
-      const ctx = getContext()
+      const ctx = this.getContext()
       if (!ctx.postMessage) {
         return
       }
@@ -964,7 +973,7 @@ export class ConsoleView extends LitElement {
       this.terminal?.focus()
     }
 
-    const ctx = getContext()
+    const ctx = this.getContext()
     if (!ctx.postMessage) {
       return
     }
@@ -975,7 +984,7 @@ export class ConsoleView extends LitElement {
   }
 
   async #displayShareDialog(): Promise<boolean | void> {
-    const ctx = getContext()
+    const ctx = this.getContext()
     if (!ctx.postMessage || !this.shareUrl) {
       return
     }
@@ -1017,7 +1026,7 @@ export class ConsoleView extends LitElement {
   }
 
   async #triggerOpenEscalation(): Promise<boolean | void | undefined> {
-    const ctx = getContext()
+    const ctx = this.getContext()
 
     if (!this.escalationUrl) {
       return
@@ -1027,7 +1036,7 @@ export class ConsoleView extends LitElement {
   }
 
   #openSessionOutput(): Promise<void | boolean> | undefined {
-    const ctx = getContext()
+    const ctx = this.getContext()
     if (!ctx.postMessage) {
       return
     }
@@ -1043,7 +1052,7 @@ export class ConsoleView extends LitElement {
   async #shareCellOutput(
     _isUserAction: boolean
   ): Promise<boolean | void | undefined> {
-    const ctx = getContext()
+    const ctx = this.getContext()
     if (!ctx.postMessage) {
       return
     }
@@ -1085,17 +1094,21 @@ export class ConsoleView extends LitElement {
   }
 
   #onWebLinkClick(_event: MouseEvent, uri: string): void {
-    postClientMessage(getContext(), ClientMessages.openLink, uri)
+    postClientMessage(this.getContext(), ClientMessages.openLink, uri)
   }
 
   #triggerOpenCellOutput(): void {
-    postClientMessage(getContext(), ClientMessages.openLink, this.shareUrl!)
+    postClientMessage(
+      this.getContext(),
+      ClientMessages.openLink,
+      this.shareUrl!
+    )
   }
 
   #onEscalateDisabled(): void {
     const message =
       'There is no Slack integration configured yet. \nOpen Dashboard to configure it'
-    postClientMessage(getContext(), ClientMessages.errorMessage, message)
+    postClientMessage(this.getContext(), ClientMessages.errorMessage, message)
   }
 
   // Render the UI as a function of component state
@@ -1206,7 +1219,7 @@ export class ConsoleView extends LitElement {
   }
 
   #copy() {
-    const ctx = getContext()
+    const ctx = this.getContext()
     if (!ctx.postMessage) {
       return
     }
