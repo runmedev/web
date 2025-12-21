@@ -44,6 +44,11 @@ export class RunmeConsole extends LitElement {
   #winsize = { rows: 34, cols: 100, x: 0, y: 0 }
   #contextBridge?: RendererContext<void>
 
+  // Optional injected messaging context to allow multiple consoles to share
+  // or isolate their backend bridge.
+  @property({ attribute: false })
+  context?: RendererContext<void>
+
   // Properties delegated to ConsoleView
   @property({ type: String })
   id!: string
@@ -84,7 +89,6 @@ export class RunmeConsole extends LitElement {
 
   constructor() {
     super()
-    this.#contextBridge = this.#installContextBridge()
   }
 
   // Delegate theme styles to ConsoleView
@@ -118,6 +122,13 @@ export class RunmeConsole extends LitElement {
   protected updated(changedProperties: PropertyValues): void {
     super.updated(changedProperties)
 
+    if (changedProperties.has('context')) {
+      this.#ensureContextBridge()
+      if (this.consoleView && this.#contextBridge) {
+        this.consoleView.context = this.#contextBridge
+      }
+    }
+
     // Delegate property updates to ConsoleView
     if (this.consoleView) {
       this.#updateConsoleViewProperties()
@@ -144,6 +155,8 @@ export class RunmeConsole extends LitElement {
     if (!this.shadowRoot) {
       return
     }
+
+    this.#ensureContextBridge()
 
     // Create ConsoleView element
     this.consoleView = document.createElement('console-view') as ConsoleView
@@ -428,6 +441,18 @@ export class RunmeConsole extends LitElement {
       console.error('Failed to set context bridge')
     }
     return ctxLike
+  }
+
+  #ensureContextBridge() {
+    // If a context prop is provided, use it and keep module-level as-is
+    if (this.context) {
+      this.#contextBridge = this.context
+      this.consoleView && (this.consoleView.context = this.context)
+      return
+    }
+    if (!this.#contextBridge) {
+      this.#contextBridge = this.#installContextBridge()
+    }
   }
 
   // Render the UI - just render ConsoleView which handles everything
