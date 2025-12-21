@@ -1,5 +1,7 @@
 import { LitElement, css, html } from 'lit'
-import { customElement, property } from 'lit/decorators.js'
+import { property } from 'lit/decorators.js'
+
+import { safeCustomElement } from '../decorators'
 
 export interface DropdownListOption {
   text: string
@@ -12,7 +14,7 @@ export type DropdownListEvent = {
   key: string
 }
 
-@customElement('dropdown-list')
+@safeCustomElement('dropdown-list')
 export class DropdownList extends LitElement {
   @property({ type: String })
   label: string | undefined

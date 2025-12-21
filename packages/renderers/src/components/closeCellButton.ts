@@ -1,7 +1,8 @@
 import { LitElement, css, html } from 'lit'
-import { customElement } from 'lit/decorators.js'
 
-@customElement('close-cell-button')
+import { safeCustomElement } from '../decorators'
+
+@safeCustomElement('close-cell-button')
 export class CloseCellButton extends LitElement {
   /* eslint-disable */
   static styles = css`
