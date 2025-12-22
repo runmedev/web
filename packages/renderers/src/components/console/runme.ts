@@ -259,9 +259,13 @@ export class RunmeConsole extends LitElement {
         interceptors: this.interceptors ?? [],
       },
     }
-    this.#streams = this.StreamCreator
-      ? this.StreamCreator(props)
-      : new Streams(props)
+    if (this.StreamCreator) {
+      console.log('RunmeConsole: using StreamCreator override')
+      this.#streams = this.StreamCreator(props)
+    } else {
+      console.log('RunmeConsole: using default Streams implementation')
+      this.#streams = new Streams(props)
+    }
     const latencySub = this.#streams.connect().subscribe()
     this.#streamsUnsubs.push(() => latencySub.unsubscribe())
 
