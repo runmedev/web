@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 
 import AppConsole from './AppConsole'
 import { Console } from '@runmedev/react-console'
-import { FakeStreams } from './fakeStreams'
+import { FakeStreams } from '@runmedev/renderers'
 
 export default function App() {
   console.log('Rendering App component')

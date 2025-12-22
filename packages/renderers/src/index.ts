@@ -9,6 +9,7 @@ export {
   type StreamsLike,
 } from './streams'
 export { genRunID, Heartbeat, type StreamError } from './streams'
+export { FakeStreams } from './streams/fakeStreams'
 
 export { ConsoleView, type ConsoleViewConfig } from './components/console'
 export { type RunmeConsoleStream } from './components/console/runme'
