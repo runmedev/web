@@ -95,6 +95,7 @@ function Console({
     [cellID, fontFamily, fontSize, takeFocus, scrollToFit, rows, content]
   )
 
+  console.log('Creating RunmeConsoleStream: rendering with cellID', cellID, 'runID', runID)
   const webComponentStream: RunmeConsoleStream = useMemo(
     () => ({
       knownID: cellID,

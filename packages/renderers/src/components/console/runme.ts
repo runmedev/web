@@ -242,7 +242,9 @@ export class RunmeConsole extends LitElement {
 
   // Streams integration helpers
   #maybeInitStreams() {
+     console.log('RunmeConsole: maybeInitStreams')
     if (this.#streams || !this.stream) {
+      console.log('RunmeConsole: skipping streams init')
       return
     }
     const knownID = this.stream.knownID ?? this.id

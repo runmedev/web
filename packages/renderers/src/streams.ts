@@ -191,6 +191,7 @@ class Streams implements StreamsLike {
   private readonly autoReconnect: boolean
 
   constructor({ knownID, runID, sequence, options }: StreamsProps) {
+    console.log("Streams: initializing for knownID", knownID, "runID", runID, "sequence", sequence )
     // Set the identifiers
     this.knownID = knownID
     this.runID = runID
