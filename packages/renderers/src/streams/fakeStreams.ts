@@ -24,9 +24,14 @@ export class FakeStreams implements StreamsLike {
   }
 
   sendExecuteRequest(executeRequest: ExecuteRequest): void {
+    console.log('FakeStreams: sendExecuteRequest called new version', executeRequest)
     const input = executeRequest.inputData
     if (input && input.length) {
+      console.log('FakeStreams: Sending input to stdout.')
       this.stdout.next(input)
+    } else {
+      console.log('FakeStreams: No input data provided.')
+      this.stdout.next(new TextEncoder().encode('FakeStreams: No input data provided.\r\n'))
     }
   }
 
