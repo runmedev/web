@@ -22,6 +22,7 @@ export default function App() {
     runmeA.setAttribute('id', 'rc-a')
     runmeA.setAttribute('style', 'height:200px; display:block;')
     runmeA.setAttribute('takeFocus', 'true')
+    ;(runmeA as any).StreamCreator = () => new FakeStreams()
 
     const labelB = document.createElement('h2')
     labelB.textContent = 'RunmeConsole B'
@@ -30,6 +31,7 @@ export default function App() {
     runmeB.setAttribute('id', 'rc-b')
     runmeB.setAttribute('style', 'height:200px; display:block;')
     runmeB.setAttribute('takeFocus', 'true')
+    ;(runmeB as any).StreamCreator = () => new FakeStreams()
 
     container.appendChild(labelA)
     container.appendChild(runmeA)
@@ -57,7 +59,7 @@ export default function App() {
           reconnect: false,
           interceptors: [] as any,
         }}
-        StreamCreator={() => new FakeStreams()}
+        streamCreator={() => new FakeStreams()}
       />
       <h2>React Console (B)</h2>
       <Console
@@ -70,7 +72,7 @@ export default function App() {
           reconnect: false,
           interceptors: [] as any,
         }}
-        StreamCreator={() => new FakeStreams()}
+        streamCreator={() => new FakeStreams()}
       />
       <div id="runme-consoles" />
     </div>
