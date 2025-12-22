@@ -15,11 +15,7 @@ import { Disposable } from 'vscode'
 import { type RendererContext } from 'vscode-notebook-renderer'
 import { type VSCodeEvent } from 'vscode-notebook-renderer/events'
 
-import { setContext } from '../../messaging'
-import {
-  RunmeRenderContext,
-  type RunmeTransport,
-} from '../../messaging/runmeRenderContext'
+import { getContext, setContext } from '../../messaging'
 import Streams from '../../streams'
 import { ClientMessages } from '../../types'
 import { ConsoleView, ConsoleViewConfig } from './view'
@@ -47,11 +43,6 @@ export class RunmeConsole extends LitElement {
   #streamsUnsubs: Array<() => void> = []
   #winsize = { rows: 34, cols: 100, x: 0, y: 0 }
   #contextBridge?: RendererContext<void>
-
-  // Optional injected messaging context to allow multiple consoles to share
-  // or isolate their backend bridge.
-  @property({ attribute: false })
-  context?: RendererContext<void>
 
   // Properties delegated to ConsoleView
   @property({ type: String })
@@ -93,6 +84,7 @@ export class RunmeConsole extends LitElement {
 
   constructor() {
     super()
+    this.#contextBridge = this.#installContextBridge()
   }
 
   // Delegate theme styles to ConsoleView
@@ -126,13 +118,6 @@ export class RunmeConsole extends LitElement {
   protected updated(changedProperties: PropertyValues): void {
     super.updated(changedProperties)
 
-    if (changedProperties.has('context')) {
-      this.#ensureContextBridge()
-      if (this.consoleView && this.#contextBridge) {
-        this.consoleView.context = this.#contextBridge
-      }
-    }
-
     // Delegate property updates to ConsoleView
     if (this.consoleView) {
       this.#updateConsoleViewProperties()
@@ -159,8 +144,6 @@ export class RunmeConsole extends LitElement {
     if (!this.shadowRoot) {
       return
     }
-
-    this.#ensureContextBridge()
 
     // Create ConsoleView element
     this.consoleView = document.createElement('console-view') as ConsoleView
@@ -393,21 +376,47 @@ export class RunmeConsole extends LitElement {
   }
 
   #installContextBridge() {
-    const transport: RunmeTransport = {
-      sendExecuteRequest: (req: any) => this.#streams?.sendExecuteRequest(req),
-      setCallback: (listener: VSCodeEvent<any>) => {
+    const encoder = new TextEncoder()
+    const ctxLike = {
+      postMessage: (message: unknown) => {
+        if (
+          (message as any).type === ClientMessages.terminalOpen ||
+          (message as any).type === ClientMessages.terminalResize
+        ) {
+          const cols = Number(
+            (message as any).output.terminalDimensions.columns
+          )
+          const rows = Number((message as any).output.terminalDimensions.rows)
+          if (Number.isFinite(cols) && Number.isFinite(rows)) {
+            // If the dimensions are the same, return early
+            if (this.#winsize.cols === cols && this.#winsize.rows === rows) {
+              return
+            }
+            this.#winsize = create(WinsizeSchema, {
+              cols,
+              rows,
+              x: 0,
+              y: 0,
+            })
+            const req = create(ExecuteRequestSchema, {
+              winsize: this.#winsize,
+            })
+            this.#streams?.sendExecuteRequest(req)
+          }
+        }
+
+        if ((message as any).type === ClientMessages.terminalStdin) {
+          const inputData = encoder.encode((message as any).output.input)
+          const req = create(ExecuteRequestSchema, { inputData })
+          // const reqJson = toJson(ExecuteRequestSchema, req)
+          // console.log('terminalStdin', reqJson)
+          this.#streams?.sendExecuteRequest(req)
+        }
+      },
+      onDidReceiveMessage: (listener: VSCodeEvent<any>) => {
         this.#streams?.setCallback(listener)
       },
-    }
-
-    const ctxLike = new RunmeRenderContext({
-      transport,
-      winsize: this.#winsize as any,
-      onWinsizeChange: (winsize) => {
-        this.#winsize = winsize as any
-      },
-    }) as RendererContext<void>
-
+    } as RendererContext<void>
     try {
       // Retain legacy behavior of setting the module-level context so
       // existing consumers continue to work, but also return the instance
@@ -419,18 +428,6 @@ export class RunmeConsole extends LitElement {
       console.error('Failed to set context bridge')
     }
     return ctxLike
-  }
-
-  #ensureContextBridge() {
-    // If a context prop is provided, use it and keep module-level as-is
-    if (this.context) {
-      this.#contextBridge = this.context
-      this.consoleView && (this.consoleView.context = this.context)
-      return
-    }
-    if (!this.#contextBridge) {
-      this.#contextBridge = this.#installContextBridge()
-    }
   }
 
   // Render the UI - just render ConsoleView which handles everything
