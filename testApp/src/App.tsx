@@ -5,44 +5,7 @@ import { Console } from '@runmedev/react-console'
 import { FakeStreams } from './fakeStreams'
 
 export default function App() {
-  useEffect(() => {
-    // Append two runme-console elements beneath the React root
-    const root = document.getElementById('root')
-    if (!root) return
-
-    const container = document.createElement('div')
-    container.style.display = 'flex'
-    container.style.flexDirection = 'column'
-    container.style.gap = '16px'
-
-    const labelA = document.createElement('h2')
-    labelA.textContent = 'RunmeConsole A'
-
-    const runmeA = document.createElement('runme-console')
-    runmeA.setAttribute('id', 'rc-a')
-    runmeA.setAttribute('style', 'height:200px; display:block;')
-    runmeA.setAttribute('takeFocus', 'true')
-    ;(runmeA as any).StreamCreator = () => new FakeStreams()
-
-    const labelB = document.createElement('h2')
-    labelB.textContent = 'RunmeConsole B'
-
-    const runmeB = document.createElement('runme-console')
-    runmeB.setAttribute('id', 'rc-b')
-    runmeB.setAttribute('style', 'height:200px; display:block;')
-    runmeB.setAttribute('takeFocus', 'true')
-    ;(runmeB as any).StreamCreator = () => new FakeStreams()
-
-    container.appendChild(labelA)
-    container.appendChild(runmeA)
-    container.appendChild(labelB)
-    container.appendChild(runmeB)
-    root.appendChild(container)
-
-    return () => {
-      container.remove()
-    }
-  }, [])
+  console.log('Rendering App component')
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
