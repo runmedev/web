@@ -232,9 +232,6 @@ importers:
       '@runmedev/react-console':
         specifier: workspace:*
         version: link:../react-console
-      '@runmedev/renderers':
-        specifier: workspace:*
-        version: link:../renderers
 
   packages/react-console:
     dependencies:
