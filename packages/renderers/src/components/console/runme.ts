@@ -39,7 +39,7 @@ export class RunmeConsole extends LitElement {
   protected consoleView?: ConsoleView
 
   // Streams-specific state
-  #streams?: Streams
+  #streams?: StreamsLike
   #streamsUnsubs: Array<() => void> = []
   #winsize = { rows: 34, cols: 100, x: 0, y: 0 }
   #contextBridge?: RendererContext<void>
