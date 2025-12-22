@@ -17,7 +17,7 @@ import { type VSCodeEvent } from 'vscode-notebook-renderer/events'
 
 import { safeCustomElement } from '../../decorators'
 import { setContext } from '../../messaging'
-import Streams from '../../streams'
+import Streams, { type StreamsLike, type StreamsProps } from '../../streams'
 import { ClientMessages } from '../../types'
 import { ConsoleView, ConsoleViewConfig } from './view'
 
@@ -40,9 +40,10 @@ export class RunmeConsole extends LitElement {
   protected consoleView?: ConsoleView
 
   // Streams-specific state
-  #streams?: Streams
+  #streams?: StreamsLike
   #streamsUnsubs: Array<() => void> = []
   #winsize = { rows: 34, cols: 100, x: 0, y: 0 }
+  #contextBridge?: RendererContext<void>
 
   // Properties delegated to ConsoleView
   @property({ type: String })
@@ -82,9 +83,13 @@ export class RunmeConsole extends LitElement {
   @property({ attribute: false })
   interceptors: Interceptor[] = []
 
+  // Optional Streams factory for testing/custom backends
+  @property({ attribute: false })
+  StreamCreator?: (props: StreamsProps) => StreamsLike
+
   constructor() {
     super()
-    this.#installContextBridge()
+    this.#contextBridge = this.#installContextBridge()
   }
 
   // Delegate theme styles to ConsoleView
@@ -147,6 +152,10 @@ export class RunmeConsole extends LitElement {
 
     // Create ConsoleView element
     this.consoleView = document.createElement('console-view') as ConsoleView
+    // Share the per-instance messaging context with the child ConsoleView
+    if (this.#contextBridge) {
+      this.consoleView.context = this.#contextBridge
+    }
 
     // Set all properties on ConsoleView
     this.#updateConsoleViewProperties()
@@ -234,14 +243,16 @@ export class RunmeConsole extends LitElement {
 
   // Streams integration helpers
   #maybeInitStreams() {
+     console.log('RunmeConsole: maybeInitStreams')
     if (this.#streams || !this.stream) {
+      console.log('RunmeConsole: skipping streams init')
       return
     }
     const knownID = this.stream.knownID ?? this.id
     if (!knownID || !this.stream.runID || !this.stream.runnerEndpoint) {
       throw new Error('Missing required stream properties')
     }
-    this.#streams = new Streams({
+    const props: StreamsProps = {
       knownID: knownID,
       runID: this.stream.runID!,
       sequence: this.stream.sequence ?? 0,
@@ -250,7 +261,14 @@ export class RunmeConsole extends LitElement {
         autoReconnect: this.stream.reconnect,
         interceptors: this.interceptors ?? [],
       },
-    })
+    }
+    if (this.StreamCreator) {
+      console.log('RunmeConsole: using StreamCreator override')
+      this.#streams = this.StreamCreator(props)
+    } else {
+      console.log('RunmeConsole: using default Streams implementation')
+      this.#streams = new Streams(props)
+    }
     const latencySub = this.#streams.connect().subscribe()
     this.#streamsUnsubs.push(() => latencySub.unsubscribe())
 
@@ -414,10 +432,16 @@ export class RunmeConsole extends LitElement {
       },
     } as RendererContext<void>
     try {
+      // Retain legacy behavior of setting the module-level context so
+      // existing consumers continue to work, but also return the instance
+      // bridge for per-instance use.
       setContext(ctxLike)
+      this.consoleView && (this.consoleView.context = ctxLike)
+      this.#contextBridge = ctxLike
     } catch {
       console.error('Failed to set context bridge')
     }
+    return ctxLike
   }
 
   // Render the UI - just render ConsoleView which handles everything
