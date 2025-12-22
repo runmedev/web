@@ -5,7 +5,6 @@ import { Code } from '@buf/googleapis_googleapis.bufbuild_es/google/rpc/code_pb'
 import { Box, Flex, Text } from '@radix-ui/themes'
 
 import { AppBranding } from './App'
-import AppConsole from './components/AppConsole/AppConsole'
 import TopNavigation from './components/TopNavigation'
 import { useSettings } from './contexts/SettingsContext'
 
@@ -73,28 +72,21 @@ function Layout({
         </Flex>
       </Box>
 
-      {/* Main content with bottom console */}
-      <Flex className="w-full flex-1 flex-col gap-2 min-h-0">
-        <Flex className="w-full flex-1 gap-2 min-h-0">
-          {/* Left */}
-          <Box className="flex-none w-[33.33%] flex flex-col h-full p-2 border-r border-gray-400 overflow-auto">
-            {left ?? <div />}
-          </Box>
+      {/* Main content */}
+      <Flex className="w-full h-[95%] flex-1 gap-2">
+        {/* Left */}
+        <Box className="flex-none w-[33.33%] flex flex-col h-full p-2 border-r border-gray-400">
+          {left ?? <div />}
+        </Box>
 
-          {/* Middle */}
-          <Box className="flex-none w-[50.00%] flex flex-col h-full p-2 border-r border-gray-400 overflow-auto">
-            {middle ?? <div />}
-          </Box>
+        {/* Middle */}
+        <Box className="flex-none w-[50.00%] flex flex-col h-full p-2 border-r border-gray-400">
+          {middle ?? <div />}
+        </Box>
 
-          {/* Right */}
-          <Box className="flex-none w-[16.67%] flex flex-col h-full p-2 overflow-auto">
-            {right ?? <div />}
-          </Box>
-        </Flex>
-
-        {/* Console spanning the full width at the bottom */}
-        <Box className="w-full min-h-[180px] max-h-[40vh] border border-gray-400 rounded bg-black text-white p-2 overflow-hidden">
-          <AppConsole />
+        {/* Right */}
+        <Box className="flex-none w-[16.67%] flex flex-col h-full p-2">
+          {right ?? <div />}
         </Box>
       </Flex>
     </Box>
