@@ -16,7 +16,7 @@ import { type RendererContext } from 'vscode-notebook-renderer'
 import { type VSCodeEvent } from 'vscode-notebook-renderer/events'
 
 import { setContext } from '../../messaging'
-import Streams from '../../streams'
+import Streams, { type StreamsLike, type StreamsProps } from '../../streams'
 import { ClientMessages } from '../../types'
 import { ConsoleView, ConsoleViewConfig } from './view'
 
@@ -81,6 +81,10 @@ export class RunmeConsole extends LitElement {
 
   @property({ attribute: false })
   interceptors: Interceptor[] = []
+
+  // Optional Streams factory for testing/custom backends
+  @property({ attribute: false })
+  StreamCreator?: (props: StreamsProps) => StreamsLike
 
   constructor() {
     super()
@@ -245,7 +249,7 @@ export class RunmeConsole extends LitElement {
     if (!knownID || !this.stream.runID || !this.stream.runnerEndpoint) {
       throw new Error('Missing required stream properties')
     }
-    this.#streams = new Streams({
+    const props: StreamsProps = {
       knownID: knownID,
       runID: this.stream.runID!,
       sequence: this.stream.sequence ?? 0,
@@ -254,7 +258,10 @@ export class RunmeConsole extends LitElement {
         autoReconnect: this.stream.reconnect,
         interceptors: this.interceptors ?? [],
       },
-    })
+    }
+    this.#streams = this.StreamCreator
+      ? this.StreamCreator(props)
+      : new Streams(props)
     const latencySub = this.#streams.connect().subscribe()
     this.#streamsUnsubs.push(() => latencySub.unsubscribe())
 

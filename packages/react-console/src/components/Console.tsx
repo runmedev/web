@@ -3,7 +3,12 @@ import { useEffect, useMemo, useRef } from 'react'
 
 import { Interceptor } from '@connectrpc/connect'
 import '@runmedev/renderers'
-import type { RunmeConsoleStream, ConsoleViewConfig } from '@runmedev/renderers'
+import type {
+  RunmeConsoleStream,
+  ConsoleViewConfig,
+  StreamsProps,
+  StreamsLike,
+} from '@runmedev/renderers'
 
 interface ConsoleSettings {
   rows?: number
@@ -29,6 +34,7 @@ export interface ConsoleProps {
   content?: string
   runner: ConsoleRunner
   settings?: ConsoleSettings
+  streamCreator?: (props: StreamsProps) => StreamsLike
   onStdout?: (data: Uint8Array) => void
   onStderr?: (data: Uint8Array) => void
   onExitCode?: (code: number) => void
@@ -45,6 +51,7 @@ function Console({
   content,
   runner,
   settings: settingsProp = {},
+  streamCreator,
   onStdout,
   onStderr,
   onExitCode,
@@ -170,6 +177,9 @@ function Console({
         // Bypass attributes because serialization of funcs won't work
         elem.interceptors = runner.interceptors
         elem.commands = commands
+        if (streamCreator) {
+          elem.StreamCreator = streamCreator
+        }
 
         el.appendChild(elem)
         const terminalEnd = document.createElement('div')

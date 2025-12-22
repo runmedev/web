@@ -81,7 +81,7 @@ type Latency = {
   updatedAt: bigint
 }
 
-type StreamsProps = {
+export type StreamsProps = {
   knownID: string
   runID: string
   sequence: number
@@ -92,7 +92,19 @@ type StreamsProps = {
   }
 }
 
-class Streams {
+export interface StreamsLike {
+  stdout: Observable<Uint8Array>
+  stderr: Observable<Uint8Array>
+  exitCode: Observable<number>
+  pid: Observable<number>
+  mimeType: Observable<string>
+  connect(): Observable<unknown>
+  sendExecuteRequest(executeRequest: ExecuteRequest): void
+  setCallback(callback: VSCodeEvent<any>): void
+  close(): void
+}
+
+class Streams implements StreamsLike {
   private callback: VSCodeEvent<any> | undefined
 
   private readonly queue = new Subject<pb.WebsocketRequest>()
