@@ -1,6 +1,5 @@
 packages:
   - packages/*
-  - testApp
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'
