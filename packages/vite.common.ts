@@ -26,6 +26,8 @@ export function createSharedConfig({ entry, name, fileName }) {
       rollupOptions: {
         external: [
           '@buf/googleapis_googleapis.bufbuild_es',
+          '@runmedev/renderers',
+          '@runmedev/react-console',
           'react',
           'react-dom',
           'react/jsx-runtime',

@@ -1,5 +1,11 @@
 # @runmedev/renderers
 
+## 3.16.5-jlewi.0
+
+### Patch Changes
+
+- Test the changes to support renderers and react-console being imported
+
 ## 3.16.4
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@runmedev/react-console",
-  "version": "3.16.4",
+  "version": "3.16.5-jlewi.0",
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
@@ -22,6 +22,7 @@
     "@runmedev/renderers": "workspace:*"
   },
   "peerDependencies": {
+    "@runmedev/renderers": "workspace:*",
     "@bufbuild/protobuf": "^2.9.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
