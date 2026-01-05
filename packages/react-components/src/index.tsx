@@ -4,7 +4,12 @@ export * from './contexts'
 export * from './runme/client'
 export { TypingCell, ChatSequence } from './components/Chat/Chat'
 export * from './components/Actions/icons'
-export { generateSessionName } from './storage'
+export {
+  generateSessionName,
+  type ISessionStorage,
+  type SessionNotebook,
+  type SessionRecord,
+} from './storage'
 
 // Export layout
 export { default as Layout } from './layout'

@@ -7,11 +7,9 @@ import { JwtPayload, jwtDecode } from 'jwt-decode'
 import md5 from 'md5'
 
 import { useCell } from '../contexts/CellContext'
-import { getSessionToken } from '../token'
+import { useMemo } from 'react'
 
-const getGravatarUrl = (size = 24) => {
-  const token = getSessionToken()
-
+const getGravatarUrl = (token: string | undefined, size = 96) => {
   if (!token || token === 'unauthenticated') {
     return 'unauthenticated'
   }
@@ -35,36 +33,52 @@ const getGravatarUrl = (size = 24) => {
   }
 }
 
-const UserAvatar = () => (
-  <DropdownMenu.Root>
-    <DropdownMenu.Trigger>
-      <span>
-        <Avatar.Root className="inline-flex size-[24px] select-none items-center justify-center overflow-hidden rounded-full bg-blackA1 align-middle cursor-pointer">
-          <Avatar.Image
-            className="size-full rounded-[inherit] object-cover"
-            src={getGravatarUrl()}
-          />
-          <Avatar.Fallback
-            className="leading-1 flex size-full items-center justify-center bg-white text-[15px] font-medium text-violet11"
-            delayMs={600}
-          >
-            <PersonIcon />
-          </Avatar.Fallback>
-        </Avatar.Root>
-      </span>
-    </DropdownMenu.Trigger>
-    <DropdownMenu.Content sideOffset={8}>
-      <DropdownMenu.Item asChild>
-        <a href="/oidc/logout">Logout</a>
-      </DropdownMenu.Item>
-    </DropdownMenu.Content>
-  </DropdownMenu.Root>
-)
+const UserAvatar = ({ url, token }: { url?: string; token?: string }) => {
+  const src = useMemo(() => {
+    if (url) {
+      return url
+    }
+    return getGravatarUrl(token)
+  }, [url, token])
 
-const TopNavigation = ({ actions }: { actions?: React.ReactNode[] }) => {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger>
+        <span>
+          <Avatar.Root className="inline-flex size-[24px] select-none items-center justify-center overflow-hidden rounded-full bg-blackA1 align-middle cursor-pointer">
+            <Avatar.Image
+              className="size-full rounded-[inherit] object-cover"
+              src={src}
+            />
+            <Avatar.Fallback
+              className="leading-1 flex size-full items-center justify-center bg-white text-[15px] font-medium text-violet11"
+              delayMs={600}
+            >
+              <PersonIcon />
+            </Avatar.Fallback>
+          </Avatar.Root>
+        </span>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Content sideOffset={8}>
+        <DropdownMenu.Item asChild>
+          <a href="/oidc/logout">Logout</a>
+        </DropdownMenu.Item>
+      </DropdownMenu.Content>
+    </DropdownMenu.Root>
+  )
+}
+
+const TopNavigation = ({
+  actions,
+  avatar,
+}: {
+  actions?: React.ReactNode[]
+  avatar?: React.ReactNode
+}) => {
   const { resetSession, exportDocument } = useCell()
   const navigate = useNavigate()
   const location = useLocation()
+
   return (
     <>
       {actions?.map((button) => button)}
@@ -160,9 +174,11 @@ const TopNavigation = ({ actions }: { actions?: React.ReactNode[] }) => {
           <Text>Settings</Text>
         </Flex>
       </Button>
-      <UserAvatar />
+      {avatar && avatar}
     </>
   )
 }
+
+TopNavigation.UserAvatar = UserAvatar
 
 export default TopNavigation

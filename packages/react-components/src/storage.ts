@@ -24,7 +24,37 @@ export interface SessionRecord<T> {
 
 export type SessionNotebook = SessionRecord<Notebook>
 
-export class SessionStorage extends Dexie {
+/**
+ * Storage interface for session persistence.
+ * Implementations can use IndexedDB (Dexie), Supabase Postgres, or other backends.
+ */
+export interface ISessionStorage {
+  /** The owner/user identifier, used for scoping queries and RLS */
+  readonly principal: string
+
+  /** Save or update a notebook for a session */
+  saveNotebook(id: string, notebook: Notebook): Promise<void> | void
+
+  /** Load a single session by id */
+  loadSession(id: string): Promise<SessionNotebook | undefined>
+
+  /** Load multiple sessions by their ids */
+  loadSessions(ids: string[]): Promise<SessionNotebook[]>
+
+  /** List all sessions for the principal (sorted by updated desc) */
+  listSessions(): Promise<SessionNotebook[]>
+
+  /** List session ids that are still active (created in last 24 hours and valid) */
+  listActiveSessions(): Promise<string[]>
+
+  /** Delete a session by id */
+  deleteSession(id: string): Promise<void>
+
+  /** Create a new session and return its id */
+  createSession(): Promise<string | undefined>
+}
+
+export class DexieSessionStorage extends Dexie implements ISessionStorage {
   sessions!: Table<SessionNotebook, string>
   readonly principal: string
   readonly client: RunnerClient
@@ -159,3 +189,6 @@ export class SessionStorage extends Dexie {
 export function generateSessionName(): string {
   return new Date().toISOString()
 }
+
+/** @deprecated Use DexieSessionStorage directly. Alias for backwards compatibility. */
+export { DexieSessionStorage as SessionStorage }

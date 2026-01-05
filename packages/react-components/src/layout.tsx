@@ -7,6 +7,7 @@ import { Box, Flex, Text } from '@radix-ui/themes'
 import { AppBranding } from './App'
 import TopNavigation from './components/TopNavigation'
 import { useSettings } from './contexts/SettingsContext'
+import { getSessionToken } from './token'
 
 function Layout({
   branding,
@@ -67,7 +68,9 @@ function Layout({
             </Flex>
           </Link>
           <Flex gap="4">
-            <TopNavigation />
+            <TopNavigation
+              avatar={<TopNavigation.UserAvatar token={getSessionToken()} />}
+            />
           </Flex>
         </Flex>
       </Box>
