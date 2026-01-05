@@ -23,7 +23,12 @@ import {
   parser_pb,
   runner_pb,
 } from '../runme/client'
-import { SessionStorage, generateSessionName } from '../storage'
+import {
+  DexieSessionStorage,
+  generateSessionName,
+  type ISessionStorage,
+} from '../storage'
+import type { RunnerClient } from '../runme/client'
 import { areCellsSimilar } from '../simhash'
 import { useClient as useAgentClient } from './AgentContext'
 import { useOutput } from './OutputContext'
@@ -117,10 +122,13 @@ export interface CellProviderProps {
   children: ReactNode
   /** Function to obtain the access token string or promise thereof */
   getAccessToken: () => string | Promise<string>
+  /** Optional factory to create a custom session storage. Defaults to DexieSessionStorage. */
+  createStorage?: (principal: string, client: RunnerClient) => ISessionStorage
 }
 export const CellProvider = ({
   children,
   getAccessToken,
+  createStorage,
 }: CellProviderProps) => {
   const { settings, createAuthInterceptors, principal } = useSettings()
   const [sequence, setSequence] = useState(0)
@@ -147,16 +155,19 @@ export const CellProvider = ({
     if (!principal) {
       return
     }
-    return new SessionStorage(
-      'agent',
-      principal,
-      createConnectClient(
-        runner_pb.RunnerService,
-        runnerConnectEndpoint,
-        createAuthInterceptors(true)
-      )
+
+    const runnerClient = createConnectClient(
+      runner_pb.RunnerService,
+      runnerConnectEndpoint,
+      createAuthInterceptors(true)
     )
-  }, [settings.agentEndpoint, principal])
+
+    // Use custom factory if provided, otherwise default to Dexie
+    if (createStorage) {
+      return createStorage(principal, runnerClient)
+    }
+    return new DexieSessionStorage('agent', principal, runnerClient)
+  }, [principal, runnerConnectEndpoint, createAuthInterceptors, createStorage])
 
   const invertedOrder = useMemo(
     () => settings.webApp.invertedOrder,
