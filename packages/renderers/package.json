@@ -1,6 +1,6 @@
 {
   "name": "@runmedev/renderers",
-  "version": "3.16.4",
+  "version": "3.16.5-jlewi.0",
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
@@ -17,6 +17,11 @@
       "types": "./dist/components.d.ts",
       "import": "./dist/components.mjs",
       "require": "./dist/components.cjs"
+    },
+    "./streams/fakeStreams": {
+      "types": "./dist/streams/fakeStreams.d.ts",
+      "import": "./dist/streams/fakeStreams.mjs",
+      "require": "./dist/streams/fakeStreams.cjs"
     }
   },
   "files": [

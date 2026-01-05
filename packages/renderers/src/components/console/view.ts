@@ -17,7 +17,11 @@ import { Disposable, TerminalDimensions } from 'vscode'
 
 import { safeCustomElement } from '../../decorators'
 import { FitAddon, type ITerminalDimensions } from '../../fitAddon'
-import { getContext, onClientMessage, postClientMessage } from '../../messaging'
+import {
+  getContext,
+  onClientMessage,
+  postClientMessage,
+} from '../../messaging'
 import { ClientMessages, OutputType, WebViews } from '../../types'
 import { ClientMessage } from '../../types'
 import { closeOutput } from '../../utils'
@@ -29,6 +33,7 @@ import './open'
 import './saveButton'
 import './shareButton'
 import { darkStyles, lightStyles } from './vscode.css'
+import type { RendererContext } from 'vscode-notebook-renderer'
 
 export interface ConsoleViewConfig {
   theme: 'dark' | 'light' | 'vscode'
@@ -428,6 +433,14 @@ export class ConsoleView extends LitElement {
   @property({ type: Boolean })
   isDaggerOutput: boolean = false
 
+  // Optional per-instance messaging context; falls back to module-level context.
+  @property({ attribute: false })
+  context?: RendererContext<void>
+
+  #ctx(): RendererContext<void> {
+    return this.context ?? getContext()
+  }
+
   protected applyThemeStyles(): void {
     if (!this.shadowRoot) {
       return
@@ -526,7 +539,7 @@ export class ConsoleView extends LitElement {
     this.terminal.unicode.activeVersion = '11'
     this.terminal.options.drawBoldTextInBrightColors
 
-    const ctx = getContext()
+    const ctx = this.#ctx()
 
     this.disposables.push(
       // todo(sebastian): what's the type of e?
@@ -727,7 +740,7 @@ export class ConsoleView extends LitElement {
     this.#subscribeSetTerminalRows(dims)
     terminalContainer.appendChild(resizeDragHandle)
 
-    const ctx = getContext()
+    const ctx = this.#ctx()
     ctx.postMessage &&
       postClientMessage(ctx, ClientMessages.terminalOpen, {
         'runme.dev/id': this.id!,
@@ -906,7 +919,7 @@ export class ConsoleView extends LitElement {
     )
 
     const sub = debounced$.subscribe(async (terminalDimensions) => {
-      const ctx = getContext()
+      const ctx = this.#ctx()
       if (!ctx.postMessage) {
         return
       }
@@ -931,7 +944,7 @@ export class ConsoleView extends LitElement {
     )
 
     const sub = debounced$.subscribe(async (terminalRows) => {
-      const ctx = getContext()
+      const ctx = this.#ctx()
       if (!ctx.postMessage) {
         return
       }
@@ -964,7 +977,7 @@ export class ConsoleView extends LitElement {
       this.terminal?.focus()
     }
 
-    const ctx = getContext()
+    const ctx = this.#ctx()
     if (!ctx.postMessage) {
       return
     }
@@ -975,7 +988,7 @@ export class ConsoleView extends LitElement {
   }
 
   async #displayShareDialog(): Promise<boolean | void> {
-    const ctx = getContext()
+    const ctx = this.#ctx()
     if (!ctx.postMessage || !this.shareUrl) {
       return
     }
@@ -994,7 +1007,7 @@ export class ConsoleView extends LitElement {
   }
 
   async #triggerEscalation(): Promise<boolean | void | undefined> {
-    // const ctx = getContext()
+    // const ctx = this.#ctx()
     this.isCreatingEscalation = true
 
     // try {
@@ -1017,7 +1030,7 @@ export class ConsoleView extends LitElement {
   }
 
   async #triggerOpenEscalation(): Promise<boolean | void | undefined> {
-    const ctx = getContext()
+    const ctx = this.#ctx()
 
     if (!this.escalationUrl) {
       return
@@ -1027,7 +1040,7 @@ export class ConsoleView extends LitElement {
   }
 
   #openSessionOutput(): Promise<void | boolean> | undefined {
-    const ctx = getContext()
+    const ctx = this.#ctx()
     if (!ctx.postMessage) {
       return
     }
@@ -1043,7 +1056,7 @@ export class ConsoleView extends LitElement {
   async #shareCellOutput(
     _isUserAction: boolean
   ): Promise<boolean | void | undefined> {
-    const ctx = getContext()
+    const ctx = this.#ctx()
     if (!ctx.postMessage) {
       return
     }
@@ -1085,17 +1098,17 @@ export class ConsoleView extends LitElement {
   }
 
   #onWebLinkClick(_event: MouseEvent, uri: string): void {
-    postClientMessage(getContext(), ClientMessages.openLink, uri)
+    postClientMessage(this.#ctx(), ClientMessages.openLink, uri)
   }
 
   #triggerOpenCellOutput(): void {
-    postClientMessage(getContext(), ClientMessages.openLink, this.shareUrl!)
+    postClientMessage(this.#ctx(), ClientMessages.openLink, this.shareUrl!)
   }
 
   #onEscalateDisabled(): void {
     const message =
       'There is no Slack integration configured yet. \nOpen Dashboard to configure it'
-    postClientMessage(getContext(), ClientMessages.errorMessage, message)
+    postClientMessage(this.#ctx(), ClientMessages.errorMessage, message)
   }
 
   // Render the UI as a function of component state
@@ -1206,7 +1219,7 @@ export class ConsoleView extends LitElement {
   }
 
   #copy() {
-    const ctx = getContext()
+    const ctx = this.#ctx()
     if (!ctx.postMessage) {
       return
     }
