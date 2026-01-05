@@ -78,6 +78,7 @@ const TopNavigation = ({
   const { resetSession, exportDocument } = useCell()
   const navigate = useNavigate()
   const location = useLocation()
+
   return (
     <>
       {actions?.map((button) => button)}

@@ -50,7 +50,9 @@ describe('TopNavigation', () => {
   })
 
   it('renders user avatar', () => {
-    render(<TopNavigation />)
+    render(
+      <TopNavigation avatar={<TopNavigation.UserAvatar token="mock-token" />} />
+    )
     // The avatar should be present (it's a span with avatar styling)
     const avatar = document.querySelector('span[class*="size-[24px]"]')
     expect(avatar).toBeInTheDocument()

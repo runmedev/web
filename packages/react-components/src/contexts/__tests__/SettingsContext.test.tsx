@@ -37,7 +37,6 @@ const TestComponent = () => {
   const settings = useSettings()
   return (
     <div>
-      <span data-testid="principal">{settings.principal}</span>
       <span data-testid="agent-endpoint">
         {settings.settings.agentEndpoint}
       </span>
@@ -98,49 +97,6 @@ describe('SettingsContext', () => {
         'http://localhost:8080'
       )
       expect(screen.getByTestId('require-auth')).toHaveTextContent('false')
-    })
-
-    it('handles unauthenticated user', async () => {
-      const { getSessionToken } = await import('../../token')
-      vi.mocked(getSessionToken).mockReturnValue(undefined)
-
-      render(
-        <SettingsProvider>
-          <TestComponent />
-        </SettingsProvider>
-      )
-
-      expect(screen.getByTestId('principal')).toHaveTextContent(
-        'unauthenticated'
-      )
-    })
-
-    it('handles token decoding errors', async () => {
-      const { getSessionToken } = await import('../../token')
-      vi.mocked(getSessionToken).mockReturnValue('invalid-token')
-
-      const { jwtDecode } = await import('jwt-decode')
-      vi.mocked(jwtDecode).mockImplementation(() => {
-        throw new Error('Invalid token')
-      })
-
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-
-      render(
-        <SettingsProvider>
-          <TestComponent />
-        </SettingsProvider>
-      )
-
-      expect(screen.getByTestId('principal')).toHaveTextContent(
-        'unauthenticated'
-      )
-      expect(consoleSpy).toHaveBeenCalledWith(
-        'Error decoding token',
-        expect.any(Error)
-      )
-
-      consoleSpy.mockRestore()
     })
 
     it('uses provided requireAuth prop', async () => {

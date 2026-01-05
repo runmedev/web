@@ -33,6 +33,8 @@ import { areCellsSimilar } from '../simhash'
 import { useClient as useAgentClient } from './AgentContext'
 import { useOutput } from './OutputContext'
 import { useSettings } from './SettingsContext'
+import { getSessionToken } from '../token'
+import { jwtDecode, JwtPayload } from 'jwt-decode'
 
 type CellContextType = {
   // useColumns returns arrays of cells organized by their kind
@@ -118,19 +120,34 @@ function getAscendingCells(
   return cells
 }
 
+function getPrincipal(): string {
+  const token = getSessionToken()
+  if (!token) {
+    return 'unauthenticated'
+  }
+  let decodedToken: JwtPayload & { email?: string }
+  try {
+    decodedToken = jwtDecode(token)
+    return decodedToken.email || decodedToken.sub || 'unauthenticated'
+  } catch (e) {
+    console.error('Error decoding token', e)
+    return 'unauthenticated'
+  }
+}
+
 export interface CellProviderProps {
   children: ReactNode
   /** Function to obtain the access token string or promise thereof */
   getAccessToken: () => string | Promise<string>
   /** Optional factory to create a custom session storage. Defaults to DexieSessionStorage. */
-  createStorage?: (principal: string, client: RunnerClient) => ISessionStorage
+  createStorage?: (client: RunnerClient) => ISessionStorage
 }
 export const CellProvider = ({
   children,
   getAccessToken,
   createStorage,
 }: CellProviderProps) => {
-  const { settings, createAuthInterceptors, principal } = useSettings()
+  const { settings, createAuthInterceptors } = useSettings()
   const [sequence, setSequence] = useState(0)
   const [isInputDisabled, setIsInputDisabled] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
@@ -138,6 +155,8 @@ export const CellProvider = ({
     string | undefined
   >()
   const { getAllRenderers } = useOutput()
+
+  const principal = getPrincipal()
 
   const runnerConnectEndpoint = useMemo(() => {
     const url = new URL(settings.webApp.runner)
@@ -152,10 +171,6 @@ export const CellProvider = ({
   }, [settings.webApp.runner])
 
   const storage = useMemo(() => {
-    if (!principal) {
-      return
-    }
-
     const runnerClient = createConnectClient(
       runner_pb.RunnerService,
       runnerConnectEndpoint,
@@ -164,10 +179,10 @@ export const CellProvider = ({
 
     // Use custom factory if provided, otherwise default to Dexie
     if (createStorage) {
-      return createStorage(principal, runnerClient)
+      return createStorage(runnerClient)
     }
     return new DexieSessionStorage('agent', principal, runnerClient)
-  }, [principal, runnerConnectEndpoint, createAuthInterceptors, createStorage])
+  }, [runnerConnectEndpoint, createAuthInterceptors, createStorage])
 
   const invertedOrder = useMemo(
     () => settings.webApp.invertedOrder,
