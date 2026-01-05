@@ -1,5 +1,11 @@
 # @runmedev/react-console
 
+## 3.16.5
+
+### Patch Changes
+
+- Alternative storage and auth
+
 ## 3.16.4
 
 ### Patch Changes
