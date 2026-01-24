@@ -35,6 +35,18 @@ import { useOutput } from './OutputContext'
 import { useSettings } from './SettingsContext'
 import { getSessionToken } from '../token'
 import { jwtDecode, JwtPayload } from 'jwt-decode'
+import { genRunID, Heartbeat, Streams } from '@runmedev/react-console'
+import {
+  CommandMode,
+  ProgramConfig_CommandListSchema,
+} from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/config_pb'
+import {
+  CreateSessionRequest_Config_SessionEnvStoreSeeding,
+  ExecuteRequestSchema,
+  ProjectSchema,
+} from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
+import { lastValueFrom } from 'rxjs'
+import { map, reduce, takeUntil } from 'rxjs/operators'
 
 type CellContextType = {
   // useColumns returns arrays of cells organized by their kind
@@ -72,10 +84,13 @@ type CellContextType = {
   // Keep track of whether the input is disabled
   isInputDisabled: boolean
   isTyping: boolean
+  isInProgress: boolean
   // Function to run a code cell
   runCodeCell: (cell: parser_pb.Cell) => void
   // Function to reset the session
   resetSession: (options: { attemptRestore: boolean }) => void
+  // Current working directory at the beginning of the session
+  cwd: string
 }
 
 const CellContext = createContext<CellContextType | undefined>(undefined)
@@ -151,9 +166,11 @@ export const CellProvider = ({
   const [sequence, setSequence] = useState(0)
   const [isInputDisabled, setIsInputDisabled] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
+  const [isInProgress, setIsInProgress] = useState(false)
   const [previousResponseId, setPreviousResponseId] = useState<
     string | undefined
   >()
+  const [cwd, setCwd] = useState<string>('.')
   const { getAllRenderers } = useOutput()
 
   const principal = getPrincipal()
@@ -170,19 +187,45 @@ export const CellProvider = ({
     return url.toString()
   }, [settings.webApp.runner])
 
-  const storage = useMemo(() => {
-    const runnerClient = createConnectClient(
-      runner_pb.RunnerService,
-      runnerConnectEndpoint,
-      createAuthInterceptors(true)
-    )
+  const authInterceptors = useMemo(
+    () => createAuthInterceptors(true),
+    [createAuthInterceptors]
+  )
 
+  const runnerClient = useMemo(
+    () =>
+      createConnectClient(
+        runner_pb.RunnerService,
+        runnerConnectEndpoint,
+        authInterceptors
+      ),
+    [runnerConnectEndpoint, authInterceptors]
+  )
+
+  const createStreams = useCallback(() => {
+    const sessionRunID = genRunID()
+    // Create a new streams instance for session creation
+    const streams = new Streams({
+      knownID: `sessions_${sessionRunID}`,
+      runID: sessionRunID,
+      sequence: 0,
+      options: {
+        runnerEndpoint: settings.webApp.runner,
+        interceptors: authInterceptors,
+        autoReconnect: false,
+      },
+    })
+    return streams
+  }, [settings.webApp.runner, authInterceptors])
+
+  const storage = useMemo(() => {
     // Use custom factory if provided, otherwise default to Dexie
     if (createStorage) {
       return createStorage(runnerClient)
     }
+
     return new DexieSessionStorage('agent', principal, runnerClient)
-  }, [runnerConnectEndpoint, createAuthInterceptors, createStorage])
+  }, [runnerClient, createStorage, principal])
 
   const invertedOrder = useMemo(
     () => settings.webApp.invertedOrder,
@@ -209,6 +252,9 @@ export const CellProvider = ({
     if (previousResponseId) {
       session.metadata[AgentMetadataKey.PreviousResponseId] = previousResponseId
     }
+    if (cwd !== '.') {
+      session.metadata[RunmeMetadataKey.WorkingDirectory] = cwd
+    }
     storage?.saveNotebook(state.runmeSession, session)
   }, [ascendingCells, previousResponseId, storage])
 
@@ -222,12 +268,16 @@ export const CellProvider = ({
       setPreviousResponseId(undefined)
 
       // Create session async, we decide later if we want to use it
-      const newSess = storage.createSession()
+      const newSessPromise = createNewSession(runnerClient, createStreams())
       let activeSessionID: string | undefined
 
       // Unless we are attempting to restore, short circuit and create a new session
       if (!attemptRestore) {
-        activeSessionID = await newSess
+        const result = await newSessPromise
+        activeSessionID = result?.id
+        if (result?.cwd) {
+          setCwd(result.cwd)
+        }
       } else {
         const sessionIds = await storage.listActiveSessions()
         const sessions = await storage.loadSessions(sessionIds)
@@ -250,7 +300,11 @@ export const CellProvider = ({
 
         // If there are no unfinished sessions, create a new session
         if (activeSessions.length === 0) {
-          activeSessionID = await newSess
+          const result = await newSessPromise
+          activeSessionID = result?.id
+          if (result?.cwd) {
+            setCwd(result.cwd)
+          }
         } else {
           const recovSess = activeSessions[0]
           let positions = recovSess.data.cells.map((cell) => cell.refId)
@@ -261,6 +315,10 @@ export const CellProvider = ({
             recovSess.data.metadata[AgentMetadataKey.PreviousResponseId]
           if (prevRespId) {
             setPreviousResponseId(prevRespId)
+          }
+          const wd = recovSess.data.metadata[RunmeMetadataKey.WorkingDirectory]
+          if (wd) {
+            setCwd(wd)
           }
           setState({
             runmeSession: recovSess.id,
@@ -283,7 +341,7 @@ export const CellProvider = ({
         positions: [],
       })
     },
-    [invertedOrder, storage]
+    [invertedOrder, storage, runnerClient, createStreams]
   )
 
   // Any time state changes, save the current state
@@ -399,6 +457,7 @@ export const CellProvider = ({
       console.log(e)
     } finally {
       setIsTyping(false)
+      setIsInProgress(false)
       setIsInputDisabled(false)
     }
   }
@@ -417,6 +476,7 @@ export const CellProvider = ({
     updateCell(userCell)
     setIsInputDisabled(true)
     setIsTyping(true)
+    setIsInProgress(true)
 
     await streamGenerateResults([userCell])
   }
@@ -625,13 +685,95 @@ export const CellProvider = ({
         updateCell,
         isInputDisabled,
         isTyping,
+        isInProgress,
         runCodeCell,
         resetSession,
+        cwd,
       }}
     >
       {children}
     </CellContext.Provider>
   )
+}
+
+/**
+ * Creates a new runner session and fetches its working directory.
+ * @param client - The runner client to use for session creation
+ * @param streams - The streams instance for executing the pwd command
+ * @param wd - Optional working directory for the session (defaults to '.')
+ * @returns The session id and resolved working directory, or null if creation failed
+ */
+async function createNewSession(
+  client: RunnerClient,
+  streams: Streams,
+  wd: string = '.'
+): Promise<{ id: string; cwd: string } | null> {
+  // Create the session
+  let sessionId: string | undefined
+  try {
+    const resp = await client.createSession({
+      project: create(ProjectSchema, {
+        root: wd,
+        envLoadOrder: ['.env', '.env.local', '.env.development', '.env.dev'],
+      }),
+      config: {
+        envStoreSeeding:
+          CreateSessionRequest_Config_SessionEnvStoreSeeding.SYSTEM,
+      },
+    })
+    sessionId = resp.session?.id
+  } catch (e) {
+    console.error('Error creating session', e)
+    throw e
+  }
+
+  if (!sessionId) {
+    return null
+  }
+
+  // Fetch the working directory using pwd command
+  streams.connect(Heartbeat.CONTINUOUS).subscribe()
+
+  const decoder = new TextDecoder()
+  const pwd = lastValueFrom(
+    streams.stdout.pipe(
+      takeUntil(streams.exitCode),
+      reduce((acc, chunk) => acc + decoder.decode(chunk, { stream: true }), ''),
+      map((result) => (result + decoder.decode()).trim())
+    )
+  )
+
+  streams.exitCode.subscribe((code) => {
+    if (code !== 0) {
+      throw new Error(
+        `Failed to get working directory for session: ${sessionId}`
+      )
+    }
+  })
+
+  streams.sendExecuteRequest(
+    create(ExecuteRequestSchema, {
+      sessionId,
+      storeStdoutInEnv: true,
+      config: {
+        languageId: 'sh',
+        background: false,
+        fileExtension: '',
+        env: ['RUNME_RUNNER=v2'],
+        interactive: false,
+        mode: CommandMode.INLINE,
+        source: {
+          case: 'commands',
+          value: create(ProgramConfig_CommandListSchema, { items: ['pwd -P'] }),
+        },
+      },
+    })
+  )
+
+  const cwd = await pwd
+  streams.close()
+
+  return { id: sessionId, cwd }
 }
 
 // singleton text encoder for non-streaming output
