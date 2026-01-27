@@ -1,9 +1,7 @@
 import { Notebook } from '@buf/runmedev_runme.bufbuild_es/runme/parser/v1/parser_pb'
 import {
-  CreateSessionRequest_Config_SessionEnvStoreSeeding,
   GetSessionRequestSchema,
   GetSessionResponse,
-  ProjectSchema,
 } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
 import { create } from '@bufbuild/protobuf'
 import { Code, ConnectError } from '@connectrpc/connect'
@@ -49,9 +47,6 @@ export interface ISessionStorage {
 
   /** Delete a session by id */
   deleteSession(id: string): Promise<void>
-
-  /** Create a new session and return its id */
-  createSession(): Promise<string | undefined>
 }
 
 export class DexieSessionStorage extends Dexie implements ISessionStorage {
@@ -164,25 +159,6 @@ export class DexieSessionStorage extends Dexie implements ISessionStorage {
   // Delete a session by id
   async deleteSession(id: string) {
     await this.sessions.delete(id)
-  }
-
-  async createSession(): Promise<string | undefined> {
-    try {
-      const resp = await this.client.createSession({
-        project: create(ProjectSchema, {
-          root: '.',
-          envLoadOrder: ['.env', '.env.local', '.env.development', '.env.dev'],
-        }),
-        config: {
-          envStoreSeeding:
-            CreateSessionRequest_Config_SessionEnvStoreSeeding.SYSTEM,
-        },
-      })
-      return resp.session?.id
-    } catch (e) {
-      console.error('Error creating session', e)
-      throw e
-    }
   }
 }
 
