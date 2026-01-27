@@ -30,8 +30,10 @@ import './saveButton'
 import './shareButton'
 import { darkStyles, lightStyles } from './vscode.css'
 
+export type ConsoleViewConfigTheme = 'dark' | 'light' | 'vscode'
+
 export interface ConsoleViewConfig {
-  theme: 'dark' | 'light' | 'vscode'
+  theme: ConsoleViewConfigTheme
   fontFamily?: string
   fontSize?: number
   cursorStyle?: 'block' | 'underline' | 'bar'
