@@ -1,0 +1,34 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="18"
+  height="18"
+  viewBox="0 0 18 18"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.6"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <g transform="translate(-3,-4)">
+  <!-- Cloud -->
+  <path
+    d="M8.5 18H7.8A3.3 3.3 0 0 1 7.8 11h.4
+       a4.3 4.3 0 0 1 8.3-1.2
+       3.1 3.1 0 0 1 .7 6.1H16"
+  />
+
+  <!-- Lightning bolt -->
+  <path
+    d="M11 13.5
+       L9.5 17
+       H11.4
+       L10.3 20.5
+       L13 16.7
+       H11.2
+       L12.3 13.5
+       Z"
+    fill="currentColor"
+    stroke="none"
+  />
+</g>
+</svg>

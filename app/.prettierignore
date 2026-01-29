@@ -1,0 +1,6 @@
+**/*.d.ts
+**/*.go
+**/*.svg
+**/runme-vscode.css
+gen/**
+src/protogen/**

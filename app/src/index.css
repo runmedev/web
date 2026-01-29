@@ -1,0 +1,90 @@
+/* Copied from  https://ui-kit.gateway.unified-0s.internal.api.openai.org/iframe.html?viewMode=docs&id=overview-installation--docs&globals=#3-add-css-foundations */
+@import "tailwindcss";
+
+// Adding breakpoints manually due to `postcss.config.mjs` customizations
+@theme static {
+  --breakpoint-sm: 576px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+  --breakpoint-2xl: 1536px;
+}
+
+@import "@oai/platform/ui/css";
+/* Required for Tailwind to find class references in Platform UI Kit components.
+   See: https://github.com/openai/openai/pull/380544/files#r2205036117
+   For a discussion of referencing node_modules looks wrong but is needed here.
+*/
+@source "../node_modules/@oai/platform";
+
+:root {
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --vscode-terminal-background: #0b0b0b; /* dark bg */
+  --vscode-terminal-foreground: #eaeaea; /* light text */
+  --vscode-terminal-border: #333333;
+}
+
+a {
+  font-weight: 500;
+  color: black;
+  text-decoration: inherit;
+}
+a:hover {
+  color: #535bf2;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+h1 {
+  font-size: 3.2em;
+  line-height: 1.1;
+}
+
+button {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.25s;
+}
+button:hover {
+  border-color: #646cff;
+}
+button:focus,
+button:focus-visible {
+  outline: 4px auto -webkit-focus-ring-color;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+  a:hover {
+    color: #747bff;
+  }
+  button {
+    background-color: #f9f9f9;
+  }
+}

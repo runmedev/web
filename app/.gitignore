@@ -1,0 +1,7 @@
+dist/**
+node_modules/**
+out/**
+
+# Allow .env (but keep .env.local ignored)
+!.env
+.env.local
