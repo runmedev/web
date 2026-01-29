@@ -183,12 +183,16 @@ const Message = ({
       break
   }
 
+  const mdDivider = '---'
   switch (cell.role) {
     case parser_pb.CellRole.USER:
       return <UserMessage cell={cell} />
     case parser_pb.CellRole.ASSISTANT:
       return <AssistantMessage cell={cell} />
     default:
+      if (cell.value != mdDivider) {
+        return <AssistantMessage cell={cell} />
+      }
       return null
   }
 }

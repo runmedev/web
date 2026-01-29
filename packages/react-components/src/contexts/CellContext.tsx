@@ -67,6 +67,11 @@ type CellContextType = {
     cells: parser_pb.Cell[],
     asSessionRecord: boolean
   ) => Promise<Uint8Array<ArrayBufferLike>>
+  // deserializeNotebook deserializes markdown into a notebook
+  deserializeNotebook: (
+    source: Uint8Array<ArrayBufferLike>,
+    identity?: parser_pb.RunmeIdentity
+  ) => Promise<parser_pb.Notebook | undefined>
   // exportDocument exports the notebook as a markdown file
   exportDocument: (options: { asSessionRecord: boolean }) => Promise<void>
   // Define additional functions to update the state
@@ -89,6 +94,8 @@ type CellContextType = {
   runCodeCell: (cell: parser_pb.Cell) => void
   // Function to reset the session
   resetSession: (options: { attemptRestore: boolean }) => void
+  // Load arbitrary state from text (always deserialized via the parser service)
+  loadState: (text: string) => Promise<void>
   // Current working directory at the beginning of the session
   cwd: string
 }
@@ -108,6 +115,28 @@ interface CellState {
   runmeSession: string
   cells: Record<string, parser_pb.Cell>
   positions: string[]
+}
+
+function importCellState(
+  runmeSession: string,
+  cells: parser_pb.Cell[],
+  invertedOrder: boolean = false
+): CellState {
+  const positions = cells.map((c) => {
+    const id =
+      c.metadata[RunmeMetadataKey.ID] ||
+      c.metadata[RunmeMetadataKey.RunmeID] ||
+      c.refId ||
+      `restored_${uuidv4().replace(/[-_]/g, '')}`
+    c.refId = id
+    c.metadata[RunmeMetadataKey.RunmeID] = id
+    return id
+  })
+  return {
+    runmeSession,
+    cells: Object.fromEntries(cells.map((cell) => [cell.refId, cell])),
+    positions: invertedOrder ? positions.reverse() : positions,
+  }
 }
 
 // Utility function to always return cells in ascending order
@@ -307,10 +336,6 @@ export const CellProvider = ({
           }
         } else {
           const recovSess = activeSessions[0]
-          let positions = recovSess.data.cells.map((cell) => cell.refId)
-          if (invertedOrder) {
-            positions = positions.reverse()
-          }
           const prevRespId =
             recovSess.data.metadata[AgentMetadataKey.PreviousResponseId]
           if (prevRespId) {
@@ -320,17 +345,9 @@ export const CellProvider = ({
           if (wd) {
             setCwd(wd)
           }
-          setState({
-            runmeSession: recovSess.id,
-            cells: recovSess.data.cells.reduce(
-              (acc, cell) => {
-                acc[cell.refId] = cell
-                return acc
-              },
-              {} as Record<string, parser_pb.Cell>
-            ),
-            positions,
-          })
+          setState(
+            importCellState(recovSess.id, recovSess.data.cells, invertedOrder)
+          )
           return
         }
       }
@@ -642,6 +659,63 @@ export const CellProvider = ({
     [settings.agentEndpoint, createAuthInterceptors, state?.runmeSession]
   )
 
+  // Internal function to deserialize notebook content
+  const deserializeNotebook = useCallback(
+    async (
+      source: Uint8Array<ArrayBufferLike>,
+      identity: parser_pb.RunmeIdentity = parser_pb.RunmeIdentity.UNSPECIFIED
+    ): Promise<parser_pb.Notebook | undefined> => {
+      const c = createConnectClient(
+        parser_pb.ParserService,
+        settings.agentEndpoint,
+        createAuthInterceptors(true)
+      )
+      const req = create(parser_pb.DeserializeRequestSchema, {
+        source,
+        options: create(parser_pb.DeserializeRequestOptionsSchema, {
+          identity,
+        }),
+      })
+
+      const resp = await c.deserialize(req)
+      return resp.notebook
+    },
+    [settings.agentEndpoint, createAuthInterceptors]
+  )
+
+  const loadState = useCallback(
+    async (text: string) => {
+      setSequence(0)
+      setPreviousResponseId(undefined)
+
+      const buffer = new TextEncoder().encode(text)
+      const notebook = await deserializeNotebook(buffer)
+      if (!notebook) {
+        return
+      }
+      const result = await createNewSession(runnerClient, createStreams())
+      if (!result) {
+        return
+      }
+      if (result.cwd) {
+        setCwd(result.cwd)
+      }
+      const imported = importCellState(result.id, notebook.cells, invertedOrder)
+      setState(imported)
+      Object.values(imported.cells).forEach((cell) => updateCell(cell))
+    },
+    [
+      setState,
+      deserializeNotebook,
+      runnerClient,
+      createStreams,
+      setCwd,
+      setSequence,
+      setPreviousResponseId,
+      invertedOrder,
+    ]
+  )
+
   // exportDocument exports the notebook as a markdown file
   const exportDocument = async ({
     asSessionRecord,
@@ -677,6 +751,7 @@ export const CellProvider = ({
         sequence,
         saveState,
         serializeNotebook,
+        deserializeNotebook,
         exportDocument,
         sendOutputCell,
         createOutputCell,
@@ -688,6 +763,7 @@ export const CellProvider = ({
         isInProgress,
         runCodeCell,
         resetSession,
+        loadState,
         cwd,
       }}
     >
@@ -777,7 +853,7 @@ async function createNewSession(
 }
 
 // singleton text encoder for non-streaming output
-const textEncoder = new TextEncoder()
+const outputsEncoder = new TextEncoder()
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function createCellOutputs(
@@ -809,7 +885,7 @@ export function createCellOutputs(
     create(parser_pb.CellOutputItemSchema, {
       mime: MimeType.VSCodeNotebookStdOut,
       type: 'Buffer',
-      data: textEncoder.encode(stdout),
+      data: outputsEncoder.encode(stdout),
     }),
   ]
 
@@ -818,7 +894,7 @@ export function createCellOutputs(
       create(parser_pb.CellOutputItemSchema, {
         mime: MimeType.VSCodeNotebookStdErr,
         type: 'Buffer',
-        data: textEncoder.encode(stderr),
+        data: outputsEncoder.encode(stderr),
       })
     )
   }
