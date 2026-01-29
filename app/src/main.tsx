@@ -4,9 +4,7 @@ import "./index.css";
 import { setContext } from "@runmedev/renderers";
 import type { RendererContext } from "vscode-notebook-renderer";
 
-import { PlatformUIKitProvider } from "@oai/platform/ui/PlatformUIKitProvider";
 import { createRoot } from "react-dom/client";
-import { Link } from "react-router";
 import App, { AppProps } from "./App";
 import aisreIcon from "./assets/aisreicon.svg";
 import { getBrowserAdapter } from "./browserAdapter.client";
@@ -17,9 +15,6 @@ declare global {
     __INITIAL_STATE__?: AppProps["initialState"];
   }
 
-  interface PlatformUIKitOverrides {
-    LinkComponent: typeof Link;
-  }
 }
 
 // Read initial state from window object
@@ -44,14 +39,12 @@ getBrowserAdapter()
   .init()
   .then(() => {
     createRoot(document.getElementById("root")!).render(
-      <PlatformUIKitProvider linkComponent={Link}>
-        <App
-          initialState={initialState}
-          branding={{
-            name: "AISRE",
-            logo: aisreIcon,
-          }}
-        />
-      </PlatformUIKitProvider>,
+      <App
+        initialState={initialState}
+        branding={{
+          name: "AISRE",
+          logo: aisreIcon,
+        }}
+      />,
     );
   });

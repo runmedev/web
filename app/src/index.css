@@ -10,13 +10,6 @@
   --breakpoint-2xl: 1536px;
 }
 
-@import "@oai/platform/ui/css";
-/* Required for Tailwind to find class references in Platform UI Kit components.
-   See: https://github.com/openai/openai/pull/380544/files#r2205036117
-   For a discussion of referencing node_modules looks wrong but is needed here.
-*/
-@source "../node_modules/@oai/platform";
-
 :root {
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
