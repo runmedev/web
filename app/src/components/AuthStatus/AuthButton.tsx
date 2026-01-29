@@ -1,4 +1,4 @@
-import type { OAuthTokenEndpointResponse } from "@oai/auth-sdk";
+import type { OAuthTokenEndpointResponse } from "../../auth/types";
 
 /**
  * Button component to trigger login or logout actions based on authentication status.

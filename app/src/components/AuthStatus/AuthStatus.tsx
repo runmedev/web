@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { jwtDecode } from "jwt-decode";
 import JsonView from "react18-json-view";
 
-import type { SimpleAuthJSONWithHelpers } from "@oai/auth-sdk/types";
+import type { SimpleAuthJSONWithHelpers } from "../../auth/types";
 import type { ReactNode } from "react";
 
 import AuthButton from "./AuthButton";
