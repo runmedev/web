@@ -7,6 +7,7 @@ import type { RendererContext } from "vscode-notebook-renderer";
 import { createRoot } from "react-dom/client";
 import App, { AppProps } from "./App";
 import aisreIcon from "./assets/aisreicon.svg";
+import { getBrowserAdapter } from "./browserAdapter.client";
 
 // Define the type for the window object with initial state
 declare global {
@@ -33,13 +34,17 @@ const noopBridge: RendererContext<void> = {
 };
 setContext(noopBridge);
 
-// Render without initializing the browser adapter for debugging.
-createRoot(document.getElementById("root")!).render(
-  <App
-    initialState={initialState}
-    branding={{
-      name: "AISRE",
-      logo: aisreIcon,
-    }}
-  />,
-);
+// Initialize auth, then render
+getBrowserAdapter()
+  .init()
+  .then(() => {
+    createRoot(document.getElementById("root")!).render(
+      <App
+        initialState={initialState}
+        branding={{
+          name: "AISRE",
+          logo: aisreIcon,
+        }}
+      />,
+    );
+  });
