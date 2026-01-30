@@ -248,10 +248,6 @@ export class ConsoleView extends LitElement {
       overflow: hidden;
     }
 
-    .xterm-dim {
-      opacity: 0.5;
-    }
-
     .xterm-underline-1 {
       text-decoration: underline;
     }
@@ -330,12 +326,6 @@ export class ConsoleView extends LitElement {
 
     #terminal {
       position: relative;
-    }
-
-    /** xf styles */
-    .xterm-bg-257,
-    .xterm-bg-7 {
-      background-color: var(--vscode-editor-selectionBackground) !important;
     }
   `
 
