@@ -21,8 +21,7 @@ export class GoogleClientManager {
   private config: GoogleClientConfig;
 
   private constructor() {
-    const defaultClientId =
-      "586812942182-bqhl39ugf2kn7r8vv4f6766jt0a7tom9.apps.googleusercontent.com";
+    const defaultClientId ="";
     const storedClientId = this.readOAuthClientIdFromStorage();
     const injectedClientId =
       storedClientId ? null : this.readOAuthClientIdFromInitialState();
