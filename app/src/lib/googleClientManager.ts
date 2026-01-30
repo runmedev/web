@@ -38,7 +38,8 @@ export class GoogleClientManager {
       drivePicker: {
         clientId: resolvedClientId,
         developerKey: "",
-        appId: "586812942182",
+        // TODO(jlewi): Do we still need this
+        appId: "notavalidappid",
       },
     };
   }
