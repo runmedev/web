@@ -7,6 +7,7 @@ import { JSKernel } from "../../lib/runtime/jsKernel";
 import { useRunners } from "../../contexts/RunnersContext";
 import { Runner } from "../../lib/runner";
 import { getRunnersManager } from "../../lib/runtime/runnersManager";
+import { googleClientManager } from "../../lib/googleClientManager";
 
 const PROMPT = "> ";
 const ERASE_TO_END = "\u001b[K";
@@ -131,6 +132,18 @@ export default function AppConsole() {
               );
               return `Default runner set to ${name}`;
             },
+          },
+          googleClientManager: {
+            get: () => googleClientManager.getOAuthClient(),
+            setClientId: (clientId: string) =>
+              googleClientManager.setOAuthClient({ clientId }),
+            setClientSecret: (clientSecret: string) =>
+              googleClientManager.setClientSecret(clientSecret),
+            setFromJson: (raw: string) =>
+              googleClientManager.setOAuthClientFromJson(raw),
+          },
+          credentials: {
+            google: googleClientManager,
           },
         },
         hooks: {

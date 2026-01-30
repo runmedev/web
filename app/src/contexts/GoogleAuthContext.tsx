@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { googleClientManager } from "../lib/googleClientManager";
 
 // N.B. I couldn't make sharing work with the more restrictive "https://www.googleapis.com/auth/drive.file"
 // scope. In particular, I couldn't quite figure out how to share a link with a user and then have that
@@ -17,9 +18,6 @@ export const DRIVE_SCOPES = [
   "https://www.googleapis.com/auth/drive",  
   "https://www.googleapis.com/auth/drive.install",
 ];
-
-const GOOGLE_CLIENT_ID =
-  "586812942182-bqhl39ugf2kn7r8vv4f6766jt0a7tom9.apps.googleusercontent.com";
 
 const STORAGE_KEY = "aisre/google-auth/token";
 
@@ -131,6 +129,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   // calls.
   const tokenInfoRef = useRef<AccessTokenInfo | null>(null);
   const tokenClientRef = useRef<TokenClient | null>(null);
+  const oauthClientIdRef = useRef<string | null>(null);
   const handlersRef = useRef<PendingHandlers | null>(null);
   const pendingPromiseRef = useRef<Promise<string> | null>(null);
   const scriptPromiseRef = useRef<Promise<void> | null>(null);
@@ -208,9 +207,12 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   // consumer actually asks for a token. The client instance is cached in a ref
   // so subsequent callers reuse the same object.
   const ensureTokenClient = useCallback(async () => {
-    if (tokenClientRef.current) {
+    const { clientId } = googleClientManager.getOAuthClient();
+    if (tokenClientRef.current && oauthClientIdRef.current === clientId) {
       return tokenClientRef.current;
     }
+    tokenClientRef.current = null;
+    oauthClientIdRef.current = clientId;
 
     await ensureScriptLoaded();
 
@@ -220,7 +222,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     }
 
     const client = oauth.initTokenClient({
-      client_id: GOOGLE_CLIENT_ID,
+      client_id: clientId,
       scope: DRIVE_SCOPES.join(" "),
       callback: (response: AccessTokenResponse) => {
         if (!handlersRef.current) {

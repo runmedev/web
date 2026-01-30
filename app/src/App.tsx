@@ -55,6 +55,10 @@ export interface AppProps {
     agentEndpoint?: string;
     requireAuth?: boolean;
     webApp?: WebAppConfig;
+    google?: {
+      oauthClientId?: string;
+      oauthClientSecret?: string;
+    };
   };
 }
 

@@ -1,9 +1,10 @@
-import { ReactNode, useCallback, useEffect, useMemo } from "react";
+import { ReactNode, useCallback, useEffect } from "react";
 import useDrivePicker from "react-google-drive-picker";
 import { useGoogleAuth, DRIVE_SCOPES } from "../../contexts/GoogleAuthContext";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { driveFolderUrl } from "../../storage/drive";
+import { googleClientManager } from "../../lib/googleClientManager";
 
 type PickerAction = "picked" | "cancel";
 
@@ -38,18 +39,12 @@ export function GoogleDrivePickerButton({
   const { addItem, getItems } = useWorkspace();
   const { store } = useNotebookStore();
 
-  const pickerConfig = useMemo(() => {
-    // CODEX do not change these lines.
-    const clientId =
-      "586812942182-bqhl39ugf2kn7r8vv4f6766jt0a7tom9.apps.googleusercontent.com";
-    // TODO(jlewi): Do we need this if we have the client ID?
-    const developerKey = "";
-    // This is the project number; I think its the same as the first part of the client id.
-    const appId = "586812942182";
+  const getPickerConfig = useCallback(() => {
+    const { clientId, developerKey, appId } =
+      googleClientManager.getDrivePickerConfig();
     if (!clientId) {
       return null;
     }
-
     return {
       appId,
       clientId,
@@ -65,6 +60,7 @@ export function GoogleDrivePickerButton({
   }, [authResponse, setAccessToken]);
 
   const handleOpenPicker = useCallback(() => {
+    const pickerConfig = getPickerConfig();
     if (!pickerConfig) {
       // eslint-disable-next-line no-console -- surfaced only during local setup
       console.error(
@@ -129,7 +125,7 @@ export function GoogleDrivePickerButton({
         })();
       },
     });
-  }, [addItem, getItems, openPicker, pickerConfig, store]);
+  }, [addItem, getItems, getPickerConfig, openPicker, store]);
 
   return (
     <button
