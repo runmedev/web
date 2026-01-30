@@ -8,6 +8,8 @@ import { useRunners } from "../../contexts/RunnersContext";
 import { Runner } from "../../lib/runner";
 import { getRunnersManager } from "../../lib/runtime/runnersManager";
 import { googleClientManager } from "../../lib/googleClientManager";
+import { oidcConfigManager } from "../../auth/oidcConfig";
+import type { OidcConfig } from "../../auth/oidcConfig";
 
 const PROMPT = "> ";
 const ERASE_TO_END = "\u001b[K";
@@ -142,8 +144,21 @@ export default function AppConsole() {
             setFromJson: (raw: string) =>
               googleClientManager.setOAuthClientFromJson(raw),
           },
+          oidc: {
+            get: () => oidcConfigManager.getConfig(),
+            set: (config: Partial<OidcConfig>) =>
+              oidcConfigManager.setConfig(config),
+            setClientId: (clientId: string) =>
+              oidcConfigManager.setClientId(clientId),
+            setClientSecret: (clientSecret: string) =>
+              oidcConfigManager.setClientSecret(clientSecret),
+            setDiscoveryURL: (discoveryUrl: string) =>
+              oidcConfigManager.setDiscoveryURL(discoveryUrl),
+            setClientToDrive: () => oidcConfigManager.setClientToDrive(),
+          },
           credentials: {
             google: googleClientManager,
+            oidc: oidcConfigManager,
           },
         },
         hooks: {
