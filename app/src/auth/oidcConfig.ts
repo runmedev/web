@@ -52,6 +52,16 @@ export class OidcConfigManager {
     return this.config;
   }
 
+  getRedirectURI(): string {
+    this.assertRequired(this.config);
+    return this.config.redirectUri;
+  }
+
+  getScope(): string {
+    this.assertRequired(this.config);
+    return this.config.scope;
+  }
+
   setConfig(config: Partial<OidcConfig>): OidcConfig {
     const extraAuthParams = config.extraAuthParams
       ? this.sanitizeExtraAuthParams(config.extraAuthParams)
@@ -85,6 +95,17 @@ export class OidcConfigManager {
   setClientToDrive(): OidcConfig {
     const { clientId, clientSecret } = googleClientManager.getOAuthClient();
     return this.setConfig({ clientId, clientSecret });
+  }
+
+  setScope(scope: string): OidcConfig {
+    return this.setConfig({ scope });
+  }
+
+  setGoogleDefaults(): OidcConfig {
+    return this.setConfig({
+      discoveryUrl: "https://accounts.google.com/.well-known/openid-configuration",
+      scope: "openid https://www.googleapis.com/auth/userinfo.email",
+    });
   }
 
   private readEnvConfig(): OidcConfig {

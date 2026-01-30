@@ -40,6 +40,16 @@ function buildSimpleAuth(token: StoredTokenResponse): SimpleAuthJSONWithHelpers 
   };
 }
 
+function buildClient(config: ReturnType<typeof getOidcConfig>): oauth.Client {
+  const client: oauth.Client = { client_id: config.clientId };
+  if (config.clientSecret && config.clientSecret.trim().length > 0) {
+    client.client_secret = config.clientSecret;
+  } else {
+    client.token_endpoint_auth_method = "none";
+  }
+  return client;
+}
+
 function normalizeTokenResponse(
   token: OAuthTokenEndpointResponse,
   existing?: StoredTokenResponse | null,
@@ -88,8 +98,12 @@ export class BrowserAuthAdapter {
   handleCallback = async () => {
     const codeVerifier = window.localStorage.getItem(PKCE_CODE_VERIFIER_KEY);
     const storedState = window.localStorage.getItem(PKCE_STATE_KEY);
+    const storedNonce = window.localStorage.getItem(PKCE_NONCE_KEY);
     if (!codeVerifier || !storedState) {
       throw new Error("No code verifier or state found");
+    }
+    if (!storedNonce) {
+      throw new Error("No nonce found");
     }
     window.localStorage.removeItem(PKCE_CODE_VERIFIER_KEY);
     window.localStorage.removeItem(PKCE_STATE_KEY);
@@ -98,7 +112,7 @@ export class BrowserAuthAdapter {
     const config = getOidcConfig();
     const discovery = await loadDiscovery();
     const authServer = discovery as oauth.AuthorizationServer;
-    const client: oauth.Client = { client_id: config.clientId };
+    const client = buildClient(config);
 
     const callbackUrl = new URL(window.location.href);
     const params = oauth.validateAuthResponse(
@@ -119,10 +133,11 @@ export class BrowserAuthAdapter {
       codeVerifier,
     );
 
-    const result = (await oauth.processAuthorizationCodeResponse(
+    const result = (await oauth.processAuthorizationCodeOpenIDResponse(
       authServer,
       client,
       response,
+      storedNonce,
     )) as OAuthTokenEndpointResponse | oauth.OAuth2Error;
 
     if (oauth.isOAuth2Error(result)) {
@@ -139,7 +154,7 @@ export class BrowserAuthAdapter {
   loginWithRedirect = async () => {
     const config = getOidcConfig();
     const discovery = await loadDiscovery();
-    const { code_verifier, code_challenge } = pkceChallenge();
+    const { code_verifier, code_challenge } = await pkceChallenge();
     const state = crypto.randomUUID();
     const nonce = crypto.randomUUID();
 
@@ -200,7 +215,7 @@ export class BrowserAuthAdapter {
     const config = getOidcConfig();
     const discovery = await loadDiscovery();
     const authServer = discovery as oauth.AuthorizationServer;
-    const client: oauth.Client = { client_id: config.clientId };
+    const client = buildClient(config);
 
     const response = await oauth.refreshTokenGrantRequest(
       authServer,

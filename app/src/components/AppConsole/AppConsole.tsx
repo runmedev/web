@@ -146,6 +146,8 @@ export default function AppConsole() {
           },
           oidc: {
             get: () => oidcConfigManager.getConfig(),
+            getRedirectURI: () => oidcConfigManager.getRedirectURI(),
+            getScope: () => oidcConfigManager.getScope(),
             set: (config: Partial<OidcConfig>) =>
               oidcConfigManager.setConfig(config),
             setClientId: (clientId: string) =>
@@ -155,6 +157,8 @@ export default function AppConsole() {
             setDiscoveryURL: (discoveryUrl: string) =>
               oidcConfigManager.setDiscoveryURL(discoveryUrl),
             setClientToDrive: () => oidcConfigManager.setClientToDrive(),
+            setScope: (scope: string) => oidcConfigManager.setScope(scope),
+            setGoogleDefaults: () => oidcConfigManager.setGoogleDefaults(),
           },
           credentials: {
             google: googleClientManager,
