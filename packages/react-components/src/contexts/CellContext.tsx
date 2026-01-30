@@ -16,7 +16,7 @@ import { clone, create } from '@bufbuild/protobuf'
 import { v4 as uuidv4 } from 'uuid'
 
 import {
-  AgentMetadataKey,
+  NotebookMetadataKey,
   MimeType,
   RunmeMetadataKey,
   createConnectClient,
@@ -279,7 +279,8 @@ export const CellProvider = ({
       cells: ascendingCells,
     })
     if (previousResponseId) {
-      session.metadata[AgentMetadataKey.PreviousResponseId] = previousResponseId
+      session.metadata[NotebookMetadataKey.PreviousResponseId] =
+        previousResponseId
     }
     if (cwd !== '.') {
       session.metadata[RunmeMetadataKey.WorkingDirectory] = cwd
@@ -337,7 +338,7 @@ export const CellProvider = ({
         } else {
           const recovSess = activeSessions[0]
           const prevRespId =
-            recovSess.data.metadata[AgentMetadataKey.PreviousResponseId]
+            recovSess.data.metadata[NotebookMetadataKey.PreviousResponseId]
           if (prevRespId) {
             setPreviousResponseId(prevRespId)
           }
