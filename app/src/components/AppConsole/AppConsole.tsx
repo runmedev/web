@@ -10,6 +10,8 @@ import { getRunnersManager } from "../../lib/runtime/runnersManager";
 import { googleClientManager } from "../../lib/googleClientManager";
 import { oidcConfigManager } from "../../auth/oidcConfig";
 import type { OidcConfig } from "../../auth/oidcConfig";
+import { getAuthData } from "../../token";
+import { jwtDecode } from "jwt-decode";
 
 const PROMPT = "> ";
 const ERASE_TO_END = "\u001b[K";
@@ -159,6 +161,39 @@ export default function AppConsole() {
             setClientToDrive: () => oidcConfigManager.setClientToDrive(),
             setScope: (scope: string) => oidcConfigManager.setScope(scope),
             setGoogleDefaults: () => oidcConfigManager.setGoogleDefaults(),
+            getStatus: async () => {
+              const authData = await getAuthData();
+              if (!authData) {
+                sendStdout("Is Authenticated: No\r\n");
+                return { isAuthenticated: false };
+              }
+              let decodedAccessToken: unknown = null;
+              let decodedIdToken: unknown = null;
+              try {
+                decodedAccessToken = jwtDecode(authData.accessToken);
+              } catch (error) {
+                sendStdout(`Failed to decode access token: ${String(error)}\r\n`);
+              }
+              try {
+                decodedIdToken = jwtDecode(authData.idToken);
+              } catch (error) {
+                sendStdout(`Failed to decode ID token: ${String(error)}\r\n`);
+              }
+              const status = {
+                isAuthenticated: true,
+                isExpired: authData.isExpired(),
+                rawAuthData: authData,
+                decodedAccessToken,
+                decodedIdToken,
+                tokenType: authData.tokenType,
+                scope: authData.scope,
+              };
+              const pretty = JSON.stringify(status, null, 2);
+              sendStdout(`Is Authenticated: Yes\r\n`);
+              sendStdout(`Is Expired: ${status.isExpired ? "Yes" : "No"}\r\n`);
+              sendStdout(`${pretty}\r\n`);
+              return status;
+            },
           },
           credentials: {
             google: googleClientManager,
