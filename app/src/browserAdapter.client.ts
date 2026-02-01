@@ -157,6 +157,7 @@ export class BrowserAuthAdapter {
     const { code_verifier, code_challenge } = await pkceChallenge();
     const state = crypto.randomUUID();
     const nonce = crypto.randomUUID();
+    const hasRefreshToken = Boolean(this.getTokenResponse()?.refresh_token);
 
     window.localStorage.setItem(PKCE_CODE_VERIFIER_KEY, code_verifier);
     window.localStorage.setItem(PKCE_STATE_KEY, state);
@@ -173,6 +174,9 @@ export class BrowserAuthAdapter {
     url.searchParams.set("nonce", nonce);
     if (config.extraAuthParams) {
       Object.entries(config.extraAuthParams).forEach(([key, value]) => {
+        if (key === "prompt" && value === "consent" && hasRefreshToken) {
+          return;
+        }
         url.searchParams.set(key, value);
       });
     }
@@ -211,7 +215,10 @@ export class BrowserAuthAdapter {
    */
   refresh = async () => {
     const tokenResponse = this.getTokenResponse();
-    if (!tokenResponse?.refresh_token) return;
+    if (!tokenResponse?.refresh_token){
+      console.error("No refresh token available; cannot refresh authentication.")
+      return;
+    }
     const config = getOidcConfig();
     const discovery = await loadDiscovery();
     const authServer = discovery as oauth.AuthorizationServer;

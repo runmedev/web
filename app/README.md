@@ -83,10 +83,39 @@ Then run the following to set your clientID and clientSecret to the same ones yo
 oidc.setClientToDrive()
 ```
 
-You should now be able to sign
+You should now be able to sign.
+
+After you sign in you can verify the status and ID information in the App Console by running.
+
+```
+oidc.getStatus()
+```
+
+This should print out information about your OIDC token.
 
 ## Run a server
 
-TODO(jlewi): need to update this
+We need to start the Runme server to provide a kernel and AI backend. 
+
+Clone the Runme Repo [https://github.com/runmedev/runme](https://github.com/runmedev/runme)
+
+
+**N.B** Right now you need to use the branch "dev/jlewi/webapp"
+
+```
+go run ./ agent serve
+```
+
+## Configure the Runner
+
+In the web app we need to configure a runner on which to execute cells
+
+In the app console.
+
+```
+aisre.runners.update("localhost","ws://localhost:9977/ws")
+```
+
+* Change the port to whatever port your runme agent is serving on
 
 ## Deployment

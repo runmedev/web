@@ -1,4 +1,12 @@
+import { jwtDecode } from "jwt-decode";
+
 import { getBrowserAdapter } from "./browserAdapter.client";
+
+const ID_TOKEN_EXP_SKEW_SECONDS = 60;
+
+type JwtWithExp = {
+  exp?: number;
+};
 
 // Returns the value of the oauth access token.
 export async function getAccessToken(): Promise<string> {
@@ -16,7 +24,11 @@ export async function getAccessToken(): Promise<string> {
 export async function getAuthData() {
   const browserAdapter = getBrowserAdapter();
 
-  if (browserAdapter.simpleAuth && browserAdapter.simpleAuth.willExpireSoon()) {
+  const authData = browserAdapter.simpleAuth;
+  const idTokenExpiring =
+    authData?.idToken !== undefined &&
+    willIdTokenExpireSoon(authData.idToken);
+  if (authData && (authData.willExpireSoon() || idTokenExpiring)) {
     await browserAdapter.refresh();
   }
   return browserAdapter.simpleAuth;
@@ -24,10 +36,20 @@ export async function getAuthData() {
 
 // Returns the value of the session token cookie, or undefined if not found
 export function getSessionToken(): string | undefined {
-  // TODO(jlewi): This function is called from SettingsContext.
-  // It was inherited as part of the Runme fork; we could probably clean things up.
-  // const authData = await getAuthData();
-  // const idToken = authData?.idToken ?? undefined;
-  // return idToken;
-  return undefined;
+  const authData = getBrowserAdapter().simpleAuth;
+  return authData?.idToken ?? undefined;
+}
+
+function willIdTokenExpireSoon(token: string): boolean {
+  try {
+    const decoded = jwtDecode<JwtWithExp>(token);
+    if (!decoded.exp) {
+      return false;
+    }
+    const expiresAtMs = decoded.exp * 1000;
+    return Date.now() >= expiresAtMs - ID_TOKEN_EXP_SKEW_SECONDS * 1000;
+  } catch (error) {
+    console.error("Failed to decode id token", error);
+    return false;
+  }
 }

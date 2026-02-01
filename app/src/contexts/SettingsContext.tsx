@@ -20,7 +20,7 @@ import { JwtPayload, jwtDecode } from "jwt-decode";
 import { Subscription } from "rxjs";
 import { ulid } from "ulid";
 
-import { getSessionToken } from "../token";
+import { getAuthData, getSessionToken } from "../token";
 
 interface GoogleDriveSettings {
   folderId: string;
@@ -168,7 +168,8 @@ export const SettingsProvider = ({
       return [
         (next) => async (req) => {
           // Single place to change where tokens are coming from
-          const token = getSessionToken();
+          const authData = await getAuthData();
+          const token = authData?.idToken;
           if (token) {
             req.header.set("Authorization", `Bearer ${token}`);
           }
