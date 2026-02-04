@@ -1,0 +1,50 @@
+# Example development config for Runme Agent
+# for local development only.
+apiVersion: ""
+kind: ""
+logging:
+    level: info
+    # json: true
+    json: false
+    sinks:
+    - path: stderr   # or stdout
+      json: false
+# Change the iamPolicy to match your user; i.e. replace
+# user@domain.com with your email.
+iamPolicy:
+    bindings:
+    - role: "role/agent.user"
+      members:
+        - name: "user@domain.com"
+          kind: "user"
+    - role: "role/parser.user"
+      members:
+        - name: "user@domain.com"
+          kind: "user"
+    - role: "role/runner.user"
+      members:
+        - name: "user@domain.com"
+          kind: "user"      
+openai:
+    apiKeyFile: "/path/to/your/openai_api_key.txt"
+cloudAssistant:
+    model: model-not-set
+
+assistantServer:
+    # TODO(jlewi): How should this be set 
+    staticAssets: /Users/jlewi/code/openai/bazel-bin/project/aisre/aisre-web/dist
+    runnerService: true
+    parserService: true    
+    oidc:
+        google:
+            # Change this to your OAuth client ID
+            clientID: "YOURPROJECTNUMBER-RANDOMID.apps.googleusercontent.com"
+        clientExchange: true
+    # TODO(jlewi): Can we just use "*"?
+    corsOrigins:        
+        - "http://localhost:5173"
+        - "http://localhost:5174"
+    # Set a port
+    port: 9977
+    # N.B. We don't generate a TLS configuration because in development mode you are most likely running
+    # with TLS disabled and only accessible via localhost

@@ -65,7 +65,7 @@ const CHATKIT_STARTER_PROMPTS = [
   },
 ] as const;
 
-const TOOL_PREFIX = "oaiproto_aisre_NotebookService_";
+const TOOL_PREFIX = "agent_tools_v1_NotebookService_";
 
 const UPDATE_CELLS_TOOL = TOOL_PREFIX + "UpdateCells";
 const LIST_CELLS_TOOL = TOOL_PREFIX + "ListCells";

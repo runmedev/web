@@ -102,9 +102,26 @@ Clone the Runme Repo [https://github.com/runmedev/runme](https://github.com/runm
 
 **N.B** Right now you need to use the branch "dev/jlewi/webapp"
 
+Setup your configuration
+
 ```
-go run ./ agent serve
+cp /Users/jlewi/git_runmeweb/app/runme-agent.dev.config.yaml \
+  ${HOME}/.runme-agent/config.dev.yaml
 ```
+
+Make the relevant changes to your config
+
+* Set the path to your OpenAI API Key
+
+```
+go run ./ agent --config=${HOME}/.runme-agent/config.dev.yaml serve
+```
+
+## Configure the server
+
+Make the following changes to the runners configuration file `${HOME}/.runme-agent/config.yaml
+
+* If you're using Google Sign-In in configure 
 
 ## Configure the Runner
 
