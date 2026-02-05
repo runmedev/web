@@ -24,6 +24,7 @@ import { useOutput } from "../../contexts/OutputContext";
 import CellConsole, { fontSettings } from "./CellConsole";
 import WebContainerConsole from "./WebContainer";
 import Editor from "./Editor";
+import MarkdownCell from "./MarkdownCell";
 import { IOPUB_INCOMPLETE_METADATA_KEY } from "../../lib/ipykernel";
 import {
   ErrorIcon,
@@ -529,10 +530,85 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     [cell, selectedLanguage, updateCellLocal],
   );
 
+  // Determine if this cell is a markdown cell (either MARKUP kind or CODE with markdown language)
+  const isMarkdownCell = useMemo(() => {
+    if (!cell) return false;
+    // Check if cell kind is MARKUP
+    if (cell.kind === parser_pb.CellKind.MARKUP) return true;
+    // Check if cell is CODE but with markdown language
+    const lang = (cell.languageId ?? "").toLowerCase();
+    return lang === "markdown" || lang === "md";
+  }, [cell]);
+
   if (!cell) {
     return null;
   }
 
+  // Render markdown cells with in-place rendering (Jupyter-style)
+  // No run button, no output area - just the markdown rendered in-place
+  if (isMarkdownCell) {
+    return (
+      <div
+        id={`markdown-action-${cell.refId}`}
+        className="relative py-2 flex flex-col gap-2 min-w-0"
+        onContextMenu={handleContextMenu}
+        data-testid="markdown-action"
+      >
+        {!isFirst && (
+          <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center">
+            <div className="pointer-events-auto flex h-8 w-8 -translate-y-1/2 items-center justify-center">
+              <button
+                type="button"
+                aria-label="Add cell above"
+                className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition-colors hover:border-gray-400 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+                onClick={handleAddCodeCellBefore}
+              >
+                <PlusIcon width={12} height={12} />
+              </button>
+            </div>
+          </div>
+        )}
+        <Box className="relative w-full min-w-0 max-w-full px-2 py-1 overflow-hidden">
+          <MarkdownCell cellData={cellData} />
+        </Box>
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center">
+          <div className="pointer-events-auto flex h-8 w-8 translate-y-1/2 items-center justify-center">
+            <button
+              type="button"
+              aria-label="Add cell below"
+              className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition-colors hover:border-gray-400 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+              onClick={handleAddCodeCellAfter}
+            >
+              <PlusIcon width={12} height={12} />
+            </button>
+          </div>
+        </div>
+        {adjustedContextMenu && (
+          <div
+            className="fixed z-50 min-w-[160px] rounded-md border border-gray-200 bg-white py-1 shadow-lg"
+            style={{
+              top: adjustedContextMenu.y,
+              left: adjustedContextMenu.x,
+            }}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <button
+              type="button"
+              className="block w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-gray-100"
+              onClick={(event) => {
+                event.stopPropagation();
+                handleRemoveCell();
+              }}
+            >
+              Remove Cell
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Render code cells with the full editor, toolbar, and output area
   return (
     <div
       className="relative py-2 flex flex-col gap-2"
@@ -712,7 +788,7 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
       key={`scroll-${docUri}`}
       type="auto"
       scrollbars="vertical"
-      className="flex-1 h-full p-1"
+      className="flex-1 h-full p-1 min-w-0 max-w-full overflow-x-hidden"
       data-document-id={docUri}
     >
       <div className="mb-2 flex justify-center">
