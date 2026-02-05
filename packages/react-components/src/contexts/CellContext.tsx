@@ -98,6 +98,16 @@ type CellContextType = {
   loadState: (text: string) => Promise<void>
   // Current working directory at the beginning of the session
   cwd: string
+  // Remove a cell by refId
+  removeCell: (refId: string) => void
+  // Move a cell by delta in display order (-1 = visually up, +1 = visually down)
+  moveCell: (refId: string, delta: number) => void
+  // Insert a new empty cell adjacent to the given refId
+  insertCellAt: (
+    adjacentRefId: string,
+    placement: 'before' | 'after',
+    kind: parser_pb.CellKind
+  ) => void
 }
 
 const CellContext = createContext<CellContextType | undefined>(undefined)
@@ -262,7 +272,30 @@ export const CellProvider = ({
   )
 
   const { client } = useAgentClient()
-  const [state, setState] = useState<CellState | undefined>(undefined)
+  const [state, _setState] = useState<CellState | undefined>(undefined)
+
+  // Custom setState that automatically notifies renderers for new/changed cells.
+  // Renderers may mutate cells (e.g. adding terminal output scaffolding),
+  // so notification must happen before the new state is returned.
+  const setState = useCallback(
+    (action: React.SetStateAction<CellState | undefined>) => {
+      _setState((prev) => {
+        const next = typeof action === 'function' ? action(prev) : action
+        if (next) {
+          const renderers = getAllRenderers()
+          for (const [refId, cell] of Object.entries(next.cells)) {
+            if (!prev?.cells[refId] || prev.cells[refId] !== cell) {
+              for (const renderer of renderers.values()) {
+                renderer.onCellUpdate(cell)
+              }
+            }
+          }
+        }
+        return next
+      })
+    },
+    [getAllRenderers]
+  )
 
   const ascendingCells = useMemo(() => {
     if (!state) {
@@ -517,11 +550,6 @@ export const CellProvider = ({
   }
 
   const updateCell = (cell: parser_pb.Cell): void => {
-    const renderers = getAllRenderers()
-    for (const renderer of renderers.values()) {
-      renderer.onCellUpdate(cell)
-    }
-
     setState((prev) => {
       if (!prev) {
         return undefined
@@ -703,7 +731,6 @@ export const CellProvider = ({
       }
       const imported = importCellState(result.id, notebook.cells, invertedOrder)
       setState(imported)
-      Object.values(imported.cells).forEach((cell) => updateCell(cell))
     },
     [
       setState,
@@ -715,6 +742,86 @@ export const CellProvider = ({
       setPreviousResponseId,
       invertedOrder,
     ]
+  )
+
+  const removeCell = useCallback(
+    (refId: string) => {
+      setState((prev) => {
+        if (!prev) return undefined
+        const newPositions = prev.positions.filter((id) => id !== refId)
+        const { [refId]: _, ...rest } = prev.cells
+        return { ...prev, cells: rest, positions: newPositions }
+      })
+    },
+    [setState]
+  )
+
+  const moveCell = useCallback(
+    (refId: string, delta: number) => {
+      setState((prev) => {
+        if (!prev) return undefined
+        const positions = [...prev.positions]
+        const idx = positions.indexOf(refId)
+        if (idx === -1) return prev
+        // In display order, delta -1 = visually up, +1 = visually down.
+        // When invertedOrder is true, positions are stored reversed,
+        // so we invert the delta direction for the internal array.
+        const actualDelta = invertedOrder ? -delta : delta
+        const targetIdx = idx + actualDelta
+        if (targetIdx < 0 || targetIdx >= positions.length) return prev
+        ;[positions[idx], positions[targetIdx]] = [
+          positions[targetIdx],
+          positions[idx],
+        ]
+        return { ...prev, positions }
+      })
+    },
+    [setState, invertedOrder]
+  )
+
+  const insertCellAt = useCallback(
+    (
+      adjacentRefId: string,
+      placement: 'before' | 'after',
+      kind: parser_pb.CellKind
+    ) => {
+      const refID = `${kind === parser_pb.CellKind.CODE ? 'code' : 'markup'}_${uuidv4().replace(/-/g, '')}`
+      const cell = create(parser_pb.CellSchema, {
+        metadata: {
+          [RunmeMetadataKey.ID]: refID,
+          [RunmeMetadataKey.RunmeID]: refID,
+        },
+        refId: refID,
+        kind,
+        role: parser_pb.CellRole.USER,
+        languageId: kind === parser_pb.CellKind.CODE ? 'sh' : '',
+        value: '',
+      })
+
+      setState((prev) => {
+        if (!prev) return undefined
+        const positions = [...prev.positions]
+        const idx = positions.indexOf(adjacentRefId)
+        if (idx === -1) return prev
+        // Determine insert position accounting for invertedOrder.
+        // 'before' in display order means earlier in the display list.
+        // When invertedOrder is true, display order is reversed from positions order,
+        // so 'before' in display = 'after' in positions array and vice versa.
+        const effectivePlacement = invertedOrder
+          ? placement === 'before'
+            ? 'after'
+            : 'before'
+          : placement
+        const insertIdx = effectivePlacement === 'before' ? idx : idx + 1
+        positions.splice(insertIdx, 0, refID)
+        return {
+          ...prev,
+          cells: { ...prev.cells, [refID]: cell },
+          positions,
+        }
+      })
+    },
+    [setState, invertedOrder]
   )
 
   // exportDocument exports the notebook as a markdown file
@@ -766,6 +873,9 @@ export const CellProvider = ({
         resetSession,
         loadState,
         cwd,
+        removeCell,
+        moveCell,
+        insertCellAt,
       }}
     >
       {children}
