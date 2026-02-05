@@ -3,7 +3,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import MonacoEditor from "@monaco-editor/react";
 import useResizeObserver from "use-resize-observer";
 
-const theme = "vs-dark";
+const theme = "vs";
 
 // Editor component for editing code which won't re-render unless the value changes
 const Editor = memo(
