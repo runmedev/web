@@ -1,0 +1,18 @@
+[project]
+name = "aisre-web"
+version = "0.0.1"
+
+[tool.oaipkg]
+owner = "aisre"
+# I think you can run js check to check if you are missing any monorepo dependencies for OAI js.
+monorepo-dependencies = [
+    "oai_js",
+    "oai_js_platform",
+    "auth-sdk-browser-adapter",
+    "auth-sdk",
+]
+compliance-policies = ["b2b-products"]
+dependency-check-ignore = []
+
+[tool.bazel]
+bazel_generator = "GAZELLE"
