@@ -9,7 +9,7 @@ import {
 } from "react";
 
 import { create } from "@bufbuild/protobuf";
-import { Box, ScrollArea, Tabs, Text } from "@radix-ui/themes";
+import { Box, Button, Card, ScrollArea, Tabs, Text } from "@radix-ui/themes";
 import { useParams } from "react-router-dom";
 
 import { Cross2Icon } from "@radix-ui/react-icons";
@@ -94,35 +94,17 @@ function RunActionButton({
     return "Run code";
   };
 
-  const isRunning = exitCode === null && pid !== null;
-  const isSuccess = exitCode !== null && exitCode === 0;
-  const isError = exitCode !== null && exitCode > 0;
-  const isIdle = exitCode === null && pid === null;
-
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={getButtonLabel()}
-      className={`flex h-8 w-8 items-center justify-center rounded-full transition-all duration-150 ${
-        isRunning
-          ? "bg-amber-100 text-amber-600"
-          : isSuccess
-            ? "bg-green-100 text-green-600"
-            : isError
-              ? "bg-red-100 text-red-600"
-              : "bg-gray-100 text-gray-500 hover:bg-amber-50 hover:text-amber-600"
-      }`}
-    >
-      {isIdle && <PlayIcon />}
-      {isRunning && (
+    <Button variant="soft" onClick={onClick} aria-label={getButtonLabel()}>
+      {exitCode === null && pid === null && <PlayIcon />}
+      {exitCode === null && pid !== null && (
         <div className="animate-spin">
           <SpinnerIcon />
         </div>
       )}
-      {isSuccess && <SuccessIcon />}
-      {isError && <ErrorIcon exitCode={exitCode} />}
-    </button>
+      {exitCode !== null && exitCode === 0 && <SuccessIcon />}
+      {exitCode !== null && exitCode > 0 && <ErrorIcon exitCode={exitCode} />}
+    </Button>
   );
 }
 
@@ -551,7 +533,9 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
   // Determine if this cell is a markdown cell (either MARKUP kind or CODE with markdown language)
   const isMarkdownCell = useMemo(() => {
     if (!cell) return false;
+    // Check if cell kind is MARKUP
     if (cell.kind === parser_pb.CellKind.MARKUP) return true;
+    // Check if cell is CODE but with markdown language
     const lang = (cell.languageId ?? "").toLowerCase();
     return lang === "markdown" || lang === "md";
   }, [cell]);
@@ -560,23 +544,23 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     return null;
   }
 
-  // Render markdown cells with in-place rendering (Jupyter-style):
-  // no run button, no output area – just the markdown rendered in-place.
+  // Render markdown cells with in-place rendering (Jupyter-style)
+  // No run button, no output area - just the markdown rendered in-place
   if (isMarkdownCell) {
     return (
       <div
         id={`markdown-action-${cell.refId}`}
-        className="group relative py-4 flex flex-col gap-3 min-w-0"
+        className="relative py-2 flex flex-col gap-2 min-w-0"
         onContextMenu={handleContextMenu}
         data-testid="markdown-action"
       >
         {!isFirst && (
-          <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+          <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center">
             <div className="pointer-events-auto flex h-8 w-8 -translate-y-1/2 items-center justify-center">
               <button
                 type="button"
                 aria-label="Add cell above"
-                className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-400 shadow-sm transition-all hover:border-amber-300 hover:text-amber-600 hover:bg-amber-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+                className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition-colors hover:border-gray-400 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
                 onClick={handleAddCodeCellBefore}
               >
                 <PlusIcon width={12} height={12} />
@@ -586,33 +570,13 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
         )}
         <Box className="relative w-full min-w-0 max-w-full px-2 py-1 overflow-hidden">
           <MarkdownCell cellData={cellData} />
-          <div
-            id={`markdown-toolbar-${cell.refId}`}
-            className="flex items-center gap-2 px-3 py-1 text-xs opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-150"
-          >
-            <Text size="1" as="span" className="text-[11px] text-gray-500">
-              Language
-            </Text>
-            <select
-              id={languageSelectId}
-              value={selectedLanguage}
-              onChange={handleLanguageChange}
-              className="cursor-pointer rounded border border-gray-200 bg-white px-2 py-0.5 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-amber-300/50 focus:border-amber-300"
-            >
-              {LANGUAGE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
         </Box>
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center">
           <div className="pointer-events-auto flex h-8 w-8 translate-y-1/2 items-center justify-center">
             <button
               type="button"
               aria-label="Add cell below"
-              className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-400 shadow-sm transition-all hover:border-amber-300 hover:text-amber-600 hover:bg-amber-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+              className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition-colors hover:border-gray-400 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
               onClick={handleAddCodeCellAfter}
             >
               <PlusIcon width={12} height={12} />
@@ -647,16 +611,16 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
   // Render code cells with the full editor, toolbar, and output area
   return (
     <div
-      className="group relative py-4 flex flex-col gap-3 border-l-[3px] border-transparent hover:border-amber-400 transition-colors duration-150 pl-2"
+      className="relative py-2 flex flex-col gap-2"
       onContextMenu={handleContextMenu}
     >
       {!isFirst && (
-        <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+        <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center">
           <div className="pointer-events-auto flex h-8 w-8 -translate-y-1/2 items-center justify-center">
             <button
               type="button"
               aria-label="Add cell above"
-              className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-400 shadow-sm transition-all hover:border-amber-300 hover:text-amber-600 hover:bg-amber-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+              className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition-colors hover:border-gray-400 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
               onClick={handleAddCodeCellBefore}
             >
               <PlusIcon width={12} height={12} />
@@ -664,20 +628,19 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
           </div>
         </div>
       )}
-      <Box className="relative w-full min-w-0 max-w-full px-2 py-1 overflow-hidden">
+      <Box className="relative w-full px-2 py-1">
         <div className="flex justify-between items-top">
-          <div className="flex flex-col items-center pt-1">
+          <div className="flex flex-col items-center">
             <RunActionButton pid={pid} exitCode={exitCode} onClick={runCode} />
-            {sequenceLabel.trim() && (
-              <span
-                className="mt-1 text-[10px] text-gray-400 font-mono"
-                data-testid="sequence-label"
-              >
-                {sequenceLabel}
-              </span>
-            )}
+            <Text
+              size="2"
+              className="mt-1 p-2 font-bold text-gray-400 font-mono"
+              data-testid="sequence-label"
+            >
+              [{sequenceLabel}]
+            </Text>
           </div>
-      <div className="flex flex-col flex-1 ml-3 overflow-hidden rounded-lg bg-white">
+      <Card className="flex flex-col flex-1 ml-2 overflow-hidden">
         <div id="editor-toolbar" className="relative flex flex-col gap-0">
               <Editor
                 key={`editor-${cell.refId}-${selectedLanguage}`}
@@ -696,13 +659,13 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
               />
               <div
                 id="toolbar"
-                className="flex items-center justify-start gap-4 border-t border-gray-100 bg-gray-50 px-3 py-1.5 text-xs opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-150"
+                className="-mt-px flex items-center justify-start gap-4 border border-sky-200/70 bg-[#111111] px-3 py-0.5 text-[10px] leading-tight text-gray-200 rounded-b-md"
               >
                 <div className="flex items-center gap-2">
                   <Text
                     size="1"
                     as="span"
-                    className="text-[11px] text-gray-500"
+                    className="text-[9px] uppercase tracking-wide text-gray-300"
                   >
                     Language
                   </Text>
@@ -710,7 +673,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
                     id={languageSelectId}
                     value={selectedLanguage}
                     onChange={handleLanguageChange}
-                    className="cursor-pointer rounded border border-gray-200 bg-white px-2 py-0.5 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-amber-300/50 focus:border-amber-300"
+                    className="cursor-pointer rounded border border-sky-200/70 bg-[#111111] px-2 py-0.5 text-[10px] font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-sky-200/50"
                   >
                     {LANGUAGE_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -723,22 +686,22 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
                   <Text
                     size="1"
                     as="span"
-                    className="text-[11px] text-gray-500"
+                    className="text-[9px] uppercase tracking-wide text-gray-300"
                   >
                     Runner
                   </Text>
                   <select
                     id={runnerSelectId}
                     value={initialRunnerName}
-                    onChange={(event) => {
+                    onChange={(event) => {                      
                       const nextName = event.target.value;
                       const names = new Set(listRunners().map((r) => r.name));
                       if (!names.has(nextName) && nextName !== DEFAULT_RUNNER_PLACEHOLDER) {
                         return;
                       }
-                      cellData.setRunner(nextName);
+                      cellData.setRunner(nextName);           
                     }}
-                    className="cursor-pointer rounded border border-gray-200 bg-white px-2 py-0.5 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-amber-300/50 focus:border-amber-300"
+                    className="cursor-pointer rounded border border-sky-200/70 bg-[#111111] px-2 py-0.5 text-[10px] font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-sky-200/50"
                   >
                     <option value="<default>">
                       {defaultRunnerName ? `<default: ${defaultRunnerName}>` : "<default>"}
@@ -754,15 +717,15 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
           </div>
             {renderedOutputs}
             {renderedOutputItems}
-          </div>
+          </Card>
         </div> 
       </Box>
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center">
         <div className="pointer-events-auto flex h-8 w-8 translate-y-1/2 items-center justify-center">
           <button
             type="button"
             aria-label="Add cell below"
-            className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-400 shadow-sm transition-all hover:border-amber-300 hover:text-amber-600 hover:bg-amber-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+            className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition-colors hover:border-gray-400 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
             onClick={handleAddCodeCellAfter}
           >
             <PlusIcon width={12} height={12} />
@@ -825,14 +788,14 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
       key={`scroll-${docUri}`}
       type="auto"
       scrollbars="vertical"
-      className="flex-1 h-full p-4 min-w-0 max-w-full overflow-x-hidden"
+      className="flex-1 h-full p-1 min-w-0 max-w-full overflow-x-hidden"
       data-document-id={docUri}
     >
-      <div className="mb-4 flex justify-center">
+      <div className="mb-2 flex justify-center">
         <button
           type="button"
           aria-label="Add cell"
-          className="flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-400 shadow-sm transition-all hover:border-amber-300 hover:text-amber-600 hover:bg-amber-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+          className="flex h-8 w-8 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition-colors hover:border-gray-400 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
           onClick={() => {
             if (!data) {
               return;
@@ -1025,20 +988,20 @@ export default function Actions() {
       ) : (
         <Tabs.Root
           value={currentDocUri ?? openNotebooks[0]?.uri ?? ""}
-          className="flex flex-col flex-1 min-h-0 rounded-lg overflow-hidden bg-gray-50"
+          className="flex flex-col flex-1 min-h-0 border border-gray-200 rounded-md overflow-hidden bg-white"
         >
-          <Tabs.List className="flex items-center gap-1 border-b border-gray-200 bg-white px-2 pt-2">
-          {openNotebooks.map((doc) => {
+          <Tabs.List className="flex items-center gap-0 border-b border-gray-300 bg-gray-100 px-1">
+          {openNotebooks.map((doc) => {              
             const displayName =
               doc.name ||
               doc.uri.split("/").filter(Boolean).pop() ||
               "This is a bug; this should not happen";
             return (
-              <div key={`tab-${doc.uri}`} className="flex items-center">
+              <div key={`tab-${doc.uri}`} className="flex items-center gap-1">
                 <Tabs.Trigger
                   value={doc.uri}
                   title={doc.name}
-                  className="group flex items-center gap-2 px-3 py-2 text-sm text-gray-500 rounded-t-lg transition-colors data-[state=active]:bg-gray-50 data-[state=active]:text-gray-900 data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=inactive]:hover:text-gray-700 data-[state=inactive]:hover:bg-gray-50 focus:outline-none"
+                  className="group flex items-center gap-2 px-3 py-1 text-sm font-medium text-gray-600 border border-gray-300 border-b-0 border-t-transparent data-[state=active]:border-t-2 data-[state=active]:border-t-sky-400 data-[state=active]:border-l-gray-400 data-[state=active]:border-r-gray-400 data-[state=active]:bg-white data-[state=active]:text-gray-900 data-[state=inactive]:bg-gray-100 focus:outline-none"
                   onClick={() => {
                     if (doc.uri !== currentDocUri) {
                       setMountedTabs((prev) => {
@@ -1057,7 +1020,7 @@ export default function Actions() {
                 </Tabs.Trigger>
                   <button
                     type="button"
-                    className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-gray-400 transition-all hover:text-gray-700 hover:bg-gray-200"
+                    className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-gray-400 transition-colors hover:text-gray-700"
                     aria-label={`Close ${displayName}`}
                     onClick={(event) => {
                       event.stopPropagation();
