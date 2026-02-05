@@ -169,7 +169,7 @@ function EditableTreeNode({
       <input
         ref={inputRef}
         defaultValue={node.data.name}
-        className="w-full rounded border border-gray-300 px-2 py-1 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+        className="w-full rounded border border-gray-300 px-2 py-1 text-sm outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
         onBlur={() => node.reset()}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
@@ -602,7 +602,7 @@ function formatShortTimestamp(date: Date): string {
           {data.type === NotebookStoreItemType.File ? (
             <button
               type="button"
-              className="block w-full bg-transparent p-0 text-left text-blue-600 leading-4 hover:bg-transparent hover:underline focus:outline-none border-0"
+              className="block w-full bg-transparent p-0 text-left text-amber-600 leading-4 hover:bg-transparent hover:text-amber-700 hover:underline focus:outline-none border-0"
               onClick={(event) => {
                 event.stopPropagation();
                 void handleFileOpen(data);
