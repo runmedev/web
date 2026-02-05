@@ -1,0 +1,49 @@
+name: Check for non-app changes
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  check-non-app-changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for changes outside app/
+        id: check
+        run: |
+          FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...HEAD -- ':!app/')
+          if [ -n "$FILES" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            {
+              echo 'files<<EOF'
+              echo "$FILES"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Add reviewer and comment
+        if: steps.check.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh pr edit ${{ github.event.pull_request.number }} --add-reviewer sourishkrout; then
+            echo "Warning: Failed to add reviewer 'sourishkrout'." >&2
+          fi
+
+          COMMENT="👋 @sourishkrout — this PR includes changes outside \`app/\` that you may want to review:
+
+          \`\`\`
+          ${{ steps.check.outputs.files }}
+          \`\`\`"
+
+          gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT" --edit-last || \
+          gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT"
