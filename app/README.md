@@ -138,3 +138,34 @@ aisre.runners.update("localhost","ws://localhost:9977/ws")
 * Change the port to whatever port your runme agent is serving on
 
 ## Deployment
+
+The web app can be published as a static-assets OCI artifact (not a runnable container image).
+
+### Publish static assets to GHCR
+
+This repo includes a GitHub Actions workflow at `.github/workflows/publish-app-assets-oci.yaml` that:
+
+1. Builds the app with `pnpm -C app run build`
+2. Packages `app/dist` into `app-assets.tgz` with files under `/assets`
+3. Pushes the tarball to GHCR as an OCI artifact using `oras`
+
+The artifact is published as:
+
+* `ghcr.io/runmedev/app-assets:sha-<commit-sha>`
+* `ghcr.io/runmedev/app-assets:latest` (for `main`)
+
+It uses a custom artifact type:
+
+* `application/vnd.runmeweb.assets.v1`
+
+### Pull and extract the static assets
+
+Install [ORAS](https://oras.land/) and then pull/extract:
+
+```sh
+oras pull ghcr.io/runmedev/app-assets:latest
+mkdir -p site
+tar -xzf app-assets.tgz -C site
+```
+
+After extraction, the app files are in `site/assets/` and can be served by any static file server or uploaded to object storage/CDN.
