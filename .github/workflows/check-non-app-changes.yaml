@@ -8,6 +8,7 @@ jobs:
   check-non-app-changes:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
@@ -17,13 +18,14 @@ jobs:
       - name: Check for changes outside app/
         id: check
         run: |
-          FILES=$(git diff --name-only origin/${{ github.event.pull_request.base.ref }}...HEAD -- ':!app/')
+          FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...HEAD -- ':!app/')
           if [ -n "$FILES" ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
-            EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
-            echo "files<<$EOF" >> "$GITHUB_OUTPUT"
-            echo "$FILES" >> "$GITHUB_OUTPUT"
-            echo "$EOF" >> "$GITHUB_OUTPUT"
+            {
+              echo 'files<<EOF'
+              echo "$FILES"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
@@ -33,7 +35,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr edit ${{ github.event.pull_request.number }} --add-reviewer sourishkrout || true
+          if ! gh pr edit ${{ github.event.pull_request.number }} --add-reviewer sourishkrout; then
+            echo "Warning: Failed to add reviewer 'sourishkrout'." >&2
+          fi
 
           COMMENT="👋 @sourishkrout — this PR includes changes outside \`app/\` that you may want to review:
 
@@ -41,4 +45,5 @@ jobs:
           ${{ steps.check.outputs.files }}
           \`\`\`"
 
+          gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT" --edit-last || \
           gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT"
