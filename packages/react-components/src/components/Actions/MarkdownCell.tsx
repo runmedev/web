@@ -20,6 +20,7 @@
 import {
   memo,
   useCallback,
+  useEffect,
   useMemo,
   useState,
   type FocusEvent,
@@ -177,6 +178,19 @@ const MarkdownCell = memo(
     // Get the current cell value
     const value = cell?.value ?? ''
 
+    // Reset rendered state when cell identity changes (new cell loaded)
+    useEffect(() => {
+      setRendered((cell?.value ?? '').trim().length > 0)
+    }, [cell?.refId])
+
+    // Enforce invariant: empty cells must be in edit mode.
+    // This handles external changes (undo/redo, sync) that clear the value.
+    useEffect(() => {
+      if (!value.trim() && rendered) {
+        setRendered(false)
+      }
+    }, [value, rendered])
+
     /**
      * Handle switching to edit mode when user double-clicks rendered content.
      * Also handles keyboard activation (Enter/Space) for accessibility.
@@ -188,9 +202,15 @@ const MarkdownCell = memo(
     /**
      * Handle keyboard activation on the rendered container for accessibility.
      * Enter or Space activates edit mode (like a button).
+     * Only triggers when the container itself has focus, not nested elements
+     * (e.g., links inside the markdown).
      */
     const handleRenderedKeyDown = useCallback(
       (event: KeyboardEvent<HTMLDivElement>) => {
+        // Only handle if the container itself is focused, not nested elements
+        if (event.target !== event.currentTarget) {
+          return
+        }
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
           setRendered(false)
@@ -300,6 +320,7 @@ const MarkdownCell = memo(
             onDoubleClick={handleDoubleClick}
             onKeyDown={handleRenderedKeyDown}
             tabIndex={0}
+            role="button"
             aria-label="Double-click or press Enter to edit markdown"
             data-testid="markdown-rendered"
           >
@@ -333,7 +354,7 @@ const MarkdownCell = memo(
     )
   },
   (prevProps, nextProps) => {
-    // Only re-render if the cell value changes
+    // Skip re-render if the cell value hasn't changed
     return prevProps.cell?.value === nextProps.cell?.value
   }
 )
