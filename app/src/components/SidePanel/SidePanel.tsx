@@ -7,7 +7,7 @@ import { useSidePanel } from "../../contexts/SidePanelContext";
 import Settings from "../Settings/Settings";
 
 const sideButtonBase =
-  "relative flex h-10 w-10 items-center justify-center rounded-md border border-transparent text-gray-700 hover:bg-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-800";
+  "relative flex h-10 w-10 items-center justify-center rounded-lg border border-transparent text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400";
 
 const tooltipBase =
   "pointer-events-none absolute left-11 top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-1 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100";
@@ -18,12 +18,12 @@ export function SidePanelToolbar() {
   const browserAdapter = getBrowserAdapter();
 
   return (
-    <div className="flex h-full w-12 flex-col items-center justify-between bg-gray-50">
+    <div className="flex h-full w-12 flex-col items-center justify-between bg-white border-r border-gray-100">
       <div className="flex flex-col items-center gap-2 pt-2">
         <button
           type="button"
           className={`group ${sideButtonBase} ${
-            activePanel === "explorer" ? "bg-gray-200 text-gray-800 hover:bg-gray-200" : ""
+            activePanel === "explorer" ? "bg-amber-50 text-amber-600 hover:bg-amber-50" : ""
           }`}
           aria-pressed={activePanel === "explorer"}
           aria-label="Toggle Explorer panel"
@@ -45,7 +45,7 @@ export function SidePanelToolbar() {
         <button
           type="button"
           className={`group ${sideButtonBase} ${
-            activePanel === "chatkit" ? "bg-gray-200 text-gray-800 hover:bg-gray-200" : ""
+            activePanel === "chatkit" ? "bg-amber-50 text-amber-600 hover:bg-amber-50" : ""
           }`}
           aria-pressed={activePanel === "chatkit"}
           aria-label="Toggle ChatKit panel"
@@ -83,7 +83,7 @@ export function SidePanelToolbar() {
         <button
           type="button"
           className={`group ${sideButtonBase} ${
-            activePanel === "settings" ? "bg-gray-200 text-gray-800 hover:bg-gray-200" : ""
+            activePanel === "settings" ? "bg-amber-50 text-amber-600 hover:bg-amber-50" : ""
           }`}
           aria-pressed={activePanel === "settings"}
           aria-label="Toggle settings panel"

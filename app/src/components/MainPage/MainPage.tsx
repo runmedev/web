@@ -12,25 +12,25 @@ export default function MainPage() {
   const sidePanelVisible = Boolean(activePanel);
 
   return (
-    <div className="flex h-screen w-screen bg-white">
+    <div className="flex h-screen w-screen bg-gray-50">
       <CurrentDocInitializer />
       <div className="flex h-full min-h-0 w-full">
         <div
-          className="flex h-full flex-col border-r border-gray-200 bg-gray-50"
+          className="flex h-full flex-col bg-white"
           style={{ width: TOOLBAR_WIDTH }}
         >
           <SidePanelToolbar />
         </div>
         <div
           id="sidepanel-column"
-          className={`h-full border-r border-gray-200 transition-[width] duration-150`}
+          className={`h-full border-r border-gray-100 bg-white transition-[width] duration-150`}
           style={{ width: sidePanelVisible ? SIDE_PANEL_WIDTH : 0 }}
         >
-          {sidePanelVisible && (    
+          {sidePanelVisible && (
             <SidePanelContent />
           )}
         </div>
-        <div className="flex h-full flex-1 min-w-0 flex-col gap-3 p-4">
+        <div className="flex h-full flex-1 min-w-0 flex-col gap-4 p-4">
           <div className="flex-1 min-h-0">
             <Actions />
           </div>
