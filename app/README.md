@@ -105,13 +105,15 @@ Clone the Runme Repo [https://github.com/runmedev/runme](https://github.com/runm
 Setup your configuration
 
 ```
-cp /Users/jlewi/git_runmeweb/app/runme-agent.dev.config.yaml \
+cp ${REPODIR}$/app/config.dev.yaml \
   ${HOME}/.runme-agent/config.dev.yaml
 ```
 
 Make the relevant changes to your config
 
 * Set the path to your OpenAI API Key
+* Change your email in the IAM rules
+* Add the Google OAuth Client ID
 
 ```
 go run ./ agent --config=${HOME}/.runme-agent/config.dev.yaml serve
