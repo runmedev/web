@@ -1,7 +1,14 @@
 import { clone, create } from "@bufbuild/protobuf";
 
 import { parser_pb, RunmeMetadataKey, MimeType } from "../contexts/CellContext";
-import LocalNotebooks from "../storage/local";
+
+/**
+ * Minimal store interface used by NotebookData for auto-saving.
+ * Both LocalNotebooks and ContentsNotebookStore satisfy this contract.
+ */
+export interface NotebookSaveStore {
+  save(uri: string, notebook: parser_pb.Notebook): Promise<unknown>;
+}
 import {
   IOPUB_INCOMPLETE_METADATA_KEY,
   IOPUB_MIME_TYPE,
@@ -304,7 +311,7 @@ export class NotebookData {
   private notebook: parser_pb.Notebook;
   private refToIndex: Map<string, number> = new Map();
   private listeners: Set<Listener> = new Set();
-  private notebookStore: LocalNotebooks | null;
+  private notebookStore: NotebookSaveStore | null;
   private sequence = 0;
   private snapshotCache: NotebookSnapshot;
   private loaded: boolean;
@@ -322,7 +329,7 @@ export class NotebookData {
     notebook: parser_pb.Notebook;
     uri: string;
     name: string;
-    notebookStore: LocalNotebooks | null;
+    notebookStore: NotebookSaveStore | null;
     loaded?: boolean;
   }) {
     this.uri = uri;

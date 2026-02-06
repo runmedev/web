@@ -133,7 +133,12 @@ function App({ branding, initialState = {} }: AppProps) {
               <FilesystemStoreProvider>
               <ContentsStoreProvider>
               <CurrentDocProvider>
-                  <NotebookStoreInitializer />
+                  <NotebookStoreInitializer
+                    agentEndpoint={
+                      initialState?.agentEndpoint ??
+                      import.meta.env.VITE_DEFAULT_AGENT_ENDPOINT
+                    }
+                  />
                   <SettingsProvider
                     requireAuth={initialState?.requireAuth}
                     agentEndpoint={
@@ -179,7 +184,7 @@ function App({ branding, initialState = {} }: AppProps) {
   );
 }
 
-function NotebookStoreInitializer() {
+function NotebookStoreInitializer({ agentEndpoint }: { agentEndpoint?: string }) {
   const { ensureAccessToken } = useGoogleAuth();
   const { store, setStore } = useNotebookStore();
   const { fsStore, setFsStore } = useFilesystemStore();
@@ -224,8 +229,6 @@ function NotebookStoreInitializer() {
       return;
     }
 
-    // Use the same agent endpoint for the ContentsService.
-    const agentEndpoint = import.meta.env.VITE_DEFAULT_AGENT_ENDPOINT;
     if (!agentEndpoint) {
       return;
     }
@@ -245,7 +248,7 @@ function NotebookStoreInitializer() {
     appState.setContentsStore(contentsStoreInstance);
     contentsInstanceRef.current = contentsStoreInstance;
     setContentsStore(contentsStoreInstance);
-  }, [contentsStore, setContentsStore]);
+  }, [agentEndpoint, contentsStore, setContentsStore]);
 
   return null;
 }

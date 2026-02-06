@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import { useNotebookStore } from "./NotebookStoreContext";
+import { isContentsUri } from "../storage/storeResolver";
 
 interface CurrentDocContextValue {
   getCurrentDoc: () => string | null;
@@ -36,9 +37,6 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
   const [currentDoc, setCurrentDocState] = useState<string | null>(null);
 
   const resolveFromLocation = useCallback(async () => {
-    if (!store) {
-      return;
-    }
     const params = new URLSearchParams(window.location.search);
     const doc = params.get("doc");
 
@@ -49,6 +47,16 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
 
     if (doc.startsWith("local://")) {
       setCurrentDocState(doc);
+      return;
+    }
+
+    if (isContentsUri(doc)) {
+      setCurrentDocState(doc);
+      return;
+    }
+
+    // Drive URIs require the local store to mirror into IndexedDB.
+    if (!store) {
       return;
     }
 
@@ -94,6 +102,8 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
         const nextUrl = new URL(window.location.href);
         if (!localUri) {
           nextUrl.searchParams.delete("doc");
+        } else if (isContentsUri(localUri)) {
+          nextUrl.searchParams.set("doc", localUri);
         } else if (store) {
           try {
             const metadata = await store.getMetadata(localUri);

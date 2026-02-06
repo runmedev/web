@@ -1,0 +1,29 @@
+{
+  "cells": [
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "# Nested Notebook\n\nThis notebook lives in a subdirectory to test folder navigation in the explorer.",
+      "languageId": "markdown",
+      "metadata": {},
+      "outputs": [],
+      "executionSummary": {}
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "echo 'I am a nested notebook'",
+      "languageId": "bash",
+      "metadata": {
+        "name": "nested-test"
+      },
+      "outputs": [],
+      "executionSummary": {}
+    }
+  ],
+  "metadata": {},
+  "frontmatter": {
+    "runme": {
+      "id": "test-nested",
+      "version": "v3"
+    }
+  }
+}

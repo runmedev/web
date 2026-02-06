@@ -5,6 +5,8 @@ import type { RendererContext } from "vscode-notebook-renderer";
 
 import { JSKernel } from "../../lib/runtime/jsKernel";
 import { useRunners } from "../../contexts/RunnersContext";
+import { useWorkspace } from "../../contexts/WorkspaceContext";
+import { useContentsStore } from "../../contexts/ContentsStoreContext";
 import { Runner } from "../../lib/runner";
 import { getRunnersManager } from "../../lib/runtime/runnersManager";
 import { googleClientManager } from "../../lib/googleClientManager";
@@ -50,6 +52,8 @@ export default function AppConsole() {
   );
   const { listRunners, updateRunner, deleteRunner, defaultRunnerName } =
     useRunners();
+  const { getItems, addItem, removeItem } = useWorkspace();
+  const { contentsStore } = useContentsStore();
 
   // Message pump to deliver stdout/stderr back into console-view.
   const messageListenerRef = useRef<((message: unknown) => void) | undefined>(
@@ -199,6 +203,81 @@ export default function AppConsole() {
             google: googleClientManager,
             oidc: oidcConfigManager,
           },
+          help: () => {
+            return [
+              "Available namespaces:",
+              "  explorer        - Manage workspace folders and notebooks",
+              "  aisreRunners    - Configure runner endpoints",
+              "  oidc            - OIDC/OAuth configuration and auth status",
+              "  googleClientManager - Google OAuth client settings",
+              "  credentials     - Shorthand for google/oidc credential managers",
+              "",
+              "Type <namespace>.help() for detailed commands, e.g. explorer.help()",
+            ].join("\n");
+          },
+          explorer: {
+            addFolder: (path?: string) => {
+              if (!contentsStore) {
+                return "ContentsService is not configured.";
+              }
+              const rootUri = contentsStore.getRootUri();
+              if (!path) {
+                addItem(rootUri);
+                return `Added contents root: ${rootUri}`;
+              }
+              // Build a proper contents:// directory URI. The root URI has the form
+              // contents://<host:port>/dir/ — we extract the host and construct a
+              // well-formed URI with the path encoded as a single relative path segment.
+              const match = rootUri.match(/^contents:\/\/([^/]+)\/dir\//);
+              if (!match) {
+                return `Error: could not parse root URI: ${rootUri}`;
+              }
+              const subUri = `contents://${match[1]}/dir/${encodeURIComponent(path)}`;
+              addItem(subUri);
+              return `Added folder: ${subUri}`;
+            },
+            mountDrive: (driveUrl: string) => {
+              if (!driveUrl) {
+                return "Usage: explorer.mountDrive(driveUrl)";
+              }
+              addItem(driveUrl);
+              return `Mounted Drive link: ${driveUrl}`;
+            },
+            openPicker: () => {
+              if (typeof window !== "undefined" && "showDirectoryPicker" in window) {
+                void (window as any).showDirectoryPicker().catch((err: unknown) => {
+                  sendStdout(`Picker cancelled or failed: ${String(err)}\r\n`);
+                });
+                return "Opening directory picker…";
+              }
+              return "showDirectoryPicker() is not supported in this browser.";
+            },
+            removeFolder: (uri: string) => {
+              if (!uri) {
+                return "Usage: explorer.removeFolder(uri)";
+              }
+              removeItem(uri);
+              return `Removed: ${uri}`;
+            },
+            listFolders: () => {
+              const items = getItems();
+              if (items.length === 0) {
+                return "No folders in workspace.";
+              }
+              return items.join("\n");
+            },
+            help: () => {
+              return [
+                "explorer.addFolder()           - Add contents root folder to workspace",
+                "explorer.addFolder(path)        - Add a subdirectory to workspace",
+                "explorer.mountDrive(driveUrl)   - Mount a Google Drive link",
+                "explorer.openPicker()           - Open native directory picker",
+                "explorer.removeFolder(uri)      - Remove a folder from workspace",
+                "explorer.listFolders()          - List all workspace folders",
+                "explorer.help()                 - Show this help",
+              ].join("\n");
+            },
+          },
         },
         hooks: {
           onStdout: (data) => {
@@ -213,7 +292,7 @@ export default function AppConsole() {
           },
         },
       }),
-    [consoleId, defaultRunnerName, deleteRunner, listRunners, updateRunner],
+    [consoleId, defaultRunnerName, deleteRunner, listRunners, updateRunner, contentsStore, addItem, getItems, removeItem],
   );
 
   // Line editor state (buffer + cursor index).
@@ -393,7 +472,7 @@ export default function AppConsole() {
                   type: ClientMessages.terminalStdout,
                   output: {
                     "runme.dev/id": consoleId,
-                    data: `AISRE JS console; use JavaScript to control the app.\n${PROMPT}`,
+                    data: `AISRE JS console. Type help() to see available commands.\n${PROMPT}`,
                   },
                 } as any);
                 return {

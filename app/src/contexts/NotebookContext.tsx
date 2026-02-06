@@ -14,11 +14,13 @@ import { create } from "@bufbuild/protobuf";
 import { NotebookData, type NotebookSnapshot } from "../lib/notebookData";
 import { parser_pb } from "./CellContext";
 import { useNotebookStore } from "./NotebookStoreContext";
+import { useContentsStore } from "./ContentsStoreContext";
 import { useCurrentDoc } from "./CurrentDocContext";
 import {
   NotebookStoreItem,
   NotebookStoreItemType,
 } from "../storage/notebook";
+import { isContentsUri, resolveStore } from "../storage/storeResolver";
 
 type NotebookContextValue = {
   getNotebookData: (uri: string) => NotebookData | undefined;
@@ -149,6 +151,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     });
   }, []);
   const { store: notebookStore } = useNotebookStore();
+  const { contentsStore } = useContentsStore();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const hasRestoredNotebooks = useRef(false);
 
@@ -167,11 +170,12 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
           cells: [],
           metadata: {},
         });
+      const effectiveStore = resolveStore(uri, notebookStore, contentsStore);
       const data = new NotebookData({
         uri,
         name: resolvedName,
         notebook: initialNotebook,
-        notebookStore: notebookStore ?? null,
+        notebookStore: effectiveStore ?? null,
         loaded,
       });
       const unsubscribe = data.subscribe(() => emit());
@@ -192,7 +196,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
       emit();
       return data;
     },
-    [emit, notebookStore],
+    [emit, notebookStore, contentsStore],
   );
 
   const getNotebookData = useCallback((uri: string) => {
@@ -284,9 +288,9 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     persistOpenNotebooks(openNotebooks);
   }, [openNotebooks]);
 
-  // Load any notebooks that were open last session once the store is available.
+  // Load any notebooks that were open last session once a store is available.
   useEffect(() => {
-    if (!notebookStore) {
+    if (!notebookStore && !contentsStore) {
       return;
     }
     const loadExisting = async () => {
@@ -296,14 +300,16 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
           continue;
         }
         if (!entry) {
-          // We persisted an open notebook URI without a corresponding model in memory.
-          // Skip here; the model should be created elsewhere before loading.
+          continue;
+        }
+        const store = resolveStore(item.uri, notebookStore, contentsStore);
+        if (!store) {
           continue;
         }
         try {
           const [metadata, notebook] = await Promise.all([
-            notebookStore.getMetadata(item.uri),
-            notebookStore.load(item.uri),
+            store.getMetadata(item.uri),
+            store.load(item.uri),
           ]);
           entry.data.loadNotebook(notebook);
           entry.loaded = true;
@@ -313,12 +319,16 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
       }
     };
     void loadExisting();
-  }, [notebookStore, openNotebooks]);
+  }, [notebookStore, contentsStore, openNotebooks]);
 
   // Ensure the current doc is loaded into NotebookData when it changes.
   useEffect(() => {
     const uri = getCurrentDoc();
-    if (!uri || !notebookStore) {
+    if (!uri) {
+      return;
+    }
+    const store = resolveStore(uri, notebookStore, contentsStore);
+    if (!store) {
       return;
     }
     const entry = storeRef.current.get(uri);
@@ -328,15 +338,13 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     const load = async () => {
       try {
         const [metadata, notebook] = await Promise.all([
-          notebookStore.getMetadata(uri),
-          notebookStore.load(uri),
+          store.getMetadata(uri),
+          store.load(uri),
         ]);
         if (entry) {
           entry.data.loadNotebook(notebook);
           entry.loaded = true;
         } else {
-          // I think we need to call ensureNotebook here because its possible currentDoc was set to a doc which isn't in
-          // the NotebookProvider yet.          
           ensureNotebook({
             uri,
             name: metadata?.name ?? uri,
@@ -350,7 +358,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
       }
     };
     void load();
-  }, [ensureNotebook, getCurrentDoc, notebookStore, setCurrentDoc]);
+  }, [ensureNotebook, getCurrentDoc, notebookStore, contentsStore, setCurrentDoc]);
 
   const value = useMemo<NotebookContextValue>(
     () => ({
