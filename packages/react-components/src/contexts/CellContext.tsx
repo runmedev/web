@@ -925,11 +925,8 @@ async function createNewSession(
   const pwd = lastValueFrom(
     streams.stdout.pipe(
       takeUntil(streams.exitCode),
-      timeout(5000), // 5 second timeout
-      reduce(
-        (acc, chunk) => acc + decoder.decode(chunk, { stream: true }),
-        ''
-      ),
+      timeout(10000), // 10 second timeout
+      reduce((acc, chunk) => acc + decoder.decode(chunk, { stream: true }), ''),
       map((result) => (result + decoder.decode()).trim())
     )
   )
