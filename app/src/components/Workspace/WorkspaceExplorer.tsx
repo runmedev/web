@@ -14,6 +14,7 @@ import useResizeObserver from "use-resize-observer";
 
 import { GoogleDrivePickerButton } from "./GoogleDrivePickerButton";
 import { FolderPlusIcon } from "../icons/FolderPlusIcon";
+import { CloudFolderIcon } from "../icons/CloudFolderIcon";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
@@ -838,10 +839,10 @@ function formatShortTimestamp(date: Date): string {
             </button>
           )}
           <GoogleDrivePickerButton
-            label="Add Folder"
+            label="Add Google Drive folder"
             className="btn btn-soft h-8 w-8 justify-center rounded-full p-0"
           >
-            <FolderPlusIcon width={20} height={20} />
+            <CloudFolderIcon width={20} height={20} />
           </GoogleDrivePickerButton>
         </div>
       </div>
