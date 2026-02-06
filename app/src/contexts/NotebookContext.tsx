@@ -20,7 +20,7 @@ import {
   NotebookStoreItem,
   NotebookStoreItemType,
 } from "../storage/notebook";
-import { isContentsUri, resolveStore } from "../storage/storeResolver";
+import { resolveStore } from "../storage/storeResolver";
 
 type NotebookContextValue = {
   getNotebookData: (uri: string) => NotebookData | undefined;

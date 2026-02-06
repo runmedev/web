@@ -4,7 +4,7 @@
 # Prerequisites:
 #   - Backend running on port 9977 with no-auth config:
 #     cd runme && go run ./ agent --config=${HOME}/.runme-agent/config.dev.noauth.yaml serve
-#   - Frontend running on port 5173 (cd web && pnpm run dev:app)
+#   - Frontend running on port 5173 (pnpm -C app run dev)
 #   - agent-browser CLI installed and available on PATH
 #
 # Usage:

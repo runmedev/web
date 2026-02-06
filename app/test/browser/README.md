@@ -21,7 +21,7 @@ Automated UI tests for jl-notebook using `agent-browser`.
 ## Running
 
 ```bash
-cd web/app/test/browser
+cd app/test/browser
 ./test-notebook-ui.sh
 ```
 

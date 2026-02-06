@@ -354,8 +354,11 @@ const MarkdownCell = memo(
     )
   },
   (prevProps, nextProps) => {
-    // Skip re-render if the cell value hasn't changed
-    return prevProps.cell?.value === nextProps.cell?.value
+    // Skip re-render only if both the cell identity and value haven't changed
+    return (
+      prevProps.cell?.refId === nextProps.cell?.refId &&
+      prevProps.cell?.value === nextProps.cell?.value
+    )
   }
 )
 

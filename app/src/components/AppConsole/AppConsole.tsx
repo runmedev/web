@@ -7,6 +7,7 @@ import { JSKernel } from "../../lib/runtime/jsKernel";
 import { useRunners } from "../../contexts/RunnersContext";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { useContentsStore } from "../../contexts/ContentsStoreContext";
+import { buildContentsUri, parseContentsUri } from "../../storage/contents";
 import { Runner } from "../../lib/runner";
 import { getRunnersManager } from "../../lib/runtime/runnersManager";
 import { googleClientManager } from "../../lib/googleClientManager";
@@ -225,14 +226,10 @@ export default function AppConsole() {
                 addItem(rootUri);
                 return `Added contents root: ${rootUri}`;
               }
-              // Build a proper contents:// directory URI. The root URI has the form
-              // contents://<host:port>/dir/ — we extract the host and construct a
-              // well-formed URI with the path encoded as a single relative path segment.
-              const match = rootUri.match(/^contents:\/\/([^/]+)\/dir\//);
-              if (!match) {
-                return `Error: could not parse root URI: ${rootUri}`;
-              }
-              const subUri = `contents://${match[1]}/dir/${encodeURIComponent(path)}`;
+              // Build a proper contents:// directory URI using the shared helpers
+              // to avoid URI format drift with the rest of the codebase.
+              const parsed = parseContentsUri(rootUri);
+              const subUri = buildContentsUri(parsed.baseURL, path, "directory");
               addItem(subUri);
               return `Added folder: ${subUri}`;
             },
