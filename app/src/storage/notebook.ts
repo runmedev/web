@@ -14,8 +14,17 @@ export interface NotebookStoreItem {
   parents: string[];
 }
 
+/**
+ * Result returned by save() when a conflict is detected.
+ * Stores that don't support conflict detection return `{ conflicted: false }`.
+ */
+export interface ConflictResult {
+  conflicted: boolean;
+  conflictFileName?: string;
+}
+
 export interface NotebookStore {
-  save(uri: string, notebook: parser_pb.Notebook): Promise<void>;
+  save(uri: string, notebook: parser_pb.Notebook): Promise<ConflictResult>;
   load(uri: string): Promise<parser_pb.Notebook>;
   list(uri: string): Promise<NotebookStoreItem[]>;
   getType(uri: string): Promise<NotebookStoreItemType>;

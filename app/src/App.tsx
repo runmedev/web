@@ -27,9 +27,16 @@ import {
   GoogleAuthProvider,
   useGoogleAuth,
 } from "./contexts/GoogleAuthContext";
+import { ContentsNotebookStore } from "./storage/contents";
+import type { MarkdownConverter } from "./storage/contents";
 import { DriveNotebookStore } from "./storage/drive";
+import { aisreClientManager } from "./lib/aisreClientManager";
 import LocalNotebooks from "./storage/local";
 import { CurrentDocProvider } from "./contexts/CurrentDocContext";
+import {
+  ContentsStoreProvider,
+  useContentsStore,
+} from "./contexts/ContentsStoreContext";
 
 import MainPage from "./components/MainPage/MainPage";
 
@@ -43,6 +50,20 @@ import { SidePanelProvider } from "./contexts/SidePanelContext";
 import { appState } from "./lib/runtime/AppState";
 
 const queryClient = new QueryClient();
+
+/** Shared factory for MarkdownConverter that delegates to AisreClient's ParserService. */
+function createMarkdownConverter(): MarkdownConverter {
+  return {
+    deserialize: async (source) => {
+      const client = aisreClientManager.get();
+      return client.deserializeNotebook(source);
+    },
+    serialize: async (notebook) => {
+      const client = aisreClientManager.get();
+      return client.serializeNotebook(notebook);
+    },
+  };
+}
 
 export interface AppBranding {
   name: string;
@@ -119,7 +140,8 @@ function App({ branding, initialState = {} }: AppProps) {
           <GoogleAuthProvider>
             <WorkspaceProvider>
               <NotebookStoreProvider>
-              <CurrentDocProvider>                
+              <ContentsStoreProvider>
+              <CurrentDocProvider>
                   <NotebookStoreInitializer />
                   <SettingsProvider
                     requireAuth={initialState?.requireAuth}
@@ -155,6 +177,7 @@ function App({ branding, initialState = {} }: AppProps) {
                     </RunnersProvider>
                   </SettingsProvider>                
                 </CurrentDocProvider>
+              </ContentsStoreProvider>
               </NotebookStoreProvider>
             </WorkspaceProvider>
           </GoogleAuthProvider>
@@ -167,7 +190,9 @@ function App({ branding, initialState = {} }: AppProps) {
 function NotebookStoreInitializer() {
   const { ensureAccessToken } = useGoogleAuth();
   const { store, setStore } = useNotebookStore();
+  const { contentsStore, setContentsStore } = useContentsStore();
   const instanceRef = useRef<LocalNotebooks | null>(null);
+  const contentsInstanceRef = useRef<ContentsNotebookStore | null>(null);
 
   useEffect(() => {
     if (instanceRef.current || store) {
@@ -183,6 +208,35 @@ function NotebookStoreInitializer() {
     instanceRef.current = localStore;
     setStore(localStore);
   }, [ensureAccessToken, setStore, store]);
+
+  useEffect(() => {
+    if (contentsInstanceRef.current || contentsStore) {
+      return;
+    }
+
+    // Use the same agent endpoint for the ContentsService.
+    const agentEndpoint = import.meta.env.VITE_DEFAULT_AGENT_ENDPOINT;
+    if (!agentEndpoint) {
+      return;
+    }
+
+    const contentsStoreInstance = new ContentsNotebookStore(
+      agentEndpoint,
+      async () => {
+        const authData = await getAuthData();
+        const token = authData?.idToken || "";
+        if (token) {
+          return { Authorization: `Bearer ${token}` };
+        }
+        return {};
+      },
+      createMarkdownConverter(),
+    );
+
+    appState.setContentsStore(contentsStoreInstance);
+    contentsInstanceRef.current = contentsStoreInstance;
+    setContentsStore(contentsStoreInstance);
+  }, [contentsStore, setContentsStore]);
 
   return null;
 }

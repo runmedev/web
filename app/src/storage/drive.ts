@@ -2,6 +2,7 @@ import { create, fromJsonString, toJsonString } from "@bufbuild/protobuf";
 
 import { parser_pb } from "../runme/client";
 import {
+  type ConflictResult,
   NotebookStore,
   NotebookStoreItem,
   NotebookStoreItemType,
@@ -450,7 +451,7 @@ export class DriveNotebookStore implements NotebookStore {
     };
   }
 
-  async save(uri: string, notebook: parser_pb.Notebook): Promise<void> {
+  async save(uri: string, notebook: parser_pb.Notebook): Promise<ConflictResult> {
     const { id, type } = parseDriveItem(uri);
     if (type !== NotebookStoreItemType.File) {
       throw new Error("DriveNotebookStore.save expects a file URI");
@@ -475,7 +476,7 @@ export class DriveNotebookStore implements NotebookStore {
           actual: remoteMd5,
         },
       );
-      return;
+      return { conflicted: true };
     }
     const json = toJsonString(parser_pb.NotebookSchema, notebook, {
       emitDefaultValues: true,
@@ -499,6 +500,7 @@ export class DriveNotebookStore implements NotebookStore {
     } else {
       this.lastReadVersion.delete(uri);
     }
+    return { conflicted: false };
   }
 
   async load(uri: string): Promise<parser_pb.Notebook> {
