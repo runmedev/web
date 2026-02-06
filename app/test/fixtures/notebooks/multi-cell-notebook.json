@@ -1,0 +1,149 @@
+{
+  "cells": [
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "# Data Pipeline Notebook\n\nThis notebook demonstrates a multi-step data pipeline.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01J0000000000000000000030"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {
+        "start": 0,
+        "end": 0
+      }
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "export DATA_DIR=/tmp/pipeline\nmkdir -p $DATA_DIR",
+      "languageId": "sh",
+      "metadata": {
+        "runme.dev/id": "01J0000000000000000000031",
+        "name": "setup-env"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {
+        "start": 0,
+        "end": 0
+      }
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## Step 1: Download Data\n\nFetch the raw dataset from the source.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01J0000000000000000000032"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {
+        "start": 0,
+        "end": 0
+      }
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "curl -sL https://example.com/data.csv -o $DATA_DIR/raw.csv\nwc -l $DATA_DIR/raw.csv",
+      "languageId": "sh",
+      "metadata": {
+        "runme.dev/id": "01J0000000000000000000033",
+        "name": "download-data"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {
+        "start": 0,
+        "end": 0
+      }
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## Step 2: Process Data\n\nTransform and clean the raw data.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01J0000000000000000000034"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {
+        "start": 0,
+        "end": 0
+      }
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "cat $DATA_DIR/raw.csv | sort | uniq > $DATA_DIR/processed.csv\necho \"Processing complete\"",
+      "languageId": "sh",
+      "metadata": {
+        "runme.dev/id": "01J0000000000000000000035",
+        "name": "process-data"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {
+        "start": 0,
+        "end": 0
+      }
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "echo \"Pipeline complete. Output at $DATA_DIR/processed.csv\"",
+      "languageId": "sh",
+      "metadata": {
+        "runme.dev/id": "01J0000000000000000000036",
+        "name": "summary"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {
+        "start": 0,
+        "end": 0
+      }
+    }
+  ],
+  "metadata": {}
+}

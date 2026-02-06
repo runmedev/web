@@ -1,0 +1,87 @@
+{
+  "cells": [
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "# Setup\n\nInstall dependencies and run the build.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01J0000000000000000000010"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {
+        "start": 0,
+        "end": 0
+      }
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "npm install",
+      "languageId": "sh",
+      "metadata": {
+        "runme.dev/id": "01J0000000000000000000011",
+        "name": "install-deps"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {
+        "start": 0,
+        "end": 0
+      }
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## Build\n\nRun the build command.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01J0000000000000000000012"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {
+        "start": 0,
+        "end": 0
+      }
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "npm run build",
+      "languageId": "sh",
+      "metadata": {
+        "runme.dev/id": "01J0000000000000000000013",
+        "name": "run-build"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {
+        "start": 0,
+        "end": 0
+      }
+    }
+  ],
+  "metadata": {}
+}
