@@ -15,12 +15,40 @@ import { ClientMessages, setContext } from "@runmedev/renderers";
 
 import { MimeType, RunmeMetadataKey, parser_pb } from "../../runme/client";
 import { CellData } from "../../lib/notebookData";
-import { maybeParseIPykernelMessage } from "../../lib/ipykernel";
+import { maybeParseIPykernelMessage, type IPykernelMessage } from "../../lib/ipykernel";
 
 export const fontSettings = {
   fontSize: 12,
   fontFamily: "monospace",
 };
+
+/**
+ * Extract displayable text from an IPykernel message.
+ * - "stream" messages contain print() output in content.text
+ * - "error" messages contain exception info in content.ename/evalue/traceback
+ * Returns the text to write to the terminal, or null if the message
+ * is a control message that should be silently ignored.
+ */
+function extractIopubText(msg: IPykernelMessage): string | null {
+  const msgType = msg.header?.msg_type ?? (msg as any).msg_type;
+
+  if (msgType === "stream") {
+    const text = typeof msg.content?.text === "string" ? msg.content.text : "";
+    return text || null;
+  }
+
+  if (msgType === "error") {
+    const ename = (msg.content as any)?.ename ?? "";
+    const evalue = (msg.content as any)?.evalue ?? "";
+    const traceback: string[] = Array.isArray((msg.content as any)?.traceback)
+      ? (msg.content as any).traceback
+      : [];
+    const text = [ename, evalue, ...traceback].filter(Boolean).join("\n");
+    return text ? text + "\n" : null;
+  }
+
+  return null;
+}
 
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
@@ -210,11 +238,13 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
         return;
       }
       stdoutBufferRef.current = "";
-      // N.B. Right now CellConsole subscribes to the raw stream from the kernel.
-      // So we need to filter out any IPykernel control messages. 
-      // We might want to refactor the code so that we create a filtered in bindStreamsToCell
-      // which contains only the actual stdout/stderr output after filtering out the control messages.
-      if (!maybeParseIPykernelMessage(pending)) {
+      const parsed = maybeParseIPykernelMessage(pending);
+      if (parsed) {
+        const text = extractIopubText(parsed);
+        if (text) {
+          writeToTerminal(textEncoder.encode(text));
+        }
+      } else {
         writeToTerminal(textEncoder.encode(pending));
       }
     };
@@ -228,7 +258,12 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
         stdoutBufferRef.current = lines.pop() ?? "";
 
         lines.forEach((line) => {
-          if (maybeParseIPykernelMessage(line)) {
+          const parsed = maybeParseIPykernelMessage(line);
+          if (parsed) {
+            const text = extractIopubText(parsed);
+            if (text) {
+              writeToTerminal(textEncoder.encode(text));
+            }
             return;
           }
           writeToTerminal(textEncoder.encode(`${line}\n`));

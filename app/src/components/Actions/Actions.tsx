@@ -586,6 +586,26 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
         )}
         <Box className="relative w-full min-w-0 max-w-full px-2 py-1 overflow-hidden">
           <MarkdownCell cellData={cellData} />
+          <div
+            id={`markdown-toolbar-${cell.refId}`}
+            className="flex items-center gap-2 px-3 py-1 text-xs opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-150"
+          >
+            <Text size="1" as="span" className="text-[11px] text-gray-500">
+              Language
+            </Text>
+            <select
+              id={languageSelectId}
+              value={selectedLanguage}
+              onChange={handleLanguageChange}
+              className="cursor-pointer rounded border border-gray-200 bg-white px-2 py-0.5 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-amber-300/50 focus:border-amber-300"
+            >
+              {LANGUAGE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </Box>
         <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150">
           <div className="pointer-events-auto flex h-8 w-8 translate-y-1/2 items-center justify-center">
