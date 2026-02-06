@@ -30,7 +30,7 @@ export class EnvViewer extends LitElement implements Disposable {
   @state()
   _copied: boolean = false
 
-  /* eslint-disable */
+   
   static styles = css`
     vscode-button {
       color: var(--vscode-button-foreground);

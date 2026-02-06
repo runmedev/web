@@ -1,6 +1,6 @@
 import { html } from 'lit'
 
-/* eslint-disable max-len */
+ 
 export const CloudShellIcon = html`
   <svg
     width="18"

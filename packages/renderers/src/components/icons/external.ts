@@ -1,6 +1,6 @@
 import { html } from 'lit'
 
-/* eslint-disable max-len */
+ 
 export const ExternalLinkIcon = html`
   <svg xmlns="http://www.w3.org/2000/svg" height="0.75em" viewBox="0 0 512 512">
     <path

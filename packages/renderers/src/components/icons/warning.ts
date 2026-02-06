@@ -1,6 +1,6 @@
 import { html } from 'lit'
 
-/* eslint-disable max-len */
+ 
 export const WarningIcon = html`
   <svg
     width="16"

@@ -1,4 +1,4 @@
-/* eslint-disable max-len */
+ 
 import { html } from 'lit'
 
 export const DaggerIcon = html`

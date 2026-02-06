@@ -28,7 +28,7 @@ export class DropdownList extends LitElement {
   @property({ type: String })
   key: string | undefined
 
-  /* eslint-disable */
+   
   static styles = css`
     .dropdown-container label {
       color: var(--vscode-settings-dropdownForeground);

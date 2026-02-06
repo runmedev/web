@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allowedCommands": [
+      "runme run setup",
+      "runme run build",
+      "runme run dev",
+      "runme run test",
+      "runme run clean",
+      "runme run configure"
+    ],
+    "allowedPrompts": [
+      {
+        "tool": "Bash",
+        "prompt": "install dependencies"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "build packages"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "start development server"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "run tests"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "clean build artifacts"
+      },
+      {
+        "tool": "Bash",
+        "prompt": "configure pnpm registry"
+      }
+    ]
+  }
+}

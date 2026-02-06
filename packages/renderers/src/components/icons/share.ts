@@ -1,6 +1,6 @@
 import { html } from 'lit'
 
-/* eslint-disable max-len */
+ 
 export const ShareIcon = html`<svg
   class="icon"
   width="16"

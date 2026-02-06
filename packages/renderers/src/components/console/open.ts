@@ -13,7 +13,7 @@ export class OpenCell extends LitElement {
   @property({ type: Boolean, reflect: true })
   disabled: boolean = false
 
-  /* eslint-disable */
+   
   static styles = css`
     vscode-button {
       color: var(--vscode-button-foreground);
