@@ -16,10 +16,14 @@ import { GoogleDrivePickerButton } from "./GoogleDrivePickerButton";
 import { FolderPlusIcon } from "../icons/FolderPlusIcon";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
+import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
+import { useContentsStore } from "../../contexts/ContentsStoreContext";
 import {
+  NotebookStore,
   NotebookStoreItem,
   NotebookStoreItemType,
 } from "../../storage/notebook";
+import { isFileSystemAccessSupported } from "../../storage/fs";
 import { fetchDriveItemWithParents, parseDriveItem } from "../../storage/drive";
 import { LOCAL_FOLDER_URI } from "../../storage/local";
 import { useGoogleAuth } from "../../contexts/GoogleAuthContext";
@@ -189,9 +193,33 @@ function EditableTreeNode({
 // in the workspace.
 // In addition to viewing Google Drive folders it also supports "local://" URIs
 // which are stored in the browser's IndexedDB.
+/**
+ * Return the appropriate NotebookStore for a given URI.
+ * - `contents://` URIs route to the ContentsNotebookStore.
+ * - `fs://` URIs route to the FilesystemNotebookStore.
+ * - Everything else routes to the LocalNotebooks (Drive-backed) store.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function storeForUri(
+  uri: string,
+  localStore: any,
+  fsStoreInstance: NotebookStore | null,
+  contentsStoreInstance?: NotebookStore | null,
+): NotebookStore | null {
+  if (uri.startsWith("contents://")) {
+    return contentsStoreInstance ?? null;
+  }
+  if (uri.startsWith("fs://")) {
+    return fsStoreInstance;
+  }
+  return localStore as NotebookStore | null;
+}
+
 export function WorkspaceExplorer() {
   const { getItems, addItem, removeItem } = useWorkspace();
   const { store } = useNotebookStore();
+  const { fsStore } = useFilesystemStore();
+  const { contentsStore } = useContentsStore();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const currentDoc = getCurrentDoc();
   const { ensureAccessToken } = useGoogleAuth();
@@ -227,6 +255,44 @@ export function WorkspaceExplorer() {
       for (const uri of workspaceUris) {
         if (cancelled) {
           return;
+        }
+
+        // fs:// workspace roots are handled by the filesystem store.
+        if (uri.startsWith("fs://")) {
+          if (!fsStore) {
+            continue;
+          }
+          try {
+            const metadata = await fsStore.getMetadata(uri);
+            const name = metadata?.name ?? uri;
+            const type = metadata?.type ?? NotebookStoreItemType.Folder;
+            if (type !== NotebookStoreItemType.Folder) {
+              continue;
+            }
+            folderNodes.push(createFolderNode(uri, name));
+          } catch (error) {
+            console.error("Failed to load fs workspace metadata", uri, error);
+          }
+          continue;
+        }
+
+        // contents:// workspace roots are handled by the contents store.
+        if (uri.startsWith("contents://")) {
+          if (!contentsStore) {
+            continue;
+          }
+          try {
+            const metadata = await contentsStore.getMetadata(uri);
+            const name = metadata?.name ?? "Server Files";
+            const type = metadata?.type ?? NotebookStoreItemType.Folder;
+            if (type !== NotebookStoreItemType.Folder) {
+              continue;
+            }
+            folderNodes.push(createFolderNode(uri, name));
+          } catch (error) {
+            console.error("Failed to load contents workspace metadata", uri, error);
+          }
+          continue;
         }
 
         let localUri = uri;
@@ -277,7 +343,7 @@ export function WorkspaceExplorer() {
     return () => {
       cancelled = true;
     };
-  }, [addItem, removeItem, store, workspaceUris]);
+  }, [addItem, contentsStore, fsStore, removeItem, store, workspaceUris]);
 
   useEffect(() => {
     // Coordinate with the global current-doc context. Whenever a Drive-backed
@@ -433,7 +499,8 @@ export function WorkspaceExplorer() {
 
   const fetchChildren = useCallback(
     async (uri: string) => {
-      if (!store) {
+      const targetStore = storeForUri(uri, store, fsStore, contentsStore);
+      if (!targetStore) {
         return;
       }
 
@@ -444,27 +511,43 @@ export function WorkspaceExplorer() {
       );
 
       try {
-        const folderMetadata = await store.getMetadata(uri);
-        if (!folderMetadata || folderMetadata.type !== NotebookStoreItemType.Folder) {
-          throw new Error(`URI ${uri} is not a folder or metadata is missing.`);
-        }
+        let childNodes: TreeNode[];
 
-        const childNodes: TreeNode[] = [];
-        for (const childUri of folderMetadata.children) {
-          const childMetadata = await store.getMetadata(childUri);
-          if (childMetadata?.type === NotebookStoreItemType.Folder) {
-            childNodes.push(
-              createFolderNode(childMetadata.uri, childMetadata.name, {
-                remoteUri: childMetadata.remoteUri,
-                parentUri: folderMetadata.uri,
-              }),
-            );
-          } else if (childMetadata?.type === NotebookStoreItemType.File) {
-            childNodes.push(
-              createFileNode(childMetadata, { parentUri: folderMetadata.uri }),
-            );
-          } else {
-            childNodes.push(createPlaceholderNode(childUri, "Unknown item"));
+        if (uri.startsWith("fs://")) {
+          // Filesystem store: use list() which returns items directly.
+          const items = await targetStore.list(uri);
+          childNodes = items.map((item) => {
+            if (item.type === NotebookStoreItemType.Folder) {
+              return createFolderNode(item.uri, item.name, {
+                parentUri: uri,
+              });
+            }
+            return createFileNode(item, { parentUri: uri });
+          });
+        } else {
+          // Local/Drive store: use getMetadata() + children array.
+          const folderMetadata = await (store as any).getMetadata(uri);
+          if (!folderMetadata || folderMetadata.type !== NotebookStoreItemType.Folder) {
+            throw new Error(`URI ${uri} is not a folder or metadata is missing.`);
+          }
+
+          childNodes = [];
+          for (const childUri of folderMetadata.children) {
+            const childMetadata = await (store as any).getMetadata(childUri);
+            if (childMetadata?.type === NotebookStoreItemType.Folder) {
+              childNodes.push(
+                createFolderNode(childMetadata.uri, childMetadata.name, {
+                  remoteUri: childMetadata.remoteUri,
+                  parentUri: folderMetadata.uri,
+                }),
+              );
+            } else if (childMetadata?.type === NotebookStoreItemType.File) {
+              childNodes.push(
+                createFileNode(childMetadata, { parentUri: folderMetadata.uri }),
+              );
+            } else {
+              childNodes.push(createPlaceholderNode(childUri, "Unknown item"));
+            }
           }
         }
 
@@ -483,17 +566,18 @@ export function WorkspaceExplorer() {
         );
       }
     },
-    [store],
+    [contentsStore, fsStore, store],
   );
 
   const handleFileOpen = useCallback(
     async (nodeData: TreeNode) => {
-      if (!store) {
+      const targetStore = storeForUri(nodeData.uri, store, fsStore, contentsStore);
+      if (!targetStore) {
         return;
       }
       try {
         const uri = nodeData.uri;
-        const item = await store.getMetadata(uri);
+        const item = await targetStore.getMetadata(uri);
         if (!item) {
           console.error("Notebook metadata missing for", uri);
           return;
@@ -507,19 +591,20 @@ export function WorkspaceExplorer() {
         );
       }
     },
-    [setCurrentDoc, store],
+    [contentsStore, fsStore, setCurrentDoc, store],
   );
 
   const handleCreateDocument = useCallback(
     async (folderUri: string) => {
-      if (!store) {
+      const targetStore = storeForUri(folderUri, store, fsStore, contentsStore);
+      if (!targetStore) {
         return;
       }
       try {
         treeRef.current?.open(folderUri);
         const timestamp = formatShortTimestamp(new Date());
         const name = `untitled-${timestamp}.json`;
-        const newItem = await store.create(folderUri, name);
+        const newItem = await targetStore.create(folderUri, name);
         await fetchChildren(folderUri);
         setPendingEditId(newItem.uri);
         setErrorMessage(null);
@@ -528,7 +613,7 @@ export function WorkspaceExplorer() {
         setErrorMessage("Unable to create a new document. Please try again.");
       }
     },
-    [fetchChildren, store],
+    [contentsStore, fetchChildren, fsStore, store],
   );
 
 function formatShortTimestamp(date: Date): string {
@@ -668,11 +753,12 @@ function formatShortTimestamp(date: Date): string {
       node: NodeApi<TreeNode, unknown>;
     }) => {
       void id;
-      if (!store) {
+      const target = node.data;
+      const targetStore = storeForUri(target.uri, store, fsStore, contentsStore);
+      if (!targetStore) {
         node.reset();
         return;
       }
-      const target = node.data;
       if (target.type !== NotebookStoreItemType.File) {
         node.reset();
         return;
@@ -680,7 +766,7 @@ function formatShortTimestamp(date: Date): string {
       const trimmed = name.trim();
       const nextName = trimmed === "" ? "untitled.json" : trimmed;
       try {
-        await store.rename(target.uri, nextName);
+        await targetStore.rename(target.uri, nextName);
         const parentUri = node.parent?.data.uri;
         if (parentUri) {
           await fetchChildren(parentUri);
@@ -697,7 +783,7 @@ function formatShortTimestamp(date: Date): string {
         node.reset();
       }
     },
-    [fetchChildren, store],
+    [contentsStore, fetchChildren, fsStore, store],
   );
 
   if (!store) {
@@ -713,18 +799,51 @@ function formatShortTimestamp(date: Date): string {
     );
   }
 
+  const handleOpenLocalFolder = useCallback(async () => {
+    if (!fsStore) {
+      return;
+    }
+    try {
+      const workspaceRootUri = await fsStore.openWorkspace();
+      if (!getItems().includes(workspaceRootUri)) {
+        addItem(workspaceRootUri);
+      }
+      setErrorMessage(null);
+    } catch (error) {
+      // User cancelled the picker or API error.
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+      console.error("Failed to open local folder", error);
+      setErrorMessage("Unable to open folder. Please try again.");
+    }
+  }, [addItem, fsStore, getItems]);
+
   return (
     <Box id="workspace-explorer-box" className="flex h-full min-h-0 w-full flex-col gap-3" onClick={() => setContextMenu(null)}>
       <div id="workspace-explorer-toolbar-row" className="flex items-center justify-between w-full">
         <Text size="4" weight="bold">
           Explorer
         </Text>
-        <GoogleDrivePickerButton
-          label="Add Folder"
-          className="btn btn-soft h-8 w-8 justify-center rounded-full p-0"
-        >
-          <FolderPlusIcon width={20} height={20} />
-        </GoogleDrivePickerButton>
+        <div className="flex items-center gap-1">
+          {isFileSystemAccessSupported() && fsStore && (
+            <button
+              type="button"
+              className="btn btn-soft h-8 w-8 justify-center rounded-full p-0"
+              onClick={handleOpenLocalFolder}
+              aria-label="Open local folder"
+              title="Open local folder"
+            >
+              <FolderPlusIcon width={20} height={20} />
+            </button>
+          )}
+          <GoogleDrivePickerButton
+            label="Add Folder"
+            className="btn btn-soft h-8 w-8 justify-center rounded-full p-0"
+          >
+            <FolderPlusIcon width={20} height={20} />
+          </GoogleDrivePickerButton>
+        </div>
       </div>
 
       {errorMessage && (
@@ -774,24 +893,26 @@ function formatShortTimestamp(date: Date): string {
         >
           {contextMenu.type === NotebookStoreItemType.File ? (
             <>
-              <button
-                type="button"
-                className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setContextMenu(null);
-                  void (async () => {
-                    try {
-                      await store?.sync(contextMenu.uri);
-                    } catch (error) {
-                      console.error("Failed to sync file", error);
-                    }
-                  })();
-                }}
-              >
-                Sync
-              </button>
+              {!contextMenu.uri.startsWith("fs://") && (
+                <button
+                  type="button"
+                  className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setContextMenu(null);
+                    void (async () => {
+                      try {
+                        await store?.sync(contextMenu.uri);
+                      } catch (error) {
+                        console.error("Failed to sync file", error);
+                      }
+                    })();
+                  }}
+                >
+                  Sync
+                </button>
+              )}
               <button
                 type="button"
                 className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"
@@ -828,6 +949,7 @@ function formatShortTimestamp(date: Date): string {
             </>
           ) : contextMenu.type === NotebookStoreItemType.Folder ? (
             <>
+              {!contextMenu.uri.startsWith("fs://") && (
               <button
                 type="button"
                 className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"
@@ -851,6 +973,7 @@ function formatShortTimestamp(date: Date): string {
               >
                 Sync
               </button>
+              )}
               <button
                 type="button"
                 className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"

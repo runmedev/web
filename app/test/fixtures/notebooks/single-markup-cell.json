@@ -1,0 +1,25 @@
+{
+  "cells": [
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "# My Notebook\n\nThis is a test notebook with a single markdown cell.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01J0000000000000000000002"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {
+        "start": 0,
+        "end": 0
+      }
+    }
+  ],
+  "metadata": {}
+}

@@ -1,0 +1,61 @@
+{
+  "cells": [
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "echo 'test output'",
+      "languageId": "sh",
+      "metadata": {
+        "runme.dev/id": "01J0000000000000000000020",
+        "name": "echo-test"
+      },
+      "outputs": [
+        {
+          "items": [
+            {
+              "mime": "stateful.runme/terminal",
+              "type": "Buffer",
+              "data": ""
+            }
+          ],
+          "metadata": {},
+          "processInfo": {
+            "exitReason": {
+              "type": "",
+              "code": 0
+            },
+            "pid": "0"
+          }
+        },
+        {
+          "items": [
+            {
+              "mime": "application/vnd.code.notebook.stdout",
+              "type": "Buffer",
+              "data": "dGVzdCBvdXRwdXQK"
+            }
+          ],
+          "metadata": {},
+          "processInfo": {
+            "exitReason": {
+              "type": "",
+              "code": 0
+            },
+            "pid": "0"
+          }
+        }
+      ],
+      "executionSummary": {
+        "success": true,
+        "timing": {
+          "startTime": "1700000000000",
+          "endTime": "1700000001000"
+        }
+      },
+      "textRange": {
+        "start": 0,
+        "end": 0
+      }
+    }
+  ],
+  "metadata": {}
+}

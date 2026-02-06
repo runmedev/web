@@ -1,4 +1,6 @@
+import { ContentsNotebookStore } from "../../storage/contents";
 import { DriveNotebookStore } from "../../storage/drive";
+import { FilesystemNotebookStore } from "../../storage/fs";
 import LocalNotebooks from "../../storage/local";
 
 /**
@@ -8,8 +10,10 @@ import LocalNotebooks from "../../storage/local";
 export class AppState {
   private static singleton: AppState | null = null;
 
+  contentsStore: ContentsNotebookStore | null = null;
   driveNotebookStore: DriveNotebookStore | null = null;
   localNotebooks: LocalNotebooks | null = null;
+  filesystemStore: FilesystemNotebookStore | null = null;
 
   private constructor() {}
 
@@ -26,6 +30,14 @@ export class AppState {
 
   setLocalNotebooks(store: LocalNotebooks | null): void {
     this.localNotebooks = store;
+  }
+
+  setFilesystemStore(store: FilesystemNotebookStore | null): void {
+    this.filesystemStore = store;
+  }
+
+  setContentsStore(store: ContentsNotebookStore | null): void {
+    this.contentsStore = store;
   }
 }
 
