@@ -348,10 +348,32 @@ export class NotebookData {
     return this.snapshotCache;
   }
 
+  /**
+   * Validate notebook cells and log warnings for suspicious data.
+   * Called during loadNotebook to surface format issues early.
+   */
+  private validateCells(): void {
+    for (const cell of this.notebook.cells) {
+      if (!cell.refId) {
+        console.warn("[NotebookData] Cell missing refId", cell);
+      }
+      const hasOutput = cell.outputs.length > 0;
+      const hasValue = (cell.value ?? "").trim().length > 0;
+      if (hasOutput && !hasValue) {
+        console.warn(
+          `[NotebookData] Cell ${cell.refId} has ${cell.outputs.length} output(s) but no input value. ` +
+          `This may indicate a corrupt notebook format.`,
+          { kind: cell.kind, languageId: cell.languageId },
+        );
+      }
+    }
+  }
+
   /** Replace the in-memory notebook. */
   loadNotebook(notebook: parser_pb.Notebook): void {
     this.notebook = clone(parser_pb.NotebookSchema, notebook);
     this.rebuildIndex();
+    this.validateCells();
     this.sequence = this.computeHighestSequence();
     this.loaded = true;
     this.snapshotCache = this.buildSnapshot();
