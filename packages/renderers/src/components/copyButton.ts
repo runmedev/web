@@ -8,7 +8,7 @@ import { CopyIcon } from './icons/copy'
 export class CopyButton extends LitElement {
   @property({ type: String })
   copyText: string = 'Copy'
-  /* eslint-disable */
+   
   static styles = css`
     vscode-button {
       color: var(--vscode-button-foreground);

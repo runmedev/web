@@ -1,6 +1,6 @@
 import { html } from 'lit'
 
-/* eslint-disable max-len */
+ 
 export const StopIcon = html`
   <svg
     viewBox="0 0 18 18"

@@ -1,6 +1,6 @@
 import { html } from 'lit'
 
-/* eslint-disable max-len */
+ 
 export const EC2Icon = html`
   <?xml version="1.0" encoding="UTF-8"?>
   <svg

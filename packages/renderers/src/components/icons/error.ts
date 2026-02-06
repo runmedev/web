@@ -1,6 +1,6 @@
 import { html } from 'lit'
 
-/* eslint-disable max-len */
+ 
 export const ErrorIcon = html`
   <svg
     width="16"
@@ -18,7 +18,7 @@ export const ErrorIcon = html`
   </svg>
 `
 
-/* eslint-disable max-len */
+ 
 export const CustomErrorIcon = (height: number, width: number) => html`
   <svg
     width="${width}px"

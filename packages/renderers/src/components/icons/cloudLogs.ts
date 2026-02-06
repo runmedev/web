@@ -1,6 +1,6 @@
 import { html } from 'lit'
 
-/* eslint-disable max-len */
+ 
 export const CloudLogsIcon = html`
   <svg
     fill="currentColor"

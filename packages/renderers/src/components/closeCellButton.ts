@@ -4,7 +4,7 @@ import { safeCustomElement } from '../decorators'
 
 @safeCustomElement('close-cell-button')
 export class CloseCellButton extends LitElement {
-  /* eslint-disable */
+   
   static styles = css`
     :host {
       --button-icon-hover-background: var(--vscode-toolbar-hoverBackground);

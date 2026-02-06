@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 import { useEffect, useMemo, useRef } from 'react'
 
 import { Interceptor } from '@connectrpc/connect'
@@ -163,7 +163,7 @@ function Console({
         }
 
         // If runID is set it means the cell needs execution, pass through execution/session config
-        if (!!webComponentStream.runID) {
+        if (webComponentStream.runID) {
           elem.setAttribute('stream', JSON.stringify(webComponentStream))
         }
 

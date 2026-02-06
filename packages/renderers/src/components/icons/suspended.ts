@@ -1,6 +1,6 @@
 import { html } from 'lit'
 
-/* eslint-disable max-len */
+ 
 export const SuspendedIcon = html`
   <svg
     data-icon-name="statusPausedIcon"

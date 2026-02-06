@@ -27,7 +27,7 @@ export class Table extends LitElement {
   displayable?: (row: any, field: string) => boolean = () => true
   hasErrors?: (row: any) => boolean = () => false
 
-  /* eslint-disable */
+   
   static styles = css`
     :host {
       width: 100%;

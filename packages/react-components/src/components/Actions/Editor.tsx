@@ -76,9 +76,9 @@ const Editor = memo(
   }) => {
     // Store the latest onEnter in a ref to ensure late binding
     const onEnterRef = useRef(onEnter)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const editorRef = useRef<any>(null)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const monacoRef = useRef<any>(null)
     const containerRef = useRef<HTMLDivElement>(null)
     const [height, setHeight] = useState('280px')
@@ -138,7 +138,7 @@ const Editor = memo(
       }
     }, [isResizing])
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const editorDidMount = (editor: any, monaco: any) => {
       editorRef.current = editor
       monacoRef.current = monaco
@@ -151,7 +151,7 @@ const Editor = memo(
       if (!editor) {
         return
       }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       editor.onKeyDown((event: any) => {
         if (event.ctrlKey && event.keyCode === 3) {
           // Use the ref to ensure we always have the latest onEnter

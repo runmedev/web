@@ -26,7 +26,7 @@ export class ActionButton extends LitElement {
   @property({ type: Boolean, reflect: true })
   saveIcon: boolean | undefined
 
-  /* eslint-disable */
+   
   static styles = css`
     vscode-button {
       color: var(--vscode-button-foreground);
