@@ -45,7 +45,7 @@ export enum RunmeMetadataKey {
 
 export enum NotebookMetadataKey {
   PreviousResponseId = `${privatePrefix}previousResponseId`,
-  Fronmatter = `${privatePrefix}frontmatter"`,
+  Frontmatter = `${privatePrefix}frontmatter`,
 }
 
 export { parser_pb, runner_pb }

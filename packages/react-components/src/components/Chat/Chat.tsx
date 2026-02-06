@@ -193,7 +193,7 @@ const Message = ({
     case parser_pb.CellRole.ASSISTANT:
       return <AssistantMessage cell={cell} />
     default:
-      if (cell.value != mdDivider) {
+      if (cell.value !== mdDivider) {
         return <AssistantMessage cell={cell} />
       }
       return null
