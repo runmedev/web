@@ -321,7 +321,7 @@ export class ContentsNotebookStore implements NotebookStore {
 
     const resp = await this.rpc<WriteResponse>("Write", {
       path: relPath,
-      content: btoa(json),
+      content: utf8ToBase64(json),
       mode: "WRITE_MODE_FAIL_IF_EXISTS",
     });
 
