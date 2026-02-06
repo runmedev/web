@@ -45,8 +45,8 @@ import {
   ExecuteRequestSchema,
   ProjectSchema,
 } from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
-import { lastValueFrom } from 'rxjs'
-import { map, reduce, takeUntil } from 'rxjs/operators'
+import { firstValueFrom, lastValueFrom } from 'rxjs'
+import { map, reduce, takeUntil, timeout } from 'rxjs/operators'
 
 type CellContextType = {
   // useColumns returns arrays of cells organized by their kind
@@ -925,18 +925,14 @@ async function createNewSession(
   const pwd = lastValueFrom(
     streams.stdout.pipe(
       takeUntil(streams.exitCode),
-      reduce((acc, chunk) => acc + decoder.decode(chunk, { stream: true }), ''),
+      timeout(5000), // 5 second timeout
+      reduce(
+        (acc, chunk) => acc + decoder.decode(chunk, { stream: true }),
+        ''
+      ),
       map((result) => (result + decoder.decode()).trim())
     )
   )
-
-  streams.exitCode.subscribe((code) => {
-    if (code !== 0) {
-      throw new Error(
-        `Failed to get working directory for session: ${sessionId}`
-      )
-    }
-  })
 
   streams.sendExecuteRequest(
     create(ExecuteRequestSchema, {
@@ -951,16 +947,28 @@ async function createNewSession(
         mode: CommandMode.INLINE,
         source: {
           case: 'commands',
-          value: create(ProgramConfig_CommandListSchema, { items: ['pwd -P'] }),
+          value: create(ProgramConfig_CommandListSchema, {
+            items: ['pwd -P'],
+          }),
         },
       },
     })
   )
 
-  const cwd = await pwd
-  streams.close()
+  try {
+    const cwd = await pwd
+    const exitCode = await firstValueFrom(streams.exitCode)
 
-  return { id: sessionId, cwd }
+    if (exitCode !== 0) {
+      throw new Error(
+        `Failed to get working directory for session: ${sessionId}`
+      )
+    }
+
+    return { id: sessionId, cwd }
+  } finally {
+    streams.close()
+  }
 }
 
 // singleton text encoder for non-streaming output
