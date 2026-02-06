@@ -40,10 +40,12 @@ export enum RunmeMetadataKey {
   LastRunID = `${privatePrefix}lastRunID`,
   Pid = `${privatePrefix}pid`,
   ExitCode = `${privatePrefix}exitCode`,
+  WorkingDirectory = `${privatePrefix}workingDirectory`,
 }
 
-export enum AgentMetadataKey {
+export enum NotebookMetadataKey {
   PreviousResponseId = `${privatePrefix}previousResponseId`,
+  Frontmatter = `${privatePrefix}frontmatter`,
 }
 
 export { parser_pb, runner_pb }

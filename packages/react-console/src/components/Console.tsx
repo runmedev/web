@@ -3,7 +3,11 @@ import { useEffect, useMemo, useRef } from 'react'
 
 import { Interceptor } from '@connectrpc/connect'
 import '@runmedev/renderers'
-import type { RunmeConsoleStream, ConsoleViewConfig } from '@runmedev/renderers'
+import {
+  type ConsoleViewConfig,
+  type ConsoleViewConfigTheme,
+  type RunmeConsoleStream,
+} from '@runmedev/renderers'
 
 interface ConsoleSettings {
   rows?: number
@@ -29,6 +33,7 @@ export interface ConsoleProps {
   content?: string
   runner: ConsoleRunner
   settings?: ConsoleSettings
+  theme?: ConsoleViewConfigTheme
   onStdout?: (data: Uint8Array) => void
   onStderr?: (data: Uint8Array) => void
   onExitCode?: (code: number) => void
@@ -45,6 +50,7 @@ function Console({
   content,
   runner,
   settings: settingsProp = {},
+  theme,
   onStdout,
   onStderr,
   onExitCode,
@@ -62,6 +68,8 @@ function Console({
 
   const elemRef = useRef<any>(null)
 
+  const actualTheme = theme ?? 'dark'
+
   const webComponentDefaults: {
     id: string
     takeFocus: boolean
@@ -75,7 +83,7 @@ function Console({
       initialContent: content || '',
       initialRows: rows,
       view: {
-        theme: 'dark',
+        theme: actualTheme,
         fontFamily: fontFamily || 'monospace',
         fontSize: fontSize || 12,
         cursorStyle: 'block',
@@ -192,7 +200,7 @@ function isInViewport(element: Element) {
     rect.top >= 0 &&
     rect.left >= 0 &&
     rect.bottom <=
-      (window.innerHeight || document.documentElement.clientHeight) &&
+    (window.innerHeight || document.documentElement.clientHeight) &&
     rect.right <= (window.innerWidth || document.documentElement.clientWidth)
   )
 }

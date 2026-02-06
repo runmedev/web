@@ -16,7 +16,7 @@ import { clone, create } from '@bufbuild/protobuf'
 import { v4 as uuidv4 } from 'uuid'
 
 import {
-  AgentMetadataKey,
+  NotebookMetadataKey,
   MimeType,
   RunmeMetadataKey,
   createConnectClient,
@@ -35,6 +35,18 @@ import { useOutput } from './OutputContext'
 import { useSettings } from './SettingsContext'
 import { getSessionToken } from '../token'
 import { jwtDecode, JwtPayload } from 'jwt-decode'
+import { genRunID, Heartbeat, Streams } from '@runmedev/react-console'
+import {
+  CommandMode,
+  ProgramConfig_CommandListSchema,
+} from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/config_pb'
+import {
+  CreateSessionRequest_Config_SessionEnvStoreSeeding,
+  ExecuteRequestSchema,
+  ProjectSchema,
+} from '@buf/runmedev_runme.bufbuild_es/runme/runner/v2/runner_pb'
+import { lastValueFrom } from 'rxjs'
+import { map, reduce, takeUntil } from 'rxjs/operators'
 
 type CellContextType = {
   // useColumns returns arrays of cells organized by their kind
@@ -55,6 +67,11 @@ type CellContextType = {
     cells: parser_pb.Cell[],
     asSessionRecord: boolean
   ) => Promise<Uint8Array<ArrayBufferLike>>
+  // deserializeNotebook deserializes markdown into a notebook
+  deserializeNotebook: (
+    source: Uint8Array<ArrayBufferLike>,
+    identity?: parser_pb.RunmeIdentity
+  ) => Promise<parser_pb.Notebook | undefined>
   // exportDocument exports the notebook as a markdown file
   exportDocument: (options: { asSessionRecord: boolean }) => Promise<void>
   // Define additional functions to update the state
@@ -72,10 +89,25 @@ type CellContextType = {
   // Keep track of whether the input is disabled
   isInputDisabled: boolean
   isTyping: boolean
+  isInProgress: boolean
   // Function to run a code cell
   runCodeCell: (cell: parser_pb.Cell) => void
   // Function to reset the session
   resetSession: (options: { attemptRestore: boolean }) => void
+  // Load arbitrary state from text (always deserialized via the parser service)
+  loadState: (text: string) => Promise<void>
+  // Current working directory at the beginning of the session
+  cwd: string
+  // Remove a cell by refId
+  removeCell: (refId: string) => void
+  // Move a cell by delta in display order (-1 = visually up, +1 = visually down)
+  moveCell: (refId: string, delta: number) => void
+  // Insert a new empty cell adjacent to the given refId
+  insertCellAt: (
+    adjacentRefId: string,
+    placement: 'before' | 'after',
+    kind: parser_pb.CellKind
+  ) => void
 }
 
 const CellContext = createContext<CellContextType | undefined>(undefined)
@@ -93,6 +125,28 @@ interface CellState {
   runmeSession: string
   cells: Record<string, parser_pb.Cell>
   positions: string[]
+}
+
+function importCellState(
+  runmeSession: string,
+  cells: parser_pb.Cell[],
+  invertedOrder: boolean = false
+): CellState {
+  const positions = cells.map((c) => {
+    const id =
+      c.metadata[RunmeMetadataKey.ID] ||
+      c.metadata[RunmeMetadataKey.RunmeID] ||
+      c.refId ||
+      `restored_${uuidv4().replace(/[-_]/g, '')}`
+    c.refId = id
+    c.metadata[RunmeMetadataKey.RunmeID] = id
+    return id
+  })
+  return {
+    runmeSession,
+    cells: Object.fromEntries(cells.map((cell) => [cell.refId, cell])),
+    positions: invertedOrder ? positions.reverse() : positions,
+  }
 }
 
 // Utility function to always return cells in ascending order
@@ -151,9 +205,11 @@ export const CellProvider = ({
   const [sequence, setSequence] = useState(0)
   const [isInputDisabled, setIsInputDisabled] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
+  const [isInProgress, setIsInProgress] = useState(false)
   const [previousResponseId, setPreviousResponseId] = useState<
     string | undefined
   >()
+  const [cwd, setCwd] = useState<string>('.')
   const { getAllRenderers } = useOutput()
 
   const principal = getPrincipal()
@@ -170,19 +226,45 @@ export const CellProvider = ({
     return url.toString()
   }, [settings.webApp.runner])
 
-  const storage = useMemo(() => {
-    const runnerClient = createConnectClient(
-      runner_pb.RunnerService,
-      runnerConnectEndpoint,
-      createAuthInterceptors(true)
-    )
+  const authInterceptors = useMemo(
+    () => createAuthInterceptors(true),
+    [createAuthInterceptors]
+  )
 
+  const runnerClient = useMemo(
+    () =>
+      createConnectClient(
+        runner_pb.RunnerService,
+        runnerConnectEndpoint,
+        authInterceptors
+      ),
+    [runnerConnectEndpoint, authInterceptors]
+  )
+
+  const createStreams = useCallback(() => {
+    const sessionRunID = genRunID()
+    // Create a new streams instance for session creation
+    const streams = new Streams({
+      knownID: `sessions_${sessionRunID}`,
+      runID: sessionRunID,
+      sequence: 0,
+      options: {
+        runnerEndpoint: settings.webApp.runner,
+        interceptors: authInterceptors,
+        autoReconnect: false,
+      },
+    })
+    return streams
+  }, [settings.webApp.runner, authInterceptors])
+
+  const storage = useMemo(() => {
     // Use custom factory if provided, otherwise default to Dexie
     if (createStorage) {
       return createStorage(runnerClient)
     }
+
     return new DexieSessionStorage('agent', principal, runnerClient)
-  }, [runnerConnectEndpoint, createAuthInterceptors, createStorage])
+  }, [runnerClient, createStorage, principal])
 
   const invertedOrder = useMemo(
     () => settings.webApp.invertedOrder,
@@ -190,7 +272,30 @@ export const CellProvider = ({
   )
 
   const { client } = useAgentClient()
-  const [state, setState] = useState<CellState | undefined>(undefined)
+  const [state, _setState] = useState<CellState | undefined>(undefined)
+
+  // Custom setState that automatically notifies renderers for new/changed cells.
+  // Renderers may mutate cells (e.g. adding terminal output scaffolding),
+  // so notification must happen before the new state is returned.
+  const setState = useCallback(
+    (action: React.SetStateAction<CellState | undefined>) => {
+      _setState((prev) => {
+        const next = typeof action === 'function' ? action(prev) : action
+        if (next) {
+          const renderers = getAllRenderers()
+          for (const [refId, cell] of Object.entries(next.cells)) {
+            if (!prev?.cells[refId] || prev.cells[refId] !== cell) {
+              for (const renderer of renderers.values()) {
+                renderer.onCellUpdate(cell)
+              }
+            }
+          }
+        }
+        return next
+      })
+    },
+    [getAllRenderers]
+  )
 
   const ascendingCells = useMemo(() => {
     if (!state) {
@@ -207,7 +312,11 @@ export const CellProvider = ({
       cells: ascendingCells,
     })
     if (previousResponseId) {
-      session.metadata[AgentMetadataKey.PreviousResponseId] = previousResponseId
+      session.metadata[NotebookMetadataKey.PreviousResponseId] =
+        previousResponseId
+    }
+    if (cwd !== '.') {
+      session.metadata[RunmeMetadataKey.WorkingDirectory] = cwd
     }
     storage?.saveNotebook(state.runmeSession, session)
   }, [ascendingCells, previousResponseId, storage])
@@ -222,12 +331,16 @@ export const CellProvider = ({
       setPreviousResponseId(undefined)
 
       // Create session async, we decide later if we want to use it
-      const newSess = storage.createSession()
+      const newSessPromise = createNewSession(runnerClient, createStreams())
       let activeSessionID: string | undefined
 
       // Unless we are attempting to restore, short circuit and create a new session
       if (!attemptRestore) {
-        activeSessionID = await newSess
+        const result = await newSessPromise
+        activeSessionID = result?.id
+        if (result?.cwd) {
+          setCwd(result.cwd)
+        }
       } else {
         const sessionIds = await storage.listActiveSessions()
         const sessions = await storage.loadSessions(sessionIds)
@@ -250,29 +363,25 @@ export const CellProvider = ({
 
         // If there are no unfinished sessions, create a new session
         if (activeSessions.length === 0) {
-          activeSessionID = await newSess
+          const result = await newSessPromise
+          activeSessionID = result?.id
+          if (result?.cwd) {
+            setCwd(result.cwd)
+          }
         } else {
           const recovSess = activeSessions[0]
-          let positions = recovSess.data.cells.map((cell) => cell.refId)
-          if (invertedOrder) {
-            positions = positions.reverse()
-          }
           const prevRespId =
-            recovSess.data.metadata[AgentMetadataKey.PreviousResponseId]
+            recovSess.data.metadata[NotebookMetadataKey.PreviousResponseId]
           if (prevRespId) {
             setPreviousResponseId(prevRespId)
           }
-          setState({
-            runmeSession: recovSess.id,
-            cells: recovSess.data.cells.reduce(
-              (acc, cell) => {
-                acc[cell.refId] = cell
-                return acc
-              },
-              {} as Record<string, parser_pb.Cell>
-            ),
-            positions,
-          })
+          const wd = recovSess.data.metadata[RunmeMetadataKey.WorkingDirectory]
+          if (wd) {
+            setCwd(wd)
+          }
+          setState(
+            importCellState(recovSess.id, recovSess.data.cells, invertedOrder)
+          )
           return
         }
       }
@@ -283,7 +392,7 @@ export const CellProvider = ({
         positions: [],
       })
     },
-    [invertedOrder, storage]
+    [invertedOrder, storage, runnerClient, createStreams]
   )
 
   // Any time state changes, save the current state
@@ -399,6 +508,7 @@ export const CellProvider = ({
       console.log(e)
     } finally {
       setIsTyping(false)
+      setIsInProgress(false)
       setIsInputDisabled(false)
     }
   }
@@ -417,6 +527,7 @@ export const CellProvider = ({
     updateCell(userCell)
     setIsInputDisabled(true)
     setIsTyping(true)
+    setIsInProgress(true)
 
     await streamGenerateResults([userCell])
   }
@@ -439,11 +550,6 @@ export const CellProvider = ({
   }
 
   const updateCell = (cell: parser_pb.Cell): void => {
-    const renderers = getAllRenderers()
-    for (const renderer of renderers.values()) {
-      renderer.onCellUpdate(cell)
-    }
-
     setState((prev) => {
       if (!prev) {
         return undefined
@@ -582,6 +688,142 @@ export const CellProvider = ({
     [settings.agentEndpoint, createAuthInterceptors, state?.runmeSession]
   )
 
+  // Internal function to deserialize notebook content
+  const deserializeNotebook = useCallback(
+    async (
+      source: Uint8Array<ArrayBufferLike>,
+      identity: parser_pb.RunmeIdentity = parser_pb.RunmeIdentity.UNSPECIFIED
+    ): Promise<parser_pb.Notebook | undefined> => {
+      const c = createConnectClient(
+        parser_pb.ParserService,
+        settings.agentEndpoint,
+        createAuthInterceptors(true)
+      )
+      const req = create(parser_pb.DeserializeRequestSchema, {
+        source,
+        options: create(parser_pb.DeserializeRequestOptionsSchema, {
+          identity,
+        }),
+      })
+
+      const resp = await c.deserialize(req)
+      return resp.notebook
+    },
+    [settings.agentEndpoint, createAuthInterceptors]
+  )
+
+  const loadState = useCallback(
+    async (text: string) => {
+      setSequence(0)
+      setPreviousResponseId(undefined)
+
+      const buffer = new TextEncoder().encode(text)
+      const notebook = await deserializeNotebook(buffer)
+      if (!notebook) {
+        return
+      }
+      const result = await createNewSession(runnerClient, createStreams())
+      if (!result) {
+        return
+      }
+      if (result.cwd) {
+        setCwd(result.cwd)
+      }
+      const imported = importCellState(result.id, notebook.cells, invertedOrder)
+      setState(imported)
+    },
+    [
+      setState,
+      deserializeNotebook,
+      runnerClient,
+      createStreams,
+      setCwd,
+      setSequence,
+      setPreviousResponseId,
+      invertedOrder,
+    ]
+  )
+
+  const removeCell = useCallback(
+    (refId: string) => {
+      setState((prev) => {
+        if (!prev) return undefined
+        const newPositions = prev.positions.filter((id) => id !== refId)
+        const { [refId]: _, ...rest } = prev.cells
+        return { ...prev, cells: rest, positions: newPositions }
+      })
+    },
+    [setState]
+  )
+
+  const moveCell = useCallback(
+    (refId: string, delta: number) => {
+      setState((prev) => {
+        if (!prev) return undefined
+        const positions = [...prev.positions]
+        const idx = positions.indexOf(refId)
+        if (idx === -1) return prev
+        // In display order, delta -1 = visually up, +1 = visually down.
+        // When invertedOrder is true, positions are stored reversed,
+        // so we invert the delta direction for the internal array.
+        const actualDelta = invertedOrder ? -delta : delta
+        const targetIdx = idx + actualDelta
+        if (targetIdx < 0 || targetIdx >= positions.length) return prev
+        ;[positions[idx], positions[targetIdx]] = [
+          positions[targetIdx],
+          positions[idx],
+        ]
+        return { ...prev, positions }
+      })
+    },
+    [setState, invertedOrder]
+  )
+
+  const insertCellAt = useCallback(
+    (
+      adjacentRefId: string,
+      placement: 'before' | 'after',
+      kind: parser_pb.CellKind
+    ) => {
+      const refID = `${kind === parser_pb.CellKind.CODE ? 'code' : 'markup'}_${uuidv4().replace(/-/g, '')}`
+      const cell = create(parser_pb.CellSchema, {
+        metadata: {
+          [RunmeMetadataKey.ID]: refID,
+          [RunmeMetadataKey.RunmeID]: refID,
+        },
+        refId: refID,
+        kind,
+        role: parser_pb.CellRole.USER,
+        languageId: kind === parser_pb.CellKind.CODE ? 'sh' : '',
+        value: '',
+      })
+
+      setState((prev) => {
+        if (!prev) return undefined
+        const positions = [...prev.positions]
+        const idx = positions.indexOf(adjacentRefId)
+        if (idx === -1) return prev
+        // Determine insert position accounting for invertedOrder.
+        // 'before' in display order means earlier in the display list.
+        // When invertedOrder is true, display order is reversed from positions order,
+        // so 'before' in display = 'after' in positions array and vice versa.
+        const effectivePlacement = invertedOrder
+          ? placement === 'before'
+            ? 'after'
+            : 'before'
+          : placement
+        const insertIdx = effectivePlacement === 'before' ? idx : idx + 1
+        positions.splice(insertIdx, 0, refID)
+        return {
+          ...prev,
+          cells: { ...prev.cells, [refID]: cell },
+          positions,
+        }
+      })
+    },
+    [setState, invertedOrder]
+  )
+
   // exportDocument exports the notebook as a markdown file
   const exportDocument = async ({
     asSessionRecord,
@@ -617,6 +859,7 @@ export const CellProvider = ({
         sequence,
         saveState,
         serializeNotebook,
+        deserializeNotebook,
         exportDocument,
         sendOutputCell,
         createOutputCell,
@@ -625,8 +868,14 @@ export const CellProvider = ({
         updateCell,
         isInputDisabled,
         isTyping,
+        isInProgress,
         runCodeCell,
         resetSession,
+        loadState,
+        cwd,
+        removeCell,
+        moveCell,
+        insertCellAt,
       }}
     >
       {children}
@@ -634,8 +883,88 @@ export const CellProvider = ({
   )
 }
 
+/**
+ * Creates a new runner session and fetches its working directory.
+ * @param client - The runner client to use for session creation
+ * @param streams - The streams instance for executing the pwd command
+ * @param wd - Optional working directory for the session (defaults to '.')
+ * @returns The session id and resolved working directory, or null if creation failed
+ */
+async function createNewSession(
+  client: RunnerClient,
+  streams: Streams,
+  wd: string = '.'
+): Promise<{ id: string; cwd: string } | null> {
+  // Create the session
+  let sessionId: string | undefined
+  try {
+    const resp = await client.createSession({
+      project: create(ProjectSchema, {
+        root: wd,
+        envLoadOrder: ['.env', '.env.local', '.env.development', '.env.dev'],
+      }),
+      config: {
+        envStoreSeeding:
+          CreateSessionRequest_Config_SessionEnvStoreSeeding.SYSTEM,
+      },
+    })
+    sessionId = resp.session?.id
+  } catch (e) {
+    console.error('Error creating session', e)
+    throw e
+  }
+
+  if (!sessionId) {
+    return null
+  }
+
+  // Fetch the working directory using pwd command
+  streams.connect(Heartbeat.CONTINUOUS).subscribe()
+
+  const decoder = new TextDecoder()
+  const pwd = lastValueFrom(
+    streams.stdout.pipe(
+      takeUntil(streams.exitCode),
+      reduce((acc, chunk) => acc + decoder.decode(chunk, { stream: true }), ''),
+      map((result) => (result + decoder.decode()).trim())
+    )
+  )
+
+  streams.exitCode.subscribe((code) => {
+    if (code !== 0) {
+      throw new Error(
+        `Failed to get working directory for session: ${sessionId}`
+      )
+    }
+  })
+
+  streams.sendExecuteRequest(
+    create(ExecuteRequestSchema, {
+      sessionId,
+      storeStdoutInEnv: true,
+      config: {
+        languageId: 'sh',
+        background: false,
+        fileExtension: '',
+        env: ['RUNME_RUNNER=v2'],
+        interactive: false,
+        mode: CommandMode.INLINE,
+        source: {
+          case: 'commands',
+          value: create(ProgramConfig_CommandListSchema, { items: ['pwd -P'] }),
+        },
+      },
+    })
+  )
+
+  const cwd = await pwd
+  streams.close()
+
+  return { id: sessionId, cwd }
+}
+
 // singleton text encoder for non-streaming output
-const textEncoder = new TextEncoder()
+const outputsEncoder = new TextEncoder()
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function createCellOutputs(
@@ -667,7 +996,7 @@ export function createCellOutputs(
     create(parser_pb.CellOutputItemSchema, {
       mime: MimeType.VSCodeNotebookStdOut,
       type: 'Buffer',
-      data: textEncoder.encode(stdout),
+      data: outputsEncoder.encode(stdout),
     }),
   ]
 
@@ -676,7 +1005,7 @@ export function createCellOutputs(
       create(parser_pb.CellOutputItemSchema, {
         mime: MimeType.VSCodeNotebookStdErr,
         type: 'Buffer',
-        data: textEncoder.encode(stderr),
+        data: outputsEncoder.encode(stderr),
       })
     )
   }

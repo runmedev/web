@@ -7,6 +7,7 @@ import { TypingCell, parser_pb, useCell } from '../../contexts/CellContext'
 import { useSettings } from '../../contexts/SettingsContext'
 import { SubmitQuestionIcon } from '../Actions/icons'
 import { Action } from '../Actions/Actions'
+import { ErrorBoundary } from '../ErrorBoundary/ErrorBoundary'
 
 type MessageProps = {
   cell: parser_pb.Cell
@@ -63,19 +64,21 @@ const UserMessage = ({ cell }: { cell: parser_pb.Cell }) => {
 const AssistantMessage = ({ cell }: { cell: parser_pb.Cell }) => {
   return (
     <MessageContainer role={parser_pb.CellRole.ASSISTANT} kind={cell.kind}>
-      <Markdown
-        components={{
-          code: ({ children, ...props }) => {
-            return (
-              <pre className="whitespace-pre-wrap">
-                <code {...props}>{String(children).replace(/\n$/, '')}</code>
-              </pre>
-            )
-          },
-        }}
-      >
-        {cell.value}
-      </Markdown>
+      <ErrorBoundary suppressHydrationErrors={true} logErrors={true}>
+        <Markdown
+          components={{
+            code: ({ children, ...props }) => {
+              return (
+                <pre className="whitespace-pre-wrap">
+                  <code {...props}>{String(children).replace(/\n$/, '')}</code>
+                </pre>
+              )
+            },
+          }}
+        >
+          {cell.value}
+        </Markdown>
+      </ErrorBoundary>
     </MessageContainer>
   )
 }
@@ -183,12 +186,16 @@ const Message = ({
       break
   }
 
+  const mdDivider = '---'
   switch (cell.role) {
     case parser_pb.CellRole.USER:
       return <UserMessage cell={cell} />
     case parser_pb.CellRole.ASSISTANT:
       return <AssistantMessage cell={cell} />
     default:
+      if (cell.value !== mdDivider) {
+        return <AssistantMessage cell={cell} />
+      }
       return null
   }
 }
