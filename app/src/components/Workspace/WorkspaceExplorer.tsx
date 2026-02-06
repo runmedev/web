@@ -513,8 +513,8 @@ export function WorkspaceExplorer() {
       try {
         let childNodes: TreeNode[];
 
-        if (uri.startsWith("fs://")) {
-          // Filesystem store: use list() which returns items directly.
+        if (uri.startsWith("fs://") || uri.startsWith("contents://")) {
+          // Filesystem / Contents store: use list() which returns items directly.
           const items = await targetStore.list(uri);
           childNodes = items.map((item) => {
             if (item.type === NotebookStoreItemType.Folder) {
@@ -893,7 +893,8 @@ function formatShortTimestamp(date: Date): string {
         >
           {contextMenu.type === NotebookStoreItemType.File ? (
             <>
-              {!contextMenu.uri.startsWith("fs://") && (
+              {!contextMenu.uri.startsWith("fs://") &&
+                !contextMenu.uri.startsWith("contents://") && (
                 <button
                   type="button"
                   className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"
@@ -949,7 +950,8 @@ function formatShortTimestamp(date: Date): string {
             </>
           ) : contextMenu.type === NotebookStoreItemType.Folder ? (
             <>
-              {!contextMenu.uri.startsWith("fs://") && (
+              {!contextMenu.uri.startsWith("fs://") &&
+                !contextMenu.uri.startsWith("contents://") && (
               <button
                 type="button"
                 className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"

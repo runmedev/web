@@ -2,7 +2,7 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { create, fromJsonString, toJsonString } from "@bufbuild/protobuf";
+import { create, toJsonString } from "@bufbuild/protobuf";
 
 import { parser_pb } from "../runme/client";
 import { NotebookStoreItemType } from "./notebook";

@@ -345,9 +345,12 @@ export class ContentsNotebookStore implements NotebookStore {
       throw new Error("ContentsNotebookStore.rename expects a file URI");
     }
 
+    // Ensure .json extension so the file remains visible via list().
+    const safeName = newName.endsWith(".json") ? newName : `${newName}.json`;
+
     const segments = parsed.relativePath.split("/");
     const parentRelPath = segments.slice(0, -1).join("/");
-    const newRelPath = parentRelPath ? `${parentRelPath}/${newName}` : newName;
+    const newRelPath = parentRelPath ? `${parentRelPath}/${safeName}` : safeName;
 
     const body: Record<string, unknown> = {
       oldPath: parsed.relativePath,
@@ -372,7 +375,7 @@ export class ContentsNotebookStore implements NotebookStore {
 
     return {
       uri: newUri,
-      name: newName,
+      name: safeName,
       type: NotebookStoreItemType.File,
       children: [],
       parents: [parentUri],

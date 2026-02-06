@@ -469,6 +469,9 @@ export class FilesystemNotebookStore implements NotebookStore {
       throw new Error("FilesystemNotebookStore.rename expects a file URI");
     }
 
+    // Ensure .json extension so the file remains visible via list().
+    const safeName = name.endsWith(".json") ? name : `${name}.json`;
+
     // Read the old file contents.
     const fileHandle = await this.resolveFileHandle(
       parsed.workspaceId,
@@ -487,7 +490,7 @@ export class FilesystemNotebookStore implements NotebookStore {
     );
 
     // Create the new file and write the contents.
-    const newFileHandle = await dirHandle.getFileHandle(name, { create: true });
+    const newFileHandle = await dirHandle.getFileHandle(safeName, { create: true });
     const writable = await newFileHandle.createWritable();
     await writable.write(content);
     await writable.close();
@@ -502,7 +505,7 @@ export class FilesystemNotebookStore implements NotebookStore {
     this.baseRevisions.delete(oldRecId);
 
     // Register the new entry.
-    const newRelPath = parentRelPath ? `${parentRelPath}/${name}` : name;
+    const newRelPath = parentRelPath ? `${parentRelPath}/${safeName}` : safeName;
     const newUri = buildFsUri(parsed.workspaceId, newRelPath, "file");
     const newFile = await newFileHandle.getFile();
     const newRecId = entryRecordId(parsed.workspaceId, newRelPath);
@@ -531,7 +534,7 @@ export class FilesystemNotebookStore implements NotebookStore {
 
     return {
       uri: newUri,
-      name,
+      name: safeName,
       type: NotebookStoreItemType.File,
       children: [],
       parents: [parentUri],
