@@ -23,6 +23,7 @@ import {
   ParserService,
   type Notebook,
   type SerializeRequestOptions,
+  type DeserializeRequestOptions,
 } from "@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb.js";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 
@@ -163,6 +164,25 @@ export class AisreClient {
     options?: RequestOptions,
   ): Promise<UpdateRunResponse> {
     return this.client.updateRun(request, this.mergeCallOptions(options));
+  }
+
+  /**
+   * Deserializes raw bytes (e.g. Markdown content) into a Notebook via the
+   * parser service.
+   */
+  async deserializeNotebook(
+    source: Uint8Array,
+    deserializeOptions?: DeserializeRequestOptions,
+    requestOptions?: RequestOptions,
+  ): Promise<Notebook> {
+    const response = await this.parserClient.deserialize(
+      {
+        source,
+        options: deserializeOptions,
+      },
+      this.mergeCallOptions(requestOptions),
+    );
+    return response.notebook!;
   }
 
   /**
