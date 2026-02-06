@@ -786,19 +786,6 @@ function formatShortTimestamp(date: Date): string {
     [contentsStore, fetchChildren, fsStore, store],
   );
 
-  if (!store) {
-    return (
-      <Box className="flex h-full min-h-0 flex-col gap-3">
-        <Text size="4" weight="bold">
-          Google Drive
-        </Text>
-        <Text size="2" color="gray">
-          Notebook storage is not initialized.
-        </Text>
-      </Box>
-    );
-  }
-
   const handleOpenLocalFolder = useCallback(async () => {
     if (!fsStore) {
       return;
@@ -818,6 +805,19 @@ function formatShortTimestamp(date: Date): string {
       setErrorMessage("Unable to open folder. Please try again.");
     }
   }, [addItem, fsStore, getItems]);
+
+  if (!store) {
+    return (
+      <Box className="flex h-full min-h-0 flex-col gap-3">
+        <Text size="4" weight="bold">
+          Google Drive
+        </Text>
+        <Text size="2" color="gray">
+          Notebook storage is not initialized.
+        </Text>
+      </Box>
+    );
+  }
 
   return (
     <Box id="workspace-explorer-box" className="flex h-full min-h-0 w-full flex-col gap-3" onClick={() => setContextMenu(null)}>
