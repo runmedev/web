@@ -570,7 +570,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
           </div>
         </div>
       )}
-      <Box className="relative w-full px-2 py-1">
+      <Box className="relative w-full min-w-0 max-w-full px-2 py-1 overflow-hidden">
         <div className="flex justify-between items-top">
           <div className="flex flex-col items-center pt-1">
             <RunActionButton pid={pid} exitCode={exitCode} onClick={runCode} />
@@ -731,7 +731,7 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
       key={`scroll-${docUri}`}
       type="auto"
       scrollbars="vertical"
-      className="flex-1 h-full p-4"
+      className="flex-1 h-full p-4 min-w-0 max-w-full overflow-x-hidden"
       data-document-id={docUri}
     >
       <div className="mb-4 flex justify-center">

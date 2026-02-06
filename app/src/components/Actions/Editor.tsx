@@ -72,10 +72,18 @@ const Editor = memo(
       // Monaco does not auto-size horizontally either, so we read the current
       // container width (falling back to the editor DOM node) and pass both
       // dimensions through layout().
-      const width =
+      // Measure the container width; never fall back to window.innerWidth
+      // because that causes Monaco to set an oversized internal width which
+      // triggers a feedback loop pushing buttons off-screen.
+      const measuredWidth =
         containerRef.current?.clientWidth ??
         editorRef.current.getContainerDomNode?.().clientWidth ??
-        window.innerWidth;
+        0;
+      const fallbackWidth = editorRef.current.getLayoutInfo?.()?.width ?? 0;
+      const width = measuredWidth || fallbackWidth;
+      if (!width) {
+        return;
+      }
       editorRef.current.layout?.({ width, height: desiredHeight });
     }, []);
 
@@ -127,7 +135,11 @@ const Editor = memo(
     }, []);
 
     return (
-      <div className="w-full" ref={setContainerRef}>
+      <div
+        className="w-full min-w-0 max-w-full"
+        style={{ contain: "inline-size" }}
+        ref={setContainerRef}
+      >
         <div className="rounded-md overflow-hidden border border-gray-200">
           <MonacoEditor
             key={id}
