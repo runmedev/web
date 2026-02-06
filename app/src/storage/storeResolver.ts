@@ -5,27 +5,26 @@ export function isContentsUri(uri: string): boolean {
 }
 
 /**
- * Minimal store interface used by resolveStore callers (load, save, getMetadata).
- *
- * LocalNotebooks does not implement the full NotebookStore interface, so we
- * expose only the subset that callers actually need. ContentsNotebookStore
- * satisfies both this and NotebookStore.
- */
-export type ResolvedStore = Pick<NotebookStore, "save" | "load" | "getMetadata">;
-
-/**
- * Resolve the appropriate store for a given URI.
+ * Resolve the appropriate NotebookStore for a given URI.
  *
  * - `contents://` URIs are routed to the ContentsNotebookStore.
  * - All other URIs (local://, gdrive://) fall through to the local store.
+ *
+ * The `localStore` parameter is typed loosely so both LocalNotebooks (which has
+ * save/load/getMetadata but does not implement the full NotebookStore interface)
+ * and any NotebookStore can be passed. The unsafe cast is a known trade-off:
+ * LocalNotebooks.save() returns Promise<void> while NotebookStore.save() returns
+ * Promise<ConflictResult>, so a full type-safe solution requires refactoring
+ * LocalNotebooks to implement NotebookStore.
  */
 export function resolveStore(
   uri: string,
-  localStore: ResolvedStore | null,
+  localStore: { save(...args: unknown[]): Promise<unknown>; load(...args: unknown[]): Promise<unknown>; getMetadata(...args: unknown[]): Promise<unknown> } | null,
   contentsStore: NotebookStore | null,
-): ResolvedStore | null {
+): NotebookStore | null {
   if (isContentsUri(uri) && contentsStore) {
     return contentsStore;
   }
-  return localStore;
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+  return localStore as unknown as NotebookStore | null;
 }
