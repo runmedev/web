@@ -100,7 +100,7 @@ export const SettingsProvider = ({
   }, [requireAuth, webApp])
 
   const [settings, setSettings] = useState<Settings>(() => {
-    const savedSettings = localStorage.getItem('cloudAssistantSettings')
+    const savedSettings = localStorage.getItem('runmeWebSettings')
     const savedSettingsJson = savedSettings ? JSON.parse(savedSettings) : {}
     // always use the default reconnect value
     if (
@@ -117,7 +117,7 @@ export const SettingsProvider = ({
   })
 
   useEffect(() => {
-    localStorage.setItem('cloudAssistantSettings', JSON.stringify(settings))
+    localStorage.setItem('runmeWebSettings', JSON.stringify(settings))
   }, [settings])
 
   // defaultCreateAuthInterceptors default interceptors
