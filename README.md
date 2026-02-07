@@ -1,9 +1,8 @@
 # Runme Web (monorepo)
 
-This project is structured as a pnpm workspace monorepo with two packages:
+This project is structured as a pnpm workspace monorepo with the following packages:
 
 - **@runme/console** [@runmedev/react-console](https://www.npmjs.com/package/@runmedev/react-console): A React component library containing the Runme Console component.
-- **@runme/components** [@runmedev/react-components](https://www.npmjs.com/package/@runmedev/react-components): A React component library containing the Runme components plus a example app.
 
 ## Getting Started
 
@@ -32,7 +31,6 @@ Build a specific package:
 ```sh
 pnpm run build:renderers
 pnpm run build:console
-pnpm run build:components
 ```
 
 Clean up:
@@ -70,7 +68,6 @@ pnpm run lint
 ## Structure
 
 - `packages/renderers`: Foundational web component libraries
-- `packages/react-components`: React component library (Runme) & example app
 - `packages/react-console`: Runme Console is a terminal attached to a Runme execution.
 
 All dependencies are managed efficiently through pnpm's workspace features.

@@ -21,7 +21,6 @@ packages/
 │   ├── utils.tsx         # Custom render function and test utilities
 │   └── README.md         # This file
 ├── vitest.config.ts      # Shared Vitest configuration
-├── react-components/     # Package with tests
 ├── react-console/        # Package with tests
 └── ...                   # Other packages
 ```
