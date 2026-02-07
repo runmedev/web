@@ -45,7 +45,7 @@ type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
 
 const TabPanel = React.forwardRef<HTMLDivElement, TabPanelProps>(
   ({ hidden: _hiddenProp, "data-state": state, style, ...rest }, ref) => {
-    const inactive = state === "inactive";
+    const inactive = state !== "active";
     return (
       <div
         ref={ref}
@@ -56,6 +56,8 @@ const TabPanel = React.forwardRef<HTMLDivElement, TabPanelProps>(
           position: inactive ? "absolute" : "relative",
           inset: inactive ? 0 : undefined,
           pointerEvents: inactive ? "none" : "auto",
+          zIndex: inactive ? 0 : 1,
+          transition: "none",
         }}
         {...rest}
       />
@@ -1030,6 +1032,19 @@ export default function Actions() {
       ) : (
         <Tabs.Root
           value={currentDocUri ?? openNotebooks[0]?.uri ?? ""}
+          onValueChange={(nextUri) => {
+            if (nextUri !== currentDocUri) {
+              setMountedTabs((prev) => {
+                if (prev.has(nextUri)) {
+                  return prev;
+                }
+                const next = new Set(prev);
+                next.add(nextUri);
+                return next;
+              });
+              setCurrentDoc(nextUri);
+            }
+          }}
           className="flex flex-col flex-1 min-h-0 overflow-hidden bg-white"
         >
           <Tabs.List className="flex items-center gap-0.5 border-b border-nb-border bg-nb-surface-2 px-2 py-1">
@@ -1044,19 +1059,6 @@ export default function Actions() {
                   value={doc.uri}
                   title={doc.name}
                   className="group flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-nb-sm transition-all duration-150 text-nb-text-muted border border-transparent data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:border-nb-border data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
-                  onClick={() => {
-                    if (doc.uri !== currentDocUri) {
-                      setMountedTabs((prev) => {
-                        if (prev.has(doc.uri)) {
-                          return prev;
-                        }
-                        const next = new Set(prev);
-                        next.add(doc.uri);
-                        return next;
-                      });
-                      setCurrentDoc(doc.uri);
-                    }
-                  }}
                 >
                   <span className="truncate max-w-[140px]">{displayName}</span>
                 </Tabs.Trigger>
@@ -1076,6 +1078,7 @@ export default function Actions() {
               );
             })}
           </Tabs.List>
+          <div className="relative flex-1 min-h-0">
           {openNotebooks.map((doc) => (
             <Tabs.Content
               key={`content-${doc.uri}`}
@@ -1084,11 +1087,11 @@ export default function Actions() {
               asChild
             >
               <TabPanel className="flex-1 min-h-0" data-document-id={doc.uri}>
-                {/* Keep every tab mounted (forceMount) so scroll position is preserved when switching. */}
                 <NotebookTabContent docUri={doc.uri} />
               </TabPanel>
             </Tabs.Content>
           ))}
+          </div>
         </Tabs.Root>
       )}
     </div>
