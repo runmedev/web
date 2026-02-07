@@ -15,3 +15,15 @@
   --vscode-terminal-foreground: #eaeaea; /* light text */
   --vscode-terminal-border: #333333;
 }
+
+/* Override Radix's global selection color in this dark quick-start snippet. */
+.radix-themes #actions-empty-quickstart-code::selection {
+  background-color: rgba(59, 130, 246, 0.6);
+  color: #ffffff;
+  -webkit-text-fill-color: #ffffff;
+}
+
+.radix-themes #actions-empty-quickstart-code::-moz-selection {
+  background-color: rgba(59, 130, 246, 0.6);
+  color: #ffffff;
+}

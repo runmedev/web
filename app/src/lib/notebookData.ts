@@ -1,7 +1,14 @@
 import { clone, create } from "@bufbuild/protobuf";
 
 import { parser_pb, RunmeMetadataKey, MimeType } from "../contexts/CellContext";
-import LocalNotebooks from "../storage/local";
+
+/**
+ * Minimal store interface used by NotebookData for auto-saving.
+ * Both LocalNotebooks and ContentsNotebookStore satisfy this contract.
+ */
+export interface NotebookSaveStore {
+  save(uri: string, notebook: parser_pb.Notebook): Promise<unknown>;
+}
 import {
   IOPUB_INCOMPLETE_METADATA_KEY,
   IOPUB_MIME_TYPE,
@@ -304,13 +311,17 @@ export class NotebookData {
   private notebook: parser_pb.Notebook;
   private refToIndex: Map<string, number> = new Map();
   private listeners: Set<Listener> = new Set();
-  private notebookStore: LocalNotebooks | null;
+  private notebookStore: NotebookSaveStore | null;
   private sequence = 0;
   private snapshotCache: NotebookSnapshot;
   private loaded: boolean;
   private activeStreams: Map<string, StreamsLike> = new Map();
 
   private refToCellData: Map<string, CellData> = new Map();
+  // Debounce auto-save writes so keystrokes don't trigger a full disk write
+  // (and in dev, a Vite page reload) on every change.
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly persistDelayMs = 750;
 
   constructor({
     notebook,
@@ -322,7 +333,7 @@ export class NotebookData {
     notebook: parser_pb.Notebook;
     uri: string;
     name: string;
-    notebookStore: LocalNotebooks | null;
+    notebookStore: NotebookSaveStore | null;
     loaded?: boolean;
   }) {
     this.uri = uri;
@@ -369,8 +380,17 @@ export class NotebookData {
     }
   }
 
-  /** Replace the in-memory notebook. */
-  loadNotebook(notebook: parser_pb.Notebook): void {
+  /**
+   * Replace the in-memory notebook.
+   *
+   * `persist` defaults to true so interactive edits still auto-save, but
+   * callers that are just loading from disk can disable it to avoid writing
+   * the same content back (which triggers Vite reloads in dev).
+   */
+  loadNotebook(
+    notebook: parser_pb.Notebook,
+    { persist = true }: { persist?: boolean } = {},
+  ): void {
     this.notebook = clone(parser_pb.NotebookSchema, notebook);
     this.rebuildIndex();
     this.validateCells();
@@ -378,7 +398,9 @@ export class NotebookData {
     this.loaded = true;
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    void this.persist();
+    if (persist) {
+      this.schedulePersist();
+    }
   }
 
   updateCell(cell: parser_pb.Cell): void {
@@ -401,7 +423,7 @@ export class NotebookData {
 
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    void this.persist();
+    this.schedulePersist();
   }
 
   addCodeCellAfter(targetRefId: string, languageId?: string | null): parser_pb.Cell | null {
@@ -414,7 +436,7 @@ export class NotebookData {
     this.rebuildIndex();
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    void this.persist();
+    this.schedulePersist();
     return cell;
   }
 
@@ -428,7 +450,7 @@ export class NotebookData {
     this.rebuildIndex();
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    void this.persist();
+    this.schedulePersist();
     return cell;
   }
 
@@ -441,21 +463,21 @@ export class NotebookData {
     this.rebuildIndex();
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    void this.persist();
+    this.schedulePersist();
   }
 
   setName(name: string): void {
     this.name = name;
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    void this.persist();
+    this.schedulePersist();
   }
 
   setUri(uri: string): void {
     this.uri = uri;
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    void this.persist();
+    this.schedulePersist();
   }
 
   // Returns the runID if the cell was started successfully.
@@ -706,6 +728,19 @@ export class NotebookData {
         error,
       });
     }
+  }
+
+  private schedulePersist(): void {
+    if (!this.notebookStore) {
+      return;
+    }
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+    }
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      void this.persist();
+    }, this.persistDelayMs);
   }
 }
 

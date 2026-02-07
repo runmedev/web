@@ -130,6 +130,25 @@ function createEmptyNotebookJson(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Base64 helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode a UTF-8 string to base64 using chunked processing to avoid
+ * max call stack size errors on large payloads.
+ */
+function utf8ToBase64(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  const CHUNK = 32768;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const chunk = bytes.subarray(i, i + CHUNK);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+// ---------------------------------------------------------------------------
 // ContentsNotebookStore
 // ---------------------------------------------------------------------------
 
@@ -321,7 +340,7 @@ export class ContentsNotebookStore implements NotebookStore {
 
     const resp = await this.rpc<WriteResponse>("Write", {
       path: relPath,
-      content: btoa(json),
+      content: utf8ToBase64(json),
       mode: "WRITE_MODE_FAIL_IF_EXISTS",
     });
 

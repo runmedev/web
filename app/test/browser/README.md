@@ -1,0 +1,71 @@
+# Browser Integration Tests
+
+Automated UI tests for jl-notebook using `agent-browser`.
+
+## Prerequisites
+
+1. **Backend** running on port 9977:
+   ```bash
+   cd runme && go run ./ agent --config=${HOME}/.runme-agent/config.dev.yaml serve
+   ```
+
+2. **Frontend** running on port 5173:
+   ```bash
+   cd web && pnpm run dev:app
+   ```
+
+   Or use `just run` from the project root to start both.
+
+3. **agent-browser** installed and on PATH.
+
+## Running
+
+```bash
+cd app/test/browser
+./test-notebook-ui.sh
+```
+
+## App Console command test
+
+Use the App Console integration test to validate console commands like
+`explorer.addFolder()` and `explorer.listFolders()` with the File System Access
+API:
+
+```bash
+cd app/test/browser
+./test-app-console-commands.sh
+```
+
+The script relies on the hidden `#app-console-output` element added to
+`AppConsole.tsx` to read console output without scraping the xterm canvas.
+`showDirectoryPicker()` commands still require a manual OS dialog interaction.
+If you skip the picker, the script expects `explorer.listFolders()` to report
+no mounted folders.
+
+## What it tests
+
+| Test | Description |
+|------|-------------|
+| Initial load | Opens app, verifies it renders |
+| Explorer | Checks WorkspaceExplorer renders without picker button |
+| Console | Checks for console/terminal area |
+| Notebook files | Verifies test fixtures appear in explorer |
+| Folder expansion | Expands tree folders |
+| Open notebook | Clicks a notebook to open it |
+| Notebook rendering | Verifies notebook content renders |
+
+## Output
+
+- Screenshots saved to `test-output/*.png`
+- DOM snapshots saved to `test-output/*.txt`
+- Exit code: 0 = all pass, 1 = failures, 2 = missing dependencies
+
+## Test fixtures
+
+The tests rely on notebooks in `../fixtures/notebooks/`:
+- `hello-world.json` - simple JSON notebook
+- `cell-types.json` - multi-language cells
+- `basic-test.runme.md` - basic echo tests
+- `cell-types-test.runme.md` - bash/python/js cells
+- `ui-test.runme.md` - visual/UX testing
+- `large-payload-test.runme.md` - >100KB payload test

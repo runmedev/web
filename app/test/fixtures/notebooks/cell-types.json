@@ -1,0 +1,67 @@
+{
+  "cells": [
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "# Cell Types Test\n\nThis notebook tests rendering of various cell types and languages.",
+      "languageId": "markdown",
+      "metadata": {},
+      "outputs": [],
+      "executionSummary": {}
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "echo 'Bash cell'",
+      "languageId": "bash",
+      "metadata": {
+        "name": "bash-cell"
+      },
+      "outputs": [],
+      "executionSummary": {}
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "print('Python cell')\nfor i in range(3):\n    print(f'  item {i}')",
+      "languageId": "python",
+      "metadata": {
+        "name": "python-cell"
+      },
+      "outputs": [],
+      "executionSummary": {}
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "console.log('JavaScript cell');\nconst x = 42;\nconsole.log(`The answer is ${x}`);",
+      "languageId": "javascript",
+      "metadata": {
+        "name": "js-cell"
+      },
+      "outputs": [],
+      "executionSummary": {}
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## Markdown Features\n\n- **Bold text**\n- *Italic text*\n- `inline code`\n- [Link](https://example.com)\n\n> Blockquote for testing\n\n| Column A | Column B |\n|----------|----------|\n| Value 1  | Value 2  |",
+      "languageId": "markdown",
+      "metadata": {},
+      "outputs": [],
+      "executionSummary": {}
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "cat << 'HEREDOC'\nThis is a multi-line\noutput test with\nspecial characters: <>&\"'\nHEREDOC",
+      "languageId": "bash",
+      "metadata": {
+        "name": "multiline-output"
+      },
+      "outputs": [],
+      "executionSummary": {}
+    }
+  ],
+  "metadata": {},
+  "frontmatter": {
+    "runme": {
+      "id": "test-cell-types",
+      "version": "v3"
+    }
+  }
+}

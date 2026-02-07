@@ -23,19 +23,16 @@ import {
   useEffect,
   useMemo,
   useState,
-  useSyncExternalStore,
   type FocusEvent,
   type KeyboardEvent,
-} from "react";
-import ReactMarkdown from "react-markdown";
-import type { Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+} from 'react'
+import ReactMarkdown from 'react-markdown'
+import type { Components } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
-import { create } from "@bufbuild/protobuf";
-import { parser_pb } from "../../runme/client";
-import type { CellData } from "../../lib/notebookData";
-import Editor from "./Editor";
-import { fontSettings } from "./CellConsole";
+import { parser_pb } from '../../runme/client'
+import Editor from './Editor'
+import { fontSettings } from './CellConsole'
 
 /**
  * Custom markdown components for consistent styling.
@@ -78,7 +75,7 @@ const markdownComponents: Components = {
     </li>
   ),
   code: ({ children, className, ...props }) => {
-    const isInline = !className;
+    const isInline = !className
     if (isInline) {
       return (
         <code
@@ -87,7 +84,7 @@ const markdownComponents: Components = {
         >
           {children}
         </code>
-      );
+      )
     }
     return (
       <code
@@ -96,7 +93,7 @@ const markdownComponents: Components = {
       >
         {children}
       </code>
-    );
+    )
   },
   pre: ({ children, ...props }) => (
     <pre className="bg-gray-100 p-3 rounded-md overflow-x-auto mb-3" {...props}>
@@ -146,16 +143,18 @@ const markdownComponents: Components = {
   img: ({ src, alt, ...props }) => (
     <img
       src={src}
-      alt={alt || ""}
+      alt={alt || ''}
       className="max-w-full h-auto rounded-md my-2"
       {...props}
     />
   ),
-};
+}
 
 interface MarkdownCellProps {
-  /** The CellData object containing the markdown content and state */
-  cellData: CellData;
+  /** The cell containing the markdown content */
+  cell: parser_pb.Cell
+  /** Callback when cell content changes - receives the new cell with updated value */
+  onCellChange?: (cell: parser_pb.Cell) => void
 }
 
 /**
@@ -168,41 +167,37 @@ interface MarkdownCellProps {
  * - Empty cells start in edit mode and stay in edit mode
  */
 const MarkdownCell = memo(
-  ({ cellData }: MarkdownCellProps) => {
-    // Subscribe to cell data changes using useSyncExternalStore for tearing-safe reads
-    const cell = useSyncExternalStore(
-      useCallback(
-        (listener) => cellData.subscribeToContentChange(listener),
-        [cellData]
-      ),
-      useCallback(() => cellData.snapshot, [cellData]),
-      useCallback(() => cellData.snapshot, [cellData])
-    );
-
+  ({ cell, onCellChange }: MarkdownCellProps) => {
     // `rendered` state controls whether we show rendered markdown or the editor
     // Start in rendered mode unless the cell is empty (new cell)
     const [rendered, setRendered] = useState(() => {
-      const value = cell?.value ?? "";
-      return value.trim().length > 0;
-    });
+      const value = cell?.value ?? ''
+      return value.trim().length > 0
+    })
 
     // Get the current cell value
-    const value = cell?.value ?? "";
+    const value = cell?.value ?? ''
+
+    // Reset rendered state when cell identity changes (new cell loaded)
+    useEffect(() => {
+      setRendered((cell?.value ?? '').trim().length > 0)
+    }, [cell?.refId])
 
     // Enforce invariant: empty cells must be in edit mode.
     // This handles external changes (undo/redo, sync) that clear the value.
     useEffect(() => {
       if (!value.trim() && rendered) {
-        setRendered(false);
+        setRendered(false)
       }
-    }, [value, rendered]);
+    }, [value, rendered])
 
     /**
      * Handle switching to edit mode when user double-clicks rendered content.
+     * Also handles keyboard activation (Enter/Space) for accessibility.
      */
     const handleDoubleClick = useCallback(() => {
-      setRendered(false);
-    }, []);
+      setRendered(false)
+    }, [])
 
     /**
      * Handle keyboard activation on the rendered container for accessibility.
@@ -214,15 +209,15 @@ const MarkdownCell = memo(
       (event: KeyboardEvent<HTMLDivElement>) => {
         // Only handle if the container itself is focused, not nested elements
         if (event.target !== event.currentTarget) {
-          return;
+          return
         }
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          setRendered(false);
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          setRendered(false)
         }
       },
       []
-    );
+    )
 
     /**
      * Handle blur event - switch back to rendered mode when clicking away.
@@ -233,16 +228,16 @@ const MarkdownCell = memo(
       (event: FocusEvent<HTMLDivElement>) => {
         // If focus moved to an element still inside the editor container, don't render
         if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          return;
+          return
         }
         // If content is empty, stay in edit mode
         if (!value.trim()) {
-          return;
+          return
         }
-        setRendered(true);
+        setRendered(true)
       },
       [value]
-    );
+    )
 
     /**
      * Handle keyboard events on the editor container.
@@ -250,29 +245,29 @@ const MarkdownCell = memo(
      */
     const handleEditorKeyDown = useCallback(
       (event: KeyboardEvent<HTMLDivElement>) => {
-        if (event.key === "Escape") {
+        if (event.key === 'Escape') {
           // Only render if there's content; empty cells stay in edit mode
           if (value.trim()) {
-            setRendered(true);
+            setRendered(true)
           }
         }
       },
       [value]
-    );
+    )
 
     /**
      * Handle content changes from the editor.
-     * Updates the cell data.
+     * Creates a new cell with updated value and notifies parent component.
      */
     const handleEditorChange = useCallback(
       (newValue: string) => {
-        if (!cell) return;
-        const updated = create(parser_pb.CellSchema, cell);
-        updated.value = newValue;
-        cellData.update(updated);
+        if (!cell || !onCellChange) return
+        // Create a shallow copy with the new value
+        const updated = { ...cell, value: newValue }
+        onCellChange(updated as parser_pb.Cell)
       },
-      [cell, cellData]
-    );
+      [cell, onCellChange]
+    )
 
     /**
      * Handle "run" action for markdown cells - just renders the markdown.
@@ -281,9 +276,9 @@ const MarkdownCell = memo(
      */
     const handleRun = useCallback(() => {
       if (value.trim()) {
-        setRendered(true);
+        setRendered(true)
       }
-    }, [value]);
+    }, [value])
 
     // Memoize the rendered markdown to avoid unnecessary re-renders
     const renderedMarkdown = useMemo(() => {
@@ -292,7 +287,7 @@ const MarkdownCell = memo(
           <div className="text-gray-400 italic py-2">
             Double-click to edit markdown...
           </div>
-        );
+        )
       }
       return (
         <div className="prose prose-sm max-w-none">
@@ -303,17 +298,17 @@ const MarkdownCell = memo(
             {value}
           </ReactMarkdown>
         </div>
-      );
-    }, [value]);
+      )
+    }, [value])
 
     if (!cell) {
-      return null;
+      return null
     }
 
     return (
       <div
         id={`markdown-cell-${cell.refId}`}
-        className="relative w-full min-w-0"
+        className="relative w-full"
         data-testid="markdown-cell"
         data-rendered={rendered}
       >
@@ -350,20 +345,23 @@ const MarkdownCell = memo(
               onEnter={handleRun}
             />
             <div className="bg-gray-100 border-t border-gray-200 px-3 py-1 text-xs text-gray-500">
-              Press <kbd className="px-1 py-0.5 bg-gray-200 rounded">Esc</kbd>{" "}
+              Press <kbd className="px-1 py-0.5 bg-gray-200 rounded">Esc</kbd>{' '}
               or click away to render
             </div>
           </div>
         )}
       </div>
-    );
+    )
   },
   (prevProps, nextProps) => {
-    // Skip re-render if the cellData reference hasn't changed
-    return prevProps.cellData === nextProps.cellData;
+    // Skip re-render only if both the cell identity and value haven't changed
+    return (
+      prevProps.cell?.refId === nextProps.cell?.refId &&
+      prevProps.cell?.value === nextProps.cell?.value
+    )
   }
-);
+)
 
-MarkdownCell.displayName = "MarkdownCell";
+MarkdownCell.displayName = 'MarkdownCell'
 
-export default MarkdownCell;
+export default MarkdownCell

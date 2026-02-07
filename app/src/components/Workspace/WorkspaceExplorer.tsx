@@ -359,6 +359,11 @@ export function WorkspaceExplorer() {
       return;
     }
 
+    if (currentDoc.startsWith("fs://") || currentDoc.startsWith("contents://")) {
+      handledDocRef.current = currentDoc;
+      return;
+    }
+
     if (!store) {
       return;
     }
@@ -660,14 +665,16 @@ function formatShortTimestamp(date: Date): string {
       return (
         <div
           style={style}
-          className="flex items-center gap-2 px-2 py-1 text-sm"
+          className="flex items-start gap-2 px-2 py-1 text-sm"
+          data-node-id={data.uri}
+          data-node-type={data.type}
           onContextMenu={handleContextMenu}
         >
           {isFolder && (
             <button
               type="button"
               aria-label={node.isOpen ? "Collapse folder" : "Expand folder"}
-              className="flex h-5 w-5 items-center justify-center rounded hover:bg-gray-100 focus:outline-none"
+              className="flex h-5 w-5 items-center justify-center rounded hover:bg-gray-100 focus:outline-none mt-[2px]"
               onClick={(event) => {
                 event.stopPropagation();
                 node.toggle();
@@ -688,18 +695,22 @@ function formatShortTimestamp(date: Date): string {
           {data.type === NotebookStoreItemType.File ? (
             <button
               type="button"
-              className="block w-full bg-transparent p-0 text-left text-amber-600 leading-4 hover:bg-transparent hover:text-amber-700 hover:underline focus:outline-none border-0"
+              title={data.name}
+              className="block flex-1 min-w-0 bg-transparent p-0 text-left text-amber-600 leading-4 hover:bg-transparent hover:text-amber-700 hover:underline focus:outline-none border-0"
               onClick={(event) => {
                 event.stopPropagation();
                 void handleFileOpen(data);
               }}
               style={{ backgroundColor: "transparent" }}
             >
-              {data.name}
+              <span className="block whitespace-normal break-words leading-5">
+                {data.name}
+              </span>
             </button>
           ) : (
             <span
-              className={`leading-4${isPlaceholder ? " text-gray-500" : ""}`}
+              title={data.name}
+              className={`block flex-1 min-w-0 whitespace-normal break-words leading-5${isPlaceholder ? " text-gray-500" : ""}`}
             >
               {data.name}
             </span>
@@ -875,6 +886,9 @@ function formatShortTimestamp(date: Date): string {
             width={Math.max(0, width)}
             height={height}
             indent={20}
+            // react-arborist uses a fixed row height; increase this so multi-line
+            // filenames can wrap without overlapping adjacent rows.
+            rowHeight={52}
             children={renderNode}
             onToggle={handleToggle}
             onClick={() => setContextMenu(null)}

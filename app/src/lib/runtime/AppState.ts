@@ -12,8 +12,8 @@ export class AppState {
 
   contentsStore: ContentsNotebookStore | null = null;
   driveNotebookStore: DriveNotebookStore | null = null;
-  localNotebooks: LocalNotebooks | null = null;
   filesystemStore: FilesystemNotebookStore | null = null;
+  localNotebooks: LocalNotebooks | null = null;
 
   private constructor() {}
 
@@ -28,12 +28,12 @@ export class AppState {
     this.driveNotebookStore = store;
   }
 
-  setLocalNotebooks(store: LocalNotebooks | null): void {
-    this.localNotebooks = store;
-  }
-
   setFilesystemStore(store: FilesystemNotebookStore | null): void {
     this.filesystemStore = store;
+  }
+
+  setLocalNotebooks(store: LocalNotebooks | null): void {
+    this.localNotebooks = store;
   }
 
   setContentsStore(store: ContentsNotebookStore | null): void {

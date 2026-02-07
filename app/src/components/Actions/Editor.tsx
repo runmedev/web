@@ -3,7 +3,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import MonacoEditor from "@monaco-editor/react";
 import useResizeObserver from "use-resize-observer";
 
-const theme = "vs";
+const theme = "vs-dark";
 
 // Editor component for editing code which won't re-render unless the value changes
 const Editor = memo(
@@ -72,9 +72,10 @@ const Editor = memo(
       // Monaco does not auto-size horizontally either, so we read the current
       // container width (falling back to the editor DOM node) and pass both
       // dimensions through layout().
-      // Measure the container width; never fall back to window.innerWidth
-      // because that causes Monaco to set an oversized internal width which
-      // triggers a feedback loop pushing buttons off-screen.
+      // IMPORTANT: Never fall back to window.innerWidth - doing so can cause
+      // Monaco to expand the container, pushing sibling elements off-screen.
+      // If width is unmeasurable, skip layout; the resize observer effect will
+      // re-layout once a real width is available.
       const measuredWidth =
         containerRef.current?.clientWidth ??
         editorRef.current.getContainerDomNode?.().clientWidth ??
@@ -82,6 +83,8 @@ const Editor = memo(
       const fallbackWidth = editorRef.current.getLayoutInfo?.()?.width ?? 0;
       const width = measuredWidth || fallbackWidth;
       if (!width) {
+        // Don't poison layout with a huge width; the resize observer effect
+        // will re-layout once width is known.
         return;
       }
       editorRef.current.layout?.({ width, height: desiredHeight });
@@ -140,7 +143,7 @@ const Editor = memo(
         style={{ contain: "inline-size" }}
         ref={setContainerRef}
       >
-        <div className="rounded-md overflow-hidden border border-gray-200">
+        <div className="rounded-t-md overflow-hidden">
           <MonacoEditor
             key={id}
             height={`${height}px`}

@@ -1,0 +1,47 @@
+{
+  "cells": [
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "# Hello World Notebook\n\nThis is a simple test notebook for verifying basic rendering and cell execution.",
+      "languageId": "markdown",
+      "metadata": {},
+      "outputs": [],
+      "executionSummary": {}
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "echo 'Hello from the test notebook!'",
+      "languageId": "bash",
+      "metadata": {
+        "name": "hello"
+      },
+      "outputs": [],
+      "executionSummary": {}
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## Second Section\n\nAnother markdown cell to test rendering.",
+      "languageId": "markdown",
+      "metadata": {},
+      "outputs": [],
+      "executionSummary": {}
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "echo \"Current date: $(date)\"\necho \"Working directory: $(pwd)\"",
+      "languageId": "bash",
+      "metadata": {
+        "name": "info"
+      },
+      "outputs": [],
+      "executionSummary": {}
+    }
+  ],
+  "metadata": {},
+  "frontmatter": {
+    "runme": {
+      "id": "test-hello-world",
+      "version": "v3"
+    }
+  }
+}
