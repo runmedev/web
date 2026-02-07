@@ -27,7 +27,6 @@ dist-ssr
 *.sw?
 
 packages/react-console/gen
-packages/react-components/gen
 
 **/*-01*.md
 

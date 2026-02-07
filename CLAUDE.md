@@ -35,18 +35,31 @@ Use `runme run <task>` to execute tasks defined in README.md:
 
 See [README.md](README.md) for additional build and test commands.
 
+## Git Commit Requirements
+
+**IMPORTANT**: This project requires all contributors to sign off on the Developer Certificate of Origin (DCO) as required by CNCF/LF.
+
+You MUST use the `-s` flag with every git commit:
+
+```bash
+git commit -s -m "Your commit message"
+```
+
+This adds a "Signed-off-by" line to your commit message, certifying that you have the right to submit the code under the project's license.
+
+**Never commit without the `-s` flag.** Commits without DCO signoff cannot be merged.
+
 ## Architecture
 
-This is a pnpm workspace monorepo with three publishable packages and one app:
+This is a pnpm workspace monorepo with two publishable packages and one app:
 
-| Package                        | Description                                                    |
-| ------------------------------ | -------------------------------------------------------------- |
-| **app/**                       | Main Vite+React 19 SPA - uses all packages below               |
-| **@runmedev/react-components** | Publishable React UI library (Actions, CellConsole, Chat, etc) |
-| **@runmedev/react-console**    | React wrapper for `<runme-console>` web component              |
-| **@runmedev/renderers**        | Lit.js web components + xterm.js terminal + WebSocket streams  |
+| Package                     | Description                                                   |
+| --------------------------- | ------------------------------------------------------------- |
+| **app/**                    | Main Vite+React 19 SPA - uses packages below                  |
+| **@runmedev/react-console** | React wrapper for `<runme-console>` web component             |
+| **@runmedev/renderers**     | Lit.js web components + xterm.js terminal + WebSocket streams |
 
-**Build order matters**: `renderers` → `console` → `components` → `app`
+**Build order matters**: `renderers` → `console` → `app`
 
 ### Key App Directories
 
@@ -60,7 +73,6 @@ This is a pnpm workspace monorepo with three publishable packages and one app:
 
 - `packages/renderers/src/index.ts` - Web components, Streams class, messaging utilities
 - `packages/react-console/src/index.tsx` - Console React component wrapper
-- `packages/react-components/src/index.tsx` - All React components, contexts, and types
 
 ### Web + React Component Stack
 
