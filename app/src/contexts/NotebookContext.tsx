@@ -15,6 +15,7 @@ import { NotebookData, type NotebookSnapshot } from "../lib/notebookData";
 import { parser_pb } from "./CellContext";
 import { useNotebookStore } from "./NotebookStoreContext";
 import { useContentsStore } from "./ContentsStoreContext";
+import { useFilesystemStore } from "./FilesystemStoreContext";
 import { useCurrentDoc } from "./CurrentDocContext";
 import {
   NotebookStoreItem,
@@ -152,6 +153,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
   }, []);
   const { store: notebookStore } = useNotebookStore();
   const { contentsStore } = useContentsStore();
+  const { fsStore } = useFilesystemStore();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const hasRestoredNotebooks = useRef(false);
 
@@ -170,7 +172,12 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
           cells: [],
           metadata: {},
         });
-      const effectiveStore = resolveStore(uri, notebookStore, contentsStore);
+      const effectiveStore = resolveStore(
+        uri,
+        notebookStore,
+        fsStore,
+        contentsStore,
+      );
       const data = new NotebookData({
         uri,
         name: resolvedName,
@@ -302,7 +309,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
         if (!entry) {
           continue;
         }
-        const store = resolveStore(item.uri, notebookStore, contentsStore);
+        const store = resolveStore(item.uri, notebookStore, fsStore, contentsStore);
         if (!store) {
           continue;
         }
@@ -311,7 +318,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
             store.getMetadata(item.uri),
             store.load(item.uri),
           ]);
-          entry.data.loadNotebook(notebook);
+          entry.data.loadNotebook(notebook, { persist: false });
           entry.loaded = true;
         } catch (error) {
           console.error("Failed to load open notebook", item.uri, error);
@@ -327,7 +334,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     if (!uri) {
       return;
     }
-    const store = resolveStore(uri, notebookStore, contentsStore);
+    const store = resolveStore(uri, notebookStore, fsStore, contentsStore);
     if (!store) {
       return;
     }
@@ -342,7 +349,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
           store.load(uri),
         ]);
         if (entry) {
-          entry.data.loadNotebook(notebook);
+          entry.data.loadNotebook(notebook, { persist: false });
           entry.loaded = true;
         } else {
           ensureNotebook({
@@ -358,7 +365,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
       }
     };
     void load();
-  }, [ensureNotebook, getCurrentDoc, notebookStore, contentsStore, setCurrentDoc]);
+  }, [ensureNotebook, getCurrentDoc, notebookStore, fsStore, contentsStore, setCurrentDoc]);
 
   const value = useMemo<NotebookContextValue>(
     () => ({

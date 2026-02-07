@@ -25,6 +25,23 @@ cd app/test/browser
 ./test-notebook-ui.sh
 ```
 
+## App Console command test
+
+Use the App Console integration test to validate console commands like
+`explorer.addFolder()` and `explorer.listFolders()` with the File System Access
+API:
+
+```bash
+cd app/test/browser
+./test-app-console-commands.sh
+```
+
+The script relies on the hidden `#app-console-output` element added to
+`AppConsole.tsx` to read console output without scraping the xterm canvas.
+`showDirectoryPicker()` commands still require a manual OS dialog interaction.
+If you skip the picker, the script expects `explorer.listFolders()` to report
+no mounted folders.
+
 ## What it tests
 
 | Test | Description |

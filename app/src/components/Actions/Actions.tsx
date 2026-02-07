@@ -844,6 +844,9 @@ export default function Actions() {
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const currentDocUri = getCurrentDoc();
   const [mountedTabs, setMountedTabs] = useState<Set<string>>(() => new Set());
+  // Empty-state hint visibility is stored locally so the hint panel can be
+  // revealed on demand without cluttering the default view.
+  const [showConsoleHints, setShowConsoleHints] = useState(false);
   const { runName } = useParams<{ runName?: string }>();
   //const { data: run } = useRun(runName);
   const [cellsInitialized, setCellsInitialized] = useState(false);
@@ -980,9 +983,71 @@ export default function Actions() {
   return (
     <div id="documents" className="flex flex-col h-full">
       {openNotebooks.length === 0 ? (
-        <ScrollArea type="auto" scrollbars="vertical" className="flex-1 p-4">
-          <div className="h-full flex flex-col items-center justify-center text-gray-500 text-sm">
-            No open files. Use the Explorer panel to open or create a document.
+        <ScrollArea
+          type="auto"
+          scrollbars="vertical"
+          className="flex-1 p-4"
+          data-testid="actions-empty-scroll"
+        >
+          <div
+            id="actions-empty-state"
+            className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center gap-6 text-center text-sm text-gray-600"
+          >
+            <div id="actions-empty-header" className="space-y-2">
+              <Text size="5" weight="bold" as="p" className="text-gray-900">
+                No open notebooks yet
+              </Text>
+              <Text size="2" as="p" className="text-gray-500">
+                Use the button below to reveal console commands for mounting
+                folders or attaching files programmatically.
+              </Text>
+            </div>
+
+            <div id="actions-empty-hints" className="flex flex-col items-center">
+              <Button
+                id="actions-empty-hints-toggle"
+                variant="soft"
+                onClick={() => setShowConsoleHints((prev) => !prev)}
+              >
+                {showConsoleHints
+                  ? "Hide Console Commands"
+                  : "Show Console Commands"}
+              </Button>
+            </div>
+
+            {showConsoleHints && (
+              <div
+                id="actions-empty-quickstart"
+                className="w-full rounded-lg border border-gray-200 bg-gray-50 p-4 text-left"
+              >
+                <Text size="3" weight="bold" as="p" className="text-gray-900">
+                  Quick Start Console Commands
+                </Text>
+                <Text size="2" as="p" className="mt-1 text-gray-500">
+                  These commands are available in the app console and map to the
+                  Explorer helpers. The File System Access API requires a picker
+                  gesture, so addFolder/openPicker always prompt for a folder.
+                </Text>
+                {/* Console snippets mirror AppConsole helpers so users can copy/paste. */}
+                <pre
+                  id="actions-empty-quickstart-code"
+                  className="quickstart-console-code mt-3 whitespace-pre-wrap rounded-md bg-gray-900 p-3 text-xs text-gray-100 select-text cursor-text"
+                  style={{
+                    userSelect: "text",
+                    WebkitUserSelect: "text",
+                  }}
+                >
+                  explorer.addFolder(){"\n"}
+                  explorer.mountDrive(driveUrl){"\n"}
+                  explorer.openPicker(){"\n"}
+                  explorer.listFolders(){"\n"}
+                  help(){"\n\n"}
+                  To attach test notebooks: use the Explorer + button to pick the fixtures folder
+                  {"\n"}
+                  To mount a local file: use the Explorer + button or explorer.openPicker()
+                </pre>
+              </div>
+            )}
           </div>
         </ScrollArea>
       ) : (

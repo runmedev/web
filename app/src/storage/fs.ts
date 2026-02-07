@@ -131,6 +131,29 @@ function createEmptyNotebookJson(): string {
   });
 }
 
+/**
+ * Normalizes notebook cells loaded from JSON by ensuring every cell has a
+ * stable `refId`. Some fixtures only include the legacy `runme.dev/id` metadata
+ * entry, which the UI cannot render without converting to `refId`.
+ */
+function ensureCellRefIds(notebook: parser_pb.Notebook): void {
+  for (const cell of notebook.cells ?? []) {
+    if (cell?.refId) {
+      continue;
+    }
+    const metadata = cell.metadata ?? {};
+    const legacyId = metadata["runme.dev/id"];
+    const fallbackId =
+      typeof legacyId === "string" && legacyId.trim().length > 0
+        ? legacyId
+        : `cell_${crypto.randomUUID().replace(/-/g, "")}`;
+    cell.refId = fallbackId;
+    if (!cell.metadata) {
+      cell.metadata = metadata;
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Base revision tracking for conflict detection
 // ---------------------------------------------------------------------------
@@ -353,9 +376,11 @@ export class FilesystemNotebookStore implements NotebookStore {
       cachedDoc: text,
     });
 
-    return fromJsonString(parser_pb.NotebookSchema, text, {
+    const notebook = fromJsonString(parser_pb.NotebookSchema, text, {
       ignoreUnknownFields: true,
     });
+    ensureCellRefIds(notebook);
+    return notebook;
   }
 
   async save(uri: string, notebook: parser_pb.Notebook): Promise<void> {

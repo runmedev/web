@@ -9,7 +9,7 @@ import {
 } from "react";
 
 import { useNotebookStore } from "./NotebookStoreContext";
-import { isContentsUri } from "../storage/storeResolver";
+import { isContentsUri, isFsUri } from "../storage/storeResolver";
 
 interface CurrentDocContextValue {
   getCurrentDoc: () => string | null;
@@ -51,6 +51,11 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
     }
 
     if (isContentsUri(doc)) {
+      setCurrentDocState(doc);
+      return;
+    }
+
+    if (isFsUri(doc)) {
       setCurrentDocState(doc);
       return;
     }
@@ -102,7 +107,7 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
         const nextUrl = new URL(window.location.href);
         if (!localUri) {
           nextUrl.searchParams.delete("doc");
-        } else if (isContentsUri(localUri)) {
+        } else if (isContentsUri(localUri) || isFsUri(localUri)) {
           nextUrl.searchParams.set("doc", localUri);
         } else if (store) {
           try {

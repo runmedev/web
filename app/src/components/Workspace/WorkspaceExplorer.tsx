@@ -359,6 +359,11 @@ export function WorkspaceExplorer() {
       return;
     }
 
+    if (currentDoc.startsWith("fs://") || currentDoc.startsWith("contents://")) {
+      handledDocRef.current = currentDoc;
+      return;
+    }
+
     if (!store) {
       return;
     }

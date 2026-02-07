@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ClientMessages } from "@runmedev/renderers";
 import type { RendererContext } from "vscode-notebook-renderer";
@@ -6,8 +6,12 @@ import type { RendererContext } from "vscode-notebook-renderer";
 import { JSKernel } from "../../lib/runtime/jsKernel";
 import { useRunners } from "../../contexts/RunnersContext";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
-import { useContentsStore } from "../../contexts/ContentsStoreContext";
-import { buildContentsUri, parseContentsUri } from "../../storage/contents";
+import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
+import { appState } from "../../lib/runtime/AppState";
+import {
+  FilesystemNotebookStore,
+  isFileSystemAccessSupported,
+} from "../../storage/fs";
 import { Runner } from "../../lib/runner";
 import { getRunnersManager } from "../../lib/runtime/runnersManager";
 import { googleClientManager } from "../../lib/googleClientManager";
@@ -20,6 +24,7 @@ const PROMPT = "> ";
 const ERASE_TO_END = "\u001b[K";
 const MOVE_CURSOR_COL = (col: number) => `\u001b[${col}G`;
 const STORAGE_KEY = "aisre.appConsoleCollapsed";
+const MAX_CONSOLE_OUTPUT = 8000;
 
 /**
  * AppConsole wired to JSKernel. Input entered in console-view is executed
@@ -38,6 +43,9 @@ export default function AppConsole() {
       return false;
     }
   });
+  // Track recent console output so automated tests can assert command results
+  // without scraping the xterm canvas.
+  const [consoleOutput, setConsoleOutput] = useState("");
 
   useEffect(() => {
     try {
@@ -53,14 +61,24 @@ export default function AppConsole() {
   );
   const { listRunners, updateRunner, deleteRunner, defaultRunnerName } =
     useRunners();
+  // WorkspaceContext provides the persisted list of workspace URIs so we can
+  // mount/unmount folders from the App Console without drilling props.
   const { getItems, addItem, removeItem } = useWorkspace();
-  const { contentsStore } = useContentsStore();
+  // FilesystemStoreContext owns the File System Access API store instance that
+  // actually opens folders and produces fs:// workspace URIs.
+  const { fsStore, setFsStore } = useFilesystemStore();
 
   // Message pump to deliver stdout/stderr back into console-view.
   const messageListenerRef = useRef<((message: unknown) => void) | undefined>(
     undefined,
   );
-  const sendStdout = (data: string) => {
+  const sendStdout = useCallback((data: string) => {
+    setConsoleOutput((prev) => {
+      const next = prev + data;
+      return next.length > MAX_CONSOLE_OUTPUT
+        ? next.slice(-MAX_CONSOLE_OUTPUT)
+        : next;
+    });
     messageListenerRef.current?.({
       type: ClientMessages.terminalStdout,
       output: {
@@ -68,7 +86,53 @@ export default function AppConsole() {
         data,
       },
     } as any);
-  };
+  }, [consoleId]);
+
+  // Lazily create the FilesystemNotebookStore if the provider has not
+  // initialized it yet. This keeps the App Console usable even if a user
+  // runs commands before the App initializer finishes.
+  const ensureFilesystemStore = useCallback(() => {
+    if (fsStore) {
+      return fsStore;
+    }
+    if (!isFileSystemAccessSupported()) {
+      return null;
+    }
+    const store = new FilesystemNotebookStore();
+    appState.setFilesystemStore(store);
+    setFsStore(store);
+    return store;
+  }, [fsStore, setFsStore]);
+
+  // Open the native directory picker via File System Access API and mount the
+  // selected folder into WorkspaceContext once permission is granted.
+  const openWorkspaceAndAdd = useCallback(() => {
+    const store = ensureFilesystemStore();
+    if (!store) {
+      const message =
+        "File System Access API is not supported in this browser.";
+      sendStdout(`${message}\r\n`);
+      return message;
+    }
+
+    void store
+      .openWorkspace()
+      .then((workspaceRootUri) => {
+        if (!getItems().includes(workspaceRootUri)) {
+          addItem(workspaceRootUri);
+        }
+        sendStdout(`Added local folder: ${workspaceRootUri}\r\n`);
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          sendStdout("Picker cancelled.\r\n");
+          return;
+        }
+        sendStdout(`Failed to open folder: ${String(error)}\r\n`);
+      });
+
+    return "Opening directory picker...";
+  }, [addItem, ensureFilesystemStore, getItems, sendStdout]);
 
   const kernel = useMemo(
     () =>
@@ -218,20 +282,10 @@ export default function AppConsole() {
           },
           explorer: {
             addFolder: (path?: string) => {
-              if (!contentsStore) {
-                return "ContentsService is not configured.";
+              if (path) {
+                return "explorer.addFolder() does not accept a path when using the File System Access API.";
               }
-              const rootUri = contentsStore.getRootUri();
-              if (!path) {
-                addItem(rootUri);
-                return `Added contents root: ${rootUri}`;
-              }
-              // Build a proper contents:// directory URI using the shared helpers
-              // to avoid URI format drift with the rest of the codebase.
-              const parsed = parseContentsUri(rootUri);
-              const subUri = buildContentsUri(parsed.baseURL, path, "directory");
-              addItem(subUri);
-              return `Added folder: ${subUri}`;
+              return openWorkspaceAndAdd();
             },
             mountDrive: (driveUrl: string) => {
               if (!driveUrl) {
@@ -241,13 +295,7 @@ export default function AppConsole() {
               return `Mounted Drive link: ${driveUrl}`;
             },
             openPicker: () => {
-              if (typeof window !== "undefined" && "showDirectoryPicker" in window) {
-                void (window as any).showDirectoryPicker().catch((err: unknown) => {
-                  sendStdout(`Picker cancelled or failed: ${String(err)}\r\n`);
-                });
-                return "Opening directory picker…";
-              }
-              return "showDirectoryPicker() is not supported in this browser.";
+              return openWorkspaceAndAdd();
             },
             removeFolder: (uri: string) => {
               if (!uri) {
@@ -265,10 +313,9 @@ export default function AppConsole() {
             },
             help: () => {
               return [
-                "explorer.addFolder()           - Add contents root folder to workspace",
-                "explorer.addFolder(path)        - Add a subdirectory to workspace",
+                "explorer.addFolder()           - Open the folder picker and mount a local folder",
                 "explorer.mountDrive(driveUrl)   - Mount a Google Drive link",
-                "explorer.openPicker()           - Open native directory picker",
+                "explorer.openPicker()           - Alias for explorer.addFolder()",
                 "explorer.removeFolder(uri)      - Remove a folder from workspace",
                 "explorer.listFolders()          - List all workspace folders",
                 "explorer.help()                 - Show this help",
@@ -289,7 +336,18 @@ export default function AppConsole() {
           },
         },
       }),
-    [consoleId, defaultRunnerName, deleteRunner, listRunners, updateRunner, contentsStore, addItem, getItems, removeItem],
+    [
+      addItem,
+      defaultRunnerName,
+      deleteRunner,
+      getItems,
+      listRunners,
+      ensureFilesystemStore,
+      openWorkspaceAndAdd,
+      removeItem,
+      sendStdout,
+      updateRunner,
+    ],
   );
 
   // Line editor state (buffer + cursor index).
@@ -309,8 +367,14 @@ export default function AppConsole() {
   };
 
   return (
-    <div className="flex flex-col overflow-hidden rounded-md border border-gray-200 bg-[#0f1014] text-white shadow-sm">
-      <div className="flex items-center justify-between border-b border-gray-800 bg-black/60 px-3">
+    <div
+      id="app-console"
+      className="flex flex-col overflow-hidden rounded-md border border-gray-200 bg-[#0f1014] text-white shadow-sm"
+    >
+      <div
+        id="app-console-header"
+        className="flex items-center justify-between border-b border-gray-800 bg-black/60 px-3"
+      >
         <span className="text-[12px] font-mono font-medium">App Console</span>
         <button
           type="button"
@@ -323,9 +387,11 @@ export default function AppConsole() {
         </button>
       </div>
       <div
+        id="app-console-body"
         className={`${collapsed ? "hidden" : "flex"} flex-1 bg-[#0f1014]`}
       >
         <div
+          id="app-console-view"
           className="flex-1 min-h-[220px] w-full"
           ref={(el) => {
             if (!el || el.hasChildNodes()) {
@@ -495,6 +561,13 @@ export default function AppConsole() {
             el.appendChild(elem);
           }}
         ></div>
+        <pre
+          id="app-console-output"
+          data-testid="app-console-output"
+          className="sr-only"
+        >
+          {consoleOutput}
+        </pre>
       </div>
     </div>
   );

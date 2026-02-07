@@ -24,6 +24,12 @@ export default defineConfig({
       //"Cross-Origin-Embedder-Policy": "require-corp",
       //"Cross-Origin-Embedder-Policy": "credentialless",
     },
+    watch: {
+      // Avoid full page reloads when local notebook fixtures are auto-saved.
+      // (These live under the Vite root so file writes would otherwise trigger
+      // a reload on every keystroke.)
+      ignored: ["**/test/fixtures/notebooks/**"],
+    },
   },
   preview: {
     headers: {

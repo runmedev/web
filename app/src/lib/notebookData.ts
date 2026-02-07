@@ -318,6 +318,10 @@ export class NotebookData {
   private activeStreams: Map<string, StreamsLike> = new Map();
 
   private refToCellData: Map<string, CellData> = new Map();
+  // Debounce auto-save writes so keystrokes don't trigger a full disk write
+  // (and in dev, a Vite page reload) on every change.
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly persistDelayMs = 750;
 
   constructor({
     notebook,
@@ -376,8 +380,17 @@ export class NotebookData {
     }
   }
 
-  /** Replace the in-memory notebook. */
-  loadNotebook(notebook: parser_pb.Notebook): void {
+  /**
+   * Replace the in-memory notebook.
+   *
+   * `persist` defaults to true so interactive edits still auto-save, but
+   * callers that are just loading from disk can disable it to avoid writing
+   * the same content back (which triggers Vite reloads in dev).
+   */
+  loadNotebook(
+    notebook: parser_pb.Notebook,
+    { persist = true }: { persist?: boolean } = {},
+  ): void {
     this.notebook = clone(parser_pb.NotebookSchema, notebook);
     this.rebuildIndex();
     this.validateCells();
@@ -385,7 +398,9 @@ export class NotebookData {
     this.loaded = true;
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    void this.persist();
+    if (persist) {
+      this.schedulePersist();
+    }
   }
 
   updateCell(cell: parser_pb.Cell): void {
@@ -408,7 +423,7 @@ export class NotebookData {
 
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    void this.persist();
+    this.schedulePersist();
   }
 
   addCodeCellAfter(targetRefId: string, languageId?: string | null): parser_pb.Cell | null {
@@ -421,7 +436,7 @@ export class NotebookData {
     this.rebuildIndex();
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    void this.persist();
+    this.schedulePersist();
     return cell;
   }
 
@@ -435,7 +450,7 @@ export class NotebookData {
     this.rebuildIndex();
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    void this.persist();
+    this.schedulePersist();
     return cell;
   }
 
@@ -448,21 +463,21 @@ export class NotebookData {
     this.rebuildIndex();
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    void this.persist();
+    this.schedulePersist();
   }
 
   setName(name: string): void {
     this.name = name;
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    void this.persist();
+    this.schedulePersist();
   }
 
   setUri(uri: string): void {
     this.uri = uri;
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    void this.persist();
+    this.schedulePersist();
   }
 
   // Returns the runID if the cell was started successfully.
@@ -713,6 +728,19 @@ export class NotebookData {
         error,
       });
     }
+  }
+
+  private schedulePersist(): void {
+    if (!this.notebookStore) {
+      return;
+    }
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+    }
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      void this.persist();
+    }, this.persistDelayMs);
   }
 }
 
