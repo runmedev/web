@@ -6,7 +6,7 @@ import type { RendererContext } from "vscode-notebook-renderer";
 
 import { createRoot } from "react-dom/client";
 import App, { AppProps } from "./App";
-import aisreIcon from "./assets/aisreicon.svg";
+import quillIcon from "./assets/quill-icon.svg";
 import { getBrowserAdapter } from "./browserAdapter.client";
 import { oidcConfigManager } from "./auth/oidcConfig";
 
@@ -45,8 +45,8 @@ getBrowserAdapter()
       <App
         initialState={initialState}
         branding={{
-          name: "AISRE",
-          logo: aisreIcon,
+          name: "Quill Notebook",
+          logo: quillIcon,
         }}
       />,
     );
