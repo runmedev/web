@@ -18,8 +18,8 @@ import { CellData } from "../../lib/notebookData";
 import { maybeParseIPykernelMessage, type IPykernelMessage } from "../../lib/ipykernel";
 
 export const fontSettings = {
-  fontSize: 12,
-  fontFamily: "monospace",
+  fontSize: 12.6,
+  fontFamily: "Fira Mono, monospace",
 };
 
 /**
@@ -165,7 +165,7 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
 
       // Mirror AppConsole defaults to avoid invalid sizing.
       consoleEl.setAttribute("buttons", "false");
-      consoleEl.setAttribute("theme", "dark");
+      consoleEl.setAttribute("theme", "light");
       consoleEl.setAttribute("fontFamily", fontSettings.fontFamily);
       consoleEl.setAttribute("fontSize", String(fontSettings.fontSize));
       consoleEl.setAttribute("cursorStyle", "block");
@@ -298,7 +298,7 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
   console.log("CellConsole render", { cellRefId: cell.refId, runID: runID });
   return (
     <div
-      className="rounded-md overflow-hidden"
+      className="w-full overflow-hidden"
       data-runkey={`console-${cell.refId}-${runID ?? "idle"}`}
       data-testid="cell-console"
       ref={containerRef}

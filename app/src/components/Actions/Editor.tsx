@@ -3,7 +3,8 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import MonacoEditor from "@monaco-editor/react";
 import useResizeObserver from "use-resize-observer";
 
-const theme = "vs-dark";
+const MARIMO_THEME = "marimo-light";
+let themeRegistered = false;
 
 // Editor component for editing code which won't re-render unless the value changes
 const Editor = memo(
@@ -11,8 +12,8 @@ const Editor = memo(
     id,
     value,
     language,
-    fontSize = 14,
-    fontFamily = "monospace",
+    fontSize = 12.6,
+    fontFamily = "Fira Mono, monospace",
     onChange,
     onEnter,
   }: {
@@ -96,7 +97,25 @@ const Editor = memo(
       if (!monaco?.editor) {
         return;
       }
-      monaco.editor.setTheme(theme);
+
+      // Register a Marimo-like light theme with white bg, light gutter, and
+      // subtle active-line highlight. Only defined once across all editors.
+      if (!themeRegistered) {
+        monaco.editor.defineTheme(MARIMO_THEME, {
+          base: "vs",
+          inherit: true,
+          rules: [],
+          colors: {
+            "editor.background": "#ffffff",
+            "editorLineNumber.foreground": "#838383",
+            "editorLineNumber.activeForeground": "#64748b",
+            "editor.lineHighlightBackground": "#0080ff08",
+            "editorGutter.background": "#ffffff",
+          },
+        });
+        themeRegistered = true;
+      }
+      monaco.editor.setTheme(MARIMO_THEME);
 
       if (!editor) {
         return;
@@ -143,7 +162,7 @@ const Editor = memo(
         style={{ contain: "inline-size" }}
         ref={setContainerRef}
       >
-        <div className="rounded-t-md overflow-hidden">
+        <div className="overflow-hidden">
           <MonacoEditor
             key={id}
             height={`${height}px`}
@@ -158,12 +177,15 @@ const Editor = memo(
                 horizontal: "auto",
               },
               minimap: { enabled: false },
-              theme,
+              theme: MARIMO_THEME,
               wordWrap: "wordWrapColumn",
               fontSize,
               fontFamily,
-              lineHeight: 20,
+              lineHeight: 18,
               scrollBeyondLastLine: false,
+              renderLineHighlight: "all",
+              lineNumbers: "on",
+              padding: { top: 3, bottom: 3 },
             }}
             onChange={(v) => {
               if (!v) {
@@ -173,8 +195,8 @@ const Editor = memo(
               onChange?.(v);
             }}
             onMount={editorDidMount}
-            className="rounded-lg"
-            wrapperProps={{ className: "rounded-lg" }}
+            className=""
+            wrapperProps={{ className: "" }}
           />
         </div>
       </div>

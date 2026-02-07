@@ -186,8 +186,8 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
   }, [stderr, stdout]);
 
   return (
-    <div className="mt-2 rounded-md border border-gray-200 bg-white p-2 text-xs text-gray-900">
-      <div className="mb-1 font-mono text-[10px] uppercase tracking-wide text-gray-500">
+    <div className="mt-2 rounded-md border border-nb-cell-border bg-white p-2 text-xs text-nb-text">
+      <div className="mb-1 font-mono text-[10px] uppercase tracking-wide text-nb-text-faint">
         Observable Output{" "}
         {lastRunId
           ? `(last run: ${new Date(lastRunId).toLocaleTimeString()})`
@@ -195,7 +195,7 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
       </div>
       <div
         ref={containerRef}
-        className="mb-2 min-h-[240px] w-full overflow-auto rounded border border-dashed border-gray-300 bg-gray-50"
+        className="mb-2 min-h-[240px] w-full overflow-auto rounded border border-dashed border-nb-cell-border bg-nb-surface-2"
       />
 
       {hasStdIO ? (
@@ -222,7 +222,7 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
           )}
         </div>
       ) : (
-        <div className="font-mono text-[11px] italic text-gray-500">
+        <div className="font-mono text-[11px] italic text-nb-text-faint">
           Use d3 (or aisre.render) to draw into the panel above.
         </div>
       )}

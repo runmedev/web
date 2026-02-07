@@ -43,32 +43,32 @@ import { fontSettings } from "./CellConsole";
  */
 const markdownComponents: Components = {
   h1: ({ children, ...props }) => (
-    <h1 className="text-2xl font-bold mb-4 mt-6 text-gray-900" {...props}>
+    <h1 className="text-2xl font-bold mb-4 mt-6 text-nb-text" {...props}>
       {children}
     </h1>
   ),
   h2: ({ children, ...props }) => (
-    <h2 className="text-xl font-bold mb-3 mt-5 text-gray-900" {...props}>
+    <h2 className="text-xl font-bold mb-3 mt-5 text-nb-text" {...props}>
       {children}
     </h2>
   ),
   h3: ({ children, ...props }) => (
-    <h3 className="text-lg font-semibold mb-2 mt-4 text-gray-900" {...props}>
+    <h3 className="text-lg font-semibold mb-2 mt-4 text-nb-text" {...props}>
       {children}
     </h3>
   ),
   p: ({ children, ...props }) => (
-    <p className="mb-3 text-gray-800 leading-relaxed" {...props}>
+    <p className="mb-3 text-nb-text leading-relaxed" {...props}>
       {children}
     </p>
   ),
   ul: ({ children, ...props }) => (
-    <ul className="list-disc list-inside mb-3 ml-4 text-gray-800" {...props}>
+    <ul className="list-disc list-inside mb-3 ml-4 text-nb-text" {...props}>
       {children}
     </ul>
   ),
   ol: ({ children, ...props }) => (
-    <ol className="list-decimal list-inside mb-3 ml-4 text-gray-800" {...props}>
+    <ol className="list-decimal list-inside mb-3 ml-4 text-nb-text" {...props}>
       {children}
     </ol>
   ),
@@ -82,7 +82,7 @@ const markdownComponents: Components = {
     if (isInline) {
       return (
         <code
-          className="bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono text-gray-800"
+          className="bg-nb-surface-2 px-1.5 py-0.5 rounded text-[12.6px] font-mono text-nb-text"
           {...props}
         >
           {children}
@@ -91,7 +91,7 @@ const markdownComponents: Components = {
     }
     return (
       <code
-        className={`block bg-gray-100 p-3 rounded-md text-sm font-mono overflow-x-auto ${className}`}
+        className={`block bg-nb-surface-2 p-3 rounded-md text-[12.6px] font-mono overflow-x-auto ${className}`}
         {...props}
       >
         {children}
@@ -99,13 +99,13 @@ const markdownComponents: Components = {
     );
   },
   pre: ({ children, ...props }) => (
-    <pre className="bg-gray-100 p-3 rounded-md overflow-x-auto mb-3" {...props}>
+    <pre className="bg-nb-surface-2 p-3 rounded-md overflow-x-auto mb-3" {...props}>
       {children}
     </pre>
   ),
   blockquote: ({ children, ...props }) => (
     <blockquote
-      className="border-l-4 border-gray-300 pl-4 italic text-gray-700 my-3"
+      className="border-l-4 border-nb-border-strong pl-4 italic text-nb-text-muted my-3"
       {...props}
     >
       {children}
@@ -124,25 +124,25 @@ const markdownComponents: Components = {
   ),
   table: ({ children, ...props }) => (
     <div className="overflow-x-auto mb-3">
-      <table className="min-w-full border border-gray-300" {...props}>
+      <table className="min-w-full border border-nb-border-strong" {...props}>
         {children}
       </table>
     </div>
   ),
   th: ({ children, ...props }) => (
     <th
-      className="border border-gray-300 bg-gray-100 px-3 py-2 text-left font-semibold"
+      className="border border-nb-border-strong bg-nb-surface-2 px-3 py-2 text-left font-semibold"
       {...props}
     >
       {children}
     </th>
   ),
   td: ({ children, ...props }) => (
-    <td className="border border-gray-300 px-3 py-2" {...props}>
+    <td className="border border-nb-border-strong px-3 py-2" {...props}>
       {children}
     </td>
   ),
-  hr: (props) => <hr className="my-4 border-gray-300" {...props} />,
+  hr: (props) => <hr className="my-4 border-nb-border-strong" {...props} />,
   img: ({ src, alt, ...props }) => (
     <img
       src={src}
@@ -289,7 +289,7 @@ const MarkdownCell = memo(
     const renderedMarkdown = useMemo(() => {
       if (!value.trim()) {
         return (
-          <div className="text-gray-400 italic py-2">
+          <div className="text-nb-text-faint italic py-2">
             Double-click to edit markdown...
           </div>
         );
@@ -321,7 +321,7 @@ const MarkdownCell = memo(
           // Rendered markdown view - double-click or keyboard to edit
           <div
             id={`markdown-rendered-${cell.refId}`}
-            className="cursor-text rounded-md border border-transparent hover:border-gray-200 hover:bg-gray-50/50 p-4 transition-colors"
+            className="cursor-text rounded-nb-md border border-transparent p-4 transition-all duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
             onDoubleClick={handleDoubleClick}
             onKeyDown={handleRenderedKeyDown}
             tabIndex={0}
@@ -335,7 +335,7 @@ const MarkdownCell = memo(
           // Editor view - blur or Escape to render
           <div
             id={`markdown-editor-${cell.refId}`}
-            className="rounded-md border border-sky-200 overflow-hidden w-full min-w-0 max-w-full"
+            className="rounded-nb-md border border-nb-accent shadow-nb-sm overflow-hidden w-full min-w-0 max-w-full transition-shadow duration-200"
             onBlur={handleBlur}
             onKeyDown={handleEditorKeyDown}
             data-testid="markdown-editor"
@@ -349,8 +349,8 @@ const MarkdownCell = memo(
               onChange={handleEditorChange}
               onEnter={handleRun}
             />
-            <div className="bg-gray-100 border-t border-gray-200 px-3 py-1 text-xs text-gray-500">
-              Press <kbd className="px-1 py-0.5 bg-gray-200 rounded">Esc</kbd>{" "}
+            <div className="bg-nb-surface-2 border-t border-nb-border px-3 py-1.5 text-xs text-nb-text-muted">
+              Press <kbd className="px-1 py-0.5 bg-nb-surface-3 rounded">Esc</kbd>{" "}
               or click away to render
             </div>
           </div>

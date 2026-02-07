@@ -12,7 +12,7 @@ export interface AuthButtonProps {
 export function AuthButton({ authData, onLogin, onLogout }: AuthButtonProps) {
   return authData ? (
     <button
-      className="p-0 text-sm font-medium text-gray-700 hover:text-gray-900 border-0"
+      className="p-0 text-sm font-medium text-nb-text-muted hover:text-nb-text border-0"
       style={{ padding: 0, backgroundColor: "transparent" }}
       onClick={onLogout}
     >
@@ -20,7 +20,7 @@ export function AuthButton({ authData, onLogin, onLogout }: AuthButtonProps) {
     </button>
   ) : (
     <button
-      className="p-0 text-sm font-medium text-gray-700 hover:text-gray-900 border-0"
+      className="p-0 text-sm font-medium text-nb-text-muted hover:text-nb-text border-0"
       style={{ padding: 0, backgroundColor: "transparent" }}
       onClick={onLogin}
     >

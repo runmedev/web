@@ -22,6 +22,7 @@
     "@connectrpc/connect-node": "^2.0.2",
     "@connectrpc/connect-web": "^2.0.2",
     "@datadog/datadog-api-client": "^1.45.0",
+    "@heroicons/react": "2.2.0",
     "@monaco-editor/react": "^4.7.0",
     "@openai/chatkit-react": "1.2.0",
     "@radix-ui/react-icons": "^1.3.0",
@@ -30,7 +31,6 @@
     "@tailwindcss/vite": "^4.0.17",
     "@tanstack/react-query": "5.89.0",
     "add": "2.0.6",
-    "use-resize-observer": "^9.1.0",
     "d3": "^7.9.0",
     "dexie": "3.2.4",
     "dexie-react-hooks": "4.2.0",
@@ -52,6 +52,7 @@
     "remark-gfm": "^3.0.1",
     "rxjs": "^7.8.2",
     "ulid": "^2.4.0",
+    "use-resize-observer": "^9.1.0",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

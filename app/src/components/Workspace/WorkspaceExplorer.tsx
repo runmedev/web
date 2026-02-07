@@ -8,13 +8,11 @@ import {
   type MouseEvent,
 } from "react";
 import { Tree, type NodeApi, type TreeApi } from "react-arborist";
-import { Box, Flex, Text } from "@radix-ui/themes";
-import { PlusIcon, MinusIcon, FileTextIcon } from "@radix-ui/react-icons";
+import { ChevronRightIcon, ChevronDownIcon } from "@heroicons/react/20/solid";
+import { CloudArrowUpIcon, DocumentTextIcon, FolderIcon, FolderPlusIcon } from "@heroicons/react/24/outline";
 import useResizeObserver from "use-resize-observer";
 
 import { GoogleDrivePickerButton } from "./GoogleDrivePickerButton";
-import { FolderPlusIcon } from "../icons/FolderPlusIcon";
-import { CloudFolderIcon } from "../icons/CloudFolderIcon";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
@@ -174,7 +172,7 @@ function EditableTreeNode({
       <input
         ref={inputRef}
         defaultValue={node.data.name}
-        className="w-full rounded border border-gray-300 px-2 py-1 text-sm outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
+        className="w-full rounded-nb-xs border border-nb-border-strong bg-nb-surface px-2 py-1 text-sm outline-none focus:border-nb-accent focus:ring-1 focus:ring-nb-accent-soft"
         onBlur={() => node.reset()}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
@@ -674,29 +672,31 @@ function formatShortTimestamp(date: Date): string {
             <button
               type="button"
               aria-label={node.isOpen ? "Collapse folder" : "Expand folder"}
-              className="flex h-5 w-5 items-center justify-center rounded hover:bg-gray-100 focus:outline-none mt-[2px]"
+              className="flex h-5 w-5 items-center justify-center rounded hover:bg-nb-surface-2 focus:outline-none mt-[2px]"
               onClick={(event) => {
                 event.stopPropagation();
                 node.toggle();
               }}
             >
               {node.isOpen ? (
-                <MinusIcon width={12} height={12} />
+                <ChevronDownIcon className="h-4 w-4" />
               ) : (
-                <PlusIcon width={12} height={12} />
+                <ChevronRightIcon className="h-4 w-4" />
               )}
             </button>
           )}
-          {isFolder ? null : data.type === NotebookStoreItemType.File ? (
-            <FileTextIcon width={16} height={16} />
+          {isFolder ? (
+            <FolderIcon className="h-4 w-4 text-nb-text-muted" />
+          ) : data.type === NotebookStoreItemType.File ? (
+            <DocumentTextIcon className="h-4 w-4 text-nb-text-faint" />
           ) : (
-            <FileTextIcon width={16} height={16} />
+            <DocumentTextIcon className="h-4 w-4 text-nb-text-faint" />
           )}
           {data.type === NotebookStoreItemType.File ? (
             <button
               type="button"
               title={data.name}
-              className="block flex-1 min-w-0 bg-transparent p-0 text-left text-amber-600 leading-4 hover:bg-transparent hover:text-amber-700 hover:underline focus:outline-none border-0"
+              className="block flex-1 min-w-0 bg-transparent p-0 text-left text-nb-accent leading-4 hover:bg-transparent hover:text-nb-accent hover:underline focus:outline-none border-0"
               onClick={(event) => {
                 event.stopPropagation();
                 void handleFileOpen(data);
@@ -710,7 +710,7 @@ function formatShortTimestamp(date: Date): string {
           ) : (
             <span
               title={data.name}
-              className={`block flex-1 min-w-0 whitespace-normal break-words leading-5${isPlaceholder ? " text-gray-500" : ""}`}
+              className={`block flex-1 min-w-0 whitespace-normal break-words leading-5${isPlaceholder ? " text-nb-text-faint" : ""}`}
             >
               {data.name}
             </span>
@@ -820,54 +820,54 @@ function formatShortTimestamp(date: Date): string {
 
   if (!store) {
     return (
-      <Box className="flex h-full min-h-0 flex-col gap-3">
-        <Text size="4" weight="bold">
+      <div className="flex h-full min-h-0 flex-col gap-3">
+        <h2 className="text-base font-semibold text-nb-text">
           Google Drive
-        </Text>
-        <Text size="2" color="gray">
+        </h2>
+        <p className="text-sm text-nb-text-muted">
           Notebook storage is not initialized.
-        </Text>
-      </Box>
+        </p>
+      </div>
     );
   }
 
   return (
-    <Box id="workspace-explorer-box" className="flex h-full min-h-0 w-full flex-col gap-3" onClick={() => setContextMenu(null)}>
+    <div id="workspace-explorer-box" className="flex h-full min-h-0 w-full flex-col gap-3" onClick={() => setContextMenu(null)}>
       <div id="workspace-explorer-toolbar-row" className="flex items-center justify-between w-full">
-        <Text size="4" weight="bold">
+        <h2 className="text-base font-semibold text-nb-text">
           Explorer
-        </Text>
+        </h2>
         <div className="flex items-center gap-1">
           {isFileSystemAccessSupported() && fsStore && (
             <button
               type="button"
-              className="btn btn-soft h-8 w-8 justify-center rounded-full p-0"
+              className="flex items-center justify-center h-8 w-8 rounded-nb-sm text-nb-text-muted hover:bg-nb-surface-2 hover:text-nb-text transition-colors duration-150"
               onClick={handleOpenLocalFolder}
               aria-label="Open local folder"
               title="Open local folder"
             >
-              <FolderPlusIcon width={20} height={20} />
+              <FolderPlusIcon className="h-5 w-5" />
             </button>
           )}
           <GoogleDrivePickerButton
             label="Add Google Drive folder"
-            className="btn btn-soft h-8 w-8 justify-center rounded-full p-0"
+            className="flex items-center justify-center h-8 w-8 rounded-nb-sm text-nb-text-muted hover:bg-nb-surface-2 hover:text-nb-text transition-colors duration-150"
           >
-            <CloudFolderIcon width={20} height={20} />
+            <CloudArrowUpIcon className="h-5 w-5" />
           </GoogleDrivePickerButton>
         </div>
       </div>
 
       {errorMessage && (
-        <Text size="2" color="red">
+        <p className="text-sm text-nb-error">
           {errorMessage}
-        </Text>
+        </p>
       )}
 
       {treeNodes.length === 0 ? (
-        <Text size="2" color="gray">
+        <p className="text-sm text-nb-text-muted">
           No notebook locations have been configured yet.
-        </Text>
+        </p>
       ) : (
         // We set height to 95% because if we set it to 100% the dive extends beyond the bottom of the page
         // It doesn't seem to be accounting for the height of the toolbar and error message above
@@ -875,7 +875,7 @@ function formatShortTimestamp(date: Date): string {
         // its the best I could come up with.
         <div
           id="workspace-explorer-tree-row"
-          className="flex-1 min-h-0 w-full overflow-hidden rounded-md border border-gray-200"
+          className="flex-1 min-h-0 w-full overflow-hidden rounded-nb-sm border border-nb-border"
           style={{ height: "95%" }}
           ref={containerRef}
         >
@@ -899,7 +899,7 @@ function formatShortTimestamp(date: Date): string {
       )}
       {contextMenu && (
         <div
-          className="fixed z-50 min-w-[180px] rounded-md border border-gray-200 bg-white py-2 shadow-lg"
+          className="ctx-menu"
           style={{
             top: contextMenu.position.y,
             left: contextMenu.position.x,
@@ -912,7 +912,7 @@ function formatShortTimestamp(date: Date): string {
                 !contextMenu.uri.startsWith("contents://") && (
                 <button
                   type="button"
-                  className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"
+                  className="ctx-menu-item"
                   onMouseDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -931,7 +931,7 @@ function formatShortTimestamp(date: Date): string {
               )}
               <button
                 type="button"
-                className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"
+                className="ctx-menu-item"
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -950,7 +950,7 @@ function formatShortTimestamp(date: Date): string {
               </button>
               {contextMenu.remoteUri && (
                 <a
-                  className="block w-full px-4 py-2 text-sm text-left hover:bg-gray-100"
+                  className="ctx-menu-item"
                   href={contextMenu.remoteUri}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -969,7 +969,7 @@ function formatShortTimestamp(date: Date): string {
                 !contextMenu.uri.startsWith("contents://") && (
               <button
                 type="button"
-                className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"
+                className="ctx-menu-item"
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -993,7 +993,7 @@ function formatShortTimestamp(date: Date): string {
               )}
               <button
                 type="button"
-                className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"
+                className="ctx-menu-item"
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -1006,7 +1006,7 @@ function formatShortTimestamp(date: Date): string {
           {contextMenu.uri !== LOCAL_FOLDER_URI && (
                 <button
                   type="button"
-                  className="block w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-gray-100"
+                  className="ctx-menu-item text-red-600"
                   onMouseDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -1019,7 +1019,7 @@ function formatShortTimestamp(date: Date): string {
               )}
               {contextMenu.remoteUri && (
                 <a
-                  className="block w-full px-4 py-2 text-sm text-left hover:bg-gray-100"
+                  className="ctx-menu-item"
                   href={contextMenu.remoteUri}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -1035,7 +1035,7 @@ function formatShortTimestamp(date: Date): string {
           ) : null}
         </div>
       )}
-    </Box>
+    </div>
   );
 }
 

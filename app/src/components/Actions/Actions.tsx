@@ -9,10 +9,10 @@ import {
 } from "react";
 
 import { create } from "@bufbuild/protobuf";
-import { Box, Button, Card, ScrollArea, Tabs, Text } from "@radix-ui/themes";
+import { Button, ScrollArea, Tabs, Text } from "@radix-ui/themes";
 import { useParams } from "react-router-dom";
 
-import { Cross2Icon } from "@radix-ui/react-icons";
+import { XMarkIcon } from "@heroicons/react/20/solid";
 import {
   MimeType,
   RunmeMetadataKey,
@@ -27,11 +27,10 @@ import Editor from "./Editor";
 import MarkdownCell from "./MarkdownCell";
 import { IOPUB_INCOMPLETE_METADATA_KEY } from "../../lib/ipykernel";
 import {
-  ErrorIcon,
   PlayIcon,
   PlusIcon,
   SpinnerIcon,
-  SuccessIcon,
+  TrashIcon,
 } from "./icons";
 //import { useRun } from "../../lib/useRun.js";
 import { useCurrentDoc } from "../../contexts/CurrentDocContext";
@@ -69,42 +68,32 @@ TabPanel.displayName = "TabPanel";
 // them. Inactive tabs are taken out of flow via absolute positioning and hidden
 // visibility so they don't visually overlap yet retain their state.
 
+/** Compact icon-only run button that sits in the cell toolbar.
+ *  Shows a spinner while running, otherwise always shows the play icon. */
 function RunActionButton({
   pid,
-  exitCode,
   onClick,
 }: {
   pid: number | null;
-  exitCode: number | null;
   onClick: () => void;
 }) {
-  const getButtonLabel = () => {
-    if (exitCode === null && pid === null) {
-      return "Run code";
-    }
-    if (exitCode === null && pid !== null) {
-      return "Running...";
-    }
-    if (exitCode !== null && exitCode === 0) {
-      return "Execution successful";
-    }
-    if (exitCode !== null && exitCode > 0) {
-      return `Execution failed with exit code ${exitCode}`;
-    }
-    return "Run code";
-  };
+  const isRunning = pid !== null;
 
   return (
-    <Button variant="soft" onClick={onClick} aria-label={getButtonLabel()}>
-      {exitCode === null && pid === null && <PlayIcon />}
-      {exitCode === null && pid !== null && (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={isRunning ? "Running..." : "Run code"}
+      className="icon-btn h-7 w-7"
+    >
+      {isRunning ? (
         <div className="animate-spin">
           <SpinnerIcon />
         </div>
+      ) : (
+        <PlayIcon />
       )}
-      {exitCode !== null && exitCode === 0 && <SuccessIcon />}
-      {exitCode !== null && exitCode > 0 && <ErrorIcon exitCode={exitCode} />}
-    </Button>
+    </button>
   );
 }
 
@@ -209,7 +198,7 @@ function ActionOutputItemView({
         title={`cell-output-${outputIndex}-${itemIndex}`}
         sandbox="allow-scripts"
         srcDoc={text}
-        className="h-[420px] w-full rounded-md border border-gray-200 bg-white"
+        className="h-[420px] w-full rounded-md border border-nb-cell-border bg-white"
       />
     );
   } else if (mime === "image/png") {
@@ -219,12 +208,12 @@ function ActionOutputItemView({
       <img
         alt={`Cell output ${outputIndex}-${itemIndex}`}
         src={src}
-        className="max-h-[480px] w-full rounded-md border border-gray-200 bg-white object-contain"
+        className="max-h-[480px] w-full rounded-md border border-nb-cell-border bg-white object-contain"
       />
     );
   } else {
     content = (
-      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-gray-900">
+      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-nb-text">
         {text}
       </pre>
     );
@@ -232,10 +221,10 @@ function ActionOutputItemView({
 
   return (
     <div
-      className="rounded-md border border-gray-200 bg-gray-50 p-2"
+      className="rounded-nb-sm border border-nb-border bg-nb-surface-2 p-3"
       data-testid="cell-output-item"
     >
-      <div className="text-[10px] font-medium uppercase tracking-wide text-gray-600">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-nb-text-faint">
         Output {outputIndex} / Item {itemIndex} - mime={mime}
         {hasIopubMetadata ? (isStreaming ? " (streaming)" : " (complete)") : ""}
       </div>
@@ -320,6 +309,14 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
   } | null>(null);
   const [pid, setPid] = useState<number | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
+
+  // When an exit code arrives, clear the pid so the spinner stops.
+  const handleExitCode = useCallback((code: number | null) => {
+    setExitCode(code);
+    if (code !== null) {
+      setPid(null);
+    }
+  }, []);
 
   useEffect(() => {
     if (!contextMenu) {
@@ -443,7 +440,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
           key={`webcontainer-${cell.refId}`}
           cell={cell}
           onPid={setPid}
-          onExitCode={setExitCode}
+          onExitCode={handleExitCode}
         />
       );
     }
@@ -465,7 +462,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     //           cell={cell}
     //           cellData={cellData}
     //           onPid={setPid}
-    //           onExitCode={setExitCode}
+    //           onExitCode={handleExitCode}
     //           {...renderer.props}
     //         />
     //       );
@@ -488,10 +485,10 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
         key={`console-${cell?.refId ?? "cell"}-${runID}`}
         cellData={cellData}
         onPid={setPid}
-        onExitCode={setExitCode}
+        onExitCode={handleExitCode}
       />
     );
-  }, [cell, cellData, runID]);
+  }, [cell, cellData, handleExitCode, runID]);
 
   const renderedOutputItems = useMemo(() => {
     if (!cell?.outputs || cell.outputs.length === 0) {
@@ -550,42 +547,47 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     return (
       <div
         id={`markdown-action-${cell.refId}`}
-        className="relative py-2 flex flex-col gap-2 min-w-0"
+        className="group/cell relative flex min-w-0"
         onContextMenu={handleContextMenu}
         data-testid="markdown-action"
       >
-        {!isFirst && (
-          <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center">
-            <div className="pointer-events-auto flex h-8 w-8 -translate-y-1/2 items-center justify-center">
-              <button
-                type="button"
-                aria-label="Add cell above"
-                className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition-colors hover:border-gray-400 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
-                onClick={handleAddCodeCellBefore}
-              >
-                <PlusIcon width={12} height={12} />
-              </button>
-            </div>
-          </div>
-        )}
-        <Box className="relative w-full min-w-0 max-w-full px-2 py-1 overflow-hidden">
-          <MarkdownCell cellData={cellData} />
-        </Box>
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center">
-          <div className="pointer-events-auto flex h-8 w-8 translate-y-1/2 items-center justify-center">
+        {/* Left gutter: top + bottom add-cell buttons */}
+        <div id={`markdown-gutter-${cell.refId}`} className="flex w-7 shrink-0 flex-col items-center justify-between py-1">
+          <button
+            type="button"
+            aria-label="Add cell above"
+            className="cell-add-btn h-5 w-5"
+            onClick={handleAddCodeCellBefore}
+          >
+            <PlusIcon width={10} height={10} />
+          </button>
+          <button
+            type="button"
+            aria-label="Add cell below"
+            className="cell-add-btn h-5 w-5"
+            onClick={handleAddCodeCellAfter}
+          >
+            <PlusIcon width={10} height={10} />
+          </button>
+        </div>
+        {/* Cell content */}
+        <div className="min-w-0 flex-1">
+          <div className="relative w-full min-w-0 max-w-full overflow-hidden">
+            <MarkdownCell cellData={cellData} />
+            {/* Trash icon on the right, visible on hover */}
             <button
               type="button"
-              aria-label="Add cell below"
-              className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition-colors hover:border-gray-400 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
-              onClick={handleAddCodeCellAfter}
+              aria-label="Delete cell"
+              className="icon-btn absolute right-2 top-2 h-6 w-6 opacity-0 transition-opacity duration-150 group-hover/cell:opacity-100"
+              onClick={handleRemoveCell}
             >
-              <PlusIcon width={12} height={12} />
+              <TrashIcon />
             </button>
           </div>
         </div>
         {adjustedContextMenu && (
           <div
-            className="fixed z-50 min-w-[160px] rounded-md border border-gray-200 bg-white py-1 shadow-lg"
+            className="ctx-menu"
             style={{
               top: adjustedContextMenu.y,
               left: adjustedContextMenu.x,
@@ -594,7 +596,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
           >
             <button
               type="button"
-              className="block w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-gray-100"
+              className="ctx-menu-item text-red-600"
               onClick={(event) => {
                 event.stopPropagation();
                 handleRemoveCell();
@@ -608,133 +610,134 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     );
   }
 
-  // Render code cells with the full editor, toolbar, and output area
+  // Render code cells as a unified Marimo-style card: editor + toolbar + output
+  // are all inside one bordered container with a distinctive "paper" shadow.
+  // The outer wrapper is a flex row: left gutter (add-cell buttons) + cell card.
   return (
     <div
-      className="relative py-2 flex flex-col gap-2"
+      id={`code-action-${cell.refId}`}
+      className="group/cell relative flex"
       onContextMenu={handleContextMenu}
+      data-testid="code-action"
     >
-      {!isFirst && (
-        <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center">
-          <div className="pointer-events-auto flex h-8 w-8 -translate-y-1/2 items-center justify-center">
-            <button
-              type="button"
-              aria-label="Add cell above"
-              className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition-colors hover:border-gray-400 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
-              onClick={handleAddCodeCellBefore}
-            >
-              <PlusIcon width={12} height={12} />
-            </button>
-          </div>
-        </div>
-      )}
-      <Box className="relative w-full px-2 py-1">
-        <div className="flex justify-between items-top">
-          <div className="flex flex-col items-center">
-            <RunActionButton pid={pid} exitCode={exitCode} onClick={runCode} />
-            <Text
-              size="2"
-              className="mt-1 p-2 font-bold text-gray-400 font-mono"
-              data-testid="sequence-label"
-            >
-              [{sequenceLabel}]
-            </Text>
-          </div>
-      <Card className="flex flex-col flex-1 ml-2 overflow-hidden">
-        <div id="editor-toolbar" className="relative flex flex-col gap-0">
-              <Editor
-                key={`editor-${cell.refId}-${selectedLanguage}`}
-                id={cell.refId}
-                value={cell.value}
-                language={editorLanguage}
-                fontSize={fontSettings.fontSize}
-                fontFamily={fontSettings.fontFamily}
-                onChange={(v) => {
-                  console.log("Editor onChange", { v });
-                  const updated = create(parser_pb.CellSchema, cell);
-                  updated.value = v;
-                  updateCellLocal(updated);
-                }}
-                onEnter={runCode}
-              />
-              <div
-                id="toolbar"
-                className="-mt-px flex items-center justify-start gap-4 border border-sky-200/70 bg-[#111111] px-3 py-0.5 text-[10px] leading-tight text-gray-200 rounded-b-md"
-              >
-                <div className="flex items-center gap-2">
-                  <Text
-                    size="1"
-                    as="span"
-                    className="text-[9px] uppercase tracking-wide text-gray-300"
-                  >
-                    Language
-                  </Text>
-                  <select
-                    id={languageSelectId}
-                    value={selectedLanguage}
-                    onChange={handleLanguageChange}
-                    className="cursor-pointer rounded border border-sky-200/70 bg-[#111111] px-2 py-0.5 text-[10px] font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-sky-200/50"
-                  >
-                    {LANGUAGE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Text
-                    size="1"
-                    as="span"
-                    className="text-[9px] uppercase tracking-wide text-gray-300"
-                  >
-                    Runner
-                  </Text>
-                  <select
-                    id={runnerSelectId}
-                    value={initialRunnerName}
-                    onChange={(event) => {                      
-                      const nextName = event.target.value;
-                      const names = new Set(listRunners().map((r) => r.name));
-                      if (!names.has(nextName) && nextName !== DEFAULT_RUNNER_PLACEHOLDER) {
-                        return;
-                      }
-                      cellData.setRunner(nextName);           
-                    }}
-                    className="cursor-pointer rounded border border-sky-200/70 bg-[#111111] px-2 py-0.5 text-[10px] font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-sky-200/50"
-                  >
-                    <option value="<default>">
-                      {defaultRunnerName ? `<default: ${defaultRunnerName}>` : "<default>"}
-                    </option>
-                    {listRunners().map((runner) => (
-                      <option key={runner.name} value={runner.name}>
-                        {runner.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-          </div>
-            {renderedOutputs}
-            {renderedOutputItems}
-          </Card>
-        </div> 
-      </Box>
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center">
-        <div className="pointer-events-auto flex h-8 w-8 translate-y-1/2 items-center justify-center">
-          <button
-            type="button"
-            aria-label="Add cell below"
-            className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition-colors hover:border-gray-400 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
-            onClick={handleAddCodeCellAfter}
+      {/* Left gutter: top + bottom add-cell buttons */}
+      <div id={`code-gutter-${cell.refId}`} className="flex w-7 shrink-0 flex-col items-center justify-between py-1">
+        <button
+          type="button"
+          aria-label="Add cell above"
+          className="cell-add-btn h-5 w-5"
+          onClick={handleAddCodeCellBefore}
+        >
+          <PlusIcon width={10} height={10} />
+        </button>
+        <button
+          type="button"
+          aria-label="Add cell below"
+          className="cell-add-btn h-5 w-5"
+          onClick={handleAddCodeCellAfter}
+        >
+          <PlusIcon width={10} height={10} />
+        </button>
+      </div>
+
+      {/* Cell card: editor + toolbar + output */}
+      <div className="min-w-0 flex-1">
+        <div
+          id={`cell-card-${cell.refId}`}
+          className="cell-card"
+        >
+          {/* Code editor section */}
+          <Editor
+            key={`editor-${cell.refId}-${selectedLanguage}`}
+            id={cell.refId}
+            value={cell.value}
+            language={editorLanguage}
+            fontSize={fontSettings.fontSize}
+            fontFamily={fontSettings.fontFamily}
+            onChange={(v) => {
+              const updated = create(parser_pb.CellSchema, cell);
+              updated.value = v;
+              updateCellLocal(updated);
+            }}
+            onEnter={runCode}
+          />
+
+          {/* Minimal toolbar: language + runner selectors + run/trash buttons */}
+          <div
+            id={`cell-toolbar-${cell.refId}`}
+            className="cell-toolbar"
           >
-            <PlusIcon width={12} height={12} />
-          </button>
+            <div className="flex items-center gap-3">
+              <select
+                id={languageSelectId}
+                value={selectedLanguage}
+                onChange={handleLanguageChange}
+                className="toolbar-select"
+              >
+                {LANGUAGE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                id={runnerSelectId}
+                value={initialRunnerName}
+                onChange={(event) => {
+                  const nextName = event.target.value;
+                  const names = new Set(listRunners().map((r) => r.name));
+                  if (!names.has(nextName) && nextName !== DEFAULT_RUNNER_PLACEHOLDER) {
+                    return;
+                  }
+                  cellData.setRunner(nextName);
+                }}
+                className="toolbar-select"
+              >
+                <option value="<default>">
+                  {defaultRunnerName ? `${defaultRunnerName}` : "default"}
+                </option>
+                {listRunners().map((runner) => (
+                  <option key={runner.name} value={runner.name}>
+                    {runner.name}
+                  </option>
+                ))}
+              </select>
+              {sequenceLabel.trim() && (
+                <span className="text-[11px] font-mono text-nb-text-faint">
+                  [{sequenceLabel}]
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
+              <RunActionButton pid={pid} onClick={runCode} />
+              <button
+                type="button"
+                aria-label="Delete cell"
+                className="icon-btn h-7 w-7 opacity-0 transition-opacity duration-150 group-hover/cell:opacity-100"
+                onClick={handleRemoveCell}
+              >
+                <TrashIcon />
+              </button>
+            </div>
+          </div>
+
+          {/* Output section: separated by a thin divider, inside the same card */}
+          {(renderedOutputs || renderedOutputItems) && (
+            <div id={`cell-output-${cell.refId}`}>
+              <div className="border-t border-nb-tray-border" />
+              <div className="p-[14.4px]">
+                {renderedOutputs}
+                {renderedOutputItems}
+              </div>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Context menu */}
       {adjustedContextMenu && (
         <div
-          className="fixed z-50 min-w-[160px] rounded-md border border-gray-200 bg-white py-1 shadow-lg"
+          className="ctx-menu"
           style={{
             top: adjustedContextMenu.y,
             left: adjustedContextMenu.x,
@@ -743,7 +746,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
         >
           <button
             type="button"
-            className="block w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-gray-100"
+            className="ctx-menu-item text-red-600"
             onClick={(event) => {
               event.stopPropagation();
               handleRemoveCell();
@@ -775,7 +778,7 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
 
   if (!notebookSnapshot || !notebookSnapshot.loaded) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-gray-500">
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-nb-text-muted">
         <span>Loading…</span>
       </div>
     );
@@ -788,52 +791,26 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
       key={`scroll-${docUri}`}
       type="auto"
       scrollbars="vertical"
-      className="flex-1 h-full p-1 min-w-0 max-w-full overflow-x-hidden"
+      className="flex-1 h-full min-w-0 max-w-full overflow-x-hidden"
       data-document-id={docUri}
     >
-      <div className="mb-2 flex justify-center">
-        <button
-          type="button"
-          aria-label="Add cell"
-          className="flex h-8 w-8 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition-colors hover:border-gray-400 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
-          onClick={() => {
-            if (!data) {
-              return;
-            }
-            // Default to inserting a code cell when notebook is empty.
-            const firstCell = cellDatas[0]?.snapshot;
-            if (firstCell) {
-              data.addCodeCellBefore(firstCell.refId);
-            } else {
-              const newCell = data.addCodeCellAfter("");
-              if (!newCell) {
-                // Fallback: create and persist a new code cell at the end.
-                const cell = create(parser_pb.CellSchema, {
-                  metadata: {},
-                  refId: `code_${crypto.randomUUID().replace(/-/g, "")}`,
-                  languageId: "bash",
-                  role: parser_pb.CellRole.USER,
-                  kind: parser_pb.CellKind.CODE,
-                  value: "",
-                });
-                data.updateCell(cell);
-              }
-            }
-          }}
-        >
-          <PlusIcon width={16} height={16} />
-        </button>
+      {/* Centered notebook column matching Marimo's ~726px content width.
+          Left padding accommodates the 28px cell gutter so add-cell buttons
+          sit flush with the card edge. */}
+      <div id="notebook-column" className="mx-auto w-full max-w-[726px] py-4 pl-0 pr-2">
+        <div className="space-y-[18px]">
+          {cellDatas.map((cellData, index) => {
+            const refId = cellData.snapshot?.refId ?? `cell-${index}`;
+            return (
+              <Action
+                key={`action-${refId}`}
+                cellData={cellData}
+                isFirst={index === 0}
+              />
+            );
+          })}
+        </div>
       </div>
-      {cellDatas.map((cellData, index) => {
-        const refId = cellData.snapshot?.refId ?? `cell-${index}`;
-        return (
-          <Action
-            key={`action-${refId}`}
-            cellData={cellData}
-            isFirst={index === 0}
-          />
-        );
-      })}
     </ScrollArea>
   );
 }
@@ -991,13 +968,13 @@ export default function Actions() {
         >
           <div
             id="actions-empty-state"
-            className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center gap-6 text-center text-sm text-gray-600"
+            className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center gap-6 text-center text-sm text-nb-text-muted"
           >
             <div id="actions-empty-header" className="space-y-2">
-              <Text size="5" weight="bold" as="p" className="text-gray-900">
+              <Text size="5" weight="bold" as="p" className="text-nb-text">
                 No open notebooks yet
               </Text>
-              <Text size="2" as="p" className="text-gray-500">
+              <Text size="2" as="p" className="text-nb-text-muted">
                 Use the button below to reveal console commands for mounting
                 folders or attaching files programmatically.
               </Text>
@@ -1018,12 +995,12 @@ export default function Actions() {
             {showConsoleHints && (
               <div
                 id="actions-empty-quickstart"
-                className="w-full rounded-lg border border-gray-200 bg-gray-50 p-4 text-left"
+                className="w-full rounded-lg border border-nb-border bg-nb-surface-2 p-4 text-left"
               >
-                <Text size="3" weight="bold" as="p" className="text-gray-900">
+                <Text size="3" weight="bold" as="p" className="text-nb-text">
                   Quick Start Console Commands
                 </Text>
-                <Text size="2" as="p" className="mt-1 text-gray-500">
+                <Text size="2" as="p" className="mt-1 text-nb-text-muted">
                   These commands are available in the app console and map to the
                   Explorer helpers. The File System Access API requires a picker
                   gesture, so addFolder/openPicker always prompt for a folder.
@@ -1053,9 +1030,9 @@ export default function Actions() {
       ) : (
         <Tabs.Root
           value={currentDocUri ?? openNotebooks[0]?.uri ?? ""}
-          className="flex flex-col flex-1 min-h-0 border border-gray-200 rounded-md overflow-hidden bg-white"
+          className="flex flex-col flex-1 min-h-0 overflow-hidden bg-white"
         >
-          <Tabs.List className="flex items-center gap-0 border-b border-gray-300 bg-gray-100 px-1">
+          <Tabs.List className="flex items-center gap-0.5 border-b border-nb-border bg-nb-surface-2 px-2 py-1">
           {openNotebooks.map((doc) => {              
             const displayName =
               doc.name ||
@@ -1066,7 +1043,7 @@ export default function Actions() {
                 <Tabs.Trigger
                   value={doc.uri}
                   title={doc.name}
-                  className="group flex items-center gap-2 px-3 py-1 text-sm font-medium text-gray-600 border border-gray-300 border-b-0 border-t-transparent data-[state=active]:border-t-2 data-[state=active]:border-t-sky-400 data-[state=active]:border-l-gray-400 data-[state=active]:border-r-gray-400 data-[state=active]:bg-white data-[state=active]:text-gray-900 data-[state=inactive]:bg-gray-100 focus:outline-none"
+                  className="group flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-nb-sm transition-all duration-150 text-nb-text-muted border border-transparent data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:border-nb-border data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
                   onClick={() => {
                     if (doc.uri !== currentDocUri) {
                       setMountedTabs((prev) => {
@@ -1085,7 +1062,7 @@ export default function Actions() {
                 </Tabs.Trigger>
                   <button
                     type="button"
-                    className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-gray-400 transition-colors hover:text-gray-700"
+                    className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-nb-xs text-nb-text-faint transition-all duration-150 hover:text-nb-text hover:bg-nb-surface-2"
                     aria-label={`Close ${displayName}`}
                     onClick={(event) => {
                       event.stopPropagation();
@@ -1093,7 +1070,7 @@ export default function Actions() {
                     }}
                     onMouseDown={(event) => event.stopPropagation()}
                   >
-                    <Cross2Icon width={12} height={12} />
+                    <XMarkIcon className="h-3 w-3" />
                   </button>
                 </div>
               );

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/20/solid";
 import { ClientMessages } from "@runmedev/renderers";
 import type { RendererContext } from "vscode-notebook-renderer";
 
@@ -369,21 +370,21 @@ export default function AppConsole() {
   return (
     <div
       id="app-console"
-      className="flex flex-col overflow-hidden rounded-md border border-gray-200 bg-[#0f1014] text-white shadow-sm"
+      className="flex flex-col overflow-hidden rounded-nb-md border border-nb-cell-border bg-[#0f1014] text-white shadow-nb-sm"
     >
       <div
         id="app-console-header"
-        className="flex items-center justify-between border-b border-gray-800 bg-black/60 px-3"
+        className="flex items-center justify-between border-b border-nb-tray-border bg-[#1a1a2e] px-3"
       >
-        <span className="text-[12px] font-mono font-medium">App Console</span>
+        <span className="text-[12.6px] font-mono font-medium">App Console</span>
         <button
           type="button"
           aria-label={collapsed ? "Expand app console" : "Collapse app console"}
-          className="inline-flex h-8 w-8 items-center justify-center rounded bg-black/0 text-[12px] font-mono font-medium text-white hover:bg-black/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black/80"
+          className="inline-flex h-8 w-8 items-center justify-center rounded bg-black/0 text-[12.6px] font-mono font-medium text-white hover:bg-black/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black/80"
           style={{ backgroundColor: "transparent" }}
           onClick={() => setCollapsed((prev) => !prev)}
         >
-          <span aria-hidden="true">{collapsed ? "▲" : "▼"}</span>
+          {collapsed ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />}
         </button>
       </div>
       <div
@@ -550,8 +551,8 @@ export default function AppConsole() {
             elem.setAttribute("buttons", "false");
             elem.setAttribute("initialContent", "");
             elem.setAttribute("theme", "dark");
-            elem.setAttribute("fontFamily", "monospace");
-            elem.setAttribute("fontSize", "12");
+            elem.setAttribute("fontFamily", "Fira Mono, monospace");
+            elem.setAttribute("fontSize", "12.6");
             elem.setAttribute("cursorStyle", "block");
             elem.setAttribute("cursorBlink", "true");
             elem.setAttribute("cursorWidth", "1");

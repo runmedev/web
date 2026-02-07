@@ -1,16 +1,6 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import {
-  Box,
-  Button,
-  Callout,
-  Flex,
-  Switch,
-  Text,
-  TextArea,
-} from "@radix-ui/themes";
-
 import { useSettings } from "../../contexts/SettingsContext";
 
 export default function Settings() {
@@ -69,41 +59,50 @@ export default function Settings() {
     endpoint !== settings.agentEndpoint ||    
     invertOrder !== settings.webApp.invertedOrder;
   return (
-    <Box className="w-full mx-auto">
-      <Text size="5" weight="bold" className="mb-2">
+    <div className="w-full mx-auto">
+      <h2 className="text-lg font-semibold text-nb-text mb-2">
         Settings
-      </Text>
+      </h2>
 
-      <Box className="mt-4">
-        <Flex direction="column" gap="4">
-          <Flex direction="column" gap="2">
-            <Text size="3" weight="bold">
+      <div className="mt-4">
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <h3 className="text-sm font-semibold text-nb-text">
               Agent Endpoint Configuration
-            </Text>
-            <Text size="2" color="gray">
+            </h3>
+            <p className="text-sm text-nb-text-muted">
               Configure the endpoint URL for the AI agent. Changes will take
               effect after saving.
-            </Text>
-            <TextArea
-              size="3"
+            </p>
+            <textarea
+              className="w-full rounded-nb-sm border border-nb-cell-border bg-white px-3 py-2 text-sm text-nb-text font-body focus:outline-none focus:ring-1 focus:ring-nb-accent focus:border-nb-accent"
               placeholder="Enter AI endpoint URL"
               value={endpoint}
               onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
                 setEndpoint(e.target.value)
               }
             />
-          </Flex>    
-        </Flex>
+          </div>
+        </div>
 
-        <Flex gap="3" justify="end" mt="4">   
-          <Button size="2" variant="soft" onClick={handleRevert}>
+        <div className="flex gap-3 justify-end mt-4">
+          <button
+            type="button"
+            className="rounded-nb-sm border border-nb-cell-border bg-white px-3 py-1.5 text-sm text-nb-text-muted hover:bg-nb-surface-2 transition-colors duration-150"
+            onClick={handleRevert}
+          >
             Revert
-          </Button>
-          <Button size="2" onClick={handleSave} disabled={!isChanged}>
+          </button>
+          <button
+            type="button"
+            className="rounded-nb-sm bg-nb-accent px-3 py-1.5 text-sm text-white hover:opacity-90 transition-opacity duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={handleSave}
+            disabled={!isChanged}
+          >
             Save
-          </Button>
-        </Flex>
-      </Box>
-    </Box>
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

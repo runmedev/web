@@ -558,22 +558,22 @@ function ChatKitPanel() {
     <div className="relative h-full w-full">
       <ChatKit control={chatkit.control} className="block h-full w-full" />
       {showLoginPrompt ? (
-        <div className="pointer-events-auto absolute inset-0 z-50 flex items-center justify-center bg-white/85 p-4 text-sm">
-          <div className="w-full max-w-sm rounded-md border border-gray-200 bg-white p-4 shadow-lg">
-            <p className="mb-4 text-gray-900">
+        <div className="pointer-events-auto absolute inset-0 z-50 flex items-center justify-center bg-white/90 p-4 text-sm">
+          <div className="w-full max-w-sm rounded-nb-md border border-nb-cell-border bg-white p-4 shadow-nb-lg">
+            <p className="mb-4 text-nb-text">
               Please log in to use AISRE chat features.
             </p>
             <div className="flex justify-end gap-2">              
               <button
                 type="button"
-                className="rounded border border-gray-900 px-3 py-1 text-black hover:bg-gray-100"
+                className="rounded border border-nb-text px-3 py-1 text-nb-text hover:bg-nb-surface-2"
                 onClick={handleLogin}
               >
                 Log In
               </button>
               <button
                 type="button"
-                className="rounded border border-gray-300 px-3 py-1 text-gray-700 hover:bg-gray-50"
+                className="rounded border border-nb-cell-border px-3 py-1 text-nb-text-muted hover:bg-nb-surface-2"
                 onClick={handleDismissPrompt}
               >
                 Cancel

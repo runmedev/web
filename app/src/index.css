@@ -1,7 +1,9 @@
-/* Copied from  https://ui-kit.gateway.unified-0s.internal.api.openai.org/iframe.html?viewMode=docs&id=overview-installation--docs&globals=#3-add-css-foundations */
+@import url("https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&family=Fira+Mono:wght@400;500&display=swap");
 @import "tailwindcss";
 
-// Adding breakpoints manually due to `postcss.config.mjs` customizations
+/* ═══════════════════════════════════════════════════════════════════
+   1. Breakpoints (build-time only — no CSS vars emitted)
+   ═══════════════════════════════════════════════════════════════════ */
 @theme static {
   --breakpoint-sm: 576px;
   --breakpoint-md: 768px;
@@ -10,13 +12,219 @@
   --breakpoint-2xl: 1536px;
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   2. Design tokens (source of truth)
+   ═══════════════════════════════════════════════════════════════════ */
 :root {
-  --vscode-terminal-background: #0b0b0b; /* dark bg */
-  --vscode-terminal-foreground: #eaeaea; /* light text */
-  --vscode-terminal-border: #333333;
+  /* ── Typography ──────────────────────────────────────────────── */
+  --nb-font-body: "PT Sans", sans-serif;
+  --nb-font-mono: "Fira Mono", monospace;
+
+  /* ── Color system (Marimo-matched) ──────────────────────────── */
+  --nb-bg: #ffffff;
+  --nb-surface: #ffffff;
+  --nb-surface-2: #f8f9fa;
+  --nb-surface-3: #e2e8f0;
+  --nb-text: #0f172a;
+  --nb-text-muted: #64748b;
+  --nb-text-faint: #838383;
+  --nb-border: #e2e8f0;
+  --nb-border-strong: #e0e0e0;
+
+  /* ── Accent ───────────────────────────────────────────────────── */
+  --nb-accent: #0880ea;
+  --nb-accent-soft: rgba(8, 128, 234, 0.10);
+  --nb-accent-muted: rgba(8, 128, 234, 0.06);
+
+  /* ── Cell card ────────────────────────────────────────────────── */
+  --nb-cell-border: #e8e8e8;
+  --nb-tray-border: #e0e0e0;
+  --nb-shadow-paper: rgba(200, 200, 200, 0.4) 4px 4px 0px 0px,
+                     rgba(200, 200, 200, 0.4) 0px 0px 2px 0px;
+
+  /* ── Status colors ────────────────────────────────────────────── */
+  --nb-success: #16a34a;
+  --nb-error: #dc2626;
+  --nb-warning: #d97706;
+
+  /* ── Radius ───────────────────────────────────────────────────── */
+  --nb-r-xs: 4px;
+  --nb-r-sm: 6px;
+  --nb-r-md: 10px;
+  --nb-r-lg: 14px;
+
+  /* ── Shadow hierarchy ─────────────────────────────────────────── */
+  --nb-shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --nb-shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --nb-shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08), 0 1px 4px rgba(15, 23, 42, 0.04);
+  --nb-shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.10), 0 2px 8px rgba(15, 23, 42, 0.06);
+
+  /* ── Terminal vars (light theme) ──────────────────────────────── */
+  --vscode-terminal-background: #ffffff;
+  --vscode-terminal-foreground: #0f172a;
+  --vscode-terminal-border: #e0e0e0;
 }
 
-/* Override Radix's global selection color in this dark quick-start snippet. */
+/* ═══════════════════════════════════════════════════════════════════
+   3. Tailwind theme aliases
+   Map --nb-* tokens to Tailwind utility prefixes so we can write
+   `text-nb-text-muted` instead of `text-[var(--nb-text-muted)]`.
+   ═══════════════════════════════════════════════════════════════════ */
+@theme {
+  /* Fonts → font-body, font-mono */
+  --font-body: var(--nb-font-body);
+  --font-mono: var(--nb-font-mono);
+
+  /* Colors → text-nb-*, bg-nb-*, border-nb-*, ring-nb-* */
+  --color-nb-bg: var(--nb-bg);
+  --color-nb-surface: var(--nb-surface);
+  --color-nb-surface-2: var(--nb-surface-2);
+  --color-nb-surface-3: var(--nb-surface-3);
+
+  --color-nb-text: var(--nb-text);
+  --color-nb-text-muted: var(--nb-text-muted);
+  --color-nb-text-faint: var(--nb-text-faint);
+
+  --color-nb-border: var(--nb-border);
+  --color-nb-border-strong: var(--nb-border-strong);
+
+  --color-nb-accent: var(--nb-accent);
+  --color-nb-accent-soft: var(--nb-accent-soft);
+  --color-nb-accent-muted: var(--nb-accent-muted);
+
+  --color-nb-cell-border: var(--nb-cell-border);
+  --color-nb-tray-border: var(--nb-tray-border);
+
+  --color-nb-success: var(--nb-success);
+  --color-nb-error: var(--nb-error);
+  --color-nb-warning: var(--nb-warning);
+
+  /* Radius → rounded-nb-xs, rounded-nb-sm, rounded-nb-md, rounded-nb-lg */
+  --radius-nb-xs: var(--nb-r-xs);
+  --radius-nb-sm: var(--nb-r-sm);
+  --radius-nb-md: var(--nb-r-md);
+  --radius-nb-lg: var(--nb-r-lg);
+
+  /* Shadows → shadow-nb-xs, shadow-nb-sm, etc. + shadow-paper */
+  --shadow-nb-xs: var(--nb-shadow-xs);
+  --shadow-nb-sm: var(--nb-shadow-sm);
+  --shadow-nb-md: var(--nb-shadow-md);
+  --shadow-nb-lg: var(--nb-shadow-lg);
+  --shadow-paper: var(--nb-shadow-paper);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   4. Base styles
+   ═══════════════════════════════════════════════════════════════════ */
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-nb-bg text-nb-text font-body;
+    font-size: 14.4px;
+  }
+
+  code, pre, kbd, samp {
+    @apply font-mono;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   5. Reusable component classes
+   These capture repeated design patterns so individual components
+   only need a single class instead of 5-10 utility classes.
+   ═══════════════════════════════════════════════════════════════════ */
+@layer components {
+  /* Marimo-style cell card: bordered, rounded, paper shadow */
+  .cell-card {
+    @apply overflow-hidden rounded-nb-md border border-nb-cell-border bg-white shadow-paper;
+    @apply transition-shadow duration-200;
+    @apply focus-within:ring-1 focus-within:ring-nb-accent focus-within:ring-offset-1;
+  }
+
+  /* Thin toolbar row inside a cell card (between editor and output) */
+  .cell-toolbar {
+    @apply flex items-center justify-between border-t border-nb-tray-border px-3 py-1;
+  }
+
+  /* Small inline <select> for language/runner pickers */
+  .toolbar-select {
+    @apply cursor-pointer rounded-nb-xs border border-nb-cell-border bg-white
+           px-2 py-0.5 text-[11px] font-mono text-nb-text-muted
+           focus:outline-none focus:ring-1 focus:ring-nb-accent-soft;
+  }
+
+  /* Add-cell button in the left gutter — always visible, not hidden on hover */
+  .cell-add-btn {
+    @apply flex items-center justify-center rounded-full
+           border border-nb-border-strong bg-white text-nb-text-muted
+           transition-colors duration-150
+           hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted;
+  }
+
+  /* Floating context menu */
+  .ctx-menu {
+    @apply fixed z-50 min-w-[160px] rounded-nb-sm border border-nb-cell-border
+           bg-white py-1 shadow-nb-lg;
+  }
+
+  /* Context menu item (button or link) */
+  .ctx-menu-item {
+    @apply block w-full px-4 py-2 text-left text-sm hover:bg-nb-surface-2;
+  }
+
+  /* Icon-only button (toolbar, sidebar) */
+  .icon-btn {
+    @apply flex items-center justify-center rounded-nb-sm
+           text-nb-text-faint transition-colors duration-150
+           hover:bg-black/5 hover:text-nb-text;
+  }
+
+  /* Sidebar toolbar button (SidePanel) */
+  .side-btn {
+    @apply relative flex h-9 w-9 items-center justify-center
+           rounded-nb-sm border border-transparent
+           transition-all duration-150 focus-visible:outline-none;
+  }
+
+  .side-btn-active {
+    @apply bg-nb-accent-soft text-nb-accent hover:bg-nb-accent-soft;
+  }
+
+  .side-btn-inactive {
+    @apply text-nb-text-muted hover:bg-nb-surface-2 hover:text-nb-text;
+  }
+
+  /* Sidebar tooltip */
+  .side-tooltip {
+    @apply pointer-events-none absolute left-11 top-1/2 z-50
+           -translate-y-1/2 whitespace-nowrap rounded-nb-xs
+           bg-[#1e293b] px-2.5 py-1.5 text-xs font-medium text-white
+           opacity-0 shadow-nb-md transition-opacity duration-150
+           group-hover:opacity-100;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   6. Vendor overrides
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Monaco light-theme: white gutter with right divider */
+.monaco-editor .margin {
+  background: #fff !important;
+  border-right: 1px solid #ddd;
+}
+
+.monaco-editor,
+.monaco-editor-background,
+.monaco-editor .inputarea.ime-input {
+  background-color: #fff !important;
+}
+
+/* Radix selection override */
 .radix-themes #actions-empty-quickstart-code::selection {
   background-color: rgba(59, 130, 246, 0.6);
   color: #ffffff;
