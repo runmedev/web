@@ -71,7 +71,7 @@ jobs:
       - name: Compute tags
         id: tags
         run: |
-          echo "sha_tag=sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=sha-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
           if [ "${GITHUB_REF_NAME}" = "main" ]; then
             echo "latest_tag=latest" >> "$GITHUB_OUTPUT"
           fi
