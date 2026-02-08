@@ -57,10 +57,10 @@ jobs:
 
       - name: Package static assets
         run: |
-          rm -rf oci-artifact
-          mkdir -p oci-artifact/assets
-          cp -R app/dist/. oci-artifact/assets/
-          tar -C oci-artifact -czf app-assets.tgz assets
+          ARTIFACT_DIR="$(mktemp -d)"
+          mkdir -p "${ARTIFACT_DIR}/assets"
+          cp -R app/dist/. "${ARTIFACT_DIR}/assets/"
+          tar -C "${ARTIFACT_DIR}" -czf app-assets.tgz assets
 
       - name: Setup ORAS
         uses: oras-project/setup-oras@v1
