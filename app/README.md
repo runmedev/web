@@ -146,7 +146,7 @@ The web app can be published as a static-assets OCI artifact (not a runnable con
 This repo includes a GitHub Actions workflow at `.github/workflows/publish-app-assets-oci.yaml` that:
 
 1. Builds the app with `pnpm -C app run build`
-2. Packages `app/dist` into `app-assets.tgz` with files under `/assets`
+2. Packages `app/dist` into `app-assets.tgz` with files under `assets/`
 3. Pushes the tarball to GHCR as an OCI artifact using `oras`
 
 The artifact is published as:
