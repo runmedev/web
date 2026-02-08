@@ -1,0 +1,96 @@
+name: Publish App Assets OCI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'app/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/publish-app-assets-oci.yaml'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/app-assets
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Get pnpm store path
+        id: pnpm-store
+        run: echo "path=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v3
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build static assets
+        run: pnpm -C app run build
+
+      - name: Package static assets
+        run: |
+          ARTIFACT_DIR="$(mktemp -d)"
+          mkdir -p "${ARTIFACT_DIR}/assets"
+          cp -R app/dist/. "${ARTIFACT_DIR}/assets/"
+          tar -C "${ARTIFACT_DIR}" -czf app-assets.tgz assets
+
+      - name: Setup ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Login to GHCR
+        run: |
+          if ! echo "${{ secrets.GITHUB_TOKEN }}" | oras login "${{ env.REGISTRY }}" -u "${{ github.actor }}" --password-stdin; then
+            echo "ERROR: Failed to login to OCI registry '${{ env.REGISTRY }}' with oras." >&2
+            exit 1
+          fi
+
+      - name: Compute tags
+        id: tags
+        run: |
+          echo "sha_tag=sha-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            echo "latest_tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push OCI artifact (sha tag)
+        run: |
+          oras push \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.sha_tag }}" \
+            --artifact-type "application/vnd.runmeweb.assets.v1" \
+            app-assets.tgz:application/vnd.runmeweb.assets.tar+gzip
+
+      - name: Push OCI artifact (latest tag)
+        if: steps.tags.outputs.latest_tag != ''
+        run: |
+          oras push \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.latest_tag }}" \
+            --artifact-type "application/vnd.runmeweb.assets.v1" \
+            app-assets.tgz:application/vnd.runmeweb.assets.tar+gzip
