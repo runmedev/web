@@ -36,7 +36,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10
+          run_install: false
 
       - name: Get pnpm store path
         id: pnpm-store
@@ -76,6 +76,12 @@ jobs:
         id: tags
         run: |
           echo "sha_tag=sha-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          BRANCH_TAG="$(echo "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9_.-]#-#g' | sed 's#^-##;s#-$##')"
+          if [ -z "${BRANCH_TAG}" ]; then
+            echo "ERROR: Computed empty branch tag from '${GITHUB_REF_NAME}'." >&2
+            exit 1
+          fi
+          echo "branch_tag=branch-${BRANCH_TAG}" >> "$GITHUB_OUTPUT"
           if [ "${GITHUB_REF_NAME}" = "main" ]; then
             echo "latest_tag=latest" >> "$GITHUB_OUTPUT"
           fi
@@ -84,6 +90,13 @@ jobs:
         run: |
           oras push \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.sha_tag }}" \
+            --artifact-type "application/vnd.runmeweb.assets.v1" \
+            app-assets.tgz:application/vnd.runmeweb.assets.tar+gzip
+
+      - name: Push OCI artifact (branch tag)
+        run: |
+          oras push \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tags.outputs.branch_tag }}" \
             --artifact-type "application/vnd.runmeweb.assets.v1" \
             app-assets.tgz:application/vnd.runmeweb.assets.tar+gzip
 
