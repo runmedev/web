@@ -20,6 +20,7 @@ import { oidcConfigManager } from "../../auth/oidcConfig";
 import type { OidcConfig } from "../../auth/oidcConfig";
 import { getAuthData } from "../../token";
 import { jwtDecode } from "jwt-decode";
+import { getDefaultAppConfigUrl, setAppConfig } from "../../lib/appConfig";
 
 const PROMPT = "> ";
 const ERASE_TO_END = "\u001b[K";
@@ -269,6 +270,26 @@ export default function AppConsole() {
             google: googleClientManager,
             oidc: oidcConfigManager,
           },
+          app: {
+            getDefaultConfigUrl: () => getDefaultAppConfigUrl(),
+            setConfig: async (url?: string) => {
+              sendStdout("Fetching app config...\r\n");
+              try {
+                const applied = await setAppConfig(url);
+                if (applied.warnings.length > 0) {
+                  applied.warnings.forEach((warning) => {
+                    sendStdout(`Warning: ${warning}\r\n`);
+                  });
+                }
+                sendStdout("App config applied.\r\n");
+                return applied;
+              } catch (error) {
+                const message = `Failed to apply app config: ${String(error)}`;
+                sendStdout(`${message}\r\n`);
+                throw error;
+              }
+            },
+          },
           help: () => {
             return [
               "Available namespaces:",
@@ -276,6 +297,7 @@ export default function AppConsole() {
               "  aisreRunners    - Configure runner endpoints",
               "  oidc            - OIDC/OAuth configuration and auth status",
               "  googleClientManager - Google OAuth client settings",
+              "  app             - App-level configuration helpers",
               "  credentials     - Shorthand for google/oidc credential managers",
               "",
               "Type <namespace>.help() for detailed commands, e.g. explorer.help()",

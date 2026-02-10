@@ -9,12 +9,20 @@ import App, { AppProps } from "./App";
 import quillIcon from "./assets/quill-icon.svg";
 import { getBrowserAdapter } from "./browserAdapter.client";
 import { oidcConfigManager } from "./auth/oidcConfig";
+import type { AppliedAppConfig } from "./lib/appConfig";
+import { getDefaultAppConfigUrl, setAppConfig } from "./lib/appConfig";
+
+type AppConfigApi = {
+  getDefaultConfigUrl: () => string;
+  setConfig: (url?: string) => Promise<AppliedAppConfig>;
+};
 
 // Define the type for the window object with initial state
 declare global {
   interface Window {
     __INITIAL_STATE__?: AppProps["initialState"];
     oidc?: typeof oidcConfigManager;
+    app?: AppConfigApi;
   }
 
 }
@@ -22,6 +30,10 @@ declare global {
 // Read initial state from window object
 const initialState = window.__INITIAL_STATE__ || {};
 window.oidc = oidcConfigManager;
+window.app = {
+  getDefaultConfigUrl: getDefaultAppConfigUrl,
+  setConfig: setAppConfig,
+};
 
 // Provide a default noop messaging bridge so console-view has a context before
 // any specific bridge is wired. Individual consoles override this on mount.
