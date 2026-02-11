@@ -10,11 +10,13 @@ import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
 import { useCurrentDoc } from "../../contexts/CurrentDocContext";
 import { useNotebookContext } from "../../contexts/NotebookContext";
+import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { appState } from "../../lib/runtime/AppState";
 import {
   FilesystemNotebookStore,
   isFileSystemAccessSupported,
 } from "../../storage/fs";
+import { LOCAL_FOLDER_URI } from "../../storage/local";
 import { Runner } from "../../lib/runner";
 import { getRunnersManager } from "../../lib/runtime/runnersManager";
 import {
@@ -27,6 +29,16 @@ import type { OidcConfig } from "../../auth/oidcConfig";
 import { getAuthData } from "../../token";
 import { jwtDecode } from "jwt-decode";
 import { getDefaultAppConfigUrl, setAppConfig } from "../../lib/appConfig";
+import {
+  deserializeMarkdownToNotebook,
+  getPickedMarkdownSelection,
+  getImportedFileBytes,
+  getImportedFileName,
+  pickMarkdownSource,
+  registerImportedMarkdownForUri,
+  toImportedNotebookName,
+} from "../../lib/markdownImport";
+import { createDriveFile, updateDriveFileBytes } from "../../lib/driveTransfer";
 
 const PROMPT = "> ";
 const ERASE_TO_END = "\u001b[K";
@@ -77,12 +89,16 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
   // WorkspaceContext provides the persisted list of workspace URIs so we can
   // mount/unmount folders from the App Console without drilling props.
   const { getItems, addItem, removeItem } = useWorkspace();
-  const { getCurrentDoc } = useCurrentDoc();
+  const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const { getNotebookData, useNotebookList } = useNotebookContext();
   const openNotebooks = useNotebookList();
   // FilesystemStoreContext owns the File System Access API store instance that
   // actually opens folders and produces fs:// workspace URIs.
   const { fsStore, setFsStore } = useFilesystemStore();
+  const { store: notebookStore } = useNotebookStore();
+  const resolveNotebookStore = useCallback(() => {
+    return notebookStore ?? appState.localNotebooks;
+  }, [notebookStore]);
 
   // Message pump to deliver stdout/stderr back into console-view.
   const messageListenerRef = useRef<((message: unknown) => void) | undefined>(
@@ -205,6 +221,46 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       }),
     [resolveNotebookData],
   );
+
+  const importMarkdownAndOpen = useCallback(async () => {
+    const store = resolveNotebookStore();
+    if (!store) {
+      sendStdout("Notebook store is not initialized yet.\r\n");
+      return "Notebook store unavailable.";
+    }
+
+    let selection;
+    try {
+      selection = await pickMarkdownSource();
+    } catch (error) {
+      const message = `Failed to open markdown picker: ${String(error)}`;
+      sendStdout(`${message}\r\n`);
+      return message;
+    }
+
+    if (!selection) {
+      sendStdout("Markdown import cancelled.\r\n");
+      return "Import cancelled.";
+    }
+
+    try {
+      const notebook = await deserializeMarkdownToNotebook(selection);
+      const fileName = toImportedNotebookName(selection.name);
+      const created = await store.create(LOCAL_FOLDER_URI, fileName);
+      await store.save(created.uri, notebook);
+      if (!getItems().includes(LOCAL_FOLDER_URI)) {
+        addItem(LOCAL_FOLDER_URI);
+      }
+      setCurrentDoc(created.uri);
+      const message = `Imported ${selection.name} as ${fileName}`;
+      sendStdout(`${message}\r\n`);
+      return message;
+    } catch (error) {
+      const message = `Failed to import markdown file: ${String(error)}`;
+      sendStdout(`${message}\r\n`);
+      return message;
+    }
+  }, [addItem, getItems, resolveNotebookStore, sendStdout, setCurrentDoc]);
 
   const kernel = useMemo(
     () =>
@@ -389,6 +445,8 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
               "  runme           - Notebook helpers (run all, clear outputs)",
               "  explorer        - Manage workspace folders and notebooks",
               "  runmeRunners    - Configure runner endpoints",
+              "  files           - Import local files and access their bytes",
+              "  drive           - Create/update Google Drive files",
               "  oidc            - OIDC/OAuth configuration and auth status",
               "  googleClientManager - Google OAuth client settings",
               "  app             - App-level configuration helpers",
@@ -416,6 +474,10 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
             openPicker: () => {
               return openWorkspaceAndAdd();
             },
+            importMarkdown: () => {
+              void importMarkdownAndOpen();
+              return "Opening markdown file picker...";
+            },
             removeFolder: (uri: string) => {
               if (!uri) {
                 return "Usage: explorer.removeFolder(uri)";
@@ -435,9 +497,93 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
                 "explorer.addFolder()           - Open the folder picker and mount a local folder",
                 "explorer.mountDrive(driveUrl)   - Mount a Google Drive link",
                 "explorer.openPicker()           - Alias for explorer.addFolder()",
+                "explorer.importMarkdown()       - Import a local Markdown file as a notebook",
                 "explorer.removeFolder(uri)      - Remove a folder from workspace",
                 "explorer.listFolders()          - List all workspace folders",
                 "explorer.help()                 - Show this help",
+              ].join("\n");
+            },
+          },
+          files: {
+            pickMarkdown: async () => {
+              const picked = await pickMarkdownSource();
+              if (!picked) {
+                sendStdout("Markdown pick cancelled.\r\n");
+                return null;
+              }
+              sendStdout(`Picked ${picked.name} -> ${picked.sourceUri}\r\n`);
+              return picked;
+            },
+            importMarkdown: async (sourceUri: string, targetFolderUri?: string) => {
+              if (!sourceUri) {
+                throw new Error(
+                  "Usage: files.importMarkdown(sourceUri, targetFolderUri?)",
+                );
+              }
+              const selection = getPickedMarkdownSelection(sourceUri);
+              const store = resolveNotebookStore();
+              if (!store) {
+                throw new Error("Notebook store is not initialized yet.");
+              }
+              const notebook = await deserializeMarkdownToNotebook(selection);
+              const fileName = toImportedNotebookName(selection.name);
+              const parentUri = targetFolderUri || LOCAL_FOLDER_URI;
+              const created = await store.create(parentUri, fileName);
+              await store.save(created.uri, notebook);
+              if (!getItems().includes(parentUri)) {
+                addItem(parentUri);
+              }
+              if (!getItems().includes(LOCAL_FOLDER_URI)) {
+                addItem(LOCAL_FOLDER_URI);
+              }
+              registerImportedMarkdownForUri(created.uri, selection);
+              sendStdout(`Imported ${selection.name} -> ${created.uri}\r\n`);
+              return {
+                localUri: created.uri,
+                sourceUri,
+                name: selection.name,
+                notebookName: fileName,
+                size: selection.bytes.byteLength,
+              };
+            },
+            getBytes: (localUri: string) => {
+              if (!localUri) {
+                throw new Error("Usage: files.getBytes(localUri)");
+              }
+              return getImportedFileBytes(localUri);
+            },
+            getName: (localUri: string) => {
+              if (!localUri) {
+                throw new Error("Usage: files.getName(localUri)");
+              }
+              return getImportedFileName(localUri);
+            },
+            help: () => {
+              return [
+                "files.pickMarkdown()           - Open local picker and return sourceUri",
+                "files.importMarkdown(sourceUri, targetFolderUri?) - Import picked markdown into local notebooks",
+                "files.getBytes(localUri)       - Return imported Markdown Uint8Array bytes for a local notebook URI",
+                "files.getName(localUri)        - Return original filename for imported file URI",
+                "files.help()                   - Show this help",
+              ].join("\n");
+            },
+          },
+          drive: {
+            create: async (folder: string, name: string) => {
+              const id = await createDriveFile(folder, name);
+              sendStdout(`Created Drive file ${id}\r\n`);
+              return id;
+            },
+            update: async (idOrUri: string, bytes: Uint8Array) => {
+              const id = await updateDriveFileBytes(idOrUri, bytes);
+              sendStdout(`Updated Drive file ${id}\r\n`);
+              return id;
+            },
+            help: () => {
+              return [
+                "drive.create(folder, name)     - Create a Drive file in folder; returns file id",
+                "drive.update(id, bytes)        - Write UTF-8 bytes to a Drive file id/URI",
+                "drive.help()                   - Show this help",
               ].join("\n");
             },
           },
@@ -463,7 +609,9 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       getItems,
       getNotebookData,
       listRunners,
+      resolveNotebookStore,
       ensureFilesystemStore,
+      importMarkdownAndOpen,
       openWorkspaceAndAdd,
       removeItem,
       runme,
