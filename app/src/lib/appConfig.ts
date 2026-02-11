@@ -1,9 +1,14 @@
 import YAML from "yaml";
 
 import type { OidcConfig } from "../auth/oidcConfig";
-import { oidcConfigManager } from "../auth/oidcConfig";
+import { OIDC_STORAGE_KEY, oidcConfigManager } from "../auth/oidcConfig";
 import type { GoogleOAuthClientConfig } from "./googleClientManager";
-import { googleClientManager } from "./googleClientManager";
+import {
+  GOOGLE_CLIENT_STORAGE_KEY,
+  googleClientManager,
+} from "./googleClientManager";
+
+const SETTINGS_STORAGE_KEY = "cloudAssistantSettings";
 
 type RawOidcGenericConfig = {
   clientID?: string;
@@ -169,4 +174,59 @@ export async function setAppConfig(url?: string): Promise<AppliedAppConfig> {
   const text = await response.text();
   const parsed = YAML.parse(text) as unknown;
   return applyAppConfig(parsed, resolvedUrl);
+}
+
+export async function maybeSetAppConfig(): Promise<AppliedAppConfig | null> {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return null;
+  }
+
+  const storage = window.localStorage;
+  const hasOidcConfig = Boolean(storage.getItem(OIDC_STORAGE_KEY));
+  const hasDriveConfig = Boolean(storage.getItem(GOOGLE_CLIENT_STORAGE_KEY));
+
+  const settingsRaw = storage.getItem(SETTINGS_STORAGE_KEY);
+  let settings: Record<string, unknown> = {};
+  if (settingsRaw) {
+    try {
+      settings = JSON.parse(settingsRaw) as Record<string, unknown>;
+    } catch (error) {
+      console.warn("Failed to parse cloudAssistantSettings; resetting.", error);
+      settings = {};
+    }
+  }
+  if (typeof settings.agentEndpoint !== "string" || !settings.agentEndpoint) {
+    const fallback = window.location?.origin?.trim() ?? "";
+    if (fallback) {
+      settings.agentEndpoint = fallback;
+      storage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+      console.info("Seeded agent endpoint in cloudAssistantSettings.");
+    }
+  } else {
+    console.info("Agent endpoint already set; skipping seed.");
+  }
+
+  if (hasOidcConfig && hasDriveConfig) {
+    console.info("OIDC and Google Drive configs already set; skipping app config load.");
+    return null;
+  }
+  if (!hasOidcConfig) {
+    console.info("OIDC config missing; attempting to load from app config.");
+  } else {
+    console.info("OIDC config already set; skipping.");
+  }
+  if (!hasDriveConfig) {
+    console.info("Google Drive config missing; attempting to load from app config.");
+  } else {
+    console.info("Google Drive config already set; skipping.");
+  }
+
+  try {
+    const applied = await setAppConfig();
+    console.info("App config loaded.");
+    return applied;
+  } catch (error) {
+    console.warn("Skipping app config preload", error);
+    return null;
+  }
 }

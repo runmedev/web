@@ -18,7 +18,8 @@ type StoredOidcConfig = {
   extraAuthParams?: Record<string, string>;
 };
 
-const STORAGE_KEY = "oidcConfig";
+export const OIDC_STORAGE_KEY = "oidcConfig";
+const STORAGE_KEY = OIDC_STORAGE_KEY;
 
 function sanitizeString(value?: string): string | undefined {
   const trimmed = value?.trim();

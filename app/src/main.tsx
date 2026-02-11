@@ -10,7 +10,11 @@ import quillIcon from "./assets/quill-icon.svg";
 import { getBrowserAdapter } from "./browserAdapter.client";
 import { oidcConfigManager } from "./auth/oidcConfig";
 import type { AppliedAppConfig } from "./lib/appConfig";
-import { getDefaultAppConfigUrl, setAppConfig } from "./lib/appConfig";
+import {
+  getDefaultAppConfigUrl,
+  maybeSetAppConfig,
+  setAppConfig,
+} from "./lib/appConfig";
 
 type AppConfigApi = {
   getDefaultConfigUrl: () => string;
@@ -50,16 +54,18 @@ const noopBridge: RendererContext<void> = {
 setContext(noopBridge);
 
 // Initialize auth, then render
-getBrowserAdapter()
-  .init()
-  .then(() => {
-    createRoot(document.getElementById("root")!).render(
-      <App
-        initialState={initialState}
-        branding={{
-          name: "Quill Notebook",
-          logo: quillIcon,
-        }}
-      />,
-    );
-  });
+maybeSetAppConfig().finally(() => {
+  getBrowserAdapter()
+    .init()
+    .then(() => {
+      createRoot(document.getElementById("root")!).render(
+        <App
+          initialState={initialState}
+          branding={{
+            name: "Quill Notebook",
+            logo: quillIcon,
+          }}
+        />,
+      );
+    });
+});
