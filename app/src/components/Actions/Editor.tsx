@@ -102,15 +102,17 @@ const Editor = memo(
       // subtle active-line highlight. Only defined once across all editors.
       if (!themeRegistered) {
         monaco.editor.defineTheme(MARIMO_THEME, {
-          base: "vs",
+          base: "vs-dark",
           inherit: true,
           rules: [],
           colors: {
-            "editor.background": "#ffffff",
-            "editorLineNumber.foreground": "#838383",
-            "editorLineNumber.activeForeground": "#64748b",
-            "editor.lineHighlightBackground": "#0080ff08",
-            "editorGutter.background": "#ffffff",
+            "editor.background": "#1e1e2e",
+            "editorLineNumber.foreground": "#6c7086",
+            "editorLineNumber.activeForeground": "#a6adc8",
+            "editor.lineHighlightBackground": "#2a2b3d",
+            "editorGutter.background": "#1e1e2e",
+            "editor.selectionBackground": "#44475a",
+            "editor.inactiveSelectionBackground": "#3a3c50",
           },
         });
         themeRegistered = true;

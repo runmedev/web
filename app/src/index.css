@@ -212,16 +212,16 @@
    6. Vendor overrides
    ═══════════════════════════════════════════════════════════════════ */
 
-/* Monaco light-theme: white gutter with right divider */
+/* Monaco dark-theme: dark gutter with subtle right divider */
 .monaco-editor .margin {
-  background: #fff !important;
-  border-right: 1px solid #ddd;
+  background: #1e1e2e !important;
+  border-right: 1px solid #313244;
 }
 
 .monaco-editor,
 .monaco-editor-background,
 .monaco-editor .inputarea.ime-input {
-  background-color: #fff !important;
+  background-color: #1e1e2e !important;
 }
 
 /* Radix selection override */
