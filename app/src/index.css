@@ -22,14 +22,14 @@
 
   /* ── Color system (Marimo-matched) ──────────────────────────── */
   --nb-bg: #ffffff;
-  --nb-surface: #ffffff;
-  --nb-surface-2: #f8f9fa;
-  --nb-surface-3: #e2e8f0;
+  --nb-surface: #f1f5f9;
+  --nb-surface-2: #e8edf2;
+  --nb-surface-3: #d4dbe5;
   --nb-text: #0f172a;
-  --nb-text-muted: #64748b;
-  --nb-text-faint: #838383;
-  --nb-border: #e2e8f0;
-  --nb-border-strong: #e0e0e0;
+  --nb-text-muted: #475569;
+  --nb-text-faint: #6b7280;
+  --nb-border: #cbd5e1;
+  --nb-border-strong: #b0bac5;
 
   /* ── Accent ───────────────────────────────────────────────────── */
   --nb-accent: #0880ea;
@@ -37,8 +37,8 @@
   --nb-accent-muted: rgba(8, 128, 234, 0.06);
 
   /* ── Cell card ────────────────────────────────────────────────── */
-  --nb-cell-border: #e8e8e8;
-  --nb-tray-border: #e0e0e0;
+  --nb-cell-border: #cbd5e1;
+  --nb-tray-border: #b0bac5;
   --nb-shadow-paper: rgba(200, 200, 200, 0.4) 4px 4px 0px 0px,
                      rgba(200, 200, 200, 0.4) 0px 0px 2px 0px;
 
@@ -62,7 +62,7 @@
   /* ── Terminal vars (light theme) ──────────────────────────────── */
   --vscode-terminal-background: #ffffff;
   --vscode-terminal-foreground: #0f172a;
-  --vscode-terminal-border: #e0e0e0;
+  --vscode-terminal-border: #b0bac5;
 }
 
 /* ═══════════════════════════════════════════════════════════════════

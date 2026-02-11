@@ -663,7 +663,7 @@ function formatShortTimestamp(date: Date): string {
       return (
         <div
           style={style}
-          className="flex items-start gap-2 px-2 py-1 text-sm"
+          className="flex items-center gap-1.5 px-2 py-0.5 text-sm"
           data-node-id={data.uri}
           data-node-type={data.type}
           onContextMenu={handleContextMenu}
@@ -672,7 +672,7 @@ function formatShortTimestamp(date: Date): string {
             <button
               type="button"
               aria-label={node.isOpen ? "Collapse folder" : "Expand folder"}
-              className="flex h-5 w-5 items-center justify-center rounded hover:bg-nb-surface-2 focus:outline-none mt-[2px]"
+              className="flex h-5 w-5 items-center justify-center rounded hover:bg-nb-surface-2 focus:outline-none"
               onClick={(event) => {
                 event.stopPropagation();
                 node.toggle();
@@ -703,14 +703,14 @@ function formatShortTimestamp(date: Date): string {
               }}
               style={{ backgroundColor: "transparent" }}
             >
-              <span className="block whitespace-normal break-words leading-5">
+              <span className="block truncate leading-5">
                 {data.name}
               </span>
             </button>
           ) : (
             <span
               title={data.name}
-              className={`block flex-1 min-w-0 whitespace-normal break-words leading-5${isPlaceholder ? " text-nb-text-faint" : ""}`}
+              className={`block flex-1 min-w-0 truncate leading-5${isPlaceholder ? " text-nb-text-faint" : ""}`}
             >
               {data.name}
             </span>
@@ -832,7 +832,7 @@ function formatShortTimestamp(date: Date): string {
   }
 
   return (
-    <div id="workspace-explorer-box" className="flex h-full min-h-0 w-full flex-col gap-3" onClick={() => setContextMenu(null)}>
+    <div id="workspace-explorer-box" className="flex h-full min-h-0 w-full flex-col gap-1" onClick={() => setContextMenu(null)}>
       <div id="workspace-explorer-toolbar-row" className="flex items-center justify-between w-full">
         <h2 className="text-base font-semibold text-nb-text">
           Explorer
@@ -888,7 +888,7 @@ function formatShortTimestamp(date: Date): string {
             indent={20}
             // react-arborist uses a fixed row height; increase this so multi-line
             // filenames can wrap without overlapping adjacent rows.
-            rowHeight={52}
+            rowHeight={32}
             children={renderNode}
             onToggle={handleToggle}
             onClick={() => setContextMenu(null)}

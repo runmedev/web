@@ -799,8 +799,8 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
       {/* Centered notebook column matching Marimo's ~726px content width.
           Left padding accommodates the 28px cell gutter so add-cell buttons
           sit flush with the card edge. */}
-      <div id="notebook-column" className="mx-auto w-full max-w-[726px] py-4 pl-0 pr-2">
-        <div className="space-y-[18px]">
+      <div id="notebook-column" className="mx-auto w-full max-w-[726px] py-2 pl-0 pr-2">
+        <div className="space-y-3">
           {cellDatas.map((cellData, index) => {
             const refId = cellData.snapshot?.refId ?? `cell-${index}`;
             return (

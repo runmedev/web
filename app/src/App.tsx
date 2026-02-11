@@ -120,7 +120,7 @@ function App({ branding, initialState = {} }: AppProps) {
 
   return (
     <>
-      <Theme accentColor="blue" scaling="110%" radius="medium">
+      <Theme accentColor="blue" scaling="100%" radius="medium">
         <Helmet>
           <title>{appBranding.name}</title>
           <meta name="description" content={`${appBranding.name}`} />

@@ -33,7 +33,7 @@ export default function MainPage() {
             <SidePanelContent />
           )}
         </div>
-        <div id="content-area" className="flex h-full flex-1 min-w-0 flex-col gap-3 p-3">
+        <div id="content-area" className="flex h-full flex-1 min-w-0 flex-col gap-2 p-2">
           <div className="flex-1 min-h-0">
             <Actions />
           </div>
