@@ -53,6 +53,9 @@
   --nb-r-md: 10px;
   --nb-r-lg: 14px;
 
+  /* ── Cell output ─────────────────────────────────────────────── */
+  --nb-cell-output-max-h: min(30rem, 55vh);
+
   /* ── Shadow hierarchy ─────────────────────────────────────────── */
   --nb-shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
   --nb-shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
@@ -138,9 +141,11 @@
    only need a single class instead of 5-10 utility classes.
    ═══════════════════════════════════════════════════════════════════ */
 @layer components {
-  /* Marimo-style cell card: bordered, rounded, paper shadow */
+  /* Marimo-style cell card: bordered, rounded, paper shadow.
+     Overflow is NOT set here — the editor wrapper clips top corners locally,
+     while the output section manages its own overflow to keep scrollbars visible. */
   .cell-card {
-    @apply overflow-hidden rounded-nb-md border border-nb-border-strong bg-white shadow-paper;
+    @apply rounded-nb-md border border-nb-border-strong bg-white shadow-paper;
     @apply transition-shadow duration-200;
     @apply focus-within:ring-1 focus-within:ring-nb-accent focus-within:ring-offset-1;
   }

@@ -298,7 +298,7 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
   console.log("CellConsole render", { cellRefId: cell.refId, runID: runID });
   return (
     <div
-      className="w-full overflow-hidden"
+      className="w-full"
       data-runkey={`console-${cell.refId}-${runID ?? "idle"}`}
       data-testid="cell-console"
       ref={containerRef}

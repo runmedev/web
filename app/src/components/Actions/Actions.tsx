@@ -55,6 +55,7 @@ const TabPanel = React.forwardRef<HTMLDivElement, TabPanelProps>(
           visibility: inactive ? "hidden" : "visible",
           position: inactive ? "absolute" : "relative",
           inset: inactive ? 0 : undefined,
+          height: "100%",
           pointerEvents: inactive ? "none" : "auto",
           zIndex: inactive ? 0 : 1,
           transition: "none",
@@ -215,7 +216,7 @@ function ActionOutputItemView({
     );
   } else {
     content = (
-      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-nb-text">
+      <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-nb-text">
         {text}
       </pre>
     );
@@ -648,21 +649,23 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
           id={`cell-card-${cell.refId}`}
           className="cell-card"
         >
-          {/* Code editor section */}
-          <Editor
-            key={`editor-${cell.refId}-${selectedLanguage}`}
-            id={cell.refId}
-            value={cell.value}
-            language={editorLanguage}
-            fontSize={fontSettings.fontSize}
-            fontFamily={fontSettings.fontFamily}
-            onChange={(v) => {
-              const updated = create(parser_pb.CellSchema, cell);
-              updated.value = v;
-              updateCellLocal(updated);
-            }}
-            onEnter={runCode}
-          />
+          {/* Code editor section — overflow-hidden keeps border-radius clipping on the editor */}
+          <div className="overflow-hidden rounded-t-nb-md">
+            <Editor
+              key={`editor-${cell.refId}-${selectedLanguage}`}
+              id={cell.refId}
+              value={cell.value}
+              language={editorLanguage}
+              fontSize={fontSettings.fontSize}
+              fontFamily={fontSettings.fontFamily}
+              onChange={(v) => {
+                const updated = create(parser_pb.CellSchema, cell);
+                updated.value = v;
+                updateCellLocal(updated);
+              }}
+              onEnter={runCode}
+            />
+          </div>
 
           {/* Minimal toolbar: language + runner selectors + run/trash buttons */}
           <div
@@ -723,11 +726,12 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
             </div>
           </div>
 
-          {/* Output section: separated by a thin divider, inside the same card */}
+          {/* Output section: separated by a thin divider, inside the same card.
+              max-h + overflow-auto gives a vertical scrollbar when output is tall. */}
           {(renderedOutputs || renderedOutputItems) && (
             <div id={`cell-output-${cell.refId}`}>
               <div className="border-t border-nb-tray-border" />
-              <div className="p-[14.4px]">
+              <div className="overflow-auto p-[14.4px]" style={{ maxHeight: 'var(--nb-cell-output-max-h)' }}>
                 {renderedOutputs}
                 {renderedOutputItems}
               </div>
@@ -823,6 +827,18 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
                 />
               );
             })}
+            {/* Add cell button at the bottom of the notebook */}
+            <div className="flex justify-center py-3">
+              <button
+                type="button"
+                className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted"
+                aria-label="Add cell at end"
+                onClick={() => data?.appendCodeCell()}
+              >
+                <PlusIcon width={10} height={10} />
+                <span>Add cell</span>
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -1091,7 +1107,7 @@ export default function Actions() {
               );
             })}
           </Tabs.List>
-          <div className="relative flex-1 min-h-0">
+          <div className="relative flex-1 min-h-0 overflow-hidden">
           {openNotebooks.map((doc) => (
             <Tabs.Content
               key={`content-${doc.uri}`}
