@@ -34,7 +34,7 @@ export default function MainPage() {
           )}
         </div>
         <div id="content-area" className="flex h-full flex-1 min-w-0 flex-col gap-2 p-2">
-          <div className="flex-1 min-h-0">
+          <div id="notebook-pane" className="flex-1 min-h-0 rounded-nb-md border border-nb-border-strong bg-white">
             <Actions />
           </div>
           <div>

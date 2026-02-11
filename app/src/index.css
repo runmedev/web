@@ -140,7 +140,7 @@
 @layer components {
   /* Marimo-style cell card: bordered, rounded, paper shadow */
   .cell-card {
-    @apply overflow-hidden rounded-nb-md border border-nb-cell-border bg-white shadow-paper;
+    @apply overflow-hidden rounded-nb-md border border-nb-border-strong bg-white shadow-paper;
     @apply transition-shadow duration-200;
     @apply focus-within:ring-1 focus-within:ring-nb-accent focus-within:ring-offset-1;
   }

@@ -796,10 +796,9 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
       className="flex-1 h-full min-w-0 max-w-full overflow-x-hidden"
       data-document-id={docUri}
     >
-      {/* Centered notebook column matching Marimo's ~726px content width.
-          Left padding accommodates the 28px cell gutter so add-cell buttons
-          sit flush with the card edge. */}
-      <div id="notebook-column" className="mx-auto w-full max-w-[726px] py-2 pl-0 pr-2">
+      {/* Full-width notebook column with horizontal padding for breathing room.
+          Cells expand to fill the available width of the tab content area. */}
+      <div id="notebook-column" className="w-full py-2 px-4">
         {cellDatas.length === 0 ? (
           <div id="empty-notebook-prompt" className="flex flex-col items-center justify-center gap-3 py-16 text-sm text-nb-text-muted">
             <p>This notebook has no cells yet.</p>
