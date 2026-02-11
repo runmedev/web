@@ -800,18 +800,32 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
           Left padding accommodates the 28px cell gutter so add-cell buttons
           sit flush with the card edge. */}
       <div id="notebook-column" className="mx-auto w-full max-w-[726px] py-2 pl-0 pr-2">
-        <div className="space-y-3">
-          {cellDatas.map((cellData, index) => {
-            const refId = cellData.snapshot?.refId ?? `cell-${index}`;
-            return (
-              <Action
-                key={`action-${refId}`}
-                cellData={cellData}
-                isFirst={index === 0}
-              />
-            );
-          })}
-        </div>
+        {cellDatas.length === 0 ? (
+          <div id="empty-notebook-prompt" className="flex flex-col items-center justify-center gap-3 py-16 text-sm text-nb-text-muted">
+            <p>This notebook has no cells yet.</p>
+            <button
+              type="button"
+              className="cell-add-btn h-8 w-8"
+              aria-label="Add first cell"
+              onClick={() => data?.appendCodeCell()}
+            >
+              <PlusIcon className="h-5 w-5" />
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {cellDatas.map((cellData, index) => {
+              const refId = cellData.snapshot?.refId ?? `cell-${index}`;
+              return (
+                <Action
+                  key={`action-${refId}`}
+                  cellData={cellData}
+                  isFirst={index === 0}
+                />
+              );
+            })}
+          </div>
+        )}
       </div>
     </ScrollArea>
   );

@@ -426,6 +426,17 @@ export class NotebookData {
     this.schedulePersist();
   }
 
+  /** Append a new code cell to the end of the notebook. Used when the notebook is empty. */
+  appendCodeCell(languageId?: string | null): parser_pb.Cell {
+    const cell = this.createCodeCell(languageId);
+    this.notebook.cells.push(cell);
+    this.rebuildIndex();
+    this.snapshotCache = this.buildSnapshot();
+    this.emit();
+    this.schedulePersist();
+    return cell;
+  }
+
   addCodeCellAfter(targetRefId: string, languageId?: string | null): parser_pb.Cell | null {
     const idx = this.refToIndex.get(targetRefId);
     if (idx === undefined) {
