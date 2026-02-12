@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import { create } from "@bufbuild/protobuf";
 import React from "react";
 
@@ -67,6 +67,10 @@ class StubCellData {
   private listeners = new Set<() => void>();
   private runListeners = new Set<(id: string) => void>();
   getRunnerName = () => "<default>";
+  update = vi.fn((nextCell: parser_pb.Cell) => {
+    this.snapshot = create(parser_pb.CellSchema, nextCell);
+    this.listeners.forEach((listener) => listener());
+  });
 
   constructor(cell: parser_pb.Cell) {
     this.snapshot = cell;
@@ -75,6 +79,10 @@ class StubCellData {
   subscribe(listener: () => void) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  subscribeToContentChange(listener: () => void) {
+    return this.subscribe(listener);
   }
 
   subscribeToRunIDChange(listener: (id: string) => void) {
@@ -100,7 +108,6 @@ class StubCellData {
   }
   addBefore() {}
   addAfter() {}
-  update() {}
   remove() {}
   run() {}
 }
@@ -131,5 +138,55 @@ describe("Action component", () => {
     const secondKey = second.dataset.runkey;
 
     expect(firstKey).not.toBe(secondKey);
+  });
+
+  it("shows language selector in markdown edit mode and converts to code language", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-md",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "",
+    });
+    const stub = new StubCellData(cell);
+
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
+
+    const selector = screen.getByRole("combobox");
+    expect(selector).toBeTruthy();
+    expect((selector as HTMLSelectElement).value).toBe("markdown");
+
+    fireEvent.change(selector, { target: { value: "bash" } });
+
+    expect(stub.update).toHaveBeenCalledTimes(1);
+    const updatedCell = stub.update.mock.calls[0][0] as parser_pb.Cell;
+    expect(updatedCell.kind).toBe(parser_pb.CellKind.CODE);
+    expect(updatedCell.languageId).toBe("bash");
+  });
+
+  it("converts code cell to markdown kind when switching to markdown", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-code",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "bash",
+      outputs: [],
+      metadata: {},
+      value: "echo hi",
+    });
+    const stub = new StubCellData(cell);
+
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
+
+    const selector = document.getElementById("language-select-cell-code") as
+      | HTMLSelectElement
+      | null;
+    expect(selector).toBeTruthy();
+    fireEvent.change(selector, { target: { value: "markdown" } });
+
+    expect(stub.update).toHaveBeenCalledTimes(1);
+    const updatedCell = stub.update.mock.calls[0][0] as parser_pb.Cell;
+    expect(updatedCell.kind).toBe(parser_pb.CellKind.MARKUP);
+    expect(updatedCell.languageId).toBe("markdown");
   });
 });

@@ -18,6 +18,7 @@
  */
 
 import {
+  type ChangeEvent,
   memo,
   useCallback,
   useEffect,
@@ -156,6 +157,16 @@ const markdownComponents: Components = {
 interface MarkdownCellProps {
   /** The CellData object containing the markdown content and state */
   cellData: CellData;
+  /** Selected language shown in the footer selector */
+  selectedLanguage: string;
+  /** ID for the language selector element */
+  languageSelectId: string;
+  /** Supported language options for converting markdown/code cells */
+  languageOptions: readonly { label: string; value: string }[];
+  /** Shared language change handler from parent Action component */
+  onLanguageChange: (event: ChangeEvent<HTMLSelectElement>) => void;
+  /** Incrementing signal to force editor mode after conversion to markdown */
+  forceEditRequest?: number;
 }
 
 /**
@@ -168,7 +179,14 @@ interface MarkdownCellProps {
  * - Empty cells start in edit mode and stay in edit mode
  */
 const MarkdownCell = memo(
-  ({ cellData }: MarkdownCellProps) => {
+  ({
+    cellData,
+    selectedLanguage,
+    languageSelectId,
+    languageOptions,
+    onLanguageChange,
+    forceEditRequest = 0,
+  }: MarkdownCellProps) => {
     // Subscribe to cell data changes using useSyncExternalStore for tearing-safe reads
     const cell = useSyncExternalStore(
       useCallback(
@@ -196,6 +214,12 @@ const MarkdownCell = memo(
         setRendered(false);
       }
     }, [value, rendered]);
+
+    useEffect(() => {
+      if (forceEditRequest > 0) {
+        setRendered(false);
+      }
+    }, [forceEditRequest]);
 
     /**
      * Handle switching to edit mode when user double-clicks rendered content.
@@ -349,9 +373,25 @@ const MarkdownCell = memo(
               onChange={handleEditorChange}
               onEnter={handleRun}
             />
-            <div className="bg-nb-surface-2 border-t border-nb-border px-3 py-1.5 text-xs text-nb-text-muted">
-              Press <kbd className="px-1 py-0.5 bg-nb-surface-3 rounded">Esc</kbd>{" "}
-              or click away to render
+            <div className="cell-toolbar">
+              <div className="flex items-center gap-3">
+                <select
+                  id={languageSelectId}
+                  value={selectedLanguage}
+                  onChange={onLanguageChange}
+                  className="toolbar-select"
+                >
+                  {languageOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="text-xs text-nb-text-muted">
+                Press <kbd className="px-1 py-0.5 bg-nb-surface-3 rounded">Esc</kbd>{" "}
+                or click away to render
+              </div>
             </div>
           </div>
         )}
