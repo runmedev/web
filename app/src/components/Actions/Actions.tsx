@@ -310,6 +310,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     x: number;
     y: number;
   } | null>(null);
+  const [markdownEditRequest, setMarkdownEditRequest] = useState(0);
   const [pid, setPid] = useState<number | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
 
@@ -514,12 +515,17 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
 
       const updatedCell = create(parser_pb.CellSchema, cell);
       if (nextValue === "markdown") {
+        setMarkdownEditRequest((request) => request + 1);
+        updatedCell.kind = parser_pb.CellKind.MARKUP;
         updatedCell.languageId = "markdown";
       } else if (nextValue === "javascript") {
+        updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "javascript";
       } else if (nextValue === "python") {
+        updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "python";
       } else {
+        updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "bash";
       }
 
@@ -576,7 +582,14 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
         {/* Cell content */}
         <div className="min-w-0 flex-1">
           <div className="relative w-full min-w-0 max-w-full overflow-hidden">
-            <MarkdownCell cellData={cellData} />
+            <MarkdownCell
+              cellData={cellData}
+              selectedLanguage={selectedLanguage}
+              languageSelectId={languageSelectId}
+              languageOptions={LANGUAGE_OPTIONS}
+              onLanguageChange={handleLanguageChange}
+              forceEditRequest={markdownEditRequest}
+            />
             {/* Trash icon on the right, visible on hover */}
             <button
               type="button"
