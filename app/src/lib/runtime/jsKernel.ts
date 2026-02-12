@@ -9,7 +9,7 @@ type KernelHooks = {
 type RunOptions = {
   /** Additional globals to inject for this run only. */
   globals?: Record<string, unknown>;
-  /** Optional DOM container exposed via aisre.render. */
+  /** Optional DOM container exposed via app.render. */
   container?: HTMLElement | null;
 };
 
@@ -23,7 +23,7 @@ type RunnersApi = {
 
 /**
  * Minimal JS runtime for executing snippets with a controlled set of globals.
- * Injects d3, aisre helpers, and a mocked console that forwards to callbacks.
+ * Injects d3, app helpers, and a mocked console that forwards to callbacks.
  */
 export class JSKernel {
   private readonly hooks: Required<KernelHooks>;
@@ -66,33 +66,35 @@ export class JSKernel {
       this.hooks.onStderr(data);
     };
 
-    const aisreRunners = (options.globals?.aisreRunners ??
+    const appRunners = (options.globals?.aisreRunners ??
       this.baseGlobals.aisreRunners) as RunnersApi | undefined;
-    const aisre = this.createAisreHelpers(
+    const app = this.createAppHelpers(
       runId,
       options.container,
       stdout,
-      aisreRunners,
+      appRunners,
     );
 
     const mergedGlobals: Record<string, unknown> = {
       ...this.baseGlobals,
       ...(options.globals ?? {}),
       console: this.createConsoleProxy(stdout, stderr),
-      aisre,
+      app,
+      // Keep `aisre` as a compatibility alias for existing snippets.
+      aisre: app,
       help: () =>
         stdout(
           [
-            "AISRE JS console helpers:",
+            "App JS console helpers:",
             "- d3: D3.js",
-            "- aisre.clear(): clear the render container",
-            "- aisre.render(fn): render into the container with a D3 selection",
+            "- app.clear(): clear the render container",
+            "- app.render(fn): render into the container with a D3 selection",
             "- console.log/info/warn/error: write to this console",
-            "- aisre.runners.get(): list configured runners",
-            "- aisre.runners.update(name, endpoint): add/update a runner",
-            "- aisre.runners.delete(name): remove a runner",
-            "- aisre.runners.getDefault(): show default runner",
-            "- aisre.runners.setDefault(name): set default runner",
+            "- app.runners.get(): list configured runners",
+            "- app.runners.update(name, endpoint): add/update a runner",
+            "- app.runners.delete(name): remove a runner",
+            "- app.runners.getDefault(): show default runner",
+            "- app.runners.setDefault(name): set default runner",
             "- help(): show this message",
           ].join("\n") + "\n",
         ),
@@ -150,7 +152,7 @@ export class JSKernel {
     );
   }
 
-  private createAisreHelpers(
+  private createAppHelpers(
     runId: number,
     container: HTMLElement | null | undefined,
     stdout: (data: string) => void,
