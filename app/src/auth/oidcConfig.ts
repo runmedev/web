@@ -18,12 +18,8 @@ type StoredOidcConfig = {
   extraAuthParams?: Record<string, string>;
 };
 
-const STORAGE_KEY = "oidcConfig";
-
-function env(name: string): string | undefined {
-  const value = import.meta.env[name as keyof ImportMetaEnv];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
+export const OIDC_STORAGE_KEY = "oidcConfig";
+const STORAGE_KEY = OIDC_STORAGE_KEY;
 
 function sanitizeString(value?: string): string | undefined {
   const trimmed = value?.trim();
@@ -35,9 +31,8 @@ export class OidcConfigManager {
   private config: OidcConfig;
 
   private constructor() {
-    const envConfig = this.readEnvConfig();
     const stored = this.readConfigFromStorage();
-    this.config = this.mergeConfig(envConfig, stored);
+    this.config = this.mergeConfig(stored);
   }
 
   static instance(): OidcConfigManager {
@@ -112,58 +107,20 @@ export class OidcConfigManager {
     });
   }
 
-  private readEnvConfig(): OidcConfig {
-    const discoveryUrl =
-      env("VITE_OIDC_DISCOVERY_URL") ??
-      env("VITE_AUTHAPI_DISCOVERY_URL") ??
-      "";
-    const clientId =
-      env("VITE_OIDC_CLIENT_ID") ?? env("VITE_OAUTH_CLIENT_ID") ?? "";
-    const clientSecret =
-      env("VITE_OIDC_CLIENT_SECRET") ?? env("VITE_OAUTH_CLIENT_SECRET");
-    const scope = env("VITE_OIDC_SCOPE") ?? env("VITE_OAUTH_SCOPE") ?? "";
-    const redirectUri =
-      env("VITE_OIDC_REDIRECT_URI") ??
-      new URL("/oidc/callback", window.location.origin).toString();
-
-    const extraAuthParams: Record<string, string> = {};
-    const prompt = env("VITE_OIDC_PROMPT");
-    if (prompt) {
-      extraAuthParams.prompt = prompt;
-    }
-    const audience = env("VITE_OIDC_AUDIENCE");
-    if (audience) {
-      extraAuthParams.audience = audience;
-    }
-
-    return {
-      discoveryUrl,
-      clientId,
-      clientSecret: clientSecret?.trim() || undefined,
-      scope,
-      redirectUri,
-      extraAuthParams: Object.keys(extraAuthParams).length
-        ? extraAuthParams
-        : undefined,
-    };
-  }
-
-  private mergeConfig(envConfig: OidcConfig, stored?: StoredOidcConfig): OidcConfig {
+  private mergeConfig(stored?: StoredOidcConfig): OidcConfig {
     const storedExtra =
       stored?.extraAuthParams && Object.keys(stored.extraAuthParams).length > 0
         ? this.sanitizeExtraAuthParams(stored.extraAuthParams)
         : undefined;
-    const mergedExtra =
-      storedExtra || envConfig.extraAuthParams
-        ? { ...envConfig.extraAuthParams, ...storedExtra }
-        : undefined;
+    const mergedExtra = storedExtra ?? undefined;
     const merged: OidcConfig = {
-      discoveryUrl: sanitizeString(stored?.discoveryUrl) ?? envConfig.discoveryUrl,
-      clientId: sanitizeString(stored?.clientId) ?? envConfig.clientId,
-      clientSecret:
-        sanitizeString(stored?.clientSecret) ?? envConfig.clientSecret,
-      scope: sanitizeString(stored?.scope) ?? envConfig.scope,
-      redirectUri: sanitizeString(stored?.redirectUri) ?? envConfig.redirectUri,
+      discoveryUrl: sanitizeString(stored?.discoveryUrl) ?? "",
+      clientId: sanitizeString(stored?.clientId) ?? "",
+      clientSecret: sanitizeString(stored?.clientSecret),
+      scope: sanitizeString(stored?.scope) ?? "",
+      redirectUri:
+        sanitizeString(stored?.redirectUri) ??
+        new URL("/oidc/callback", window.location.origin).toString(),
       extraAuthParams:
         mergedExtra && Object.keys(mergedExtra).length > 0
           ? mergedExtra

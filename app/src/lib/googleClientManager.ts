@@ -9,7 +9,8 @@ export type GoogleDrivePickerConfig = {
   appId: string;
 };
 
-const STORAGE_KEY = "googleClientConfig";
+export const GOOGLE_CLIENT_STORAGE_KEY = "googleClientConfig";
+const STORAGE_KEY = GOOGLE_CLIENT_STORAGE_KEY;
 
 type GoogleClientConfig = {
   oauth: GoogleOAuthClientConfig;
