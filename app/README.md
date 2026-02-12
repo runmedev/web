@@ -153,7 +153,7 @@ In the web app we need to configure a runner on which to execute cells
 In the app console.
 
 ```sh
-aisre.runners.update("localhost","ws://localhost:9977/ws")
+app.runners.update("localhost","ws://localhost:9977/ws")
 ```
 
 * Change the port to whatever port your runme agent is serving on
