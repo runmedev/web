@@ -1,0 +1,388 @@
+#!/usr/bin/env bash
+#
+# runme-nb - Runme Notebook Testing CLI
+# Test and validate markdown notebooks built on the Runme architecture
+#
+
+set -euo pipefail
+
+# Configuration
+RUNME_PATH="${RUNME_PATH:-runme}"
+RUNME_TIMEOUT="${RUNME_TIMEOUT:-300}"
+
+# Cross-platform timeout command
+run_with_timeout() {
+    local timeout_secs="$1"
+    shift
+    if command -v gtimeout &> /dev/null; then
+        gtimeout "$timeout_secs" "$@"
+    elif command -v timeout &> /dev/null; then
+        timeout "$timeout_secs" "$@"
+    else
+        # No timeout available, run without it
+        "$@"
+    fi
+}
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Print colored output
+print_success() { echo -e "${GREEN}✓${NC} $1"; }
+print_error() { echo -e "${RED}✗${NC} $1"; }
+print_info() { echo -e "${BLUE}ℹ${NC} $1"; }
+print_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
+
+# Find runme binary
+find_runme() {
+    # Check if RUNME_PATH is set and exists
+    if [[ -x "$RUNME_PATH" ]]; then
+        echo "$RUNME_PATH"
+        return 0
+    fi
+
+    # Check if runme is in PATH
+    if command -v runme &> /dev/null; then
+        echo "runme"
+        return 0
+    fi
+
+    # Check common locations
+    local locations=(
+        "./runme/runme"
+        "../runme/runme"
+        "../../runme/runme"
+        "$HOME/.local/bin/runme"
+        "/usr/local/bin/runme"
+    )
+
+    for loc in "${locations[@]}"; do
+        if [[ -x "$loc" ]]; then
+            echo "$loc"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# Show usage
+usage() {
+    cat << EOF
+Usage: runme-nb <command> [options] <notebook>
+
+Commands:
+  test      Run all code blocks and report pass/fail
+  list      List all code blocks in a notebook
+  run       Run specific named block(s)
+  validate  Validate notebook structure without executing
+  parse     Parse and display notebook structure
+  help      Show this help message
+
+Options:
+  --verbose, -v    Show detailed output
+  --output, -o     Save output to file
+  --details, -d    Show additional details (for list command)
+  --timeout, -t    Set execution timeout in seconds (default: 300)
+
+Examples:
+  runme-nb test README.md
+  runme-nb list README.md --details
+  runme-nb run install-deps README.md
+  runme-nb validate docs/setup.md
+
+Environment:
+  RUNME_PATH      Path to runme binary (default: searches PATH)
+  RUNME_TIMEOUT   Execution timeout in seconds (default: 300)
+EOF
+}
+
+# List code blocks in a notebook
+cmd_list() {
+    local notebook=""
+    local details=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --details|-d) details=true; shift ;;
+            -*) print_error "Unknown option: $1"; exit 2 ;;
+            *) notebook="$1"; shift ;;
+        esac
+    done
+
+    if [[ -z "$notebook" ]]; then
+        print_error "No notebook specified"
+        echo "Usage: runme-nb list <notebook.md> [--details]"
+        exit 2
+    fi
+
+    if [[ ! -f "$notebook" ]]; then
+        print_error "Notebook not found: $notebook"
+        exit 2
+    fi
+
+    local runme
+    runme=$(find_runme) || { print_error "runme binary not found"; exit 2; }
+
+    print_info "Code blocks in $notebook:"
+    echo
+
+    "$runme" list --filename "$notebook"
+}
+
+# Test (run all blocks) in a notebook
+cmd_test() {
+    local notebook=""
+    local verbose=false
+    local output_file=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --verbose|-v) verbose=true; shift ;;
+            --output|-o) output_file="$2"; shift 2 ;;
+            --timeout|-t) RUNME_TIMEOUT="$2"; shift 2 ;;
+            -*) print_error "Unknown option: $1"; exit 2 ;;
+            *) notebook="$1"; shift ;;
+        esac
+    done
+
+    if [[ -z "$notebook" ]]; then
+        print_error "No notebook specified"
+        echo "Usage: runme-nb test <notebook.md> [--verbose] [--output file]"
+        exit 2
+    fi
+
+    if [[ ! -f "$notebook" ]]; then
+        print_error "Notebook not found: $notebook"
+        exit 2
+    fi
+
+    local runme
+    runme=$(find_runme) || { print_error "runme binary not found"; exit 2; }
+
+    print_info "Testing notebook: $notebook"
+    echo
+
+    local start_time
+    start_time=$(date +%s)
+
+    local exit_code=0
+    local output
+
+    if $verbose; then
+        if [[ -n "$output_file" ]]; then
+            run_with_timeout "$RUNME_TIMEOUT" "$runme" run --filename "$notebook" --all --skip-prompts 2>&1 | tee "$output_file" || exit_code=$?
+        else
+            run_with_timeout "$RUNME_TIMEOUT" "$runme" run --filename "$notebook" --all --skip-prompts || exit_code=$?
+        fi
+    else
+        if [[ -n "$output_file" ]]; then
+            output=$(run_with_timeout "$RUNME_TIMEOUT" "$runme" run --filename "$notebook" --all --skip-prompts 2>&1) || exit_code=$?
+            echo "$output" > "$output_file"
+        else
+            output=$(run_with_timeout "$RUNME_TIMEOUT" "$runme" run --filename "$notebook" --all --skip-prompts 2>&1) || exit_code=$?
+        fi
+    fi
+
+    local end_time
+    end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+
+    echo
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    if [[ $exit_code -eq 0 ]]; then
+        print_success "All blocks executed successfully"
+        echo "Duration: ${duration}s"
+        if [[ -n "$output_file" ]]; then
+            echo "Output saved to: $output_file"
+        fi
+        return 0
+    elif [[ $exit_code -eq 124 ]]; then
+        print_error "Execution timed out after ${RUNME_TIMEOUT}s"
+        exit 1
+    else
+        print_error "One or more blocks failed (exit code: $exit_code)"
+        if ! $verbose && [[ -n "$output" ]]; then
+            echo
+            echo "Output:"
+            echo "$output"
+        fi
+        exit 1
+    fi
+}
+
+# Run specific block(s)
+cmd_run() {
+    local blocks=""
+    local notebook=""
+    local verbose=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --verbose|-v) verbose=true; shift ;;
+            -*) print_error "Unknown option: $1"; exit 2 ;;
+            *)
+                if [[ -z "$blocks" ]]; then
+                    blocks="$1"
+                else
+                    notebook="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$blocks" ]] || [[ -z "$notebook" ]]; then
+        print_error "Missing arguments"
+        echo "Usage: runme-nb run <block-name(s)> <notebook.md>"
+        echo "  Multiple blocks: runme-nb run 'block1,block2' notebook.md"
+        exit 2
+    fi
+
+    if [[ ! -f "$notebook" ]]; then
+        print_error "Notebook not found: $notebook"
+        exit 2
+    fi
+
+    local runme
+    runme=$(find_runme) || { print_error "runme binary not found"; exit 2; }
+
+    # Split blocks by comma and run each
+    IFS=',' read -ra block_array <<< "$blocks"
+
+    local failed=0
+    for block in "${block_array[@]}"; do
+        block=$(echo "$block" | xargs)  # Trim whitespace
+        print_info "Running block: $block"
+
+        if run_with_timeout "$RUNME_TIMEOUT" "$runme" run "$block" --filename "$notebook" --skip-prompts; then
+            print_success "Block '$block' completed"
+        else
+            print_error "Block '$block' failed"
+            ((failed++))
+        fi
+        echo
+    done
+
+    if [[ $failed -gt 0 ]]; then
+        print_error "$failed block(s) failed"
+        exit 1
+    else
+        print_success "All blocks completed successfully"
+    fi
+}
+
+# Validate notebook structure
+cmd_validate() {
+    local notebook=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -*) print_error "Unknown option: $1"; exit 2 ;;
+            *) notebook="$1"; shift ;;
+        esac
+    done
+
+    if [[ -z "$notebook" ]]; then
+        print_error "No notebook specified"
+        echo "Usage: runme-nb validate <notebook.md>"
+        exit 2
+    fi
+
+    if [[ ! -f "$notebook" ]]; then
+        print_error "Notebook not found: $notebook"
+        exit 2
+    fi
+
+    local runme
+    runme=$(find_runme) || { print_error "runme binary not found"; exit 2; }
+
+    print_info "Validating notebook: $notebook"
+
+    # Try to list blocks - if this succeeds, the notebook is valid
+    local output
+    if output=$("$runme" list --filename "$notebook" 2>&1); then
+        local block_count
+        block_count=$(echo "$output" | grep -E "Yes$|No$" | wc -l | tr -d ' ')
+
+        print_success "Notebook is valid"
+        echo "Found $block_count code block(s)"
+
+        # Check for common issues
+        local unnamed_count
+        unnamed_count=$(echo "$output" | grep -E "No$" | wc -l | tr -d ' ' || true)
+        if [[ "$unnamed_count" -gt 0 ]]; then
+            print_warning "$unnamed_count unnamed block(s) found (won't run by default)"
+        fi
+
+        return 0
+    else
+        print_error "Notebook validation failed"
+        echo "$output"
+        exit 2
+    fi
+}
+
+# Parse and display notebook structure
+cmd_parse() {
+    local notebook=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -*) print_error "Unknown option: $1"; exit 2 ;;
+            *) notebook="$1"; shift ;;
+        esac
+    done
+
+    if [[ -z "$notebook" ]]; then
+        print_error "No notebook specified"
+        echo "Usage: runme-nb parse <notebook.md>"
+        exit 2
+    fi
+
+    if [[ ! -f "$notebook" ]]; then
+        print_error "Notebook not found: $notebook"
+        exit 2
+    fi
+
+    local runme
+    runme=$(find_runme) || { print_error "runme binary not found"; exit 2; }
+
+    print_info "Parsing notebook: $notebook"
+    echo
+
+    # Use runme print to show the structure
+    "$runme" list --filename "$notebook"
+}
+
+# Main entry point
+main() {
+    if [[ $# -eq 0 ]]; then
+        usage
+        exit 0
+    fi
+
+    local command="$1"
+    shift
+
+    case "$command" in
+        test)     cmd_test "$@" ;;
+        list)     cmd_list "$@" ;;
+        run)      cmd_run "$@" ;;
+        validate) cmd_validate "$@" ;;
+        parse)    cmd_parse "$@" ;;
+        help|--help|-h) usage ;;
+        *)
+            print_error "Unknown command: $command"
+            echo "Run 'runme-nb help' for usage"
+            exit 2
+            ;;
+    esac
+}
+
+main "$@"
