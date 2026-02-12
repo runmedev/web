@@ -216,3 +216,21 @@ describe("NotebookData.getActiveStream", () => {
     expect(model.getActiveStream(cell.refId)).toBeUndefined();
   });
 });
+
+describe("NotebookData cell defaults", () => {
+  it("creates markdown cells by default for new notebooks", () => {
+    const notebook = create(parser_pb.NotebookSchema, { cells: [] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://new",
+      name: "new",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    const cell = model.appendCodeCell();
+
+    expect(cell.languageId).toBe("markdown");
+    expect(cell.kind).toBe(parser_pb.CellKind.CODE);
+  });
+});

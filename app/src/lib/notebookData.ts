@@ -636,7 +636,9 @@ export class NotebookData {
     const refID = `code_${crypto.randomUUID().replace(/-/g, "")}`;
     const normalizedLanguage = languageId?.trim().toLowerCase();
     const resolvedLanguage =
-      normalizedLanguage && normalizedLanguage.length > 0 ? normalizedLanguage : "js";
+      normalizedLanguage && normalizedLanguage.length > 0
+        ? normalizedLanguage
+        : "markdown";
     return create(parser_pb.CellSchema, {
       metadata: {},
       refId: refID,
