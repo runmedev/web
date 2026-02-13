@@ -79,5 +79,4 @@ jobs:
           ./releaser-bin \
             --runme="${RUNME_BRANCH}" \
             --web="${WEB_BRANCH}" \
-            --runme-assets-dir=assets \
             --dry-run="${DRY_RUN}"

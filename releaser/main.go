@@ -26,6 +26,7 @@ const (
 	githubAPI        = "https://api.github.com"
 	defaultRunmeRepo = "runmedev/runme"
 	defaultWebRepo   = "runmedev/web"
+	defaultAssetsDir = "kodata/assets"
 	shortSHALen      = 8
 )
 
@@ -36,8 +37,7 @@ type config struct {
 	runmeRepo string
 	webRepo   string
 
-	runmeAssetsDir string
-	dryRun         bool
+	dryRun bool
 
 	tmpBase string
 }
@@ -75,7 +75,6 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.webBranch, "web", "", "branch name in runmedev/web")
 	cmd.Flags().StringVar(&cfg.runmeRepo, "runme-repo", defaultRunmeRepo, "GitHub repo in org/repo format")
 	cmd.Flags().StringVar(&cfg.webRepo, "web-repo", defaultWebRepo, "GitHub repo in org/repo format")
-	cmd.Flags().StringVar(&cfg.runmeAssetsDir, "runme-assets-dir", "", "relative path in runme repo to copy web assets into (auto-detected when empty)")
 	cmd.Flags().BoolVar(&cfg.dryRun, "dry-run", false, "execute build flow but do not push image to registry")
 	cmd.Flags().StringVar(&cfg.tmpBase, "tmpdir", os.TempDir(), "base temporary directory")
 	_ = cmd.MarkFlagRequired("runme")
@@ -142,6 +141,7 @@ func run(ctx context.Context, cfg config) error {
 
 	for _, cmdline := range []string{
 		"pnpm install --frozen-lockfile",
+		"pnpm run build:renderers",
 		"pnpm -C app run build",
 	} {
 		if err := runShell(ctx, webDir, nil, cmdline); err != nil {
@@ -154,13 +154,7 @@ func run(ctx context.Context, cfg config) error {
 		return fmt.Errorf("validate built web assets: %w", err)
 	}
 
-	destRel := cfg.runmeAssetsDir
-	if destRel == "" {
-		destRel, err = detectRunmeAssetsDir(runmeDir)
-		if err != nil {
-			return fmt.Errorf("detect runme static assets path (set --runme-assets-dir to override): %w", err)
-		}
-	}
+	destRel := defaultAssetsDir
 	destAssets := filepath.Join(runmeDir, filepath.Clean(destRel))
 	fmt.Printf("copying assets: %s -> %s\n", srcAssets, destAssets)
 	if err := replaceDirContents(srcAssets, destAssets); err != nil {
