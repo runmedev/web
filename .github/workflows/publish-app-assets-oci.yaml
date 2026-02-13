@@ -7,6 +7,7 @@ on:
       - main
     paths:
       - 'app/**'
+      - 'packages/renderers/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
@@ -51,6 +52,9 @@ jobs:
             ${{ runner.os }}-pnpm-store-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Build renderers
+        run: pnpm run build:renderers
 
       - name: Build static assets
         run: pnpm -C app run build
