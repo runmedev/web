@@ -410,6 +410,30 @@ export class NotebookData {
     return cell;
   }
 
+  addMarkupCellBefore(targetRefId: string): parser_pb.Cell | null {
+    const idx = this.refToIndex.get(targetRefId);
+    if (idx === undefined) {
+      return null;
+    }
+    const cell = this.createMarkupCell();
+    this.notebook.cells.splice(idx, 0, cell);
+    this.rebuildIndex();
+    this.snapshotCache = this.buildSnapshot();
+    this.emit();
+    void this.persist();
+    return cell;
+  }
+
+  appendMarkupCell(): parser_pb.Cell {
+    const cell = this.createMarkupCell();
+    this.notebook.cells.push(cell);
+    this.rebuildIndex();
+    this.snapshotCache = this.buildSnapshot();
+    this.emit();
+    void this.persist();
+    return cell;
+  }
+
   removeCell(refId: string): void {
     const idx = this.refToIndex.get(refId);
     if (idx === undefined) {
@@ -575,6 +599,18 @@ export class NotebookData {
     const sequence = Number.isNaN(parsedSeq) ? this.sequence : parsedSeq;
 
     return this.createAndBindStreams({ cell, runID, sequence, runner });
+  }
+
+  private createMarkupCell(): parser_pb.Cell {
+    const refID = `markup_${crypto.randomUUID().replace(/-/g, "")}`;
+    return create(parser_pb.CellSchema, {
+      metadata: {},
+      refId: refID,
+      languageId: "markdown",
+      role: parser_pb.CellRole.USER,
+      kind: parser_pb.CellKind.MARKUP,
+      value: "",
+    });
   }
 
   private createCodeCell(languageId?: string | null): parser_pb.Cell {
@@ -786,15 +822,16 @@ export class CellData {
     this.notebook.removeCell(this.refId);
   }
 
-  run(): void {
+  run(): string {
     console.log(`Running CellData ${this.cellDataID}`);
     const cell = this.snapshot;
-    if (!cell) return;
+    if (!cell) return "";
     const runID = this.notebook.runCodeCell(cell);
     console.log("Started run for cell", { refId: this.refId, runID });
     // Update the snapshot after running to pick up any metadata changes.
-    this.cachedSnapshot = this.notebook.getCellSnapshot(this.refId); 
+    this.cachedSnapshot = this.notebook.getCellSnapshot(this.refId);
     this.emitRunIDChange(runID ?? "");
+    return runID;
   }
 
   getStreams(): StreamsLike | undefined {
