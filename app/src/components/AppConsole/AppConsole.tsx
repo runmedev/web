@@ -355,7 +355,7 @@ export default function AppConsole() {
             },
           },
           help: () => {
-            return [
+            const message = [
               "Available namespaces:",
               "  runme           - Notebook helpers (run all, clear outputs)",
               "  explorer        - Manage workspace folders and notebooks",
@@ -367,6 +367,8 @@ export default function AppConsole() {
               "",
               "Type <namespace>.help() for detailed commands, e.g. explorer.help()",
             ].join("\n");
+            sendStdout(`${message}\r\n`);
+            return message;
           },
           explorer: {
             addFolder: (path?: string) => {
