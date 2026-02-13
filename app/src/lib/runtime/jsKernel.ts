@@ -74,6 +74,9 @@ export class JSKernel {
       stdout,
       appRunners,
     );
+    const globalHelp =
+      (options.globals?.help as (() => unknown) | undefined) ??
+      (this.baseGlobals.help as (() => unknown) | undefined);
 
     const mergedGlobals: Record<string, unknown> = {
       ...this.baseGlobals,
@@ -82,22 +85,24 @@ export class JSKernel {
       app,
       // Keep `aisre` as a compatibility alias for existing snippets.
       aisre: app,
-      help: () =>
-        stdout(
-          [
-            "App JS console helpers:",
-            "- d3: D3.js",
-            "- app.clear(): clear the render container",
-            "- app.render(fn): render into the container with a D3 selection",
-            "- console.log/info/warn/error: write to this console",
-            "- app.runners.get(): list configured runners",
-            "- app.runners.update(name, endpoint): add/update a runner",
-            "- app.runners.delete(name): remove a runner",
-            "- app.runners.getDefault(): show default runner",
-            "- app.runners.setDefault(name): set default runner",
-            "- help(): show this message",
-          ].join("\n") + "\n",
-        ),
+      help:
+        globalHelp ??
+        (() =>
+          stdout(
+            [
+              "App JS console helpers:",
+              "- d3: D3.js",
+              "- app.clear(): clear the render container",
+              "- app.render(fn): render into the container with a D3 selection",
+              "- console.log/info/warn/error: write to this console",
+              "- app.runners.get(): list configured runners",
+              "- app.runners.update(name, endpoint): add/update a runner",
+              "- app.runners.delete(name): remove a runner",
+              "- app.runners.getDefault(): show default runner",
+              "- app.runners.setDefault(name): set default runner",
+              "- help(): show this message",
+            ].join("\n") + "\n",
+          )),
     };
 
     const argNames = Object.keys(mergedGlobals);
