@@ -819,7 +819,7 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
             if (!data) {
               return;
             }
-            // Default to inserting a markup (markdown) cell when notebook is empty.
+            // Insert a markup (markdown) cell at the top of the notebook.
             const firstCell = cellDatas[0]?.snapshot;
             if (firstCell) {
               data.addMarkupCellBefore(firstCell.refId);

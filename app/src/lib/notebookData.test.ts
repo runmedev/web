@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { Subject } from "rxjs";
 import { create } from "@bufbuild/protobuf";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -214,5 +215,115 @@ describe("NotebookData.getActiveStream", () => {
     });
 
     expect(model.getActiveStream(cell.refId)).toBeUndefined();
+  });
+});
+
+describe("NotebookData markup cell methods", () => {
+  function makeModel(cells: InstanceType<typeof parser_pb.Cell>[]) {
+    const notebook = create(parser_pb.NotebookSchema, { cells });
+    return new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "test",
+      notebookStore: null,
+      loaded: true,
+    });
+  }
+
+  function getCells(model: InstanceType<typeof NotebookData>) {
+    return model.getSnapshot().notebook.cells;
+  }
+
+  describe("appendMarkupCell", () => {
+    it("appends a markup cell to an empty notebook", () => {
+      const model = makeModel([]);
+      const cell = model.appendMarkupCell();
+      const cells = getCells(model);
+
+      expect(cell).toBeTruthy();
+      expect(cell.kind).toBe(parser_pb.CellKind.MARKUP);
+      expect(cell.languageId).toBe("markdown");
+      expect(cell.value).toBe("");
+      expect(cell.refId).toMatch(/^markup_/);
+      expect(cells.length).toBe(1);
+      expect(cells[0].refId).toBe(cell.refId);
+    });
+
+    it("appends a markup cell after existing cells", () => {
+      const existing = create(parser_pb.CellSchema, {
+        refId: "code_existing",
+        kind: parser_pb.CellKind.CODE,
+        languageId: "js",
+        value: "console.log(1)",
+        metadata: {},
+        outputs: [],
+      });
+      const model = makeModel([existing]);
+      const cell = model.appendMarkupCell();
+      const cells = getCells(model);
+
+      expect(cells.length).toBe(2);
+      expect(cells[0].refId).toBe("code_existing");
+      expect(cells[1].refId).toBe(cell.refId);
+      expect(cell.kind).toBe(parser_pb.CellKind.MARKUP);
+    });
+  });
+
+  describe("addMarkupCellBefore", () => {
+    it("inserts a markup cell before a target cell", () => {
+      const existing = create(parser_pb.CellSchema, {
+        refId: "code_first",
+        kind: parser_pb.CellKind.CODE,
+        languageId: "bash",
+        value: "echo hi",
+        metadata: {},
+        outputs: [],
+      });
+      const model = makeModel([existing]);
+      const cell = model.addMarkupCellBefore("code_first");
+      const cells = getCells(model);
+
+      expect(cell).toBeTruthy();
+      expect(cell!.kind).toBe(parser_pb.CellKind.MARKUP);
+      expect(cell!.languageId).toBe("markdown");
+      expect(cell!.refId).toMatch(/^markup_/);
+      expect(cells.length).toBe(2);
+      expect(cells[0].refId).toBe(cell!.refId);
+      expect(cells[1].refId).toBe("code_first");
+    });
+
+    it("returns null for an invalid refId", () => {
+      const model = makeModel([]);
+      const result = model.addMarkupCellBefore("nonexistent");
+      expect(result).toBeNull();
+      expect(getCells(model).length).toBe(0);
+    });
+
+    it("inserts before the correct cell in a multi-cell notebook", () => {
+      const cell1 = create(parser_pb.CellSchema, {
+        refId: "cell_1",
+        kind: parser_pb.CellKind.CODE,
+        languageId: "js",
+        value: "1",
+        metadata: {},
+        outputs: [],
+      });
+      const cell2 = create(parser_pb.CellSchema, {
+        refId: "cell_2",
+        kind: parser_pb.CellKind.CODE,
+        languageId: "js",
+        value: "2",
+        metadata: {},
+        outputs: [],
+      });
+      const model = makeModel([cell1, cell2]);
+      const inserted = model.addMarkupCellBefore("cell_2");
+      const cells = getCells(model);
+
+      expect(cells.length).toBe(3);
+      expect(cells[0].refId).toBe("cell_1");
+      expect(cells[1].refId).toBe(inserted!.refId);
+      expect(cells[2].refId).toBe("cell_2");
+    });
   });
 });

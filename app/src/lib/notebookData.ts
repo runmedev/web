@@ -420,7 +420,7 @@ export class NotebookData {
     this.rebuildIndex();
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    this.schedulePersist();
+    void this.persist();
     return cell;
   }
 
@@ -430,7 +430,7 @@ export class NotebookData {
     this.rebuildIndex();
     this.snapshotCache = this.buildSnapshot();
     this.emit();
-    this.schedulePersist();
+    void this.persist();
     return cell;
   }
 
