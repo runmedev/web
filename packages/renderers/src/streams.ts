@@ -53,6 +53,7 @@ const MAX_LATENCY_DEADLINE_MS = 4_000
 const RECONNECT_THROTTLE_MS = 1_000
 const MAX_CONSECUTIVE_FAILURES = 3
 const FAILURE_WINDOW_MS = 5_000
+const INITIAL_CONNECT_FAILURES = 1
 
 export type StreamError = Error | pb.WebsocketStatus
 
@@ -182,6 +183,7 @@ class Streams {
 
   // Track consecutive connection failures to detect unreachable backend
   private connectionFailures: number[] = []
+  private hasConnectedOnce = false
 
   constructor({ knownID, runID, sequence, options }: StreamsProps) {
     // Set the identifiers
@@ -323,6 +325,36 @@ class Streams {
       url.searchParams.set('id', streamID)
       url.searchParams.set('runID', this.runID)
       const socket = new WebSocket(url.toString())
+      let opened = false
+      let failureRecorded = false
+      let terminalFailure = false
+
+      const recordConnectionFailure = (requiredFailures: number) => {
+        if (failureRecorded) {
+          return false
+        }
+        failureRecorded = true
+
+        const now = Date.now()
+        this.connectionFailures.push(now)
+        this.connectionFailures = this.connectionFailures.filter(
+          (t) => now - t < FAILURE_WINDOW_MS
+        )
+
+        if (this.connectionFailures.length < requiredFailures) {
+          return false
+        }
+
+        this.connectionFailures = []
+        this._errors.next(
+          new Error(
+            `Unable to connect to Runme backend server for cell ${this.knownID} (#${this.sequence}).`
+          )
+        )
+        terminalFailure = true
+        observer.error(new Error('WebSocket connection failed'))
+        return true
+      }
 
       // Define event handlers
       const onClose = (event: CloseEvent) => {
@@ -332,6 +364,16 @@ class Streams {
         }
 
         if (this.autoReconnect) {
+          if (!opened) {
+            const shouldStop = recordConnectionFailure(
+              this.hasConnectedOnce
+                ? MAX_CONSECUTIVE_FAILURES
+                : INITIAL_CONNECT_FAILURES
+            )
+            if (shouldStop || terminalFailure) {
+              return
+            }
+          }
           // This infinite loop is throttled by the reconnect subject.
           this.connect()
           return
@@ -345,21 +387,11 @@ class Streams {
           return
         }
 
-        // Track rapid consecutive failures to detect unreachable backend
-        const now = Date.now()
-        this.connectionFailures.push(now)
-        // Only keep failures within the sliding window
-        this.connectionFailures = this.connectionFailures.filter(
-          (t) => now - t < FAILURE_WINDOW_MS
+        const shouldStop = recordConnectionFailure(
+          opened ? MAX_CONSECUTIVE_FAILURES : INITIAL_CONNECT_FAILURES
         )
-        if (this.connectionFailures.length >= MAX_CONSECUTIVE_FAILURES) {
-          this.connectionFailures = []
-          this._errors.next(
-            new Error(
-              `Unable to connect to Runme backend server for cell ${this.knownID} (#${this.sequence}).`
-            )
-          )
-          observer.error(event)
+        if (shouldStop || terminalFailure) {
+          return
         }
       }
 
@@ -429,6 +461,8 @@ class Streams {
       const onOpen = () => {
         // Reset failure tracking on successful connection
         this.connectionFailures = []
+        this.hasConnectedOnce = true
+        opened = true
 
         observer.next(socket)
       }

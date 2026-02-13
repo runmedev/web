@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useMemo,
   useRef,
   useSyncExternalStore,
   type MutableRefObject,
@@ -136,10 +135,6 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
       () => cellData.snapshot,
     ) || undefined;
 
-  const initialContent = useMemo(
-    () => decodeOutputs(cell?.outputs ?? []),
-    [cell?.outputs],
-  );
   const runID = cellData.getRunID();
 
   if (!cell || cell.kind !== parser_pb.CellKind.CODE) {
@@ -150,6 +145,7 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
     if (!containerRef.current) {
       return;
     }
+    const initialContent = decodeOutputs(cell?.outputs ?? []);
 
     void customElements.whenDefined("console-view");
 
@@ -176,10 +172,6 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
       consoleEl.setAttribute("initialRows", "20");
       consoleEl.initialContent = "";
       if (!runID) {
-        // TODO(jlewi): I'm not sure this is really the right thing to do.
-        // Maybe we shouldn't be rendering CellConsole if the cell has no runID?
-        // If there is no runID that arguably means the cell hasn't been run.
-        console.log("No runID for cell; generating a new ID");
         consoleEl.id = `run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       } else {
         consoleEl.id = runID;
@@ -295,7 +287,6 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runID]);
 
-  console.log("CellConsole render", { cellRefId: cell.refId, runID: runID });
   return (
     <div
       className="w-full"

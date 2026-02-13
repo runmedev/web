@@ -280,7 +280,6 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
 
   useEffect(() => {
     const unsubscribe = cellData.subscribeToRunIDChange((next) => {
-      console.log("Action detected runID change", { next });
       setRunID(next);
     });
     return () => unsubscribe();
@@ -481,8 +480,6 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     if (!runID && (cell?.outputs?.length ?? 0) === 0) {
       return null;
     }
-
-    console.log("Rendering CellConsole", { runID });
 
     return (
       <CellConsole

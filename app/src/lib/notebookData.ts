@@ -41,7 +41,10 @@ export type StreamBinder = (args: {
   refId: string;
   streams: StreamsLike;
   getCell: (refId: string) => parser_pb.Cell | null;
-  updateCell: (cell: parser_pb.Cell) => void;
+  updateCell: (
+    cell: parser_pb.Cell,
+    options?: { transient?: boolean },
+  ) => void;
 }) => { dispose(): void };
 
 /**
@@ -76,15 +79,17 @@ export const bindStreamsToCell: StreamBinder = ({
     if (!updated) return;
 
     const { output, item } = ensureOutputItem(updated, mime);
-    const prev = textDecoder.decode(item.data ?? new Uint8Array());
-    const next = prev + textDecoder.decode(chunk);
-    item.data = textEncoder.encode(next);
+    const prev = item.data ?? new Uint8Array();
+    const next = new Uint8Array(prev.length + chunk.length);
+    next.set(prev);
+    next.set(chunk, prev.length);
+    item.data = next;
 
     if (!updated.outputs.includes(output)) {
       updated.outputs = [...updated.outputs, output];
     }
 
-    updateCell(updated);
+    updateCell(updated, { transient: true });
   };
 
   /**
@@ -169,7 +174,7 @@ export const bindStreamsToCell: StreamBinder = ({
     });
 
     updated.outputs = [...updated.outputs, output];
-    updateCell(updated);
+    updateCell(updated, { transient: true });
   };
 
   /**
@@ -259,7 +264,7 @@ export const bindStreamsToCell: StreamBinder = ({
       const updated = getCell(refId);
       if (!updated || !updated.metadata) return;
       updated.metadata[RunmeMetadataKey.Pid] = pid.toString();
-      updateCell(updated);
+      updateCell(updated, { transient: true });
     }),
     streams.exitCode.subscribe((code) => {
       const updated = getCell(refId);
@@ -417,7 +422,10 @@ export class NotebookData {
     }
   }
 
-  updateCell(cell: parser_pb.Cell): void {
+  updateCell(
+    cell: parser_pb.Cell,
+    { transient = false }: { transient?: boolean } = {},
+  ): void {
     const idx = this.refToIndex.get(cell.refId);
     const cloned = clone(parser_pb.CellSchema, cell);
     if (idx === undefined) {
@@ -435,9 +443,11 @@ export class NotebookData {
       existingCellData.emitContentChange();
     }
 
-    this.snapshotCache = this.buildSnapshot();
-    this.emit();
-    this.schedulePersist();
+    if (!transient) {
+      this.snapshotCache = this.buildSnapshot();
+      this.emit();
+      this.schedulePersist();
+    }
   }
 
   /** Append a new code cell to the end of the notebook. */
@@ -612,9 +622,9 @@ export class NotebookData {
     // We need getCell to refer to the same CellData instance for a given refId
     // otherwise subscriptions and other changes won't be reflected across the application.
     if (!this.refToCellData.has(refId)) {
-      this.refToCellData.set(refId, new CellData(this, refId));      
+      this.refToCellData.set(refId, new CellData(this, refId));
     }
-    
+
     return this.refToCellData.get(refId)!;
   }
 
@@ -725,7 +735,7 @@ export class NotebookData {
       refId: cell.refId,
       streams,
       getCell: (ref) => this.getCellProto(ref),
-      updateCell: (next) => this.updateCell(next),
+      updateCell: (next, options) => this.updateCell(next, options),
     });
 
     return streams;
@@ -805,19 +815,9 @@ export class CellData {
   private cachedSnapshot: parser_pb.Cell | null = null;
   private runIdListeners: Set<(runID: string) => void> = new Set();
 
-  // Assign a unique ID to each CellData to help with debugging.
-  private cellDataID: string = crypto.randomUUID();
-
-  constructor(private readonly notebook: NotebookData, private readonly refId: string) {    
+  constructor(private readonly notebook: NotebookData, private readonly refId: string) {
     // TODO(jlewi): Need to rationalize the design and management of snapshots
-    this.cachedSnapshot = notebook.getCellSnapshot(refId); 
-
-    // Check if there are active streams for this cell.
-    const streams = this.getStreams()
-    if (streams) {
-      console.log(`CellData ${this.cellDataID} found active streams for cell ${refId} runID ${this.getRunID()} `);
-    }
-    console.log(`Created CellData ${this.cellDataID}`);
+    this.cachedSnapshot = notebook.getCellSnapshot(refId);
   }
 
   subscribe(listener: Listener): () => void {
@@ -848,14 +848,14 @@ export class CellData {
     });
   }
 
-  private emit(): void {    
+  private emit(): void {
     this.listeners.forEach((listener) => {
       try {
         listener();
       } catch (err) {
         console.error("CellData listener failed", err);
       }
-    });    
+    });
   }
 
   emitContentChange(): void {
@@ -867,7 +867,7 @@ export class CellData {
   }
 
   /** Latest cloned snapshot of this cell. */
-  get snapshot(): parser_pb.Cell | null {    
+  get snapshot(): parser_pb.Cell | null {
     return this.cachedSnapshot;
   }
 
@@ -898,13 +898,11 @@ export class CellData {
   }
 
   run(): void {
-    console.log(`Running CellData ${this.cellDataID}`);
     const cell = this.snapshot;
     if (!cell) return;
     const runID = this.notebook.runCodeCell(cell);
-    console.log("Started run for cell", { refId: this.refId, runID });
     // Update the snapshot after running to pick up any metadata changes.
-    this.cachedSnapshot = this.notebook.getCellSnapshot(this.refId); 
+    this.cachedSnapshot = this.notebook.getCellSnapshot(this.refId);
     this.emitRunIDChange(runID ?? "");
   }
 
@@ -936,9 +934,9 @@ export class CellData {
   }
 
   /** Runner name from metadata, validated against known runners; falls back to default placeholder. */
-  getRunnerName(): string {    
+  getRunnerName(): string {
     const requested =
-      this.snapshot?.metadata?.[RunmeMetadataKey.RunnerName] ??      
+      this.snapshot?.metadata?.[RunmeMetadataKey.RunnerName] ??
       null;
     if (requested) {
       return requested;
