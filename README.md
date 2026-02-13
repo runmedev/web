@@ -57,6 +57,20 @@ Will fail for a clean project. Be sure to build first.
 pnpm run test:run
 ```
 
+### Browser Smoke Tests
+
+Run the browser smoke test for the app (frontend must already be running):
+
+```sh
+cd app && bash test/browser/test-smoke.sh
+```
+
+Run the backend-unavailable toast check (backend must be stopped, frontend running):
+
+```sh
+cd app && bash test/browser/test-backend-toast.sh
+```
+
 ## Linting
 
 Lint all packages:

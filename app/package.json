@@ -27,7 +27,7 @@
     "@openai/chatkit-react": "1.2.0",
     "@radix-ui/react-icons": "^1.3.0",
     "@radix-ui/themes": "^3.1.4",
-    "@runmedev/renderers": "3.16.5-jlewi.2",
+    "@runmedev/renderers": "workspace:*",
     "@tailwindcss/vite": "^4.0.17",
     "@tanstack/react-query": "5.89.0",
     "add": "2.0.6",

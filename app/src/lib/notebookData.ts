@@ -58,6 +58,10 @@ export const bindStreamsToCell: StreamBinder = ({
   getCell,
   updateCell,
 }) => {
+  // Track the most recent error toast so we don't spam the user during
+  // repeated reconnect attempts for the same cell run.
+  let lastToastAt = 0;
+  const toastThrottleMs = 3_000;
   /**
    * stdoutBuffer tracks partial lines across chunks so we can parse line-based
    * IOPub messages without losing bytes. We only attempt IOPub detection at
@@ -273,10 +277,15 @@ export const bindStreamsToCell: StreamBinder = ({
     }),
     streams.errors.subscribe((err) => {
       console.error("Stream error", err);
-      showToast({
-        message: "Runme backend server is not running. Please start it and try again.",
-        tone: "error",
-      });
+      const now = Date.now();
+      if (now - lastToastAt >= toastThrottleMs) {
+        lastToastAt = now;
+        showToast({
+          message:
+            "Runme backend server is not running. Please start it and try again.",
+          tone: "error",
+        });
+      }
       flushStdoutBuffer();
       finalizeIopubStream();
       streams.close();

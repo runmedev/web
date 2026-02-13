@@ -150,6 +150,15 @@ export function RunnersProvider({
 
   useEffect(() => {
     persistRunners(runners, defaultRunnerName);
+    // Sync React state to the RunnersManager singleton so that non-React code
+    // (e.g. NotebookData.getRunner) can resolve runners.
+    const mgr = getRunnersManager();
+    for (const runner of runners.values()) {
+      mgr.update(runner.name, runner.endpoint, runner.reconnect);
+    }
+    if (defaultRunnerName) {
+      mgr.setDefault(defaultRunnerName);
+    }
   }, [defaultRunnerName, runners]);
 
   useEffect(() => {

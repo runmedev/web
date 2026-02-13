@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { subscribeToast } from "../lib/toast";
 
+// GlobalToast renders transient status messages for the entire app.
 export default function GlobalToast() {
   const timeoutRef = useRef<number | null>(null);
   const [toast, setToast] = useState<{
@@ -35,14 +36,18 @@ export default function GlobalToast() {
   if (!toast) return null;
 
   return (
-    <div className="pointer-events-none fixed left-1/2 top-4 z-50 -translate-x-1/2 transform">
+    <div
+      id="global-toast-wrapper"
+      className="pointer-events-none fixed left-1/2 top-4 z-50 -translate-x-1/2 transform"
+    >
       <div
+        id="global-toast"
         role="status"
         aria-live="polite"
         className={`pointer-events-auto rounded-md border px-4 py-2 text-sm shadow-lg ${
           toast.tone === "success"
             ? "border-emerald-200 bg-emerald-50 text-emerald-900"
-            : "border-red-200 bg-red-50 text-red-900"
+            : "border-red-950 bg-red-900 text-white"
         }`}
       >
         {toast.message}

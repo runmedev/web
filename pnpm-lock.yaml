@@ -241,8 +241,8 @@ importers:
         specifier: ^3.1.4
         version: 3.2.1(@types/react-dom@19.2.1(@types/react@19.2.2))(@types/react@19.2.2)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
       '@runmedev/renderers':
-        specifier: 3.16.5-jlewi.2
-        version: 3.16.5-jlewi.2
+        specifier: workspace:*
+        version: link:../packages/renderers
       '@tailwindcss/vite':
         specifier: ^4.0.17
         version: 4.1.14(vite@6.3.6(@types/node@22.19.7)(jiti@2.6.1)(lightningcss@1.30.1)(yaml@2.8.2))
@@ -2083,9 +2083,6 @@ packages:
     resolution: {integrity: sha512-bf9PtUa0u8IXDVxzRToFQKsNCRz9qLYfR/MpECxl4mRoWYjAeFjgxj1XdZr2M/GNVpT05p+LgQOHopYDlUu6/w==}
     cpu: [x64]
     os: [win32]
-
-  '@runmedev/renderers@3.16.5-jlewi.2':
-    resolution: {integrity: sha512-O7mBaiVk/r6Tjd8htZXmNDqgGoDNRkds/l+xM2AvadzAjzkZQRJC42XSQcT0rRLef+hJPUcTl2Tsk/MqSoEMkg==}
 
   '@svgr/babel-plugin-add-jsx-attribute@8.0.0':
     resolution: {integrity: sha512-b9MIk7yhdS1pMCZM8VeNfUlSKVRhsHZNMl5O9SfaX0l0t5wjdgu4IDzGB8bpnGBBOjGST3rRFVsaaEtI4W6f7g==}
@@ -6449,10 +6446,6 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.52.4':
     optional: true
-
-  '@runmedev/renderers@3.16.5-jlewi.2':
-    dependencies:
-      '@bufbuild/protobuf': 2.9.0
 
   '@svgr/babel-plugin-add-jsx-attribute@8.0.0(@babel/core@7.28.4)':
     dependencies:

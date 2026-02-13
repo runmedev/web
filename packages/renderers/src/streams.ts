@@ -51,6 +51,8 @@ const HEARTBEAT_INTERVAL_MS = 5_000
 const MONITOR_INTERVAL_MS = 1_000
 const MAX_LATENCY_DEADLINE_MS = 4_000
 const RECONNECT_THROTTLE_MS = 1_000
+const MAX_CONSECUTIVE_FAILURES = 3
+const FAILURE_WINDOW_MS = 5_000
 
 export type StreamError = Error | pb.WebsocketStatus
 
@@ -178,6 +180,9 @@ class Streams {
   private readonly interceptors: Interceptor[]
   private readonly autoReconnect: boolean
 
+  // Track consecutive connection failures to detect unreachable backend
+  private connectionFailures: number[] = []
+
   constructor({ knownID, runID, sequence, options }: StreamsProps) {
     // Set the identifiers
     this.knownID = knownID
@@ -245,12 +250,8 @@ class Streams {
 
     // Monitor the latencies and trigger reconnects if the latency is too high
     return monitor.subscribe({
-      next: (latencies) => {
-        console.log(new Date(), 'Triggering reconnect', latencies)
+      next: () => {
         this.connect()
-      },
-      complete: () => {
-        console.log('Monitor complete')
       },
       error: (err) => {
         console.error('Error in monitor', err)
@@ -325,7 +326,6 @@ class Streams {
 
       // Define event handlers
       const onClose = (event: CloseEvent) => {
-        console.log(new Date(), `WebSocket transport ${streamID} closed`, event)
         if (event.code === 1005) {
           observer.complete()
           return
@@ -339,9 +339,26 @@ class Streams {
       }
 
       const onError = (event: Event) => {
-        console.log(new Date(), `WebSocket transport ${streamID} error`, event)
         // If autoReconnect is disabled, we want to error out immediately.
         if (!this.autoReconnect) {
+          observer.error(event)
+          return
+        }
+
+        // Track rapid consecutive failures to detect unreachable backend
+        const now = Date.now()
+        this.connectionFailures.push(now)
+        // Only keep failures within the sliding window
+        this.connectionFailures = this.connectionFailures.filter(
+          (t) => now - t < FAILURE_WINDOW_MS
+        )
+        if (this.connectionFailures.length >= MAX_CONSECUTIVE_FAILURES) {
+          this.connectionFailures = []
+          this._errors.next(
+            new Error(
+              `Unable to connect to Runme backend server for cell ${this.knownID} (#${this.sequence}).`
+            )
+          )
           observer.error(event)
         }
       }
@@ -354,8 +371,6 @@ class Streams {
         let message: pb.WebsocketResponse
         try {
           message = parseWebsocketResponse(event.data)
-          // Use the message
-          console.log('Received WebsocketResponse:', message)
         } catch (err) {
           console.error('Failed to parse WebsocketResponse:', err)
         }
@@ -412,10 +427,8 @@ class Streams {
       }
 
       const onOpen = () => {
-        console.log(
-          new Date(),
-          `✅ Connected WebSocket for cell ${this.knownID} (#${this.sequence}) with runID ${this.runID}`
-        )
+        // Reset failure tracking on successful connection
+        this.connectionFailures = []
 
         observer.next(socket)
       }
@@ -427,10 +440,6 @@ class Streams {
       socket.addEventListener('open', onOpen)
 
       return () => {
-        console.log(
-          new Date(),
-          `☑️ Cleanly disconnected WebSocket for cell ${this.knownID} (#${this.sequence}) with runID ${this.runID}`
-        )
         socket.removeEventListener('close', onClose)
         socket.removeEventListener('error', onError)
         socket.removeEventListener('message', onMessage)
@@ -527,6 +536,7 @@ class Streams {
             )
           ).pipe(
             catchError((err) => {
+              void err
               // Emit a deadline latency to trigger a reconnect
               this._latencies.next({
                 streamID,
@@ -534,7 +544,6 @@ class Streams {
                 readyState: socket.readyState,
                 updatedAt: BigInt(Date.now()),
               })
-              console.log(new Date(), `Ping deadline exceeded`, err.message)
               return of(null) // Continue stream
             })
           )

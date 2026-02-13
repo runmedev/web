@@ -5,6 +5,9 @@ import svgr from "vite-plugin-svgr";
 
 // https://vite.dev/config/
 export default defineConfig({
+  optimizeDeps: {
+    exclude: ["@runmedev/renderers"],
+  },
   plugins: [
     react(),
     tailwindcss(),
