@@ -113,9 +113,10 @@ export function createRunmeConsoleApi({
         continue;
       }
 
+      const previousRunID = cellData.getRunID();
       cellData.run();
       const runID = cellData.getRunID();
-      if (runID) {
+      if (runID && runID !== previousRunID) {
         started += 1;
       } else {
         failedToStart += 1;
@@ -132,8 +133,8 @@ export function createRunmeConsoleApi({
   const help = () =>
     [
       "runme.getCurrentNotebook()      - Return the active notebook handle",
-      "runme.clearOutputs([notebook])  - Clear all outputs in a notebook",
-      "runme.runAll([notebook])        - Run all non-empty code cells",
+      "runme.clearOutputs([notebookOrUri]) - Clear all outputs in a notebook",
+      "runme.runAll([notebookOrUri])       - Run all non-empty code cells",
       "runme.help()                    - Show this help",
     ].join("\n");
 

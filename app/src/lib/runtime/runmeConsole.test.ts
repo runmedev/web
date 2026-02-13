@@ -24,19 +24,21 @@ class FakeNotebookData implements NotebookDataLike {
     private readonly name: string,
     private readonly notebook: parser_pb.Notebook,
     private readonly failedRunRefIds: Set<string> = new Set(),
+    private readonly initialRunIds: Map<string, string> = new Map(),
   ) {
     for (const cell of notebook.cells ?? []) {
       if (!cell?.refId) {
         continue;
       }
-      let runID = "";
+      let runID = this.initialRunIds.get(cell.refId) ?? "";
       const runner: FakeCellRunner = {
         calls: 0,
         run: () => {
           runner.calls += 1;
-          runID = this.failedRunRefIds.has(cell.refId)
-            ? ""
-            : `run-${cell.refId}-${runner.calls}`;
+          if (this.failedRunRefIds.has(cell.refId)) {
+            return;
+          }
+          runID = `run-${cell.refId}-${runner.calls}`;
         },
         getRunID: () => runID,
       };
@@ -171,5 +173,39 @@ describe("createRunmeConsoleApi", () => {
     expect(model.getCell("cell-a")?.calls).toBe(1);
     expect(model.getCell("cell-b")?.calls).toBe(0);
     expect(model.getCell("cell-d")?.calls).toBe(1);
+  });
+
+  it("treats unchanged stale run IDs as failed starts", () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell("cell-a", "echo a")],
+    });
+    const model = new FakeNotebookData(
+      "local://one",
+      "Notebook One",
+      notebook,
+      new Set(["cell-a"]),
+      new Map([["cell-a", "old-run-id"]]),
+    );
+    const api = createRunmeConsoleApi({
+      resolveNotebook: () => model,
+    });
+
+    const message = api.runAll();
+
+    expect(message).toContain("Started 0/1 code cell(s)");
+    expect(message).toContain("1 failed to start");
+  });
+
+  it("documents notebook/URI helper usage in help text", () => {
+    const notebook = create(parser_pb.NotebookSchema, { cells: [] });
+    const model = new FakeNotebookData("local://one", "One", notebook);
+    const api = createRunmeConsoleApi({
+      resolveNotebook: () => model,
+    });
+
+    const message = api.help();
+
+    expect(message).toContain("runme.clearOutputs([notebookOrUri])");
+    expect(message).toContain("runme.runAll([notebookOrUri])");
   });
 });
