@@ -33,3 +33,6 @@ packages/react-console/gen
 **/coverage
 
 .changeset/*.md
+
+# local releaser build artifact
+/releaser/releaser
