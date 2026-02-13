@@ -48,6 +48,7 @@ import { Interceptor } from "@connectrpc/connect";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SidePanelProvider } from "./contexts/SidePanelContext";
 import { appState } from "./lib/runtime/AppState";
+import { Toaster } from "sonner";
 
 const queryClient = new QueryClient();
 
@@ -131,6 +132,16 @@ function App({ branding, initialState = {} }: AppProps) {
   return (
     <>
       <Theme accentColor="gray" scaling="110%" radius="small">
+        <Toaster
+          position="bottom-right"
+          toastOptions={{
+            style: {
+              fontFamily: "var(--default-font-family, system-ui, sans-serif)",
+              fontSize: "13px",
+              borderRadius: "var(--radius-2, 4px)",
+            },
+          }}
+        />
         <Helmet>
           <title>{appBranding.name}</title>
           <meta name="description" content={`${appBranding.name}`} />

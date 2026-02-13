@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -38,6 +39,7 @@ import { useCurrentDoc } from "../../contexts/CurrentDocContext";
 import { useRunners } from "../../contexts/RunnersContext";
 import { DEFAULT_RUNNER_PLACEHOLDER } from "../../lib/runtime/runnersManager";
 import React from "react";
+import { toast } from "sonner";
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
   "data-state"?: "active" | "inactive";
@@ -338,6 +340,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
   } | null>(null);
   const [pid, setPid] = useState<number | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
+  const connectionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!contextMenu) {
@@ -383,8 +386,49 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
   }, [contextMenu]);
 
   const runCode = useCallback(() => {
-    cellData.run();
+    // Clear any pending connection timeout from a previous run.
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+    }
+
+    const runID = cellData.run();
+
+    if (!runID) {
+      toast.error("No runner configured. Check your runner settings in the console.", {
+        id: "no-runner",
+        duration: 5000,
+      });
+      return;
+    }
+
+    // If the backend is down the WebSocket will silently fail to connect.
+    // Set a timeout: if no PID arrives within 5 seconds, warn the user.
+    connectionTimeoutRef.current = setTimeout(() => {
+      toast.error(
+        "Unable to connect to the Runme service. Make sure the backend is running.",
+        { id: "runner-unavailable", duration: 8000 },
+      );
+      connectionTimeoutRef.current = null;
+    }, 5000);
   }, [cellData]);
+
+  // Clear the connection timeout once a PID arrives (backend responded).
+  useEffect(() => {
+    if (pid !== null && connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+    }
+  }, [pid]);
+
+  // Cleanup timeout on unmount.
+  useEffect(() => {
+    return () => {
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleContextMenu = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
