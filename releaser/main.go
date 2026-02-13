@@ -38,8 +38,6 @@ type config struct {
 
 	runmeAssetsDir string
 
-	webBuildCmds string
-
 	tmpBase string
 }
 
@@ -77,7 +75,6 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.runmeRepo, "runme-repo", defaultRunmeRepo, "GitHub repo in org/repo format")
 	cmd.Flags().StringVar(&cfg.webRepo, "web-repo", defaultWebRepo, "GitHub repo in org/repo format")
 	cmd.Flags().StringVar(&cfg.runmeAssetsDir, "runme-assets-dir", "", "relative path in runme repo to copy web assets into (auto-detected when empty)")
-	cmd.Flags().StringVar(&cfg.webBuildCmds, "web-build-cmds", "pnpm install --frozen-lockfile;pnpm run build:renderers;pnpm -C app run build", "semicolon-delimited shell commands to build web assets")
 	cmd.Flags().StringVar(&cfg.tmpBase, "tmpdir", os.TempDir(), "base temporary directory")
 	_ = cmd.MarkFlagRequired("runme")
 	_ = cmd.MarkFlagRequired("web")
@@ -137,9 +134,12 @@ func run(ctx context.Context, cfg config) error {
 		return fmt.Errorf("clone web repository: %w", err)
 	}
 
-	for _, cmdline := range splitCommands(cfg.webBuildCmds) {
+	for _, cmdline := range []string{
+		"pnpm install --frozen-lockfile",
+		"pnpm -C app run build",
+	} {
 		if err := runShell(ctx, webDir, nil, cmdline); err != nil {
-			return fmt.Errorf("build web static assets: %w", err)
+			return fmt.Errorf("build web static assets (%q): %w", cmdline, err)
 		}
 	}
 
@@ -514,17 +514,6 @@ func extractDestinationPath(line string) string {
 		last = strings.TrimPrefix(last, "./")
 	}
 	return filepath.ToSlash(last)
-}
-
-func splitCommands(v string) []string {
-	out := []string{}
-	for _, p := range strings.Split(v, ";") {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func runShell(ctx context.Context, dir string, env []string, command string) error {
