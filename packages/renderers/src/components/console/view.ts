@@ -420,6 +420,15 @@ export class ConsoleView extends LitElement {
   @property({ type: Boolean })
   isDaggerOutput: boolean = false
 
+  // Allow each console-view instance to carry its own messaging bridge.
+  // If unset, we fall back to the shared renderer context for compatibility.
+  @property({ attribute: false })
+  context?: ReturnType<typeof getContext>
+
+  #getMessagingContext(): ReturnType<typeof getContext> {
+    return (this.context ?? getContext()) as ReturnType<typeof getContext>
+  }
+
   protected applyThemeStyles(): void {
     if (!this.shadowRoot) {
       return
@@ -518,7 +527,7 @@ export class ConsoleView extends LitElement {
     this.terminal.unicode.activeVersion = '11'
     this.terminal.options.drawBoldTextInBrightColors
 
-    const ctx = getContext()
+    const ctx = this.#getMessagingContext()
 
     this.disposables.push(
       // todo(sebastian): what's the type of e?
@@ -719,7 +728,7 @@ export class ConsoleView extends LitElement {
     this.#subscribeSetTerminalRows(dims)
     terminalContainer.appendChild(resizeDragHandle)
 
-    const ctx = getContext()
+    const ctx = this.#getMessagingContext()
     ctx.postMessage &&
       postClientMessage(ctx, ClientMessages.terminalOpen, {
         'runme.dev/id': this.id!,
@@ -898,7 +907,7 @@ export class ConsoleView extends LitElement {
     )
 
     const sub = debounced$.subscribe(async (terminalDimensions) => {
-      const ctx = getContext()
+      const ctx = this.#getMessagingContext()
       if (!ctx.postMessage) {
         return
       }
@@ -923,7 +932,7 @@ export class ConsoleView extends LitElement {
     )
 
     const sub = debounced$.subscribe(async (terminalRows) => {
-      const ctx = getContext()
+      const ctx = this.#getMessagingContext()
       if (!ctx.postMessage) {
         return
       }
@@ -956,7 +965,7 @@ export class ConsoleView extends LitElement {
       this.terminal?.focus()
     }
 
-    const ctx = getContext()
+    const ctx = this.#getMessagingContext()
     if (!ctx.postMessage) {
       return
     }
@@ -967,7 +976,7 @@ export class ConsoleView extends LitElement {
   }
 
   async #displayShareDialog(): Promise<boolean | void> {
-    const ctx = getContext()
+    const ctx = this.#getMessagingContext()
     if (!ctx.postMessage || !this.shareUrl) {
       return
     }
@@ -1009,7 +1018,7 @@ export class ConsoleView extends LitElement {
   }
 
   async #triggerOpenEscalation(): Promise<boolean | void | undefined> {
-    const ctx = getContext()
+    const ctx = this.#getMessagingContext()
 
     if (!this.escalationUrl) {
       return
@@ -1019,7 +1028,7 @@ export class ConsoleView extends LitElement {
   }
 
   #openSessionOutput(): Promise<void | boolean> | undefined {
-    const ctx = getContext()
+    const ctx = this.#getMessagingContext()
     if (!ctx.postMessage) {
       return
     }
@@ -1035,7 +1044,7 @@ export class ConsoleView extends LitElement {
   async #shareCellOutput(
     _isUserAction: boolean
   ): Promise<boolean | void | undefined> {
-    const ctx = getContext()
+    const ctx = this.#getMessagingContext()
     if (!ctx.postMessage) {
       return
     }
@@ -1077,17 +1086,21 @@ export class ConsoleView extends LitElement {
   }
 
   #onWebLinkClick(_event: MouseEvent, uri: string): void {
-    postClientMessage(getContext(), ClientMessages.openLink, uri)
+    postClientMessage(this.#getMessagingContext(), ClientMessages.openLink, uri)
   }
 
   #triggerOpenCellOutput(): void {
-    postClientMessage(getContext(), ClientMessages.openLink, this.shareUrl!)
+    postClientMessage(
+      this.#getMessagingContext(),
+      ClientMessages.openLink,
+      this.shareUrl!
+    )
   }
 
   #onEscalateDisabled(): void {
     const message =
       'There is no Slack integration configured yet. \nOpen Dashboard to configure it'
-    postClientMessage(getContext(), ClientMessages.errorMessage, message)
+    postClientMessage(this.#getMessagingContext(), ClientMessages.errorMessage, message)
   }
 
   // Render the UI as a function of component state
@@ -1198,7 +1211,7 @@ export class ConsoleView extends LitElement {
   }
 
   #copy() {
-    const ctx = getContext()
+    const ctx = this.#getMessagingContext()
     if (!ctx.postMessage) {
       return
     }

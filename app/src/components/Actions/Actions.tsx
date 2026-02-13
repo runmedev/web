@@ -276,14 +276,9 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     useCallback(() => cellData.snapshot, [cellData]),
     useCallback(() => cellData.snapshot, [cellData]),
   );
-  const [runID, setRunID] = useState(cellData.getRunID());
-
-  useEffect(() => {
-    const unsubscribe = cellData.subscribeToRunIDChange((next) => {
-      setRunID(next);
-    });
-    return () => unsubscribe();
-  }, [cellData]);
+  // Derive runID from the current cell snapshot so clear/reset operations
+  // immediately repaint output visibility without requiring a separate listener.
+  const runID = cellData.getRunID();
 
   const handleAddCodeCellBefore = useCallback(() => {
     cellData.addBefore(cell?.languageId);
@@ -1060,8 +1055,9 @@ export default function Actions() {
                   explorer.openPicker(){"\n"}
                   explorer.listFolders(){"\n"}
                   runme.getCurrentNotebook(){"\n"}
-                  runme.clearOutputs(runme.getCurrentNotebook()){"\n"}
-                  runme.runAll(runme.getCurrentNotebook()){"\n"}
+                  runme.clear(){"\n"}
+                  runme.runAll(){"\n"}
+                  runme.rerun(){"\n"}
                   help(){"\n\n"}
                   To attach test notebooks: use the Explorer + button to pick the fixtures folder
                   {"\n"}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/20/solid";
-import { ClientMessages } from "@runmedev/renderers";
+import { ClientMessages, setContext } from "@runmedev/renderers";
 import type { RendererContext } from "vscode-notebook-renderer";
 
 import { JSKernel } from "../../lib/runtime/jsKernel";
@@ -73,7 +73,8 @@ export default function AppConsole() {
   // mount/unmount folders from the App Console without drilling props.
   const { getItems, addItem, removeItem } = useWorkspace();
   const { getCurrentDoc } = useCurrentDoc();
-  const { getNotebookData } = useNotebookContext();
+  const { getNotebookData, useNotebookList } = useNotebookContext();
+  const openNotebooks = useNotebookList();
   // FilesystemStoreContext owns the File System Access API store instance that
   // actually opens folders and produces fs:// workspace URIs.
   const { fsStore, setFsStore } = useFilesystemStore();
@@ -144,6 +145,17 @@ export default function AppConsole() {
     return "Opening directory picker...";
   }, [addItem, ensureFilesystemStore, getItems, sendStdout]);
 
+  const getVisibleNotebookUri = useCallback((): string | null => {
+    const activePanel = document.querySelector<HTMLElement>(
+      '[data-document-id][data-state="active"]',
+    );
+    const uri = activePanel?.dataset.documentId;
+    if (!uri || uri.trim() === "") {
+      return null;
+    }
+    return uri;
+  }, []);
+
   const resolveNotebookData = useCallback(
     (target?: unknown): NotebookDataLike | null => {
       if (target && typeof target === "object") {
@@ -163,13 +175,22 @@ export default function AppConsole() {
         return getNotebookData(target) ?? null;
       }
 
-      const uri = getCurrentDoc();
-      if (!uri) {
+      const currentUri = getCurrentDoc();
+      if (currentUri) {
+        const currentNotebook = getNotebookData(currentUri);
+        if (currentNotebook) {
+          return currentNotebook;
+        }
+      }
+
+      const visibleUri = openNotebooks[0]?.uri;
+      const activeUri = getVisibleNotebookUri() ?? visibleUri;
+      if (!activeUri) {
         return null;
       }
-      return getNotebookData(uri) ?? null;
+      return getNotebookData(activeUri) ?? null;
     },
-    [getCurrentDoc, getNotebookData],
+    [getCurrentDoc, getNotebookData, getVisibleNotebookUri, openNotebooks],
   );
 
   const runme = useMemo(
@@ -188,6 +209,11 @@ export default function AppConsole() {
             getCurrentNotebook: () => {
               return runme.getCurrentNotebook();
             },
+            clear: (target?: unknown) => {
+              const message = runme.clear(target);
+              sendStdout(`${message}\r\n`);
+              return message;
+            },
             clearOutputs: (target?: unknown) => {
               const message = runme.clearOutputs(target);
               sendStdout(`${message}\r\n`);
@@ -195,6 +221,11 @@ export default function AppConsole() {
             },
             runAll: (target?: unknown) => {
               const message = runme.runAll(target);
+              sendStdout(`${message}\r\n`);
+              return message;
+            },
+            rerun: (target?: unknown) => {
+              const message = runme.rerun(target);
               sendStdout(`${message}\r\n`);
               return message;
             },
@@ -637,7 +668,16 @@ export default function AppConsole() {
               },
             } as RendererContext<void>;
 
+            const activateConsoleContext = () => {
+              setContext(ctxBridge);
+            };
+
+            // console-view currently resolves messaging through the renderer
+            // global context, so ensure this bridge is active for app-console input.
+            activateConsoleContext();
             (elem as any).context = ctxBridge;
+            elem.addEventListener("pointerdown", activateConsoleContext);
+            elem.addEventListener("focusin", activateConsoleContext);
 
             elem.setAttribute("id", consoleId);
             elem.setAttribute("buttons", "false");

@@ -175,6 +175,65 @@ describe("createRunmeConsoleApi", () => {
     expect(model.getCell("cell-d")?.calls).toBe(1);
   });
 
+  it("supports clear alias", () => {
+    const output = create(parser_pb.CellOutputSchema, {
+      items: [
+        create(parser_pb.CellOutputItemSchema, {
+          mime: "text/plain",
+          type: "Buffer",
+          data: new TextEncoder().encode("hello"),
+        }),
+      ],
+    });
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell("cell-a", "echo a", { outputs: [output] })],
+    });
+    const model = new FakeNotebookData("local://one", "Notebook One", notebook);
+    const api = createRunmeConsoleApi({
+      resolveNotebook: () => model,
+    });
+
+    const clearMessage = api.clear();
+    const runMessage = api.runAll();
+
+    expect(clearMessage).toContain("Cleared 1 output item group(s) across 1 cell(s)");
+    expect(runMessage).toContain("Started 1/1 code cell(s)");
+    expect(model.getCell("cell-a")?.calls).toBe(1);
+  });
+
+  it("reruns notebook by clearing outputs before running cells", () => {
+    const output = create(parser_pb.CellOutputSchema, {
+      items: [
+        create(parser_pb.CellOutputItemSchema, {
+          mime: "text/plain",
+          type: "Buffer",
+          data: new TextEncoder().encode("hello"),
+        }),
+      ],
+    });
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        codeCell("cell-a", "echo a", {
+          outputs: [output],
+          metadata: {
+            [RunmeMetadataKey.LastRunID]: "run-cell-a",
+          },
+        }),
+      ],
+    });
+    const model = new FakeNotebookData("local://one", "Notebook One", notebook);
+    const api = createRunmeConsoleApi({
+      resolveNotebook: () => model,
+    });
+
+    const message = api.rerun();
+
+    expect(message).toContain("Cleared 1 output item group(s) across 1 cell(s)");
+    expect(message).toContain("Started 1/1 code cell(s)");
+    expect(notebook.cells[0]?.outputs).toHaveLength(0);
+    expect(model.getCell("cell-a")?.calls).toBe(1);
+  });
+
   it("treats unchanged stale run IDs as failed starts", () => {
     const notebook = create(parser_pb.NotebookSchema, {
       cells: [codeCell("cell-a", "echo a")],
@@ -205,7 +264,11 @@ describe("createRunmeConsoleApi", () => {
 
     const message = api.help();
 
-    expect(message).toContain("runme.clearOutputs([notebookOrUri])");
-    expect(message).toContain("runme.runAll([notebookOrUri])");
+    expect(message).toContain("runme.clear()");
+    expect(message).toContain("runme.runAll()");
+    expect(message).toContain("runme.rerun()");
+    expect(message).toContain("runme.clear(target)");
+    expect(message).toContain("runme.runAll(target)");
+    expect(message).toContain("runme.rerun(target)");
   });
 });

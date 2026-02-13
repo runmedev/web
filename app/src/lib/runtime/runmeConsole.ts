@@ -17,8 +17,10 @@ export type NotebookDataLike = {
 
 export type RunmeConsoleApi = {
   getCurrentNotebook: () => NotebookDataLike | null;
+  clear: (target?: unknown) => string;
   clearOutputs: (target?: unknown) => string;
   runAll: (target?: unknown) => string;
+  rerun: (target?: unknown) => string;
   help: () => string;
 };
 
@@ -130,18 +132,40 @@ export function createRunmeConsoleApi({
     return `Started ${started}/${runnableCells} code cell(s) in ${formatNotebookLabel(notebookData)}.${failedToStart > 0 ? ` ${failedToStart} failed to start.` : ""}`;
   };
 
+  const clear = (target?: unknown) => clearOutputs(target);
+  const rerun = (target?: unknown) => {
+    const notebookData = resolveNotebook(target);
+    if (!notebookData) {
+      return "No active notebook found.";
+    }
+
+    const clearMessage = clearOutputs(notebookData);
+    const runMessage = runAll(notebookData);
+    return `${clearMessage}\n${runMessage}`;
+  };
+
   const help = () =>
     [
-      "runme.getCurrentNotebook()      - Return the active notebook handle",
-      "runme.clearOutputs([notebookOrUri]) - Clear all outputs in a notebook",
-      "runme.runAll([notebookOrUri])       - Run all non-empty code cells",
+      "runme.clear()                  - Clear outputs in the current visible notebook",
+      "runme.runAll()                 - Run all non-empty code cells in the current visible notebook",
+      "runme.rerun()                  - Clear outputs, then run all cells in the current visible notebook",
+      "runme.getCurrentNotebook()     - Advanced: return notebook handle for scripting",
+      "runme.clearOutputs()           - Alias for runme.clear()",
+      "",
+      "Advanced optional target:",
+      "  runme.clear(target)",
+      "  runme.runAll(target)",
+      "  runme.rerun(target)",
+      "  target can be a notebook handle or notebook URI",
       "runme.help()                    - Show this help",
     ].join("\n");
 
   return {
     getCurrentNotebook,
+    clear,
     clearOutputs,
     runAll,
+    rerun,
     help,
   };
 }

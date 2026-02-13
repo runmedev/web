@@ -65,7 +65,6 @@ class StubCellData {
   snapshot: parser_pb.Cell;
   private runID = "run-0";
   private listeners = new Set<() => void>();
-  private runListeners = new Set<(id: string) => void>();
   getRunnerName = () => "<default>";
   update = vi.fn((nextCell: parser_pb.Cell) => {
     this.snapshot = create(parser_pb.CellSchema, nextCell);
@@ -86,8 +85,7 @@ class StubCellData {
   }
 
   subscribeToRunIDChange(listener: (id: string) => void) {
-    this.runListeners.add(listener);
-    return () => this.runListeners.delete(listener);
+    return () => {};
   }
 
   getRunID() {
@@ -96,11 +94,7 @@ class StubCellData {
 
   setRunID(id: string) {
     this.runID = id;
-    this.snapshot.metadata ??= {};
-    // @ts-expect-error protobuf metadata map
-    this.snapshot.metadata[parser_pb.RunmeMetadataKey] = id;
     this.listeners.forEach((l) => l());
-    this.runListeners.forEach((l) => l(id));
   }
 
   getStreams() {
@@ -138,6 +132,28 @@ describe("Action component", () => {
     const secondKey = second.dataset.runkey;
 
     expect(firstKey).not.toBe(secondKey);
+  });
+
+  it("hides console output area when runID is cleared and outputs are empty", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-clear",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "bash",
+      outputs: [],
+      metadata: {},
+      value: "echo hi",
+    });
+    const stub = new StubCellData(cell) as unknown as CellData;
+
+    render(<Action cellData={stub} isFirst={false} />);
+    expect(screen.getByTestId("cell-console")).toBeTruthy();
+
+    await act(async () => {
+      stub.setRunID("");
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("cell-console")).toBeNull();
   });
 
   it("shows language selector in markdown edit mode and converts to code language", () => {
