@@ -1041,6 +1041,9 @@ export default function Actions() {
                   explorer.mountDrive(driveUrl){"\n"}
                   explorer.openPicker(){"\n"}
                   explorer.listFolders(){"\n"}
+                  runme.getCurrentNotebook(){"\n"}
+                  runme.clearOutputs(runme.getCurrentNotebook()){"\n"}
+                  runme.runAll(runme.getCurrentNotebook()){"\n"}
                   help(){"\n\n"}
                   To attach test notebooks: use the Explorer + button to pick the fixtures folder
                   {"\n"}

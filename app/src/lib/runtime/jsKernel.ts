@@ -74,28 +74,33 @@ export class JSKernel {
       stdout,
       aisreRunners,
     );
+    const globalHelp =
+      (options.globals?.help as (() => unknown) | undefined) ??
+      (this.baseGlobals.help as (() => unknown) | undefined);
 
     const mergedGlobals: Record<string, unknown> = {
       ...this.baseGlobals,
       ...(options.globals ?? {}),
       console: this.createConsoleProxy(stdout, stderr),
       aisre,
-      help: () =>
-        stdout(
-          [
-            "AISRE JS console helpers:",
-            "- d3: D3.js",
-            "- aisre.clear(): clear the render container",
-            "- aisre.render(fn): render into the container with a D3 selection",
-            "- console.log/info/warn/error: write to this console",
-            "- aisre.runners.get(): list configured runners",
-            "- aisre.runners.update(name, endpoint): add/update a runner",
-            "- aisre.runners.delete(name): remove a runner",
-            "- aisre.runners.getDefault(): show default runner",
-            "- aisre.runners.setDefault(name): set default runner",
-            "- help(): show this message",
-          ].join("\n") + "\n",
-        ),
+      help:
+        globalHelp ??
+        (() =>
+          stdout(
+            [
+              "AISRE JS console helpers:",
+              "- d3: D3.js",
+              "- aisre.clear(): clear the render container",
+              "- aisre.render(fn): render into the container with a D3 selection",
+              "- console.log/info/warn/error: write to this console",
+              "- aisre.runners.get(): list configured runners",
+              "- aisre.runners.update(name, endpoint): add/update a runner",
+              "- aisre.runners.delete(name): remove a runner",
+              "- aisre.runners.getDefault(): show default runner",
+              "- aisre.runners.setDefault(name): set default runner",
+              "- help(): show this message",
+            ].join("\n") + "\n",
+          )),
     };
 
     const argNames = Object.keys(mergedGlobals);

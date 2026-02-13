@@ -7,6 +7,8 @@ import { JSKernel } from "../../lib/runtime/jsKernel";
 import { useRunners } from "../../contexts/RunnersContext";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
+import { useCurrentDoc } from "../../contexts/CurrentDocContext";
+import { useNotebookContext } from "../../contexts/NotebookContext";
 import { appState } from "../../lib/runtime/AppState";
 import {
   FilesystemNotebookStore,
@@ -14,6 +16,10 @@ import {
 } from "../../storage/fs";
 import { Runner } from "../../lib/runner";
 import { getRunnersManager } from "../../lib/runtime/runnersManager";
+import {
+  createRunmeConsoleApi,
+  type NotebookDataLike,
+} from "../../lib/runtime/runmeConsole";
 import { googleClientManager } from "../../lib/googleClientManager";
 import { oidcConfigManager } from "../../auth/oidcConfig";
 import type { OidcConfig } from "../../auth/oidcConfig";
@@ -64,6 +70,8 @@ export default function AppConsole() {
   // WorkspaceContext provides the persisted list of workspace URIs so we can
   // mount/unmount folders from the App Console without drilling props.
   const { getItems, addItem, removeItem } = useWorkspace();
+  const { getCurrentDoc } = useCurrentDoc();
+  const { getNotebookData } = useNotebookContext();
   // FilesystemStoreContext owns the File System Access API store instance that
   // actually opens folders and produces fs:// workspace URIs.
   const { fsStore, setFsStore } = useFilesystemStore();
@@ -134,10 +142,66 @@ export default function AppConsole() {
     return "Opening directory picker...";
   }, [addItem, ensureFilesystemStore, getItems, sendStdout]);
 
+  const resolveNotebookData = useCallback(
+    (target?: unknown): NotebookDataLike | null => {
+      if (target && typeof target === "object") {
+        const candidate = target as Partial<NotebookDataLike>;
+        if (
+          typeof candidate.getUri === "function" &&
+          typeof candidate.getName === "function" &&
+          typeof candidate.getNotebook === "function" &&
+          typeof candidate.updateCell === "function" &&
+          typeof candidate.getCell === "function"
+        ) {
+          return candidate as NotebookDataLike;
+        }
+      }
+
+      if (typeof target === "string" && target.trim() !== "") {
+        return getNotebookData(target) ?? null;
+      }
+
+      const uri = getCurrentDoc();
+      if (!uri) {
+        return null;
+      }
+      return getNotebookData(uri) ?? null;
+    },
+    [getCurrentDoc, getNotebookData],
+  );
+
+  const runme = useMemo(
+    () =>
+      createRunmeConsoleApi({
+        resolveNotebook: resolveNotebookData,
+      }),
+    [resolveNotebookData],
+  );
+
   const kernel = useMemo(
     () =>
       new JSKernel({
         globals: {
+          runme: {
+            getCurrentNotebook: () => {
+              return runme.getCurrentNotebook();
+            },
+            clearOutputs: (target?: unknown) => {
+              const message = runme.clearOutputs(target);
+              sendStdout(`${message}\r\n`);
+              return message;
+            },
+            runAll: (target?: unknown) => {
+              const message = runme.runAll(target);
+              sendStdout(`${message}\r\n`);
+              return message;
+            },
+            help: () => {
+              const message = runme.help();
+              sendStdout(`${message}\r\n`);
+              return message;
+            },
+          },
           aisreRunners: {
             get: () => {
               const mgr = getRunnersManager();
@@ -271,6 +335,7 @@ export default function AppConsole() {
           help: () => {
             return [
               "Available namespaces:",
+              "  runme           - Notebook helpers (run all, clear outputs)",
               "  explorer        - Manage workspace folders and notebooks",
               "  aisreRunners    - Configure runner endpoints",
               "  oidc            - OIDC/OAuth configuration and auth status",
@@ -340,11 +405,14 @@ export default function AppConsole() {
       addItem,
       defaultRunnerName,
       deleteRunner,
+      getCurrentDoc,
       getItems,
+      getNotebookData,
       listRunners,
       ensureFilesystemStore,
       openWorkspaceAndAdd,
       removeItem,
+      runme,
       sendStdout,
       updateRunner,
     ],
