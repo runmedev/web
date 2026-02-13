@@ -26,6 +26,7 @@ import {
 } from "@runmedev/renderers";
 import { buildExecuteRequest } from "./runme";
 import type { Runner } from "./runner";
+import { showToast } from "./toast";
 
 export type NotebookSnapshot = {
   readonly uri: string;
@@ -272,6 +273,10 @@ export const bindStreamsToCell: StreamBinder = ({
     }),
     streams.errors.subscribe((err) => {
       console.error("Stream error", err);
+      showToast({
+        message: "Runme backend server is not running. Please start it and try again.",
+        tone: "error",
+      });
       flushStdoutBuffer();
       finalizeIopubStream();
       streams.close();
@@ -491,6 +496,10 @@ export class NotebookData {
     const runner = this.getRunner(cell);
     if (!runner || !runner.endpoint) {
       console.error("No runner available for cell", cell.refId);
+      showToast({
+        message: "Runme backend server is not running. Please start it and try again.",
+        tone: "error",
+      });
       return "";
     }
 
