@@ -11,7 +11,7 @@ go run . --runme=<branch> --web=<branch>
 The tool:
 
 1. Resolves latest commit SHA for each branch via GitHub API.
-2. Checks whether `ghcr.io/runmedev/runme:runme-<runmeSHA>-web-<webSHA>` exists.
+2. Checks whether `ghcr.io/<runme-repo>:runme-<runmeShortSHA>-web-<webShortSHA>` exists.
 3. Exits if the image exists.
 4. If missing, creates `${TMPDIR}/runme-<runmeSHA>-web-<webSHA>`, clones both repos, builds web assets, copies assets into runme, and publishes a multi-arch image via `ko`.
 
@@ -31,7 +31,8 @@ If a token is present, the tool generates a temporary Docker config for `ko` pus
 
 ## Useful overrides
 
+- `--runme-repo=<org/repo>`: source repo and GHCR image repo (default `runmedev/runme`).
+- `--web-repo=<org/repo>`: source repo for web assets (default `runmedev/web`).
 - `--runme-assets-dir=<path>`: override destination path inside runme repo for copied web assets.
-- `--runme-main-pkg=./cmd/runme`: override ko target package.
 - `--web-build-cmds="...;...;..."`: override web build commands.
 - `--tmpdir=<path>`: override temporary workspace base.

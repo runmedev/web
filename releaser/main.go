@@ -23,23 +23,20 @@ import (
 )
 
 const (
-	githubAPI   = "https://api.github.com"
-	defaultOrg  = "runmedev"
-	runmeRepo   = "runme"
-	webRepo     = "web"
-	ghcrRepoRef = "ghcr.io/runmedev/runme"
-	shortSHALen = 8
+	githubAPI        = "https://api.github.com"
+	defaultRunmeRepo = "runmedev/runme"
+	defaultWebRepo   = "runmedev/web"
+	shortSHALen      = 8
 )
 
 type config struct {
 	runmeBranch string
 	webBranch   string
 
-	runmeOrg string
-	webOrg   string
+	runmeRepo string
+	webRepo   string
 
 	runmeAssetsDir string
-	runmeMainPkg   string
 
 	webBuildCmds string
 
@@ -77,10 +74,9 @@ func newRootCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&cfg.runmeBranch, "runme", "", "branch name in runmedev/runme")
 	cmd.Flags().StringVar(&cfg.webBranch, "web", "", "branch name in runmedev/web")
-	cmd.Flags().StringVar(&cfg.runmeOrg, "runme-org", defaultOrg, "GitHub org for runme repo")
-	cmd.Flags().StringVar(&cfg.webOrg, "web-org", defaultOrg, "GitHub org for web repo")
+	cmd.Flags().StringVar(&cfg.runmeRepo, "runme-repo", defaultRunmeRepo, "GitHub repo in org/repo format")
+	cmd.Flags().StringVar(&cfg.webRepo, "web-repo", defaultWebRepo, "GitHub repo in org/repo format")
 	cmd.Flags().StringVar(&cfg.runmeAssetsDir, "runme-assets-dir", "", "relative path in runme repo to copy web assets into (auto-detected when empty)")
-	cmd.Flags().StringVar(&cfg.runmeMainPkg, "runme-main-pkg", "./cmd/runme", "go package for ko build")
 	cmd.Flags().StringVar(&cfg.webBuildCmds, "web-build-cmds", "pnpm install --frozen-lockfile;pnpm run build:renderers;pnpm -C app run build", "semicolon-delimited shell commands to build web assets")
 	cmd.Flags().StringVar(&cfg.tmpBase, "tmpdir", os.TempDir(), "base temporary directory")
 	_ = cmd.MarkFlagRequired("runme")
@@ -93,20 +89,30 @@ func run(ctx context.Context, cfg config) error {
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	ghToken := firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN"))
 
-	runmeSHA, err := githubBranchHead(ctx, httpClient, cfg.runmeOrg, runmeRepo, cfg.runmeBranch, ghToken)
+	runmeOwner, runmeRepoName, err := parseGitHubRepo(cfg.runmeRepo)
+	if err != nil {
+		return fmt.Errorf("invalid --runme-repo: %w", err)
+	}
+	webOwner, webRepoName, err := parseGitHubRepo(cfg.webRepo)
+	if err != nil {
+		return fmt.Errorf("invalid --web-repo: %w", err)
+	}
+
+	runmeSHA, err := githubBranchHead(ctx, httpClient, runmeOwner, runmeRepoName, cfg.runmeBranch, ghToken)
 	if err != nil {
 		return fmt.Errorf("resolve runme branch head: %w", err)
 	}
-	webSHA, err := githubBranchHead(ctx, httpClient, cfg.webOrg, webRepo, cfg.webBranch, ghToken)
+	webSHA, err := githubBranchHead(ctx, httpClient, webOwner, webRepoName, cfg.webBranch, ghToken)
 	if err != nil {
 		return fmt.Errorf("resolve web branch head: %w", err)
 	}
 
 	tag := fmt.Sprintf("runme-%s-web-%s", shortSHA(runmeSHA, shortSHALen), shortSHA(webSHA, shortSHALen))
+	ghcrRepoRef := "ghcr.io/" + cfg.runmeRepo
 	imageRef := fmt.Sprintf("%s:%s", ghcrRepoRef, tag)
 
 	registryUser, registryToken := registryCredentials()
-	exists, err := imageExists(ctx, httpClient, "runmedev/runme", tag, registryUser, registryToken)
+	exists, err := imageExists(ctx, httpClient, cfg.runmeRepo, tag, registryUser, registryToken)
 	if err != nil {
 		return fmt.Errorf("check image existence: %w", err)
 	}
@@ -124,10 +130,10 @@ func run(ctx context.Context, cfg config) error {
 	runmeDir := filepath.Join(workDir, "runme")
 	webDir := filepath.Join(workDir, "web")
 
-	if err := gitCloneAndCheckout(ctx, runmeDir, cfg.runmeOrg, runmeRepo, cfg.runmeBranch, runmeSHA); err != nil {
+	if err := gitCloneAndCheckout(ctx, runmeDir, runmeOwner, runmeRepoName, cfg.runmeBranch, runmeSHA); err != nil {
 		return fmt.Errorf("clone runme repository: %w", err)
 	}
-	if err := gitCloneAndCheckout(ctx, webDir, cfg.webOrg, webRepo, cfg.webBranch, webSHA); err != nil {
+	if err := gitCloneAndCheckout(ctx, webDir, webOwner, webRepoName, cfg.webBranch, webSHA); err != nil {
 		return fmt.Errorf("clone web repository: %w", err)
 	}
 
@@ -158,13 +164,13 @@ func run(ctx context.Context, cfg config) error {
 		return fmt.Errorf("write version file: %w", err)
 	}
 
-	koEnv, cleanup, err := koEnv(registryUser, registryToken)
+	koEnv, cleanup, err := koEnv(ghcrRepoRef, registryUser, registryToken)
 	if err != nil {
 		return fmt.Errorf("prepare ko auth env: %w", err)
 	}
 	defer cleanup()
 
-	koArgs := []string{"build", "--bare", cfg.runmeMainPkg, "--platform=linux/amd64,linux/arm64", "--tags", tag}
+	koArgs := []string{"build", "./", "--bare", "--platform=linux/amd64,linux/arm64", "--tags", tag, "--sbom=none"}
 	if err := runCmd(ctx, runmeDir, mergeEnv(os.Environ(), koEnv), "ko", koArgs...); err != nil {
 		return fmt.Errorf("publish multi-arch image with ko: %w", err)
 	}
@@ -623,7 +629,7 @@ func registryCredentials() (string, string) {
 	return user, token
 }
 
-func koEnv(user, token string) ([]string, func(), error) {
+func koEnv(ghcrRepoRef, user, token string) ([]string, func(), error) {
 	if token == "" {
 		return []string{"KO_DOCKER_REPO=" + ghcrRepoRef}, func() {}, nil
 	}
@@ -650,6 +656,15 @@ func koEnv(user, token string) ([]string, func(), error) {
 		"DOCKER_CONFIG=" + cfgDir,
 	}
 	return env, cleanup, nil
+}
+
+func parseGitHubRepo(v string) (string, string, error) {
+	v = strings.TrimSpace(v)
+	parts := strings.Split(v, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("expected org/repo, got %q", v)
+	}
+	return parts[0], parts[1], nil
 }
 
 func mergeEnv(base, extra []string) []string {
