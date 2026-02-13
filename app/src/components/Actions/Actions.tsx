@@ -819,12 +819,24 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
             if (!data) {
               return;
             }
-            // Insert a markup (markdown) cell at the top of the notebook.
+            // Default to inserting a code cell when notebook is empty.
             const firstCell = cellDatas[0]?.snapshot;
             if (firstCell) {
-              data.addMarkupCellBefore(firstCell.refId);
+              data.addCodeCellBefore(firstCell.refId);
             } else {
-              data.appendMarkupCell();
+              const newCell = data.addCodeCellAfter("");
+              if (!newCell) {
+                // Fallback: create and persist a new code cell at the end.
+                const cell = create(parser_pb.CellSchema, {
+                  metadata: {},
+                  refId: `code_${crypto.randomUUID().replace(/-/g, "")}`,
+                  languageId: "bash",
+                  role: parser_pb.CellRole.USER,
+                  kind: parser_pb.CellKind.CODE,
+                  value: "",
+                });
+                data.updateCell(cell);
+              }
             }
           }}
         >
