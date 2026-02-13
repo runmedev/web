@@ -823,7 +823,7 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
               type="button"
               className="cell-add-btn h-8 w-8"
               aria-label="Add first cell"
-              onClick={() => data?.appendCodeCell()}
+              onClick={() => data?.appendMarkupCell()}
             >
               <PlusIcon className="h-5 w-5" />
             </button>

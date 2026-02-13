@@ -426,9 +426,20 @@ export class NotebookData {
     this.schedulePersist();
   }
 
-  /** Append a new code cell to the end of the notebook. Used when the notebook is empty. */
+  /** Append a new code cell to the end of the notebook. */
   appendCodeCell(languageId?: string | null): parser_pb.Cell {
     const cell = this.createCodeCell(languageId);
+    this.notebook.cells.push(cell);
+    this.rebuildIndex();
+    this.snapshotCache = this.buildSnapshot();
+    this.emit();
+    this.schedulePersist();
+    return cell;
+  }
+
+  /** Append a new markup (markdown) cell to the end of the notebook. */
+  appendMarkupCell(): parser_pb.Cell {
+    const cell = this.createMarkupCell();
     this.notebook.cells.push(cell);
     this.rebuildIndex();
     this.snapshotCache = this.buildSnapshot();
@@ -645,6 +656,18 @@ export class NotebookData {
       languageId: resolvedLanguage,
       role: parser_pb.CellRole.USER,
       kind: parser_pb.CellKind.CODE,
+      value: "",
+    });
+  }
+
+  private createMarkupCell(): parser_pb.Cell {
+    const refID = `markup_${crypto.randomUUID().replace(/-/g, "")}`;
+    return create(parser_pb.CellSchema, {
+      metadata: {},
+      refId: refID,
+      languageId: "markdown",
+      role: parser_pb.CellRole.USER,
+      kind: parser_pb.CellKind.MARKUP,
       value: "",
     });
   }
