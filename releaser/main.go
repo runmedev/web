@@ -37,6 +37,7 @@ type config struct {
 	webRepo   string
 
 	runmeAssetsDir string
+	dryRun         bool
 
 	tmpBase string
 }
@@ -75,6 +76,7 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.runmeRepo, "runme-repo", defaultRunmeRepo, "GitHub repo in org/repo format")
 	cmd.Flags().StringVar(&cfg.webRepo, "web-repo", defaultWebRepo, "GitHub repo in org/repo format")
 	cmd.Flags().StringVar(&cfg.runmeAssetsDir, "runme-assets-dir", "", "relative path in runme repo to copy web assets into (auto-detected when empty)")
+	cmd.Flags().BoolVar(&cfg.dryRun, "dry-run", false, "execute build flow but do not push image to registry")
 	cmd.Flags().StringVar(&cfg.tmpBase, "tmpdir", os.TempDir(), "base temporary directory")
 	_ = cmd.MarkFlagRequired("runme")
 	_ = cmd.MarkFlagRequired("web")
@@ -114,8 +116,12 @@ func run(ctx context.Context, cfg config) error {
 		return fmt.Errorf("check image existence: %w", err)
 	}
 	if exists {
-		fmt.Printf("image already exists: %s\n", imageRef)
-		return nil
+		if cfg.dryRun {
+			fmt.Printf("image already exists (continuing due to dry-run): %s\n", imageRef)
+		} else {
+			fmt.Printf("image already exists: %s\n", imageRef)
+			return nil
+		}
 	}
 
 	workDir := filepath.Join(cfg.tmpBase, fmt.Sprintf("runme-%s-web-%s", runmeSHA, webSHA))
@@ -171,11 +177,18 @@ func run(ctx context.Context, cfg config) error {
 	defer cleanup()
 
 	koArgs := []string{"build", "./", "--bare", "--platform=linux/amd64,linux/arm64", "--tags", tag, "--sbom=none"}
+	if cfg.dryRun {
+		koArgs = append(koArgs, "--push=false")
+	}
 	if err := runCmd(ctx, runmeDir, mergeEnv(os.Environ(), koEnv), "ko", koArgs...); err != nil {
 		return fmt.Errorf("publish multi-arch image with ko: %w", err)
 	}
 
-	fmt.Printf("published image: %s\n", imageRef)
+	if cfg.dryRun {
+		fmt.Printf("dry-run complete (image not pushed): %s\n", imageRef)
+	} else {
+		fmt.Printf("published image: %s\n", imageRef)
+	}
 	return nil
 }
 

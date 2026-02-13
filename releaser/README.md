@@ -34,4 +34,5 @@ If a token is present, the tool generates a temporary Docker config for `ko` pus
 - `--runme-repo=<org/repo>`: source repo and GHCR image repo (default `runmedev/runme`).
 - `--web-repo=<org/repo>`: source repo for web assets (default `runmedev/web`).
 - `--runme-assets-dir=<path>`: override destination path inside runme repo for copied web assets.
+- `--dry-run=true`: run build and `ko` packaging with `--push=false` (no registry push).
 - `--tmpdir=<path>`: override temporary workspace base.

@@ -1,0 +1,83 @@
+name: Releaser
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      runme_branch:
+        description: "runmedev/runme branch"
+        required: false
+        default: "main"
+      web_branch:
+        description: "runmedev/web branch"
+        required: false
+        default: "main"
+      dry_run:
+        description: "Run without pushing image"
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    - cron: "0 * * * *"
+  pull_request:
+    paths:
+      - "releaser/**"
+      - ".github/workflows/releaser.yaml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: releaser-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  releaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: releaser/go.mod
+          cache-dependency-path: releaser/go.sum
+
+      - name: Build releaser
+        run: |
+          cd releaser
+          go build -o ../releaser-bin .
+
+      - name: Run releaser
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUNME_BRANCH="main"
+          WEB_BRANCH="main"
+          DRY_RUN="false"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ -n "${{ github.event.inputs.runme_branch }}" ]; then
+              RUNME_BRANCH="${{ github.event.inputs.runme_branch }}"
+            fi
+            if [ -n "${{ github.event.inputs.web_branch }}" ]; then
+              WEB_BRANCH="${{ github.event.inputs.web_branch }}"
+            fi
+            if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+              DRY_RUN="true"
+            fi
+          fi
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            DRY_RUN="true"
+          fi
+
+          ./releaser-bin \
+            --runme="${RUNME_BRANCH}" \
+            --web="${WEB_BRANCH}" \
+            --runme-assets-dir=assets \
+            --dry-run="${DRY_RUN}"
