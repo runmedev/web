@@ -52,6 +52,7 @@ import { Interceptor } from "@connectrpc/connect";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SidePanelProvider } from "./contexts/SidePanelContext";
 import { appState } from "./lib/runtime/AppState";
+import GlobalToast from "./components/Toast";
 
 const queryClient = new QueryClient();
 
@@ -165,6 +166,7 @@ function App({ branding, initialState = {} }: AppProps) {
                         <NotebookProvider>
                           <CellProvider>
                             <SidePanelProvider>
+                              <GlobalToast />
                               <AppRouter />
                             </SidePanelProvider>
                           </CellProvider>
