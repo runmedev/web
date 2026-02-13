@@ -46,6 +46,7 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
   const [stdout, setStdout] = useState<string>("");
   const [stderr, setStderr] = useState<string>("");
   const [lastRunId, setLastRunId] = useState<number>(0);
+  const [hasRenderableOutput, setHasRenderableOutput] = useState<boolean>(false);
   const activeRunIdRef = useRef<number | null>(null);
 
   const runCode = useCallback(async () => {
@@ -60,6 +61,7 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
     setLastRunId(runId);
     setStdout("");
     setStderr("");
+    setHasRenderableOutput(false);
     container.innerHTML = "";
     onPid(null);
 
@@ -140,6 +142,11 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
 
     const stdoutText = logBuffer.join("\n");
     const stderrText = errorBuffer.join("\n");
+    const renderedText = container.textContent?.trim() ?? "";
+    const renderedElements = container.querySelectorAll("*").length;
+    const hasRenderedContent = renderedElements > 0 || renderedText.length > 0;
+    const hasTerminalOutput =
+      stdoutText.trim().length > 0 || stderrText.trim().length > 0;
 
     const updatedCell = create(parser_pb.CellSchema, cell);
     updatedCell.outputs = createCellOutputs(
@@ -161,6 +168,7 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
 
     setStdout(stdoutText);
     setStderr(stderrText);
+    setHasRenderableOutput(hasRenderedContent || hasTerminalOutput);
     onExitCode(exitCode);
   }, [cell, notebookData, onExitCode, onPid]);
 
@@ -185,7 +193,7 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
     return stdout.trim().length > 0 || stderr.trim().length > 0;
   }, [stderr, stdout]);
 
-  return (
+  return hasRenderableOutput ? (
     <div className="mt-2 rounded-md border border-nb-cell-border bg-white p-2 text-xs text-nb-text">
       <div className="mb-1 font-mono text-[10px] uppercase tracking-wide text-nb-text-faint">
         Observable Output{" "}
@@ -198,7 +206,7 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
         className="mb-2 min-h-[240px] w-full overflow-auto rounded border border-dashed border-nb-cell-border bg-nb-surface-2"
       />
 
-      {hasStdIO ? (
+      {hasStdIO && (
         <div className="space-y-2 font-mono">
           {stdout.trim().length > 0 && (
             <div>
@@ -221,12 +229,10 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
             </div>
           )}
         </div>
-      ) : (
-        <div className="font-mono text-[11px] italic text-nb-text-faint">
-          Use d3 (or aisre.render) to draw into the panel above.
-        </div>
       )}
     </div>
+  ) : (
+    <div ref={containerRef} className="hidden" aria-hidden="true" />
   );
 };
 
