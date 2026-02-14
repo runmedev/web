@@ -45,13 +45,13 @@ no mounted folders.
 
 ## Scenario runner (hello world)
 
-The `test-scenario-hello-world.sh` script implements the first scenario-based
+The `test-scenario-hello-world.ts` script implements the first scenario-based
 acceptance test described in `../../docs/cujs/hello-world-local-notebook.md`.
 
 It validates an end-to-end "hello world" flow:
 
 - seed a local notebook with one bash cell (`echo "hello world"`)
-- configure `app.runners` from App Console
+- configure `aisreRunners` from App Console
 - open the notebook from the workspace tree
 - run the first cell
 - assert rendered output contains `hello world`
@@ -60,7 +60,8 @@ Run it with:
 
 ```bash
 cd app/test/browser
-./test-scenario-hello-world.sh
+pnpm exec tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir .generated test-scenario-hello-world.ts
+node .generated/test-scenario-hello-world.js
 ```
 
 Run all implemented CUJs:

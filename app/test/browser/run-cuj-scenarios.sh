@@ -9,13 +9,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Keep this list aligned with docs/cujs/*.md.
-SCENARIO_SCRIPTS=(
-  "$SCRIPT_DIR/test-scenario-hello-world.sh"
+SCENARIO_DRIVERS=(
+  "$SCRIPT_DIR/test-scenario-hello-world.ts"
 )
 
-for scenario_script in "${SCENARIO_SCRIPTS[@]}"; do
-  echo "[CUJ] Running $(basename "$scenario_script")"
-  "$scenario_script"
-  echo "[CUJ] Completed $(basename "$scenario_script")"
+for scenario_driver in "${SCENARIO_DRIVERS[@]}"; do
+  echo "[CUJ] Running $(basename "$scenario_driver")"
+  pnpm exec tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir "$SCRIPT_DIR/.generated" "$scenario_driver"
+  node "$SCRIPT_DIR/.generated/$(basename "${scenario_driver%.ts}").js"
+  echo "[CUJ] Completed $(basename "$scenario_driver")"
   echo
 done

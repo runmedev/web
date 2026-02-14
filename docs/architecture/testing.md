@@ -53,7 +53,7 @@ Current baseline CUJ:
 
 ### Execution model
 
-- Scenario scripts are implemented in `app/test/browser/`.
+- Scenario driver scripts are implemented in `app/test/browser/` and are written in TypeScript.
 - `app/test/browser/run-cuj-scenarios.sh` is the orchestration entrypoint.
 - Each script should produce assertion logs and test artifacts in
   `app/test/browser/test-output/`.
