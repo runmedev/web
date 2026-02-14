@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test-scenario-hello-world.sh - Executes the hello-world UX scenario.
 #
-# This script follows app/test/scenarios/hello-world-local-notebook.md and keeps
+# This script follows docs/cujs/hello-world-local-notebook.md and keeps
 # assertions machine-verifiable by using agent-browser snapshots, text reads,
 # and JS evaluation against live DOM/app state.
 

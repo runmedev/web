@@ -46,7 +46,7 @@ no mounted folders.
 ## Scenario runner (hello world)
 
 The `test-scenario-hello-world.sh` script implements the first scenario-based
-acceptance test described in `../scenarios/hello-world-local-notebook.md`.
+acceptance test described in `../../docs/cujs/hello-world-local-notebook.md`.
 
 It validates an end-to-end "hello world" flow:
 
@@ -61,6 +61,13 @@ Run it with:
 ```bash
 cd app/test/browser
 ./test-scenario-hello-world.sh
+```
+
+Run all implemented CUJs:
+
+```bash
+cd app/test/browser
+./run-cuj-scenarios.sh
 ```
 
 ## What it tests
