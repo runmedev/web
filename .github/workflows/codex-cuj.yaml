@@ -2,7 +2,7 @@ name: Codex CUJ Automation
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
   push:
     branches: [main]
   workflow_dispatch:
@@ -50,46 +50,20 @@ jobs:
             });
 
   postsubmit-codex-request:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request_target' && github.event.action == 'closed' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      - name: Create or find postsubmit CUJ tracking issue
-        id: issue
-        uses: actions/github-script@v7
-        with:
-          result-encoding: string
-          script: |
-            const title = 'Codex postsubmit CUJ runs';
-            const { data: issues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              per_page: 100,
-            });
-            const existing = issues.find((i) => i.title === title);
-            if (existing) {
-              return String(existing.number);
-            }
-            const created = await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title,
-              body: 'Tracking issue for Codex postsubmit CUJ execution artifacts (screenshots/videos).',
-            });
-            return String(created.data.number);
-
       - name: Ask Codex to run CUJ scenarios for main
         uses: actions/github-script@v7
-        env:
-          ISSUE_NUMBER: ${{ steps.issue.outputs.result }}
         with:
           script: |
-            const issueNumber = Number(process.env.ISSUE_NUMBER);
-            const marker = `[codex-cuj-postsubmit][sha:${context.sha}]`;
+            const prNumber = context.payload.pull_request.number;
+            const mergedSha = context.payload.pull_request.merge_commit_sha ?? context.sha;
+            const marker = `[codex-cuj-postsubmit][sha:${mergedSha}]`;
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: issueNumber,
+              issue_number: prNumber,
               per_page: 100,
             });
             if (comments.some((c) => c.body && c.body.includes(marker))) {
@@ -98,16 +72,16 @@ jobs:
             }
             const body = [
               marker,
-              `@codex Please run all scenarios in docs-dev/cujs against main at ${context.sha}.`,
+              `@codex Please run all scenarios in docs-dev/cujs against main at ${mergedSha}.`,
               '',
               'Required outputs:',
               '- pass/fail summary per CUJ from `app/test/browser/run-cuj-scenarios.ts`',
               '- screenshots and logs attached in the comment',
-              '- a short end-to-end CUJ video uploaded to this issue',
+              '- a short end-to-end CUJ video uploaded to this PR thread',
             ].join('\n');
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: issueNumber,
+              issue_number: prNumber,
               body,
             });
