@@ -4,7 +4,7 @@ This directory is the source of truth for scenario-driven UX testing.
 
 Each CUJ markdown file describes a user-visible workflow with machine-verifiable
 acceptance criteria. Automation scripts and Codex prompts should reference CUJs
-from `docs/cujs/`.
+from `docs-dev/cujs/`.
 
 ## Current CUJs
 
@@ -17,7 +17,7 @@ from `docs/cujs/`.
 ## How CUJs are executed
 
 - Scripted runner(s) live under `app/test/browser/`.
-- `run-cuj-scenarios.sh` is a thin orchestrator that executes all implemented
+- `run-cuj-scenarios.ts` is the canonical orchestrator that executes all implemented
   CUJ scripts.
 - CI can ask Codex to execute CUJs in two modes:
   - **presubmit** (on PR updates)

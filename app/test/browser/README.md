@@ -46,7 +46,7 @@ no mounted folders.
 ## Scenario runner (hello world)
 
 The `test-scenario-hello-world.ts` script implements the first scenario-based
-acceptance test described in `../../docs/cujs/hello-world-local-notebook.md`.
+acceptance test described in `../../docs-dev/cujs/hello-world-local-notebook.md`.
 
 It validates an end-to-end "hello world" flow:
 
@@ -68,7 +68,8 @@ Run all implemented CUJs:
 
 ```bash
 cd app/test/browser
-./run-cuj-scenarios.sh
+pnpm exec tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir .generated run-cuj-scenarios.ts
+node .generated/run-cuj-scenarios.js
 ```
 
 ## What it tests

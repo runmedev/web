@@ -34,10 +34,10 @@ jobs:
             }
             const body = [
               marker,
-              `@codex Please run the Critical User Journeys from docs/cujs for commit ${context.payload.pull_request.head.sha}.`,
+              `@codex Please run the Critical User Journeys from docs-dev/cujs for commit ${context.payload.pull_request.head.sha}.`,
               '',
               'Required steps:',
-              '- Execute `app/test/browser/run-cuj-scenarios.sh`.',
+              '- Execute `app/test/browser/run-cuj-scenarios.ts`.',
               '- Report assertion-level pass/fail for each CUJ.',
               '- Capture screenshots and scenario logs.',
               '- Record a short CUJ walkthrough video and attach/upload it to this PR thread.',
@@ -98,10 +98,10 @@ jobs:
             }
             const body = [
               marker,
-              `@codex Please run all scenarios in docs/cujs against main at ${context.sha}.`,
+              `@codex Please run all scenarios in docs-dev/cujs against main at ${context.sha}.`,
               '',
               'Required outputs:',
-              '- pass/fail summary per CUJ from `app/test/browser/run-cuj-scenarios.sh`',
+              '- pass/fail summary per CUJ from `app/test/browser/run-cuj-scenarios.ts`',
               '- screenshots and logs attached in the comment',
               '- a short end-to-end CUJ video uploaded to this issue',
             ].join('\n');

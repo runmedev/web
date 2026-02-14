@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
-# run-cuj-scenarios.sh - Runs all implemented Critical User Journey scenarios.
+# run-cuj-scenarios.sh - Compatibility wrapper for the TypeScript CUJ orchestrator.
 #
-# The CUJ definitions live in docs/cujs/*.md and this script maps each scenario
-# to the corresponding executable browser test script.
+# The canonical orchestrator now lives in run-cuj-scenarios.ts so CUJ automation
+# logic stays in TypeScript. This wrapper exists for convenience and backwards
+# compatibility with existing docs/CI references.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Keep this list aligned with docs/cujs/*.md.
-SCENARIO_DRIVERS=(
-  "$SCRIPT_DIR/test-scenario-hello-world.ts"
-)
+pnpm exec tsc \
+  --target es2020 \
+  --module nodenext \
+  --moduleResolution nodenext \
+  --esModuleInterop \
+  --skipLibCheck \
+  --outDir "$SCRIPT_DIR/.generated" \
+  "$SCRIPT_DIR/run-cuj-scenarios.ts"
 
-for scenario_driver in "${SCENARIO_DRIVERS[@]}"; do
-  echo "[CUJ] Running $(basename "$scenario_driver")"
-  pnpm exec tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir "$SCRIPT_DIR/.generated" "$scenario_driver"
-  node "$SCRIPT_DIR/.generated/$(basename "${scenario_driver%.ts}").js"
-  echo "[CUJ] Completed $(basename "$scenario_driver")"
-  echo
-done
+node "$SCRIPT_DIR/.generated/run-cuj-scenarios.js"

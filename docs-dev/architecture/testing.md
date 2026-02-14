@@ -39,7 +39,7 @@ These tests are expected to run on every PR and are the first quality gate.
 
 ### Source of truth
 
-CUJs are defined in markdown under `docs/cujs/`.
+CUJs are defined in markdown under `docs-dev/cujs/`.
 
 Each CUJ file includes:
 
@@ -49,12 +49,12 @@ Each CUJ file includes:
 
 Current baseline CUJ:
 
-- `docs/cujs/hello-world-local-notebook.md`
+- `docs-dev/cujs/hello-world-local-notebook.md`
 
 ### Execution model
 
 - Scenario driver scripts are implemented in `app/test/browser/` and are written in TypeScript.
-- `app/test/browser/run-cuj-scenarios.sh` is the orchestration entrypoint.
+- `app/test/browser/run-cuj-scenarios.ts` is the canonical orchestration entrypoint (with a shell wrapper kept for compatibility).
 - Each script should produce assertion logs and test artifacts in
   `app/test/browser/test-output/`.
 
@@ -83,7 +83,7 @@ It requests Codex CUJ execution in two modes:
 
 1. **Presubmit** (`pull_request_target`)
    - posts a deduplicated `@codex` request in the PR thread.
-   - asks Codex to run `app/test/browser/run-cuj-scenarios.sh`.
+   - asks Codex to run `app/test/browser/run-cuj-scenarios.ts`.
 
 2. **Postsubmit** (`push` to `main`)
    - comments on a tracking issue for main-branch CUJ runs.
@@ -108,8 +108,8 @@ reviewers can quickly validate UI behavior and regressions.
 
 ## Adding a new CUJ
 
-1. Add a scenario doc in `docs/cujs/<name>.md`.
+1. Add a scenario doc in `docs-dev/cujs/<name>.md`.
 2. Implement or extend a browser script under `app/test/browser/`.
-3. Register the script in `app/test/browser/run-cuj-scenarios.sh`.
+3. Register the script in `app/test/browser/run-cuj-scenarios.ts`.
 4. Ensure assertions are machine-verifiable.
 5. Update docs if command names/flows changed.
