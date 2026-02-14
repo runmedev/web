@@ -42,6 +42,36 @@ The script relies on the hidden `#app-console-output` element added to
 If you skip the picker, the script expects `explorer.listFolders()` to report
 no mounted folders.
 
+
+## Scenario runner (hello world)
+
+The `test-scenario-hello-world.ts` script implements the first scenario-based
+acceptance test described in `../../docs-dev/cujs/hello-world-local-notebook.md`.
+
+It validates an end-to-end "hello world" flow:
+
+- seed a local notebook with one bash cell (`echo "hello world"`)
+- configure `aisreRunners` from App Console
+- open the notebook from the workspace tree
+- run the first cell
+- assert rendered output contains `hello world`
+
+Run it with:
+
+```bash
+cd app/test/browser
+pnpm exec tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir .generated test-scenario-hello-world.ts
+node .generated/test-scenario-hello-world.js
+```
+
+Run all implemented CUJs:
+
+```bash
+cd app/test/browser
+pnpm exec tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir .generated run-cuj-scenarios.ts
+node .generated/run-cuj-scenarios.js
+```
+
 ## What it tests
 
 | Test | Description |
