@@ -678,6 +678,11 @@ export default function AppConsole() {
             (elem as any).context = ctxBridge;
             elem.addEventListener("pointerdown", activateConsoleContext);
             elem.addEventListener("focusin", activateConsoleContext);
+            // Some terminal events (for example selection/annotation updates)
+            // can be emitted before focus is moved to the element. Re-arming
+            // the bridge on keydown keeps AppConsole interactive even when
+            // another console recently replaced the shared renderer context.
+            elem.addEventListener("keydown", activateConsoleContext, true);
 
             elem.setAttribute("id", consoleId);
             elem.setAttribute("buttons", "false");
@@ -692,6 +697,9 @@ export default function AppConsole() {
             elem.setAttribute("scrollback", "4000");
 
             el.appendChild(elem);
+            // Re-apply once after attachment so the global messaging context is
+            // deterministic even if another component changed it during mount.
+            queueMicrotask(activateConsoleContext);
           }}
         ></div>
         <pre
