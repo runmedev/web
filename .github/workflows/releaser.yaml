@@ -57,6 +57,11 @@ jobs:
         with:
           run_install: false
 
+      - name: Install ko
+        run: |
+          go install github.com/google/ko@v0.17.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: Build releaser
         run: |
           cd releaser
