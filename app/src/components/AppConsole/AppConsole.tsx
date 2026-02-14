@@ -201,6 +201,80 @@ export default function AppConsole() {
     [resolveNotebookData],
   );
 
+  // Runner commands are shared between the preferred app.runners namespace and
+  // the legacy aisreRunners namespace to preserve backwards compatibility.
+  const runnerCommands = useMemo(
+    () => ({
+      get: () => {
+        const mgr = getRunnersManager();
+        const runners = mgr.list();
+        if (runners.length === 0) {
+          return "No runners configured.";
+        }
+        return runners
+          .map((r) => {
+            const isDefault = r.name === mgr.getDefaultRunnerName();
+            const endpoint =
+              typeof r.endpoint === "string" && r.endpoint.trim() !== ""
+                ? r.endpoint
+                : "<endpoint not set>";
+            return `${r.name}: ${endpoint}${isDefault ? " (default)" : ""}`;
+          })
+          .join("\n");
+      },
+      update: (name: string, endpoint: string) => {
+        const mgr = getRunnersManager();
+        const updated = mgr.update(name, endpoint);
+        updateRunner(
+          new Runner({
+            name: updated.name,
+            endpoint: updated.endpoint,
+            reconnect: updated.reconnect,
+            interceptors: [],
+          }),
+        );
+        return `Runner ${name} set to ${endpoint}`;
+      },
+      delete: (name: string) => {
+        const mgr = getRunnersManager();
+        mgr.delete(name);
+        deleteRunner(name);
+        return `Runner ${name} deleted`;
+      },
+      getDefault: () => {
+        const mgr = getRunnersManager();
+        const defaultName = mgr.getDefaultRunnerName();
+        if (!defaultName) {
+          return "No default runner set.";
+        }
+        const runner = mgr.get(defaultName);
+        const endpoint =
+          runner && typeof runner.endpoint === "string"
+            ? runner.endpoint
+            : "<endpoint not set>";
+        return `Default runner: ${defaultName} (${endpoint})`;
+      },
+      setDefault: (name: string) => {
+        const mgr = getRunnersManager();
+        const runner = mgr.get(name);
+        if (!runner) {
+          return `Runner ${name} not found`;
+        }
+        mgr.setDefault(name);
+        updateRunner(
+          new Runner({
+            name: runner.name,
+            endpoint: runner.endpoint,
+            reconnect: runner.reconnect,
+            interceptors: runner.interceptors,
+          }),
+        );
+        return `Default runner set to ${name}`;
+      },
+    }),
+    [deleteRunner, updateRunner],
+  );
+
   const kernel = useMemo(
     () =>
       new JSKernel({
@@ -235,74 +309,8 @@ export default function AppConsole() {
               return message;
             },
           },
-          aisreRunners: {
-            get: () => {
-              const mgr = getRunnersManager();
-              const runners = mgr.list();
-              if (runners.length === 0) {
-                return "No runners configured.";
-              }
-              return runners
-                .map((r) => {
-                  const isDefault = r.name === mgr.getDefaultRunnerName();
-                  const endpoint =
-                    typeof r.endpoint === "string" && r.endpoint.trim() !== ""
-                      ? r.endpoint
-                      : "<endpoint not set>";
-                  return `${r.name}: ${endpoint}${isDefault ? " (default)" : ""}`;
-                })
-                .join("\n");
-            },
-            update: (name: string, endpoint: string) => {
-              const mgr = getRunnersManager();
-              const updated = mgr.update(name, endpoint);
-              updateRunner(
-                new Runner({
-                  name: updated.name,
-                  endpoint: updated.endpoint,
-                  reconnect: updated.reconnect,
-                  interceptors: [],
-                }),
-              );
-              return `Runner ${name} set to ${endpoint}`;
-            },
-            delete: (name: string) => {
-              const mgr = getRunnersManager();
-              mgr.delete(name);
-              deleteRunner(name);
-              return `Runner ${name} deleted`;
-            },
-            getDefault: () => {
-              const mgr = getRunnersManager();
-              const defaultName = mgr.getDefaultRunnerName();
-              if (!defaultName) {
-                return "No default runner set.";
-              }
-              const runner = mgr.get(defaultName);
-              const endpoint =
-                runner && typeof runner.endpoint === "string"
-                  ? runner.endpoint
-                  : "<endpoint not set>";
-              return `Default runner: ${defaultName} (${endpoint})`;
-            },
-            setDefault: (name: string) => {
-              const mgr = getRunnersManager();
-              const runner = mgr.get(name);
-              if (!runner) {
-                return `Runner ${name} not found`;
-              }
-              mgr.setDefault(name);
-              updateRunner(
-                new Runner({
-                  name: runner.name,
-                  endpoint: runner.endpoint,
-                  reconnect: runner.reconnect,
-                  interceptors: runner.interceptors,
-                }),
-              );
-              return `Default runner set to ${name}`;
-            },
-          },
+          // Deprecated alias: use app.runners instead.
+          aisreRunners: runnerCommands,
           googleClientManager: {
             get: () => googleClientManager.getOAuthClient(),
             setClientId: (clientId: string) =>
@@ -367,6 +375,7 @@ export default function AppConsole() {
           },
           app: {
             getDefaultConfigUrl: () => getDefaultAppConfigUrl(),
+            runners: runnerCommands,
             setConfig: async (url?: string) => {
               sendStdout("Fetching app config...\r\n");
               try {
@@ -390,7 +399,8 @@ export default function AppConsole() {
               "Available namespaces:",
               "  runme           - Notebook helpers (run all, clear outputs)",
               "  explorer        - Manage workspace folders and notebooks",
-              "  aisreRunners    - Configure runner endpoints",
+              "  app.runners     - Configure runner endpoints (preferred)",
+              "  aisreRunners    - Backward-compatible runner alias",
               "  oidc            - OIDC/OAuth configuration and auth status",
               "  googleClientManager - Google OAuth client settings",
               "  app             - App-level configuration helpers",
@@ -469,6 +479,7 @@ export default function AppConsole() {
       openWorkspaceAndAdd,
       removeItem,
       runme,
+      runnerCommands,
       sendStdout,
       updateRunner,
     ],

@@ -22,8 +22,8 @@ cell end-to-end.
 
 ## Machine-verifiable acceptance criteria
 
-- [ ] The App Console accepts `aisreRunners.update("local", "http://localhost:9977")`.
-- [ ] `aisreRunners.getDefault()` reports runner `local` after setting default.
+- [ ] The App Console accepts `app.runners.update("local", "http://localhost:9977")`.
+- [ ] `app.runners.getDefault()` reports runner `local` after setting default.
 - [ ] The workspace tree shows notebook `scenario-hello-world.runme.md`.
 - [ ] Clicking the notebook opens a tab with the notebook name.
 - [ ] Running the first cell completes without a blocking runner error.

@@ -92,13 +92,13 @@ if [ -z "$console_ref" ]; then
 fi
 
 agent-browser click "$console_ref" >/dev/null 2>&1 || true
-agent-browser type "$console_ref" "aisreRunners.update('local','http://localhost:9977')" >/dev/null 2>&1 || true
+agent-browser type "$console_ref" "app.runners.update('local','http://localhost:9977')" >/dev/null 2>&1 || true
 agent-browser press Enter >/dev/null 2>&1 || true
 agent-browser wait 500 >/dev/null 2>&1 || true
-agent-browser type "$console_ref" "aisreRunners.setDefault('local')" >/dev/null 2>&1 || true
+agent-browser type "$console_ref" "app.runners.setDefault('local')" >/dev/null 2>&1 || true
 agent-browser press Enter >/dev/null 2>&1 || true
 agent-browser wait 500 >/dev/null 2>&1 || true
-agent-browser type "$console_ref" "aisreRunners.getDefault()" >/dev/null 2>&1 || true
+agent-browser type "$console_ref" "app.runners.getDefault()" >/dev/null 2>&1 || true
 agent-browser press Enter >/dev/null 2>&1 || true
 agent-browser wait 1000 >/dev/null 2>&1 || true
 

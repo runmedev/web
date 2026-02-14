@@ -51,7 +51,7 @@ acceptance test described in `../../docs/cujs/hello-world-local-notebook.md`.
 It validates an end-to-end "hello world" flow:
 
 - seed a local notebook with one bash cell (`echo "hello world"`)
-- configure `aisreRunners` from App Console
+- configure `app.runners` from App Console
 - open the notebook from the workspace tree
 - run the first cell
 - assert rendered output contains `hello world`
