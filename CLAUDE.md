@@ -49,6 +49,13 @@ This adds a "Signed-off-by" line to your commit message, certifying that you hav
 
 **Never commit without the `-s` flag.** Commits without DCO signoff cannot be merged.
 
+## Pull Request Requirements
+
+When you open a follow-up PR that fixes an issue, include an issue-closing reference in the PR description so GitHub auto-closes the issue on merge.
+
+- Use one of GitHub's auto-close keywords with an issue number, for example: `Fixes #123`, `Closes #123`, or `Resolves #123`.
+- Put this in the PR body (not just a comment) so the issue is linked and automatically closed when the PR merges.
+
 ## Architecture
 
 This is a pnpm workspace monorepo with two publishable packages and one app:
