@@ -17,8 +17,9 @@ cell end-to-end.
 3. Create a new local notebook with one bash cell: `echo "hello world"`.
 4. Use AppConsole to add a local runner endpoint.
 5. Open the local notebook.
-6. Execute the bash cell.
-7. Verify execution output contains `hello world`.
+6. Verify the notebook shows no output for the cell before it is executed.
+7. Execute the bash cell.
+8. Verify execution output contains `hello world`.
 
 ## Machine-verifiable acceptance criteria
 
@@ -26,5 +27,6 @@ cell end-to-end.
 - [ ] `aisreRunners.getDefault()` reports runner `local` after setting default.
 - [ ] The workspace tree shows notebook `scenario-hello-world.runme.md`.
 - [ ] Clicking the notebook opens a tab with the notebook name.
+- [ ] Before running, the first cell shows no rendered output panel.
 - [ ] Running the first cell completes without a blocking runner error.
 - [ ] The rendered output area includes `hello world`.
