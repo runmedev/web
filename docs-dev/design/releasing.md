@@ -249,3 +249,24 @@ Short answer: **yes**, you can attach a secret to the Codex execution environmen
 - Use short token TTLs and rotate regularly.
 - Prefer one-purpose tokens (artifact publishing only).
 - If a token is suspected leaked, revoke immediately and re-run with a new secret.
+
+## Verification notes: `GITHUB_TOKEN` and posting artifacts to PRs
+
+Expected behavior when a token is attached to the Codex environment:
+
+- If `GITHUB_TOKEN` is present and has `issues:write` / `pull_requests:write`, Codex can post comments to PR or issue threads through the GitHub REST API.
+- The REST API does not provide a simple generic binary "upload attachment" endpoint for issue/PR comments; practical patterns are:
+  1. publish artifacts to a durable location first (Actions artifacts, object storage, or committed files),
+  2. post links/embedded image markdown in the PR comment.
+
+Observed in this container during verification:
+
+- `GITHUB_TOKEN` was not present in process environment, so authenticated post-to-PR verification could not be completed from this shell.
+- This means the preflight should fail fast and mark "artifact publication blocked" rather than claiming upload success.
+
+### Recommended preflight checks (must pass before claiming publication)
+
+1. Verify token presence (`GITHUB_TOKEN` or equivalent secret env).
+2. Verify target PR/issue identifier is known (`PR_NUMBER`/`ISSUE_NUMBER`).
+3. Verify write access with an authenticated API probe (`POST` comment endpoint).
+4. Only after (1)-(3), publish artifact links in a final comment.
