@@ -9,7 +9,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  id-token: write
+  contents: read
   issues: write
   pull-requests: write
 
@@ -148,63 +149,50 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Build browsable artifact bundle
-        if: always()
+      - name: Authenticate to Google Cloud
+        id: gcp_auth
+        if: always() && secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+
+      - name: Setup gcloud
+        if: always() && steps.gcp_auth.outcome == 'success'
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Upload CUJ artifacts to GCS
+        id: gcs_upload
+        if: always() && steps.gcp_auth.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
-          DEST_DIR=".cuj-publish/runs/${GITHUB_RUN_ID}"
-          mkdir -p "${DEST_DIR}"
-          cp -R app/test/browser/test-output/. "${DEST_DIR}/"
+          gcloud auth application-default print-access-token >/dev/null
+          CUJ_OUTPUT_DIR="app/test/browser/test-output" \
+          CUJ_ARTIFACT_BUCKET="runme-dev-assets" \
+          CUJ_STATUS="${{ steps.cuj.outputs.cuj_status }}" \
+          CUJ_EXIT="${{ steps.cuj.outputs.cuj_exit }}" \
+          CUJ_ASSERTIONS_TOTAL="${{ steps.cuj.outputs.assertions_total }}" \
+          CUJ_ASSERTIONS_PASSED="${{ steps.cuj.outputs.assertions_passed }}" \
+          CUJ_ASSERTIONS_FAILED="${{ steps.cuj.outputs.assertions_failed }}" \
+          pnpm -C app run cuj:upload
 
-          TREE_URL="https://github.com/${GITHUB_REPOSITORY}/tree/cuj-artifacts/runs/${GITHUB_RUN_ID}"
-          RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/cuj-artifacts/runs/${GITHUB_RUN_ID}"
-          STATUS="${{ steps.cuj.outputs.cuj_status }}"
-          TOTAL="${{ steps.cuj.outputs.assertions_total }}"
-          PASSED="${{ steps.cuj.outputs.assertions_passed }}"
-          FAILED="${{ steps.cuj.outputs.assertions_failed }}"
-
-          cat > "${DEST_DIR}/index.md" <<EOF
-          # CUJ Run ${GITHUB_RUN_ID}
-
-          - Status: ${STATUS}
-          - Assertions: ${TOTAL} total, ${PASSED} passed, ${FAILED} failed
-          - Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-
-          ## Key artifacts
-
-          - [Walkthrough movie](${TREE_URL}/scenario-hello-world-walkthrough.webm)
-          - [Initial screenshot](${TREE_URL}/scenario-hello-world-01-initial.png)
-          - [After-run screenshot](${TREE_URL}/scenario-hello-world-06-after-run.png)
-          - [After-run snapshot](${TREE_URL}/scenario-hello-world-06-after-run.txt)
-          - [CUJ log](${TREE_URL}/cuj-run.log)
-
-          ## Preview
-
-          ![CUJ initial screenshot](${RAW_BASE}/scenario-hello-world-01-initial.png)
-          EOF
-
-          cat > "${CUJ_OUTPUT_DIR}/pr-comment.md" <<EOF
+      - name: Create fallback PR comment body
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && (steps.gcs_upload.outcome != 'success')
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > app/test/browser/test-output/pr-comment.md <<EOF
           <!-- cuj-report -->
           ## CUJ Results
 
           | Scenario | Status | Assertions | Artifacts |
           | --- | --- | --- | --- |
-          | hello-world-local-notebook | ${STATUS} | ${TOTAL} total (${PASSED} pass / ${FAILED} fail) | [movie](${TREE_URL}/scenario-hello-world-walkthrough.webm) · [initial png](${TREE_URL}/scenario-hello-world-01-initial.png) · [after-run png](${TREE_URL}/scenario-hello-world-06-after-run.png) · [after-run txt](${TREE_URL}/scenario-hello-world-06-after-run.txt) |
+          | hello-world-local-notebook | ${{ steps.cuj.outputs.cuj_status }} | ${{ steps.cuj.outputs.assertions_total }} total (${{ steps.cuj.outputs.assertions_passed }} pass / ${{ steps.cuj.outputs.assertions_failed }} fail) | GCS upload unavailable; see workflow artifact bundle |
 
-          - [Browse all files](${TREE_URL})
-          - [GitHub Actions artifact (zip)](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
+          - [GitHub Actions run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
           EOF
-
-      - name: Publish browsable artifacts branch
-        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: cuj-artifacts
-          publish_dir: .cuj-publish
-          keep_files: true
-          enable_jekyll: false
 
       - name: Post PR comment with CUJ links
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
@@ -244,11 +232,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          GCS_INDEX_URL="not published"
+          if [[ -f "app/test/browser/test-output/gcs-summary.json" ]]; then
+            GCS_INDEX_URL="$(jq -r '.index_url' app/test/browser/test-output/gcs-summary.json)"
+          fi
           echo "## CUJ Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- Status: ${{ steps.cuj.outputs.cuj_status }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Assertions: ${{ steps.cuj.outputs.assertions_total }} total, ${{ steps.cuj.outputs.assertions_passed }} passed, ${{ steps.cuj.outputs.assertions_failed }} failed" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Browse artifacts: https://github.com/${GITHUB_REPOSITORY}/tree/cuj-artifacts/runs/${GITHUB_RUN_ID}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Browse artifacts: ${GCS_INDEX_URL}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Workflow artifacts: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fail job when CUJ assertions fail

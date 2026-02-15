@@ -9,6 +9,7 @@
     "build": "vite build",
     "cuj:build": "tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/browser/.generated test/browser/run-cuj-scenarios.ts",
     "cuj:run": "pnpm run cuj:build && node test/browser/.generated/run-cuj-scenarios.js",
+    "cuj:upload": "tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/browser/.generated test/browser/upload-cuj-artifacts.ts && node test/browser/.generated/upload-cuj-artifacts.js",
     "lint": "eslint .",
     "format": "prettier --ignore-path .prettierignore --write .",
     "preview": "vite preview",
