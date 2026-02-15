@@ -314,3 +314,34 @@ For PRs, post a markdown comment that references durable artifact URLs, e.g.:
 ```
 
 This confirms that the Codex task can publish links back to the PR thread with the attached token scope.
+
+## GitHub CLI (`gh`) standard for issue/PR publication
+
+Use `gh` as the default publishing interface (instead of raw `curl`) for release-thread updates.
+
+### Required commands
+
+```bash
+# Auth + reachability preflight
+gh auth status -h github.com
+gh issue view <ISSUE_NUMBER> --repo <OWNER>/<REPO>
+
+# Publish comment with artifact links
+gh issue comment <ISSUE_NUMBER> --repo <OWNER>/<REPO> --body-file artifacts-comment.md
+# or for pull requests
+gh pr comment <PR_NUMBER> --repo <OWNER>/<REPO> --body-file artifacts-comment.md
+```
+
+### Artifact handling with `gh`
+
+- `gh issue comment` / `gh pr comment` publish markdown text.
+- For binaries (PNG/WEBM), first publish them to a durable location (Actions artifact, committed file URL, or gist/release URL), then post links in comment markdown.
+- Never publish local container paths like `/tmp/...` as final artifact references.
+
+### Verification result in this shell
+
+- `gh` was installed and used for probing.
+- `gh auth status` reported not logged in and no token available.
+- `gh issue comment 69 --repo runmedev/runme ...` failed due missing authentication.
+
+This validates the preflight contract: if auth is absent, do not claim artifact publication success.
