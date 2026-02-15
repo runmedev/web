@@ -28,7 +28,7 @@ const toPrintable = (value: unknown) => {
   }
   try {
     return JSON.stringify(value);
-  } catch (err) {
+  } catch {
     return String(value);
   }
 };
@@ -81,19 +81,19 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
 
     const mockedConsole = {
       log: (...args: unknown[]) => {
-        originalConsole.log(...(args as any[]));
+        originalConsole.log(...args);
         append(logBuffer, args);
       },
       info: (...args: unknown[]) => {
-        originalConsole.info(...(args as any[]));
+        originalConsole.info(...args);
         append(logBuffer, args);
       },
       warn: (...args: unknown[]) => {
-        originalConsole.warn(...(args as any[]));
+        originalConsole.warn(...args);
         append(errorBuffer, args);
       },
       error: (...args: unknown[]) => {
-        originalConsole.error(...(args as any[]));
+        originalConsole.error(...args);
         append(errorBuffer, args);
       },
     };
@@ -122,7 +122,6 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
     let exitCode = 0;
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval
       const runner = new Function(
         // Inject the libraries/objects we want to expose to the cell code
         "d3",
@@ -193,8 +192,12 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
     return stdout.trim().length > 0 || stderr.trim().length > 0;
   }, [stderr, stdout]);
 
-  return hasRenderableOutput ? (
-    <div className="mt-2 rounded-md border border-nb-cell-border bg-white p-2 text-xs text-nb-text">
+  return (
+    <div
+      id={`webcontainer-output-shell-${cell.refId}`}
+      className={hasRenderableOutput ? "mt-2 rounded-md border border-nb-cell-border bg-white p-2 text-xs text-nb-text" : "hidden"}
+      aria-hidden={!hasRenderableOutput}
+    >
       <div className="mb-1 font-mono text-[10px] uppercase tracking-wide text-nb-text-faint">
         Observable Output{" "}
         {lastRunId
@@ -202,6 +205,7 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
           : ""}
       </div>
       <div
+        id={`webcontainer-output-content-${cell.refId}`}
         ref={containerRef}
         className="mb-2 min-h-[240px] w-full overflow-auto rounded border border-dashed border-nb-cell-border bg-nb-surface-2"
       />
@@ -231,8 +235,6 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
         </div>
       )}
     </div>
-  ) : (
-    <div ref={containerRef} className="hidden" aria-hidden="true" />
   );
 };
 
