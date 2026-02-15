@@ -83,12 +83,12 @@ The workflow executes `app/test/browser/run-cuj-scenarios.ts` in two modes:
 
 1. **Presubmit** (`pull_request`)
    - runs CUJs for PR updates,
-   - uploads `app/test/browser/test-output/*` as GitHub Actions artifacts,
-   - publishes browsable files to the `cuj-artifacts` branch and posts/updates a PR comment table with links.
+   - uploads `app/test/browser/test-output/*` to a world-readable GCS bucket,
+   - posts/updates a PR comment table with direct HTTP links to each artifact.
 
 2. **Postsubmit** (`push` to `main`)
    - runs the same CUJ driver against `main`,
-   - uploads the same artifact set and browsable links.
+   - uploads the same artifact set to GCS and emits direct links in workflow summary/reporting.
 
 Both modes produce per-CUJ status, screenshots, text snapshots/logs, and a short walkthrough video.
 
@@ -100,8 +100,34 @@ For CUJ runs, capture the following per scenario:
 - snapshots and screenshots,
 - short video clip (or GIF/MP4 fallback where tooling limits apply).
 
-Artifacts should be available both as Actions artifacts and as direct, file-level links so
-reviewers can open them without downloading and unzipping a bundle.
+### Publication policy (GCS)
+
+To avoid zip-download-only UX from GitHub Actions artifacts, CUJ artifacts are
+published to Google Cloud Storage and linked directly.
+
+1. **Bucket accessibility**
+   - Use a dedicated, world-readable bucket for CUJ artifact files.
+   - Artifact URLs should be plain HTTPS object links that humans and reviewer
+     AIs can open directly.
+
+2. **Write access from GitHub Actions**
+   - Grant write access only to a dedicated service account used by the CUJ
+     workflow.
+   - Prefer GitHub OIDC + Workload Identity Federation over long-lived JSON keys.
+
+3. **Lifecycle/retention**
+   - Configure bucket lifecycle rules to delete CUJ artifacts after **7 days**.
+
+### Comment/report contract
+
+Each PR comment (or workflow summary for postsubmit) should include:
+
+- a scenario result table (`PASS`/`FAIL`, assertions),
+- direct links to `.png`, `.txt`, and `.webm` files,
+- one “browse run” index link for the full artifact set.
+
+GitHub Actions artifact upload can still be kept as a secondary fallback, but
+direct review should rely on HTTP links to GCS objects.
 
 ## Adding a new CUJ
 
