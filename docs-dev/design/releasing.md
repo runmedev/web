@@ -270,3 +270,47 @@ Observed in this container during verification:
 2. Verify target PR/issue identifier is known (`PR_NUMBER`/`ISSUE_NUMBER`).
 3. Verify write access with an authenticated API probe (`POST` comment endpoint).
 4. Only after (1)-(3), publish artifact links in a final comment.
+
+## Codex-task verification procedure (repository-linked runtime)
+
+When maintainers state that the repository-linked Codex task includes `GITHUB_TOKEN`, verify artifact posting in that runtime (not a generic shell) with the following sequence.
+
+### Step-by-step verification script
+
+```bash
+# 1) Confirm token exists (do not print value)
+python - <<'PY'
+import os
+print('GITHUB_TOKEN_PRESENT=', bool(os.getenv('GITHUB_TOKEN')))
+PY
+
+# 2) Check target thread is reachable
+curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  https://api.github.com/repos/runmedev/runme/issues/69 | jq -r '.number, .state'
+
+# 3) Post probe comment
+curl -sS -X POST \
+  -H "Authorization: Bearer $GITHUB_TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  https://api.github.com/repos/runmedev/runme/issues/69/comments \
+  -d '{"body":"Codex artifact publish probe (safe to delete)."}' | jq -r '.id, .html_url'
+```
+
+### Expected outcome
+
+- If token and permissions are correct, step (3) returns a comment id/url (`201 Created`).
+- If token is missing/invalid, step (3) returns `401`.
+- If token exists but lacks permission, step (3) returns `403`.
+
+### PR artifact posting pattern
+
+For PRs, post a markdown comment that references durable artifact URLs, e.g.:
+
+```markdown
+### CUJ artifacts
+- Screenshot: https://.../artifact.png
+- Video: https://.../artifact.webm
+```
+
+This confirms that the Codex task can publish links back to the PR thread with the attached token scope.
