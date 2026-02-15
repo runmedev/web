@@ -1,0 +1,251 @@
+# Codex-assisted release process (draft)
+
+## Goals
+
+- Enable maintainers to run a **manual, auditable release workflow** with Codex.
+- Keep credentials minimal by relying on the permissions of the person triggering Codex.
+- Make UI validation artifacts (screenshots/videos) accessible from PRs and issues.
+- Use Codex to run tests, detect regressions, and iterate on fixes with human approval checkpoints.
+
+## Trigger model
+
+We intentionally use **manual triggers** only:
+
+1. `@codex` mention on an issue or PR.
+2. Codex UI session started by a maintainer.
+3. App-based Codex trigger.
+
+Rationale:
+
+- No standalone Codex API key is required.
+- Execution inherits the trigger user's permission model in GitHub/repo context.
+- Maintainers can choose scope and timing (pre-release, release candidate, hotfix).
+
+## Proposed release stages
+
+### Stage 0 — Intake and context sync
+
+Codex gathers:
+
+- target release version,
+- release branch/tag target,
+- changelog source,
+- known blockers,
+- required CUJs.
+
+Codex posts a short execution plan in the issue/PR thread before touching code.
+
+### Stage 1 — Environment + dependency checks
+
+Run setup tasks and classify outcomes:
+
+- **Blocking checks**: must pass to proceed (e.g., install, build, required tests).
+- **Non-blocking checks**: report warnings but allow continuation (e.g., optional tooling download issues when an equivalent command succeeds).
+
+> Note on earlier confusion: `runme run configure` can fail (network/tooling fetch issue) while release validation still passes if the equivalent pnpm configuration command succeeds and all blocking checks pass. Future reports should explicitly mark this as **warning + fallback used**, not as a full pass.
+
+### Stage 2 — Build + tests + regression detection
+
+Codex runs the canonical build/test pipeline and records:
+
+- exact commands,
+- pass/fail/warn status per command,
+- failing suites and first failing test(s),
+- comparison against baseline expectations (where available).
+
+Regression classification:
+
+- **New regression**: test previously passing on base branch, fails on candidate.
+- **Known failing**: already failing on base branch; do not block unless policy says otherwise.
+- **Flaky suspect**: intermittent failure; rerun policy required.
+
+### Stage 3 — Automated fix iteration loop
+
+For each actionable regression:
+
+1. Codex proposes root cause hypothesis.
+2. Codex applies minimal patch.
+3. Codex reruns targeted tests, then full required suite.
+4. Codex posts diff summary and residual risk.
+
+Loop stops when:
+
+- required suites pass, or
+- max iteration budget reached, or
+- human asks to stop.
+
+### Stage 4 — CUJ UI validation + artifact capture
+
+Codex runs the app and executes CUJs (scripted/manual-assist).
+
+Artifacts required per CUJ:
+
+- screenshot(s),
+- short video,
+- machine-verifiable assertion log.
+
+Codex should store artifacts in a **repo-accessible location**, not ephemeral `/tmp` references in final PR comments.
+
+### Stage 5 — Release handoff
+
+Codex prepares:
+
+- release readiness summary,
+- final changelog draft,
+- remaining risks/open items,
+- go/no-go recommendation.
+
+A maintainer performs final approval and release/tag action.
+
+## Artifact publishing design (screenshots/videos)
+
+Problem: local `/tmp/...` artifact paths are not durable or user-accessible after session end.
+
+### Preferred publication targets
+
+1. **GitHub Actions artifacts** (if run in CI context)
+   - durable for retention period,
+   - downloadable by users with repo access,
+   - easy link from PR comment.
+
+2. **PR comment attachments** (images directly embedded; videos linked)
+   - fastest reviewer UX,
+   - good for key screenshots,
+   - may need size limits handling for video.
+
+3. **Issue comment links** for `@codex` issue-triggered runs
+   - mirrors PR behavior when no PR exists yet.
+
+### Permission model
+
+- Codex inherits permissions from the triggering user/session.
+- Posting to PR/issue requires write access to that thread.
+- Uploading artifacts requires platform support in the execution environment (CI/App/Codex UI).
+- If permissions are insufficient, Codex must:
+  - explicitly report which action failed,
+  - keep local artifact metadata,
+  - provide instructions for a maintainer re-run with adequate permissions.
+
+### Minimum artifact policy
+
+For each CUJ run, publish:
+
+- `summary.json` (machine-readable pass/fail + assertions),
+- at least one screenshot,
+- one short video (WebM/MP4),
+- a markdown index linking all files.
+
+## Reporting contract for Codex comments
+
+Each run should post a structured report with:
+
+1. **Command status table**
+   - pass/fail/warn,
+   - command string,
+   - short failure reason,
+   - fallback used (if any).
+
+2. **Regression section**
+   - detected regressions,
+   - fixed regressions,
+   - unresolved regressions.
+
+3. **Artifact section**
+   - durable links to screenshots/videos,
+   - explicit note if links are ephemeral or unavailable.
+
+4. **Decision section**
+   - ready / not ready,
+   - blocking reasons,
+   - suggested next action.
+
+## Open decisions
+
+- Should release gating require *all* CUJs to pass, or allow a labeled exception list?
+- What is the maximum Codex fix-iteration count before mandatory human review?
+- Do we require baseline comparison against `main` for every release candidate?
+- Where should long-term artifact retention live beyond GitHub retention windows?
+
+## Next iteration tasks
+
+1. Define a concrete `release-checklist.md` using this stage model.
+2. Add a machine-readable schema for `summary.json` and regression report output.
+3. Add CUJ runner integration that emits durable artifact bundle links.
+4. Add a PR/issue comment template for Codex release updates.
+
+## Verification: posting artifacts to GitHub from Codex container
+
+Tested from this container against `runmedev/runme` issue `#69`.
+
+### What was verified
+
+1. Issue read access works without auth:
+   - `GET /repos/runmedev/runme/issues/69` returned `200`.
+2. Posting to issue comments without auth does **not** work:
+   - `POST /repos/runmedev/runme/issues/69/comments` returned `401 Requires authentication`.
+
+### Conclusion
+
+- In a Codex container, posting screenshots/videos back to PRs/issues works **only if** the execution context provides GitHub credentials with write permission to issues/PRs.
+- Without injected credentials, Codex can generate artifacts locally but cannot publish them to GitHub threads.
+
+### Required permissions for successful publish
+
+Minimum token scopes/permissions needed:
+
+- Issues: write (for issue comments)
+- Pull requests: write (for PR comments/reviews)
+- Actions artifacts (if used): permissions to upload artifacts in workflow context
+
+### Operational recommendation
+
+Before CUJ runs, add a preflight "publishability check":
+
+1. Verify GitHub auth is present.
+2. Verify target thread write access using a dry-run comment API check.
+3. If check fails, mark artifact publication as blocked and avoid claiming public links.
+
+## Secret and token strategy for Codex environments
+
+Short answer: **yes**, you can attach a secret to the Codex execution environment and use a narrow GitHub token for issue/PR posting.
+
+### Can Codex generate and attach the secret itself?
+
+- Codex can only do this if it already has privileged GitHub credentials that allow managing secrets.
+- Without such bootstrap credentials, a human maintainer must create the secret and attach it to the environment.
+- Therefore, treat secret creation as a platform/admin step, not a default runtime step.
+
+### Recommended token type
+
+1. **Best for automation at scale**: GitHub App installation token
+   - short-lived,
+   - repository-scoped by installation,
+   - granular permissions.
+2. **Practical fallback**: Fine-grained PAT
+   - restrict to a single repository,
+   - grant only required repo permissions,
+   - enforce expiration and rotation.
+
+### Minimum permissions for the artifact-posting use case
+
+- Issues: **Read and write** (post issue comments)
+- Pull requests: **Read and write** (post PR comments / status updates)
+- Contents: **Read-only** (optional, only if Codex must read repo files via API)
+
+### Implementation blueprint
+
+1. Create token (GitHub App installation token preferred, or fine-grained PAT).
+2. Store token as a secret in the Codex/Codespaces environment (for example `GITHUB_TOKEN_CUJ_BOT`).
+3. Limit secret exposure to the specific repository and environment where release runs happen.
+4. At run start, export token to process env and run preflight checks:
+   - `GET` target issue/PR,
+   - `POST` a dry-run marker comment (or equivalent permission probe),
+   - delete probe comment if policy requires a clean thread.
+5. If preflight fails, continue local validation but mark publication as blocked.
+
+### Security guardrails
+
+- Never print token values in logs.
+- Use short token TTLs and rotate regularly.
+- Prefer one-purpose tokens (artifact publishing only).
+- If a token is suspected leaked, revoke immediately and re-run with a new secret.
