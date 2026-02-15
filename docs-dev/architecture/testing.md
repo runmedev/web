@@ -75,25 +75,22 @@ Avoid assertions that require subjective manual judgment.
 The existing `Test` workflow performs install/build/test for regular code quality
 checks.
 
-### Codex-triggered CUJ automation
+### CI-triggered CUJ automation
 
 Workflow: `.github/workflows/codex-cuj.yaml`
 
-It requests Codex CUJ execution in two modes:
+The workflow executes `app/test/browser/run-cuj-scenarios.ts` in two modes:
 
-1. **Presubmit** (`pull_request_target`)
-   - posts a deduplicated `@codex` request in the PR thread.
-   - asks Codex to run `app/test/browser/run-cuj-scenarios.ts`.
+1. **Presubmit** (`pull_request`)
+   - runs CUJs for PR updates,
+   - uploads `app/test/browser/test-output/*` as GitHub Actions artifacts,
+   - publishes browsable files to the `cuj-artifacts` branch and posts/updates a PR comment table with links.
 
 2. **Postsubmit** (`push` to `main`)
-   - comments on a tracking issue for main-branch CUJ runs.
-   - asks Codex to run all CUJs against the merged commit.
+   - runs the same CUJ driver against `main`,
+   - uploads the same artifact set and browsable links.
 
-Both requests ask for:
-
-- per-CUJ pass/fail summaries,
-- screenshots and logs,
-- a short walkthrough video uploaded to the PR/issue.
+Both modes produce per-CUJ status, screenshots, text snapshots/logs, and a short walkthrough video.
 
 ## Artifacts and reporting
 
@@ -103,8 +100,8 @@ For CUJ runs, capture the following per scenario:
 - snapshots and screenshots,
 - short video clip (or GIF/MP4 fallback where tooling limits apply).
 
-Artifacts should be attached in the PR/issue where Codex was triggered so
-reviewers can quickly validate UI behavior and regressions.
+Artifacts should be available both as Actions artifacts and as direct, file-level links so
+reviewers can open them without downloading and unzipping a bundle.
 
 ## Adding a new CUJ
 

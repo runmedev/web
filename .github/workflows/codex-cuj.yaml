@@ -3,62 +3,257 @@ name: CUJ Tests
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   run-cuj-tests:
     runs-on: ubuntu-latest
+    env:
+      CUJ_OUTPUT_DIR: app/test/browser/test-output
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
-          go-version: '1.25'
+          version: latest
 
-      - name: Enable pnpm
-        run: corepack enable
-
-      - name: Install runme from runmedev/runme main
+      - name: Install dependencies
+        shell: bash
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/bin"
-          GOBIN="$GITHUB_WORKSPACE/bin" go install github.com/runmedev/runme/v3@main
-          "$GITHUB_WORKSPACE/bin/runme" --version
+          set -euo pipefail
+          pnpm config set @buf:registry https://buf.build/gen/npm/v1
+          pnpm install --frozen-lockfile
 
-      - name: Prepare dependencies (best-effort)
+      - name: Build app dependencies
+        shell: bash
         run: |
-          "$GITHUB_WORKSPACE/bin/runme" run configure || true
-          "$GITHUB_WORKSPACE/bin/runme" run setup || true
+          set -euo pipefail
+          pnpm run build:renderers
+          pnpm run build:console
 
-      - name: Run CUJ driver
+      - name: Install agent-browser
+        shell: bash
         run: |
-          cd app/test/browser
-          npx tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir .generated cuj-driver.ts
-          CUJ_REPO="${GITHUB_REPOSITORY}" CUJ_UPLOAD=false node .generated/cuj-driver.js || true
+          set -euo pipefail
+          npm install -g agent-browser
+          agent-browser --version
+          agent-browser install
 
-      - name: Upload CUJ artifacts
+      - name: Run CUJ scenarios
+        id: cuj
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${CUJ_OUTPUT_DIR}"
+          BACKEND_LOG="${CUJ_OUTPUT_DIR}/backend.log"
+          FRONTEND_LOG="${CUJ_OUTPUT_DIR}/frontend.log"
+          CUJ_LOG="${CUJ_OUTPUT_DIR}/cuj-run.log"
+          SUMMARY_JSON="${CUJ_OUTPUT_DIR}/summary.json"
+
+          # Lightweight backend stub for deterministic CI setup.
+          python3 -m http.server 9977 >"${BACKEND_LOG}" 2>&1 &
+          BACK_PID=$!
+
+          pnpm run dev:app >"${FRONTEND_LOG}" 2>&1 &
+          FRONT_PID=$!
+
+          cleanup() {
+            if kill -0 "${FRONT_PID}" 2>/dev/null; then kill "${FRONT_PID}" || true; fi
+            if kill -0 "${BACK_PID}" 2>/dev/null; then kill "${BACK_PID}" || true; fi
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 60); do
+            if curl -sf "http://localhost:5173" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+
+          for _ in $(seq 1 30); do
+            if curl -sf "http://localhost:9977" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+
+          set +e
+          pnpm -C app run cuj:run >"${CUJ_LOG}" 2>&1
+          CUJ_EXIT=$?
+          set -e
+
+          ASSERTIONS_LINE="$(grep -E 'Assertions:' "${CUJ_LOG}" | tail -1 || true)"
+          PASSED="$(echo "${ASSERTIONS_LINE}" | sed -E 's/.*Passed: ([0-9]+).*/\1/' || true)"
+          FAILED="$(echo "${ASSERTIONS_LINE}" | sed -E 's/.*Failed: ([0-9]+).*/\1/' || true)"
+          TOTAL="$(echo "${ASSERTIONS_LINE}" | sed -E 's/.*Assertions: ([0-9]+).*/\1/' || true)"
+          if [[ -z "${TOTAL}" || "${TOTAL}" == "${ASSERTIONS_LINE}" ]]; then TOTAL=0; fi
+          if [[ -z "${PASSED}" || "${PASSED}" == "${ASSERTIONS_LINE}" ]]; then PASSED=0; fi
+          if [[ -z "${FAILED}" || "${FAILED}" == "${ASSERTIONS_LINE}" ]]; then FAILED=0; fi
+
+          STATUS="PASS"
+          if [[ "${CUJ_EXIT}" != "0" ]]; then
+            STATUS="FAIL"
+          fi
+
+          cat > "${SUMMARY_JSON}" <<EOF
+          {
+            "status": "${STATUS}",
+            "exit_code": ${CUJ_EXIT},
+            "assertions_total": ${TOTAL},
+            "assertions_passed": ${PASSED},
+            "assertions_failed": ${FAILED},
+            "run_id": "${GITHUB_RUN_ID}",
+            "run_attempt": "${GITHUB_RUN_ATTEMPT}",
+            "sha": "${GITHUB_SHA}"
+          }
+          EOF
+
+          {
+            echo "cuj_exit=${CUJ_EXIT}"
+            echo "cuj_status=${STATUS}"
+            echo "assertions_total=${TOTAL}"
+            echo "assertions_passed=${PASSED}"
+            echo "assertions_failed=${FAILED}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload CUJ artifacts to Actions
+        id: upload_artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cuj-artifacts-${{ github.run_id }}
+          name: cuj-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            .artifacts/cuj-runs/**
             app/test/browser/test-output/**
           if-no-files-found: warn
+          retention-days: 14
 
-      - name: Upload CUJ summary
+      - name: Build browsable artifact bundle
         if: always()
-        uses: actions/upload-artifact@v4
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEST_DIR=".cuj-publish/runs/${GITHUB_RUN_ID}"
+          mkdir -p "${DEST_DIR}"
+          cp -R app/test/browser/test-output/. "${DEST_DIR}/"
+
+          TREE_URL="https://github.com/${GITHUB_REPOSITORY}/tree/cuj-artifacts/runs/${GITHUB_RUN_ID}"
+          RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/cuj-artifacts/runs/${GITHUB_RUN_ID}"
+          STATUS="${{ steps.cuj.outputs.cuj_status }}"
+          TOTAL="${{ steps.cuj.outputs.assertions_total }}"
+          PASSED="${{ steps.cuj.outputs.assertions_passed }}"
+          FAILED="${{ steps.cuj.outputs.assertions_failed }}"
+
+          cat > "${DEST_DIR}/index.md" <<EOF
+          # CUJ Run ${GITHUB_RUN_ID}
+
+          - Status: ${STATUS}
+          - Assertions: ${TOTAL} total, ${PASSED} passed, ${FAILED} failed
+          - Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          ## Key artifacts
+
+          - [Walkthrough movie](${TREE_URL}/scenario-hello-world-walkthrough.webm)
+          - [Initial screenshot](${TREE_URL}/scenario-hello-world-01-initial.png)
+          - [After-run screenshot](${TREE_URL}/scenario-hello-world-06-after-run.png)
+          - [After-run snapshot](${TREE_URL}/scenario-hello-world-06-after-run.txt)
+          - [CUJ log](${TREE_URL}/cuj-run.log)
+
+          ## Preview
+
+          ![CUJ initial screenshot](${RAW_BASE}/scenario-hello-world-01-initial.png)
+          EOF
+
+          cat > "${CUJ_OUTPUT_DIR}/pr-comment.md" <<EOF
+          <!-- cuj-report -->
+          ## CUJ Results
+
+          | Scenario | Status | Assertions | Artifacts |
+          | --- | --- | --- | --- |
+          | hello-world-local-notebook | ${STATUS} | ${TOTAL} total (${PASSED} pass / ${FAILED} fail) | [movie](${TREE_URL}/scenario-hello-world-walkthrough.webm) · [initial png](${TREE_URL}/scenario-hello-world-01-initial.png) · [after-run png](${TREE_URL}/scenario-hello-world-06-after-run.png) · [after-run txt](${TREE_URL}/scenario-hello-world-06-after-run.txt) |
+
+          - [Browse all files](${TREE_URL})
+          - [GitHub Actions artifact (zip)](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
+          EOF
+
+      - name: Publish browsable artifacts branch
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          name: cuj-summary-${{ github.run_id }}
-          path: app/test/browser/test-output/driver/**
-          if-no-files-found: warn
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: cuj-artifacts
+          publish_dir: .cuj-publish
+          keep_files: true
+          enable_jekyll: false
+
+      - name: Post PR comment with CUJ links
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const marker = "<!-- cuj-report -->";
+            const body = fs.readFileSync("app/test/browser/test-output/pr-comment.md", "utf8");
+            const issue_number = context.payload.pull_request.number;
+            const { owner, repo } = context.repo;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find((c) => c.user.type === "Bot" && c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
+
+      - name: Add workflow summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "## CUJ Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Status: ${{ steps.cuj.outputs.cuj_status }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Assertions: ${{ steps.cuj.outputs.assertions_total }} total, ${{ steps.cuj.outputs.assertions_passed }} passed, ${{ steps.cuj.outputs.assertions_failed }} failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Browse artifacts: https://github.com/${GITHUB_REPOSITORY}/tree/cuj-artifacts/runs/${GITHUB_RUN_ID}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Workflow artifacts: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail job when CUJ assertions fail
+        if: always() && steps.cuj.outputs.cuj_exit != '0'
+        shell: bash
+        run: |
+          echo "CUJ tests failed; see artifacts for details."
+          exit 1
