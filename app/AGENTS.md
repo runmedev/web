@@ -38,3 +38,11 @@ Here is an example of correct code.
             onClick={() => setContextMenu(null)}
           />
 ```
+
+## Review guidelines for app/
+
+* Ensure code changes are consistent with the design, practices, and styles defined in `docs-dev/architecture.md`.
+* Ensure that tests are properly updated to verify bug fixes and prevent regressions, including adding new tests where needed.
+  * Ensure CUJs as defined in `docs-dev/cujs` are updated if necessary.
+  * Ensure E2E tests and CUJs are in sync.
+* Ensure artifacts uploaded by tests confirm that the tests are validating what they claim to test.
