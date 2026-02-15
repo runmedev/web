@@ -92,6 +92,8 @@ for (const file of [
   "scenario-hello-world-04-before-open.txt",
   "scenario-hello-world-04b-after-expand.txt",
   "scenario-hello-world-05-opened-notebook.txt",
+  "scenario-hello-world-05-before-run.png",
+  "scenario-hello-world-05-before-run-output-check.txt",
   "scenario-hello-world-06-after-run.txt",
   "scenario-hello-world-06-after-run.png",
 ]) {
@@ -131,7 +133,7 @@ const seedResult = run(
         refId: 'cell_hello_world',
         kind: 2,
         languageId: 'bash',
-        value: 'echo \\\"hello world\\\"',
+        value: 'echo hello world',
         metadata: { runner: 'local' },
         outputs: []
       }
@@ -211,7 +213,31 @@ if (notebookRef) {
 
 snapshot = run("agent-browser snapshot -i").stdout;
 writeArtifact("scenario-hello-world-05-opened-notebook.txt", snapshot);
-let runRef = firstRef(snapshot, /Run cell/i) ?? firstRef(snapshot, /\bRun\b/i);
+run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-hello-world-05-before-run.png")}`);
+
+const beforeRunOutputCheck = run(
+  `agent-browser eval "(() => {
+    const outputItems = document.querySelectorAll('[data-testid="cell-output-item"]');
+    const consoles = document.querySelectorAll('[data-testid="cell-console"]');
+    const webContainerShells = document.querySelectorAll('[id^="webcontainer-output-shell-"]:not(.hidden)');
+    return JSON.stringify({
+      outputItemCount: outputItems.length,
+      consoleCount: consoles.length,
+      visibleWebContainerOutputCount: webContainerShells.length,
+    });
+  })()"`,
+).stdout;
+writeArtifact("scenario-hello-world-05-before-run-output-check.txt", beforeRunOutputCheck);
+
+if (beforeRunOutputCheck.includes('"outputItemCount":0') &&
+    beforeRunOutputCheck.includes('"consoleCount":0') &&
+    beforeRunOutputCheck.includes('"visibleWebContainerOutputCount":0')) {
+  pass("Cell shows no output panel before execution");
+} else {
+  fail(`Unexpected visible output before execution: ${beforeRunOutputCheck.trim()}`);
+}
+
+const runRef = firstRef(snapshot, /Run cell/i) ?? firstRef(snapshot, /\bRun\b/i);
 if (runRef) {
   run(`agent-browser click ${runRef}`);
   run("agent-browser wait 3500");

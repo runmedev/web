@@ -37,6 +37,7 @@ import { useCurrentDoc } from "../../contexts/CurrentDocContext";
 import { useRunners } from "../../contexts/RunnersContext";
 import { DEFAULT_RUNNER_PLACEHOLDER } from "../../lib/runtime/runnersManager";
 import React from "react";
+import { hasVisibleCellOutput } from "./outputVisibility";
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
   "data-state"?: "active" | "inactive";
@@ -472,7 +473,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     //   return rendered;
     // }
 
-    if (!runID && (cell?.outputs?.length ?? 0) === 0) {
+    if (!runID && !hasVisibleCellOutput(cell?.outputs)) {
       return null;
     }
 
