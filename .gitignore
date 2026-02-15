@@ -36,3 +36,11 @@ packages/react-console/gen
 
 # local releaser build artifact
 /releaser/releaser
+
+# CUJ generated outputs
+/app/.generated/
+/app/test/browser/.generated/
+/app/test/browser/test-output/*
+!/app/test/browser/test-output/after-full-notebook.png
+!/app/test/browser/test-output/before-full.png
+!/app/test/browser/test-output/design-check-explorer.png
