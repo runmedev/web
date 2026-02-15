@@ -36,3 +36,9 @@ packages/react-console/gen
 
 # local releaser build artifact
 /releaser/releaser
+
+# local tool binaries (not committed)
+/bin/
+
+# local CUJ artifact staging (not committed)
+/.artifacts/

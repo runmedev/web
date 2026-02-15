@@ -56,6 +56,11 @@ When you open a follow-up PR that fixes an issue, include an issue-closing refer
 - Use one of GitHub's auto-close keywords with an issue number, for example: `Fixes #123`, `Closes #123`, or `Resolves #123`.
 - Put this in the PR body (not just a comment) so the issue is linked and automatically closed when the PR merges.
 
+
+## Design-doc lookup expectation
+
+Reach for `docs-dev/architecture/` (start at `docs-dev/architecture/testing.md`) when you’re entering a domain you haven’t touched this session, a requester cites a doc, or you suspect prior art exists. Skip the search when you already have the context (for example, compaction/follow-up on the same file). If the needed context is missing, create or update a design doc first. Keep doc review fast—confirm whether guidance exists, then get back to editing. Only add durable information backed by evidence (no brainstorming dumps); include commands or proofs and note which doc you updated (or why none changed) in your notes/PR.
+
 ## Architecture
 
 This is a pnpm workspace monorepo with two publishable packages and one app:
