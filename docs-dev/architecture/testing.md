@@ -1,183 +1,115 @@
 # Testing Architecture
 
-This document describes how testing is organized in this repository, with a
-specific focus on deterministic CUJ/scenario testing and artifact publication.
+This document describes how testing is organized in this repository and how we
+run Critical User Journey (CUJ) testing.
 
 ## Goals
 
+The testing strategy balances three needs:
+
 1. Fast feedback for code changes.
-2. Reliable, deterministic regression detection for core user workflows.
-3. Durable, reviewable artifacts (images/videos/logs) for behavior validation.
-4. Clear division of responsibility between test automation and Codex review.
+2. Reliable regression detection for core user workflows.
+3. Human-reviewable artifacts (screenshots/videos) for UX changes.
 
 ## Test layers
 
 ### 1) Unit/component tests (fast, deterministic)
 
 - Framework: Vitest.
-- Scope: isolated functions and React components.
+- Typical scope: isolated functions and React components.
 - Example location: `packages/react-console/src/components/__tests__/`.
 
 These tests are expected to run on every PR and are the first quality gate.
 
 ### 2) Build validation
 
-Build order follows package dependencies:
+- Build order follows package dependencies:
+  1. `renderers`
+  2. `react-console`
+  3. `app`
+- The repo build validates that all packages compile and bundle correctly.
 
-1. `renderers`
-2. `react-console`
-3. `app`
-
-Build validation ensures each package compiles and bundles successfully.
-
-### 3) CUJ/scenario browser tests (deterministic TypeScript programs)
+### 3) Browser integration tests (workflow-oriented)
 
 - Location: `app/test/browser/`.
-- Language/runtime: TypeScript + Node execution.
-- Primary scenario orchestration entrypoint: `app/test/browser/run-cuj-scenarios.ts`.
-- Driver entrypoint (env checks + publication): `app/test/browser/cuj-driver.ts`.
+- Driver: `agent-browser` (snapshot, click/type, eval, screenshot).
+- Purpose: validate realistic flows through the UI and backend integration.
 
-**Requirement:** CUJ/scenario tests must be implemented as deterministic
-TypeScript programs that can run without AI intervention.
+## CUJ (Critical User Journey) testing
 
-AI/Codex may trigger or review results, but the test logic itself should be
-fully programmatic and reproducible.
-
-## CUJ source of truth
+### Source of truth
 
 CUJs are defined in markdown under `docs-dev/cujs/`.
 
-Each CUJ file should include:
+Each CUJ file includes:
 
-- preconditions,
-- user journey steps,
-- machine-verifiable acceptance criteria.
+- Preconditions (services/tools that must be running).
+- User journey steps.
+- Machine-verifiable acceptance criteria.
 
 Current baseline CUJ:
 
-- `docs-dev/cujs/hello-world-local-notebook.md`.
+- `docs-dev/cujs/hello-world-local-notebook.md`
 
-## CUJ runner contract
+### Execution model
 
-Every scenario test should:
+- Scenario driver scripts are implemented in `app/test/browser/` and are written in TypeScript.
+- `app/test/browser/run-cuj-scenarios.ts` is the canonical orchestration entrypoint (with a shell wrapper kept for compatibility).
+- Each script should produce assertion logs and test artifacts in
+  `app/test/browser/test-output/`.
 
-1. Validate preconditions and fail fast with clear diagnostics.
-2. Execute deterministic steps only (no subjective/manual-only assertions).
-3. Emit structured pass/fail assertions.
-4. Produce artifacts:
-   - screenshots,
-   - snapshots/logs,
-   - short video where supported.
-5. Write outputs to a known artifact directory.
+### Assertion philosophy
 
-## Driver architecture (local + GHA)
+Prefer machine-verifiable checks only:
 
-A dedicated TypeScript driver should orchestrate scenario execution and
-publication concerns.
+- DOM/snapshot assertions (`agent-browser snapshot -i`)
+- explicit text checks
+- deterministic JS evaluation (`agent-browser eval`)
 
-Driver responsibilities:
+Avoid assertions that require subjective manual judgment.
 
-1. Environment setup checks
-   - frontend/backend reachability,
-   - required tools available,
-   - auth/token presence for publication,
-   - install `runme` into `${REPO_ROOT}/bin` via `go install github.com/runmedev/runme/v3@main`.
-2. Scenario orchestration
-   - run selected/all CUJ scenario scripts,
-   - aggregate assertion summaries.
-3. Artifact collection
-   - normalize paths and metadata,
-   - produce machine-readable summary output.
-4. Publication
-   - upload artifacts to a durable channel (for local Codex runs: release assets in the target repo),
-   - mirror/copy artifacts under `.artifacts/cuj-runs/` for local inspection (gitignored),
-   - comment results on PR/issue when credentials permit,
-   - repo selection should be deterministic (env override, CI-provided repo, then git remote fallback).
+## CI and automation
 
-The same driver design should run in both contexts:
+### Standard CI tests
 
-- local developer execution,
-- GitHub Actions execution.
+The existing `Test` workflow performs install/build/test for regular code quality
+checks.
 
-Runtime-specific behavior (e.g. artifact upload implementation) should be
-selected by configuration/environment, not by duplicating test logic.
+### Codex-triggered CUJ automation
 
-## Publication model
+Workflow: `.github/workflows/codex-cuj.yaml`
 
-Use durable artifact references for PR/issue reporting.
+It requests Codex CUJ execution in two modes:
 
-- Never treat local `/tmp/...` paths as final reviewer-facing links.
-- Prefer GHA artifacts, committed artifact files, or other durable storage.
-- Post links via `gh` (`gh issue comment` / `gh pr comment`) when token scope
-  allows write access.
-- For GitHub Release-based artifact hosting, token needs repository `Contents: write` permission.
+1. **Presubmit** (`pull_request_target`)
+   - posts a deduplicated `@codex` request in the PR thread.
+   - asks Codex to run `app/test/browser/run-cuj-scenarios.ts`.
 
-## Codex role (reviewer, not test runtime)
+2. **Postsubmit** (`push` to `main`)
+   - comments on a tracking issue for main-branch CUJ runs.
+   - asks Codex to run all CUJs against the merged commit.
 
-Codex should primarily act as a reviewer of the deterministic test system:
+Both requests ask for:
 
-1. Ensure CUJ docs are updated when features/bugs change workflows.
-2. Ensure TypeScript CUJ tests stay in sync with CUJ markdown criteria.
-3. Ensure artifact evidence supports the assertions the test claims to verify.
-4. Flag mismatches between claimed coverage and observed assertions/artifacts.
+- per-CUJ pass/fail summaries,
+- screenshots and logs,
+- a short walkthrough video uploaded to the PR/issue.
 
-Codex may run the driver and summarize outcomes, but CUJ correctness must not
-depend on Codex-specific reasoning in the execution path.
+## Artifacts and reporting
 
-## Adding or updating a CUJ
+For CUJ runs, capture the following per scenario:
 
-1. Add/update scenario doc in `docs-dev/cujs/<name>.md`.
-2. Implement/update deterministic scenario test in `app/test/browser/`.
-3. Register it in `app/test/browser/run-cuj-scenarios.ts`.
-4. Ensure `app/test/browser/cuj-driver.ts` can execute it and publish summary artifacts.
-5. Ensure required artifacts and assertion summary are produced.
-6. Validate driver behavior locally and in GHA configuration.
-7. Have Codex review CUJ↔test sync and artifact adequacy.
+- terminal/assertion summary,
+- snapshots and screenshots,
+- short video clip (or GIF/MP4 fallback where tooling limits apply).
 
+Artifacts should be attached in the PR/issue where Codex was triggered so
+reviewers can quickly validate UI behavior and regressions.
 
-## Design constraints: PR/issue artifact attachments
+## Adding a new CUJ
 
-Direct binary attachment upload to PR/issue comments is not reliably available via
-standard `gh pr comment` / `gh issue comment` flows. Treat this as a design
-constraint for the CUJ driver.
-
-Implications:
-
-- Driver comments should include durable links, not local paths.
-- For local runs, keep artifacts under `.artifacts/cuj-runs/` (gitignored).
-- For CI runs, prefer GitHub Actions artifact upload and link to the run/artifact
-  page in the PR comment/check output.
-
-## CI artifact publishing policy (GHA)
-
-When running in GitHub Actions (`GITHUB_ACTIONS=true`), the driver or workflow
-should:
-
-1. Write all CUJ outputs to `.artifacts/cuj-runs/<run-id>/`.
-2. Upload that directory using `actions/upload-artifact`.
-3. Publish a machine-readable summary (JSON) and human summary (Markdown).
-4. Link to the artifact bundle from PR comments and/or check summaries.
-
-## Rich reporting options in GHA/status checks
-
-GitHub Actions + checks can provide richer review UX even without direct comment
-attachments:
-
-1. **Step Summary (`$GITHUB_STEP_SUMMARY`)**
-   - Markdown report in the workflow run page.
-   - Include pass/fail table, assertion counts, and links to uploaded artifacts.
-
-2. **Uploaded artifact bundle**
-   - Bundle screenshots/videos/logs + `summary.json` in one downloadable artifact.
-   - Include an `index.html` in the bundle for local viewing after download.
-
-3. **Check run annotations + links**
-   - Expose key failures as annotations.
-   - Link to workflow run and artifact bundle from the check output.
-
-4. **Optional Pages/report hosting**
-   - For truly inline rich HTML, publish a static report site (e.g. GitHub Pages
-     or other static hosting) and link it from PR/checks.
-   - Artifact ZIPs themselves are downloadable, but not rendered as embedded
-     rich pages directly inside PR comments.
-
+1. Add a scenario doc in `docs-dev/cujs/<name>.md`.
+2. Implement or extend a browser script under `app/test/browser/`.
+3. Register the script in `app/test/browser/run-cuj-scenarios.ts`.
+4. Ensure assertions are machine-verifiable.
+5. Update docs if command names/flows changed.
