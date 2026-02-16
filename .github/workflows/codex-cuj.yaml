@@ -25,6 +25,9 @@ jobs:
       CUJ_OUTPUT_DIR: app/test/browser/test-output
       GCP_PROJECT_ID: runme-lewi-dev
       GCP_PROJECT_NUMBER: "690012737568"
+      GCP_WIF_POOL_ID: github-pool
+      GCP_WIF_PROVIDER_ID: github-provider
+      GCP_SERVICE_ACCOUNT_EMAIL: runme-gha@runme-lewi-dev.iam.gserviceaccount.com
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -153,11 +156,11 @@ jobs:
 
       - name: Authenticate to Google Cloud
         id: gcp_auth
-        if: always() && vars.GCP_WORKLOAD_IDENTITY_POOL_ID != '' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER_ID != '' && vars.GCP_SERVICE_ACCOUNT_EMAIL != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: projects/${{ env.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/${{ vars.GCP_WORKLOAD_IDENTITY_POOL_ID }}/providers/${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER_ID }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+          workload_identity_provider: projects/${{ env.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/${{ env.GCP_WIF_POOL_ID }}/providers/${{ env.GCP_WIF_PROVIDER_ID }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT_EMAIL }}
           token_format: access_token
           access_token_scopes: https://www.googleapis.com/auth/cloud-platform
           create_credentials_file: true
