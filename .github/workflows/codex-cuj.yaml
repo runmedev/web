@@ -29,6 +29,39 @@ jobs:
       GCP_WIF_PROVIDER_ID: github-provider
       GCP_SERVICE_ACCOUNT_EMAIL: runme-gha@runme-lewi-dev.iam.gserviceaccount.com
     steps:
+      - name: Authenticate to Google Cloud
+        id: gcp_auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/${{ env.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/${{ env.GCP_WIF_POOL_ID }}/providers/${{ env.GCP_WIF_PROVIDER_ID }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT_EMAIL }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/cloud-platform
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Verify Google auth identity
+        id: verify_gcp_auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTIVE_ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -1)"
+          echo "Active gcloud account: ${ACTIVE_ACCOUNT}"
+          if [[ -z "${ACTIVE_ACCOUNT}" ]]; then
+            echo "No active gcloud account found after OIDC auth."
+            exit 1
+          fi
+          if [[ "${ACTIVE_ACCOUNT}" != "${GCP_SERVICE_ACCOUNT_EMAIL}" ]]; then
+            echo "Expected active account ${GCP_SERVICE_ACCOUNT_EMAIL} but got ${ACTIVE_ACCOUNT}"
+            exit 1
+          fi
+          gcloud auth application-default print-access-token >/dev/null
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -145,7 +178,7 @@ jobs:
 
       - name: Upload CUJ artifacts to Actions
         id: upload_artifacts
-        if: always()
+        if: always() && steps.verify_gcp_auth.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: cuj-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
@@ -154,27 +187,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Authenticate to Google Cloud
-        id: gcp_auth
-        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: projects/${{ env.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/${{ env.GCP_WIF_POOL_ID }}/providers/${{ env.GCP_WIF_PROVIDER_ID }}
-          service_account: ${{ env.GCP_SERVICE_ACCOUNT_EMAIL }}
-          token_format: access_token
-          access_token_scopes: https://www.googleapis.com/auth/cloud-platform
-          create_credentials_file: true
-          export_environment_variables: true
-
-      - name: Setup gcloud
-        if: always() && steps.gcp_auth.outcome == 'success'
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
-
       - name: Upload CUJ artifacts to GCS
         id: gcs_upload
-        if: always() && steps.gcp_auth.outcome == 'success'
+        if: always() && steps.verify_gcp_auth.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -189,7 +204,7 @@ jobs:
           pnpm -C app run cuj:upload
 
       - name: Create fallback PR comment body
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && (steps.gcs_upload.outcome != 'success')
+        if: always() && steps.verify_gcp_auth.outcome == 'success' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && (steps.gcs_upload.outcome != 'success')
         shell: bash
         run: |
           set -euo pipefail
@@ -205,7 +220,7 @@ jobs:
           EOF
 
       - name: Post PR comment with CUJ links
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
+        if: always() && steps.verify_gcp_auth.outcome == 'success' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
         uses: actions/github-script@v7
         with:
           script: |
@@ -238,7 +253,7 @@ jobs:
             }
 
       - name: Add workflow summary
-        if: always()
+        if: always() && steps.verify_gcp_auth.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -254,7 +269,7 @@ jobs:
           echo "- Workflow artifacts: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fail job when CUJ assertions fail
-        if: always() && steps.cuj.outputs.cuj_exit != '0'
+        if: always() && steps.verify_gcp_auth.outcome == 'success' && steps.cuj.outputs.cuj_exit != '0'
         shell: bash
         run: |
           echo "CUJ tests failed; see artifacts for details."
