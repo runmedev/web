@@ -406,6 +406,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.2.1(@types/react-dom@19.2.1(@types/react@19.2.2))(@types/react@19.2.2)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+      '@runmedev/renderers':
+        specifier: workspace:*
+        version: link:../renderers
       react:
         specifier: ^19.0.0
         version: 19.2.0
@@ -418,10 +421,6 @@ importers:
       react-router-dom:
         specifier: ^7.5.0
         version: 7.9.4(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
-    devDependencies:
-      '@runmedev/renderers':
-        specifier: workspace:*
-        version: link:../renderers
 
   packages/renderers:
     dependencies:

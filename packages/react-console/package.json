@@ -1,6 +1,6 @@
 {
   "name": "@runmedev/react-console",
-  "version": "3.16.6",
+  "version": "3.16.7",
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
@@ -18,7 +18,7 @@
   "files": [
     "dist"
   ],
-  "devDependencies": {
+  "dependencies": {
     "@runmedev/renderers": "workspace:*"
   },
   "peerDependencies": {
