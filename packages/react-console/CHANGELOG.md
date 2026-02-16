@@ -1,5 +1,13 @@
 # @runmedev/react-console
 
+## 3.16.7
+
+### Patch Changes
+
+- Move from dev to regular dependency to honor re-exports
+- Updated dependencies
+  - @runmedev/renderers@3.16.7
+
 ## 3.16.6
 
 ### Patch Changes
