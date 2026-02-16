@@ -1,5 +1,11 @@
 # @runmedev/renderers
 
+## 3.16.6
+
+### Patch Changes
+
+- Removed react-components
+
 ## 3.16.5
 
 ### Patch Changes
