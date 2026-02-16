@@ -70,6 +70,29 @@ function run(command: string, cwd = SCRIPT_DIR): CommandResult {
   };
 }
 
+function runNodeScript(scriptPath: string, cwd: string): CommandResult {
+  const timeoutMs = Number(process.env.CUJ_SCENARIO_TIMEOUT_MS ?? "240000");
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd,
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+  });
+  const errorCode =
+    typeof result.error === "object" && result.error !== null && "code" in result.error
+      ? String((result.error as { code?: string }).code ?? "")
+      : "";
+  const timedOut = errorCode === "ETIMEDOUT";
+  const timeoutHint = timedOut
+    ? `\n[CUJ] Scenario process timed out after ${timeoutMs}ms: ${scriptPath}\n`
+    : "";
+  return {
+    status: result.status ?? (timedOut ? 124 : 1),
+    stdout: result.stdout ?? "",
+    stderr: `${result.stderr ?? ""}${timeoutHint}`,
+  };
+}
+
 function printOutput(stdout: string, stderr: string): void {
   if (stdout.trim()) {
     process.stdout.write(stdout.endsWith("\n") ? stdout : `${stdout}\n`);
@@ -365,7 +388,7 @@ async function main(): Promise<void> {
       }
 
       const compiled = join(GENERATED_DIR, `${basename.replace(/\.ts$/, "")}.js`);
-      const runResult = run(`node ${compiled}`, APP_ROOT);
+      const runResult = runNodeScript(compiled, APP_ROOT);
       printOutput(runResult.stdout, runResult.stderr);
 
       const assertions = parseAssertions(`${runResult.stdout}\n${runResult.stderr}`);
