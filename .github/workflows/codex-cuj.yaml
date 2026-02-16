@@ -117,6 +117,7 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.gcp_auth.outputs.access_token }}
           CUJ_MANAGE_SERVERS: "true"
           CUJ_FRONTEND_CMD: "pnpm run dev:app"
           CUJ_BACKEND_CMD: "python3 -m http.server 9977"
