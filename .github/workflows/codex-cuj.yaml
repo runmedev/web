@@ -68,6 +68,12 @@ jobs:
           fi
           gcloud auth application-default print-access-token >/dev/null
 
+      - name: Verify GCS bucket access
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud storage ls "gs://runme-dev-assets" >/dev/null
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
