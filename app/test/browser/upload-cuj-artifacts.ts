@@ -61,13 +61,25 @@ function getAccessToken(): string {
     return explicit.trim();
   }
 
+  if (process.env.GITHUB_ACTIONS === "true") {
+    throw new Error(
+      "Missing GOOGLE_OAUTH_ACCESS_TOKEN/GCP_ACCESS_TOKEN in GitHub Actions environment; refusing gcloud fallback.",
+    );
+  }
+
+  const timeoutMs = Number(process.env.CUJ_GCLOUD_TOKEN_TIMEOUT_MS ?? "15000");
+
   // Prefer ADC; fall back to active gcloud user/service account auth for local runs.
   let result = spawnSync("gcloud", ["auth", "application-default", "print-access-token"], {
     encoding: "utf-8",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
   });
   if (result.status !== 0 || !result.stdout.trim()) {
     result = spawnSync("gcloud", ["auth", "print-access-token"], {
       encoding: "utf-8",
+      timeout: timeoutMs,
+      killSignal: "SIGKILL",
     });
   }
 
