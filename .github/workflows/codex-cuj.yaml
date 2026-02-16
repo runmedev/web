@@ -22,7 +22,6 @@ jobs:
   run-cuj-tests:
     runs-on: ubuntu-latest
     env:
-      CUJ_OUTPUT_DIR: app/test/browser/test-output
       GCP_PROJECT_ID: runme-lewi-dev
       GCP_PROJECT_NUMBER: "690012737568"
       GCP_WIF_POOL_ID: github-pool
@@ -54,7 +53,6 @@ jobs:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
       - name: Verify Google auth identity
-        id: verify_gcp_auth
         shell: bash
         run: |
           set -euo pipefail
@@ -80,10 +78,12 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: latest
+      - name: Enable corepack
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          pnpm --version
 
       - name: Install dependencies
         shell: bash
@@ -107,86 +107,23 @@ jobs:
           agent-browser --version
           agent-browser install
 
-      - name: Run CUJ scenarios
-        id: cuj
+      - name: Run CUJ orchestrator
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CUJ_MANAGE_SERVERS: "true"
+          CUJ_FRONTEND_CMD: "pnpm run dev:app"
+          CUJ_BACKEND_CMD: "python3 -m http.server 9977"
+          CUJ_UPLOAD: "true"
+          CUJ_COMMENT: "true"
+          CUJ_COMMENT_STRICT: "true"
+          CUJ_ARTIFACT_BUCKET: "runme-dev-assets"
         run: |
           set -euo pipefail
-          mkdir -p "${CUJ_OUTPUT_DIR}"
-          BACKEND_LOG="${CUJ_OUTPUT_DIR}/backend.log"
-          FRONTEND_LOG="${CUJ_OUTPUT_DIR}/frontend.log"
-          CUJ_LOG="${CUJ_OUTPUT_DIR}/cuj-run.log"
-          SUMMARY_JSON="${CUJ_OUTPUT_DIR}/summary.json"
-
-          # Lightweight backend stub for deterministic CI setup.
-          python3 -m http.server 9977 >"${BACKEND_LOG}" 2>&1 &
-          BACK_PID=$!
-
-          pnpm run dev:app >"${FRONTEND_LOG}" 2>&1 &
-          FRONT_PID=$!
-
-          cleanup() {
-            if kill -0 "${FRONT_PID}" 2>/dev/null; then kill "${FRONT_PID}" || true; fi
-            if kill -0 "${BACK_PID}" 2>/dev/null; then kill "${BACK_PID}" || true; fi
-          }
-          trap cleanup EXIT
-
-          for _ in $(seq 1 60); do
-            if curl -sf "http://localhost:5173" >/dev/null 2>&1; then
-              break
-            fi
-            sleep 1
-          done
-
-          for _ in $(seq 1 30); do
-            if curl -sf "http://localhost:9977" >/dev/null 2>&1; then
-              break
-            fi
-            sleep 1
-          done
-
-          set +e
-          pnpm -C app run cuj:run >"${CUJ_LOG}" 2>&1
-          CUJ_EXIT=$?
-          set -e
-
-          ASSERTIONS_LINE="$(grep -E 'Assertions:' "${CUJ_LOG}" | tail -1 || true)"
-          PASSED="$(echo "${ASSERTIONS_LINE}" | sed -E 's/.*Passed: ([0-9]+).*/\1/' || true)"
-          FAILED="$(echo "${ASSERTIONS_LINE}" | sed -E 's/.*Failed: ([0-9]+).*/\1/' || true)"
-          TOTAL="$(echo "${ASSERTIONS_LINE}" | sed -E 's/.*Assertions: ([0-9]+).*/\1/' || true)"
-          if [[ -z "${TOTAL}" || "${TOTAL}" == "${ASSERTIONS_LINE}" ]]; then TOTAL=0; fi
-          if [[ -z "${PASSED}" || "${PASSED}" == "${ASSERTIONS_LINE}" ]]; then PASSED=0; fi
-          if [[ -z "${FAILED}" || "${FAILED}" == "${ASSERTIONS_LINE}" ]]; then FAILED=0; fi
-
-          STATUS="PASS"
-          if [[ "${CUJ_EXIT}" != "0" ]]; then
-            STATUS="FAIL"
-          fi
-
-          cat > "${SUMMARY_JSON}" <<EOF
-          {
-            "status": "${STATUS}",
-            "exit_code": ${CUJ_EXIT},
-            "assertions_total": ${TOTAL},
-            "assertions_passed": ${PASSED},
-            "assertions_failed": ${FAILED},
-            "run_id": "${GITHUB_RUN_ID}",
-            "run_attempt": "${GITHUB_RUN_ATTEMPT}",
-            "sha": "${GITHUB_SHA}"
-          }
-          EOF
-
-          {
-            echo "cuj_exit=${CUJ_EXIT}"
-            echo "cuj_status=${STATUS}"
-            echo "assertions_total=${TOTAL}"
-            echo "assertions_passed=${PASSED}"
-            echo "assertions_failed=${FAILED}"
-          } >> "$GITHUB_OUTPUT"
+          pnpm -C app run cuj:run
 
       - name: Upload CUJ artifacts to Actions
-        id: upload_artifacts
-        if: always() && steps.verify_gcp_auth.outcome == 'success'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cuj-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
@@ -194,91 +131,3 @@ jobs:
             app/test/browser/test-output/**
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Upload CUJ artifacts to GCS
-        id: gcs_upload
-        if: always() && steps.verify_gcp_auth.outcome == 'success'
-        shell: bash
-        run: |
-          set -euo pipefail
-          gcloud auth application-default print-access-token >/dev/null
-          CUJ_OUTPUT_DIR="app/test/browser/test-output" \
-          CUJ_ARTIFACT_BUCKET="runme-dev-assets" \
-          CUJ_STATUS="${{ steps.cuj.outputs.cuj_status }}" \
-          CUJ_EXIT="${{ steps.cuj.outputs.cuj_exit }}" \
-          CUJ_ASSERTIONS_TOTAL="${{ steps.cuj.outputs.assertions_total }}" \
-          CUJ_ASSERTIONS_PASSED="${{ steps.cuj.outputs.assertions_passed }}" \
-          CUJ_ASSERTIONS_FAILED="${{ steps.cuj.outputs.assertions_failed }}" \
-          pnpm -C app run cuj:upload
-
-      - name: Create fallback PR comment body
-        if: always() && steps.verify_gcp_auth.outcome == 'success' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && (steps.gcs_upload.outcome != 'success')
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > app/test/browser/test-output/pr-comment.md <<EOF
-          <!-- cuj-report -->
-          ## CUJ Results
-
-          | Scenario | Status | Assertions | Artifacts |
-          | --- | --- | --- | --- |
-          | hello-world-local-notebook | ${{ steps.cuj.outputs.cuj_status }} | ${{ steps.cuj.outputs.assertions_total }} total (${{ steps.cuj.outputs.assertions_passed }} pass / ${{ steps.cuj.outputs.assertions_failed }} fail) | GCS upload unavailable; see workflow artifact bundle |
-
-          - [GitHub Actions run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
-          EOF
-
-      - name: Post PR comment with CUJ links
-        if: always() && steps.verify_gcp_auth.outcome == 'success' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require("fs");
-            const marker = "<!-- cuj-report -->";
-            const body = fs.readFileSync("app/test/browser/test-output/pr-comment.md", "utf8");
-            const issue_number = context.payload.pull_request.number;
-            const { owner, repo } = context.repo;
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner,
-              repo,
-              issue_number,
-              per_page: 100,
-            });
-            const existing = comments.find((c) => c.user.type === "Bot" && c.body && c.body.includes(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner,
-                repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number,
-                body,
-              });
-            }
-
-      - name: Add workflow summary
-        if: always() && steps.verify_gcp_auth.outcome == 'success'
-        shell: bash
-        run: |
-          set -euo pipefail
-          GCS_INDEX_URL="not published"
-          if [[ -f "app/test/browser/test-output/gcs-summary.json" ]]; then
-            GCS_INDEX_URL="$(jq -r '.index_url' app/test/browser/test-output/gcs-summary.json)"
-          fi
-          echo "## CUJ Results" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Status: ${{ steps.cuj.outputs.cuj_status }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Assertions: ${{ steps.cuj.outputs.assertions_total }} total, ${{ steps.cuj.outputs.assertions_passed }} passed, ${{ steps.cuj.outputs.assertions_failed }} failed" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Browse artifacts: ${GCS_INDEX_URL}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Workflow artifacts: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Fail job when CUJ assertions fail
-        if: always() && steps.verify_gcp_auth.outcome == 'success' && steps.cuj.outputs.cuj_exit != '0'
-        shell: bash
-        run: |
-          echo "CUJ tests failed; see artifacts for details."
-          exit 1

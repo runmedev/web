@@ -3,7 +3,7 @@ import { appendFileSync } from "node:fs";
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { extname, posix, resolve } from "node:path";
 
-type CujSummary = {
+export type CujSummary = {
   status: string;
   exit_code: number;
   assertions_total: number;
@@ -20,6 +20,22 @@ type UploadedFile = {
   size_bytes: number;
   content_type: string;
   url: string;
+};
+
+export type UploadResult = {
+  bucket: string;
+  prefix: string;
+  indexUrl: string;
+  manifestUrl: string;
+  prCommentPath: string;
+  summary: CujSummary;
+};
+
+export type UploadOptions = {
+  outputDir?: string;
+  bucket?: string;
+  prefix?: string;
+  summary?: Partial<CujSummary>;
 };
 
 function normalizePath(value: string): string {
@@ -41,20 +57,21 @@ function getAccessToken(): string {
     return explicit.trim();
   }
 
-  // Uses gcloud's ADC flow (service account via WIF/key, or local user ADC).
-  const result = spawnSync("gcloud", ["auth", "application-default", "print-access-token"], {
+  // Prefer ADC; fall back to active gcloud user/service account auth for local runs.
+  let result = spawnSync("gcloud", ["auth", "application-default", "print-access-token"], {
     encoding: "utf-8",
   });
-  if (result.status !== 0) {
-    throw new Error(
-      `Could not obtain Google access token from ADC. stderr: ${result.stderr.trim()}`,
-    );
+  if (result.status !== 0 || !result.stdout.trim()) {
+    result = spawnSync("gcloud", ["auth", "print-access-token"], {
+      encoding: "utf-8",
+    });
+  }
+
+  if (result.status !== 0 || !result.stdout.trim()) {
+    throw new Error(`Could not obtain Google access token. stderr: ${result.stderr.trim()}`);
   }
 
   const token = result.stdout.trim();
-  if (!token) {
-    throw new Error("gcloud returned an empty ADC access token");
-  }
   return token;
 }
 
@@ -162,24 +179,10 @@ function relativePath(root: string, absolutePath: string): string {
   return normalizedAbs;
 }
 
-async function main(): Promise<void> {
-  const outputDir = resolve(process.env.CUJ_OUTPUT_DIR ?? "test/browser/test-output");
-  const outputStat = await stat(outputDir).catch(() => null);
-  if (!outputStat || !outputStat.isDirectory()) {
-    throw new Error(`CUJ output directory not found: ${outputDir}`);
-  }
-
-  const bucket = process.env.CUJ_ARTIFACT_BUCKET ?? "runme-dev-assets";
-  const repository = process.env.GITHUB_REPOSITORY ?? "local/local";
+function buildDefaultSummary(): CujSummary {
   const runId = process.env.GITHUB_RUN_ID ?? `${Date.now()}`;
   const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? "1";
-  const safeRepo = repository.replace(/\//g, "-");
-  const prefix =
-    process.env.CUJ_ARTIFACT_PREFIX ??
-    posix.join("cuj-runs", safeRepo, runId, runAttempt);
-
-  const summaryPath = posix.join(normalizePath(outputDir), "summary.json");
-  let summary: CujSummary = {
+  return {
     status: process.env.CUJ_STATUS ?? "UNKNOWN",
     exit_code: getEnvNumber("CUJ_EXIT", -1),
     assertions_total: getEnvNumber("CUJ_ASSERTIONS_TOTAL", 0),
@@ -189,11 +192,38 @@ async function main(): Promise<void> {
     run_attempt: runAttempt,
     sha: process.env.GITHUB_SHA ?? "",
   };
+}
+
+export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<UploadResult> {
+  const outputDir = resolve(options.outputDir ?? process.env.CUJ_OUTPUT_DIR ?? "test/browser/test-output");
+  const outputStat = await stat(outputDir).catch(() => null);
+  if (!outputStat || !outputStat.isDirectory()) {
+    throw new Error(`CUJ output directory not found: ${outputDir}`);
+  }
+
+  const bucket = options.bucket ?? process.env.CUJ_ARTIFACT_BUCKET ?? "runme-dev-assets";
+  const repository = process.env.GITHUB_REPOSITORY ?? "local/local";
+  const runId = process.env.GITHUB_RUN_ID ?? `${Date.now()}`;
+  const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? "1";
+  const safeRepo = repository.replace(/\//g, "-");
+  const prefix =
+    options.prefix ??
+    process.env.CUJ_ARTIFACT_PREFIX ??
+    posix.join("cuj-runs", safeRepo, runId, runAttempt);
+
+  const summaryPath = posix.join(normalizePath(outputDir), "summary.json");
+  let summary: CujSummary = {
+    ...buildDefaultSummary(),
+    ...(options.summary ?? {}),
+  };
 
   const summaryRaw = await readFile(summaryPath, "utf-8").catch(() => "");
   if (summaryRaw.trim()) {
     try {
-      summary = JSON.parse(summaryRaw) as CujSummary;
+      summary = {
+        ...(JSON.parse(summaryRaw) as CujSummary),
+        ...(options.summary ?? {}),
+      };
     } catch (error) {
       console.warn(`Could not parse summary.json at ${summaryPath}: ${error}`);
     }
@@ -222,7 +252,6 @@ async function main(): Promise<void> {
 
   const token = getAccessToken();
   const uploaded: UploadedFile[] = [];
-
   for (const file of filesToUpload) {
     const objectName = posix.join(prefix, normalizePath(file.relative));
     const result = await uploadObject(token, bucket, objectName, file.absolute);
@@ -391,9 +420,24 @@ async function main(): Promise<void> {
   console.log(`Uploaded ${uploaded.length} files to gs://${bucket}/${prefix}`);
   console.log(`Index: ${indexHtmlUpload.url}`);
   console.log(`Manifest: ${manifestUpload.url}`);
+
+  return {
+    bucket,
+    prefix,
+    indexUrl: indexHtmlUpload.url,
+    manifestUrl: manifestUpload.url,
+    prCommentPath,
+    summary,
+  };
 }
 
-main().catch((error) => {
-  console.error(`upload-cuj-artifacts failed: ${error instanceof Error ? error.stack : error}`);
-  process.exit(1);
-});
+async function main(): Promise<void> {
+  await uploadCujArtifacts();
+}
+
+if (import.meta.url === new URL(process.argv[1], "file://").href) {
+  main().catch((error) => {
+    console.error(`upload-cuj-artifacts failed: ${error instanceof Error ? error.stack : error}`);
+    process.exit(1);
+  });
+}
