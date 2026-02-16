@@ -32,11 +32,25 @@ let totalCount = 0;
  * Run a shell command and return captured stdout/stderr/status.
  */
 function run(command: string): { status: number; stdout: string; stderr: string } {
-  const result = spawnSync(command, { shell: true, encoding: "utf-8" });
+  const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "60000");
+  const result = spawnSync(command, {
+    shell: true,
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+  });
+  const errorCode =
+    typeof result.error === "object" && result.error !== null && "code" in result.error
+      ? String((result.error as { code?: string }).code ?? "")
+      : "";
+  const timedOut = errorCode === "ETIMEDOUT";
+  const timeoutHint = timedOut
+    ? `\n[scenario-timeout] command timed out after ${timeoutMs}ms: ${command}\n`
+    : "";
   return {
-    status: result.status ?? 1,
+    status: result.status ?? (timedOut ? 124 : 1),
     stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
+    stderr: `${result.stderr ?? ""}${timeoutHint}`,
   };
 }
 

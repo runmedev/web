@@ -49,15 +49,24 @@ function fetchWithTimeout(
 const SCENARIO_DRIVERS = [join(SCRIPT_DIR, "test-scenario-hello-world.ts")];
 
 function run(command: string, cwd = SCRIPT_DIR): CommandResult {
+  const timeoutMs = Number(process.env.CUJ_CMD_TIMEOUT_MS ?? "240000");
   const result = spawnSync(command, {
     shell: true,
     encoding: "utf-8",
     cwd,
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
   });
+  const errorCode =
+    typeof result.error === "object" && result.error !== null && "code" in result.error
+      ? String((result.error as { code?: string }).code ?? "")
+      : "";
+  const timedOut = errorCode === "ETIMEDOUT";
+  const timeoutHint = timedOut ? `\n[CUJ] Command timed out after ${timeoutMs}ms: ${command}\n` : "";
   return {
-    status: result.status ?? 1,
+    status: result.status ?? (timedOut ? 124 : 1),
     stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
+    stderr: `${result.stderr ?? ""}${timeoutHint}`,
   };
 }
 
