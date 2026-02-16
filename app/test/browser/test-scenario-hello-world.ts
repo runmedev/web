@@ -32,7 +32,7 @@ let totalCount = 0;
  * Run a shell command and return captured stdout/stderr/status.
  */
 function run(command: string): { status: number; stdout: string; stderr: string } {
-  const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "20000");
+  const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "10000");
   const result = spawnSync(command, {
     shell: true,
     encoding: "utf-8",
@@ -47,6 +47,9 @@ function run(command: string): { status: number; stdout: string; stderr: string 
   const timeoutHint = timedOut
     ? `\n[scenario-timeout] command timed out after ${timeoutMs}ms: ${command}\n`
     : "";
+  if (timedOut && command.trim().startsWith("agent-browser ")) {
+    throw new Error(timeoutHint.trim());
+  }
   return {
     status: result.status ?? (timedOut ? 124 : 1),
     stdout: result.stdout ?? "",
