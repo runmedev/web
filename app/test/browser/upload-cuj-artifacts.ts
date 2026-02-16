@@ -38,6 +38,10 @@ export type UploadOptions = {
   summary?: Partial<CujSummary>;
 };
 
+const DEFAULT_UPLOAD_HTTP_TIMEOUT_MS = Number(
+  process.env.CUJ_UPLOAD_HTTP_TIMEOUT_MS ?? process.env.CUJ_HTTP_TIMEOUT_MS ?? "120000",
+);
+
 function normalizePath(value: string): string {
   return value.replace(/\\/g, "/");
 }
@@ -150,6 +154,7 @@ async function uploadObject(
       "Cache-Control": "no-store",
     },
     body,
+    signal: AbortSignal.timeout(DEFAULT_UPLOAD_HTTP_TIMEOUT_MS),
   });
 
   if (!response.ok) {

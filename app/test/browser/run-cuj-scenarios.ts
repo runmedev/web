@@ -32,6 +32,19 @@ const GENERATED_DIR = join(SCRIPT_DIR, ".generated");
 const OUTPUT_DIR = join(SCRIPT_DIR, "test-output");
 const REPO_ROOT = resolve(SCRIPT_DIR, "..", "..", "..");
 const APP_ROOT = resolve(SCRIPT_DIR, "..", "..");
+const DEFAULT_HTTP_TIMEOUT_MS = Number(process.env.CUJ_HTTP_TIMEOUT_MS ?? "20000");
+
+function fetchWithTimeout(
+  input: string,
+  init: RequestInit = {},
+  timeoutMs = DEFAULT_HTTP_TIMEOUT_MS,
+): Promise<Response> {
+  const withSignal: RequestInit = {
+    ...init,
+    signal: init.signal ?? AbortSignal.timeout(timeoutMs),
+  };
+  return fetch(input, withSignal);
+}
 
 const SCENARIO_DRIVERS = [join(SCRIPT_DIR, "test-scenario-hello-world.ts")];
 
@@ -109,7 +122,7 @@ async function waitForHttp(url: string, timeoutMs: number, label: string): Promi
   let lastError = "unknown";
   while (Date.now() < deadline) {
     try {
-      const resp = await fetch(url);
+      const resp = await fetchWithTimeout(url, {}, 5_000);
       if (resp.ok || resp.status < 500) {
         return;
       }
@@ -233,9 +246,10 @@ async function postOrUpdatePrComment(commentFilePath: string): Promise<void> {
   };
 
   try {
-    const commentsResp = await fetch(
+    const commentsResp = await fetchWithTimeout(
       `https://api.github.com/repos/${repo}/issues/${prNumber}/comments?per_page=100`,
       { headers },
+      20_000,
     );
     if (!commentsResp.ok) {
       throw new Error(`Could not list PR comments: HTTP ${commentsResp.status}`);
@@ -244,13 +258,14 @@ async function postOrUpdatePrComment(commentFilePath: string): Promise<void> {
     const existing = comments.find((comment) => comment.body?.includes(marker));
 
     if (existing) {
-      const updateResp = await fetch(
+      const updateResp = await fetchWithTimeout(
         `https://api.github.com/repos/${repo}/issues/comments/${existing.id}`,
         {
           method: "PATCH",
           headers,
           body: JSON.stringify({ body }),
         },
+        20_000,
       );
       if (!updateResp.ok) {
         throw new Error(`Could not update PR comment: HTTP ${updateResp.status}`);
@@ -259,11 +274,15 @@ async function postOrUpdatePrComment(commentFilePath: string): Promise<void> {
       return;
     }
 
-    const createResp = await fetch(`https://api.github.com/repos/${repo}/issues/${prNumber}/comments`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ body }),
-    });
+    const createResp = await fetchWithTimeout(
+      `https://api.github.com/repos/${repo}/issues/${prNumber}/comments`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ body }),
+      },
+      20_000,
+    );
     if (!createResp.ok) {
       throw new Error(`Could not create PR comment: HTTP ${createResp.status}`);
     }
