@@ -21,6 +21,7 @@ concurrency:
 jobs:
   run-cuj-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       GCP_PROJECT_ID: runme-lewi-dev
       GCP_PROJECT_NUMBER: "690012737568"
@@ -126,6 +127,9 @@ jobs:
           CUJ_COMMENT_STRICT: "false"
           CUJ_FAIL_ON_SCENARIO_FAILURE: "false"
           CUJ_ARTIFACT_BUCKET: "runme-dev-assets"
+          CUJ_CMD_TIMEOUT_MS: "120000"
+          CUJ_SCENARIO_TIMEOUT_MS: "120000"
+          CUJ_SCENARIO_CMD_TIMEOUT_MS: "10000"
         run: |
           set -euo pipefail
           pnpm -C app run cuj:run
