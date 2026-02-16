@@ -15,8 +15,14 @@ const FRONTEND_URL = "http://localhost:5173";
 const BACKEND_URL = "http://localhost:9977";
 const SCENARIO_NOTEBOOK_NAME = "scenario-hello-world.runme.md";
 
-const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const CURRENT_FILE_DIR = dirname(fileURLToPath(import.meta.url));
+// When executed from .generated, emit artifacts to the source browser test dir.
+const SCRIPT_DIR =
+  CURRENT_FILE_DIR.endsWith("/.generated") || CURRENT_FILE_DIR.endsWith("\\.generated")
+    ? dirname(CURRENT_FILE_DIR)
+    : CURRENT_FILE_DIR;
 const OUTPUT_DIR = join(SCRIPT_DIR, "test-output");
+const MOVIE_PATH = join(OUTPUT_DIR, "scenario-hello-world-walkthrough.webm");
 
 let passCount = 0;
 let failCount = 0;
@@ -80,12 +86,19 @@ function firstRef(snapshot: string, pattern: RegExp): string | null {
   if (!line) {
     return null;
   }
-  const match = line.match(/@[a-zA-Z0-9]+/);
-  return match ? match[0] : null;
+  const legacyRef = line.match(/@[a-zA-Z0-9]+/);
+  if (legacyRef) {
+    return legacyRef[0];
+  }
+
+  // Newer agent-browser snapshots expose refs as [ref=e11].
+  const currentRef = line.match(/\[ref=([^\]]+)\]/);
+  return currentRef ? currentRef[1] : null;
 }
 
 mkdirSync(OUTPUT_DIR, { recursive: true });
 rmSync(join(OUTPUT_DIR, "scenario-hello-world-01-initial.png"), { force: true });
+rmSync(MOVIE_PATH, { force: true });
 for (const file of [
   "scenario-hello-world-02-after-seed.txt",
   "scenario-hello-world-03-console-output.txt",
@@ -117,6 +130,7 @@ if (
 }
 
 runOrThrow(`agent-browser open ${FRONTEND_URL}`);
+runOrThrow(`agent-browser record start ${MOVIE_PATH}`);
 run("agent-browser wait 3500");
 run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-hello-world-01-initial.png")}`);
 
@@ -164,27 +178,25 @@ writeArtifact("scenario-hello-world-02-after-seed.txt", snapshot);
 const consoleRef = firstRef(snapshot, /Terminal input/i);
 if (!consoleRef) {
   fail("Did not find AppConsole terminal input");
-  run("agent-browser close");
-  process.exit(1);
-}
-
-run(`agent-browser click ${consoleRef}`);
-run(`agent-browser type ${consoleRef} "aisreRunners.update('local','http://localhost:9977')"`);
-run("agent-browser press Enter");
-run("agent-browser wait 500");
-run(`agent-browser type ${consoleRef} "aisreRunners.setDefault('local')"`);
-run("agent-browser press Enter");
-run("agent-browser wait 500");
-run(`agent-browser type ${consoleRef} "aisreRunners.getDefault()"`);
-run("agent-browser press Enter");
-run("agent-browser wait 1000");
-
-const consoleOutput = run("agent-browser get text '#app-console-output'").stdout;
-writeArtifact("scenario-hello-world-03-console-output.txt", consoleOutput);
-if (consoleOutput.includes("Default runner: local")) {
-  pass("Configured local runner and set default");
 } else {
-  fail("Default runner output did not report local");
+  run(`agent-browser click ${consoleRef}`);
+  run(`agent-browser type ${consoleRef} "aisreRunners.update('local','http://localhost:9977')"`);
+  run("agent-browser press Enter");
+  run("agent-browser wait 500");
+  run(`agent-browser type ${consoleRef} "aisreRunners.setDefault('local')"`);
+  run("agent-browser press Enter");
+  run("agent-browser wait 500");
+  run(`agent-browser type ${consoleRef} "aisreRunners.getDefault()"`);
+  run("agent-browser press Enter");
+  run("agent-browser wait 1000");
+
+  const consoleOutput = run("agent-browser get text '#app-console-output'").stdout;
+  writeArtifact("scenario-hello-world-03-console-output.txt", consoleOutput);
+  if (consoleOutput.includes("Default runner: local")) {
+    pass("Configured local runner and set default");
+  } else {
+    fail("Default runner output did not report local");
+  }
 }
 
 snapshot = run("agent-browser snapshot -i").stdout;
@@ -230,6 +242,8 @@ if (/hello world/i.test(snapshot)) {
   fail("Did not observe hello world in UI snapshot");
 }
 
+run("agent-browser record stop");
 run("agent-browser close");
+console.log(`Movie: ${MOVIE_PATH}`);
 console.log(`Assertions: ${totalCount}, Passed: ${passCount}, Failed: ${failCount}`);
 process.exit(failCount === 0 ? 0 : 1);

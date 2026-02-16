@@ -36,3 +36,8 @@ packages/react-console/gen
 
 # local releaser build artifact
 /releaser/releaser
+
+# CUJ generated outputs
+/app/.generated/
+/app/test/browser/.generated/
+/app/test/browser/test-output/*

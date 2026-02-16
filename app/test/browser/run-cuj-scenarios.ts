@@ -40,23 +40,23 @@ function run(command: string): { status: number; stdout: string; stderr: string 
   };
 }
 
-/**
- * Run shell command and throw when it fails.
- */
-function runOrThrow(command: string): string {
-  const result = run(command);
-  if (result.status !== 0) {
-    throw new Error(`Command failed: ${command}\n${result.stderr}`);
+function printOutput(stdout: string, stderr: string): void {
+  if (stdout.trim()) {
+    process.stdout.write(stdout.endsWith("\n") ? stdout : `${stdout}\n`);
   }
-  return result.stdout;
+  if (stderr.trim()) {
+    process.stderr.write(stderr.endsWith("\n") ? stderr : `${stderr}\n`);
+  }
 }
+
+let failures = 0;
 
 for (const scenarioDriver of SCENARIO_DRIVERS) {
   const basename = scenarioDriver.split("/").at(-1) ?? scenarioDriver;
   console.log(`[CUJ] Running ${basename}`);
 
   // Compile each TS scenario into .generated so Node can execute it.
-  runOrThrow(
+  const compileResult = run(
     [
       "pnpm exec tsc",
       "--target es2020",
@@ -68,13 +68,32 @@ for (const scenarioDriver of SCENARIO_DRIVERS) {
       scenarioDriver,
     ].join(" "),
   );
+  printOutput(compileResult.stdout, compileResult.stderr);
+  if (compileResult.status !== 0) {
+    failures += 1;
+    console.error(`[CUJ] Failed ${basename} (compile exit ${compileResult.status})`);
+    console.log("");
+    continue;
+  }
 
   const compiled = join(
     GENERATED_DIR,
     `${basename.replace(/\.ts$/, "")}.js`,
   );
-  runOrThrow(`node ${compiled}`);
+  const runResult = run(`node ${compiled}`);
+  printOutput(runResult.stdout, runResult.stderr);
+  if (runResult.status !== 0) {
+    failures += 1;
+    console.error(`[CUJ] Failed ${basename} (exit ${runResult.status})`);
+    console.log("");
+    continue;
+  }
 
   console.log(`[CUJ] Completed ${basename}`);
   console.log("");
+}
+
+if (failures > 0) {
+  console.error(`[CUJ] ${failures} scenario(s) failed`);
+  process.exit(1);
 }
