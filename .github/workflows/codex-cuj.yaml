@@ -23,6 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CUJ_OUTPUT_DIR: app/test/browser/test-output
+      GCP_PROJECT_ID: runme-lewi-dev
+      GCP_PROJECT_NUMBER: "690012737568"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -151,16 +153,21 @@ jobs:
 
       - name: Authenticate to Google Cloud
         id: gcp_auth
-        if: always() && secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+        if: always() && vars.GCP_WORKLOAD_IDENTITY_POOL_ID != '' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER_ID != '' && vars.GCP_SERVICE_ACCOUNT_EMAIL != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: projects/${{ env.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/${{ vars.GCP_WORKLOAD_IDENTITY_POOL_ID }}/providers/${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER_ID }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/cloud-platform
           create_credentials_file: true
+          export_environment_variables: true
 
       - name: Setup gcloud
         if: always() && steps.gcp_auth.outcome == 'success'
         uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
 
       - name: Upload CUJ artifacts to GCS
         id: gcs_upload
