@@ -21,6 +21,7 @@ type ServiceHandle = {
   name: string;
   process: ChildProcess;
   logPath: string;
+  logStream: ReturnType<typeof createWriteStream>;
 };
 
 const CURRENT_FILE_DIR = dirname(fileURLToPath(import.meta.url));
@@ -127,11 +128,18 @@ function startService(name: string, command: string, cwd: string, logPath: strin
     logStream.end();
   });
 
-  return { name, process: child, logPath };
+  return { name, process: child, logPath, logStream };
 }
 
 async function stopService(service: ServiceHandle): Promise<void> {
+  const closeLogStream = (): void => {
+    if (!service.logStream.closed && !service.logStream.destroyed) {
+      service.logStream.end();
+    }
+  };
+
   if (service.process.exitCode !== null || service.process.killed) {
+    closeLogStream();
     return;
   }
   service.process.kill("SIGTERM");
@@ -147,6 +155,9 @@ async function stopService(service: ServiceHandle): Promise<void> {
       resolveStop();
     });
   });
+  service.process.stdout?.destroy();
+  service.process.stderr?.destroy();
+  closeLogStream();
 }
 
 async function waitForHttp(url: string, timeoutMs: number, label: string): Promise<void> {
