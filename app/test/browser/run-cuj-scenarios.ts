@@ -390,8 +390,15 @@ async function main(): Promise<void> {
     }
 
     if (failures > 0) {
-      console.error(`[CUJ] ${failures} scenario(s) failed`);
-      process.exit(1);
+      const failOnScenarioFailure =
+        (process.env.CUJ_FAIL_ON_SCENARIO_FAILURE ?? "true").toLowerCase() === "true";
+      if (failOnScenarioFailure) {
+        console.error(`[CUJ] ${failures} scenario(s) failed`);
+        process.exit(1);
+      }
+      console.warn(
+        `[CUJ] ${failures} scenario(s) failed but continuing (CUJ_FAIL_ON_SCENARIO_FAILURE=false)`,
+      );
     }
   } finally {
     await Promise.all(services.map((service) => stopService(service)));

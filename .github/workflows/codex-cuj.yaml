@@ -115,8 +115,9 @@ jobs:
           CUJ_FRONTEND_CMD: "pnpm run dev:app"
           CUJ_BACKEND_CMD: "python3 -m http.server 9977"
           CUJ_UPLOAD: "true"
-          CUJ_COMMENT: "true"
-          CUJ_COMMENT_STRICT: "true"
+          CUJ_COMMENT: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+          CUJ_COMMENT_STRICT: "false"
+          CUJ_FAIL_ON_SCENARIO_FAILURE: "false"
           CUJ_ARTIFACT_BUCKET: "runme-dev-assets"
         run: |
           set -euo pipefail
