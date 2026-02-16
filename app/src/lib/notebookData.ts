@@ -68,6 +68,7 @@ export const bindStreamsToCell: StreamBinder = ({
    * the start of the stream or when a newline boundary is reached.
    */
   let stdoutBuffer = "";
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
   const textDecoder = new TextDecoder();
   const textEncoder = new TextEncoder();
 
@@ -197,8 +198,11 @@ export const bindStreamsToCell: StreamBinder = ({
   /**
    * appendStdoutChunk parses stdout chunks into lines, detects IOPub messages,
    * and routes them into an IOPub buffer while preserving normal stdout.
+   *
+   * Returns `true` if the chunk was deferred (first partial line awaiting
+   * classification), meaning the caller should NOT schedule a flush timer.
    */
-  const appendStdoutChunk = (chunk: Uint8Array) => {
+  const appendStdoutChunk = (chunk: Uint8Array): boolean => {
     const chunkText = textDecoder.decode(chunk);
     const hadBuffer = stdoutBuffer.length > 0;
     stdoutBuffer += chunkText;
@@ -208,7 +212,7 @@ export const bindStreamsToCell: StreamBinder = ({
 
     if (!hadBuffer && lines.length === 0 && stdoutBuffer) {
       // Stream just started with a partial line; we'll classify it once a newline arrives.
-      return;
+      return true;
     }
 
     lines.forEach((line) => {
@@ -223,6 +227,8 @@ export const bindStreamsToCell: StreamBinder = ({
         textEncoder.encode(`${line}\n`),
       );
     });
+
+    return false;
   };
 
   /**
@@ -251,7 +257,21 @@ export const bindStreamsToCell: StreamBinder = ({
   };
 
   const subs = [
-    streams.stdout.subscribe((data) => appendStdoutChunk(data)),
+    streams.stdout.subscribe((data) => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      const deferred = appendStdoutChunk(data);
+      // Schedule a flush for partial lines so prompts without trailing \n appear.
+      // Skip when deferred (first partial chunk awaiting IOPub classification).
+      if (stdoutBuffer && !deferred) {
+        flushTimer = setTimeout(() => {
+          flushTimer = null;
+          flushStdoutBuffer();
+        }, 150);
+      }
+    }),
     streams.stderr.subscribe((data) =>
       appendBuffer(MimeType.VSCodeNotebookStdErr, data),
     ),
@@ -262,6 +282,10 @@ export const bindStreamsToCell: StreamBinder = ({
       updateCell(updated);
     }),
     streams.exitCode.subscribe((code) => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
       const updated = getCell(refId);
       if (!updated || !updated.metadata) return;
       updated.metadata[RunmeMetadataKey.ExitCode] = code.toString();
@@ -276,6 +300,10 @@ export const bindStreamsToCell: StreamBinder = ({
       // no-op for now
     }),
     streams.errors.subscribe((err) => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
       console.error("Stream error", err);
       const now = Date.now();
       if (now - lastToastAt >= toastThrottleMs) {
@@ -297,6 +325,10 @@ export const bindStreamsToCell: StreamBinder = ({
 
   return {
     dispose() {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
       subs.forEach((s) => s.unsubscribe());
       streams.close();
     },

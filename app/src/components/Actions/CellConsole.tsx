@@ -129,6 +129,7 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
   const winsizeRef = useRef<{ cols: number; rows: number }>({ cols: 0, rows: 0 });
   const wroteInitialForRun = useRef<string | null>(null);
   const stdoutBufferRef = useRef("");
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cell =
     useSyncExternalStore(
@@ -251,6 +252,12 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
 
     if (stream) { 
       const stdoutSub = stream.stdout.subscribe((data: Uint8Array) => {
+        // Clear any pending flush timer since we're processing new data.
+        if (flushTimerRef.current) {
+          clearTimeout(flushTimerRef.current);
+          flushTimerRef.current = null;
+        }
+
         const chunkText = textDecoder.decode(data);
         stdoutBufferRef.current += chunkText;
 
@@ -268,6 +275,15 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
           }
           writeToTerminal(textEncoder.encode(`${line}\n`));
         });
+
+        // If there's a partial line remaining, schedule a flush so prompts
+        // like "Password:" that don't end with \n still appear.
+        if (stdoutBufferRef.current) {
+          flushTimerRef.current = setTimeout(() => {
+            flushTimerRef.current = null;
+            flushStdoutBuffer();
+          }, 150);
+        }
       });
       disposers.push(() => stdoutSub.unsubscribe());
 
@@ -289,6 +305,10 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
     }
     
     return () => {
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
       disposers.forEach((fn) => fn());
     };
     // Only recreate subscriptions/console when the run changes; callbacks are stable.

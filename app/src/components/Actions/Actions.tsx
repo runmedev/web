@@ -27,9 +27,11 @@ import Editor from "./Editor";
 import MarkdownCell from "./MarkdownCell";
 import { IOPUB_INCOMPLETE_METADATA_KEY } from "../../lib/ipykernel";
 import {
+  ErrorIcon,
   PlayIcon,
   PlusIcon,
   SpinnerIcon,
+  SuccessIcon,
   TrashIcon,
 } from "./icons";
 //import { useRun } from "../../lib/useRun.js";
@@ -71,31 +73,59 @@ TabPanel.displayName = "TabPanel";
 // them. Inactive tabs are taken out of flow via absolute positioning and hidden
 // visibility so they don't visually overlap yet retain their state.
 
+export type CellExecState = "idle" | "pending" | "running" | "success" | "error";
+
 /** Compact icon-only run button that sits in the cell toolbar.
- *  Shows a spinner while running, otherwise always shows the play icon. */
+ *  Shows a spinner while pending/running, success/error icons after completion. */
 function RunActionButton({
-  pid,
+  execState,
+  exitCode,
   onClick,
 }: {
-  pid: number | null;
+  execState: CellExecState;
+  exitCode: number | null;
   onClick: () => void;
 }) {
-  const isRunning = pid !== null;
+  const [faded, setFaded] = useState(false);
+
+  useEffect(() => {
+    if (execState === "success") {
+      setFaded(false);
+      const timer = setTimeout(() => setFaded(true), 2000);
+      return () => clearTimeout(timer);
+    }
+    setFaded(false);
+  }, [execState]);
+
+  let icon: React.ReactNode;
+  if (execState === "pending" || execState === "running") {
+    icon = (
+      <div className="animate-spin">
+        <SpinnerIcon />
+      </div>
+    );
+  } else if (execState === "success" && !faded) {
+    icon = <SuccessIcon />;
+  } else if (execState === "error" && exitCode !== null) {
+    icon = <ErrorIcon exitCode={exitCode} />;
+  } else {
+    icon = <PlayIcon />;
+  }
 
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={isRunning ? "Running..." : "Run code"}
+      aria-label={
+        execState === "pending" || execState === "running"
+          ? "Running..."
+          : execState === "error"
+            ? `Error (exit ${exitCode})`
+            : "Run code"
+      }
       className="icon-btn h-7 w-7"
     >
-      {isRunning ? (
-        <div className="animate-spin">
-          <SpinnerIcon />
-        </div>
-      ) : (
-        <PlayIcon />
-      )}
+      {icon}
     </button>
   );
 }
@@ -313,14 +343,37 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
   const [markdownEditRequest, setMarkdownEditRequest] = useState(0);
   const [pid, setPid] = useState<number | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
+  const [pending, setPending] = useState(false);
 
-  // When an exit code arrives, clear the pid so the spinner stops.
+  // When an exit code arrives, clear the pid and pending so the state resolves.
   const handleExitCode = useCallback((code: number | null) => {
     setExitCode(code);
+    setPending(false);
     if (code !== null) {
       setPid(null);
     }
   }, []);
+
+  // When a PID arrives, clear pending (transitions to "running").
+  const handlePid = useCallback((newPid: number | null) => {
+    setPid(newPid);
+    if (newPid !== null) {
+      setPending(false);
+    }
+  }, []);
+
+  const execState: CellExecState = useMemo(() => {
+    if (exitCode !== null) {
+      return exitCode === 0 ? "success" : "error";
+    }
+    if (pid !== null) {
+      return "running";
+    }
+    if (pending) {
+      return "pending";
+    }
+    return "idle";
+  }, [exitCode, pid, pending]);
 
   useEffect(() => {
     if (!contextMenu) {
@@ -366,6 +419,9 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
   }, [contextMenu]);
 
   const runCode = useCallback(() => {
+    setPending(true);
+    setPid(null);
+    setExitCode(null);
     cellData.run();
   }, [cellData]);
 
@@ -384,15 +440,12 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
   }, [cellData]);
 
   const sequenceLabel = useMemo(() => {
-    if (!cell) {
-      return " ";
-    }
+    if (execState === "error") return "!";
+    if (execState === "pending" || execState === "running") return "*";
+    if (!cell) return " ";
     const seq = Number(cell.metadata[RunmeMetadataKey.Sequence]);
-    if (!seq) {
-      return " ";
-    }
-    return seq.toString();
-  }, [cell, pid, exitCode]);
+    return seq ? seq.toString() : " ";
+  }, [cell, execState]);
 
   const selectedLanguage = useMemo(() => {
     if (!cell) {
@@ -443,7 +496,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
         <WebContainerConsole
           key={`webcontainer-${cell.refId}`}
           cell={cell}
-          onPid={setPid}
+          onPid={handlePid}
           onExitCode={handleExitCode}
         />
       );
@@ -488,7 +541,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
       <CellConsole
         key={`console-${cell?.refId ?? "cell"}-${runID}`}
         cellData={cellData}
-        onPid={setPid}
+        onPid={handlePid}
         onExitCode={handleExitCode}
       />
     );
@@ -661,6 +714,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
         <div
           id={`cell-card-${cell.refId}`}
           className="cell-card"
+          data-exec-state={execState}
         >
           {/* Code editor section — overflow-hidden keeps border-radius clipping on the editor */}
           <div className="overflow-hidden rounded-t-nb-md">
@@ -720,14 +774,23 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
                   </option>
                 ))}
               </select>
-              {sequenceLabel.trim() && (
-                <span className="text-[11px] font-mono text-nb-text-faint">
-                  [{sequenceLabel}]
-                </span>
-              )}
+              <span
+                className={`text-[11px] font-mono ${
+                  execState === "error"
+                    ? "text-red-500"
+                    : execState === "pending" || execState === "running"
+                      ? "text-amber-500"
+                      : execState === "success"
+                        ? "text-green-600"
+                        : "text-nb-text-faint"
+                }`}
+                data-testid="cell-bracket"
+              >
+                [{sequenceLabel}]
+              </span>
             </div>
             <div className="flex items-center gap-1">
-              <RunActionButton pid={pid} onClick={runCode} />
+              <RunActionButton execState={execState} exitCode={exitCode} onClick={runCode} />
               <button
                 type="button"
                 aria-label="Delete cell"
