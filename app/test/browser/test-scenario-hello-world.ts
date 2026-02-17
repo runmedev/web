@@ -126,12 +126,25 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function escapeDoubleQuotes(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function runAppConsoleCommand(consoleRef: string, command: string): string {
+  run(`agent-browser click ${consoleRef}`);
+  run(`agent-browser type ${consoleRef} "${escapeDoubleQuotes(command)}"`);
+  run("agent-browser press Enter");
+  run("agent-browser wait 900");
+  return run("agent-browser get text '#app-console-output'").stdout;
+}
+
 mkdirSync(OUTPUT_DIR, { recursive: true });
 rmSync(join(OUTPUT_DIR, "scenario-hello-world-01-initial.png"), { force: true });
 rmSync(MOVIE_PATH, { force: true });
 for (const file of [
   "scenario-hello-world-02-after-seed.txt",
   "scenario-hello-world-03-console-output.txt",
+  "scenario-hello-world-03b-runner-setup.txt",
   "scenario-hello-world-04-before-open.txt",
   "scenario-hello-world-04b-after-expand.txt",
   "scenario-hello-world-05-opened-notebook.txt",
@@ -242,6 +255,44 @@ if (!consoleRef) {
   const consoleOutput = run("agent-browser get text '#app-console-output'").stdout;
   writeArtifact("scenario-hello-world-03-console-output.txt", consoleOutput);
   pass("Found AppConsole terminal input");
+
+  const runnerName = "local";
+  const runnerEndpoint = "ws://localhost:9977/ws";
+
+  const updateOutput = runAppConsoleCommand(
+    consoleRef,
+    `app.runners.update("${runnerName}", "${runnerEndpoint}")`,
+  );
+  if (updateOutput.includes(`Runner ${runnerName} set to ${runnerEndpoint}`)) {
+    pass("Configured local runner endpoint via app.runners.update");
+  } else {
+    fail("Failed to configure runner endpoint via app.runners.update");
+  }
+
+  const getOutput = runAppConsoleCommand(consoleRef, "app.runners.get()");
+  if (getOutput.includes(`${runnerName}: ${runnerEndpoint}`)) {
+    pass("Confirmed configured runner via app.runners.get");
+  } else {
+    fail("app.runners.get did not report expected local runner endpoint");
+  }
+
+  const setDefaultOutput = runAppConsoleCommand(
+    consoleRef,
+    `app.runners.setDefault("${runnerName}")`,
+  );
+  if (setDefaultOutput.includes(`Default runner set to ${runnerName}`)) {
+    pass("Set default runner via app.runners.setDefault");
+  } else {
+    fail("Failed to set default runner via app.runners.setDefault");
+  }
+
+  const getDefaultOutput = runAppConsoleCommand(consoleRef, "app.runners.getDefault()");
+  writeArtifact("scenario-hello-world-03b-runner-setup.txt", getDefaultOutput);
+  if (getDefaultOutput.includes(`Default runner: ${runnerName} (${runnerEndpoint})`)) {
+    pass("Confirmed default runner via app.runners.getDefault");
+  } else {
+    fail("app.runners.getDefault did not report expected local default runner");
+  }
 }
 
 snapshot = run("agent-browser snapshot -i").stdout;

@@ -12,6 +12,8 @@ export type CujSummary = {
   run_id: string;
   run_attempt: string;
   sha: string;
+  repository?: string;
+  pr_number?: number;
 };
 
 type ScenarioResult = {
@@ -211,9 +213,86 @@ function relativePath(root: string, absolutePath: string): string {
   return normalizedAbs;
 }
 
+function normalizeRepository(value: string | undefined | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = trimmed
+    .replace(/^git@github\.com:/, "")
+    .replace(/^ssh:\/\/git@github\.com\//, "")
+    .replace(/^https?:\/\/github\.com\//, "")
+    .replace(/\.git$/, "")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+  if (/^[^/\s]+\/[^/\s]+$/.test(normalized)) {
+    return normalized;
+  }
+  const fallbackMatch = trimmed.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/);
+  if (fallbackMatch?.[1] && /^[^/\s]+\/[^/\s]+$/.test(fallbackMatch[1])) {
+    return fallbackMatch[1];
+  }
+  return null;
+}
+
+function parsePositiveInt(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function parsePrNumberFromGithubRef(ref: string | undefined): number | null {
+  if (!ref) {
+    return null;
+  }
+  const match = ref.match(/refs\/pull\/(\d+)(?:\/|$)/);
+  return match?.[1] ? parsePositiveInt(match[1]) : null;
+}
+
+async function resolvePrNumber(summary: CujSummary): Promise<number | null> {
+  const fromSummary = parsePositiveInt(summary.pr_number);
+  if (fromSummary) {
+    return fromSummary;
+  }
+
+  const explicit = parsePositiveInt(process.env.CUJ_PR_NUMBER ?? process.env.PR_NUMBER);
+  if (explicit) {
+    return explicit;
+  }
+
+  const fromRef = parsePrNumberFromGithubRef(process.env.GITHUB_REF);
+  if (fromRef) {
+    return fromRef;
+  }
+
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  if (!eventPath) {
+    return null;
+  }
+  try {
+    const raw = await readFile(eventPath, "utf-8");
+    const event = JSON.parse(raw) as { pull_request?: { number?: number } };
+    return parsePositiveInt(event.pull_request?.number);
+  } catch {
+    return null;
+  }
+}
+
 function buildDefaultSummary(): CujSummary {
   const runId = process.env.GITHUB_RUN_ID ?? `${Date.now()}`;
   const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? "1";
+  const repository = normalizeRepository(process.env.GITHUB_REPOSITORY);
+  const prNumber = parsePositiveInt(process.env.CUJ_PR_NUMBER ?? process.env.PR_NUMBER);
   return {
     status: process.env.CUJ_STATUS ?? "UNKNOWN",
     exit_code: getEnvNumber("CUJ_EXIT", -1),
@@ -223,6 +302,8 @@ function buildDefaultSummary(): CujSummary {
     run_id: runId,
     run_attempt: runAttempt,
     sha: process.env.GITHUB_SHA ?? "",
+    ...(repository ? { repository } : {}),
+    ...(prNumber ? { pr_number: prNumber } : {}),
   };
 }
 
@@ -234,14 +315,9 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
   }
 
   const bucket = options.bucket ?? process.env.CUJ_ARTIFACT_BUCKET ?? "runme-dev-assets";
-  const repository = process.env.GITHUB_REPOSITORY ?? "local/local";
+  const repositoryFromEnv = process.env.GITHUB_REPOSITORY ?? "";
   const runId = process.env.GITHUB_RUN_ID ?? `${Date.now()}`;
   const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? "1";
-  const safeRepo = repository.replace(/\//g, "-");
-  const prefix =
-    options.prefix ??
-    process.env.CUJ_ARTIFACT_PREFIX ??
-    posix.join("cuj-runs", safeRepo, runId, runAttempt);
 
   const summaryPath = posix.join(normalizePath(outputDir), "summary.json");
   let summary: CujSummary = {
@@ -260,6 +336,22 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
       console.warn(`Could not parse summary.json at ${summaryPath}: ${error}`);
     }
   }
+
+  const sourceRepository =
+    normalizeRepository(summary.repository) ?? normalizeRepository(repositoryFromEnv);
+  const repository = sourceRepository ?? "local/local";
+  const safeRepo = repository.replace(/\//g, "-");
+  const prefix =
+    options.prefix ??
+    process.env.CUJ_ARTIFACT_PREFIX ??
+    posix.join("cuj-runs", safeRepo, runId, runAttempt);
+  const prNumber = await resolvePrNumber(summary);
+  const commitUrl = sourceRepository && summary.sha
+    ? `https://github.com/${sourceRepository}/commit/${summary.sha}`
+    : "";
+  const prUrl = sourceRepository && prNumber
+    ? `https://github.com/${sourceRepository}/pull/${prNumber}`
+    : "";
 
   const scenarioResultsPath = posix.join(normalizePath(outputDir), "scenario-results.json");
   const scenarioResultsRaw = await readFile(scenarioResultsPath, "utf-8").catch(() => "");
@@ -360,6 +452,10 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
   const indexHtmlPath = posix.join(normalizePath(outputDir), "index.html");
   const indexMdPath = posix.join(normalizePath(outputDir), "index.md");
   const indexTitle = `CUJ Artifacts: ${repository} run ${runId}`;
+  const sourceLinksHtml = [
+    commitUrl ? `Commit: <a href="${commitUrl}">${escapeHtml(summary.sha)}</a>` : "",
+    prUrl ? `PR: <a href="${prUrl}">#${prNumber}</a>` : "",
+  ].filter(Boolean).join(" · ");
   const indexHtml = `<!doctype html>
 <html lang="en">
 <head>
@@ -389,6 +485,7 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
   <p>Exit code: <strong>${summary.exit_code}</strong></p>
   <p>Assertions: ${summary.assertions_total} total, ${summary.assertions_passed} passed, ${summary.assertions_failed} failed</p>
   <p>Manifest: <a href="${manifestUpload.url}">${manifestUpload.url}</a></p>
+  ${sourceLinksHtml ? `<p>Source: ${sourceLinksHtml}</p>` : ""}
   ${
     hasFailures
       ? `<div class="failure-box">
@@ -494,6 +591,8 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     `- Exit code: ${summary.exit_code}`,
     `- Assertions: ${summary.assertions_total} total, ${summary.assertions_passed} passed, ${summary.assertions_failed} failed`,
     `- Manifest: ${manifestUpload.url}`,
+    ...(commitUrl ? [`- Commit: ${commitUrl}`] : []),
+    ...(prUrl ? [`- Pull request: ${prUrl}`] : []),
     "",
     ...(hasFailures
       ? [
@@ -575,6 +674,9 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
           "",
         ]
       : []),
+    ...(commitUrl ? [`- Commit: [${summary.sha.slice(0, 12)}](${commitUrl})`] : []),
+    ...(prUrl ? [`- PR: [#${prNumber}](${prUrl})`] : []),
+    ...(commitUrl || prUrl ? [""] : []),
     `- [Browse all files](${indexHtmlUpload.url})`,
     `- [Manifest JSON](${manifestUpload.url})`,
     "",
@@ -591,6 +693,13 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     file_count: uploaded.length,
     summary,
     test_report: assertionTotals,
+    source: {
+      repository: sourceRepository ?? "",
+      commit_sha: summary.sha ?? "",
+      commit_url: commitUrl,
+      pr_number: prNumber,
+      pr_url: prUrl,
+    },
     urls: {
       movie: movieUrl,
       initial_png: initialPngUrl,
