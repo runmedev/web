@@ -1,0 +1,136 @@
+name: app-tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  statuses: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run-app-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GCP_PROJECT_ID: runme-lewi-dev
+      GCP_PROJECT_NUMBER: "690012737568"
+      GCP_WIF_POOL_ID: github-pool
+      GCP_WIF_PROVIDER_ID: github-provider
+      GCP_SERVICE_ACCOUNT_EMAIL: runme-gha@runme-lewi-dev.iam.gserviceaccount.com
+    steps:
+      - name: Dump GitHub OIDC claims
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOK="$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.googleapis.com" | jq -r .value)"
+          echo "$TOK" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq '{repository, repository_owner, ref, sub, aud}'
+
+      - name: Authenticate to Google Cloud
+        id: gcp_auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/${{ env.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/${{ env.GCP_WIF_POOL_ID }}/providers/${{ env.GCP_WIF_PROVIDER_ID }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT_EMAIL }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/cloud-platform
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Verify Google auth identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTIVE_ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -1)"
+          echo "Active gcloud account: ${ACTIVE_ACCOUNT}"
+          if [[ -z "${ACTIVE_ACCOUNT}" ]]; then
+            echo "No active gcloud account found after OIDC auth."
+            exit 1
+          fi
+          if [[ "${ACTIVE_ACCOUNT}" != "${GCP_SERVICE_ACCOUNT_EMAIL}" ]]; then
+            echo "Expected active account ${GCP_SERVICE_ACCOUNT_EMAIL} but got ${ACTIVE_ACCOUNT}"
+            exit 1
+          fi
+          gcloud auth application-default print-access-token >/dev/null
+
+      - name: Verify GCS bucket access
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud storage ls "gs://runme-dev-assets" >/dev/null
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Enable corepack
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          pnpm --version
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm config set @buf:registry https://buf.build/gen/npm/v1
+          pnpm install --frozen-lockfile
+
+      - name: Build app dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm run build:renderers
+          pnpm run build:console
+
+      - name: Install agent-browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g agent-browser
+          agent-browser --version
+          agent-browser install
+
+      - name: Run CUJ orchestrator
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.gcp_auth.outputs.access_token }}
+          CUJ_MANAGE_SERVERS: "true"
+          CUJ_FRONTEND_CMD: "pnpm run dev:app"
+          CUJ_BACKEND_CMD: "python3 -m http.server 9977"
+          CUJ_UPLOAD: "true"
+          CUJ_COMMENT: "false"
+          CUJ_COMMENT_STRICT: "false"
+          CUJ_STATUS_CHECK: "true"
+          CUJ_STATUS_CONTEXT: "app-tests"
+          CUJ_FAIL_ON_SCENARIO_FAILURE: "false"
+          CUJ_ARTIFACT_BUCKET: "runme-dev-assets"
+          CUJ_CMD_TIMEOUT_MS: "120000"
+          CUJ_SCENARIO_TIMEOUT_MS: "120000"
+          CUJ_SCENARIO_CMD_TIMEOUT_MS: "10000"
+        run: |
+          set -euo pipefail
+          pnpm -C app run cuj:run
