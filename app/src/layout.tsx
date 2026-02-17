@@ -1,6 +1,7 @@
 import { Flex } from "@radix-ui/themes";
 import { CurrentDocInitializer } from "./components/CurrentDocInitializer";
-export function AISREContentWrapper({
+
+export function RunmeContentWrapper({
   children,
   maxHeightScreen = false,
 }: {
@@ -28,7 +29,7 @@ function Layout({
   maxHeightScreen?: boolean;
 }) {
   return (
-    <AISREContentWrapper maxHeightScreen={maxHeightScreen}>
+    <RunmeContentWrapper maxHeightScreen={maxHeightScreen}>
       {/* Main content */}
       <Flex align="stretch" className="w-full flex-1 min-h-0">
         <Flex
@@ -41,7 +42,7 @@ function Layout({
           {right ?? <div />}
         </Flex>
       </Flex>
-    </AISREContentWrapper>
+    </RunmeContentWrapper>
   );
 }
 

@@ -31,7 +31,8 @@ import { getDefaultAppConfigUrl, setAppConfig } from "../../lib/appConfig";
 const PROMPT = "> ";
 const ERASE_TO_END = "\u001b[K";
 const MOVE_CURSOR_COL = (col: number) => `\u001b[${col}G`;
-const STORAGE_KEY = "aisre.appConsoleCollapsed";
+const STORAGE_KEY = "runme.appConsoleCollapsed";
+const LEGACY_STORAGE_KEY = "aisre.appConsoleCollapsed";
 const MAX_CONSOLE_OUTPUT = 8000;
 
 /**
@@ -45,7 +46,10 @@ export default function AppConsole() {
       return false;
     }
     try {
-      return localStorage.getItem(STORAGE_KEY) === "true";
+      const stored =
+        localStorage.getItem(STORAGE_KEY) ??
+        localStorage.getItem(LEGACY_STORAGE_KEY);
+      return stored === "true";
     } catch (error) {
       console.error("Failed to read console collapse state", error);
       return false;
@@ -58,6 +62,7 @@ export default function AppConsole() {
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, collapsed ? "true" : "false");
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
     } catch (error) {
       console.error("Failed to persist console collapse state", error);
     }
@@ -235,7 +240,7 @@ export default function AppConsole() {
               return message;
             },
           },
-          aisreRunners: {
+          runmeRunners: {
             get: () => {
               const mgr = getRunnersManager();
               const runners = mgr.list();
@@ -390,7 +395,7 @@ export default function AppConsole() {
               "Available namespaces:",
               "  runme           - Notebook helpers (run all, clear outputs)",
               "  explorer        - Manage workspace folders and notebooks",
-              "  aisreRunners    - Configure runner endpoints",
+              "  runmeRunners    - Configure runner endpoints",
               "  oidc            - OIDC/OAuth configuration and auth status",
               "  googleClientManager - Google OAuth client settings",
               "  app             - App-level configuration helpers",
@@ -659,7 +664,7 @@ export default function AppConsole() {
                   type: ClientMessages.terminalStdout,
                   output: {
                     "runme.dev/id": consoleId,
-                    data: `AISRE JS console. Type help() to see available commands.\n${PROMPT}`,
+                    data: `runme JS console. Type help() to see available commands.\n${PROMPT}`,
                   },
                 } as any);
                 return {

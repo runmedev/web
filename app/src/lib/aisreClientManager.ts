@@ -1,6 +1,6 @@
 import {
   AisreClient,
-  DEFAULT_AISRE_SERVER_BASE_URL,
+  DEFAULT_RUNME_SERVER_BASE_URL,
   type AisreClientOptions,
   createAisreClient,
 } from "./aisreClient";
@@ -73,12 +73,12 @@ export class AisreClientManager {
 
   private resolveAppOrigin(): string {
     if (typeof window === "undefined") {
-      return DEFAULT_AISRE_SERVER_BASE_URL;
+      return DEFAULT_RUNME_SERVER_BASE_URL;
     }
     const origin = window.location?.origin?.trim();
     return origin && origin.length > 0
       ? origin.replace(/\/+$/, "")
-      : DEFAULT_AISRE_SERVER_BASE_URL;
+      : DEFAULT_RUNME_SERVER_BASE_URL;
   }
 }
 

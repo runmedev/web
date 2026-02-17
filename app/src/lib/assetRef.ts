@@ -1,4 +1,5 @@
-export const AISRE_ASSET_MIME = "application/vnd.openai.aisre-asset+json";
+export const RUNME_ASSET_MIME = "application/vnd.openai.runme-asset+json";
+export const LEGACY_ASSET_MIME = "application/vnd.openai.aisre-asset+json";
 
 export type AssetRef = { uri: string; mimeType: string };
 

@@ -6,7 +6,7 @@ import type { RendererContext } from "vscode-notebook-renderer";
 
 import { createRoot } from "react-dom/client";
 import App, { AppProps } from "./App";
-import quillIcon from "./assets/quill-icon.svg";
+import runmeIcon from "./assets/runme-icon.svg";
 import { getBrowserAdapter } from "./browserAdapter.client";
 import { oidcConfigManager } from "./auth/oidcConfig";
 import type { AppliedAppConfig } from "./lib/appConfig";
@@ -62,8 +62,8 @@ maybeSetAppConfig().finally(() => {
         <App
           initialState={initialState}
           branding={{
-            name: "Quill Notebook",
-            logo: quillIcon,
+            name: "runme notebook",
+            logo: runmeIcon,
           }}
         />,
       );

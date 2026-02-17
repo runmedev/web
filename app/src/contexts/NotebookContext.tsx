@@ -57,14 +57,17 @@ type EnsureNotebookArgs = {
   loaded?: boolean;
 };
 
-const OPEN_NOTEBOOKS_STORAGE_KEY = "aisre/openNotebooks";
+const OPEN_NOTEBOOKS_STORAGE_KEY = "runme/openNotebooks";
+const LEGACY_OPEN_NOTEBOOKS_STORAGE_KEY = "aisre/openNotebooks";
 
 function loadStoredOpenNotebooks(): NotebookStoreItem[] {
   if (typeof window === "undefined") {
     return [];
   }
   try {
-    const raw = window.localStorage.getItem(OPEN_NOTEBOOKS_STORAGE_KEY);
+    const raw =
+      window.localStorage.getItem(OPEN_NOTEBOOKS_STORAGE_KEY) ??
+      window.localStorage.getItem(LEGACY_OPEN_NOTEBOOKS_STORAGE_KEY);
     if (!raw) {
       return [];
     }
@@ -117,6 +120,7 @@ function persistOpenNotebooks(list: NotebookStoreItem[]): void {
       OPEN_NOTEBOOKS_STORAGE_KEY,
       JSON.stringify(filtered),
     );
+    window.localStorage.removeItem(LEGACY_OPEN_NOTEBOOKS_STORAGE_KEY);
   } catch (error) {
     console.error("Failed to persist open notebooks", error);
   }

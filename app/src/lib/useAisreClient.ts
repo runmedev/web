@@ -1,7 +1,7 @@
 import { getAuthData } from "../token.js";
 import { useSettings } from "../contexts/SettingsContext";
 import {
-  DEFAULT_AISRE_SERVER_BASE_URL,
+  DEFAULT_RUNME_SERVER_BASE_URL,
   createAisreClient,
   type AisreClientOptions,
 } from "./aisreClient.js";
@@ -43,7 +43,7 @@ function createClient(options: Pick<AisreClientOptions, "baseUrl">) {
 function normalizeBaseUrl(agentEndpoint?: string | null): string {
   const trimmed = agentEndpoint?.trim();
   if (!trimmed) {
-    return DEFAULT_AISRE_SERVER_BASE_URL;
+    return DEFAULT_RUNME_SERVER_BASE_URL;
   }
   return trimmed.replace(/\/+$/, "");
 }

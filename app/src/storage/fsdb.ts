@@ -52,7 +52,7 @@ export class FsDatabase extends Dexie {
   workspaces!: Table<WorkspaceRecord, string>;
   entries!: Table<FsEntryRecord, string>;
 
-  constructor(databaseName: string = "aisre-fs-workspaces") {
+  constructor(databaseName: string = "runme-fs-workspaces") {
     super(databaseName);
 
     this.version(1).stores({

@@ -13,7 +13,7 @@ import {
   TextField,
 } from "@radix-ui/themes";
 
-import { AISREContentWrapper } from "../layout";
+import { RunmeContentWrapper } from "../layout";
 import { useRuns, DEFAULT_RUNS_PAGE_SIZE } from "../lib/useRuns.js";
 
 export default function RunsRoute() {
@@ -182,7 +182,7 @@ export default function RunsRoute() {
   };
 
   return (
-    <AISREContentWrapper>
+    <RunmeContentWrapper>
       <Flex className="flex-col gap-4 p-4">
         <Flex align="center" justify="between">
           <Heading size="6" weight="bold">
@@ -267,6 +267,6 @@ export default function RunsRoute() {
           </Flex>
         ) : null}
       </Flex>
-    </AISREContentWrapper>
+    </RunmeContentWrapper>
   );
 }

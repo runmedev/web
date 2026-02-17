@@ -1,9 +1,9 @@
 [project]
-name = "aisre-web"
+name = "runme-web"
 version = "0.0.1"
 
 [tool.oaipkg]
-owner = "aisre"
+owner = "runme"
 # I think you can run js check to check if you are missing any monorepo dependencies for OAI js.
 monorepo-dependencies = [
     "oai_js",

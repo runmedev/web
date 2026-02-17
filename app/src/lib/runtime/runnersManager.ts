@@ -1,8 +1,10 @@
 import { Runner } from "../runner";
 import { makeAuthInterceptor } from "../../App";
 
-const RUNNERS_STORAGE_KEY = "aisre/runners";
-const DEFAULT_RUNNER_NAME_STORAGE_KEY = "aisre/defaultRunner";
+const RUNNERS_STORAGE_KEY = "runme/runners";
+const DEFAULT_RUNNER_NAME_STORAGE_KEY = "runme/defaultRunner";
+const LEGACY_RUNNERS_STORAGE_KEY = "aisre/runners";
+const LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY = "aisre/defaultRunner";
 export const DEFAULT_RUNNER_PLACEHOLDER = "<default>";
 
 // TODO(jlewi): The use of makeAuthInterceptor() to attach interceptors for
@@ -101,8 +103,12 @@ class RunnersManager {
       return { runners: new Map(), defaultRunnerName: null };
     }
     try {
-      const raw = window.localStorage.getItem(RUNNERS_STORAGE_KEY);
-      const defaultName = window.localStorage.getItem(DEFAULT_RUNNER_NAME_STORAGE_KEY);
+      const raw =
+        window.localStorage.getItem(RUNNERS_STORAGE_KEY) ??
+        window.localStorage.getItem(LEGACY_RUNNERS_STORAGE_KEY);
+      const defaultName =
+        window.localStorage.getItem(DEFAULT_RUNNER_NAME_STORAGE_KEY) ??
+        window.localStorage.getItem(LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY);
       if (!raw) {
         return { runners: new Map(), defaultRunnerName: defaultName };
       }
@@ -149,10 +155,13 @@ class RunnersManager {
         reconnect: runner.reconnect,
       }));
       window.localStorage.setItem(RUNNERS_STORAGE_KEY, JSON.stringify(serialized));
+      window.localStorage.removeItem(LEGACY_RUNNERS_STORAGE_KEY);
       if (this.defaultRunnerName) {
         window.localStorage.setItem(DEFAULT_RUNNER_NAME_STORAGE_KEY, this.defaultRunnerName);
+        window.localStorage.removeItem(LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY);
       } else {
         window.localStorage.removeItem(DEFAULT_RUNNER_NAME_STORAGE_KEY);
+        window.localStorage.removeItem(LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY);
       }
     } catch (error) {
       console.error("Failed to persist runners to storage", error);

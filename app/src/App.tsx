@@ -7,7 +7,7 @@ import RunsRoute from "./routes/runs";
 import { Theme } from "@radix-ui/themes";
 import "@radix-ui/themes/styles.css";
 import AuthStatus from "./components/AuthStatus/AuthStatus";
-import quillIcon from "./assets/quill-icon.svg";
+import runmeIcon from "./assets/runme-icon.svg";
 import { WebAppConfig } from "@buf/stateful_runme.bufbuild_es/agent/v1/webapp_pb";
 
 // import Actions from "./components/Actions/Actions";
@@ -92,8 +92,8 @@ function AppRouter() {
 
 function App({ branding, initialState = {} }: AppProps) {
   const appBranding = {
-    name: branding?.name ?? "Quill Notebook",
-    logo: branding?.logo ?? quillIcon,
+    name: branding?.name ?? "runme notebook",
+    logo: branding?.logo ?? runmeIcon,
   };
   const makeInterceptors = useCallback(makeAuthInterceptor, []);
   const initialRunnerEndpoint =
