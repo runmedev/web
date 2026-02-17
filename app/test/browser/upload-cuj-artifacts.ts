@@ -14,6 +14,17 @@ export type CujSummary = {
   sha: string;
 };
 
+type ScenarioResult = {
+  scenario: string;
+  script: string;
+  status: "PASS" | "FAIL";
+  exit_code: number;
+  assertions_total: number;
+  assertions_passed: number;
+  assertions_failed: number;
+  failure_messages: string[];
+};
+
 type UploadedFile = {
   relative_path: string;
   object_name: string;
@@ -246,12 +257,28 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     }
   }
 
+  const scenarioResultsPath = posix.join(normalizePath(outputDir), "scenario-results.json");
+  const scenarioResultsRaw = await readFile(scenarioResultsPath, "utf-8").catch(() => "");
+  let scenarioResults: ScenarioResult[] = [];
+  if (scenarioResultsRaw.trim()) {
+    try {
+      const parsed = JSON.parse(scenarioResultsRaw) as unknown;
+      if (Array.isArray(parsed)) {
+        scenarioResults = parsed as ScenarioResult[];
+      }
+    } catch (error) {
+      console.warn(`Could not parse scenario-results.json at ${scenarioResultsPath}: ${error}`);
+    }
+  }
+
   const excluded = new Set([
     "gcs-manifest.json",
     "gcs-summary.json",
     "index.html",
     "index.md",
     "pr-comment.md",
+    "cuj-oidc-token.json",
+    "cuj-openai-key.txt",
   ]);
 
   const absoluteFiles = await listFilesRecursive(outputDir);
@@ -287,7 +314,19 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
   const initialPngUrl = urlByName.get("scenario-hello-world-01-initial.png") ?? "";
   const afterRunPngUrl = urlByName.get("scenario-hello-world-06-after-run.png") ?? "";
   const afterRunTxtUrl = urlByName.get("scenario-hello-world-06-after-run.txt") ?? "";
+  const outputProbeUrl = urlByName.get("scenario-hello-world-07-output-probe.json") ?? "";
+  const scenarioResultsUrl = urlByName.get("scenario-results.json") ?? "";
+  const backendLogUrl = urlByName.get("backend.log") ?? "";
   const runLogUrl = urlByName.get("cuj-run.log") ?? "";
+  const hasFailures = summary.status !== "PASS" ||
+    summary.exit_code !== 0 ||
+    summary.assertions_failed > 0;
+  const statusClass = hasFailures ? "status-fail" : "status-pass";
+  const statusLabel = hasFailures ? "FAIL" : "PASS";
+  const allFailureMessages = scenarioResults.flatMap((result) =>
+    result.failure_messages.map((message) => `${result.script}: ${message}`)
+  );
+  const failureMessages = [...new Set(allFailureMessages)];
 
   const manifest = {
     bucket,
@@ -312,6 +351,10 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
   <title>${escapeHtml(indexTitle)}</title>
   <style>
     body { font-family: sans-serif; margin: 24px; }
+    .status-banner { border-radius: 6px; padding: 12px; margin-bottom: 16px; font-weight: 600; }
+    .status-pass { background: #e6ffed; color: #0b5f2a; border: 1px solid #34d058; }
+    .status-fail { background: #ffeef0; color: #86181d; border: 1px solid #d73a49; }
+    .failure-box { background: #fff5f5; border: 1px solid #d73a49; border-radius: 6px; padding: 12px; margin: 16px 0; }
     table { border-collapse: collapse; width: 100%; }
     th, td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
     th { background: #f6f8fa; }
@@ -322,17 +365,60 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
 </head>
 <body>
   <h1>${escapeHtml(indexTitle)}</h1>
+  <div class="status-banner ${statusClass}">Status: ${escapeHtml(statusLabel)}</div>
   <p>Status: <strong>${escapeHtml(summary.status)}</strong></p>
+  <p>Exit code: <strong>${summary.exit_code}</strong></p>
   <p>Assertions: ${summary.assertions_total} total, ${summary.assertions_passed} passed, ${summary.assertions_failed} failed</p>
   <p>Manifest: <a href="${manifestUpload.url}">${manifestUpload.url}</a></p>
+  ${
+    hasFailures
+      ? `<div class="failure-box">
+  <h2>Failure Summary</h2>
+  <p>One or more CUJ assertions failed. Start with <a href="${scenarioResultsUrl || "#"}">scenario-results.json</a>, <a href="${outputProbeUrl || "#"}">output probe</a>, and <a href="${runLogUrl || backendLogUrl || "#"}">logs</a>.</p>
+  ${
+        failureMessages.length > 0
+          ? `<ul>${failureMessages.map((message) => `<li>${escapeHtml(message)}</li>`).join("\n")}</ul>`
+          : "<p>No explicit [FAIL] lines captured; check logs and scenario results.</p>"
+      }
+  </div>`
+      : ""
+  }
   <h2>Primary Artifacts</h2>
   <ul>
     <li>Movie: <a href="${movieUrl}">${movieUrl || "not found"}</a></li>
     <li>Initial PNG: <a href="${initialPngUrl}">${initialPngUrl || "not found"}</a></li>
     <li>After-run PNG: <a href="${afterRunPngUrl}">${afterRunPngUrl || "not found"}</a></li>
     <li>After-run TXT: <a href="${afterRunTxtUrl}">${afterRunTxtUrl || "not found"}</a></li>
+    <li>Output probe JSON: <a href="${outputProbeUrl}">${outputProbeUrl || "not found"}</a></li>
+    <li>Scenario results JSON: <a href="${scenarioResultsUrl}">${scenarioResultsUrl || "not found"}</a></li>
+    <li>Backend log: <a href="${backendLogUrl}">${backendLogUrl || "not found"}</a></li>
     <li>CUJ log: <a href="${runLogUrl}">${runLogUrl || "not found"}</a></li>
   </ul>
+  ${
+    scenarioResults.length > 0
+      ? `<h2>Scenario Status</h2>
+  <table>
+    <thead>
+      <tr><th>Scenario</th><th>Status</th><th>Exit</th><th>Assertions</th><th>Failure Messages</th></tr>
+    </thead>
+    <tbody>
+      ${
+        scenarioResults.map((result) =>
+          `<tr><td><code>${escapeHtml(result.script)}</code></td><td>${escapeHtml(
+            result.status,
+          )}</td><td>${result.exit_code}</td><td>${result.assertions_total} total (${result.assertions_passed} pass / ${result.assertions_failed} fail)</td><td>${
+            result.failure_messages.length > 0
+              ? `<ul>${result.failure_messages.map((message) =>
+                `<li>${escapeHtml(message)}</li>`
+              ).join("")}</ul>`
+              : "none"
+          }</td></tr>`
+        ).join("\n")
+      }
+    </tbody>
+  </table>`
+      : ""
+  }
   ${
     movieUrl
       ? `<h3>Movie Preview</h3><video controls preload="metadata" src="${movieUrl}"></video>`
@@ -368,16 +454,49 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     `# ${indexTitle}`,
     "",
     `- Status: ${summary.status}`,
+    `- Exit code: ${summary.exit_code}`,
     `- Assertions: ${summary.assertions_total} total, ${summary.assertions_passed} passed, ${summary.assertions_failed} failed`,
     `- Manifest: ${manifestUpload.url}`,
     "",
+    ...(hasFailures
+      ? [
+          "## Failure summary",
+          "",
+          "- ❌ One or more CUJ assertions failed.",
+          `- Scenario results: ${scenarioResultsUrl || "not found"}`,
+          `- Output probe JSON: ${outputProbeUrl || "not found"}`,
+          `- Backend log: ${backendLogUrl || "not found"}`,
+          `- CUJ log: ${runLogUrl || "not found"}`,
+          ...(failureMessages.length > 0
+            ? ["", ...failureMessages.map((message) => `- ${message}`)]
+            : []),
+          "",
+        ]
+      : []),
     "## Primary artifacts",
     "",
     `- Movie: ${movieUrl || "not found"}`,
     `- Initial PNG: ${initialPngUrl || "not found"}`,
     `- After-run PNG: ${afterRunPngUrl || "not found"}`,
     `- After-run TXT: ${afterRunTxtUrl || "not found"}`,
+    `- Output probe JSON: ${outputProbeUrl || "not found"}`,
+    `- Scenario results JSON: ${scenarioResultsUrl || "not found"}`,
+    `- Backend log: ${backendLogUrl || "not found"}`,
     `- CUJ log: ${runLogUrl || "not found"}`,
+    ...(scenarioResults.length > 0
+      ? [
+          "",
+          "## Scenario status",
+          "",
+          ...scenarioResults.map((result) =>
+            `- ${result.script}: ${result.status} (exit ${result.exit_code}, assertions ${result.assertions_total} total/${result.assertions_passed} pass/${result.assertions_failed} fail)${
+              result.failure_messages.length > 0
+                ? `; failures: ${result.failure_messages.join(" | ")}`
+                : ""
+            }`
+          ),
+        ]
+      : []),
     "",
     "## All files",
     "",
@@ -392,6 +511,7 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
   const indexMdObject = posix.join(prefix, "index.md");
   const indexHtmlUpload = await uploadObject(token, bucket, indexHtmlObject, indexHtmlPath);
   await uploadObject(token, bucket, indexMdObject, indexMdPath);
+  const statusEmoji = hasFailures ? "❌" : "✅";
 
   const prComment = [
     "<!-- cuj-report -->",
@@ -399,8 +519,14 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     "",
     "| Scenario | Status | Assertions | Artifacts |",
     "| --- | --- | --- | --- |",
-    `| hello-world-local-notebook | ${summary.status} | ${summary.assertions_total} total (${summary.assertions_passed} pass / ${summary.assertions_failed} fail) | [movie](${movieUrl || indexHtmlUpload.url}) · [initial png](${initialPngUrl || indexHtmlUpload.url}) · [after-run png](${afterRunPngUrl || indexHtmlUpload.url}) · [after-run txt](${afterRunTxtUrl || indexHtmlUpload.url}) |`,
+    `| hello-world-local-notebook | ${statusEmoji} ${summary.status} | ${summary.assertions_total} total (${summary.assertions_passed} pass / ${summary.assertions_failed} fail) | [movie](${movieUrl || indexHtmlUpload.url}) · [initial png](${initialPngUrl || indexHtmlUpload.url}) · [after-run png](${afterRunPngUrl || indexHtmlUpload.url}) · [after-run txt](${afterRunTxtUrl || indexHtmlUpload.url}) |`,
     "",
+    ...(hasFailures
+      ? [
+          `- Failure details: [scenario-results.json](${scenarioResultsUrl || indexHtmlUpload.url}) · [output-probe.json](${outputProbeUrl || indexHtmlUpload.url}) · [backend.log](${backendLogUrl || indexHtmlUpload.url})`,
+          "",
+        ]
+      : []),
     `- [Browse all files](${indexHtmlUpload.url})`,
     `- [Manifest JSON](${manifestUpload.url})`,
     "",
@@ -421,6 +547,9 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
       initial_png: initialPngUrl,
       after_run_png: afterRunPngUrl,
       after_run_txt: afterRunTxtUrl,
+      output_probe_json: outputProbeUrl,
+      scenario_results_json: scenarioResultsUrl,
+      backend_log: backendLogUrl,
       cuj_log: runLogUrl,
     },
   };

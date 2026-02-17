@@ -28,6 +28,17 @@ type CujSummary = {
   sha: string;
 };
 
+type ScenarioResult = {
+  scenario: string;
+  script: string;
+  status: "PASS" | "FAIL";
+  exit_code: number;
+  assertions_total: number;
+  assertions_passed: number;
+  assertions_failed: number;
+  failure_messages: string[];
+};
+
 type ServiceHandle = {
   name: string;
   process: ChildProcess;
@@ -269,6 +280,40 @@ function detectBackendCommand(
   );
 }
 
+function assertConfiguredBackendCommandIsRunmeAgent(command: string): void {
+  const allowNonRunme = (process.env.CUJ_ALLOW_NON_RUNME_BACKEND ?? "false").toLowerCase() ===
+    "true";
+  if (allowNonRunme) {
+    return;
+  }
+
+  const normalized = command.trim().toLowerCase();
+  if (!normalized) {
+    return;
+  }
+
+  const knownStaticServerPatterns = [
+    "python -m http.server",
+    "python3 -m http.server",
+    "http-server",
+    "busybox httpd",
+  ];
+  if (knownStaticServerPatterns.some((pattern) => normalized.includes(pattern))) {
+    throw new Error(
+      `CUJ_BACKEND_CMD="${command}" does not provide Runme runner/parser APIs. Remove CUJ_BACKEND_CMD to use auto-detection or set it to a Runme agent serve command.`,
+    );
+  }
+
+  const looksLikeRunmeAgent =
+    (/\brunme\b/.test(normalized) && /\bagent\b/.test(normalized)) ||
+    (/\bgo\s+run\b/.test(normalized) && /\bagent\b/.test(normalized));
+  if (!looksLikeRunmeAgent) {
+    throw new Error(
+      `CUJ_BACKEND_CMD="${command}" does not look like a Runme agent command. Set CUJ_ALLOW_NON_RUNME_BACKEND=true to bypass this check if intentional.`,
+    );
+  }
+}
+
 function run(command: string, cwd = SCRIPT_DIR): CommandResult {
   const timeoutMs = Number(process.env.CUJ_CMD_TIMEOUT_MS ?? "240000");
   const result = spawnSync(command, {
@@ -441,6 +486,18 @@ function parseAssertions(output: string): Assertions {
     passed: Number(last[2] ?? 0),
     failed: Number(last[3] ?? 0),
   };
+}
+
+function parseFailureMessages(output: string): string[] {
+  const matches = output.match(/^\[FAIL\]\s+(.+)$/gm) ?? [];
+  const unique = new Set<string>();
+  for (const line of matches) {
+    const message = line.replace(/^\[FAIL\]\s+/, "").trim();
+    if (message) {
+      unique.add(message);
+    }
+  }
+  return [...unique];
 }
 
 function resolveRepo(): string | null {
@@ -664,13 +721,18 @@ async function main(): Promise<void> {
   const oidc = resolveOidcAuthConfig();
   const frontendCmd = process.env.CUJ_FRONTEND_CMD ?? "pnpm run dev:app";
   const frontendCwd = resolve(process.env.CUJ_FRONTEND_CWD ?? REPO_ROOT);
-  let backendCmd = process.env.CUJ_BACKEND_CMD;
+  const configuredBackendCmd = process.env.CUJ_BACKEND_CMD?.trim() ?? "";
+  let backendCmd = configuredBackendCmd;
   let backendCwd = resolve(process.env.CUJ_BACKEND_CWD ?? REPO_ROOT);
-  if (!backendCmd || backendCmd.trim() === "") {
+  if (!backendCmd) {
     const detected = detectBackendCommand(frontendUrl, backendUrl, oidc);
     backendCmd = detected.command;
     backendCwd = detected.cwd;
     console.log(`[CUJ] Using detected backend command: ${backendCmd}`);
+    console.log(`[CUJ] Backend working directory: ${backendCwd}`);
+  } else {
+    assertConfiguredBackendCommandIsRunmeAgent(backendCmd);
+    console.log(`[CUJ] Using configured backend command: ${backendCmd}`);
     console.log(`[CUJ] Backend working directory: ${backendCwd}`);
   }
 
@@ -736,6 +798,7 @@ async function main(): Promise<void> {
 
     let failures = 0;
     const aggregateAssertions: Assertions = { total: 0, passed: 0, failed: 0 };
+    const scenarioResults: ScenarioResult[] = [];
 
     for (const scenarioDriver of SCENARIO_DRIVERS) {
       const basename = scenarioDriver.split("/").at(-1) ?? scenarioDriver;
@@ -757,6 +820,18 @@ async function main(): Promise<void> {
       printOutput(compileResult.stdout, compileResult.stderr);
       if (compileResult.status !== 0) {
         failures += 1;
+        scenarioResults.push({
+          scenario: basename.replace(/^test-scenario-/, "").replace(/\.ts$/, ""),
+          script: basename,
+          status: "FAIL",
+          exit_code: compileResult.status,
+          assertions_total: 0,
+          assertions_passed: 0,
+          assertions_failed: 0,
+          failure_messages: [
+            `Scenario failed to compile (exit ${compileResult.status})`,
+          ],
+        });
         console.error(`[CUJ] Failed ${basename} (compile exit ${compileResult.status})`);
         continue;
       }
@@ -769,6 +844,18 @@ async function main(): Promise<void> {
       aggregateAssertions.total += assertions.total;
       aggregateAssertions.passed += assertions.passed;
       aggregateAssertions.failed += assertions.failed;
+      const outputCombined = `${runResult.stdout}\n${runResult.stderr}`;
+      const failureMessages = parseFailureMessages(outputCombined);
+      scenarioResults.push({
+        scenario: basename.replace(/^test-scenario-/, "").replace(/\.ts$/, ""),
+        script: basename,
+        status: runResult.status === 0 ? "PASS" : "FAIL",
+        exit_code: runResult.status,
+        assertions_total: assertions.total,
+        assertions_passed: assertions.passed,
+        assertions_failed: assertions.failed,
+        failure_messages: failureMessages,
+      });
 
       if (runResult.status !== 0) {
         failures += 1;
@@ -791,6 +878,8 @@ async function main(): Promise<void> {
     };
     const summaryPath = join(OUTPUT_DIR, "summary.json");
     writeFileSync(summaryPath, JSON.stringify(summary, null, 2), "utf-8");
+    const scenarioResultsPath = join(OUTPUT_DIR, "scenario-results.json");
+    writeFileSync(scenarioResultsPath, JSON.stringify(scenarioResults, null, 2), "utf-8");
 
     const shouldUpload = (process.env.CUJ_UPLOAD ?? "true").toLowerCase() !== "false";
     if (shouldUpload) {
