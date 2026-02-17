@@ -46,3 +46,10 @@ Here is an example of correct code.
   * Ensure CUJs as defined in `docs-dev/cujs` are updated if necessary.
   * Ensure E2E tests and CUJs are in sync.
 * Ensure artifacts uploaded by tests confirm that the tests are validating what they claim to test.
+
+## Backend/Fake Implementation Policy
+
+- Test backends and fake services must be implemented in Go.
+- Do not add new Python/Node-based fake backend servers for browser integration tests or CUJs.
+- If a TypeScript test harness needs to spin up a fake service, it should invoke a Go command (for example `go run ...`) rather than embedding the server in JavaScript.
+- Shared fake backend binaries should live under the repo-root `testing/` directory.

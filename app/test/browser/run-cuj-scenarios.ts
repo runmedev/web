@@ -28,6 +28,23 @@ type CujSummary = {
   sha: string;
 };
 
+type ScenarioResult = {
+  scenario: string;
+  script: string;
+  status: "PASS" | "FAIL";
+  exit_code: number;
+  assertions_total: number;
+  assertions_passed: number;
+  assertions_failed: number;
+  failure_messages: string[];
+  assertion_results: AssertionResult[];
+};
+
+type AssertionResult = {
+  status: "PASS" | "FAIL";
+  message: string;
+};
+
 type ServiceHandle = {
   name: string;
   process: ChildProcess;
@@ -60,6 +77,249 @@ function fetchWithTimeout(
 
 const SCENARIO_DRIVERS = [join(SCRIPT_DIR, "test-scenario-hello-world.ts")];
 
+type BackendCommandConfig = {
+  command: string;
+  cwd: string;
+};
+
+type OidcAuthConfig = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  issuer: string;
+  discoveryUrl: string;
+  clientId: string;
+  principalEmail: string;
+  tokenFile: string;
+  serverCommand: string;
+  serverEnv: NodeJS.ProcessEnv;
+};
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function parseBackendPort(backendUrl: string): number {
+  try {
+    const parsed = new URL(backendUrl);
+    if (parsed.port) {
+      const port = Number(parsed.port);
+      if (Number.isFinite(port) && port > 0) {
+        return port;
+      }
+    }
+  } catch {
+    // Fallback to default below.
+  }
+  return 9977;
+}
+
+function buildBackendOrigins(frontendUrl: string): string[] {
+  const origins = new Set<string>();
+  try {
+    const parsed = new URL(frontendUrl);
+    origins.add(parsed.origin);
+    const portSuffix = parsed.port ? `:${parsed.port}` : "";
+    if (parsed.hostname === "localhost") {
+      origins.add(`${parsed.protocol}//127.0.0.1${portSuffix}`);
+    } else if (parsed.hostname === "127.0.0.1") {
+      origins.add(`${parsed.protocol}//localhost${portSuffix}`);
+    }
+  } catch {
+    origins.add("http://localhost:5173");
+    origins.add("http://127.0.0.1:5173");
+  }
+  return [...origins];
+}
+
+function resolveOidcAuthConfig(): OidcAuthConfig {
+  const enabled = (process.env.CUJ_USE_AUTH ?? "true").toLowerCase() !== "false";
+  const host = process.env.CUJ_OIDC_HOST ?? "127.0.0.1";
+  const port = Number(process.env.CUJ_OIDC_PORT ?? "9988");
+  const issuer = process.env.CUJ_OIDC_ISSUER ?? `http://${host}:${port}`;
+  const discoveryUrl = process.env.CUJ_OIDC_DISCOVERY_URL ??
+    `${issuer}/.well-known/openid-configuration`;
+  const clientId = process.env.CUJ_OIDC_CLIENT_ID ?? "cuj-web-client";
+  const principalEmail = process.env.CUJ_OIDC_EMAIL ?? "cuj-user@example.com";
+  const tokenFile = process.env.CUJ_OIDC_TOKEN_FILE ?? join(OUTPUT_DIR, "cuj-oidc-token.json");
+  const serverScript = join(REPO_ROOT, "testing", "cuj-oidc-server.go");
+  const serverCommand = process.env.CUJ_OIDC_CMD ??
+    `go run ${shellQuote(serverScript)}`;
+  const serverEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    CUJ_OIDC_HOST: host,
+    CUJ_OIDC_PORT: `${port}`,
+    CUJ_OIDC_ISSUER: issuer,
+    CUJ_OIDC_CLIENT_ID: clientId,
+    CUJ_OIDC_EMAIL: principalEmail,
+    CUJ_OIDC_TOKEN_FILE: tokenFile,
+  };
+
+  return {
+    enabled,
+    host,
+    port,
+    issuer,
+    discoveryUrl,
+    clientId,
+    principalEmail,
+    tokenFile,
+    serverCommand,
+    serverEnv,
+  };
+}
+
+function ensureBackendAssetsAndConfig(
+  frontendUrl: string,
+  backendUrl: string,
+  oidc: OidcAuthConfig,
+): string {
+  const assetsDir = join(OUTPUT_DIR, "cuj-agent-assets");
+  mkdirSync(assetsDir, { recursive: true });
+  writeFileSync(
+    join(assetsDir, "index.html"),
+    "<!doctype html><html><body>CUJ backend assets</body></html>\n",
+    "utf-8",
+  );
+  const keyFilePath = join(OUTPUT_DIR, "cuj-openai-key.txt");
+  writeFileSync(keyFilePath, "cuj-dummy-key\n", "utf-8");
+
+  const configPath = join(OUTPUT_DIR, "cuj-agent-config.yaml");
+  const origins = buildBackendOrigins(frontendUrl);
+  const originsYaml = origins.map((origin) => `    - "${origin}"`).join("\n");
+  const config = [
+    'apiVersion: ""',
+    'kind: ""',
+    "logging:",
+    "  level: info",
+    "  sinks:",
+    "    - path: stderr",
+    "      json: false",
+    "openai:",
+    `  apiKeyFile: "${keyFilePath}"`,
+    "cloudAssistant:",
+    "  vectorStores: []",
+    "assistantServer:",
+    "  bindAddress: 127.0.0.1",
+    `  port: ${parseBackendPort(backendUrl)}`,
+    "  parserService: true",
+    "  runnerService: true",
+    `  staticAssets: "${assetsDir}"`,
+    "  corsOrigins:",
+    originsYaml,
+    ...(oidc.enabled
+      ? [
+          "  oidc:",
+          "    clientExchange: true",
+          "    generic:",
+          `      clientID: "${oidc.clientId}"`,
+          '      clientSecret: ""',
+          `      discoveryURL: "${oidc.discoveryUrl}"`,
+          "      scopes:",
+          '        - "openid"',
+          '        - "email"',
+          `      issuer: "${oidc.issuer}"`,
+        ]
+      : []),
+    ...(oidc.enabled
+      ? [
+          "iamPolicy:",
+          "  bindings:",
+          '    - role: "role/runner.user"',
+          "      members:",
+          '        - kind: "user"',
+          `          name: "${oidc.principalEmail}"`,
+          '    - role: "role/parser.user"',
+          "      members:",
+          '        - kind: "user"',
+          `          name: "${oidc.principalEmail}"`,
+          '    - role: "role/agent.user"',
+          "      members:",
+          '        - kind: "user"',
+          `          name: "${oidc.principalEmail}"`,
+        ]
+      : []),
+    "",
+  ].join("\n");
+  writeFileSync(configPath, config, "utf-8");
+
+  return configPath;
+}
+
+function detectBackendCommand(
+  frontendUrl: string,
+  backendUrl: string,
+  oidc: OidcAuthConfig,
+): BackendCommandConfig {
+  const configPath = ensureBackendAssetsAndConfig(frontendUrl, backendUrl, oidc);
+  const candidateBinaries = [
+    process.env.CUJ_RUNME_AGENT_BIN?.trim(),
+    "runme",
+    resolve(REPO_ROOT, "..", "git_runme", "runme"),
+  ].filter((value): value is string => Boolean(value && value.length > 0));
+
+  for (const binary of candidateBinaries) {
+    const checkCmd = `${shellQuote(binary)} agent --help`;
+    if (run(checkCmd, REPO_ROOT).status === 0) {
+      return {
+        command: `${shellQuote(binary)} agent --config ${shellQuote(configPath)} serve`,
+        cwd: REPO_ROOT,
+      };
+    }
+  }
+
+  const fallbackRepo = resolve(
+    process.env.CUJ_RUNME_REPO?.trim() || resolve(REPO_ROOT, "..", "git_runme"),
+  );
+  const goBinaryPresent = run("command -v go", REPO_ROOT).status === 0;
+  const repoLooksValid =
+    run(`test -f ${shellQuote(join(fallbackRepo, "go.mod"))}`, REPO_ROOT).status === 0;
+  if (goBinaryPresent && repoLooksValid) {
+    return {
+      command: `go run ./ agent --config ${shellQuote(configPath)} serve`,
+      cwd: fallbackRepo,
+    };
+  }
+
+  throw new Error(
+    "Could not locate a Runme agent command for CUJ backend startup. Set CUJ_BACKEND_CMD explicitly or configure CUJ_RUNME_AGENT_BIN/CUJ_RUNME_REPO.",
+  );
+}
+
+function assertConfiguredBackendCommandIsRunmeAgent(command: string): void {
+  const allowNonRunme = (process.env.CUJ_ALLOW_NON_RUNME_BACKEND ?? "false").toLowerCase() ===
+    "true";
+  if (allowNonRunme) {
+    return;
+  }
+
+  const normalized = command.trim().toLowerCase();
+  if (!normalized) {
+    return;
+  }
+
+  const knownStaticServerPatterns = [
+    "python -m http.server",
+    "python3 -m http.server",
+    "http-server",
+    "busybox httpd",
+  ];
+  if (knownStaticServerPatterns.some((pattern) => normalized.includes(pattern))) {
+    throw new Error(
+      `CUJ_BACKEND_CMD="${command}" does not provide Runme runner/parser APIs. Remove CUJ_BACKEND_CMD to use auto-detection or set it to a Runme agent serve command.`,
+    );
+  }
+
+  const looksLikeRunmeAgent =
+    (/\brunme\b/.test(normalized) && /\bagent\b/.test(normalized)) ||
+    (/\bgo\s+run\b/.test(normalized) && /\bagent\b/.test(normalized));
+  if (!looksLikeRunmeAgent) {
+    throw new Error(
+      `CUJ_BACKEND_CMD="${command}" does not look like a Runme agent command. Set CUJ_ALLOW_NON_RUNME_BACKEND=true to bypass this check if intentional.`,
+    );
+  }
+}
+
 function run(command: string, cwd = SCRIPT_DIR): CommandResult {
   const timeoutMs = Number(process.env.CUJ_CMD_TIMEOUT_MS ?? "240000");
   const result = spawnSync(command, {
@@ -82,11 +342,16 @@ function run(command: string, cwd = SCRIPT_DIR): CommandResult {
   };
 }
 
-function runNodeScript(scriptPath: string, cwd: string): CommandResult {
+function runNodeScript(
+  scriptPath: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): CommandResult {
   const timeoutMs = Number(process.env.CUJ_SCENARIO_TIMEOUT_MS ?? "240000");
   const result = spawnSync(process.execPath, [scriptPath], {
     cwd,
     encoding: "utf-8",
+    env,
     timeout: timeoutMs,
     killSignal: "SIGKILL",
   });
@@ -123,12 +388,19 @@ function runOrThrow(command: string, cwd = SCRIPT_DIR): string {
   return result.stdout;
 }
 
-function startService(name: string, command: string, cwd: string, logPath: string): ServiceHandle {
+function startService(
+  name: string,
+  command: string,
+  cwd: string,
+  logPath: string,
+  env?: NodeJS.ProcessEnv,
+): ServiceHandle {
   mkdirSync(dirname(logPath), { recursive: true });
   const logStream = createWriteStream(logPath, { flags: "w" });
   const child = spawn(command, {
     cwd,
     shell: true,
+    env: env ?? process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -189,6 +461,22 @@ async function waitForHttp(url: string, timeoutMs: number, label: string): Promi
   throw new Error(`Timed out waiting for ${label} at ${url}: ${lastError}`);
 }
 
+function readOidcTokenFile(
+  tokenFile: string,
+): { id_token?: string; access_token?: string; expires_at?: number } | null {
+  try {
+    const raw = readFileSync(tokenFile, "utf-8");
+    const parsed = JSON.parse(raw) as {
+      id_token?: string;
+      access_token?: string;
+      expires_at?: number;
+    };
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 function parseAssertions(output: string): Assertions {
   const pattern = /Assertions:\s*(\d+),\s*Passed:\s*(\d+),\s*Failed:\s*(\d+)/g;
   let match: RegExpExecArray | null = null;
@@ -204,6 +492,32 @@ function parseAssertions(output: string): Assertions {
     passed: Number(last[2] ?? 0),
     failed: Number(last[3] ?? 0),
   };
+}
+
+function parseFailureMessages(output: string): string[] {
+  const matches = output.match(/^\[FAIL\]\s+(.+)$/gm) ?? [];
+  const unique = new Set<string>();
+  for (const line of matches) {
+    const message = line.replace(/^\[FAIL\]\s+/, "").trim();
+    if (message) {
+      unique.add(message);
+    }
+  }
+  return [...unique];
+}
+
+function parseAssertionResults(output: string): AssertionResult[] {
+  const results: AssertionResult[] = [];
+  const pattern = /^\[(PASS|FAIL)\]\s+(.+)$/gm;
+  let match: RegExpExecArray | null = null;
+  while ((match = pattern.exec(output)) !== null) {
+    const status = match[1] as "PASS" | "FAIL";
+    const message = (match[2] ?? "").trim();
+    if (message) {
+      results.push({ status, message });
+    }
+  }
+  return results;
 }
 
 function resolveRepo(): string | null {
@@ -424,14 +738,48 @@ async function main(): Promise<void> {
   const manageServers = (process.env.CUJ_MANAGE_SERVERS ?? "true").toLowerCase() !== "false";
   const frontendUrl = process.env.CUJ_FRONTEND_URL ?? "http://localhost:5173";
   const backendUrl = process.env.CUJ_BACKEND_URL ?? "http://localhost:9977";
+  const oidc = resolveOidcAuthConfig();
   const frontendCmd = process.env.CUJ_FRONTEND_CMD ?? "pnpm run dev:app";
-  const backendCmd = process.env.CUJ_BACKEND_CMD ?? "python3 -m http.server 9977";
   const frontendCwd = resolve(process.env.CUJ_FRONTEND_CWD ?? REPO_ROOT);
-  const backendCwd = resolve(process.env.CUJ_BACKEND_CWD ?? REPO_ROOT);
+  const configuredBackendCmd = process.env.CUJ_BACKEND_CMD?.trim() ?? "";
+  let backendCmd = configuredBackendCmd;
+  let backendCwd = resolve(process.env.CUJ_BACKEND_CWD ?? REPO_ROOT);
+  if (!backendCmd) {
+    const detected = detectBackendCommand(frontendUrl, backendUrl, oidc);
+    backendCmd = detected.command;
+    backendCwd = detected.cwd;
+    console.log(`[CUJ] Using detected backend command: ${backendCmd}`);
+    console.log(`[CUJ] Backend working directory: ${backendCwd}`);
+  } else {
+    assertConfiguredBackendCommandIsRunmeAgent(backendCmd);
+    console.log(`[CUJ] Using configured backend command: ${backendCmd}`);
+    console.log(`[CUJ] Backend working directory: ${backendCwd}`);
+  }
 
   const services: ServiceHandle[] = [];
   try {
     if (manageServers) {
+      if (oidc.enabled) {
+        if (!process.env.CUJ_OIDC_CMD && run("command -v go", REPO_ROOT).status !== 0) {
+          throw new Error(
+            "CUJ auth requires Go to run the local OIDC fake server. Install Go or set CUJ_OIDC_CMD.",
+          );
+        }
+        const oidcUp = await fetch(oidc.discoveryUrl).then(() => true).catch(() => false);
+        if (!oidcUp) {
+          services.push(
+            startService(
+              "oidc",
+              oidc.serverCommand,
+              REPO_ROOT,
+              join(OUTPUT_DIR, "oidc.log"),
+              oidc.serverEnv,
+            ),
+          );
+        }
+        await waitForHttp(oidc.discoveryUrl, 30_000, "oidc");
+      }
+
       const frontendUp = await fetch(frontendUrl).then(() => true).catch(() => false);
       if (!frontendUp) {
         services.push(
@@ -450,8 +798,27 @@ async function main(): Promise<void> {
       await waitForHttp(backendUrl, 30_000, "backend");
     }
 
+    const scenarioEnv: NodeJS.ProcessEnv = { ...process.env };
+    if (oidc.enabled) {
+      const tokens = readOidcTokenFile(oidc.tokenFile);
+      const idToken = process.env.CUJ_ID_TOKEN ?? tokens?.id_token ?? "";
+      const accessToken = process.env.CUJ_ACCESS_TOKEN ?? tokens?.access_token ?? idToken;
+      if (!idToken) {
+        throw new Error(
+          `CUJ auth enabled but no ID token available. Expected token in ${oidc.tokenFile} or CUJ_ID_TOKEN.`,
+        );
+      }
+      scenarioEnv.CUJ_ID_TOKEN = idToken;
+      scenarioEnv.CUJ_ACCESS_TOKEN = accessToken;
+      if (typeof tokens?.expires_at === "number") {
+        scenarioEnv.CUJ_TOKEN_EXPIRES_AT = `${tokens.expires_at}`;
+      }
+      scenarioEnv.CUJ_OIDC_EMAIL = oidc.principalEmail;
+    }
+
     let failures = 0;
     const aggregateAssertions: Assertions = { total: 0, passed: 0, failed: 0 };
+    const scenarioResults: ScenarioResult[] = [];
 
     for (const scenarioDriver of SCENARIO_DRIVERS) {
       const basename = scenarioDriver.split("/").at(-1) ?? scenarioDriver;
@@ -473,18 +840,56 @@ async function main(): Promise<void> {
       printOutput(compileResult.stdout, compileResult.stderr);
       if (compileResult.status !== 0) {
         failures += 1;
+        scenarioResults.push({
+          scenario: basename.replace(/^test-scenario-/, "").replace(/\.ts$/, ""),
+          script: basename,
+          status: "FAIL",
+          exit_code: compileResult.status,
+          assertions_total: 0,
+          assertions_passed: 0,
+          assertions_failed: 0,
+          failure_messages: [
+            `Scenario failed to compile (exit ${compileResult.status})`,
+          ],
+          assertion_results: [
+            {
+              status: "FAIL",
+              message: `Scenario failed to compile (exit ${compileResult.status})`,
+            },
+          ],
+        });
         console.error(`[CUJ] Failed ${basename} (compile exit ${compileResult.status})`);
         continue;
       }
 
       const compiled = join(GENERATED_DIR, `${basename.replace(/\.ts$/, "")}.js`);
-      const runResult = runNodeScript(compiled, APP_ROOT);
+      const runResult = runNodeScript(compiled, APP_ROOT, scenarioEnv);
       printOutput(runResult.stdout, runResult.stderr);
 
       const assertions = parseAssertions(`${runResult.stdout}\n${runResult.stderr}`);
       aggregateAssertions.total += assertions.total;
       aggregateAssertions.passed += assertions.passed;
       aggregateAssertions.failed += assertions.failed;
+      const outputCombined = `${runResult.stdout}\n${runResult.stderr}`;
+      const failureMessages = parseFailureMessages(outputCombined);
+      const assertionResults = parseAssertionResults(outputCombined);
+      if (runResult.status !== 0 && assertionResults.length === 0) {
+        assertionResults.push({
+          status: "FAIL",
+          message: `Scenario process exited with status ${runResult.status}`,
+        });
+      }
+      scenarioResults.push({
+        scenario: basename.replace(/^test-scenario-/, "").replace(/\.ts$/, ""),
+        script: basename,
+        status: runResult.status === 0 ? "PASS" : "FAIL",
+        exit_code: runResult.status,
+        assertions_total: assertions.total,
+        assertions_passed: assertions.passed,
+        assertions_failed: assertions.failed,
+        failure_messages: failureMessages,
+        assertion_results: assertionResults,
+      });
 
       if (runResult.status !== 0) {
         failures += 1;
@@ -507,6 +912,8 @@ async function main(): Promise<void> {
     };
     const summaryPath = join(OUTPUT_DIR, "summary.json");
     writeFileSync(summaryPath, JSON.stringify(summary, null, 2), "utf-8");
+    const scenarioResultsPath = join(OUTPUT_DIR, "scenario-results.json");
+    writeFileSync(scenarioResultsPath, JSON.stringify(scenarioResults, null, 2), "utf-8");
 
     const shouldUpload = (process.env.CUJ_UPLOAD ?? "true").toLowerCase() !== "false";
     if (shouldUpload) {

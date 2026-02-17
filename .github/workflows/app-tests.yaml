@@ -91,6 +91,11 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+
       - name: Enable corepack
         shell: bash
         run: |
@@ -120,6 +125,14 @@ jobs:
           agent-browser --version
           agent-browser install
 
+      - name: Install Runme CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g runme
+          runme --version
+          runme agent --help >/dev/null
+
       - name: Run CUJ orchestrator
         shell: bash
         env:
@@ -127,7 +140,6 @@ jobs:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.gcp_auth.outputs.access_token }}
           CUJ_MANAGE_SERVERS: "true"
           CUJ_FRONTEND_CMD: "pnpm run dev:app"
-          CUJ_BACKEND_CMD: "python3 -m http.server 9977"
           CUJ_UPLOAD: "true"
           CUJ_COMMENT: "false"
           CUJ_COMMENT_STRICT: "false"
