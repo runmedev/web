@@ -144,7 +144,7 @@ jobs:
           CUJ_COMMENT: "false"
           CUJ_COMMENT_STRICT: "false"
           CUJ_STATUS_CHECK: "true"
-          CUJ_STATUS_CONTEXT: "app-tests"
+          CUJ_STATUS_CONTEXT: "app-tests-pass"
           CUJ_FAIL_ON_SCENARIO_FAILURE: "false"
           CUJ_ARTIFACT_BUCKET: "runme-dev-assets"
           CUJ_CMD_TIMEOUT_MS: "120000"
