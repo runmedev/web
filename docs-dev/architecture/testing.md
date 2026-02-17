@@ -77,7 +77,7 @@ checks.
 
 ### CUJ automation modes
 
-Workflow: `.github/workflows/codex-cuj.yaml`
+Workflow: `.github/workflows/app-tests.yaml`
 
 The canonical entrypoint is `app/test/browser/run-cuj-scenarios.ts`.
 GHA should contain minimal glue logic; orchestration and publishing behavior
