@@ -72,7 +72,7 @@ export default function AppConsole() {
     () => `console-${Math.random().toString(36).substring(2, 9)}`,
     [],
   );
-  const { listRunners, updateRunner, deleteRunner, defaultRunnerName } =
+  const { listRunners, updateRunner, deleteRunner, defaultRunnerName, setDefaultRunner } =
     useRunners();
   // WorkspaceContext provides the persisted list of workspace URIs so we can
   // mount/unmount folders from the App Console without drilling props.
@@ -296,15 +296,8 @@ export default function AppConsole() {
               if (!runner) {
                 return `Runner ${name} not found`;
               }
-              mgr.setDefault(name);
-              updateRunner(
-                new Runner({
-                  name: runner.name,
-                  endpoint: runner.endpoint,
-                  reconnect: runner.reconnect,
-                  interceptors: runner.interceptors,
-                }),
-              );
+              // Keep React state and singleton manager in sync for default runner.
+              setDefaultRunner(name);
               return `Default runner set to ${name}`;
             },
           },
@@ -475,6 +468,7 @@ export default function AppConsole() {
       removeItem,
       runme,
       sendStdout,
+      setDefaultRunner,
       updateRunner,
     ],
   );

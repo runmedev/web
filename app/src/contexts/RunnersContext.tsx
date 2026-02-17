@@ -195,13 +195,16 @@ export function RunnersProvider({
 
   const setDefaultRunner = useCallback(
     (name: string) => {
-      if (!runners.has(name)) {
+      const mgr = getRunnersManager();
+      // Validate against the singleton manager to avoid races with pending
+      // React state updates from a just-added runner.
+      if (!mgr.get(name)) {
         return;
       }
       setDefaultRunnerName(name);
-      getRunnersManager().setDefault(name);
+      mgr.setDefault(name);
     },
-    [runners],
+    [],
   );
 
   const updateRunner = useCallback((runner: Runner) => {

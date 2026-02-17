@@ -26,6 +26,8 @@ type CujSummary = {
   run_id: string;
   run_attempt: string;
   sha: string;
+  repository?: string;
+  pr_number?: number;
 };
 
 type ScenarioResult = {
@@ -900,6 +902,12 @@ async function main(): Promise<void> {
       console.log("");
     }
 
+    const repo = resolveRepo();
+    const prNumber = resolvePrNumber();
+    if (repo && !process.env.GITHUB_REPOSITORY) {
+      process.env.GITHUB_REPOSITORY = repo;
+    }
+
     const summary: CujSummary = {
       status: failures > 0 ? "FAIL" : "PASS",
       exit_code: failures > 0 ? 1 : 0,
@@ -909,6 +917,8 @@ async function main(): Promise<void> {
       run_id: process.env.GITHUB_RUN_ID ?? `${Date.now()}`,
       run_attempt: process.env.GITHUB_RUN_ATTEMPT ?? "1",
       sha: process.env.GITHUB_SHA ?? "",
+      ...(repo ? { repository: repo } : {}),
+      ...(typeof prNumber === "number" ? { pr_number: prNumber } : {}),
     };
     const summaryPath = join(OUTPUT_DIR, "summary.json");
     writeFileSync(summaryPath, JSON.stringify(summary, null, 2), "utf-8");
@@ -917,10 +927,6 @@ async function main(): Promise<void> {
 
     const shouldUpload = (process.env.CUJ_UPLOAD ?? "true").toLowerCase() !== "false";
     if (shouldUpload) {
-      const repo = resolveRepo();
-      if (repo && !process.env.GITHUB_REPOSITORY) {
-        process.env.GITHUB_REPOSITORY = repo;
-      }
       const uploadPrefix = process.env.CUJ_ARTIFACT_PREFIX ??
         (repo
           ? `cuj-runs/${repo.replace(/\//g, "-")}/${summary.run_id}/${summary.run_attempt}`
