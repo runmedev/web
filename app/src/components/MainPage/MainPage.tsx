@@ -1,5 +1,5 @@
 import Actions from "../Actions/Actions";
-import AppConsole from "../AppConsole/AppConsole";
+import BottomPane from "../BottomPane/BottomPane";
 import { SidePanelContent, SidePanelToolbar } from "../SidePanel/SidePanel";
 import { useSidePanel } from "../../contexts/SidePanelContext";
 import { CurrentDocInitializer } from "../CurrentDocInitializer";
@@ -37,8 +37,8 @@ export default function MainPage() {
           <div id="notebook-pane" className="flex-1 min-h-0 overflow-hidden rounded-nb-md border border-nb-border-strong bg-white">
             <Actions />
           </div>
-          <div>
-            <AppConsole />
+          <div id="bottom-pane-container">
+            <BottomPane />
           </div>
         </div>
       </div>

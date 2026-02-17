@@ -53,8 +53,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SidePanelProvider } from "./contexts/SidePanelContext";
 import { appState } from "./lib/runtime/AppState";
 import GlobalToast from "./components/Toast";
+import { appLogger } from "./lib/logging/runtime";
 
 const queryClient = new QueryClient();
+
+let hasLoggedStartup = false;
 
 export interface AppBranding {
   name: string;
@@ -116,6 +119,17 @@ function App({ branding, initialState = {} }: AppProps) {
     // This should allow us to access it inside the chrome console.
     if (typeof window !== "undefined") {
       (window as any).app = appState;
+    }
+
+    // React StrictMode can mount/unmount components twice in development.
+    // We gate this message so startup emits exactly one validation event.
+    if (!hasLoggedStartup) {
+      appLogger.info("Application startup complete", {
+        attrs: {
+          routeCount: 7,
+        },
+      });
+      hasLoggedStartup = true;
     }
   }, []);
 
