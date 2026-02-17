@@ -91,6 +91,11 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+
       - name: Enable corepack
         shell: bash
         run: |
@@ -119,6 +124,14 @@ jobs:
           npm install -g agent-browser
           agent-browser --version
           agent-browser install
+
+      - name: Install Runme CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g runme
+          runme --version
+          runme agent --help >/dev/null
 
       - name: Run CUJ orchestrator
         shell: bash
