@@ -126,10 +126,19 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Escape a command string for safe insertion in a double-quoted shell arg.
+ */
 function escapeDoubleQuotes(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
+/**
+ * Execute one AppConsole command and return the captured console output.
+ *
+ * The helper centralizes how we drive the terminal widget so runner setup
+ * assertions remain stable and every command appears in the walkthrough video.
+ */
 function runAppConsoleCommand(consoleRef: string, command: string): string {
   run(`agent-browser click ${consoleRef}`);
   run(`agent-browser type ${consoleRef} "${escapeDoubleQuotes(command)}"`);

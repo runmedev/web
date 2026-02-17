@@ -213,6 +213,9 @@ function relativePath(root: string, absolutePath: string): string {
   return normalizedAbs;
 }
 
+/**
+ * Normalize repository values to owner/name form accepted by GitHub URLs.
+ */
 function normalizeRepository(value: string | undefined | null): string | null {
   if (!value) {
     return null;
@@ -238,6 +241,9 @@ function normalizeRepository(value: string | undefined | null): string | null {
   return null;
 }
 
+/**
+ * Parse a positive integer from number/string values used in CI metadata.
+ */
 function parsePositiveInt(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     return value;
@@ -251,6 +257,9 @@ function parsePositiveInt(value: unknown): number | null {
   return null;
 }
 
+/**
+ * Extract a PR number from refs like refs/pull/123/merge.
+ */
 function parsePrNumberFromGithubRef(ref: string | undefined): number | null {
   if (!ref) {
     return null;
@@ -259,6 +268,9 @@ function parsePrNumberFromGithubRef(ref: string | undefined): number | null {
   return match?.[1] ? parsePositiveInt(match[1]) : null;
 }
 
+/**
+ * Resolve PR number from summary first, then env/ref/event payload fallbacks.
+ */
 async function resolvePrNumber(summary: CujSummary): Promise<number | null> {
   const fromSummary = parsePositiveInt(summary.pr_number);
   if (fromSummary) {
