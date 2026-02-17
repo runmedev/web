@@ -60,6 +60,215 @@ function fetchWithTimeout(
 
 const SCENARIO_DRIVERS = [join(SCRIPT_DIR, "test-scenario-hello-world.ts")];
 
+type BackendCommandConfig = {
+  command: string;
+  cwd: string;
+};
+
+type OidcAuthConfig = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  issuer: string;
+  discoveryUrl: string;
+  clientId: string;
+  principalEmail: string;
+  tokenFile: string;
+  serverCommand: string;
+  serverEnv: NodeJS.ProcessEnv;
+};
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function parseBackendPort(backendUrl: string): number {
+  try {
+    const parsed = new URL(backendUrl);
+    if (parsed.port) {
+      const port = Number(parsed.port);
+      if (Number.isFinite(port) && port > 0) {
+        return port;
+      }
+    }
+  } catch {
+    // Fallback to default below.
+  }
+  return 9977;
+}
+
+function buildBackendOrigins(frontendUrl: string): string[] {
+  const origins = new Set<string>();
+  try {
+    const parsed = new URL(frontendUrl);
+    origins.add(parsed.origin);
+    const portSuffix = parsed.port ? `:${parsed.port}` : "";
+    if (parsed.hostname === "localhost") {
+      origins.add(`${parsed.protocol}//127.0.0.1${portSuffix}`);
+    } else if (parsed.hostname === "127.0.0.1") {
+      origins.add(`${parsed.protocol}//localhost${portSuffix}`);
+    }
+  } catch {
+    origins.add("http://localhost:5173");
+    origins.add("http://127.0.0.1:5173");
+  }
+  return [...origins];
+}
+
+function resolveOidcAuthConfig(): OidcAuthConfig {
+  const enabled = (process.env.CUJ_USE_AUTH ?? "true").toLowerCase() !== "false";
+  const host = process.env.CUJ_OIDC_HOST ?? "127.0.0.1";
+  const port = Number(process.env.CUJ_OIDC_PORT ?? "9988");
+  const issuer = process.env.CUJ_OIDC_ISSUER ?? `http://${host}:${port}`;
+  const discoveryUrl = process.env.CUJ_OIDC_DISCOVERY_URL ??
+    `${issuer}/.well-known/openid-configuration`;
+  const clientId = process.env.CUJ_OIDC_CLIENT_ID ?? "cuj-web-client";
+  const principalEmail = process.env.CUJ_OIDC_EMAIL ?? "cuj-user@example.com";
+  const tokenFile = process.env.CUJ_OIDC_TOKEN_FILE ?? join(OUTPUT_DIR, "cuj-oidc-token.json");
+  const serverScript = join(REPO_ROOT, "testing", "cuj-oidc-server.go");
+  const serverCommand = process.env.CUJ_OIDC_CMD ??
+    `go run ${shellQuote(serverScript)}`;
+  const serverEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    CUJ_OIDC_HOST: host,
+    CUJ_OIDC_PORT: `${port}`,
+    CUJ_OIDC_ISSUER: issuer,
+    CUJ_OIDC_CLIENT_ID: clientId,
+    CUJ_OIDC_EMAIL: principalEmail,
+    CUJ_OIDC_TOKEN_FILE: tokenFile,
+  };
+
+  return {
+    enabled,
+    host,
+    port,
+    issuer,
+    discoveryUrl,
+    clientId,
+    principalEmail,
+    tokenFile,
+    serverCommand,
+    serverEnv,
+  };
+}
+
+function ensureBackendAssetsAndConfig(
+  frontendUrl: string,
+  backendUrl: string,
+  oidc: OidcAuthConfig,
+): string {
+  const assetsDir = join(OUTPUT_DIR, "cuj-agent-assets");
+  mkdirSync(assetsDir, { recursive: true });
+  writeFileSync(
+    join(assetsDir, "index.html"),
+    "<!doctype html><html><body>CUJ backend assets</body></html>\n",
+    "utf-8",
+  );
+  const keyFilePath = join(OUTPUT_DIR, "cuj-openai-key.txt");
+  writeFileSync(keyFilePath, "cuj-dummy-key\n", "utf-8");
+
+  const configPath = join(OUTPUT_DIR, "cuj-agent-config.yaml");
+  const origins = buildBackendOrigins(frontendUrl);
+  const originsYaml = origins.map((origin) => `    - "${origin}"`).join("\n");
+  const config = [
+    'apiVersion: ""',
+    'kind: ""',
+    "logging:",
+    "  level: info",
+    "  sinks:",
+    "    - path: stderr",
+    "      json: false",
+    "openai:",
+    `  apiKeyFile: "${keyFilePath}"`,
+    "cloudAssistant:",
+    "  vectorStores: []",
+    "assistantServer:",
+    "  bindAddress: 127.0.0.1",
+    `  port: ${parseBackendPort(backendUrl)}`,
+    "  parserService: true",
+    "  runnerService: true",
+    `  staticAssets: "${assetsDir}"`,
+    "  corsOrigins:",
+    originsYaml,
+    ...(oidc.enabled
+      ? [
+          "  oidc:",
+          "    clientExchange: true",
+          "    generic:",
+          `      clientID: "${oidc.clientId}"`,
+          '      clientSecret: ""',
+          `      discoveryURL: "${oidc.discoveryUrl}"`,
+          "      scopes:",
+          '        - "openid"',
+          '        - "email"',
+          `      issuer: "${oidc.issuer}"`,
+        ]
+      : []),
+    ...(oidc.enabled
+      ? [
+          "iamPolicy:",
+          "  bindings:",
+          '    - role: "role/runner.user"',
+          "      members:",
+          '        - kind: "user"',
+          `          name: "${oidc.principalEmail}"`,
+          '    - role: "role/parser.user"',
+          "      members:",
+          '        - kind: "user"',
+          `          name: "${oidc.principalEmail}"`,
+          '    - role: "role/agent.user"',
+          "      members:",
+          '        - kind: "user"',
+          `          name: "${oidc.principalEmail}"`,
+        ]
+      : []),
+    "",
+  ].join("\n");
+  writeFileSync(configPath, config, "utf-8");
+
+  return configPath;
+}
+
+function detectBackendCommand(
+  frontendUrl: string,
+  backendUrl: string,
+  oidc: OidcAuthConfig,
+): BackendCommandConfig {
+  const configPath = ensureBackendAssetsAndConfig(frontendUrl, backendUrl, oidc);
+  const candidateBinaries = [
+    process.env.CUJ_RUNME_AGENT_BIN?.trim(),
+    "runme",
+    resolve(REPO_ROOT, "..", "git_runme", "runme"),
+  ].filter((value): value is string => Boolean(value && value.length > 0));
+
+  for (const binary of candidateBinaries) {
+    const checkCmd = `${shellQuote(binary)} agent --help`;
+    if (run(checkCmd, REPO_ROOT).status === 0) {
+      return {
+        command: `${shellQuote(binary)} agent --config ${shellQuote(configPath)} serve`,
+        cwd: REPO_ROOT,
+      };
+    }
+  }
+
+  const fallbackRepo = resolve(
+    process.env.CUJ_RUNME_REPO?.trim() || resolve(REPO_ROOT, "..", "git_runme"),
+  );
+  const goBinaryPresent = run("command -v go", REPO_ROOT).status === 0;
+  const repoLooksValid =
+    run(`test -f ${shellQuote(join(fallbackRepo, "go.mod"))}`, REPO_ROOT).status === 0;
+  if (goBinaryPresent && repoLooksValid) {
+    return {
+      command: `go run ./ agent --config ${shellQuote(configPath)} serve`,
+      cwd: fallbackRepo,
+    };
+  }
+
+  throw new Error(
+    "Could not locate a Runme agent command for CUJ backend startup. Set CUJ_BACKEND_CMD explicitly or configure CUJ_RUNME_AGENT_BIN/CUJ_RUNME_REPO.",
+  );
+}
+
 function run(command: string, cwd = SCRIPT_DIR): CommandResult {
   const timeoutMs = Number(process.env.CUJ_CMD_TIMEOUT_MS ?? "240000");
   const result = spawnSync(command, {
@@ -82,11 +291,16 @@ function run(command: string, cwd = SCRIPT_DIR): CommandResult {
   };
 }
 
-function runNodeScript(scriptPath: string, cwd: string): CommandResult {
+function runNodeScript(
+  scriptPath: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): CommandResult {
   const timeoutMs = Number(process.env.CUJ_SCENARIO_TIMEOUT_MS ?? "240000");
   const result = spawnSync(process.execPath, [scriptPath], {
     cwd,
     encoding: "utf-8",
+    env,
     timeout: timeoutMs,
     killSignal: "SIGKILL",
   });
@@ -123,12 +337,19 @@ function runOrThrow(command: string, cwd = SCRIPT_DIR): string {
   return result.stdout;
 }
 
-function startService(name: string, command: string, cwd: string, logPath: string): ServiceHandle {
+function startService(
+  name: string,
+  command: string,
+  cwd: string,
+  logPath: string,
+  env?: NodeJS.ProcessEnv,
+): ServiceHandle {
   mkdirSync(dirname(logPath), { recursive: true });
   const logStream = createWriteStream(logPath, { flags: "w" });
   const child = spawn(command, {
     cwd,
     shell: true,
+    env: env ?? process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -187,6 +408,22 @@ async function waitForHttp(url: string, timeoutMs: number, label: string): Promi
     await new Promise((r) => setTimeout(r, 1000));
   }
   throw new Error(`Timed out waiting for ${label} at ${url}: ${lastError}`);
+}
+
+function readOidcTokenFile(
+  tokenFile: string,
+): { id_token?: string; access_token?: string; expires_at?: number } | null {
+  try {
+    const raw = readFileSync(tokenFile, "utf-8");
+    const parsed = JSON.parse(raw) as {
+      id_token?: string;
+      access_token?: string;
+      expires_at?: number;
+    };
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 function parseAssertions(output: string): Assertions {
@@ -424,14 +661,43 @@ async function main(): Promise<void> {
   const manageServers = (process.env.CUJ_MANAGE_SERVERS ?? "true").toLowerCase() !== "false";
   const frontendUrl = process.env.CUJ_FRONTEND_URL ?? "http://localhost:5173";
   const backendUrl = process.env.CUJ_BACKEND_URL ?? "http://localhost:9977";
+  const oidc = resolveOidcAuthConfig();
   const frontendCmd = process.env.CUJ_FRONTEND_CMD ?? "pnpm run dev:app";
-  const backendCmd = process.env.CUJ_BACKEND_CMD ?? "python3 -m http.server 9977";
   const frontendCwd = resolve(process.env.CUJ_FRONTEND_CWD ?? REPO_ROOT);
-  const backendCwd = resolve(process.env.CUJ_BACKEND_CWD ?? REPO_ROOT);
+  let backendCmd = process.env.CUJ_BACKEND_CMD;
+  let backendCwd = resolve(process.env.CUJ_BACKEND_CWD ?? REPO_ROOT);
+  if (!backendCmd || backendCmd.trim() === "") {
+    const detected = detectBackendCommand(frontendUrl, backendUrl, oidc);
+    backendCmd = detected.command;
+    backendCwd = detected.cwd;
+    console.log(`[CUJ] Using detected backend command: ${backendCmd}`);
+    console.log(`[CUJ] Backend working directory: ${backendCwd}`);
+  }
 
   const services: ServiceHandle[] = [];
   try {
     if (manageServers) {
+      if (oidc.enabled) {
+        if (!process.env.CUJ_OIDC_CMD && run("command -v go", REPO_ROOT).status !== 0) {
+          throw new Error(
+            "CUJ auth requires Go to run the local OIDC fake server. Install Go or set CUJ_OIDC_CMD.",
+          );
+        }
+        const oidcUp = await fetch(oidc.discoveryUrl).then(() => true).catch(() => false);
+        if (!oidcUp) {
+          services.push(
+            startService(
+              "oidc",
+              oidc.serverCommand,
+              REPO_ROOT,
+              join(OUTPUT_DIR, "oidc.log"),
+              oidc.serverEnv,
+            ),
+          );
+        }
+        await waitForHttp(oidc.discoveryUrl, 30_000, "oidc");
+      }
+
       const frontendUp = await fetch(frontendUrl).then(() => true).catch(() => false);
       if (!frontendUp) {
         services.push(
@@ -448,6 +714,24 @@ async function main(): Promise<void> {
 
       await waitForHttp(frontendUrl, 90_000, "frontend");
       await waitForHttp(backendUrl, 30_000, "backend");
+    }
+
+    const scenarioEnv: NodeJS.ProcessEnv = { ...process.env };
+    if (oidc.enabled) {
+      const tokens = readOidcTokenFile(oidc.tokenFile);
+      const idToken = process.env.CUJ_ID_TOKEN ?? tokens?.id_token ?? "";
+      const accessToken = process.env.CUJ_ACCESS_TOKEN ?? tokens?.access_token ?? idToken;
+      if (!idToken) {
+        throw new Error(
+          `CUJ auth enabled but no ID token available. Expected token in ${oidc.tokenFile} or CUJ_ID_TOKEN.`,
+        );
+      }
+      scenarioEnv.CUJ_ID_TOKEN = idToken;
+      scenarioEnv.CUJ_ACCESS_TOKEN = accessToken;
+      if (typeof tokens?.expires_at === "number") {
+        scenarioEnv.CUJ_TOKEN_EXPIRES_AT = `${tokens.expires_at}`;
+      }
+      scenarioEnv.CUJ_OIDC_EMAIL = oidc.principalEmail;
     }
 
     let failures = 0;
@@ -478,7 +762,7 @@ async function main(): Promise<void> {
       }
 
       const compiled = join(GENERATED_DIR, `${basename.replace(/\.ts$/, "")}.js`);
-      const runResult = runNodeScript(compiled, APP_ROOT);
+      const runResult = runNodeScript(compiled, APP_ROOT, scenarioEnv);
       printOutput(runResult.stdout, runResult.stderr);
 
       const assertions = parseAssertions(`${runResult.stdout}\n${runResult.stderr}`);

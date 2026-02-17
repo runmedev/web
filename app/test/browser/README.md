@@ -51,10 +51,10 @@ acceptance test described in `../../docs-dev/cujs/hello-world-local-notebook.md`
 It validates an end-to-end "hello world" flow:
 
 - seed a local notebook with one bash cell (`echo "hello world"`)
-- configure `aisreRunners` from App Console
+- inject OIDC auth into browser storage
 - open the notebook from the workspace tree
 - run the first cell
-- assert rendered output contains `hello world`
+- assert executed cell outputs contain `hello world`
 
 Run it with:
 
@@ -69,6 +69,10 @@ Run all implemented CUJs:
 ```bash
 pnpm -C app run cuj:run
 ```
+
+The CUJ runner starts a local Go OIDC fake server
+(`testing/cuj-oidc-server.go`) and a Runme backend configured to trust JWTs
+from that issuer.
 
 ## What it tests
 
