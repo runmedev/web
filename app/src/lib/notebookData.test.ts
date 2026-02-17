@@ -125,6 +125,8 @@ describe("bindStreamsToCell", () => {
     fake.stdout$.next(new TextEncoder().encode(" world"));
     fake.stderr$.next(new TextEncoder().encode("oops"));
     fake.stderr$.next(new TextEncoder().encode(" again"));
+    // Stdout chunks without a newline are flushed when the run exits.
+    fake.exitCode$.next(0);
 
     const stdoutItem = current.outputs
       .flatMap((o) => o.items)

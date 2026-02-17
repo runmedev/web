@@ -14,7 +14,7 @@ export interface LogQuery {
   limit?: number;
 }
 
-interface LogOptions {
+export interface LogOptions {
   attrs?: Record<string, unknown>;
 }
 
@@ -42,11 +42,30 @@ function matchesLevel(eventLevel: LogLevel, query: LogQuery): boolean {
   return true;
 }
 
+function createLogID(): string {
+  try {
+    const randomUUID = globalThis.crypto?.randomUUID;
+    if (typeof randomUUID === "function") {
+      return randomUUID.call(globalThis.crypto);
+    }
+  } catch {
+    // Logging must never throw due to UUID generation in constrained runtimes.
+  }
+
+  return `log-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export interface LoggingRuntimeStore {
+  log(level: LogLevel, message: string, options?: LogOptions): LogEvent;
+  list(query?: LogQuery): LogEvent[];
+  subscribe(listener: () => void): () => void;
+}
+
 /**
  * LoggingRuntime keeps a bounded in-memory event list that both feature code
  * and React UI components can access through one app-scoped singleton.
  */
-class LoggingRuntime {
+class LoggingRuntime implements LoggingRuntimeStore {
   private events: LogEvent[] = [];
 
   private listeners = new Set<() => void>();
@@ -57,7 +76,7 @@ class LoggingRuntime {
    */
   log(level: LogLevel, message: string, options: LogOptions = {}): LogEvent {
     const event: LogEvent = {
-      id: crypto.randomUUID(),
+      id: createLogID(),
       ts: new Date().toISOString(),
       level,
       message,
@@ -92,7 +111,11 @@ class LoggingRuntime {
   }
 }
 
-export const loggingRuntime = new LoggingRuntime();
+export function createLoggingRuntime(): LoggingRuntimeStore {
+  return new LoggingRuntime();
+}
+
+export const loggingRuntime = createLoggingRuntime();
 
 /**
  * appLogger is a tiny convenience API that keeps call sites terse while

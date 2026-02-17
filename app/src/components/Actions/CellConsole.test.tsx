@@ -13,7 +13,7 @@ vi.mock("@runmedev/renderers", () => ({
   setContext: vi.fn(),
 }));
 
-import { parser_pb, MimeType } from "../../contexts/CellContext";
+import { parser_pb, MimeType, RunmeMetadataKey } from "../../contexts/CellContext";
 import { create } from "@bufbuild/protobuf";
 import CellConsole from "./CellConsole";
 
@@ -30,6 +30,11 @@ class FakeCellData {
 
   getStreams() {
     return undefined;
+  }
+
+  getRunID() {
+    const runID = this.snapshot.metadata?.[RunmeMetadataKey.LastRunID];
+    return typeof runID === "string" ? runID : "";
   }
 }
 
