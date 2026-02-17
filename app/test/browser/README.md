@@ -67,9 +67,7 @@ node .generated/test-scenario-hello-world.js
 Run all implemented CUJs:
 
 ```bash
-cd app/test/browser
-pnpm exec tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir .generated run-cuj-scenarios.ts
-node .generated/run-cuj-scenarios.js
+pnpm -C app run cuj:run
 ```
 
 ## What it tests
@@ -87,6 +85,7 @@ node .generated/run-cuj-scenarios.js
 ## Output
 
 - Screenshots saved to `test-output/*.png`
+- Walkthrough videos saved to `test-output/*.webm`
 - DOM snapshots saved to `test-output/*.txt`
 - Exit code: 0 = all pass, 1 = failures, 2 = missing dependencies
 

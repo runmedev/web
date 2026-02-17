@@ -75,25 +75,35 @@ Avoid assertions that require subjective manual judgment.
 The existing `Test` workflow performs install/build/test for regular code quality
 checks.
 
-### Codex-triggered CUJ automation
+### CUJ automation modes
 
-Workflow: `.github/workflows/codex-cuj.yaml`
+Workflow: `.github/workflows/app-tests.yaml`
 
-It requests Codex CUJ execution in two modes:
+The canonical entrypoint is `app/test/browser/run-cuj-scenarios.ts`.
+GHA should contain minimal glue logic; orchestration and publishing behavior
+should live in the TypeScript runner so the same flow works in CI and locally.
 
-1. **Presubmit** (`pull_request_target`)
-   - posts a deduplicated `@codex` request in the PR thread.
-   - asks Codex to run `app/test/browser/run-cuj-scenarios.ts`.
+CUJ automation is supported in three modes:
 
-2. **Postsubmit** (`push` to `main`)
-   - comments on a tracking issue for main-branch CUJ runs.
-   - asks Codex to run all CUJs against the merged commit.
+1. **Local iteration**
+   - run locally via `pnpm -C app run cuj:run`,
+   - produces the same artifacts and movie output under
+     `app/test/browser/test-output/`,
+   - can upload artifacts to GCS when local credentials/permissions are available,
+   - enables fast AI-assisted iteration without waiting on GHA.
 
-Both requests ask for:
+2. **Presubmit** (`pull_request`)
+   - runs CUJs for PR updates,
+   - uploads `app/test/browser/test-output/*` to a world-readable GCS bucket,
+   - publishes a commit status check (`app-tests`) whose target URL points to
+     the run `index.html` in GCS.
 
-- per-CUJ pass/fail summaries,
-- screenshots and logs,
-- a short walkthrough video uploaded to the PR/issue.
+3. **Postsubmit** (`push` to `main`)
+   - runs the same CUJ driver against `main`,
+   - uploads the same artifact set to GCS,
+   - publishes the same status-check link pattern for the commit.
+
+All modes produce per-CUJ status, screenshots, text snapshots/logs, and a short walkthrough video.
 
 ## Artifacts and reporting
 
@@ -103,8 +113,37 @@ For CUJ runs, capture the following per scenario:
 - snapshots and screenshots,
 - short video clip (or GIF/MP4 fallback where tooling limits apply).
 
-Artifacts should be attached in the PR/issue where Codex was triggered so
-reviewers can quickly validate UI behavior and regressions.
+### Publication policy (GCS)
+
+To avoid zip-download-only UX from GitHub Actions artifacts, CUJ artifacts are
+published to Google Cloud Storage and linked directly.
+
+1. **Bucket accessibility**
+   - Use a dedicated, world-readable bucket for CUJ artifact files.
+   - Artifact URLs should be plain HTTPS object links that humans and reviewer
+     AIs can open directly.
+
+2. **Write access from CI and local runs**
+   - Grant write access to the dedicated service account used by the CUJ
+     workflow and to trusted local principals as needed for local iteration.
+   - Prefer GitHub OIDC + Workload Identity Federation over long-lived JSON keys.
+
+3. **Lifecycle/retention**
+   - Configure bucket lifecycle rules to delete CUJ artifacts after **7 days**.
+
+### Discoverability contract
+
+Each run should publish:
+
+- one commit status check context (`app-tests`) on the tested SHA,
+- a status `target_url` set to the GCS run index:
+  `https://storage.googleapis.com/<bucket>/cuj-runs/<repo>/<run>/<attempt>/index.html`.
+
+This keeps the main PR Checks UI as the primary discovery surface while
+avoiding repeated PR-comment noise.
+
+Optional: one stable PR comment can still be updated in place when human-facing
+summary text is needed, but this is not required for artifact discovery.
 
 ## Adding a new CUJ
 
