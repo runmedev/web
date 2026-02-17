@@ -23,6 +23,10 @@ type ScenarioResult = {
   assertions_passed: number;
   assertions_failed: number;
   failure_messages: string[];
+  assertion_results?: Array<{
+    status: "PASS" | "FAIL";
+    message: string;
+  }>;
 };
 
 type UploadedFile = {
@@ -327,6 +331,19 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     result.failure_messages.map((message) => `${result.script}: ${message}`)
   );
   const failureMessages = [...new Set(allFailureMessages)];
+  const assertionRows = scenarioResults.flatMap((result) => {
+    const assertions = Array.isArray(result.assertion_results) ? result.assertion_results : [];
+    return assertions.map((assertion) => ({
+      scenario: result.script,
+      status: assertion.status,
+      message: assertion.message,
+    }));
+  });
+  const assertionTotals = {
+    total: assertionRows.length,
+    passed: assertionRows.filter((row) => row.status === "PASS").length,
+    failed: assertionRows.filter((row) => row.status === "FAIL").length,
+  };
 
   const manifest = {
     bucket,
@@ -355,6 +372,8 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     .status-pass { background: #e6ffed; color: #0b5f2a; border: 1px solid #34d058; }
     .status-fail { background: #ffeef0; color: #86181d; border: 1px solid #d73a49; }
     .failure-box { background: #fff5f5; border: 1px solid #d73a49; border-radius: 6px; padding: 12px; margin: 16px 0; }
+    .cell-pass { color: #0b5f2a; font-weight: 600; }
+    .cell-fail { color: #86181d; font-weight: 600; }
     table { border-collapse: collapse; width: 100%; }
     th, td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
     th { background: #f6f8fa; }
@@ -413,6 +432,24 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
               ).join("")}</ul>`
               : "none"
           }</td></tr>`
+        ).join("\n")
+      }
+    </tbody>
+  </table>`
+      : ""
+  }
+  ${
+    assertionRows.length > 0
+      ? `<h2>Test Report</h2>
+  <p>Assertions: ${assertionTotals.total} total, ${assertionTotals.passed} passed, ${assertionTotals.failed} failed</p>
+  <table>
+    <thead>
+      <tr><th>Scenario</th><th>Status</th><th>Assertion</th></tr>
+    </thead>
+    <tbody>
+      ${
+        assertionRows.map((row) =>
+          `<tr><td><code>${escapeHtml(row.scenario)}</code></td><td class="${row.status === "PASS" ? "cell-pass" : "cell-fail"}">${row.status}</td><td>${escapeHtml(row.message)}</td></tr>`
         ).join("\n")
       }
     </tbody>
@@ -497,6 +534,17 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
           ),
         ]
       : []),
+    ...(assertionRows.length > 0
+      ? [
+          "",
+          "## Test report",
+          "",
+          `- Assertions: ${assertionTotals.total} total, ${assertionTotals.passed} passed, ${assertionTotals.failed} failed`,
+          ...assertionRows.map((row) =>
+            `- ${row.status}: ${row.scenario} :: ${row.message}`
+          ),
+        ]
+      : []),
     "",
     "## All files",
     "",
@@ -542,6 +590,7 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     pr_comment_path: prCommentPath,
     file_count: uploaded.length,
     summary,
+    test_report: assertionTotals,
     urls: {
       movie: movieUrl,
       initial_png: initialPngUrl,

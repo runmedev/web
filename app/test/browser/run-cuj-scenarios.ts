@@ -37,6 +37,12 @@ type ScenarioResult = {
   assertions_passed: number;
   assertions_failed: number;
   failure_messages: string[];
+  assertion_results: AssertionResult[];
+};
+
+type AssertionResult = {
+  status: "PASS" | "FAIL";
+  message: string;
 };
 
 type ServiceHandle = {
@@ -500,6 +506,20 @@ function parseFailureMessages(output: string): string[] {
   return [...unique];
 }
 
+function parseAssertionResults(output: string): AssertionResult[] {
+  const results: AssertionResult[] = [];
+  const pattern = /^\[(PASS|FAIL)\]\s+(.+)$/gm;
+  let match: RegExpExecArray | null = null;
+  while ((match = pattern.exec(output)) !== null) {
+    const status = match[1] as "PASS" | "FAIL";
+    const message = (match[2] ?? "").trim();
+    if (message) {
+      results.push({ status, message });
+    }
+  }
+  return results;
+}
+
 function resolveRepo(): string | null {
   if (process.env.GITHUB_REPOSITORY) {
     return process.env.GITHUB_REPOSITORY;
@@ -831,6 +851,12 @@ async function main(): Promise<void> {
           failure_messages: [
             `Scenario failed to compile (exit ${compileResult.status})`,
           ],
+          assertion_results: [
+            {
+              status: "FAIL",
+              message: `Scenario failed to compile (exit ${compileResult.status})`,
+            },
+          ],
         });
         console.error(`[CUJ] Failed ${basename} (compile exit ${compileResult.status})`);
         continue;
@@ -846,6 +872,13 @@ async function main(): Promise<void> {
       aggregateAssertions.failed += assertions.failed;
       const outputCombined = `${runResult.stdout}\n${runResult.stderr}`;
       const failureMessages = parseFailureMessages(outputCombined);
+      const assertionResults = parseAssertionResults(outputCombined);
+      if (runResult.status !== 0 && assertionResults.length === 0) {
+        assertionResults.push({
+          status: "FAIL",
+          message: `Scenario process exited with status ${runResult.status}`,
+        });
+      }
       scenarioResults.push({
         scenario: basename.replace(/^test-scenario-/, "").replace(/\.ts$/, ""),
         script: basename,
@@ -855,6 +888,7 @@ async function main(): Promise<void> {
         assertions_passed: assertions.passed,
         assertions_failed: assertions.failed,
         failure_messages: failureMessages,
+        assertion_results: assertionResults,
       });
 
       if (runResult.status !== 0) {
