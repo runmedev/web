@@ -75,24 +75,35 @@ Avoid assertions that require subjective manual judgment.
 The existing `Test` workflow performs install/build/test for regular code quality
 checks.
 
-### CI-triggered CUJ automation
+### CUJ automation modes
 
 Workflow: `.github/workflows/codex-cuj.yaml`
 
-The workflow executes `app/test/browser/run-cuj-scenarios.ts` in two modes:
+The canonical entrypoint is `app/test/browser/run-cuj-scenarios.ts`.
+GHA should contain minimal glue logic; orchestration and publishing behavior
+should live in the TypeScript runner so the same flow works in CI and locally.
 
-1. **Presubmit** (`pull_request`)
+CUJ automation is supported in three modes:
+
+1. **Local iteration**
+   - run locally via `pnpm -C app run cuj:run`,
+   - produces the same artifacts and movie output under
+     `app/test/browser/test-output/`,
+   - can upload artifacts to GCS when local credentials/permissions are available,
+   - enables fast AI-assisted iteration without waiting on GHA.
+
+2. **Presubmit** (`pull_request`)
    - runs CUJs for PR updates,
    - uploads `app/test/browser/test-output/*` to a world-readable GCS bucket,
    - publishes a commit status check (`app-tests`) whose target URL points to
      the run `index.html` in GCS.
 
-2. **Postsubmit** (`push` to `main`)
+3. **Postsubmit** (`push` to `main`)
    - runs the same CUJ driver against `main`,
    - uploads the same artifact set to GCS,
    - publishes the same status-check link pattern for the commit.
 
-Both modes produce per-CUJ status, screenshots, text snapshots/logs, and a short walkthrough video.
+All modes produce per-CUJ status, screenshots, text snapshots/logs, and a short walkthrough video.
 
 ## Artifacts and reporting
 
@@ -112,9 +123,9 @@ published to Google Cloud Storage and linked directly.
    - Artifact URLs should be plain HTTPS object links that humans and reviewer
      AIs can open directly.
 
-2. **Write access from GitHub Actions**
-   - Grant write access only to a dedicated service account used by the CUJ
-     workflow.
+2. **Write access from CI and local runs**
+   - Grant write access to the dedicated service account used by the CUJ
+     workflow and to trusted local principals as needed for local iteration.
    - Prefer GitHub OIDC + Workload Identity Federation over long-lived JSON keys.
 
 3. **Lifecycle/retention**
