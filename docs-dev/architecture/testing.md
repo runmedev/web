@@ -98,7 +98,7 @@ CUJ automation is supported in three modes:
 2. **Presubmit** (`pull_request`)
    - runs CUJs for PR updates,
    - uploads `app/test/browser/test-output/*` to a world-readable GCS bucket,
-   - publishes a commit status check (`app-tests`) whose target URL points to
+   - publishes a commit status check (`app-tests-pass`) whose target URL points to
      the run `index.html` in GCS.
 
 3. **Postsubmit** (`push` to `main`)
@@ -138,7 +138,7 @@ published to Google Cloud Storage and linked directly.
 
 Each run should publish:
 
-- one commit status check context (`app-tests`) on the tested SHA,
+- one commit status check context (`app-tests-pass`) on the tested SHA,
 - a status `target_url` set to the GCS run index:
   `https://storage.googleapis.com/<bucket>/cuj-runs/<repo>/<run>/<attempt>/index.html`.
 

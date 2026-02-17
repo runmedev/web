@@ -682,7 +682,7 @@ async function publishCommitStatus(indexUrl: string, summary: CujSummary): Promi
     return;
   }
 
-  const context = process.env.CUJ_STATUS_CONTEXT ?? "app-tests";
+  const context = process.env.CUJ_STATUS_CONTEXT ?? "app-tests-pass";
   const derivedState = summary.status === "PASS" && summary.assertions_failed === 0 && summary.exit_code === 0
     ? "success"
     : "failure";
