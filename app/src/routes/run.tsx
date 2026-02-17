@@ -25,7 +25,7 @@ import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
-import { AISREContentWrapper } from "../layout";
+import { RunmeContentWrapper } from "../layout";
 import { useRun } from "../lib/useRun.js";
 import { useWindowStickToBottom } from "../lib/useWindowStickToBottom.js";
 import {
@@ -37,7 +37,8 @@ import {
 } from "../protogen/runme/parser/v1/parser_pb.js";
 import { isRunDone } from "../lib/conditions.js";
 import {
-  AISRE_ASSET_MIME,
+  LEGACY_ASSET_MIME,
+  RUNME_ASSET_MIME,
   type AssetRef,
   getAssetProxyUrl,
 } from "../lib/assetRef.js";
@@ -193,7 +194,7 @@ export default function RunRoute() {
   ]);
 
   return (
-    <AISREContentWrapper>
+    <RunmeContentWrapper>
       <Flex className="flex-col gap-4 p-4 pt-0">
         <div className="sticky top-0 z-10 bg-white shadow-xs">
           <div className="space-y-4 pt-4 pb-4">
@@ -211,7 +212,7 @@ export default function RunRoute() {
           {pageContent}
         </Box>
       </Flex>
-    </AISREContentWrapper>
+    </RunmeContentWrapper>
   );
 }
 
@@ -861,8 +862,8 @@ function NotebookOutputItemView({
     item.metadata?.[IOPUB_INCOMPLETE_METADATA_KEY] === "false";
 
   let content: ReactNode;
-  // Handle AISRE asset pointers
-  if (mime === AISRE_ASSET_MIME) {
+  // Handle runme asset pointers
+  if (mime === RUNME_ASSET_MIME || mime === LEGACY_ASSET_MIME) {
     const ref = decodeAssetRef(item.data ?? new Uint8Array());
     if (ref) {
       const url = getAssetProxyUrl(baseUrl, ref);

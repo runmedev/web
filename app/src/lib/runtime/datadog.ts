@@ -66,13 +66,13 @@ function help() {
   console.log(
     " - query(query: string, from: string, to: string): Promise<any>",
   );
-  console.log(" - plotMetrics(data: any, aisre: any): void");
+  console.log(" - plotMetrics(data: any, runme: any): void");
   console.log("");
   console.log("Example usage:");
   console.log(
     ' const data = await datadog.query("avg:system.cpu.user{*} by {host}", "now-1h", "now");',
   );
-  console.log(" datadog.plotMetrics(data, aisre);");
+  console.log(" datadog.plotMetrics(data, runme);");
 }
 
 async function query(
@@ -100,7 +100,7 @@ queries:
   const token = authData?.idToken;
 
   if (token == null || token === "") {
-    console.error("Datadog query aborted: missing AISRE token.");
+    console.error("Datadog query aborted: missing runme token.");
     return {} as MetricsQueryResponse;
   }
 
@@ -153,7 +153,7 @@ function toJSONString(data: string | Uint8Array): string {
 
 function plotMetrics(
   data: MetricsQueryResponse,
-  aisre: any,
+  runme: any,
   options?: { title?: string; xLabel?: string; yLabel?: string },
 ) {
   console.log("Plotting Datadog data...");
@@ -192,9 +192,9 @@ function plotMetrics(
   const yMax =
     d3.max(allPoints, (d) => (Number.isFinite(d.y) ? d.y : null)) ?? 0;
 
-  // Clear and render using AISRE notebook helpers
-  aisre.clear();
-  aisre.render((selection) => {
+  // Clear and render using runme notebook helpers
+  runme.clear();
+  runme.render((selection) => {
     const width = 820;
     const height = 360;
     const margins = { top: 40, right: 24, bottom: 50, left: 64 };

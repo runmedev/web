@@ -8,7 +8,8 @@ interface SidePanelContextValue {
   setPanel: (panel: PanelKey) => void;
 }
 
-const STORAGE_KEY = "aisre.sidePanel.active";
+const STORAGE_KEY = "runme.sidePanel.active";
+const LEGACY_STORAGE_KEY = "aisre.sidePanel.active";
 
 const SidePanelContext = createContext<SidePanelContextValue | undefined>(undefined);
 
@@ -18,7 +19,9 @@ export function SidePanelProvider({ children }: { children: ReactNode }) {
       return "explorer";
     }
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const stored =
+        localStorage.getItem(STORAGE_KEY) ??
+        localStorage.getItem(LEGACY_STORAGE_KEY);
       if (stored === "explorer" || stored === "chatkit" || stored === "settings") {
         return stored;
       }
@@ -32,8 +35,10 @@ export function SidePanelProvider({ children }: { children: ReactNode }) {
     try {
       if (activePanel) {
         localStorage.setItem(STORAGE_KEY, activePanel);
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
       } else {
         localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
       }
     } catch (error) {
       console.error("Failed to persist side panel state", error);

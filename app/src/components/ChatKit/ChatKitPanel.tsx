@@ -21,7 +21,7 @@ import {
 } from "../../protogen/oaiproto/aisre/notebooks_pb.js";
 
 class UserNotLoggedInError extends Error {
-  constructor(message = "You must log in to use AISRE chat.") {
+  constructor(message = "You must log in to use runme chat.") {
     super(message);
     this.name = "UserNotLoggedInError";
   }
@@ -41,15 +41,15 @@ const CHATKIT_DOMAIN_KEY = (() => {
   return "domain_pk_68f8054e7da081908cc1972e9167ec270895bf04413e753b";
 })();
 
-const CHATKIT_GREETING = "How can AISRE help you today?";
+const CHATKIT_GREETING = "How can runme help you today?";
 
 const CHATKIT_PLACEHOLDER =
   "Describe the production issue or question you are investigating";
 
 const CHATKIT_STARTER_PROMPTS = [
   {
-    label: "Setup a local runner for AISRE to execute code",
-    prompt: "How do I setup a local runner to execute code with the AISRE?",
+    label: "Setup a local runner for runme to execute code",
+    prompt: "How do I setup a local runner to execute code with runme?",
     icon: "circle-question",
   },
   {
@@ -561,7 +561,7 @@ function ChatKitPanel() {
         <div className="pointer-events-auto absolute inset-0 z-50 flex items-center justify-center bg-white/90 p-4 text-sm">
           <div className="w-full max-w-sm rounded-nb-md border border-nb-cell-border bg-white p-4 shadow-nb-lg">
             <p className="mb-4 text-nb-text">
-              Please log in to use AISRE chat features.
+              Please log in to use runme chat features.
             </p>
             <div className="flex justify-end gap-2">              
               <button

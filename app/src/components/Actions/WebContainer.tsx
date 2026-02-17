@@ -96,7 +96,7 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
       },
     };
 
-    const aisre = {
+    const runme = {
       clear: () => {
         if (activeRunIdRef.current === runId) {
           container.innerHTML = "";
@@ -125,11 +125,11 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
         // Inject the libraries/objects we want to expose to the cell code
         "d3",
         "datadog",
-        "aisre",
+        "runme",
         "console",
         `"use strict"; return (async () => {\n${cell.value}\n})();`,
       );
-      await runner(d3, datadog, aisre, mockedConsole);
+      await runner(d3, datadog, runme, mockedConsole);
     } catch (err) {
       exitCode = 1;
       console.error(`Error during cell execution: ${err}`);
@@ -223,7 +223,7 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
         </div>
       ) : (
         <div className="font-mono text-[11px] italic text-nb-text-faint">
-          Use d3 (or aisre.render) to draw into the panel above.
+          Use d3 (or runme.render) to draw into the panel above.
         </div>
       )}
     </div>
