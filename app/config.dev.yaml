@@ -32,7 +32,7 @@ cloudAssistant:
 
 assistantServer:
     # TODO(jlewi): How should this be set 
-    staticAssets: /Users/jlewi/code/openai/bazel-bin/project/aisre/aisre-web/dist
+    staticAssets: /Users/jlewi/git_runmeweb/app/dist
     runnerService: true
     parserService: true    
     oidc:

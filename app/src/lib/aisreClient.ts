@@ -27,7 +27,7 @@ import {
 } from "@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb.js";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 
-export const DEFAULT_AISRE_SERVER_BASE_URL =
+export const DEFAULT_RUNME_SERVER_BASE_URL =
   window.location.hostname === "localhost"
     ? "http://localhost:9988"
     : window.location.origin;
@@ -38,7 +38,7 @@ export type RequestOptions = Omit<RequestInit, "body"> & {
 
 export interface AisreClientOptions {
   /**
-   * Base URL used when constructing requests. Defaults to the AISRE server
+   * Base URL used when constructing requests. Defaults to the runme server
    * running on http://localhost:9988 so the client can talk directly to the
    * backend during local development.
    */
@@ -88,7 +88,7 @@ export class AisreClient {
   private readonly getIdToken?: () => Promise<string | undefined>;
 
   constructor(options: AisreClientOptions = {}) {
-    const baseUrl = options.baseUrl ?? DEFAULT_AISRE_SERVER_BASE_URL;
+    const baseUrl = options.baseUrl ?? DEFAULT_RUNME_SERVER_BASE_URL;
     this.baseUrl = stripTrailingSlashes(baseUrl);
     this.defaultCallOptions = buildCallOptions(options.defaultOptions);
     this.defaultRequestOptions = options.defaultOptions;

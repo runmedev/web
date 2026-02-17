@@ -5,7 +5,7 @@ import md5 from "md5";
 import { Subject, debounceTime } from "rxjs";
 
 import { parser_pb } from "../runme/client";
-import { aisreClientManager } from "../lib/aisreClientManager";
+import { aisreClientManager as runmeClientManager } from "../lib/aisreClientManager";
 import { appState } from "../lib/runtime/AppState";
 import { DriveNotebookStore } from "./drive";
 import {
@@ -96,7 +96,7 @@ export class LocalNotebooks extends Dexie {
 
   constructor(
     driveStore: DriveNotebookStore,
-    databaseName: string = "aisre-local-notebooks",
+    databaseName: string = "runme-local-notebooks",
   ) {
     super(databaseName);
 
@@ -573,7 +573,7 @@ export class LocalNotebooks extends Dexie {
     let markdownBytes: Uint8Array;
     try {
       const notebook = deserializeNotebook(record.doc ?? "");
-      const client = aisreClientManager.get();
+      const client = runmeClientManager.get();
       markdownBytes = await client.serializeNotebook(notebook, {
         outputs: {
           enabled: true,

@@ -13,8 +13,10 @@ import { type Interceptor } from "@connectrpc/connect";
 import { Runner, RunnerMap } from "../lib/runner";
 import { getRunnersManager } from "../lib/runtime/runnersManager";
 
-const RUNNERS_STORAGE_KEY = "aisre/runners";
-const DEFAULT_RUNNER_NAME_STORAGE_KEY = "aisre/defaultRunner";
+const RUNNERS_STORAGE_KEY = "runme/runners";
+const DEFAULT_RUNNER_NAME_STORAGE_KEY = "runme/defaultRunner";
+const LEGACY_RUNNERS_STORAGE_KEY = "aisre/runners";
+const LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY = "aisre/defaultRunner";
 
 type StoredRunner = {
   name: string;
@@ -63,6 +65,7 @@ function loadStoredRunners(
     const mgr = getRunnersManager();
     const storedDefaultRunnerName =
       window.localStorage.getItem(DEFAULT_RUNNER_NAME_STORAGE_KEY) ??
+      window.localStorage.getItem(LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY) ??
       mgr.getDefaultRunnerName();
     const runners = mgr.list().map(
       (r) =>
@@ -97,13 +100,16 @@ function persistRunners(
   }));
   try {
     window.localStorage.setItem(RUNNERS_STORAGE_KEY, JSON.stringify(serialized));
+    window.localStorage.removeItem(LEGACY_RUNNERS_STORAGE_KEY);
     if (defaultRunnerName) {
       window.localStorage.setItem(
         DEFAULT_RUNNER_NAME_STORAGE_KEY,
         defaultRunnerName,
       );
+      window.localStorage.removeItem(LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY);
     } else {
       window.localStorage.removeItem(DEFAULT_RUNNER_NAME_STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY);
     }
   } catch (error) {
     console.error("Failed to persist runners to storage", error);

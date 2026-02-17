@@ -66,8 +66,8 @@ export class JSKernel {
       this.hooks.onStderr(data);
     };
 
-    const appRunners = (options.globals?.aisreRunners ??
-      this.baseGlobals.aisreRunners) as RunnersApi | undefined;
+    const appRunners = (options.globals?.runmeRunners ??
+      this.baseGlobals.runmeRunners) as RunnersApi | undefined;
     const app = this.createAppHelpers(
       runId,
       options.container,
@@ -83,8 +83,6 @@ export class JSKernel {
       ...(options.globals ?? {}),
       console: this.createConsoleProxy(stdout, stderr),
       app,
-      // Keep `aisre` as a compatibility alias for existing snippets.
-      aisre: app,
       help:
         globalHelp ??
         (() =>

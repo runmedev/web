@@ -19,7 +19,8 @@ export const DRIVE_SCOPES = [
   "https://www.googleapis.com/auth/drive.install",
 ];
 
-const STORAGE_KEY = "aisre/google-auth/token";
+const STORAGE_KEY = "runme/google-auth/token";
+const LEGACY_STORAGE_KEY = "aisre/google-auth/token";
 
 interface AccessTokenInfo {
   token: string;
@@ -86,21 +87,26 @@ const REFRESH_MARGIN_MS = 60_000;
 // cached.
 function loadStoredToken(): AccessTokenInfo | null {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw =
+      window.localStorage.getItem(STORAGE_KEY) ??
+      window.localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) {
       return null;
     }
     const parsed = JSON.parse(raw) as Partial<AccessTokenInfo> | null;
     if (!parsed?.token || typeof parsed.token !== "string") {
       window.localStorage.removeItem(STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
       return null;
     }
     if (typeof parsed.expiresAt !== "number") {
       window.localStorage.removeItem(STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
       return null;
     }
     if (parsed.expiresAt <= Date.now() + REFRESH_MARGIN_MS) {
       window.localStorage.removeItem(STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
       return null;
     }
     return {
@@ -145,6 +151,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       tokenInfoRef.current = null;
       try {
         window.localStorage.removeItem(STORAGE_KEY);
+        window.localStorage.removeItem(LEGACY_STORAGE_KEY);
       } catch (error) {
         console.error("Failed to clear Google auth token", error);
       }
@@ -157,6 +164,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     tokenInfoRef.current = info;
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(info));
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
     } catch (error) {
       console.error("Failed to persist Google auth token", error);
     }

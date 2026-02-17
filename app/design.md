@@ -1,8 +1,8 @@
-# AISRE Web Design
+# runme Web Design
 
 ## Overview
 
-Some notes about the overall design of the AISRE web app.
+Some notes about the overall design of the runme web app.
 
 ## Model - View Architecture
 
@@ -30,7 +30,7 @@ I think using global singletons makes more sense when
 * We want to access the data in library code that is independent of React
 * The UI isn't reactive to changes in the state
 
-Example would be things like clients for talking to backend services (e.g. AISRE)
+Example would be things like clients for talking to backend services (e.g. runme)
 * We can have a singleton ClientManager which provides methods for getting/setting the clients
 * Libraries that need a client can then get it via the ClientManager
 * When user changes a setting in the UI (E.g. backend URL) we can react and update the clients in the ClientManager

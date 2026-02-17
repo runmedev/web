@@ -8,7 +8,8 @@ import {
   useState,
 } from "react";
 
-const STORAGE_KEY = "aisre/workspace";
+const STORAGE_KEY = "runme/workspace";
+const LEGACY_STORAGE_KEY = "aisre/workspace";
 
 export interface WorkspaceState {
   items: string[];
@@ -36,7 +37,9 @@ export function useWorkspace() {
 
 function loadWorkspaceState(): WorkspaceState {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw =
+      localStorage.getItem(STORAGE_KEY) ??
+      localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) {
       return { items: [] };
     }
@@ -71,6 +74,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
     } catch (error) {
       console.error("Failed to persist workspace state", error);
     }
