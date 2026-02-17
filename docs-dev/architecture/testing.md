@@ -57,6 +57,9 @@ Current baseline CUJ:
 - `app/test/browser/run-cuj-scenarios.ts` is the canonical orchestration entrypoint (with a shell wrapper kept for compatibility).
 - Each script should produce assertion logs and test artifacts in
   `app/test/browser/test-output/`.
+- Test backend services and fake infrastructure used by browser tests/CUJs should be implemented in Go.
+- Avoid introducing Node/Python fake backend servers; orchestrators may call Go services, but backend behavior should live in Go code.
+- Place shared Go fake backend servers under the repo-root `testing/` directory.
 
 ### Assertion philosophy
 

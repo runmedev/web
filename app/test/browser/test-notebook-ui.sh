@@ -2,8 +2,8 @@
 # test-notebook-ui.sh - Agent-browser integration test for jl-notebook UI
 #
 # Prerequisites:
-#   - Backend running on port 9977 with no-auth config:
-#     cd runme && go run ./ agent --config=${HOME}/.runme-agent/config.dev.noauth.yaml serve
+#   - Backend running on port 9977:
+#     cd runme && go run ./ agent --config=${HOME}/.runme-agent/config.dev.yaml serve
 #   - Frontend running on port 5173 (pnpm -C app run dev)
 #   - agent-browser CLI installed and available on PATH
 #
@@ -12,6 +12,11 @@
 #
 # The script uses agent-browser to automate UI interactions and takes
 # screenshots at each step. Results are saved to test-output/.
+#
+# TODO(testing): Convert this shell script into a TypeScript scenario driver
+# under app/test/browser and execute it via run-cuj-scenarios.ts so it follows
+# repo scripting guidance. While converting, align its assertions with CUJ docs
+# in docs-dev/cujs to avoid overlap/divergence with test-scenario-hello-world.ts.
 
 set -euo pipefail
 
@@ -86,7 +91,7 @@ if curl -sf "http://localhost:$BACKEND_PORT" >/dev/null 2>&1 || \
     pass "Backend is running on port $BACKEND_PORT"
 else
     fail "Backend is NOT running on port $BACKEND_PORT"
-    echo "Start it with: cd runme && go run ./ agent --config=\${HOME}/.runme-agent/config.dev.noauth.yaml serve"
+    echo "Start it with: cd runme && go run ./ agent --config=\${HOME}/.runme-agent/config.dev.yaml serve"
     exit 1
 fi
 
@@ -99,16 +104,15 @@ else
     exit 1
 fi
 
-# Check backend auth is disabled (devAuth: true)
+# Check backend auth mode (informational)
 auth_response=$(curl -s -o /dev/null -w "%{http_code}" \
     -X POST "http://localhost:$BACKEND_PORT/runme.contents.v1.ContentsService/List" \
     -H "Content-Type: application/json" \
     -d '{"path":""}' 2>/dev/null || echo "000")
 if [ "$auth_response" = "401" ]; then
-    fail "Backend returns 401 - auth is enabled. Use the no-auth config: --config=\${HOME}/.runme-agent/config.dev.noauth.yaml"
-    exit 1
+    log "Backend auth is enabled (401). Use authenticated CUJ flow for execution checks."
 elif [ "$auth_response" = "200" ]; then
-    pass "Backend auth bypass active (devAuth: true)"
+    pass "Backend accepted unauthenticated request"
 else
     log "Backend returned HTTP $auth_response (may still work - ContentsService might not be enabled)"
 fi
