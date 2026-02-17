@@ -17,6 +17,17 @@ type Assertions = {
   failed: number;
 };
 
+type CujSummary = {
+  status: string;
+  exit_code: number;
+  assertions_total: number;
+  assertions_passed: number;
+  assertions_failed: number;
+  run_id: string;
+  run_attempt: string;
+  sha: string;
+};
+
 type ServiceHandle = {
   name: string;
   process: ChildProcess;
@@ -261,7 +272,7 @@ function resolveGithubToken(): string | null {
 }
 
 async function postOrUpdatePrComment(commentFilePath: string): Promise<void> {
-  const shouldComment = (process.env.CUJ_COMMENT ?? "true").toLowerCase() !== "false";
+  const shouldComment = (process.env.CUJ_COMMENT ?? "false").toLowerCase() !== "false";
   if (!shouldComment) {
     console.log("[CUJ] Skipping PR comment (CUJ_COMMENT=false)");
     return;
@@ -336,6 +347,71 @@ async function postOrUpdatePrComment(commentFilePath: string): Promise<void> {
       throw error;
     }
     console.warn(`[CUJ] PR comment failed but continuing: ${String(error)}`);
+  }
+}
+
+async function publishCommitStatus(indexUrl: string, summary: CujSummary): Promise<void> {
+  const shouldPublishStatus = (process.env.CUJ_STATUS_CHECK ?? "true").toLowerCase() !== "false";
+  if (!shouldPublishStatus) {
+    console.log("[CUJ] Skipping commit status (CUJ_STATUS_CHECK=false)");
+    return;
+  }
+
+  const repo = resolveRepo();
+  const token = resolveGithubToken();
+  const sha = summary.sha || process.env.GITHUB_SHA ||
+    run("git rev-parse HEAD", REPO_ROOT).stdout.trim();
+  if (!repo || !token || !sha) {
+    console.log(
+      `[CUJ] Skipping commit status (repo=${repo ?? "missing"}, token=${token ? "set" : "missing"}, sha=${sha || "missing"})`,
+    );
+    return;
+  }
+
+  const context = process.env.CUJ_STATUS_CONTEXT ?? "app-tests";
+  const rawState = (process.env.CUJ_STATUS_STATE ?? "success").toLowerCase();
+  const state = rawState === "error" || rawState === "failure" || rawState === "pending"
+    ? rawState
+    : "success";
+  const description = (
+    summary.assertions_failed > 0
+      ? `CUJ artifacts ready (${summary.assertions_failed} assertion failures)`
+      : "CUJ artifacts ready"
+  ).slice(0, 140);
+
+  const headers = {
+    Accept: "application/vnd.github+json",
+    Authorization: `Bearer ${token}`,
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "runme-cuj-runner",
+    "Content-Type": "application/json",
+  };
+
+  try {
+    const response = await fetchWithTimeout(
+      `https://api.github.com/repos/${repo}/statuses/${sha}`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          state,
+          context,
+          target_url: indexUrl,
+          description,
+        }),
+      },
+      20_000,
+    );
+    if (!response.ok) {
+      throw new Error(`Could not publish commit status: HTTP ${response.status}`);
+    }
+    console.log(`[CUJ] Published commit status '${context}' for ${repo}@${sha}`);
+  } catch (error) {
+    const strictStatus = (process.env.CUJ_STATUS_STRICT ?? "false").toLowerCase() === "true";
+    if (strictStatus) {
+      throw error;
+    }
+    console.warn(`[CUJ] Commit status failed but continuing: ${String(error)}`);
   }
 }
 
@@ -416,7 +492,7 @@ async function main(): Promise<void> {
       console.log("");
     }
 
-    const summary = {
+    const summary: CujSummary = {
       status: failures > 0 ? "FAIL" : "PASS",
       exit_code: failures > 0 ? 1 : 0,
       assertions_total: aggregateAssertions.total,
@@ -445,6 +521,7 @@ async function main(): Promise<void> {
         prefix: uploadPrefix,
         summary,
       });
+      await publishCommitStatus(uploadResult.indexUrl, summary);
       await postOrUpdatePrComment(uploadResult.prCommentPath);
       console.log(`[CUJ] Artifact index: ${uploadResult.indexUrl}`);
     } else {

@@ -84,11 +84,13 @@ The workflow executes `app/test/browser/run-cuj-scenarios.ts` in two modes:
 1. **Presubmit** (`pull_request`)
    - runs CUJs for PR updates,
    - uploads `app/test/browser/test-output/*` to a world-readable GCS bucket,
-   - posts/updates a PR comment table with direct HTTP links to each artifact.
+   - publishes a commit status check (`app-tests`) whose target URL points to
+     the run `index.html` in GCS.
 
 2. **Postsubmit** (`push` to `main`)
    - runs the same CUJ driver against `main`,
-   - uploads the same artifact set to GCS and emits direct links in workflow summary/reporting.
+   - uploads the same artifact set to GCS,
+   - publishes the same status-check link pattern for the commit.
 
 Both modes produce per-CUJ status, screenshots, text snapshots/logs, and a short walkthrough video.
 
@@ -118,16 +120,19 @@ published to Google Cloud Storage and linked directly.
 3. **Lifecycle/retention**
    - Configure bucket lifecycle rules to delete CUJ artifacts after **7 days**.
 
-### Comment/report contract
+### Discoverability contract
 
-Each PR comment (or workflow summary for postsubmit) should include:
+Each run should publish:
 
-- a scenario result table (`PASS`/`FAIL`, assertions),
-- direct links to `.png`, `.txt`, and `.webm` files,
-- one “browse run” index link for the full artifact set.
+- one commit status check context (`app-tests`) on the tested SHA,
+- a status `target_url` set to the GCS run index:
+  `https://storage.googleapis.com/<bucket>/cuj-runs/<repo>/<run>/<attempt>/index.html`.
 
-GitHub Actions artifact upload can still be kept as a secondary fallback, but
-direct review should rely on HTTP links to GCS objects.
+This keeps the main PR Checks UI as the primary discovery surface while
+avoiding repeated PR-comment noise.
+
+Optional: one stable PR comment can still be updated in place when human-facing
+summary text is needed, but this is not required for artifact discovery.
 
 ## Adding a new CUJ
 

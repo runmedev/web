@@ -11,8 +11,7 @@ on:
 permissions:
   id-token: write
   contents: read
-  issues: write
-  pull-requests: write
+  statuses: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -123,8 +122,10 @@ jobs:
           CUJ_FRONTEND_CMD: "pnpm run dev:app"
           CUJ_BACKEND_CMD: "python3 -m http.server 9977"
           CUJ_UPLOAD: "true"
-          CUJ_COMMENT: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+          CUJ_COMMENT: "false"
           CUJ_COMMENT_STRICT: "false"
+          CUJ_STATUS_CHECK: "true"
+          CUJ_STATUS_CONTEXT: "app-tests"
           CUJ_FAIL_ON_SCENARIO_FAILURE: "false"
           CUJ_ARTIFACT_BUCKET: "runme-dev-assets"
           CUJ_CMD_TIMEOUT_MS: "120000"
@@ -133,13 +134,3 @@ jobs:
         run: |
           set -euo pipefail
           pnpm -C app run cuj:run
-
-      - name: Upload CUJ artifacts to Actions
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cuj-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            app/test/browser/test-output/**
-          if-no-files-found: warn
-          retention-days: 14
