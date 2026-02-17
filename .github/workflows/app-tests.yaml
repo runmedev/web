@@ -34,7 +34,14 @@ jobs:
           set -euo pipefail
           TOK="$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.googleapis.com" | jq -r .value)"
-          echo "$TOK" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq '{repository, repository_owner, ref, sub, aud}'
+          PAYLOAD="$(echo "$TOK" | cut -d. -f2 | tr '_-' '/+')"
+          case $((${#PAYLOAD} % 4)) in
+            0) ;;
+            2) PAYLOAD="${PAYLOAD}==";;
+            3) PAYLOAD="${PAYLOAD}=";;
+            *) echo "Invalid JWT payload length: ${#PAYLOAD}"; exit 1;;
+          esac
+          echo "$PAYLOAD" | base64 -d | jq '{repository, repository_owner, ref, sub, aud, workflow, job_workflow_ref}'
 
       - name: Authenticate to Google Cloud
         id: gcp_auth
