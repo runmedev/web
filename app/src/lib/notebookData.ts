@@ -26,6 +26,7 @@ import {
 } from "@runmedev/renderers";
 import { buildExecuteRequest } from "./runme";
 import type { Runner } from "./runner";
+import { appLogger } from "./logging/runtime";
 import { showToast } from "./toast";
 
 export type NotebookSnapshot = {
@@ -537,6 +538,12 @@ export class NotebookData {
     const runner = this.getRunner(cell);
     if (!runner || !runner.endpoint) {
       console.error("No runner available for cell", cell.refId);
+      appLogger.error("Run failed: no runner is configured", {
+        attrs: {
+          refId: cell.refId,
+          runnerName: cell.metadata?.[RunmeMetadataKey.RunnerName] ?? "",
+        },
+      });
       showToast({
         message: "Runme backend server is not running. Please start it and try again.",
         tone: "error",

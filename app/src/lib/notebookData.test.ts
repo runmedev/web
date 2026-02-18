@@ -9,6 +9,16 @@ const mockRunner = {
   reconnect: true,
   interceptors: [],
 };
+const appLoggerError = vi.fn();
+
+vi.mock("./logging/runtime", () => ({
+  appLogger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: appLoggerError,
+  },
+}));
 
 vi.mock("@runmedev/renderers", () => {
   class FakeStreams {
@@ -234,5 +244,39 @@ describe("NotebookData cell defaults", () => {
 
     expect(cell.languageId).toBe("markdown");
     expect(cell.kind).toBe(parser_pb.CellKind.CODE);
+  });
+});
+
+describe("NotebookData.runCodeCell", () => {
+  it("logs an error when no runner is available", () => {
+    getWithFallback.mockReturnValueOnce(undefined);
+    appLoggerError.mockClear();
+
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-no-runner",
+      kind: parser_pb.CellKind.CODE,
+      outputs: [],
+      metadata: {},
+      value: "echo hello",
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "test",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    const runID = model.runCodeCell(cell);
+    expect(runID).toBe("");
+    expect(appLoggerError).toHaveBeenCalledWith(
+      "Run failed: no runner is configured",
+      expect.objectContaining({
+        attrs: expect.objectContaining({
+          refId: "cell-no-runner",
+        }),
+      }),
+    );
   });
 });

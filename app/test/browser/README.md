@@ -43,18 +43,29 @@ If you skip the picker, the script expects `explorer.listFolders()` to report
 no mounted folders.
 
 
-## Scenario runner (hello world)
+## Scenario runner
 
-The `test-scenario-hello-world.ts` script implements the first scenario-based
-acceptance test described in `../../docs-dev/cujs/hello-world-local-notebook.md`.
+Scenario scripts in this folder implement scenario-based acceptance tests:
 
-It validates an end-to-end "hello world" flow:
+- `test-scenario-hello-world.ts`
+- `test-scenario-no-runner-logs.ts`
+
+The hello-world scenario validates an end-to-end flow:
 
 - seed a local notebook with one bash cell (`echo "hello world"`)
 - inject OIDC auth into browser storage
 - open the notebook from the workspace tree
 - run the first cell
 - assert executed cell outputs contain `hello world`
+
+The no-runner logs scenario validates failure diagnostics:
+
+- remove configured runners
+- minimize the bottom pane before execution
+- attempt to execute a code cell
+- re-expand the bottom pane
+- open the Logs tab
+- assert the no-runner error is visible in logs
 
 Run it with:
 

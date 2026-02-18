@@ -77,7 +77,10 @@ function fetchWithTimeout(
   return fetch(input, withSignal);
 }
 
-const SCENARIO_DRIVERS = [join(SCRIPT_DIR, "test-scenario-hello-world.ts")];
+const SCENARIO_DRIVERS = [
+  join(SCRIPT_DIR, "test-scenario-hello-world.ts"),
+  join(SCRIPT_DIR, "test-scenario-no-runner-logs.ts"),
+];
 
 type BackendCommandConfig = {
   command: string;
