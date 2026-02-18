@@ -164,6 +164,30 @@ function setBottomPaneCollapsed(collapsed: boolean): boolean {
   return readBottomPaneCollapsed() === desired;
 }
 
+function clickLogsTab(): boolean {
+  const snapshot = run("agent-browser snapshot -i").stdout;
+  const logsRef = firstRef(snapshot, /tab "Logs"/i);
+  if (!logsRef) {
+    return false;
+  }
+  run(`agent-browser click ${logsRef}`);
+  return true;
+}
+
+function parseStateToken(output: string): "visible" | "not-visible" | "missing" | "" {
+  const normalized = output.trim().replace(/^['"]|['"]$/g, "");
+  if (normalized === "visible") {
+    return "visible";
+  }
+  if (normalized === "not-visible") {
+    return "not-visible";
+  }
+  if (normalized === "missing") {
+    return "missing";
+  }
+  return "";
+}
+
 mkdirSync(OUTPUT_DIR, { recursive: true });
 for (const file of [
   "scenario-no-runner-logs-01-initial.png",
@@ -172,6 +196,7 @@ for (const file of [
   "scenario-no-runner-logs-04-opened-notebook.txt",
   "scenario-no-runner-logs-05-after-run.txt",
   "scenario-no-runner-logs-06-logs-pane.txt",
+  "scenario-no-runner-logs-07-logs-visible.png",
   "scenario-no-runner-logs-auth-seed.txt",
 ]) {
   rmSync(join(OUTPUT_DIR, file), { force: true });
@@ -341,28 +366,72 @@ if (setBottomPaneCollapsed(false)) {
   fail("Could not expand bottom pane after execution");
 }
 
-const logsTabState = run(
-  `agent-browser eval "(() => {
-    const tab = document.getElementById('bottom-pane-tab-logs');
-    if (!tab) return 'missing';
-    tab.click();
-    return tab.getAttribute('data-state') || 'clicked';
-  })()"`,
-).stdout;
-if (logsTabState.includes("active")) {
-  run("agent-browser wait 900");
+let logsTabVisible = false;
+const tabAttemptStates: string[] = [];
+for (let attempt = 0; attempt < 8; attempt += 1) {
+  if (!clickLogsTab()) {
+    tabAttemptStates.push(`attempt=${attempt + 1} click=missing-tab-ref`);
+    break;
+  }
+  run("agent-browser wait 300");
+  const visibleStateRaw = run(
+    `agent-browser eval "(() => {
+      const logsTab = document.getElementById('bottom-pane-tab-logs');
+      const consoleTab = document.getElementById('bottom-pane-tab-console');
+      const logsContent = document.getElementById('bottom-pane-content-logs');
+      const pane = document.getElementById('bottom-pane');
+      if (!logsTab || !consoleTab || !logsContent || !pane) return 'missing';
+      const logsActive =
+        logsTab.getAttribute('data-state') === 'active' ||
+        logsTab.getAttribute('aria-selected') === 'true';
+      const consoleInactive =
+        consoleTab.getAttribute('data-state') === 'inactive' ||
+        consoleTab.getAttribute('aria-selected') === 'false';
+      const visible = window.getComputedStyle(logsContent).display !== 'none';
+      const paneExpanded = pane.getAttribute('data-collapsed') === 'false';
+      return logsActive && consoleInactive && visible && paneExpanded ? 'visible' : 'not-visible';
+    })()"`,
+  ).stdout;
+  const visibleState = parseStateToken(visibleStateRaw);
+  tabAttemptStates.push(
+    `attempt=${attempt + 1} state=${visibleState || "unknown"} raw=${JSON.stringify(visibleStateRaw.trim())}`,
+  );
+  if (visibleState === "missing") {
+    break;
+  }
+  if (visibleState === "visible") {
+    logsTabVisible = true;
+    break;
+  }
+}
+writeArtifact("scenario-no-runner-logs-08-tab-debug.txt", tabAttemptStates.join("\n"));
+
+if (logsTabVisible) {
   pass("Opened Logs tab");
+  run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-no-runner-logs-07-logs-visible.png")}`);
 } else {
-  fail("Could not find Logs tab");
+  fail("Could not visibly activate Logs tab");
 }
 
-const logsText = run("agent-browser get text '#logs-pane-content'").stdout;
+const logsText = run(
+  `agent-browser eval "(() => {
+    const content = document.getElementById('bottom-pane-content-logs');
+    if (!content) return '';
+    return content.innerText || content.textContent || '';
+  })()"`,
+).stdout;
 writeArtifact("scenario-no-runner-logs-06-logs-pane.txt", logsText);
-if (logsText.includes("Run failed: no runner is configured")) {
-  pass("Observed no-runner error in Logs tab");
+if (
+  logsText.includes(
+    "Runme backend server is not running. Please start it and try again.",
+  )
+) {
+  pass("Observed backend-unavailable error in Logs tab");
 } else {
-  fail("Logs tab did not show no-runner execution error");
+  fail("Logs tab did not show backend-unavailable execution error");
 }
+
+run("agent-browser wait 1500");
 
 run("agent-browser record stop");
 if (CUJ_ID_TOKEN) {

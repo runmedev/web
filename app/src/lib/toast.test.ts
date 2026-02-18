@@ -30,10 +30,10 @@ describe("toast", () => {
 
     showToast({ message: "boom", tone: "error" });
     expect(appLoggerError).toHaveBeenCalledWith(
-      "User-visible error toast",
+      "boom",
       expect.objectContaining({
         attrs: expect.objectContaining({
-          message: "boom",
+          source: "toast",
         }),
       }),
     );

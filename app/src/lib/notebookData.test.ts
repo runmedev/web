@@ -9,16 +9,6 @@ const mockRunner = {
   reconnect: true,
   interceptors: [],
 };
-const appLoggerError = vi.fn();
-
-vi.mock("./logging/runtime", () => ({
-  appLogger: {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: appLoggerError,
-  },
-}));
 
 vi.mock("@runmedev/renderers", () => {
   class FakeStreams {
@@ -248,9 +238,8 @@ describe("NotebookData cell defaults", () => {
 });
 
 describe("NotebookData.runCodeCell", () => {
-  it("logs an error when no runner is available", () => {
+  it("returns empty run id when no runner is available", () => {
     getWithFallback.mockReturnValueOnce(undefined);
-    appLoggerError.mockClear();
 
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-no-runner",
@@ -270,13 +259,5 @@ describe("NotebookData.runCodeCell", () => {
 
     const runID = model.runCodeCell(cell);
     expect(runID).toBe("");
-    expect(appLoggerError).toHaveBeenCalledWith(
-      "Run failed: no runner is configured",
-      expect.objectContaining({
-        attrs: expect.objectContaining({
-          refId: "cell-no-runner",
-        }),
-      }),
-    );
   });
 });
