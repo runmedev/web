@@ -16,9 +16,9 @@ export function subscribeToast(listener: ToastListener): () => void {
 
 export function showToast(toast: Toast): void {
   if (toast.tone === "error") {
-    appLogger.error("User-visible error toast", {
+    appLogger.error(toast.message, {
       attrs: {
-        message: toast.message,
+        source: "toast",
       },
     });
   }
