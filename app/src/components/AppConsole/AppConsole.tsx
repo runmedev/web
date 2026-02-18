@@ -39,7 +39,7 @@ const MAX_CONSOLE_OUTPUT = 8000;
  * AppConsole wired to JSKernel. Input entered in console-view is executed
  * via JSKernel and stdout/stderr are written back to the terminal.
  */
-export default function AppConsole() {
+export default function AppConsole({ showHeader = true }: { showHeader?: boolean }) {
   const elemRef = useRef<any>(null);
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     if (typeof window === "undefined") {
@@ -489,29 +489,33 @@ export default function AppConsole() {
     sendStdout(MOVE_CURSOR_COL(promptLen + cursor + 1));
   };
 
+  const isBodyHidden = showHeader && collapsed;
+
   return (
     <div
       id="app-console"
       className="flex flex-col overflow-hidden rounded-nb-md border border-nb-cell-border bg-[#0f1014] text-white shadow-nb-sm"
     >
-      <div
-        id="app-console-header"
-        className="flex items-center justify-between border-b border-nb-tray-border bg-[#1a1a2e] px-3"
-      >
-        <span className="text-[12.6px] font-mono font-medium">App Console</span>
-        <button
-          type="button"
-          aria-label={collapsed ? "Expand app console" : "Collapse app console"}
-          className="inline-flex h-8 w-8 items-center justify-center rounded bg-black/0 text-[12.6px] font-mono font-medium text-white hover:bg-black/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black/80"
-          style={{ backgroundColor: "transparent" }}
-          onClick={() => setCollapsed((prev) => !prev)}
+      {showHeader && (
+        <div
+          id="app-console-header"
+          className="flex items-center justify-between border-b border-nb-tray-border bg-[#1a1a2e] px-3"
         >
-          {collapsed ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />}
-        </button>
-      </div>
+          <span className="text-[12.6px] font-mono font-medium">App Console</span>
+          <button
+            type="button"
+            aria-label={collapsed ? "Expand app console" : "Collapse app console"}
+            className="inline-flex h-8 w-8 items-center justify-center rounded bg-black/0 text-[12.6px] font-mono font-medium text-white hover:bg-black/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black/80"
+            style={{ backgroundColor: "transparent" }}
+            onClick={() => setCollapsed((prev) => !prev)}
+          >
+            {collapsed ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />}
+          </button>
+        </div>
+      )}
       <div
         id="app-console-body"
-        className={`${collapsed ? "hidden" : "flex"} flex-1 bg-[#0f1014]`}
+        className={`${isBodyHidden ? "hidden" : "flex"} flex-1 bg-[#0f1014]`}
       >
         <div
           id="app-console-view"
