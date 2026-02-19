@@ -64,7 +64,7 @@ The key point is that the client reads config at runtime from HTTP, so dev/test 
 
 Define a TypeScript schema for runtime config so loaders and consumers share one contract:
 
-- `app/src/config/appConfig.ts`
+- `app/src/lib/appConfig.ts`
 
 This module defines:
 
