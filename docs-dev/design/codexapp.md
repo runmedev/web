@@ -135,6 +135,16 @@ By invoking NotebookService MCP tools hosted by Runme server and bridged to the 
 
 This keeps the notebook source of truth in browser while preserving codex tool semantics.
 
+### 4. Approval policy and mutation behavior
+
+v1 approval behavior is explicit:
+
+- Set codex `approvalPolicy` to `never`.
+- Do not show approval prompts in normal operation.
+- Instruct codex to prefer notebook tools for code/command generation (`List/Get/Update/ExecuteCells` flow) so users can inspect/edit before execution.
+- Allow codex file writes to the local filesystem within configured sandbox/writable roots.
+- If an unexpected approval-request event is emitted by app-server, fail the operation with a clear diagnostic rather than presenting an interactive approval UI in v1.
+
 ## Why websocket relay for notebook tools?
 
 - Tool calls are asynchronous relative to browser UI state and can occur at any point in a turn.
@@ -245,6 +255,9 @@ sequenceDiagram
 
 - Keep browser auth on `/chatkit` and `/codex/ws` using existing IAM policy checks.
 - Reuse existing Agent role policy for codex harness access.
+- Configure codex sessions with `approvalPolicy=never`.
+- Permit file writes in codex sessions, constrained by local sandbox/writable roots.
+- Bias tool choice toward notebook MCP tools so mutations are surfaced in notebook UX first.
 - Codex subprocess remains local (`stdio` child process), not browser reachable.
 - Notebook MCP interface is server-side (invoked by codex harness). If an HTTP MCP endpoint is ever exposed, do not rely on CORS alone; require explicit auth.
 
@@ -293,7 +306,6 @@ sequenceDiagram
 
 ## Open Questions
 
-- Which codex approval policy should be default (`session/configure.approvalPolicy`)?
 - Should `execute_cells` output include full stdout/stderr or summarized result plus references?
 - Which default harness profile should be created during first-run bootstrap?
 
