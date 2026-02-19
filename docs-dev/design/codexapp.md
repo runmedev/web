@@ -102,9 +102,19 @@ Yes. Today `/ws` is the runner execution websocket and is run-scoped.
 
 Decision: keep `/ws` unchanged for runner execution and add separate `/codex/ws` for codex notebook MCP bridging. This avoids coupling codex session lifecycle to runner run lifecycle and minimizes regression risk.
 
+### 2b. How many `/codex/ws` connections are allowed?
+
+v1 assumes a single user driving codex from one browser session, so `/codex/ws` is a singleton connection.
+
+- Allow exactly one active `/codex/ws` connection at a time.
+- If a second connection arrives while one is active, reject with HTTP `409 Conflict` and a machine-readable error code (for example `codex_ws_already_connected`).
+- Optional override: if `force_replace=true` is supplied at connect time, close the old connection and accept the new one.
+- The bridge is not notebook-specific and not thread-specific; it carries notebook MCP tool calls for any active conversation.
+- If no active bridge connection exists when a tool call arrives, fail the tool call with an explicit bridge-unavailable error.
+
 ### 3. How does codex manipulate notebooks?
 
-By invoking NotebookService MCP tools hosted by Runme server and bridged to the active browser notebook session.
+By invoking NotebookService MCP tools hosted by Runme server and bridged to the active browser codex bridge connection.
 
 - Tool definitions come from `runme/api/proto/agent/tools/v1/notebooks.proto` and generated MCP/OpenAI metadata (`toolsv1mcp`) from the redpanda MCP plugin.
 - Codex emits `mcpToolCall` items for notebook actions (`ListCells`, `GetCells`, `UpdateCells`, `ExecuteCells`, ...).
@@ -112,6 +122,7 @@ By invoking NotebookService MCP tools hosted by Runme server and bridged to the 
 - For browser-owned notebook state (`List/Get/Update`), Runme forwards the tool request to browser over websocket (proto envelope), waits for browser response, then returns MCP tool result to codex.
 - For execution (`ExecuteCells`), Runme reuses existing runner websocket execution flow and returns the result via MCP tool response.
 - We do **not** embed ad-hoc notebook operations in item payloads; tool invocation contract is MCP.
+- Server and browser correlate each tool call using a server-generated `bridge_call_id` included in request/response envelopes.
 
 This keeps the notebook source of truth in browser while preserving codex tool semantics.
 
@@ -136,9 +147,9 @@ sequenceDiagram
   RS->>CA: JSON-RPC turn/start (via chatkit->codex adapter)
   CA-->>RS: notifications (..., mcpToolCall)
 
-  RS-->>CWS: NotebookToolCallRequest (proto)
+  RS-->>CWS: NotebookToolCallRequest (proto, bridge_call_id)
   CWS-->>UI: NotebookToolCallRequest (proto)
-  UI-->>CWS: NotebookToolCallResponse (proto)
+  UI-->>CWS: NotebookToolCallResponse (proto, bridge_call_id)
   CWS-->>RS: NotebookToolCallResponse (proto)
   RS->>CA: MCP tool result (list/get/update)
 
@@ -165,6 +176,7 @@ sequenceDiagram
   - receive `NotebookToolCallRequest` over websocket,
   - invoke notebook APIs in browser,
   - send `NotebookToolCallResponse` back over websocket.
+- Open only one bridge websocket per app session; if server returns `409`, show a clear "codex bridge already connected" diagnostic.
 
 ### UI updates
 
@@ -207,18 +219,20 @@ sequenceDiagram
 - Keep `mux.HandleProtected("/chatkit", ..., role/agent.user)` and route to harness adapter by `agentHarness`.
 - Keep existing `/ws` unchanged for runner execution.
 - Add codex bridge websocket route `/codex/ws` for notebook MCP dispatch/results.
+- Enforce singleton `/codex/ws` policy (reject second connection unless `force_replace=true`).
 
 ### Proto changes
 
 - Keep tool schemas in `runme/api/proto/agent/tools/v1/notebooks.proto` as the MCP source of truth.
 - Add codex bridge websocket envelopes (new proto or oneof extension following existing style) with:
-  - `NotebookToolCallRequest`
-  - `NotebookToolCallResponse`
+  - `NotebookToolCallRequest` (must include `bridge_call_id`)
+  - `NotebookToolCallResponse` (must include `bridge_call_id`)
 - Generate Go/TS protobuf code and wire into codex bridge websocket handler.
 
 ### Auth and policy
 
-- Keep browser auth on `/chatkit` and `/codex/ws`.
+- Keep browser auth on `/chatkit` and `/codex/ws` using existing IAM policy checks.
+- Reuse existing Agent role policy for codex harness access.
 - Codex subprocess remains local (`stdio` child process), not browser reachable.
 - Notebook MCP interface is server-side (invoked by codex harness). If an HTTP MCP endpoint is ever exposed, do not rely on CORS alone; require explicit auth.
 
@@ -259,10 +273,11 @@ sequenceDiagram
 ## Risks
 
 - Codex turn/item event schema may evolve: mitigate with strict version checks (`initialize.protocolVersion`) and adapter layer.
-- Multiple browser tabs may race to execute notebook items: mitigate with tab leadership lock (localStorage/BroadcastChannel) in v1.1.
+- Multiple browser tabs may contend for singleton bridge ownership: mitigate with explicit `409` on second connect, optional `force_replace=true`, and clear UI diagnostics.
 - Websocket bridge can deadlock if browser disconnects mid-toolcall: mitigate with per-tool timeout + explicit error completion to codex.
 - Local codex process not installed/running: provide explicit UI diagnostics and recovery action.
 - Two harnesses can drift behavior: add shared notebook contract tests that run against both `responses` and `codex`.
+- Singleton websocket can cause lockout after stale disconnects: mitigate with ping/pong heartbeat + server idle timeout + pending-call failure on disconnect.
 
 ## Open Questions
 
