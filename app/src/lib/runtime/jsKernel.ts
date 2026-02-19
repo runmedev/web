@@ -29,6 +29,8 @@ function asObjectRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+type AppGlobals = Record<string, unknown>;
+
 /**
  * Minimal JS runtime for executing snippets with a controlled set of globals.
  * Injects d3, app helpers, and a mocked console that forwards to callbacks.
@@ -77,10 +79,14 @@ export class JSKernel {
     const appRunners = (options.globals?.runmeRunners ??
       this.baseGlobals.runmeRunners) as RunnersApi | undefined;
     const appHelpers = this.createAppHelpers(
+    const appGlobals = ((options.globals?.app ?? this.baseGlobals.app) ??
+      {}) as AppGlobals;
+    const appHelpers = this.createAppHelpers(
       runId,
       options.container,
       stdout,
       appRunners,
+      appGlobals,
     );
     const mergedApp = {
       ...asObjectRecord(this.baseGlobals.app),
@@ -183,8 +189,40 @@ export class JSKernel {
     container: HTMLElement | null | undefined,
     stdout: (data: string) => void,
     runners?: RunnersApi,
+    appGlobals: AppGlobals = {},
   ) {
+    const runnersHelpers =
+      runners &&
+      (() => ({
+        get: () => {
+          const res = runners.get();
+          stdout(res + "\n");
+          return res;
+        },
+        update: (name: string, endpoint: string) => {
+          const res = runners.update(name, endpoint);
+          stdout(res + "\n");
+          return res;
+        },
+        delete: (name: string) => {
+          const res = runners.delete(name);
+          stdout(res + "\n");
+          return res;
+        },
+        getDefault: () => {
+          const res = runners.getDefault();
+          stdout(res + "\n");
+          return res;
+        },
+        setDefault: (name: string) => {
+          const res = runners.setDefault(name);
+          stdout(res + "\n");
+          return res;
+        },
+      }))();
+
     return {
+      ...appGlobals,
       clear: () => {
         if (this.activeRunId !== runId) {
           return;
@@ -208,35 +246,7 @@ export class JSKernel {
         const selection = d3.select(container as HTMLElement);
         return renderFn(selection);
       },
-      runners:
-        runners &&
-        (() => ({
-          get: () => {
-            const res = runners.get();
-            stdout(res + "\n");
-            return res;
-          },
-          update: (name: string, endpoint: string) => {
-            const res = runners.update(name, endpoint);
-            stdout(res + "\n");
-            return res;
-          },
-          delete: (name: string) => {
-            const res = runners.delete(name);
-            stdout(res + "\n");
-            return res;
-          },
-          getDefault: () => {
-            const res = runners.getDefault();
-            stdout(res + "\n");
-            return res;
-          },
-          setDefault: (name: string) => {
-            const res = runners.setDefault(name);
-            stdout(res + "\n");
-            return res;
-          },
-        }))(),
+      ...(runnersHelpers ? { runners: runnersHelpers } : {}),
     };
   }
 }

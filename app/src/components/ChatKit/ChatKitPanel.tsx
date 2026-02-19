@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { ChatKit, useChatKit, ChatKitIcon } from "@openai/chatkit-react";
 import { parser_pb, useCell } from "../../contexts/CellContext";
 import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useOutput } from "../../contexts/OutputContext";
 import { useCurrentDoc } from "../../contexts/CurrentDocContext";
 import { create, fromJsonString, toJson } from "@bufbuild/protobuf";
+import { useHarness, buildChatkitUrl } from "../../lib/runtime/harnessManager";
 
 import { getAccessToken, getAuthData } from "../../token";
 import { getBrowserAdapter } from "../../browserAdapter.client";
@@ -18,9 +19,7 @@ import {
   ListCellsResponseSchema,
   ChatkitStateSchema,
 } from "../../protogen/oaiproto/aisre/notebooks_pb.js";
-import { useAgentEndpointSnapshot } from "../../lib/agentEndpointManager";
 import { getConfiguredChatKitDomainKey } from "../../lib/appConfig";
-
 class UserNotLoggedInError extends Error {
   constructor(message = "You must log in to use runme chat.") {
     super(message);
@@ -215,7 +214,8 @@ const useAuthorizedFetch = (
 function ChatKitPanel() {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const chatkitDomainKey = getConfiguredChatKitDomainKey();
-  const agentEndpoint = useAgentEndpointSnapshot();
+  const [assistantPreview, setAssistantPreview] = useState("");
+  const { defaultHarness } = useHarness();
   const { getChatkitState, setChatkitState } = useCell();
   const { getNotebookData, useNotebookSnapshot } = useNotebookContext();
   const { getCurrentDoc } = useCurrentDoc();
@@ -260,6 +260,17 @@ function ChatKitPanel() {
 
         try {
           const parsed = JSON.parse(payload);
+          if (parsed?.type === "response.created") {
+            setAssistantPreview("");
+            continue;
+          }
+          if (
+            parsed?.type === "response.output_text.delta" &&
+            typeof parsed?.delta === "string"
+          ) {
+            setAssistantPreview((previous) => previous + parsed.delta);
+            continue;
+          }
           if (parsed?.type !== "aisre.chatkit.state") {
             continue;
           }
@@ -297,24 +308,15 @@ function ChatKitPanel() {
         }
       }
     },
-    [setChatkitState],
+    [setAssistantPreview, setChatkitState],
   );
   const authorizedFetch = useAuthorizedFetch(getChatkitState, {
     onSSEEvent: handleSseEvent,
   });
 
   const chatkitApiUrl = useMemo(() => {
-    const base = agentEndpoint.endpoint ?? "";
-    try {
-      const url = new URL(base);
-      url.pathname = "/chatkit";
-      url.search = "";
-      url.hash = "";
-      return url.toString();
-    } catch {
-      return `${base.replace(/\/$/, "")}/chatkit`;
-    }
-  }, [agentEndpoint.endpoint]);
+    return buildChatkitUrl(defaultHarness.baseUrl, defaultHarness.adapter);
+  }, [defaultHarness.adapter, defaultHarness.baseUrl]);
   const chatkit = useChatKit({
     api: {
       url: chatkitApiUrl,
@@ -545,6 +547,14 @@ function ChatKitPanel() {
   return (
     <div className="relative h-full w-full">
       <ChatKit control={chatkit.control} className="block h-full w-full" />
+      {import.meta.env.DEV && assistantPreview ? (
+        <div
+          data-testid="chatkit-assistant-preview"
+          className="pointer-events-none absolute bottom-2 left-2 right-2 rounded border border-nb-cell-border bg-white/90 px-2 py-1 text-[12px] text-nb-text shadow-sm"
+        >
+          {assistantPreview}
+        </div>
+      ) : null}
       {showLoginPrompt ? (
         <div className="pointer-events-auto absolute inset-0 z-50 flex items-center justify-center bg-white/90 p-4 text-sm">
           <div className="w-full max-w-sm rounded-nb-md border border-nb-cell-border bg-white p-4 shadow-nb-lg">
