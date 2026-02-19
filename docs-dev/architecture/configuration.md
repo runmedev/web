@@ -7,7 +7,7 @@ Client configuration should be runtime-driven so the same built PWA can run in d
 ## Runtime Configuration Pattern
 
 1. Server hosts a YAML file at a well-known path, for example:
-   - `/configs/app-config.yaml`
+   - `/configs/app-configs.yaml`
 2. On startup, the client configuration loader fetches this file.
 3. The app initializes default settings from that runtime config.
 4. Optional local overrides (for example localStorage or App Console setters) are applied on top.
@@ -17,7 +17,7 @@ This avoids hard-coding environment behavior into build-time `VITE_*` values for
 ## Suggested Precedence
 
 1. Explicit runtime/user override (App Console or localStorage)
-2. Server-provided runtime config (`/configs/app-config.yaml`)
+2. Server-provided runtime config (`/configs/app-configs.yaml`)
 3. Build-time defaults (`import.meta.env`) as fallback only
 
 ## Deprecated Bootstrap State
@@ -54,8 +54,8 @@ googleDrive:
 
 Yes, this works with Vite.
 
-- Option 1: place `configs/app-config.yaml` under Vite public assets so it is served at `/configs/app-config.yaml`.
-- Option 2: use a Vite proxy/rewrite to route `/configs/app-config.yaml` to an external config source.
+- Option 1: place `configs/app-configs.yaml` under Vite public assets so it is served at `/configs/app-configs.yaml`.
+- Option 2: use a Vite proxy/rewrite to route `/configs/app-configs.yaml` to an external config source.
 - Option 3: swap config files per test run (for example by copying a test fixture into the served public path before launching dev server).
 
 The key point is that the client reads config at runtime from HTTP, so dev/test can switch behavior without changing the bundle.

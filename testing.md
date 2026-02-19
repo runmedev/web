@@ -78,7 +78,7 @@ Add runtime Drive endpoint configuration in the webapp so tests can run end-to-e
 
 Use runtime app configuration (not build-time `VITE_*`) for Drive endpoint selection:
 
-- Serve config at a well-known path, e.g. `/configs/app-config.yaml`.
+- Serve config at a well-known path, e.g. `/configs/app-configs.yaml`.
 - App loads this file on startup and applies Drive defaults from it.
 - If `googleDrive.baseUrl` is an empty string, Drive client init falls back to official Google APIs URL.
 - Test runs provide a config file that points `googleDrive.baseUrl` to the fake server.
