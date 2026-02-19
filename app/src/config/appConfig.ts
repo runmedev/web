@@ -1,4 +1,4 @@
-export const APP_CONFIG_PATH_DEFAULT = "/configs/app-config.yaml";
+export const APP_CONFIG_PATH_DEFAULT = "/configs/app-configs.yaml";
 
 export interface OidcGenericRuntimeConfig {
   clientId: string;
