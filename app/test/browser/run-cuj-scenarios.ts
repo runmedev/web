@@ -678,7 +678,7 @@ async function publishCommitStatus(indexUrl: string, summary: CujSummary): Promi
 
   const repo = resolveRepo();
   const token = resolveGithubToken();
-  const sha = summary.sha || process.env.GITHUB_SHA ||
+  const sha = process.env.CUJ_STATUS_SHA?.trim() || summary.sha || process.env.GITHUB_SHA ||
     run("git rev-parse HEAD", REPO_ROOT).stdout.trim();
   if (!repo || !token || !sha) {
     console.log(
@@ -919,7 +919,7 @@ async function main(): Promise<void> {
       assertions_failed: aggregateAssertions.failed,
       run_id: process.env.GITHUB_RUN_ID ?? `${Date.now()}`,
       run_attempt: process.env.GITHUB_RUN_ATTEMPT ?? "1",
-      sha: process.env.GITHUB_SHA ?? "",
+      sha: process.env.CUJ_STATUS_SHA?.trim() || process.env.GITHUB_SHA || "",
       ...(repo ? { repository: repo } : {}),
       ...(typeof prNumber === "number" ? { pr_number: prNumber } : {}),
     };
