@@ -51,9 +51,19 @@ We support two harness paths:
 - `responses` (existing): browser `ChatKitPanel` -> Runme `/chatkit`.
 - `codex` (new): browser `ChatKitPanel` -> Runme `/chatkit` (codex adapter) -> local codex app-server.
 
-No hardcoded harness adapter default; active harness is whichever profile is set by `app.harness.setDefault(name)`.
+Bootstrap default harness adapter is `responses`.
+Active harness remains whichever profile is set by `app.harness.setDefault(name)`.
 
 Selection is user-configurable from App Console and persisted in `cloudAssistantSettings.harnesses` plus `cloudAssistantSettings.defaultHarness`.
+
+Bootstrap and initialization model:
+
+- Add a global singleton harness manager (similar to existing singleton managers) as the source of truth for harness profiles/default.
+- On app load, run harness bootstrap alongside the existing app-config preload flow:
+  - attempt to load `/configs/app-configs.yaml` (same pattern as `maybeSetAppConfig()`),
+  - if harness profiles are present in config, seed `cloudAssistantSettings.harnesses` and `cloudAssistantSettings.defaultHarness`,
+  - if no harness profile config is present, create fallback profile `local-responses` with `baseUrl=window.location.origin` and `adapter=responses`, then set it as default.
+- If harness profiles/default already exist in local storage, do not overwrite user-managed values.
 
 Proposed App Console commands:
 
@@ -129,7 +139,8 @@ By invoking NotebookService MCP tools hosted by Runme server and bridged to the 
 - Codex emits `mcpToolCall` items for notebook actions (`ListCells`, `GetCells`, `UpdateCells`, `ExecuteCells`, ...).
 - Runme implements NotebookService MCP handlers.
 - For browser-owned notebook state (`List/Get/Update`), Runme forwards the tool request to browser over websocket (proto envelope), waits for browser response, then returns MCP tool result to codex.
-- For execution (`ExecuteCells`), Runme reuses existing runner websocket execution flow and returns the result via MCP tool response.
+- For execution (`ExecuteCells`), Runme requires explicit user approval in the UI before execution, then reuses existing runner websocket execution flow and returns the result via MCP tool response.
+- `ExecuteCells` responses return full stdout/stderr (no summarization in v1).
 - We do **not** embed ad-hoc notebook operations in item payloads; tool invocation contract is MCP.
 - Server and browser correlate each tool call using a server-generated `bridge_call_id` included in request/response envelopes.
 
@@ -140,10 +151,11 @@ This keeps the notebook source of truth in browser while preserving codex tool s
 v1 approval behavior is explicit:
 
 - Set codex `approvalPolicy` to `never`.
-- Do not show approval prompts in normal operation.
+- Do not surface codex approval prompts in normal operation.
 - Instruct codex to prefer notebook tools for code/command generation (`List/Get/Update/ExecuteCells` flow) so users can inspect/edit before execution.
 - Allow codex file writes to the local filesystem within configured sandbox/writable roots.
 - If an unexpected approval-request event is emitted by app-server, fail the operation with a clear diagnostic rather than presenting an interactive approval UI in v1.
+- `ExecuteCells` is separately gated by explicit user approval in Runme UI before any runner-side execution.
 
 ## Why websocket relay for notebook tools?
 
@@ -212,13 +224,18 @@ sequenceDiagram
   - `app.harness.delete(name)`
   - `app.harness.getDefault()`
   - `app.harness.setDefault(name)`
+- Add v0 execution-approval command:
+  - `app.runCells(["cellID", "cellID"])` approves and executes the pending codex `ExecuteCells` request for those cells.
 - Persist harness profiles and default in `cloudAssistantSettings.harnesses` and `cloudAssistantSettings.defaultHarness`.
+- Back harness commands with a global singleton harness manager so App Console, ChatKit routing, and bootstrap state stay consistent.
 - Print active harness in `help()` output to make debugging obvious.
 
 ### Notebook integration
 
 - Reuse existing notebook and renderer APIs for `ListCells`/`GetCells`/`UpdateCells`.
-- Reuse existing websocket + runner flow for `ExecuteCells`.
+- For `ExecuteCells`, queue request as pending user approval, surface it in UI/App Console, and only execute after explicit user approval.
+- Reuse existing websocket + runner flow for approved `ExecuteCells`.
+- Return full stdout/stderr in the `ExecuteCells` MCP tool response.
 - Keep notebook updates visible in real-time so user sees codex edits immediately.
 
 ## Runme Server Changes (`runme`)
@@ -277,6 +294,7 @@ sequenceDiagram
 1. Harness profiles and default selection
 - Add App Console `app.harness` commands (`get/update/delete/getDefault/setDefault`).
 - Persist named harness profiles with `baseUrl` + `adapter`, and select one default.
+- Add bootstrap initialization using the existing app-config preload pattern; default bootstrap profile is `local-responses` at `window.location.origin`.
 
 2. Codex transport + ChatKit adapter
 - Add codex process manager and ChatKit->codex adapter in Runme server.
@@ -288,7 +306,8 @@ sequenceDiagram
 - Handle `List/Get/Update` via browser bridge and return MCP tool results.
 
 4. Codex execution path
-- Support `ExecuteCells` via existing runner websocket pipeline.
+- Add explicit user approval flow for `ExecuteCells` (v0 via App Console `app.runCells([...])`).
+- Support approved `ExecuteCells` via existing runner websocket pipeline.
 - Add cancellation mapping (`thread/interrupt` + runner cancel).
 
 5. Optional default flip
@@ -306,8 +325,7 @@ sequenceDiagram
 
 ## Open Questions
 
-- Should `execute_cells` output include full stdout/stderr or summarized result plus references?
-- Which default harness profile should be created during first-run bootstrap?
+- None.
 
 ## Alternative Considered: Direct Google Drive mutation
 
@@ -331,4 +349,4 @@ The browser-notebook + runner execution path provides better user visibility and
 
 Implication for Runme:
 
-- We should preserve approval surfaces and file-change provenance in our adapter layer, rather than hiding these semantics behind opaque text streaming.
+- In v1 (`approvalPolicy=never`), we do not present codex approval prompts; we preserve file-change provenance in adapter events/logs rather than hiding semantics behind opaque text streaming.
