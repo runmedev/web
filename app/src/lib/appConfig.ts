@@ -9,30 +9,34 @@ import {
 } from "./googleClientManager";
 
 const SETTINGS_STORAGE_KEY = "cloudAssistantSettings";
+export const APP_CONFIG_PATH_DEFAULT = "/configs/app-configs.yaml";
 
-type RawOidcGenericConfig = {
-  clientID?: string;
-  clientId?: string;
-  clientSecret?: string;
-  redirectURL?: string;
-  redirectUrl?: string;
-  discoveryURL?: string;
-  discoveryUrl?: string;
-  scopes?: string[] | string;
-  issuer?: string;
-};
+export interface OidcGenericRuntimeConfig {
+  clientId: string;
+  clientSecret: string;
+  discoveryUrl: string;
+  issuer: string;
+  redirectUrl: string;
+  scopes: string[];
+}
 
-type RawAppConfig = {
-  oidc?: {
-    clientExchange?: boolean;
-    generic?: RawOidcGenericConfig;
-  };
-  googleDrive?: {
-    clientID?: string;
-    clientId?: string;
-    clientSecret?: string;
-  };
-};
+export interface OidcRuntimeConfig {
+  clientExchange: boolean;
+  generic: OidcGenericRuntimeConfig;
+}
+
+export interface GoogleDriveRuntimeConfig {
+  clientId: string;
+  clientSecret: string;
+  baseUrl: string;
+}
+
+export interface RuntimeAppConfig {
+  agentEndpoint: string;
+  defaultRunnerEndpoint: string;
+  oidc: OidcRuntimeConfig;
+  googleDrive: GoogleDriveRuntimeConfig;
+}
 
 export type AppliedAppConfig = {
   url: string;
@@ -49,87 +53,173 @@ function normalizeString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizeScope(scopes: unknown): string | undefined {
-  if (Array.isArray(scopes)) {
-    const normalized = scopes
-      .map((scope) => normalizeString(scope))
-      .filter((scope): scope is string => Boolean(scope));
-    return normalized.length > 0 ? normalized.join(" ") : undefined;
-  }
-  return normalizeString(scopes);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function extractOidcConfig(raw: RawAppConfig): Partial<OidcConfig> {
-  const generic = raw.oidc?.generic;
-  if (!generic) {
-    return {};
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
   }
-  const config: Partial<OidcConfig> = {};
-  const discoveryUrl =
-    normalizeString(generic.discoveryURL) ??
-    normalizeString(generic.discoveryUrl);
-  if (discoveryUrl) {
-    config.discoveryUrl = discoveryUrl;
-  }
-  const clientId =
-    normalizeString(generic.clientID) ?? normalizeString(generic.clientId);
-  if (clientId) {
-    config.clientId = clientId;
-  }
-  const clientSecret = normalizeString(generic.clientSecret);
-  if (clientSecret) {
-    config.clientSecret = clientSecret;
-  }
-  const redirectUri =
-    normalizeString(generic.redirectURL) ??
-    normalizeString(generic.redirectUrl);
-  if (redirectUri) {
-    config.redirectUri = redirectUri;
-  }
-  const scope = normalizeScope(generic.scopes);
-  if (scope) {
-    config.scope = scope;
-  }
-  return config;
+  return value as Record<string, unknown>;
 }
 
-function extractGoogleConfig(raw: RawAppConfig): GoogleOAuthClientConfig | null {
-  const google = raw.googleDrive;
-  if (!google) {
-    return null;
+function asNonEmptyString(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
   }
-  const clientId =
-    normalizeString(google.clientID) ?? normalizeString(google.clientId);
-  if (!clientId) {
-    return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : "";
+}
+
+function asBoolean(value: unknown): boolean {
+  return typeof value === "boolean" ? value : false;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
   }
-  const clientSecret = normalizeString(google.clientSecret);
+  const values = value
+    .map((item) => asNonEmptyString(item))
+    .filter((item): item is string => Boolean(item));
+  return values;
+}
+
+function pickString(
+  source: Record<string, unknown>,
+  keys: string[],
+): string {
+  for (const key of keys) {
+    const value = asNonEmptyString(source[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function createDefaultOidcGenericRuntimeConfig(): OidcGenericRuntimeConfig {
   return {
-    clientId,
-    clientSecret,
+    clientId: "",
+    clientSecret: "",
+    discoveryUrl: "",
+    issuer: "",
+    redirectUrl: "",
+    scopes: [],
   };
+}
+
+function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
+  return {
+    agentEndpoint: "",
+    defaultRunnerEndpoint: "",
+    oidc: {
+      clientExchange: false,
+      generic: createDefaultOidcGenericRuntimeConfig(),
+    },
+    googleDrive: {
+      clientId: "",
+      clientSecret: "",
+      baseUrl: "",
+    },
+  };
+}
+
+/**
+ * RuntimeAppConfigSchema normalizes untyped input (for example parsed YAML)
+ * into the supported RuntimeAppConfig shape.
+ */
+export class RuntimeAppConfigSchema {
+  static fromUnknown(value: unknown): RuntimeAppConfig {
+    const parsed = createDefaultRuntimeAppConfig();
+    const root = asRecord(value);
+    if (!root) {
+      return parsed;
+    }
+
+    const oidc = asRecord(root.oidc);
+    const oidcGeneric = asRecord(oidc?.generic);
+    const drive = asRecord(root.googleDrive);
+
+    parsed.agentEndpoint = asNonEmptyString(root.agentEndpoint);
+    parsed.defaultRunnerEndpoint = asNonEmptyString(root.defaultRunnerEndpoint);
+
+    if (oidc) {
+      parsed.oidc.clientExchange = asBoolean(oidc.clientExchange);
+    }
+    if (oidcGeneric) {
+      parsed.oidc.generic = {
+        clientId: pickString(oidcGeneric, ["clientId", "clientID"]),
+        clientSecret: pickString(oidcGeneric, [
+          "clientSecret",
+          "client_secret",
+        ]),
+        discoveryUrl: pickString(oidcGeneric, ["discoveryUrl", "discoveryURL"]),
+        issuer: pickString(oidcGeneric, ["issuer"]),
+        redirectUrl: pickString(oidcGeneric, ["redirectUrl", "redirectURL"]),
+        scopes: asStringArray(oidcGeneric.scopes),
+      };
+    }
+
+    if (drive) {
+      parsed.googleDrive = {
+        clientId: pickString(drive, ["clientId", "clientID"]),
+        clientSecret: pickString(drive, ["clientSecret", "client_secret"]),
+        baseUrl: asNonEmptyString(drive.baseUrl),
+      };
+    }
+
+    return parsed;
+  }
 }
 
 export function getDefaultAppConfigUrl(): string {
   if (typeof window === "undefined") {
-    return "/configs/app-configs.yaml";
+    return APP_CONFIG_PATH_DEFAULT;
   }
-  return new URL("/configs/app-configs.yaml", window.location.origin).toString();
+  return new URL(APP_CONFIG_PATH_DEFAULT, window.location.origin).toString();
 }
 
 export function applyAppConfig(
   rawConfig: unknown,
   url: string,
 ): AppliedAppConfig {
-  if (!rawConfig || typeof rawConfig !== "object") {
+  if (!isRecord(rawConfig)) {
     throw new Error("App config is empty or invalid");
   }
-  const raw = rawConfig as RawAppConfig;
+  const parsed = RuntimeAppConfigSchema.fromUnknown(rawConfig);
+  const hasOidcBlock = isRecord(rawConfig.oidc);
+  const hasGoogleDriveBlock = isRecord(rawConfig.googleDrive);
   const warnings: string[] = [];
   let oidc: OidcConfig | undefined;
   let googleOAuth: GoogleOAuthClientConfig | undefined;
 
-  const oidcConfig = extractOidcConfig(raw);
+  const oidcConfig: Partial<OidcConfig> = {};
+  const genericOidcConfig = parsed.oidc.generic;
+  const oidcScope =
+    genericOidcConfig.scopes.length > 0
+      ? genericOidcConfig.scopes.join(" ")
+      : undefined;
+  const discoveryUrl = normalizeString(genericOidcConfig.discoveryUrl);
+  const clientId = normalizeString(genericOidcConfig.clientId);
+  const clientSecret = normalizeString(genericOidcConfig.clientSecret);
+  const redirectUri = normalizeString(genericOidcConfig.redirectUrl);
+  if (discoveryUrl) {
+    oidcConfig.discoveryUrl = discoveryUrl;
+  }
+  if (clientId) {
+    oidcConfig.clientId = clientId;
+  }
+  if (clientSecret) {
+    oidcConfig.clientSecret = clientSecret;
+  }
+  if (redirectUri) {
+    oidcConfig.redirectUri = redirectUri;
+  }
+  if (oidcScope) {
+    oidcConfig.scope = oidcScope;
+  }
   if (Object.keys(oidcConfig).length > 0) {
     if (!oidcConfig.redirectUri && typeof window !== "undefined") {
       oidcConfig.redirectUri = new URL(
@@ -142,16 +232,22 @@ export function applyAppConfig(
     } catch (error) {
       warnings.push(`OIDC config not applied: ${String(error)}`);
     }
+  } else if (hasOidcBlock) {
+    warnings.push("OIDC config present but no applicable generic values found");
   }
 
-  const googleConfig = extractGoogleConfig(raw);
-  if (googleConfig) {
+  const googleClientId = normalizeString(parsed.googleDrive.clientId);
+  const googleClientSecret = normalizeString(parsed.googleDrive.clientSecret);
+  if (googleClientId) {
     try {
-      googleOAuth = googleClientManager.setOAuthClient(googleConfig);
+      googleOAuth = googleClientManager.setOAuthClient({
+        clientId: googleClientId,
+        clientSecret: googleClientSecret,
+      });
     } catch (error) {
       warnings.push(`Google OAuth config not applied: ${String(error)}`);
     }
-  } else if (raw.googleDrive) {
+  } else if (hasGoogleDriveBlock) {
     warnings.push("Google Drive config missing clientID/clientId");
   }
 
