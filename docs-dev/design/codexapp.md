@@ -4,7 +4,7 @@
 
 This doc proposes adding Codex app-server as an additional harness path for `runmedev/web` ([issue #34](https://github.com/runmedev/web/issues/34)), while keeping the existing Responses API + ChatKit path.
 
-The design keeps notebook state and UX in the web app, keeps execution on the Runme runner, and uses Runme server as codex lifecycle manager plus NotebookService MCP host. We reuse the existing ChatKit UI/protocol surface (`/chatkit`) and swap backend harness adapters (`responses` vs `codex`). Notebook MCP tool calls are bridged to the browser over a dedicated codex websocket using proto-defined envelopes.
+The design keeps notebook state and UX in the web app, keeps execution on the Runme runner, and uses Runme server as codex lifecycle manager plus NotebookService MCP host. We keep ChatKit UX while using separate backend handlers (`/chatkit` for `responses`, `/chatkit-codex` for `codex`). Codex uses a Runme-hosted streamable MCP endpoint (with bearer auth) for notebook tools, and Runme bridges browser-owned notebook operations over a dedicated codex websocket using proto-defined envelopes.
 
 ## Context
 
@@ -49,26 +49,26 @@ Key external inputs:
 We support two harness paths:
 
 - `responses` (existing): browser `ChatKitPanel` -> Runme `/chatkit`.
-- `codex` (new): browser `ChatKitPanel` -> Runme `/chatkit` (codex adapter) -> local codex app-server.
+- `codex` (new): browser `ChatKitPanel` -> Runme `/chatkit-codex` -> local codex app-server.
 
 Bootstrap default harness adapter is `responses`.
 Active harness remains whichever profile is set by `app.harness.setDefault(name)`.
 
-Selection is user-configurable from App Console and persisted in `cloudAssistantSettings.harnesses` plus `cloudAssistantSettings.defaultHarness`.
+Selection is user-configurable from App Console and persisted in local storage key `runme/harness` (profiles + default harness name).
 
 Bootstrap and initialization model:
 
 - Add a global singleton harness manager (similar to existing singleton managers) as the source of truth for harness profiles/default.
 - On app load, run harness bootstrap alongside the existing app-config preload flow:
   - attempt to load `/configs/app-configs.yaml` (same pattern as `maybeSetAppConfig()`),
-  - if harness profiles are present in config, seed `cloudAssistantSettings.harnesses` and `cloudAssistantSettings.defaultHarness`,
+  - if harness profiles are present in config, seed `runme/harness`,
   - if no harness profile config is present, create fallback profile `local-responses` with `baseUrl=window.location.origin` and `adapter=responses`, then set it as default.
 - If harness profiles/default already exist in local storage, do not overwrite user-managed values.
 
 Proposed App Console commands:
 
 - `app.harness.get()` -> list configured harness profiles (`name`, `baseUrl`, `adapter`) and indicate default.
-- `app.harness.update(name, baseUrl, adapter)` -> create/update a harness profile.
+- `app.harness.update(name, baseUrl, adapter)` -> create/update a harness profile; `adapter` is required and must be `"responses"` or `"codex"`.
 - `app.harness.delete(name)` -> remove a harness profile.
 - `app.harness.getDefault()` -> show the default harness profile.
 - `app.harness.setDefault(name)` -> set active harness profile used by ChatKit calls.
@@ -92,6 +92,7 @@ Runme server owns lifecycle.
 - Start lazily on first codex request by spawning `codex app-server` as a child process.
 - Health check with JSON-RPC `initialize`.
 - Reuse one app-server process per Runme server instance (v1), assuming a single local user session.
+- On codex session startup, configure app-server MCP servers to use Runme's streamable notebook MCP endpoint plus per-session `Authorization: Bearer <token>`.
 - Stop on Runme server shutdown (SIGINT first, then force-kill on timeout).
 - Interrupt active turns with JSON-RPC `thread/interrupt` when user cancels.
 
@@ -101,8 +102,10 @@ Rationale: keeps local process management out of browser code and centralizes fa
 
 Through Runme server, with split control/data planes.
 
-- Runme server talks to codex app-server over JSON-RPC on `stdio`.
-- Browser keeps using `POST /chatkit` for thread/messages/tool-output events.
+- Runme server talks to codex app-server over JSON-RPC on `stdio` for control-plane chat/session operations.
+- Codex app-server talks to Runme notebook tools over a streamable MCP HTTP endpoint configured by Runme.
+- We do not use a codex-managed `stdio` MCP server for notebook tools.
+- Browser uses `POST /chatkit-codex` for codex thread/messages/tool-output events (`responses` continues on `POST /chatkit`).
 - Browser opens a dedicated codex bridge websocket (`/codex/ws`) for asynchronous notebook MCP tool dispatch/results.
 - We do not use browser -> codex direct transport in v1.
 
@@ -136,8 +139,9 @@ v1 assumes a single user driving codex from one browser session, so `/codex/ws` 
 By invoking NotebookService MCP tools hosted by Runme server and bridged to the active browser codex bridge connection.
 
 - Tool definitions come from `runme/api/proto/agent/tools/v1/notebooks.proto` and generated MCP/OpenAI metadata (`toolsv1mcp`) from the redpanda MCP plugin.
-- Codex emits `mcpToolCall` items for notebook actions (`ListCells`, `GetCells`, `UpdateCells`, `ExecuteCells`, ...).
-- Runme implements NotebookService MCP handlers.
+- Runme exposes a streamable MCP endpoint (for example `/mcp/notebooks`) implementing `NotebookService` handlers.
+- Runme mints a short-lived symmetric bearer token per codex session and injects it into codex MCP server config (`Authorization` header).
+- Codex app-server invokes notebook tools (`ListCells`, `GetCells`, `UpdateCells`, `ExecuteCells`, ...) against that streamable endpoint.
 - For browser-owned notebook state (`List/Get/Update`), Runme forwards the tool request to browser over websocket (proto envelope), waits for browser response, then returns MCP tool result to codex.
 - For execution (`ExecuteCells`), Runme requires explicit user approval in the UI before execution, then reuses existing runner websocket execution flow and returns the result via MCP tool response.
 - `ExecuteCells` responses return full stdout/stderr (no summarization in v1).
@@ -170,23 +174,24 @@ sequenceDiagram
   participant UI as "Web App (ChatKitPanel)"
   participant RS as Runme Server
   participant CA as Codex App-Server
+  participant MCP as "Runme MCP (/mcp/notebooks)"
   participant CWS as Runme Websocket (/codex/ws)
   participant RW as Runme Runner
 
   UI->>CWS: open persistent websocket (auth + session IDs)
-  UI->>RS: POST /chatkit (threads.create / add_user_message)
+  UI->>RS: POST /chatkit-codex (threads.create / add_user_message)
   RS->>CA: JSON-RPC turn/start (via chatkit->codex adapter)
-  CA-->>RS: notifications (..., mcpToolCall)
+  CA->>MCP: streamable MCP tool call + Authorization Bearer token
 
-  RS-->>CWS: NotebookToolCallRequest (proto, bridge_call_id)
+  MCP-->>CWS: NotebookToolCallRequest (proto, bridge_call_id)
   CWS-->>UI: NotebookToolCallRequest (proto)
   UI-->>CWS: NotebookToolCallResponse (proto, bridge_call_id)
-  CWS-->>RS: NotebookToolCallResponse (proto)
-  RS->>CA: MCP tool result (list/get/update)
+  CWS-->>MCP: NotebookToolCallResponse (proto)
+  MCP->>CA: MCP tool result (list/get/update)
 
-  RS->>RW: ExecuteRequest (for execute_cells)
-  RW-->>RS: ExecuteResponse stream
-  RS->>CA: MCP tool result (execute_cells)
+  MCP->>RW: ExecuteRequest (for execute_cells, after user approval)
+  RW-->>MCP: ExecuteResponse stream
+  MCP->>CA: MCP tool result (execute_cells)
 
   CA-->>RS: notifications (item/completed, turn/completed)
   RS-->>UI: ChatKit SSE events
@@ -197,7 +202,7 @@ sequenceDiagram
 ### Reuse ChatKit panel
 
 - Keep `ChatKitPanel` as the only chat UI.
-- Keep ChatKit protocol surface to backend (`/chatkit` + SSE responses).
+- Keep ChatKit protocol surface to backend (`/chatkit` for responses, `/chatkit-codex` for codex, both SSE-compatible).
 - Continue using existing `chatkit_state` persistence (`previous_response_id`, `thread_id`) so the codex adapter can resume turns.
 
 ### Codex bridge client/runtime
@@ -226,7 +231,7 @@ sequenceDiagram
   - `app.harness.setDefault(name)`
 - Add v0 execution-approval command:
   - `app.runCells(["cellID", "cellID"])` approves and executes the pending codex `ExecuteCells` request for those cells.
-- Persist harness profiles and default in `cloudAssistantSettings.harnesses` and `cloudAssistantSettings.defaultHarness`.
+- Persist harness profiles and default in local storage key `runme/harness`.
 - Back harness commands with a global singleton harness manager so App Console, ChatKit routing, and bootstrap state stay consistent.
 - Print active harness in `help()` output to make debugging obvious.
 
@@ -252,12 +257,16 @@ sequenceDiagram
   - MCP implementation of `NotebookService` backed by websocket bridge + runner
 - `pkg/agent/codex/ws_handler.go`
   - websocket handler for `/codex/ws` notebook tool bridge
+- `pkg/agent/codex/mcp_streamable_handler.go`
+  - streamable MCP HTTP handler for notebook tools with bearer-token auth
 
 ### Route registration
 
-- Keep `mux.HandleProtected("/chatkit", ..., role/agent.user)` and route to harness adapter by selected default harness profile.
+- Keep `mux.HandleProtected("/chatkit", ..., role/agent.user)` for the responses handler.
+- Add `mux.HandleProtected("/chatkit-codex", ..., role/agent.user)` for the codex handler.
 - Keep existing `/ws` unchanged for runner execution.
 - Add codex bridge websocket route `/codex/ws` for notebook MCP dispatch/results.
+- Add streamable MCP route (for example `/mcp/notebooks`) used by codex app-server.
 - Enforce singleton `/codex/ws` policy (reject second connection unless `force_replace=true`).
 
 ### Proto changes
@@ -270,13 +279,14 @@ sequenceDiagram
 
 ### Auth and policy
 
-- Keep browser auth on `/chatkit` and `/codex/ws` using existing IAM policy checks.
+- Keep browser auth on `/chatkit`, `/chatkit-codex`, and `/codex/ws` using existing IAM policy checks.
 - Reuse existing Agent role policy for codex harness access.
 - Configure codex sessions with `approvalPolicy=never`.
 - Permit file writes in codex sessions, constrained by local sandbox/writable roots.
 - Bias tool choice toward notebook MCP tools so mutations are surfaced in notebook UX first.
 - Codex subprocess remains local (`stdio` child process), not browser reachable.
-- Notebook MCP interface is server-side (invoked by codex harness). If an HTTP MCP endpoint is ever exposed, do not rely on CORS alone; require explicit auth.
+- Protect the streamable MCP endpoint with per-session bearer token auth; do not rely on CORS.
+- Mint short-lived symmetric tokens in Runme, pass them to codex via MCP server config headers, and validate token/session scope on each MCP request.
 
 ### Observability
 
@@ -298,10 +308,12 @@ sequenceDiagram
 
 2. Codex transport + ChatKit adapter
 - Add codex process manager and ChatKit->codex adapter in Runme server.
-- Keep `/chatkit` as frontend protocol; select adapter from default harness profile.
+- Add `/chatkit-codex` handler and keep `/chatkit` unchanged for responses.
+- Route selection happens client-side from harness profile `adapter` (`responses` -> `/chatkit`, `codex` -> `/chatkit-codex`).
 
 3. MCP + websocket bridge
 - Implement `NotebookService` MCP handlers using generated tool/proto definitions from `api/proto/agent/tools/v1/notebooks.proto`.
+- Add streamable MCP endpoint and per-session bearer token mint/validation.
 - Add `/codex/ws` bridge using proto-defined notebook tool request/response payloads.
 - Handle `List/Get/Update` via browser bridge and return MCP tool results.
 
@@ -317,6 +329,7 @@ sequenceDiagram
 ## Risks
 
 - Codex turn/item event schema may evolve: mitigate with strict version checks (`initialize.protocolVersion`) and adapter layer.
+- Streamable MCP auth token expiry/drift can break tool calls: mitigate with short-lived token refresh on session restart and explicit auth error mapping.
 - Multiple browser tabs may contend for singleton bridge ownership: mitigate with explicit `409` on second connect, optional `force_replace=true`, and clear UI diagnostics.
 - Websocket bridge can deadlock if browser disconnects mid-toolcall: mitigate with per-tool timeout + explicit error completion to codex.
 - Local codex process not installed/running: provide explicit UI diagnostics and recovery action.
