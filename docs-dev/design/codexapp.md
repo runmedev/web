@@ -51,14 +51,23 @@ We support two harness paths:
 - `responses` (existing): browser `ChatKitPanel` -> Runme `/chatkit`.
 - `codex` (new): browser `ChatKitPanel` -> Runme `/chatkit` (codex adapter) -> local codex app-server.
 
-Default: `responses`.
+No hardcoded harness adapter default; active harness is whichever profile is set by `app.harness.setDefault(name)`.
 
-Selection is user-configurable from App Console and persisted in `cloudAssistantSettings`.
+Selection is user-configurable from App Console and persisted in `cloudAssistantSettings.harnesses` plus `cloudAssistantSettings.defaultHarness`.
 
 Proposed App Console commands:
 
-- `app.getAgentHarness()` -> returns `"responses"` or `"codex"`.
-- `app.setAgentHarness("responses" | "codex")` -> updates local setting and switches backend harness adapter without UI rebuild.
+- `app.harness.get()` -> list configured harness profiles (`name`, `baseUrl`, `adapter`) and indicate default.
+- `app.harness.update(name, baseUrl, adapter)` -> create/update a harness profile.
+- `app.harness.delete(name)` -> remove a harness profile.
+- `app.harness.getDefault()` -> show the default harness profile.
+- `app.harness.setDefault(name)` -> set active harness profile used by ChatKit calls.
+
+Example flow:
+
+- `app.harness.update("local-codex", "http://localhost:1234", "codex")`
+- `app.harness.update("local-responses", "http://localhost:1234", "responses")`
+- `app.harness.setDefault("local-codex")`
 
 Rationale:
 
@@ -72,7 +81,7 @@ Runme server owns lifecycle.
 
 - Start lazily on first codex request by spawning `codex app-server` as a child process.
 - Health check with JSON-RPC `initialize`.
-- Reuse one app-server process per Runme server instance (v1).
+- Reuse one app-server process per Runme server instance (v1), assuming a single local user session.
 - Stop on Runme server shutdown (SIGINT first, then force-kill on timeout).
 - Interrupt active turns with JSON-RPC `thread/interrupt` when user cancels.
 
@@ -181,16 +190,19 @@ sequenceDiagram
 ### UI updates
 
 - Keep panel layout unchanged (no `CodexPanel`).
-- Add harness selector keyed by `agentHarness` setting.
+- Remove `Settings.tsx`; move runtime harness configuration to App Console namespaces (`app.harness`, `oidc`, `googleClientManager`).
 - Render codex-backed responses through ChatKit events returned by server adapter.
 - Keep existing ChatKit tool UX for `responses`; codex MCP notebook tools flow through websocket bridge.
 
 ### App Console updates
 
 - Extend `app` namespace with harness commands:
-  - `app.getAgentHarness()`
-  - `app.setAgentHarness("responses" | "codex")`
-- Persist setting in `cloudAssistantSettings.agentHarness`.
+  - `app.harness.get()`
+  - `app.harness.update(name, baseUrl, adapter)`
+  - `app.harness.delete(name)`
+  - `app.harness.getDefault()`
+  - `app.harness.setDefault(name)`
+- Persist harness profiles and default in `cloudAssistantSettings.harnesses` and `cloudAssistantSettings.defaultHarness`.
 - Print active harness in `help()` output to make debugging obvious.
 
 ### Notebook integration
@@ -216,7 +228,7 @@ sequenceDiagram
 
 ### Route registration
 
-- Keep `mux.HandleProtected("/chatkit", ..., role/agent.user)` and route to harness adapter by `agentHarness`.
+- Keep `mux.HandleProtected("/chatkit", ..., role/agent.user)` and route to harness adapter by selected default harness profile.
 - Keep existing `/ws` unchanged for runner execution.
 - Add codex bridge websocket route `/codex/ws` for notebook MCP dispatch/results.
 - Enforce singleton `/codex/ws` policy (reject second connection unless `force_replace=true`).
@@ -249,13 +261,13 @@ sequenceDiagram
 
 ## Rollout Plan
 
-1. Harness selector (no behavior change)
-- Add `agentHarness` setting and App Console commands.
-- Default remains `responses`.
+1. Harness profiles and default selection
+- Add App Console `app.harness` commands (`get/update/delete/getDefault/setDefault`).
+- Persist named harness profiles with `baseUrl` + `adapter`, and select one default.
 
 2. Codex transport + ChatKit adapter
 - Add codex process manager and ChatKit->codex adapter in Runme server.
-- Keep `/chatkit` as frontend protocol; select adapter by `agentHarness`.
+- Keep `/chatkit` as frontend protocol; select adapter from default harness profile.
 
 3. MCP + websocket bridge
 - Implement `NotebookService` MCP handlers using generated tool/proto definitions from `api/proto/agent/tools/v1/notebooks.proto`.
@@ -281,10 +293,9 @@ sequenceDiagram
 
 ## Open Questions
 
-- Do we need per-user codex subprocess isolation when multiple users share one Runme server instance?
 - Which codex approval policy should be default (`session/configure.approvalPolicy`)?
 - Should `execute_cells` output include full stdout/stderr or summarized result plus references?
-- When should we flip default harness from `responses` to `codex` (if ever)?
+- Which default harness profile should be created during first-run bootstrap?
 
 ## Alternative Considered: Direct Google Drive mutation
 
