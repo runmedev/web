@@ -419,9 +419,11 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
   }
 
   const movieUrl = urlByName.get("scenario-hello-world-walkthrough.webm") ?? "";
+  const noRunnerMovieUrl = urlByName.get("scenario-no-runner-logs-walkthrough.webm") ?? "";
   const initialPngUrl = urlByName.get("scenario-hello-world-01-initial.png") ?? "";
   const afterRunPngUrl = urlByName.get("scenario-hello-world-06-after-run.png") ?? "";
   const afterRunTxtUrl = urlByName.get("scenario-hello-world-06-after-run.txt") ?? "";
+  const noRunnerLogsPngUrl = urlByName.get("scenario-no-runner-logs-07-logs-visible.png") ?? "";
   const outputProbeUrl = urlByName.get("scenario-hello-world-07-output-probe.json") ?? "";
   const scenarioResultsUrl = urlByName.get("scenario-results.json") ?? "";
   const backendLogUrl = urlByName.get("backend.log") ?? "";
@@ -448,6 +450,8 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     passed: assertionRows.filter((row) => row.status === "PASS").length,
     failed: assertionRows.filter((row) => row.status === "FAIL").length,
   };
+  const helloWorldScenario = scenarioResults.find((result) => result.scenario === "hello-world");
+  const noRunnerScenario = scenarioResults.find((result) => result.scenario === "no-runner-logs");
 
   const manifest = {
     bucket,
@@ -513,10 +517,12 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
   }
   <h2>Primary Artifacts</h2>
   <ul>
-    <li>Movie: <a href="${movieUrl}">${movieUrl || "not found"}</a></li>
+    <li>Hello-world movie: <a href="${movieUrl}">${movieUrl || "not found"}</a></li>
+    <li>No-runner movie: <a href="${noRunnerMovieUrl}">${noRunnerMovieUrl || "not found"}</a></li>
     <li>Initial PNG: <a href="${initialPngUrl}">${initialPngUrl || "not found"}</a></li>
     <li>After-run PNG: <a href="${afterRunPngUrl}">${afterRunPngUrl || "not found"}</a></li>
     <li>After-run TXT: <a href="${afterRunTxtUrl}">${afterRunTxtUrl || "not found"}</a></li>
+    <li>No-runner Logs PNG: <a href="${noRunnerLogsPngUrl}">${noRunnerLogsPngUrl || "not found"}</a></li>
     <li>Output probe JSON: <a href="${outputProbeUrl}">${outputProbeUrl || "not found"}</a></li>
     <li>Scenario results JSON: <a href="${scenarioResultsUrl}">${scenarioResultsUrl || "not found"}</a></li>
     <li>Backend log: <a href="${backendLogUrl}">${backendLogUrl || "not found"}</a></li>
@@ -567,7 +573,12 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
   }
   ${
     movieUrl
-      ? `<h3>Movie Preview</h3><video controls preload="metadata" src="${movieUrl}"></video>`
+      ? `<h3>Hello-world Movie Preview</h3><video controls preload="metadata" src="${movieUrl}"></video>`
+      : ""
+  }
+  ${
+    noRunnerMovieUrl
+      ? `<h3>No-runner Movie Preview</h3><video controls preload="metadata" src="${noRunnerMovieUrl}"></video>`
       : ""
   }
   ${
@@ -623,10 +634,12 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
       : []),
     "## Primary artifacts",
     "",
-    `- Movie: ${movieUrl || "not found"}`,
+    `- Hello-world movie: ${movieUrl || "not found"}`,
+    `- No-runner movie: ${noRunnerMovieUrl || "not found"}`,
     `- Initial PNG: ${initialPngUrl || "not found"}`,
     `- After-run PNG: ${afterRunPngUrl || "not found"}`,
     `- After-run TXT: ${afterRunTxtUrl || "not found"}`,
+    `- No-runner Logs PNG: ${noRunnerLogsPngUrl || "not found"}`,
     `- Output probe JSON: ${outputProbeUrl || "not found"}`,
     `- Scenario results JSON: ${scenarioResultsUrl || "not found"}`,
     `- Backend log: ${backendLogUrl || "not found"}`,
@@ -678,7 +691,24 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     "",
     "| Scenario | Status | Assertions | Artifacts |",
     "| --- | --- | --- | --- |",
-    `| hello-world-local-notebook | ${statusEmoji} ${summary.status} | ${summary.assertions_total} total (${summary.assertions_passed} pass / ${summary.assertions_failed} fail) | [movie](${movieUrl || indexHtmlUpload.url}) · [initial png](${initialPngUrl || indexHtmlUpload.url}) · [after-run png](${afterRunPngUrl || indexHtmlUpload.url}) · [after-run txt](${afterRunTxtUrl || indexHtmlUpload.url}) |`,
+    `| hello-world-local-notebook | ${
+      helloWorldScenario
+        ? `${helloWorldScenario.status === "PASS" ? "✅" : "❌"} ${helloWorldScenario.status}`
+        : `${statusEmoji} ${summary.status}`
+    } | ${
+      helloWorldScenario
+        ? `${helloWorldScenario.assertions_total} total (${helloWorldScenario.assertions_passed} pass / ${helloWorldScenario.assertions_failed} fail)`
+        : `${summary.assertions_total} total (${summary.assertions_passed} pass / ${summary.assertions_failed} fail)`
+    } | [movie](${movieUrl || indexHtmlUpload.url}) · [initial png](${initialPngUrl || indexHtmlUpload.url}) · [after-run png](${afterRunPngUrl || indexHtmlUpload.url}) · [after-run txt](${afterRunTxtUrl || indexHtmlUpload.url}) |`,
+    `| no-runner-logs | ${
+      noRunnerScenario
+        ? `${noRunnerScenario.status === "PASS" ? "✅" : "❌"} ${noRunnerScenario.status}`
+        : `${statusEmoji} ${summary.status}`
+    } | ${
+      noRunnerScenario
+        ? `${noRunnerScenario.assertions_total} total (${noRunnerScenario.assertions_passed} pass / ${noRunnerScenario.assertions_failed} fail)`
+        : `${summary.assertions_total} total (${summary.assertions_passed} pass / ${summary.assertions_failed} fail)`
+    } | [movie](${noRunnerMovieUrl || indexHtmlUpload.url}) · [logs png](${noRunnerLogsPngUrl || indexHtmlUpload.url}) · [scenario-results.json](${scenarioResultsUrl || indexHtmlUpload.url}) |`,
     "",
     ...(hasFailures
       ? [
@@ -714,9 +744,11 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     },
     urls: {
       movie: movieUrl,
+      no_runner_movie: noRunnerMovieUrl,
       initial_png: initialPngUrl,
       after_run_png: afterRunPngUrl,
       after_run_txt: afterRunTxtUrl,
+      no_runner_logs_png: noRunnerLogsPngUrl,
       output_probe_json: outputProbeUrl,
       scenario_results_json: scenarioResultsUrl,
       backend_log: backendLogUrl,

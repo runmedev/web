@@ -125,6 +125,8 @@ describe("bindStreamsToCell", () => {
     fake.stdout$.next(new TextEncoder().encode(" world"));
     fake.stderr$.next(new TextEncoder().encode("oops"));
     fake.stderr$.next(new TextEncoder().encode(" again"));
+    // Stdout chunks without a newline are flushed when the run exits.
+    fake.exitCode$.next(0);
 
     const stdoutItem = current.outputs
       .flatMap((o) => o.items)
@@ -232,5 +234,30 @@ describe("NotebookData cell defaults", () => {
 
     expect(cell.languageId).toBe("markdown");
     expect(cell.kind).toBe(parser_pb.CellKind.CODE);
+  });
+});
+
+describe("NotebookData.runCodeCell", () => {
+  it("returns empty run id when no runner is available", () => {
+    getWithFallback.mockReturnValueOnce(undefined);
+
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-no-runner",
+      kind: parser_pb.CellKind.CODE,
+      outputs: [],
+      metadata: {},
+      value: "echo hello",
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "test",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    const runID = model.runCodeCell(cell);
+    expect(runID).toBe("");
   });
 });

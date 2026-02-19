@@ -3,17 +3,9 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/**
- * test-scenario-hello-world.ts - Executes the hello-world UX CUJ scenario.
- *
- * This script follows docs-dev/cujs/hello-world-local-notebook.md and keeps
- * assertions machine-verifiable by using agent-browser snapshots, text reads,
- * and JS evaluation against live DOM/app state.
- */
-
 const FRONTEND_URL = "http://localhost:5173";
 const BACKEND_URL = "http://localhost:9977";
-const SCENARIO_NOTEBOOK_NAME = "scenario-hello-world.runme.md";
+const SCENARIO_NOTEBOOK_NAME = "scenario-no-runner.runme.md";
 const CUJ_ID_TOKEN = process.env.CUJ_ID_TOKEN?.trim() ?? "";
 const CUJ_ACCESS_TOKEN = process.env.CUJ_ACCESS_TOKEN?.trim() ?? CUJ_ID_TOKEN;
 const tokenExpiresAtEnv = Number(process.env.CUJ_TOKEN_EXPIRES_AT ?? "");
@@ -22,21 +14,17 @@ const CUJ_TOKEN_EXPIRES_AT = Number.isFinite(tokenExpiresAtEnv) && tokenExpiresA
   : Date.now() + 5 * 60 * 1000;
 
 const CURRENT_FILE_DIR = dirname(fileURLToPath(import.meta.url));
-// When executed from .generated, emit artifacts to the source browser test dir.
 const SCRIPT_DIR =
   CURRENT_FILE_DIR.endsWith("/.generated") || CURRENT_FILE_DIR.endsWith("\\.generated")
     ? dirname(CURRENT_FILE_DIR)
     : CURRENT_FILE_DIR;
 const OUTPUT_DIR = join(SCRIPT_DIR, "test-output");
-const MOVIE_PATH = join(OUTPUT_DIR, "scenario-hello-world-walkthrough.webm");
+const MOVIE_PATH = join(OUTPUT_DIR, "scenario-no-runner-logs-walkthrough.webm");
 
 let passCount = 0;
 let failCount = 0;
 let totalCount = 0;
 
-/**
- * Run a shell command and return captured stdout/stderr/status.
- */
 function run(command: string): { status: number; stdout: string; stderr: string } {
   const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "20000");
   const result = spawnSync(command, {
@@ -63,9 +51,6 @@ function run(command: string): { status: number; stdout: string; stderr: string 
   };
 }
 
-/**
- * Run a shell command and throw with context when it fails.
- */
 function runOrThrow(command: string): string {
   const result = run(command);
   if (result.status !== 0) {
@@ -74,34 +59,22 @@ function runOrThrow(command: string): string {
   return result.stdout;
 }
 
-/**
- * Record a passed assertion in a consistent format.
- */
 function pass(message: string): void {
   totalCount += 1;
   passCount += 1;
   console.log(`[PASS] ${message}`);
 }
 
-/**
- * Record a failed assertion in a consistent format.
- */
 function fail(message: string): void {
   totalCount += 1;
   failCount += 1;
   console.log(`[FAIL] ${message}`);
 }
 
-/**
- * Save text artifacts so debugging CI failures is easier.
- */
 function writeArtifact(name: string, content: string): void {
   writeFileSync(join(OUTPUT_DIR, name), content, "utf-8");
 }
 
-/**
- * Extract the first element reference token from agent-browser snapshot lines.
- */
 function firstRef(snapshot: string, pattern: RegExp): string | null {
   const line = snapshot
     .split("\n")
@@ -113,32 +86,18 @@ function firstRef(snapshot: string, pattern: RegExp): string | null {
   if (legacyRef) {
     return legacyRef[0];
   }
-
-  // Newer agent-browser snapshots expose refs as [ref=e11].
   const currentRef = line.match(/\[ref=([^\]]+)\]/);
   return currentRef ? currentRef[1] : null;
 }
 
-/**
- * Escape a literal string so it can be embedded in a RegExp safely.
- */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * Escape a command string for safe insertion in a double-quoted shell arg.
- */
 function escapeDoubleQuotes(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-/**
- * Execute one AppConsole command and return the captured console output.
- *
- * The helper centralizes how we drive the terminal widget so runner setup
- * assertions remain stable and every command appears in the walkthrough video.
- */
 function runAppConsoleCommand(consoleRef: string, command: string): string {
   run(`agent-browser click ${consoleRef}`);
   run(`agent-browser type ${consoleRef} "${escapeDoubleQuotes(command)}"`);
@@ -162,35 +121,96 @@ function runWithRetry(command: string, attempts = 3, waitMs = 1200): void {
   throw new Error(`Command failed after ${attempts} attempts: ${command}\n${lastError}`);
 }
 
+function readBottomPaneCollapsed(): "true" | "false" | "missing" {
+  const output = run(
+    `agent-browser eval "(() => {
+      const pane = document.getElementById('bottom-pane');
+      if (!pane) return 'missing';
+      return pane.getAttribute('data-collapsed') || 'false';
+    })()"`,
+  ).stdout;
+  if (output.includes("true")) return "true";
+  if (output.includes("false")) return "false";
+  return "missing";
+}
+
+function toggleBottomPane(): boolean {
+  const output = run(
+    `agent-browser eval "(() => {
+      const toggle = document.getElementById('bottom-pane-collapse-toggle');
+      if (!toggle) return 'missing';
+      toggle.click();
+      return 'clicked';
+    })()"`,
+  ).stdout;
+  return output.includes("clicked");
+}
+
+function setBottomPaneCollapsed(collapsed: boolean): boolean {
+  const desired = collapsed ? "true" : "false";
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const current = readBottomPaneCollapsed();
+    if (current === desired) {
+      return true;
+    }
+    if (current === "missing") {
+      return false;
+    }
+    if (!toggleBottomPane()) {
+      return false;
+    }
+    run("agent-browser wait 350");
+  }
+  return readBottomPaneCollapsed() === desired;
+}
+
+function clickLogsTab(): boolean {
+  const snapshot = run("agent-browser snapshot -i").stdout;
+  const logsRef = firstRef(snapshot, /tab "Logs"/i);
+  if (!logsRef) {
+    return false;
+  }
+  run(`agent-browser click ${logsRef}`);
+  return true;
+}
+
+function parseStateToken(output: string): "visible" | "not-visible" | "missing" | "" {
+  const normalized = output.trim().replace(/^['"]|['"]$/g, "");
+  if (normalized === "visible") {
+    return "visible";
+  }
+  if (normalized === "not-visible") {
+    return "not-visible";
+  }
+  if (normalized === "missing") {
+    return "missing";
+  }
+  return "";
+}
+
 mkdirSync(OUTPUT_DIR, { recursive: true });
-rmSync(join(OUTPUT_DIR, "scenario-hello-world-01-initial.png"), { force: true });
-rmSync(MOVIE_PATH, { force: true });
 for (const file of [
-  "scenario-hello-world-02-after-seed.txt",
-  "scenario-hello-world-03-console-output.txt",
-  "scenario-hello-world-03b-runner-setup.txt",
-  "scenario-hello-world-04-before-open.txt",
-  "scenario-hello-world-04b-after-expand.txt",
-  "scenario-hello-world-05-opened-notebook.txt",
-  "scenario-hello-world-06-after-run.txt",
-  "scenario-hello-world-06b-documents.txt",
-  "scenario-hello-world-07-output-probe.json",
-  "scenario-hello-world-auth-seed.txt",
-  "scenario-hello-world-06-after-run.png",
+  "scenario-no-runner-logs-01-initial.png",
+  "scenario-no-runner-logs-02-after-seed.txt",
+  "scenario-no-runner-logs-03-runner-state.txt",
+  "scenario-no-runner-logs-04-opened-notebook.txt",
+  "scenario-no-runner-logs-05-after-run.txt",
+  "scenario-no-runner-logs-06-logs-pane.txt",
+  "scenario-no-runner-logs-07-logs-visible.png",
+  "scenario-no-runner-logs-auth-seed.txt",
 ]) {
   rmSync(join(OUTPUT_DIR, file), { force: true });
 }
+rmSync(MOVIE_PATH, { force: true });
 
 if (run("command -v agent-browser").status !== 0) {
   console.error("ERROR: agent-browser is required on PATH");
   process.exit(2);
 }
-
 if (run(`curl -sf ${FRONTEND_URL}`).status !== 0) {
   console.error(`ERROR: frontend is not running at ${FRONTEND_URL}`);
   process.exit(1);
 }
-
 if (
   run(`curl -sf ${BACKEND_URL}`).status !== 0 &&
   run("nc -z localhost 9977").status !== 0
@@ -201,7 +221,7 @@ if (
 
 runWithRetry(`agent-browser open ${FRONTEND_URL}`);
 runWithRetry(`agent-browser record restart ${MOVIE_PATH}`);
-run("agent-browser wait 3500");
+run("agent-browser wait 3200");
 
 if (CUJ_ID_TOKEN) {
   const idTokenLiteral = `'${CUJ_ID_TOKEN.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
@@ -219,7 +239,7 @@ if (CUJ_ID_TOKEN) {
     })()"`,
   );
   const authSeedResult = `${authSeed.stdout}\n${authSeed.stderr}`.trim();
-  writeArtifact("scenario-hello-world-auth-seed.txt", authSeedResult);
+  writeArtifact("scenario-no-runner-logs-auth-seed.txt", authSeedResult);
   if (authSeed.status === 0 && authSeedResult.includes("ok")) {
     pass("Injected OIDC auth token");
     run("agent-browser reload");
@@ -229,7 +249,7 @@ if (CUJ_ID_TOKEN) {
   }
 }
 
-run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-hello-world-01-initial.png")}`);
+run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-no-runner-logs-01-initial.png")}`);
 
 const seedResult = run(
   `agent-browser eval "(async () => {
@@ -239,11 +259,11 @@ const seedResult = run(
     metadata: {},
     cells: [
       {
-        refId: 'cell_hello_world',
+        refId: 'cell_no_runner',
         kind: 2,
         languageId: 'bash',
-        value: 'echo \\\"hello world\\\"',
-        metadata: { runner: 'default' },
+        value: 'echo \\\"runner missing\\\"',
+        metadata: {},
         outputs: []
       }
     ]
@@ -270,72 +290,33 @@ if (seedResult.includes("ok")) {
 }
 
 let snapshot = run("agent-browser snapshot -i").stdout;
-writeArtifact("scenario-hello-world-02-after-seed.txt", snapshot);
+writeArtifact("scenario-no-runner-logs-02-after-seed.txt", snapshot);
 
 const consoleRef = firstRef(snapshot, /Terminal input/i);
 if (!consoleRef) {
   fail("Did not find AppConsole terminal input");
 } else {
-  const consoleOutput = run("agent-browser get text '#app-console-output'").stdout;
-  writeArtifact("scenario-hello-world-03-console-output.txt", consoleOutput);
-  pass("Found AppConsole terminal input");
-
-  const runnerName = "local";
-  const runnerEndpoint = "ws://localhost:9977/ws";
-
-  const updateOutput = runAppConsoleCommand(
-    consoleRef,
-    `app.runners.update("${runnerName}", "${runnerEndpoint}")`,
+  const firstDelete = runAppConsoleCommand(consoleRef, 'app.runners.delete("default")');
+  const secondDelete = runAppConsoleCommand(consoleRef, 'app.runners.delete("local")');
+  const runnersState = runAppConsoleCommand(consoleRef, "app.runners.get()");
+  writeArtifact(
+    "scenario-no-runner-logs-03-runner-state.txt",
+    `${firstDelete}\n${secondDelete}\n${runnersState}`,
   );
-  if (updateOutput.includes(`Runner ${runnerName} set to ${runnerEndpoint}`)) {
-    pass("Configured local runner endpoint via app.runners.update");
+  if (runnersState.includes("No runners configured.")) {
+    pass("Removed all configured runners");
   } else {
-    fail("Failed to configure runner endpoint via app.runners.update");
-  }
-
-  let getOutput = "";
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    getOutput = runAppConsoleCommand(consoleRef, "app.runners.get()");
-    if (getOutput.includes(`${runnerName}: ${runnerEndpoint}`)) {
-      break;
-    }
-    run("agent-browser wait 500");
-  }
-  if (getOutput.includes(`${runnerName}: ${runnerEndpoint}`)) {
-    pass("Confirmed configured runner via app.runners.get");
-  } else {
-    fail("app.runners.get did not report expected local runner endpoint");
-  }
-
-  const setDefaultOutput = runAppConsoleCommand(
-    consoleRef,
-    `app.runners.setDefault("${runnerName}")`,
-  );
-  if (setDefaultOutput.includes(`Default runner set to ${runnerName}`)) {
-    pass("Set default runner via app.runners.setDefault");
-  } else {
-    fail("Failed to set default runner via app.runners.setDefault");
-  }
-
-  const getDefaultOutput = runAppConsoleCommand(consoleRef, "app.runners.getDefault()");
-  writeArtifact("scenario-hello-world-03b-runner-setup.txt", getDefaultOutput);
-  if (getDefaultOutput.includes(`Default runner: ${runnerName} (${runnerEndpoint})`)) {
-    pass("Confirmed default runner via app.runners.getDefault");
-  } else {
-    fail("app.runners.getDefault did not report expected local default runner");
+    fail("Runners were still configured before execution");
   }
 }
 
 snapshot = run("agent-browser snapshot -i").stdout;
-writeArtifact("scenario-hello-world-04-before-open.txt", snapshot);
-
 const expandFolderRef = firstRef(snapshot, /button "Expand folder"/i);
 if (expandFolderRef) {
   run(`agent-browser click ${expandFolderRef}`);
   run("agent-browser wait 900");
   snapshot = run("agent-browser snapshot -i").stdout;
 }
-writeArtifact("scenario-hello-world-04b-after-expand.txt", snapshot);
 
 const notebookPattern = new RegExp(escapeRegExp(SCENARIO_NOTEBOOK_NAME), "i");
 let notebookRef = firstRef(snapshot, notebookPattern);
@@ -347,101 +328,117 @@ for (let attempt = 0; !notebookRef && attempt < 4; attempt += 1) {
 
 if (notebookRef) {
   run(`agent-browser click ${notebookRef}`);
-  run("agent-browser wait 1500");
-  pass("Opened scenario notebook");
+  run("agent-browser wait 1400");
+  pass("Opened no-runner scenario notebook");
 } else {
-  fail("Could not find scenario notebook in explorer");
+  fail("Could not find no-runner scenario notebook in explorer");
 }
 
 snapshot = run("agent-browser snapshot -i").stdout;
-writeArtifact("scenario-hello-world-05-opened-notebook.txt", snapshot);
-let runRef =
+writeArtifact("scenario-no-runner-logs-04-opened-notebook.txt", snapshot);
+
+if (setBottomPaneCollapsed(true)) {
+  run("agent-browser wait 600");
+  pass("Ensured bottom pane is minimized");
+} else {
+  fail("Could not minimize bottom pane before execution");
+}
+
+const runRef =
   firstRef(snapshot, /Run code/i) ??
   firstRef(snapshot, /Run cell/i) ??
   firstRef(snapshot, /\bRun\b/i);
 if (runRef) {
   run(`agent-browser click ${runRef}`);
-  run("agent-browser wait 4500");
-  pass("Triggered cell execution");
+  run("agent-browser wait 1800");
+  pass("Attempted to execute cell without runners");
 } else {
-  fail("Could not find a Run control for the first cell");
+  fail("Could not find Run control for the no-runner cell");
 }
 
-run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-hello-world-06-after-run.png")}`);
 snapshot = run("agent-browser snapshot -i").stdout;
-writeArtifact("scenario-hello-world-06-after-run.txt", snapshot);
+writeArtifact("scenario-no-runner-logs-05-after-run.txt", snapshot);
 
-const documentsText = run("agent-browser get text '#documents'").stdout;
-writeArtifact("scenario-hello-world-06b-documents.txt", documentsText);
-
-const outputProbeRaw = run(
-  `agent-browser eval "(async () => {
-    const ln = window.app?.localNotebooks;
-    if (!ln) {
-      return JSON.stringify({ status: 'missing-local-notebooks' });
-    }
-    const rec = await ln.files.get('local://file/${SCENARIO_NOTEBOOK_NAME}');
-    if (!rec) {
-      return JSON.stringify({ status: 'missing-notebook-record' });
-    }
-    const doc = JSON.parse(rec.doc || '{}');
-    const firstCell = Array.isArray(doc.cells) ? doc.cells[0] : null;
-    const outputs = Array.isArray(firstCell?.outputs) ? firstCell.outputs : [];
-    const decodedChunks = [];
-    for (const output of outputs) {
-      const items = Array.isArray(output?.items) ? output.items : [];
-      for (const item of items) {
-        const data = item?.data;
-        if (typeof data === 'string' && data.length > 0) {
-          try {
-            decodedChunks.push(atob(data));
-          } catch {
-            // Ignore non-base64 string payloads.
-          }
-        }
-      }
-    }
-    return JSON.stringify({
-      status: 'ok',
-      outputsCount: outputs.length,
-      decodedText: decodedChunks.join('\\n'),
-    });
-  })()"`,
-).stdout.trim();
-writeArtifact("scenario-hello-world-07-output-probe.json", outputProbeRaw);
-
-let observedExecutionOutput = false;
-try {
-  const parsedOnce = JSON.parse(outputProbeRaw) as unknown;
-  const parsed = (typeof parsedOnce === "string"
-    ? JSON.parse(parsedOnce)
-    : parsedOnce) as {
-    status?: string;
-    outputsCount?: number;
-    decodedText?: string;
-  };
-  observedExecutionOutput =
-    parsed.status === "ok" &&
-    Number(parsed.outputsCount ?? 0) > 0 &&
-    /hello world/i.test(parsed.decodedText ?? "");
-} catch {
-  observedExecutionOutput = false;
-}
-
-if (observedExecutionOutput) {
-  pass("Observed hello world in executed cell outputs");
-  // Keep recording briefly so the walkthrough artifact reliably includes
-  // the rendered output state before we stop the movie.
-  run("agent-browser wait 1200");
+if (setBottomPaneCollapsed(false)) {
+  run("agent-browser wait 600");
+  pass("Expanded bottom pane after execution");
 } else {
-  fail("Did not observe hello world in executed cell outputs");
+  fail("Could not expand bottom pane after execution");
 }
+
+let logsTabVisible = false;
+const tabAttemptStates: string[] = [];
+for (let attempt = 0; attempt < 8; attempt += 1) {
+  if (!clickLogsTab()) {
+    tabAttemptStates.push(`attempt=${attempt + 1} click=missing-tab-ref`);
+    break;
+  }
+  run("agent-browser wait 300");
+  const visibleStateRaw = run(
+    `agent-browser eval "(() => {
+      const logsTab = document.getElementById('bottom-pane-tab-logs');
+      const consoleTab = document.getElementById('bottom-pane-tab-console');
+      const logsContent = document.getElementById('bottom-pane-content-logs');
+      const pane = document.getElementById('bottom-pane');
+      if (!logsTab || !consoleTab || !logsContent || !pane) return 'missing';
+      const logsActive =
+        logsTab.getAttribute('data-state') === 'active' ||
+        logsTab.getAttribute('aria-selected') === 'true';
+      const consoleInactive =
+        consoleTab.getAttribute('data-state') === 'inactive' ||
+        consoleTab.getAttribute('aria-selected') === 'false';
+      const visible = window.getComputedStyle(logsContent).display !== 'none';
+      const paneExpanded = pane.getAttribute('data-collapsed') === 'false';
+      return logsActive && consoleInactive && visible && paneExpanded ? 'visible' : 'not-visible';
+    })()"`,
+  ).stdout;
+  const visibleState = parseStateToken(visibleStateRaw);
+  tabAttemptStates.push(
+    `attempt=${attempt + 1} state=${visibleState || "unknown"} raw=${JSON.stringify(visibleStateRaw.trim())}`,
+  );
+  if (visibleState === "missing") {
+    break;
+  }
+  if (visibleState === "visible") {
+    logsTabVisible = true;
+    break;
+  }
+}
+writeArtifact("scenario-no-runner-logs-08-tab-debug.txt", tabAttemptStates.join("\n"));
+
+if (logsTabVisible) {
+  pass("Opened Logs tab");
+  run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-no-runner-logs-07-logs-visible.png")}`);
+} else {
+  fail("Could not visibly activate Logs tab");
+}
+
+const logsText = run(
+  `agent-browser eval "(() => {
+    const content = document.getElementById('bottom-pane-content-logs');
+    if (!content) return '';
+    return content.innerText || content.textContent || '';
+  })()"`,
+).stdout;
+writeArtifact("scenario-no-runner-logs-06-logs-pane.txt", logsText);
+if (
+  logsText.includes(
+    "Runme backend server is not running. Please start it and try again.",
+  )
+) {
+  pass("Observed backend-unavailable error in Logs tab");
+} else {
+  fail("Logs tab did not show backend-unavailable execution error");
+}
+
+run("agent-browser wait 1500");
 
 run("agent-browser record stop");
 if (CUJ_ID_TOKEN) {
   run(`agent-browser eval "localStorage.removeItem('oidc-auth'); 'ok'"`);
 }
 run("agent-browser close");
+
 console.log(`Movie: ${MOVIE_PATH}`);
 console.log(`Assertions: ${totalCount}, Passed: ${passCount}, Failed: ${failCount}`);
 process.exit(failCount === 0 ? 0 : 1);

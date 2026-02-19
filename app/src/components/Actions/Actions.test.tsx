@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
-import { create } from "@bufbuild/protobuf";
+import { clone, create } from "@bufbuild/protobuf";
 import React from "react";
 
-import { parser_pb } from "../../runme/client";
+import { parser_pb, RunmeMetadataKey } from "../../runme/client";
 import type { CellData } from "../../lib/notebookData";
 import { Action } from "./Actions";
 
@@ -63,11 +63,10 @@ vi.mock("../../contexts/CellContext", () => ({}));
 // Minimal stub CellData to drive runID changes.
 class StubCellData {
   snapshot: parser_pb.Cell;
-  private runID = "run-0";
   private listeners = new Set<() => void>();
   getRunnerName = () => "<default>";
   update = vi.fn((nextCell: parser_pb.Cell) => {
-    this.snapshot = create(parser_pb.CellSchema, nextCell);
+    this.snapshot = clone(parser_pb.CellSchema, nextCell);
     this.listeners.forEach((listener) => listener());
   });
 
@@ -89,12 +88,19 @@ class StubCellData {
   }
 
   getRunID() {
-    return this.runID;
+    const runID = this.snapshot.metadata?.[RunmeMetadataKey.LastRunID];
+    return typeof runID === "string" ? runID : "";
   }
 
   setRunID(id: string) {
-    this.runID = id;
-    this.listeners.forEach((l) => l());
+    const next = clone(parser_pb.CellSchema, this.snapshot);
+    next.metadata = { ...(next.metadata ?? {}) };
+    if (id) {
+      next.metadata[RunmeMetadataKey.LastRunID] = id;
+    } else {
+      delete next.metadata[RunmeMetadataKey.LastRunID];
+    }
+    this.update(next);
   }
 
   getStreams() {
@@ -113,7 +119,9 @@ describe("Action component", () => {
       kind: parser_pb.CellKind.CODE,
       languageId: "bash",
       outputs: [],
-      metadata: {},
+      metadata: {
+        [RunmeMetadataKey.LastRunID]: "run-0",
+      },
       value: "echo hi",
     });
     const stub = new StubCellData(cell) as unknown as CellData;
@@ -140,7 +148,9 @@ describe("Action component", () => {
       kind: parser_pb.CellKind.CODE,
       languageId: "bash",
       outputs: [],
-      metadata: {},
+      metadata: {
+        [RunmeMetadataKey.LastRunID]: "run-0",
+      },
       value: "echo hi",
     });
     const stub = new StubCellData(cell) as unknown as CellData;

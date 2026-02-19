@@ -48,7 +48,10 @@ describe("parseDriveItem", () => {
     });
   });
 
-  it("throws when the id cannot be determined", () => {
-    expect(() => parseDriveItem("https://example.com/not-drive")).toThrow();
+  it("falls back to the last path segment for generic URLs", () => {
+    expect(parseDriveItem("https://example.com/not-drive")).toEqual({
+      id: "not-drive",
+      type: NotebookStoreItemType.File,
+    });
   });
 });
