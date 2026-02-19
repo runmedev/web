@@ -71,10 +71,6 @@ Run the backend-unavailable toast check (backend must be stopped, frontend runni
 cd app && bash test/browser/test-backend-toast.sh
 ```
 
-Developer docs index:
-
-- [`docs-dev/index.md`](docs-dev/index.md)
-
 ## Linting
 
 Lint all packages:
