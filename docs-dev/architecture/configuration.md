@@ -70,6 +70,7 @@ This module defines:
 
 - `RuntimeAppConfig` interface for the normalized config shape (concrete defaults, no optional fields).
 - `RuntimeAppConfigSchema.fromUnknown(...)` for normalizing untyped parsed YAML.
+- Agent config block for assistant/runner endpoints (with backward-compatible parsing of legacy top-level endpoint keys).
 - OIDC and Google Drive config blocks (including key normalization such as `clientID` and `discoveryURL`).
 - Empty-string sentinel for unset string values.
 - Drive base URL field; upload endpoint derivation and fallback behavior are handled by Drive client initialization code.

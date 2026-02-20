@@ -1,6 +1,6 @@
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 
-type PanelKey = "explorer" | "chatkit" | "settings" | null;
+type PanelKey = "explorer" | "chatkit" | null;
 
 interface SidePanelContextValue {
   activePanel: PanelKey;
@@ -22,7 +22,7 @@ export function SidePanelProvider({ children }: { children: ReactNode }) {
       const stored =
         localStorage.getItem(STORAGE_KEY) ??
         localStorage.getItem(LEGACY_STORAGE_KEY);
-      if (stored === "explorer" || stored === "chatkit" || stored === "settings") {
+      if (stored === "explorer" || stored === "chatkit") {
         return stored;
       }
     } catch (error) {
