@@ -30,6 +30,8 @@ export class AgentEndpointManager {
 
   private defaultEndpoint: string | null = null;
 
+  private snapshotCache: AgentEndpointSnapshot | null = null;
+
   static instance(): AgentEndpointManager {
     if (!this.singleton) {
       this.singleton = new AgentEndpointManager();
@@ -47,11 +49,26 @@ export class AgentEndpointManager {
   getSnapshot(): AgentEndpointSnapshot {
     this.ensureLoaded();
     const defaultEndpoint = this.getDefault();
-    return {
-      endpoint: this.overrideEndpoint ?? defaultEndpoint,
+    const endpoint = this.overrideEndpoint ?? defaultEndpoint;
+    const hasOverride = this.overrideEndpoint !== null;
+
+    const cached = this.snapshotCache;
+    if (
+      cached &&
+      cached.endpoint === endpoint &&
+      cached.defaultEndpoint === defaultEndpoint &&
+      cached.hasOverride === hasOverride
+    ) {
+      return cached;
+    }
+
+    const snapshot = {
+      endpoint,
       defaultEndpoint,
-      hasOverride: this.overrideEndpoint !== null,
+      hasOverride,
     };
+    this.snapshotCache = snapshot;
+    return snapshot;
   }
 
   get(): string {

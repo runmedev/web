@@ -312,32 +312,44 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
               const current = agentEndpoint.endpoint?.trim() || "<not set>";
               const defaultEndpoint =
                 agentEndpoint.defaultEndpoint?.trim() || "<not set>";
-              return `Agent endpoint: ${current}\nDefault agent endpoint: ${defaultEndpoint}`;
+              const message = `Agent endpoint: ${current}\nDefault agent endpoint: ${defaultEndpoint}`;
+              sendStdout(`${message}\r\n`);
+              return message;
             },
             update: (endpoint: string) => {
               const trimmed = endpoint?.trim();
               if (!trimmed) {
-                return "Usage: agent.update(endpoint)";
+                const message = "Usage: agent.update(endpoint)";
+                sendStdout(`${message}\r\n`);
+                return message;
               }
               agentEndpointManager.set(trimmed);
               aisreClientManager.setDefault({ baseUrl: trimmed });
-              return `Agent endpoint set to ${trimmed}`;
+              const message = `Agent endpoint set to ${trimmed}`;
+              sendStdout(`${message}\r\n`);
+              return message;
             },
             setDefault: () => {
               const defaultEndpoint = agentEndpointManager.reset();
               if (!defaultEndpoint) {
-                return "Default agent endpoint is not configured.";
+                const message = "Default agent endpoint is not configured.";
+                sendStdout(`${message}\r\n`);
+                return message;
               }
               aisreClientManager.setDefault({ baseUrl: defaultEndpoint });
-              return `Agent endpoint reset to default (${defaultEndpoint})`;
+              const message = `Agent endpoint reset to default (${defaultEndpoint})`;
+              sendStdout(`${message}\r\n`);
+              return message;
             },
             help: () => {
-              return [
+              const message = [
                 "agent.get()                 - Show current and default agent endpoint",
                 "agent.update(endpoint)      - Set the active agent endpoint",
                 "agent.setDefault()          - Reset agent endpoint to app default",
                 "agent.help()                - Show this help",
               ].join("\n");
+              sendStdout(`${message}\r\n`);
+              return message;
             },
           },
           googleClientManager: {
