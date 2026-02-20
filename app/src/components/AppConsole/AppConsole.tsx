@@ -27,6 +27,11 @@ import type { OidcConfig } from "../../auth/oidcConfig";
 import { getAuthData } from "../../token";
 import { jwtDecode } from "jwt-decode";
 import { getDefaultAppConfigUrl, setAppConfig } from "../../lib/appConfig";
+import {
+  agentEndpointManager,
+  useAgentEndpointSnapshot,
+} from "../../lib/agentEndpointManager";
+import { aisreClientManager } from "../../lib/aisreClientManager";
 
 const PROMPT = "> ";
 const ERASE_TO_END = "\u001b[K";
@@ -74,6 +79,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
   );
   const { listRunners, updateRunner, deleteRunner, defaultRunnerName, setDefaultRunner } =
     useRunners();
+  const agentEndpoint = useAgentEndpointSnapshot();
   // WorkspaceContext provides the persisted list of workspace URIs so we can
   // mount/unmount folders from the App Console without drilling props.
   const { getItems, addItem, removeItem } = useWorkspace();
@@ -301,6 +307,39 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
               return `Default runner set to ${name}`;
             },
           },
+          agent: {
+            get: () => {
+              const current = agentEndpoint.endpoint?.trim() || "<not set>";
+              const defaultEndpoint =
+                agentEndpoint.defaultEndpoint?.trim() || "<not set>";
+              return `Agent endpoint: ${current}\nDefault agent endpoint: ${defaultEndpoint}`;
+            },
+            update: (endpoint: string) => {
+              const trimmed = endpoint?.trim();
+              if (!trimmed) {
+                return "Usage: agent.update(endpoint)";
+              }
+              agentEndpointManager.set(trimmed);
+              aisreClientManager.setDefault({ baseUrl: trimmed });
+              return `Agent endpoint set to ${trimmed}`;
+            },
+            setDefault: () => {
+              const defaultEndpoint = agentEndpointManager.reset();
+              if (!defaultEndpoint) {
+                return "Default agent endpoint is not configured.";
+              }
+              aisreClientManager.setDefault({ baseUrl: defaultEndpoint });
+              return `Agent endpoint reset to default (${defaultEndpoint})`;
+            },
+            help: () => {
+              return [
+                "agent.get()                 - Show current and default agent endpoint",
+                "agent.update(endpoint)      - Set the active agent endpoint",
+                "agent.setDefault()          - Reset agent endpoint to app default",
+                "agent.help()                - Show this help",
+              ].join("\n");
+            },
+          },
           googleClientManager: {
             get: () => googleClientManager.getOAuthClient(),
             setClientId: (clientId: string) =>
@@ -389,6 +428,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
               "  runme           - Notebook helpers (run all, clear outputs)",
               "  explorer        - Manage workspace folders and notebooks",
               "  runmeRunners    - Configure runner endpoints",
+              "  agent           - Configure assistant/API agent endpoint",
               "  oidc            - OIDC/OAuth configuration and auth status",
               "  googleClientManager - Google OAuth client settings",
               "  app             - App-level configuration helpers",
@@ -457,6 +497,8 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       }),
     [
       addItem,
+      agentEndpoint.defaultEndpoint,
+      agentEndpoint.endpoint,
       defaultRunnerName,
       deleteRunner,
       getCurrentDoc,

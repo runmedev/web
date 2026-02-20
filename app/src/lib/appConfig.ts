@@ -7,6 +7,7 @@ import {
   GOOGLE_CLIENT_STORAGE_KEY,
   googleClientManager,
 } from "./googleClientManager";
+import { agentEndpointManager } from "./agentEndpointManager";
 import { appLogger } from "./logging/runtime";
 
 type StoredRunner = {
@@ -71,10 +72,6 @@ function normalizeString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function removeTrailingSlashes(value: string): string {
-  return value.replace(/\/+$/, "");
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -132,14 +129,6 @@ function writeSettingsToStorage(
   settings: Record<string, unknown>,
 ): void {
   storage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-}
-
-function resolveAgentEndpointFallback(): string {
-  if (typeof window === "undefined") {
-    return "";
-  }
-  const origin = window.location?.origin?.trim() ?? "";
-  return origin ? removeTrailingSlashes(origin) : "";
 }
 
 export function resolveDefaultRunnerEndpointFallback(): string {
@@ -235,11 +224,7 @@ function seedDefaultRunner(storage: Storage, endpoint: string): void {
 }
 
 export function getConfiguredAgentEndpoint(): string {
-  if (typeof window === "undefined" || !window.localStorage) {
-    return resolveAgentEndpointFallback();
-  }
-  const settings = readSettingsFromStorage(window.localStorage);
-  return normalizeString(settings.agentEndpoint) ?? resolveAgentEndpointFallback();
+  return agentEndpointManager.get();
 }
 
 export function getConfiguredDefaultRunnerEndpoint(): string {
@@ -441,24 +426,15 @@ export function applyAppConfig(
     const storage = window.localStorage;
     const settings = readSettingsFromStorage(storage);
     const settingsWebApp = asRecord(settings.webApp);
-    const storedAgentEndpoint = normalizeString(settings.agentEndpoint);
     const configAgentEndpoint = normalizeString(parsed.agent.endpoint);
-
-    const resolvedAgentEndpoint =
-      storedAgentEndpoint ??
-      configAgentEndpoint ??
-      resolveAgentEndpointFallback();
-
-    if (!storedAgentEndpoint && resolvedAgentEndpoint) {
-      settings.agentEndpoint = resolvedAgentEndpoint;
-      writeSettingsToStorage(storage, settings);
-      if (!configAgentEndpoint) {
-        warnings.push(
-          "App config missing agentEndpoint; defaulting to window.location.origin",
-        );
-      }
+    const hadAgentOverride = agentEndpointManager.hasOverride();
+    agentEndpointManager.setDefaultEndpoint(configAgentEndpoint);
+    if (!configAgentEndpoint && !hadAgentOverride) {
+      warnings.push(
+        "App config missing agent.endpoint; defaulting to window.location.origin",
+      );
     }
-    agentEndpoint = resolvedAgentEndpoint;
+    agentEndpoint = agentEndpointManager.get();
 
     const configRunnerEndpoint = normalizeString(
       parsed.agent.defaultRunnerEndpoint,
@@ -512,7 +488,7 @@ export async function maybeSetAppConfig(): Promise<AppliedAppConfig | null> {
   const hasOidcConfig = Boolean(storage.getItem(OIDC_STORAGE_KEY));
   const hasDriveConfig = Boolean(storage.getItem(GOOGLE_CLIENT_STORAGE_KEY));
   const settings = readSettingsFromStorage(storage);
-  const hasAgentEndpoint = Boolean(normalizeString(settings.agentEndpoint));
+  const hasAgentEndpoint = agentEndpointManager.hasOverride();
   const hasRunnerEndpoint = hasConfiguredRunners(storage);
 
   if (hasOidcConfig && hasDriveConfig && hasAgentEndpoint && hasRunnerEndpoint) {
@@ -576,20 +552,6 @@ export async function maybeSetAppConfig(): Promise<AppliedAppConfig | null> {
     });
     return applied;
   } catch (error) {
-    if (!hasAgentEndpoint) {
-      const fallbackAgentEndpoint = resolveAgentEndpointFallback();
-      if (fallbackAgentEndpoint) {
-        settings.agentEndpoint = fallbackAgentEndpoint;
-        writeSettingsToStorage(storage, settings);
-        appLogger.info("Seeded fallback agent endpoint from window.location.origin.", {
-          attrs: {
-            scope: "config.app",
-            code: "APP_CONFIG_AGENT_FALLBACK_SEEDED",
-            agentEndpoint: fallbackAgentEndpoint,
-          },
-        });
-      }
-    }
     appLogger.warn("Skipping app config preload", {
       attrs: {
         scope: "config.app",
