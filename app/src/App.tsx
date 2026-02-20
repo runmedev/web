@@ -54,6 +54,10 @@ import { SidePanelProvider } from "./contexts/SidePanelContext";
 import { appState } from "./lib/runtime/AppState";
 import GlobalToast from "./components/Toast";
 import { appLogger } from "./lib/logging/runtime";
+import {
+  getConfiguredAgentEndpoint,
+  getConfiguredDefaultRunnerEndpoint,
+} from "./lib/appConfig";
 
 const queryClient = new QueryClient();
 
@@ -66,15 +70,6 @@ export interface AppBranding {
 
 export interface AppProps {
   branding?: AppBranding;
-  initialState?: {
-    agentEndpoint?: string;
-    requireAuth?: boolean;
-    webApp?: WebAppConfig;
-    google?: {
-      oauthClientId?: string;
-      oauthClientSecret?: string;
-    };
-  };
 }
 
 function AppRouter() {
@@ -93,15 +88,16 @@ function AppRouter() {
   );
 }
 
-function App({ branding, initialState = {} }: AppProps) {
+function App({ branding }: AppProps) {
   const appBranding = {
     name: branding?.name ?? "runme notebook",
     logo: branding?.logo ?? runmeIcon,
   };
   const makeInterceptors = useCallback(makeAuthInterceptor, []);
-  const initialRunnerEndpoint =
-    initialState?.webApp?.runner ?? import.meta.env.VITE_DEFAULT_RUNNER_ENDPOINT;
-  const initialRunnerReconnect = initialState?.webApp?.reconnect ?? true;
+  const configuredRunnerEndpoint = getConfiguredDefaultRunnerEndpoint();
+  const initialRunnerEndpoint = configuredRunnerEndpoint;
+  const initialRunnerReconnect = true;
+  const configuredAgentEndpoint = getConfiguredAgentEndpoint();
   const initialRunnerList = useMemo(
     () => [
       new Runner({
@@ -149,27 +145,16 @@ function App({ branding, initialState = {} }: AppProps) {
               <ContentsStoreProvider>
               <CurrentDocProvider>
                   <NotebookStoreInitializer
-                    agentEndpoint={
-                      initialState?.agentEndpoint ??
-                      import.meta.env.VITE_DEFAULT_AGENT_ENDPOINT
-                    }
+                    agentEndpoint={configuredAgentEndpoint}
                   />
                   <SettingsProvider
-                    requireAuth={initialState?.requireAuth}
-                    agentEndpoint={
-                      initialState?.agentEndpoint ??
-                      import.meta.env.VITE_DEFAULT_AGENT_ENDPOINT
-                    }
+                    agentEndpoint={configuredAgentEndpoint}
                     webApp={
-                      initialState?.webApp ??
-                      ({
-                        runner: import.meta.env.VITE_DEFAULT_RUNNER_ENDPOINT,
-                      } as WebAppConfig)
+                      {
+                        runner: configuredRunnerEndpoint,
+                      } as WebAppConfig
                     }
-                    createAuthInterceptors={useCallback(
-                      makeAuthInterceptor,
-                      [],
-                    )}
+                    createAuthInterceptors={makeInterceptors}
                   >
                     <RunnersProvider
                       initialRunners={initialRunnerList}

@@ -22,18 +22,11 @@ export class GoogleClientManager {
   private config: GoogleClientConfig;
 
   private constructor() {
-    const defaultClientId ="";
+    const defaultClientId = "";
     const storedClientId = this.readOAuthClientIdFromStorage();
-    const injectedClientId =
-      storedClientId ? null : this.readOAuthClientIdFromInitialState();
     const storedClientSecret = this.readOAuthClientSecretFromStorage();
-    const injectedClientSecret = storedClientSecret
-      ? null
-      : this.readOAuthClientSecretFromInitialState();
-    const resolvedClientId =
-      storedClientId ?? injectedClientId ?? defaultClientId;
-    const resolvedClientSecret =
-      storedClientSecret ?? injectedClientSecret ?? undefined;
+    const resolvedClientId = storedClientId ?? defaultClientId;
+    const resolvedClientSecret = storedClientSecret ?? undefined;
     this.config = {
       oauth: { clientId: resolvedClientId, clientSecret: resolvedClientSecret },
       drivePicker: {
@@ -147,28 +140,6 @@ export class GoogleClientManager {
       console.warn("Failed to read Google OAuth client config", error);
       return null;
     }
-  }
-
-  private readOAuthClientIdFromInitialState(): string | null {
-    if (typeof window === "undefined") {
-      return null;
-    }
-    const state = window.__INITIAL_STATE__ as
-      | { google?: { oauthClientId?: string; oauthClientSecret?: string } }
-      | undefined;
-    const clientId = state?.google?.oauthClientId?.trim();
-    return clientId && clientId.length > 0 ? clientId : null;
-  }
-
-  private readOAuthClientSecretFromInitialState(): string | null {
-    if (typeof window === "undefined") {
-      return null;
-    }
-    const state = window.__INITIAL_STATE__ as
-      | { google?: { oauthClientId?: string; oauthClientSecret?: string } }
-      | undefined;
-    const clientSecret = state?.google?.oauthClientSecret?.trim();
-    return clientSecret && clientSecret.length > 0 ? clientSecret : null;
   }
 
   private persistOAuthClient(config: GoogleOAuthClientConfig): void {

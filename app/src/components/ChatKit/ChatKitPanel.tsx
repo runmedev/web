@@ -3,7 +3,6 @@ import { ChatKit, useChatKit, ChatKitIcon } from "@openai/chatkit-react";
 import { parser_pb, useCell } from "../../contexts/CellContext";
 import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useOutput } from "../../contexts/OutputContext";
-import { useSettings } from "../../contexts/SettingsContext";
 import { useCurrentDoc } from "../../contexts/CurrentDocContext";
 import { create, fromJsonString, toJson } from "@bufbuild/protobuf";
 
@@ -19,6 +18,7 @@ import {
   ListCellsResponseSchema,
   ChatkitStateSchema,
 } from "../../protogen/oaiproto/aisre/notebooks_pb.js";
+import { useAgentEndpointSnapshot } from "../../lib/agentEndpointManager";
 
 class UserNotLoggedInError extends Error {
   constructor(message = "You must log in to use runme chat.") {
@@ -227,7 +227,7 @@ const useAuthorizedFetch = (
 
 function ChatKitPanel() {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
-  const { settings } = useSettings();
+  const agentEndpoint = useAgentEndpointSnapshot();
   const { getChatkitState, setChatkitState } = useCell();
   const { getNotebookData, useNotebookSnapshot } = useNotebookContext();
   const { getCurrentDoc } = useCurrentDoc();
@@ -316,7 +316,7 @@ function ChatKitPanel() {
   });
 
   const chatkitApiUrl = useMemo(() => {
-    const base = settings.agentEndpoint ?? "";
+    const base = agentEndpoint.endpoint ?? "";
     try {
       const url = new URL(base);
       url.pathname = "/chatkit";
@@ -326,7 +326,7 @@ function ChatKitPanel() {
     } catch {
       return `${base.replace(/\/$/, "")}/chatkit`;
     }
-  }, [settings.agentEndpoint]);
+  }, [agentEndpoint.endpoint]);
   const chatkit = useChatKit({
     api: {
       url: chatkitApiUrl,

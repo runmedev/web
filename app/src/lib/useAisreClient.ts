@@ -1,11 +1,11 @@
 import { getAuthData } from "../token.js";
-import { useSettings } from "../contexts/SettingsContext";
 import {
   DEFAULT_RUNME_SERVER_BASE_URL,
   createAisreClient,
   type AisreClientOptions,
 } from "./aisreClient.js";
 import { useMemo } from "react";
+import { useAgentEndpointSnapshot } from "./agentEndpointManager";
 
 // TODO(jlewi): I think this is using ReactContexts to manage and keep track of AisreClients.
 // I'm not sure I like that pattern because it starts injecting react constructs into libraries
@@ -14,18 +14,18 @@ import { useMemo } from "react";
 // settings changes by higher level code in the React app.
 
 export function useBaseUrl() {
-  const { settings } = useSettings();
+  const agentEndpoint = useAgentEndpointSnapshot();
   return useMemo(
-    () => normalizeBaseUrl(settings.agentEndpoint),
-    [settings.agentEndpoint],
+    () => normalizeBaseUrl(agentEndpoint.endpoint),
+    [agentEndpoint.endpoint],
   );
 }
 
 export function useAisreClient(options?: Pick<AisreClientOptions, "baseUrl">) {
-  const { settings } = useSettings();
+  const agentEndpoint = useAgentEndpointSnapshot();
   const baseUrl = useMemo(
-    () => normalizeBaseUrl(settings.agentEndpoint),
-    [settings.agentEndpoint],
+    () => normalizeBaseUrl(agentEndpoint.endpoint),
+    [agentEndpoint.endpoint],
   );
 
   const client = useMemo(() => createClient({ baseUrl }), [baseUrl]);

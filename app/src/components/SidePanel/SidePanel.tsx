@@ -2,14 +2,12 @@ import {
   FolderIcon,
   ChatBubbleLeftRightIcon,
   UserCircleIcon,
-  Cog6ToothIcon,
 } from "@heroicons/react/24/outline";
 
 import ChatKitPanel from "../ChatKit/ChatKitPanel";
 import WorkspaceExplorer from "../Workspace/WorkspaceExplorer";
 import { getBrowserAdapter, useBrowserAuthData } from "../../browserAdapter.client";
 import { useSidePanel } from "../../contexts/SidePanelContext";
-import Settings from "../Settings/Settings";
 
 const sideButtonBase = "group side-btn";
 
@@ -66,18 +64,6 @@ export function SidePanelToolbar() {
           <UserCircleIcon className="h-5 w-5" />
           <span className={tooltipBase}>{authData ? "Logout" : "Login"}</span>
         </button>
-        <button
-          type="button"
-          className={`${sideButtonBase} ${
-            activePanel === "settings" ? sideButtonActive : sideButtonInactive
-          }`}
-          aria-pressed={activePanel === "settings"}
-          aria-label="Toggle settings panel"
-          onClick={() => togglePanel("settings")}
-        >
-          <Cog6ToothIcon className="h-5 w-5" />
-          <span className={tooltipBase}>Settings</span>
-        </button>
       </div>
     </div>
   );
@@ -101,13 +87,6 @@ export function SidePanelContent() {
     return (
       <div className="flex h-full min-h-0 w-full overflow-hidden">
         <ChatKitPanel />
-      </div>
-    );
-  }
-  if (activePanel === "settings") {
-    return (
-      <div className="flex h-full min-h-0 w-full">
-        <Settings />
       </div>
     );
   }
