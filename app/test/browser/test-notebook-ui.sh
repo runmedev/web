@@ -305,6 +305,27 @@ fi
 screenshot "07-notebook-rendered"
 
 # ============================================================
+# Phase 8: Verify exec-state and bracket UI elements
+# ============================================================
+log ""
+log "=== Phase 8: Cell execution state UI ==="
+
+# Check that cell-card elements have the data-exec-state attribute
+page_html=$(agent-browser eval "document.documentElement.outerHTML" 2>/dev/null || true)
+if echo "$page_html" | grep -q 'data-exec-state'; then
+    pass "Cell card has data-exec-state attribute"
+else
+    fail "Cell card missing data-exec-state attribute"
+fi
+
+# Check that the bracket label element exists in the toolbar
+if echo "$page_html" | grep -q 'data-testid="cell-bracket"'; then
+    pass "Cell bracket label rendered in toolbar"
+else
+    fail "Cell bracket label NOT found in toolbar"
+fi
+
+# ============================================================
 # Cleanup and Summary
 # ============================================================
 

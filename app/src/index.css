@@ -146,8 +146,23 @@
      while the output section manages its own overflow to keep scrollbars visible. */
   .cell-card {
     @apply rounded-nb-md border border-nb-border-strong bg-white shadow-paper;
+    @apply border-l-[3px] border-l-transparent;
     @apply transition-shadow duration-200;
     @apply focus-within:ring-1 focus-within:ring-nb-accent focus-within:ring-offset-1;
+  }
+
+  .cell-card[data-exec-state="pending"],
+  .cell-card[data-exec-state="running"] {
+    @apply border-l-amber-400;
+    animation: pulse-border 1.5s ease-in-out infinite;
+  }
+
+  .cell-card[data-exec-state="success"] {
+    @apply border-l-green-400;
+  }
+
+  .cell-card[data-exec-state="error"] {
+    @apply border-l-red-400;
   }
 
   /* Thin toolbar row inside a cell card (between editor and output) */
@@ -214,7 +229,15 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   6. Vendor overrides
+   6. Animations
+   ═══════════════════════════════════════════════════════════════════ */
+@keyframes pulse-border {
+  0%, 100% { border-left-color: #fbbf24; }
+  50% { border-left-color: transparent; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   7. Vendor overrides
    ═══════════════════════════════════════════════════════════════════ */
 
 /* Monaco dark-theme: dark gutter with subtle right divider */
