@@ -1,6 +1,10 @@
 import { clone, create } from "@bufbuild/protobuf";
 
-import { parser_pb, RunmeMetadataKey, MimeType } from "../contexts/CellContext";
+import {
+  parser_pb,
+  RunmeMetadataKey,
+  MimeType,
+} from "../contexts/CellContext";
 
 /**
  * Minimal store interface used by NotebookData for auto-saving.
@@ -18,6 +22,9 @@ import {
   DEFAULT_RUNNER_PLACEHOLDER,
   getRunnersManager,
 } from "./runtime/runnersManager";
+import { createRunmeConsoleApi } from "./runtime/runmeConsole";
+import { JSKernel } from "./runtime/jsKernel";
+import { isAppKernelRunnerName } from "./runtime/appKernel";
 import {
   Streams,
   Heartbeat,
@@ -34,6 +41,37 @@ export type NotebookSnapshot = {
   readonly notebook: parser_pb.Notebook;
   readonly loaded: boolean;
 };
+
+const localTextEncoder = new TextEncoder();
+
+function encodeCellOutputBytes(text: string): Uint8Array {
+  const encoded = localTextEncoder.encode(text);
+  return encoded instanceof Uint8Array
+    ? encoded
+    : Uint8Array.from(encoded as ArrayLike<number>);
+}
+
+function createStdTextOutputs(
+  stdout: string,
+  stderr: string,
+): parser_pb.CellOutput[] {
+  return [
+    create(parser_pb.CellOutputSchema, {
+      items: [
+        create(parser_pb.CellOutputItemSchema, {
+          mime: MimeType.VSCodeNotebookStdOut,
+          type: "Buffer",
+          data: encodeCellOutputBytes(stdout),
+        }),
+        create(parser_pb.CellOutputItemSchema, {
+          mime: MimeType.VSCodeNotebookStdErr,
+          type: "Buffer",
+          data: encodeCellOutputBytes(stderr),
+        }),
+      ],
+    }),
+  ];
+}
 
 type Listener = () => void;
 
@@ -534,8 +572,11 @@ export class NotebookData {
       return "";
     }
 
-    const runner = this.getRunner(cell);
-    if (!runner || !runner.endpoint) {
+    const requestedRunnerName =
+      (cell.metadata?.[RunmeMetadataKey.RunnerName] as string | undefined) ?? "";
+    const useAppKernel = isAppKernelRunnerName(requestedRunnerName);
+    const runner = useAppKernel ? undefined : this.getRunner(cell);
+    if (!useAppKernel && (!runner || !runner.endpoint)) {
       console.error("No runner available for cell", cell.refId);
       showToast({
         message: "Runme backend server is not running. Please start it and try again.",
@@ -565,11 +606,16 @@ export class NotebookData {
     cell.metadata[RunmeMetadataKey.LastRunID] = runID;
     this.updateCell(cell);
 
+    if (useAppKernel) {
+      this.runCodeCellLocallyWithAppKernel(cell, runID);
+      return runID;
+    }
+
     const streams = this.createAndBindStreams({
       cell,
       runID,
       sequence: this.sequence,
-      runner,
+      runner: runner!,
     });
     if (!streams) {
       return "";
@@ -698,6 +744,78 @@ export class NotebookData {
       kind: parser_pb.CellKind.MARKUP,
       value: "",
     });
+  }
+
+  private runCodeCellLocallyWithAppKernel(
+    cell: parser_pb.Cell,
+    runID: string,
+  ): void {
+    const refId = cell.refId;
+    const languageId = (cell.languageId ?? "").trim().toLowerCase();
+    const source = cell.value ?? "";
+
+    let stdout = "";
+    let stderr = "";
+    let finalExitCode = 0;
+
+    const kernel = new JSKernel({
+      globals: {
+        runme: createRunmeConsoleApi({
+          resolveNotebook: () => this,
+        }),
+      },
+      hooks: {
+        onStdout: (data) => {
+          stdout += data;
+        },
+        onStderr: (data) => {
+          stderr += data;
+        },
+        onExit: (code) => {
+          finalExitCode = code;
+        },
+      },
+    });
+
+    const runPromise =
+      languageId === "javascript"
+        ? kernel.run(source)
+        : Promise.resolve().then(() => {
+            stderr += "AppKernel only supports javascript cells in v0.\n";
+            finalExitCode = 1;
+          });
+
+    void runPromise
+      .catch((error) => {
+        finalExitCode = 1;
+        stderr += `${String(error)}\n`;
+      })
+      .finally(() => {
+        const updated = this.getCellProto(refId);
+        if (!updated) {
+          return;
+        }
+        const currentRunID =
+          typeof updated.metadata?.[RunmeMetadataKey.LastRunID] === "string"
+            ? updated.metadata[RunmeMetadataKey.LastRunID]
+            : "";
+        if (currentRunID !== runID) {
+          return;
+        }
+
+        updated.metadata ??= {};
+        updated.metadata[RunmeMetadataKey.ExitCode] = `${finalExitCode}`;
+        delete updated.metadata[RunmeMetadataKey.Pid];
+
+        const preservedTerminalOutputs = (updated.outputs ?? []).filter((o) =>
+          o.items.some((oi) => oi.mime === MimeType.StatefulRunmeTerminal)
+        );
+        updated.outputs = [
+          ...preservedTerminalOutputs,
+          ...createStdTextOutputs(stdout, stderr),
+        ];
+        this.updateCell(updated);
+      });
   }
 
   private getRunner(cell: parser_pb.Cell): Runner | undefined {

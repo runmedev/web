@@ -35,6 +35,10 @@ import {
 import { useCurrentDoc } from "../../contexts/CurrentDocContext";
 import { useRunners } from "../../contexts/RunnersContext";
 import { DEFAULT_RUNNER_PLACEHOLDER } from "../../lib/runtime/runnersManager";
+import {
+  APPKERNEL_RUNNER_LABEL,
+  APPKERNEL_RUNNER_NAME,
+} from "../../lib/runtime/appKernel";
 import React from "react";
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
@@ -680,7 +684,11 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
                 onChange={(event) => {
                   const nextName = event.target.value;
                   const names = new Set(listRunners().map((r) => r.name));
-                  if (!names.has(nextName) && nextName !== DEFAULT_RUNNER_PLACEHOLDER) {
+                  if (
+                    !names.has(nextName) &&
+                    nextName !== DEFAULT_RUNNER_PLACEHOLDER &&
+                    nextName !== APPKERNEL_RUNNER_NAME
+                  ) {
                     return;
                   }
                   cellData.setRunner(nextName);
@@ -689,6 +697,9 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
               >
                 <option value="<default>">
                   {defaultRunnerName ? `${defaultRunnerName}` : "default"}
+                </option>
+                <option value={APPKERNEL_RUNNER_NAME}>
+                  {APPKERNEL_RUNNER_LABEL}
                 </option>
                 {listRunners().map((runner) => (
                   <option key={runner.name} value={runner.name}>

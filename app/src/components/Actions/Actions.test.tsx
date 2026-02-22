@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { clone, create } from "@bufbuild/protobuf";
 import React from "react";
+import { APPKERNEL_RUNNER_NAME, APPKERNEL_RUNNER_LABEL } from "../../lib/runtime/appKernel";
 
 import { parser_pb, RunmeMetadataKey } from "../../runme/client";
 import type { CellData } from "../../lib/notebookData";
@@ -214,5 +215,29 @@ describe("Action component", () => {
     const updatedCell = stub.update.mock.calls[0][0] as parser_pb.Cell;
     expect(updatedCell.kind).toBe(parser_pb.CellKind.MARKUP);
     expect(updatedCell.languageId).toBe("markdown");
+  });
+
+  it("includes AppKernel in the runner selector", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-runner-select",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {},
+      value: 'console.log("hi")',
+    });
+    const stub = new StubCellData(cell);
+
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
+
+    const runnerSelect = document.getElementById("runner-select-cell-runner-select") as
+      | HTMLSelectElement
+      | null;
+    expect(runnerSelect).toBeTruthy();
+
+    const appKernelOption = Array.from(runnerSelect!.options).find(
+      (option) => option.value === APPKERNEL_RUNNER_NAME,
+    );
+    expect(appKernelOption?.textContent).toBe(APPKERNEL_RUNNER_LABEL);
   });
 });
