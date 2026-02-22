@@ -22,7 +22,6 @@ import { CellData } from "../../lib/notebookData";
 import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useOutput } from "../../contexts/OutputContext";
 import CellConsole, { fontSettings } from "./CellConsole";
-import WebContainerConsole from "./WebContainer";
 import Editor from "./Editor";
 import MarkdownCell from "./MarkdownCell";
 import { IOPUB_INCOMPLETE_METADATA_KEY } from "../../lib/ipykernel";
@@ -106,15 +105,13 @@ const LANGUAGE_OPTIONS = [
   { label: "Bash", value: "bash" },
   { label: "Python", value: "python" },
   { label: "JS", value: "javascript" },
-  { label: "AppConsole", value: "appconsole" },
 ] as const;
 
 type SupportedLanguage =
   | "bash"
   | "javascript"
   | "markdown"
-  | "python"
-  | "appconsole";
+  | "python";
 
 const outputTextDecoder = new TextDecoder();
 const OUTPUT_SKIP_MIMES = new Set<string>([
@@ -135,9 +132,6 @@ function normalizeLanguageId(
       }
       if (normalized === "python" || normalized === "py") {
         return "python";
-      }
-      if (normalized === "appconsole") {
-        return "appconsole";
       }
       if (
         normalized === "javascript" ||
@@ -408,7 +402,6 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     switch (selectedLanguage) {
       case "markdown":
         return "markdown";
-      case "appconsole":
       case "javascript":
         return "javascript";
       case "python":
@@ -434,26 +427,6 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
 
   const renderedOutputs = useMemo(() => {
     const languageId = cell?.languageId?.toLowerCase();
-    const isObservable = languageId === "observable" || languageId === "d3";
-    const isJavaScript =
-      languageId === "javascript" ||
-      languageId === "typescript" ||
-      languageId === "js" ||
-      languageId === "ts" ||
-      languageId === "appconsole";
-    const isPython = languageId === "python" || languageId === "py";
-
-    if (!isPython && (isObservable || isJavaScript)) {
-      return (
-        <WebContainerConsole
-          key={`webcontainer-${cell.refId}`}
-          cell={cell}
-          onPid={setPid}
-          onExitCode={handleExitCode}
-        />
-      );
-    }
-
     // For non-JS/Observable cells, prefer renderer-backed outputs. If none
     // exist (fresh cell), fall back to the terminal console so the user sees
     // an output area immediately.
@@ -524,9 +497,6 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
       } else if (nextValue === "javascript") {
         updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "javascript";
-      } else if (nextValue === "appconsole") {
-        updatedCell.kind = parser_pb.CellKind.CODE;
-        updatedCell.languageId = "appconsole";
       } else if (nextValue === "python") {
         updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "python";
@@ -956,27 +926,6 @@ export default function Actions() {
         onPid: (pid: number | null) => void;
         onExitCode: (exitCode: number | null) => void;
       }) => {
-        const languageId = cell.languageId?.toLowerCase();
-        const isJavaScript =
-          languageId === "javascript" ||
-          languageId === "typescript" ||
-          languageId === "js" ||
-          languageId === "ts" ||
-          languageId === "appconsole";
-        const isObservable = languageId === "observable" || languageId === "d3";
-        const isPython = languageId === "python" || languageId === "py";
-
-        if (!isPython && (isObservable || isJavaScript)) {
-          return (
-            <WebContainerConsole
-              key={`webcontainer-${cell.refId}`}
-              cell={cell}
-              onPid={onPid}
-              onExitCode={onExitCode}
-            />
-          );
-        }
-
         return (
           // TODO(jlewi): Why do we pass cell which is parser_pb.Cell? Rather than CellData?
           <CellConsole
