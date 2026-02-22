@@ -118,11 +118,7 @@ type SupportedLanguage =
   | "python";
 
 const outputTextDecoder = new TextDecoder();
-const OUTPUT_SKIP_MIMES = new Set<string>([
-  MimeType.StatefulRunmeTerminal,
-  MimeType.VSCodeNotebookStdOut,
-  MimeType.VSCodeNotebookStdErr,
-]);
+const ALWAYS_SKIP_MIMES = new Set<string>([MimeType.StatefulRunmeTerminal]);
 
 function normalizeLanguageId(
   kind: parser_pb.CellKind,
@@ -244,10 +240,24 @@ function ActionOutputItemView({
 }
 
 function ActionOutputItems({ outputs }: { outputs: parser_pb.CellOutput[] }) {
+  const hasTerminalOutput = outputs.some((output) =>
+    (output.items ?? []).some((item) => item?.mime === MimeType.StatefulRunmeTerminal),
+  );
+
   const displayableItems = outputs.flatMap((output, outputIndex) =>
     (output.items ?? [])
       .map((item, itemIndex) => {
-        if (!item || OUTPUT_SKIP_MIMES.has(item.mime || "")) {
+        if (!item) {
+          return null;
+        }
+        const mime = item.mime || "";
+        if (ALWAYS_SKIP_MIMES.has(mime)) {
+          return null;
+        }
+        if (
+          hasTerminalOutput &&
+          (mime === MimeType.VSCodeNotebookStdOut || mime === MimeType.VSCodeNotebookStdErr)
+        ) {
           return null;
         }
         if (!(item.data instanceof Uint8Array)) {

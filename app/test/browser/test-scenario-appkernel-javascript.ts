@@ -179,11 +179,87 @@ function clickRun(cellRefId: string): boolean {
   return result.includes("ok");
 }
 
+function scrollCellIntoView(cellRefId: string): void {
+  run(
+    `agent-browser eval "(async () => {
+      const el = document.getElementById('cell-output-${cellRefId}') ?? document.getElementById('code-action-${cellRefId}');
+      if (!el) return 'missing';
+      el.scrollIntoView({ block: 'center' });
+      return 'ok';
+    })()"`,
+  );
+}
+
+function getRenderedCellOutputText(cellRefId: string): string {
+  const raw = run(
+    `agent-browser eval "(async () => {
+      const el = document.getElementById('cell-output-${cellRefId}');
+      if (!el) return '';
+      const domText = el.innerText || el.textContent || '';
+      if (domText && domText.trim().length > 0) {
+        return domText;
+      }
+      const consoleEl = el.querySelector('console-view');
+      const terminal = consoleEl && 'terminal' in consoleEl ? consoleEl.terminal : null;
+      const active = terminal?.buffer?.active;
+      if (!active) {
+        return '';
+      }
+      const lines = [];
+      for (let i = 0; i < active.length; i += 1) {
+        const line = active.getLine(i);
+        if (!line) continue;
+        const text = line.translateToString(true);
+        if (text && text.trim().length > 0) {
+          lines.push(text);
+        }
+      }
+      return lines.join('\\n');
+    })()"`,
+  ).stdout;
+  return parseAgentEvalString(raw);
+}
+
+function waitForRenderedCellOutput(
+  cellRefId: string,
+  pattern: RegExp,
+  timeoutMs = 7000,
+): string {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const text = getRenderedCellOutputText(cellRefId);
+    if (pattern.test(text)) {
+      return text;
+    }
+    run("agent-browser wait 300");
+  }
+  return getRenderedCellOutputText(cellRefId);
+}
+
+function parseAgentEvalString(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return typeof parsed === "string" ? parsed : trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
 mkdirSync(OUTPUT_DIR, { recursive: true });
 for (const file of [
   "scenario-appkernel-javascript-01-initial.png",
   "scenario-appkernel-javascript-02-after-seed.txt",
   "scenario-appkernel-javascript-03-opened.txt",
+  "scenario-appkernel-javascript-04a-cell-a.png",
+  "scenario-appkernel-javascript-04b-cell-b.png",
+  "scenario-appkernel-javascript-04c-cell-c.png",
+  "scenario-appkernel-javascript-04a-cell-a-output.txt",
+  "scenario-appkernel-javascript-04b-cell-b-output.txt",
+  "scenario-appkernel-javascript-04c-cell-c-output.txt",
   "scenario-appkernel-javascript-04-after-runs.txt",
   "scenario-appkernel-javascript-05-probe.json",
   "scenario-appkernel-javascript-04-after-runs.png",
@@ -341,6 +417,16 @@ if (probe.status === "ok" && cellA && /appkernel hello/.test(cellA.decodedText ?
 } else {
   fail("Cell A output/exit metadata did not match expectations");
 }
+scrollCellIntoView("cell_appkernel_a");
+const cellAOutputText = waitForRenderedCellOutput("cell_appkernel_a", /appkernel hello/i);
+writeArtifact("scenario-appkernel-javascript-04a-cell-a-output.txt", cellAOutputText);
+run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-appkernel-javascript-04a-cell-a.png")}`);
+if (/appkernel hello/i.test(cellAOutputText) && /"ok":true/i.test(cellAOutputText)) {
+  pass("Cell A rendered output is visible in notebook UI");
+} else {
+  fail("Cell A rendered output did not appear in notebook UI");
+}
+run("agent-browser wait 900");
 
 const backendToastCheckA = run(
   `agent-browser eval "(async () => document.body.innerText.includes('Runme backend server is not running'))()"`,
@@ -366,6 +452,19 @@ if (probe.status === "ok" && cellB && /true/.test(cellB.decodedText ?? "") && ne
 } else {
   fail("Cell B helper output did not match expectations");
 }
+scrollCellIntoView("cell_appkernel_b");
+const cellBOutputText = waitForRenderedCellOutput("cell_appkernel_b", /true/);
+writeArtifact("scenario-appkernel-javascript-04b-cell-b-output.txt", cellBOutputText);
+run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-appkernel-javascript-04b-cell-b.png")}`);
+if (
+  /true/.test(cellBOutputText) &&
+  new RegExp(escapeRegExp(SCENARIO_NOTEBOOK_NAME)).test(cellBOutputText)
+) {
+  pass("Cell B rendered output is visible in notebook UI");
+} else {
+  fail("Cell B rendered output did not appear in notebook UI");
+}
+run("agent-browser wait 900");
 
 if (clickRun("cell_appkernel_c")) {
   pass("Triggered Cell C execution");
@@ -382,6 +481,16 @@ if (probe.status === "ok" && cellC && /appkernel expected test error/.test(cellC
 } else {
   fail("Cell C failure path did not match expectations");
 }
+scrollCellIntoView("cell_appkernel_c");
+const cellCOutputText = waitForRenderedCellOutput("cell_appkernel_c", /appkernel expected test error/i);
+writeArtifact("scenario-appkernel-javascript-04c-cell-c-output.txt", cellCOutputText);
+run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-appkernel-javascript-04c-cell-c.png")}`);
+if (/appkernel expected test error/i.test(cellCOutputText)) {
+  pass("Cell C rendered error output is visible in notebook UI");
+} else {
+  fail("Cell C rendered error output did not appear in notebook UI");
+}
+run("agent-browser wait 900");
 
 if (clickRun("cell_appkernel_a")) {
   pass("Triggered Cell A re-run");
@@ -409,7 +518,8 @@ snapshot = run("agent-browser snapshot -i").stdout;
 writeArtifact("scenario-appkernel-javascript-04-after-runs.txt", snapshot);
 run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-appkernel-javascript-04-after-runs.png")}`);
 
-run("agent-browser wait 1200");
+scrollCellIntoView("cell_appkernel_a");
+run("agent-browser wait 2500");
 run("agent-browser record stop");
 run("agent-browser close");
 
