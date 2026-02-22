@@ -10,6 +10,18 @@ This project needs deterministic, local testing for Google Drive flows (create, 
 - High confidence that fake Drive behavior matches real Drive behavior for the API subset we use.
 - Easy switch between real Drive and fake Drive for manual and automated webapp testing.
 
+## Near-Term Reality (Current `gapi`-based implementation)
+
+Before we have a Drive REST client seam, the current browser implementation uses `gapi` discovery-generated methods plus a hardcoded upload URL. This makes fake-server substitution difficult.
+
+Near-term plan:
+
+- Validate Drive behavior with manual tests against the real Drive API.
+- Package these checks as a Runme notebook that exercises the same app/drive helpers exposed in App Console.
+- This is currently blocked on supporting AppConsole-style cells in notebooks.
+
+Once AppConsole cells are available in notebooks, the manual verification notebook becomes the default smoke test for Drive changes.
+
 ## 1) Fake Google Drive Server (Go)
 
 Implement a small Go HTTP server that emulates only the Drive endpoints we currently call:
@@ -104,6 +116,7 @@ Note on official browser libraries:
 
 - The current browser `gapi` usage does not provide a simple, global base-URL override for discovery-generated Drive methods.
 - If endpoint-routing flexibility is required for fake servers, prefer a fetch-based REST wrapper with the same auth token flow.
+- Until that refactor lands, real-Drive manual notebook tests are the primary validation path for `gapi` behavior.
 
 ## Test Pyramid For Drive Features
 
@@ -116,6 +129,7 @@ Note on official browser libraries:
   - Existing browser automation runs with fake backend enabled.
   - CUJ tests (for example copy current notebook) assert console output and resulting notebook data.
 - Manual smoke against real Drive:
+  - Run the manual Runme notebook for user-facing Drive workflows.
   - Run the recorder/scenario tool periodically or before release when Drive behavior assumptions change.
 
 ## Initial Rollout Plan
