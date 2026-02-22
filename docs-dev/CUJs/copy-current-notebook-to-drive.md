@@ -16,7 +16,10 @@ From the App Console, a user can copy the currently open notebook to a target lo
 
 ```js
 const source = app.getCurrentNotebook();
-const target = drive.newNotebook("folder/subfolder/name.json");
+const target = await drive.resolvePath("folder/subfolder/name.json", {
+  createParents: true,
+  duplicate: "error",
+});
 const copied = await drive.copy(source, target);
 await app.openNotebook(copied.uri);
 ```
@@ -25,7 +28,10 @@ await app.openNotebook(copied.uri);
 
 - `app.getCurrentNotebook()` returns a stable notebook reference for the currently open notebook (at minimum, URI).
 - `app.openNotebook(uri)` opens a notebook and makes it current.
-- `drive.newNotebook(path)` resolves a destination path in Drive.
+- `drive.resolvePath(path, options)` resolves a human-friendly Drive path to a concrete destination reference (ID-backed URI).
+- Path resolution is not the same as identity:
+  - Drive names are not unique, so duplicates must be handled explicitly.
+  - Returned `target.uri` is a canonical Drive URI suitable for subsequent operations.
 - `drive.copy(source, target)` copies notebook contents to a new Drive file.
 - Copy preserves notebook cell/order/content/metadata.
 - On success, return destination file id and URL/URI.
@@ -53,6 +59,8 @@ await app.openNotebook(copied.uri);
   - Return actionable error: "Drive authentication required."
 - Destination path invalid:
   - Return actionable error with the invalid segment.
+- Destination path resolves ambiguously (duplicate names):
+  - v0: fail with actionable error listing the ambiguous segment/name
 - Destination already exists:
   - v0: fail with "already exists"
   - later iteration: optional overwrite flag

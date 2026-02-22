@@ -21,6 +21,13 @@ type RunnersApi = {
   setDefault: (name: string) => string;
 };
 
+function asObjectRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
 /**
  * Minimal JS runtime for executing snippets with a controlled set of globals.
  * Injects d3, app helpers, and a mocked console that forwards to callbacks.
@@ -68,12 +75,17 @@ export class JSKernel {
 
     const appRunners = (options.globals?.runmeRunners ??
       this.baseGlobals.runmeRunners) as RunnersApi | undefined;
-    const app = this.createAppHelpers(
+    const appHelpers = this.createAppHelpers(
       runId,
       options.container,
       stdout,
       appRunners,
     );
+    const mergedApp = {
+      ...asObjectRecord(this.baseGlobals.app),
+      ...asObjectRecord(options.globals?.app),
+      ...appHelpers,
+    };
     const globalHelp =
       (options.globals?.help as (() => unknown) | undefined) ??
       (this.baseGlobals.help as (() => unknown) | undefined);
@@ -82,7 +94,7 @@ export class JSKernel {
       ...this.baseGlobals,
       ...(options.globals ?? {}),
       console: this.createConsoleProxy(stdout, stderr),
-      app,
+      app: mergedApp,
       help:
         globalHelp ??
         (() =>
