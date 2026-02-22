@@ -106,9 +106,15 @@ const LANGUAGE_OPTIONS = [
   { label: "Bash", value: "bash" },
   { label: "Python", value: "python" },
   { label: "JS", value: "javascript" },
+  { label: "AppConsole", value: "appconsole" },
 ] as const;
 
-type SupportedLanguage = "bash" | "javascript" | "markdown" | "python";
+type SupportedLanguage =
+  | "bash"
+  | "javascript"
+  | "markdown"
+  | "python"
+  | "appconsole";
 
 const outputTextDecoder = new TextDecoder();
 const OUTPUT_SKIP_MIMES = new Set<string>([
@@ -129,6 +135,9 @@ function normalizeLanguageId(
       }
       if (normalized === "python" || normalized === "py") {
         return "python";
+      }
+      if (normalized === "appconsole") {
+        return "appconsole";
       }
       if (
         normalized === "javascript" ||
@@ -399,6 +408,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     switch (selectedLanguage) {
       case "markdown":
         return "markdown";
+      case "appconsole":
       case "javascript":
         return "javascript";
       case "python":
@@ -429,7 +439,8 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
       languageId === "javascript" ||
       languageId === "typescript" ||
       languageId === "js" ||
-      languageId === "ts";
+      languageId === "ts" ||
+      languageId === "appconsole";
     const isPython = languageId === "python" || languageId === "py";
 
     if (!isPython && (isObservable || isJavaScript)) {
@@ -513,6 +524,9 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
       } else if (nextValue === "javascript") {
         updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "javascript";
+      } else if (nextValue === "appconsole") {
+        updatedCell.kind = parser_pb.CellKind.CODE;
+        updatedCell.languageId = "appconsole";
       } else if (nextValue === "python") {
         updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "python";
@@ -947,7 +961,8 @@ export default function Actions() {
           languageId === "javascript" ||
           languageId === "typescript" ||
           languageId === "js" ||
-          languageId === "ts";
+          languageId === "ts" ||
+          languageId === "appconsole";
         const isObservable = languageId === "observable" || languageId === "d3";
         const isPython = languageId === "python" || languageId === "py";
 
