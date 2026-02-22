@@ -77,30 +77,7 @@ const WebContainer = ({ cell, onExitCode, onPid }: ObservableOutputProps) => {
     const kernel = new JSKernel({
       globals: {
         datadog,
-        runme: {
-          getCurrentNotebook: () => runme.getCurrentNotebook(),
-          clear: () => {
-            if (activeRunIdRef.current !== runId) {
-              return;
-            }
-            container.innerHTML = "";
-          },
-          render: (
-            renderFn: (
-              selection: d3.Selection<HTMLDivElement, unknown, null, undefined>,
-            ) => void | Promise<void>,
-          ) => {
-            if (activeRunIdRef.current !== runId) {
-              return;
-            }
-            container.innerHTML = "";
-            return renderFn(d3.select(container));
-          },
-          clearOutputs: (target?: unknown) => runme.clearOutputs(target),
-          runAll: (target?: unknown) => runme.runAll(target),
-          rerun: (target?: unknown) => runme.rerun(target),
-          help: () => runme.help(),
-        },
+        runme,
         googleClientManager: {
           get: () => googleClientManager.getOAuthClient(),
           setClientId: (clientId: string) =>
