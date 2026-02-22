@@ -1,11 +1,17 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChatKit, useChatKit, ChatKitIcon } from "@openai/chatkit-react";
-import { parser_pb, useCell } from "../../contexts/CellContext";
+import { parser_pb, RunmeMetadataKey, useCell } from "../../contexts/CellContext";
 import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useOutput } from "../../contexts/OutputContext";
 import { useCurrentDoc } from "../../contexts/CurrentDocContext";
 import { create, fromJsonString, toJson } from "@bufbuild/protobuf";
-import { useHarness, buildChatkitUrl } from "../../lib/runtime/harnessManager";
+import {
+  useHarness,
+  buildChatkitUrl,
+  buildCodexBridgeWsUrl,
+} from "../../lib/runtime/harnessManager";
+import { getCodexToolBridge } from "../../lib/runtime/codexToolBridge";
+import { getCodexExecuteApprovalManager } from "../../lib/runtime/codexExecuteApprovalManager";
 
 import { getAccessToken, getAuthData } from "../../token";
 import { getBrowserAdapter } from "../../browserAdapter.client";
@@ -18,6 +24,7 @@ import {
   GetCellsResponseSchema,
   ListCellsResponseSchema,
   ChatkitStateSchema,
+  NotebookServiceExecuteCellsResponseSchema,
 } from "../../protogen/oaiproto/aisre/notebooks_pb.js";
 import { getConfiguredChatKitDomainKey } from "../../lib/appConfig";
 class UserNotLoggedInError extends Error {
@@ -215,6 +222,7 @@ function ChatKitPanel() {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const chatkitDomainKey = getConfiguredChatKitDomainKey();
   const [assistantPreview, setAssistantPreview] = useState("");
+  const [codexBridgeError, setCodexBridgeError] = useState<string | null>(null);
   const { defaultHarness } = useHarness();
   const { getChatkitState, setChatkitState } = useCell();
   const { getNotebookData, useNotebookSnapshot } = useNotebookContext();
@@ -241,6 +249,168 @@ function ChatKitPanel() {
       data.updateCell(cell as unknown as parser_pb.Cell);
     },
     [currentDocUri, getAllRenderers, getNotebookData],
+  );
+
+  const getLatestCells = useCallback((): Cell[] => {
+    if (!currentDocUri) {
+      return orderedCells;
+    }
+    const data = getNotebookData(currentDocUri);
+    return (data?.getNotebook().cells ?? orderedCells) as unknown as Cell[];
+  }, [currentDocUri, getNotebookData, orderedCells]);
+
+  const waitForCellExecutionToComplete = useCallback(
+    async (refId: string, timeoutMs = 60_000): Promise<void> => {
+      if (!currentDocUri) {
+        throw new Error("No active notebook for ExecuteCells");
+      }
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < timeoutMs) {
+        const data = getNotebookData(currentDocUri);
+        const updatedCell = data?.getNotebook().cells.find((cell) => cell.refId === refId);
+        const exitCode = updatedCell?.metadata?.[RunmeMetadataKey.ExitCode];
+        if (typeof exitCode === "string") {
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error(`Timed out waiting for cell execution to finish: ${refId}`);
+    },
+    [currentDocUri, getNotebookData],
+  );
+
+  const executeCellsWithApproval = useCallback(
+    async (bridgeCallId: string, refIds: string[]): Promise<Cell[]> => {
+      if (!currentDocUri) {
+        throw new Error("No active notebook for ExecuteCells");
+      }
+      const notebookData = getNotebookData(currentDocUri);
+      if (!notebookData) {
+        throw new Error("No active notebook data for ExecuteCells");
+      }
+      const normalizedRefIds = refIds.filter((id) => typeof id === "string" && id.trim() !== "");
+      if (normalizedRefIds.length === 0) {
+        throw new Error("ExecuteCells request missing refIds");
+      }
+
+      await getCodexExecuteApprovalManager().requestApproval(bridgeCallId, normalizedRefIds);
+
+      for (const refId of normalizedRefIds) {
+        const cellData = notebookData.getCell(refId);
+        if (!cellData) {
+          throw new Error(`Cell not found for ExecuteCells: ${refId}`);
+        }
+        cellData.run();
+      }
+
+      for (const refId of normalizedRefIds) {
+        await waitForCellExecutionToComplete(refId);
+      }
+
+      const latestCells = notebookData.getNotebook().cells as unknown as Cell[];
+      return normalizedRefIds
+        .map((refId) => latestCells.find((cell) => cell.refId === refId))
+        .filter((cell): cell is Cell => Boolean(cell));
+    },
+    [currentDocUri, getNotebookData, waitForCellExecutionToComplete],
+  );
+
+  const handleCodexBridgeToolCall = useCallback(
+    async ({
+      bridgeCallId,
+      toolCallInput,
+    }: {
+      bridgeCallId: string;
+      toolCallInput: unknown;
+    }): Promise<unknown> => {
+      let decodedInput;
+      try {
+        const payload =
+          typeof toolCallInput === "string"
+            ? toolCallInput
+            : JSON.stringify(toolCallInput ?? {});
+        decodedInput = fromJsonString(ToolCallInputSchema, payload);
+      } catch (error) {
+        const failedOutput = create(ToolCallOutputSchema, {
+          status: ToolCallOutput_Status.FAILED,
+          clientError: `Failed to decode tool params: ${error}`,
+        });
+        return toJson(ToolCallOutputSchema, failedOutput);
+      }
+
+      const toolOutput = create(ToolCallOutputSchema, {
+        callId: decodedInput.callId,
+        previousResponseId: decodedInput.previousResponseId,
+        status: ToolCallOutput_Status.SUCCESS,
+        clientError: "",
+      });
+      const latestCells = getLatestCells();
+      const cellMap = new Map<string, Cell>();
+      latestCells.forEach((cell) => {
+        cellMap.set(cell.refId, cell);
+      });
+
+      const inputCase = decodedInput.input?.case;
+      switch (inputCase) {
+        case "updateCells": {
+          const cells = decodedInput.input.value?.cells ?? [];
+          if (cells.length === 0) {
+            toolOutput.status = ToolCallOutput_Status.FAILED;
+            toolOutput.clientError = "UpdateCells invoked without cells payload";
+            break;
+          }
+          cells.forEach((updatedCell: Cell) => updateCell(updatedCell));
+          toolOutput.output = {
+            case: "updateCells",
+            value: create(UpdateCellsResponseSchema, { cells }),
+          };
+          break;
+        }
+        case "listCells": {
+          toolOutput.output = {
+            case: "listCells",
+            value: create(ListCellsResponseSchema, { cells: getLatestCells() }),
+          };
+          break;
+        }
+        case "getCells": {
+          const requestedRefs = decodedInput.input.value?.refIds ?? [];
+          const foundCells = requestedRefs
+            .map((id: string) => cellMap.get(id))
+            .filter((cell): cell is Cell => Boolean(cell));
+          toolOutput.output = {
+            case: "getCells",
+            value: create(GetCellsResponseSchema, { cells: foundCells }),
+          };
+          break;
+        }
+        case "executeCells": {
+          try {
+            const executedCells = await executeCellsWithApproval(
+              bridgeCallId,
+              decodedInput.input.value?.refIds ?? [],
+            );
+            toolOutput.output = {
+              case: "executeCells",
+              value: create(NotebookServiceExecuteCellsResponseSchema, {
+                cells: executedCells,
+              }),
+            };
+          } catch (error) {
+            toolOutput.status = ToolCallOutput_Status.FAILED;
+            toolOutput.clientError = String(error);
+          }
+          break;
+        }
+        default: {
+          toolOutput.status = ToolCallOutput_Status.FAILED;
+          toolOutput.clientError = `Unsupported codex notebook tool input: ${String(inputCase)}`;
+          break;
+        }
+      }
+      return toJson(ToolCallOutputSchema, toolOutput);
+    },
+    [executeCellsWithApproval, getLatestCells, updateCell],
   );
   const handleSseEvent = useCallback(
     (rawEvent: string) => {
@@ -317,6 +487,50 @@ function ChatKitPanel() {
   const chatkitApiUrl = useMemo(() => {
     return buildChatkitUrl(defaultHarness.baseUrl, defaultHarness.adapter);
   }, [defaultHarness.adapter, defaultHarness.baseUrl]);
+  const codexBridgeUrl = useMemo(() => {
+    return buildCodexBridgeWsUrl(defaultHarness.baseUrl);
+  }, [defaultHarness.baseUrl]);
+
+  useEffect(() => {
+    const bridge = getCodexToolBridge();
+    setCodexBridgeError(bridge.getSnapshot().lastError);
+    return bridge.subscribe(() => {
+      const snapshot = bridge.getSnapshot();
+      setCodexBridgeError(snapshot.lastError);
+      if (
+        defaultHarness.adapter === "codex" &&
+        (snapshot.state === "closed" || snapshot.state === "error")
+      ) {
+        getCodexExecuteApprovalManager().failAll("Codex bridge disconnected");
+      }
+    });
+  }, [defaultHarness.adapter]);
+
+  useEffect(() => {
+    const bridge = getCodexToolBridge();
+    if (defaultHarness.adapter !== "codex") {
+      bridge.setHandler(null);
+      return;
+    }
+    bridge.setHandler(handleCodexBridgeToolCall);
+    return () => {
+      bridge.setHandler(null);
+    };
+  }, [defaultHarness.adapter, handleCodexBridgeToolCall]);
+
+  useEffect(() => {
+    const bridge = getCodexToolBridge();
+    if (defaultHarness.adapter !== "codex") {
+      bridge.disconnect();
+      getCodexExecuteApprovalManager().failAll("Codex bridge disabled");
+      return;
+    }
+    bridge.connect(codexBridgeUrl);
+    return () => {
+      bridge.disconnect();
+      getCodexExecuteApprovalManager().failAll("Codex bridge disconnected");
+    };
+  }, [codexBridgeUrl, defaultHarness.adapter]);
   const chatkit = useChatKit({
     api: {
       url: chatkitApiUrl,
@@ -547,6 +761,14 @@ function ChatKitPanel() {
   return (
     <div className="relative h-full w-full">
       <ChatKit control={chatkit.control} className="block h-full w-full" />
+      {defaultHarness.adapter === "codex" && codexBridgeError ? (
+        <div
+          data-testid="codex-bridge-error"
+          className="pointer-events-none absolute left-2 right-2 top-2 rounded border border-red-300 bg-white/95 px-2 py-1 text-[12px] text-red-700 shadow-sm"
+        >
+          Codex bridge error: {codexBridgeError}
+        </div>
+      ) : null}
       {import.meta.env.DEV && assistantPreview ? (
         <div
           data-testid="chatkit-assistant-preview"

@@ -117,6 +117,7 @@ export class JSKernel {
               "- app.runners.delete(name): remove a runner",
               "- app.runners.getDefault(): show default runner",
               "- app.runners.setDefault(name): set default runner",
+              '- app.runCells(["cellID"]): approve pending codex ExecuteCells',
               "- help(): show this message",
             ].join("\n") + "\n",
           )),

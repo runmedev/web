@@ -60,6 +60,31 @@ export function buildChatkitUrl(baseUrl: string, adapter: HarnessAdapter): strin
   }
 }
 
+export function buildCodexBridgeWsUrl(baseUrl: string, options?: {
+  forceReplace?: boolean;
+}): string {
+  const forceReplace = options?.forceReplace === true;
+  try {
+    const url = new URL(baseUrl);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.pathname = "/codex/ws";
+    url.hash = "";
+    if (forceReplace) {
+      url.searchParams.set("force_replace", "true");
+    } else {
+      url.search = "";
+    }
+    return url.toString();
+  } catch {
+    const trimmed = baseUrl.trim().replace(/\/+$/, "");
+    const normalized = trimmed.replace(/^https?:\/\//, (prefix) =>
+      prefix === "https://" ? "wss://" : "ws://"
+    );
+    const qs = forceReplace ? "?force_replace=true" : "";
+    return `${normalized}/codex/ws${qs}`;
+  }
+}
+
 function createDefaultHarness(baseUrl = defaultBaseUrl()): HarnessProfile {
   return {
     name: DEFAULT_HARNESS_NAME,
