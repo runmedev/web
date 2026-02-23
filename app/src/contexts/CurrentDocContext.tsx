@@ -10,6 +10,7 @@ import {
 
 import { useNotebookStore } from "./NotebookStoreContext";
 import { isContentsUri, isFsUri } from "../storage/storeResolver";
+import { appState } from "../lib/runtime/AppState";
 
 interface CurrentDocContextValue {
   getCurrentDoc: () => string | null;
@@ -145,6 +146,15 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
     }),
     [getCurrentDoc, setCurrentDoc],
   );
+
+  useEffect(() => {
+    appState.setOpenNotebookHandler((uri: string) => {
+      setCurrentDoc(uri);
+    });
+    return () => {
+      appState.setOpenNotebookHandler(null);
+    };
+  }, [setCurrentDoc]);
 
   return (
     <CurrentDocContext.Provider value={value}>

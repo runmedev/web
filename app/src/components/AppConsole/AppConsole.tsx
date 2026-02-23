@@ -43,7 +43,11 @@ import {
   registerImportedMarkdownForUri,
   toImportedNotebookName,
 } from "../../lib/markdownImport";
-import { createDriveFile, updateDriveFileBytes } from "../../lib/driveTransfer";
+import {
+  createDriveFile,
+  saveNotebookAsDriveCopy,
+  updateDriveFileBytes,
+} from "../../lib/driveTransfer";
 
 const PROMPT = "> ";
 const ERASE_TO_END = "\u001b[K";
@@ -472,6 +476,14 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
           },
           app: {
             getDefaultConfigUrl: () => getDefaultAppConfigUrl(),
+            openNotebook: async (uri: string) => {
+              if (!uri?.trim()) {
+                throw new Error("Usage: app.openNotebook(localUri)");
+              }
+              setCurrentDoc(uri);
+              sendStdout(`Opened notebook ${uri}\r\n`);
+              return uri;
+            },
             setConfig: async (url?: string) => {
               sendStdout("Fetching app config...\r\n");
               try {
@@ -631,10 +643,31 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
               sendStdout(`Updated Drive file ${id}\r\n`);
               return id;
             },
+            saveAsCurrentNotebook: async (folder: string, name: string) => {
+              if (!folder?.trim() || !name?.trim()) {
+                throw new Error(
+                  "Usage: drive.saveAsCurrentNotebook(folderIdOrUri, fileName)",
+                );
+              }
+              const nb = runme.getCurrentNotebook();
+              if (!nb) {
+                throw new Error("No active notebook handle available.");
+              }
+              const result = await saveNotebookAsDriveCopy(
+                nb.getNotebook(),
+                folder,
+                name,
+              );
+              sendStdout(
+                `Saved notebook as ${result.fileName} (${result.fileId}) and switched to ${result.localUri}\r\n`,
+              );
+              return result;
+            },
             help: () => {
               return [
                 "drive.create(folder, name)     - Create a Drive file in folder; returns file id",
                 "drive.update(id, bytes)        - Write UTF-8 bytes to a Drive file id/URI",
+                "drive.saveAsCurrentNotebook(folder, fileName) - Save current notebook to Drive and switch current doc",
                 "drive.help()                   - Show this help",
               ].join("\n");
             },

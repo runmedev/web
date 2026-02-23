@@ -1,4 +1,5 @@
 import * as d3 from "d3";
+import { appLogger } from "../logging/runtime";
 
 type KernelHooks = {
   onStdout?: (data: string) => void;
@@ -128,6 +129,14 @@ export class JSKernel {
       await runner(...argValues);
     } catch (err) {
       exitCode = 1;
+      appLogger.error("JSKernel execution failed", {
+        attrs: {
+          scope: "appkernel.jskernel",
+          error: String(err),
+          runId,
+          codeLength: code.length,
+        },
+      });
       stderr(`${String(err)}\n`);
     } finally {
       if (this.activeRunId === runId) {
@@ -151,6 +160,8 @@ export class JSKernel {
   }
 
   private formatArgs(args: unknown[]): string {
+    const replacer = (_key: string, value: unknown) =>
+      typeof value === "bigint" ? value.toString() : value;
     return (
       args
         .map((a) => {
@@ -158,7 +169,7 @@ export class JSKernel {
             return a;
           }
           try {
-            return JSON.stringify(a);
+            return JSON.stringify(a, replacer);
           } catch {
             return String(a);
           }

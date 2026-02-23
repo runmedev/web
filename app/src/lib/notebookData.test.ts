@@ -1,9 +1,10 @@
 import { Subject } from "rxjs";
 import { create } from "@bufbuild/protobuf";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { parser_pb, MimeType, RunmeMetadataKey } from "../contexts/CellContext";
 import type { StreamsLike } from "@runmedev/renderers";
 import { APPKERNEL_RUNNER_NAME } from "./runtime/appKernel";
+import { appState } from "./runtime/AppState";
 
 const mockRunner = {
   endpoint: "https://runner.example.com",
@@ -101,6 +102,12 @@ function makeFakeStreams(): FakeStreams {
 
 beforeAll(async () => {
   ({ bindStreamsToCell, NotebookData } = await import("./notebookData"));
+});
+
+afterEach(() => {
+  appState.setDriveNotebookStore(null);
+  appState.setLocalNotebooks(null);
+  appState.setOpenNotebookHandler(null);
 });
 
 async function waitForCondition(
@@ -353,6 +360,107 @@ describe("NotebookData.runCodeCell", () => {
       .join("");
     expect(stdoutText).toContain("true");
     expect(stdoutText).toContain("helper-notebook.runme.md");
+  });
+
+  it("exposes drive and google helper namespaces in appkernel cells", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-drive-helpers",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        'console.log(typeof drive);',
+        'console.log(typeof drive.create);',
+        'console.log(typeof drive.saveAsCurrentNotebook);',
+        'console.log(typeof googleClientManager.get);',
+        'console.log(typeof app.getDefaultConfigUrl);',
+        'console.log(typeof app.openNotebook);',
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "drive-helpers.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("object");
+    expect(stdoutText).toContain("function");
+  });
+
+  it("supports drive.saveAsCurrentNotebook in appkernel cells", async () => {
+    const createRemote = vi.fn().mockResolvedValue({
+      uri: "https://drive.google.com/file/d/saveas123/view",
+    });
+    const saveContent = vi.fn().mockResolvedValue(undefined);
+    appState.setDriveNotebookStore({ create: createRemote, saveContent } as any);
+    const addFile = vi.fn().mockResolvedValue("local://file/saveas-copy");
+    const saveLocal = vi.fn().mockResolvedValue(undefined);
+    appState.setLocalNotebooks({ addFile, save: saveLocal } as any);
+    const openNotebook = vi.fn().mockResolvedValue(undefined);
+    appState.setOpenNotebookHandler(openNotebook);
+
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-saveas",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        'const result = await drive.saveAsCurrentNotebook("folder123", "copy.json");',
+        'console.log(result.fileId);',
+        'console.log(result.localUri);',
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "local://file/original",
+      name: "saveas-source.json",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    expect(addFile).toHaveBeenCalledWith(
+      "https://drive.google.com/file/d/saveas123/view",
+      "copy.json",
+    );
+    expect(saveLocal).toHaveBeenCalled();
+    expect(openNotebook).toHaveBeenCalledWith("local://file/saveas-copy");
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("saveas123");
+    expect(stdoutText).toContain("local://file/saveas-copy");
   });
 
   it("drops stale terminal output when rerunning a cell with appkernel", async () => {

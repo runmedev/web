@@ -2,6 +2,8 @@
 
 ## Documentation and comments
 
+- User-facing documentation belongs in the repo-root `docs/` directory (not `docs-dev/`).
+- Prefer user-facing documentation in notebook form so examples are executable. For Runme notebooks, prefer JSON notebook files when possible.
 - Functions and classes should have comments explaining what they do
 - Comments should capture important design decisions
 - Comments should explain how state is being managed via contexts and other react features

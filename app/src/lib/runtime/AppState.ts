@@ -14,6 +14,8 @@ export class AppState {
   driveNotebookStore: DriveNotebookStore | null = null;
   filesystemStore: FilesystemNotebookStore | null = null;
   localNotebooks: LocalNotebooks | null = null;
+  private openNotebookHandler: ((uri: string) => void | Promise<void>) | null =
+    null;
 
   private constructor() {}
 
@@ -38,6 +40,19 @@ export class AppState {
 
   setContentsStore(store: ContentsNotebookStore | null): void {
     this.contentsStore = store;
+  }
+
+  setOpenNotebookHandler(
+    handler: ((uri: string) => void | Promise<void>) | null,
+  ): void {
+    this.openNotebookHandler = handler;
+  }
+
+  async openNotebook(uri: string): Promise<void> {
+    if (!this.openNotebookHandler) {
+      throw new Error("Notebook navigation is not initialized");
+    }
+    await this.openNotebookHandler(uri);
   }
 }
 

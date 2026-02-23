@@ -1,0 +1,296 @@
+{
+  "cells": [
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "# Google Drive Cookbook (AppKernel)\n\nThis notebook demonstrates the current Google Drive helper APIs available in **AppKernel JavaScript cells**.\n\nAll code cells below are configured to use `AppKernel (browser JS)` via cell metadata (`runme.dev/runnerName = appkernel-js`).\n\n## What You Will Learn\n\n- Inspect runtime app config and Google OAuth client settings\n- Verify helper namespaces available in AppKernel cells\n- Mount a Drive folder in Explorer (manual step via console helper is not yet injected here)\n- Create a Drive file with `drive.create(...)`\n- Write file contents with `drive.update(...)`\n- Perform a create + write end-to-end flow\n\n## Important\n\n- Most getter-style helpers return values but do not auto-display the last expression result.\n- Use `console.log(...)` to render output in the notebook UI.\n- Some examples require editing placeholders like `<folder-id>` before they will perform a Drive write.\n",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000001"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "markup_drive_intro"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## How to use this notebook\n\nThis notebook is meant to be **copied into your own Google Drive** and then edited as you work.\n\nRecommended workflow:\n\n1. Run the **Save As** cell below after replacing `<folder-id>` with your target Google Drive folder id.\n2. The cell will create a new Drive file, mirror it locally, and switch the current notebook to that new copy.\n3. Mount that Drive folder in the Explorer (currently via App Console: `explorer.mountDrive(...)`) if you want to browse to it.\n4. Edit the placeholder values in later cells (for example `<folder-id>` and `<file-id>`) and re-run cells as needed.\n\nThe Save As cell uses `drive.saveAsCurrentNotebook(...)` so subsequent notebook saves continue writing to the new Google Drive file.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000015"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "markup_drive_how_to_use"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "const folderId = \"<folder-id>\";\nif (!folderId || folderId.includes(\"<folder-id>\")) {\n  console.log(\"Set folderId to a Google Drive folder id before running this cell.\");\n} else {\n  try {\n    const nb = runme.getCurrentNotebook();\n    if (!nb) {\n      throw new Error(\"No active notebook handle available.\");\n    }\n    const sourceName = (typeof nb.getName === \"function\" && nb.getName()) || \"google-drive-appkernel-cookbook\";\n    const baseName = sourceName.replace(/\\.(json|runme\\.md|md)$/i, \"\");\n    const fileName = `${baseName}-copy-${Date.now()}.json`;\n    const result = await drive.saveAsCurrentNotebook(folderId, fileName);\n    console.log(result);\n    console.log(\"This tab is now pointing at the new Drive-backed copy.\");\n  } catch (err) {\n    console.error(\"Failed to save notebook as a Google Drive copy\", { error: String(err) });\n    throw err;\n  }\n}",
+      "languageId": "javascript",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000016",
+        "name": "copy-notebook-to-drive",
+        "runme.dev/runnerName": "appkernel-js"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "code_drive_copy_notebook_to_drive"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "console.log({\n  hasDrive: typeof drive === \"object\",\n  hasDriveCreate: typeof drive?.create,\n  hasDriveUpdate: typeof drive?.update,\n  hasGoogleClientManager: typeof googleClientManager === \"object\",\n  hasOidc: typeof oidc === \"object\",\n  hasApp: typeof app === \"object\",\n  hasRunme: typeof runme === \"object\",\n});",
+      "languageId": "javascript",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000002",
+        "name": "helper-probe",
+        "runme.dev/runnerName": "appkernel-js"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "code_drive_helper_probe"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## 1. Runtime Configuration and OAuth Client Setup\n\nThese cells help verify that the app loaded the expected runtime config and Google OAuth client settings.\n\nIf your deployment serves `/configs/app-configs.yaml`, you can apply it from a cell with `await app.setConfig(...)`.\n\nUse `console.log(...)` to display the returned objects.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000003"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "markup_config"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "console.log(app.getDefaultConfigUrl());",
+      "languageId": "javascript",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000004",
+        "name": "show-default-config-url",
+        "runme.dev/runnerName": "appkernel-js"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "code_show_config_url"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "const configUrl = app.getDefaultConfigUrl();\nconsole.log(`Applying config from ${configUrl}`);\ntry {\n  const applied = await app.setConfig(configUrl);\n  console.log({ applied: true, warnings: applied?.warnings ?? [] });\n} catch (err) {\n  console.log({ applied: false, error: String(err) });\n}",
+      "languageId": "javascript",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000005",
+        "name": "apply-runtime-config",
+        "runme.dev/runnerName": "appkernel-js"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "code_apply_runtime_config"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "console.log(googleClientManager.get());",
+      "languageId": "javascript",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000006",
+        "name": "inspect-google-client",
+        "runme.dev/runnerName": "appkernel-js"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "code_google_client_inspect"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## 2. OIDC Helper Inspection\n\nThese cells show the OIDC config currently loaded in the browser. This is useful when Drive auth is failing due to configuration drift.\n\nNote: This notebook currently exposes config helpers (`oidc.get()`, `oidc.setGoogleDefaults()`, etc.), not the full `oidc.getStatus()` helper from App Console.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000007"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "markup_oidc"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "console.log(oidc.get());",
+      "languageId": "javascript",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000008",
+        "name": "inspect-oidc-config",
+        "runme.dev/runnerName": "appkernel-js"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "code_oidc_inspect"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## 3. Create and Update Google Drive Files\n\nThe next cells are the main Drive operations.\n\n- `drive.create(folder, name)` accepts either a Drive folder id or a full Drive folder URL.\n- `drive.update(idOrUri, bytes)` accepts either a Drive file id or a full Drive file URL and writes UTF-8 bytes.\n\nEdit the placeholders (`<folder-id>`, `<file-id>`) before running the write examples.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000009"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "markup_drive_create_update"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "console.log(drive.help());",
+      "languageId": "javascript",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000010",
+        "name": "drive-help",
+        "runme.dev/runnerName": "appkernel-js"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "code_drive_help"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "const folderId = \"<folder-id>\";\nif (!folderId || folderId.includes(\"<folder-id>\")) {\n  console.log(\"Set folderId before running this cell.\");\n} else {\n  const fileId = await drive.create(folderId, `runme-drive-demo-${Date.now()}.md`);\n  console.log({ fileId });\n}",
+      "languageId": "javascript",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000011",
+        "name": "drive-create-demo",
+        "runme.dev/runnerName": "appkernel-js"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "code_drive_create_demo"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "const fileId = \"<file-id>\";\nif (!fileId || fileId.includes(\"<file-id>\")) {\n  console.log(\"Set fileId before running this cell.\");\n} else {\n  const content = [\n    \"# Runme Google Drive Demo\",\n    \"\",\n    \"Updated from an AppKernel JS cell.\",\n    `Timestamp: ${new Date().toISOString()}`,\n  ].join(\"\\\\n\");\n  await drive.update(fileId, new TextEncoder().encode(content));\n  console.log({ updated: true, fileId });\n}",
+      "languageId": "javascript",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000012",
+        "name": "drive-update-demo",
+        "runme.dev/runnerName": "appkernel-js"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "code_drive_update_demo"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "const folderId = \"<folder-id>\";\nif (!folderId || folderId.includes(\"<folder-id>\")) {\n  console.log(\"Set folderId before running this cell.\");\n} else {\n  const fileId = await drive.create(folderId, `runme-demo-${Date.now()}.md`);\n  const content = [\n    \"# Hello Google Drive\",\n    \"\",\n    \"Created and written from an AppKernel JS cell.\",\n    `Timestamp: ${new Date().toISOString()}`,\n  ].join(\"\\\\n\");\n  await drive.update(fileId, new TextEncoder().encode(content));\n  console.log({ fileId, status: \"ok\" });\n}",
+      "languageId": "javascript",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000013",
+        "name": "drive-create-and-write",
+        "runme.dev/runnerName": "appkernel-js"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "code_drive_create_and_write"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## 4. Troubleshooting\n\n### No visible output\n\nUse `console.log(...)` for returned values:\n\n- `console.log(drive.help())`\n- `console.log(googleClientManager.get())`\n- `console.log(oidc.get())`\n\n### `Google Drive store is not initialized`\n\nTypically means the app has not loaded valid runtime config for Google Drive yet.\n\nTry running the config cells again, then inspect `googleClientManager.get()`.\n\n### Placeholder guards\n\nThe create/update cells intentionally no-op until you replace placeholders like `<folder-id>` and `<file-id>`.\n",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01JDRV00000000000000000014"
+      },
+      "textRange": {},
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "refId": "markup_troubleshooting"
+    }
+  ]
+}

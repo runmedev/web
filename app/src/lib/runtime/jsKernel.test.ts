@@ -50,4 +50,17 @@ describe("JSKernel", () => {
     expect(stdout).toHaveBeenCalledWith("run\n");
     expect(stdout).toHaveBeenCalledWith("function\n");
   });
+
+  it("formats objects containing BigInt values for console output", async () => {
+    const stdout = vi.fn();
+    const kernel = new JSKernel({
+      hooks: {
+        onStdout: stdout,
+      },
+    });
+
+    await kernel.run('console.log({ count: 1n, nested: { id: 2n } });');
+
+    expect(stdout).toHaveBeenCalledWith('{"count":"1","nested":{"id":"2"}}\n');
+  });
 });
