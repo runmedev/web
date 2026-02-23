@@ -440,37 +440,11 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
   }
 
   const renderedOutputs = useMemo(() => {
-    const languageId = cell?.languageId?.toLowerCase();
-    // For non-JS/Observable cells, prefer renderer-backed outputs. If none
-    // exist (fresh cell), fall back to the terminal console so the user sees
-    // an output area immediately.
-    // const rendered = cellData.snapshot?.outputs
-    //   .flatMap((o) =>
-    //     (o.items ?? []).map((oi) => {
-    //       const renderer = getRenderer(oi.mime);
-    //       if (!renderer) {
-    //         return null;
-    //       }
-    //       const Component = renderer.component;
-    //       return (
-    //         <Component
-    //           key={`${oi.mime}-${cell.refId}`}
-    //           cell={cell}
-    //           cellData={cellData}
-    //           onPid={setPid}
-    //           onExitCode={handleExitCode}
-    //           {...renderer.props}
-    //         />
-    //       );
-    //     }),
-    //   )
-    //   .filter(Boolean);
-
-    // if (rendered && rendered.length > 0) {
-    //   return rendered;
-    // }
-
-    if (!runID && (cell?.outputs?.length ?? 0) === 0) {
+    const hasTerminalOutput = (cell?.outputs ?? []).some((output) =>
+      (output.items ?? []).some((item) => item.mime === MimeType.StatefulRunmeTerminal),
+    );
+    const hasActiveStream = Boolean(cellData.getStreams());
+    if (!hasTerminalOutput && !hasActiveStream) {
       return null;
     }
 

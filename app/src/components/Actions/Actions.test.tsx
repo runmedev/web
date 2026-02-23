@@ -105,7 +105,22 @@ class StubCellData {
   }
 
   getStreams() {
-    return null;
+    if (!this.getRunID()) {
+      return null;
+    }
+    const sub = () => ({ unsubscribe: () => {} });
+    return {
+      stdout: { subscribe: sub },
+      stderr: { subscribe: sub },
+      pid: { subscribe: sub },
+      exitCode: { subscribe: sub },
+      mimeType: { subscribe: sub },
+      errors: { subscribe: sub },
+      sendExecuteRequest: () => {},
+      setCallback: () => {},
+      close: () => {},
+      connect: () => ({ subscribe: () => ({ unsubscribe: () => {} }) }),
+    } as any;
   }
   addBefore() {}
   addAfter() {}

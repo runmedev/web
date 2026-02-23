@@ -354,4 +354,46 @@ describe("NotebookData.runCodeCell", () => {
     expect(stdoutText).toContain("true");
     expect(stdoutText).toContain("helper-notebook.runme.md");
   });
+
+  it("drops stale terminal output when rerunning a cell with appkernel", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-stale-terminal",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: 'console.log("fresh appkernel output");',
+      outputs: [
+        create(parser_pb.CellOutputSchema, {
+          items: [
+            create(parser_pb.CellOutputItemSchema, {
+              mime: MimeType.StatefulRunmeTerminal,
+              type: "Buffer",
+              data: new Uint8Array(),
+            }),
+          ],
+        }),
+      ],
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "stale-terminal.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const mimes = (updated?.outputs ?? []).flatMap((o) => o.items.map((i) => i.mime));
+    expect(mimes).not.toContain(MimeType.StatefulRunmeTerminal);
+    expect(mimes).toContain(MimeType.VSCodeNotebookStdOut);
+  });
 });

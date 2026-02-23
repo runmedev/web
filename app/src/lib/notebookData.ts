@@ -807,13 +807,10 @@ export class NotebookData {
         updated.metadata[RunmeMetadataKey.ExitCode] = `${finalExitCode}`;
         delete updated.metadata[RunmeMetadataKey.Pid];
 
-        const preservedTerminalOutputs = (updated.outputs ?? []).filter((o) =>
-          o.items.some((oi) => oi.mime === MimeType.StatefulRunmeTerminal)
-        );
-        updated.outputs = [
-          ...preservedTerminalOutputs,
-          ...createStdTextOutputs(stdout, stderr),
-        ];
+        // AppKernel runs are not terminal-stream based. Drop stale terminal MIME
+        // outputs from prior remote runs so stdout/stderr are visible in the
+        // notebook output renderer.
+        updated.outputs = createStdTextOutputs(stdout, stderr);
         this.updateCell(updated);
       });
   }
