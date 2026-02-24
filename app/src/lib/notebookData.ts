@@ -1,6 +1,10 @@
 import { clone, create } from "@bufbuild/protobuf";
 
-import { parser_pb, RunmeMetadataKey, MimeType } from "../contexts/CellContext";
+import {
+  parser_pb,
+  RunmeMetadataKey,
+  MimeType,
+} from "../contexts/CellContext";
 
 /**
  * Minimal store interface used by NotebookData for auto-saving.
@@ -18,6 +22,18 @@ import {
   DEFAULT_RUNNER_PLACEHOLDER,
   getRunnersManager,
 } from "./runtime/runnersManager";
+import { createRunmeConsoleApi } from "./runtime/runmeConsole";
+import { JSKernel } from "./runtime/jsKernel";
+import { isAppKernelRunnerName } from "./runtime/appKernel";
+import {
+  createDriveFile,
+  saveNotebookAsDriveCopy,
+  updateDriveFileBytes,
+} from "./driveTransfer";
+import { appState } from "./runtime/AppState";
+import { googleClientManager } from "./googleClientManager";
+import { oidcConfigManager } from "../auth/oidcConfig";
+import { getDefaultAppConfigUrl, setAppConfig } from "./appConfig";
 import {
   Streams,
   Heartbeat,
@@ -27,6 +43,7 @@ import {
 import { buildExecuteRequest } from "./runme";
 import type { Runner } from "./runner";
 import { showToast } from "./toast";
+import { appLogger } from "./logging/runtime";
 
 export type NotebookSnapshot = {
   readonly uri: string;
@@ -34,6 +51,37 @@ export type NotebookSnapshot = {
   readonly notebook: parser_pb.Notebook;
   readonly loaded: boolean;
 };
+
+const localTextEncoder = new TextEncoder();
+
+function encodeCellOutputBytes(text: string): Uint8Array {
+  const encoded = localTextEncoder.encode(text);
+  return encoded instanceof Uint8Array
+    ? encoded
+    : Uint8Array.from(encoded as ArrayLike<number>);
+}
+
+function createStdTextOutputs(
+  stdout: string,
+  stderr: string,
+): parser_pb.CellOutput[] {
+  return [
+    create(parser_pb.CellOutputSchema, {
+      items: [
+        create(parser_pb.CellOutputItemSchema, {
+          mime: MimeType.VSCodeNotebookStdOut,
+          type: "Buffer",
+          data: encodeCellOutputBytes(stdout),
+        }),
+        create(parser_pb.CellOutputItemSchema, {
+          mime: MimeType.VSCodeNotebookStdErr,
+          type: "Buffer",
+          data: encodeCellOutputBytes(stderr),
+        }),
+      ],
+    }),
+  ];
+}
 
 type Listener = () => void;
 
@@ -534,8 +582,11 @@ export class NotebookData {
       return "";
     }
 
-    const runner = this.getRunner(cell);
-    if (!runner || !runner.endpoint) {
+    const requestedRunnerName =
+      (cell.metadata?.[RunmeMetadataKey.RunnerName] as string | undefined) ?? "";
+    const useAppKernel = isAppKernelRunnerName(requestedRunnerName);
+    const runner = useAppKernel ? undefined : this.getRunner(cell);
+    if (!useAppKernel && (!runner || !runner.endpoint)) {
       console.error("No runner available for cell", cell.refId);
       showToast({
         message: "Runme backend server is not running. Please start it and try again.",
@@ -565,11 +616,16 @@ export class NotebookData {
     cell.metadata[RunmeMetadataKey.LastRunID] = runID;
     this.updateCell(cell);
 
+    if (useAppKernel) {
+      this.runCodeCellLocallyWithAppKernel(cell, runID);
+      return runID;
+    }
+
     const streams = this.createAndBindStreams({
       cell,
       runID,
       sequence: this.sequence,
-      runner,
+      runner: runner!,
     });
     if (!streams) {
       return "";
@@ -698,6 +754,151 @@ export class NotebookData {
       kind: parser_pb.CellKind.MARKUP,
       value: "",
     });
+  }
+
+  private runCodeCellLocallyWithAppKernel(
+    cell: parser_pb.Cell,
+    runID: string,
+  ): void {
+    const refId = cell.refId;
+    const languageId = (cell.languageId ?? "").trim().toLowerCase();
+    const source = cell.value ?? "";
+
+    let stdout = "";
+    let stderr = "";
+    let finalExitCode = 0;
+
+    appLogger.info("Starting AppKernel cell execution", {
+      attrs: {
+        scope: "appkernel.runner",
+        refId,
+        runID,
+        languageId,
+      },
+    });
+
+    const kernel = new JSKernel({
+      globals: {
+        runme: createRunmeConsoleApi({
+          resolveNotebook: () => this,
+        }),
+        drive: {
+          create: async (folder: string, name: string) => createDriveFile(folder, name),
+          update: async (idOrUri: string, bytes: Uint8Array) =>
+            updateDriveFileBytes(idOrUri, bytes),
+          saveAsCurrentNotebook: async (folder: string, name: string) =>
+            saveNotebookAsDriveCopy(this.notebook, folder, name),
+          help: () =>
+            [
+              "drive.create(folder, name) - Create a Drive file in folder; returns file id",
+              "drive.update(id, bytes)    - Write UTF-8 bytes to a Drive file id/URI",
+              "drive.saveAsCurrentNotebook(folder, fileName) - Save current notebook to Drive and switch current doc",
+            ].join("\n"),
+        },
+        googleClientManager: {
+          get: () => googleClientManager.getOAuthClient(),
+          setClientId: (clientId: string) => googleClientManager.setOAuthClient({ clientId }),
+          setClientSecret: (clientSecret: string) =>
+            googleClientManager.setClientSecret(clientSecret),
+          setFromJson: (raw: string) => googleClientManager.setOAuthClientFromJson(raw),
+        },
+        oidc: {
+          get: () => oidcConfigManager.getConfig(),
+          getRedirectURI: () => oidcConfigManager.getRedirectURI(),
+          getScope: () => oidcConfigManager.getScope(),
+          set: (config: Record<string, unknown>) => oidcConfigManager.setConfig(config as any),
+          setClientId: (clientId: string) => oidcConfigManager.setClientId(clientId),
+          setClientSecret: (clientSecret: string) =>
+            oidcConfigManager.setClientSecret(clientSecret),
+          setDiscoveryURL: (discoveryUrl: string) =>
+            oidcConfigManager.setDiscoveryURL(discoveryUrl),
+          setClientToDrive: () => oidcConfigManager.setClientToDrive(),
+          setScope: (scope: string) => oidcConfigManager.setScope(scope),
+          setGoogleDefaults: () => oidcConfigManager.setGoogleDefaults(),
+        },
+        app: {
+          getDefaultConfigUrl: () => getDefaultAppConfigUrl(),
+          openNotebook: async (uri: string) => appState.openNotebook(uri),
+          setConfig: async (url?: string) => setAppConfig(url),
+        },
+      },
+      hooks: {
+        onStdout: (data) => {
+          stdout += data;
+        },
+        onStderr: (data) => {
+          stderr += data;
+        },
+        onExit: (code) => {
+          finalExitCode = code;
+        },
+      },
+    });
+
+    const runPromise =
+      languageId === "javascript"
+        ? kernel.run(source)
+        : Promise.resolve().then(() => {
+            appLogger.error("Unsupported AppKernel language", {
+              attrs: {
+                scope: "appkernel.runner",
+                refId,
+                runID,
+                languageId,
+              },
+            });
+            stderr += "AppKernel only supports javascript cells in v0.\n";
+            finalExitCode = 1;
+          });
+
+    void runPromise
+      .catch((error) => {
+        finalExitCode = 1;
+        appLogger.error("AppKernel cell execution failed", {
+          attrs: {
+            scope: "appkernel.runner",
+            refId,
+            runID,
+            languageId,
+            error: String(error),
+          },
+        });
+        stderr += `${String(error)}\n`;
+      })
+      .finally(() => {
+        const updated = this.getCellProto(refId);
+        if (!updated) {
+          return;
+        }
+        const currentRunID =
+          typeof updated.metadata?.[RunmeMetadataKey.LastRunID] === "string"
+            ? updated.metadata[RunmeMetadataKey.LastRunID]
+            : "";
+        if (currentRunID !== runID) {
+          return;
+        }
+
+        updated.metadata ??= {};
+        updated.metadata[RunmeMetadataKey.ExitCode] = `${finalExitCode}`;
+        delete updated.metadata[RunmeMetadataKey.Pid];
+
+        // AppKernel runs are not terminal-stream based. Drop stale terminal MIME
+        // outputs from prior remote runs so stdout/stderr are visible in the
+        // notebook output renderer.
+        updated.outputs = createStdTextOutputs(stdout, stderr);
+        this.updateCell(updated);
+        appLogger.info("Finished AppKernel cell execution", {
+          attrs: {
+            scope: "appkernel.runner",
+            refId,
+            runID,
+            languageId,
+            exitCode: finalExitCode,
+            stdoutBytes: stdout.length,
+            stderrBytes: stderr.length,
+          },
+        });
+      });
   }
 
   private getRunner(cell: parser_pb.Cell): Runner | undefined {

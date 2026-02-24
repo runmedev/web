@@ -42,7 +42,6 @@ The script relies on the hidden `#app-console-output` element added to
 If you skip the picker, the script expects `explorer.listFolders()` to report
 no mounted folders.
 
-
 ## Scenario runner
 
 Scenario scripts in this folder implement scenario-based acceptance tests:
@@ -84,6 +83,12 @@ pnpm -C app run cuj:run
 The CUJ runner starts a local Go OIDC fake server
 (`testing/cuj-oidc-server.go`) and a Runme backend configured to trust JWTs
 from that issuer.
+
+## Drive copy CUJ draft
+
+For the "copy current notebook to Google Drive" console flow, see:
+
+- `docs-dev/CUJs/copy-current-notebook-to-drive.md`
 
 ## What it tests
 

@@ -13,6 +13,10 @@ from `docs-dev/cujs/`.
   - open local notebook,
   - run bash cell,
   - verify `hello world` output.
+- `appkernel-javascript-notebook.md` — AppKernel notebook flow:
+  - select `AppKernel (browser JS)` runner,
+  - run JavaScript cells in-browser,
+  - verify stdout/stderr and exit metadata updates in notebook outputs.
 
 ## How CUJs are executed
 

@@ -1,4 +1,5 @@
 import * as d3 from "d3";
+import { appLogger } from "../logging/runtime";
 
 type KernelHooks = {
   onStdout?: (data: string) => void;
@@ -20,6 +21,13 @@ type RunnersApi = {
   getDefault: () => string;
   setDefault: (name: string) => string;
 };
+
+function asObjectRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
 
 /**
  * Minimal JS runtime for executing snippets with a controlled set of globals.
@@ -68,12 +76,17 @@ export class JSKernel {
 
     const appRunners = (options.globals?.runmeRunners ??
       this.baseGlobals.runmeRunners) as RunnersApi | undefined;
-    const app = this.createAppHelpers(
+    const appHelpers = this.createAppHelpers(
       runId,
       options.container,
       stdout,
       appRunners,
     );
+    const mergedApp = {
+      ...asObjectRecord(this.baseGlobals.app),
+      ...asObjectRecord(options.globals?.app),
+      ...appHelpers,
+    };
     const globalHelp =
       (options.globals?.help as (() => unknown) | undefined) ??
       (this.baseGlobals.help as (() => unknown) | undefined);
@@ -82,7 +95,7 @@ export class JSKernel {
       ...this.baseGlobals,
       ...(options.globals ?? {}),
       console: this.createConsoleProxy(stdout, stderr),
-      app,
+      app: mergedApp,
       help:
         globalHelp ??
         (() =>
@@ -116,6 +129,14 @@ export class JSKernel {
       await runner(...argValues);
     } catch (err) {
       exitCode = 1;
+      appLogger.error("JSKernel execution failed", {
+        attrs: {
+          scope: "appkernel.jskernel",
+          error: String(err),
+          runId,
+          codeLength: code.length,
+        },
+      });
       stderr(`${String(err)}\n`);
     } finally {
       if (this.activeRunId === runId) {
@@ -139,6 +160,8 @@ export class JSKernel {
   }
 
   private formatArgs(args: unknown[]): string {
+    const replacer = (_key: string, value: unknown) =>
+      typeof value === "bigint" ? value.toString() : value;
     return (
       args
         .map((a) => {
@@ -146,7 +169,7 @@ export class JSKernel {
             return a;
           }
           try {
-            return JSON.stringify(a);
+            return JSON.stringify(a, replacer);
           } catch {
             return String(a);
           }

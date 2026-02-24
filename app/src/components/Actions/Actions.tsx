@@ -22,7 +22,6 @@ import { CellData } from "../../lib/notebookData";
 import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useOutput } from "../../contexts/OutputContext";
 import CellConsole, { fontSettings } from "./CellConsole";
-import WebContainerConsole from "./WebContainer";
 import Editor from "./Editor";
 import MarkdownCell from "./MarkdownCell";
 import { IOPUB_INCOMPLETE_METADATA_KEY } from "../../lib/ipykernel";
@@ -36,6 +35,10 @@ import {
 import { useCurrentDoc } from "../../contexts/CurrentDocContext";
 import { useRunners } from "../../contexts/RunnersContext";
 import { DEFAULT_RUNNER_PLACEHOLDER } from "../../lib/runtime/runnersManager";
+import {
+  APPKERNEL_RUNNER_LABEL,
+  APPKERNEL_RUNNER_NAME,
+} from "../../lib/runtime/appKernel";
 import React from "react";
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
@@ -108,14 +111,14 @@ const LANGUAGE_OPTIONS = [
   { label: "JS", value: "javascript" },
 ] as const;
 
-type SupportedLanguage = "bash" | "javascript" | "markdown" | "python";
+type SupportedLanguage =
+  | "bash"
+  | "javascript"
+  | "markdown"
+  | "python";
 
 const outputTextDecoder = new TextDecoder();
-const OUTPUT_SKIP_MIMES = new Set<string>([
-  MimeType.StatefulRunmeTerminal,
-  MimeType.VSCodeNotebookStdOut,
-  MimeType.VSCodeNotebookStdErr,
-]);
+const ALWAYS_SKIP_MIMES = new Set<string>([MimeType.StatefulRunmeTerminal]);
 
 function normalizeLanguageId(
   kind: parser_pb.CellKind,
@@ -237,10 +240,24 @@ function ActionOutputItemView({
 }
 
 function ActionOutputItems({ outputs }: { outputs: parser_pb.CellOutput[] }) {
+  const hasTerminalOutput = outputs.some((output) =>
+    (output.items ?? []).some((item) => item?.mime === MimeType.StatefulRunmeTerminal),
+  );
+
   const displayableItems = outputs.flatMap((output, outputIndex) =>
     (output.items ?? [])
       .map((item, itemIndex) => {
-        if (!item || OUTPUT_SKIP_MIMES.has(item.mime || "")) {
+        if (!item) {
+          return null;
+        }
+        const mime = item.mime || "";
+        if (ALWAYS_SKIP_MIMES.has(mime)) {
+          return null;
+        }
+        if (
+          hasTerminalOutput &&
+          (mime === MimeType.VSCodeNotebookStdOut || mime === MimeType.VSCodeNotebookStdErr)
+        ) {
           return null;
         }
         if (!(item.data instanceof Uint8Array)) {
@@ -423,56 +440,11 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
   }
 
   const renderedOutputs = useMemo(() => {
-    const languageId = cell?.languageId?.toLowerCase();
-    const isObservable = languageId === "observable" || languageId === "d3";
-    const isJavaScript =
-      languageId === "javascript" ||
-      languageId === "typescript" ||
-      languageId === "js" ||
-      languageId === "ts";
-    const isPython = languageId === "python" || languageId === "py";
-
-    if (!isPython && (isObservable || isJavaScript)) {
-      return (
-        <WebContainerConsole
-          key={`webcontainer-${cell.refId}`}
-          cell={cell}
-          onPid={setPid}
-          onExitCode={handleExitCode}
-        />
-      );
-    }
-
-    // For non-JS/Observable cells, prefer renderer-backed outputs. If none
-    // exist (fresh cell), fall back to the terminal console so the user sees
-    // an output area immediately.
-    // const rendered = cellData.snapshot?.outputs
-    //   .flatMap((o) =>
-    //     (o.items ?? []).map((oi) => {
-    //       const renderer = getRenderer(oi.mime);
-    //       if (!renderer) {
-    //         return null;
-    //       }
-    //       const Component = renderer.component;
-    //       return (
-    //         <Component
-    //           key={`${oi.mime}-${cell.refId}`}
-    //           cell={cell}
-    //           cellData={cellData}
-    //           onPid={setPid}
-    //           onExitCode={handleExitCode}
-    //           {...renderer.props}
-    //         />
-    //       );
-    //     }),
-    //   )
-    //   .filter(Boolean);
-
-    // if (rendered && rendered.length > 0) {
-    //   return rendered;
-    // }
-
-    if (!runID && (cell?.outputs?.length ?? 0) === 0) {
+    const hasTerminalOutput = (cell?.outputs ?? []).some((output) =>
+      (output.items ?? []).some((item) => item.mime === MimeType.StatefulRunmeTerminal),
+    );
+    const hasActiveStream = Boolean(cellData.getStreams());
+    if (!hasTerminalOutput && !hasActiveStream) {
       return null;
     }
 
@@ -696,7 +668,11 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
                 onChange={(event) => {
                   const nextName = event.target.value;
                   const names = new Set(listRunners().map((r) => r.name));
-                  if (!names.has(nextName) && nextName !== DEFAULT_RUNNER_PLACEHOLDER) {
+                  if (
+                    !names.has(nextName) &&
+                    nextName !== DEFAULT_RUNNER_PLACEHOLDER &&
+                    nextName !== APPKERNEL_RUNNER_NAME
+                  ) {
                     return;
                   }
                   cellData.setRunner(nextName);
@@ -705,6 +681,9 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
               >
                 <option value="<default>">
                   {defaultRunnerName ? `${defaultRunnerName}` : "default"}
+                </option>
+                <option value={APPKERNEL_RUNNER_NAME}>
+                  {APPKERNEL_RUNNER_LABEL}
                 </option>
                 {listRunners().map((runner) => (
                   <option key={runner.name} value={runner.name}>
@@ -942,26 +921,6 @@ export default function Actions() {
         onPid: (pid: number | null) => void;
         onExitCode: (exitCode: number | null) => void;
       }) => {
-        const languageId = cell.languageId?.toLowerCase();
-        const isJavaScript =
-          languageId === "javascript" ||
-          languageId === "typescript" ||
-          languageId === "js" ||
-          languageId === "ts";
-        const isObservable = languageId === "observable" || languageId === "d3";
-        const isPython = languageId === "python" || languageId === "py";
-
-        if (!isPython && (isObservable || isJavaScript)) {
-          return (
-            <WebContainerConsole
-              key={`webcontainer-${cell.refId}`}
-              cell={cell}
-              onPid={onPid}
-              onExitCode={onExitCode}
-            />
-          );
-        }
-
         return (
           // TODO(jlewi): Why do we pass cell which is parser_pb.Cell? Rather than CellData?
           <CellConsole

@@ -1,8 +1,10 @@
 import { Subject } from "rxjs";
 import { create } from "@bufbuild/protobuf";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { parser_pb, MimeType, RunmeMetadataKey } from "../contexts/CellContext";
 import type { StreamsLike } from "@runmedev/renderers";
+import { APPKERNEL_RUNNER_NAME } from "./runtime/appKernel";
+import { appState } from "./runtime/AppState";
 
 const mockRunner = {
   endpoint: "https://runner.example.com",
@@ -101,6 +103,25 @@ function makeFakeStreams(): FakeStreams {
 beforeAll(async () => {
   ({ bindStreamsToCell, NotebookData } = await import("./notebookData"));
 });
+
+afterEach(() => {
+  appState.setDriveNotebookStore(null);
+  appState.setLocalNotebooks(null);
+  appState.setOpenNotebookHandler(null);
+});
+
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 200,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 describe("bindStreamsToCell", () => {
   it("appends stdout/stderr to existing outputs", () => {
@@ -259,5 +280,228 @@ describe("NotebookData.runCodeCell", () => {
 
     const runID = model.runCodeCell(cell);
     expect(runID).toBe("");
+  });
+
+  it("executes javascript locally with appkernel and records stdout + exit code", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: 'console.log("hello");',
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "test-notebook.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    const runID = model.runCodeCell(cell);
+    expect(runID).toBe("run-generated");
+
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    expect(updated?.metadata?.[RunmeMetadataKey.ExitCode]).toBe("0");
+    expect(updated?.metadata?.[RunmeMetadataKey.Pid]).toBeUndefined();
+
+    const stdoutItem = updated?.outputs
+      .flatMap((o) => o.items)
+      .find((i) => i.mime === MimeType.VSCodeNotebookStdOut);
+    expect(stdoutItem).toBeTruthy();
+    expect(new TextDecoder().decode(stdoutItem!.data)).toContain("hello");
+  });
+
+  it("supports runme helper access inside appkernel javascript cells", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-helper",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: 'const nb = runme.getCurrentNotebook(); console.log(Boolean(nb)); console.log(nb?.getName?.() ?? "");',
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "helper-notebook.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      const stdoutText = (snap?.outputs ?? [])
+        .flatMap((o) => o.items)
+        .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+        .map((i) => new TextDecoder().decode(i.data))
+        .join("");
+      return stdoutText.includes("true");
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("true");
+    expect(stdoutText).toContain("helper-notebook.runme.md");
+  });
+
+  it("exposes drive and google helper namespaces in appkernel cells", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-drive-helpers",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        'console.log(typeof drive);',
+        'console.log(typeof drive.create);',
+        'console.log(typeof drive.saveAsCurrentNotebook);',
+        'console.log(typeof googleClientManager.get);',
+        'console.log(typeof app.getDefaultConfigUrl);',
+        'console.log(typeof app.openNotebook);',
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "drive-helpers.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("object");
+    expect(stdoutText).toContain("function");
+  });
+
+  it("supports drive.saveAsCurrentNotebook in appkernel cells", async () => {
+    const createRemote = vi.fn().mockResolvedValue({
+      uri: "https://drive.google.com/file/d/saveas123/view",
+    });
+    const saveContent = vi.fn().mockResolvedValue(undefined);
+    appState.setDriveNotebookStore({ create: createRemote, saveContent } as any);
+    const addFile = vi.fn().mockResolvedValue("local://file/saveas-copy");
+    const saveLocal = vi.fn().mockResolvedValue(undefined);
+    appState.setLocalNotebooks({ addFile, save: saveLocal } as any);
+    const openNotebook = vi.fn().mockResolvedValue(undefined);
+    appState.setOpenNotebookHandler(openNotebook);
+
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-saveas",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        'const result = await drive.saveAsCurrentNotebook("folder123", "copy.json");',
+        'console.log(result.fileId);',
+        'console.log(result.localUri);',
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "local://file/original",
+      name: "saveas-source.json",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    expect(addFile).toHaveBeenCalledWith(
+      "https://drive.google.com/file/d/saveas123/view",
+      "copy.json",
+    );
+    expect(saveLocal).toHaveBeenCalled();
+    expect(openNotebook).toHaveBeenCalledWith("local://file/saveas-copy");
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("saveas123");
+    expect(stdoutText).toContain("local://file/saveas-copy");
+  });
+
+  it("drops stale terminal output when rerunning a cell with appkernel", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-stale-terminal",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: 'console.log("fresh appkernel output");',
+      outputs: [
+        create(parser_pb.CellOutputSchema, {
+          items: [
+            create(parser_pb.CellOutputItemSchema, {
+              mime: MimeType.StatefulRunmeTerminal,
+              type: "Buffer",
+              data: new Uint8Array(),
+            }),
+          ],
+        }),
+      ],
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "stale-terminal.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const mimes = (updated?.outputs ?? []).flatMap((o) => o.items.map((i) => i.mime));
+    expect(mimes).not.toContain(MimeType.StatefulRunmeTerminal);
+    expect(mimes).toContain(MimeType.VSCodeNotebookStdOut);
   });
 });
