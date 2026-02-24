@@ -83,6 +83,7 @@ const SCENARIO_DRIVERS = [
   join(SCRIPT_DIR, "test-scenario-appkernel-javascript.ts"),
   join(SCRIPT_DIR, "test-scenario-no-runner-logs.ts"),
   join(SCRIPT_DIR, "test-scenario-ai.ts"),
+  join(SCRIPT_DIR, "test-scenario-ai-codex.ts"),
 ];
 
 type BackendCommandConfig = {
@@ -969,8 +970,29 @@ async function main(): Promise<void> {
     let failures = 0;
     const aggregateAssertions: Assertions = { total: 0, passed: 0, failed: 0 };
     const scenarioResults: ScenarioResult[] = [];
+    const scenarioFilterRaw = process.env.CUJ_SCENARIOS?.trim() ?? "";
+    const selectedScenarios = scenarioFilterRaw
+      ? new Set(
+          scenarioFilterRaw
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean),
+        )
+      : null;
+    const scenarioDrivers = selectedScenarios
+      ? SCENARIO_DRIVERS.filter((driver) => {
+          const basename = driver.split("/").at(-1) ?? driver;
+          const shortName = basename.replace(/^test-scenario-/, "").replace(/\.ts$/, "");
+          return selectedScenarios.has(basename) || selectedScenarios.has(shortName);
+        })
+      : SCENARIO_DRIVERS;
+    if (selectedScenarios && scenarioDrivers.length === 0) {
+      throw new Error(
+        `CUJ_SCENARIOS did not match any scenarios: ${[...selectedScenarios].join(", ")}`,
+      );
+    }
 
-    for (const scenarioDriver of SCENARIO_DRIVERS) {
+    for (const scenarioDriver of scenarioDrivers) {
       const basename = scenarioDriver.split("/").at(-1) ?? scenarioDriver;
       const scenarioName = basename.replace(/^test-scenario-/, "").replace(/\.ts$/, "");
       console.log(`[CUJ] Running ${basename}`);

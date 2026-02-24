@@ -192,6 +192,10 @@ export class JSKernel {
     runners?: RunnersApi,
     appGlobals: AppGlobals = {},
   ) {
+    const nestedAppGlobals =
+      appGlobals.app && typeof appGlobals.app === "object"
+        ? (appGlobals.app as AppGlobals)
+        : {};
     const runnersHelpers =
       runners &&
       (() => ({
@@ -224,6 +228,7 @@ export class JSKernel {
 
     return {
       ...appGlobals,
+      ...nestedAppGlobals,
       clear: () => {
         if (this.activeRunId !== runId) {
           return;
