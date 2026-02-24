@@ -254,7 +254,8 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
     }
 
     try {
-      const notebook = await deserializeMarkdownToNotebook(selection);
+      const fullSelection = getPickedMarkdownSelection(selection.sourceUri);
+      const notebook = await deserializeMarkdownToNotebook(fullSelection);
       const fileName = toImportedNotebookName(selection.name);
       const created = await store.create(LOCAL_FOLDER_URI, fileName);
       await store.save(created.uri, notebook);
