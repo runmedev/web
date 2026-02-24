@@ -78,7 +78,6 @@ export class JSKernel {
 
     const appRunners = (options.globals?.runmeRunners ??
       this.baseGlobals.runmeRunners) as RunnersApi | undefined;
-    const appHelpers = this.createAppHelpers(
     const appGlobals = ((options.globals?.app ?? this.baseGlobals.app) ??
       {}) as AppGlobals;
     const appHelpers = this.createAppHelpers(

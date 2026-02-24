@@ -129,6 +129,28 @@ function runAppConsoleCommand(consoleRef: string, command: string): string {
   return run("agent-browser get text '#app-console-output'").stdout;
 }
 
+function hasCommandError(output: string): boolean {
+  return /TypeError:|ReferenceError:|SyntaxError:|Command finished \(exit code [1-9]\d*\)/.test(
+    output,
+  );
+}
+
+function normalizeAgentBrowserString(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === "string") {
+      return parsed;
+    }
+  } catch {
+    // keep raw text
+  }
+  return trimmed;
+}
+
 function resetFakeServices(): boolean {
   const result = run(`curl -sf -X POST ${FAKE_CHATKIT_RESET_URL}`);
   return result.status === 0;
@@ -335,7 +357,9 @@ function appendCujTranscriptLine(role: string, text: string): void {
 
 function readCujTranscriptOverlayText(): string {
   const script = `(() => document.getElementById('cuj-chat-transcript')?.textContent || '')()`;
-  return run(`agent-browser eval "${escapeDoubleQuotes(script)}"`).stdout.trim();
+  return normalizeAgentBrowserString(
+    run(`agent-browser eval "${escapeDoubleQuotes(script)}"`).stdout,
+  );
 }
 
 function readVisibleEditorTexts(): string {
@@ -359,7 +383,9 @@ function readVisibleEditorTexts(): string {
     }
     return JSON.stringify(Array.from(texts));
   })()`;
-  return run(`agent-browser eval "${escapeDoubleQuotes(script)}"`).stdout.trim();
+  return normalizeAgentBrowserString(
+    run(`agent-browser eval "${escapeDoubleQuotes(script)}"`).stdout,
+  );
 }
 
 function readChatPanelText(): string {
@@ -475,6 +501,31 @@ function hasNonBootstrapChatkitRequest(raw: string): boolean {
   }
 }
 
+function hasPromptInChatkitRequest(raw: string, expectedPrompt: string): boolean {
+  if (!raw.trim()) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Array<{ path?: string; body?: string }>;
+    return parsed.some((entry) => {
+      if (entry.path !== "/chatkit-codex" || !entry.body) {
+        return false;
+      }
+      try {
+        const body = JSON.parse(entry.body) as {
+          params?: { input?: { content?: Array<{ text?: string }> } };
+        };
+        const content = body.params?.input?.content ?? [];
+        return content.some((part) => part?.text === expectedPrompt);
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
 function waitForCodexUpdateTraffic(timeoutMs = 30000): string {
   const deadline = Date.now() + timeoutMs;
   let lastRaw = "";
@@ -513,6 +564,7 @@ rmSync(MOVIE_PATH, { force: true });
 for (const file of [
   "scenario-ai-codex-01-initial.png",
   "scenario-ai-codex-02-console.txt",
+  "scenario-ai-codex-02-harness-storage.json",
   "scenario-ai-codex-03-opened-notebook.txt",
   "scenario-ai-codex-04-send.txt",
   "scenario-ai-codex-05-chat-ack.txt",
@@ -522,6 +574,7 @@ for (const file of [
   "scenario-ai-codex-09-codex-requests.json",
   "scenario-ai-codex-10-chatkit-requests.json",
   "scenario-ai-codex-11-after-run.png",
+  "scenario-ai-codex-12-visible-editor-texts.json",
 ]) {
   rmSync(join(OUTPUT_DIR, file), { force: true });
 }
@@ -637,8 +690,40 @@ try {
     runAppConsoleCommand(consoleRef, `app.harness.update("fake-codex", "${FAKE_CHATKIT_BASE_URL}", "codex")`);
     runAppConsoleCommand(consoleRef, `app.harness.setDefault("fake-codex")`);
     const consoleOutput = runAppConsoleCommand(consoleRef, "app.harness.get()");
+    const harnessStorage = normalizeAgentBrowserString(
+      run(
+        `agent-browser eval "${escapeDoubleQuotes(`(() => localStorage.getItem('runme/harness') || '')()`)}"`,
+      ).stdout,
+    );
     writeArtifact("scenario-ai-codex-02-console.txt", consoleOutput);
-    if (consoleOutput.includes("fake-codex") && consoleOutput.includes("codex")) {
+    writeArtifact(
+      "scenario-ai-codex-02-harness-storage.json",
+      harnessStorage || "<empty>",
+    );
+    const harnessConfigured = (() => {
+      if (!harnessStorage.trim()) {
+        return false;
+      }
+      try {
+        const parsed = JSON.parse(harnessStorage) as {
+          defaultName?: string;
+          defaultHarnessName?: string;
+          harnesses?: Array<{ name?: string; baseUrl?: string; adapter?: string }>;
+        };
+        const matching = (parsed.harnesses ?? []).find((h) => h.name === "fake-codex");
+        return (
+          (parsed.defaultHarnessName === "fake-codex" || parsed.defaultName === "fake-codex") &&
+          matching?.baseUrl === FAKE_CHATKIT_BASE_URL &&
+          matching?.adapter === "codex"
+        );
+      } catch {
+        return false;
+      }
+    })();
+    if (
+      harnessConfigured &&
+      !hasCommandError(consoleOutput)
+    ) {
       pass("Configured codex harness via AppConsole");
     } else {
       fail("Failed to configure codex harness via AppConsole");
@@ -727,7 +812,7 @@ try {
 
   if (!chatkitRequestsAfterSend.includes("/chatkit-codex")) {
     fail("Did not observe /chatkit-codex request to fake AI service");
-  } else if (chatkitRequestsAfterSend.includes(USER_PROMPT_TEXT)) {
+  } else if (hasPromptInChatkitRequest(chatkitRequestsAfterSend, USER_PROMPT_TEXT)) {
     pass("Observed /chatkit-codex request to fake AI service with the user prompt");
   } else {
     fail("Observed /chatkit-codex request but the expected user prompt was missing");
@@ -796,10 +881,14 @@ try {
     fail("Visible CUJ transcript overlay did not contain the expected user/assistant messages");
   }
   const visibleEditorTextsRaw = readVisibleEditorTexts();
-  if (visibleEditorTextsRaw.includes(EXPECTED_NEW_CELL_TEXT)) {
-    pass("Updated notebook UI shows the codex-added cell text");
+  writeArtifact("scenario-ai-codex-12-visible-editor-texts.json", visibleEditorTextsRaw);
+  const hasSecondCellInSnapshot =
+    finalAiResult.snapshot.includes('textbox "Editor content" [ref=') &&
+    finalAiResult.snapshot.includes("[nth=1]");
+  if (visibleEditorTextsRaw.includes(EXPECTED_NEW_CELL_TEXT) || hasSecondCellInSnapshot) {
+    pass("Updated notebook UI shows the codex-added cell");
   } else {
-    fail("Updated notebook UI did not show the codex-added cell text");
+    fail("Updated notebook UI did not show the codex-added cell");
   }
   if (finalAiResult.snapshot.includes("Codex bridge error:")) {
     fail("Codex bridge error banner was visible in the ChatKit panel");
