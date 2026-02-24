@@ -164,4 +164,34 @@ describe("ChatKitPanel codex harness routing", () => {
     );
     expect(approvalMgrMock.failAll).toHaveBeenCalledWith("Codex bridge disconnected");
   });
+
+  it("switches chatkit endpoint immediately when harness default changes", () => {
+    const { rerender } = render(<ChatKitPanel />);
+
+    expect(useChatKitMock.mock.calls.at(-1)?.[0]?.api?.url).toBe(
+      "http://127.0.0.1:31337/chatkit",
+    );
+
+    harnessState.defaultHarness = {
+      ...harnessState.defaultHarness,
+      adapter: "codex",
+    };
+    rerender(<ChatKitPanel />);
+
+    expect(useChatKitMock.mock.calls.at(-1)?.[0]?.api?.url).toBe(
+      "http://127.0.0.1:31337/chatkit-codex",
+    );
+    expect(bridgeMock.connect).toHaveBeenCalledWith("ws://127.0.0.1:31337/codex/ws");
+
+    harnessState.defaultHarness = {
+      ...harnessState.defaultHarness,
+      adapter: "responses",
+    };
+    rerender(<ChatKitPanel />);
+
+    expect(useChatKitMock.mock.calls.at(-1)?.[0]?.api?.url).toBe(
+      "http://127.0.0.1:31337/chatkit",
+    );
+    expect(bridgeMock.disconnect).toHaveBeenCalled();
+  });
 });

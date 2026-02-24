@@ -9,6 +9,7 @@ import {
   useHarness,
   buildChatkitUrl,
   buildCodexBridgeWsUrl,
+  type HarnessProfile,
 } from "../../lib/runtime/harnessManager";
 import { getCodexToolBridge } from "../../lib/runtime/codexToolBridge";
 import { getCodexExecuteApprovalManager } from "../../lib/runtime/codexExecuteApprovalManager";
@@ -218,12 +219,15 @@ const useAuthorizedFetch = (
   }, [onSSEEvent, getChatkitState]);
 };
 
-function ChatKitPanel() {
+type ChatKitPanelInnerProps = {
+  defaultHarness: HarnessProfile;
+};
+
+function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const chatkitDomainKey = getConfiguredChatKitDomainKey();
   const [assistantPreview, setAssistantPreview] = useState("");
   const [codexBridgeError, setCodexBridgeError] = useState<string | null>(null);
-  const { defaultHarness } = useHarness();
   const { getChatkitState, setChatkitState } = useCell();
   const { getNotebookData, useNotebookSnapshot } = useNotebookContext();
   const { getCurrentDoc } = useCurrentDoc();
@@ -803,6 +807,17 @@ function ChatKitPanel() {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function ChatKitPanel() {
+  const { defaultHarness } = useHarness();
+  const harnessSessionKey = `${defaultHarness.name}:${defaultHarness.baseUrl}:${defaultHarness.adapter}`;
+  return (
+    <ChatKitPanelInner
+      key={harnessSessionKey}
+      defaultHarness={defaultHarness}
+    />
   );
 }
 

@@ -36,3 +36,9 @@ For CUJ/browser scripts:
 - Fail fast on required prerequisites.
 - Provide clear PASS/FAIL output for assertions.
 - Keep commands deterministic and avoid hidden state where possible.
+
+## Runme docs notebook format
+
+- Default format for Runme documentation notebooks is JSON notebook files (for example `docs/<name>.json`), not markdown `.runme.md`.
+- When adding notebook-based walkthroughs under `docs/`, create/update the JSON notebook directly.
+- Use markdown cells inside the JSON notebook for narrative instructions and code cells for runnable steps.
