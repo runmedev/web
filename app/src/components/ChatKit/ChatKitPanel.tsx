@@ -13,6 +13,7 @@ import {
 } from "../../lib/runtime/harnessManager";
 import { getCodexToolBridge } from "../../lib/runtime/codexToolBridge";
 import { getCodexExecuteApprovalManager } from "../../lib/runtime/codexExecuteApprovalManager";
+import { appLogger } from "../../lib/logging/runtime";
 
 import { getAccessToken, getAuthData } from "../../token";
 import { getBrowserAdapter } from "../../browserAdapter.client";
@@ -211,6 +212,12 @@ const useAuthorizedFetch = (
         return interceptedResponse;
       } catch (error) {
         console.error("ChatKit authorized fetch failed", error);
+        appLogger.error("ChatKit authorized fetch failed", {
+          attrs: {
+            scope: "chatkit.fetch",
+            error: String(error),
+          },
+        });
         throw error;
       }
     };
@@ -736,6 +743,12 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     },
     onError: ({ error }) => {
       const promptForLogin = () => setShowLoginPrompt(true);
+      const errorText =
+        typeof error === "string"
+          ? error
+          : error && typeof error === "object" && "message" in error
+            ? String((error as { message?: unknown }).message)
+            : String(error);
 
       // This is a bit of a hacky way to check for authentication errors.
       // Chatkit throws a StreamError if the user isn't logged in. 
@@ -747,6 +760,14 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       })();
 
       console.error("ChatKit error", error);
+      appLogger.error("ChatKit error", {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: defaultHarness.adapter,
+          baseUrl: defaultHarness.baseUrl,
+          error: errorText,
+        },
+      });
     },
   });
 

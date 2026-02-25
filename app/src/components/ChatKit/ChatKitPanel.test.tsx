@@ -8,6 +8,11 @@ let harnessState: { defaultHarness: { name: string; baseUrl: string; adapter: Ha
 let bridgeSnapshot: { state: "idle" | "connecting" | "open" | "closed" | "error"; url: string | null; lastError: string | null };
 let bridgeListener: (() => void) | null;
 const useChatKitMock = vi.fn();
+const { appLoggerMock } = vi.hoisted(() => ({
+  appLoggerMock: {
+    error: vi.fn(),
+  },
+}));
 const bridgeMock = {
   connect: vi.fn(),
   disconnect: vi.fn(),
@@ -95,6 +100,10 @@ vi.mock("../../lib/runtime/harnessManager", async () => {
   };
 });
 
+vi.mock("../../lib/logging/runtime", () => ({
+  appLogger: appLoggerMock,
+}));
+
 import ChatKitPanel from "./ChatKitPanel";
 
 describe("ChatKitPanel codex harness routing", () => {
@@ -120,6 +129,7 @@ describe("ChatKitPanel codex harness routing", () => {
     bridgeMock.subscribe.mockClear();
     bridgeMock.getSnapshot.mockClear();
     approvalMgrMock.failAll.mockClear();
+    appLoggerMock.error.mockClear();
   });
 
   afterEach(() => {
@@ -191,5 +201,25 @@ describe("ChatKitPanel codex harness routing", () => {
       "http://127.0.0.1:31337/chatkit",
     );
     expect(bridgeMock.disconnect).toHaveBeenCalled();
+  });
+
+  it("logs chatkit errors through appLogger", () => {
+    render(<ChatKitPanel />);
+
+    const config = useChatKitMock.mock.calls.at(0)?.[0];
+    expect(config).toBeDefined();
+
+    act(() => {
+      config.onError({ error: new Error("thread is not materialized yet") });
+    });
+
+    expect(appLoggerMock.error).toHaveBeenCalledWith("ChatKit error", {
+      attrs: {
+        scope: "chatkit.panel",
+        adapter: "responses",
+        baseUrl: "http://127.0.0.1:31337",
+        error: "thread is not materialized yet",
+      },
+    });
   });
 });
