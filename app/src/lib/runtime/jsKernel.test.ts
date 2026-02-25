@@ -97,6 +97,26 @@ describe("JSKernel app globals", () => {
     expect(streams.output.join("")).toContain("default-harness");
   });
 
+  it("preserves nested app namespaces like app.codex.project", async () => {
+    const streams = collectStdout();
+    const kernel = new JSKernel({
+      globals: {
+        app: {
+          codex: {
+            project: {
+              getDefault: () => "default-codex-project",
+            },
+          },
+        },
+      },
+      hooks: streams,
+    });
+
+    await kernel.run("console.log(app.codex.project.getDefault())");
+
+    expect(streams.output.join("")).toContain("default-codex-project");
+  });
+
   it("keeps app.runners helpers while preserving app.harness", async () => {
     const streams = collectStdout();
     const kernel = new JSKernel({
