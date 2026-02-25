@@ -49,7 +49,7 @@ Key external inputs:
 We support two harness paths:
 
 - `responses` (existing): browser `ChatKitPanel` -> Runme `/chatkit`.
-- `codex` (new): browser `ChatKitPanel` -> Runme `/codex/app-server/ws` -> local codex app-server.
+- `codex` (new): browser `ChatKitPanel` -> browser-side ChatKit/Codex adapter -> Runme `/codex/app-server/ws` -> local codex app-server.
 
 Bootstrap default harness adapter is `responses`.
 Active harness remains whichever profile is set by `app.harness.setDefault(name)`.
@@ -200,6 +200,7 @@ Through Runme server, with split control/data planes.
 - Browser uses a Runme websocket proxy for Codex app-server methods and notifications (proposed path: `/codex/app-server/ws`).
 - Browser opens a dedicated codex bridge websocket (`/codex/ws`) for asynchronous notebook MCP tool dispatch/results.
 - We do not use browser -> codex direct transport in v1.
+- For ChatKit UI compatibility, the browser also owns a small adapter layer that translates ChatKit send-message flow into Codex lifecycle calls and translates Codex notifications back into ChatKit-visible streamed events/state.
 
 Current JSON-RPC flow:
 
@@ -218,6 +219,51 @@ Why a websocket proxy instead of plain HTTP pass-through:
 - Codex turns emit asynchronous notifications after `turn/start`.
 - The browser needs one transport for requests, responses, and streamed notifications.
 - A websocket proxy lets the browser work against the Codex protocol directly without spawning a local Codex process.
+
+### 2e. Where does ChatKit-to-Codex protocol conversion happen?
+
+ChatKit UI and the Codex app-server do not speak the same protocol.
+
+- `@openai/chatkit-react` expects ChatKit-oriented request/stream semantics.
+- Codex app-server exposes JSON-RPC lifecycle methods (`thread/*`, `turn/*`) plus notifications over a websocket transport.
+
+Current implementation:
+
+- The browser sends ChatKit requests to Runme server.
+- Runme's `/chatkit-codex` handler performs the protocol translation.
+
+Updated design direction:
+
+- For the Codex harness, we move that translation into the browser.
+- Runme server still exposes the Codex websocket proxy at `/codex/app-server/ws`, but it is no longer responsible for re-encoding Codex notifications into ChatKit SSE for the browser.
+- The browser keeps ChatKit as the visible UI, but owns a `ChatKit <-> Codex` adapter layer.
+
+Recommended browser-side shape:
+
+- `CodexAppServerProxyClient`
+  - raw JSON-RPC websocket client for `/codex/app-server/ws`
+- `CodexConversationController`
+  - owns thread/turn lifecycle, current thread selection, history loading, and interrupt handling
+- `codexFetchShim`
+  - plugs into ChatKit's custom `fetch` hook
+  - returns a synthetic `Response` with a `ReadableStream`
+  - emits ChatKit-compatible SSE events derived from Codex notifications
+
+This lets the codex path preserve the current ChatKit UI contract without requiring Runme server to keep a ChatKit-shaped codex endpoint.
+
+### 2f. Should the browser-side adapter run in a Web Worker?
+
+Not in v1.
+
+- Browser `fetch` and `WebSocket` are already asynchronous and do not block the UI on their own.
+- The hard part is protocol/state mapping, not CPU-heavy work.
+- A Web Worker would add another protocol boundary (`postMessage`) plus token/lifecycle/debugging complexity.
+
+Decision:
+
+- Implement the codex adapter on the main thread first.
+- Keep the design worker-compatible so it can move later if we discover UI jank or need stronger isolation.
+- Do not introduce a Web Worker until the main-thread controller proves insufficient.
 
 ### 2a. Browser-facing Codex proxy API
 
@@ -393,7 +439,8 @@ sequenceDiagram
 
 - Keep `ChatKitPanel` as the only chat UI.
 - Keep `POST /chatkit` for the `responses` harness.
-- For the Codex harness, add a frontend adapter that uses the Codex websocket proxy rather than a ChatKit-shaped `/chatkit-codex` endpoint.
+- For the Codex harness, add a browser-side adapter that uses the Codex websocket proxy rather than a ChatKit-shaped `/chatkit-codex` endpoint.
+- The codex adapter should use ChatKit's custom `fetch` hook to return a synthetic `text/event-stream` `Response` backed by browser-side Codex lifecycle calls, not by a server-side ChatKit adapter.
 - Maintain ChatKit UI state using Codex thread ids and turn ids:
   - `thread_id` is the Codex thread ID
   - `previous_response_id` is the most recent Codex turn ID
@@ -410,6 +457,12 @@ sequenceDiagram
   - `turn/start`
   - `turn/interrupt`
 - Turn notifications should be translated into ChatKit store updates in the browser, rather than requiring the server to re-encode them as SSE.
+- Add a main-thread `CodexConversationController` that owns:
+  - current thread id / latest turn id
+  - `thread/start`, `thread/read`, `thread/resume`, `turn/start`, `turn/interrupt`
+  - history loading for the selected project
+  - conversion from Codex notifications into ChatKit-compatible streamed events
+- The controller should be designed so a future Web Worker migration is possible, but v1 should keep it on the main thread.
 
 ### Codex bridge client/runtime
 
@@ -529,7 +582,7 @@ sequenceDiagram
 2. Codex transport + browser proxy
 - Add codex process manager and browser-facing Codex websocket proxy in Runme server.
 - Keep `/chatkit` unchanged for `responses`.
-- Route selection happens client-side from harness profile `adapter` (`responses` -> `/chatkit`, `codex` -> `/codex/app-server/ws` plus `/codex/ws`).
+- Route selection happens client-side from harness profile `adapter` (`responses` -> `/chatkit`, `codex` -> browser-side ChatKit/Codex adapter backed by `/codex/app-server/ws` plus `/codex/ws`).
 
 3. Projects + history UI
 - Add AppKernel-managed Codex projects and a default project.

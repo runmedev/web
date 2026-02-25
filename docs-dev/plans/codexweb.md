@@ -1,172 +1,429 @@
-# Codex Web Frontend Plan
+# Codex Web Frontend Execution Plan
 
 ## Summary
 
-This plan covers the frontend (`web`) work needed to support the codex harness path described in `docs-dev/design/codexapp.md`.
+`docs-dev/design/codexapp.md` has moved the codex frontend design in two important ways:
 
-Your framing is correct with one refinement:
+1. Codex chat traffic no longer goes through a ChatKit-shaped `/chatkit-codex` HTTP/SSE adapter.
+2. The browser now owns a Runme-level `project -> thread history -> turns` model on top of the Codex websocket proxy.
+3. The ChatKit-to-Codex protocol conversion moves into the browser, implemented as a main-thread adapter/controller rather than a Web Worker in v1.
 
-1. Harness selection/configuration (`responses` vs `codex`)
-2. `/codex/ws` bridge connection and notebook tool fulfillment
+That means the old frontend split is no longer sufficient. The frontend work is now:
 
-Refinement: `ExecuteCells` approval (`app.runCells([...])`) is part of (2), because it is the frontend behavior for fulfilling a notebook tool request.
+1. Harness selection and bootstrap (`responses` vs `codex`)
+2. Codex project management in browser/AppKernel
+3. Codex proxy client for lifecycle + thread management (`/codex/app-server/ws`)
+4. Browser-side ChatKit/Codex adapter (`codexFetchShim` + `CodexConversationController`)
+5. ChatKit UI integration for project selection, history, new chat, and interrupt
+6. Existing `/codex/ws` notebook bridge and `ExecuteCells` approval flow
 
-## Scope (Frontend Only)
+## Current State
 
-- In scope:
-  - Harness profile management and routing in the web app
-  - ChatKit frontend routing to `/chatkit` vs `/chatkit-codex`
-  - Codex websocket bridge client/runtime (`/codex/ws`)
-  - Browser-side notebook tool dispatch (`List/Get/Update/ExecuteCells`)
-  - UI/App Console handling for `ExecuteCells` approval
-  - Frontend tests and CUJs
+Implemented already:
 
-- Out of scope:
-  - Runme server `/chatkit-codex` handler implementation
-  - Codex app-server process manager / JSON-RPC adapter
-  - Streamable MCP server implementation in Runme
+- Harness manager and `app.harness.*`
+- Codex notebook bridge client on `/codex/ws`
+- Browser fulfillment of notebook tool calls (`List/Get/Update/ExecuteCells`)
+- `app.runCells([...])`
+- Codex CUJ coverage for notebook mutation/approval
 
-## Workstream 1: Harness Selection and ChatKit Routing
+Out of date versus the latest design:
 
-### Goal
+- Codex harness still routes ChatKit to `/chatkit-codex`
+- No browser `CodexAppServerProxyClient`
+- No browser-side `CodexConversationController` / `codexFetchShim`
+- No Codex project manager
+- No `app.codex.project.*` AppKernel/App Console helpers
+- No project selector / `New chat` UI
+- No project-scoped conversation history from `thread/list`
+- No `thread/read` / `thread/resume` flow in the UI
+- No `turn/interrupt` wiring from the chat UI
 
-User can configure which harness to use (`responses` or `codex`) and ChatKit requests are routed to the matching backend path.
+## Frontend Changes Required
 
-### Implementation Tasks
+### 1. Replace codex chat transport
 
-1. Harness state and bootstrap
-- Add/finish global harness manager singleton as source of truth.
-- Persist profiles + default in local storage key `runme/harness`.
-- Bootstrap on app load using app-config preload pattern:
-  - honor existing local storage if present
-  - otherwise seed from `/configs/app-configs.yaml`
-  - fallback to `local-responses` at `window.location.origin`
+For `codex` harnesses, the browser must stop using `POST /chatkit-codex` and instead:
 
-2. App Console commands
-- `app.harness.get()`
-- `app.harness.update(name, baseUrl, adapter)`
-- `app.harness.delete(name)`
-- `app.harness.getDefault()`
-- `app.harness.setDefault(name)`
-- Include active harness info in `help()` output
+- open `/codex/app-server/ws`
+- send JSON-RPC requests for:
+  - `thread/list`
+  - `thread/read`
+  - `thread/start`
+  - `thread/resume`
+  - `turn/start`
+  - `turn/interrupt`
+- receive streamed notifications for turn items/completion
+- translate those notifications into ChatKit-visible message state
+- expose a synthetic ChatKit-compatible `fetch` path in the browser by returning a `ReadableStream`-backed `text/event-stream` `Response`
 
-3. ChatKit frontend routing
-- Use default harness profile to build ChatKit API URL/path:
-  - `responses` -> `/chatkit`
-  - `codex` -> `/chatkit-codex`
-- Keep `ChatKitPanel` as the only chat UI
-- Preserve `chatkit_state` behavior (`thread_id`, `previous_response_id`)
+Recommended browser shape:
 
-4. Diagnostics
-- Clear error when harness config is invalid (unknown adapter, malformed URL)
-- Clear UI/App Console feedback for active harness and routing target
+- `CodexAppServerProxyClient`
+  - raw JSON-RPC websocket client
+- `CodexConversationController`
+  - owns thread/turn lifecycle and history selection
+- `codexFetchShim`
+  - plugs into ChatKit's custom `fetch`
+  - maps ChatKit send-message flow into controller calls
+  - emits ChatKit-compatible SSE events from Codex notifications
 
-### Tests
+Decision:
 
-1. Unit tests
-- Harness manager CRUD + default selection
-- Bootstrap precedence (local storage > app config > fallback)
-- URL/path builder for `responses` vs `codex`
+- do this on the main thread first
+- do not introduce a Web Worker in v1
+- keep the controller boundary clean so a worker migration stays possible later
 
-2. Component/integration tests (frontend)
-- `ChatKitPanel` routes to `/chatkit` for `responses`
-- `ChatKitPanel` routes to `/chatkit-codex` for `codex`
+Impacted frontend areas:
 
-3. CUJ coverage
-- User can open ChatKit panel and chat using default fallback harness (`responses`)
-- User can change harness via App Console
-- User can chat after changing harness
+- `/Users/jlewi/code/runmecodex/web/app/src/components/ChatKit/ChatKitPanel.tsx`
+- new runtime client under `/Users/jlewi/code/runmecodex/web/app/src/lib/runtime/`
+- harness URL builder in `/Users/jlewi/code/runmecodex/web/app/src/lib/runtime/harnessManager.ts`
 
-## Workstream 2: Codex Websocket Bridge and Notebook Request Fulfillment
+### 2. Add Codex project management
 
-### Goal
+The browser needs a first-class Runme project abstraction because Codex only exposes thread defaults.
 
-When using the codex harness, the frontend opens `/codex/ws`, receives notebook tool requests, fulfills them using browser notebook APIs, and returns results. `ExecuteCells` requires explicit user approval.
+Required project fields:
 
-### Implementation Tasks
+- `id`
+- `name`
+- `cwd`
+- `model`
+- `approvalPolicy`
+- `sandboxPolicy`
+- `personality`
+- optional `writableRoots`
+- optional notebook/workspace metadata
 
-1. Codex bridge client/runtime
-- Add `CodexToolBridge` websocket client for `/codex/ws`
-- Single connection per app session
-- Connection lifecycle:
-  - open on demand (codex harness active / chat panel use)
-  - reconnect policy (if desired for v1) or explicit reconnect action
-  - handle `409 codex_ws_already_connected` diagnostic
-- Correlate requests/responses by `bridge_call_id`
+Required frontend behavior:
 
-2. Browser notebook tool fulfillment
-- Dispatch `ListCells` via existing notebook APIs
-- Dispatch `GetCells` via existing notebook APIs
-- Dispatch `UpdateCells` via existing notebook APIs and renderer updates
-- Return structured success/failure payloads over websocket
+- persist projects + default project in browser/AppKernel storage
+- expose singleton manager to UI and AppKernel
+- let user choose active project before starting/resuming chat
+- use project `cwd` to scope conversation history
 
-3. `ExecuteCells` approval flow (v0)
-- Queue pending `ExecuteCells` request instead of executing immediately
-- Surface pending request in UI/App Console
-- Implement `app.runCells(["cellID", ...])` to approve and execute the queued request
-- Reuse existing runner execution path after approval
-- Return full stdout/stderr in tool response
+Required APIs:
 
-4. Error and disconnect handling
-- No bridge connected -> explicit diagnostic
-- Bridge disconnect during pending request -> fail request cleanly
-- Request timeout -> fail request with clear message
-- Unknown tool / malformed payload -> structured error response
+- `app.codex.project.list()`
+- `app.codex.project.create(name, cwd, model, sandboxPolicy, approvalPolicy, personality)`
+- `app.codex.project.update(id, patch)`
+- `app.codex.project.delete(id)`
+- `app.codex.project.getDefault()`
+- `app.codex.project.setDefault(id)`
 
-### Tests
+Impacted frontend areas:
 
-1. Unit tests
-- `CodexToolBridge` message decode/encode and `bridge_call_id` correlation
-- Tool dispatch mapping (`List/Get/Update/ExecuteCells`)
-- Pending approval queue semantics and `app.runCells(...)`
-- Error mapping for malformed/unknown requests
+- new runtime manager under `/Users/jlewi/code/runmecodex/web/app/src/lib/runtime/`
+- `/Users/jlewi/code/runmecodex/web/app/src/components/AppConsole/AppConsole.tsx`
+- `/Users/jlewi/code/runmecodex/web/app/src/lib/notebookData.ts`
+- `/Users/jlewi/code/runmecodex/web/app/src/lib/runtime/jsKernel.ts`
 
-2. Integration tests (frontend with fake websocket server)
-- Use a `WebSocket` browser-API test double (mock/fake `globalThis.WebSocket`) in Vitest; do not require a real network websocket server for frontend integration tests
-- Fake websocket peer sends notebook tool calls; frontend returns expected responses
-- `UpdateCells` visibly mutates notebook state
-- `ExecuteCells` is queued until `app.runCells(...)` approval is issued
-- Disconnect mid-request produces deterministic failure response
+### 3. Add browser-side ChatKit/Codex adapter
 
-Notes:
-- The test double should support scripted `open`, `message`, `close`, and `error` events and capture `send(...)` payloads for assertions.
-- Reserve a real fake `/codex/ws` server (for example in Go) for CUJ/E2E tests where we want to exercise actual browser network websocket behavior.
+The codex path still needs ChatKit/Codex protocol conversion. The difference is that the conversion now lives in the browser instead of Runme server.
 
-3. CUJ coverage (codex harness mode)
-- Use fake backend services for determinism in CUJ/E2E:
-  - fake `/chatkit-codex` SSE handler (scripted assistant response)
-  - fake `/codex/ws` websocket server (scripted notebook tool calls)
-- Configure codex harness in App Console
-- Open ChatKit and verify codex bridge connection established
-- Ask AI to modify a notebook cell (user-facing prompt)
-- Fake `/codex/ws` sends `UpdateCells`; verify tool-driven notebook update appears in notebook UI and persisted notebook state
-- `ExecuteCells` request surfaces approval prompt path (`app.runCells([...])`)
-- After approval, execution output appears and tool result returns
-- Verify assistant response appears in ChatKit panel
-- Record walkthrough video artifact for the codex CUJ scenario
+Required runtime behavior:
 
-## Proposed Sequence
+- parse ChatKit request payloads from the custom `fetch` hook
+- decide whether to:
+  - `thread/start` for a new conversation
+  - `thread/resume` for an existing stored thread
+  - `turn/start` for the current user message
+- turn Codex websocket notifications into ChatKit-compatible SSE events/messages
+- map ChatKit cancel/abort to `turn/interrupt`
+- keep auth/header handling in the browser fetch path
 
-1. Finish/stabilize Workstream 1 (harness config + routing) and keep current AI CUJ green
-2. Add `CodexToolBridge` skeleton + protocol types (no tool execution yet)
-3. Implement `List/Get/Update` fulfillment and add fake websocket integration tests
-4. Implement `ExecuteCells` pending approval + `app.runCells([...])`
-5. Add codex-mode CUJ with fake backend(s) and stabilize artifacts (screenshots/videos)
+Required implementation structure:
 
-## Acceptance Criteria
+- `CodexAppServerProxyClient`
+- `CodexConversationController`
+- `codexFetchShim`
 
-1. User can configure a named harness with adapter `codex` via App Console and set it default
-2. ChatKit frontend routes requests to `/chatkit-codex` when codex harness is active
-3. Frontend maintains a single `/codex/ws` bridge connection and handles conflict diagnostics
-4. Frontend fulfills `ListCells`/`GetCells`/`UpdateCells` requests over the bridge
-5. `ExecuteCells` requires explicit user approval (`app.runCells([...])`) before execution
-6. CUJs cover harness switching and codex notebook-tool fulfillment paths
+Why not a Web Worker:
 
-## Dependencies / Coordination (Runme Server)
+- transport is already async
+- the complexity is state/protocol mapping, not CPU
+- a worker adds another messaging protocol without reducing the core integration risk
 
-Frontend implementation can begin with fakes, but final integration depends on Runme server providing:
+### 4. Add project-scoped thread lifecycle in ChatKit UI
 
-- `/chatkit-codex` SSE-compatible handler
-- `/codex/ws` websocket protocol + envelope schema
-- Stable `NotebookToolCallRequest/Response` payloads with `bridge_call_id`
-- Expected error codes (including websocket `409` conflict case)
+The ChatKit panel needs new codex-specific control state while keeping the existing layout.
+
+Required UI additions:
+
+- project selector in ChatKit header
+- `New chat` action
+- project-scoped history list from `thread/list`
+- resume existing conversation by:
+  - `thread/read` for preview/state
+  - `thread/resume` before next user turn
+- maintain `thread_id` as Codex thread id
+- maintain `previous_response_id` as latest Codex turn id
+- support `turn/interrupt` from the existing stop/cancel affordance
+
+Required policy behavior:
+
+- new chat starts a new thread using selected project defaults
+- changing project should not silently mutate an existing unrelated thread
+- history filtering must use exact `cwd`
+
+Impacted frontend areas:
+
+- `/Users/jlewi/code/runmecodex/web/app/src/components/ChatKit/ChatKitPanel.tsx`
+- possible ChatKit wrapper/runtime files if the current `useChatKit` integration cannot ingest external websocket-driven state directly
+
+### 5. Keep `/codex/ws` bridge, but rebind it to thread-driven chat flow
+
+The notebook bridge work already exists, but it now needs to be integrated with the new lifecycle model.
+
+Required behavior:
+
+- keep one `/codex/ws` bridge per browser app session
+- attach it whenever codex harness is active
+- make it usable across many Codex threads in the same browser session
+- keep notebook tool handling conversation-agnostic
+- preserve `ExecuteCells` approval flow through `app.runCells([...])`
+- surface bridge and proxy failures in logs without obscuring the chat UI
+
+This is primarily an integration/refactor task, not a greenfield feature.
+
+### 6. Add bootstrap + storage rules for codex projects
+
+We already bootstrap harnesses. We need the same discipline for codex projects.
+
+Required behavior:
+
+- initialize a singleton project manager on app load
+- prefer existing user-managed storage
+- support initial seeding from app config if codex projects are later added there
+- otherwise create a sensible fallback default project for local usage
+- keep storage keys aligned with current naming patterns (`runme/...`)
+
+Open implementation detail:
+
+- storage key name for projects is not specified in the design doc; pick a stable key such as `runme/codex-project` or `runme/codex/projects` and use it consistently in manager, tests, and docs
+
+## Proposed Execution Sequence
+
+### Phase 1: Project Manager and AppKernel Surface
+
+Goal:
+
+- browser/AppKernel can create, update, list, and select Codex projects
+
+Tasks:
+
+- implement `CodexProjectManager`
+- add storage + subscription model similar to harness manager
+- expose `app.codex.project.*` in App Console
+- expose `app.codex.project.*` in AppKernel notebook cells
+- add tests for CRUD/default selection/persistence
+
+Why first:
+
+- project selection is a prerequisite for `thread/start`, `thread/list`, and history filtering
+
+### Phase 2: Codex Proxy Runtime
+
+Goal:
+
+- browser can talk to `/codex/app-server/ws` using a typed runtime client
+
+Tasks:
+
+- add `buildCodexAppServerWsUrl(...)`
+- generate or check in the TS protocol types for the supported methods/events
+- implement `CodexAppServerProxyClient`
+- support request/response correlation and streamed notifications
+- support clean reconnect/disconnect/error handling
+
+Tests:
+
+- unit tests for request correlation and notification dispatch
+- integration tests with a mocked/fake `globalThis.WebSocket`
+- explicit coverage for malformed frames, disconnects, and in-flight errors
+
+Why second:
+
+- this is the transport foundation for lifecycle and history UI
+
+### Phase 3: Browser-side ChatKit/Codex Adapter
+
+Goal:
+
+- codex harness uses websocket lifecycle operations instead of `/chatkit-codex`
+
+Tasks:
+
+- implement `CodexConversationController`
+- implement `codexFetchShim`
+- refactor `ChatKitPanel` so:
+  - `responses` still uses existing `useChatKit` HTTP flow
+  - `codex` uses the ChatKit custom `fetch` hook backed by the browser-side codex adapter
+- translate Codex notifications into ChatKit-visible state/messages
+- preserve existing responses behavior untouched
+- wire `thread_id` / `previous_response_id` to Codex thread/turn ids
+- wire stop/cancel to `turn/interrupt`
+
+Key risk:
+
+- the current `@openai/chatkit-react` integration is oriented around API transport ownership. The first attempt should preserve that contract by returning a synthetic SSE `Response` from the custom `fetch` hook. If ChatKit still assumes too much server behavior, we may need a thinner UI-only ChatKit wrapper that is fed by browser-owned state.
+
+Tests:
+
+- component tests for harness split:
+  - `responses` still uses `/chatkit`
+  - `codex` uses `/codex/app-server/ws`
+- unit tests for turn-start, interrupt, and notification-to-message rendering
+
+### Phase 4: Project Selector, New Chat, and History UI
+
+Goal:
+
+- user can choose a project, start a new thread, and resume prior project-scoped threads
+
+Tasks:
+
+- add project selector in ChatKit header
+- add `New chat`
+- fetch `thread/list` for selected project
+- load previews/state with `thread/read`
+- resume selected thread with `thread/resume`
+- ensure project switch refreshes history and active-thread state predictably
+
+Tests:
+
+- component tests for selector/history interactions
+- integration tests with fake proxy responses for:
+  - project switch
+  - new chat
+  - resume existing thread
+  - exact-`cwd` history filtering
+
+### Phase 5: Rebind `/codex/ws` Notebook Bridge to the New Lifecycle
+
+Goal:
+
+- existing notebook bridge remains stable while chats are driven by threads via the proxy
+
+Tasks:
+
+- connect bridge independently of active thread
+- ensure tool calls still update notebook state in the currently loaded notebook context
+- verify `ExecuteCells` approvals still work after ChatKit transport refactor
+- align logging/diagnostics across proxy and bridge
+
+Tests:
+
+- regression tests for existing `CodexToolBridge`
+- integration test covering:
+  - `turn/start`
+  - notebook tool call over `/codex/ws`
+  - `app.runCells([...])`
+  - final assistant completion
+
+## Test Plan
+
+### Unit Tests
+
+- `HarnessManager`
+  - no transport regression for `responses`
+  - new codex app-server websocket URL builder
+- `CodexProjectManager`
+  - CRUD
+  - default selection
+  - persistence/bootstrap
+- `CodexAppServerProxyClient`
+  - JSON-RPC request/response correlation
+  - notification fanout
+  - disconnect/error behavior
+- `CodexConversationController`
+  - thread state transitions
+  - new-thread vs resumed-thread behavior
+  - interrupt behavior
+- `codexFetchShim`
+  - ChatKit request parsing
+  - SSE event generation
+- ChatKit codex adapter
+  - notification-to-rendered-message mapping
+
+### Frontend Integration Tests
+
+Use mocked/fake `globalThis.WebSocket`, not a real websocket server.
+
+Coverage:
+
+- proxy connect / disconnect / reconnect
+- `thread/start` sends selected project defaults
+- `thread/list` filtering results drive history list
+- `thread/read` + `thread/resume` update active conversation
+- notifications render visible assistant/user transcript state
+- `codexFetchShim` returns a ChatKit-compatible `text/event-stream` response
+- `/codex/ws` notebook tool calls still succeed while proxy client is active
+
+### CUJ / E2E Tests
+
+Use fake backend services implemented as real processes.
+
+Required fake services:
+
+- fake `/codex/app-server/ws` server
+- fake `/codex/ws` notebook bridge server
+- existing fake auth/bootstrap dependencies as needed
+
+Required CUJs:
+
+1. `ai.md` / responses path remains healthy
+- user opens ChatKit
+- user sends message
+- assistant response is visible
+
+2. codex project + thread lifecycle CUJ
+- configure codex harness
+- create/select project in App Console or AppKernel
+- open ChatKit
+- start new chat in that project
+- visible user message and visible assistant acknowledgement render
+- fake proxy emits project-scoped thread id + turn stream
+- notebook mutation arrives over `/codex/ws`
+- notebook visibly updates
+- assistant completion renders
+
+3. codex history/resume CUJ
+- project has at least two stored threads
+- history list is filtered by selected project `cwd`
+- selecting a prior conversation resumes it
+- follow-up user message continues that thread
+
+4. codex execute approval CUJ
+- assistant requests execution
+- pending approval is surfaced
+- `app.runCells([...])` is used
+- stdout/stderr output is visible
+
+All codex CUJs should continue producing walkthrough videos.
+
+## Backend Dependencies
+
+Frontend implementation can start behind fakes, but final integration depends on Runme server providing:
+
+- `/codex/app-server/ws` websocket proxy
+- supported JSON-RPC methods:
+  - `thread/list`
+  - `thread/read`
+  - `thread/start`
+  - `thread/resume`
+  - `turn/start`
+  - `turn/interrupt`
+- stable notification shapes for item/turn events
+- `/codex/ws` envelope compatibility with the existing bridge client
+- precise proxy/bridge error codes so UI can show actionable diagnostics
+
+## Recommended First PR Breakdown
+
+1. `CodexProjectManager` + `app.codex.project.*` + AppKernel tests
+2. `CodexAppServerProxyClient` runtime + websocket integration tests
+3. `ChatKitPanel` codex transport refactor (`/codex/app-server/ws`)
+4. project selector + `New chat` + history UI
+5. codex lifecycle CUJs and bridge regression pass
