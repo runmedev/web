@@ -1,3 +1,5 @@
+import { appLogger } from "../logging/runtime";
+
 export type CodexToolBridgeRequestEnvelope = {
   type: "NotebookToolCallRequest" | "notebook_tool_call_request";
   bridge_call_id?: string;
@@ -96,10 +98,22 @@ class CodexToolBridge {
           return;
         }
         this.state = "closed";
+        let errorMessage: string | null = null;
         if (event.reason) {
-          this.lastError = event.reason;
+          errorMessage = event.reason;
         } else if (typeof event.code === "number" && event.code !== 1000) {
-          this.lastError = `Codex bridge websocket closed (${event.code})`;
+          errorMessage = `Codex bridge websocket closed (${event.code})`;
+        }
+        if (errorMessage) {
+          this.lastError = errorMessage;
+          appLogger.error("Codex bridge websocket closed", {
+            attrs: {
+              scope: "chatkit.codex_bridge",
+              code: event.code,
+              reason: event.reason || undefined,
+              url: this.url,
+            },
+          });
         }
         this.notify();
       };
@@ -109,6 +123,13 @@ class CodexToolBridge {
         }
         this.state = "error";
         this.lastError = this.lastError ?? "Codex bridge websocket error";
+        appLogger.error("Codex bridge websocket error", {
+          attrs: {
+            scope: "chatkit.codex_bridge",
+            url: this.url,
+            state: this.state,
+          },
+        });
         this.notify();
       };
       ws.onmessage = (event) => {
@@ -189,6 +210,13 @@ class CodexToolBridge {
   private setError(message: string): void {
     this.lastError = message;
     this.state = "error";
+    appLogger.error("Codex bridge error", {
+      attrs: {
+        scope: "chatkit.codex_bridge",
+        error: message,
+        url: this.url,
+      },
+    });
     this.notify();
   }
 
@@ -197,7 +225,12 @@ class CodexToolBridge {
       try {
         listener();
       } catch (error) {
-        console.error("CodexToolBridge listener failed", error);
+        appLogger.error("CodexToolBridge listener failed", {
+          attrs: {
+            scope: "chatkit.codex_bridge",
+            error: String(error),
+          },
+        });
       }
     });
   }

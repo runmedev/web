@@ -227,7 +227,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const chatkitDomainKey = getConfiguredChatKitDomainKey();
   const [assistantPreview, setAssistantPreview] = useState("");
-  const [codexBridgeError, setCodexBridgeError] = useState<string | null>(null);
   const { getChatkitState, setChatkitState } = useCell();
   const { getNotebookData, useNotebookSnapshot } = useNotebookContext();
   const { getCurrentDoc } = useCurrentDoc();
@@ -497,10 +496,8 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
 
   useEffect(() => {
     const bridge = getCodexToolBridge();
-    setCodexBridgeError(bridge.getSnapshot().lastError);
     return bridge.subscribe(() => {
       const snapshot = bridge.getSnapshot();
-      setCodexBridgeError(snapshot.lastError);
       if (
         defaultHarness.adapter === "codex" &&
         (snapshot.state === "closed" || snapshot.state === "error")
@@ -765,14 +762,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   return (
     <div className="relative h-full w-full">
       <ChatKit control={chatkit.control} className="block h-full w-full" />
-      {defaultHarness.adapter === "codex" && codexBridgeError ? (
-        <div
-          data-testid="codex-bridge-error"
-          className="pointer-events-none absolute left-2 right-2 top-2 rounded border border-red-300 bg-white/95 px-2 py-1 text-[12px] text-red-700 shadow-sm"
-        >
-          Codex bridge error: {codexBridgeError}
-        </div>
-      ) : null}
       {import.meta.env.DEV && assistantPreview ? (
         <div
           data-testid="chatkit-assistant-preview"

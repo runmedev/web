@@ -146,7 +146,7 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(bridgeMock.setHandler).toHaveBeenCalled();
   });
 
-  it("shows codex bridge error diagnostic banner and clears pending approvals on disconnect", () => {
+  it("clears pending approvals on codex bridge disconnect without showing an in-panel error banner", () => {
     harnessState.defaultHarness.adapter = "codex";
     bridgeSnapshot = {
       state: "error",
@@ -159,9 +159,7 @@ describe("ChatKitPanel codex harness routing", () => {
       bridgeListener?.();
     });
 
-    expect(screen.getByTestId("codex-bridge-error").textContent).toContain(
-      "codex_ws_already_connected",
-    );
+    expect(screen.queryByTestId("codex-bridge-error")).toBeNull();
     expect(approvalMgrMock.failAll).toHaveBeenCalledWith("Codex bridge disconnected");
   });
 
