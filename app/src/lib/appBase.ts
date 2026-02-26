@@ -104,3 +104,17 @@ export function getAppPath(path = ""): string {
 export function getOidcCallbackUrl(): string {
   return resolveAppUrl(APP_ROUTE_PATHS.oidcCallback).toString();
 }
+
+export function normalizeAppIndexUrl(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const { pathname, search, hash } = window.location;
+  if (!pathname.endsWith("/index.html")) {
+    return;
+  }
+
+  const normalizedPath = pathname.slice(0, -"/index.html".length) || ROOT_PATH;
+  window.history.replaceState(null, "", `${ensureTrailingSlash(normalizedPath)}${search}${hash}`);
+}

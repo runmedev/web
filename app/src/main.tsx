@@ -15,6 +15,7 @@ import {
   maybeSetAppConfig,
   setAppConfig,
 } from "./lib/appConfig";
+import { normalizeAppIndexUrl } from "./lib/appBase";
 
 type AppConfigApi = {
   getDefaultConfigUrl: () => string;
@@ -47,6 +48,8 @@ const noopBridge: RendererContext<void> = {
   onDidReceiveMessage: () => ({ dispose: () => {} }),
 };
 setContext(noopBridge);
+
+normalizeAppIndexUrl();
 
 // Initialize auth, then render
 maybeSetAppConfig().finally(() => {

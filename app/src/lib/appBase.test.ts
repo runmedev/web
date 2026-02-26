@@ -5,6 +5,7 @@ import {
   deriveAppBasePath,
   getAppPath,
   getOidcCallbackUrl,
+  normalizeAppIndexUrl,
   resolveAppUrl,
 } from "./appBase";
 
@@ -44,5 +45,19 @@ describe("app base URL helpers", () => {
     expect(getOidcCallbackUrl()).toBe(
       `${origin}/runme-dev-assets/oidc/callback`,
     );
+  });
+
+  it("normalizes index.html entry URLs to the directory path", () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/runme-dev-assets/index.html?doc=foo#section-1",
+    );
+
+    normalizeAppIndexUrl();
+
+    expect(window.location.pathname).toBe("/runme-dev-assets/");
+    expect(window.location.search).toBe("?doc=foo");
+    expect(window.location.hash).toBe("#section-1");
   });
 });
