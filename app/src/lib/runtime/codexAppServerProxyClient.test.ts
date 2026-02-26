@@ -1,5 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const { appLoggerMock } = vi.hoisted(() => ({
+  appLoggerMock: {
+    error: vi.fn(),
+  },
+}));
+
+vi.mock("../logging/runtime", () => ({
+  appLogger: appLoggerMock,
+}));
+
 import {
   createCodexAppServerProxyClientForTests,
   type WebSocketFactory,
@@ -54,6 +64,7 @@ describe("CodexAppServerProxyClient", () => {
 
   beforeEach(() => {
     sockets = [];
+    appLoggerMock.error.mockClear();
     (globalThis as unknown as { WebSocket: typeof WebSocket }).WebSocket = {
       OPEN: FakeWebSocket.OPEN,
     } as typeof WebSocket;
@@ -176,5 +187,25 @@ describe("CodexAppServerProxyClient", () => {
     await expect(responsePromise).rejects.toThrow("proxy_closed");
     expect(client.getSnapshot().lastError).toBe("proxy_closed");
   });
-});
 
+  it("logs websocket connection errors through appLogger", async () => {
+    const client = createCodexAppServerProxyClientForTests({ wsFactory });
+
+    const connectPromise = client.connect("ws://localhost:1234/codex/app-server/ws");
+    sockets[0]?.emitError();
+
+    await expect(connectPromise).rejects.toThrow(
+      "Codex app-server websocket error",
+    );
+    expect(appLoggerMock.error).toHaveBeenCalledWith(
+      "Codex app-server websocket error",
+      {
+        attrs: {
+          scope: "chatkit.codex_proxy",
+          error: "Codex app-server websocket error",
+          url: "ws://localhost:1234/codex/app-server/ws",
+        },
+      },
+    );
+  });
+});

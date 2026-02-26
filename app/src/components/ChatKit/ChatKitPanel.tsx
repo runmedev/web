@@ -83,6 +83,38 @@ const useAuthorizedFetch = (
   const { onSSEEvent, baseFetch } = options ?? {};
   return useMemo(() => {
     const fetchImpl = baseFetch ?? fetch;
+    const resolveRequestBody = async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ): Promise<BodyInit | null | undefined> => {
+      if (init?.body != null) {
+        return init.body;
+      }
+      if (!(input instanceof Request)) {
+        return init?.body;
+      }
+      const clone = input.clone();
+      const contentType = clone.headers.get("content-type")?.toLowerCase() ?? "";
+      if (contentType.includes("multipart/form-data")) {
+        try {
+          return await clone.formData();
+        } catch {
+          return null;
+        }
+      }
+      if (contentType.includes("application/x-www-form-urlencoded")) {
+        try {
+          return new URLSearchParams(await clone.text());
+        } catch {
+          return null;
+        }
+      }
+      try {
+        return await clone.text();
+      } catch {
+        return null;
+      }
+    };
     const authorizedFetch: typeof fetch = async (
       input: RequestInfo | URL,
       init?: RequestInit,
@@ -106,7 +138,7 @@ const useAuthorizedFetch = (
 
         headers.set("OpenAIAccessToken", oaiAccessToken);
 
-        let body = init?.body;
+        let body = await resolveRequestBody(input, init);
         const method =
           init?.method ?? (input instanceof Request ? input.method : "GET");
         if (method.toUpperCase() === "POST") {
@@ -244,6 +276,13 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const chatkitDomainKey = getConfiguredChatKitDomainKey();
   const [assistantPreview, setAssistantPreview] = useState("");
   const [showCodexDrawer, setShowCodexDrawer] = useState(false);
+  const syncedCodexStateRef = useRef<{
+    threadId: string | null;
+    previousResponseId: string | null;
+  }>({
+    threadId: null,
+    previousResponseId: null,
+  });
   const chatkitActionsRef = useRef<{
     setThreadId: (threadId: string | null) => Promise<void>;
     fetchUpdates: () => Promise<void>;
@@ -487,6 +526,26 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
             JSON.stringify(stateData),
           );
           setChatkitState(state);
+          if (defaultHarness.adapter === "codex" && state.threadId) {
+            const nextThreadId = state.threadId ?? null;
+            const nextPreviousResponseId = state.previousResponseId ?? null;
+            const previous = syncedCodexStateRef.current;
+            if (
+              previous.threadId !== nextThreadId ||
+              previous.previousResponseId !== nextPreviousResponseId
+            ) {
+              syncedCodexStateRef.current = {
+                threadId: nextThreadId,
+                previousResponseId: nextPreviousResponseId,
+              };
+              queueMicrotask(() => {
+                void (async () => {
+                  await chatkitActionsRef.current?.setThreadId(nextThreadId);
+                  await chatkitActionsRef.current?.fetchUpdates();
+                })();
+              });
+            }
+          }
           if (state.previousResponseId || state.threadId) {
             console.log(
               "ChatKit state update",
@@ -505,7 +564,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         }
       }
     },
-    [setAssistantPreview, setChatkitState],
+    [defaultHarness.adapter, setAssistantPreview, setChatkitState],
   );
   const codexFetch = useMemo(() => createCodexChatkitFetch(), []);
   const authorizedFetch = useAuthorizedFetch(getChatkitState, {
@@ -875,6 +934,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     const controller = getCodexConversationController();
     controller.startNewChat();
     setChatkitState(create(ChatkitStateSchema, {}));
+    syncedCodexStateRef.current = {
+      threadId: null,
+      previousResponseId: null,
+    };
     await chatkitActionsRef.current?.setThreadId(null);
   }, [setChatkitState]);
 
@@ -888,6 +951,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           previousResponseId: thread.previousResponseId ?? "",
         }),
       );
+      syncedCodexStateRef.current = {
+        threadId: thread.id,
+        previousResponseId: thread.previousResponseId ?? null,
+      };
       await chatkitActionsRef.current?.setThreadId(thread.id);
       await chatkitActionsRef.current?.fetchUpdates();
       setShowCodexDrawer(false);
@@ -901,6 +968,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       controller.setSelectedProject(projectId);
       controller.startNewChat();
       setChatkitState(create(ChatkitStateSchema, {}));
+      syncedCodexStateRef.current = {
+        threadId: null,
+        previousResponseId: null,
+      };
       await chatkitActionsRef.current?.setThreadId(null);
       await controller.refreshHistory();
     },

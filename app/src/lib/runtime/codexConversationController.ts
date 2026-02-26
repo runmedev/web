@@ -51,6 +51,22 @@ type CodexStreamSink = {
   emit: (payload: unknown) => void;
 };
 
+function emitChatkitState(
+  sink: CodexStreamSink,
+  threadId: string,
+  previousResponseId?: string,
+): void {
+  sink.emit({
+    type: "aisre.chatkit.state",
+    item: {
+      state: {
+        threadId,
+        previousResponseId,
+      },
+    },
+  });
+}
+
 function asRecord(value: unknown): JsonRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -248,9 +264,11 @@ function createAssistantItem(itemId: string): CodexConversationItem {
   };
 }
 
-function stringifyEvent(payload: unknown): string {
-  return `data: ${JSON.stringify(payload)}\n\n`;
-}
+type MappedAssistantEvent =
+  | { kind: "message_started"; responseId: string; itemId: string }
+  | { kind: "delta"; responseId: string; itemId: string; text: string }
+  | { kind: "done"; responseId: string; itemId: string; text?: string }
+  | { kind: "completed" };
 
 class CodexConversationController {
   private listeners = new Set<ControllerListener>();
@@ -424,8 +442,9 @@ class CodexConversationController {
 
     let assistantText = "";
     let finished = false;
-    let responseId = "";
-    let assistantItemId = "";
+    let lastResponseId = "";
+    const responseTexts = new Map<string, string>();
+    const responseItemIds = new Map<string, string>();
     let turnIdForNotifications: string | null = null;
     let resolveCompletion: (() => void) | null = null;
     let rejectCompletion: ((reason?: unknown) => void) | null = null;
@@ -451,52 +470,106 @@ class CodexConversationController {
       if (!mapped) {
         return;
       }
-      if (mapped.kind === "delta") {
-        assistantText += mapped.text;
-        this.updateAssistantItem(threadId!, assistantItemId, assistantText, "in_progress");
+      const ensureMessageStarted = (responseId: string, itemId: string) => {
+        if (responseItemIds.has(responseId)) {
+          return;
+        }
+        responseItemIds.set(responseId, itemId);
+        responseTexts.set(responseId, "");
         sink.emit({
-          type: "response.output_text.delta",
+          type: "response.created",
+          response: { id: responseId },
+        });
+        sink.emit({
+          type: "response.output_item.added",
           response_id: responseId,
           output_index: 0,
-          item_id: assistantItemId,
+          item: {
+            id: itemId,
+            type: "message",
+            status: "in_progress",
+            role: "assistant",
+            content: [],
+          },
+        });
+        sink.emit({
+          type: "response.content_part.added",
+          response_id: responseId,
+          output_index: 0,
+          item_id: itemId,
+          content_index: 0,
+          part: { type: "output_text", text: "" },
+        });
+        this.appendThreadItem(threadId!, createAssistantItem(itemId));
+        this.notify();
+      };
+      if (mapped.kind === "message_started") {
+        ensureMessageStarted(mapped.responseId, mapped.itemId);
+        return;
+      }
+      if (mapped.kind === "delta") {
+        ensureMessageStarted(mapped.responseId, mapped.itemId);
+        assistantText = (responseTexts.get(mapped.responseId) ?? "") + mapped.text;
+        responseTexts.set(mapped.responseId, assistantText);
+        this.updateAssistantItem(threadId!, mapped.itemId, assistantText, "in_progress");
+        sink.emit({
+          type: "response.output_text.delta",
+          response_id: mapped.responseId,
+          output_index: 0,
+          item_id: mapped.itemId,
           content_index: 0,
           delta: mapped.text,
         });
         return;
       }
       if (mapped.kind === "done") {
+        ensureMessageStarted(mapped.responseId, mapped.itemId);
+        assistantText = responseTexts.get(mapped.responseId) ?? "";
         if (mapped.text) {
           assistantText = mapped.text;
         }
-        this.updateAssistantItem(threadId!, assistantItemId, assistantText, "completed");
+        responseTexts.set(mapped.responseId, assistantText);
+        this.updateAssistantItem(threadId!, mapped.itemId, assistantText, "completed");
         sink.emit({
           type: "response.output_text.done",
-          response_id: responseId,
+          response_id: mapped.responseId,
           output_index: 0,
-          item_id: assistantItemId,
+          item_id: mapped.itemId,
           content_index: 0,
           text: assistantText,
         });
         sink.emit({
           type: "response.content_part.done",
-          response_id: responseId,
+          response_id: mapped.responseId,
           output_index: 0,
-          item_id: assistantItemId,
+          item_id: mapped.itemId,
           content_index: 0,
           part: { type: "output_text", text: assistantText },
         });
         sink.emit({
           type: "response.output_item.done",
-          response_id: responseId,
+          response_id: mapped.responseId,
           output_index: 0,
           item: {
-            id: assistantItemId,
+            id: mapped.itemId,
             type: "message",
             status: "completed",
             role: "assistant",
             content: [{ type: "output_text", text: assistantText }],
           },
         });
+        lastResponseId = mapped.responseId;
+        const updatedThread = this.threads.get(threadId!);
+        if (updatedThread) {
+          updatedThread.previousResponseId = lastResponseId;
+          this.threads.set(threadId!, updatedThread);
+        }
+        emitChatkitState(sink, threadId!, lastResponseId);
+        sink.emit({
+          type: "response.completed",
+          response: { id: mapped.responseId },
+        });
+        this.notify();
         return;
       }
       if (mapped.kind === "completed") {
@@ -519,69 +592,30 @@ class CodexConversationController {
         `turn-${Math.random().toString(36).slice(2, 10)}`;
       turnIdForNotifications = turnId;
       this.currentTurnId = turnId;
-
-      responseId = turnId;
-      assistantItemId =
-        asString(turnResult.itemId) ??
-        asString(turnResult.item_id) ??
-        `msg-${Math.random().toString(36).slice(2, 10)}`;
-
-      sink.emit({
-        type: "response.created",
-        response: { id: responseId },
-      });
-      sink.emit({
-        type: "response.output_item.added",
-        response_id: responseId,
-        output_index: 0,
-        item: {
-          id: assistantItemId,
-          type: "message",
-          status: "in_progress",
-          role: "assistant",
-          content: [],
-        },
-      });
-      sink.emit({
-        type: "response.content_part.added",
-        response_id: responseId,
-        output_index: 0,
-        item_id: assistantItemId,
-        content_index: 0,
-        part: { type: "output_text", text: "" },
-      });
-
-      this.appendThreadItem(threadId, createAssistantItem(assistantItemId));
       await completionPromise;
     } finally {
       clearTimeout(timeoutId);
       unsubscribe();
     }
-
-    sink.emit({
-      type: "aisre.chatkit.state",
-      item: {
-        state: {
-          threadId,
-          previousResponseId: responseId,
-        },
-      },
-    });
-    sink.emit({
-      type: "response.completed",
-      response: { id: responseId },
-    });
-
+    if (!lastResponseId) {
+      lastResponseId = turnIdForNotifications ?? `resp-${Date.now()}`;
+    }
     const updatedThread = this.threads.get(threadId);
     if (updatedThread) {
-      updatedThread.previousResponseId = responseId;
+      updatedThread.previousResponseId = lastResponseId;
       this.threads.set(threadId, updatedThread);
+    } else {
+      emitChatkitState(sink, threadId, lastResponseId);
+      sink.emit({
+        type: "response.completed",
+        response: { id: lastResponseId },
+      });
     }
-    this.currentTurnId = responseId;
+    this.currentTurnId = null;
     this.notify();
     return {
       threadId,
-      previousResponseId: responseId,
+      previousResponseId: lastResponseId,
     };
   }
 
@@ -654,11 +688,7 @@ class CodexConversationController {
     notification: CodexProxyJsonRpcNotification,
     threadId: string,
     turnId: string | null,
-  ):
-    | { kind: "delta"; text: string }
-    | { kind: "done"; text?: string }
-    | { kind: "completed" }
-    | null {
+  ): MappedAssistantEvent | null {
     const params = asRecord(notification.params);
     const notificationThreadId =
       asString(params.threadId) ?? asString(params.thread_id);
@@ -674,26 +704,42 @@ class CodexConversationController {
       return null;
     }
 
+    const responseId =
+      asString(params.responseId) ??
+      asString(params.response_id) ??
+      notificationTurnId ??
+      turnId ??
+      "resp-codex";
+    const itemId =
+      asString(params.itemId) ??
+      asString(params.item_id) ??
+      `${responseId}-item`;
+
     switch (notification.method) {
+      case "turn.message.started":
+        return { kind: "message_started", responseId, itemId };
       case "turn.output_text.delta": {
         const delta = asString(params.delta) ?? extractText(params);
-        return delta ? { kind: "delta", text: delta } : null;
+        return delta ? { kind: "delta", responseId, itemId, text: delta } : null;
       }
       case "turn.output_text.done": {
         const text = asString(params.text) ?? extractText(params);
-        return { kind: "done", text };
+        return { kind: "done", responseId, itemId, text };
       }
       case "turn.completed":
         return { kind: "completed" };
       default: {
         const type = asString(params.type);
+        if (type === "response.created") {
+          return { kind: "message_started", responseId, itemId };
+        }
         if (type === "response.output_text.delta") {
           const delta = asString(params.delta) ?? extractText(params);
-          return delta ? { kind: "delta", text: delta } : null;
+          return delta ? { kind: "delta", responseId, itemId, text: delta } : null;
         }
         if (type === "response.output_text.done") {
           const text = asString(params.text) ?? extractText(params);
-          return { kind: "done", text };
+          return { kind: "done", responseId, itemId, text };
         }
         if (type === "turn.completed") {
           return { kind: "completed" };

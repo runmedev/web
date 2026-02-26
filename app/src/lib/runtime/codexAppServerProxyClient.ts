@@ -40,6 +40,23 @@ export type CodexProxyNotificationHandler = (
 
 export type WebSocketFactory = (url: string) => WebSocket;
 
+function recordCodexProxyDebug(entry: Record<string, unknown>): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const debugWindow = window as Window & {
+    __codexProxyDebug?: Array<Record<string, unknown>>;
+  };
+  const entries = Array.isArray(debugWindow.__codexProxyDebug)
+    ? debugWindow.__codexProxyDebug
+    : [];
+  entries.push({
+    ts: Date.now(),
+    ...entry,
+  });
+  debugWindow.__codexProxyDebug = entries.slice(-50);
+}
+
 class CodexAppServerProxyClient {
   private ws: WebSocket | null = null;
   private state: CodexProxyClientState = "idle";
@@ -84,6 +101,7 @@ class CodexAppServerProxyClient {
   }
 
   async connect(url: string): Promise<void> {
+    recordCodexProxyDebug({ event: "connect_called", url });
     if (!url) {
       this.setError("Codex app-server websocket URL is required");
       throw new Error("Codex app-server websocket URL is required");
@@ -110,6 +128,7 @@ class CodexAppServerProxyClient {
           if (this.ws !== ws) {
             return;
           }
+          recordCodexProxyDebug({ event: "open", url });
           this.state = "open";
           this.lastError = null;
           this.notify();
@@ -119,6 +138,12 @@ class CodexAppServerProxyClient {
           if (this.ws !== ws) {
             return;
           }
+          recordCodexProxyDebug({
+            event: "close",
+            url,
+            code: event.code,
+            reason: event.reason || "",
+          });
           this.state = "closed";
           const errorMessage =
             event.reason ||
@@ -143,6 +168,7 @@ class CodexAppServerProxyClient {
           if (this.ws !== ws) {
             return;
           }
+          recordCodexProxyDebug({ event: "error", url });
           const error = new Error("Codex app-server websocket error");
           this.setError(error.message);
           this.rejectPending(error);
@@ -185,6 +211,7 @@ class CodexAppServerProxyClient {
       params,
     };
     const payload = JSON.stringify(request);
+    recordCodexProxyDebug({ event: "send_request", method, url: this.url, payload });
 
     return await new Promise<T>((resolve, reject) => {
       this.pending.set(id, {
@@ -224,6 +251,7 @@ class CodexAppServerProxyClient {
     }
 
     if ("id" in parsed && parsed.id !== undefined) {
+      recordCodexProxyDebug({ event: "response", url: this.url, raw });
       const pending = this.pending.get(parsed.id);
       if (!pending) {
         return;
@@ -244,6 +272,7 @@ class CodexAppServerProxyClient {
     if (!("method" in parsed) || typeof parsed.method !== "string") {
       return;
     }
+    recordCodexProxyDebug({ event: "notification", url: this.url, method: parsed.method, raw });
     if (this.ws !== ws) {
       return;
     }
@@ -318,4 +347,3 @@ export function resetCodexAppServerProxyClientForTests(): void {
   singleton?.resetForTests();
   singleton = null;
 }
-

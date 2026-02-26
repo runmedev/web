@@ -9,8 +9,38 @@ type BodyPayload = {
   json: Record<string, unknown>;
 };
 
-async function readBody(init?: RequestInit): Promise<BodyPayload> {
-  const body = init?.body;
+async function resolveBody(input: RequestInfo | URL, init?: RequestInit): Promise<BodyInit | null | undefined> {
+  if (init?.body != null) {
+    return init.body;
+  }
+  if (!(input instanceof Request)) {
+    return init?.body;
+  }
+  const clone = input.clone();
+  const contentType = clone.headers.get("content-type")?.toLowerCase() ?? "";
+  if (contentType.includes("multipart/form-data")) {
+    try {
+      return await clone.formData();
+    } catch {
+      return null;
+    }
+  }
+  if (contentType.includes("application/x-www-form-urlencoded")) {
+    try {
+      return new URLSearchParams(await clone.text());
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return await clone.text();
+  } catch {
+    return null;
+  }
+}
+
+async function readBody(input: RequestInfo | URL, init?: RequestInit): Promise<BodyPayload> {
+  const body = await resolveBody(input, init);
   if (typeof body === "string") {
     try {
       const parsed = JSON.parse(body) as Record<string, unknown>;
@@ -111,14 +141,23 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
+function getPayloadRecord(payload: Record<string, unknown>): Record<string, unknown> {
+  const params =
+    payload.params && typeof payload.params === "object" && !Array.isArray(payload.params)
+      ? (payload.params as Record<string, unknown>)
+      : null;
+  return params ?? payload;
+}
+
 function extractInput(payload: Record<string, unknown>): string {
-  const direct = asString(payload.input);
+  const source = getPayloadRecord(payload);
+  const direct = asString(source.input);
   if (direct) {
     return direct;
   }
   const inputRecord =
-    payload.input && typeof payload.input === "object" && !Array.isArray(payload.input)
-      ? (payload.input as Record<string, unknown>)
+    source.input && typeof source.input === "object" && !Array.isArray(source.input)
+      ? (source.input as Record<string, unknown>)
       : null;
   if (inputRecord) {
     const content = inputRecord.content;
@@ -138,9 +177,10 @@ function extractInput(payload: Record<string, unknown>): string {
 }
 
 function extractChatKitState(payload: Record<string, unknown>): ChatKitStateValue {
+  const source = getPayloadRecord(payload);
   const stateRecord =
-    payload.chatkit_state && typeof payload.chatkit_state === "object"
-      ? (payload.chatkit_state as Record<string, unknown>)
+    source.chatkit_state && typeof source.chatkit_state === "object"
+      ? (source.chatkit_state as Record<string, unknown>)
       : {};
   return {
     threadId: asString(stateRecord.threadId) ?? asString(stateRecord.thread_id),
@@ -150,12 +190,27 @@ function extractChatKitState(payload: Record<string, unknown>): ChatKitStateValu
   };
 }
 
+function recordDebugPayload(payload: Record<string, unknown>): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const debugWindow = window as Window & {
+    __codexChatkitFetchDebug?: Array<Record<string, unknown>>;
+  };
+  const entries = Array.isArray(debugWindow.__codexChatkitFetchDebug)
+    ? debugWindow.__codexChatkitFetchDebug
+    : [];
+  entries.push(payload);
+  debugWindow.__codexChatkitFetchDebug = entries.slice(-20);
+}
+
 export function createCodexChatkitFetch(): typeof fetch {
   const controller = getCodexConversationController();
-  return async (_input: RequestInfo | URL, init?: RequestInit) => {
+  return async (input: RequestInfo | URL, init?: RequestInit) => {
     try {
-      const { json } = await readBody(init);
-      const requestType = asString(json.type);
+      const { json } = await readBody(input, init);
+      recordDebugPayload(json);
+      const requestType = asString(getPayloadRecord(json).type) ?? asString(json.type);
 
       if (requestType === "threads.list") {
         await controller.refreshHistory();
@@ -223,4 +278,3 @@ export function createCodexChatkitFetch(): typeof fetch {
     }
   };
 }
-

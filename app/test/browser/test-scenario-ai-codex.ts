@@ -16,13 +16,17 @@ const CUJ_TOKEN_EXPIRES_AT = Number.isFinite(tokenExpiresAtEnv) && tokenExpiresA
 const FAKE_CHATKIT_BASE_URL = process.env.CUJ_FAKE_CHATKIT_BASE_URL ?? "http://127.0.0.1:19989";
 const FAKE_CHATKIT_HEALTH_URL = process.env.CUJ_FAKE_CHATKIT_HEALTH_URL ?? `${FAKE_CHATKIT_BASE_URL}/healthz`;
 const FAKE_CHATKIT_RESET_URL = process.env.CUJ_FAKE_CHATKIT_RESET_URL ?? `${FAKE_CHATKIT_BASE_URL}/reset`;
-const FAKE_CHATKIT_REQUESTS_URL = process.env.CUJ_FAKE_CHATKIT_REQUESTS_URL ?? `${FAKE_CHATKIT_BASE_URL}/requests`;
+const FAKE_CODEX_APP_SERVER_REQUESTS_URL =
+  process.env.CUJ_FAKE_CODEX_APP_SERVER_REQUESTS_URL ??
+  `${FAKE_CHATKIT_BASE_URL}/codex/app-server/requests`;
 const FAKE_CODEX_REQUESTS_URL = process.env.CUJ_FAKE_CODEX_REQUESTS_URL ?? `${FAKE_CHATKIT_BASE_URL}/codex/requests`;
 const USER_PROMPT_TEXT = `Add a cell to print("hello world")`;
 const FIRST_AI_RESPONSE_TEXT = `Ok, I'll add a cell to print("hello world").`;
 const FINAL_AI_RESPONSE_TEXT = "Cell has been added.";
 const EXPECTED_NEW_CELL_TEXT = `print("hello world")`;
 const EXPECTED_NEW_CELL_ID = "cell_ai_codex_added";
+const SEEDED_THREAD_TITLE = "Earlier conversation";
+const SEEDED_THREAD_ASSISTANT_TEXT = "Previous assistant answer.";
 
 const CURRENT_FILE_DIR = dirname(fileURLToPath(import.meta.url));
 const SCRIPT_DIR =
@@ -126,7 +130,16 @@ function runAppConsoleCommand(consoleRef: string, command: string): string {
   run(`agent-browser type ${consoleRef} "${escapeDoubleQuotes(command)}"`);
   run("agent-browser press Enter");
   run("agent-browser wait 900");
-  return run("agent-browser get text '#app-console-output'").stdout;
+  return normalizeAgentBrowserString(
+    run(
+      `agent-browser eval "${escapeDoubleQuotes(
+        `(() => {
+          const el = document.querySelector('#app-console-output');
+          return el ? (el.textContent || '') : '';
+        })()`,
+      )}"`,
+    ).stdout,
+  );
 }
 
 function hasCommandError(output: string): boolean {
@@ -158,43 +171,58 @@ function resetFakeServices(): boolean {
 
 function tryTypeChatMessage(message: string): string {
   const script = `(() => {
-    const docs = [document];
-    for (const frame of Array.from(document.querySelectorAll('iframe'))) {
-      try {
-        const doc = frame.contentDocument;
-        if (doc) docs.push(doc);
-      } catch {}
-    }
-    let activeDoc = null;
-    let composer = null;
-    for (const doc of docs) {
-      const candidate = doc.querySelector('textarea') ||
-        doc.querySelector('[contenteditable="true"][role="textbox"]') ||
-        doc.querySelector('[contenteditable="true"]');
-      if (candidate) {
-        activeDoc = doc;
-        composer = candidate;
-        break;
+    const collectRoots = () => {
+      const roots = [];
+      const seen = new Set();
+      const visit = (root) => {
+        if (!root || seen.has(root)) return;
+        seen.add(root);
+        roots.push(root);
+        if (typeof root.querySelectorAll !== 'function') return;
+        for (const el of Array.from(root.querySelectorAll('*'))) {
+          if (el && el.shadowRoot) visit(el.shadowRoot);
+        }
+      };
+      const chat = document.querySelector('openai-chatkit');
+      if (chat && chat.shadowRoot) {
+        visit(chat.shadowRoot);
       }
+      for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+        try {
+          const doc = frame.contentDocument;
+          if (doc) visit(doc);
+        } catch {}
+      }
+      visit(document);
+      return roots;
+    };
+    for (const root of collectRoots()) {
+      const composer = root.querySelector('textarea') ||
+        root.querySelector('[contenteditable="true"][role="textbox"]') ||
+        root.querySelector('[contenteditable="true"]');
+      if (!composer) continue;
+      if (composer instanceof HTMLTextAreaElement) {
+        const descriptor = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+        if (descriptor?.set) descriptor.set.call(composer, ${JSON.stringify(message)});
+        else composer.value = ${JSON.stringify(message)};
+        composer.dispatchEvent(new Event('input', { bubbles: true }));
+      } else {
+        composer.textContent = ${JSON.stringify(message)};
+        composer.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      composer.focus();
+      const sendButton = root.querySelector('button[aria-label*="Send"]') || root.querySelector('button[type="submit"]');
+      if (sendButton instanceof HTMLElement) {
+        sendButton.click();
+        return 'typed-composer';
+      }
+      const eventInit = { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true };
+      composer.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+      composer.dispatchEvent(new KeyboardEvent('keypress', eventInit));
+      composer.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+      return 'typed-composer';
     }
-    if (!composer || !activeDoc) return 'missing-composer';
-    if (composer instanceof HTMLTextAreaElement) {
-      const descriptor = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
-      if (descriptor?.set) descriptor.set.call(composer, ${JSON.stringify(message)});
-      else composer.value = ${JSON.stringify(message)};
-      composer.dispatchEvent(new Event('input', { bubbles: true }));
-    } else {
-      composer.textContent = ${JSON.stringify(message)};
-      composer.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-    composer.focus();
-    const eventInit = { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true };
-    composer.dispatchEvent(new KeyboardEvent('keydown', eventInit));
-    composer.dispatchEvent(new KeyboardEvent('keypress', eventInit));
-    composer.dispatchEvent(new KeyboardEvent('keyup', eventInit));
-    const sendButton = activeDoc.querySelector('button[aria-label*="Send"]') || activeDoc.querySelector('button[type="submit"]');
-    if (sendButton instanceof HTMLElement) sendButton.click();
-    return 'typed';
+    return 'missing-composer';
   })()`;
   const result = run(`agent-browser eval "${escapeDoubleQuotes(script)}"`);
   return `${result.stdout}\n${result.stderr}`.trim();
@@ -223,10 +251,7 @@ function typeChatMessageWithRetry(message: string, timeoutMs = 15000): string {
       if (typeof chat.setComposerValue === 'function') {
         await chat.setComposerValue({ text: ${JSON.stringify(message)} });
       }
-      const pending = chat.sendUserMessage({ text: ${JSON.stringify(message)} });
-      if (pending && typeof pending.catch === 'function') {
-        pending.catch(() => {});
-      }
+      await chat.sendUserMessage({ text: ${JSON.stringify(message)} });
       return 'typed-fallback';
     } catch (error) {
       return 'fallback-error:' + String(error);
@@ -250,10 +275,7 @@ function sendUserMessageViaChatkitApi(message: string): string {
       if (typeof chat.setComposerValue === 'function') {
         await chat.setComposerValue({ text: ${JSON.stringify(message)} });
       }
-      const pending = chat.sendUserMessage({ text: ${JSON.stringify(message)} });
-      if (pending && typeof pending.catch === 'function') {
-        pending.catch(() => {});
-      }
+      await chat.sendUserMessage({ text: ${JSON.stringify(message)} });
       return 'sent-via-chatkit-api';
     } catch (error) {
       return 'chatkit-api-error:' + String(error);
@@ -290,13 +312,45 @@ function installChatkitEventProbe(): void {
   run(`agent-browser eval "${escapeDoubleQuotes(script)}"`);
 }
 
-function waitForChatkitReady(timeoutMs = 30000): boolean {
+function waitForChatComposer(timeoutMs = 30000): boolean {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const ready = run(
-      `agent-browser eval "${escapeDoubleQuotes(`(() => (window.__cujChatkitReady ? 'ready' : 'not-ready'))()`)}"`,
-    ).stdout.trim();
-    if (ready === "ready" || ready === `"ready"`) {
+    const composerState = normalizeAgentBrowserString(
+      run(
+        `agent-browser eval "${escapeDoubleQuotes(`(() => {
+          const roots = [];
+          const seen = new Set();
+          const visit = (root) => {
+            if (!root || seen.has(root)) return;
+            seen.add(root);
+            roots.push(root);
+            if (typeof root.querySelectorAll !== 'function') return;
+            for (const el of Array.from(root.querySelectorAll('*'))) {
+              if (el && el.shadowRoot) visit(el.shadowRoot);
+            }
+          };
+          const chat = document.querySelector('openai-chatkit');
+          if (chat && chat.shadowRoot) visit(chat.shadowRoot);
+          for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+            try {
+              const doc = frame.contentDocument;
+              if (doc) visit(doc);
+            } catch {}
+          }
+          visit(document);
+          for (const root of roots) {
+            const composer = root.querySelector('textarea') ||
+              root.querySelector('[contenteditable="true"][role="textbox"]') ||
+              root.querySelector('[contenteditable="true"]');
+            if (composer) {
+              return 'composer-ready';
+            }
+          }
+          return window.__cujChatkitReady ? 'ready-event-only' : 'missing-composer';
+        })()`)}"`,
+      ).stdout,
+    );
+    if (composerState === "composer-ready" || composerState === "ready-event-only") {
       return true;
     }
     run("agent-browser wait 500");
@@ -307,59 +361,6 @@ function waitForChatkitReady(timeoutMs = 30000): boolean {
 function readChatkitEvents(): string {
   const script = `(() => JSON.stringify(window.__cujChatkitEvents || []))()`;
   return run(`agent-browser eval "${escapeDoubleQuotes(script)}"`).stdout.trim();
-}
-
-function installCujTranscriptOverlay(): void {
-  const script = `(() => {
-    const id = 'cuj-chat-transcript';
-    let root = document.getElementById(id);
-    if (!root) {
-      root = document.createElement('div');
-      root.id = id;
-      root.setAttribute('data-testid', id);
-      Object.assign(root.style, {
-        position: 'fixed',
-        left: '56px',
-        top: '56px',
-        zIndex: '99999',
-        maxWidth: '360px',
-        background: 'rgba(255,255,255,0.96)',
-        border: '1px solid #cbd5e1',
-        borderRadius: '8px',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-        padding: '8px 10px',
-        font: '12px/1.4 monospace',
-        color: '#0f172a',
-        whiteSpace: 'pre-wrap'
-      });
-      document.body.appendChild(root);
-    }
-    window.__cujTranscript = [];
-    root.textContent = 'CUJ transcript\\n';
-    return 'ok';
-  })()`;
-  run(`agent-browser eval "${escapeDoubleQuotes(script)}"`);
-}
-
-function appendCujTranscriptLine(role: string, text: string): void {
-  const script = `(() => {
-    const root = document.getElementById('cuj-chat-transcript');
-    if (!root) return 'missing-overlay';
-    const lines = Array.isArray(window.__cujTranscript) ? window.__cujTranscript : [];
-    const line = ${JSON.stringify(`${role}: ${text}`)};
-    if (!lines.includes(line)) lines.push(line);
-    window.__cujTranscript = lines;
-    root.textContent = ['CUJ transcript', ...lines].join('\\n');
-    return root.textContent;
-  })()`;
-  run(`agent-browser eval "${escapeDoubleQuotes(script)}"`);
-}
-
-function readCujTranscriptOverlayText(): string {
-  const script = `(() => document.getElementById('cuj-chat-transcript')?.textContent || '')()`;
-  return normalizeAgentBrowserString(
-    run(`agent-browser eval "${escapeDoubleQuotes(script)}"`).stdout,
-  );
 }
 
 function readVisibleEditorTexts(): string {
@@ -390,14 +391,34 @@ function readVisibleEditorTexts(): string {
 
 function readChatPanelText(): string {
   const script = `(() => {
-    const docs = [document];
+    const chunks = [];
+    const seen = new Set();
+    const visit = (root) => {
+      if (!root || seen.has(root)) return;
+      seen.add(root);
+      let text = '';
+      if (root instanceof Document) {
+        text = root.body?.innerText || root.body?.textContent || '';
+      } else if (root instanceof ShadowRoot) {
+        text = root.textContent || '';
+      }
+      text = text.trim();
+      if (text) chunks.push(text);
+      if (typeof root.querySelectorAll !== 'function') return;
+      for (const el of Array.from(root.querySelectorAll('*'))) {
+        if (el && el.shadowRoot) visit(el.shadowRoot);
+      }
+    };
+    const chat = document.querySelector('openai-chatkit');
+    if (chat && chat.shadowRoot) visit(chat.shadowRoot);
     for (const frame of Array.from(document.querySelectorAll('iframe'))) {
       try {
         const doc = frame.contentDocument;
-        if (doc) docs.push(doc);
+        if (doc) visit(doc);
       } catch {}
     }
-    return docs.map((doc) => doc.body?.innerText || '').filter(Boolean).join('\\n');
+    visit(document);
+    return chunks.join('\\n');
   })()`;
   return run(`agent-browser eval "${escapeDoubleQuotes(script)}"`).stdout.trim();
 }
@@ -448,27 +469,24 @@ function waitForNotebookProbe(
   return { ok: false, raw: lastRaw };
 }
 
-function waitForFakeChatkitRequest(
-  path: string,
+function waitForCodexAppServerRequest(
+  method: string,
   timeoutMs = 20000,
-  options?: { bodyIncludes?: string; skipBodyIncludes?: string },
+  options?: { bodyIncludes?: string },
 ): string {
   const deadline = Date.now() + timeoutMs;
   let lastRaw = "";
   while (Date.now() < deadline) {
-    const result = run(`curl -sf ${FAKE_CHATKIT_REQUESTS_URL}`);
+    const result = run(`curl -sf ${FAKE_CODEX_APP_SERVER_REQUESTS_URL}`);
     lastRaw = result.stdout.trim();
     if (result.status === 0 && lastRaw) {
       try {
-        const parsed = JSON.parse(lastRaw) as Array<{ path?: string; body?: string }>;
+        const parsed = JSON.parse(lastRaw) as Array<{ method?: string; body?: string; direction?: string }>;
         const matched = parsed.some((entry) => {
-          if (entry.path !== path) {
+          if (entry.direction !== "inbound" || entry.method !== method) {
             return false;
           }
           const body = entry.body ?? "";
-          if (options?.skipBodyIncludes && body.includes(options.skipBodyIncludes)) {
-            return false;
-          }
           if (options?.bodyIncludes && !body.includes(options.bodyIncludes)) {
             return false;
           }
@@ -486,37 +504,33 @@ function waitForFakeChatkitRequest(
   return lastRaw;
 }
 
-function hasNonBootstrapChatkitRequest(raw: string): boolean {
+function hasCodexMethodRequest(raw: string, method: string): boolean {
   if (!raw.trim()) {
     return false;
   }
   try {
-    const parsed = JSON.parse(raw) as Array<{ path?: string; body?: string }>;
+    const parsed = JSON.parse(raw) as Array<{ direction?: string; method?: string }>;
     return parsed.some(
-      (entry) =>
-        entry.path === "/chatkit-codex" && !(entry.body ?? "").includes(`"type":"threads.list"`),
+      (entry) => entry.direction === "inbound" && entry.method === method,
     );
   } catch {
     return false;
   }
 }
 
-function hasPromptInChatkitRequest(raw: string, expectedPrompt: string): boolean {
+function hasPromptInTurnStart(raw: string, expectedPrompt: string): boolean {
   if (!raw.trim()) {
     return false;
   }
   try {
-    const parsed = JSON.parse(raw) as Array<{ path?: string; body?: string }>;
+    const parsed = JSON.parse(raw) as Array<{ direction?: string; method?: string; body?: string }>;
     return parsed.some((entry) => {
-      if (entry.path !== "/chatkit-codex" || !entry.body) {
+      if (entry.direction !== "inbound" || entry.method !== "turn/start" || !entry.body) {
         return false;
       }
       try {
-        const body = JSON.parse(entry.body) as {
-          params?: { input?: { content?: Array<{ text?: string }> } };
-        };
-        const content = body.params?.input?.content ?? [];
-        return content.some((part) => part?.text === expectedPrompt);
+        const body = JSON.parse(entry.body) as { params?: { input?: string } };
+        return body.params?.input === expectedPrompt;
       } catch {
         return false;
       }
@@ -566,7 +580,9 @@ for (const file of [
   "scenario-ai-codex-02-console.txt",
   "scenario-ai-codex-02-harness-storage.json",
   "scenario-ai-codex-03-opened-notebook.txt",
+  "scenario-ai-codex-03-proxy-debug.json",
   "scenario-ai-codex-04-send.txt",
+  "scenario-ai-codex-04-fetch-debug.json",
   "scenario-ai-codex-05-chat-ack.txt",
   "scenario-ai-codex-06-notebook-probe.json",
   "scenario-ai-codex-07-chat-final.txt",
@@ -765,57 +781,81 @@ try {
   if (chatRef) {
     run(`agent-browser click ${chatRef}`);
     run("agent-browser wait 1500");
-    installCujTranscriptOverlay();
     installChatkitEventProbe();
+    const proxyDebugRaw = normalizeAgentBrowserString(
+      run(
+        `agent-browser eval "${escapeDoubleQuotes(
+          `(() => JSON.stringify(window.__codexProxyDebug || []))()`,
+        )}"`,
+      ).stdout,
+    );
+    writeArtifact("scenario-ai-codex-03-proxy-debug.json", proxyDebugRaw || "[]");
     pass("Opened ChatKit panel");
   } else {
     fail("Could not find AI Chat button");
   }
 
-  if (waitForChatkitReady(20000)) {
-    pass("ChatKit panel reported ready");
+  if (waitForChatComposer(20000)) {
+    pass("ChatKit panel is interactive");
   } else {
-    fail(`ChatKit panel did not report ready (events=${readChatkitEvents()})`);
+    fail(`ChatKit panel did not become interactive (events=${readChatkitEvents()})`);
+  }
+  const threadListRequests = waitForCodexAppServerRequest("thread/list", 15000, {
+    bodyIncludes: `"cwd":"."`,
+  });
+  if (hasCodexMethodRequest(threadListRequests, "thread/list")) {
+    pass("ChatKit requested codex conversation history from the app-server");
+  } else {
+    fail("Did not observe thread/list request for codex conversation history");
   }
 
   run("agent-browser wait 600");
   let sendOutput = typeChatMessageWithRetry(USER_PROMPT_TEXT);
-  let chatkitRequestsAfterSend = waitForFakeChatkitRequest("/chatkit-codex", 3000, {
-    skipBodyIncludes: `"type":"threads.list"`,
+  let appServerRequestsAfterSend = waitForCodexAppServerRequest("turn/start", 3000, {
+    bodyIncludes: USER_PROMPT_TEXT,
   });
-  if (!hasNonBootstrapChatkitRequest(chatkitRequestsAfterSend)) {
+  if (!hasCodexMethodRequest(appServerRequestsAfterSend, "turn/start")) {
     const fallbackSend = sendUserMessageViaChatkitApi(USER_PROMPT_TEXT);
     sendOutput = `${sendOutput}\n${fallbackSend}`.trim();
-    chatkitRequestsAfterSend = waitForFakeChatkitRequest("/chatkit-codex", 30000, {
-      skipBodyIncludes: `"type":"threads.list"`,
+    appServerRequestsAfterSend = waitForCodexAppServerRequest("turn/start", 30000, {
+      bodyIncludes: USER_PROMPT_TEXT,
     });
   }
   writeArtifact("scenario-ai-codex-04-send.txt", sendOutput);
-  if ((sendOutput.includes("typed") || sendOutput.includes("sent-via-chatkit-api")) && hasNonBootstrapChatkitRequest(chatkitRequestsAfterSend)) {
-    appendCujTranscriptLine("User", USER_PROMPT_TEXT);
+  const fetchDebugRaw = normalizeAgentBrowserString(
+    run(
+      `agent-browser eval "${escapeDoubleQuotes(
+        `(() => JSON.stringify(window.__codexChatkitFetchDebug || []))()`,
+      )}"`,
+    ).stdout,
+  );
+  writeArtifact("scenario-ai-codex-04-fetch-debug.json", fetchDebugRaw || "[]");
+  if (
+    (sendOutput.includes("typed") || sendOutput.includes("sent-via-chatkit-api")) &&
+    hasCodexMethodRequest(appServerRequestsAfterSend, "turn/start")
+  ) {
     pass(`User enters into chatkit "${USER_PROMPT_TEXT}"`);
   } else {
     fail(`Failed to send codex request in ChatKit panel (${sendOutput || "no output"})`);
   }
 
   const firstChatResult = waitForVisibleSnapshotTexts(
-    [FIRST_AI_RESPONSE_TEXT],
+    [USER_PROMPT_TEXT, FIRST_AI_RESPONSE_TEXT],
     30000,
   );
   writeArtifact("scenario-ai-codex-05-chat-ack.txt", firstChatResult.snapshot);
   if (firstChatResult.found) {
-    appendCujTranscriptLine("Assistant", FIRST_AI_RESPONSE_TEXT);
     pass(`AI responds with "${FIRST_AI_RESPONSE_TEXT}"`);
   } else {
-    fail("Did not see the initial AI response rendered in the ChatKit panel");
+    fail("Did not see the user prompt and initial AI response rendered in the ChatKit panel");
   }
 
-  if (!chatkitRequestsAfterSend.includes("/chatkit-codex")) {
-    fail("Did not observe /chatkit-codex request to fake AI service");
-  } else if (hasPromptInChatkitRequest(chatkitRequestsAfterSend, USER_PROMPT_TEXT)) {
-    pass("Observed /chatkit-codex request to fake AI service with the user prompt");
+  if (!hasCodexMethodRequest(appServerRequestsAfterSend, "turn/start")) {
+    fail("Did not observe turn/start request to fake codex app-server");
+  } else if (hasPromptInTurnStart(appServerRequestsAfterSend, USER_PROMPT_TEXT)) {
+    pass("Observed turn/start request to fake codex app-server with the user prompt");
   } else {
-    fail("Observed /chatkit-codex request but the expected user prompt was missing");
+    fail("Observed turn/start request but the expected user prompt was missing");
   }
 
   const codexUpdateTraffic = waitForCodexUpdateTraffic();
@@ -858,12 +898,11 @@ try {
     fail("Notebook was not updated with the expected codex-added cell");
   }
 
-  const finalAiResult = waitForVisibleSnapshotTexts([FINAL_AI_RESPONSE_TEXT], 30000);
-  if (finalAiResult.found) {
-    appendCujTranscriptLine("Assistant", FINAL_AI_RESPONSE_TEXT);
-  }
-  const transcriptOverlayText = readCujTranscriptOverlayText();
-  writeArtifact("scenario-ai-codex-07-chat-final.txt", transcriptOverlayText);
+  const finalAiResult = waitForVisibleSnapshotTexts(
+    [USER_PROMPT_TEXT, FIRST_AI_RESPONSE_TEXT, FINAL_AI_RESPONSE_TEXT],
+    30000,
+  );
+  writeArtifact("scenario-ai-codex-07-chat-final.txt", finalAiResult.panelText || finalAiResult.snapshot);
   writeArtifact("scenario-ai-codex-08-snapshot-final.txt", finalAiResult.snapshot);
   run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-ai-codex-11-after-run.png")}`);
   if (finalAiResult.found) {
@@ -872,13 +911,13 @@ try {
     fail("Did not see the final AI response rendered in the ChatKit panel");
   }
   if (
-    transcriptOverlayText.includes(`User: ${USER_PROMPT_TEXT}`) &&
-    transcriptOverlayText.includes(`Assistant: ${FIRST_AI_RESPONSE_TEXT}`) &&
-    transcriptOverlayText.includes(`Assistant: ${FINAL_AI_RESPONSE_TEXT}`)
+    (finalAiResult.panelText.includes(USER_PROMPT_TEXT) || finalAiResult.snapshot.includes(USER_PROMPT_TEXT)) &&
+    (finalAiResult.panelText.includes(FIRST_AI_RESPONSE_TEXT) || finalAiResult.snapshot.includes(FIRST_AI_RESPONSE_TEXT)) &&
+    (finalAiResult.panelText.includes(FINAL_AI_RESPONSE_TEXT) || finalAiResult.snapshot.includes(FINAL_AI_RESPONSE_TEXT))
   ) {
-    pass("Visible CUJ transcript shows user message and both AI messages");
+    pass("Visible ChatKit transcript shows user message and both AI messages");
   } else {
-    fail("Visible CUJ transcript overlay did not contain the expected user/assistant messages");
+    fail("Visible ChatKit transcript did not contain the expected user/assistant messages");
   }
   const visibleEditorTextsRaw = readVisibleEditorTexts();
   writeArtifact("scenario-ai-codex-12-visible-editor-texts.json", visibleEditorTextsRaw);
@@ -897,9 +936,11 @@ try {
   }
 
   const codexRequestsRaw = waitForCodexUpdateTraffic(5000);
-  const chatkitRequestsRaw = waitForFakeChatkitRequest("/chatkit-codex", 5000);
+  const appServerRequestsRaw = waitForCodexAppServerRequest("turn/start", 5000, {
+    bodyIncludes: USER_PROMPT_TEXT,
+  });
   writeArtifact("scenario-ai-codex-09-codex-requests.json", codexRequestsRaw);
-  writeArtifact("scenario-ai-codex-10-chatkit-requests.json", chatkitRequestsRaw);
+  writeArtifact("scenario-ai-codex-10-chatkit-requests.json", appServerRequestsRaw);
   try {
     const codexMessages = JSON.parse(codexRequestsRaw) as Array<{ body?: string; direction?: string }>;
     const allBodies = codexMessages.map((m) => m.body ?? "").join("\n");

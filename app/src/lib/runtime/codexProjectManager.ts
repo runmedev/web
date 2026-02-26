@@ -26,6 +26,7 @@ export type CodexProjectSnapshot = {
 
 const CODEX_PROJECT_STORAGE_KEY = "runme/codex/projects";
 const DEFAULT_PROJECT_ID = "local-default";
+const CODEX_PROJECTS_CHANGED_EVENT = "runme:codex-projects-changed";
 
 function normalizeString(value: string): string {
   return value.trim();
@@ -104,12 +105,26 @@ class CodexProjectManager {
   private projects: Map<string, CodexProject>;
   private defaultProjectId: string;
   private listeners = new Set<() => void>();
+  private readonly handleStorageBound: ((event: StorageEvent) => void) | null;
+  private readonly handleProjectsChangedBound: (() => void) | null;
 
   private constructor() {
     const loaded = this.loadFromStorage();
     this.projects = loaded.projects;
     this.defaultProjectId = loaded.defaultProjectId;
     this.ensureDefaultProject();
+    if (typeof window !== "undefined") {
+      this.handleStorageBound = (event: StorageEvent) => this.handleStorage(event);
+      window.addEventListener("storage", this.handleStorageBound);
+      this.handleProjectsChangedBound = () => this.syncFromStorage();
+      window.addEventListener(
+        CODEX_PROJECTS_CHANGED_EVENT,
+        this.handleProjectsChangedBound,
+      );
+    } else {
+      this.handleStorageBound = null;
+      this.handleProjectsChangedBound = null;
+    }
   }
 
   static getInstance(): CodexProjectManager {
@@ -120,6 +135,7 @@ class CodexProjectManager {
   }
 
   static resetForTests(): void {
+    CodexProjectManager.instance?.dispose();
     CodexProjectManager.instance = null;
   }
 
@@ -335,9 +351,48 @@ class CodexProjectManager {
         defaultProjectId: this.defaultProjectId || null,
       };
       window.localStorage.setItem(CODEX_PROJECT_STORAGE_KEY, JSON.stringify(payload));
+      window.dispatchEvent(new CustomEvent(CODEX_PROJECTS_CHANGED_EVENT));
     } catch (error) {
       console.error("Failed to persist codex projects", error);
     }
+  }
+
+  private dispose(): void {
+    if (typeof window !== "undefined" && this.handleStorageBound) {
+      window.removeEventListener("storage", this.handleStorageBound);
+    }
+    if (typeof window !== "undefined" && this.handleProjectsChangedBound) {
+      window.removeEventListener(
+        CODEX_PROJECTS_CHANGED_EVENT,
+        this.handleProjectsChangedBound,
+      );
+    }
+  }
+
+  private handleStorage(event: StorageEvent): void {
+    if (event.key !== CODEX_PROJECT_STORAGE_KEY) {
+      return;
+    }
+    this.syncFromStorage();
+  }
+
+  private syncFromStorage(): void {
+    const loaded = this.loadFromStorage();
+    const currentSerialized = JSON.stringify({
+      projects: this.list(),
+      defaultProjectId: this.defaultProjectId,
+    });
+    const nextSerialized = JSON.stringify({
+      projects: [...loaded.projects.values()],
+      defaultProjectId: loaded.defaultProjectId,
+    });
+    if (currentSerialized === nextSerialized) {
+      return;
+    }
+    this.projects = loaded.projects;
+    this.defaultProjectId = loaded.defaultProjectId;
+    this.ensureDefaultProject();
+    this.notify();
   }
 }
 
@@ -361,4 +416,3 @@ export function useCodexProjects(): CodexProjectSnapshot {
 export function __resetCodexProjectManagerForTests(): void {
   CodexProjectManager.resetForTests();
 }
-

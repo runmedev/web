@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { create } from "@bufbuild/protobuf";
+import { ChatkitStateSchema } from "../../protogen/oaiproto/aisre/notebooks_pb.js";
 
 type HarnessAdapter = "responses" | "codex";
 
@@ -19,6 +21,8 @@ let codexConversationState: {
 };
 let bridgeSnapshot: { state: "idle" | "connecting" | "open" | "closed" | "error"; url: string | null; lastError: string | null };
 let bridgeListener: (() => void) | null;
+let setThreadIdMock: ReturnType<typeof vi.fn>;
+let fetchUpdatesMock: ReturnType<typeof vi.fn>;
 const useChatKitMock = vi.fn();
 const { appLoggerMock } = vi.hoisted(() => ({
   appLoggerMock: {
@@ -73,7 +77,7 @@ vi.mock("../../contexts/CellContext", () => ({
     ExitCode: "exitCode",
   },
   useCell: () => ({
-    getChatkitState: () => ({}),
+    getChatkitState: () => create(ChatkitStateSchema, {}),
     setChatkitState: vi.fn(),
   }),
 }));
@@ -176,11 +180,13 @@ describe("ChatKitPanel codex harness routing", () => {
       lastError: null,
     };
     bridgeListener = null;
+    setThreadIdMock = vi.fn(async () => {});
+    fetchUpdatesMock = vi.fn(async () => {});
     useChatKitMock.mockReset();
     useChatKitMock.mockReturnValue({
       control: {},
-      setThreadId: vi.fn(async () => {}),
-      fetchUpdates: vi.fn(async () => {}),
+      setThreadId: setThreadIdMock,
+      fetchUpdates: fetchUpdatesMock,
     });
     bridgeMock.connect.mockClear();
     bridgeMock.disconnect.mockClear();
@@ -217,7 +223,7 @@ describe("ChatKitPanel codex harness routing", () => {
     render(<ChatKitPanel />);
 
     const config = useChatKitMock.mock.calls.at(0)?.[0];
-    expect(config.api.url).toBe("http://127.0.0.1:31337/codex/app-server/ws");
+    expect(config.api.url).toBe("http://127.0.0.1:31337/codex/chatkit");
     expect(bridgeMock.connect).toHaveBeenCalledWith("ws://127.0.0.1:31337/codex/ws");
     expect(proxyMock.connect).toHaveBeenCalledWith("ws://127.0.0.1:31337/codex/app-server/ws");
     expect(bridgeMock.setHandler).toHaveBeenCalled();
@@ -256,7 +262,7 @@ describe("ChatKitPanel codex harness routing", () => {
     rerender(<ChatKitPanel />);
 
     expect(useChatKitMock.mock.calls.at(-1)?.[0]?.api?.url).toBe(
-      "http://127.0.0.1:31337/codex/app-server/ws",
+      "http://127.0.0.1:31337/codex/chatkit",
     );
     expect(bridgeMock.connect).toHaveBeenCalledWith("ws://127.0.0.1:31337/codex/ws");
     expect(proxyMock.connect).toHaveBeenCalledWith("ws://127.0.0.1:31337/codex/app-server/ws");
@@ -297,6 +303,114 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(
       screen.getByTestId("codex-thread-thread-1").textContent ?? "",
     ).toContain("Investigate latency");
+  });
+
+  it("selects a codex conversation from the drawer and refreshes ChatKit history", async () => {
+    harnessState.defaultHarness.adapter = "codex";
+    codexConversationState.threads = [
+      {
+        id: "thread-1",
+        title: "Investigate latency",
+        updatedAt: "2026-02-26T00:00:00Z",
+        previousResponseId: "turn-1",
+      },
+    ];
+
+    render(<ChatKitPanel />);
+
+    const config = useChatKitMock.mock.calls.at(0)?.[0];
+    act(() => {
+      config.header.leftAction.onClick();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("codex-thread-thread-1"));
+    });
+
+    expect(codexControllerMock.selectThread).toHaveBeenCalledWith("thread-1");
+    expect(setThreadIdMock).toHaveBeenCalledWith("thread-1");
+    expect(fetchUpdatesMock).toHaveBeenCalled();
+  });
+
+  it("syncs codex chatkit state events back into ChatKit thread history", async () => {
+    harnessState.defaultHarness.adapter = "codex";
+    const encoder = new TextEncoder();
+    codexFetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                'data: {"type":"aisre.chatkit.state","item":{"state":{"threadId":"thread-1","previousResponseId":"resp-1"}}}\n\n',
+              ),
+            );
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream",
+          },
+        },
+      ),
+    );
+
+    render(<ChatKitPanel />);
+
+    const config = useChatKitMock.mock.calls.at(0)?.[0];
+    expect(config).toBeDefined();
+
+    await act(async () => {
+      await config.api.fetch("http://127.0.0.1:31337/codex/chatkit", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "threads.create",
+          params: {
+            input: {
+              content: [{ type: "input_text", text: 'print("hello")' }],
+            },
+          },
+        }),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(setThreadIdMock).toHaveBeenCalledWith("thread-1");
+    expect(fetchUpdatesMock).toHaveBeenCalled();
+  });
+
+  it("switches codex projects and reloads history", async () => {
+    harnessState.defaultHarness.adapter = "codex";
+    codexProjectsState = {
+      projects: [
+        { id: "project-1", name: "Runme Repo" },
+        { id: "project-2", name: "Docs Repo" },
+      ],
+      defaultProject: { id: "project-1", name: "Runme Repo" },
+    };
+
+    render(<ChatKitPanel />);
+
+    const config = useChatKitMock.mock.calls.at(0)?.[0];
+    act(() => {
+      config.header.leftAction.onClick();
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("codex-project-select"), {
+        target: { value: "project-2" },
+      });
+    });
+
+    expect(codexControllerMock.setSelectedProject).toHaveBeenCalledWith("project-2");
+    expect(codexControllerMock.startNewChat).toHaveBeenCalled();
+    expect(codexControllerMock.refreshHistory).toHaveBeenCalled();
+    expect(setThreadIdMock).toHaveBeenCalledWith(null);
   });
 
   it("logs chatkit errors through appLogger", () => {

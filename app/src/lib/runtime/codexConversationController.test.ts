@@ -81,10 +81,22 @@ describe("CodexConversationController", () => {
           notificationHandlers.forEach((handler) => {
             handler({
               jsonrpc: "2.0",
+              method: "turn.message.started",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                responseId: "resp-1",
+                itemId: "msg-1",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
               method: "turn.output_text.delta",
               params: {
                 threadId: "thread-1",
                 turnId: "turn-1",
+                responseId: "resp-1",
+                itemId: "msg-1",
                 delta: "hello ",
               },
             });
@@ -94,7 +106,41 @@ describe("CodexConversationController", () => {
               params: {
                 threadId: "thread-1",
                 turnId: "turn-1",
+                responseId: "resp-1",
+                itemId: "msg-1",
                 text: "hello world",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn.message.started",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                responseId: "resp-2",
+                itemId: "msg-2",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn.output_text.delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                responseId: "resp-2",
+                itemId: "msg-2",
+                delta: "done",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn.output_text.done",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                responseId: "resp-2",
+                itemId: "msg-2",
+                text: "done",
               },
             });
             handler({
@@ -124,7 +170,7 @@ describe("CodexConversationController", () => {
 
     expect(nextState).toEqual({
       threadId: "thread-1",
-      previousResponseId: "turn-1",
+      previousResponseId: "resp-2",
     });
     expect(events).toEqual(
       expect.arrayContaining([
@@ -134,6 +180,10 @@ describe("CodexConversationController", () => {
         expect.objectContaining({
           type: "response.output_text.delta",
           delta: "hello ",
+        }),
+        expect.objectContaining({
+          type: "response.output_text.delta",
+          delta: "done",
         }),
         expect.objectContaining({
           type: "response.output_item.done",
@@ -146,8 +196,13 @@ describe("CodexConversationController", () => {
         }),
       ]),
     );
+    expect(
+      events.filter((event) => event?.type === "response.completed"),
+    ).toHaveLength(2);
+    expect(
+      events.filter((event) => event?.type === "aisre.chatkit.state"),
+    ).toHaveLength(2);
     expect(controller.getSnapshot().currentThreadId).toBe("thread-1");
-    expect(controller.getSnapshot().currentTurnId).toBe("turn-1");
+    expect(controller.getSnapshot().currentTurnId).toBeNull();
   });
 });
-

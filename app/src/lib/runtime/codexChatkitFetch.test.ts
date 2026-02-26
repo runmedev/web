@@ -73,6 +73,20 @@ describe("createCodexChatkitFetch", () => {
     });
   });
 
+  it("handles nested params requests", async () => {
+    const fetchFn = createCodexChatkitFetch();
+    const response = await fetchFn("http://localhost/codex/chatkit", {
+      method: "POST",
+      body: JSON.stringify({ params: { type: "threads.list" } }),
+    });
+
+    expect(controller.refreshHistory).toHaveBeenCalled();
+    expect(await response.json()).toEqual({
+      data: [{ id: "thread-1", title: "One", updated_at: "2026-02-26T00:00:00Z" }],
+      has_more: false,
+    });
+  });
+
   it("handles threads.get_by_id requests", async () => {
     const fetchFn = createCodexChatkitFetch();
     const response = await fetchFn("http://localhost/codex/app-server/ws", {
@@ -120,5 +134,52 @@ describe("createCodexChatkitFetch", () => {
     expect(body).toContain('"delta":"hello"');
     expect(body).toContain('"type":"response.completed"');
   });
-});
 
+  it("reads POST bodies from Request objects", async () => {
+    const fetchFn = createCodexChatkitFetch();
+    const request = new Request("http://localhost/codex/chatkit", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        input: "hello from request",
+        chatkit_state: {},
+      }),
+    });
+
+    const response = await fetchFn(request);
+    const body = await response.text();
+
+    expect(controller.streamUserMessage).toHaveBeenCalledWith(
+      "hello from request",
+      { threadId: undefined, previousResponseId: undefined },
+      expect.any(Object),
+    );
+    expect(body).toContain('"type":"response.created"');
+  });
+
+  it("extracts nested params.input payloads", async () => {
+    const fetchFn = createCodexChatkitFetch();
+    const response = await fetchFn("http://localhost/codex/chatkit", {
+      method: "POST",
+      body: JSON.stringify({
+        params: {
+          input: {
+            content: [{ text: "hello from nested params" }],
+          },
+          chatkit_state: {},
+        },
+      }),
+    });
+
+    const body = await response.text();
+
+    expect(controller.streamUserMessage).toHaveBeenCalledWith(
+      "hello from nested params",
+      { threadId: undefined, previousResponseId: undefined },
+      expect.any(Object),
+    );
+    expect(body).toContain('"type":"response.created"');
+  });
+});

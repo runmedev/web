@@ -89,5 +89,65 @@ describe("codexProjectManager", () => {
     expect(active.name).toBe("Runme Repo");
     expect(reloaded.list().some((project) => project.id === created.id)).toBe(true);
   });
-});
 
+  it("syncs project updates from storage events", () => {
+    const mgr = getCodexProjectManager();
+
+    localStorage.setItem(
+      CODEX_PROJECT_STORAGE_KEY,
+      JSON.stringify({
+        projects: [
+          {
+            id: "project-external",
+            name: "External Project",
+            cwd: "/tmp/project",
+            model: "gpt-5",
+            approvalPolicy: "never",
+            sandboxPolicy: "workspace-write",
+            personality: "default",
+          },
+        ],
+        defaultProjectId: "project-external",
+      }),
+    );
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: CODEX_PROJECT_STORAGE_KEY,
+        newValue: localStorage.getItem(CODEX_PROJECT_STORAGE_KEY),
+      }),
+    );
+
+    const active = mgr.getDefault();
+    expect(active.id).toBe("project-external");
+    expect(active.name).toBe("External Project");
+    expect(active.cwd).toBe("/tmp/project");
+  });
+
+  it("syncs project updates from same-window change events", () => {
+    const mgr = getCodexProjectManager();
+
+    localStorage.setItem(
+      CODEX_PROJECT_STORAGE_KEY,
+      JSON.stringify({
+        projects: [
+          {
+            id: "project-same-window",
+            name: "Same Window Project",
+            cwd: "/tmp/same-window",
+            model: "gpt-5",
+            approvalPolicy: "never",
+            sandboxPolicy: "workspace-write",
+            personality: "default",
+          },
+        ],
+        defaultProjectId: "project-same-window",
+      }),
+    );
+    window.dispatchEvent(new CustomEvent("runme:codex-projects-changed"));
+
+    const active = mgr.getDefault();
+    expect(active.id).toBe("project-same-window");
+    expect(active.name).toBe("Same Window Project");
+    expect(active.cwd).toBe("/tmp/same-window");
+  });
+});

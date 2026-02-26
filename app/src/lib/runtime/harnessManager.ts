@@ -22,10 +22,11 @@ export type HarnessSnapshot = {
 const HARNESS_STORAGE_KEY = "runme/harness";
 const LEGACY_SETTINGS_STORAGE_KEY = "cloudAssistantSettings";
 const DEFAULT_HARNESS_NAME = "local-responses";
+const HARNESS_CHANGED_EVENT = "runme:harness-changed";
 
 const CHATKIT_ROUTE_BY_ADAPTER: Record<HarnessAdapter, string> = {
   responses: "/chatkit",
-  codex: "/codex/app-server/ws",
+  codex: "/codex/chatkit",
 };
 
 function isHarnessAdapter(value: unknown): value is HarnessAdapter {
@@ -115,12 +116,23 @@ class HarnessManager {
   private harnesses: Map<string, HarnessProfile>;
   private defaultHarnessName: string;
   private listeners = new Set<() => void>();
+  private readonly handleStorageBound: ((event: StorageEvent) => void) | null;
+  private readonly handleHarnessChangedBound: (() => void) | null;
 
   private constructor() {
     const loaded = this.loadFromStorage();
     this.harnesses = loaded.harnesses;
     this.defaultHarnessName = loaded.defaultHarnessName;
     this.ensureDefaultHarness();
+    if (typeof window !== "undefined") {
+      this.handleStorageBound = (event: StorageEvent) => this.handleStorage(event);
+      window.addEventListener("storage", this.handleStorageBound);
+      this.handleHarnessChangedBound = () => this.syncFromStorage();
+      window.addEventListener(HARNESS_CHANGED_EVENT, this.handleHarnessChangedBound);
+    } else {
+      this.handleStorageBound = null;
+      this.handleHarnessChangedBound = null;
+    }
   }
 
   static getInstance(): HarnessManager {
@@ -131,6 +143,7 @@ class HarnessManager {
   }
 
   static resetForTests(): void {
+    HarnessManager.instance?.dispose();
     HarnessManager.instance = null;
   }
 
@@ -357,9 +370,48 @@ class HarnessManager {
         defaultHarnessName: this.defaultHarnessName || null,
       };
       window.localStorage.setItem(HARNESS_STORAGE_KEY, JSON.stringify(payload));
+      window.dispatchEvent(new CustomEvent(HARNESS_CHANGED_EVENT));
     } catch (error) {
       console.error("Failed to persist harnesses", error);
     }
+  }
+
+  private dispose(): void {
+    if (typeof window !== "undefined" && this.handleStorageBound) {
+      window.removeEventListener("storage", this.handleStorageBound);
+    }
+    if (typeof window !== "undefined" && this.handleHarnessChangedBound) {
+      window.removeEventListener(HARNESS_CHANGED_EVENT, this.handleHarnessChangedBound);
+    }
+  }
+
+  private handleStorage(event: StorageEvent): void {
+    if (
+      event.key !== HARNESS_STORAGE_KEY &&
+      event.key !== LEGACY_SETTINGS_STORAGE_KEY
+    ) {
+      return;
+    }
+    this.syncFromStorage();
+  }
+
+  private syncFromStorage(): void {
+    const loaded = this.loadFromStorage();
+    const currentSerialized = JSON.stringify({
+      harnesses: this.list(),
+      defaultHarnessName: this.defaultHarnessName,
+    });
+    const nextSerialized = JSON.stringify({
+      harnesses: [...loaded.harnesses.values()],
+      defaultHarnessName: loaded.defaultHarnessName,
+    });
+    if (currentSerialized === nextSerialized) {
+      return;
+    }
+    this.harnesses = loaded.harnesses;
+    this.defaultHarnessName = loaded.defaultHarnessName;
+    this.ensureDefaultHarness();
+    this.notify();
   }
 }
 

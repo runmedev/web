@@ -30,10 +30,12 @@ var (
 	requestsMu sync.Mutex
 	requests   []capturedRequest
 
-	codexMu             sync.Mutex
-	codexBridgeMessages []capturedCodexBridgeMessage
-	codexChatkitPosts   int
-	codexUpdateDone     bool
+	codexMu                sync.Mutex
+	codexBridgeMessages    []capturedCodexBridgeMessage
+	codexAppServerMessages []capturedCodexAppServerMessage
+	codexUpdateDone        bool
+	codexTurnStarted       bool
+	codexCurrentThread     *fakeCodexThread
 )
 
 type capturedCodexBridgeMessage struct {
@@ -41,6 +43,23 @@ type capturedCodexBridgeMessage struct {
 	Direction string `json:"direction"`
 	Type      string `json:"type,omitempty"`
 	Body      string `json:"body"`
+}
+
+type capturedCodexAppServerMessage struct {
+	Timestamp string `json:"timestamp"`
+	Direction string `json:"direction"`
+	Method    string `json:"method,omitempty"`
+	Body      string `json:"body"`
+}
+
+type fakeCodexThread struct {
+	ID               string                   `json:"id"`
+	Title            string                   `json:"title"`
+	UpdatedAt        string                   `json:"updated_at,omitempty"`
+	Cwd              string                   `json:"cwd,omitempty"`
+	PreviousResponse string                   `json:"previous_response_id,omitempty"`
+	LastTurnID       string                   `json:"last_turn_id,omitempty"`
+	Items            []map[string]any         `json:"items"`
 }
 
 func envOrDefault(name, defaultValue string) string {
@@ -90,6 +109,17 @@ func appendCodexBridgeMessage(direction string, messageType string, body string)
 	})
 }
 
+func appendCodexAppServerMessage(direction string, method string, body string) {
+	codexMu.Lock()
+	defer codexMu.Unlock()
+	codexAppServerMessages = append(codexAppServerMessages, capturedCodexAppServerMessage{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Direction: direction,
+		Method:    method,
+		Body:      body,
+	})
+}
+
 func snapshotCodexBridgeMessages() []capturedCodexBridgeMessage {
 	codexMu.Lock()
 	defer codexMu.Unlock()
@@ -98,33 +128,37 @@ func snapshotCodexBridgeMessages() []capturedCodexBridgeMessage {
 	return out
 }
 
+func snapshotCodexAppServerMessages() []capturedCodexAppServerMessage {
+	codexMu.Lock()
+	defer codexMu.Unlock()
+	out := make([]capturedCodexAppServerMessage, len(codexAppServerMessages))
+	copy(out, codexAppServerMessages)
+	return out
+}
+
 func resetCodexState() {
 	codexMu.Lock()
 	defer codexMu.Unlock()
 	codexBridgeMessages = nil
-	codexChatkitPosts = 0
+	codexAppServerMessages = nil
 	codexUpdateDone = false
+	codexTurnStarted = false
+	codexCurrentThread = nil
 }
 
-func noteCodexChatkitPost(path string, body string) {
-	if path != "/chatkit-codex" {
-		return
-	}
-	if strings.Contains(body, `"type":"threads.list"`) {
-		return
-	}
+func noteCodexTurnStarted() {
 	codexMu.Lock()
-	codexChatkitPosts++
+	codexTurnStarted = true
 	codexMu.Unlock()
 }
 
-func waitForCodexChatkitPost(timeout time.Duration) bool {
+func waitForCodexTurnStarted(timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		codexMu.Lock()
-		count := codexChatkitPosts
+		started := codexTurnStarted
 		codexMu.Unlock()
-		if count > 0 {
+		if started {
 			return true
 		}
 		time.Sleep(25 * time.Millisecond)
@@ -198,7 +232,6 @@ func handleChatkit(w http.ResponseWriter, r *http.Request) {
 		Authorization: r.Header.Get("Authorization"),
 		Body:          string(body),
 	})
-	noteCodexChatkitPost(r.URL.Path, string(body))
 
 	if strings.Contains(string(body), `"type":"threads.list"`) {
 		w.Header().Set("content-type", "application/json")
@@ -462,6 +495,357 @@ func (c *wsConn) readFrame() (byte, []byte, error) {
 	return b0 & 0x0f, payload, nil
 }
 
+type jsonRPCRequest struct {
+	JSONRPC string         `json:"jsonrpc"`
+	ID      any            `json:"id,omitempty"`
+	Method  string         `json:"method"`
+	Params  map[string]any `json:"params,omitempty"`
+}
+
+func fakeSeededThread() *fakeCodexThread {
+	return &fakeCodexThread{
+		ID:        "thread_seeded",
+		Title:     "Earlier conversation",
+		UpdatedAt: "2026-02-26T18:00:00Z",
+		Cwd:       ".",
+		Items: []map[string]any{
+			{
+				"id":     "seed_user",
+				"type":   "message",
+				"role":   "user",
+				"status": "completed",
+				"content": []map[string]any{
+					{"type": "input_text", "text": "What changed in this notebook?"},
+				},
+			},
+			{
+				"id":     "seed_assistant",
+				"type":   "message",
+				"role":   "assistant",
+				"status": "completed",
+				"content": []map[string]any{
+					{"type": "output_text", "text": "Previous assistant answer."},
+				},
+			},
+		},
+	}
+}
+
+func snapshotCurrentThread() *fakeCodexThread {
+	codexMu.Lock()
+	defer codexMu.Unlock()
+	if codexCurrentThread == nil {
+		return nil
+	}
+	threadCopy := *codexCurrentThread
+	threadCopy.Items = append([]map[string]any(nil), codexCurrentThread.Items...)
+	return &threadCopy
+}
+
+func upsertCurrentThread(thread *fakeCodexThread) {
+	codexMu.Lock()
+	defer codexMu.Unlock()
+	codexCurrentThread = thread
+}
+
+func appendCurrentThreadItem(item map[string]any) {
+	codexMu.Lock()
+	defer codexMu.Unlock()
+	if codexCurrentThread == nil {
+		return
+	}
+	codexCurrentThread.Items = append(codexCurrentThread.Items, item)
+	codexCurrentThread.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+}
+
+func completeCurrentThreadTurn(turnID string, responseID string, messages ...string) {
+	codexMu.Lock()
+	defer codexMu.Unlock()
+	if codexCurrentThread == nil {
+		return
+	}
+	for index, message := range messages {
+		codexCurrentThread.Items = append(codexCurrentThread.Items, map[string]any{
+			"id":     fmt.Sprintf("assistant_%s_%d", turnID, index+1),
+			"type":   "message",
+			"role":   "assistant",
+			"status": "completed",
+			"content": []map[string]any{
+				{"type": "output_text", "text": message},
+			},
+		})
+	}
+	codexCurrentThread.PreviousResponse = responseID
+	codexCurrentThread.LastTurnID = turnID
+	codexCurrentThread.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+}
+
+func sendJSONRPCResult(ws *wsConn, id any, result any) error {
+	payload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result":  result,
+	})
+	if err != nil {
+		return err
+	}
+	appendCodexAppServerMessage("outbound", "result", string(payload))
+	return ws.WriteText(string(payload))
+}
+
+func sendJSONRPCNotification(ws *wsConn, method string, params map[string]any) error {
+	payload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"params":  params,
+	})
+	if err != nil {
+		return err
+	}
+	appendCodexAppServerMessage("outbound", method, string(payload))
+	return ws.WriteText(string(payload))
+}
+
+func filterThreadsForCwd(cwd string) []map[string]any {
+	threads := make([]map[string]any, 0, 2)
+	seeded := fakeSeededThread()
+	if cwd == "" || cwd == seeded.Cwd {
+		threads = append(threads, map[string]any{
+			"id":                  seeded.ID,
+			"title":               seeded.Title,
+			"updated_at":          seeded.UpdatedAt,
+			"cwd":                 seeded.Cwd,
+			"previous_response_id": seeded.PreviousResponse,
+			"last_turn_id":        seeded.LastTurnID,
+		})
+	}
+	if current := snapshotCurrentThread(); current != nil {
+		if cwd == "" || cwd == current.Cwd {
+			threads = append(threads, map[string]any{
+				"id":                  current.ID,
+				"title":               current.Title,
+				"updated_at":          current.UpdatedAt,
+				"cwd":                 current.Cwd,
+				"previous_response_id": current.PreviousResponse,
+				"last_turn_id":        current.LastTurnID,
+			})
+		}
+	}
+	return threads
+}
+
+func readThread(threadID string) *fakeCodexThread {
+	if threadID == "thread_seeded" {
+		return fakeSeededThread()
+	}
+	current := snapshotCurrentThread()
+	if current != nil && current.ID == threadID {
+		return current
+	}
+	return nil
+}
+
+func handleCodexAppServerWebSocket(w http.ResponseWriter, r *http.Request) {
+	ws, err := upgradeWebSocket(w, r)
+	if err != nil {
+		log.Printf("[cuj-chatkit] /codex/app-server/ws upgrade failed: %v", err)
+		http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
+		return
+	}
+	defer func() {
+		_ = ws.Close()
+	}()
+	log.Printf("[cuj-chatkit] codex app-server websocket connected")
+	appendCodexAppServerMessage("meta", "connect", `{"status":"connected"}`)
+
+	for {
+		raw, err := ws.ReadText()
+		if err != nil {
+			if err != io.EOF {
+				appendCodexAppServerMessage("meta", "error", err.Error())
+				log.Printf("[cuj-chatkit] codex app-server read error: %v", err)
+			}
+			return
+		}
+		var request jsonRPCRequest
+		if err := json.Unmarshal([]byte(raw), &request); err != nil {
+			appendCodexAppServerMessage("inbound", "invalid", raw)
+			_ = sendJSONRPCResult(ws, nil, map[string]any{
+				"error": "invalid_json",
+			})
+			continue
+		}
+		appendCodexAppServerMessage("inbound", request.Method, raw)
+		switch request.Method {
+		case "thread/list":
+			cwd, _ := request.Params["cwd"].(string)
+			if err := sendJSONRPCResult(ws, request.ID, map[string]any{
+				"threads": filterThreadsForCwd(cwd),
+			}); err != nil {
+				return
+			}
+		case "thread/read":
+			threadID, _ := request.Params["threadId"].(string)
+			if threadID == "" {
+				threadID, _ = request.Params["thread_id"].(string)
+			}
+			thread := readThread(threadID)
+			if thread == nil {
+				_ = sendJSONRPCResult(ws, request.ID, map[string]any{
+					"thread": map[string]any{},
+					"items":  []any{},
+				})
+				continue
+			}
+			if err := sendJSONRPCResult(ws, request.ID, map[string]any{
+				"thread": map[string]any{
+					"id":                   thread.ID,
+					"title":                thread.Title,
+					"updated_at":           thread.UpdatedAt,
+					"cwd":                  thread.Cwd,
+					"previous_response_id": thread.PreviousResponse,
+					"last_turn_id":         thread.LastTurnID,
+				},
+				"items": thread.Items,
+			}); err != nil {
+				return
+			}
+		case "thread/start":
+			cwd, _ := request.Params["cwd"].(string)
+			thread := &fakeCodexThread{
+				ID:        "thread_cuj",
+				Title:     "Codex notebook edit",
+				Cwd:       cwd,
+				UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+				Items:     []map[string]any{},
+			}
+			upsertCurrentThread(thread)
+			if err := sendJSONRPCResult(ws, request.ID, map[string]any{
+				"threadId": thread.ID,
+				"title":    thread.Title,
+				"cwd":      thread.Cwd,
+			}); err != nil {
+				return
+			}
+		case "thread/resume":
+			threadID, _ := request.Params["threadId"].(string)
+			if threadID == "" {
+				threadID, _ = request.Params["thread_id"].(string)
+			}
+			thread := readThread(threadID)
+			if thread == nil {
+				thread = &fakeCodexThread{
+					ID:        threadID,
+					Title:     "Resumed thread",
+					Cwd:       ".",
+					UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+					Items:     []map[string]any{},
+				}
+				upsertCurrentThread(thread)
+			}
+			if err := sendJSONRPCResult(ws, request.ID, map[string]any{
+				"threadId": thread.ID,
+				"title":    thread.Title,
+				"cwd":      thread.Cwd,
+			}); err != nil {
+				return
+			}
+		case "turn/start":
+			threadID, _ := request.Params["threadId"].(string)
+			input, _ := request.Params["input"].(string)
+			turnID := "turn_cuj_1"
+			appendCurrentThreadItem(map[string]any{
+				"id":     "user_turn_cuj_1",
+				"type":   "message",
+				"role":   "user",
+				"status": "completed",
+				"content": []map[string]any{
+					{"type": "input_text", "text": input},
+				},
+			})
+			noteCodexTurnStarted()
+			if err := sendJSONRPCResult(ws, request.ID, map[string]any{
+				"turnId": turnID,
+			}); err != nil {
+				return
+			}
+			go func() {
+				firstResponseID := "resp_cuj_codex_1"
+				firstItemID := "item_cuj_codex_1"
+				finalResponseID := "resp_cuj_codex_2"
+				finalItemID := "item_cuj_codex_2"
+				firstText := `Ok, I'll add a cell to print("hello world").`
+				finalText := "Cell has been added."
+				time.Sleep(200 * time.Millisecond)
+				_ = sendJSONRPCNotification(ws, "turn.message.started", map[string]any{
+					"threadId":   threadID,
+					"turnId":     turnID,
+					"responseId": firstResponseID,
+					"itemId":     firstItemID,
+				})
+				_ = sendJSONRPCNotification(ws, "turn.output_text.delta", map[string]any{
+					"threadId":   threadID,
+					"turnId":     turnID,
+					"responseId": firstResponseID,
+					"itemId":     firstItemID,
+					"delta":      firstText,
+				})
+				_ = sendJSONRPCNotification(ws, "turn.output_text.done", map[string]any{
+					"threadId":   threadID,
+					"turnId":     turnID,
+					"responseId": firstResponseID,
+					"itemId":     firstItemID,
+					"text":       firstText,
+				})
+				if !waitForCodexUpdateComplete(30 * time.Second) {
+					_ = sendJSONRPCNotification(ws, "turn.completed", map[string]any{
+						"threadId": threadID,
+						"turnId":   turnID,
+					})
+					return
+				}
+				_ = sendJSONRPCNotification(ws, "turn.message.started", map[string]any{
+					"threadId":   threadID,
+					"turnId":     turnID,
+					"responseId": finalResponseID,
+					"itemId":     finalItemID,
+				})
+				_ = sendJSONRPCNotification(ws, "turn.output_text.delta", map[string]any{
+					"threadId":   threadID,
+					"turnId":     turnID,
+					"responseId": finalResponseID,
+					"itemId":     finalItemID,
+					"delta":      finalText,
+				})
+				_ = sendJSONRPCNotification(ws, "turn.output_text.done", map[string]any{
+					"threadId":   threadID,
+					"turnId":     turnID,
+					"responseId": finalResponseID,
+					"itemId":     finalItemID,
+					"text":       finalText,
+				})
+				completeCurrentThreadTurn(turnID, finalResponseID, firstText, finalText)
+				_ = sendJSONRPCNotification(ws, "turn.completed", map[string]any{
+					"threadId": threadID,
+					"turnId":   turnID,
+				})
+			}()
+		case "turn/interrupt":
+			if err := sendJSONRPCResult(ws, request.ID, map[string]any{
+				"ok": true,
+			}); err != nil {
+				return
+			}
+		default:
+			if err := sendJSONRPCResult(ws, request.ID, map[string]any{
+				"ok": true,
+			}); err != nil {
+				return
+			}
+		}
+	}
+}
+
 func handleCodexWebSocket(w http.ResponseWriter, r *http.Request) {
 	ws, err := upgradeWebSocket(w, r)
 	if err != nil {
@@ -486,8 +870,8 @@ func handleCodexWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 func runCodexScript(ws *wsConn) error {
-	if !waitForCodexChatkitPost(30 * time.Second) {
-		return fmt.Errorf("timed out waiting for /chatkit-codex request")
+	if !waitForCodexTurnStarted(30 * time.Second) {
+		return fmt.Errorf("timed out waiting for codex turn/start request")
 	}
 	if err := sendCodexToolRequest(ws, "bridge_list", map[string]any{
 		"callId":             "call_list",
@@ -639,6 +1023,8 @@ func main() {
 		switch r.URL.Path {
 		case "/chatkit", "/chatkit-codex":
 			handleChatkit(w, r)
+		case "/codex/app-server/ws":
+			handleCodexAppServerWebSocket(w, r)
 		case "/codex/ws":
 			handleCodexWebSocket(w, r)
 		case "/requests":
@@ -655,6 +1041,13 @@ func main() {
 			}
 			w.Header().Set("content-type", "application/json")
 			_ = json.NewEncoder(w).Encode(snapshotCodexBridgeMessages())
+		case "/codex/app-server/requests":
+			if r.Method != http.MethodGet {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			w.Header().Set("content-type", "application/json")
+			_ = json.NewEncoder(w).Encode(snapshotCodexAppServerMessages())
 		case "/reset":
 			if r.Method != http.MethodPost {
 				w.WriteHeader(http.StatusMethodNotAllowed)
