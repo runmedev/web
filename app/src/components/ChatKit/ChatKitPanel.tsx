@@ -581,6 +581,23 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const codexBridgeUrl = useMemo(() => {
     return buildCodexBridgeWsUrl(defaultHarness.baseUrl);
   }, [defaultHarness.baseUrl]);
+  const resolveCodexAuthorization = useCallback(async (): Promise<string> => {
+    const authData = await getAuthData();
+    const idToken = authData?.idToken?.trim();
+    if (!idToken) {
+      const message = "Codex websocket auth requires an OIDC id token";
+      appLogger.error(message, {
+        attrs: {
+          scope: "chatkit.codex_auth",
+          adapter: defaultHarness.adapter,
+          baseUrl: defaultHarness.baseUrl,
+        },
+      });
+      setShowLoginPrompt(true);
+      throw new UserNotLoggedInError(message);
+    }
+    return `Bearer ${idToken}`;
+  }, [defaultHarness.adapter, defaultHarness.baseUrl]);
 
   useEffect(() => {
     if (defaultHarness.adapter !== "codex") {
@@ -597,21 +614,35 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       proxy.disconnect();
       return;
     }
-    void proxy.connect(codexProxyWsUrl).then(() => {
-      void getCodexConversationController().refreshHistory();
-    }).catch((error) => {
-      appLogger.error("Failed to connect codex app-server websocket", {
-        attrs: {
-          scope: "chatkit.codex_proxy",
-          error: String(error),
-          url: codexProxyWsUrl,
-        },
-      });
-    });
+    let canceled = false;
+    void (async () => {
+      try {
+        const authorization = await resolveCodexAuthorization();
+        if (canceled) {
+          return;
+        }
+        await proxy.connect(codexProxyWsUrl, authorization);
+        if (!canceled) {
+          await getCodexConversationController().refreshHistory();
+        }
+      } catch (error) {
+        if (canceled) {
+          return;
+        }
+        appLogger.error("Failed to connect codex app-server websocket", {
+          attrs: {
+            scope: "chatkit.codex_proxy",
+            error: String(error),
+            url: codexProxyWsUrl,
+          },
+        });
+      }
+    })();
     return () => {
+      canceled = true;
       proxy.disconnect();
     };
-  }, [codexProxyWsUrl, defaultHarness.adapter]);
+  }, [codexProxyWsUrl, defaultHarness.adapter, resolveCodexAuthorization]);
 
   useEffect(() => {
     const bridge = getCodexToolBridge();
@@ -645,12 +676,33 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       getCodexExecuteApprovalManager().failAll("Codex bridge disabled");
       return;
     }
-    bridge.connect(codexBridgeUrl);
+    let canceled = false;
+    void (async () => {
+      try {
+        const authorization = await resolveCodexAuthorization();
+        if (canceled) {
+          return;
+        }
+        await bridge.connect(codexBridgeUrl, authorization);
+      } catch (error) {
+        if (canceled) {
+          return;
+        }
+        appLogger.error("Failed to connect codex bridge websocket", {
+          attrs: {
+            scope: "chatkit.codex_bridge",
+            error: String(error),
+            url: codexBridgeUrl,
+          },
+        });
+      }
+    })();
     return () => {
+      canceled = true;
       bridge.disconnect();
       getCodexExecuteApprovalManager().failAll("Codex bridge disconnected");
     };
-  }, [codexBridgeUrl, defaultHarness.adapter]);
+  }, [codexBridgeUrl, defaultHarness.adapter, resolveCodexAuthorization]);
 
   const chatkit = useChatKit({
     api: {

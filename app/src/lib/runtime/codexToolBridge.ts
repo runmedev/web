@@ -31,6 +31,10 @@ export type CodexToolBridgeHandler = (request: CodexToolBridgeRequest) => Promis
 
 export type WebSocketFactory = (url: string) => WebSocket;
 
+type CodexBridgeAuthEnvelope = {
+  authorization: string;
+};
+
 class CodexToolBridge {
   private ws: WebSocket | null = null;
   private state: CodexToolBridgeState = "idle";
@@ -63,10 +67,14 @@ class CodexToolBridge {
     };
   }
 
-  connect(url: string): void {
+  async connect(url: string, authorization: string): Promise<void> {
     if (!url) {
       this.setError("Codex bridge URL is required");
-      return;
+      throw new Error("Codex bridge URL is required");
+    }
+    if (!authorization.trim()) {
+      this.setError("Codex bridge websocket authorization is required");
+      throw new Error("Codex bridge websocket authorization is required");
     }
     if (
       this.ws &&
@@ -85,58 +93,82 @@ class CodexToolBridge {
     try {
       const ws = this.wsFactory(url);
       this.ws = ws;
-      ws.onopen = () => {
-        if (this.ws !== ws) {
-          return;
-        }
-        this.state = "open";
-        this.lastError = null;
-        this.notify();
-      };
-      ws.onclose = (event) => {
-        if (this.ws !== ws) {
-          return;
-        }
-        this.state = "closed";
-        let errorMessage: string | null = null;
-        if (event.reason) {
-          errorMessage = event.reason;
-        } else if (typeof event.code === "number" && event.code !== 1000) {
-          errorMessage = `Codex bridge websocket closed (${event.code})`;
-        }
-        if (errorMessage) {
-          this.lastError = errorMessage;
-          appLogger.error("Codex bridge websocket closed", {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        ws.onopen = () => {
+          if (this.ws !== ws) {
+            return;
+          }
+          this.state = "open";
+          this.lastError = null;
+          try {
+            const authEnvelope: CodexBridgeAuthEnvelope = {
+              authorization,
+            };
+            ws.send(JSON.stringify(authEnvelope));
+            settled = true;
+            resolve();
+          } catch (error) {
+            this.setError(`Failed to initialize codex bridge websocket: ${String(error)}`);
+            settled = true;
+            reject(error);
+          }
+          this.notify();
+        };
+        ws.onclose = (event) => {
+          if (this.ws !== ws) {
+            return;
+          }
+          this.state = "closed";
+          let errorMessage: string | null = null;
+          if (event.reason) {
+            errorMessage = event.reason;
+          } else if (typeof event.code === "number" && event.code !== 1000) {
+            errorMessage = `Codex bridge websocket closed (${event.code})`;
+          }
+          if (errorMessage) {
+            this.lastError = errorMessage;
+            appLogger.error("Codex bridge websocket closed", {
+              attrs: {
+                scope: "chatkit.codex_bridge",
+                code: event.code,
+                reason: event.reason || undefined,
+                url: this.url,
+              },
+            });
+          }
+          if (!settled) {
+            settled = true;
+            reject(new Error(errorMessage ?? "Codex bridge websocket closed"));
+          }
+          this.notify();
+        };
+        ws.onerror = () => {
+          if (this.ws !== ws) {
+            return;
+          }
+          this.state = "error";
+          this.lastError = this.lastError ?? "Codex bridge websocket error";
+          appLogger.error("Codex bridge websocket error", {
             attrs: {
               scope: "chatkit.codex_bridge",
-              code: event.code,
-              reason: event.reason || undefined,
               url: this.url,
+              state: this.state,
             },
           });
-        }
-        this.notify();
-      };
-      ws.onerror = () => {
-        if (this.ws !== ws) {
-          return;
-        }
-        this.state = "error";
-        this.lastError = this.lastError ?? "Codex bridge websocket error";
-        appLogger.error("Codex bridge websocket error", {
-          attrs: {
-            scope: "chatkit.codex_bridge",
-            url: this.url,
-            state: this.state,
-          },
-        });
-        this.notify();
-      };
-      ws.onmessage = (event) => {
-        void this.handleMessage(ws, event.data);
-      };
+          if (!settled) {
+            settled = true;
+            reject(new Error(this.lastError));
+          }
+          this.notify();
+        };
+        ws.onmessage = (event) => {
+          void this.handleMessage(ws, event.data);
+        };
+      });
     } catch (error) {
       this.setError(`Failed to connect codex bridge: ${String(error)}`);
+      throw error;
     }
   }
 

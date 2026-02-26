@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { create } from "@bufbuild/protobuf";
 import { ChatkitStateSchema } from "../../protogen/oaiproto/aisre/notebooks_pb.js";
 
@@ -217,15 +217,25 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(bridgeMock.disconnect).toHaveBeenCalled();
   });
 
-  it("routes ChatKit to /codex/app-server/ws and connects codex bridge + proxy websocket", () => {
+  it("routes ChatKit to /codex/app-server/ws and connects codex bridge + proxy websocket", async () => {
     harnessState.defaultHarness.adapter = "codex";
 
     render(<ChatKitPanel />);
 
     const config = useChatKitMock.mock.calls.at(0)?.[0];
     expect(config.api.url).toBe("http://127.0.0.1:31337/codex/chatkit");
-    expect(bridgeMock.connect).toHaveBeenCalledWith("ws://127.0.0.1:31337/codex/ws");
-    expect(proxyMock.connect).toHaveBeenCalledWith("ws://127.0.0.1:31337/codex/app-server/ws");
+    await waitFor(() =>
+      expect(bridgeMock.connect).toHaveBeenCalledWith(
+        "ws://127.0.0.1:31337/codex/ws",
+        "Bearer test-id-token",
+      ),
+    );
+    await waitFor(() =>
+      expect(proxyMock.connect).toHaveBeenCalledWith(
+        "ws://127.0.0.1:31337/codex/app-server/ws",
+        "Bearer test-id-token",
+      ),
+    );
     expect(bridgeMock.setHandler).toHaveBeenCalled();
     expect(config.history.enabled).toBe(false);
     expect(config.header.title.text).toBe("Runme Repo");
@@ -248,7 +258,7 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(approvalMgrMock.failAll).toHaveBeenCalledWith("Codex bridge disconnected");
   });
 
-  it("switches chatkit endpoint immediately when harness default changes", () => {
+  it("switches chatkit endpoint immediately when harness default changes", async () => {
     const { rerender } = render(<ChatKitPanel />);
 
     expect(useChatKitMock.mock.calls.at(-1)?.[0]?.api?.url).toBe(
@@ -264,8 +274,18 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(useChatKitMock.mock.calls.at(-1)?.[0]?.api?.url).toBe(
       "http://127.0.0.1:31337/codex/chatkit",
     );
-    expect(bridgeMock.connect).toHaveBeenCalledWith("ws://127.0.0.1:31337/codex/ws");
-    expect(proxyMock.connect).toHaveBeenCalledWith("ws://127.0.0.1:31337/codex/app-server/ws");
+    await waitFor(() =>
+      expect(bridgeMock.connect).toHaveBeenCalledWith(
+        "ws://127.0.0.1:31337/codex/ws",
+        "Bearer test-id-token",
+      ),
+    );
+    await waitFor(() =>
+      expect(proxyMock.connect).toHaveBeenCalledWith(
+        "ws://127.0.0.1:31337/codex/app-server/ws",
+        "Bearer test-id-token",
+      ),
+    );
 
     harnessState.defaultHarness = {
       ...harnessState.defaultHarness,

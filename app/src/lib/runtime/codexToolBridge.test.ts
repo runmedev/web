@@ -66,12 +66,15 @@ describe("CodexToolBridge", () => {
   it("connects and reports open state", () => {
     const bridge = createCodexToolBridgeForTests({ wsFactory });
 
-    bridge.connect("ws://localhost:1234/codex/ws");
+    void bridge.connect("ws://localhost:1234/codex/ws", "Bearer test-id-token");
     expect(sockets).toHaveLength(1);
     expect(bridge.getSnapshot().state).toBe("connecting");
 
     sockets[0]?.emitOpen();
     expect(bridge.getSnapshot().state).toBe("open");
+    expect(sockets[0]?.sent).toEqual([
+      JSON.stringify({ authorization: "Bearer test-id-token" }),
+    ]);
   });
 
   it("handles a tool-call request and sends response envelope", async () => {
@@ -83,7 +86,7 @@ describe("CodexToolBridge", () => {
     }));
 
     bridge.setHandler(handler);
-    bridge.connect("ws://localhost:1234/codex/ws");
+    void bridge.connect("ws://localhost:1234/codex/ws", "Bearer test-id-token");
     sockets[0]?.emitOpen();
 
     sockets[0]?.emitMessage(JSON.stringify({
@@ -98,8 +101,8 @@ describe("CodexToolBridge", () => {
       toolCallInput: { call_id: "call_1" },
     });
     const sent = sockets[0]?.sent ?? [];
-    expect(sent).toHaveLength(1);
-    expect(JSON.parse(sent[0] ?? "{}")).toEqual({
+    expect(sent).toHaveLength(2);
+    expect(JSON.parse(sent[1] ?? "{}")).toEqual({
       type: "NotebookToolCallResponse",
       bridge_call_id: "bridge_1",
       tool_call_output: {
@@ -112,7 +115,7 @@ describe("CodexToolBridge", () => {
 
   it("records error on malformed JSON", () => {
     const bridge = createCodexToolBridgeForTests({ wsFactory });
-    bridge.connect("ws://localhost:1234/codex/ws");
+    void bridge.connect("ws://localhost:1234/codex/ws", "Bearer test-id-token");
     sockets[0]?.emitOpen();
 
     sockets[0]?.emitMessage("{bad");
@@ -123,7 +126,7 @@ describe("CodexToolBridge", () => {
 
   it("records error when request arrives before handler registration", () => {
     const bridge = createCodexToolBridgeForTests({ wsFactory });
-    bridge.connect("ws://localhost:1234/codex/ws");
+    void bridge.connect("ws://localhost:1234/codex/ws", "Bearer test-id-token");
     sockets[0]?.emitOpen();
 
     sockets[0]?.emitMessage(JSON.stringify({
@@ -138,7 +141,7 @@ describe("CodexToolBridge", () => {
 
   it("captures websocket close reason for diagnostics", () => {
     const bridge = createCodexToolBridgeForTests({ wsFactory });
-    bridge.connect("ws://localhost:1234/codex/ws");
+    void bridge.connect("ws://localhost:1234/codex/ws", "Bearer test-id-token");
     sockets[0]?.emitOpen();
 
     sockets[0]?.emitClose({ code: 4409, reason: "codex_ws_already_connected" });
@@ -156,7 +159,7 @@ describe("CodexToolBridge", () => {
           resolveHandler = resolve;
         }),
     );
-    bridge.connect("ws://localhost:1234/codex/ws");
+    void bridge.connect("ws://localhost:1234/codex/ws", "Bearer test-id-token");
     sockets[0]?.emitOpen();
 
     sockets[0]?.emitMessage(JSON.stringify({
@@ -169,7 +172,9 @@ describe("CodexToolBridge", () => {
     resolveHandler?.({ ok: true });
     await Promise.resolve();
 
-    expect(sockets[0]?.sent ?? []).toHaveLength(0);
+    expect(sockets[0]?.sent ?? []).toEqual([
+      JSON.stringify({ authorization: "Bearer test-id-token" }),
+    ]);
     expect(bridge.getSnapshot().lastError).toBe("server_closed");
   });
 });

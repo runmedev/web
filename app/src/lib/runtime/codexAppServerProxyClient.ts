@@ -40,6 +40,8 @@ export type CodexProxyNotificationHandler = (
 
 export type WebSocketFactory = (url: string) => WebSocket;
 
+const DEFAULT_INITIALIZE_PROTOCOL_VERSION = "2025-03-26";
+
 function recordCodexProxyDebug(entry: Record<string, unknown>): void {
   if (typeof window === "undefined") {
     return;
@@ -100,11 +102,15 @@ class CodexAppServerProxyClient {
     };
   }
 
-  async connect(url: string): Promise<void> {
+  async connect(url: string, authorization: string): Promise<void> {
     recordCodexProxyDebug({ event: "connect_called", url });
     if (!url) {
       this.setError("Codex app-server websocket URL is required");
       throw new Error("Codex app-server websocket URL is required");
+    }
+    if (!authorization.trim()) {
+      this.setError("Codex app-server websocket authorization is required");
+      throw new Error("Codex app-server websocket authorization is required");
     }
     if (
       this.ws &&
@@ -124,6 +130,7 @@ class CodexAppServerProxyClient {
       try {
         const ws = this.wsFactory(url);
         this.ws = ws;
+        let settled = false;
         ws.onopen = () => {
           if (this.ws !== ws) {
             return;
@@ -132,7 +139,21 @@ class CodexAppServerProxyClient {
           this.state = "open";
           this.lastError = null;
           this.notify();
-          resolve();
+          void this.initializeSession(authorization)
+            .then(() => {
+              settled = true;
+              resolve();
+            })
+            .catch((error) => {
+              this.setError(`Failed to initialize codex app-server websocket: ${String(error)}`);
+              try {
+                ws.close();
+              } catch {
+                // Ignore websocket close errors.
+              }
+              settled = true;
+              reject(error);
+            });
         };
         ws.onclose = (event) => {
           if (this.ws !== ws) {
@@ -162,6 +183,10 @@ class CodexAppServerProxyClient {
             });
           }
           this.rejectPending(new Error(errorMessage ?? "Codex app-server websocket closed"));
+          if (!settled) {
+            settled = true;
+            reject(new Error(errorMessage ?? "Codex app-server websocket closed"));
+          }
           this.notify();
         };
         ws.onerror = () => {
@@ -172,7 +197,10 @@ class CodexAppServerProxyClient {
           const error = new Error("Codex app-server websocket error");
           this.setError(error.message);
           this.rejectPending(error);
-          reject(error);
+          if (!settled) {
+            settled = true;
+            reject(error);
+          }
         };
         ws.onmessage = (event) => {
           void this.handleMessage(ws, event.data);
@@ -225,6 +253,29 @@ class CodexAppServerProxyClient {
         reject(error);
       }
     });
+  }
+
+  private async initializeSession(authorization: string): Promise<void> {
+    await this.sendRequest("initialize", {
+      protocolVersion: DEFAULT_INITIALIZE_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: {
+        name: "runme-web",
+        version: "1.0.0",
+      },
+      authorization,
+    });
+
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("Codex app-server websocket closed before initialized");
+    }
+    const payload = JSON.stringify({
+      jsonrpc: "2.0",
+      method: "initialized",
+      params: {},
+    });
+    recordCodexProxyDebug({ event: "send_notification", method: "initialized", url: this.url, payload });
+    this.ws.send(payload);
   }
 
   resetForTests(): void {

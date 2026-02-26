@@ -201,6 +201,7 @@ Through Runme server, with split control/data planes.
 - Browser opens a dedicated codex bridge websocket (`/codex/ws`) for asynchronous notebook MCP tool dispatch/results.
 - We do not use browser -> codex direct transport in v1.
 - For ChatKit UI compatibility, the browser also owns a small adapter layer that translates ChatKit send-message flow into Codex lifecycle calls and translates Codex notifications back into ChatKit-visible streamed events/state.
+- Browser websocket auth follows the existing Runme `/ws` pattern: upgrade the websocket first, then send auth in the first protocol message rather than relying on `HandleProtected(...)` during the HTTP upgrade.
 
 Current JSON-RPC flow:
 
@@ -551,7 +552,13 @@ sequenceDiagram
 
 ### Auth and policy
 
-- Keep browser auth on `/chatkit`, `/codex/app-server/ws`, and `/codex/ws` using existing IAM policy checks.
+- Keep browser auth on `/chatkit` using existing HTTP IAM policy checks.
+- Do not wrap browser websocket upgrades for `/codex/app-server/ws` or `/codex/ws` with `HandleProtected(...)`.
+- Instead, both codex websocket routes should follow the existing `/ws` pattern:
+  - accept the websocket upgrade first
+  - require a bearer token in the first protocol message
+  - validate that token with the existing OIDC + IAM role checks before processing any further messages
+  - close the websocket immediately if auth is missing, invalid, or unauthorized
 - Reuse existing Agent role policy for codex harness access.
 - Configure Codex threads with server-validated `approvalPolicy`.
 - Permit file writes in Codex threads, constrained by local sandbox/writable roots.
@@ -559,6 +566,18 @@ sequenceDiagram
 - Codex subprocess remains local (`stdio` child process), not browser reachable.
 - Protect the streamable MCP endpoint with app-server-scoped auth; do not rely on CORS.
 - Mint one long-lived opaque token in Runme, pass it to Codex via the MCP server URL (`session_token` query parameter in v1), and validate that token on each MCP request.
+
+#### Browser websocket auth details
+
+- Browser `WebSocket` cannot set an `Authorization` header during the upgrade, so HTTP middleware auth on websocket upgrades is not sufficient for the codex browser routes.
+- `/codex/app-server/ws`
+  - Browser must include `authorization: "Bearer <id_token>"` in the first JSON-RPC `initialize` request.
+  - Runme must verify that bearer token before honoring `initialize` or any later JSON-RPC request.
+- `/codex/ws`
+  - Browser must include `authorization: "Bearer <id_token>"` in the first websocket envelope.
+  - Runme must verify that bearer token before accepting notebook tool traffic.
+- Frontend must source this bearer token from the refresh-aware OIDC path (`getAuthData()`), not from a stale cached token.
+- Error reporting must surface websocket auth failures in the app logger so the Logs pane shows a clear codex auth/connect failure instead of only browser-console websocket errors.
 
 ### Observability
 

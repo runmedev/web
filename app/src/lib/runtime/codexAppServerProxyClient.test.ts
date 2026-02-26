@@ -78,25 +78,64 @@ describe("CodexAppServerProxyClient", () => {
   it("connects and reports open state", async () => {
     const client = createCodexAppServerProxyClientForTests({ wsFactory });
 
-    const connectPromise = client.connect("ws://localhost:1234/codex/app-server/ws");
+    const connectPromise = client.connect(
+      "ws://localhost:1234/codex/app-server/ws",
+      "Bearer test-id-token",
+    );
     expect(client.getSnapshot().state).toBe("connecting");
 
     sockets[0]?.emitOpen();
+    sockets[0]?.emitMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {},
+      }),
+    );
     await connectPromise;
 
     expect(client.getSnapshot().state).toBe("open");
+    expect(JSON.parse(sockets[0]?.sent[0] ?? "{}")).toEqual({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-03-26",
+        capabilities: {},
+        clientInfo: {
+          name: "runme-web",
+          version: "1.0.0",
+        },
+        authorization: "Bearer test-id-token",
+      },
+    });
+    expect(JSON.parse(sockets[0]?.sent[1] ?? "{}")).toEqual({
+      jsonrpc: "2.0",
+      method: "initialized",
+      params: {},
+    });
   });
 
   it("sends JSON-RPC requests and resolves responses", async () => {
     const client = createCodexAppServerProxyClientForTests({ wsFactory });
-    const connectPromise = client.connect("ws://localhost:1234/codex/app-server/ws");
+    const connectPromise = client.connect(
+      "ws://localhost:1234/codex/app-server/ws",
+      "Bearer test-id-token",
+    );
     sockets[0]?.emitOpen();
+    sockets[0]?.emitMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {},
+      }),
+    );
     await connectPromise;
 
     const responsePromise = client.sendRequest("thread/list", {
       cwd: "/workspace",
     });
-    expect(JSON.parse(sockets[0]?.sent[0] ?? "{}")).toMatchObject({
+    expect(JSON.parse(sockets[0]?.sent[2] ?? "{}")).toMatchObject({
       jsonrpc: "2.0",
       method: "thread/list",
       params: { cwd: "/workspace" },
@@ -105,7 +144,7 @@ describe("CodexAppServerProxyClient", () => {
     sockets[0]?.emitMessage(
       JSON.stringify({
         jsonrpc: "2.0",
-        id: 1,
+        id: 2,
         result: {
           threads: [{ id: "thread_1" }],
         },
@@ -119,8 +158,18 @@ describe("CodexAppServerProxyClient", () => {
 
   it("surfaces JSON-RPC errors", async () => {
     const client = createCodexAppServerProxyClientForTests({ wsFactory });
-    const connectPromise = client.connect("ws://localhost:1234/codex/app-server/ws");
+    const connectPromise = client.connect(
+      "ws://localhost:1234/codex/app-server/ws",
+      "Bearer test-id-token",
+    );
     sockets[0]?.emitOpen();
+    sockets[0]?.emitMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {},
+      }),
+    );
     await connectPromise;
 
     const responsePromise = client.sendRequest("thread/read", {
@@ -129,7 +178,7 @@ describe("CodexAppServerProxyClient", () => {
     sockets[0]?.emitMessage(
       JSON.stringify({
         jsonrpc: "2.0",
-        id: 1,
+        id: 2,
         error: {
           code: -32600,
           message: "thread missing",
@@ -144,8 +193,18 @@ describe("CodexAppServerProxyClient", () => {
 
   it("dispatches notifications to subscribers", async () => {
     const client = createCodexAppServerProxyClientForTests({ wsFactory });
-    const connectPromise = client.connect("ws://localhost:1234/codex/app-server/ws");
+    const connectPromise = client.connect(
+      "ws://localhost:1234/codex/app-server/ws",
+      "Bearer test-id-token",
+    );
     sockets[0]?.emitOpen();
+    sockets[0]?.emitMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {},
+      }),
+    );
     await connectPromise;
 
     const handler = vi.fn();
@@ -174,8 +233,18 @@ describe("CodexAppServerProxyClient", () => {
 
   it("rejects pending requests on websocket close", async () => {
     const client = createCodexAppServerProxyClientForTests({ wsFactory });
-    const connectPromise = client.connect("ws://localhost:1234/codex/app-server/ws");
+    const connectPromise = client.connect(
+      "ws://localhost:1234/codex/app-server/ws",
+      "Bearer test-id-token",
+    );
     sockets[0]?.emitOpen();
+    sockets[0]?.emitMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {},
+      }),
+    );
     await connectPromise;
 
     const responsePromise = client.sendRequest("turn/start", {
@@ -191,7 +260,10 @@ describe("CodexAppServerProxyClient", () => {
   it("logs websocket connection errors through appLogger", async () => {
     const client = createCodexAppServerProxyClientForTests({ wsFactory });
 
-    const connectPromise = client.connect("ws://localhost:1234/codex/app-server/ws");
+    const connectPromise = client.connect(
+      "ws://localhost:1234/codex/app-server/ws",
+      "Bearer test-id-token",
+    );
     sockets[0]?.emitError();
 
     await expect(connectPromise).rejects.toThrow(

@@ -858,6 +858,13 @@ func handleCodexWebSocket(w http.ResponseWriter, r *http.Request) {
 	}()
 	log.Printf("[cuj-chatkit] codex websocket connected")
 	appendCodexBridgeMessage("meta", "connect", `{"status":"connected"}`)
+	authMessage, err := ws.ReadText()
+	if err != nil {
+		appendCodexBridgeMessage("meta", "error", "missing auth envelope: "+err.Error())
+		log.Printf("[cuj-chatkit] codex websocket auth read error: %v", err)
+		return
+	}
+	appendCodexBridgeMessage("inbound", "auth", authMessage)
 
 	if err := runCodexScript(ws); err != nil {
 		appendCodexBridgeMessage("meta", "error", err.Error())
