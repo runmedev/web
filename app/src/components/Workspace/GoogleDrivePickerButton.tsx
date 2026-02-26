@@ -56,7 +56,7 @@ export function GoogleDrivePickerButton({
     const pickerConfig = getPickerConfig();
     if (!pickerConfig) {
       console.error(
-        "Missing Google Drive picker credentials. Please set VITE_GOOGLE_DRIVE_PICKER_CLIENT_ID and VITE_GOOGLE_DRIVE_PICKER_DEVELOPER_KEY.",
+        "Missing Google Drive client ID. Set it with googleClientManager.setClientId(...).",
       );
       return;
     }
