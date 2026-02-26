@@ -2,6 +2,7 @@ import YAML from "yaml";
 
 import type { OidcConfig } from "../auth/oidcConfig";
 import { OIDC_STORAGE_KEY, oidcConfigManager } from "../auth/oidcConfig";
+import { getOidcCallbackUrl, resolveAppUrl } from "./appBase";
 import type { GoogleOAuthClientConfig } from "./googleClientManager";
 import {
   GOOGLE_CLIENT_STORAGE_KEY,
@@ -22,7 +23,7 @@ const LEGACY_RUNNERS_STORAGE_KEY = "aisre/runners";
 const DEFAULT_RUNNER_NAME_STORAGE_KEY = "runme/defaultRunner";
 const LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY = "aisre/defaultRunner";
 const DEFAULT_RUNNER_NAME = "default";
-export const APP_CONFIG_PATH_DEFAULT = "/configs/app-configs.yaml";
+export const APP_CONFIG_PATH_DEFAULT = "configs/app-configs.yaml";
 
 export interface OidcGenericRuntimeConfig {
   clientId: string;
@@ -347,7 +348,7 @@ export function getDefaultAppConfigUrl(): string {
   if (typeof window === "undefined") {
     return APP_CONFIG_PATH_DEFAULT;
   }
-  return new URL(APP_CONFIG_PATH_DEFAULT, window.location.origin).toString();
+  return resolveAppUrl(APP_CONFIG_PATH_DEFAULT).toString();
 }
 
 export function applyAppConfig(
@@ -393,10 +394,7 @@ export function applyAppConfig(
   }
   if (Object.keys(oidcConfig).length > 0) {
     if (!oidcConfig.redirectUri && typeof window !== "undefined") {
-      oidcConfig.redirectUri = new URL(
-        "/oidc/callback",
-        window.location.origin,
-      ).toString();
+      oidcConfig.redirectUri = getOidcCallbackUrl();
     }
     try {
       oidc = oidcConfigManager.setConfig(oidcConfig);

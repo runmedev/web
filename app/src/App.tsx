@@ -58,6 +58,7 @@ import {
   getConfiguredAgentEndpoint,
   getConfiguredDefaultRunnerEndpoint,
 } from "./lib/appConfig";
+import { getAppRouterBasename } from "./lib/appBase";
 
 const queryClient = new QueryClient();
 
@@ -73,8 +74,9 @@ export interface AppProps {
 }
 
 function AppRouter() {
+  const basename = getAppRouterBasename();
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={basename === "/" ? undefined : basename}>
       <Routes>
         <Route path="/" element={<MainPage />} />
         <Route path="/runs" element={<RunsRoute />} />

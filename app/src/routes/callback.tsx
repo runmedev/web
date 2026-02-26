@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { getBrowserAdapter } from "../browserAdapter.client";
+import { APP_ROUTE_PATHS } from "../lib/appBase";
 
 /**
  * Apps running in-browser auth still need to implement a handler at a callback URL. The
@@ -18,7 +19,7 @@ export default function Callback() {
       if (controller.signal.aborted) return;
 
       // Navigate back to the main page after handling the callback
-      navigate("/");
+      navigate(APP_ROUTE_PATHS.home);
     });
 
     // If the user navigates away on their own, cancel the post-callback navigation above

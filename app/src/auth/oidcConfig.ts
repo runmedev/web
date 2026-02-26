@@ -1,4 +1,5 @@
 import { googleClientManager } from "../lib/googleClientManager";
+import { getOidcCallbackUrl } from "../lib/appBase";
 
 export type OidcConfig = {
   discoveryUrl: string;
@@ -118,9 +119,7 @@ export class OidcConfigManager {
       clientId: sanitizeString(stored?.clientId) ?? "",
       clientSecret: sanitizeString(stored?.clientSecret),
       scope: sanitizeString(stored?.scope) ?? "",
-      redirectUri:
-        sanitizeString(stored?.redirectUri) ??
-        new URL("/oidc/callback", window.location.origin).toString(),
+      redirectUri: sanitizeString(stored?.redirectUri) ?? getOidcCallbackUrl(),
       extraAuthParams:
         mergedExtra && Object.keys(mergedExtra).length > 0
           ? mergedExtra

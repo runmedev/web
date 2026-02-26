@@ -1,4 +1,5 @@
 import { Container, Heading, Link, Text } from "@radix-ui/themes";
+import { Link as RouterLink } from "react-router-dom";
 
 const NotFound = () => {
   return (
@@ -14,8 +15,8 @@ const NotFound = () => {
       </Text>
       <Text as="p" mt="4">
         Click{" "}
-        <Link href="/" underline="always">
-          here
+        <Link asChild underline="always">
+          <RouterLink to="/">here</RouterLink>
         </Link>{" "}
         to go back home.
       </Text>
