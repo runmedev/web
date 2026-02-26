@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatKit, useChatKit, ChatKitIcon } from "@openai/chatkit-react";
 import { parser_pb, RunmeMetadataKey, useCell } from "../../contexts/CellContext";
 import { useNotebookContext } from "../../contexts/NotebookContext";
@@ -8,11 +8,19 @@ import { create, fromJsonString, toJson } from "@bufbuild/protobuf";
 import {
   useHarness,
   buildChatkitUrl,
+  buildCodexAppServerWsUrl,
   buildCodexBridgeWsUrl,
   type HarnessProfile,
 } from "../../lib/runtime/harnessManager";
 import { getCodexToolBridge } from "../../lib/runtime/codexToolBridge";
 import { getCodexExecuteApprovalManager } from "../../lib/runtime/codexExecuteApprovalManager";
+import { getCodexAppServerProxyClient } from "../../lib/runtime/codexAppServerProxyClient";
+import { createCodexChatkitFetch } from "../../lib/runtime/codexChatkitFetch";
+import {
+  getCodexConversationController,
+  useCodexConversationSnapshot,
+} from "../../lib/runtime/codexConversationController";
+import { useCodexProjects } from "../../lib/runtime/codexProjectManager";
 import { appLogger } from "../../lib/logging/runtime";
 
 import { getAccessToken, getAuthData } from "../../token";
@@ -70,10 +78,11 @@ type SSEInterceptor = (rawEvent: string) => void;
 
 const useAuthorizedFetch = (
   getChatkitState: () => ReturnType<(typeof ChatkitStateSchema)["create"]>,
-  options?: { onSSEEvent?: SSEInterceptor },
+  options?: { onSSEEvent?: SSEInterceptor; baseFetch?: typeof fetch },
 ) => {
-  const { onSSEEvent } = options ?? {};
+  const { onSSEEvent, baseFetch } = options ?? {};
   return useMemo(() => {
+    const fetchImpl = baseFetch ?? fetch;
     const authorizedFetch: typeof fetch = async (
       input: RequestInfo | URL,
       init?: RequestInit,
@@ -140,7 +149,7 @@ const useAuthorizedFetch = (
           body,
         };
 
-        const response = await fetch(input, nextInit);
+        const response = await fetchImpl(input, nextInit);
         //return response;
         const isSSE =
           onSSEEvent &&
@@ -223,7 +232,7 @@ const useAuthorizedFetch = (
     };
 
     return authorizedFetch;
-  }, [onSSEEvent, getChatkitState]);
+  }, [baseFetch, onSSEEvent, getChatkitState]);
 };
 
 type ChatKitPanelInnerProps = {
@@ -234,10 +243,18 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const chatkitDomainKey = getConfiguredChatKitDomainKey();
   const [assistantPreview, setAssistantPreview] = useState("");
+  const [showCodexDrawer, setShowCodexDrawer] = useState(false);
+  const chatkitActionsRef = useRef<{
+    setThreadId: (threadId: string | null) => Promise<void>;
+    fetchUpdates: () => Promise<void>;
+  } | null>(null);
   const { getChatkitState, setChatkitState } = useCell();
   const { getNotebookData, useNotebookSnapshot } = useNotebookContext();
   const { getCurrentDoc } = useCurrentDoc();
   const { getAllRenderers } = useOutput();
+  const codexProjects = useCodexProjects();
+  const { defaultProject } = codexProjects;
+  const codexConversation = useCodexConversationSnapshot();
   const currentDocUri = getCurrentDoc();
   const notebookSnapshot = useNotebookSnapshot(currentDocUri ?? "");
   const orderedCells = useMemo(
@@ -490,16 +507,52 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     },
     [setAssistantPreview, setChatkitState],
   );
+  const codexFetch = useMemo(() => createCodexChatkitFetch(), []);
   const authorizedFetch = useAuthorizedFetch(getChatkitState, {
     onSSEEvent: handleSseEvent,
+    baseFetch: defaultHarness.adapter === "codex" ? codexFetch : undefined,
   });
 
   const chatkitApiUrl = useMemo(() => {
     return buildChatkitUrl(defaultHarness.baseUrl, defaultHarness.adapter);
   }, [defaultHarness.adapter, defaultHarness.baseUrl]);
+  const codexProxyWsUrl = useMemo(() => {
+    return buildCodexAppServerWsUrl(defaultHarness.baseUrl);
+  }, [defaultHarness.baseUrl]);
   const codexBridgeUrl = useMemo(() => {
     return buildCodexBridgeWsUrl(defaultHarness.baseUrl);
   }, [defaultHarness.baseUrl]);
+
+  useEffect(() => {
+    if (defaultHarness.adapter !== "codex") {
+      return;
+    }
+    const controller = getCodexConversationController();
+    controller.setSelectedProject(defaultProject.id);
+    void controller.refreshHistory();
+  }, [defaultHarness.adapter, defaultProject.id]);
+
+  useEffect(() => {
+    const proxy = getCodexAppServerProxyClient();
+    if (defaultHarness.adapter !== "codex") {
+      proxy.disconnect();
+      return;
+    }
+    void proxy.connect(codexProxyWsUrl).then(() => {
+      void getCodexConversationController().refreshHistory();
+    }).catch((error) => {
+      appLogger.error("Failed to connect codex app-server websocket", {
+        attrs: {
+          scope: "chatkit.codex_proxy",
+          error: String(error),
+          url: codexProxyWsUrl,
+        },
+      });
+    });
+    return () => {
+      proxy.disconnect();
+    };
+  }, [codexProxyWsUrl, defaultHarness.adapter]);
 
   useEffect(() => {
     const bridge = getCodexToolBridge();
@@ -539,6 +592,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       getCodexExecuteApprovalManager().failAll("Codex bridge disconnected");
     };
   }, [codexBridgeUrl, defaultHarness.adapter]);
+
   const chatkit = useChatKit({
     api: {
       url: chatkitApiUrl,
@@ -598,9 +652,35 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     },
     header: {
       enabled: true,
+      title:
+        defaultHarness.adapter === "codex"
+          ? {
+              enabled: true,
+              text: codexConversation.selectedProject.name,
+            }
+          : undefined,
+      leftAction:
+        defaultHarness.adapter === "codex"
+          ? {
+              icon: showCodexDrawer ? "close" : "menu",
+              onClick: () => setShowCodexDrawer((previous) => !previous),
+            }
+          : undefined,
+      rightAction:
+        defaultHarness.adapter === "codex"
+          ? {
+              icon: "compose",
+              onClick: () => {
+                const controller = getCodexConversationController();
+                controller.startNewChat();
+                setChatkitState(create(ChatkitStateSchema, {}));
+                void chatkitActionsRef.current?.setThreadId(null);
+              },
+            }
+          : undefined,
     },
     history: {
-      enabled: true,
+      enabled: defaultHarness.adapter !== "codex",
     },
     onClientTool: async (invocation) => {
       const toolOutput = create(ToolCallOutputSchema, {
@@ -769,7 +849,63 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         },
       });
     },
+    onThreadChange: ({ threadId }) => {
+      if (defaultHarness.adapter !== "codex") {
+        return;
+      }
+      if (!threadId) {
+        setChatkitState(create(ChatkitStateSchema, {}));
+        return;
+      }
+      const existing = codexConversation.threads.find((thread) => thread.id === threadId);
+      setChatkitState(
+        create(ChatkitStateSchema, {
+          threadId,
+          previousResponseId: existing?.previousResponseId ?? "",
+        }),
+      );
+    },
   });
+  chatkitActionsRef.current = {
+    setThreadId: chatkit.setThreadId,
+    fetchUpdates: chatkit.fetchUpdates,
+  };
+
+  const handleCodexNewChat = useCallback(async () => {
+    const controller = getCodexConversationController();
+    controller.startNewChat();
+    setChatkitState(create(ChatkitStateSchema, {}));
+    await chatkitActionsRef.current?.setThreadId(null);
+  }, [setChatkitState]);
+
+  const handleCodexSelectThread = useCallback(
+    async (threadId: string) => {
+      const controller = getCodexConversationController();
+      const thread = await controller.selectThread(threadId);
+      setChatkitState(
+        create(ChatkitStateSchema, {
+          threadId: thread.id,
+          previousResponseId: thread.previousResponseId ?? "",
+        }),
+      );
+      await chatkitActionsRef.current?.setThreadId(thread.id);
+      await chatkitActionsRef.current?.fetchUpdates();
+      setShowCodexDrawer(false);
+    },
+    [setChatkitState],
+  );
+
+  const handleCodexProjectChange = useCallback(
+    async (projectId: string) => {
+      const controller = getCodexConversationController();
+      controller.setSelectedProject(projectId);
+      controller.startNewChat();
+      setChatkitState(create(ChatkitStateSchema, {}));
+      await chatkitActionsRef.current?.setThreadId(null);
+      await controller.refreshHistory();
+    },
+    [setChatkitState],
+  );
 
   const handleLogin = useCallback(() => {
     setShowLoginPrompt(false);
@@ -783,6 +919,74 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   return (
     <div className="relative h-full w-full">
       <ChatKit control={chatkit.control} className="block h-full w-full" />
+      {defaultHarness.adapter === "codex" && showCodexDrawer ? (
+        <div
+          data-testid="codex-project-drawer"
+          className="absolute inset-y-0 left-0 z-40 flex w-[280px] flex-col border-r border-nb-cell-border bg-white/95 shadow-lg"
+        >
+          <div className="border-b border-nb-cell-border px-3 py-3">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-nb-text-muted">
+              Codex Project
+            </div>
+            <select
+              data-testid="codex-project-select"
+              className="w-full rounded border border-nb-cell-border bg-white px-2 py-1 text-sm text-nb-text"
+              value={codexConversation.selectedProject.id}
+              onChange={(event) => {
+                void handleCodexProjectChange(event.target.value);
+              }}
+            >
+              {codexProjects.projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="mt-2 w-full rounded border border-nb-cell-border px-2 py-1 text-sm text-nb-text hover:bg-nb-surface-2"
+              onClick={() => {
+                void handleCodexNewChat();
+              }}
+            >
+              New chat
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-nb-text-muted">
+              Conversations
+            </div>
+            {codexConversation.loadingHistory ? (
+              <div className="text-sm text-nb-text-muted">Loading...</div>
+            ) : codexConversation.threads.length === 0 ? (
+              <div className="text-sm text-nb-text-muted">No conversations yet.</div>
+            ) : (
+              <div className="space-y-2">
+                {codexConversation.threads.map((thread) => (
+                  <button
+                    key={thread.id}
+                    type="button"
+                    data-testid={`codex-thread-${thread.id}`}
+                    className={`w-full rounded border px-2 py-2 text-left text-sm ${
+                      codexConversation.currentThreadId === thread.id
+                        ? "border-nb-accent bg-nb-surface-2"
+                        : "border-nb-cell-border bg-white"
+                    }`}
+                    onClick={() => {
+                      void handleCodexSelectThread(thread.id);
+                    }}
+                  >
+                    <div className="font-medium text-nb-text">{thread.title}</div>
+                    {thread.updatedAt ? (
+                      <div className="mt-1 text-xs text-nb-text-muted">{thread.updatedAt}</div>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
       {import.meta.env.DEV && assistantPreview ? (
         <div
           data-testid="chatkit-assistant-preview"

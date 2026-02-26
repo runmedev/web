@@ -25,7 +25,7 @@ const DEFAULT_HARNESS_NAME = "local-responses";
 
 const CHATKIT_ROUTE_BY_ADAPTER: Record<HarnessAdapter, string> = {
   responses: "/chatkit",
-  codex: "/chatkit-codex",
+  codex: "/codex/app-server/ws",
 };
 
 function isHarnessAdapter(value: unknown): value is HarnessAdapter {
@@ -82,6 +82,23 @@ export function buildCodexBridgeWsUrl(baseUrl: string, options?: {
     );
     const qs = forceReplace ? "?force_replace=true" : "";
     return `${normalized}/codex/ws${qs}`;
+  }
+}
+
+export function buildCodexAppServerWsUrl(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.pathname = "/codex/app-server/ws";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    const trimmed = baseUrl.trim().replace(/\/+$/, "");
+    const normalized = trimmed.replace(/^https?:\/\//, (prefix) =>
+      prefix === "https://" ? "wss://" : "ws://"
+    );
+    return `${normalized}/codex/app-server/ws`;
   }
 }
 

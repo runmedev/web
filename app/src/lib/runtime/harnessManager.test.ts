@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   __resetHarnessManagerForTests,
+  buildCodexAppServerWsUrl,
   buildCodexBridgeWsUrl,
   buildChatkitUrl,
   getHarnessManager,
@@ -45,7 +46,7 @@ describe("harnessManager", () => {
 
   it("builds codex route for codex harnesses", () => {
     expect(buildChatkitUrl("http://localhost:1234", "codex")).toBe(
-      "http://localhost:1234/chatkit-codex",
+      "http://localhost:1234/codex/app-server/ws",
     );
   });
 
@@ -58,6 +59,15 @@ describe("harnessManager", () => {
     );
     expect(buildCodexBridgeWsUrl("http://localhost:1234", { forceReplace: true })).toBe(
       "ws://localhost:1234/codex/ws?force_replace=true",
+    );
+  });
+
+  it("builds codex app-server websocket URL", () => {
+    expect(buildCodexAppServerWsUrl("http://localhost:1234")).toBe(
+      "ws://localhost:1234/codex/app-server/ws",
+    );
+    expect(buildCodexAppServerWsUrl("https://example.com/base")).toBe(
+      "wss://example.com/codex/app-server/ws",
     );
   });
 
