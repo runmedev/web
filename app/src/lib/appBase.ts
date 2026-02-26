@@ -2,6 +2,7 @@ const ROOT_PATH = "/";
 
 export const APP_ROUTE_PATHS = {
   home: "/",
+  indexEntry: "/index.html",
   authStatus: "/auth/status",
   oidcCallback: "/oidc/callback",
   runs: "/runs",
