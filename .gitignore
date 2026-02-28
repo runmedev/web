@@ -41,3 +41,6 @@ packages/react-console/gen
 /app/.generated/
 /app/test/browser/.generated/
 /app/test/browser/test-output/*
+
+# Local checkout symlink
+/runme
