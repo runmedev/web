@@ -34,9 +34,15 @@ export interface OidcGenericRuntimeConfig {
   scopes: string[];
 }
 
+export interface OidcGoogleRuntimeConfig {
+  clientId: string;
+  clientSecret: string;
+}
+
 export interface OidcRuntimeConfig {
   clientExchange: boolean;
   generic: OidcGenericRuntimeConfig;
+  google: OidcGoogleRuntimeConfig;
 }
 
 export interface GoogleDriveRuntimeConfig {
@@ -271,6 +277,13 @@ function createDefaultOidcGenericRuntimeConfig(): OidcGenericRuntimeConfig {
   };
 }
 
+function createDefaultOidcGoogleRuntimeConfig(): OidcGoogleRuntimeConfig {
+  return {
+    clientId: "",
+    clientSecret: "",
+  };
+}
+
 function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
   return {
     agent: {
@@ -280,6 +293,7 @@ function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
     oidc: {
       clientExchange: false,
       generic: createDefaultOidcGenericRuntimeConfig(),
+      google: createDefaultOidcGoogleRuntimeConfig(),
     },
     googleDrive: {
       clientId: "",
@@ -304,6 +318,7 @@ export class RuntimeAppConfigSchema {
     const agent = asRecord(root.agent);
     const oidc = asRecord(root.oidc);
     const oidcGeneric = asRecord(oidc?.generic);
+    const oidcGoogle = asRecord(oidc?.google);
     const drive = asRecord(root.googleDrive);
 
     parsed.agent = {
@@ -329,6 +344,12 @@ export class RuntimeAppConfigSchema {
         issuer: pickString(oidcGeneric, ["issuer"]),
         redirectUrl: pickString(oidcGeneric, ["redirectUrl", "redirectURL"]),
         scopes: asStringArray(oidcGeneric.scopes),
+      };
+    }
+    if (oidcGoogle) {
+      parsed.oidc.google = {
+        clientId: pickString(oidcGoogle, ["clientId", "clientID"]),
+        clientSecret: pickString(oidcGoogle, ["clientSecret", "client_secret"]),
       };
     }
 
@@ -360,6 +381,8 @@ export function applyAppConfig(
   }
   const parsed = RuntimeAppConfigSchema.fromUnknown(rawConfig);
   const hasOidcBlock = isRecord(rawConfig.oidc);
+  const rawOidc = asRecord(rawConfig.oidc);
+  const hasOidcGoogleBlock = isRecord(rawOidc?.google);
   const hasGoogleDriveBlock = isRecord(rawConfig.googleDrive);
   const warnings: string[] = [];
   let oidc: OidcConfig | undefined;
@@ -369,14 +392,22 @@ export function applyAppConfig(
 
   const oidcConfig: Partial<OidcConfig> = {};
   const genericOidcConfig = parsed.oidc.generic;
+  const googleOidcConfig = parsed.oidc.google;
+  const googleOidcClientId = normalizeString(googleOidcConfig.clientId);
+  const googleOidcClientSecret = normalizeString(googleOidcConfig.clientSecret);
   const oidcScope =
     genericOidcConfig.scopes.length > 0
       ? genericOidcConfig.scopes.join(" ")
       : undefined;
   const discoveryUrl = normalizeString(genericOidcConfig.discoveryUrl);
-  const clientId = normalizeString(genericOidcConfig.clientId);
-  const clientSecret = normalizeString(genericOidcConfig.clientSecret);
+  const clientId =
+    googleOidcClientId ?? normalizeString(genericOidcConfig.clientId);
+  const clientSecret =
+    googleOidcClientSecret ?? normalizeString(genericOidcConfig.clientSecret);
   const redirectUri = normalizeString(genericOidcConfig.redirectUrl);
+  if (hasOidcGoogleBlock) {
+    oidcConfigManager.setGoogleDefaults();
+  }
   if (discoveryUrl) {
     oidcConfig.discoveryUrl = discoveryUrl;
   }
@@ -401,6 +432,8 @@ export function applyAppConfig(
     } catch (error) {
       warnings.push(`OIDC config not applied: ${String(error)}`);
     }
+  } else if (hasOidcGoogleBlock) {
+    warnings.push("OIDC Google config missing clientID/clientId");
   } else if (hasOidcBlock) {
     warnings.push("OIDC config present but no applicable generic values found");
   }

@@ -98,14 +98,18 @@ export class OidcConfigManager {
   }
 
   setGoogleDefaults(): OidcConfig {
-    return this.setConfig({
+    const extraAuthParams = this.sanitizeExtraAuthParams({
+      access_type: "offline",
+      prompt: "consent",
+    });
+    this.config = {
+      ...this.config,
       discoveryUrl: "https://accounts.google.com/.well-known/openid-configuration",
       scope: "openid https://www.googleapis.com/auth/userinfo.email",
-      extraAuthParams: {
-        access_type: "offline",
-        prompt: "consent",
-      },
-    });
+      extraAuthParams,
+    };
+    this.persistConfig(this.config);
+    return this.config;
   }
 
   private mergeConfig(stored?: StoredOidcConfig): OidcConfig {

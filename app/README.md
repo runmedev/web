@@ -131,13 +131,15 @@ go run ./ agent --config=${HOME}/.runme-agent/config.dev.yaml serve
         # OIDC callback handling should happen in the browser.
         clientExchange: true    
         google:
-            # Need to set the clientID to validate the audience tokens
+            # Runtime config applies Google defaults automatically when this block is present.
             clientID: "44661292282-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com"
 
     googleDrive:
         clientID: "44661292282-bqhl39ugf2kn7r8vv4f6766jt0a7tom9.apps.googleusercontent.com"
         clientSecret: ""
   ```
+
+  If you need to override the discovery URL, redirect URL, or scopes explicitly, add an `oidc.generic` block alongside `oidc.google`.
 
 
 * Then in the web in the console you can do.
