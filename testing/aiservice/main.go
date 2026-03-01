@@ -53,13 +53,13 @@ type capturedCodexAppServerMessage struct {
 }
 
 type fakeCodexThread struct {
-	ID               string                   `json:"id"`
-	Title            string                   `json:"title"`
-	UpdatedAt        string                   `json:"updated_at,omitempty"`
-	Cwd              string                   `json:"cwd,omitempty"`
-	PreviousResponse string                   `json:"previous_response_id,omitempty"`
-	LastTurnID       string                   `json:"last_turn_id,omitempty"`
-	Items            []map[string]any         `json:"items"`
+	ID               string           `json:"id"`
+	Title            string           `json:"title"`
+	UpdatedAt        string           `json:"updated_at,omitempty"`
+	Cwd              string           `json:"cwd,omitempty"`
+	PreviousResponse string           `json:"previous_response_id,omitempty"`
+	LastTurnID       string           `json:"last_turn_id,omitempty"`
+	Items            []map[string]any `json:"items"`
 }
 
 func envOrDefault(name, defaultValue string) string {
@@ -611,23 +611,23 @@ func filterThreadsForCwd(cwd string) []map[string]any {
 	seeded := fakeSeededThread()
 	if cwd == "" || cwd == seeded.Cwd {
 		threads = append(threads, map[string]any{
-			"id":                  seeded.ID,
-			"title":               seeded.Title,
-			"updated_at":          seeded.UpdatedAt,
-			"cwd":                 seeded.Cwd,
+			"id":                   seeded.ID,
+			"title":                seeded.Title,
+			"updated_at":           seeded.UpdatedAt,
+			"cwd":                  seeded.Cwd,
 			"previous_response_id": seeded.PreviousResponse,
-			"last_turn_id":        seeded.LastTurnID,
+			"last_turn_id":         seeded.LastTurnID,
 		})
 	}
 	if current := snapshotCurrentThread(); current != nil {
 		if cwd == "" || cwd == current.Cwd {
 			threads = append(threads, map[string]any{
-				"id":                  current.ID,
-				"title":               current.Title,
-				"updated_at":          current.UpdatedAt,
-				"cwd":                 current.Cwd,
+				"id":                   current.ID,
+				"title":                current.Title,
+				"updated_at":           current.UpdatedAt,
+				"cwd":                  current.Cwd,
 				"previous_response_id": current.PreviousResponse,
-				"last_turn_id":        current.LastTurnID,
+				"last_turn_id":         current.LastTurnID,
 			})
 		}
 	}
@@ -721,12 +721,25 @@ func handleCodexAppServerWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 			upsertCurrentThread(thread)
 			if err := sendJSONRPCResult(ws, request.ID, map[string]any{
-				"threadId": thread.ID,
-				"title":    thread.Title,
-				"cwd":      thread.Cwd,
+				"thread": map[string]any{
+					"id":         thread.ID,
+					"title":      thread.Title,
+					"cwd":        thread.Cwd,
+					"updated_at": thread.UpdatedAt,
+					"items":      []any{},
+				},
 			}); err != nil {
 				return
 			}
+			_ = sendJSONRPCNotification(ws, "thread/started", map[string]any{
+				"threadId": thread.ID,
+				"thread": map[string]any{
+					"id":         thread.ID,
+					"title":      thread.Title,
+					"cwd":        thread.Cwd,
+					"updated_at": thread.UpdatedAt,
+				},
+			})
 		case "thread/resume":
 			threadID, _ := request.Params["threadId"].(string)
 			if threadID == "" {
@@ -744,15 +757,32 @@ func handleCodexAppServerWebSocket(w http.ResponseWriter, r *http.Request) {
 				upsertCurrentThread(thread)
 			}
 			if err := sendJSONRPCResult(ws, request.ID, map[string]any{
-				"threadId": thread.ID,
-				"title":    thread.Title,
-				"cwd":      thread.Cwd,
+				"thread": map[string]any{
+					"id":         thread.ID,
+					"title":      thread.Title,
+					"cwd":        thread.Cwd,
+					"updated_at": thread.UpdatedAt,
+					"items":      []any{},
+				},
 			}); err != nil {
 				return
 			}
 		case "turn/start":
 			threadID, _ := request.Params["threadId"].(string)
-			input, _ := request.Params["input"].(string)
+			input := ""
+			switch typed := request.Params["input"].(type) {
+			case string:
+				input = typed
+			case []any:
+				for _, item := range typed {
+					part, ok := item.(map[string]any)
+					if !ok {
+						continue
+					}
+					text, _ := part["text"].(string)
+					input += text
+				}
+			}
 			turnID := "turn_cuj_1"
 			appendCurrentThreadItem(map[string]any{
 				"id":     "user_turn_cuj_1",
@@ -765,69 +795,119 @@ func handleCodexAppServerWebSocket(w http.ResponseWriter, r *http.Request) {
 			})
 			noteCodexTurnStarted()
 			if err := sendJSONRPCResult(ws, request.ID, map[string]any{
-				"turnId": turnID,
+				"turn": map[string]any{
+					"id":     turnID,
+					"status": "inProgress",
+					"items":  []any{},
+					"error":  nil,
+				},
 			}); err != nil {
 				return
 			}
 			go func() {
 				firstResponseID := "resp_cuj_codex_1"
-				firstItemID := "item_cuj_codex_1"
+				firstItemID := "msg_cuj_codex_1"
 				finalResponseID := "resp_cuj_codex_2"
-				finalItemID := "item_cuj_codex_2"
+				finalItemID := "msg_cuj_codex_2"
 				firstText := `Ok, I'll add a cell to print("hello world").`
 				finalText := "Cell has been added."
 				time.Sleep(200 * time.Millisecond)
-				_ = sendJSONRPCNotification(ws, "turn.message.started", map[string]any{
-					"threadId":   threadID,
-					"turnId":     turnID,
-					"responseId": firstResponseID,
-					"itemId":     firstItemID,
+				_ = sendJSONRPCNotification(ws, "turn/started", map[string]any{
+					"threadId": threadID,
+					"turn": map[string]any{
+						"id":     turnID,
+						"status": "inProgress",
+					},
 				})
-				_ = sendJSONRPCNotification(ws, "turn.output_text.delta", map[string]any{
+				_ = sendJSONRPCNotification(ws, "item/started", map[string]any{
+					"threadId": threadID,
+					"turnId":   turnID,
+					"item": map[string]any{
+						"id":   "user_turn_cuj_1",
+						"type": "userMessage",
+						"text": input,
+					},
+				})
+				_ = sendJSONRPCNotification(ws, "item/completed", map[string]any{
+					"threadId": threadID,
+					"turnId":   turnID,
+					"item": map[string]any{
+						"id":   "user_turn_cuj_1",
+						"type": "userMessage",
+						"text": input,
+					},
+				})
+				_ = sendJSONRPCNotification(ws, "item/started", map[string]any{
+					"threadId": threadID,
+					"turnId":   turnID,
+					"item": map[string]any{
+						"id":         firstItemID,
+						"type":       "agentMessage",
+						"responseId": firstResponseID,
+						"text":       "",
+					},
+				})
+				_ = sendJSONRPCNotification(ws, "item/agentMessage/delta", map[string]any{
 					"threadId":   threadID,
 					"turnId":     turnID,
 					"responseId": firstResponseID,
 					"itemId":     firstItemID,
 					"delta":      firstText,
 				})
-				_ = sendJSONRPCNotification(ws, "turn.output_text.done", map[string]any{
-					"threadId":   threadID,
-					"turnId":     turnID,
-					"responseId": firstResponseID,
-					"itemId":     firstItemID,
-					"text":       firstText,
+				_ = sendJSONRPCNotification(ws, "item/completed", map[string]any{
+					"threadId": threadID,
+					"turnId":   turnID,
+					"item": map[string]any{
+						"id":         firstItemID,
+						"type":       "agentMessage",
+						"responseId": firstResponseID,
+						"text":       firstText,
+					},
 				})
 				if !waitForCodexUpdateComplete(30 * time.Second) {
-					_ = sendJSONRPCNotification(ws, "turn.completed", map[string]any{
+					_ = sendJSONRPCNotification(ws, "turn/completed", map[string]any{
 						"threadId": threadID,
-						"turnId":   turnID,
+						"turn": map[string]any{
+							"id":     turnID,
+							"status": "completed",
+						},
 					})
 					return
 				}
-				_ = sendJSONRPCNotification(ws, "turn.message.started", map[string]any{
-					"threadId":   threadID,
-					"turnId":     turnID,
-					"responseId": finalResponseID,
-					"itemId":     finalItemID,
+				_ = sendJSONRPCNotification(ws, "item/started", map[string]any{
+					"threadId": threadID,
+					"turnId":   turnID,
+					"item": map[string]any{
+						"id":         finalItemID,
+						"type":       "agentMessage",
+						"responseId": finalResponseID,
+						"text":       "",
+					},
 				})
-				_ = sendJSONRPCNotification(ws, "turn.output_text.delta", map[string]any{
+				_ = sendJSONRPCNotification(ws, "item/agentMessage/delta", map[string]any{
 					"threadId":   threadID,
 					"turnId":     turnID,
 					"responseId": finalResponseID,
 					"itemId":     finalItemID,
 					"delta":      finalText,
 				})
-				_ = sendJSONRPCNotification(ws, "turn.output_text.done", map[string]any{
-					"threadId":   threadID,
-					"turnId":     turnID,
-					"responseId": finalResponseID,
-					"itemId":     finalItemID,
-					"text":       finalText,
-				})
-				completeCurrentThreadTurn(turnID, finalResponseID, firstText, finalText)
-				_ = sendJSONRPCNotification(ws, "turn.completed", map[string]any{
+				_ = sendJSONRPCNotification(ws, "item/completed", map[string]any{
 					"threadId": threadID,
 					"turnId":   turnID,
+					"item": map[string]any{
+						"id":         finalItemID,
+						"type":       "agentMessage",
+						"responseId": finalResponseID,
+						"text":       finalText,
+					},
+				})
+				completeCurrentThreadTurn(turnID, finalResponseID, firstText, finalText)
+				_ = sendJSONRPCNotification(ws, "turn/completed", map[string]any{
+					"threadId": threadID,
+					"turn": map[string]any{
+						"id":     turnID,
+						"status": "completed",
+					},
 				})
 			}()
 		case "turn/interrupt":

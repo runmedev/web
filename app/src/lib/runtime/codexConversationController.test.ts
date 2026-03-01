@@ -7,7 +7,7 @@ const project = {
   model: "gpt-5",
   approvalPolicy: "never",
   sandboxPolicy: "workspace-write",
-  personality: "default",
+  personality: "pragmatic",
 };
 
 const notificationHandlers = new Set<(notification: any) => void>();
@@ -204,5 +204,97 @@ describe("CodexConversationController", () => {
     ).toHaveLength(2);
     expect(controller.getSnapshot().currentThreadId).toBe("thread-1");
     expect(controller.getSnapshot().currentTurnId).toBeNull();
+  });
+
+  it("maps item-based codex notifications into ChatKit-compatible events", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return {
+          thread: {
+            id: "thread-1",
+            title: "Runme Repo",
+            cwd: "/workspace",
+            updated_at: "2026-02-26T18:00:00Z",
+          },
+        };
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/started",
+              params: {
+                threadId: "thread-1",
+                turn: { id: "turn-1" },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+                delta: "hello ",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "msg-1",
+                  text: "hello world",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: { id: "turn-1", status: "completed" },
+              },
+            });
+          });
+        });
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: any[] = [];
+    const nextState = await controller.streamUserMessage(
+      'print("hello")',
+      {},
+      {
+        emit: (payload) => events.push(payload),
+      },
+    );
+
+    expect(nextState).toEqual({
+      threadId: "thread-1",
+      previousResponseId: "turn-1",
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "response.created" }),
+        expect.objectContaining({
+          type: "response.output_text.delta",
+          delta: "hello ",
+        }),
+        expect.objectContaining({
+          type: "response.output_text.done",
+          text: "hello world",
+        }),
+        expect.objectContaining({ type: "response.completed" }),
+      ]),
+    );
+    expect(controller.getSnapshot().currentThreadId).toBe("thread-1");
   });
 });

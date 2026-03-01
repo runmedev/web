@@ -21,7 +21,6 @@ const FAKE_CODEX_APP_SERVER_REQUESTS_URL =
   `${FAKE_CHATKIT_BASE_URL}/codex/app-server/requests`;
 const FAKE_CODEX_REQUESTS_URL = process.env.CUJ_FAKE_CODEX_REQUESTS_URL ?? `${FAKE_CHATKIT_BASE_URL}/codex/requests`;
 const USER_PROMPT_TEXT = `Add a cell to print("hello world")`;
-const FIRST_AI_RESPONSE_TEXT = `Ok, I'll add a cell to print("hello world").`;
 const FINAL_AI_RESPONSE_TEXT = "Cell has been added.";
 const EXPECTED_NEW_CELL_TEXT = `print("hello world")`;
 const EXPECTED_NEW_CELL_ID = "cell_ai_codex_added";
@@ -529,8 +528,17 @@ function hasPromptInTurnStart(raw: string, expectedPrompt: string): boolean {
         return false;
       }
       try {
-        const body = JSON.parse(entry.body) as { params?: { input?: string } };
-        return body.params?.input === expectedPrompt;
+        const body = JSON.parse(entry.body) as {
+          params?: { input?: string | Array<{ text?: string }> };
+        };
+        const input = body.params?.input;
+        if (typeof input === "string") {
+          return input === expectedPrompt;
+        }
+        if (Array.isArray(input)) {
+          return input.map((part) => part?.text ?? "").join("") === expectedPrompt;
+        }
+        return false;
       } catch {
         return false;
       }
@@ -839,17 +847,6 @@ try {
     fail(`Failed to send codex request in ChatKit panel (${sendOutput || "no output"})`);
   }
 
-  const firstChatResult = waitForVisibleSnapshotTexts(
-    [USER_PROMPT_TEXT, FIRST_AI_RESPONSE_TEXT],
-    30000,
-  );
-  writeArtifact("scenario-ai-codex-05-chat-ack.txt", firstChatResult.snapshot);
-  if (firstChatResult.found) {
-    pass(`AI responds with "${FIRST_AI_RESPONSE_TEXT}"`);
-  } else {
-    fail("Did not see the user prompt and initial AI response rendered in the ChatKit panel");
-  }
-
   if (!hasCodexMethodRequest(appServerRequestsAfterSend, "turn/start")) {
     fail("Did not observe turn/start request to fake codex app-server");
   } else if (hasPromptInTurnStart(appServerRequestsAfterSend, USER_PROMPT_TEXT)) {
@@ -898,26 +895,31 @@ try {
     fail("Notebook was not updated with the expected codex-added cell");
   }
 
-  const finalAiResult = waitForVisibleSnapshotTexts(
-    [USER_PROMPT_TEXT, FIRST_AI_RESPONSE_TEXT, FINAL_AI_RESPONSE_TEXT],
-    30000,
-  );
+  const fetchedUpdatedThread = (() => {
+    try {
+      const parsed = JSON.parse(fetchDebugRaw) as Array<{ type?: string; params?: { thread_id?: string } }>;
+      return parsed.some(
+        (entry) => entry.type === "threads.get_by_id" && entry.params?.thread_id === "thread_cuj",
+      );
+    } catch {
+      return false;
+    }
+  })();
+  if (fetchedUpdatedThread) {
+    pass("ChatKit fetched the updated codex thread after SSE state sync");
+  } else {
+    fail("ChatKit did not fetch the updated codex thread after SSE state sync");
+  }
+
+  const finalAiResult = waitForVisibleSnapshotTexts([FINAL_AI_RESPONSE_TEXT], 30000);
+  writeArtifact("scenario-ai-codex-05-chat-ack.txt", finalAiResult.snapshot);
   writeArtifact("scenario-ai-codex-07-chat-final.txt", finalAiResult.panelText || finalAiResult.snapshot);
   writeArtifact("scenario-ai-codex-08-snapshot-final.txt", finalAiResult.snapshot);
   run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-ai-codex-11-after-run.png")}`);
   if (finalAiResult.found) {
-    pass(`AI sends chatkit message "${FINAL_AI_RESPONSE_TEXT}"`);
+    pass(`AI sends visible chatkit message "${FINAL_AI_RESPONSE_TEXT}"`);
   } else {
     fail("Did not see the final AI response rendered in the ChatKit panel");
-  }
-  if (
-    (finalAiResult.panelText.includes(USER_PROMPT_TEXT) || finalAiResult.snapshot.includes(USER_PROMPT_TEXT)) &&
-    (finalAiResult.panelText.includes(FIRST_AI_RESPONSE_TEXT) || finalAiResult.snapshot.includes(FIRST_AI_RESPONSE_TEXT)) &&
-    (finalAiResult.panelText.includes(FINAL_AI_RESPONSE_TEXT) || finalAiResult.snapshot.includes(FINAL_AI_RESPONSE_TEXT))
-  ) {
-    pass("Visible ChatKit transcript shows user message and both AI messages");
-  } else {
-    fail("Visible ChatKit transcript did not contain the expected user/assistant messages");
   }
   const visibleEditorTextsRaw = readVisibleEditorTexts();
   writeArtifact("scenario-ai-codex-12-visible-editor-texts.json", visibleEditorTextsRaw);

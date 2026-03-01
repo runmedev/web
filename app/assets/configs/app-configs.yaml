@@ -1,6 +1,10 @@
 # app-configs.yaml is a file that will be served by the server as a static asset.
 # It will be used by the frontend to configure itself.
-# This is the configuration for web.runme.dev
+# This is the configuration for local development.
+agent:
+    endpoint: "http://localhost:5191"
+    defaultRunnerEndpoint: "ws://localhost:5191/ws"
+
 oidc:
     # OIDC callback handling should happen in the browser.
     clientExchange: true

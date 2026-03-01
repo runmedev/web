@@ -27,6 +27,12 @@ export type CodexProjectSnapshot = {
 const CODEX_PROJECT_STORAGE_KEY = "runme/codex/projects";
 const DEFAULT_PROJECT_ID = "local-default";
 const CODEX_PROJECTS_CHANGED_EVENT = "runme:codex-projects-changed";
+const DEFAULT_CODEX_PERSONALITY = "pragmatic";
+const ALLOWED_CODEX_PERSONALITIES = new Set([
+  "none",
+  "friendly",
+  "pragmatic",
+]);
 
 function normalizeString(value: string): string {
   return value.trim();
@@ -38,6 +44,17 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizePersonality(value: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  if (ALLOWED_CODEX_PERSONALITIES.has(normalized)) {
+    return normalized;
+  }
+  return DEFAULT_CODEX_PERSONALITY;
 }
 
 function normalizeWritableRoots(value: unknown): string[] | undefined {
@@ -59,7 +76,7 @@ function createDefaultProject(): CodexProject {
     model: "gpt-5",
     approvalPolicy: "never",
     sandboxPolicy: "workspace-write",
-    personality: "default",
+    personality: DEFAULT_CODEX_PERSONALITY,
   };
 }
 
@@ -80,7 +97,7 @@ function normalizeProject(
   const model = normalizeOptionalString(project.model);
   const approvalPolicy = normalizeOptionalString(project.approvalPolicy);
   const sandboxPolicy = normalizeOptionalString(project.sandboxPolicy);
-  const personality = normalizeOptionalString(project.personality);
+  const personality = normalizePersonality(project.personality);
 
   if (!id || !name || !cwd || !model || !approvalPolicy || !sandboxPolicy || !personality) {
     return null;

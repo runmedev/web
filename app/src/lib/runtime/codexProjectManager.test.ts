@@ -24,6 +24,7 @@ describe("codexProjectManager", () => {
     expect(active.model).toBe("gpt-5");
     expect(active.approvalPolicy).toBe("never");
     expect(active.sandboxPolicy).toBe("workspace-write");
+    expect(active.personality).toBe("pragmatic");
   });
 
   it("supports project create and default selection", () => {
@@ -34,7 +35,7 @@ describe("codexProjectManager", () => {
       "gpt-5",
       "workspace-write",
       "never",
-      "default",
+      "pragmatic",
     );
 
     mgr.setDefault(created.id);
@@ -53,20 +54,40 @@ describe("codexProjectManager", () => {
       "gpt-5",
       "workspace-write",
       "never",
-      "default",
+      "pragmatic",
     );
 
     const updated = mgr.update(created.id, {
       model: "gpt-5-mini",
-      personality: "code-review",
+      personality: "friendly",
       writableRoots: ["/Users/jlewi/code/runmecodex/web/app"],
     });
 
     expect(updated.model).toBe("gpt-5-mini");
-    expect(updated.personality).toBe("code-review");
+    expect(updated.personality).toBe("friendly");
     expect(updated.writableRoots).toEqual([
       "/Users/jlewi/code/runmecodex/web/app",
     ]);
+  });
+
+  it("normalizes legacy and invalid personalities to pragmatic", () => {
+    const mgr = getCodexProjectManager();
+    const created = mgr.create(
+      "Runme Repo",
+      "/Users/jlewi/code/runmecodex/web",
+      "gpt-5",
+      "workspace-write",
+      "never",
+      "default",
+    );
+
+    expect(created.personality).toBe("pragmatic");
+
+    const updated = mgr.update(created.id, {
+      personality: "code-review",
+    });
+
+    expect(updated.personality).toBe("pragmatic");
   });
 
   it("persists projects and default selection in local storage", () => {
@@ -77,7 +98,7 @@ describe("codexProjectManager", () => {
       "gpt-5",
       "workspace-write",
       "never",
-      "default",
+      "pragmatic",
     );
     mgr.setDefault(created.id);
 
@@ -121,6 +142,7 @@ describe("codexProjectManager", () => {
     expect(active.id).toBe("project-external");
     expect(active.name).toBe("External Project");
     expect(active.cwd).toBe("/tmp/project");
+    expect(active.personality).toBe("pragmatic");
   });
 
   it("syncs project updates from same-window change events", () => {
@@ -149,5 +171,6 @@ describe("codexProjectManager", () => {
     expect(active.id).toBe("project-same-window");
     expect(active.name).toBe("Same Window Project");
     expect(active.cwd).toBe("/tmp/same-window");
+    expect(active.personality).toBe("pragmatic");
   });
 });

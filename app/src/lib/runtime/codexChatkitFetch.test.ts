@@ -182,4 +182,31 @@ describe("createCodexChatkitFetch", () => {
     );
     expect(body).toContain('"type":"response.created"');
   });
+
+  it("closes the SSE stream cleanly when the request is aborted", async () => {
+    const fetchFn = createCodexChatkitFetch();
+    controller.streamUserMessage.mockImplementationOnce(
+      async (_input: string, _state: unknown, sink: { emit: (payload: unknown) => void }) => {
+        sink.emit({ type: "response.created", response: { id: "turn-1" } });
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+      },
+    );
+
+    const abortController = new AbortController();
+    const responsePromise = fetchFn("http://localhost/codex/chatkit", {
+      method: "POST",
+      body: JSON.stringify({
+        input: "hello",
+        chatkit_state: {},
+      }),
+      signal: abortController.signal,
+    });
+
+    abortController.abort();
+    const response = await responsePromise;
+    await response.text();
+    expect(controller.interruptActiveTurn).toHaveBeenCalled();
+  });
 });

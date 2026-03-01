@@ -88,7 +88,18 @@ function buildStreamResponse(
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      let closed = false;
+      const close = () => {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        controller.close();
+      };
       const emit = (payload: unknown) => {
+        if (closed) {
+          return;
+        }
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
       };
 
@@ -96,7 +107,7 @@ function buildStreamResponse(
         try {
           await options?.onAbort?.();
         } finally {
-          controller.close();
+          close();
         }
       };
 
@@ -112,17 +123,13 @@ function buildStreamResponse(
 
       void producer({ emit })
         .catch((error) => {
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({
-                type: "response.failed",
-                error: { message: String(error) },
-              })}\n\n`,
-            ),
-          );
+          emit({
+            type: "response.failed",
+            error: { message: String(error) },
+          });
         })
         .finally(() => {
-          controller.close();
+          close();
         });
     },
   });

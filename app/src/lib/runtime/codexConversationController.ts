@@ -113,6 +113,41 @@ function extractText(value: unknown): string {
   return "";
 }
 
+function getNotificationPayloadRecord(
+  params: JsonRecord,
+): { payload: JsonRecord; message: JsonRecord } {
+  const message = asRecord(params.msg);
+  const payload =
+    Object.keys(message).length > 0
+      ? {
+          ...message,
+          threadId:
+            asString(message.threadId) ??
+            asString(message.thread_id) ??
+            asString(params.threadId) ??
+            asString(params.thread_id),
+          turnId:
+            asString(message.turnId) ??
+            asString(message.turn_id) ??
+            asString(params.turnId) ??
+            asString(params.turn_id) ??
+            asString(asRecord(params.turn).id) ??
+            asString(params.id),
+          itemId:
+            asString(message.itemId) ??
+            asString(message.item_id) ??
+            asString(params.itemId) ??
+            asString(params.item_id),
+          responseId:
+            asString(message.responseId) ??
+            asString(message.response_id) ??
+            asString(params.responseId) ??
+            asString(params.response_id),
+        }
+      : params;
+  return { payload, message };
+}
+
 function toConversationItem(value: unknown): CodexConversationItem | null {
   const record = asRecord(value);
   const id = asString(record.id) ?? `item-${Math.random().toString(36).slice(2, 10)}`;
@@ -262,6 +297,10 @@ function createAssistantItem(itemId: string): CodexConversationItem {
     status: "in_progress",
     content: [{ type: "output_text", text: "" }],
   };
+}
+
+function buildTurnInput(text: string): Array<{ type: "text"; text: string }> {
+  return [{ type: "text", text }];
 }
 
 type MappedAssistantEvent =
@@ -454,7 +493,9 @@ class CodexConversationController {
     });
     const timeoutId = setTimeout(() => {
       rejectCompletion?.(
-        new Error(`Timed out waiting for codex turn completion: ${turnId}`),
+        new Error(
+          `Timed out waiting for codex turn completion: ${turnIdForNotifications ?? threadId}`,
+        ),
       );
     }, 30_000);
 
@@ -582,12 +623,13 @@ class CodexConversationController {
       const turnResult = asRecord(
         await proxy.sendRequest("turn/start", {
           threadId,
-          input,
+          input: buildTurnInput(input),
         }),
       );
       const turnId =
         asString(turnResult.turnId) ??
         asString(turnResult.turn_id) ??
+        asString(asRecord(turnResult.turn).id) ??
         asString(turnResult.id) ??
         `turn-${Math.random().toString(36).slice(2, 10)}`;
       turnIdForNotifications = turnId;
@@ -690,10 +732,11 @@ class CodexConversationController {
     turnId: string | null,
   ): MappedAssistantEvent | null {
     const params = asRecord(notification.params);
+    const { payload, message } = getNotificationPayloadRecord(params);
     const notificationThreadId =
-      asString(params.threadId) ?? asString(params.thread_id);
+      asString(payload.threadId) ?? asString(payload.thread_id);
     const notificationTurnId =
-      asString(params.turnId) ?? asString(params.turn_id);
+      asString(payload.turnId) ?? asString(payload.turn_id);
     if (
       notificationThreadId &&
       notificationThreadId !== threadId
@@ -705,14 +748,14 @@ class CodexConversationController {
     }
 
     const responseId =
-      asString(params.responseId) ??
-      asString(params.response_id) ??
+      asString(payload.responseId) ??
+      asString(payload.response_id) ??
       notificationTurnId ??
       turnId ??
       "resp-codex";
     const itemId =
-      asString(params.itemId) ??
-      asString(params.item_id) ??
+      asString(payload.itemId) ??
+      asString(payload.item_id) ??
       `${responseId}-item`;
 
     switch (notification.method) {
@@ -727,21 +770,51 @@ class CodexConversationController {
         return { kind: "done", responseId, itemId, text };
       }
       case "turn.completed":
+      case "turn/completed":
         return { kind: "completed" };
+      case "item/agentMessage/delta": {
+        const delta = asString(payload.delta) ?? extractText(payload);
+        return delta ? { kind: "delta", responseId, itemId, text: delta } : null;
+      }
+      case "item/completed": {
+        const item = asRecord(payload.item);
+        if (item.type !== "agentMessage") {
+          return null;
+        }
+        const text = asString(item.text) ?? extractText(item);
+        return { kind: "done", responseId, itemId: asString(item.id) ?? itemId, text };
+      }
       default: {
-        const type = asString(params.type);
+        const type = asString(payload.type);
         if (type === "response.created") {
           return { kind: "message_started", responseId, itemId };
         }
         if (type === "response.output_text.delta") {
-          const delta = asString(params.delta) ?? extractText(params);
+          const delta = asString(payload.delta) ?? extractText(payload);
           return delta ? { kind: "delta", responseId, itemId, text: delta } : null;
         }
         if (type === "response.output_text.done") {
-          const text = asString(params.text) ?? extractText(params);
+          const text = asString(payload.text) ?? extractText(payload);
           return { kind: "done", responseId, itemId, text };
         }
         if (type === "turn.completed") {
+          return { kind: "completed" };
+        }
+        if (type === "agent_message_content_delta" || type === "agent_message_delta") {
+          const delta = asString(payload.delta) ?? extractText(payload);
+          return delta ? { kind: "delta", responseId, itemId, text: delta } : null;
+        }
+        if (type === "item_completed") {
+          const item = asRecord(payload.item);
+          const text = extractText(item);
+          return {
+            kind: "done",
+            responseId,
+            itemId: asString(item.id) ?? itemId,
+            text,
+          };
+        }
+        if (type === "task_complete") {
           return { kind: "completed" };
         }
         return null;
