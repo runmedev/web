@@ -45,6 +45,8 @@ googleDrive:
   clientID: "<google-drive-client-id>"
   clientSecret: ""
   baseUrl: "http://127.0.0.1:9090"
+chatkit:
+  domainKey: "<chatkit-domain-key>"
 ```
 
 Generic OIDC:
@@ -64,6 +66,8 @@ googleDrive:
   clientID: "<google-drive-client-id>"
   clientSecret: ""
   baseUrl: "http://127.0.0.1:9090"
+chatkit:
+  domainKey: "<chatkit-domain-key>"
 ```
 
 When `oidc.google` is present, runtime config loading applies the same Google OIDC defaults as `oidc.setGoogleDefaults()` and then sets the configured client ID. Use `oidc.generic` when you need to override the discovery URL, redirect URL, or scopes explicitly.

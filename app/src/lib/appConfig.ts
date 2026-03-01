@@ -51,6 +51,10 @@ export interface GoogleDriveRuntimeConfig {
   baseUrl: string;
 }
 
+export interface ChatkitRuntimeConfig {
+  domainKey: string;
+}
+
 export interface AgentRuntimeConfig {
   endpoint: string;
   defaultRunnerEndpoint: string;
@@ -60,6 +64,7 @@ export interface RuntimeAppConfig {
   agent: AgentRuntimeConfig;
   oidc: OidcRuntimeConfig;
   googleDrive: GoogleDriveRuntimeConfig;
+  chatkit: ChatkitRuntimeConfig;
 }
 
 export type AppliedAppConfig = {
@@ -68,6 +73,7 @@ export type AppliedAppConfig = {
   googleOAuth?: GoogleOAuthClientConfig;
   agentEndpoint?: string;
   defaultRunnerEndpoint?: string;
+  chatkitDomainKey?: string;
   warnings: string[];
 };
 
@@ -253,6 +259,37 @@ export function getConfiguredDefaultRunnerEndpoint(): string {
   );
 }
 
+export function resolveDefaultChatKitDomainKeyFallback(): string {
+  const envValue = normalizeString(import.meta.env.VITE_CHATKIT_DOMAIN_KEY);
+  if (envValue) {
+    return envValue;
+  }
+  if (
+    typeof window !== "undefined" &&
+    window.location.hostname === "localhost"
+  ) {
+    return "domain_pk_localhost_dev";
+  }
+  return "domain_pk_68f8054e7da081908cc1972e9167ec270895bf04413e753b";
+}
+
+function readStoredChatKitDomainKey(storage: Storage): string | undefined {
+  const settings = readSettingsFromStorage(storage);
+  const settingsChatkit = asRecord(settings.chatkit);
+  return normalizeString(settingsChatkit?.domainKey);
+}
+
+export function getConfiguredChatKitDomainKey(): string {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return resolveDefaultChatKitDomainKeyFallback();
+  }
+
+  return (
+    readStoredChatKitDomainKey(window.localStorage) ??
+    resolveDefaultChatKitDomainKeyFallback()
+  );
+}
+
 function pickString(
   source: Record<string, unknown>,
   keys: string[],
@@ -300,6 +337,9 @@ function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
       clientSecret: "",
       baseUrl: "",
     },
+    chatkit: {
+      domainKey: "",
+    },
   };
 }
 
@@ -320,6 +360,7 @@ export class RuntimeAppConfigSchema {
     const oidcGeneric = asRecord(oidc?.generic);
     const oidcGoogle = asRecord(oidc?.google);
     const drive = asRecord(root.googleDrive);
+    const chatkit = asRecord(root.chatkit);
 
     parsed.agent = {
       endpoint:
@@ -361,6 +402,12 @@ export class RuntimeAppConfigSchema {
       };
     }
 
+    if (chatkit) {
+      parsed.chatkit = {
+        domainKey: pickString(chatkit, ["domainKey", "domain_key"]),
+      };
+    }
+
     return parsed;
   }
 }
@@ -384,11 +431,13 @@ export function applyAppConfig(
   const rawOidc = asRecord(rawConfig.oidc);
   const hasOidcGoogleBlock = isRecord(rawOidc?.google);
   const hasGoogleDriveBlock = isRecord(rawConfig.googleDrive);
+  const hasChatkitBlock = isRecord(rawConfig.chatkit);
   const warnings: string[] = [];
   let oidc: OidcConfig | undefined;
   let googleOAuth: GoogleOAuthClientConfig | undefined;
   let agentEndpoint: string | undefined;
   let defaultRunnerEndpoint: string | undefined;
+  let chatkitDomainKey: string | undefined;
 
   const oidcConfig: Partial<OidcConfig> = {};
   const genericOidcConfig = parsed.oidc.generic;
@@ -405,6 +454,7 @@ export function applyAppConfig(
   const clientSecret =
     googleOidcClientSecret ?? normalizeString(genericOidcConfig.clientSecret);
   const redirectUri = normalizeString(genericOidcConfig.redirectUrl);
+  const configuredChatkitDomainKey = normalizeString(parsed.chatkit.domainKey);
   if (hasOidcGoogleBlock) {
     oidcConfigManager.setGoogleDefaults();
   }
@@ -457,6 +507,7 @@ export function applyAppConfig(
     const storage = window.localStorage;
     const settings = readSettingsFromStorage(storage);
     const settingsWebApp = asRecord(settings.webApp);
+    const settingsChatkit = asRecord(settings.chatkit);
     const configAgentEndpoint = normalizeString(parsed.agent.endpoint);
     const hadAgentOverride = agentEndpointManager.hasOverride();
     agentEndpointManager.setDefaultEndpoint(configAgentEndpoint);
@@ -485,6 +536,25 @@ export function applyAppConfig(
     } else if (hasStoredRunnerEndpoint) {
       defaultRunnerEndpoint = readStoredRunnerEndpoint(storage);
     }
+
+    const storedChatkitDomainKey = readStoredChatKitDomainKey(storage);
+    if (!storedChatkitDomainKey && configuredChatkitDomainKey) {
+      chatkitDomainKey = configuredChatkitDomainKey;
+      settings.chatkit = {
+        ...(settingsChatkit ?? {}),
+        domainKey: configuredChatkitDomainKey,
+      };
+      writeSettingsToStorage(storage, settings);
+    } else {
+      chatkitDomainKey = storedChatkitDomainKey;
+    }
+  }
+
+  if (!chatkitDomainKey) {
+    chatkitDomainKey = configuredChatkitDomainKey;
+  }
+  if (hasChatkitBlock && !configuredChatkitDomainKey) {
+    warnings.push("ChatKit config missing domainKey");
   }
 
   return {
@@ -493,6 +563,7 @@ export function applyAppConfig(
     googleOAuth,
     agentEndpoint,
     defaultRunnerEndpoint,
+    chatkitDomainKey,
     warnings,
   };
 }
@@ -518,11 +589,18 @@ export async function maybeSetAppConfig(): Promise<AppliedAppConfig | null> {
   const storage = window.localStorage;
   const hasOidcConfig = Boolean(storage.getItem(OIDC_STORAGE_KEY));
   const hasDriveConfig = Boolean(storage.getItem(GOOGLE_CLIENT_STORAGE_KEY));
+  const hasChatkitDomainKey = Boolean(readStoredChatKitDomainKey(storage));
   const settings = readSettingsFromStorage(storage);
   const hasAgentEndpoint = agentEndpointManager.hasOverride();
   const hasRunnerEndpoint = hasConfiguredRunners(storage);
 
-  if (hasOidcConfig && hasDriveConfig && hasAgentEndpoint && hasRunnerEndpoint) {
+  if (
+    hasOidcConfig &&
+    hasDriveConfig &&
+    hasChatkitDomainKey &&
+    hasAgentEndpoint &&
+    hasRunnerEndpoint
+  ) {
     appLogger.info("App config values already set; skipping app config load.", {
       attrs: { scope: "config.app", code: "APP_CONFIG_PRELOAD_SKIPPED" },
     });
@@ -547,6 +625,18 @@ export async function maybeSetAppConfig(): Promise<AppliedAppConfig | null> {
   } else {
     appLogger.info("Google Drive config already set; skipping.", {
       attrs: { scope: "config.app", code: "APP_CONFIG_DRIVE_PRESENT" },
+    });
+  }
+  if (!hasChatkitDomainKey) {
+    appLogger.info(
+      "ChatKit domain key missing; attempting to load from app config.",
+      {
+        attrs: { scope: "config.app", code: "APP_CONFIG_CHATKIT_MISSING" },
+      },
+    );
+  } else {
+    appLogger.info("ChatKit domain key already set; skipping.", {
+      attrs: { scope: "config.app", code: "APP_CONFIG_CHATKIT_PRESENT" },
     });
   }
   if (!hasAgentEndpoint) {

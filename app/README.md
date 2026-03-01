@@ -137,6 +137,9 @@ go run ./ agent --config=${HOME}/.runme-agent/config.dev.yaml serve
     googleDrive:
         clientID: "44661292282-bqhl39ugf2kn7r8vv4f6766jt0a7tom9.apps.googleusercontent.com"
         clientSecret: ""
+
+    chatkit:
+        domainKey: "<chatkit-domain-key>"
   ```
 
   If you need to override the discovery URL, redirect URL, or scopes explicitly, add an `oidc.generic` block alongside `oidc.google`.

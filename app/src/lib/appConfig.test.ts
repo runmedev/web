@@ -70,4 +70,37 @@ describe("appConfig OIDC Google shorthand", () => {
       prompt: "consent",
     });
   });
+
+  it("stores the ChatKit domain key from app config in local storage", async () => {
+    const { applyAppConfig, getConfiguredChatKitDomainKey } = await loadModules();
+
+    const result = applyAppConfig(
+      {
+        agent: {
+          endpoint: "http://localhost:9977",
+        },
+        chatkit: {
+          domainKey: "domain_pk_configured",
+        },
+      },
+      "http://localhost/configs/app-configs.yaml",
+    );
+
+    expect(result.warnings).toEqual([]);
+    expect(result.chatkitDomainKey).toBe("domain_pk_configured");
+    expect(getConfiguredChatKitDomainKey()).toBe("domain_pk_configured");
+
+    const stored = JSON.parse(
+      window.localStorage.getItem("cloudAssistantSettings") ?? "{}",
+    );
+    expect(stored.chatkit).toEqual({
+      domainKey: "domain_pk_configured",
+    });
+  });
+
+  it("falls back to the existing ChatKit localhost default when no config is stored", async () => {
+    const { getConfiguredChatKitDomainKey } = await loadModules();
+
+    expect(getConfiguredChatKitDomainKey()).toBe("domain_pk_localhost_dev");
+  });
 });
