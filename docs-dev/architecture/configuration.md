@@ -32,13 +32,34 @@ not be used going forward.
 
 For integration testing, serve an app config that points the client at test doubles (for example fake Google Drive server). This keeps test setup declarative and close to production configuration behavior.
 
-Example (illustrative):
+Examples (illustrative):
+
+Google shortcut:
 
 ```yaml
 oidc:
   clientExchange: true
   google:
     clientID: "<google-oidc-client-id>"
+googleDrive:
+  clientID: "<google-drive-client-id>"
+  clientSecret: ""
+  baseUrl: "http://127.0.0.1:9090"
+```
+
+Generic OIDC:
+
+```yaml
+oidc:
+  clientExchange: true
+  generic:
+    clientID: "<oidc-client-id>"
+    clientSecret: ""
+    discoveryURL: "https://accounts.example.com/.well-known/openid-configuration"
+    redirectURL: "https://web.runme.dev/oidc/callback"
+    scopes:
+      - "openid"
+      - "email"
 googleDrive:
   clientID: "<google-drive-client-id>"
   clientSecret: ""
