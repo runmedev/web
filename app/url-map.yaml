@@ -1,0 +1,20 @@
+# This is the url map used with hosting of web.runme.dev
+# We need a url map because we need https://web.runme.dev/oidc/callback to route to gs://runme-hosted/index.html
+# so that we load our SPA 
+defaultService: https://www.googleapis.com/compute/v1/projects/runme-lewi-dev/global/backendBuckets/runme-backend
+name: runme-url-map
+hostRules:
+- hosts:
+  - web.runme.dev
+  pathMatcher: web-runme-matcher
+pathMatchers:
+- name: web-runme-matcher
+  defaultService: https://www.googleapis.com/compute/v1/projects/runme-lewi-dev/global/backendBuckets/runme-backend
+  pathRules:
+  # Rewrite /oidc/callback -> /index.html (backend fetch)
+  - paths:
+    - /oidc/callback
+    routeAction:
+      urlRewrite:
+        pathPrefixRewrite: /index.html
+    service: https://www.googleapis.com/compute/v1/projects/runme-lewi-dev/global/backendBuckets/runme-backend

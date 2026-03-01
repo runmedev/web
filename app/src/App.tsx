@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Helmet } from "react-helmet";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import Callback from "./routes/callback";
 import RunRoute from "./routes/run";
 import RunsRoute from "./routes/runs";
@@ -58,6 +58,7 @@ import {
   getConfiguredAgentEndpoint,
   getConfiguredDefaultRunnerEndpoint,
 } from "./lib/appConfig";
+import { APP_ROUTE_PATHS, getAppRouterBasename } from "./lib/appBase";
 
 const queryClient = new QueryClient();
 
@@ -73,10 +74,15 @@ export interface AppProps {
 }
 
 function AppRouter() {
+  const basename = getAppRouterBasename();
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={basename === "/" ? undefined : basename}>
       <Routes>
         <Route path="/" element={<MainPage />} />
+        <Route
+          path={APP_ROUTE_PATHS.indexEntry}
+          element={<Navigate replace to={APP_ROUTE_PATHS.home} />}
+        />
         <Route path="/runs" element={<RunsRoute />} />
         <Route path="/runs/:runName" element={<RunRoute />} />
         <Route path="/runs/:runName/edit" element={<MainPage />} />

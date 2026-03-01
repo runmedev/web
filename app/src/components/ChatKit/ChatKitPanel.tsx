@@ -19,6 +19,7 @@ import {
   ChatkitStateSchema,
 } from "../../protogen/oaiproto/aisre/notebooks_pb.js";
 import { useAgentEndpointSnapshot } from "../../lib/agentEndpointManager";
+import { getConfiguredChatKitDomainKey } from "../../lib/appConfig";
 
 class UserNotLoggedInError extends Error {
   constructor(message = "You must log in to use runme chat.") {
@@ -26,20 +27,6 @@ class UserNotLoggedInError extends Error {
     this.name = "UserNotLoggedInError";
   }
 }
-
-const CHATKIT_DOMAIN_KEY = (() => {
-  const envValue = import.meta.env.VITE_CHATKIT_DOMAIN_KEY;
-  if (envValue) {
-    return envValue;
-  }
-  if (
-    typeof window !== "undefined" &&
-    window.location.hostname === "localhost"
-  ) {
-    return "domain_pk_localhost_dev";
-  }
-  return "domain_pk_68f8054e7da081908cc1972e9167ec270895bf04413e753b";
-})();
 
 const CHATKIT_GREETING = "How can runme help you today?";
 
@@ -227,6 +214,7 @@ const useAuthorizedFetch = (
 
 function ChatKitPanel() {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+  const chatkitDomainKey = getConfiguredChatKitDomainKey();
   const agentEndpoint = useAgentEndpointSnapshot();
   const { getChatkitState, setChatkitState } = useCell();
   const { getNotebookData, useNotebookSnapshot } = useNotebookContext();
@@ -330,7 +318,7 @@ function ChatKitPanel() {
   const chatkit = useChatKit({
     api: {
       url: chatkitApiUrl,
-      domainKey: CHATKIT_DOMAIN_KEY,
+      domainKey: chatkitDomainKey,
       fetch: authorizedFetch,
     },
     theme: {
