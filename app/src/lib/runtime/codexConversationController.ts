@@ -320,6 +320,10 @@ type MappedAssistantEvent =
   | { kind: "done"; responseId: string; itemId: string; text?: string }
   | { kind: "completed" };
 
+function isAssistantMessageType(value: unknown): boolean {
+  return value === "agentMessage" || value === "AgentMessage";
+}
+
 class CodexConversationController {
   private listeners = new Set<ControllerListener>();
   private threads = new Map<string, CodexConversationThread>();
@@ -495,6 +499,7 @@ class CodexConversationController {
     let lastResponseId = "";
     const responseTexts = new Map<string, string>();
     const responseItemIds = new Map<string, string>();
+    const completedResponses = new Set<string>();
     let turnIdForNotifications: string | null = null;
     let resolveCompletion: (() => void) | null = null;
     let rejectCompletion: ((reason?: unknown) => void) | null = null;
@@ -582,6 +587,9 @@ class CodexConversationController {
         return;
       }
       if (mapped.kind === "done") {
+        if (completedResponses.has(mapped.responseId)) {
+          return;
+        }
         ensureMessageStarted(mapped.responseId, mapped.itemId);
         assistantText = responseTexts.get(mapped.responseId) ?? "";
         if (mapped.text) {
@@ -618,6 +626,7 @@ class CodexConversationController {
           },
         });
         lastResponseId = mapped.responseId;
+        completedResponses.add(mapped.responseId);
         const updatedThread = this.threads.get(threadId!);
         if (updatedThread) {
           updatedThread.previousResponseId = lastResponseId;
@@ -796,7 +805,7 @@ class CodexConversationController {
       }
       case "item/completed": {
         const item = asRecord(payload.item);
-        if (item.type !== "agentMessage") {
+        if (!isAssistantMessageType(item.type)) {
           return null;
         }
         const text = asString(item.text) ?? extractText(item);
@@ -818,12 +827,11 @@ class CodexConversationController {
         if (type === "turn.completed") {
           return { kind: "completed" };
         }
-        if (type === "agent_message_content_delta" || type === "agent_message_delta") {
-          const delta = asString(payload.delta) ?? extractText(payload);
-          return delta ? { kind: "delta", responseId, itemId, text: delta } : null;
-        }
         if (type === "item_completed") {
           const item = asRecord(payload.item);
+          if (!isAssistantMessageType(item.type)) {
+            return null;
+          }
           const text = extractText(item);
           return {
             kind: "done",
@@ -831,6 +839,17 @@ class CodexConversationController {
             itemId: asString(item.id) ?? itemId,
             text,
           };
+        }
+        if (type === "agent_message") {
+          const text = asString(payload.message) ?? extractText(payload);
+          return text
+            ? {
+                kind: "done",
+                responseId,
+                itemId,
+                text,
+              }
+            : null;
         }
         if (type === "task_complete") {
           return { kind: "completed" };

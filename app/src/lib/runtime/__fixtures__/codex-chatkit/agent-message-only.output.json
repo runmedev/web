@@ -1,0 +1,46 @@
+{
+  "events": [
+    {
+      "type": "response.created",
+      "response_id": "turn-agent-only"
+    },
+    {
+      "type": "response.output_item.added",
+      "response_id": "turn-agent-only",
+      "item_id": "turn-agent-only-item"
+    },
+    {
+      "type": "response.content_part.added",
+      "response_id": "turn-agent-only",
+      "item_id": "turn-agent-only-item",
+      "text": ""
+    },
+    {
+      "type": "response.output_text.done",
+      "response_id": "turn-agent-only",
+      "item_id": "turn-agent-only-item",
+      "text": "Use `print(\"Hello, world!\")`."
+    },
+    {
+      "type": "response.content_part.done",
+      "response_id": "turn-agent-only",
+      "item_id": "turn-agent-only-item",
+      "text": "Use `print(\"Hello, world!\")`."
+    },
+    {
+      "type": "response.output_item.done",
+      "response_id": "turn-agent-only",
+      "item_id": "turn-agent-only-item",
+      "text": "Use `print(\"Hello, world!\")`."
+    },
+    {
+      "type": "aisre.chatkit.state",
+      "thread_id": "thread-agent-only",
+      "previous_response_id": "turn-agent-only"
+    },
+    {
+      "type": "response.completed",
+      "response_id": "turn-agent-only"
+    }
+  ]
+}

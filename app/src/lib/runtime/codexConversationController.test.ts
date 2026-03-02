@@ -42,28 +42,161 @@ import {
   createCodexConversationControllerForTests,
 } from "./codexConversationController";
 
-type TranscriptEntry =
-  | {
-      kind: "request_result";
-      method: string;
-      result: Record<string, unknown>;
-    }
-  | {
-      kind: "notification";
-      payload: Record<string, unknown>;
-    };
+type ConversationFixtureEvent = {
+  kind: "request" | "response" | "notification";
+  payload: Record<string, unknown>;
+};
 
-function loadTranscriptFixture(name: string): TranscriptEntry[] {
+type ConversationFixture = {
+  prompt: string;
+  events: ConversationFixtureEvent[];
+};
+
+type ExpectedChatKitFixture = {
+  events: Array<Record<string, unknown>>;
+};
+
+function loadJSONFixture<T>(...parts: string[]): T {
   const fixturePath = path.resolve(
     process.cwd(),
     "src/lib/runtime/__fixtures__",
-    name,
+    ...parts,
   );
-  return readFileSync(fixturePath, "utf8")
-    .trim()
-    .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as TranscriptEntry);
+  return JSON.parse(readFileSync(fixturePath, "utf8")) as T;
+}
+
+function buildConversationReplay(fixture: ConversationFixture): {
+  responseQueues: Map<string, Array<Record<string, unknown>>>;
+  notifications: Array<Record<string, unknown>>;
+} {
+  const requestMethodsById = new Map<number, string>();
+  const responseQueues = new Map<string, Array<Record<string, unknown>>>();
+  const notifications: Array<Record<string, unknown>> = [];
+
+  fixture.events.forEach((event) => {
+    if (event.kind === "request") {
+      const id = typeof event.payload.id === "number" ? event.payload.id : null;
+      const method =
+        typeof event.payload.method === "string" ? event.payload.method : null;
+      if (id !== null && method) {
+        requestMethodsById.set(id, method);
+      }
+      return;
+    }
+    if (event.kind === "response") {
+      const id = typeof event.payload.id === "number" ? event.payload.id : null;
+      if (id === null) {
+        return;
+      }
+      const method = requestMethodsById.get(id);
+      if (!method) {
+        throw new Error(`response fixture missing request method for id ${id}`);
+      }
+      const existing = responseQueues.get(method) ?? [];
+      existing.push((event.payload.result as Record<string, unknown>) ?? {});
+      responseQueues.set(method, existing);
+      return;
+    }
+    notifications.push(event.payload);
+  });
+
+  return { responseQueues, notifications };
+}
+
+function normalizeChatKitEvents(
+  events: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  return events.flatMap((event) => {
+    switch (event.type) {
+      case "response.created":
+        return [
+          {
+            type: "response.created",
+            response_id: (event.response as { id?: string } | undefined)?.id,
+          },
+        ];
+      case "response.output_item.added":
+        return [
+          {
+            type: "response.output_item.added",
+            response_id: event.response_id,
+            item_id: (event.item as { id?: string } | undefined)?.id,
+          },
+        ];
+      case "response.content_part.added":
+        return [
+          {
+            type: "response.content_part.added",
+            response_id: event.response_id,
+            item_id: event.item_id,
+            text: (event.part as { text?: string } | undefined)?.text ?? "",
+          },
+        ];
+      case "response.output_text.delta":
+        return [
+          {
+            type: "response.output_text.delta",
+            response_id: event.response_id,
+            item_id: event.item_id,
+            delta: event.delta,
+          },
+        ];
+      case "response.output_text.done":
+        return [
+          {
+            type: "response.output_text.done",
+            response_id: event.response_id,
+            item_id: event.item_id,
+            text: event.text,
+          },
+        ];
+      case "response.content_part.done":
+        return [
+          {
+            type: "response.content_part.done",
+            response_id: event.response_id,
+            item_id: event.item_id,
+            text: (event.part as { text?: string } | undefined)?.text ?? "",
+          },
+        ];
+      case "response.output_item.done":
+        return [
+          {
+            type: "response.output_item.done",
+            response_id: event.response_id,
+            item_id: (event.item as { id?: string } | undefined)?.id,
+            text:
+              (event.item as { content?: Array<{ text?: string }> } | undefined)
+                ?.content?.[0]?.text ?? "",
+          },
+        ];
+      case "aisre.chatkit.state":
+        return [
+          {
+            type: "aisre.chatkit.state",
+            thread_id: (
+              event.item as {
+                state?: { threadId?: string; previousResponseId?: string };
+              } | undefined
+            )?.state?.threadId,
+            previous_response_id: (
+              event.item as {
+                state?: { threadId?: string; previousResponseId?: string };
+              } | undefined
+            )?.state?.previousResponseId,
+          },
+        ];
+      case "response.completed":
+        return [
+          {
+            type: "response.completed",
+            response_id: (event.response as { id?: string } | undefined)?.id,
+          },
+        ];
+      default:
+        return [];
+    }
+  });
 }
 
 describe("CodexConversationController", () => {
@@ -324,69 +457,72 @@ describe("CodexConversationController", () => {
     expect(controller.getSnapshot().currentThreadId).toBe("thread-1");
   });
 
-  it("replays a captured Codex transcript fixture into ChatKit-compatible events", async () => {
-    const transcript = loadTranscriptFixture("codex-print-hello-world.ndjson");
-    const requestResults = transcript.filter(
-      (entry): entry is Extract<TranscriptEntry, { kind: "request_result" }> =>
-        entry.kind === "request_result",
+  it.each([
+    {
+      name: "deduplicates the real manual Codex transcript",
+      inputFile: "manual-print-hello-world.input.json",
+      outputFile: "manual-print-hello-world.output.json",
+    },
+    {
+      name: "falls back to direct agent_message notifications",
+      inputFile: "agent-message-only.input.json",
+      outputFile: "agent-message-only.output.json",
+    },
+  ])("$name", async ({ inputFile, outputFile }) => {
+    const fixture = loadJSONFixture<ConversationFixture>(
+      "codex-chatkit",
+      inputFile,
     );
-    const notifications = transcript.filter(
-      (entry): entry is Extract<TranscriptEntry, { kind: "notification" }> =>
-        entry.kind === "notification",
+    const expected = loadJSONFixture<ExpectedChatKitFixture>(
+      "codex-chatkit",
+      outputFile,
     );
-    let requestIndex = 0;
+    const { responseQueues, notifications } = buildConversationReplay(fixture);
 
     proxyClient.sendRequest.mockImplementation(async (method: string) => {
-      const requestResult = requestResults[requestIndex];
-      if (!requestResult || requestResult.method !== method) {
-        throw new Error(`unexpected method ${method} at transcript index ${requestIndex}`);
+      const queue = responseQueues.get(method);
+      if (!queue || queue.length === 0) {
+        throw new Error(`unexpected method ${method}`);
       }
-      requestIndex += 1;
+      const result = queue.shift() ?? {};
       if (method === "turn/start") {
         queueMicrotask(() => {
-          notifications.forEach((entry) => {
+          notifications.forEach((payload) => {
             notificationHandlers.forEach((handler) => {
-              handler(entry.payload);
+              handler(payload);
             });
           });
         });
       }
-      return requestResult.result;
+      return result;
     });
 
     const controller = createCodexConversationControllerForTests();
     const events: Array<Record<string, unknown>> = [];
     const nextState = await controller.streamUserMessage(
-      "print hello world in python",
+      fixture.prompt,
       {},
       {
         emit: (payload) => events.push(payload as Record<string, unknown>),
       },
     );
 
-    expect(nextState).toEqual({
-      threadId: "thread-hello",
-      previousResponseId: "turn-hello",
-    });
-    expect(
-      normalizeTranscriptText(
-        events
-          .filter((event) => event.type === "response.output_text.delta")
-          .map((event) => event.delta)
-          .join(""),
-      ),
-    ).toContain('print("Hello, world!")');
-    expect(
-      normalizeTranscriptText(
-        events.find((event) => event.type === "response.output_text.done")?.text,
-      ),
-    ).toContain('print("Hello, world!")');
-    const thread = controller.getSnapshot().threads.find((item) => item.id === "thread-hello");
-    expect(
-      normalizeTranscriptText(thread?.items.at(-1)?.content?.[0]?.text),
-    ).toContain('print("Hello, world!")');
+    expect(normalizeChatKitEvents(events)).toEqual(expected.events);
+
+    const finalState = expected.events.findLast(
+      (event) => event.type === "aisre.chatkit.state",
+    );
+    if (finalState) {
+      expect(nextState).toEqual({
+        threadId: finalState.thread_id,
+        previousResponseId: finalState.previous_response_id,
+      });
+      const thread = controller
+        .getSnapshot()
+        .threads.find((item) => item.id === finalState.thread_id);
+      expect(thread?.items.at(-1)?.content?.[0]?.text).toBe(
+        expected.events.findLast((event) => event.type === "response.output_item.done")?.text,
+      );
+    }
   });
 });
-function normalizeTranscriptText(value: unknown): string {
-  return String(value ?? "").replace(/\\"/g, '"');
-}

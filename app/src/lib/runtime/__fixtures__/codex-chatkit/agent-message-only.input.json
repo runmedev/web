@@ -1,0 +1,93 @@
+{
+  "thread_id": "thread-agent-only",
+  "prompt": "print hello world in python",
+  "events": [
+    {
+      "kind": "request",
+      "payload": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "thread/start",
+        "params": {
+          "cwd": "/workspace",
+          "model": "gpt-5"
+        }
+      }
+    },
+    {
+      "kind": "response",
+      "payload": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "thread": {
+            "id": "thread-agent-only",
+            "title": "Local Project",
+            "cwd": "/workspace"
+          }
+        }
+      }
+    },
+    {
+      "kind": "request",
+      "payload": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "method": "turn/start",
+        "params": {
+          "threadId": "thread-agent-only",
+          "input": [
+            {
+              "type": "text",
+              "text": "print hello world in python"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "response",
+      "payload": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "result": {
+          "turn": {
+            "id": "turn-agent-only",
+            "status": "inProgress"
+          }
+        }
+      }
+    },
+    {
+      "kind": "notification",
+      "payload": {
+        "jsonrpc": "2.0",
+        "method": "codex/event/agent_message",
+        "params": {
+          "conversationId": "thread-agent-only",
+          "id": "turn-agent-only",
+          "msg": {
+            "message": "Use `print(\"Hello, world!\")`.",
+            "type": "agent_message"
+          }
+        }
+      }
+    },
+    {
+      "kind": "notification",
+      "payload": {
+        "jsonrpc": "2.0",
+        "method": "codex/event/task_complete",
+        "params": {
+          "conversationId": "thread-agent-only",
+          "id": "turn-agent-only",
+          "msg": {
+            "last_agent_message": "Use `print(\"Hello, world!\")`.",
+            "turn_id": "turn-agent-only",
+            "type": "task_complete"
+          }
+        }
+      }
+    }
+  ]
+}
