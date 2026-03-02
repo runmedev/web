@@ -96,20 +96,22 @@ describe("createCodexChatkitFetch", () => {
 
     expect(controller.getThread).toHaveBeenCalledWith("thread-1");
     expect(await response.json()).toEqual({
-      id: "thread-1",
-      title: "One",
-      updated_at: undefined,
-      items: {
-        data: [
-          {
-            id: "msg-1",
-            type: "message",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: "hello" }],
-          },
-        ],
-        has_more: false,
+      data: {
+        id: "thread-1",
+        title: "One",
+        updated_at: undefined,
+        items: {
+          data: [
+            {
+              id: "msg-1",
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: "hello" }],
+            },
+          ],
+          has_more: false,
+        },
       },
     });
   });

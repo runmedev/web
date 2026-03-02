@@ -8,6 +8,7 @@ import {
   getCodexAppServerProxyClient,
   type CodexProxyJsonRpcNotification,
 } from "./codexAppServerProxyClient";
+import { logCodexEvent } from "./codexLogging";
 
 export type ChatKitStateValue = {
   threadId?: string;
@@ -51,12 +52,22 @@ type CodexStreamSink = {
   emit: (payload: unknown) => void;
 };
 
+function emitLoggedChatkitEvent(sink: CodexStreamSink, payload: unknown): void {
+  logCodexEvent("Codex adapter emitted ChatKit event", {
+    scope: "chatkit.codex_adapter",
+    direction: "derived",
+    transport: "chatkit_fetch",
+    payload,
+  });
+  sink.emit(payload);
+}
+
 function emitChatkitState(
   sink: CodexStreamSink,
   threadId: string,
   previousResponseId?: string,
 ): void {
-  sink.emit({
+  emitLoggedChatkitEvent(sink, {
     type: "aisre.chatkit.state",
     item: {
       state: {
@@ -503,6 +514,13 @@ class CodexConversationController {
       if (finished) {
         return;
       }
+      logCodexEvent("Codex adapter received proxy notification", {
+        scope: "chatkit.codex_adapter",
+        direction: "inbound",
+        transport: "codex_proxy",
+        jsonrpcMethod: notification.method,
+        payload: notification,
+      });
       const mapped = this.mapNotificationToAssistantEvent(
         notification,
         threadId!,
@@ -517,11 +535,11 @@ class CodexConversationController {
         }
         responseItemIds.set(responseId, itemId);
         responseTexts.set(responseId, "");
-        sink.emit({
+        emitLoggedChatkitEvent(sink, {
           type: "response.created",
           response: { id: responseId },
         });
-        sink.emit({
+        emitLoggedChatkitEvent(sink, {
           type: "response.output_item.added",
           response_id: responseId,
           output_index: 0,
@@ -533,7 +551,7 @@ class CodexConversationController {
             content: [],
           },
         });
-        sink.emit({
+        emitLoggedChatkitEvent(sink, {
           type: "response.content_part.added",
           response_id: responseId,
           output_index: 0,
@@ -553,7 +571,7 @@ class CodexConversationController {
         assistantText = (responseTexts.get(mapped.responseId) ?? "") + mapped.text;
         responseTexts.set(mapped.responseId, assistantText);
         this.updateAssistantItem(threadId!, mapped.itemId, assistantText, "in_progress");
-        sink.emit({
+        emitLoggedChatkitEvent(sink, {
           type: "response.output_text.delta",
           response_id: mapped.responseId,
           output_index: 0,
@@ -571,7 +589,7 @@ class CodexConversationController {
         }
         responseTexts.set(mapped.responseId, assistantText);
         this.updateAssistantItem(threadId!, mapped.itemId, assistantText, "completed");
-        sink.emit({
+        emitLoggedChatkitEvent(sink, {
           type: "response.output_text.done",
           response_id: mapped.responseId,
           output_index: 0,
@@ -579,7 +597,7 @@ class CodexConversationController {
           content_index: 0,
           text: assistantText,
         });
-        sink.emit({
+        emitLoggedChatkitEvent(sink, {
           type: "response.content_part.done",
           response_id: mapped.responseId,
           output_index: 0,
@@ -587,7 +605,7 @@ class CodexConversationController {
           content_index: 0,
           part: { type: "output_text", text: assistantText },
         });
-        sink.emit({
+        emitLoggedChatkitEvent(sink, {
           type: "response.output_item.done",
           response_id: mapped.responseId,
           output_index: 0,
@@ -606,7 +624,7 @@ class CodexConversationController {
           this.threads.set(threadId!, updatedThread);
         }
         emitChatkitState(sink, threadId!, lastResponseId);
-        sink.emit({
+        emitLoggedChatkitEvent(sink, {
           type: "response.completed",
           response: { id: mapped.responseId },
         });
@@ -648,7 +666,7 @@ class CodexConversationController {
       this.threads.set(threadId, updatedThread);
     } else {
       emitChatkitState(sink, threadId, lastResponseId);
-      sink.emit({
+      emitLoggedChatkitEvent(sink, {
         type: "response.completed",
         response: { id: lastResponseId },
       });

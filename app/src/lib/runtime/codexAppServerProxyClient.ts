@@ -1,4 +1,5 @@
 import { appLogger } from "../logging/runtime";
+import { logCodexEvent } from "./codexLogging";
 
 export type JsonRpcId = string | number;
 
@@ -41,23 +42,6 @@ export type CodexProxyNotificationHandler = (
 export type WebSocketFactory = (url: string) => WebSocket;
 
 const DEFAULT_INITIALIZE_PROTOCOL_VERSION = "2025-03-26";
-
-function recordCodexProxyDebug(entry: Record<string, unknown>): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  const debugWindow = window as Window & {
-    __codexProxyDebug?: Array<Record<string, unknown>>;
-  };
-  const entries = Array.isArray(debugWindow.__codexProxyDebug)
-    ? debugWindow.__codexProxyDebug
-    : [];
-  entries.push({
-    ts: Date.now(),
-    ...entry,
-  });
-  debugWindow.__codexProxyDebug = entries.slice(-50);
-}
 
 class CodexAppServerProxyClient {
   private ws: WebSocket | null = null;
@@ -103,7 +87,6 @@ class CodexAppServerProxyClient {
   }
 
   async connect(url: string, authorization: string): Promise<void> {
-    recordCodexProxyDebug({ event: "connect_called", url });
     if (!url) {
       this.setError("Codex app-server websocket URL is required");
       throw new Error("Codex app-server websocket URL is required");
@@ -135,7 +118,12 @@ class CodexAppServerProxyClient {
           if (this.ws !== ws) {
             return;
           }
-          recordCodexProxyDebug({ event: "open", url });
+          logCodexEvent("Codex proxy websocket opened", {
+            scope: "chatkit.codex_proxy",
+            direction: "inbound",
+            transport: "codex_proxy",
+            url,
+          });
           this.state = "open";
           this.lastError = null;
           this.notify();
@@ -159,11 +147,15 @@ class CodexAppServerProxyClient {
           if (this.ws !== ws) {
             return;
           }
-          recordCodexProxyDebug({
-            event: "close",
+          logCodexEvent("Codex proxy websocket closed", {
+            scope: "chatkit.codex_proxy",
+            direction: "inbound",
+            transport: "codex_proxy",
             url,
-            code: event.code,
-            reason: event.reason || "",
+            payload: {
+              code: event.code,
+              reason: event.reason || "",
+            },
           });
           this.state = "closed";
           const errorMessage =
@@ -193,7 +185,6 @@ class CodexAppServerProxyClient {
           if (this.ws !== ws) {
             return;
           }
-          recordCodexProxyDebug({ event: "error", url });
           const error = new Error("Codex app-server websocket error");
           this.setError(error.message);
           this.rejectPending(error);
@@ -239,7 +230,15 @@ class CodexAppServerProxyClient {
       params,
     };
     const payload = JSON.stringify(request);
-    recordCodexProxyDebug({ event: "send_request", method, url: this.url, payload });
+    logCodexEvent("Codex proxy request", {
+      scope: "chatkit.codex_proxy",
+      direction: "outbound",
+      transport: "codex_proxy",
+      url: this.url,
+      jsonrpcMethod: method,
+      requestId: id,
+      payload: request,
+    });
 
     return await new Promise<T>((resolve, reject) => {
       this.pending.set(id, {
@@ -274,7 +273,18 @@ class CodexAppServerProxyClient {
       method: "initialized",
       params: {},
     });
-    recordCodexProxyDebug({ event: "send_notification", method: "initialized", url: this.url, payload });
+    logCodexEvent("Codex proxy notification", {
+      scope: "chatkit.codex_proxy",
+      direction: "outbound",
+      transport: "codex_proxy",
+      url: this.url,
+      jsonrpcMethod: "initialized",
+      payload: {
+        jsonrpc: "2.0",
+        method: "initialized",
+        params: {},
+      },
+    });
     this.ws.send(payload);
   }
 
@@ -302,7 +312,14 @@ class CodexAppServerProxyClient {
     }
 
     if ("id" in parsed && parsed.id !== undefined) {
-      recordCodexProxyDebug({ event: "response", url: this.url, raw });
+      logCodexEvent("Codex proxy response", {
+        scope: "chatkit.codex_proxy",
+        direction: "inbound",
+        transport: "codex_proxy",
+        url: this.url,
+        requestId: parsed.id,
+        payload: parsed,
+      });
       const pending = this.pending.get(parsed.id);
       if (!pending) {
         return;
@@ -323,7 +340,14 @@ class CodexAppServerProxyClient {
     if (!("method" in parsed) || typeof parsed.method !== "string") {
       return;
     }
-    recordCodexProxyDebug({ event: "notification", url: this.url, method: parsed.method, raw });
+    logCodexEvent("Codex proxy notification", {
+      scope: "chatkit.codex_proxy",
+      direction: "inbound",
+      transport: "codex_proxy",
+      url: this.url,
+      jsonrpcMethod: parsed.method,
+      payload: parsed,
+    });
     if (this.ws !== ws) {
       return;
     }

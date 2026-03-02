@@ -274,7 +274,6 @@ type ChatKitPanelInnerProps = {
 function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const chatkitDomainKey = getConfiguredChatKitDomainKey();
-  const [assistantPreview, setAssistantPreview] = useState("");
   const [showCodexDrawer, setShowCodexDrawer] = useState(false);
   const syncedCodexStateRef = useRef<{
     threadId: string | null;
@@ -496,17 +495,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
 
         try {
           const parsed = JSON.parse(payload);
-          if (parsed?.type === "response.created") {
-            setAssistantPreview("");
-            continue;
-          }
-          if (
-            parsed?.type === "response.output_text.delta" &&
-            typeof parsed?.delta === "string"
-          ) {
-            setAssistantPreview((previous) => previous + parsed.delta);
-            continue;
-          }
           if (parsed?.type !== "aisre.chatkit.state") {
             continue;
           }
@@ -564,7 +552,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         }
       }
     },
-    [defaultHarness.adapter, setAssistantPreview, setChatkitState],
+    [defaultHarness.adapter, setChatkitState],
   );
   const codexFetch = useMemo(() => createCodexChatkitFetch(), []);
   const authorizedFetch = useAuthorizedFetch(getChatkitState, {
@@ -1108,14 +1096,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
               </div>
             )}
           </div>
-        </div>
-      ) : null}
-      {import.meta.env.DEV && assistantPreview ? (
-        <div
-          data-testid="chatkit-assistant-preview"
-          className="pointer-events-none absolute bottom-2 left-2 right-2 rounded border border-nb-cell-border bg-white/90 px-2 py-1 text-[12px] text-nb-text shadow-sm"
-        >
-          {assistantPreview}
         </div>
       ) : null}
       {showLoginPrompt ? (

@@ -1,4 +1,5 @@
 import { appLogger } from "../logging/runtime";
+import { logCodexEvent } from "./codexLogging";
 import {
   getCodexConversationController,
   type ChatKitStateValue,
@@ -197,39 +198,39 @@ function extractChatKitState(payload: Record<string, unknown>): ChatKitStateValu
   };
 }
 
-function recordDebugPayload(payload: Record<string, unknown>): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  const debugWindow = window as Window & {
-    __codexChatkitFetchDebug?: Array<Record<string, unknown>>;
-  };
-  const entries = Array.isArray(debugWindow.__codexChatkitFetchDebug)
-    ? debugWindow.__codexChatkitFetchDebug
-    : [];
-  entries.push(payload);
-  debugWindow.__codexChatkitFetchDebug = entries.slice(-20);
-}
-
 export function createCodexChatkitFetch(): typeof fetch {
   const controller = getCodexConversationController();
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     try {
       const { json } = await readBody(input, init);
-      recordDebugPayload(json);
       const requestType = asString(getPayloadRecord(json).type) ?? asString(json.type);
+      logCodexEvent("Codex ChatKit fetch request", {
+        scope: "chatkit.codex_adapter",
+        direction: "outbound",
+        transport: "chatkit_fetch",
+        requestType,
+        payload: json,
+      });
 
       if (requestType === "threads.list") {
         await controller.refreshHistory();
         const snapshot = controller.getSnapshot();
-        return jsonResponse({
+        const payload = {
           data: snapshot.threads.map((thread) => ({
             id: thread.id,
             title: thread.title,
             updated_at: thread.updatedAt,
           })),
           has_more: false,
+        };
+        logCodexEvent("Codex ChatKit fetch response", {
+          scope: "chatkit.codex_adapter",
+          direction: "derived",
+          transport: "chatkit_fetch",
+          requestType,
+          payload,
         });
+        return jsonResponse(payload);
       }
 
       if (requestType === "threads.get_by_id") {
@@ -238,15 +239,25 @@ export function createCodexChatkitFetch(): typeof fetch {
           return jsonResponse({ error: "thread_id_required" });
         }
         const thread = await controller.getThread(threadId);
-        return jsonResponse({
-          id: thread.id,
-          title: thread.title,
-          updated_at: thread.updatedAt,
-          items: {
-            data: thread.items,
-            has_more: false,
+        const payload = {
+          data: {
+            id: thread.id,
+            title: thread.title,
+            updated_at: thread.updatedAt,
+            items: {
+              data: thread.items,
+              has_more: false,
+            },
           },
+        };
+        logCodexEvent("Codex ChatKit fetch response", {
+          scope: "chatkit.codex_adapter",
+          direction: "derived",
+          transport: "chatkit_fetch",
+          requestType,
+          payload,
         });
+        return jsonResponse(payload);
       }
 
       if (requestType === "items.list") {
@@ -254,7 +265,15 @@ export function createCodexChatkitFetch(): typeof fetch {
         if (!threadId) {
           return jsonResponse({ data: [], has_more: false });
         }
-        return jsonResponse(await controller.handleListItems(threadId));
+        const payload = await controller.handleListItems(threadId);
+        logCodexEvent("Codex ChatKit fetch response", {
+          scope: "chatkit.codex_adapter",
+          direction: "derived",
+          transport: "chatkit_fetch",
+          requestType,
+          payload,
+        });
+        return jsonResponse(payload);
       }
 
       const inputText = extractInput(json);

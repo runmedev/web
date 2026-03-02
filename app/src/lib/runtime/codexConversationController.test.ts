@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const project = {
@@ -39,6 +41,30 @@ vi.mock("./codexProjectManager", () => ({
 import {
   createCodexConversationControllerForTests,
 } from "./codexConversationController";
+
+type TranscriptEntry =
+  | {
+      kind: "request_result";
+      method: string;
+      result: Record<string, unknown>;
+    }
+  | {
+      kind: "notification";
+      payload: Record<string, unknown>;
+    };
+
+function loadTranscriptFixture(name: string): TranscriptEntry[] {
+  const fixturePath = path.resolve(
+    process.cwd(),
+    "src/lib/runtime/__fixtures__",
+    name,
+  );
+  return readFileSync(fixturePath, "utf8")
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as TranscriptEntry);
+}
 
 describe("CodexConversationController", () => {
   beforeEach(() => {
@@ -297,4 +323,70 @@ describe("CodexConversationController", () => {
     );
     expect(controller.getSnapshot().currentThreadId).toBe("thread-1");
   });
+
+  it("replays a captured Codex transcript fixture into ChatKit-compatible events", async () => {
+    const transcript = loadTranscriptFixture("codex-print-hello-world.ndjson");
+    const requestResults = transcript.filter(
+      (entry): entry is Extract<TranscriptEntry, { kind: "request_result" }> =>
+        entry.kind === "request_result",
+    );
+    const notifications = transcript.filter(
+      (entry): entry is Extract<TranscriptEntry, { kind: "notification" }> =>
+        entry.kind === "notification",
+    );
+    let requestIndex = 0;
+
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      const requestResult = requestResults[requestIndex];
+      if (!requestResult || requestResult.method !== method) {
+        throw new Error(`unexpected method ${method} at transcript index ${requestIndex}`);
+      }
+      requestIndex += 1;
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          notifications.forEach((entry) => {
+            notificationHandlers.forEach((handler) => {
+              handler(entry.payload);
+            });
+          });
+        });
+      }
+      return requestResult.result;
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: Array<Record<string, unknown>> = [];
+    const nextState = await controller.streamUserMessage(
+      "print hello world in python",
+      {},
+      {
+        emit: (payload) => events.push(payload as Record<string, unknown>),
+      },
+    );
+
+    expect(nextState).toEqual({
+      threadId: "thread-hello",
+      previousResponseId: "turn-hello",
+    });
+    expect(
+      normalizeTranscriptText(
+        events
+          .filter((event) => event.type === "response.output_text.delta")
+          .map((event) => event.delta)
+          .join(""),
+      ),
+    ).toContain('print("Hello, world!")');
+    expect(
+      normalizeTranscriptText(
+        events.find((event) => event.type === "response.output_text.done")?.text,
+      ),
+    ).toContain('print("Hello, world!")');
+    const thread = controller.getSnapshot().threads.find((item) => item.id === "thread-hello");
+    expect(
+      normalizeTranscriptText(thread?.items.at(-1)?.content?.[0]?.text),
+    ).toContain('print("Hello, world!")');
+  });
 });
+function normalizeTranscriptText(value: unknown): string {
+  return String(value ?? "").replace(/\\"/g, '"');
+}

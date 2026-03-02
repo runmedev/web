@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { appLoggerMock } = vi.hoisted(() => ({
   appLoggerMock: {
+    info: vi.fn(),
     error: vi.fn(),
   },
 }));
@@ -64,6 +65,7 @@ describe("CodexAppServerProxyClient", () => {
 
   beforeEach(() => {
     sockets = [];
+    appLoggerMock.info.mockClear();
     appLoggerMock.error.mockClear();
     (globalThis as unknown as { WebSocket: typeof WebSocket }).WebSocket = {
       OPEN: FakeWebSocket.OPEN,
@@ -114,6 +116,19 @@ describe("CodexAppServerProxyClient", () => {
       method: "initialized",
       params: {},
     });
+    expect(appLoggerMock.info).toHaveBeenCalledWith(
+      "Codex proxy request",
+      expect.objectContaining({
+        attrs: expect.objectContaining({
+          jsonrpcMethod: "initialize",
+          payload: expect.objectContaining({
+            params: expect.objectContaining({
+              authorization: "[REDACTED]",
+            }),
+          }),
+        }),
+      }),
+    );
   });
 
   it("sends JSON-RPC requests and resolves responses", async () => {

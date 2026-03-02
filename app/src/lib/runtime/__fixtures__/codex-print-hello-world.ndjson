@@ -1,0 +1,7 @@
+{"kind":"request_result","method":"thread/start","result":{"thread":{"id":"thread-hello","title":"Local Project","cwd":"/workspace","updated_at":"2026-03-01T20:00:00Z"}}}
+{"kind":"request_result","method":"turn/start","result":{"turn":{"id":"turn-hello","status":"in_progress"}}}
+{"kind":"notification","payload":{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread-hello","turn":{"id":"turn-hello","status":"inProgress"}}}}
+{"kind":"notification","payload":{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread-hello","turnId":"turn-hello","itemId":"item-hello","delta":"Use this one-liner in Python:\\n\\n"}}}
+{"kind":"notification","payload":{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread-hello","turnId":"turn-hello","itemId":"item-hello","delta":"`print(\\\"Hello, world!\\\")`"}}}
+{"kind":"notification","payload":{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread-hello","turnId":"turn-hello","item":{"type":"agentMessage","id":"item-hello","text":"Use this one-liner in Python:\\n\\n`print(\\\"Hello, world!\\\")`"}}}}
+{"kind":"notification","payload":{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread-hello","turn":{"id":"turn-hello","status":"completed"}}}}

@@ -77,7 +77,7 @@ describe("CodexToolBridge", () => {
     ]);
   });
 
-  it("handles a tool-call request and sends response envelope", async () => {
+  it("handles a legacy tool-call request and sends protobuf response envelope", async () => {
     const bridge = createCodexToolBridgeForTests({ wsFactory });
     const handler = vi.fn(async ({ bridgeCallId, toolCallInput }) => ({
       ok: true,
@@ -103,12 +103,51 @@ describe("CodexToolBridge", () => {
     const sent = sockets[0]?.sent ?? [];
     expect(sent).toHaveLength(2);
     expect(JSON.parse(sent[1] ?? "{}")).toEqual({
-      type: "NotebookToolCallResponse",
-      bridge_call_id: "bridge_1",
-      tool_call_output: {
-        ok: true,
+      notebookToolCallResponse: {
         bridgeCallId: "bridge_1",
-        echoed: { call_id: "call_1" },
+        output: {
+          ok: true,
+          bridgeCallId: "bridge_1",
+          echoed: { call_id: "call_1" },
+        },
+      },
+    });
+  });
+
+  it("handles a protobuf tool-call request and sends protobuf response envelope", async () => {
+    const bridge = createCodexToolBridgeForTests({ wsFactory });
+    const handler = vi.fn(async ({ bridgeCallId, toolCallInput }) => ({
+      ok: true,
+      bridgeCallId,
+      echoed: toolCallInput,
+    }));
+
+    bridge.setHandler(handler);
+    void bridge.connect("ws://localhost:1234/codex/ws", "Bearer test-id-token");
+    sockets[0]?.emitOpen();
+
+    sockets[0]?.emitMessage(JSON.stringify({
+      notebookToolCallRequest: {
+        bridgeCallId: "bridge_proto",
+        input: { callId: "call_proto" },
+      },
+    }));
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    expect(handler).toHaveBeenCalledWith({
+      bridgeCallId: "bridge_proto",
+      toolCallInput: { callId: "call_proto" },
+    });
+    const sent = sockets[0]?.sent ?? [];
+    expect(sent).toHaveLength(2);
+    expect(JSON.parse(sent[1] ?? "{}")).toEqual({
+      notebookToolCallResponse: {
+        bridgeCallId: "bridge_proto",
+        output: {
+          ok: true,
+          bridgeCallId: "bridge_proto",
+          echoed: { callId: "call_proto" },
+        },
       },
     });
   });

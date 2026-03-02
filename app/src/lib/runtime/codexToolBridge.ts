@@ -1,18 +1,38 @@
 import { appLogger } from "../logging/runtime";
 
-export type CodexToolBridgeRequestEnvelope = {
-  type: "NotebookToolCallRequest" | "notebook_tool_call_request";
-  bridge_call_id?: string;
-  bridgeCallId?: string;
-  tool_call_input?: unknown;
-  toolCallInput?: unknown;
-};
+export type CodexToolBridgeRequestEnvelope =
+  | {
+      type: "NotebookToolCallRequest" | "notebook_tool_call_request";
+      bridge_call_id?: string;
+      bridgeCallId?: string;
+      tool_call_input?: unknown;
+      toolCallInput?: unknown;
+    }
+  | {
+      notebook_tool_call_request?: {
+        bridge_call_id?: string;
+        bridgeCallId?: string;
+        input?: unknown;
+      };
+      notebookToolCallRequest?: {
+        bridge_call_id?: string;
+        bridgeCallId?: string;
+        input?: unknown;
+      };
+    };
 
-export type CodexToolBridgeResponseEnvelope = {
-  type: "NotebookToolCallResponse";
-  bridge_call_id: string;
-  tool_call_output: unknown;
-};
+export type CodexToolBridgeResponseEnvelope =
+  | {
+      type: "NotebookToolCallResponse";
+      bridge_call_id: string;
+      tool_call_output: unknown;
+    }
+  | {
+      notebookToolCallResponse: {
+        bridgeCallId: string;
+        output: unknown;
+      };
+    };
 
 export type CodexToolBridgeState = "idle" | "connecting" | "open" | "closed" | "error";
 
@@ -34,6 +54,57 @@ export type WebSocketFactory = (url: string) => WebSocket;
 type CodexBridgeAuthEnvelope = {
   authorization: string;
 };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function extractBridgeRequest(
+  parsed: CodexToolBridgeRequestEnvelope,
+): CodexToolBridgeRequest | null {
+  const direct = asRecord(parsed);
+  const typed = direct?.type;
+  if (
+    typed === "NotebookToolCallRequest" ||
+    typed === "notebook_tool_call_request"
+  ) {
+    const bridgeCallId =
+      typeof direct?.bridge_call_id === "string"
+        ? direct.bridge_call_id
+        : typeof direct?.bridgeCallId === "string"
+          ? direct.bridgeCallId
+          : "";
+    if (!bridgeCallId) {
+      return null;
+    }
+    return {
+      bridgeCallId,
+      toolCallInput: direct?.tool_call_input ?? direct?.toolCallInput,
+    };
+  }
+
+  const nested =
+    asRecord(direct?.notebook_tool_call_request) ??
+    asRecord(direct?.notebookToolCallRequest);
+  if (!nested) {
+    return null;
+  }
+  const bridgeCallId =
+    typeof nested.bridge_call_id === "string"
+      ? nested.bridge_call_id
+      : typeof nested.bridgeCallId === "string"
+        ? nested.bridgeCallId
+        : "";
+  if (!bridgeCallId) {
+    return null;
+  }
+  return {
+    bridgeCallId,
+    toolCallInput: nested.input,
+  };
+}
 
 class CodexToolBridge {
   private ws: WebSocket | null = null;
@@ -207,12 +278,11 @@ class CodexToolBridge {
       this.setError(`Invalid codex bridge JSON: ${String(error)}`);
       return;
     }
-    const type = parsed.type;
-    if (type !== "NotebookToolCallRequest" && type !== "notebook_tool_call_request") {
+    const request = extractBridgeRequest(parsed);
+    if (!request) {
       return;
     }
-    const bridgeCallId = parsed.bridge_call_id ?? parsed.bridgeCallId ?? "";
-    if (!bridgeCallId) {
+    if (!request.bridgeCallId) {
       this.setError("Codex bridge request missing bridge_call_id");
       return;
     }
@@ -222,16 +292,17 @@ class CodexToolBridge {
     }
     try {
       const toolCallOutput = await this.handler({
-        bridgeCallId,
-        toolCallInput: parsed.tool_call_input ?? parsed.toolCallInput,
+        bridgeCallId: request.bridgeCallId,
+        toolCallInput: request.toolCallInput,
       });
       if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) {
         return;
       }
       const response: CodexToolBridgeResponseEnvelope = {
-        type: "NotebookToolCallResponse",
-        bridge_call_id: bridgeCallId,
-        tool_call_output: toolCallOutput,
+        notebookToolCallResponse: {
+          bridgeCallId: request.bridgeCallId,
+          output: toolCallOutput,
+        },
       };
       ws.send(JSON.stringify(response));
     } catch (error) {
