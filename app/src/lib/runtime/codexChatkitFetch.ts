@@ -84,7 +84,11 @@ function jsonResponse(payload: unknown): Response {
 
 function buildStreamResponse(
   producer: (sink: { emit: (payload: unknown) => void }) => Promise<void>,
-  options?: { signal?: AbortSignal | null; onAbort?: () => Promise<void> | void },
+  options?: {
+    signal?: AbortSignal | null;
+    onAbort?: () => Promise<void> | void;
+    logContext?: Record<string, unknown>;
+  },
 ): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -105,8 +109,29 @@ function buildStreamResponse(
       };
 
       const abortHandler = async () => {
+        appLogger.info("Codex ChatKit stream abort signaled", {
+          attrs: {
+            scope: "chatkit.codex_fetch",
+            ...options?.logContext,
+          },
+        });
         try {
           await options?.onAbort?.();
+          appLogger.info("Codex ChatKit stream abort handler completed", {
+            attrs: {
+              scope: "chatkit.codex_fetch",
+              ...options?.logContext,
+            },
+          });
+        } catch (error) {
+          appLogger.error("Codex ChatKit stream abort handler failed", {
+            attrs: {
+              scope: "chatkit.codex_fetch",
+              error: String(error),
+              ...options?.logContext,
+            },
+          });
+          throw error;
         } finally {
           close();
         }
@@ -114,6 +139,12 @@ function buildStreamResponse(
 
       if (options?.signal) {
         if (options.signal.aborted) {
+          appLogger.info("Codex ChatKit stream started with aborted signal", {
+            attrs: {
+              scope: "chatkit.codex_fetch",
+              ...options?.logContext,
+            },
+          });
           void abortHandler();
           return;
         }
@@ -240,7 +271,12 @@ export function createCodexChatkitFetch(): typeof fetch {
       }
 
       if (requestType === "threads.get_by_id") {
-        const threadId = asString(json.thread_id) ?? asString(json.threadId);
+        const source = getPayloadRecord(json);
+        const threadId =
+          asString(source.thread_id) ??
+          asString(source.threadId) ??
+          asString(json.thread_id) ??
+          asString(json.threadId);
         if (!threadId) {
           return jsonResponse({ error: "thread_id_required" });
         }
@@ -267,7 +303,12 @@ export function createCodexChatkitFetch(): typeof fetch {
       }
 
       if (requestType === "items.list") {
-        const threadId = asString(json.thread_id) ?? asString(json.threadId);
+        const source = getPayloadRecord(json);
+        const threadId =
+          asString(source.thread_id) ??
+          asString(source.threadId) ??
+          asString(json.thread_id) ??
+          asString(json.threadId);
         if (!threadId) {
           return jsonResponse({ data: [], has_more: false });
         }
@@ -296,6 +337,12 @@ export function createCodexChatkitFetch(): typeof fetch {
           signal: init?.signal ?? null,
           onAbort: async () => {
             await controller.interruptActiveTurn();
+          },
+          logContext: {
+            requestType: requestType ?? "message_stream",
+            inputText,
+            threadId: chatkitState.threadId ?? null,
+            previousResponseId: chatkitState.previousResponseId ?? null,
           },
         },
       );

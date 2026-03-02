@@ -230,6 +230,33 @@ describe("CodexConversationController", () => {
     ]);
   });
 
+  it("returns cached thread details when items are already present", async () => {
+    proxyClient.sendRequest.mockResolvedValueOnce({
+      threads: [
+        { id: "thread-1", title: "One", cwd: "/workspace", last_turn_id: "turn-1" },
+      ],
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    await controller.refreshHistory();
+    const snapshot = controller.getSnapshot();
+    const existing = snapshot.threads[0];
+    existing.items = [
+      {
+        id: "msg-1",
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "hello" }],
+      },
+    ];
+
+    const detail = await controller.getThread("thread-1");
+
+    expect(detail).toEqual(existing);
+    expect(proxyClient.sendRequest).toHaveBeenCalledTimes(1);
+  });
+
   it("streams a new codex turn into ChatKit-compatible SSE events", async () => {
     proxyClient.sendRequest.mockImplementation(async (method: string) => {
       if (method === "thread/start") {

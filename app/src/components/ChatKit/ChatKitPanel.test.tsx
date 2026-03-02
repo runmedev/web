@@ -26,6 +26,7 @@ let fetchUpdatesMock: ReturnType<typeof vi.fn>;
 const useChatKitMock = vi.fn();
 const { appLoggerMock } = vi.hoisted(() => ({
   appLoggerMock: {
+    info: vi.fn(),
     error: vi.fn(),
   },
 }));
@@ -51,6 +52,7 @@ const approvalMgrMock = {
 const proxyMock = {
   connect: vi.fn(async () => {}),
   disconnect: vi.fn(),
+  setAuthorizationResolver: vi.fn(),
 };
 const codexControllerMock = {
   setSelectedProject: vi.fn(),
@@ -201,6 +203,7 @@ describe("ChatKitPanel codex harness routing", () => {
     codexControllerMock.selectThread.mockClear();
     codexFetchMock.mockClear();
     approvalMgrMock.failAll.mockClear();
+    appLoggerMock.info.mockClear();
     appLoggerMock.error.mockClear();
   });
 
@@ -239,6 +242,17 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(bridgeMock.setHandler).toHaveBeenCalled();
     expect(config.history.enabled).toBe(false);
     expect(config.header.title.text).toBe("Runme Repo");
+    expect(appLoggerMock.info).toHaveBeenCalledWith(
+      "ChatKit host configured",
+      expect.objectContaining({
+        attrs: expect.objectContaining({
+          scope: "chatkit.panel",
+          adapter: "codex",
+          apiUrl: "http://127.0.0.1:31337/codex/chatkit",
+          selectedProjectId: "project-1",
+        }),
+      }),
+    );
   });
 
   it("clears pending approvals on codex bridge disconnect without showing an in-panel error banner", () => {
@@ -402,6 +416,39 @@ describe("ChatKitPanel codex harness routing", () => {
 
     expect(setThreadIdMock).toHaveBeenCalledWith("thread-1");
     expect(fetchUpdatesMock).toHaveBeenCalled();
+    expect(appLoggerMock.info).toHaveBeenCalledWith("Received ChatKit state event", {
+      attrs: {
+        scope: "chatkit.panel",
+        adapter: "codex",
+        threadId: "thread-1",
+        previousResponseId: "resp-1",
+      },
+    });
+    expect(appLoggerMock.info).toHaveBeenCalledWith(
+      "Syncing Codex state into ChatKit host",
+      {
+        attrs: {
+          scope: "chatkit.panel",
+          threadId: "thread-1",
+          previousResponseId: "resp-1",
+        },
+      },
+    );
+    expect(appLoggerMock.info).toHaveBeenCalledWith("Calling ChatKit setThreadId", {
+      attrs: {
+        scope: "chatkit.panel",
+        adapter: "codex",
+        threadId: "thread-1",
+        source: "sse_state_sync",
+      },
+    });
+    expect(appLoggerMock.info).toHaveBeenCalledWith("Calling ChatKit fetchUpdates", {
+      attrs: {
+        scope: "chatkit.panel",
+        adapter: "codex",
+        source: "sse_state_sync",
+      },
+    });
   });
 
   it("switches codex projects and reloads history", async () => {
@@ -449,6 +496,33 @@ describe("ChatKitPanel codex harness routing", () => {
         adapter: "responses",
         baseUrl: "http://127.0.0.1:31337",
         error: "thread is not materialized yet",
+      },
+    });
+  });
+
+  it("logs chatkit thread changes through appLogger", () => {
+    harnessState.defaultHarness.adapter = "codex";
+    codexConversationState.threads = [
+      {
+        id: "thread-1",
+        title: "Investigate latency",
+        updatedAt: "2026-02-26T00:00:00Z",
+        previousResponseId: "turn-1",
+      },
+    ];
+
+    render(<ChatKitPanel />);
+
+    const config = useChatKitMock.mock.calls.at(0)?.[0];
+    act(() => {
+      config.onThreadChange({ threadId: "thread-1" });
+    });
+
+    expect(appLoggerMock.info).toHaveBeenCalledWith("ChatKit thread changed", {
+      attrs: {
+        scope: "chatkit.panel",
+        adapter: "codex",
+        threadId: "thread-1",
       },
     });
   });

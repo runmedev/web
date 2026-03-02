@@ -135,6 +135,63 @@ describe("createCodexChatkitFetch", () => {
     });
   });
 
+  it("handles threads.get_by_id requests with thread_id nested under params", async () => {
+    const fetchFn = createCodexChatkitFetch();
+    const response = await fetchFn("http://localhost/codex/app-server/ws", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "threads.get_by_id",
+        params: { thread_id: "thread-1" },
+      }),
+    });
+
+    expect(controller.getThread).toHaveBeenCalledWith("thread-1");
+    expect(await response.json()).toEqual({
+      data: {
+        id: "thread-1",
+        title: "One",
+        updated_at: undefined,
+        items: {
+          data: [
+            {
+              id: "msg-1",
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: "hello" }],
+            },
+          ],
+          has_more: false,
+        },
+      },
+    });
+  });
+
+  it("handles items.list requests with thread_id nested under params", async () => {
+    const fetchFn = createCodexChatkitFetch();
+    const response = await fetchFn("http://localhost/codex/app-server/ws", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "items.list",
+        params: { thread_id: "thread-1" },
+      }),
+    });
+
+    expect(controller.handleListItems).toHaveBeenCalledWith("thread-1");
+    expect(await response.json()).toEqual({
+      data: [
+        {
+          id: "msg-1",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "hello" }],
+        },
+      ],
+      has_more: false,
+    });
+  });
+
   it("streams assistant events for simple input requests", async () => {
     const fetchFn = createCodexChatkitFetch();
     const response = await fetchFn("http://localhost/codex/app-server/ws", {
@@ -229,6 +286,30 @@ describe("createCodexChatkitFetch", () => {
     const response = await responsePromise;
     await response.text();
     expect(controller.interruptActiveTurn).toHaveBeenCalled();
+    expect(appLoggerMock.info).toHaveBeenCalledWith(
+      "Codex ChatKit stream abort signaled",
+      {
+        attrs: {
+          scope: "chatkit.codex_fetch",
+          requestType: "message_stream",
+          inputText: "hello",
+          threadId: null,
+          previousResponseId: null,
+        },
+      },
+    );
+    expect(appLoggerMock.info).toHaveBeenCalledWith(
+      "Codex ChatKit stream abort handler completed",
+      {
+        attrs: {
+          scope: "chatkit.codex_fetch",
+          requestType: "message_stream",
+          inputText: "hello",
+          threadId: null,
+          previousResponseId: null,
+        },
+      },
+    );
   });
 
   it("logs stream producer failures", async () => {

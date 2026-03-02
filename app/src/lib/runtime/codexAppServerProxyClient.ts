@@ -40,6 +40,7 @@ export type CodexProxyNotificationHandler = (
 ) => void;
 
 export type WebSocketFactory = (url: string) => WebSocket;
+export type CodexProxyAuthorizationResolver = () => Promise<string>;
 
 const DEFAULT_INITIALIZE_PROTOCOL_VERSION = "2025-03-26";
 
@@ -49,6 +50,7 @@ class CodexAppServerProxyClient {
   private lastError: string | null = null;
   private url: string | null = null;
   private authorization: string | null = null;
+  private authorizationResolver: CodexProxyAuthorizationResolver | null = null;
   private listeners = new Set<() => void>();
   private notificationHandlers = new Set<CodexProxyNotificationHandler>();
   private readonly wsFactory: WebSocketFactory;
@@ -86,6 +88,12 @@ class CodexAppServerProxyClient {
     return () => {
       this.notificationHandlers.delete(handler);
     };
+  }
+
+  setAuthorizationResolver(
+    resolver: CodexProxyAuthorizationResolver | null,
+  ): void {
+    this.authorizationResolver = resolver;
   }
 
   async connect(url: string, authorization: string): Promise<void> {
@@ -337,6 +345,7 @@ class CodexAppServerProxyClient {
     this.lastError = null;
     this.url = null;
     this.authorization = null;
+    this.authorizationResolver = null;
     this.connectPromise = null;
     this.nextId = 1;
     this.pending.clear();
@@ -427,10 +436,14 @@ class CodexAppServerProxyClient {
     if (!this.url) {
       throw new Error("Codex app-server websocket URL is not configured");
     }
-    if (!this.authorization?.trim()) {
+    let authorization = this.authorization;
+    if (this.authorizationResolver) {
+      authorization = await this.authorizationResolver();
+    }
+    if (!authorization?.trim()) {
       throw new Error("Codex app-server websocket authorization is not configured");
     }
-    await this.connect(this.url, this.authorization);
+    await this.connect(this.url, authorization);
   }
 
   private setError(message: string): void {

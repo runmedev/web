@@ -353,6 +353,76 @@ describe("CodexAppServerProxyClient", () => {
     });
   });
 
+  it("reconnects with a fresh authorization token from the resolver", async () => {
+    const client = createCodexAppServerProxyClientForTests({ wsFactory });
+    const resolver = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValue("Bearer refreshed-token");
+    client.setAuthorizationResolver(resolver);
+
+    const connectPromise = client.connect(
+      "ws://localhost:1234/codex/app-server/ws",
+      "Bearer initial-token",
+    );
+    sockets[0]?.emitOpen();
+    sockets[0]?.emitMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {},
+      }),
+    );
+    await connectPromise;
+
+    sockets[0]?.emitClose({ code: 1006, reason: "" });
+
+    const responsePromise = client.sendRequest("thread/list", {
+      cwd: "/workspace",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(sockets).toHaveLength(2);
+    sockets[1]?.emitOpen();
+    sockets[1]?.emitMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        result: {},
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(JSON.parse(sockets[1]?.sent[0] ?? "{}")).toEqual({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-03-26",
+        capabilities: {},
+        clientInfo: {
+          name: "runme-web",
+          version: "1.0.0",
+        },
+        authorization: "Bearer refreshed-token",
+      },
+    });
+
+    sockets[1]?.emitMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        result: {
+          threads: [{ id: "thread_2" }],
+        },
+      }),
+    );
+
+    await expect(responsePromise).resolves.toEqual({
+      threads: [{ id: "thread_2" }],
+    });
+  });
+
   it("logs reconnect failures before sending a request", async () => {
     const client = createCodexAppServerProxyClientForTests({ wsFactory });
 

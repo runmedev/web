@@ -283,8 +283,8 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     previousResponseId: null,
   });
   const chatkitActionsRef = useRef<{
-    setThreadId: (threadId: string | null) => Promise<void>;
-    fetchUpdates: () => Promise<void>;
+    setThreadId: (threadId: string | null, source?: string) => Promise<void>;
+    fetchUpdates: (source?: string) => Promise<void>;
   } | null>(null);
   const { getChatkitState, setChatkitState } = useCell();
   const { getNotebookData, useNotebookSnapshot } = useNotebookContext();
@@ -513,6 +513,14 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
             ChatkitStateSchema,
             JSON.stringify(stateData),
           );
+          appLogger.info("Received ChatKit state event", {
+            attrs: {
+              scope: "chatkit.panel",
+              adapter: defaultHarness.adapter,
+              threadId: state.threadId ?? null,
+              previousResponseId: state.previousResponseId ?? null,
+            },
+          });
           setChatkitState(state);
           if (defaultHarness.adapter === "codex" && state.threadId) {
             const nextThreadId = state.threadId ?? null;
@@ -526,10 +534,20 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
                 threadId: nextThreadId,
                 previousResponseId: nextPreviousResponseId,
               };
+              appLogger.info("Syncing Codex state into ChatKit host", {
+                attrs: {
+                  scope: "chatkit.panel",
+                  threadId: nextThreadId,
+                  previousResponseId: nextPreviousResponseId,
+                },
+              });
               queueMicrotask(() => {
                 void (async () => {
-                  await chatkitActionsRef.current?.setThreadId(nextThreadId);
-                  await chatkitActionsRef.current?.fetchUpdates();
+                  await chatkitActionsRef.current?.setThreadId(
+                    nextThreadId,
+                    "sse_state_sync",
+                  );
+                  await chatkitActionsRef.current?.fetchUpdates("sse_state_sync");
                 })();
               });
             }
@@ -569,6 +587,25 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const codexBridgeUrl = useMemo(() => {
     return buildCodexBridgeWsUrl(defaultHarness.baseUrl);
   }, [defaultHarness.baseUrl]);
+  useEffect(() => {
+    appLogger.info("ChatKit host configured", {
+      attrs: {
+        scope: "chatkit.panel",
+        adapter: defaultHarness.adapter,
+        apiUrl: chatkitApiUrl,
+        domainKeyConfigured: Boolean(chatkitDomainKey),
+        selectedProjectId:
+          defaultHarness.adapter === "codex"
+            ? codexConversation.selectedProject.id
+            : null,
+      },
+    });
+  }, [
+    chatkitApiUrl,
+    chatkitDomainKey,
+    codexConversation.selectedProject.id,
+    defaultHarness.adapter,
+  ]);
   const resolveCodexAuthorization = useCallback(async (): Promise<string> => {
     const authData = await getAuthData();
     const idToken = authData?.idToken?.trim();
@@ -599,9 +636,11 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   useEffect(() => {
     const proxy = getCodexAppServerProxyClient();
     if (defaultHarness.adapter !== "codex") {
+      proxy.setAuthorizationResolver(null);
       proxy.disconnect();
       return;
     }
+    proxy.setAuthorizationResolver(resolveCodexAuthorization);
     let canceled = false;
     void (async () => {
       try {
@@ -628,6 +667,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     })();
     return () => {
       canceled = true;
+      proxy.setAuthorizationResolver(null);
       proxy.disconnect();
     };
   }, [codexProxyWsUrl, defaultHarness.adapter, resolveCodexAuthorization]);
@@ -773,7 +813,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
                 const controller = getCodexConversationController();
                 controller.startNewChat();
                 setChatkitState(create(ChatkitStateSchema, {}));
-                void chatkitActionsRef.current?.setThreadId(null);
+                void chatkitActionsRef.current?.setThreadId(
+                  null,
+                  "header_new_chat",
+                );
               },
             }
           : undefined,
@@ -949,6 +992,13 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       });
     },
     onThreadChange: ({ threadId }) => {
+      appLogger.info("ChatKit thread changed", {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: defaultHarness.adapter,
+          threadId: threadId ?? null,
+        },
+      });
       if (defaultHarness.adapter !== "codex") {
         return;
       }
@@ -965,9 +1015,76 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       );
     },
   });
+  const setChatkitThreadId = useCallback(
+    async (threadId: string | null, source = "panel_ref") => {
+      appLogger.info("Calling ChatKit setThreadId", {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: defaultHarness.adapter,
+          threadId,
+          source,
+        },
+      });
+      try {
+        await chatkit.setThreadId(threadId);
+        appLogger.info("ChatKit setThreadId completed", {
+          attrs: {
+            scope: "chatkit.panel",
+            adapter: defaultHarness.adapter,
+            threadId,
+            source,
+          },
+        });
+      } catch (error) {
+        appLogger.error("ChatKit setThreadId failed", {
+          attrs: {
+            scope: "chatkit.panel",
+            adapter: defaultHarness.adapter,
+            threadId,
+            source,
+            error: String(error),
+          },
+        });
+        throw error;
+      }
+    },
+    [chatkit, defaultHarness.adapter],
+  );
+  const fetchChatkitUpdates = useCallback(
+    async (source = "panel_ref") => {
+      appLogger.info("Calling ChatKit fetchUpdates", {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: defaultHarness.adapter,
+          source,
+        },
+      });
+      try {
+        await chatkit.fetchUpdates();
+        appLogger.info("ChatKit fetchUpdates completed", {
+          attrs: {
+            scope: "chatkit.panel",
+            adapter: defaultHarness.adapter,
+            source,
+          },
+        });
+      } catch (error) {
+        appLogger.error("ChatKit fetchUpdates failed", {
+          attrs: {
+            scope: "chatkit.panel",
+            adapter: defaultHarness.adapter,
+            source,
+            error: String(error),
+          },
+        });
+        throw error;
+      }
+    },
+    [chatkit, defaultHarness.adapter],
+  );
   chatkitActionsRef.current = {
-    setThreadId: chatkit.setThreadId,
-    fetchUpdates: chatkit.fetchUpdates,
+    setThreadId: setChatkitThreadId,
+    fetchUpdates: fetchChatkitUpdates,
   };
 
   const handleCodexNewChat = useCallback(async () => {
@@ -978,7 +1095,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       threadId: null,
       previousResponseId: null,
     };
-    await chatkitActionsRef.current?.setThreadId(null);
+    await chatkitActionsRef.current?.setThreadId(null, "new_chat");
   }, [setChatkitState]);
 
   const handleCodexSelectThread = useCallback(
@@ -995,8 +1112,8 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         threadId: thread.id,
         previousResponseId: thread.previousResponseId ?? null,
       };
-      await chatkitActionsRef.current?.setThreadId(thread.id);
-      await chatkitActionsRef.current?.fetchUpdates();
+      await chatkitActionsRef.current?.setThreadId(thread.id, "select_thread");
+      await chatkitActionsRef.current?.fetchUpdates("select_thread");
       setShowCodexDrawer(false);
     },
     [setChatkitState],
@@ -1012,7 +1129,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         threadId: null,
         previousResponseId: null,
       };
-      await chatkitActionsRef.current?.setThreadId(null);
+      await chatkitActionsRef.current?.setThreadId(null, "project_change");
       await controller.refreshHistory();
     },
     [setChatkitState],

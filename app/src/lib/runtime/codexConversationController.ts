@@ -418,16 +418,20 @@ class CodexConversationController {
   }
 
   async getThread(threadId: string): Promise<CodexConversationThread> {
+    const existing = this.threads.get(threadId);
+    if (existing && existing.items.length > 0) {
+      return existing;
+    }
     const proxy = getCodexAppServerProxyClient();
     const result = await proxy.sendRequest("thread/read", { threadId });
     const detail = parseThreadDetail(result);
     if (!detail) {
       throw new Error(`Invalid thread/read response for ${threadId}`);
     }
-    const existing = this.threads.get(detail.id);
+    const current = this.threads.get(detail.id);
     this.threads.set(detail.id, {
       ...detail,
-      items: detail.items.length > 0 ? detail.items : existing?.items ?? [],
+      items: detail.items.length > 0 ? detail.items : current?.items ?? [],
     });
     this.notify();
     return this.threads.get(detail.id)!;
