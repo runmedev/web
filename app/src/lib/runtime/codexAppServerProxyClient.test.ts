@@ -295,4 +295,119 @@ describe("CodexAppServerProxyClient", () => {
       },
     );
   });
+
+  it("reconnects on sendRequest after the websocket closes", async () => {
+    const client = createCodexAppServerProxyClientForTests({ wsFactory });
+
+    const connectPromise = client.connect(
+      "ws://localhost:1234/codex/app-server/ws",
+      "Bearer test-id-token",
+    );
+    sockets[0]?.emitOpen();
+    sockets[0]?.emitMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {},
+      }),
+    );
+    await connectPromise;
+
+    sockets[0]?.emitClose({ code: 1006, reason: "" });
+    expect(client.getSnapshot().state).toBe("closed");
+
+    const responsePromise = client.sendRequest("thread/list", {
+      cwd: "/workspace",
+    });
+
+    expect(sockets).toHaveLength(2);
+    sockets[1]?.emitOpen();
+    sockets[1]?.emitMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        result: {},
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sockets[1]?.sent).toHaveLength(3);
+    expect(JSON.parse(sockets[1]?.sent[2] ?? "{}")).toMatchObject({
+      jsonrpc: "2.0",
+      method: "thread/list",
+      params: { cwd: "/workspace" },
+    });
+
+    sockets[1]?.emitMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        result: {
+          threads: [{ id: "thread_2" }],
+        },
+      }),
+    );
+
+    await expect(responsePromise).resolves.toEqual({
+      threads: [{ id: "thread_2" }],
+    });
+  });
+
+  it("logs reconnect failures before sending a request", async () => {
+    const client = createCodexAppServerProxyClientForTests({ wsFactory });
+
+    await expect(client.sendRequest("thread/list", { cwd: "/workspace" })).rejects.toThrow(
+      "Codex app-server websocket URL is not configured",
+    );
+
+    expect(appLoggerMock.error).toHaveBeenCalledWith(
+      "Failed to reconnect codex app-server websocket before request",
+      {
+        attrs: {
+          scope: "chatkit.codex_proxy",
+          error: "Error: Codex app-server websocket URL is not configured",
+          url: null,
+          method: "thread/list",
+        },
+      },
+    );
+  });
+
+  it("logs request send failures", async () => {
+    const client = createCodexAppServerProxyClientForTests({ wsFactory });
+    const connectPromise = client.connect(
+      "ws://localhost:1234/codex/app-server/ws",
+      "Bearer test-id-token",
+    );
+    sockets[0]?.emitOpen();
+    sockets[0]?.emitMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {},
+      }),
+    );
+    await connectPromise;
+
+    vi.spyOn(sockets[0] as FakeWebSocket, "send").mockImplementationOnce(() => {
+      throw new Error("send failed");
+    });
+
+    await expect(client.sendRequest("thread/list", { cwd: "/workspace" })).rejects.toThrow(
+      "send failed",
+    );
+
+    expect(appLoggerMock.error).toHaveBeenCalledWith(
+      "Failed to send codex proxy request",
+      {
+        attrs: {
+          scope: "chatkit.codex_proxy",
+          error: "Error: send failed",
+          url: "ws://localhost:1234/codex/app-server/ws",
+          method: "thread/list",
+          requestId: 2,
+        },
+      },
+    );
+  });
 });

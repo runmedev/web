@@ -48,10 +48,12 @@ class CodexAppServerProxyClient {
   private state: CodexProxyClientState = "idle";
   private lastError: string | null = null;
   private url: string | null = null;
+  private authorization: string | null = null;
   private listeners = new Set<() => void>();
   private notificationHandlers = new Set<CodexProxyNotificationHandler>();
   private readonly wsFactory: WebSocketFactory;
   private nextId = 1;
+  private connectPromise: Promise<void> | null = null;
   private pending = new Map<
     JsonRpcId,
     {
@@ -100,16 +102,17 @@ class CodexAppServerProxyClient {
       this.url === url &&
       (this.state === "connecting" || this.state === "open")
     ) {
-      return;
+      return this.connectPromise ?? Promise.resolve();
     }
     this.disconnect();
 
     this.url = url;
+    this.authorization = authorization;
     this.state = "connecting";
     this.lastError = null;
     this.notify();
 
-    await new Promise<void>((resolve, reject) => {
+    const connectPromise = new Promise<void>((resolve, reject) => {
       try {
         const ws = this.wsFactory(url);
         this.ws = ws;
@@ -201,6 +204,14 @@ class CodexAppServerProxyClient {
         reject(error);
       }
     });
+    this.connectPromise = connectPromise;
+    try {
+      await connectPromise;
+    } finally {
+      if (this.connectPromise === connectPromise) {
+        this.connectPromise = null;
+      }
+    }
   }
 
   disconnect(): void {
@@ -220,7 +231,31 @@ class CodexAppServerProxyClient {
 
   async sendRequest<T = unknown>(method: string, params?: unknown): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error("Codex app-server websocket is not open");
+      try {
+        await this.ensureConnected();
+      } catch (error) {
+        appLogger.error("Failed to reconnect codex app-server websocket before request", {
+          attrs: {
+            scope: "chatkit.codex_proxy",
+            error: String(error),
+            url: this.url,
+            method,
+          },
+        });
+        throw error;
+      }
+    }
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      const error = new Error("Codex app-server websocket is not open");
+      appLogger.error("Codex proxy request failed because websocket is not open", {
+        attrs: {
+          scope: "chatkit.codex_proxy",
+          error: String(error),
+          url: this.url,
+          method,
+        },
+      });
+      throw error;
     }
     const id = this.nextId++;
     const request: CodexProxyJsonRpcRequest = {
@@ -249,6 +284,15 @@ class CodexAppServerProxyClient {
         this.ws?.send(payload);
       } catch (error) {
         this.pending.delete(id);
+        appLogger.error("Failed to send codex proxy request", {
+          attrs: {
+            scope: "chatkit.codex_proxy",
+            error: String(error),
+            url: this.url,
+            method,
+            requestId: id,
+          },
+        });
         reject(error);
       }
     });
@@ -292,6 +336,8 @@ class CodexAppServerProxyClient {
     this.disconnect();
     this.lastError = null;
     this.url = null;
+    this.authorization = null;
+    this.connectPromise = null;
     this.nextId = 1;
     this.pending.clear();
     this.notificationHandlers.clear();
@@ -372,6 +418,19 @@ class CodexAppServerProxyClient {
       reject(error);
     });
     this.pending.clear();
+  }
+
+  private async ensureConnected(): Promise<void> {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      return;
+    }
+    if (!this.url) {
+      throw new Error("Codex app-server websocket URL is not configured");
+    }
+    if (!this.authorization?.trim()) {
+      throw new Error("Codex app-server websocket authorization is not configured");
+    }
+    await this.connect(this.url, this.authorization);
   }
 
   private setError(message: string): void {

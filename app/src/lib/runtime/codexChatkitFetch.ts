@@ -124,6 +124,12 @@ function buildStreamResponse(
 
       void producer({ emit })
         .catch((error) => {
+          appLogger.error("Codex ChatKit stream producer failed", {
+            attrs: {
+              scope: "chatkit.codex_fetch",
+              error: String(error),
+            },
+          });
           emit({
             type: "response.failed",
             error: { message: String(error) },

@@ -1,5 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const { appLoggerMock } = vi.hoisted(() => ({
+  appLoggerMock: {
+    info: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+vi.mock("../logging/runtime", () => ({
+  appLogger: appLoggerMock,
+}));
+
+const defaultStreamUserMessage = async (
+  _input: string,
+  _state: unknown,
+  sink: { emit: (payload: unknown) => void },
+) => {
+  sink.emit({ type: "response.created", response: { id: "turn-1" } });
+  sink.emit({ type: "response.output_text.delta", delta: "hello" });
+  sink.emit({
+    type: "aisre.chatkit.state",
+    item: { state: { threadId: "thread-1", previousResponseId: "turn-1" } },
+  });
+  sink.emit({ type: "response.completed", response: { id: "turn-1" } });
+  return { threadId: "thread-1", previousResponseId: "turn-1" };
+};
+
 const controller = {
   refreshHistory: vi.fn(),
   getSnapshot: vi.fn(() => ({
@@ -30,16 +56,7 @@ const controller = {
     ],
     has_more: false,
   })),
-  streamUserMessage: vi.fn(async (_input: string, _state: unknown, sink: { emit: (payload: unknown) => void }) => {
-    sink.emit({ type: "response.created", response: { id: "turn-1" } });
-    sink.emit({ type: "response.output_text.delta", delta: "hello" });
-    sink.emit({
-      type: "aisre.chatkit.state",
-      item: { state: { threadId: "thread-1", previousResponseId: "turn-1" } },
-    });
-    sink.emit({ type: "response.completed", response: { id: "turn-1" } });
-    return { threadId: "thread-1", previousResponseId: "turn-1" };
-  }),
+  streamUserMessage: vi.fn(defaultStreamUserMessage),
   interruptActiveTurn: vi.fn(),
 };
 
@@ -51,11 +68,13 @@ import { createCodexChatkitFetch } from "./codexChatkitFetch";
 
 describe("createCodexChatkitFetch", () => {
   beforeEach(() => {
+    appLoggerMock.info.mockClear();
+    appLoggerMock.error.mockClear();
     controller.refreshHistory.mockClear();
     controller.getSnapshot.mockClear();
     controller.getThread.mockClear();
     controller.handleListItems.mockClear();
-    controller.streamUserMessage.mockClear();
+    controller.streamUserMessage = vi.fn(defaultStreamUserMessage);
     controller.interruptActiveTurn.mockClear();
   });
 
@@ -210,5 +229,34 @@ describe("createCodexChatkitFetch", () => {
     const response = await responsePromise;
     await response.text();
     expect(controller.interruptActiveTurn).toHaveBeenCalled();
+  });
+
+  it("logs stream producer failures", async () => {
+    const fetchFn = createCodexChatkitFetch();
+    controller.streamUserMessage = vi.fn(async () => {
+      throw new Error("stream failed");
+    });
+
+    const response = await fetchFn("http://localhost/codex/chatkit", {
+      method: "POST",
+      body: JSON.stringify({
+        input: "hello",
+        chatkit_state: {},
+      }),
+    });
+
+    const body = await response.text();
+
+    expect(body).toContain('"type":"response.failed"');
+    expect(body).toContain("stream failed");
+    expect(appLoggerMock.error).toHaveBeenCalledWith(
+      "Codex ChatKit stream producer failed",
+      {
+        attrs: {
+          scope: "chatkit.codex_fetch",
+          error: "Error: stream failed",
+        },
+      },
+    );
   });
 });
