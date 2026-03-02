@@ -591,6 +591,148 @@ sequenceDiagram
   - MCP tool-call latency/error rate
   - proxy stream disconnects
 
+### Conversation Capture And Replay
+
+The current ad hoc browser globals such as `window.__codexProxyDebug` are useful for one-off debugging but are the wrong long-term mechanism. The integration needs a repeatable way to capture a real Codex conversation, inspect it with normal tools, and replay it in tests.
+
+Design decision:
+
+- Replace browser debug globals with structured `appLogger` events.
+- Add structured Runme logs for raw Codex protocol traffic at the proxy boundary.
+- Use the existing Runme manual Codex smoke test as the canonical way to capture a real conversation.
+- Use captured conversation fixtures to drive automatic replay tests in the web repo for the ChatKit `<->` Codex adapter.
+
+#### Browser logging
+
+The browser should log all adapter-visible Codex traffic through `appLogger`, not through mutable globals.
+
+Required browser log scopes:
+
+- `chatkit.codex_proxy`
+  - websocket connect/disconnect
+  - outbound JSON-RPC requests to `/codex/app-server/ws`
+  - inbound JSON-RPC responses and notifications from `/codex/app-server/ws`
+- `chatkit.codex_adapter`
+  - ChatKit custom-fetch request type (`threads.list`, `threads.get_by_id`, `items.list`, stream send)
+  - adapter-produced ChatKit thread payloads
+  - adapter-produced ChatKit stream events emitted into the synthetic SSE response
+- `chatkit.codex_bridge`
+  - `/codex/ws` notebook tool dispatch/result flow
+
+Required browser log fields:
+
+- `scope`
+- `direction` (`outbound`, `inbound`, `derived`)
+- `transport` (`codex_proxy`, `codex_bridge`, `chatkit_fetch`)
+- `jsonrpcMethod` where applicable
+- `threadId`
+- `turnId`
+- `itemId`
+- `requestId` / `bridgeCallId` where applicable
+- `payload`
+
+The browser logger should redact or omit:
+
+- bearer tokens
+- session tokens
+- cookies
+
+Payload logging should preserve the actual JSON shape seen by the adapter. The main purpose is to answer: "what exact message did Codex send?" and "what exact message did the adapter hand to ChatKit?"
+
+#### Runme logging
+
+Runme should log the raw Codex protocol at the proxy boundary using the existing structured logging stack, not printf debugging.
+
+Logging points:
+
+- `/codex/app-server/ws` proxy
+  - outbound request forwarded to Codex
+  - inbound response returned from Codex
+  - inbound notification returned from Codex
+- `/codex/ws` bridge
+  - outbound `NotebookToolCallRequest`
+  - inbound `NotebookToolCallResponse`
+- streamable MCP notebook handler
+  - tool input and tool output summaries
+
+Preferred implementation:
+
+- JSON-RPC payloads logged as JSON objects using normal zap fields
+- protobuf websocket bridge payloads logged with `logs.ZapProto(...)`
+
+Required Runme log fields:
+
+- `component`
+- `principal`
+- `threadId`
+- `turnId`
+- `itemId`
+- `method`
+- `requestID` or JSON-RPC `id`
+- `bridgeCallID` where applicable
+- `payload`
+
+Runme must redact:
+
+- OIDC bearer tokens
+- MCP `session_token`
+- any authorization field inside logged JSON-RPC params
+
+This is the logging needed so a developer can inspect `/tmp/runme-agent.google.log` with `jq` and reconstruct the exact request/response sequence for a conversation.
+
+#### Canonical capture flow
+
+The source of truth for a real Codex conversation should be the existing manual Runme smoke test:
+
+- `runme/pkg/agent/server/codex_manual_test.go`
+
+That test already exercises:
+
+- real `/codex/app-server/ws`
+- real `/codex/ws`
+- real Codex app-server
+- real notebook MCP calls through Runme
+
+Process:
+
+1. Run the manual Codex smoke test against a real OpenAI-backed Codex session.
+2. Log the full JSON-RPC conversation on the Runme side and the adapter-visible messages on the browser side.
+3. Save a normalized transcript artifact containing:
+   - ordered proxy requests
+   - ordered proxy responses
+   - ordered proxy notifications
+   - ordered notebook bridge tool call requests/responses
+   - the final expected assistant text
+4. Redact auth/session material.
+5. Check the normalized transcript into the repo as a test fixture.
+
+The transcript format should be newline-delimited JSON so it is easy to diff and to inspect with `jq`.
+
+#### Replay-based web tests
+
+The web repo should not depend on live Codex for adapter correctness tests. Instead it should replay a previously captured real conversation.
+
+Test strategy:
+
+- feed the captured proxy transcript into `CodexConversationController`
+- verify the resulting ChatKit-facing thread/item model
+- verify the resulting synthetic SSE event stream produced by `codexChatkitFetch`
+- verify the final ChatKit-visible assistant message contains the expected Python code such as `print("Hello, world!")`
+
+This should become the main regression test for the ChatKit `<->` Codex conversion layer.
+
+The fake Codex server used in browser CUJs should be updated to match the captured real transcript shape, not an invented approximation. The manual smoke test is therefore the fixture source, and the web mocks are downstream from that fixture.
+
+#### Implementation order
+
+Before debugging more rendering failures, implement in this order:
+
+1. Add structured raw-protocol logging in Runme and browser code.
+2. Capture and redact one or more real Codex conversations with the manual Runme smoke test.
+3. Add transcript fixtures derived from those captures.
+4. Add replay tests in the web repo for `CodexConversationController` and `codexChatkitFetch`.
+5. Only then adjust the adapter implementation until the replay tests and live browser flow both pass.
+
 ## Rollout Plan
 
 1. Harness profiles and default selection
