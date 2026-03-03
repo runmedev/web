@@ -536,6 +536,17 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
             ChatkitStateSchema,
             JSON.stringify(stateData),
           );
+          if (defaultHarness.adapter === "codex") {
+            appLogger.info("Ignoring Codex ChatKit state event", {
+              attrs: {
+                scope: "chatkit.panel",
+                adapter: defaultHarness.adapter,
+                threadId: state.threadId ?? null,
+                previousResponseId: state.previousResponseId ?? null,
+              },
+            });
+            continue;
+          }
           appLogger.info("Received ChatKit state event", {
             attrs: {
               scope: "chatkit.panel",
@@ -545,36 +556,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
             },
           });
           setChatkitState(state);
-          if (defaultHarness.adapter === "codex" && state.threadId) {
-            const nextThreadId = state.threadId ?? null;
-            const nextPreviousResponseId = state.previousResponseId ?? null;
-            const previous = syncedCodexStateRef.current;
-            if (
-              previous.threadId !== nextThreadId ||
-              previous.previousResponseId !== nextPreviousResponseId
-            ) {
-              syncedCodexStateRef.current = {
-                threadId: nextThreadId,
-                previousResponseId: nextPreviousResponseId,
-              };
-              appLogger.info("Syncing Codex state into ChatKit host", {
-                attrs: {
-                  scope: "chatkit.panel",
-                  threadId: nextThreadId,
-                  previousResponseId: nextPreviousResponseId,
-                },
-              });
-              queueMicrotask(() => {
-                void (async () => {
-                  await chatkitActionsRef.current?.setThreadId(
-                    nextThreadId,
-                    "sse_state_sync",
-                  );
-                  await chatkitActionsRef.current?.fetchUpdates("sse_state_sync");
-                })();
-              });
-            }
-          }
           if (state.previousResponseId || state.threadId) {
             console.log(
               "ChatKit state update",

@@ -395,14 +395,15 @@ class CodexAppServerProxyClient {
     if (!("method" in parsed) || typeof parsed.method !== "string") {
       return;
     }
-    logCodexEvent("Codex proxy notification", {
-      scope: "chatkit.codex_proxy",
-      direction: "inbound",
-      transport: "codex_proxy",
-      url: this.url,
-      jsonrpcMethod: parsed.method,
-      payload: parsed,
-    });
+    // Too verbose 
+    // logCodexEvent("Codex proxy notification", {
+    //   scope: "chatkit.codex_proxy",
+    //   direction: "inbound",
+    //   transport: "codex_proxy",
+    //   url: this.url,
+    //   jsonrpcMethod: parsed.method,
+    //   payload: parsed,
+    // });
     if (this.ws !== ws) {
       return;
     }

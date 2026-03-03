@@ -284,8 +284,10 @@ export function createCodexChatkitFetch(): typeof fetch {
       if (requestType === "threads.get_by_id") {
         const source = getPayloadRecord(json);
         const threadId =
+          asString(source.id) ??
           asString(source.thread_id) ??
           asString(source.threadId) ??
+          asString(json.id) ??
           asString(json.thread_id) ??
           asString(json.threadId);
         if (!threadId) {
@@ -316,8 +318,10 @@ export function createCodexChatkitFetch(): typeof fetch {
       if (requestType === "items.list") {
         const source = getPayloadRecord(json);
         const threadId =
+          asString(source.id) ??
           asString(source.thread_id) ??
           asString(source.threadId) ??
+          asString(json.id) ??
           asString(json.thread_id) ??
           asString(json.threadId);
         if (!threadId) {

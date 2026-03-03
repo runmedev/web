@@ -52,6 +52,8 @@ type CodexStreamSink = {
   emit: (payload: unknown) => void;
 };
 
+const CODEX_TURN_INACTIVITY_TIMEOUT_MS = 120_000;
+
 function emitLoggedChatkitEvent(sink: CodexStreamSink, payload: unknown): void {
   logCodexEvent("Codex adapter emitted ChatKit event", {
     scope: "chatkit.codex_adapter",
@@ -511,17 +513,38 @@ class CodexConversationController {
       resolveCompletion = resolve;
       rejectCompletion = reject;
     });
-    const timeoutId = setTimeout(() => {
-      rejectCompletion?.(
-        new Error(
-          `Timed out waiting for codex turn completion: ${turnIdForNotifications ?? threadId}`,
-        ),
-      );
-    }, 30_000);
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const refreshCompletionTimeout = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      timeoutId = setTimeout(() => {
+        rejectCompletion?.(
+          new Error(
+            `Timed out waiting for codex turn completion after inactivity: ${turnIdForNotifications ?? threadId}`,
+          ),
+        );
+      }, CODEX_TURN_INACTIVITY_TIMEOUT_MS);
+    };
+    refreshCompletionTimeout();
 
     const unsubscribe = proxy.subscribeNotifications((notification) => {
       if (finished) {
         return;
+      }
+      const params = asRecord(notification.params);
+      const { payload } = getNotificationPayloadRecord(params);
+      const notificationThreadId =
+        asString(payload.threadId) ?? asString(payload.thread_id);
+      const notificationTurnId =
+        asString(payload.turnId) ?? asString(payload.turn_id);
+      if (
+        (!notificationThreadId || notificationThreadId === threadId) &&
+        (!turnIdForNotifications ||
+          !notificationTurnId ||
+          notificationTurnId === turnIdForNotifications)
+      ) {
+        refreshCompletionTimeout();
       }
       logCodexEvent("Codex adapter received proxy notification", {
         scope: "chatkit.codex_adapter",
@@ -669,7 +692,9 @@ class CodexConversationController {
       }
       await completionPromise;
     } finally {
-      clearTimeout(timeoutId);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       unsubscribe();
     }
     if (!lastResponseId) {

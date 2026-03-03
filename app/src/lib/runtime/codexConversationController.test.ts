@@ -201,6 +201,7 @@ function normalizeChatKitEvents(
 
 describe("CodexConversationController", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     proxyClient.sendRequest.mockReset();
     proxyClient.subscribeNotifications.mockClear();
     notificationHandlers.clear();
@@ -482,6 +483,85 @@ describe("CodexConversationController", () => {
       ]),
     );
     expect(controller.getSnapshot().currentThreadId).toBe("thread-1");
+  });
+
+  it("resets the completion timeout on inbound activity for the active turn", async () => {
+    vi.useFakeTimers();
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return { threadId: "thread-1", title: "Runme Repo" };
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "codex/event/reasoning_content_delta",
+              params: {
+                conversationId: "thread-1",
+                id: "turn-1",
+                msg: {
+                  type: "reasoning_content_delta",
+                  thread_id: "thread-1",
+                  turn_id: "turn-1",
+                  delta: "thinking",
+                },
+              },
+            });
+          });
+        }, 90_000);
+        setTimeout(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "msg-1",
+                  text: "hello world",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: { id: "turn-1", status: "completed" },
+              },
+            });
+          });
+        }, 170_000);
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: any[] = [];
+    const promise = controller.streamUserMessage("hello", {}, {
+      emit: (payload) => events.push(payload),
+    });
+
+    await vi.advanceTimersByTimeAsync(170_000);
+    const nextState = await promise;
+
+    expect(nextState).toEqual({
+      threadId: "thread-1",
+      previousResponseId: "turn-1",
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "response.output_text.done",
+          text: "hello world",
+        }),
+        expect.objectContaining({ type: "response.completed" }),
+      ]),
+    );
   });
 
   it.each([

@@ -167,6 +167,38 @@ describe("createCodexChatkitFetch", () => {
     });
   });
 
+  it("handles threads.get_by_id requests with id nested under params", async () => {
+    const fetchFn = createCodexChatkitFetch();
+    const response = await fetchFn("http://localhost/codex/app-server/ws", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "threads.get_by_id",
+        params: { id: "thread-1" },
+      }),
+    });
+
+    expect(controller.getThread).toHaveBeenCalledWith("thread-1");
+    expect(await response.json()).toEqual({
+      data: {
+        id: "thread-1",
+        title: "One",
+        updated_at: undefined,
+        items: {
+          data: [
+            {
+              id: "msg-1",
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: "hello" }],
+            },
+          ],
+          has_more: false,
+        },
+      },
+    });
+  });
+
   it("handles items.list requests with thread_id nested under params", async () => {
     const fetchFn = createCodexChatkitFetch();
     const response = await fetchFn("http://localhost/codex/app-server/ws", {
@@ -174,6 +206,31 @@ describe("createCodexChatkitFetch", () => {
       body: JSON.stringify({
         type: "items.list",
         params: { thread_id: "thread-1" },
+      }),
+    });
+
+    expect(controller.handleListItems).toHaveBeenCalledWith("thread-1");
+    expect(await response.json()).toEqual({
+      data: [
+        {
+          id: "msg-1",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "hello" }],
+        },
+      ],
+      has_more: false,
+    });
+  });
+
+  it("handles items.list requests with id nested under params", async () => {
+    const fetchFn = createCodexChatkitFetch();
+    const response = await fetchFn("http://localhost/codex/app-server/ws", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "items.list",
+        params: { id: "thread-1" },
       }),
     });
 

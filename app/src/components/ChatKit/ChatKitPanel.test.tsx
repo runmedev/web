@@ -366,7 +366,7 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(fetchUpdatesMock).toHaveBeenCalled();
   });
 
-  it("syncs codex chatkit state events back into ChatKit thread history", async () => {
+  it("ignores codex chatkit state events and does not resync ChatKit host", async () => {
     harnessState.defaultHarness.adapter = "codex";
     const encoder = new TextEncoder();
     codexFetchMock.mockResolvedValueOnce(
@@ -414,9 +414,9 @@ describe("ChatKitPanel codex harness routing", () => {
       await Promise.resolve();
     });
 
-    expect(setThreadIdMock).toHaveBeenCalledWith("thread-1");
-    expect(fetchUpdatesMock).toHaveBeenCalled();
-    expect(appLoggerMock.info).toHaveBeenCalledWith("Received ChatKit state event", {
+    expect(setThreadIdMock).not.toHaveBeenCalledWith("thread-1");
+    expect(fetchUpdatesMock).not.toHaveBeenCalled();
+    expect(appLoggerMock.info).toHaveBeenCalledWith("Ignoring Codex ChatKit state event", {
       attrs: {
         scope: "chatkit.panel",
         adapter: "codex",
@@ -424,31 +424,10 @@ describe("ChatKitPanel codex harness routing", () => {
         previousResponseId: "resp-1",
       },
     });
-    expect(appLoggerMock.info).toHaveBeenCalledWith(
-      "Syncing Codex state into ChatKit host",
-      {
-        attrs: {
-          scope: "chatkit.panel",
-          threadId: "thread-1",
-          previousResponseId: "resp-1",
-        },
-      },
+    expect(appLoggerMock.info).not.toHaveBeenCalledWith(
+      "Received ChatKit state event",
+      expect.anything(),
     );
-    expect(appLoggerMock.info).toHaveBeenCalledWith("Calling ChatKit setThreadId", {
-      attrs: {
-        scope: "chatkit.panel",
-        adapter: "codex",
-        threadId: "thread-1",
-        source: "sse_state_sync",
-      },
-    });
-    expect(appLoggerMock.info).toHaveBeenCalledWith("Calling ChatKit fetchUpdates", {
-      attrs: {
-        scope: "chatkit.panel",
-        adapter: "codex",
-        source: "sse_state_sync",
-      },
-    });
   });
 
   it("surfaces response.failed SSE events as an in-panel error", async () => {
@@ -511,6 +490,67 @@ describe("ChatKitPanel codex harness routing", () => {
           error: "Timed out waiting for codex turn completion",
         },
       },
+    );
+  });
+
+  it("does not invoke ChatKit host sync for codex state events even if host methods would fail", async () => {
+    harnessState.defaultHarness.adapter = "codex";
+    fetchUpdatesMock.mockRejectedValueOnce(
+      new TypeError("Cannot read properties of undefined (reading 'data')"),
+    );
+    setThreadIdMock.mockRejectedValueOnce(new Error("should not be called"));
+    const encoder = new TextEncoder();
+    codexFetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                'data: {"type":"aisre.chatkit.state","item":{"state":{"threadId":"thread-1","previousResponseId":"resp-1"}}}\n\n',
+              ),
+            );
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream",
+          },
+        },
+      ),
+    );
+
+    render(<ChatKitPanel />);
+
+    const config = useChatKitMock.mock.calls.at(0)?.[0];
+    expect(config).toBeDefined();
+
+    await act(async () => {
+      await config.api.fetch("http://127.0.0.1:31337/codex/chatkit", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "threads.create",
+          params: {
+            input: {
+              content: [{ type: "input_text", text: 'print(\"hello\")' }],
+            },
+          },
+        }),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(setThreadIdMock).not.toHaveBeenCalledWith("thread-1");
+    expect(fetchUpdatesMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("codex-stream-error")).toBeNull();
+    expect(appLoggerMock.error).not.toHaveBeenCalledWith(
+      "Failed to sync Codex state into ChatKit host",
+      expect.anything(),
     );
   });
 
