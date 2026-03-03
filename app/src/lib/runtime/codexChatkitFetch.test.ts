@@ -121,22 +121,71 @@ describe("createCodexChatkitFetch", () => {
 
     expect(controller.getThread).toHaveBeenCalledWith("thread-1");
     expect(await response.json()).toEqual({
-      data: {
-        id: "thread-1",
-        title: "One",
-        updated_at: undefined,
-        items: {
-          data: [
-            {
-              id: "msg-1",
-              type: "message",
-              role: "assistant",
-              status: "completed",
-              content: [{ type: "output_text", text: "hello" }],
-            },
-          ],
-          has_more: false,
-        },
+      id: "thread-1",
+      title: "One",
+      updated_at: undefined,
+      items: {
+        data: [
+          {
+            id: "msg-1",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "hello" }],
+          },
+        ],
+        has_more: false,
+      },
+      messages: {
+        data: [
+          {
+            id: "msg-1",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "hello" }],
+          },
+        ],
+        has_more: false,
+      },
+    });
+  });
+
+  it("handles threads.get requests", async () => {
+    const fetchFn = createCodexChatkitFetch();
+    const response = await fetchFn("http://localhost/codex/app-server/ws", {
+      method: "POST",
+      body: JSON.stringify({ type: "threads.get", thread_id: "thread-1" }),
+    });
+
+    expect(controller.getThread).toHaveBeenCalledWith("thread-1");
+    expect(await response.json()).toEqual({
+      id: "thread-1",
+      title: "One",
+      updated_at: undefined,
+      items: {
+        data: [
+          {
+            id: "msg-1",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "hello" }],
+          },
+        ],
+        has_more: false,
+      },
+      messages: {
+        data: [
+          {
+            id: "msg-1",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "hello" }],
+          },
+        ],
+        has_more: false,
       },
     });
   });
@@ -153,22 +202,32 @@ describe("createCodexChatkitFetch", () => {
 
     expect(controller.getThread).toHaveBeenCalledWith("thread-1");
     expect(await response.json()).toEqual({
-      data: {
-        id: "thread-1",
-        title: "One",
-        updated_at: undefined,
-        items: {
-          data: [
-            {
-              id: "msg-1",
-              type: "message",
-              role: "assistant",
-              status: "completed",
-              content: [{ type: "output_text", text: "hello" }],
-            },
-          ],
-          has_more: false,
-        },
+      id: "thread-1",
+      title: "One",
+      updated_at: undefined,
+      items: {
+        data: [
+          {
+            id: "msg-1",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "hello" }],
+          },
+        ],
+        has_more: false,
+      },
+      messages: {
+        data: [
+          {
+            id: "msg-1",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "hello" }],
+          },
+        ],
+        has_more: false,
       },
     });
   });
@@ -185,22 +244,32 @@ describe("createCodexChatkitFetch", () => {
 
     expect(controller.getThread).toHaveBeenCalledWith("thread-1");
     expect(await response.json()).toEqual({
-      data: {
-        id: "thread-1",
-        title: "One",
-        updated_at: undefined,
-        items: {
-          data: [
-            {
-              id: "msg-1",
-              type: "message",
-              role: "assistant",
-              status: "completed",
-              content: [{ type: "output_text", text: "hello" }],
-            },
-          ],
-          has_more: false,
-        },
+      id: "thread-1",
+      title: "One",
+      updated_at: undefined,
+      items: {
+        data: [
+          {
+            id: "msg-1",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "hello" }],
+          },
+        ],
+        has_more: false,
+      },
+      messages: {
+        data: [
+          {
+            id: "msg-1",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "hello" }],
+          },
+        ],
+        has_more: false,
       },
     });
   });
@@ -253,6 +322,56 @@ describe("createCodexChatkitFetch", () => {
       ],
       has_more: false,
     });
+  });
+
+  it("handles messages.list requests", async () => {
+    const fetchFn = createCodexChatkitFetch();
+    const response = await fetchFn("http://localhost/codex/app-server/ws", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "messages.list",
+        params: { thread_id: "thread-1" },
+      }),
+    });
+
+    expect(controller.handleListItems).toHaveBeenCalledWith("thread-1");
+    expect(await response.json()).toEqual({
+      data: [
+        {
+          id: "msg-1",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "hello" }],
+        },
+      ],
+      has_more: false,
+    });
+  });
+
+  it("returns a structured error for unsupported non-message requests", async () => {
+    const fetchFn = createCodexChatkitFetch();
+    const response = await fetchFn("http://localhost/codex/app-server/ws", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "threads.load",
+        params: { thread_id: "thread-1" },
+      }),
+    });
+
+    expect(await response.json()).toEqual({
+      data: null,
+      error: "unsupported_codex_chatkit_request:threads.load",
+    });
+    expect(appLoggerMock.error).toHaveBeenCalledWith(
+      "Unsupported Codex ChatKit fetch request",
+      expect.objectContaining({
+        attrs: expect.objectContaining({
+          scope: "chatkit.codex_adapter",
+          requestType: "threads.load",
+        }),
+      }),
+    );
   });
 
   it("streams assistant events for simple input requests", async () => {

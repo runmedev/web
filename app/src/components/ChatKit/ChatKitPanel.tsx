@@ -1033,6 +1033,37 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         },
       });
     },
+    onThreadLoadStart: ({ threadId }) => {
+      console.log("[chatkit] thread load start", JSON.stringify({ threadId }));
+      appLogger.info("ChatKit thread load start", {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: defaultHarness.adapter,
+          threadId,
+        },
+      });
+    },
+    onThreadLoadEnd: ({ threadId }) => {
+      console.log("[chatkit] thread load end", JSON.stringify({ threadId }));
+      appLogger.info("ChatKit thread load end", {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: defaultHarness.adapter,
+          threadId,
+        },
+      });
+    },
+    onLog: ({ name, data }) => {
+      console.log("[chatkit] log", JSON.stringify({ name, data }));
+      appLogger.info("ChatKit diagnostic log", {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: defaultHarness.adapter,
+          name,
+          data: data ?? null,
+        },
+      });
+    },
     onThreadChange: ({ threadId }) => {
       const localChatkitState = getChatkitState();
       const codexSnapshot =
