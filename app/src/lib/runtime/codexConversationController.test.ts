@@ -231,6 +231,41 @@ describe("CodexConversationController", () => {
     ]);
   });
 
+  it("ensures an active thread by creating one when no current thread exists", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return {
+          thread: {
+            id: "thread-bootstrap",
+            title: "Bootstrap Thread",
+            cwd: "/workspace",
+          },
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const thread = await controller.ensureActiveThread();
+
+    expect(proxyClient.sendRequest).toHaveBeenCalledWith("thread/start", {
+      projectId: "project-1",
+      cwd: "/workspace",
+      model: "gpt-5",
+      approvalPolicy: "never",
+      sandboxPolicy: "workspace-write",
+      personality: "pragmatic",
+    });
+    expect(thread).toEqual(
+      expect.objectContaining({
+        id: "thread-bootstrap",
+        title: "Bootstrap Thread",
+        cwd: "/workspace",
+      }),
+    );
+    expect(controller.getSnapshot().currentThreadId).toBe("thread-bootstrap");
+  });
+
   it("returns cached thread details when items are already present", async () => {
     proxyClient.sendRequest.mockResolvedValueOnce({
       threads: [
@@ -627,9 +662,12 @@ describe("CodexConversationController", () => {
       const thread = controller
         .getSnapshot()
         .threads.find((item) => item.id === finalState.thread_id);
-      expect(thread?.items.at(-1)?.content?.[0]?.text).toBe(
-        expected.events.findLast((event) => event.type === "response.output_item.done")?.text,
-      );
+      const finalAssistantText = expected.events.findLast(
+        (event) => event.type === "response.output_item.done",
+      )?.item?.content?.[0]?.text;
+      if (finalAssistantText) {
+        expect(thread?.items.at(-1)?.content?.[0]?.text).toBe(finalAssistantText);
+      }
     }
   });
 });

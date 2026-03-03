@@ -58,6 +58,20 @@ const codexControllerMock = {
   setSelectedProject: vi.fn(),
   refreshHistory: vi.fn(async () => {}),
   startNewChat: vi.fn(),
+  ensureActiveThread: vi.fn(async () => {
+    codexConversationState.currentThreadId = "thread-bootstrap";
+    codexConversationState.currentTurnId = null;
+    return {
+      id: "thread-bootstrap",
+      title: "Bootstrap Thread",
+      previousResponseId: "",
+      items: [],
+    };
+  }),
+  getSnapshot: vi.fn(() => ({
+    currentThreadId: codexConversationState.currentThreadId,
+    currentTurnId: codexConversationState.currentTurnId,
+  })),
   selectThread: vi.fn(async (threadId: string) => ({
     id: threadId,
     previousResponseId: "turn-1",
@@ -200,6 +214,8 @@ describe("ChatKitPanel codex harness routing", () => {
     codexControllerMock.setSelectedProject.mockClear();
     codexControllerMock.refreshHistory.mockClear();
     codexControllerMock.startNewChat.mockClear();
+    codexControllerMock.ensureActiveThread.mockClear();
+    codexControllerMock.getSnapshot.mockClear();
     codexControllerMock.selectThread.mockClear();
     codexFetchMock.mockClear();
     approvalMgrMock.failAll.mockClear();
@@ -253,6 +269,15 @@ describe("ChatKitPanel codex harness routing", () => {
         }),
       }),
     );
+  });
+
+  it("bootstraps a codex thread on load and passes it to ChatKit as initialThread", async () => {
+    harnessState.defaultHarness.adapter = "codex";
+
+    render(<ChatKitPanel />);
+
+    await waitFor(() => expect(codexControllerMock.ensureActiveThread).toHaveBeenCalled());
+    expect(useChatKitMock.mock.calls.at(-1)?.[0]?.initialThread).toBe("thread-bootstrap");
   });
 
   it("clears pending approvals on codex bridge disconnect without showing an in-panel error banner", () => {
@@ -580,7 +605,7 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(codexControllerMock.setSelectedProject).toHaveBeenCalledWith("project-2");
     expect(codexControllerMock.startNewChat).toHaveBeenCalled();
     expect(codexControllerMock.refreshHistory).toHaveBeenCalled();
-    expect(setThreadIdMock).toHaveBeenCalledWith(null);
+    expect(setThreadIdMock).toHaveBeenCalledWith("thread-bootstrap");
   });
 
   it("logs chatkit errors through appLogger", () => {
@@ -621,12 +646,53 @@ describe("ChatKitPanel codex harness routing", () => {
       config.onThreadChange({ threadId: "thread-1" });
     });
 
-    expect(appLoggerMock.info).toHaveBeenCalledWith("ChatKit thread changed", {
-      attrs: {
-        scope: "chatkit.panel",
-        adapter: "codex",
-        threadId: "thread-1",
+    expect(appLoggerMock.info).toHaveBeenCalledWith(
+      "ChatKit thread changed",
+      expect.objectContaining({
+        attrs: expect.objectContaining({
+          scope: "chatkit.panel",
+          adapter: "codex",
+          threadId: "thread-1",
+          localThreadId: "",
+          localPreviousResponseId: "",
+          codexCurrentThreadId: null,
+          codexCurrentTurnId: null,
+        }),
+      }),
+    );
+  });
+
+  it("ignores null chatkit thread changes when codex already has an active thread", () => {
+    harnessState.defaultHarness.adapter = "codex";
+    codexConversationState.currentThreadId = "thread-1";
+    codexConversationState.currentTurnId = "turn-1";
+    codexConversationState.threads = [
+      {
+        id: "thread-1",
+        title: "Investigate latency",
+        updatedAt: "2026-02-26T00:00:00Z",
+        previousResponseId: "turn-1",
       },
+    ];
+
+    render(<ChatKitPanel />);
+
+    const config = useChatKitMock.mock.calls.at(0)?.[0];
+    act(() => {
+      config.onThreadChange({ threadId: null });
     });
+
+    expect(appLoggerMock.info).toHaveBeenCalledWith(
+      "Ignoring null ChatKit thread change while Codex thread is active",
+      expect.objectContaining({
+        attrs: expect.objectContaining({
+          scope: "chatkit.panel",
+          adapter: "codex",
+          threadId: null,
+          codexCurrentThreadId: "thread-1",
+          codexCurrentTurnId: "turn-1",
+        }),
+      }),
+    );
   });
 });

@@ -448,6 +448,63 @@ class CodexConversationController {
     return thread;
   }
 
+  async ensureActiveThread(): Promise<CodexConversationThread> {
+    const currentThreadId = this.currentThreadId;
+    if (currentThreadId) {
+      const existing = this.threads.get(currentThreadId);
+      if (existing) {
+        return existing;
+      }
+      return this.getThread(currentThreadId);
+    }
+
+    const proxy = getCodexAppServerProxyClient();
+    const project = this.getSnapshot().selectedProject;
+    const created = asRecord(
+      await proxy.sendRequest("thread/start", this.buildProjectDefaults(project)),
+    );
+    const threadId =
+      asString(created.threadId) ??
+      asString(created.thread_id) ??
+      asString(asRecord(created.thread).id);
+    if (!threadId) {
+      throw new Error("thread/start did not return a thread id");
+    }
+    const threadRecord = asRecord(created.thread);
+    const thread: CodexConversationThread = {
+      id: threadId,
+      title:
+        asString(created.title) ??
+        asString(threadRecord.title) ??
+        asString(threadRecord.preview) ??
+        project.name,
+      updatedAt:
+        asString(created.updatedAt) ??
+        asString(created.updated_at) ??
+        asString(threadRecord.updatedAt) ??
+        asString(threadRecord.updated_at),
+      previousResponseId:
+        asString(created.previousResponseId) ??
+        asString(created.previous_response_id) ??
+        asString(threadRecord.lastTurnId) ??
+        asString(threadRecord.last_turn_id),
+      cwd:
+        asString(created.cwd) ??
+        asString(threadRecord.cwd) ??
+        project.cwd,
+      items: [],
+    };
+    const existing = this.threads.get(threadId);
+    this.threads.set(threadId, {
+      ...thread,
+      items: existing?.items ?? [],
+    });
+    this.currentThreadId = threadId;
+    this.currentTurnId = thread.previousResponseId ?? null;
+    this.notify();
+    return this.threads.get(threadId)!;
+  }
+
   async interruptActiveTurn(): Promise<void> {
     if (!this.currentThreadId || !this.currentTurnId) {
       return;
@@ -465,30 +522,14 @@ class CodexConversationController {
     sink: CodexStreamSink,
   ): Promise<ChatKitStateValue> {
     const proxy = getCodexAppServerProxyClient();
-    const project = this.getSnapshot().selectedProject;
-    let threadId = chatkitState.threadId ?? this.currentThreadId;
-
+    const activeThread = await this.ensureActiveThread();
+    let threadId = chatkitState.threadId ?? this.currentThreadId ?? activeThread.id;
     if (!threadId) {
-      const created = asRecord(
-        await proxy.sendRequest("thread/start", this.buildProjectDefaults(project)),
-      );
-      threadId =
-        asString(created.threadId) ??
-        asString(created.thread_id) ??
-        asString(asRecord(created.thread).id);
-      if (!threadId) {
-        throw new Error("thread/start did not return a thread id");
-      }
-      this.threads.set(threadId, {
-        id: threadId,
-        title:
-          asString(created.title) ??
-          asString(asRecord(created.thread).title) ??
-          project.name,
-        cwd: project.cwd,
-        items: [],
-      });
-    } else if (this.resumeRequired.has(threadId)) {
+      throw new Error("No active Codex thread available before turn/start");
+    }
+
+    if (this.resumeRequired.has(threadId)) {
+      const project = this.getSnapshot().selectedProject;
       await proxy.sendRequest("thread/resume", {
         threadId,
         ...this.buildProjectDefaults(project),

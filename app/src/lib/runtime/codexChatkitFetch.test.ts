@@ -56,6 +56,11 @@ const controller = {
     ],
     has_more: false,
   })),
+  ensureActiveThread: vi.fn(async () => ({
+    id: "thread-1",
+    title: "One",
+    items: [],
+  })),
   streamUserMessage: vi.fn(defaultStreamUserMessage),
   interruptActiveTurn: vi.fn(),
 };
@@ -74,6 +79,7 @@ describe("createCodexChatkitFetch", () => {
     controller.getSnapshot.mockClear();
     controller.getThread.mockClear();
     controller.handleListItems.mockClear();
+    controller.ensureActiveThread.mockClear();
     controller.streamUserMessage = vi.fn(defaultStreamUserMessage);
     controller.interruptActiveTurn.mockClear();
   });
@@ -345,27 +351,31 @@ describe("createCodexChatkitFetch", () => {
     expect(controller.interruptActiveTurn).toHaveBeenCalled();
     expect(appLoggerMock.info).toHaveBeenCalledWith(
       "Codex ChatKit stream abort signaled",
-      {
-        attrs: {
+      expect.objectContaining({
+        attrs: expect.objectContaining({
           scope: "chatkit.codex_fetch",
           requestType: "message_stream",
           inputText: "hello",
-          threadId: null,
+          threadId: "thread-1",
           previousResponseId: null,
-        },
-      },
+          streamId: expect.any(String),
+          aborted: true,
+        }),
+      }),
     );
     expect(appLoggerMock.info).toHaveBeenCalledWith(
       "Codex ChatKit stream abort handler completed",
-      {
-        attrs: {
+      expect.objectContaining({
+        attrs: expect.objectContaining({
           scope: "chatkit.codex_fetch",
           requestType: "message_stream",
           inputText: "hello",
-          threadId: null,
+          threadId: "thread-1",
           previousResponseId: null,
-        },
-      },
+          streamId: expect.any(String),
+          aborted: true,
+        }),
+      }),
     );
   });
 
@@ -388,15 +398,18 @@ describe("createCodexChatkitFetch", () => {
     expect(controller.interruptActiveTurn).not.toHaveBeenCalled();
     expect(appLoggerMock.info).toHaveBeenCalledWith(
       "Codex ChatKit stream abort ignored after stream settled",
-      {
-        attrs: {
+      expect.objectContaining({
+        attrs: expect.objectContaining({
           scope: "chatkit.codex_fetch",
           requestType: "message_stream",
           inputText: "hello",
-          threadId: null,
+          threadId: "thread-1",
           previousResponseId: null,
-        },
-      },
+          streamId: expect.any(String),
+          aborted: true,
+          settled: true,
+        }),
+      }),
     );
   });
 
@@ -420,12 +433,13 @@ describe("createCodexChatkitFetch", () => {
     expect(body).toContain("stream failed");
     expect(appLoggerMock.error).toHaveBeenCalledWith(
       "Codex ChatKit stream producer failed",
-      {
-        attrs: {
+      expect.objectContaining({
+        attrs: expect.objectContaining({
           scope: "chatkit.codex_fetch",
           error: "Error: stream failed",
-        },
-      },
+          streamId: expect.any(String),
+        }),
+      }),
     );
   });
 });

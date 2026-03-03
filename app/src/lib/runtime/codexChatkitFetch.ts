@@ -82,6 +82,10 @@ function jsonResponse(payload: unknown): Response {
   });
 }
 
+function createCodexStreamId(): string {
+  return `codex-stream-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function buildStreamResponse(
   producer: (sink: { emit: (payload: unknown) => void }) => Promise<void>,
   options?: {
@@ -95,17 +99,39 @@ function buildStreamResponse(
     start(controller) {
       let closed = false;
       let settled = false;
+      let eventCount = 0;
       const close = () => {
         if (closed) {
           return;
         }
         closed = true;
+        appLogger.info("Codex ChatKit stream closed", {
+          attrs: {
+            scope: "chatkit.codex_fetch",
+            closed,
+            settled,
+            eventCount,
+            ...options?.logContext,
+          },
+        });
         controller.close();
       };
       const emit = (payload: unknown) => {
         if (closed) {
           return;
         }
+        eventCount += 1;
+        appLogger.info("Codex ChatKit stream emitted event", {
+          attrs: {
+            scope: "chatkit.codex_fetch",
+            eventCount,
+            payloadType:
+              payload && typeof payload === "object" && !Array.isArray(payload)
+                ? asString((payload as Record<string, unknown>).type) ?? null
+                : null,
+            ...options?.logContext,
+          },
+        });
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
       };
 
@@ -114,6 +140,12 @@ function buildStreamResponse(
           appLogger.info("Codex ChatKit stream abort ignored after stream settled", {
             attrs: {
               scope: "chatkit.codex_fetch",
+              aborted: options?.signal?.aborted ?? false,
+              abortReason: String(options?.signal?.reason ?? ""),
+              settled,
+              closed,
+              eventCount,
+              stack: new Error("abort observed after stream settled").stack,
               ...options?.logContext,
             },
           });
@@ -122,6 +154,12 @@ function buildStreamResponse(
         appLogger.info("Codex ChatKit stream abort signaled", {
           attrs: {
             scope: "chatkit.codex_fetch",
+            aborted: options?.signal?.aborted ?? false,
+            abortReason: String(options?.signal?.reason ?? ""),
+            settled,
+            closed,
+            eventCount,
+            stack: new Error("abort observed").stack,
             ...options?.logContext,
           },
         });
@@ -130,6 +168,11 @@ function buildStreamResponse(
           appLogger.info("Codex ChatKit stream abort handler completed", {
             attrs: {
               scope: "chatkit.codex_fetch",
+              aborted: options?.signal?.aborted ?? false,
+              abortReason: String(options?.signal?.reason ?? ""),
+              settled,
+              closed,
+              eventCount,
               ...options?.logContext,
             },
           });
@@ -138,6 +181,11 @@ function buildStreamResponse(
             attrs: {
               scope: "chatkit.codex_fetch",
               error: String(error),
+              aborted: options?.signal?.aborted ?? false,
+              abortReason: String(options?.signal?.reason ?? ""),
+              settled,
+              closed,
+              eventCount,
               ...options?.logContext,
             },
           });
@@ -152,6 +200,11 @@ function buildStreamResponse(
           appLogger.info("Codex ChatKit stream started with aborted signal", {
             attrs: {
               scope: "chatkit.codex_fetch",
+              aborted: options.signal.aborted,
+              abortReason: String(options.signal.reason ?? ""),
+              settled,
+              closed,
+              eventCount,
               ...options?.logContext,
             },
           });
@@ -163,12 +216,26 @@ function buildStreamResponse(
         }, { once: true });
       }
 
+      appLogger.info("Codex ChatKit stream started", {
+        attrs: {
+          scope: "chatkit.codex_fetch",
+          settled,
+          closed,
+          eventCount,
+          ...options?.logContext,
+        },
+      });
+
       void producer({ emit })
         .catch((error) => {
           appLogger.error("Codex ChatKit stream producer failed", {
             attrs: {
               scope: "chatkit.codex_fetch",
               error: String(error),
+              settled,
+              closed,
+              eventCount,
+              ...options?.logContext,
             },
           });
           emit({
@@ -178,6 +245,15 @@ function buildStreamResponse(
         })
         .finally(() => {
           settled = true;
+          appLogger.info("Codex ChatKit stream settled", {
+            attrs: {
+              scope: "chatkit.codex_fetch",
+              settled,
+              closed,
+              eventCount,
+              ...options?.logContext,
+            },
+          });
           close();
         });
     },
@@ -343,7 +419,9 @@ export function createCodexChatkitFetch(): typeof fetch {
         return jsonResponse({ ok: true });
       }
 
+      const activeThread = await controller.ensureActiveThread();
       const chatkitState = extractChatKitState(json);
+      const streamId = createCodexStreamId();
       return buildStreamResponse(
         async (sink) => {
           await controller.streamUserMessage(inputText, chatkitState, sink);
@@ -354,9 +432,10 @@ export function createCodexChatkitFetch(): typeof fetch {
             await controller.interruptActiveTurn();
           },
           logContext: {
+            streamId,
             requestType: requestType ?? "message_stream",
             inputText,
-            threadId: chatkitState.threadId ?? null,
+            threadId: chatkitState.threadId ?? activeThread.id,
             previousResponseId: chatkitState.previousResponseId ?? null,
           },
         },
