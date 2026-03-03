@@ -94,6 +94,7 @@ function buildStreamResponse(
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       let closed = false;
+      let settled = false;
       const close = () => {
         if (closed) {
           return;
@@ -109,6 +110,15 @@ function buildStreamResponse(
       };
 
       const abortHandler = async () => {
+        if (settled || closed) {
+          appLogger.info("Codex ChatKit stream abort ignored after stream settled", {
+            attrs: {
+              scope: "chatkit.codex_fetch",
+              ...options?.logContext,
+            },
+          });
+          return;
+        }
         appLogger.info("Codex ChatKit stream abort signaled", {
           attrs: {
             scope: "chatkit.codex_fetch",
@@ -167,6 +177,7 @@ function buildStreamResponse(
           });
         })
         .finally(() => {
+          settled = true;
           close();
         });
     },

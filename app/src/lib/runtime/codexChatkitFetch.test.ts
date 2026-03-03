@@ -312,6 +312,37 @@ describe("createCodexChatkitFetch", () => {
     );
   });
 
+  it("ignores aborts after the stream has already settled", async () => {
+    const fetchFn = createCodexChatkitFetch();
+    const abortController = new AbortController();
+
+    const response = await fetchFn("http://localhost/codex/chatkit", {
+      method: "POST",
+      body: JSON.stringify({
+        input: "hello",
+        chatkit_state: {},
+      }),
+      signal: abortController.signal,
+    });
+
+    await response.text();
+    abortController.abort();
+
+    expect(controller.interruptActiveTurn).not.toHaveBeenCalled();
+    expect(appLoggerMock.info).toHaveBeenCalledWith(
+      "Codex ChatKit stream abort ignored after stream settled",
+      {
+        attrs: {
+          scope: "chatkit.codex_fetch",
+          requestType: "message_stream",
+          inputText: "hello",
+          threadId: null,
+          previousResponseId: null,
+        },
+      },
+    );
+  });
+
   it("logs stream producer failures", async () => {
     const fetchFn = createCodexChatkitFetch();
     controller.streamUserMessage = vi.fn(async () => {

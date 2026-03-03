@@ -273,6 +273,7 @@ type ChatKitPanelInnerProps = {
 
 function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+  const [codexStreamError, setCodexStreamError] = useState<string | null>(null);
   const chatkitDomainKey = getConfiguredChatKitDomainKey();
   const [showCodexDrawer, setShowCodexDrawer] = useState(false);
   const syncedCodexStateRef = useRef<{
@@ -495,6 +496,28 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
 
         try {
           const parsed = JSON.parse(payload);
+          if (parsed?.type === "response.failed") {
+            const message =
+              typeof parsed?.error?.message === "string"
+                ? parsed.error.message
+                : "Codex request failed.";
+            appLogger.error("ChatKit response stream failed", {
+              attrs: {
+                scope: "chatkit.panel",
+                adapter: defaultHarness.adapter,
+                error: message,
+              },
+            });
+            setCodexStreamError(message);
+            continue;
+          }
+          if (
+            parsed?.type === "response.created" ||
+            parsed?.type === "response.output_text.delta" ||
+            parsed?.type === "response.completed"
+          ) {
+            setCodexStreamError(null);
+          }
           if (parsed?.type !== "aisre.chatkit.state") {
             continue;
           }
@@ -813,6 +836,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
                 const controller = getCodexConversationController();
                 controller.startNewChat();
                 setChatkitState(create(ChatkitStateSchema, {}));
+                setCodexStreamError(null);
                 void chatkitActionsRef.current?.setThreadId(
                   null,
                   "header_new_chat",
@@ -1091,6 +1115,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     const controller = getCodexConversationController();
     controller.startNewChat();
     setChatkitState(create(ChatkitStateSchema, {}));
+    setCodexStreamError(null);
     syncedCodexStateRef.current = {
       threadId: null,
       previousResponseId: null,
@@ -1125,6 +1150,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       controller.setSelectedProject(projectId);
       controller.startNewChat();
       setChatkitState(create(ChatkitStateSchema, {}));
+      setCodexStreamError(null);
       syncedCodexStateRef.current = {
         threadId: null,
         previousResponseId: null,
@@ -1147,6 +1173,14 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   return (
     <div className="relative h-full w-full">
       <ChatKit control={chatkit.control} className="block h-full w-full" />
+      {defaultHarness.adapter === "codex" && codexStreamError ? (
+        <div
+          data-testid="codex-stream-error"
+          className="absolute left-3 right-3 top-3 z-30 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 shadow-sm"
+        >
+          {codexStreamError}
+        </div>
+      ) : null}
       {defaultHarness.adapter === "codex" && showCodexDrawer ? (
         <div
           data-testid="codex-project-drawer"

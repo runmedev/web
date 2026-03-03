@@ -451,6 +451,69 @@ describe("ChatKitPanel codex harness routing", () => {
     });
   });
 
+  it("surfaces response.failed SSE events as an in-panel error", async () => {
+    harnessState.defaultHarness.adapter = "codex";
+    const encoder = new TextEncoder();
+    codexFetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                'data: {"type":"response.failed","error":{"message":"Timed out waiting for codex turn completion"}}\n\n',
+              ),
+            );
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream",
+          },
+        },
+      ),
+    );
+
+    render(<ChatKitPanel />);
+
+    const config = useChatKitMock.mock.calls.at(0)?.[0];
+    expect(config).toBeDefined();
+
+    await act(async () => {
+      await config.api.fetch("http://127.0.0.1:31337/codex/chatkit", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "threads.create",
+          params: {
+            input: {
+              content: [{ type: "input_text", text: 'print(\"hello\")' }],
+            },
+          },
+        }),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("codex-stream-error").textContent).toContain(
+      "Timed out waiting for codex turn completion",
+    );
+    expect(appLoggerMock.error).toHaveBeenCalledWith(
+      "ChatKit response stream failed",
+      {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: "codex",
+          error: "Timed out waiting for codex turn completion",
+        },
+      },
+    );
+  });
+
   it("switches codex projects and reloads history", async () => {
     harnessState.defaultHarness.adapter = "codex";
     codexProjectsState = {

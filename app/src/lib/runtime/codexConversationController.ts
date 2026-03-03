@@ -664,7 +664,9 @@ class CodexConversationController {
         asString(turnResult.id) ??
         `turn-${Math.random().toString(36).slice(2, 10)}`;
       turnIdForNotifications = turnId;
-      this.currentTurnId = turnId;
+      if (!finished) {
+        this.currentTurnId = turnId;
+      }
       await completionPromise;
     } finally {
       clearTimeout(timeoutId);
