@@ -4,7 +4,7 @@ import {
   useCallback,
   useContext,
   useMemo,
-  useState,
+  useRef,
 } from "react";
 
 import { clone, create } from "@bufbuild/protobuf";
@@ -47,15 +47,15 @@ export interface CellProviderProps {
 }
 
 export const CellProvider = ({ children }: CellProviderProps) => {
-  const [chatkitState, setChatkitStateState] = useState(createChatkitState());
+  const chatkitStateRef = useRef(createChatkitState());
 
   const getChatkitState = useCallback(() => {
-    return clone(ChatkitStateSchema, chatkitState);
-  }, [chatkitState]);
+    return clone(ChatkitStateSchema, chatkitStateRef.current);
+  }, []);
 
   const setChatkitState = useCallback(
     (nextState: ReturnType<typeof createChatkitState>) => {
-      setChatkitStateState(clone(ChatkitStateSchema, nextState));
+      chatkitStateRef.current = clone(ChatkitStateSchema, nextState);
     },
     [],
   );
