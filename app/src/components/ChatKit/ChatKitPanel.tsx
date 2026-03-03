@@ -290,7 +290,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     setThreadId: (threadId: string | null, source?: string) => Promise<void>;
     fetchUpdates: (source?: string) => Promise<void>;
   } | null>(null);
-  const { getChatkitState, setChatkitState } = useCell();
+  const { getChatkitState } = useCell();
   const { getNotebookData, useNotebookSnapshot } = useNotebookContext();
   const { getCurrentDoc } = useCurrentDoc();
   const { getAllRenderers } = useOutput();
@@ -558,7 +558,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
               previousResponseId: state.previousResponseId ?? null,
             },
           });
-          setChatkitState(state);
+          // setChatkitState(state);
           if (state.previousResponseId || state.threadId) {
             console.log(
               "ChatKit state update",
@@ -577,7 +577,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         }
       }
     },
-    [defaultHarness.adapter, setChatkitState],
+    [defaultHarness.adapter],
   );
   const codexFetch = useMemo(() => createCodexChatkitFetch(), []);
   const authorizedFetch = useAuthorizedFetch(getChatkitState, {
@@ -661,12 +661,12 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           const controller = getCodexConversationController();
           await controller.refreshHistory();
           const thread = await controller.ensureActiveThread();
-          setChatkitState(
-            create(ChatkitStateSchema, {
-              threadId: thread.id,
-              previousResponseId: thread.previousResponseId ?? "",
-            }),
-          );
+          // setChatkitState(
+          //   create(ChatkitStateSchema, {
+          //     threadId: thread.id,
+          //     previousResponseId: thread.previousResponseId ?? "",
+          //   }),
+          // );
           syncedCodexStateRef.current = {
             threadId: thread.id,
             previousResponseId: thread.previousResponseId ?? null,
@@ -844,12 +844,12 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
                     previousResponseId: null,
                   };
                   const thread = await controller.ensureActiveThread();
-                  setChatkitState(
-                    create(ChatkitStateSchema, {
-                      threadId: thread.id,
-                      previousResponseId: thread.previousResponseId ?? "",
-                    }),
-                  );
+                  // setChatkitState(
+                  //   create(ChatkitStateSchema, {
+                  //     threadId: thread.id,
+                  //     previousResponseId: thread.previousResponseId ?? "",
+                  //   }),
+                  // );
                   syncedCodexStateRef.current = {
                     threadId: thread.id,
                     previousResponseId: thread.previousResponseId ?? null,
@@ -1068,26 +1068,25 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
               codexCurrentTurnId: codexSnapshot?.currentTurnId ?? null,
             },
           });
-          if (defaultHarness.adapter === "codex") {
-          setChatkitState(
-            create(ChatkitStateSchema, {
-              threadId: codexThreadId,
-              previousResponseId: codexThread?.previousResponseId ?? "",
-            }),
-          );
-        }
+          // setChatkitState(
+          //   create(ChatkitStateSchema, {
+          //     threadId: codexThreadId,
+          //     previousResponseId: codexThread?.previousResponseId ?? "",
+          //   }),
+          // );
           return;
         }
-        setChatkitState(create(ChatkitStateSchema, {}));
+        // setChatkitState(create(ChatkitStateSchema, {}));
         return;
       }
       const existing = codexConversation.threads.find((thread) => thread.id === threadId);
-      setChatkitState(
-        create(ChatkitStateSchema, {
-          threadId,
-          previousResponseId: existing?.previousResponseId ?? "",
-        }),
-      );
+      void existing;
+      // setChatkitState(
+      //   create(ChatkitStateSchema, {
+      //     threadId,
+      //     previousResponseId: existing?.previousResponseId ?? "",
+      //   }),
+      // );
     },
   });
   const setChatkitThreadId = useCallback(
@@ -1171,29 +1170,29 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       previousResponseId: null,
     };
     const thread = await controller.ensureActiveThread();
-    setChatkitState(
-      create(ChatkitStateSchema, {
-        threadId: thread.id,
-        previousResponseId: thread.previousResponseId ?? "",
-      }),
-    );
+    // setChatkitState(
+    //   create(ChatkitStateSchema, {
+    //     threadId: thread.id,
+    //     previousResponseId: thread.previousResponseId ?? "",
+    //   }),
+    // );
     syncedCodexStateRef.current = {
       threadId: thread.id,
       previousResponseId: thread.previousResponseId ?? null,
     };
     await chatkitActionsRef.current?.setThreadId(thread.id, "new_chat");
-  }, [setChatkitState]);
+  }, []);
 
   const handleCodexSelectThread = useCallback(
     async (threadId: string) => {
       const controller = getCodexConversationController();
       const thread = await controller.selectThread(threadId);
-      setChatkitState(
-        create(ChatkitStateSchema, {
-          threadId: thread.id,
-          previousResponseId: thread.previousResponseId ?? "",
-        }),
-      );
+      // setChatkitState(
+      //   create(ChatkitStateSchema, {
+      //     threadId: thread.id,
+      //     previousResponseId: thread.previousResponseId ?? "",
+      //   }),
+      // );
       syncedCodexStateRef.current = {
         threadId: thread.id,
         previousResponseId: thread.previousResponseId ?? null,
@@ -1202,7 +1201,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       await chatkitActionsRef.current?.fetchUpdates("select_thread");
       setShowCodexDrawer(false);
     },
-    [setChatkitState],
+    [],
   );
 
   const handleCodexProjectChange = useCallback(
@@ -1217,19 +1216,19 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       };
       await controller.refreshHistory();
       const thread = await controller.ensureActiveThread();
-      setChatkitState(
-        create(ChatkitStateSchema, {
-          threadId: thread.id,
-          previousResponseId: thread.previousResponseId ?? "",
-        }),
-      );
+      // setChatkitState(
+      //   create(ChatkitStateSchema, {
+      //     threadId: thread.id,
+      //     previousResponseId: thread.previousResponseId ?? "",
+      //   }),
+      // );
       syncedCodexStateRef.current = {
         threadId: thread.id,
         previousResponseId: thread.previousResponseId ?? null,
       };
       await chatkitActionsRef.current?.setThreadId(thread.id, "project_change");
     },
-    [setChatkitState],
+    [],
   );
 
   const handleLogin = useCallback(() => {
