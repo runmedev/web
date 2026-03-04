@@ -79,6 +79,7 @@ function fetchWithTimeout(
 
 const SCENARIO_DRIVERS = [
   join(SCRIPT_DIR, "test-scenario-hello-world.ts"),
+  join(SCRIPT_DIR, "test-scenario-open-shared-drive-link.ts"),
   join(SCRIPT_DIR, "test-scenario-appkernel-javascript.ts"),
   join(SCRIPT_DIR, "test-scenario-no-runner-logs.ts"),
 ];
@@ -97,6 +98,15 @@ type OidcAuthConfig = {
   clientId: string;
   principalEmail: string;
   tokenFile: string;
+  serverCommand: string;
+  serverEnv: NodeJS.ProcessEnv;
+};
+
+type FakeDriveConfig = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  baseUrl: string;
   serverCommand: string;
   serverEnv: NodeJS.ProcessEnv;
 };
@@ -170,6 +180,30 @@ function resolveOidcAuthConfig(): OidcAuthConfig {
     clientId,
     principalEmail,
     tokenFile,
+    serverCommand,
+    serverEnv,
+  };
+}
+
+function resolveFakeDriveConfig(): FakeDriveConfig {
+  const enabled = (process.env.CUJ_DRIVE_FAKE_ENABLED ?? "true").toLowerCase() !== "false";
+  const host = process.env.CUJ_DRIVE_FAKE_HOST ?? "127.0.0.1";
+  const port = Number(process.env.CUJ_DRIVE_FAKE_PORT ?? "9090");
+  const baseUrl = process.env.CUJ_DRIVE_FAKE_BASE_URL ?? `http://${host}:${port}`;
+  const serverScript = join(REPO_ROOT, "testing", "fake-drive-server.go");
+  const serverCommand = process.env.CUJ_DRIVE_FAKE_CMD ??
+    `go run ${shellQuote(serverScript)}`;
+  const serverEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    CUJ_DRIVE_FAKE_HOST: host,
+    CUJ_DRIVE_FAKE_PORT: `${port}`,
+  };
+
+  return {
+    enabled,
+    host,
+    port,
+    baseUrl,
     serverCommand,
     serverEnv,
   };
@@ -745,6 +779,7 @@ async function main(): Promise<void> {
   const frontendUrl = process.env.CUJ_FRONTEND_URL ?? "http://localhost:5173";
   const backendUrl = process.env.CUJ_BACKEND_URL ?? "http://localhost:9977";
   const oidc = resolveOidcAuthConfig();
+  const fakeDrive = resolveFakeDriveConfig();
   const frontendCmd = process.env.CUJ_FRONTEND_CMD ?? "pnpm run dev:app";
   const frontendCwd = resolve(process.env.CUJ_FRONTEND_CWD ?? REPO_ROOT);
   const configuredBackendCmd = process.env.CUJ_BACKEND_CMD?.trim() ?? "";
@@ -786,6 +821,27 @@ async function main(): Promise<void> {
         await waitForHttp(oidc.discoveryUrl, 30_000, "oidc");
       }
 
+      if (fakeDrive.enabled) {
+        if (!process.env.CUJ_DRIVE_FAKE_CMD && run("command -v go", REPO_ROOT).status !== 0) {
+          throw new Error(
+            "CUJ fake Drive requires Go to run the local server. Install Go or set CUJ_DRIVE_FAKE_CMD.",
+          );
+        }
+        const fakeDriveUp = await fetch(fakeDrive.baseUrl).then(() => true).catch(() => false);
+        if (!fakeDriveUp) {
+          services.push(
+            startService(
+              "fake-drive",
+              fakeDrive.serverCommand,
+              REPO_ROOT,
+              join(OUTPUT_DIR, "fake-drive.log"),
+              fakeDrive.serverEnv,
+            ),
+          );
+        }
+        await waitForHttp(fakeDrive.baseUrl, 30_000, "fake-drive");
+      }
+
       const frontendUp = await fetch(frontendUrl).then(() => true).catch(() => false);
       if (!frontendUp) {
         services.push(
@@ -820,6 +876,9 @@ async function main(): Promise<void> {
         scenarioEnv.CUJ_TOKEN_EXPIRES_AT = `${tokens.expires_at}`;
       }
       scenarioEnv.CUJ_OIDC_EMAIL = oidc.principalEmail;
+    }
+    if (fakeDrive.enabled) {
+      scenarioEnv.CUJ_FAKE_DRIVE_URL = fakeDrive.baseUrl;
     }
 
     let failures = 0;

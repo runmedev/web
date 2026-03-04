@@ -39,6 +39,12 @@ import {
   APPKERNEL_RUNNER_LABEL,
   APPKERNEL_RUNNER_NAME,
 } from "../../lib/runtime/appKernel";
+import {
+  driveLinkCoordinator,
+  DRIVE_LINK_STATUS_TAB_URI,
+  useDriveLinkCoordinatorSnapshot,
+} from "../../lib/driveLinkCoordinator";
+import DriveLinkStatusTab from "../DriveLinkStatusTab";
 import React from "react";
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
@@ -835,7 +841,10 @@ export default function Actions() {
   const openNotebooks = useNotebookList();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const currentDocUri = getCurrentDoc();
+  const driveLinkSnapshot = useDriveLinkCoordinatorSnapshot();
+  const statusTabVisible = driveLinkSnapshot.intents.length > 0;
   const [mountedTabs, setMountedTabs] = useState<Set<string>>(() => new Set());
+  const [selectedTabUri, setSelectedTabUri] = useState<string | null>(null);
   // Empty-state hint visibility is stored locally so the hint panel can be
   // revealed on demand without cluttering the default view.
   const [showConsoleHints, setShowConsoleHints] = useState(false);
@@ -884,7 +893,21 @@ export default function Actions() {
       next.add(currentDocUri);
       return next;
     });
+    setSelectedTabUri((prev) =>
+      prev === DRIVE_LINK_STATUS_TAB_URI ? prev : currentDocUri,
+    );
   }, [currentDocUri]);
+
+  useEffect(() => {
+    if (statusTabVisible && !currentDocUri) {
+      setSelectedTabUri((prev) => prev ?? DRIVE_LINK_STATUS_TAB_URI);
+      return;
+    }
+
+    if (!statusTabVisible && selectedTabUri === DRIVE_LINK_STATUS_TAB_URI) {
+      setSelectedTabUri(currentDocUri ?? openNotebooks[0]?.uri ?? null);
+    }
+  }, [currentDocUri, openNotebooks, selectedTabUri, statusTabVisible]);
 
   // TODO(jlewi): Does it still make sense to have a registration pattern for renderers? What does that buy us over
   // just hardcoding an "if" statement when rendering the outputs. Is that a legacy of the vscode extension where
@@ -954,7 +977,7 @@ export default function Actions() {
 
   return (
     <div id="documents" className="flex flex-col h-full">
-      {openNotebooks.length === 0 ? (
+      {openNotebooks.length === 0 && !statusTabVisible ? (
         <ScrollArea
           type="auto"
           scrollbars="vertical"
@@ -1028,8 +1051,18 @@ export default function Actions() {
         </ScrollArea>
       ) : (
         <Tabs.Root
-          value={currentDocUri ?? openNotebooks[0]?.uri ?? ""}
+          value={
+            selectedTabUri ??
+            currentDocUri ??
+            (statusTabVisible
+              ? DRIVE_LINK_STATUS_TAB_URI
+              : openNotebooks[0]?.uri ?? "")
+          }
           onValueChange={(nextUri) => {
+            setSelectedTabUri(nextUri);
+            if (nextUri === DRIVE_LINK_STATUS_TAB_URI) {
+              return;
+            }
             if (nextUri !== currentDocUri) {
               setMountedTabs((prev) => {
                 if (prev.has(nextUri)) {
@@ -1045,6 +1078,20 @@ export default function Actions() {
           className="flex flex-col flex-1 min-h-0 overflow-hidden bg-white"
         >
           <Tabs.List className="flex items-center gap-0.5 border-b border-nb-border bg-nb-surface-2 px-2 py-1">
+          {statusTabVisible && (
+            <div
+              key={`tab-${DRIVE_LINK_STATUS_TAB_URI}`}
+              className="flex items-center gap-1"
+            >
+              <Tabs.Trigger
+                value={DRIVE_LINK_STATUS_TAB_URI}
+                title="Drive Link Status"
+                className="group flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-nb-sm transition-all duration-150 text-nb-text-muted border border-transparent data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:border-nb-border data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
+              >
+                <span className="truncate max-w-[180px]">Drive Link Status</span>
+              </Tabs.Trigger>
+            </div>
+          )}
           {openNotebooks.map((doc) => {              
             const displayName =
               doc.name ||
@@ -1076,6 +1123,20 @@ export default function Actions() {
             })}
           </Tabs.List>
           <div className="relative flex-1 min-h-0 overflow-hidden">
+          {statusTabVisible && (
+            <Tabs.Content
+              key={`content-${DRIVE_LINK_STATUS_TAB_URI}`}
+              value={DRIVE_LINK_STATUS_TAB_URI}
+              forceMount
+              asChild
+            >
+              <TabPanel className="flex-1 min-h-0">
+                <DriveLinkStatusTab
+                  onRetry={() => driveLinkCoordinator.retryAuthAndProcess()}
+                />
+              </TabPanel>
+            </Tabs.Content>
+          )}
           {openNotebooks.map((doc) => (
             <Tabs.Content
               key={`content-${doc.uri}`}

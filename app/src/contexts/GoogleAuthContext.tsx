@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { googleClientManager } from "../lib/googleClientManager";
+import { appLogger } from "../lib/logging/runtime";
 
 // N.B. I couldn't make sharing work with the more restrictive "https://www.googleapis.com/auth/drive.file"
 // scope. In particular, I couldn't quite figure out how to share a link with a user and then have that
@@ -216,6 +217,9 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   // so subsequent callers reuse the same object.
   const ensureTokenClient = useCallback(async () => {
     const { clientId } = googleClientManager.getOAuthClient();
+    if (!clientId?.trim()) {
+      throw new Error("Google OAuth client is not configured.");
+    }
     if (tokenClientRef.current && oauthClientIdRef.current === clientId) {
       return tokenClientRef.current;
     }
@@ -294,6 +298,13 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
           });
         } catch (error) {
           handlersRef.current = null;
+          appLogger.error("Failed to request Google access token", {
+            attrs: {
+              scope: "storage.drive.auth",
+              code: "DRIVE_AUTH_TOKEN_REQUEST_FAILED",
+              error: String(error),
+            },
+          });
           reject(error);
         }
       });

@@ -1,6 +1,7 @@
 import { create, fromJsonString, toJsonString } from "@bufbuild/protobuf";
 
 import { parser_pb } from "../runme/client";
+import { getGoogleDriveBaseUrl } from "../lib/googleDriveRuntime";
 import {
   type ConflictResult,
   NotebookStore,
@@ -64,7 +65,17 @@ type DriveCreateResponse = { result?: DriveDoc };
 type DriveUpdateResponse = { result?: DriveDoc };
 type DriveListResponse = { result?: { files?: DriveDoc[] } };
 
-class GapiDriveFilesClient {
+interface DriveFilesClient {
+  create(doc: DriveDoc): Promise<DriveDoc>;
+  update(doc: DriveDoc): Promise<DriveDoc>;
+  get(
+    request: Record<string, unknown>,
+  ): Promise<{ body?: string; result?: unknown }>;
+  list(request: Record<string, unknown>): Promise<DriveListResponse>;
+  ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc>;
+}
+
+class GapiDriveFilesClient implements DriveFilesClient {
   private readonly files: GapiDriveFileMethods;
 
   constructor(private readonly gapi: GapiGlobal) {
@@ -196,6 +207,186 @@ class GapiDriveFilesClient {
   }
 }
 
+class FetchDriveFilesClient implements DriveFilesClient {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly accessToken: string,
+  ) {}
+
+  private buildUrl(
+    path: string,
+    params?: Record<string, unknown>,
+  ): string {
+    const url = new URL(path.replace(/^\//, ""), `${this.baseUrl}/`);
+    for (const [key, value] of Object.entries(params ?? {})) {
+      if (value === undefined || value === null || value === "") {
+        continue;
+      }
+      url.searchParams.set(key, String(value));
+    }
+    return url.toString();
+  }
+
+  private async request(
+    method: string,
+    path: string,
+    options: {
+      params?: Record<string, unknown>;
+      body?: string;
+      contentType?: string;
+      expectText?: boolean;
+    } = {},
+  ): Promise<{ body?: string; result?: unknown }> {
+    const response = await fetch(this.buildUrl(path, options.params), {
+      method,
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        ...(options.body !== undefined
+          ? {
+              "Content-Type": options.contentType ?? "application/json",
+            }
+          : {}),
+      },
+      body: options.body,
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => "");
+      throw new Error(
+        `Drive request failed (${response.status} ${response.statusText}): ${errorBody}`,
+      );
+    }
+
+    if (options.expectText) {
+      return { body: await response.text() };
+    }
+
+    const text = await response.text();
+    if (!text) {
+      return { result: undefined };
+    }
+    return { result: JSON.parse(text) };
+  }
+
+  private buildResource(doc: DriveDoc): Record<string, unknown> {
+    const resource: Record<string, unknown> = {};
+    if (typeof doc.name === "string") {
+      resource.name = doc.name;
+    }
+    if (typeof doc.mimeType === "string") {
+      resource.mimeType = doc.mimeType;
+    }
+    if (Array.isArray(doc.parents)) {
+      resource.parents = doc.parents;
+    }
+    return resource;
+  }
+
+  private async setContent(
+    fileId: string,
+    content: string,
+    mimeType?: string,
+  ): Promise<void> {
+    await this.request("PATCH", `/upload/drive/v3/files/${encodeURIComponent(fileId)}`, {
+      params: {
+        uploadType: "media",
+        supportsAllDrives: "true",
+      },
+      body: content,
+      contentType: mimeType ?? "application/octet-stream",
+    });
+  }
+
+  async create(doc: DriveDoc): Promise<DriveDoc> {
+    const response = await this.request("POST", "/drive/v3/files", {
+      params: {
+        fields: "id,name,mimeType,parents",
+        supportsAllDrives: "true",
+      },
+      body: JSON.stringify(this.buildResource(doc)),
+    });
+    const file = (response.result ?? {}) as DriveDoc;
+    if (file.id && doc.content !== undefined) {
+      await this.setContent(file.id, doc.content, doc.mimeType);
+    }
+    return file;
+  }
+
+  async update(doc: DriveDoc): Promise<DriveDoc> {
+    if (!doc.id) {
+      throw new Error("Drive file id is required for update");
+    }
+    const resource = this.buildResource(doc);
+    let file: DriveDoc = { id: doc.id };
+    if (Object.keys(resource).length > 0) {
+      const response = await this.request(
+        "PATCH",
+        `/drive/v3/files/${encodeURIComponent(doc.id)}`,
+        {
+          params: {
+            fields: "id,name,mimeType,parents",
+            supportsAllDrives: "true",
+          },
+          body: JSON.stringify(resource),
+        },
+      );
+      file = (response.result ?? {}) as DriveDoc;
+    }
+
+    if (doc.content !== undefined) {
+      await this.setContent(doc.id, doc.content, doc.mimeType);
+    }
+
+    return file.id ? file : { ...doc };
+  }
+
+  get(
+    request: Record<string, unknown>,
+  ): Promise<{ body?: string; result?: unknown }> {
+    const fileId = String(request.fileId ?? "");
+    return this.request(
+      "GET",
+      `/drive/v3/files/${encodeURIComponent(fileId)}`,
+      {
+        params: request,
+        expectText: request.alt === "media",
+      },
+    );
+  }
+
+  list(request: Record<string, unknown>): Promise<DriveListResponse> {
+    return this.request("GET", "/drive/v3/files", {
+      params: request,
+    }) as Promise<DriveListResponse>;
+  }
+
+  async ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc> {
+    if (!file.id || !parentId) {
+      return file;
+    }
+    if ((file.parents ?? []).includes(parentId)) {
+      return file;
+    }
+
+    const response = await this.request(
+      "PATCH",
+      `/drive/v3/files/${encodeURIComponent(file.id)}`,
+      {
+        params: {
+          addParents: parentId,
+          supportsAllDrives: "true",
+          fields: "id,name,mimeType,parents",
+          ...((file.parents ?? []).includes("root")
+            ? { removeParents: "root" }
+            : {}),
+        },
+      },
+    );
+
+    return (response.result ?? file) as DriveDoc;
+  }
+}
+
 // Augment the browser Window type so TypeScript knows that the Google API
 // script may attach a gapi object at runtime. This lets the rest of the module
 // access window.gapi without falling back to any-typed shims.
@@ -273,7 +464,12 @@ async function ensureGapi(): Promise<typeof window.gapi> {
 // which can be called to get get a token and which handles refreshing the token as needed.
 async function ensureDriveFilesClient(
   accessToken: string,
-): Promise<GapiDriveFilesClient> {
+): Promise<DriveFilesClient> {
+  const baseUrl = getGoogleDriveBaseUrl();
+  if (baseUrl) {
+    return new FetchDriveFilesClient(baseUrl, accessToken);
+  }
+
   const gapi = await ensureGapi();
 
   if (!clientPromise) {

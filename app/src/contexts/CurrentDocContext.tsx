@@ -8,9 +8,10 @@ import {
   useState,
 } from "react";
 
-import { useNotebookStore } from "./NotebookStoreContext";
 import { isContentsUri, isFsUri } from "../storage/storeResolver";
 import { appState } from "../lib/runtime/AppState";
+
+const CURRENT_DOC_STORAGE_KEY = "runme/currentDoc";
 
 interface CurrentDocContextValue {
   getCurrentDoc: () => string | null;
@@ -33,16 +34,26 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
   // Helper that reads the current doc value straight from the URL. We call this
   // exactly once on initialisation and again on popstate events so the context
   // stays aligned with browser navigation.
-  const { store } = useNotebookStore();
-
   const [currentDoc, setCurrentDocState] = useState<string | null>(null);
+
+  const loadStoredCurrentDoc = useCallback((): string | null => {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return null;
+    }
+    try {
+      const stored = window.localStorage.getItem(CURRENT_DOC_STORAGE_KEY);
+      return stored?.trim() ? stored : null;
+    } catch {
+      return null;
+    }
+  }, []);
 
   const resolveFromLocation = useCallback(async () => {
     const params = new URLSearchParams(window.location.search);
     const doc = params.get("doc");
 
     if (!doc) {
-      setCurrentDocState(null);
+      setCurrentDocState(loadStoredCurrentDoc());
       return;
     }
 
@@ -61,19 +72,10 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Drive URIs require the local store to mirror into IndexedDB.
-    if (!store) {
-      return;
-    }
-
-    try {
-      const localUri = await store.addFile(doc);
-      setCurrentDocState(localUri);
-    } catch (error) {
-      console.error("Failed to mirror remote document", error);
-      setCurrentDocState(null);
-    }
-  }, [store]);
+    // Shared Drive links are consumed by the Drive link coordinator. They are
+    // not treated as steady-state current-doc values.
+    setCurrentDocState(null);
+  }, [loadStoredCurrentDoc]);
 
   useEffect(() => {
     void resolveFromLocation();
@@ -106,25 +108,15 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
 
       const updateUrl = async () => {
         const nextUrl = new URL(window.location.href);
-        if (!localUri) {
-          nextUrl.searchParams.delete("doc");
-        } else if (isContentsUri(localUri) || isFsUri(localUri)) {
-          nextUrl.searchParams.set("doc", localUri);
-        } else if (store) {
-          try {
-            const metadata = await store.getMetadata(localUri);
-            const remote = metadata?.remoteUri;
-            if (remote) {
-              nextUrl.searchParams.set("doc", remote);
-            } else {
-              nextUrl.searchParams.delete("doc");
-            }
-          } catch (error) {
-            console.error("Failed to resolve remote URI for", localUri, error);
-            nextUrl.searchParams.delete("doc");
+        nextUrl.searchParams.delete("doc");
+        try {
+          if (!localUri) {
+            window.localStorage.removeItem(CURRENT_DOC_STORAGE_KEY);
+          } else {
+            window.localStorage.setItem(CURRENT_DOC_STORAGE_KEY, localUri);
           }
-        } else {
-          nextUrl.searchParams.delete("doc");
+        } catch {
+          // Ignore persistence failures for current-doc restore state.
         }
 
         window.history.replaceState(
@@ -136,7 +128,7 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
 
       void updateUrl();
     },
-    [currentDoc, store],
+    [currentDoc],
   );
 
   const value = useMemo<CurrentDocContextValue>(
