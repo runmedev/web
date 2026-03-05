@@ -9,11 +9,14 @@ import {
   type CodexProxyJsonRpcNotification,
 } from "./codexAppServerProxyClient";
 import { logCodexEvent } from "./codexLogging";
-
-export type ChatKitStateValue = {
-  threadId?: string;
-  previousResponseId?: string;
-};
+import type {
+  ChatKitAssistantMessageItem,
+  ChatKitEndOfTurnItem,
+  ChatKitMessageItem,
+  ChatKitOutputTextPart,
+  ChatKitStateValue,
+  ChatKitStreamEvent,
+} from "./chatkitProtocol";
 
 export type CodexConversationItem = {
   id: string;
@@ -49,12 +52,14 @@ type ControllerListener = () => void;
 type JsonRecord = Record<string, unknown>;
 
 type CodexStreamSink = {
-  emit: (payload: unknown) => void;
+  emit: (payload: ChatKitStreamEvent) => void;
 };
 
 const CODEX_TURN_INACTIVITY_TIMEOUT_MS = 120_000;
+const CODEX_STREAM_START_MARKER = "[[CODEX_STREAM_START]]\n";
+const CODEX_STREAM_END_MARKER = "\n[[CODEX_STREAM_END]]";
 
-function emitLoggedChatkitEvent(sink: CodexStreamSink, payload: unknown): void {
+function emitLoggedChatkitEvent(sink: CodexStreamSink, payload: ChatKitStreamEvent): void {
   const payloadRecord = asRecord(payload);
   const responseRecord = asRecord(payloadRecord.response);
   const itemRecord = asRecord(payloadRecord.item);
@@ -90,6 +95,42 @@ function emitChatkitState(
       },
     },
   });
+}
+
+function buildAssistantThreadItem(
+  threadId: string,
+  itemId: string,
+  text: string,
+  status: "in_progress" | "completed",
+  createdAt: string,
+): ChatKitAssistantMessageItem {
+  return {
+    id: itemId,
+    type: "assistant_message",
+    status,
+    thread_id: threadId,
+    created_at: createdAt,
+    content: [
+      {
+        type: "output_text",
+        text,
+        annotations: [],
+      } satisfies ChatKitOutputTextPart,
+    ],
+  };
+}
+
+function buildEndOfTurnItem(
+  threadId: string,
+  responseId: string,
+  createdAt: string,
+): ChatKitEndOfTurnItem {
+  return {
+    id: `${responseId}-end-of-turn`,
+    type: "end_of_turn",
+    thread_id: threadId,
+    created_at: createdAt,
+  };
 }
 
 function asRecord(value: unknown): JsonRecord {
@@ -328,6 +369,18 @@ function buildTurnInput(text: string): Array<{ type: "text"; text: string }> {
   return [{ type: "text", text }];
 }
 
+function addStartMarker(text: string): string {
+  return text.startsWith(CODEX_STREAM_START_MARKER)
+    ? text
+    : `${CODEX_STREAM_START_MARKER}${text}`;
+}
+
+function addEndMarker(text: string): string {
+  return text.endsWith(CODEX_STREAM_END_MARKER)
+    ? text
+    : `${text}${CODEX_STREAM_END_MARKER}`;
+}
+
 type MappedAssistantEvent =
   | { kind: "message_started"; responseId: string; itemId: string }
   | { kind: "delta"; responseId: string; itemId: string; text: string }
@@ -558,6 +611,7 @@ class CodexConversationController {
     let lastResponseId = "";
     const responseTexts = new Map<string, string>();
     const responseItemIds = new Map<string, string>();
+    const responseCreatedAts = new Map<string, string>();
     const completedResponses = new Set<string>();
     let turnIdForNotifications: string | null = null;
     let resolveCompletion: (() => void) | null = null;
@@ -618,8 +672,10 @@ class CodexConversationController {
         if (responseItemIds.has(responseId)) {
           return;
         }
+        const createdAt = new Date().toISOString();
         responseItemIds.set(responseId, itemId);
-        responseTexts.set(responseId, "");
+        responseCreatedAts.set(responseId, createdAt);
+        responseTexts.set(responseId, CODEX_STREAM_START_MARKER);
         emitLoggedChatkitEvent(sink, {
           type: "response.created",
           response: { id: responseId },
@@ -634,7 +690,7 @@ class CodexConversationController {
             status: "in_progress",
             role: "assistant",
             content: [],
-          },
+          } satisfies ChatKitMessageItem,
         });
         emitLoggedChatkitEvent(sink, {
           type: "response.content_part.added",
@@ -642,9 +698,54 @@ class CodexConversationController {
           output_index: 0,
           item_id: itemId,
           content_index: 0,
-          part: { type: "output_text", text: "" },
+          part: { type: "output_text", text: "" } satisfies ChatKitOutputTextPart,
+        });
+        emitLoggedChatkitEvent(sink, {
+          type: "thread.item.added",
+          item: buildAssistantThreadItem(
+            threadId!,
+            itemId,
+            "",
+            "in_progress",
+            createdAt,
+          ),
+        });
+        emitLoggedChatkitEvent(sink, {
+          type: "thread.item.updated",
+          item_id: itemId,
+          update: {
+            type: "assistant_message.content_part.added",
+            content_index: 0,
+            content: {
+              text: "",
+              annotations: [],
+            },
+          },
         });
         this.appendThreadItem(threadId!, createAssistantItem(itemId));
+        this.updateAssistantItem(
+          threadId!,
+          itemId,
+          CODEX_STREAM_START_MARKER,
+          "in_progress",
+        );
+        emitLoggedChatkitEvent(sink, {
+          type: "response.output_text.delta",
+          response_id: responseId,
+          output_index: 0,
+          item_id: itemId,
+          content_index: 0,
+          delta: CODEX_STREAM_START_MARKER,
+        });
+        emitLoggedChatkitEvent(sink, {
+          type: "thread.item.updated",
+          item_id: itemId,
+          update: {
+            type: "assistant_message.content_part.text_delta",
+            content_index: 0,
+            delta: CODEX_STREAM_START_MARKER,
+          },
+        });
         this.notify();
       };
       if (mapped.kind === "message_started") {
@@ -664,6 +765,15 @@ class CodexConversationController {
           content_index: 0,
           delta: mapped.text,
         });
+        emitLoggedChatkitEvent(sink, {
+          type: "thread.item.updated",
+          item_id: mapped.itemId,
+          update: {
+            type: "assistant_message.content_part.text_delta",
+            content_index: 0,
+            delta: mapped.text,
+          },
+        });
         return;
       }
       if (mapped.kind === "done") {
@@ -671,12 +781,30 @@ class CodexConversationController {
           return;
         }
         ensureMessageStarted(mapped.responseId, mapped.itemId);
-        assistantText = responseTexts.get(mapped.responseId) ?? "";
+        assistantText = responseTexts.get(mapped.responseId) ?? CODEX_STREAM_START_MARKER;
         if (mapped.text) {
-          assistantText = mapped.text;
+          assistantText = addStartMarker(mapped.text);
         }
+        assistantText = addEndMarker(assistantText);
         responseTexts.set(mapped.responseId, assistantText);
         this.updateAssistantItem(threadId!, mapped.itemId, assistantText, "completed");
+        emitLoggedChatkitEvent(sink, {
+          type: "response.output_text.delta",
+          response_id: mapped.responseId,
+          output_index: 0,
+          item_id: mapped.itemId,
+          content_index: 0,
+          delta: CODEX_STREAM_END_MARKER,
+        });
+        emitLoggedChatkitEvent(sink, {
+          type: "thread.item.updated",
+          item_id: mapped.itemId,
+          update: {
+            type: "assistant_message.content_part.text_delta",
+            content_index: 0,
+            delta: CODEX_STREAM_END_MARKER,
+          },
+        });
         emitLoggedChatkitEvent(sink, {
           type: "response.output_text.done",
           response_id: mapped.responseId,
@@ -691,7 +819,22 @@ class CodexConversationController {
           output_index: 0,
           item_id: mapped.itemId,
           content_index: 0,
-          part: { type: "output_text", text: assistantText },
+          part: {
+            type: "output_text",
+            text: assistantText,
+          } satisfies ChatKitOutputTextPart,
+        });
+        emitLoggedChatkitEvent(sink, {
+          type: "thread.item.updated",
+          item_id: mapped.itemId,
+          update: {
+            type: "assistant_message.content_part.done",
+            content_index: 0,
+            content: {
+              text: assistantText,
+              annotations: [],
+            },
+          },
         });
         emitLoggedChatkitEvent(sink, {
           type: "response.output_item.done",
@@ -703,7 +846,25 @@ class CodexConversationController {
             status: "completed",
             role: "assistant",
             content: [{ type: "output_text", text: assistantText }],
-          },
+          } satisfies ChatKitMessageItem,
+        });
+        emitLoggedChatkitEvent(sink, {
+          type: "thread.item.done",
+          item: buildAssistantThreadItem(
+            threadId!,
+            mapped.itemId,
+            assistantText,
+            "completed",
+            responseCreatedAts.get(mapped.responseId) ?? new Date().toISOString(),
+          ),
+        });
+        emitLoggedChatkitEvent(sink, {
+          type: "thread.item.done",
+          item: buildEndOfTurnItem(
+            threadId!,
+            mapped.responseId,
+            responseCreatedAts.get(mapped.responseId) ?? new Date().toISOString(),
+          ),
         });
         lastResponseId = mapped.responseId;
         completedResponses.add(mapped.responseId);

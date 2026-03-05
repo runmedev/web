@@ -56,6 +56,9 @@ type ExpectedChatKitFixture = {
   events: Array<Record<string, unknown>>;
 };
 
+const CODEX_STREAM_START_MARKER = "[[CODEX_STREAM_START]]\n";
+const CODEX_STREAM_END_MARKER = "\n[[CODEX_STREAM_END]]";
+
 function loadJSONFixture<T>(...parts: string[]): T {
   const fixturePath = path.resolve(
     process.cwd(),
@@ -133,6 +136,12 @@ function normalizeChatKitEvents(
           },
         ];
       case "response.output_text.delta":
+        if (
+          event.delta === CODEX_STREAM_START_MARKER ||
+          event.delta === CODEX_STREAM_END_MARKER
+        ) {
+          return [];
+        }
         return [
           {
             type: "response.output_text.delta",
@@ -147,7 +156,12 @@ function normalizeChatKitEvents(
             type: "response.output_text.done",
             response_id: event.response_id,
             item_id: event.item_id,
-            text: event.text,
+            text:
+              typeof event.text === "string"
+                ? event.text
+                    .replace(CODEX_STREAM_START_MARKER, "")
+                    .replace(CODEX_STREAM_END_MARKER, "")
+                : event.text,
           },
         ];
       case "response.content_part.done":
@@ -156,7 +170,12 @@ function normalizeChatKitEvents(
             type: "response.content_part.done",
             response_id: event.response_id,
             item_id: event.item_id,
-            text: (event.part as { text?: string } | undefined)?.text ?? "",
+            text:
+              (
+                event.part as { text?: string } | undefined
+              )?.text
+                ?.replace(CODEX_STREAM_START_MARKER, "")
+                .replace(CODEX_STREAM_END_MARKER, "") ?? "",
           },
         ];
       case "response.output_item.done":
@@ -166,8 +185,11 @@ function normalizeChatKitEvents(
             response_id: event.response_id,
             item_id: (event.item as { id?: string } | undefined)?.id,
             text:
-              (event.item as { content?: Array<{ text?: string }> } | undefined)
-                ?.content?.[0]?.text ?? "",
+              (
+                event.item as { content?: Array<{ text?: string }> } | undefined
+              )?.content?.[0]?.text
+                ?.replace(CODEX_STREAM_START_MARKER, "")
+                .replace(CODEX_STREAM_END_MARKER, "") ?? "",
           },
         ];
       case "aisre.chatkit.state":
@@ -508,16 +530,137 @@ describe("CodexConversationController", () => {
         expect.objectContaining({ type: "response.created" }),
         expect.objectContaining({
           type: "response.output_text.delta",
+          delta: CODEX_STREAM_START_MARKER,
+        }),
+        expect.objectContaining({
+          type: "response.output_text.delta",
           delta: "hello ",
         }),
         expect.objectContaining({
+          type: "response.output_text.delta",
+          delta: CODEX_STREAM_END_MARKER,
+        }),
+        expect.objectContaining({
           type: "response.output_text.done",
-          text: "hello world",
+          text: `${CODEX_STREAM_START_MARKER}hello world${CODEX_STREAM_END_MARKER}`,
         }),
         expect.objectContaining({ type: "response.completed" }),
       ]),
     );
     expect(controller.getSnapshot().currentThreadId).toBe("thread-1");
+  });
+
+  it("emits visible start and end markers around the streamed assistant text", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return { threadId: "thread-1", title: "Runme Repo" };
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+                delta: 'print("Hello, world!")',
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "msg-1",
+                  text: 'print("Hello, world!")',
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: { id: "turn-1", status: "completed" },
+              },
+            });
+          });
+        });
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: any[] = [];
+    await controller.streamUserMessage("print hello world in python", {}, {
+      emit: (payload) => events.push(payload),
+    });
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "thread.item.added",
+          item: expect.objectContaining({
+            id: "msg-1",
+            type: "assistant_message",
+            status: "in_progress",
+          }),
+        }),
+        expect.objectContaining({
+          type: "thread.item.updated",
+          item_id: "msg-1",
+          update: expect.objectContaining({
+            type: "assistant_message.content_part.added",
+          }),
+        }),
+        expect.objectContaining({
+          type: "response.output_text.delta",
+          delta: CODEX_STREAM_START_MARKER,
+        }),
+        expect.objectContaining({
+          type: "thread.item.updated",
+          item_id: "msg-1",
+          update: expect.objectContaining({
+            type: "assistant_message.content_part.text_delta",
+            delta: CODEX_STREAM_START_MARKER,
+          }),
+        }),
+        expect.objectContaining({
+          type: "response.output_text.delta",
+          delta: CODEX_STREAM_END_MARKER,
+        }),
+        expect.objectContaining({
+          type: "thread.item.updated",
+          item_id: "msg-1",
+          update: expect.objectContaining({
+            type: "assistant_message.content_part.done",
+            content: expect.objectContaining({
+              text:
+                `${CODEX_STREAM_START_MARKER}print(\"Hello, world!\")${CODEX_STREAM_END_MARKER}`,
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          type: "response.output_text.done",
+          text:
+            `${CODEX_STREAM_START_MARKER}print("Hello, world!")${CODEX_STREAM_END_MARKER}`,
+        }),
+        expect.objectContaining({
+          type: "thread.item.done",
+          item: expect.objectContaining({
+            id: "msg-1",
+            type: "assistant_message",
+            status: "completed",
+          }),
+        }),
+      ]),
+    );
   });
 
   it("resets the completion timeout on inbound activity for the active turn", async () => {
@@ -592,7 +735,7 @@ describe("CodexConversationController", () => {
       expect.arrayContaining([
         expect.objectContaining({
           type: "response.output_text.done",
-          text: "hello world",
+          text: `${CODEX_STREAM_START_MARKER}hello world${CODEX_STREAM_END_MARKER}`,
         }),
         expect.objectContaining({ type: "response.completed" }),
       ]),
@@ -662,9 +805,9 @@ describe("CodexConversationController", () => {
       const thread = controller
         .getSnapshot()
         .threads.find((item) => item.id === finalState.thread_id);
-      const finalAssistantText = expected.events.findLast(
-        (event) => event.type === "response.output_item.done",
-      )?.item?.content?.[0]?.text;
+        const finalAssistantText = expected.events.findLast(
+          (event) => event.type === "response.output_item.done",
+        )?.item?.content?.[0]?.text;
       if (finalAssistantText) {
         expect(thread?.items.at(-1)?.content?.[0]?.text).toBe(finalAssistantText);
       }

@@ -4,6 +4,7 @@ import {
   getCodexConversationController,
   type ChatKitStateValue,
 } from "./codexConversationController";
+import type { ChatKitThreadDetail } from "./chatkitProtocol";
 
 type BodyPayload = {
   raw: unknown;
@@ -426,7 +427,7 @@ export function createCodexChatkitFetch(): typeof fetch {
           data: appendSyntheticAssistantThreadItem(threadId, thread.items),
           has_more: false,
         };
-        const payload = {
+        const payload: ChatKitThreadDetail = {
           id: thread.id,
           title: thread.title,
           created_at: thread.updatedAt ?? new Date().toISOString(),
