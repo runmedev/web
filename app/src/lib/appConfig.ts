@@ -10,6 +10,7 @@ import {
 } from "./googleClientManager";
 import { agentEndpointManager } from "./agentEndpointManager";
 import { appLogger } from "./logging/runtime";
+import { setGoogleDriveBaseUrl } from "./googleDriveRuntime";
 
 type StoredRunner = {
   name: string;
@@ -501,6 +502,9 @@ export function applyAppConfig(
     }
   } else if (hasGoogleDriveBlock) {
     warnings.push("Google Drive config missing clientID/clientId");
+  }
+  if (parsed.googleDrive.baseUrl) {
+    setGoogleDriveBaseUrl(parsed.googleDrive.baseUrl);
   }
 
   if (typeof window !== "undefined" && window.localStorage) {

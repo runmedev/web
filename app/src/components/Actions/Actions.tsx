@@ -20,11 +20,14 @@ import {
 } from "../../runme/client";;
 import { CellData } from "../../lib/notebookData";
 import { useNotebookContext } from "../../contexts/NotebookContext";
+import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useOutput } from "../../contexts/OutputContext";
 import CellConsole, { fontSettings } from "./CellConsole";
 import Editor from "./Editor";
 import MarkdownCell from "./MarkdownCell";
 import { IOPUB_INCOMPLETE_METADATA_KEY } from "../../lib/ipykernel";
+import { appLogger } from "../../lib/logging/runtime";
+import { copyNotebookShareUrl } from "../../lib/shareLinks";
 import {
   PlayIcon,
   PlusIcon,
@@ -39,6 +42,12 @@ import {
   APPKERNEL_RUNNER_LABEL,
   APPKERNEL_RUNNER_NAME,
 } from "../../lib/runtime/appKernel";
+import {
+  driveLinkCoordinator,
+  DRIVE_LINK_STATUS_TAB_URI,
+  useDriveLinkCoordinatorSnapshot,
+} from "../../lib/driveLinkCoordinator";
+import DriveLinkStatusTab from "../DriveLinkStatusTab";
 import React from "react";
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
@@ -282,8 +291,17 @@ function ActionOutputItems({ outputs }: { outputs: parser_pb.CellOutput[] }) {
   return <div className="mt-2 space-y-2">{displayableItems}</div>;
 }
 
-export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boolean }) {
+export function Action({
+  cellData,
+  docUri,
+  isFirst,
+}: {
+  cellData: CellData;
+  docUri: string;
+  isFirst: boolean;
+}) {
   const { getAllRenderers } = useOutput();
+  const { store } = useNotebookStore();
   const { listRunners, defaultRunnerName } = useRunners();
   const cell = useSyncExternalStore(
     useCallback(
@@ -321,9 +339,35 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     x: number;
     y: number;
   } | null>(null);
+  const [shareRemoteUri, setShareRemoteUri] = useState<string | null>(null);
   const [markdownEditRequest, setMarkdownEditRequest] = useState(0);
   const [pid, setPid] = useState<number | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!store || !docUri.startsWith("local://")) {
+      setShareRemoteUri(null);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const metadata = await store.getMetadata(docUri);
+        if (!cancelled) {
+          setShareRemoteUri(metadata?.remoteUri ?? null);
+        }
+      } catch {
+        if (!cancelled) {
+          setShareRemoteUri(null);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [docUri, store]);
 
   // When an exit code arrives, clear the pid so the spinner stops.
   const handleExitCode = useCallback((code: number | null) => {
@@ -364,7 +408,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     }
 
     const menuWidth = 200;
-    const menuHeight = 48;
+    const menuHeight = shareRemoteUri ? 88 : 48;
     const left = Math.max(
       0,
       Math.min(contextMenu.x, window.innerWidth - menuWidth),
@@ -374,7 +418,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
       Math.min(contextMenu.y, window.innerHeight - menuHeight),
     );
     return { x: left, y: top };
-  }, [contextMenu]);
+  }, [contextMenu, shareRemoteUri]);
 
   const runCode = useCallback(() => {
     cellData.run();
@@ -393,6 +437,28 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     cellData.remove();
     setContextMenu(null);
   }, [cellData]);
+
+  const handleCopyShareLink = useCallback(async () => {
+    if (!shareRemoteUri) {
+      setContextMenu(null);
+      return;
+    }
+
+    try {
+      await copyNotebookShareUrl(shareRemoteUri);
+    } catch (error) {
+      appLogger.error("Failed to copy notebook share link from document menu", {
+        attrs: {
+          scope: "storage.drive.share",
+          code: "DRIVE_SHARE_LINK_COPY_FAILED",
+          remoteUri: shareRemoteUri,
+          error: String(error),
+        },
+      });
+    } finally {
+      setContextMenu(null);
+    }
+  }, [shareRemoteUri]);
 
   const sequenceLabel = useMemo(() => {
     if (!cell) {
@@ -574,6 +640,18 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
             }}
             onContextMenu={(event) => event.preventDefault()}
           >
+            {shareRemoteUri && (
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void handleCopyShareLink();
+                }}
+              >
+                Copy Share Link
+              </button>
+            )}
             <button
               type="button"
               className="ctx-menu-item text-red-600"
@@ -734,6 +812,18 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
           }}
           onContextMenu={(event) => event.preventDefault()}
         >
+          {shareRemoteUri && (
+            <button
+              type="button"
+              className="ctx-menu-item"
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleCopyShareLink();
+              }}
+            >
+              Copy Share Link
+            </button>
+          )}
           <button
             type="button"
             className="ctx-menu-item text-red-600"
@@ -807,6 +897,7 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
                 <Action
                   key={`action-${refId}`}
                   cellData={cellData}
+                  docUri={docUri}
                   isFirst={index === 0}
                 />
               );
@@ -835,7 +926,10 @@ export default function Actions() {
   const openNotebooks = useNotebookList();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const currentDocUri = getCurrentDoc();
+  const driveLinkSnapshot = useDriveLinkCoordinatorSnapshot();
+  const statusTabVisible = driveLinkSnapshot.intents.length > 0;
   const [mountedTabs, setMountedTabs] = useState<Set<string>>(() => new Set());
+  const [selectedTabUri, setSelectedTabUri] = useState<string | null>(null);
   // Empty-state hint visibility is stored locally so the hint panel can be
   // revealed on demand without cluttering the default view.
   const [showConsoleHints, setShowConsoleHints] = useState(false);
@@ -884,7 +978,21 @@ export default function Actions() {
       next.add(currentDocUri);
       return next;
     });
+    setSelectedTabUri((prev) =>
+      prev === DRIVE_LINK_STATUS_TAB_URI ? prev : currentDocUri,
+    );
   }, [currentDocUri]);
+
+  useEffect(() => {
+    if (statusTabVisible && !currentDocUri) {
+      setSelectedTabUri((prev) => prev ?? DRIVE_LINK_STATUS_TAB_URI);
+      return;
+    }
+
+    if (!statusTabVisible && selectedTabUri === DRIVE_LINK_STATUS_TAB_URI) {
+      setSelectedTabUri(currentDocUri ?? openNotebooks[0]?.uri ?? null);
+    }
+  }, [currentDocUri, openNotebooks, selectedTabUri, statusTabVisible]);
 
   // TODO(jlewi): Does it still make sense to have a registration pattern for renderers? What does that buy us over
   // just hardcoding an "if" statement when rendering the outputs. Is that a legacy of the vscode extension where
@@ -954,7 +1062,7 @@ export default function Actions() {
 
   return (
     <div id="documents" className="flex flex-col h-full">
-      {openNotebooks.length === 0 ? (
+      {openNotebooks.length === 0 && !statusTabVisible ? (
         <ScrollArea
           type="auto"
           scrollbars="vertical"
@@ -1028,8 +1136,18 @@ export default function Actions() {
         </ScrollArea>
       ) : (
         <Tabs.Root
-          value={currentDocUri ?? openNotebooks[0]?.uri ?? ""}
+          value={
+            selectedTabUri ??
+            currentDocUri ??
+            (statusTabVisible
+              ? DRIVE_LINK_STATUS_TAB_URI
+              : openNotebooks[0]?.uri ?? "")
+          }
           onValueChange={(nextUri) => {
+            setSelectedTabUri(nextUri);
+            if (nextUri === DRIVE_LINK_STATUS_TAB_URI) {
+              return;
+            }
             if (nextUri !== currentDocUri) {
               setMountedTabs((prev) => {
                 if (prev.has(nextUri)) {
@@ -1045,6 +1163,20 @@ export default function Actions() {
           className="flex flex-col flex-1 min-h-0 overflow-hidden bg-white"
         >
           <Tabs.List className="flex items-center gap-0.5 border-b border-nb-border bg-nb-surface-2 px-2 py-1">
+          {statusTabVisible && (
+            <div
+              key={`tab-${DRIVE_LINK_STATUS_TAB_URI}`}
+              className="flex items-center gap-1"
+            >
+              <Tabs.Trigger
+                value={DRIVE_LINK_STATUS_TAB_URI}
+                title="Drive Link Status"
+                className="group flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-nb-sm transition-all duration-150 text-nb-text-muted border border-transparent data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:border-nb-border data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
+              >
+                <span className="truncate max-w-[180px]">Drive Link Status</span>
+              </Tabs.Trigger>
+            </div>
+          )}
           {openNotebooks.map((doc) => {              
             const displayName =
               doc.name ||
@@ -1076,6 +1208,20 @@ export default function Actions() {
             })}
           </Tabs.List>
           <div className="relative flex-1 min-h-0 overflow-hidden">
+          {statusTabVisible && (
+            <Tabs.Content
+              key={`content-${DRIVE_LINK_STATUS_TAB_URI}`}
+              value={DRIVE_LINK_STATUS_TAB_URI}
+              forceMount
+              asChild
+            >
+              <TabPanel className="flex-1 min-h-0">
+                <DriveLinkStatusTab
+                  onRetry={() => driveLinkCoordinator.retryAuthAndProcess()}
+                />
+              </TabPanel>
+            </Tabs.Content>
+          )}
           {openNotebooks.map((doc) => (
             <Tabs.Content
               key={`content-${doc.uri}`}

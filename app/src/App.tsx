@@ -53,6 +53,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SidePanelProvider } from "./contexts/SidePanelContext";
 import { appState } from "./lib/runtime/AppState";
 import GlobalToast from "./components/Toast";
+import DriveLinkCoordinatorHost from "./components/DriveLinkCoordinatorHost";
 import { appLogger } from "./lib/logging/runtime";
 import {
   getConfiguredAgentEndpoint,
@@ -153,6 +154,7 @@ function App({ branding }: AppProps) {
                   <NotebookStoreInitializer
                     agentEndpoint={configuredAgentEndpoint}
                   />
+                  <DriveLinkCoordinatorHost />
                   <SettingsProvider
                     agentEndpoint={configuredAgentEndpoint}
                     webApp={
