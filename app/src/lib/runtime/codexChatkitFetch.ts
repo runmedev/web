@@ -2,6 +2,7 @@ import { appLogger } from "../logging/runtime";
 import { logCodexEvent } from "./codexLogging";
 import {
   getCodexConversationController,
+  type CodexConversationItem,
   type ChatKitStateValue,
 } from "./codexConversationController";
 import type { ChatKitThreadDetail } from "./chatkitProtocol";
@@ -87,49 +88,56 @@ function createCodexStreamId(): string {
   return `codex-stream-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function createSyntheticAssistantThreadItem(threadId: string): Record<string, unknown> {
-  const timestamp = new Date().toISOString();
-  return {
-    id: `test-assistant-message-${timestamp}`,
-    thread_id: threadId,
-    type: "assistant_message",
-    content: [
-      {
-        type: "output_text",
-        text: `Test Message ${timestamp}`,
-        annotations: [],
-      },
-    ],
-    created_at: timestamp,
-  };
-}
-
-function createSyntheticEndOfTurnItem(
+function toChatKitThreadItems(
   threadId: string,
-  createdAt: string,
-): Record<string, unknown> {
-  return {
-    id: `test-end-of-turn-${createdAt}`,
-    thread_id: threadId,
-    type: "end_of_turn",
-    created_at: createdAt,
-  };
-}
+  items: CodexConversationItem[],
+): Record<string, unknown>[] {
+  const converted: Record<string, unknown>[] = [];
+  for (const item of items) {
+    const createdAt = item.createdAt ?? new Date().toISOString();
+    if (item.role === "user") {
+      converted.push({
+        id: item.id,
+        type: "user_message",
+        thread_id: threadId,
+        created_at: createdAt,
+        content: item.content.map((part) => ({
+          type: part.type === "input_text" ? "input_text" : "input_text",
+          text: part.text,
+        })),
+        attachments: [],
+        inference_options: {},
+      });
+      continue;
+    }
 
-function appendSyntheticAssistantThreadItem<T>(
-  threadId: string,
-  items: T[],
-): Array<T | Record<string, unknown>> {
-  const assistantItem = createSyntheticAssistantThreadItem(threadId);
-  const createdAt =
-    typeof assistantItem.created_at === "string"
-      ? assistantItem.created_at
-      : new Date().toISOString();
-  return [
-    ...items,
-    assistantItem,
-    createSyntheticEndOfTurnItem(threadId, createdAt),
-  ];
+    const assistantText = item.content
+      .map((part) => part.text)
+      .join("");
+    converted.push({
+      id: item.id,
+      type: "assistant_message",
+      thread_id: threadId,
+      created_at: createdAt,
+      status: item.status,
+      content: [
+        {
+          type: "output_text",
+          text: assistantText,
+          annotations: [],
+        },
+      ],
+    });
+    if (item.status === "completed") {
+      converted.push({
+        id: `${item.id}-end-of-turn`,
+        type: "end_of_turn",
+        thread_id: threadId,
+        created_at: createdAt,
+      });
+    }
+  }
+  return converted;
 }
 
 function buildStreamResponse(
@@ -424,7 +432,7 @@ export function createCodexChatkitFetch(): typeof fetch {
         }
         const thread = await controller.getThread(threadId);
         const messageCollection = {
-          data: appendSyntheticAssistantThreadItem(threadId, thread.items),
+          data: toChatKitThreadItems(threadId, thread.items),
           has_more: false,
         };
         const payload: ChatKitThreadDetail = {
@@ -463,7 +471,7 @@ export function createCodexChatkitFetch(): typeof fetch {
         const payload = await controller.handleListItems(threadId);
         const derivedPayload = {
           ...payload,
-          data: appendSyntheticAssistantThreadItem(threadId, payload.data),
+          data: toChatKitThreadItems(threadId, payload.data),
         };
         logCodexEvent("Codex ChatKit fetch response", {
           scope: "chatkit.codex_adapter",

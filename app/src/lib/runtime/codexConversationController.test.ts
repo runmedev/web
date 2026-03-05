@@ -56,9 +56,6 @@ type ExpectedChatKitFixture = {
   events: Array<Record<string, unknown>>;
 };
 
-const CODEX_STREAM_START_MARKER = "[[CODEX_STREAM_START]]\n";
-const CODEX_STREAM_END_MARKER = "\n[[CODEX_STREAM_END]]";
-
 function loadJSONFixture<T>(...parts: string[]): T {
   const fixturePath = path.resolve(
     process.cwd(),
@@ -136,12 +133,6 @@ function normalizeChatKitEvents(
           },
         ];
       case "response.output_text.delta":
-        if (
-          event.delta === CODEX_STREAM_START_MARKER ||
-          event.delta === CODEX_STREAM_END_MARKER
-        ) {
-          return [];
-        }
         return [
           {
             type: "response.output_text.delta",
@@ -156,12 +147,7 @@ function normalizeChatKitEvents(
             type: "response.output_text.done",
             response_id: event.response_id,
             item_id: event.item_id,
-            text:
-              typeof event.text === "string"
-                ? event.text
-                    .replace(CODEX_STREAM_START_MARKER, "")
-                    .replace(CODEX_STREAM_END_MARKER, "")
-                : event.text,
+            text: event.text,
           },
         ];
       case "response.content_part.done":
@@ -170,12 +156,7 @@ function normalizeChatKitEvents(
             type: "response.content_part.done",
             response_id: event.response_id,
             item_id: event.item_id,
-            text:
-              (
-                event.part as { text?: string } | undefined
-              )?.text
-                ?.replace(CODEX_STREAM_START_MARKER, "")
-                .replace(CODEX_STREAM_END_MARKER, "") ?? "",
+            text: (event.part as { text?: string } | undefined)?.text ?? "",
           },
         ];
       case "response.output_item.done":
@@ -187,9 +168,7 @@ function normalizeChatKitEvents(
             text:
               (
                 event.item as { content?: Array<{ text?: string }> } | undefined
-              )?.content?.[0]?.text
-                ?.replace(CODEX_STREAM_START_MARKER, "")
-                .replace(CODEX_STREAM_END_MARKER, "") ?? "",
+              )?.content?.[0]?.text ?? "",
           },
         ];
       case "aisre.chatkit.state":
@@ -604,6 +583,34 @@ describe("CodexConversationController", () => {
 
     expect(events).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          type: "thread.item.added",
+          item: expect.objectContaining({
+            type: "user_message",
+            content: [
+              expect.objectContaining({
+                type: "input_text",
+                text: "print hello world in python",
+              }),
+            ],
+            attachments: [],
+            inference_options: expect.objectContaining({
+              model: "gpt-5",
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          type: "thread.item.done",
+          item: expect.objectContaining({
+            type: "user_message",
+            content: [
+              expect.objectContaining({
+                type: "input_text",
+                text: "print hello world in python",
+              }),
+            ],
+          }),
+        }),
         expect.objectContaining({
           type: "thread.item.added",
           item: expect.objectContaining({

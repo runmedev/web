@@ -36,10 +36,19 @@ const controller = {
     title: "One",
     items: [
       {
+        id: "msg-user-1",
+        type: "message",
+        role: "user",
+        status: "completed",
+        createdAt: "2026-02-26T00:00:00Z",
+        content: [{ type: "input_text", text: "print hello world in python" }],
+      },
+      {
         id: "msg-1",
         type: "message",
         role: "assistant",
         status: "completed",
+        createdAt: "2026-02-26T00:01:00Z",
         content: [{ type: "output_text", text: "hello" }],
       },
     ],
@@ -47,10 +56,19 @@ const controller = {
   handleListItems: vi.fn(async () => ({
     data: [
       {
+        id: "msg-user-1",
+        type: "message",
+        role: "user",
+        status: "completed",
+        createdAt: "2026-02-26T00:00:00Z",
+        content: [{ type: "input_text", text: "print hello world in python" }],
+      },
+      {
         id: "msg-1",
         type: "message",
         role: "assistant",
         status: "completed",
+        createdAt: "2026-02-26T00:01:00Z",
         content: [{ type: "output_text", text: "hello" }],
       },
     ],
@@ -71,31 +89,51 @@ vi.mock("./codexConversationController", () => ({
 
 import { createCodexChatkitFetch } from "./codexChatkitFetch";
 
-function expectSyntheticAssistantItem(item: unknown): void {
+function expectUserThreadItem(item: unknown): void {
   expect(item).toEqual(
     expect.objectContaining({
-      id: expect.stringMatching(/^test-assistant-message-/),
+      id: "msg-user-1",
       thread_id: "thread-1",
-      type: "assistant_message",
+      type: "user_message",
       content: [
         {
-          type: "output_text",
-          text: expect.stringMatching(/^Test Message /),
-          annotations: [],
+          type: "input_text",
+          text: "print hello world in python",
         },
       ],
-      created_at: expect.any(String),
+      attachments: [],
+      inference_options: {},
+      created_at: "2026-02-26T00:00:00Z",
     }),
   );
 }
 
-function expectSyntheticEndOfTurnItem(item: unknown): void {
+function expectAssistantThreadItem(item: unknown): void {
   expect(item).toEqual(
     expect.objectContaining({
-      id: expect.stringMatching(/^test-end-of-turn-/),
+      id: "msg-1",
+      thread_id: "thread-1",
+      type: "assistant_message",
+      status: "completed",
+      content: [
+        {
+          type: "output_text",
+          text: "hello",
+          annotations: [],
+        },
+      ],
+      created_at: "2026-02-26T00:01:00Z",
+    }),
+  );
+}
+
+function expectEndOfTurnItem(item: unknown): void {
+  expect(item).toEqual(
+    expect.objectContaining({
+      id: "msg-1-end-of-turn",
       thread_id: "thread-1",
       type: "end_of_turn",
-      created_at: expect.any(String),
+      created_at: "2026-02-26T00:01:00Z",
     }),
   );
 }
@@ -167,15 +205,9 @@ describe("createCodexChatkitFetch", () => {
       },
     });
     expect(payload.items.data).toHaveLength(3);
-    expect(payload.items.data[0]).toEqual({
-      id: "msg-1",
-      type: "message",
-      role: "assistant",
-      status: "completed",
-      content: [{ type: "output_text", text: "hello" }],
-    });
-    expectSyntheticAssistantItem(payload.items.data[1]);
-    expectSyntheticEndOfTurnItem(payload.items.data[2]);
+    expectUserThreadItem(payload.items.data[0]);
+    expectAssistantThreadItem(payload.items.data[1]);
+    expectEndOfTurnItem(payload.items.data[2]);
     expect(payload.messages.data).toEqual(payload.items.data);
   });
 
@@ -205,8 +237,9 @@ describe("createCodexChatkitFetch", () => {
       },
     });
     expect(payload.items.data).toHaveLength(3);
-    expectSyntheticAssistantItem(payload.items.data[1]);
-    expectSyntheticEndOfTurnItem(payload.items.data[2]);
+    expectUserThreadItem(payload.items.data[0]);
+    expectAssistantThreadItem(payload.items.data[1]);
+    expectEndOfTurnItem(payload.items.data[2]);
     expect(payload.messages.data).toEqual(payload.items.data);
   });
 
@@ -239,8 +272,9 @@ describe("createCodexChatkitFetch", () => {
       },
     });
     expect(payload.items.data).toHaveLength(3);
-    expectSyntheticAssistantItem(payload.items.data[1]);
-    expectSyntheticEndOfTurnItem(payload.items.data[2]);
+    expectUserThreadItem(payload.items.data[0]);
+    expectAssistantThreadItem(payload.items.data[1]);
+    expectEndOfTurnItem(payload.items.data[2]);
     expect(payload.messages.data).toEqual(payload.items.data);
   });
 
@@ -272,15 +306,9 @@ describe("createCodexChatkitFetch", () => {
       },
     });
     expect(payload.items.data).toHaveLength(3);
-    expect(payload.items.data[0]).toEqual({
-      id: "msg-1",
-      type: "message",
-      role: "assistant",
-      status: "completed",
-      content: [{ type: "output_text", text: "hello" }],
-    });
-    expectSyntheticAssistantItem(payload.items.data[1]);
-    expectSyntheticEndOfTurnItem(payload.items.data[2]);
+    expectUserThreadItem(payload.items.data[0]);
+    expectAssistantThreadItem(payload.items.data[1]);
+    expectEndOfTurnItem(payload.items.data[2]);
     expect(payload.messages.data).toEqual(payload.items.data);
   });
 
@@ -301,15 +329,9 @@ describe("createCodexChatkitFetch", () => {
       has_more: false,
     });
     expect(payload.data).toHaveLength(3);
-    expect(payload.data[0]).toEqual({
-      id: "msg-1",
-      type: "message",
-      role: "assistant",
-      status: "completed",
-      content: [{ type: "output_text", text: "hello" }],
-    });
-    expectSyntheticAssistantItem(payload.data[1]);
-    expectSyntheticEndOfTurnItem(payload.data[2]);
+    expectUserThreadItem(payload.data[0]);
+    expectAssistantThreadItem(payload.data[1]);
+    expectEndOfTurnItem(payload.data[2]);
   });
 
   it("handles items.list requests with id nested under params", async () => {
@@ -329,8 +351,9 @@ describe("createCodexChatkitFetch", () => {
       has_more: false,
     });
     expect(payload.data).toHaveLength(3);
-    expectSyntheticAssistantItem(payload.data[1]);
-    expectSyntheticEndOfTurnItem(payload.data[2]);
+    expectUserThreadItem(payload.data[0]);
+    expectAssistantThreadItem(payload.data[1]);
+    expectEndOfTurnItem(payload.data[2]);
   });
 
   it("handles messages.list requests", async () => {
@@ -350,8 +373,9 @@ describe("createCodexChatkitFetch", () => {
       has_more: false,
     });
     expect(payload.data).toHaveLength(3);
-    expectSyntheticAssistantItem(payload.data[1]);
-    expectSyntheticEndOfTurnItem(payload.data[2]);
+    expectUserThreadItem(payload.data[0]);
+    expectAssistantThreadItem(payload.data[1]);
+    expectEndOfTurnItem(payload.data[2]);
   });
 
   it("returns a structured error for unsupported non-message requests", async () => {

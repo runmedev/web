@@ -16,6 +16,14 @@ export type ChatKitOutputTextPart = {
   annotations?: Array<Record<string, unknown>>;
 };
 
+export type ChatKitInputTextPart = {
+  type: "input_text";
+  text: string;
+  id?: string;
+  data?: Record<string, unknown>;
+  interactive?: boolean;
+};
+
 export type ChatKitAssistantMessageItem = {
   id: string;
   type: "assistant_message";
@@ -23,6 +31,27 @@ export type ChatKitAssistantMessageItem = {
   thread_id?: string;
   created_at?: string;
   content: ChatKitOutputTextPart[];
+};
+
+export type ChatKitUserMessageItem = {
+  id: string;
+  type: "user_message";
+  thread_id?: string;
+  created_at?: string;
+  content: ChatKitInputTextPart[];
+  attachments: Array<{
+    id?: string;
+    name?: string;
+    mime_type?: string;
+    size?: number;
+  }>;
+  quoted_text?: string;
+  inference_options: {
+    model?: string;
+    tool_choice?: {
+      id: string;
+    };
+  };
 };
 
 export type ChatKitEndOfTurnItem = {
@@ -114,13 +143,14 @@ export type ChatKitResponseFailedEvent = {
 
 export type ChatKitThreadItemAddedEvent = {
   type: "thread.item.added";
-  item: ChatKitAssistantMessageItem;
+  item: ChatKitAssistantMessageItem | ChatKitUserMessageItem;
 };
 
 export type ChatKitAssistantMessageContentPartAdded = {
   type: "assistant_message.content_part.added";
   content_index: number;
   content: {
+    type: "output_text";
     text: string;
     annotations: Array<Record<string, unknown>>;
   };
@@ -136,6 +166,7 @@ export type ChatKitAssistantMessageContentPartDone = {
   type: "assistant_message.content_part.done";
   content_index: number;
   content: {
+    type: "output_text";
     text: string;
     annotations: Array<Record<string, unknown>>;
   };
@@ -152,7 +183,7 @@ export type ChatKitThreadItemUpdatedEvent = {
 
 export type ChatKitThreadItemDoneEvent = {
   type: "thread.item.done";
-  item: ChatKitAssistantMessageItem | ChatKitEndOfTurnItem;
+  item: ChatKitAssistantMessageItem | ChatKitUserMessageItem | ChatKitEndOfTurnItem;
 };
 
 export type ChatKitStreamEvent =

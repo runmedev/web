@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatKitAssistantMessageItem,
   ChatKitStreamEvent,
+  ChatKitUserMessageItem,
 } from "./chatkitProtocol";
 import { createCodexConversationControllerForTests } from "./codexConversationController";
 
@@ -46,12 +47,14 @@ vi.mock("./codexProjectManager", () => ({
 }));
 
 type RenderState = {
+  users: Map<string, ChatKitUserMessageItem>;
   responses: Map<string, ChatKitAssistantMessageItem>;
   order: string[];
 };
 
 function reduceEvents(events: ChatKitStreamEvent[]): RenderState {
   const state: RenderState = {
+    users: new Map(),
     responses: new Map(),
     order: [],
   };
@@ -59,6 +62,17 @@ function reduceEvents(events: ChatKitStreamEvent[]): RenderState {
   for (const event of events) {
     switch (event.type) {
       case "thread.item.added": {
+        if (event.item.type === "user_message") {
+          state.users.set(event.item.id, {
+            ...event.item,
+            content: [...event.item.content],
+          });
+          state.order.push(event.item.id);
+          break;
+        }
+        if (event.item.type !== "assistant_message") {
+          break;
+        }
         state.responses.set(event.item.id, {
           ...event.item,
           content: [...event.item.content],
@@ -102,6 +116,16 @@ function reduceEvents(events: ChatKitStreamEvent[]): RenderState {
         break;
       }
       case "thread.item.done": {
+        if (event.item.type === "user_message") {
+          state.users.set(event.item.id, {
+            ...event.item,
+            content: [...event.item.content],
+          });
+          if (!state.order.includes(event.item.id)) {
+            state.order.push(event.item.id);
+          }
+          break;
+        }
         if (event.item.type !== "assistant_message") {
           break;
         }
@@ -128,14 +152,22 @@ function ContractRenderer({ events }: { events: ChatKitStreamEvent[] }) {
     <div>
       {state.order.map((itemId) => {
         const item = state.responses.get(itemId);
-        if (!item) {
-          return null;
+        if (item) {
+          return (
+            <article key={itemId} data-testid={`assistant-item-${itemId}`}>
+              {item.content[0]?.text ?? ""}
+            </article>
+          );
         }
-        return (
-          <article key={itemId} data-testid={`assistant-item-${itemId}`}>
-            {item.content[0]?.text ?? ""}
-          </article>
-        );
+        const user = state.users.get(itemId);
+        if (user) {
+          return (
+            <article key={itemId} data-testid={`user-item-${itemId}`}>
+              {user.content[0]?.text ?? ""}
+            </article>
+          );
+        }
+        return null;
       })}
     </div>
   );
@@ -202,6 +234,9 @@ describe("ChatKit protocol render contract", () => {
 
     render(<ContractRenderer events={events} />);
 
+    expect(screen.getByText("print hello world in python").textContent).toBe(
+      "print hello world in python",
+    );
     expect(screen.getByTestId("assistant-item-msg-1").textContent).toBe(
       '[[CODEX_STREAM_START]]\nprint("Hello, world!")\n[[CODEX_STREAM_END]]',
     );
