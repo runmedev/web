@@ -71,6 +71,35 @@ vi.mock("./codexConversationController", () => ({
 
 import { createCodexChatkitFetch } from "./codexChatkitFetch";
 
+function expectSyntheticAssistantItem(item: unknown): void {
+  expect(item).toEqual(
+    expect.objectContaining({
+      id: expect.stringMatching(/^test-assistant-message-/),
+      thread_id: "thread-1",
+      type: "assistant_message",
+      content: [
+        {
+          type: "output_text",
+          text: expect.stringMatching(/^Test Message /),
+          annotations: [],
+        },
+      ],
+      created_at: expect.any(String),
+    }),
+  );
+}
+
+function expectSyntheticEndOfTurnItem(item: unknown): void {
+  expect(item).toEqual(
+    expect.objectContaining({
+      id: expect.stringMatching(/^test-end-of-turn-/),
+      thread_id: "thread-1",
+      type: "end_of_turn",
+      created_at: expect.any(String),
+    }),
+  );
+}
+
 describe("createCodexChatkitFetch", () => {
   beforeEach(() => {
     appLoggerMock.info.mockClear();
@@ -120,35 +149,34 @@ describe("createCodexChatkitFetch", () => {
     });
 
     expect(controller.getThread).toHaveBeenCalledWith("thread-1");
-    expect(await response.json()).toEqual({
+    const payload = await response.json();
+    expect(payload).toEqual({
       id: "thread-1",
       title: "One",
+      created_at: expect.any(String),
+      status: { type: "active" },
+      metadata: {},
       updated_at: undefined,
       items: {
-        data: [
-          {
-            id: "msg-1",
-            type: "message",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: "hello" }],
-          },
-        ],
+        data: expect.any(Array),
         has_more: false,
       },
       messages: {
-        data: [
-          {
-            id: "msg-1",
-            type: "message",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: "hello" }],
-          },
-        ],
+        data: expect.any(Array),
         has_more: false,
       },
     });
+    expect(payload.items.data).toHaveLength(3);
+    expect(payload.items.data[0]).toEqual({
+      id: "msg-1",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "hello" }],
+    });
+    expectSyntheticAssistantItem(payload.items.data[1]);
+    expectSyntheticEndOfTurnItem(payload.items.data[2]);
+    expect(payload.messages.data).toEqual(payload.items.data);
   });
 
   it("handles threads.get requests", async () => {
@@ -159,35 +187,27 @@ describe("createCodexChatkitFetch", () => {
     });
 
     expect(controller.getThread).toHaveBeenCalledWith("thread-1");
-    expect(await response.json()).toEqual({
+    const payload = await response.json();
+    expect(payload).toEqual({
       id: "thread-1",
       title: "One",
+      created_at: expect.any(String),
+      status: { type: "active" },
+      metadata: {},
       updated_at: undefined,
       items: {
-        data: [
-          {
-            id: "msg-1",
-            type: "message",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: "hello" }],
-          },
-        ],
+        data: expect.any(Array),
         has_more: false,
       },
       messages: {
-        data: [
-          {
-            id: "msg-1",
-            type: "message",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: "hello" }],
-          },
-        ],
+        data: expect.any(Array),
         has_more: false,
       },
     });
+    expect(payload.items.data).toHaveLength(3);
+    expectSyntheticAssistantItem(payload.items.data[1]);
+    expectSyntheticEndOfTurnItem(payload.items.data[2]);
+    expect(payload.messages.data).toEqual(payload.items.data);
   });
 
   it("handles threads.get_by_id requests with thread_id nested under params", async () => {
@@ -201,35 +221,27 @@ describe("createCodexChatkitFetch", () => {
     });
 
     expect(controller.getThread).toHaveBeenCalledWith("thread-1");
-    expect(await response.json()).toEqual({
+    const payload = await response.json();
+    expect(payload).toEqual({
       id: "thread-1",
       title: "One",
+      created_at: expect.any(String),
+      status: { type: "active" },
+      metadata: {},
       updated_at: undefined,
       items: {
-        data: [
-          {
-            id: "msg-1",
-            type: "message",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: "hello" }],
-          },
-        ],
+        data: expect.any(Array),
         has_more: false,
       },
       messages: {
-        data: [
-          {
-            id: "msg-1",
-            type: "message",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: "hello" }],
-          },
-        ],
+        data: expect.any(Array),
         has_more: false,
       },
     });
+    expect(payload.items.data).toHaveLength(3);
+    expectSyntheticAssistantItem(payload.items.data[1]);
+    expectSyntheticEndOfTurnItem(payload.items.data[2]);
+    expect(payload.messages.data).toEqual(payload.items.data);
   });
 
   it("handles threads.get_by_id requests with id nested under params", async () => {
@@ -243,35 +255,33 @@ describe("createCodexChatkitFetch", () => {
     });
 
     expect(controller.getThread).toHaveBeenCalledWith("thread-1");
-    expect(await response.json()).toEqual({
+    const payload = await response.json();
+    expect(payload).toEqual({
       id: "thread-1",
       title: "One",
-      updated_at: undefined,
+      created_at: expect.any(String),
+      status: { type: "active" },
+      metadata: {},
       items: {
-        data: [
-          {
-            id: "msg-1",
-            type: "message",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: "hello" }],
-          },
-        ],
+        data: expect.any(Array),
         has_more: false,
       },
       messages: {
-        data: [
-          {
-            id: "msg-1",
-            type: "message",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: "hello" }],
-          },
-        ],
+        data: expect.any(Array),
         has_more: false,
       },
     });
+    expect(payload.items.data).toHaveLength(3);
+    expect(payload.items.data[0]).toEqual({
+      id: "msg-1",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "hello" }],
+    });
+    expectSyntheticAssistantItem(payload.items.data[1]);
+    expectSyntheticEndOfTurnItem(payload.items.data[2]);
+    expect(payload.messages.data).toEqual(payload.items.data);
   });
 
   it("handles items.list requests with thread_id nested under params", async () => {
@@ -285,18 +295,21 @@ describe("createCodexChatkitFetch", () => {
     });
 
     expect(controller.handleListItems).toHaveBeenCalledWith("thread-1");
-    expect(await response.json()).toEqual({
-      data: [
-        {
-          id: "msg-1",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "hello" }],
-        },
-      ],
+    const payload = await response.json();
+    expect(payload).toEqual({
+      data: expect.any(Array),
       has_more: false,
     });
+    expect(payload.data).toHaveLength(3);
+    expect(payload.data[0]).toEqual({
+      id: "msg-1",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "hello" }],
+    });
+    expectSyntheticAssistantItem(payload.data[1]);
+    expectSyntheticEndOfTurnItem(payload.data[2]);
   });
 
   it("handles items.list requests with id nested under params", async () => {
@@ -310,18 +323,14 @@ describe("createCodexChatkitFetch", () => {
     });
 
     expect(controller.handleListItems).toHaveBeenCalledWith("thread-1");
-    expect(await response.json()).toEqual({
-      data: [
-        {
-          id: "msg-1",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "hello" }],
-        },
-      ],
+    const payload = await response.json();
+    expect(payload).toEqual({
+      data: expect.any(Array),
       has_more: false,
     });
+    expect(payload.data).toHaveLength(3);
+    expectSyntheticAssistantItem(payload.data[1]);
+    expectSyntheticEndOfTurnItem(payload.data[2]);
   });
 
   it("handles messages.list requests", async () => {
@@ -335,18 +344,14 @@ describe("createCodexChatkitFetch", () => {
     });
 
     expect(controller.handleListItems).toHaveBeenCalledWith("thread-1");
-    expect(await response.json()).toEqual({
-      data: [
-        {
-          id: "msg-1",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "hello" }],
-        },
-      ],
+    const payload = await response.json();
+    expect(payload).toEqual({
+      data: expect.any(Array),
       has_more: false,
     });
+    expect(payload.data).toHaveLength(3);
+    expectSyntheticAssistantItem(payload.data[1]);
+    expectSyntheticEndOfTurnItem(payload.data[2]);
   });
 
   it("returns a structured error for unsupported non-message requests", async () => {

@@ -76,4 +76,27 @@ describe("logging runtime", () => {
       randomUUIDSpy.mockRestore();
     }
   });
+
+  it("mirrors chatkit and codex scoped logs to console in dev", () => {
+    const runtime = createLoggingRuntime();
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      runtime.log("info", "chatkit info", { attrs: { scope: "chatkit.panel" } });
+      runtime.log("warn", "codex warn", { attrs: { scope: "codex.proxy" } });
+      runtime.log("error", "other error", { attrs: { scope: "other.scope" } });
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      expect(infoSpy.mock.calls[0]?.[0]).toBe("[appLogger] chatkit info");
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0]?.[0]).toBe("[appLogger] codex warn");
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      infoSpy.mockRestore();
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
 });

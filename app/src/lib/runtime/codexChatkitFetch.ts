@@ -86,6 +86,51 @@ function createCodexStreamId(): string {
   return `codex-stream-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function createSyntheticAssistantThreadItem(threadId: string): Record<string, unknown> {
+  const timestamp = new Date().toISOString();
+  return {
+    id: `test-assistant-message-${timestamp}`,
+    thread_id: threadId,
+    type: "assistant_message",
+    content: [
+      {
+        type: "output_text",
+        text: `Test Message ${timestamp}`,
+        annotations: [],
+      },
+    ],
+    created_at: timestamp,
+  };
+}
+
+function createSyntheticEndOfTurnItem(
+  threadId: string,
+  createdAt: string,
+): Record<string, unknown> {
+  return {
+    id: `test-end-of-turn-${createdAt}`,
+    thread_id: threadId,
+    type: "end_of_turn",
+    created_at: createdAt,
+  };
+}
+
+function appendSyntheticAssistantThreadItem<T>(
+  threadId: string,
+  items: T[],
+): Array<T | Record<string, unknown>> {
+  const assistantItem = createSyntheticAssistantThreadItem(threadId);
+  const createdAt =
+    typeof assistantItem.created_at === "string"
+      ? assistantItem.created_at
+      : new Date().toISOString();
+  return [
+    ...items,
+    assistantItem,
+    createSyntheticEndOfTurnItem(threadId, createdAt),
+  ];
+}
+
 function buildStreamResponse(
   producer: (sink: { emit: (payload: unknown) => void }) => Promise<void>,
   options?: {
@@ -378,12 +423,15 @@ export function createCodexChatkitFetch(): typeof fetch {
         }
         const thread = await controller.getThread(threadId);
         const messageCollection = {
-          data: thread.items,
+          data: appendSyntheticAssistantThreadItem(threadId, thread.items),
           has_more: false,
         };
         const payload = {
           id: thread.id,
           title: thread.title,
+          created_at: thread.updatedAt ?? new Date().toISOString(),
+          status: { type: "active" },
+          metadata: {},
           updated_at: thread.updatedAt,
           items: messageCollection,
           messages: messageCollection,
@@ -412,15 +460,22 @@ export function createCodexChatkitFetch(): typeof fetch {
           return jsonResponse({ data: [], has_more: false });
         }
         const payload = await controller.handleListItems(threadId);
+        const derivedPayload = {
+          ...payload,
+          data: appendSyntheticAssistantThreadItem(threadId, payload.data),
+        };
         logCodexEvent("Codex ChatKit fetch response", {
           scope: "chatkit.codex_adapter",
           direction: "derived",
           transport: "chatkit_fetch",
           requestType,
-          payload,
+          payload: derivedPayload,
         });
-        console.log("[codex-chatkit-fetch] response", JSON.stringify({ requestType, payload }));
-        return jsonResponse(payload);
+        console.log(
+          "[codex-chatkit-fetch] response",
+          JSON.stringify({ requestType, payload: derivedPayload }),
+        );
+        return jsonResponse(derivedPayload);
       }
 
       const inputText = extractInput(json);

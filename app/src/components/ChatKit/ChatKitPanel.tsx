@@ -290,6 +290,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     setThreadId: (threadId: string | null, source?: string) => Promise<void>;
     fetchUpdates: (source?: string) => Promise<void>;
   } | null>(null);
+  const lastAppliedCodexThreadRef = useRef<string | null>(null);
   const { getChatkitState } = useCell();
   const { getNotebookData, useNotebookSnapshot } = useNotebookContext();
   const { getCurrentDoc } = useCurrentDoc();
@@ -580,7 +581,20 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     [defaultHarness.adapter],
   );
   const codexFetch = useMemo(() => createCodexChatkitFetch(), []);
-  const authorizedFetch = useAuthorizedFetch(getChatkitState, {
+  const getAuthorizedChatkitState = useCallback(() => {
+    if (defaultHarness.adapter !== "codex") {
+      return getChatkitState();
+    }
+    const controllerSnapshot = getCodexConversationController().getSnapshot();
+    return create(ChatkitStateSchema, {
+      threadId:
+        syncedCodexStateRef.current.threadId ??
+        controllerSnapshot.currentThreadId ??
+        "",
+      previousResponseId: syncedCodexStateRef.current.previousResponseId ?? "",
+    });
+  }, [defaultHarness.adapter, getChatkitState]);
+  const authorizedFetch = useAuthorizedFetch(getAuthorizedChatkitState, {
     onSSEEvent: handleSseEvent,
     baseFetch: defaultHarness.adapter === "codex" ? codexFetch : undefined,
   });
@@ -694,6 +708,19 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       proxy.disconnect();
     };
   }, [codexProxyWsUrl, defaultHarness.adapter, resolveCodexAuthorization]);
+
+  useEffect(() => {
+    if (defaultHarness.adapter !== "codex" || !codexThreadBootstrapComplete) {
+      lastAppliedCodexThreadRef.current = null;
+      return;
+    }
+    const threadId = syncedCodexStateRef.current.threadId;
+    if (!threadId || lastAppliedCodexThreadRef.current === threadId) {
+      return;
+    }
+    lastAppliedCodexThreadRef.current = threadId;
+    void chatkitActionsRef.current?.setThreadId(threadId, "bootstrap_sync");
+  }, [codexThreadBootstrapComplete, defaultHarness.adapter]);
 
   useEffect(() => {
     const bridge = getCodexToolBridge();
@@ -1070,6 +1097,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         defaultHarness.adapter === "codex"
           ? getCodexConversationController().getSnapshot()
           : null;
+      const stack = new Error("chatkit thread change").stack ?? null;
       appLogger.info("ChatKit thread changed", {
         attrs: {
           scope: "chatkit.panel",
@@ -1079,6 +1107,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           localPreviousResponseId: localChatkitState.previousResponseId ?? null,
           codexCurrentThreadId: codexSnapshot?.currentThreadId ?? null,
           codexCurrentTurnId: codexSnapshot?.currentTurnId ?? null,
+          stack,
         },
       });
       if (defaultHarness.adapter !== "codex") {

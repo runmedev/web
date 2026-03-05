@@ -55,11 +55,23 @@ type CodexStreamSink = {
 const CODEX_TURN_INACTIVITY_TIMEOUT_MS = 120_000;
 
 function emitLoggedChatkitEvent(sink: CodexStreamSink, payload: unknown): void {
+  const payloadRecord = asRecord(payload);
+  const responseRecord = asRecord(payloadRecord.response);
+  const itemRecord = asRecord(payloadRecord.item);
   logCodexEvent("Codex adapter emitted ChatKit event", {
     scope: "chatkit.codex_adapter",
     direction: "derived",
     transport: "chatkit_fetch",
     payload,
+    payloadType: asString(payloadRecord.type) ?? null,
+    responseId:
+      asString(payloadRecord.response_id) ??
+      asString(responseRecord.id) ??
+      null,
+    itemId:
+      asString(payloadRecord.item_id) ??
+      asString(itemRecord.id) ??
+      null,
   });
   sink.emit(payload);
 }

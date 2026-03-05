@@ -278,6 +278,51 @@ describe("ChatKitPanel codex harness routing", () => {
 
     await waitFor(() => expect(codexControllerMock.ensureActiveThread).toHaveBeenCalled());
     expect(useChatKitMock.mock.calls.at(-1)?.[0]?.initialThread).toBe("thread-bootstrap");
+    await waitFor(() =>
+      expect(setThreadIdMock).toHaveBeenCalledWith("thread-bootstrap"),
+    );
+  });
+
+  it("uses the synced codex thread state for Codex fetch requests", async () => {
+    harnessState.defaultHarness.adapter = "codex";
+    codexFetchMock.mockResolvedValue(new Response(JSON.stringify({ data: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+
+    render(<ChatKitPanel />);
+
+    await waitFor(() => expect(codexControllerMock.ensureActiveThread).toHaveBeenCalled());
+    const config = useChatKitMock.mock.calls.at(-1)?.[0];
+    expect(config).toBeDefined();
+
+    await act(async () => {
+      await config.api.fetch("http://127.0.0.1:31337/codex/chatkit", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "threads.create",
+          params: {
+            input: {
+              content: [{ type: "input_text", text: "print('hello')" }],
+            },
+          },
+        }),
+      });
+    });
+
+    const lastCall = codexFetchMock.mock.calls.at(-1);
+    expect(lastCall).toBeTruthy();
+    const init = lastCall?.[1] as RequestInit | undefined;
+    expect(typeof init?.body).toBe("string");
+    const payload = JSON.parse(String(init?.body));
+    expect(payload.chatkit_state).toEqual(
+      expect.objectContaining({
+        threadId: "thread-bootstrap",
+      }),
+    );
   });
 
   it("clears pending approvals on codex bridge disconnect without showing an in-panel error banner", () => {
@@ -523,7 +568,6 @@ describe("ChatKitPanel codex harness routing", () => {
     fetchUpdatesMock.mockRejectedValueOnce(
       new TypeError("Cannot read properties of undefined (reading 'data')"),
     );
-    setThreadIdMock.mockRejectedValueOnce(new Error("should not be called"));
     const encoder = new TextEncoder();
     codexFetchMock.mockResolvedValueOnce(
       new Response(
