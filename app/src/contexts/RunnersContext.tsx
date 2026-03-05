@@ -11,6 +11,7 @@ import {
 import { type Interceptor } from "@connectrpc/connect";
 
 import { Runner, RunnerMap } from "../lib/runner";
+import { appState } from "../lib/runtime/AppState";
 import { getRunnersManager } from "../lib/runtime/runnersManager";
 
 const RUNNERS_STORAGE_KEY = "runme/runners";
@@ -247,6 +248,17 @@ export function RunnersProvider({
       deleteRunner,
     ],
   );
+
+  useEffect(() => {
+    appState.setRunnerHandlers({
+      updateRunner,
+      deleteRunner,
+      setDefaultRunner,
+    });
+    return () => {
+      appState.setRunnerHandlers(null);
+    };
+  }, [deleteRunner, setDefaultRunner, updateRunner]);
 
   return (
     <RunnersContext.Provider value={value}>

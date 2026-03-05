@@ -8,6 +8,8 @@ import {
   useState,
 } from "react";
 
+import { appState } from "../lib/runtime/AppState";
+
 const STORAGE_KEY = "runme/workspace";
 const LEGACY_STORAGE_KEY = "aisre/workspace";
 
@@ -115,6 +117,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }),
     [state, addItem, getItems, removeItem],
   );
+
+  useEffect(() => {
+    appState.setWorkspaceHandlers({
+      getItems,
+      addItem,
+      removeItem,
+    });
+    return () => {
+      appState.setWorkspaceHandlers(null);
+    };
+  }, [addItem, getItems, removeItem]);
 
   return (
     <WorkspaceContext.Provider value={value}>

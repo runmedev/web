@@ -22,18 +22,10 @@ import {
   DEFAULT_RUNNER_PLACEHOLDER,
   getRunnersManager,
 } from "./runtime/runnersManager";
+import { createAppJsGlobals } from "./runtime/appJsGlobals";
 import { createRunmeConsoleApi } from "./runtime/runmeConsole";
 import { JSKernel } from "./runtime/jsKernel";
 import { isAppKernelRunnerName } from "./runtime/appKernel";
-import {
-  createDriveFile,
-  saveNotebookAsDriveCopy,
-  updateDriveFileBytes,
-} from "./driveTransfer";
-import { appState } from "./runtime/AppState";
-import { googleClientManager } from "./googleClientManager";
-import { oidcConfigManager } from "../auth/oidcConfig";
-import { getDefaultAppConfigUrl, setAppConfig } from "./appConfig";
 import {
   Streams,
   Heartbeat,
@@ -778,50 +770,11 @@ export class NotebookData {
     });
 
     const kernel = new JSKernel({
-      globals: {
+      globals: createAppJsGlobals({
         runme: createRunmeConsoleApi({
           resolveNotebook: () => this,
         }),
-        drive: {
-          create: async (folder: string, name: string) => createDriveFile(folder, name),
-          update: async (idOrUri: string, bytes: Uint8Array) =>
-            updateDriveFileBytes(idOrUri, bytes),
-          saveAsCurrentNotebook: async (folder: string, name: string) =>
-            saveNotebookAsDriveCopy(this.notebook, folder, name),
-          help: () =>
-            [
-              "drive.create(folder, name) - Create a Drive file in folder; returns file id",
-              "drive.update(id, bytes)    - Write UTF-8 bytes to a Drive file id/URI",
-              "drive.saveAsCurrentNotebook(folder, fileName) - Save current notebook to Drive and switch current doc",
-            ].join("\n"),
-        },
-        googleClientManager: {
-          get: () => googleClientManager.getOAuthClient(),
-          setClientId: (clientId: string) => googleClientManager.setOAuthClient({ clientId }),
-          setClientSecret: (clientSecret: string) =>
-            googleClientManager.setClientSecret(clientSecret),
-          setFromJson: (raw: string) => googleClientManager.setOAuthClientFromJson(raw),
-        },
-        oidc: {
-          get: () => oidcConfigManager.getConfig(),
-          getRedirectURI: () => oidcConfigManager.getRedirectURI(),
-          getScope: () => oidcConfigManager.getScope(),
-          set: (config: Record<string, unknown>) => oidcConfigManager.setConfig(config as any),
-          setClientId: (clientId: string) => oidcConfigManager.setClientId(clientId),
-          setClientSecret: (clientSecret: string) =>
-            oidcConfigManager.setClientSecret(clientSecret),
-          setDiscoveryURL: (discoveryUrl: string) =>
-            oidcConfigManager.setDiscoveryURL(discoveryUrl),
-          setClientToDrive: () => oidcConfigManager.setClientToDrive(),
-          setScope: (scope: string) => oidcConfigManager.setScope(scope),
-          setGoogleDefaults: () => oidcConfigManager.setGoogleDefaults(),
-        },
-        app: {
-          getDefaultConfigUrl: () => getDefaultAppConfigUrl(),
-          openNotebook: async (uri: string) => appState.openNotebook(uri),
-          setConfig: async (url?: string) => setAppConfig(url),
-        },
-      },
+      }),
       hooks: {
         onStdout: (data) => {
           stdout += data;
