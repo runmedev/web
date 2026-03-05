@@ -503,7 +503,9 @@ export function applyAppConfig(
   } else if (hasGoogleDriveBlock) {
     warnings.push("Google Drive config missing clientID/clientId");
   }
-  setGoogleDriveBaseUrl(parsed.googleDrive.baseUrl);
+  if (parsed.googleDrive.baseUrl) {
+    setGoogleDriveBaseUrl(parsed.googleDrive.baseUrl);
+  }
 
   if (typeof window !== "undefined" && window.localStorage) {
     const storage = window.localStorage;

@@ -20,11 +20,14 @@ import {
 } from "../../runme/client";;
 import { CellData } from "../../lib/notebookData";
 import { useNotebookContext } from "../../contexts/NotebookContext";
+import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useOutput } from "../../contexts/OutputContext";
 import CellConsole, { fontSettings } from "./CellConsole";
 import Editor from "./Editor";
 import MarkdownCell from "./MarkdownCell";
 import { IOPUB_INCOMPLETE_METADATA_KEY } from "../../lib/ipykernel";
+import { appLogger } from "../../lib/logging/runtime";
+import { copyNotebookShareUrl } from "../../lib/shareLinks";
 import {
   PlayIcon,
   PlusIcon,
@@ -288,8 +291,17 @@ function ActionOutputItems({ outputs }: { outputs: parser_pb.CellOutput[] }) {
   return <div className="mt-2 space-y-2">{displayableItems}</div>;
 }
 
-export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boolean }) {
+export function Action({
+  cellData,
+  docUri,
+  isFirst,
+}: {
+  cellData: CellData;
+  docUri: string;
+  isFirst: boolean;
+}) {
   const { getAllRenderers } = useOutput();
+  const { store } = useNotebookStore();
   const { listRunners, defaultRunnerName } = useRunners();
   const cell = useSyncExternalStore(
     useCallback(
@@ -327,9 +339,35 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     x: number;
     y: number;
   } | null>(null);
+  const [shareRemoteUri, setShareRemoteUri] = useState<string | null>(null);
   const [markdownEditRequest, setMarkdownEditRequest] = useState(0);
   const [pid, setPid] = useState<number | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!store || !docUri.startsWith("local://")) {
+      setShareRemoteUri(null);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const metadata = await store.getMetadata(docUri);
+        if (!cancelled) {
+          setShareRemoteUri(metadata?.remoteUri ?? null);
+        }
+      } catch {
+        if (!cancelled) {
+          setShareRemoteUri(null);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [docUri, store]);
 
   // When an exit code arrives, clear the pid so the spinner stops.
   const handleExitCode = useCallback((code: number | null) => {
@@ -370,7 +408,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     }
 
     const menuWidth = 200;
-    const menuHeight = 48;
+    const menuHeight = shareRemoteUri ? 88 : 48;
     const left = Math.max(
       0,
       Math.min(contextMenu.x, window.innerWidth - menuWidth),
@@ -380,7 +418,7 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
       Math.min(contextMenu.y, window.innerHeight - menuHeight),
     );
     return { x: left, y: top };
-  }, [contextMenu]);
+  }, [contextMenu, shareRemoteUri]);
 
   const runCode = useCallback(() => {
     cellData.run();
@@ -399,6 +437,28 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
     cellData.remove();
     setContextMenu(null);
   }, [cellData]);
+
+  const handleCopyShareLink = useCallback(async () => {
+    if (!shareRemoteUri) {
+      setContextMenu(null);
+      return;
+    }
+
+    try {
+      await copyNotebookShareUrl(shareRemoteUri);
+    } catch (error) {
+      appLogger.error("Failed to copy notebook share link from document menu", {
+        attrs: {
+          scope: "storage.drive.share",
+          code: "DRIVE_SHARE_LINK_COPY_FAILED",
+          remoteUri: shareRemoteUri,
+          error: String(error),
+        },
+      });
+    } finally {
+      setContextMenu(null);
+    }
+  }, [shareRemoteUri]);
 
   const sequenceLabel = useMemo(() => {
     if (!cell) {
@@ -580,6 +640,18 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
             }}
             onContextMenu={(event) => event.preventDefault()}
           >
+            {shareRemoteUri && (
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void handleCopyShareLink();
+                }}
+              >
+                Copy Share Link
+              </button>
+            )}
             <button
               type="button"
               className="ctx-menu-item text-red-600"
@@ -740,6 +812,18 @@ export function Action({ cellData, isFirst }: { cellData: CellData; isFirst: boo
           }}
           onContextMenu={(event) => event.preventDefault()}
         >
+          {shareRemoteUri && (
+            <button
+              type="button"
+              className="ctx-menu-item"
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleCopyShareLink();
+              }}
+            >
+              Copy Share Link
+            </button>
+          )}
           <button
             type="button"
             className="ctx-menu-item text-red-600"
@@ -813,6 +897,7 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
                 <Action
                   key={`action-${refId}`}
                   cellData={cellData}
+                  docUri={docUri}
                   isFirst={index === 0}
                 />
               );

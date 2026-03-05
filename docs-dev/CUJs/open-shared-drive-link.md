@@ -1,8 +1,9 @@
 # Scenario: Open shared Google Drive link
 
-This scenario validates that the app can consume a shared Google Drive notebook
-link, persist the pending work when Drive auth is unavailable, and complete the
-load after the user refreshes with a valid credential.
+This scenario validates that the app can consume shared Google Drive file and
+folder links, persist pending work when Drive auth is unavailable, complete the
+load after the user refreshes with a valid credential, and expose app share
+links from the Explorer context menu.
 
 ## Preconditions
 
@@ -20,6 +21,11 @@ load after the user refreshes with a valid credential.
 3. Refresh after a valid Google Drive credential becomes available locally.
 4. The app loads the shared notebook from the fake Drive backend.
 5. The containing Drive folder is added to Explorer automatically.
+6. The file and its containing folder expose `Copy Share Link` in the Explorer
+   context menu.
+7. Open the app with a shared Drive folder URL in `?doc=...`.
+8. Refresh after a valid Google Drive credential becomes available locally.
+9. The app mounts the shared folder in Explorer and lists its contents.
 
 ## Machine-verifiable acceptance criteria
 
@@ -29,3 +35,10 @@ load after the user refreshes with a valid credential.
 - [ ] After refresh with a valid stored Drive token, the shared notebook opens.
 - [ ] Explorer shows the containing folder `Shared Drive Folder`.
 - [ ] Explorer lists the notebook `shared-drive-notebook.json`.
+- [ ] Explorer file nodes expose a `Copy Share Link` action that copies an app
+      share URL for the Drive file.
+- [ ] Explorer folder nodes expose a `Copy Share Link` action that copies an app
+      share URL for the Drive folder.
+- [ ] A shared Drive folder URL in `?doc=...` mounts the folder after auth is
+      available.
+- [ ] Mounted shared folders can be expanded to show `shared-drive-notebook.json`.

@@ -103,4 +103,27 @@ describe("appConfig OIDC Google shorthand", () => {
 
     expect(getConfiguredChatKitDomainKey()).toBe("domain_pk_localhost_dev");
   });
+
+  it("preserves the runtime Google Drive base URL when config omits it", async () => {
+    const { applyAppConfig } = await loadModules();
+    const { setGoogleDriveBaseUrl, getGoogleDriveBaseUrl } = await import(
+      "./googleDriveRuntime"
+    );
+
+    setGoogleDriveBaseUrl("http://127.0.0.1:9090");
+
+    applyAppConfig(
+      {
+        agent: {
+          endpoint: "http://localhost:9977",
+        },
+        googleDrive: {
+          clientID: "client-id.apps.googleusercontent.com",
+        },
+      },
+      "http://localhost/configs/app-configs.yaml",
+    );
+
+    expect(getGoogleDriveBaseUrl()).toBe("http://127.0.0.1:9090");
+  });
 });

@@ -71,6 +71,19 @@ function isLocalUri(uri: string): boolean {
   );
 }
 
+export function isDriveAuthError(error: unknown): boolean {
+  const message = String(error).toLowerCase();
+  return [
+    "auth",
+    "oauth",
+    "token",
+    "popup",
+    "consent",
+    "access denied",
+    "not configured",
+  ].some((token) => message.includes(token));
+}
+
 function loadIntents(): DriveLinkIntent[] {
   if (typeof window === "undefined" || !window.localStorage) {
     return [];
@@ -122,10 +135,6 @@ class DriveLinkCoordinatorRuntime {
 
   private processing = false;
 
-  private authBlocked = false;
-
-  private lastErrorMessage: string | null = null;
-
   configure(deps: DriveLinkCoordinatorDeps | null): void {
     this.deps = deps;
   }
@@ -143,10 +152,17 @@ class DriveLinkCoordinatorRuntime {
   }
 
   getSnapshot(): DriveLinkCoordinatorSnapshot {
+    const authBlocked = this.intents.some(
+      (intent) => intent.status === "waiting_for_auth",
+    );
+    const lastErrorMessage =
+      [...this.intents]
+        .reverse()
+        .find((intent) => intent.lastErrorMessage)?.lastErrorMessage ?? null;
     return {
       intents: this.intents.map((intent) => ({ ...intent })),
-      authBlocked: this.authBlocked,
-      lastErrorMessage: this.lastErrorMessage,
+      authBlocked,
+      lastErrorMessage,
     };
   }
 
@@ -212,8 +228,6 @@ class DriveLinkCoordinatorRuntime {
   }
 
   async retryAuthAndProcess(): Promise<void> {
-    this.authBlocked = false;
-    this.lastErrorMessage = null;
     this.intents = this.intents.map((intent) => ({
       ...intent,
       status:
@@ -294,14 +308,11 @@ class DriveLinkCoordinatorRuntime {
         await deps.openNotebook(localFileUri);
       }
 
-      this.authBlocked = false;
-      this.lastErrorMessage = null;
       this.intents = this.intents.filter((item) => item.id !== intentId);
       this.persistAndEmit();
     } catch (error) {
       const message = String(error);
-      this.authBlocked = true;
-      this.lastErrorMessage = message;
+      const waitingForAuth = isDriveAuthError(error);
       appLogger.error("Failed to process shared Drive link", {
         attrs: {
           scope: "storage.drive.share",
@@ -312,7 +323,7 @@ class DriveLinkCoordinatorRuntime {
         },
       });
       this.updateIntent(intentId, {
-        status: "waiting_for_auth",
+        status: waitingForAuth ? "waiting_for_auth" : "failed",
         lastErrorMessage: message,
       });
     }
