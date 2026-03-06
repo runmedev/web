@@ -31,6 +31,7 @@ const LEGACY_STORAGE_KEY = "aisre/google-auth/token";
 const PKCE_STATE_KEY = "runme/google-auth/pkce-state";
 const PKCE_CODE_VERIFIER_KEY = "runme/google-auth/pkce-code-verifier";
 const PKCE_RETURN_TO_KEY = "runme/google-auth/pkce-return-to";
+const PKCE_ERROR_KEY = "runme/google-auth/pkce-error";
 
 interface AccessTokenInfo {
   token: string;
@@ -217,6 +218,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       window.localStorage.removeItem(PKCE_STATE_KEY);
       window.localStorage.removeItem(PKCE_CODE_VERIFIER_KEY);
       window.localStorage.removeItem(PKCE_RETURN_TO_KEY);
+      window.sessionStorage.removeItem(PKCE_ERROR_KEY);
     } catch (error) {
       console.error("Failed to clear Google PKCE state", error);
     }
@@ -417,6 +419,11 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     callbackErrorRef.current = null;
     const pending = handlePkceCallbackIfPresent().catch((error) => {
       callbackErrorRef.current = error;
+      try {
+        window.sessionStorage.setItem(PKCE_ERROR_KEY, String(error));
+      } catch {
+        // Ignore session storage failures.
+      }
       appLogger.error("Failed to handle Google Drive OAuth callback", {
         attrs: {
           scope: "storage.drive.auth",
@@ -424,6 +431,10 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
           error: String(error),
         },
       });
+      const callbackPath = new URL(getGoogleDriveOAuthCallbackUrl()).pathname;
+      if (window.location.pathname === callbackPath) {
+        window.location.replace(getAppPath(APP_ROUTE_PATHS.home));
+      }
     });
     callbackPromiseRef.current = pending.finally(() => {
       callbackPromiseRef.current = null;
@@ -529,6 +540,18 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     pendingPromiseRef.current = (async () => {
       if (callbackPromiseRef.current) {
         await callbackPromiseRef.current;
+      }
+      let callbackErrorFromStorage: string | null = null;
+      try {
+        callbackErrorFromStorage = window.sessionStorage.getItem(PKCE_ERROR_KEY);
+        if (callbackErrorFromStorage) {
+          window.sessionStorage.removeItem(PKCE_ERROR_KEY);
+        }
+      } catch {
+        callbackErrorFromStorage = null;
+      }
+      if (callbackErrorFromStorage) {
+        throw new Error(callbackErrorFromStorage);
       }
       if (callbackErrorRef.current) {
         const callbackError = callbackErrorRef.current;

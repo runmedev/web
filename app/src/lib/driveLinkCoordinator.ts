@@ -9,7 +9,6 @@ import { NotebookStoreItemType } from "../storage/notebook";
 
 const STORAGE_KEY = "runme/drive-link-intents";
 const STATUS_TAB_URI = "system://drive-link-status";
-const PROCESS_INTENT_TIMEOUT_MS = 20_000;
 
 export type DriveLinkIntentStatus =
   | "pending"
@@ -101,26 +100,6 @@ export function isDriveMissingOrAccessDeniedError(error: unknown): boolean {
 
 function toDriveLinkAccessErrorMessage(remoteUri: string): string {
   return `Failed to load shared Drive link (${remoteUri}). The file may not exist or you may not have permission to access it.`;
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  timeoutMessage: string,
-): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await new Promise<T>((resolve, reject) => {
-      timeoutId = setTimeout(() => {
-        reject(new Error(timeoutMessage));
-      }, timeoutMs);
-      promise.then(resolve, reject);
-    });
-  } finally {
-    if (timeoutId !== null) {
-      clearTimeout(timeoutId);
-    }
-  }
 }
 
 function loadIntents(): DriveLinkIntent[] {
@@ -378,40 +357,34 @@ class DriveLinkCoordinatorRuntime {
     });
 
     try {
-      await withTimeout(
-        (async () => {
-          await deps.ensureAccessToken({ interactive: false });
+      await deps.ensureAccessToken({ interactive: false });
 
-          if (intent.action === "mount_shared_folder") {
-            const localFolderUri = await deps.updateFolder(intent.remoteUri);
-            if (!deps.getWorkspaceItems().includes(localFolderUri)) {
-              deps.addWorkspaceItem(localFolderUri);
-            }
-          } else {
-            const { item, parents } = await fetchDriveItemWithParents(
-              intent.remoteUri,
-              deps.ensureAccessToken,
-            );
-            const parentFolder = parents.find(
-              (parent) => parent.type === NotebookStoreItemType.Folder,
-            );
-            if (parentFolder) {
-              const localFolderUri = await deps.updateFolder(
-                parentFolder.uri,
-                parentFolder.name,
-              );
-              if (!deps.getWorkspaceItems().includes(localFolderUri)) {
-                deps.addWorkspaceItem(localFolderUri);
-              }
-            }
-
-            const localFileUri = await deps.addFile(item.uri, item.name);
-            await deps.openNotebook(localFileUri);
+      if (intent.action === "mount_shared_folder") {
+        const localFolderUri = await deps.updateFolder(intent.remoteUri);
+        if (!deps.getWorkspaceItems().includes(localFolderUri)) {
+          deps.addWorkspaceItem(localFolderUri);
+        }
+      } else {
+        const { item, parents } = await fetchDriveItemWithParents(
+          intent.remoteUri,
+          deps.ensureAccessToken,
+        );
+        const parentFolder = parents.find(
+          (parent) => parent.type === NotebookStoreItemType.Folder,
+        );
+        if (parentFolder) {
+          const localFolderUri = await deps.updateFolder(
+            parentFolder.uri,
+            parentFolder.name,
+          );
+          if (!deps.getWorkspaceItems().includes(localFolderUri)) {
+            deps.addWorkspaceItem(localFolderUri);
           }
-        })(),
-        PROCESS_INTENT_TIMEOUT_MS,
-        "Timed out while loading the shared Drive link.",
-      );
+        }
+
+        const localFileUri = await deps.addFile(item.uri, item.name);
+        await deps.openNotebook(localFileUri);
+      }
 
       this.lastMessage = null;
       this.intents = this.intents.filter((item) => item.id !== intentId);

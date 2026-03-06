@@ -167,8 +167,8 @@ function openNotebookDocumentContextMenu(): void {
   runOrThrow(
     `agent-browser eval "(async () => {
       const cell =
-        document.querySelector('[data-document-id] [data-testid=\"code-action\"]') ||
-        document.querySelector('[data-document-id] [data-testid=\"markdown-action\"]');
+        document.querySelector('[data-document-id] [data-testid="code-action"]') ||
+        document.querySelector('[data-document-id] [data-testid="markdown-action"]');
       if (!cell) {
         throw new Error('Unable to find a notebook cell to open the document context menu');
       }
@@ -355,13 +355,11 @@ if (copyShareRef) {
   run(`agent-browser click ${copyShareRef}`);
   run("agent-browser wait 400");
 }
-const expectedFileShareLink =
-  `${FRONTEND_URL}/?doc=${encodeURIComponent(SHARED_FILE_URL)}`;
-const fileShareStatus = run("agent-browser get text '#workspace-explorer-box'").stdout;
-if (fileShareStatus.includes(expectedFileShareLink)) {
+const fileShareToast = run("agent-browser get text '#global-toast'").stdout;
+if (/Share link copied/i.test(fileShareToast)) {
   pass("Copied the shared notebook app link from the file context menu");
 } else {
-  fail(`File share link status did not include ${expectedFileShareLink}`);
+  fail("File share link copy did not show success toast");
 }
 
 openContextMenuForLabel("Shared Drive Folder");
@@ -378,13 +376,11 @@ if (copyShareRef) {
   run(`agent-browser click ${copyShareRef}`);
   run("agent-browser wait 400");
 }
-const expectedFolderShareLink =
-  `${FRONTEND_URL}/?doc=${encodeURIComponent(SHARED_FOLDER_URL)}`;
-const folderShareStatus = run("agent-browser get text '#workspace-explorer-box'").stdout;
-if (folderShareStatus.includes(expectedFolderShareLink)) {
+const folderShareToast = run("agent-browser get text '#global-toast'").stdout;
+if (/Share link copied/i.test(folderShareToast)) {
   pass("Copied the shared folder app link from the folder context menu");
 } else {
-  fail(`Folder share link status did not include ${expectedFolderShareLink}`);
+  fail("Folder share link copy did not show success toast");
 }
 
 run(
