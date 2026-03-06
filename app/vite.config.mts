@@ -7,6 +7,7 @@ import svgr from "vite-plugin-svgr";
 export default defineConfig({
   // Use root-relative assets so LB rewrites to /index.html still load bundles from /.
   base: "/",
+  publicDir: "assets",
   optimizeDeps: {
     exclude: ["@runmedev/renderers"],
   },

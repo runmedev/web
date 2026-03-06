@@ -89,6 +89,10 @@ function AppRouter() {
         <Route path="/runs/:runName/edit" element={<MainPage />} />
         <Route path="/auth/status" element={<BrowserAuthStatus />} />
         <Route path="/oidc/callback" element={<Callback />} />
+        <Route
+          path={APP_ROUTE_PATHS.googleDriveOauthCallback}
+          element={<GoogleDriveOAuthCallback />}
+        />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>
@@ -129,7 +133,7 @@ function App({ branding }: AppProps) {
     if (!hasLoggedStartup) {
       appLogger.info("Application startup complete", {
         attrs: {
-          routeCount: 7,
+          routeCount: 8,
         },
       });
       hasLoggedStartup = true;
@@ -275,6 +279,10 @@ const BrowserAuthStatus = () => {
       onLogout={() => browserAdapter.logout()}
     />
   );
+};
+
+const GoogleDriveOAuthCallback = () => {
+  return <div className="p-6 text-sm">Completing Google Drive sign-in...</div>;
 };
 
 export function makeAuthInterceptor(): Interceptor[] {

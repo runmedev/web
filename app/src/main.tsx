@@ -11,8 +11,12 @@ import { getBrowserAdapter } from "./browserAdapter.client";
 import { oidcConfigManager } from "./auth/oidcConfig";
 import type { AppliedAppConfig } from "./lib/appConfig";
 import {
+  disableAppConfigOverridesOnLoad,
+  enableAppConfigOverridesOnLoad,
   getDefaultAppConfigUrl,
+  isLocalConfigPreferredOnLoad,
   maybeSetAppConfig,
+  setLocalConfigPreferredOnLoad,
   setAppConfig,
 } from "./lib/appConfig";
 import { normalizeAppIndexUrl } from "./lib/appBase";
@@ -20,6 +24,10 @@ import { normalizeAppIndexUrl } from "./lib/appBase";
 type AppConfigApi = {
   getDefaultConfigUrl: () => string;
   setConfig: (url?: string) => Promise<AppliedAppConfig>;
+  isLocalConfigPreferredOnLoad: () => boolean;
+  setLocalConfigPreferredOnLoad: (preferLocal: boolean) => boolean;
+  disableConfigOverridesOnLoad: () => boolean;
+  enableConfigOverridesOnLoad: () => boolean;
 };
 
 declare global {
@@ -33,6 +41,10 @@ window.oidc = oidcConfigManager;
 window.app = {
   getDefaultConfigUrl: getDefaultAppConfigUrl,
   setConfig: setAppConfig,
+  isLocalConfigPreferredOnLoad,
+  setLocalConfigPreferredOnLoad,
+  disableConfigOverridesOnLoad: disableAppConfigOverridesOnLoad,
+  enableConfigOverridesOnLoad: enableAppConfigOverridesOnLoad,
 };
 
 // Provide a default noop messaging bridge so console-view has a context before
