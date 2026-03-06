@@ -19,9 +19,9 @@ import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
 import { useContentsStore } from "../../contexts/ContentsStoreContext";
 import { appLogger } from "../../lib/logging/runtime";
 import {
-  buildNotebookShareUrl,
   copyNotebookShareUrl,
 } from "../../lib/shareLinks";
+import { showToast } from "../../lib/toast";
 import {
   NotebookStore,
   NotebookStoreItem,
@@ -235,7 +235,6 @@ export function WorkspaceExplorer() {
   const [treeNodes, setTreeNodes] = useState<TreeNode[]>([]);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [pendingEditId, setPendingEditId] = useState<string | null>(null);
 
   const workspaceUris = useMemo(() => getItems(), [getItems]);
@@ -813,7 +812,6 @@ function formatShortTimestamp(date: Date): string {
       if (!getItems().includes(workspaceRootUri)) {
         addItem(workspaceRootUri);
       }
-      setStatusMessage(null);
       setErrorMessage(null);
     } catch (error) {
       // User cancelled the picker or API error.
@@ -821,17 +819,15 @@ function formatShortTimestamp(date: Date): string {
         return;
       }
       console.error("Failed to open local folder", error);
-      setStatusMessage(null);
       setErrorMessage("Unable to open folder. Please try again.");
     }
   }, [addItem, fsStore, getItems]);
 
   const handleCopyShareLink = useCallback(async (remoteUri: string) => {
-    const shareUrl = buildNotebookShareUrl(remoteUri);
     try {
       await copyNotebookShareUrl(remoteUri);
       setErrorMessage(null);
-      setStatusMessage(`Share link: ${shareUrl}`);
+      showToast({ message: "Share link copied", tone: "success" });
     } catch (error) {
       appLogger.error("Failed to copy notebook share link", {
         attrs: {
@@ -841,10 +837,10 @@ function formatShortTimestamp(date: Date): string {
           error: String(error),
         },
       });
-      setStatusMessage(`Share link: ${shareUrl}`);
-      setErrorMessage(
-        "Clipboard access was unavailable. Copy the share link shown below.",
-      );
+      showToast({
+        message: "Could not copy share link. Please check clipboard permissions.",
+        tone: "error",
+      });
     }
   }, []);
 
@@ -891,11 +887,6 @@ function formatShortTimestamp(date: Date): string {
       {errorMessage && (
         <p className="text-sm text-nb-error">
           {errorMessage}
-        </p>
-      )}
-      {statusMessage && (
-        <p className="text-sm text-nb-text-muted">
-          {statusMessage}
         </p>
       )}
 
