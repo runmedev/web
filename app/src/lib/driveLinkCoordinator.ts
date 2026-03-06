@@ -137,13 +137,20 @@ function loadIntents(): DriveLinkIntent[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.filter(
-      (intent): intent is DriveLinkIntent =>
-        Boolean(intent?.id) &&
-        Boolean(intent?.remoteUri) &&
-        Boolean(intent?.action) &&
-        Boolean(intent?.status),
-    );
+    return parsed
+      .filter(
+        (intent): intent is DriveLinkIntent =>
+          Boolean(intent?.id) &&
+          Boolean(intent?.remoteUri) &&
+          Boolean(intent?.action) &&
+          Boolean(intent?.status),
+      )
+      .map((intent) => ({
+        ...intent,
+        // "processing" can be left behind in localStorage after reload/crash.
+        // Treat it as pending so the coordinator can resume it.
+        status: intent.status === "processing" ? "pending" : intent.status,
+      }));
   } catch {
     return [];
   }
@@ -282,11 +289,19 @@ class DriveLinkCoordinatorRuntime {
       return;
     }
 
-    this.lastMessage = null;
+    this.lastMessage = "Retrying shared links...";
+    appLogger.info("Retry requested for shared Drive links", {
+      attrs: {
+        scope: "storage.drive.share",
+        code: "DRIVE_SHARED_LINK_RETRY_REQUESTED",
+      },
+    });
     this.intents = this.intents.map((intent) => ({
       ...intent,
       status:
-        intent.status === "waiting_for_auth" || intent.status === "failed"
+        intent.status === "waiting_for_auth" ||
+        intent.status === "failed" ||
+        intent.status === "processing"
           ? "pending"
           : intent.status,
       updatedAt: nowIso(),
@@ -333,7 +348,8 @@ class DriveLinkCoordinatorRuntime {
         if (
           intent.status !== "pending" &&
           intent.status !== "waiting_for_auth" &&
-          intent.status !== "failed"
+          intent.status !== "failed" &&
+          intent.status !== "processing"
         ) {
           continue;
         }
