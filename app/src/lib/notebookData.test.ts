@@ -12,6 +12,12 @@ const mockRunner = {
   interceptors: [],
 };
 
+const runnerState = new Map<
+  string,
+  { name: string; endpoint: string; reconnect: boolean; interceptors: unknown[] }
+>();
+let defaultRunnerName: string | null = null;
+
 vi.mock("@runmedev/renderers", () => {
   class FakeStreams {
     stdout = new Subject<Uint8Array>();
@@ -47,10 +53,45 @@ vi.mock("@runmedev/renderers", () => {
   };
 });
 
+const list = vi.fn(() => [...runnerState.values()]);
+const get = vi.fn((name: string) => runnerState.get(name));
+const update = vi.fn((name: string, endpoint: string, reconnect = true) => {
+  const next = {
+    name,
+    endpoint,
+    reconnect,
+    interceptors: [],
+  };
+  runnerState.set(name, next);
+  if (!defaultRunnerName) {
+    defaultRunnerName = name;
+  }
+  return next;
+});
+const removeRunner = vi.fn((name: string) => {
+  runnerState.delete(name);
+  if (defaultRunnerName === name) {
+    defaultRunnerName = runnerState.size > 0 ? [...runnerState.keys()][0] : null;
+  }
+});
+const getDefaultRunnerName = vi.fn(() => defaultRunnerName);
+const setDefault = vi.fn((name: string) => {
+  if (runnerState.has(name)) {
+    defaultRunnerName = name;
+  }
+});
 const getWithFallback = vi.fn(() => mockRunner);
 vi.mock("./runtime/runnersManager", () => ({
   DEFAULT_RUNNER_PLACEHOLDER: "<default>",
-  getRunnersManager: () => ({ getWithFallback }),
+  getRunnersManager: () => ({
+    getWithFallback,
+    list,
+    get,
+    update,
+    delete: removeRunner,
+    getDefaultRunnerName,
+    setDefault,
+  }),
 }));
 
 let bindStreamsToCell: typeof import("./notebookData").bindStreamsToCell;
@@ -108,6 +149,10 @@ afterEach(() => {
   appState.setDriveNotebookStore(null);
   appState.setLocalNotebooks(null);
   appState.setOpenNotebookHandler(null);
+  appState.setWorkspaceHandlers(null);
+  appState.setRunnerHandlers(null);
+  runnerState.clear();
+  defaultRunnerName = null;
 });
 
 async function waitForCondition(
@@ -403,6 +448,58 @@ describe("NotebookData.runCodeCell", () => {
       .join("");
     expect(stdoutText).toContain("object");
     expect(stdoutText).toContain("function");
+  });
+
+  it("exposes AppConsole runner and config helpers in appkernel cells", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-console-parity",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        'console.log(typeof app.runners.get);',
+        'console.log(app.runners.update("local", "ws://localhost:9977/ws"));',
+        "console.log(app.runners.get());",
+        'console.log(app.runners.setDefault("local"));',
+        "console.log(app.runners.getDefault());",
+        'console.log(typeof agent.get);',
+        'console.log(typeof credentials.google.getOAuthClient);',
+        'console.log(typeof oidc.getStatus);',
+        'console.log(typeof explorer.listFolders);',
+        'console.log(typeof files.help);',
+        "console.log(help().includes('Available namespaces:'));",
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "console-parity.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+
+    expect(stdoutText).toContain("Runner local set to ws://localhost:9977/ws");
+    expect(stdoutText).toContain("local: ws://localhost:9977/ws (default)");
+    expect(stdoutText).toContain("Default runner set to local");
+    expect(stdoutText).toContain("Default runner: local (ws://localhost:9977/ws)");
+    expect(stdoutText).toContain("true");
   });
 
   it("supports drive.saveAsCurrentNotebook in appkernel cells", async () => {
