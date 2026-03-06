@@ -23,7 +23,9 @@ import {
 import { googleClientManager } from "../googleClientManager";
 import type { Runner } from "../runner";
 import {
+  copyDriveNotebookFile,
   createDriveFile,
+  listDriveFolderItems,
   saveNotebookAsDriveCopy,
   updateDriveFileBytes,
 } from "../driveTransfer";
@@ -422,7 +424,7 @@ export function createAppJsGlobals({
         "  runmeRunners    - Configure runner endpoints",
         "  agent           - Configure assistant/API agent endpoint",
         "  files           - Import local files and access their bytes",
-        "  drive           - Create/update Google Drive files",
+        "  drive           - List/create/copy/update Google Drive notebook files",
         "  oidc            - OIDC/OAuth configuration and auth status",
         "  googleClientManager - Google OAuth client settings",
         "  app             - App-level configuration helpers",
@@ -543,6 +545,11 @@ export function createAppJsGlobals({
       },
     },
     drive: {
+      list: async (folder: string) => {
+        const items = await listDriveFolderItems(folder);
+        emitLine(sendOutput, `Listed ${items.length} Drive item(s)`);
+        return items;
+      },
       create: async (folder: string, name: string) => {
         const id = await createDriveFile(folder, name);
         emitLine(sendOutput, `Created Drive file ${id}`);
@@ -574,11 +581,29 @@ export function createAppJsGlobals({
         );
         return result;
       },
+      copyNotebook: async (
+        sourceIdOrUri: string,
+        targetFolder: string,
+        targetName?: string,
+      ) => {
+        const result = await copyDriveNotebookFile(
+          sourceIdOrUri,
+          targetFolder,
+          targetName,
+        );
+        emitLine(
+          sendOutput,
+          `Copied notebook ${result.sourceUri} -> ${result.targetUri}`,
+        );
+        return result;
+      },
       help: () => {
         return [
+          "drive.list(folder)            - List Drive items in a folder",
           "drive.create(folder, name)     - Create a Drive file in folder; returns file id",
           "drive.update(id, bytes)        - Write UTF-8 bytes to a Drive file id/URI",
           "drive.saveAsCurrentNotebook(folder, fileName) - Save current notebook to Drive and switch current doc",
+          "drive.copyNotebook(source, targetFolder, fileName?) - Copy a notebook file to another Drive folder",
           "drive.help()                   - Show this help",
         ].join("\n");
       },
