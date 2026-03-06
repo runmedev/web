@@ -334,6 +334,12 @@ export function createAppJsGlobals({
     },
     googleClientManager: {
       get: () => googleClientManager.getOAuthClient(),
+      setOAuthClient: (config: {
+        clientId?: string;
+        clientSecret?: string;
+        authFlow?: "implicit" | "pkce";
+        authUxMode?: "popup" | "redirect";
+      }) => googleClientManager.setOAuthClient(config),
       setClientId: (clientId: string) =>
         googleClientManager.setOAuthClient({ clientId }),
       setClientSecret: (clientSecret: string) =>
