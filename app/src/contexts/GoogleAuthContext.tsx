@@ -12,6 +12,7 @@ import pkceChallenge from "pkce-challenge";
 import { googleClientManager } from "../lib/googleClientManager";
 import {
   APP_ROUTE_PATHS,
+  getAppPath,
   getGoogleDriveOAuthCallbackUrl,
 } from "../lib/appBase";
 import { appLogger } from "../lib/logging/runtime";
@@ -291,7 +292,8 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     const storedState = window.localStorage.getItem(PKCE_STATE_KEY);
     const codeVerifier = window.localStorage.getItem(PKCE_CODE_VERIFIER_KEY);
     const returnTo =
-      window.localStorage.getItem(PKCE_RETURN_TO_KEY) ?? APP_ROUTE_PATHS.home;
+      window.localStorage.getItem(PKCE_RETURN_TO_KEY) ??
+      getAppPath(APP_ROUTE_PATHS.home);
 
     if (!code || !state || !storedState || !codeVerifier) {
       clearPkceState();
@@ -316,7 +318,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       refreshToken: tokenResponse.refresh_token,
     });
     clearPkceState();
-    window.history.replaceState(null, "", returnTo);
+    window.location.replace(returnTo);
   }, [clearPkceState, exchangeAuthorizationCode, setAccessToken]);
 
   const startPkceRedirect = useCallback(async () => {
@@ -330,7 +332,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     const state = globalThis.crypto?.randomUUID
       ? globalThis.crypto.randomUUID()
       : `${Date.now()}-${Math.random()}`;
-    const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const returnTo = getAppPath(APP_ROUTE_PATHS.home);
 
     window.localStorage.setItem(PKCE_CODE_VERIFIER_KEY, codeVerifier);
     window.localStorage.setItem(PKCE_STATE_KEY, state);
