@@ -39,7 +39,7 @@ export interface DriveLinkCoordinatorSnapshot {
 }
 
 type DriveLinkCoordinatorDeps = {
-  ensureAccessToken: () => Promise<string>;
+  ensureAccessToken: (options?: { interactive?: boolean }) => Promise<string>;
   updateFolder: (remoteUri: string, name?: string) => Promise<string>;
   addFile: (remoteUri: string, name?: string) => Promise<string>;
   addWorkspaceItem: (localUri: string) => void;
@@ -79,6 +79,7 @@ export function isDriveAuthError(error: unknown): boolean {
     "token",
     "popup",
     "consent",
+    "required",
     "access denied",
     "not configured",
   ].some((token) => message.includes(token));
@@ -240,6 +241,33 @@ class DriveLinkCoordinatorRuntime {
     await this.processPending();
   }
 
+  async loginToDriveAndProcess(): Promise<void> {
+    const deps = this.deps;
+    if (!deps) {
+      return;
+    }
+    try {
+      await deps.ensureAccessToken({ interactive: true });
+    } catch (error) {
+      if (isDriveAuthError(error)) {
+        this.intents = this.intents.map((intent) =>
+          intent.status === "waiting_for_auth" || intent.status === "failed"
+            ? {
+                ...intent,
+                status: "waiting_for_auth",
+                lastErrorMessage: String(error),
+                updatedAt: nowIso(),
+              }
+            : intent,
+        );
+        this.persistAndEmit();
+      }
+      return;
+    }
+
+    await this.retryAuthAndProcess();
+  }
+
   async processPending(): Promise<void> {
     if (this.processing || !this.deps) {
       return;
@@ -279,7 +307,7 @@ class DriveLinkCoordinatorRuntime {
     });
 
     try {
-      await deps.ensureAccessToken();
+      await deps.ensureAccessToken({ interactive: false });
 
       if (intent.action === "mount_shared_folder") {
         const localFolderUri = await deps.updateFolder(intent.remoteUri);

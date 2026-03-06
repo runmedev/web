@@ -18,4 +18,12 @@ describe("isDriveAuthError", () => {
       ),
     ).toBe(false);
   });
+
+  it("treats explicit authorization-required failures as auth errors", () => {
+    expect(
+      isDriveAuthError(
+        new Error("Google Drive authorization is required."),
+      ),
+    ).toBe(true);
+  });
 });

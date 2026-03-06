@@ -34,10 +34,15 @@ const PKCE_RETURN_TO_KEY = "runme/google-auth/pkce-return-to";
 interface AccessTokenInfo {
   token: string;
   expiresAt: number;
+  refreshToken?: string;
+}
+
+interface EnsureAccessTokenOptions {
+  interactive?: boolean;
 }
 
 interface GoogleAuthContextType {
-  ensureAccessToken: () => Promise<string>;
+  ensureAccessToken: (options?: EnsureAccessTokenOptions) => Promise<string>;
   setAccessToken: (token: string, expiresIn?: number) => void;
 }
 
@@ -54,6 +59,7 @@ interface TokenClient {
 interface AccessTokenResponse {
   access_token?: string;
   expires_in?: number;
+  refresh_token?: string;
   scope?: string;
   token_type?: string;
   error?: string;
@@ -116,7 +122,12 @@ function loadStoredToken(): AccessTokenInfo | null {
       window.localStorage.removeItem(LEGACY_STORAGE_KEY);
       return null;
     }
-    if (parsed.expiresAt <= Date.now() + REFRESH_MARGIN_MS) {
+    const refreshToken =
+      typeof parsed.refreshToken === "string" && parsed.refreshToken.trim()
+        ? parsed.refreshToken.trim()
+        : undefined;
+
+    if (parsed.expiresAt <= Date.now() + REFRESH_MARGIN_MS && !refreshToken) {
       window.localStorage.removeItem(STORAGE_KEY);
       window.localStorage.removeItem(LEGACY_STORAGE_KEY);
       return null;
@@ -124,6 +135,7 @@ function loadStoredToken(): AccessTokenInfo | null {
     return {
       token: parsed.token,
       expiresAt: parsed.expiresAt,
+      refreshToken,
     };
   } catch (error) {
     console.error("Failed to read Google auth token from storage", error);
@@ -159,30 +171,45 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   // to other hooks and stored in refs; without useCallback React would recreate
   // the function every render, potentially breaking equality checks or causing
   // needless effect cleanups.
-  const setAccessToken = useCallback((token: string, expiresIn = 3600) => {
-    if (!token) {
-      setTokenInfo(null);
-      tokenInfoRef.current = null;
+  const setAccessToken = useCallback(
+    (
+      token: string,
+      expiresIn = 3600,
+      options?: { refreshToken?: string | null },
+    ) => {
+      if (!token) {
+        setTokenInfo(null);
+        tokenInfoRef.current = null;
+        try {
+          window.localStorage.removeItem(STORAGE_KEY);
+          window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+        } catch (error) {
+          console.error("Failed to clear Google auth token", error);
+        }
+        return;
+      }
+
+      const refreshToken =
+        options?.refreshToken === undefined
+          ? tokenInfoRef.current?.refreshToken
+          : options.refreshToken || undefined;
+      const expiresAt = Date.now() + (expiresIn * 1000 - REFRESH_MARGIN_MS);
+      const info: AccessTokenInfo = {
+        token,
+        expiresAt,
+        ...(refreshToken ? { refreshToken } : {}),
+      };
+      setTokenInfo(info);
+      tokenInfoRef.current = info;
       try {
-        window.localStorage.removeItem(STORAGE_KEY);
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(info));
         window.localStorage.removeItem(LEGACY_STORAGE_KEY);
       } catch (error) {
-        console.error("Failed to clear Google auth token", error);
+        console.error("Failed to persist Google auth token", error);
       }
-      return;
-    }
-
-    const expiresAt = Date.now() + (expiresIn * 1000 - REFRESH_MARGIN_MS);
-    const info = { token, expiresAt };
-    setTokenInfo(info);
-    tokenInfoRef.current = info;
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(info));
-      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
-    } catch (error) {
-      console.error("Failed to persist Google auth token", error);
-    }
-  }, []);
+    },
+    [],
+  );
 
   const clearPkceState = useCallback(() => {
     try {
@@ -285,10 +312,9 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       );
     }
 
-    setAccessToken(
-      tokenResponse.access_token,
-      tokenResponse.expires_in ?? 3600,
-    );
+    setAccessToken(tokenResponse.access_token, tokenResponse.expires_in ?? 3600, {
+      refreshToken: tokenResponse.refresh_token,
+    });
     clearPkceState();
     window.history.replaceState(null, "", returnTo);
   }, [clearPkceState, exchangeAuthorizationCode, setAccessToken]);
@@ -319,14 +345,67 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     authUrl.searchParams.set("code_challenge", codeChallenge);
     authUrl.searchParams.set("code_challenge_method", "S256");
     authUrl.searchParams.set("include_granted_scopes", "true");
+    authUrl.searchParams.set("access_type", "offline");
 
-    // Force consent only for first-time grants. Re-auth attempts can stay silent.
-    if (!tokenInfoRef.current?.token) {
+    // Force consent only until we obtain a refresh token.
+    if (!tokenInfoRef.current?.refreshToken) {
       authUrl.searchParams.set("prompt", "consent");
     }
 
     window.location.assign(authUrl.toString());
   }, []);
+
+  const refreshAccessToken = useCallback(async (): Promise<string | null> => {
+    const refreshToken = tokenInfoRef.current?.refreshToken?.trim();
+    if (!refreshToken) {
+      return null;
+    }
+
+    const { clientId, clientSecret } = googleClientManager.getOAuthClient();
+    if (!clientId?.trim()) {
+      throw new Error("Google OAuth client is not configured.");
+    }
+
+    const body = new URLSearchParams({
+      client_id: clientId,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    });
+    if (clientSecret?.trim()) {
+      body.set("client_secret", clientSecret.trim());
+    }
+
+    const response = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body,
+    });
+
+    let token: AccessTokenResponse | null = null;
+    try {
+      token = (await response.json()) as AccessTokenResponse;
+    } catch {
+      token = null;
+    }
+
+    if (!response.ok || token?.error || !token?.access_token) {
+      if (token?.error === "invalid_grant") {
+        setAccessToken("");
+      }
+      throw new Error(
+        token?.error_description ??
+          token?.error ??
+          `Google OAuth refresh failed (${response.status})`,
+      );
+    }
+
+    setAccessToken(token.access_token, token.expires_in ?? 3600, {
+      refreshToken: token.refresh_token ?? refreshToken,
+    });
+    return token.access_token;
+  }, [setAccessToken]);
 
   useEffect(() => {
     tokenInfoRef.current = tokenInfo;
@@ -431,7 +510,8 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
 
   // Public entry point: fetch (or reuse) an access token. The callback contains
   // all of the state orchestration so Callers can simply `await`.
-  const ensureAccessToken = useCallback(() => {
+  const ensureAccessToken = useCallback((options?: EnsureAccessTokenOptions) => {
+    const interactive = options?.interactive ?? true;
     const currentInfo = tokenInfoRef.current;
     if (
       currentInfo?.token &&
@@ -460,6 +540,30 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
         refreshedInfo.expiresAt > Date.now() + REFRESH_MARGIN_MS
       ) {
         return refreshedInfo.token;
+      }
+
+      try {
+        const refreshedToken = await refreshAccessToken();
+        if (refreshedToken) {
+          return refreshedToken;
+        }
+      } catch (error) {
+        appLogger.error("Failed to refresh Google access token", {
+          attrs: {
+            scope: "storage.drive.auth",
+            code: "DRIVE_AUTH_TOKEN_REFRESH_FAILED",
+            error: String(error),
+          },
+        });
+        if (!interactive) {
+          throw new Error(
+            `Google Drive authorization is required: ${String(error)}`,
+          );
+        }
+      }
+
+      if (!interactive) {
+        throw new Error("Google Drive authorization is required.");
       }
 
       const oauthClient = googleClientManager.getOAuthClient();
@@ -510,7 +614,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     });
 
     return pendingPromiseRef.current;
-  }, [ensureTokenClient, setAccessToken, startPkceRedirect]);
+  }, [ensureTokenClient, refreshAccessToken, setAccessToken, startPkceRedirect]);
 
   // useMemo caches the context value so React hands the same object reference to
   // consumers unless one of the dependencies changes. This prevents needless
