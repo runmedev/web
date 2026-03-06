@@ -433,6 +433,12 @@ export class RuntimeAppConfigSchema {
     }
 
     if (drive) {
+      const hasClientMaterial =
+        Object.prototype.hasOwnProperty.call(drive, "clientMaterial") ||
+        Object.prototype.hasOwnProperty.call(drive, "client_material");
+      const clientMaterial = asStringArray(
+        drive.clientMaterial ?? drive.client_material,
+      ).join("");
       const authFlow =
         asGoogleDriveAuthFlow(
           drive.authFlow ?? drive.auth_flow ?? drive.oauthFlow ?? drive.flow,
@@ -446,7 +452,9 @@ export class RuntimeAppConfigSchema {
         ) ?? (authFlow === "pkce" ? "redirect" : "popup");
       parsed.googleDrive = {
         clientId: pickString(drive, ["clientId", "clientID"]),
-        clientSecret: pickString(drive, ["clientSecret", "client_secret"]),
+        clientSecret: hasClientMaterial
+          ? clientMaterial
+          : pickString(drive, ["clientSecret", "client_secret"]),
         baseUrl: asNonEmptyString(drive.baseUrl),
         authFlow,
         authUxMode,
