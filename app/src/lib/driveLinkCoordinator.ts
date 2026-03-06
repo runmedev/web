@@ -9,6 +9,7 @@ import { NotebookStoreItemType } from "../storage/notebook";
 
 const STORAGE_KEY = "runme/drive-link-intents";
 const STATUS_TAB_URI = "system://drive-link-status";
+const PROCESS_INTENT_TIMEOUT_MS = 20_000;
 
 export type DriveLinkIntentStatus =
   | "pending"
@@ -85,6 +86,43 @@ export function isDriveAuthError(error: unknown): boolean {
   ].some((token) => message.includes(token));
 }
 
+export function isDriveMissingOrAccessDeniedError(error: unknown): boolean {
+  const message = String(error).toLowerCase();
+  return (
+    message.includes("drive request failed (404") ||
+    message.includes("drive request failed (403") ||
+    message.includes("not found") ||
+    message.includes("insufficientfilepermissions") ||
+    message.includes("insufficient permissions") ||
+    message.includes("permission denied") ||
+    message.includes("forbidden")
+  );
+}
+
+function toDriveLinkAccessErrorMessage(remoteUri: string): string {
+  return `Failed to load shared Drive link (${remoteUri}). The file may not exist or you may not have permission to access it.`;
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(new Error(timeoutMessage));
+      }, timeoutMs);
+      promise.then(resolve, reject);
+    });
+  } finally {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 function loadIntents(): DriveLinkIntent[] {
   if (typeof window === "undefined" || !window.localStorage) {
     return [];
@@ -129,6 +167,7 @@ function persistIntents(intents: DriveLinkIntent[]): void {
 
 class DriveLinkCoordinatorRuntime {
   private intents = loadIntents();
+  private lastMessage: string | null = null;
 
   private listeners = new Set<() => void>();
 
@@ -156,14 +195,14 @@ class DriveLinkCoordinatorRuntime {
     const authBlocked = this.intents.some(
       (intent) => intent.status === "waiting_for_auth",
     );
-    const lastErrorMessage =
+    const intentErrorMessage =
       [...this.intents]
         .reverse()
         .find((intent) => intent.lastErrorMessage)?.lastErrorMessage ?? null;
     return {
       intents: this.intents.map((intent) => ({ ...intent })),
       authBlocked,
-      lastErrorMessage,
+      lastErrorMessage: this.lastMessage ?? intentErrorMessage,
     };
   }
 
@@ -184,6 +223,7 @@ class DriveLinkCoordinatorRuntime {
       return;
     }
 
+    this.lastMessage = null;
     this.intents = [
       ...this.intents,
       {
@@ -229,6 +269,20 @@ class DriveLinkCoordinatorRuntime {
   }
 
   async retryAuthAndProcess(): Promise<void> {
+    if (this.processing) {
+      this.lastMessage =
+        "Shared links are already being processed. Please wait for the current attempt to finish.";
+      appLogger.info("Retry requested while shared links are still processing", {
+        attrs: {
+          scope: "storage.drive.share",
+          code: "DRIVE_SHARED_LINK_RETRY_IGNORED_PROCESSING",
+        },
+      });
+      this.persistAndEmit();
+      return;
+    }
+
+    this.lastMessage = null;
     this.intents = this.intents.map((intent) => ({
       ...intent,
       status:
@@ -250,6 +304,7 @@ class DriveLinkCoordinatorRuntime {
       await deps.ensureAccessToken({ interactive: true });
     } catch (error) {
       if (isDriveAuthError(error)) {
+        this.lastMessage = String(error);
         this.intents = this.intents.map((intent) =>
           intent.status === "waiting_for_auth" || intent.status === "failed"
             ? {
@@ -307,40 +362,49 @@ class DriveLinkCoordinatorRuntime {
     });
 
     try {
-      await deps.ensureAccessToken({ interactive: false });
+      await withTimeout(
+        (async () => {
+          await deps.ensureAccessToken({ interactive: false });
 
-      if (intent.action === "mount_shared_folder") {
-        const localFolderUri = await deps.updateFolder(intent.remoteUri);
-        if (!deps.getWorkspaceItems().includes(localFolderUri)) {
-          deps.addWorkspaceItem(localFolderUri);
-        }
-      } else {
-        const { item, parents } = await fetchDriveItemWithParents(
-          intent.remoteUri,
-          deps.ensureAccessToken,
-        );
-        const parentFolder = parents.find(
-          (parent) => parent.type === NotebookStoreItemType.Folder,
-        );
-        if (parentFolder) {
-          const localFolderUri = await deps.updateFolder(
-            parentFolder.uri,
-            parentFolder.name,
-          );
-          if (!deps.getWorkspaceItems().includes(localFolderUri)) {
-            deps.addWorkspaceItem(localFolderUri);
+          if (intent.action === "mount_shared_folder") {
+            const localFolderUri = await deps.updateFolder(intent.remoteUri);
+            if (!deps.getWorkspaceItems().includes(localFolderUri)) {
+              deps.addWorkspaceItem(localFolderUri);
+            }
+          } else {
+            const { item, parents } = await fetchDriveItemWithParents(
+              intent.remoteUri,
+              deps.ensureAccessToken,
+            );
+            const parentFolder = parents.find(
+              (parent) => parent.type === NotebookStoreItemType.Folder,
+            );
+            if (parentFolder) {
+              const localFolderUri = await deps.updateFolder(
+                parentFolder.uri,
+                parentFolder.name,
+              );
+              if (!deps.getWorkspaceItems().includes(localFolderUri)) {
+                deps.addWorkspaceItem(localFolderUri);
+              }
+            }
+
+            const localFileUri = await deps.addFile(item.uri, item.name);
+            await deps.openNotebook(localFileUri);
           }
-        }
+        })(),
+        PROCESS_INTENT_TIMEOUT_MS,
+        "Timed out while loading the shared Drive link.",
+      );
 
-        const localFileUri = await deps.addFile(item.uri, item.name);
-        await deps.openNotebook(localFileUri);
-      }
-
+      this.lastMessage = null;
       this.intents = this.intents.filter((item) => item.id !== intentId);
       this.persistAndEmit();
     } catch (error) {
       const message = String(error);
       const waitingForAuth = isDriveAuthError(error);
+      const terminalMissingOrAccessDenied =
+        isDriveMissingOrAccessDeniedError(error);
       appLogger.error("Failed to process shared Drive link", {
         attrs: {
           scope: "storage.drive.share",
@@ -350,6 +414,14 @@ class DriveLinkCoordinatorRuntime {
           error: message,
         },
       });
+      if (terminalMissingOrAccessDenied) {
+        this.lastMessage = toDriveLinkAccessErrorMessage(intent.remoteUri);
+        this.intents = this.intents.filter((item) => item.id !== intentId);
+        this.persistAndEmit();
+        return;
+      }
+
+      this.lastMessage = message;
       this.updateIntent(intentId, {
         status: waitingForAuth ? "waiting_for_auth" : "failed",
         lastErrorMessage: message,

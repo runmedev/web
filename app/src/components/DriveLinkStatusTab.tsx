@@ -39,6 +39,8 @@ export function DriveLinkStatusTab({
           >
             {snapshot.authBlocked
               ? "Google Drive authorization is required before shared links can be loaded. Click Login to Drive to continue."
+              : snapshot.intents.length === 0 && snapshot.lastErrorMessage
+                ? "No pending shared links. See the latest status message below."
               : "Shared links are queued for processing."}
           </Text>
           {snapshot.lastErrorMessage && (
