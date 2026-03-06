@@ -5,6 +5,7 @@ export const APP_ROUTE_PATHS = {
   indexEntry: "/index.html",
   authStatus: "/auth/status",
   oidcCallback: "/oidc/callback",
+  googleDriveOauthCallback: "/gdrive/callback",
   runs: "/runs",
   run: (runName: string) => `/runs/${runName}`,
   editRun: (runName: string) => `/runs/${runName}/edit`,
@@ -104,6 +105,10 @@ export function getAppPath(path = ""): string {
 
 export function getOidcCallbackUrl(): string {
   return resolveAppUrl(APP_ROUTE_PATHS.oidcCallback).toString();
+}
+
+export function getGoogleDriveOAuthCallbackUrl(): string {
+  return resolveAppUrl(APP_ROUTE_PATHS.googleDriveOauthCallback).toString();
 }
 
 export function normalizeAppIndexUrl(): void {

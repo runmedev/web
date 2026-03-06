@@ -8,7 +8,14 @@ import {
   isFileSystemAccessSupported,
 } from "../../storage/fs";
 import { getAuthData } from "../../token";
-import { getDefaultAppConfigUrl, setAppConfig } from "../appConfig";
+import {
+  disableAppConfigOverridesOnLoad,
+  enableAppConfigOverridesOnLoad,
+  getDefaultAppConfigUrl,
+  isLocalConfigPreferredOnLoad,
+  setAppConfig,
+  setLocalConfigPreferredOnLoad,
+} from "../appConfig";
 import { agentEndpointManager } from "../agentEndpointManager";
 import { aisreClientManager } from "../aisreClientManager";
 import {
@@ -329,10 +336,20 @@ export function createAppJsGlobals({
     },
     googleClientManager: {
       get: () => googleClientManager.getOAuthClient(),
+      setOAuthClient: (config: {
+        clientId?: string;
+        clientSecret?: string;
+        authFlow?: "implicit" | "pkce";
+        authUxMode?: "popup" | "redirect";
+      }) => googleClientManager.setOAuthClient(config),
       setClientId: (clientId: string) =>
         googleClientManager.setOAuthClient({ clientId }),
       setClientSecret: (clientSecret: string) =>
         googleClientManager.setClientSecret(clientSecret),
+      setAuthFlow: (authFlow: "implicit" | "pkce") =>
+        googleClientManager.setAuthFlow(authFlow),
+      setAuthUxMode: (authUxMode: "popup" | "redirect") =>
+        googleClientManager.setAuthUxMode(authUxMode),
       setFromJson: (raw: string) =>
         googleClientManager.setOAuthClientFromJson(raw),
     },
@@ -390,6 +407,23 @@ export function createAppJsGlobals({
     },
     app: {
       getDefaultConfigUrl: () => getDefaultAppConfigUrl(),
+      isLocalConfigPreferredOnLoad: () => isLocalConfigPreferredOnLoad(),
+      setLocalConfigPreferredOnLoad: (preferLocal: boolean) => {
+        const applied = setLocalConfigPreferredOnLoad(Boolean(preferLocal));
+        const message = `App config load precedence set to ${applied ? "local storage" : "app-config"}`;
+        emitLine(sendOutput, message);
+        return applied;
+      },
+      disableConfigOverridesOnLoad: () => {
+        const applied = disableAppConfigOverridesOnLoad();
+        emitLine(sendOutput, "App config overrides on load disabled.");
+        return applied;
+      },
+      enableConfigOverridesOnLoad: () => {
+        const applied = enableAppConfigOverridesOnLoad();
+        emitLine(sendOutput, "App config overrides on load enabled.");
+        return applied;
+      },
       openNotebook: async (uri: string) => {
         if (!uri?.trim()) {
           throw new Error("Usage: app.openNotebook(localUri)");

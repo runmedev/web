@@ -3,8 +3,10 @@ import { Button, ScrollArea, Text } from "@radix-ui/themes";
 import { useDriveLinkCoordinatorSnapshot } from "../lib/driveLinkCoordinator";
 
 export function DriveLinkStatusTab({
+  onLogin,
   onRetry,
 }: {
+  onLogin: () => void | Promise<void>;
   onRetry: () => void | Promise<void>;
 }) {
   const snapshot = useDriveLinkCoordinatorSnapshot();
@@ -36,7 +38,9 @@ export function DriveLinkStatusTab({
             className={snapshot.authBlocked ? "mt-2 text-nb-error" : "mt-2 text-nb-text-muted"}
           >
             {snapshot.authBlocked
-              ? "Google Drive authorization is required before shared links can be loaded. If loading does not continue, make sure your browser is not blocking popups needed for the Google Drive auth flow."
+              ? "Google Drive authorization is required before shared links can be loaded. Click Login to Drive to continue."
+              : snapshot.intents.length === 0 && snapshot.lastErrorMessage
+                ? "No pending shared links. See the latest status message below."
               : "Shared links are queued for processing."}
           </Text>
           {snapshot.lastErrorMessage && (
@@ -47,8 +51,11 @@ export function DriveLinkStatusTab({
               {snapshot.lastErrorMessage}
             </pre>
           )}
-          <div className="mt-4">
-            <Button onClick={() => void onRetry()}>
+          <div className="mt-4 flex flex-wrap gap-3">
+            {snapshot.authBlocked && (
+              <Button onClick={() => void onLogin()}>Login To Drive</Button>
+            )}
+            <Button variant="soft" onClick={() => void onRetry()}>
               Retry Loading Shared Links
             </Button>
           </div>

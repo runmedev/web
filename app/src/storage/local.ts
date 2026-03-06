@@ -193,11 +193,29 @@ export class LocalNotebooks extends Dexie {
 
     const folderId =
       existingFolder?.id ?? this.generateLocalUri("folder");
-    const resolvedName =
-      existingFolder?.name ??
-      name ??
-      this.deriveDisplayNameFromUri(remoteUri) ??
-      "Untitled Folder";
+    const fallbackName =
+      this.deriveDisplayNameFromUri(remoteUri) ?? "Untitled Folder";
+    let resolvedName =
+      name ?? existingFolder?.name ?? fallbackName;
+
+    // When callers don't provide a name, resolve the remote folder metadata so
+    // new mounts use the human-readable Drive name instead of an id-derived
+    // fallback. If an existing record still has that fallback name, upgrade it.
+    if (!name && (!existingFolder || existingFolder.name === fallbackName)) {
+      try {
+        const metadata = await this.driveStore.getMetadata(remoteUri);
+        const remoteName = metadata?.name?.trim();
+        if (remoteName) {
+          resolvedName = remoteName;
+        }
+      } catch (error) {
+        console.error(
+          "Failed to resolve Drive folder name from metadata",
+          remoteUri,
+          error,
+        );
+      }
+    }
 
     // Ensure the folder exists locally before we populate it.
     if (!existingFolder) {

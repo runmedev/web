@@ -8,7 +8,13 @@ import {
   useRef,
   useState,
 } from "react";
+import pkceChallenge from "pkce-challenge";
 import { googleClientManager } from "../lib/googleClientManager";
+import {
+  APP_ROUTE_PATHS,
+  getAppPath,
+  getGoogleDriveOAuthCallbackUrl,
+} from "../lib/appBase";
 import { appLogger } from "../lib/logging/runtime";
 
 // N.B. I couldn't make sharing work with the more restrictive "https://www.googleapis.com/auth/drive.file"
@@ -22,14 +28,23 @@ export const DRIVE_SCOPES = [
 
 const STORAGE_KEY = "runme/google-auth/token";
 const LEGACY_STORAGE_KEY = "aisre/google-auth/token";
+const PKCE_STATE_KEY = "runme/google-auth/pkce-state";
+const PKCE_CODE_VERIFIER_KEY = "runme/google-auth/pkce-code-verifier";
+const PKCE_RETURN_TO_KEY = "runme/google-auth/pkce-return-to";
+const PKCE_ERROR_KEY = "runme/google-auth/pkce-error";
 
 interface AccessTokenInfo {
   token: string;
   expiresAt: number;
+  refreshToken?: string;
+}
+
+interface EnsureAccessTokenOptions {
+  interactive?: boolean;
 }
 
 interface GoogleAuthContextType {
-  ensureAccessToken: () => Promise<string>;
+  ensureAccessToken: (options?: EnsureAccessTokenOptions) => Promise<string>;
   setAccessToken: (token: string, expiresIn?: number) => void;
 }
 
@@ -46,7 +61,11 @@ interface TokenClient {
 interface AccessTokenResponse {
   access_token?: string;
   expires_in?: number;
+  refresh_token?: string;
+  scope?: string;
+  token_type?: string;
   error?: string;
+  error_description?: string;
 }
 
 interface GoogleOAuth {
@@ -105,7 +124,12 @@ function loadStoredToken(): AccessTokenInfo | null {
       window.localStorage.removeItem(LEGACY_STORAGE_KEY);
       return null;
     }
-    if (parsed.expiresAt <= Date.now() + REFRESH_MARGIN_MS) {
+    const refreshToken =
+      typeof parsed.refreshToken === "string" && parsed.refreshToken.trim()
+        ? parsed.refreshToken.trim()
+        : undefined;
+
+    if (parsed.expiresAt <= Date.now() + REFRESH_MARGIN_MS && !refreshToken) {
       window.localStorage.removeItem(STORAGE_KEY);
       window.localStorage.removeItem(LEGACY_STORAGE_KEY);
       return null;
@@ -113,6 +137,7 @@ function loadStoredToken(): AccessTokenInfo | null {
     return {
       token: parsed.token,
       expiresAt: parsed.expiresAt,
+      refreshToken,
     };
   } catch (error) {
     console.error("Failed to read Google auth token from storage", error);
@@ -140,40 +165,281 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   const handlersRef = useRef<PendingHandlers | null>(null);
   const pendingPromiseRef = useRef<Promise<string> | null>(null);
   const scriptPromiseRef = useRef<Promise<void> | null>(null);
+  const callbackPromiseRef = useRef<Promise<void> | null>(null);
+  const callbackErrorRef = useRef<unknown>(null);
 
   // useCallback memoises the function instance so consumers receive a stable
   // reference between renders. That is important because the callback is passed
   // to other hooks and stored in refs; without useCallback React would recreate
   // the function every render, potentially breaking equality checks or causing
   // needless effect cleanups.
-  const setAccessToken = useCallback((token: string, expiresIn = 3600) => {
-    if (!token) {
-      setTokenInfo(null);
-      tokenInfoRef.current = null;
+  const setAccessToken = useCallback(
+    (
+      token: string,
+      expiresIn = 3600,
+      options?: { refreshToken?: string | null },
+    ) => {
+      if (!token) {
+        setTokenInfo(null);
+        tokenInfoRef.current = null;
+        try {
+          window.localStorage.removeItem(STORAGE_KEY);
+          window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+        } catch (error) {
+          console.error("Failed to clear Google auth token", error);
+        }
+        return;
+      }
+
+      const refreshToken =
+        options?.refreshToken === undefined
+          ? tokenInfoRef.current?.refreshToken
+          : options.refreshToken || undefined;
+      const expiresAt = Date.now() + (expiresIn * 1000 - REFRESH_MARGIN_MS);
+      const info: AccessTokenInfo = {
+        token,
+        expiresAt,
+        ...(refreshToken ? { refreshToken } : {}),
+      };
+      setTokenInfo(info);
+      tokenInfoRef.current = info;
       try {
-        window.localStorage.removeItem(STORAGE_KEY);
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(info));
         window.localStorage.removeItem(LEGACY_STORAGE_KEY);
       } catch (error) {
-        console.error("Failed to clear Google auth token", error);
+        console.error("Failed to persist Google auth token", error);
       }
+    },
+    [],
+  );
+
+  const clearPkceState = useCallback(() => {
+    try {
+      window.localStorage.removeItem(PKCE_STATE_KEY);
+      window.localStorage.removeItem(PKCE_CODE_VERIFIER_KEY);
+      window.localStorage.removeItem(PKCE_RETURN_TO_KEY);
+      window.sessionStorage.removeItem(PKCE_ERROR_KEY);
+    } catch (error) {
+      console.error("Failed to clear Google PKCE state", error);
+    }
+  }, []);
+
+  const exchangeAuthorizationCode = useCallback(
+    async (code: string, codeVerifier: string): Promise<AccessTokenResponse> => {
+      const { clientId, clientSecret } = googleClientManager.getOAuthClient();
+      if (!clientId?.trim()) {
+        throw new Error("Google OAuth client is not configured.");
+      }
+
+      const body = new URLSearchParams({
+        client_id: clientId,
+        code,
+        code_verifier: codeVerifier,
+        redirect_uri: getGoogleDriveOAuthCallbackUrl(),
+        grant_type: "authorization_code",
+      });
+      if (clientSecret?.trim()) {
+        body.set("client_secret", clientSecret.trim());
+      }
+
+      const response = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body,
+      });
+
+      let token: AccessTokenResponse | null = null;
+      try {
+        token = (await response.json()) as AccessTokenResponse;
+      } catch {
+        token = null;
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          token?.error_description ??
+            token?.error ??
+            `Google OAuth token exchange failed (${response.status})`,
+        );
+      }
+
+      return token ?? {};
+    },
+    [],
+  );
+
+  const handlePkceCallbackIfPresent = useCallback(async () => {
+    const callbackPath = new URL(getGoogleDriveOAuthCallbackUrl()).pathname;
+    if (window.location.pathname !== callbackPath) {
       return;
     }
 
-    const expiresAt = Date.now() + (expiresIn * 1000 - REFRESH_MARGIN_MS);
-    const info = { token, expiresAt };
-    setTokenInfo(info);
-    tokenInfoRef.current = info;
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(info));
-      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
-    } catch (error) {
-      console.error("Failed to persist Google auth token", error);
+    const params = new URLSearchParams(window.location.search);
+    const oauthError = params.get("error");
+    if (oauthError) {
+      const message =
+        params.get("error_description") ?? `Google OAuth failed: ${oauthError}`;
+      clearPkceState();
+      throw new Error(message);
     }
+
+    const code = params.get("code");
+    const state = params.get("state");
+    if (!code && !state) {
+      return;
+    }
+
+    const storedState = window.localStorage.getItem(PKCE_STATE_KEY);
+    const codeVerifier = window.localStorage.getItem(PKCE_CODE_VERIFIER_KEY);
+    const returnTo =
+      window.localStorage.getItem(PKCE_RETURN_TO_KEY) ??
+      getAppPath(APP_ROUTE_PATHS.home);
+
+    if (!code || !state || !storedState || !codeVerifier) {
+      clearPkceState();
+      throw new Error("Google OAuth callback is missing required PKCE state.");
+    }
+    if (state !== storedState) {
+      clearPkceState();
+      throw new Error("Google OAuth callback state mismatch.");
+    }
+
+    const tokenResponse = await exchangeAuthorizationCode(code, codeVerifier);
+    if (tokenResponse.error || !tokenResponse.access_token) {
+      clearPkceState();
+      throw new Error(
+        tokenResponse.error_description ??
+          tokenResponse.error ??
+          "Failed to obtain access token",
+      );
+    }
+
+    setAccessToken(tokenResponse.access_token, tokenResponse.expires_in ?? 3600, {
+      refreshToken: tokenResponse.refresh_token,
+    });
+    clearPkceState();
+    window.location.replace(returnTo);
+  }, [clearPkceState, exchangeAuthorizationCode, setAccessToken]);
+
+  const startPkceRedirect = useCallback(async () => {
+    const { clientId } = googleClientManager.getOAuthClient();
+    if (!clientId?.trim()) {
+      throw new Error("Google OAuth client is not configured.");
+    }
+
+    const { code_verifier: codeVerifier, code_challenge: codeChallenge } =
+      await pkceChallenge();
+    const state = globalThis.crypto?.randomUUID
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now()}-${Math.random()}`;
+    const returnTo = getAppPath(APP_ROUTE_PATHS.home);
+
+    window.localStorage.setItem(PKCE_CODE_VERIFIER_KEY, codeVerifier);
+    window.localStorage.setItem(PKCE_STATE_KEY, state);
+    window.localStorage.setItem(PKCE_RETURN_TO_KEY, returnTo);
+
+    const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    authUrl.searchParams.set("client_id", clientId);
+    authUrl.searchParams.set("redirect_uri", getGoogleDriveOAuthCallbackUrl());
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set("scope", DRIVE_SCOPES.join(" "));
+    authUrl.searchParams.set("state", state);
+    authUrl.searchParams.set("code_challenge", codeChallenge);
+    authUrl.searchParams.set("code_challenge_method", "S256");
+    authUrl.searchParams.set("include_granted_scopes", "true");
+    authUrl.searchParams.set("access_type", "offline");
+
+    // Force consent only until we obtain a refresh token.
+    if (!tokenInfoRef.current?.refreshToken) {
+      authUrl.searchParams.set("prompt", "consent");
+    }
+
+    window.location.assign(authUrl.toString());
   }, []);
+
+  const refreshAccessToken = useCallback(async (): Promise<string | null> => {
+    const refreshToken = tokenInfoRef.current?.refreshToken?.trim();
+    if (!refreshToken) {
+      return null;
+    }
+
+    const { clientId, clientSecret } = googleClientManager.getOAuthClient();
+    if (!clientId?.trim()) {
+      throw new Error("Google OAuth client is not configured.");
+    }
+
+    const body = new URLSearchParams({
+      client_id: clientId,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    });
+    if (clientSecret?.trim()) {
+      body.set("client_secret", clientSecret.trim());
+    }
+
+    const response = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body,
+    });
+
+    let token: AccessTokenResponse | null = null;
+    try {
+      token = (await response.json()) as AccessTokenResponse;
+    } catch {
+      token = null;
+    }
+
+    if (!response.ok || token?.error || !token?.access_token) {
+      if (token?.error === "invalid_grant") {
+        setAccessToken("");
+      }
+      throw new Error(
+        token?.error_description ??
+          token?.error ??
+          `Google OAuth refresh failed (${response.status})`,
+      );
+    }
+
+    setAccessToken(token.access_token, token.expires_in ?? 3600, {
+      refreshToken: token.refresh_token ?? refreshToken,
+    });
+    return token.access_token;
+  }, [setAccessToken]);
 
   useEffect(() => {
     tokenInfoRef.current = tokenInfo;
   }, [tokenInfo]);
+
+  useEffect(() => {
+    callbackErrorRef.current = null;
+    const pending = handlePkceCallbackIfPresent().catch((error) => {
+      callbackErrorRef.current = error;
+      try {
+        window.sessionStorage.setItem(PKCE_ERROR_KEY, String(error));
+      } catch {
+        // Ignore session storage failures.
+      }
+      appLogger.error("Failed to handle Google Drive OAuth callback", {
+        attrs: {
+          scope: "storage.drive.auth",
+          code: "DRIVE_AUTH_CALLBACK_FAILED",
+          error: String(error),
+        },
+      });
+      const callbackPath = new URL(getGoogleDriveOAuthCallbackUrl()).pathname;
+      if (window.location.pathname === callbackPath) {
+        window.location.replace(getAppPath(APP_ROUTE_PATHS.home));
+      }
+    });
+    callbackPromiseRef.current = pending.finally(() => {
+      callbackPromiseRef.current = null;
+    });
+  }, [handlePkceCallbackIfPresent]);
 
   // Loads the Google Identity Services script exactly once. We memoise the
   // function so callers share the same pending promise, and we stash the promise
@@ -257,7 +523,8 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
 
   // Public entry point: fetch (or reuse) an access token. The callback contains
   // all of the state orchestration so Callers can simply `await`.
-  const ensureAccessToken = useCallback(() => {
+  const ensureAccessToken = useCallback((options?: EnsureAccessTokenOptions) => {
+    const interactive = options?.interactive ?? true;
     const currentInfo = tokenInfoRef.current;
     if (
       currentInfo?.token &&
@@ -271,6 +538,65 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     }
 
     pendingPromiseRef.current = (async () => {
+      if (callbackPromiseRef.current) {
+        await callbackPromiseRef.current;
+      }
+      let callbackErrorFromStorage: string | null = null;
+      try {
+        callbackErrorFromStorage = window.sessionStorage.getItem(PKCE_ERROR_KEY);
+        if (callbackErrorFromStorage) {
+          window.sessionStorage.removeItem(PKCE_ERROR_KEY);
+        }
+      } catch {
+        callbackErrorFromStorage = null;
+      }
+      if (callbackErrorFromStorage) {
+        throw new Error(callbackErrorFromStorage);
+      }
+      if (callbackErrorRef.current) {
+        const callbackError = callbackErrorRef.current;
+        callbackErrorRef.current = null;
+        throw callbackError;
+      }
+
+      const refreshedInfo = tokenInfoRef.current;
+      if (
+        refreshedInfo?.token &&
+        refreshedInfo.expiresAt > Date.now() + REFRESH_MARGIN_MS
+      ) {
+        return refreshedInfo.token;
+      }
+
+      try {
+        const refreshedToken = await refreshAccessToken();
+        if (refreshedToken) {
+          return refreshedToken;
+        }
+      } catch (error) {
+        appLogger.error("Failed to refresh Google access token", {
+          attrs: {
+            scope: "storage.drive.auth",
+            code: "DRIVE_AUTH_TOKEN_REFRESH_FAILED",
+            error: String(error),
+          },
+        });
+        if (!interactive) {
+          throw new Error(
+            `Google Drive authorization is required: ${String(error)}`,
+          );
+        }
+      }
+
+      if (!interactive) {
+        throw new Error("Google Drive authorization is required.");
+      }
+
+      const oauthClient = googleClientManager.getOAuthClient();
+      if (oauthClient.authFlow === "pkce" || oauthClient.authUxMode === "redirect") {
+        await startPkceRedirect();
+        throw new Error("Redirecting to Google OAuth for Drive authorization.");
+      }
+
       const client = await ensureTokenClient();
       return await new Promise<string>((resolve, reject) => {
         handlersRef.current = { resolve, reject };
@@ -313,7 +639,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     });
 
     return pendingPromiseRef.current;
-  }, [ensureTokenClient, setAccessToken]);
+  }, [ensureTokenClient, refreshAccessToken, setAccessToken, startPkceRedirect]);
 
   // useMemo caches the context value so React hands the same object reference to
   // consumers unless one of the dependencies changes. This prevents needless

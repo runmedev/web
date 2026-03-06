@@ -39,7 +39,7 @@ export interface DriveLinkCoordinatorSnapshot {
 }
 
 type DriveLinkCoordinatorDeps = {
-  ensureAccessToken: () => Promise<string>;
+  ensureAccessToken: (options?: { interactive?: boolean }) => Promise<string>;
   updateFolder: (remoteUri: string, name?: string) => Promise<string>;
   addFile: (remoteUri: string, name?: string) => Promise<string>;
   addWorkspaceItem: (localUri: string) => void;
@@ -79,9 +79,27 @@ export function isDriveAuthError(error: unknown): boolean {
     "token",
     "popup",
     "consent",
+    "required",
     "access denied",
     "not configured",
   ].some((token) => message.includes(token));
+}
+
+export function isDriveMissingOrAccessDeniedError(error: unknown): boolean {
+  const message = String(error).toLowerCase();
+  return (
+    message.includes("drive request failed (404") ||
+    message.includes("drive request failed (403") ||
+    message.includes("not found") ||
+    message.includes("insufficientfilepermissions") ||
+    message.includes("insufficient permissions") ||
+    message.includes("permission denied") ||
+    message.includes("forbidden")
+  );
+}
+
+function toDriveLinkAccessErrorMessage(remoteUri: string): string {
+  return `Failed to load shared Drive link (${remoteUri}). The file may not exist or you may not have permission to access it.`;
 }
 
 function loadIntents(): DriveLinkIntent[] {
@@ -98,13 +116,20 @@ function loadIntents(): DriveLinkIntent[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.filter(
-      (intent): intent is DriveLinkIntent =>
-        Boolean(intent?.id) &&
-        Boolean(intent?.remoteUri) &&
-        Boolean(intent?.action) &&
-        Boolean(intent?.status),
-    );
+    return parsed
+      .filter(
+        (intent): intent is DriveLinkIntent =>
+          Boolean(intent?.id) &&
+          Boolean(intent?.remoteUri) &&
+          Boolean(intent?.action) &&
+          Boolean(intent?.status),
+      )
+      .map((intent) => ({
+        ...intent,
+        // "processing" can be left behind in localStorage after reload/crash.
+        // Treat it as pending so the coordinator can resume it.
+        status: intent.status === "processing" ? "pending" : intent.status,
+      }));
   } catch {
     return [];
   }
@@ -128,6 +153,7 @@ function persistIntents(intents: DriveLinkIntent[]): void {
 
 class DriveLinkCoordinatorRuntime {
   private intents = loadIntents();
+  private lastMessage: string | null = null;
 
   private listeners = new Set<() => void>();
 
@@ -155,14 +181,14 @@ class DriveLinkCoordinatorRuntime {
     const authBlocked = this.intents.some(
       (intent) => intent.status === "waiting_for_auth",
     );
-    const lastErrorMessage =
+    const intentErrorMessage =
       [...this.intents]
         .reverse()
         .find((intent) => intent.lastErrorMessage)?.lastErrorMessage ?? null;
     return {
       intents: this.intents.map((intent) => ({ ...intent })),
       authBlocked,
-      lastErrorMessage,
+      lastErrorMessage: this.lastMessage ?? intentErrorMessage,
     };
   }
 
@@ -183,6 +209,7 @@ class DriveLinkCoordinatorRuntime {
       return;
     }
 
+    this.lastMessage = null;
     this.intents = [
       ...this.intents,
       {
@@ -228,16 +255,66 @@ class DriveLinkCoordinatorRuntime {
   }
 
   async retryAuthAndProcess(): Promise<void> {
+    if (this.processing) {
+      this.lastMessage =
+        "Shared links are already being processed. Please wait for the current attempt to finish.";
+      appLogger.info("Retry requested while shared links are still processing", {
+        attrs: {
+          scope: "storage.drive.share",
+          code: "DRIVE_SHARED_LINK_RETRY_IGNORED_PROCESSING",
+        },
+      });
+      this.persistAndEmit();
+      return;
+    }
+
+    this.lastMessage = "Retrying shared links...";
+    appLogger.info("Retry requested for shared Drive links", {
+      attrs: {
+        scope: "storage.drive.share",
+        code: "DRIVE_SHARED_LINK_RETRY_REQUESTED",
+      },
+    });
     this.intents = this.intents.map((intent) => ({
       ...intent,
       status:
-        intent.status === "waiting_for_auth" || intent.status === "failed"
+        intent.status === "waiting_for_auth" ||
+        intent.status === "failed" ||
+        intent.status === "processing"
           ? "pending"
           : intent.status,
       updatedAt: nowIso(),
     }));
     this.persistAndEmit();
     await this.processPending();
+  }
+
+  async loginToDriveAndProcess(): Promise<void> {
+    const deps = this.deps;
+    if (!deps) {
+      return;
+    }
+    try {
+      await deps.ensureAccessToken({ interactive: true });
+    } catch (error) {
+      if (isDriveAuthError(error)) {
+        this.lastMessage = String(error);
+        this.intents = this.intents.map((intent) =>
+          intent.status === "waiting_for_auth" || intent.status === "failed"
+            ? {
+                ...intent,
+                status: "waiting_for_auth",
+                lastErrorMessage: String(error),
+                updatedAt: nowIso(),
+              }
+            : intent,
+        );
+        this.persistAndEmit();
+      }
+      return;
+    }
+
+    await this.retryAuthAndProcess();
   }
 
   async processPending(): Promise<void> {
@@ -250,7 +327,8 @@ class DriveLinkCoordinatorRuntime {
         if (
           intent.status !== "pending" &&
           intent.status !== "waiting_for_auth" &&
-          intent.status !== "failed"
+          intent.status !== "failed" &&
+          intent.status !== "processing"
         ) {
           continue;
         }
@@ -279,7 +357,7 @@ class DriveLinkCoordinatorRuntime {
     });
 
     try {
-      await deps.ensureAccessToken();
+      await deps.ensureAccessToken({ interactive: false });
 
       if (intent.action === "mount_shared_folder") {
         const localFolderUri = await deps.updateFolder(intent.remoteUri);
@@ -308,11 +386,14 @@ class DriveLinkCoordinatorRuntime {
         await deps.openNotebook(localFileUri);
       }
 
+      this.lastMessage = null;
       this.intents = this.intents.filter((item) => item.id !== intentId);
       this.persistAndEmit();
     } catch (error) {
       const message = String(error);
       const waitingForAuth = isDriveAuthError(error);
+      const terminalMissingOrAccessDenied =
+        isDriveMissingOrAccessDeniedError(error);
       appLogger.error("Failed to process shared Drive link", {
         attrs: {
           scope: "storage.drive.share",
@@ -322,6 +403,14 @@ class DriveLinkCoordinatorRuntime {
           error: message,
         },
       });
+      if (terminalMissingOrAccessDenied) {
+        this.lastMessage = toDriveLinkAccessErrorMessage(intent.remoteUri);
+        this.intents = this.intents.filter((item) => item.id !== intentId);
+        this.persistAndEmit();
+        return;
+      }
+
+      this.lastMessage = message;
       this.updateIntent(intentId, {
         status: waitingForAuth ? "waiting_for_auth" : "failed",
         lastErrorMessage: message,

@@ -4,6 +4,7 @@ import {
   APP_ROUTE_PATHS,
   deriveAppBasePath,
   getAppPath,
+  getGoogleDriveOAuthCallbackUrl,
   getOidcCallbackUrl,
   normalizeAppIndexUrl,
   resolveAppUrl,
@@ -44,6 +45,9 @@ describe("app base URL helpers", () => {
     );
     expect(getOidcCallbackUrl()).toBe(
       `${origin}/runme-dev-assets/oidc/callback`,
+    );
+    expect(getGoogleDriveOAuthCallbackUrl()).toBe(
+      `${origin}/runme-dev-assets/gdrive/callback`,
     );
   });
 

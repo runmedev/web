@@ -3,14 +3,18 @@ import YAML from "yaml";
 import type { OidcConfig } from "../auth/oidcConfig";
 import { OIDC_STORAGE_KEY, oidcConfigManager } from "../auth/oidcConfig";
 import { getOidcCallbackUrl, resolveAppUrl } from "./appBase";
-import type { GoogleOAuthClientConfig } from "./googleClientManager";
+import type {
+  GoogleDriveAuthFlow,
+  GoogleDriveAuthUxMode,
+  GoogleOAuthClientConfig,
+} from "./googleClientManager";
 import {
   GOOGLE_CLIENT_STORAGE_KEY,
   googleClientManager,
 } from "./googleClientManager";
 import { agentEndpointManager } from "./agentEndpointManager";
 import { appLogger } from "./logging/runtime";
-import { setGoogleDriveBaseUrl } from "./googleDriveRuntime";
+import { getGoogleDriveBaseUrl, setGoogleDriveBaseUrl } from "./googleDriveRuntime";
 
 type StoredRunner = {
   name: string;
@@ -25,6 +29,11 @@ const DEFAULT_RUNNER_NAME_STORAGE_KEY = "runme/defaultRunner";
 const LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY = "aisre/defaultRunner";
 const DEFAULT_RUNNER_NAME = "default";
 export const APP_CONFIG_PATH_DEFAULT = "configs/app-configs.yaml";
+export const APP_CONFIG_PREFER_LOCAL_STORAGE_KEY = "runme/app-config/prefer-local";
+
+export type AppConfigApplyOptions = {
+  preserveLocalConfiguration?: boolean;
+};
 
 export interface OidcGenericRuntimeConfig {
   clientId: string;
@@ -50,6 +59,8 @@ export interface GoogleDriveRuntimeConfig {
   clientId: string;
   clientSecret: string;
   baseUrl: string;
+  authFlow: GoogleDriveAuthFlow;
+  authUxMode: GoogleDriveAuthUxMode;
 }
 
 export interface ChatkitRuntimeConfig {
@@ -107,6 +118,30 @@ function asNonEmptyString(value: unknown): string {
 
 function asBoolean(value: unknown): boolean {
   return typeof value === "boolean" ? value : false;
+}
+
+function asGoogleDriveAuthFlow(value: unknown): GoogleDriveAuthFlow | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "implicit" || normalized === "pkce") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function asGoogleDriveAuthUxMode(
+  value: unknown,
+): GoogleDriveAuthUxMode | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "popup" || normalized === "redirect") {
+    return normalized;
+  }
+  return undefined;
 }
 
 function asStringArray(value: unknown): string[] {
@@ -337,6 +372,8 @@ function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
       clientId: "",
       clientSecret: "",
       baseUrl: "",
+      authFlow: "implicit",
+      authUxMode: "popup",
     },
     chatkit: {
       domainKey: "",
@@ -396,10 +433,23 @@ export class RuntimeAppConfigSchema {
     }
 
     if (drive) {
+      const authFlow =
+        asGoogleDriveAuthFlow(
+          drive.authFlow ?? drive.auth_flow ?? drive.oauthFlow ?? drive.flow,
+        ) ?? "implicit";
+      const authUxMode =
+        asGoogleDriveAuthUxMode(
+          drive.authUxMode ??
+            drive.auth_ux_mode ??
+            drive.oauthUxMode ??
+            drive.uxMode,
+        ) ?? (authFlow === "pkce" ? "redirect" : "popup");
       parsed.googleDrive = {
         clientId: pickString(drive, ["clientId", "clientID"]),
         clientSecret: pickString(drive, ["clientSecret", "client_secret"]),
         baseUrl: asNonEmptyString(drive.baseUrl),
+        authFlow,
+        authUxMode,
       };
     }
 
@@ -423,10 +473,26 @@ export function getDefaultAppConfigUrl(): string {
 export function applyAppConfig(
   rawConfig: unknown,
   url: string,
+  options?: AppConfigApplyOptions,
 ): AppliedAppConfig {
   if (!isRecord(rawConfig)) {
     throw new Error("App config is empty or invalid");
   }
+  const preserveLocalConfiguration = Boolean(
+    options?.preserveLocalConfiguration,
+  );
+  const localStorageRef =
+    typeof window !== "undefined" && window.localStorage
+      ? window.localStorage
+      : null;
+  const hasLocalOidcConfig = Boolean(
+    localStorageRef?.getItem(OIDC_STORAGE_KEY),
+  );
+  const hasLocalDriveConfig = Boolean(
+    localStorageRef?.getItem(GOOGLE_CLIENT_STORAGE_KEY),
+  );
+  const hasLocalDriveRuntimeBaseUrl = Boolean(getGoogleDriveBaseUrl());
+
   const parsed = RuntimeAppConfigSchema.fromUnknown(rawConfig);
   const hasOidcBlock = isRecord(rawConfig.oidc);
   const rawOidc = asRecord(rawConfig.oidc);
@@ -456,60 +522,82 @@ export function applyAppConfig(
     googleOidcClientSecret ?? normalizeString(genericOidcConfig.clientSecret);
   const redirectUri = normalizeString(genericOidcConfig.redirectUrl);
   const configuredChatkitDomainKey = normalizeString(parsed.chatkit.domainKey);
-  if (hasOidcGoogleBlock) {
-    oidcConfigManager.setGoogleDefaults();
-  }
-  if (discoveryUrl) {
-    oidcConfig.discoveryUrl = discoveryUrl;
-  }
-  if (clientId) {
-    oidcConfig.clientId = clientId;
-  }
-  if (clientSecret) {
-    oidcConfig.clientSecret = clientSecret;
-  }
-  if (redirectUri) {
-    oidcConfig.redirectUri = redirectUri;
-  }
-  if (oidcScope) {
-    oidcConfig.scope = oidcScope;
-  }
-  if (Object.keys(oidcConfig).length > 0) {
-    if (!oidcConfig.redirectUri && typeof window !== "undefined") {
-      oidcConfig.redirectUri = getOidcCallbackUrl();
-    }
+  const skipOidcFromConfig =
+    preserveLocalConfiguration && hasLocalOidcConfig;
+  if (skipOidcFromConfig) {
     try {
-      oidc = oidcConfigManager.setConfig(oidcConfig);
-    } catch (error) {
-      warnings.push(`OIDC config not applied: ${String(error)}`);
+      oidc = oidcConfigManager.getConfig();
+    } catch {
+      oidc = undefined;
     }
-  } else if (hasOidcGoogleBlock) {
-    warnings.push("OIDC Google config missing clientID/clientId");
-  } else if (hasOidcBlock) {
-    warnings.push("OIDC config present but no applicable generic values found");
+  } else {
+    if (hasOidcGoogleBlock) {
+      oidcConfigManager.setGoogleDefaults();
+    }
+    if (discoveryUrl) {
+      oidcConfig.discoveryUrl = discoveryUrl;
+    }
+    if (clientId) {
+      oidcConfig.clientId = clientId;
+    }
+    if (clientSecret) {
+      oidcConfig.clientSecret = clientSecret;
+    }
+    if (redirectUri) {
+      oidcConfig.redirectUri = redirectUri;
+    }
+    if (oidcScope) {
+      oidcConfig.scope = oidcScope;
+    }
+    if (Object.keys(oidcConfig).length > 0) {
+      if (!oidcConfig.redirectUri && typeof window !== "undefined") {
+        oidcConfig.redirectUri = getOidcCallbackUrl();
+      }
+      try {
+        oidc = oidcConfigManager.setConfig(oidcConfig);
+      } catch (error) {
+        warnings.push(`OIDC config not applied: ${String(error)}`);
+      }
+    } else if (hasOidcGoogleBlock) {
+      warnings.push("OIDC Google config missing clientID/clientId");
+    } else if (hasOidcBlock) {
+      warnings.push("OIDC config present but no applicable generic values found");
+    }
   }
 
   const googleClientId = normalizeString(parsed.googleDrive.clientId);
   const googleClientSecret = normalizeString(parsed.googleDrive.clientSecret);
-  if (googleClientId) {
-    try {
-      googleOAuth = googleClientManager.setOAuthClient({
-        clientId: googleClientId,
-        clientSecret: googleClientSecret,
-      });
-    } catch (error) {
-      warnings.push(`Google OAuth config not applied: ${String(error)}`);
+  const googleAuthFlow = parsed.googleDrive.authFlow;
+  const googleAuthUxMode = parsed.googleDrive.authUxMode;
+  const skipGoogleDriveFromConfig =
+    preserveLocalConfiguration && hasLocalDriveConfig;
+  if (skipGoogleDriveFromConfig) {
+    googleOAuth = googleClientManager.getOAuthClient();
+  } else {
+    if (googleClientId) {
+      try {
+        googleOAuth = googleClientManager.setOAuthClient({
+          clientId: googleClientId,
+          clientSecret: googleClientSecret,
+          authFlow: googleAuthFlow,
+          authUxMode: googleAuthUxMode,
+        });
+      } catch (error) {
+        warnings.push(`Google OAuth config not applied: ${String(error)}`);
+      }
+    } else if (hasGoogleDriveBlock) {
+      warnings.push("Google Drive config missing clientID/clientId");
     }
-  } else if (hasGoogleDriveBlock) {
-    warnings.push("Google Drive config missing clientID/clientId");
   }
-  if (parsed.googleDrive.baseUrl) {
+  if (
+    parsed.googleDrive.baseUrl &&
+    !(preserveLocalConfiguration && hasLocalDriveRuntimeBaseUrl)
+  ) {
     setGoogleDriveBaseUrl(parsed.googleDrive.baseUrl);
   }
 
-  if (typeof window !== "undefined" && window.localStorage) {
-    const storage = window.localStorage;
-    const settings = readSettingsFromStorage(storage);
+  if (localStorageRef) {
+    const settings = readSettingsFromStorage(localStorageRef);
     const settingsWebApp = asRecord(settings.webApp);
     const settingsChatkit = asRecord(settings.chatkit);
     const configAgentEndpoint = normalizeString(parsed.agent.endpoint);
@@ -525,30 +613,30 @@ export function applyAppConfig(
     const configRunnerEndpoint = normalizeString(
       parsed.agent.defaultRunnerEndpoint,
     );
-    const hasStoredRunnerEndpoint = hasConfiguredRunners(storage);
+    const hasStoredRunnerEndpoint = hasConfiguredRunners(localStorageRef);
 
     if (!hasStoredRunnerEndpoint && configRunnerEndpoint) {
       defaultRunnerEndpoint = configRunnerEndpoint;
-      seedDefaultRunner(storage, configRunnerEndpoint);
+      seedDefaultRunner(localStorageRef, configRunnerEndpoint);
 
       const webApp = {
         ...(settingsWebApp ?? {}),
         runner: configRunnerEndpoint,
       };
       settings.webApp = webApp;
-      writeSettingsToStorage(storage, settings);
+      writeSettingsToStorage(localStorageRef, settings);
     } else if (hasStoredRunnerEndpoint) {
-      defaultRunnerEndpoint = readStoredRunnerEndpoint(storage);
+      defaultRunnerEndpoint = readStoredRunnerEndpoint(localStorageRef);
     }
 
-    const storedChatkitDomainKey = readStoredChatKitDomainKey(storage);
+    const storedChatkitDomainKey = readStoredChatKitDomainKey(localStorageRef);
     if (!storedChatkitDomainKey && configuredChatkitDomainKey) {
       chatkitDomainKey = configuredChatkitDomainKey;
       settings.chatkit = {
         ...(settingsChatkit ?? {}),
         domainKey: configuredChatkitDomainKey,
       };
-      writeSettingsToStorage(storage, settings);
+      writeSettingsToStorage(localStorageRef, settings);
     } else {
       chatkitDomainKey = storedChatkitDomainKey;
     }
@@ -572,7 +660,10 @@ export function applyAppConfig(
   };
 }
 
-export async function setAppConfig(url?: string): Promise<AppliedAppConfig> {
+export async function setAppConfig(
+  url?: string,
+  options?: AppConfigApplyOptions,
+): Promise<AppliedAppConfig> {
   const resolvedUrl = normalizeString(url) ?? getDefaultAppConfigUrl();
   const response = await fetch(resolvedUrl, { cache: "no-store" });
   if (!response.ok) {
@@ -582,91 +673,56 @@ export async function setAppConfig(url?: string): Promise<AppliedAppConfig> {
   }
   const text = await response.text();
   const parsed = YAML.parse(text) as unknown;
-  return applyAppConfig(parsed, resolvedUrl);
+  return applyAppConfig(parsed, resolvedUrl, options);
+}
+
+export function isLocalConfigPreferredOnLoad(): boolean {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return false;
+  }
+  return (
+    normalizeString(
+      window.localStorage.getItem(APP_CONFIG_PREFER_LOCAL_STORAGE_KEY),
+    ) === "true"
+  );
+}
+
+export function setLocalConfigPreferredOnLoad(preferLocal: boolean): boolean {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return preferLocal;
+  }
+  window.localStorage.setItem(
+    APP_CONFIG_PREFER_LOCAL_STORAGE_KEY,
+    preferLocal ? "true" : "false",
+  );
+  return preferLocal;
+}
+
+export function disableAppConfigOverridesOnLoad(): boolean {
+  return setLocalConfigPreferredOnLoad(true);
+}
+
+export function enableAppConfigOverridesOnLoad(): boolean {
+  return setLocalConfigPreferredOnLoad(false);
 }
 
 export async function maybeSetAppConfig(): Promise<AppliedAppConfig | null> {
   if (typeof window === "undefined" || !window.localStorage) {
     return null;
   }
-
-  const storage = window.localStorage;
-  const hasOidcConfig = Boolean(storage.getItem(OIDC_STORAGE_KEY));
-  const hasDriveConfig = Boolean(storage.getItem(GOOGLE_CLIENT_STORAGE_KEY));
-  const hasChatkitDomainKey = Boolean(readStoredChatKitDomainKey(storage));
-  const settings = readSettingsFromStorage(storage);
-  const hasAgentEndpoint = agentEndpointManager.hasOverride();
-  const hasRunnerEndpoint = hasConfiguredRunners(storage);
-
-  if (
-    hasOidcConfig &&
-    hasDriveConfig &&
-    hasChatkitDomainKey &&
-    hasAgentEndpoint &&
-    hasRunnerEndpoint
-  ) {
-    appLogger.info("App config values already set; skipping app config load.", {
-      attrs: { scope: "config.app", code: "APP_CONFIG_PRELOAD_SKIPPED" },
-    });
-    return null;
-  }
-  if (!hasOidcConfig) {
-    appLogger.info("OIDC config missing; attempting to load from app config.", {
-      attrs: { scope: "config.app", code: "APP_CONFIG_OIDC_MISSING" },
-    });
-  } else {
-    appLogger.info("OIDC config already set; skipping.", {
-      attrs: { scope: "config.app", code: "APP_CONFIG_OIDC_PRESENT" },
-    });
-  }
-  if (!hasDriveConfig) {
-    appLogger.info(
-      "Google Drive config missing; attempting to load from app config.",
-      {
-        attrs: { scope: "config.app", code: "APP_CONFIG_DRIVE_MISSING" },
-      },
-    );
-  } else {
-    appLogger.info("Google Drive config already set; skipping.", {
-      attrs: { scope: "config.app", code: "APP_CONFIG_DRIVE_PRESENT" },
-    });
-  }
-  if (!hasChatkitDomainKey) {
-    appLogger.info(
-      "ChatKit domain key missing; attempting to load from app config.",
-      {
-        attrs: { scope: "config.app", code: "APP_CONFIG_CHATKIT_MISSING" },
-      },
-    );
-  } else {
-    appLogger.info("ChatKit domain key already set; skipping.", {
-      attrs: { scope: "config.app", code: "APP_CONFIG_CHATKIT_PRESENT" },
-    });
-  }
-  if (!hasAgentEndpoint) {
-    appLogger.info("Agent endpoint missing; attempting to load from app config.", {
-      attrs: { scope: "config.app", code: "APP_CONFIG_AGENT_MISSING" },
-    });
-  } else {
-    appLogger.info("Agent endpoint already set; skipping.", {
-      attrs: { scope: "config.app", code: "APP_CONFIG_AGENT_PRESENT" },
-    });
-  }
-  if (!hasRunnerEndpoint) {
-    appLogger.info(
-      "Runner endpoint missing; attempting to load from app config.",
-      {
-        attrs: { scope: "config.app", code: "APP_CONFIG_RUNNER_MISSING" },
-      },
-    );
-  } else {
-    appLogger.info("Runner endpoint already set; skipping.", {
-      attrs: { scope: "config.app", code: "APP_CONFIG_RUNNER_PRESENT" },
-    });
-  }
+  const preserveLocalConfiguration = isLocalConfigPreferredOnLoad();
+  appLogger.info("Attempting app config preload", {
+    attrs: {
+      scope: "config.app",
+      code: "APP_CONFIG_PRELOAD_ATTEMPT",
+      preserveLocalConfiguration,
+    },
+  });
 
   try {
-    const applied = await setAppConfig();
+    const applied = await setAppConfig(undefined, {
+      preserveLocalConfiguration,
+    });
     appLogger.info("App config loaded.", {
       attrs: {
         scope: "config.app",

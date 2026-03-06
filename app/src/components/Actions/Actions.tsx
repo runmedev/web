@@ -927,7 +927,9 @@ export default function Actions() {
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const currentDocUri = getCurrentDoc();
   const driveLinkSnapshot = useDriveLinkCoordinatorSnapshot();
-  const statusTabVisible = driveLinkSnapshot.intents.length > 0;
+  const statusTabVisible =
+    driveLinkSnapshot.intents.length > 0 ||
+    Boolean(driveLinkSnapshot.lastErrorMessage);
   const [mountedTabs, setMountedTabs] = useState<Set<string>>(() => new Set());
   const [selectedTabUri, setSelectedTabUri] = useState<string | null>(null);
   // Empty-state hint visibility is stored locally so the hint panel can be
@@ -1217,6 +1219,7 @@ export default function Actions() {
             >
               <TabPanel className="flex-1 min-h-0">
                 <DriveLinkStatusTab
+                  onLogin={() => driveLinkCoordinator.loginToDriveAndProcess()}
                   onRetry={() => driveLinkCoordinator.retryAuthAndProcess()}
                 />
               </TabPanel>

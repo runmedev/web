@@ -126,4 +126,84 @@ describe("appConfig OIDC Google shorthand", () => {
 
     expect(getGoogleDriveBaseUrl()).toBe("http://127.0.0.1:9090");
   });
+
+  it("applies Google Drive PKCE auth flow when configured", async () => {
+    const { applyAppConfig } = await loadModules();
+    const { googleClientManager } = await import("./googleClientManager");
+
+    applyAppConfig(
+      {
+        agent: {
+          endpoint: "http://localhost:9977",
+        },
+        googleDrive: {
+          clientID: "client-id.apps.googleusercontent.com",
+          authFlow: "pkce",
+        },
+      },
+      "http://localhost/configs/app-configs.yaml",
+    );
+
+    expect(googleClientManager.getOAuthClient()).toMatchObject({
+      clientId: "client-id.apps.googleusercontent.com",
+      authFlow: "pkce",
+      authUxMode: "redirect",
+    });
+    expect(googleClientManager.getDrivePickerConfig().clientId).toBe(
+      "client-id.apps.googleusercontent.com",
+    );
+  });
+
+  it("preserves local Google Drive config when local precedence is requested", async () => {
+    const { applyAppConfig } = await loadModules();
+    const { googleClientManager } = await import("./googleClientManager");
+
+    googleClientManager.setOAuthClient({
+      clientId: "local-client.apps.googleusercontent.com",
+      authFlow: "pkce",
+      authUxMode: "redirect",
+    });
+
+    applyAppConfig(
+      {
+        agent: {
+          endpoint: "http://localhost:9977",
+        },
+        googleDrive: {
+          clientID: "config-client.apps.googleusercontent.com",
+          authFlow: "implicit",
+        },
+      },
+      "http://localhost/configs/app-configs.yaml",
+      {
+        preserveLocalConfiguration: true,
+      },
+    );
+
+    expect(googleClientManager.getOAuthClient()).toMatchObject({
+      clientId: "local-client.apps.googleusercontent.com",
+      authFlow: "pkce",
+      authUxMode: "redirect",
+    });
+  });
+
+  it("toggles app-config local precedence on load", async () => {
+    const {
+      disableAppConfigOverridesOnLoad,
+      enableAppConfigOverridesOnLoad,
+      isLocalConfigPreferredOnLoad,
+      setLocalConfigPreferredOnLoad,
+    } = await loadModules();
+
+    expect(isLocalConfigPreferredOnLoad()).toBe(false);
+
+    expect(disableAppConfigOverridesOnLoad()).toBe(true);
+    expect(isLocalConfigPreferredOnLoad()).toBe(true);
+
+    expect(setLocalConfigPreferredOnLoad(false)).toBe(false);
+    expect(isLocalConfigPreferredOnLoad()).toBe(false);
+
+    expect(enableAppConfigOverridesOnLoad()).toBe(false);
+    expect(isLocalConfigPreferredOnLoad()).toBe(false);
+  });
 });

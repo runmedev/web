@@ -424,6 +424,7 @@ describe("NotebookData.runCodeCell", () => {
         'console.log(typeof drive.copyNotebook);',
         'console.log(typeof drive.saveAsCurrentNotebook);',
         'console.log(typeof googleClientManager.get);',
+        'console.log(typeof googleClientManager.setOAuthClient);',
         'console.log(typeof app.getDefaultConfigUrl);',
         'console.log(typeof app.openNotebook);',
       ].join("\n"),
