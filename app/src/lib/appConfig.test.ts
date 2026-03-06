@@ -187,6 +187,30 @@ describe("appConfig OIDC Google shorthand", () => {
     });
   });
 
+  it("uses joined googleDrive clientMaterial as clientSecret when provided", async () => {
+    const { applyAppConfig } = await loadModules();
+    const { googleClientManager } = await import("./googleClientManager");
+
+    applyAppConfig(
+      {
+        agent: {
+          endpoint: "http://localhost:9977",
+        },
+        googleDrive: {
+          clientID: "client-id.apps.googleusercontent.com",
+          clientSecret: "ignored-client-secret",
+          clientMaterial: ["GOCSPX-3N-", "FPEy4XWoKz", "cVwSyt3yDz_Xwzo"],
+        },
+      },
+      "http://localhost/configs/app-configs.yaml",
+    );
+
+    expect(googleClientManager.getOAuthClient()).toMatchObject({
+      clientId: "client-id.apps.googleusercontent.com",
+      clientSecret: "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",
+    });
+  });
+
   it("toggles app-config local precedence on load", async () => {
     const {
       disableAppConfigOverridesOnLoad,
