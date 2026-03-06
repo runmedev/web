@@ -173,6 +173,19 @@ function ContractRenderer({ events }: { events: ChatKitStreamEvent[] }) {
   );
 }
 
+async function waitForNotificationsReady(
+  isReady: () => boolean,
+  attempts = 10,
+): Promise<void> {
+  for (let index = 0; index < attempts; index += 1) {
+    if (isReady()) {
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw new Error("notification handlers were not ready");
+}
+
 describe("ChatKit protocol render contract", () => {
   beforeEach(() => {
     proxyClient.sendRequest.mockReset();
@@ -238,7 +251,95 @@ describe("ChatKit protocol render contract", () => {
       "print hello world in python",
     );
     expect(screen.getByTestId("assistant-item-msg-1").textContent).toBe(
-      '[[CODEX_STREAM_START]]\nprint("Hello, world!")\n[[CODEX_STREAM_END]]',
+      'print("Hello, world!")',
+    );
+  });
+
+  it("renders partial assistant text before the turn completes", async () => {
+    let emitNotifications: (() => void) | null = null;
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return { threadId: "thread-1", title: "Runme Repo" };
+      }
+      if (method === "turn/start") {
+        emitNotifications = () => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "turn.message.started",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+                delta: "Hello",
+              },
+            });
+          });
+        };
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: ChatKitStreamEvent[] = [];
+    const streamPromise = controller.streamUserMessage("print hello world in python", {}, {
+      emit: (payload) => events.push(payload),
+    });
+
+    await waitForNotificationsReady(
+      () => notificationHandlers.size > 0 && emitNotifications !== null,
+    );
+    emitNotifications?.();
+    await Promise.resolve();
+
+    const { rerender } = render(<ContractRenderer events={events} />);
+
+    expect(screen.getByText("print hello world in python").textContent).toBe(
+      "print hello world in python",
+    );
+    expect(screen.getByTestId("assistant-item-msg-1").textContent).toBe(
+      "Hello",
+    );
+
+    notificationHandlers.forEach((handler) => {
+      handler({
+        jsonrpc: "2.0",
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "agentMessage",
+            id: "msg-1",
+            text: "Hello world",
+          },
+        },
+      });
+      handler({
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "completed" },
+        },
+      });
+    });
+
+    await streamPromise;
+    rerender(<ContractRenderer events={events} />);
+
+    expect(screen.getByTestId("assistant-item-msg-1").textContent).toBe(
+      "Hello world",
     );
   });
 });

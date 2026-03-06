@@ -509,19 +509,11 @@ describe("CodexConversationController", () => {
         expect.objectContaining({ type: "response.created" }),
         expect.objectContaining({
           type: "response.output_text.delta",
-          delta: CODEX_STREAM_START_MARKER,
-        }),
-        expect.objectContaining({
-          type: "response.output_text.delta",
           delta: "hello ",
         }),
         expect.objectContaining({
-          type: "response.output_text.delta",
-          delta: CODEX_STREAM_END_MARKER,
-        }),
-        expect.objectContaining({
           type: "response.output_text.done",
-          text: `${CODEX_STREAM_START_MARKER}hello world${CODEX_STREAM_END_MARKER}`,
+          text: "hello world",
         }),
         expect.objectContaining({ type: "response.completed" }),
       ]),
@@ -529,7 +521,7 @@ describe("CodexConversationController", () => {
     expect(controller.getSnapshot().currentThreadId).toBe("thread-1");
   });
 
-  it("emits visible start and end markers around the streamed assistant text", async () => {
+  it("emits user and assistant thread items for the streamed assistant text", async () => {
     proxyClient.sendRequest.mockImplementation(async (method: string) => {
       if (method === "thread/start") {
         return { threadId: "thread-1", title: "Runme Repo" };
@@ -627,36 +619,18 @@ describe("CodexConversationController", () => {
           }),
         }),
         expect.objectContaining({
-          type: "response.output_text.delta",
-          delta: CODEX_STREAM_START_MARKER,
-        }),
-        expect.objectContaining({
-          type: "thread.item.updated",
-          item_id: "msg-1",
-          update: expect.objectContaining({
-            type: "assistant_message.content_part.text_delta",
-            delta: CODEX_STREAM_START_MARKER,
-          }),
-        }),
-        expect.objectContaining({
-          type: "response.output_text.delta",
-          delta: CODEX_STREAM_END_MARKER,
-        }),
-        expect.objectContaining({
           type: "thread.item.updated",
           item_id: "msg-1",
           update: expect.objectContaining({
             type: "assistant_message.content_part.done",
             content: expect.objectContaining({
-              text:
-                `${CODEX_STREAM_START_MARKER}print(\"Hello, world!\")${CODEX_STREAM_END_MARKER}`,
+              text: 'print("Hello, world!")',
             }),
           }),
         }),
         expect.objectContaining({
           type: "response.output_text.done",
-          text:
-            `${CODEX_STREAM_START_MARKER}print("Hello, world!")${CODEX_STREAM_END_MARKER}`,
+          text: 'print("Hello, world!")',
         }),
         expect.objectContaining({
           type: "thread.item.done",
@@ -742,7 +716,7 @@ describe("CodexConversationController", () => {
       expect.arrayContaining([
         expect.objectContaining({
           type: "response.output_text.done",
-          text: `${CODEX_STREAM_START_MARKER}hello world${CODEX_STREAM_END_MARKER}`,
+          text: "hello world",
         }),
         expect.objectContaining({ type: "response.completed" }),
       ]),
