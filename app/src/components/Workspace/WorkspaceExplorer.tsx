@@ -97,6 +97,10 @@ function createFileNode(
   };
 }
 
+function isJsonNotebookFile(name: string): boolean {
+  return /\.json$/i.test(name.trim());
+}
+
 function setChildrenForFolder(
   nodes: TreeNode[],
   folderUri: string,
@@ -552,6 +556,12 @@ export function WorkspaceExplorer() {
                 }),
               );
             } else if (childMetadata?.type === NotebookStoreItemType.File) {
+              if (
+                folderMetadata.remoteUri &&
+                !isJsonNotebookFile(childMetadata.name)
+              ) {
+                continue;
+              }
               childNodes.push(
                 createFileNode(childMetadata, { parentUri: folderMetadata.uri }),
               );
