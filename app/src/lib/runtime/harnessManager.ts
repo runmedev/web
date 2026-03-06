@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-export type HarnessAdapter = "responses" | "codex";
+export type HarnessAdapter = "responses" | "responses-direct" | "codex";
 
 export interface HarnessProfile {
   name: string;
@@ -26,11 +26,12 @@ const HARNESS_CHANGED_EVENT = "runme:harness-changed";
 
 const CHATKIT_ROUTE_BY_ADAPTER: Record<HarnessAdapter, string> = {
   responses: "/chatkit",
+  "responses-direct": "/responses/direct/chatkit",
   codex: "/codex/chatkit",
 };
 
 function isHarnessAdapter(value: unknown): value is HarnessAdapter {
-  return value === "responses" || value === "codex";
+  return value === "responses" || value === "responses-direct" || value === "codex";
 }
 
 function normalizeName(value: string): string {

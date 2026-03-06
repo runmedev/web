@@ -4,6 +4,15 @@
 agent:
     endpoint: "http://localhost:5191"
     defaultRunnerEndpoint: "ws://localhost:5191/ws"
+    openai:
+        # Supported values: OAuth, APIKey
+        authMethod: "OAuth"
+        # Required when authMethod is OAuth.
+        # Replace with your OpenAI organization and project values.
+        organization: "org-not-set"
+        project: "proj-not-set"
+        # Optional file-search vector stores for direct Responses mode.
+        vectorStores: []
 
 oidc:
     # OIDC callback handling should happen in the browser.

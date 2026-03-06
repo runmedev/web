@@ -104,6 +104,85 @@ describe("appConfig OIDC Google shorthand", () => {
     expect(getConfiguredChatKitDomainKey()).toBe("domain_pk_localhost_dev");
   });
 
+  it("applies direct Responses OpenAI config from agent.openai", async () => {
+    const { applyAppConfig } = await loadModules();
+
+    const result = applyAppConfig(
+      {
+        agent: {
+          endpoint: "http://localhost:9977",
+          openai: {
+            authMethod: "OAuth",
+            organization: "org-test",
+            project: "proj-test",
+            vectorStores: ["vs_1", "vs_2"],
+          },
+        },
+      },
+      "http://localhost/configs/app-configs.yaml",
+    );
+
+    expect(result.warnings).toEqual([]);
+    expect(result.responsesDirect).toEqual({
+      authMethod: "oauth",
+      openaiOrganization: "org-test",
+      openaiProject: "proj-test",
+      vectorStores: ["vs_1", "vs_2"],
+      apiKeySet: false,
+    });
+  });
+
+  it("supports go-style top-level OpenAI and cloudAssistant vectorStores", async () => {
+    const { applyAppConfig } = await loadModules();
+
+    const result = applyAppConfig(
+      {
+        agent: {
+          endpoint: "http://localhost:9977",
+        },
+        openai: {
+          authMethod: "OAuth",
+          organization: "org-top-level",
+          project: "proj-top-level",
+        },
+        cloudAssistant: {
+          vectorStores: ["vs_top"],
+        },
+      },
+      "http://localhost/configs/app-configs.yaml",
+    );
+
+    expect(result.warnings).toEqual([]);
+    expect(result.responsesDirect).toEqual({
+      authMethod: "oauth",
+      openaiOrganization: "org-top-level",
+      openaiProject: "proj-top-level",
+      vectorStores: ["vs_top"],
+      apiKeySet: false,
+    });
+  });
+
+  it("warns when direct Responses is configured for API key auth without a key", async () => {
+    const { applyAppConfig } = await loadModules();
+
+    const result = applyAppConfig(
+      {
+        agent: {
+          endpoint: "http://localhost:9977",
+          openai: {
+            authMethod: "APIKey",
+          },
+        },
+      },
+      "http://localhost/configs/app-configs.yaml",
+    );
+
+    expect(result.responsesDirect?.authMethod).toBe("api_key");
+    expect(result.warnings).toContain(
+      "Direct Responses API key auth selected; set API key via app.responsesDirect.setAPIKey(...)",
+    );
+  });
+
   it("preserves the runtime Google Drive base URL when config omits it", async () => {
     const { applyAppConfig } = await loadModules();
     const { setGoogleDriveBaseUrl, getGoogleDriveBaseUrl } = await import(

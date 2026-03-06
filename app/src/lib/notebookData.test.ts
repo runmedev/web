@@ -2,22 +2,16 @@ import { Subject } from "rxjs";
 import { create } from "@bufbuild/protobuf";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { parser_pb, MimeType, RunmeMetadataKey } from "../contexts/CellContext";
-import { NotebookStoreItemType } from "../storage/notebook";
 import type { StreamsLike } from "@runmedev/renderers";
 import { APPKERNEL_RUNNER_NAME } from "./runtime/appKernel";
 import { appState } from "./runtime/AppState";
 
 const mockRunner = {
+  name: "mock-runner",
   endpoint: "https://runner.example.com",
   reconnect: true,
   interceptors: [],
 };
-
-const runnerState = new Map<
-  string,
-  { name: string; endpoint: string; reconnect: boolean; interceptors: unknown[] }
->();
-let defaultRunnerName: string | null = null;
 
 vi.mock("@runmedev/renderers", () => {
   class FakeStreams {
@@ -54,45 +48,200 @@ vi.mock("@runmedev/renderers", () => {
   };
 });
 
-const list = vi.fn(() => [...runnerState.values()]);
-const get = vi.fn((name: string) => runnerState.get(name));
-const update = vi.fn((name: string, endpoint: string, reconnect = true) => {
-  const next = {
-    name,
-    endpoint,
-    reconnect,
-    interceptors: [],
-  };
-  runnerState.set(name, next);
-  if (!defaultRunnerName) {
-    defaultRunnerName = name;
+const runnerStore = new Map<string, any>();
+let defaultRunnerName: string | null = null;
+const getWithFallback = vi.fn((name?: string | null) => {
+  if (name && runnerStore.has(name)) {
+    return runnerStore.get(name);
   }
-  return next;
-});
-const removeRunner = vi.fn((name: string) => {
-  runnerState.delete(name);
-  if (defaultRunnerName === name) {
-    defaultRunnerName = runnerState.size > 0 ? [...runnerState.keys()][0] : null;
+  if (defaultRunnerName && runnerStore.has(defaultRunnerName)) {
+    return runnerStore.get(defaultRunnerName);
   }
+  return mockRunner;
 });
-const getDefaultRunnerName = vi.fn(() => defaultRunnerName);
-const setDefault = vi.fn((name: string) => {
-  if (runnerState.has(name)) {
-    defaultRunnerName = name;
-  }
-});
-const getWithFallback = vi.fn(() => mockRunner);
+const runnersManager = {
+  getWithFallback,
+  list: vi.fn(() => [...runnerStore.values()]),
+  get: vi.fn((name: string) => runnerStore.get(name)),
+  update: vi.fn((name: string, endpoint: string, reconnect = true) => {
+    const next = { name, endpoint, reconnect, interceptors: [] };
+    runnerStore.set(name, next);
+    if (!defaultRunnerName) {
+      defaultRunnerName = name;
+    }
+    return next;
+  }),
+  delete: vi.fn((name: string) => {
+    runnerStore.delete(name);
+    if (defaultRunnerName === name) {
+      defaultRunnerName = runnerStore.size > 0 ? [...runnerStore.keys()][0] : null;
+    }
+  }),
+  getDefaultRunnerName: vi.fn(() => defaultRunnerName),
+  setDefault: vi.fn((name: string) => {
+    if (runnerStore.has(name)) {
+      defaultRunnerName = name;
+    }
+  }),
+};
 vi.mock("./runtime/runnersManager", () => ({
   DEFAULT_RUNNER_PLACEHOLDER: "<default>",
-  getRunnersManager: () => ({
-    getWithFallback,
-    list,
-    get,
-    update,
-    delete: removeRunner,
-    getDefaultRunnerName,
-    setDefault,
+  getRunnersManager: () => runnersManager,
+}));
+
+const harnessStore = new Map<
+  string,
+  {
+    name: string;
+    baseUrl: string;
+    adapter: "responses" | "responses-direct" | "codex";
+  }
+>();
+let defaultHarnessName: string | null = null;
+const harnessManager = {
+  list: vi.fn(() => [...harnessStore.values()]),
+  getDefaultName: vi.fn(() => defaultHarnessName ?? ""),
+  getDefault: vi.fn(() => {
+    if (defaultHarnessName && harnessStore.has(defaultHarnessName)) {
+      return harnessStore.get(defaultHarnessName)!;
+    }
+    const first = harnessStore.values().next().value;
+    return (
+      first ?? {
+        name: "local-responses",
+        baseUrl: "http://localhost",
+        adapter: "responses",
+      }
+    );
   }),
+  update: vi.fn(
+    (
+      name: string,
+      baseUrl: string,
+      adapter: "responses" | "responses-direct" | "codex",
+    ) => {
+      const next = { name, baseUrl, adapter };
+      harnessStore.set(name, next);
+      if (!defaultHarnessName) {
+        defaultHarnessName = name;
+      }
+      return next;
+    },
+  ),
+  delete: vi.fn((name: string) => {
+    harnessStore.delete(name);
+    if (defaultHarnessName === name) {
+      defaultHarnessName = harnessStore.size > 0 ? [...harnessStore.keys()][0] : null;
+    }
+  }),
+  setDefault: vi.fn((name: string) => {
+    if (harnessStore.has(name)) {
+      defaultHarnessName = name;
+    }
+  }),
+  resolveChatkitUrl: vi.fn(
+    (
+      profile: {
+        baseUrl: string;
+        adapter: "responses" | "responses-direct" | "codex";
+      },
+    ) =>
+      `${profile.baseUrl}/${
+        profile.adapter === "codex"
+          ? "chatkit-codex"
+          : profile.adapter === "responses-direct"
+            ? "chatkit-responses-direct"
+            : "chatkit"
+      }`,
+  ),
+};
+vi.mock("./runtime/harnessManager", () => ({
+  getHarnessManager: () => harnessManager,
+}));
+
+const codexProjectStore = new Map<
+  string,
+  {
+    id: string;
+    name: string;
+    cwd: string;
+    model: string;
+    approvalPolicy: string;
+    sandboxPolicy: string;
+    personality: string;
+  }
+>();
+let defaultCodexProjectId: string | null = null;
+const codexProjectManager = {
+  list: vi.fn(() => [...codexProjectStore.values()]),
+  getDefaultId: vi.fn(() => defaultCodexProjectId ?? ""),
+  getDefault: vi.fn(() => {
+    if (defaultCodexProjectId && codexProjectStore.has(defaultCodexProjectId)) {
+      return codexProjectStore.get(defaultCodexProjectId)!;
+    }
+    const first = codexProjectStore.values().next().value;
+    return (
+      first ?? {
+        id: "local-default",
+        name: "Local Project",
+        cwd: ".",
+        model: "gpt-5",
+        approvalPolicy: "never",
+        sandboxPolicy: "workspace-write",
+        personality: "default",
+      }
+    );
+  }),
+  create: vi.fn(
+    (
+      name: string,
+      cwd: string,
+      model: string,
+      sandboxPolicy: string,
+      approvalPolicy: string,
+      personality: string,
+    ) => {
+      const id = `project-${codexProjectStore.size + 1}`;
+      const next = {
+        id,
+        name,
+        cwd,
+        model,
+        sandboxPolicy,
+        approvalPolicy,
+        personality,
+      };
+      codexProjectStore.set(id, next);
+      if (!defaultCodexProjectId) {
+        defaultCodexProjectId = id;
+      }
+      return next;
+    },
+  ),
+  update: vi.fn((id: string, patch: Record<string, unknown>) => {
+    const current = codexProjectStore.get(id);
+    if (!current) {
+      throw new Error(`Codex project ${id} not found`);
+    }
+    const next = { ...current, ...patch, id };
+    codexProjectStore.set(id, next);
+    return next;
+  }),
+  delete: vi.fn((id: string) => {
+    codexProjectStore.delete(id);
+    if (defaultCodexProjectId === id) {
+      defaultCodexProjectId =
+        codexProjectStore.size > 0 ? [...codexProjectStore.keys()][0] : null;
+    }
+  }),
+  setDefault: vi.fn((id: string) => {
+    if (codexProjectStore.has(id)) {
+      defaultCodexProjectId = id;
+    }
+  }),
+};
+vi.mock("./runtime/codexProjectManager", () => ({
+  getCodexProjectManager: () => codexProjectManager,
 }));
 
 let bindStreamsToCell: typeof import("./notebookData").bindStreamsToCell;
@@ -150,10 +299,12 @@ afterEach(() => {
   appState.setDriveNotebookStore(null);
   appState.setLocalNotebooks(null);
   appState.setOpenNotebookHandler(null);
-  appState.setWorkspaceHandlers(null);
-  appState.setRunnerHandlers(null);
-  runnerState.clear();
+  runnerStore.clear();
   defaultRunnerName = null;
+  harnessStore.clear();
+  defaultHarnessName = null;
+  codexProjectStore.clear();
+  defaultCodexProjectId = null;
 });
 
 async function waitForCondition(
@@ -419,12 +570,9 @@ describe("NotebookData.runCodeCell", () => {
       },
       value: [
         'console.log(typeof drive);',
-        'console.log(typeof drive.list);',
         'console.log(typeof drive.create);',
-        'console.log(typeof drive.copyNotebook);',
         'console.log(typeof drive.saveAsCurrentNotebook);',
         'console.log(typeof googleClientManager.get);',
-        'console.log(typeof googleClientManager.setOAuthClient);',
         'console.log(typeof oidc.getStatus);',
         'console.log(typeof app.getDefaultConfigUrl);',
         'console.log(typeof app.openNotebook);',
@@ -455,9 +603,9 @@ describe("NotebookData.runCodeCell", () => {
     expect(stdoutText).toContain("function");
   });
 
-  it("exposes AppConsole runner and config helpers in appkernel cells", async () => {
+  it("exposes app.runners and app.harness helpers in appkernel cells", async () => {
     const cell = create(parser_pb.CellSchema, {
-      refId: "cell-appkernel-console-parity",
+      refId: "cell-appkernel-runner-harness-helpers",
       kind: parser_pb.CellKind.CODE,
       languageId: "javascript",
       outputs: [],
@@ -465,24 +613,19 @@ describe("NotebookData.runCodeCell", () => {
         [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
       },
       value: [
-        'console.log(typeof app.runners.get);',
-        'console.log(app.runners.update("local", "ws://localhost:9977/ws"));',
-        "console.log(app.runners.get());",
+        'console.log(app.runners.update("local", "ws://localhost:5190/ws"));',
         'console.log(app.runners.setDefault("local"));',
-        "console.log(app.runners.getDefault());",
-        'console.log(typeof agent.get);',
-        'console.log(typeof credentials.google.getOAuthClient);',
-        'console.log(typeof oidc.getStatus);',
-        'console.log(typeof explorer.listFolders);',
-        'console.log(typeof files.help);',
-        "console.log(help().includes('Available namespaces:'));",
+        'console.log(app.runners.getDefault());',
+        'console.log(app.harness.update("local-codex", "http://localhost:5190", "codex"));',
+        'console.log(app.harness.setDefault("local-codex"));',
+        'console.log(app.harness.getDefault());',
       ].join("\n"),
     });
     const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
     const model = new NotebookData({
       notebook,
       uri: "nb://test",
-      name: "console-parity.runme.md",
+      name: "runner-harness-helpers.runme.md",
       notebookStore: null,
       loaded: true,
     });
@@ -499,12 +642,66 @@ describe("NotebookData.runCodeCell", () => {
       .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
       .map((i) => new TextDecoder().decode(i.data))
       .join("");
-
-    expect(stdoutText).toContain("Runner local set to ws://localhost:9977/ws");
-    expect(stdoutText).toContain("local: ws://localhost:9977/ws (default)");
+    expect(stdoutText).toContain("Runner local set to ws://localhost:5190/ws");
     expect(stdoutText).toContain("Default runner set to local");
-    expect(stdoutText).toContain("Default runner: local (ws://localhost:9977/ws)");
-    expect(stdoutText).toContain("true");
+    expect(stdoutText).toContain("Default runner: local (ws://localhost:5190/ws)");
+    expect(stdoutText).toContain(
+      "Harness local-codex set to http://localhost:5190 (codex)",
+    );
+    expect(stdoutText).toContain("Default harness set to local-codex");
+    expect(stdoutText).toContain(
+      "Default harness: local-codex (http://localhost:5190, codex)",
+    );
+  });
+
+  it("exposes app.codex.project helpers in appkernel cells", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-codex-project-helpers",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        'const created = app.codex.project.create("Runme Repo", "/Users/jlewi/code/runmecodex/web", "gpt-5", "workspace-write", "never", "default");',
+        "console.log(created);",
+        'console.log(app.codex.project.update("project-1", { model: "gpt-5-mini" }));',
+        'console.log(app.codex.project.setDefault("project-1"));',
+        "console.log(app.codex.project.getDefault());",
+        "console.log(app.codex.project.list());",
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "codex-project-helpers.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("Codex project Runme Repo created (project-1)");
+    expect(stdoutText).toContain("Codex project Runme Repo updated (project-1)");
+    expect(stdoutText).toContain("Default codex project set to project-1");
+    expect(stdoutText).toContain(
+      "Default codex project: Runme Repo (project-1, cwd=/Users/jlewi/code/runmecodex/web, model=gpt-5-mini)",
+    );
+    expect(stdoutText).toContain(
+      "project-1: Runme Repo (/Users/jlewi/code/runmecodex/web, model=gpt-5-mini, sandbox=workspace-write, approval=never) (default)",
+    );
   });
 
   it("supports drive.saveAsCurrentNotebook in appkernel cells", async () => {
@@ -563,84 +760,6 @@ describe("NotebookData.runCodeCell", () => {
       .join("");
     expect(stdoutText).toContain("saveas123");
     expect(stdoutText).toContain("local://file/saveas-copy");
-  });
-
-  it("supports drive.list and drive.copyNotebook in appkernel cells", async () => {
-    const listDrive = vi.fn().mockResolvedValue([
-      {
-        uri: "https://drive.google.com/file/d/src123/view",
-        name: "source.json",
-        type: NotebookStoreItemType.File,
-        children: [],
-        parents: [],
-      },
-    ]);
-    const getMetadata = vi.fn().mockResolvedValue({
-      uri: "https://drive.google.com/file/d/src123/view",
-      name: "source.json",
-      type: NotebookStoreItemType.File,
-      children: [],
-      parents: [],
-    });
-    const load = vi.fn().mockResolvedValue(create(parser_pb.NotebookSchema, { cells: [] }));
-    const createRemote = vi.fn().mockResolvedValue({
-      uri: "https://drive.google.com/file/d/copy999/view",
-    });
-    const save = vi.fn().mockResolvedValue({ conflicted: false });
-    appState.setDriveNotebookStore({
-      list: listDrive,
-      getMetadata,
-      load,
-      create: createRemote,
-      save,
-    } as any);
-
-    const cell = create(parser_pb.CellSchema, {
-      refId: "cell-appkernel-list-copy",
-      kind: parser_pb.CellKind.CODE,
-      languageId: "javascript",
-      outputs: [],
-      metadata: {
-        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
-      },
-      value: [
-        'const items = await drive.list("sourceFolder");',
-        "console.log(items.length);",
-        'const copied = await drive.copyNotebook("src123", "targetFolder");',
-        "console.log(copied.fileId);",
-      ].join("\n"),
-    });
-    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
-    const model = new NotebookData({
-      notebook,
-      uri: "local://file/list-copy-source",
-      name: "list-copy-source.json",
-      notebookStore: null,
-      loaded: true,
-    });
-
-    model.runCodeCell(cell);
-    await waitForCondition(() => {
-      const snap = model.getCellSnapshot(cell.refId);
-      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
-    });
-
-    expect(listDrive).toHaveBeenCalledWith(
-      "https://drive.google.com/drive/folders/sourceFolder",
-    );
-    expect(createRemote).toHaveBeenCalledWith(
-      "https://drive.google.com/drive/folders/targetFolder",
-      "source.json",
-    );
-
-    const updated = model.getCellSnapshot(cell.refId);
-    const stdoutText = (updated?.outputs ?? [])
-      .flatMap((o) => o.items)
-      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
-      .map((i) => new TextDecoder().decode(i.data))
-      .join("");
-    expect(stdoutText).toContain("1");
-    expect(stdoutText).toContain("copy999");
   });
 
   it("drops stale terminal output when rerunning a cell with appkernel", async () => {

@@ -16,12 +16,14 @@ import { getCodexToolBridge } from "../../lib/runtime/codexToolBridge";
 import { getCodexExecuteApprovalManager } from "../../lib/runtime/codexExecuteApprovalManager";
 import { getCodexAppServerProxyClient } from "../../lib/runtime/codexAppServerProxyClient";
 import { createCodexChatkitFetch } from "../../lib/runtime/codexChatkitFetch";
+import { createResponsesDirectChatkitFetch } from "../../lib/runtime/responsesDirectChatkitFetch";
 import {
   getCodexConversationController,
   useCodexConversationSnapshot,
 } from "../../lib/runtime/codexConversationController";
 import { useCodexProjects } from "../../lib/runtime/codexProjectManager";
 import { appLogger } from "../../lib/logging/runtime";
+import { responsesDirectConfigManager } from "../../lib/runtime/responsesDirectConfigManager";
 
 import { getAccessToken, getAuthData } from "../../token";
 import { getBrowserAdapter } from "../../browserAdapter.client";
@@ -78,9 +80,19 @@ type SSEInterceptor = (rawEvent: string) => void;
 
 const useAuthorizedFetch = (
   getChatkitState: () => ReturnType<(typeof ChatkitStateSchema)["create"]>,
-  options?: { onSSEEvent?: SSEInterceptor; baseFetch?: typeof fetch },
+  options?: {
+    onSSEEvent?: SSEInterceptor;
+    baseFetch?: typeof fetch;
+    includeRunmeHeaders?: boolean;
+    includeChatkitState?: boolean;
+  },
 ) => {
-  const { onSSEEvent, baseFetch } = options ?? {};
+  const {
+    onSSEEvent,
+    baseFetch,
+    includeRunmeHeaders = true,
+    includeChatkitState = true,
+  } = options ?? {};
   return useMemo(() => {
     const fetchImpl = baseFetch ?? fetch;
     const resolveRequestBody = async (
@@ -120,28 +132,28 @@ const useAuthorizedFetch = (
       init?: RequestInit,
     ) => {
       try {
-        const authData = await getAuthData();
-        const idToken = authData?.idToken ?? undefined;
-        const oaiAccessToken = await getAccessToken();
-        if (!oaiAccessToken) {          
-          throw new UserNotLoggedInError();
-        }
-
         const headers = new Headers(
           init?.headers ??
             (input instanceof Request ? input.headers : undefined),
         );
 
-        if (idToken) {
-          headers.set("Authorization", `Bearer ${idToken}`);
+        if (includeRunmeHeaders) {
+          const authData = await getAuthData();
+          const idToken = authData?.idToken ?? undefined;
+          const oaiAccessToken = await getAccessToken();
+          if (!oaiAccessToken) {
+            throw new UserNotLoggedInError();
+          }
+          if (idToken) {
+            headers.set("Authorization", `Bearer ${idToken}`);
+          }
+          headers.set("OpenAIAccessToken", oaiAccessToken);
         }
-
-        headers.set("OpenAIAccessToken", oaiAccessToken);
 
         let body = await resolveRequestBody(input, init);
         const method =
           init?.method ?? (input instanceof Request ? input.method : "GET");
-        if (method.toUpperCase() === "POST") {
+        if (includeChatkitState && method.toUpperCase() === "POST") {
           const state = getChatkitState();
           const chatkitStateJson = toJson(ChatkitStateSchema, state);
           if (body == null) {
@@ -264,7 +276,13 @@ const useAuthorizedFetch = (
     };
 
     return authorizedFetch;
-  }, [baseFetch, onSSEEvent, getChatkitState]);
+  }, [
+    baseFetch,
+    onSSEEvent,
+    getChatkitState,
+    includeRunmeHeaders,
+    includeChatkitState,
+  ]);
 };
 
 type ChatKitPanelInnerProps = {
@@ -581,6 +599,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     [defaultHarness.adapter],
   );
   const codexFetch = useMemo(() => createCodexChatkitFetch(), []);
+  const responsesDirectFetch = useMemo(() => createResponsesDirectChatkitFetch(), []);
   const getAuthorizedChatkitState = useCallback(() => {
     if (defaultHarness.adapter !== "codex") {
       return getChatkitState();
@@ -596,7 +615,14 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   }, [defaultHarness.adapter, getChatkitState]);
   const authorizedFetch = useAuthorizedFetch(getAuthorizedChatkitState, {
     onSSEEvent: handleSseEvent,
-    baseFetch: defaultHarness.adapter === "codex" ? codexFetch : undefined,
+    baseFetch:
+      defaultHarness.adapter === "codex"
+        ? codexFetch
+        : defaultHarness.adapter === "responses-direct"
+          ? responsesDirectFetch
+          : undefined,
+    includeRunmeHeaders: defaultHarness.adapter !== "responses-direct",
+    includeChatkitState: defaultHarness.adapter !== "responses-direct",
   });
 
   const chatkitApiUrl = useMemo(() => {
@@ -1044,6 +1070,12 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       // This is a bit of a hacky way to check for authentication errors.
       // Chatkit throws a StreamError if the user isn't logged in. 
       void (async () => {
+        if (
+          defaultHarness.adapter === "responses-direct" &&
+          responsesDirectConfigManager.getSnapshot().authMethod !== "oauth"
+        ) {
+          return;
+        }
         const token = await getAccessToken();
         if (!token) {
           promptForLogin();

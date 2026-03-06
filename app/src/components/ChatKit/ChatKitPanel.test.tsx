@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { create } from "@bufbuild/protobuf";
 import { ChatkitStateSchema } from "../../protogen/oaiproto/aisre/notebooks_pb.js";
 
-type HarnessAdapter = "responses" | "codex";
+type HarnessAdapter = "responses" | "responses-direct" | "codex";
 
 let harnessState: { defaultHarness: { name: string; baseUrl: string; adapter: HarnessAdapter } };
 let codexProjectsState: {
@@ -78,6 +78,7 @@ const codexControllerMock = {
   })),
 };
 const codexFetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+const responsesDirectFetchMock = vi.fn(async () => new Response(null, { status: 200 }));
 
 vi.mock("@openai/chatkit-react", () => ({
   ChatKit: ({ className }: { className?: string }) => (
@@ -142,6 +143,10 @@ vi.mock("../../lib/runtime/codexAppServerProxyClient", () => ({
 
 vi.mock("../../lib/runtime/codexChatkitFetch", () => ({
   createCodexChatkitFetch: () => codexFetchMock,
+}));
+
+vi.mock("../../lib/runtime/responsesDirectChatkitFetch", () => ({
+  createResponsesDirectChatkitFetch: () => responsesDirectFetchMock,
 }));
 
 vi.mock("../../lib/runtime/codexConversationController", () => ({
@@ -218,6 +223,7 @@ describe("ChatKitPanel codex harness routing", () => {
     codexControllerMock.getSnapshot.mockClear();
     codexControllerMock.selectThread.mockClear();
     codexFetchMock.mockClear();
+    responsesDirectFetchMock.mockClear();
     approvalMgrMock.failAll.mockClear();
     appLoggerMock.info.mockClear();
     appLoggerMock.error.mockClear();
@@ -234,6 +240,36 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(config.api.url).toBe("http://127.0.0.1:31337/chatkit");
     expect(bridgeMock.connect).not.toHaveBeenCalled();
     expect(bridgeMock.disconnect).toHaveBeenCalled();
+  });
+
+  it("routes ChatKit to responses-direct adapter URL and uses responses-direct fetch", async () => {
+    harnessState.defaultHarness.adapter = "responses-direct";
+
+    render(<ChatKitPanel />);
+
+    const config = useChatKitMock.mock.calls.at(0)?.[0];
+    expect(config.api.url).toBe("http://127.0.0.1:31337/responses/direct/chatkit");
+
+    await act(async () => {
+      await config.api.fetch("http://127.0.0.1:31337/responses/direct/chatkit", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "threads.create",
+          params: {
+            input: {
+              content: [{ type: "input_text", text: "hello" }],
+            },
+          },
+        }),
+      });
+    });
+
+    expect(responsesDirectFetchMock).toHaveBeenCalled();
+    expect(codexFetchMock).not.toHaveBeenCalled();
+    expect(bridgeMock.connect).not.toHaveBeenCalled();
   });
 
   it("routes ChatKit to /codex/app-server/ws and connects codex bridge + proxy websocket", async () => {

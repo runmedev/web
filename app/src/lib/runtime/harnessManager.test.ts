@@ -50,6 +50,12 @@ describe("harnessManager", () => {
     );
   });
 
+  it("builds responses-direct route for direct OpenAI harnesses", () => {
+    expect(buildChatkitUrl("http://localhost:1234", "responses-direct")).toBe(
+      "http://localhost:1234/responses/direct/chatkit",
+    );
+  });
+
   it("builds codex websocket bridge URL", () => {
     expect(buildCodexBridgeWsUrl("http://localhost:1234")).toBe(
       "ws://localhost:1234/codex/ws",
