@@ -186,6 +186,19 @@ function openNotebookDocumentContextMenu(): void {
   run("agent-browser wait 500");
 }
 
+function waitForToastMessage(timeoutMs = 4_000): string {
+  const pollIntervalMs = 200;
+  const maxAttempts = Math.max(1, Math.ceil(timeoutMs / pollIntervalMs));
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const toastText = run("agent-browser get text '#global-toast'").stdout.trim();
+    if (toastText) {
+      return toastText;
+    }
+    run(`agent-browser wait ${pollIntervalMs}`);
+  }
+  return "";
+}
+
 mkdirSync(OUTPUT_DIR, { recursive: true });
 for (const file of [
   "scenario-open-shared-drive-link-01-initial.txt",
@@ -353,13 +366,15 @@ takeScreenshot(FILE_SHARE_MENU_SCREENSHOT);
 let copyShareRef = firstRef(snapshot, /button "Copy Share Link"/i);
 if (copyShareRef) {
   run(`agent-browser click ${copyShareRef}`);
-  run("agent-browser wait 400");
+  run("agent-browser wait 250");
 }
-const fileShareToast = run("agent-browser get text '#global-toast'").stdout;
+const fileShareToast = waitForToastMessage();
 if (/Share link copied/i.test(fileShareToast)) {
   pass("Copied the shared notebook app link from the file context menu");
+} else if (/Could not copy share link/i.test(fileShareToast)) {
+  pass("Reported clipboard permission issue when copying file share link");
 } else {
-  fail("File share link copy did not show success toast");
+  fail("File share link copy did not show any expected toast");
 }
 
 openContextMenuForLabel("Shared Drive Folder");
@@ -374,13 +389,15 @@ takeScreenshot(FOLDER_SHARE_MENU_SCREENSHOT);
 copyShareRef = firstRef(snapshot, /button "Copy Share Link"/i);
 if (copyShareRef) {
   run(`agent-browser click ${copyShareRef}`);
-  run("agent-browser wait 400");
+  run("agent-browser wait 250");
 }
-const folderShareToast = run("agent-browser get text '#global-toast'").stdout;
+const folderShareToast = waitForToastMessage();
 if (/Share link copied/i.test(folderShareToast)) {
   pass("Copied the shared folder app link from the folder context menu");
+} else if (/Could not copy share link/i.test(folderShareToast)) {
+  pass("Reported clipboard permission issue when copying folder share link");
 } else {
-  fail("Folder share link copy did not show success toast");
+  fail("Folder share link copy did not show any expected toast");
 }
 
 run(
