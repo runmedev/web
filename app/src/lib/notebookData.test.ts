@@ -2,6 +2,7 @@ import { Subject } from "rxjs";
 import { create } from "@bufbuild/protobuf";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { parser_pb, MimeType, RunmeMetadataKey } from "../contexts/CellContext";
+import { NotebookStoreItemType } from "../storage/notebook";
 import type { StreamsLike } from "@runmedev/renderers";
 import { APPKERNEL_RUNNER_NAME } from "./runtime/appKernel";
 import { appState } from "./runtime/AppState";
@@ -418,7 +419,9 @@ describe("NotebookData.runCodeCell", () => {
       },
       value: [
         'console.log(typeof drive);',
+        'console.log(typeof drive.list);',
         'console.log(typeof drive.create);',
+        'console.log(typeof drive.copyNotebook);',
         'console.log(typeof drive.saveAsCurrentNotebook);',
         'console.log(typeof googleClientManager.get);',
         'console.log(typeof app.getDefaultConfigUrl);',
@@ -558,6 +561,84 @@ describe("NotebookData.runCodeCell", () => {
       .join("");
     expect(stdoutText).toContain("saveas123");
     expect(stdoutText).toContain("local://file/saveas-copy");
+  });
+
+  it("supports drive.list and drive.copyNotebook in appkernel cells", async () => {
+    const listDrive = vi.fn().mockResolvedValue([
+      {
+        uri: "https://drive.google.com/file/d/src123/view",
+        name: "source.json",
+        type: NotebookStoreItemType.File,
+        children: [],
+        parents: [],
+      },
+    ]);
+    const getMetadata = vi.fn().mockResolvedValue({
+      uri: "https://drive.google.com/file/d/src123/view",
+      name: "source.json",
+      type: NotebookStoreItemType.File,
+      children: [],
+      parents: [],
+    });
+    const load = vi.fn().mockResolvedValue(create(parser_pb.NotebookSchema, { cells: [] }));
+    const createRemote = vi.fn().mockResolvedValue({
+      uri: "https://drive.google.com/file/d/copy999/view",
+    });
+    const save = vi.fn().mockResolvedValue({ conflicted: false });
+    appState.setDriveNotebookStore({
+      list: listDrive,
+      getMetadata,
+      load,
+      create: createRemote,
+      save,
+    } as any);
+
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-list-copy",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        'const items = await drive.list("sourceFolder");',
+        "console.log(items.length);",
+        'const copied = await drive.copyNotebook("src123", "targetFolder");',
+        "console.log(copied.fileId);",
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "local://file/list-copy-source",
+      name: "list-copy-source.json",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    expect(listDrive).toHaveBeenCalledWith(
+      "https://drive.google.com/drive/folders/sourceFolder",
+    );
+    expect(createRemote).toHaveBeenCalledWith(
+      "https://drive.google.com/drive/folders/targetFolder",
+      "source.json",
+    );
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("1");
+    expect(stdoutText).toContain("copy999");
   });
 
   it("drops stale terminal output when rerunning a cell with appkernel", async () => {

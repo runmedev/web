@@ -1,5 +1,10 @@
 import { appState } from "./runtime/AppState";
-import { driveFileUrl, parseDriveItem } from "../storage/drive";
+import {
+  driveFileUrl,
+  driveFolderUrl,
+  parseDriveItem,
+} from "../storage/drive";
+import { NotebookStoreItemType } from "../storage/notebook";
 import { appLogger } from "./logging/runtime";
 import { parser_pb } from "../runme/client";
 import { toJsonString } from "@bufbuild/protobuf";
@@ -66,6 +71,43 @@ export async function createDriveFile(
         scope: "drive.transfer",
         folderRef,
         name,
+        error: String(error),
+      },
+    });
+    throw error;
+  }
+}
+
+export async function listDriveFolderItems(folder: string) {
+  if (!folder?.trim()) {
+    throw new Error("drive.list requires a Drive folder URI or folder id");
+  }
+
+  const folderRef = folder.includes("://")
+    ? folder
+    : driveFolderUrl(folder.trim());
+
+  appLogger.info("Listing Google Drive folder", {
+    attrs: {
+      scope: "drive.transfer",
+      folderRef,
+    },
+  });
+  try {
+    const items = await ensureDriveStore().list(folderRef);
+    appLogger.info("Listed Google Drive folder items", {
+      attrs: {
+        scope: "drive.transfer",
+        folderRef,
+        count: items.length,
+      },
+    });
+    return items;
+  } catch (error) {
+    appLogger.error("Failed to list Google Drive folder", {
+      attrs: {
+        scope: "drive.transfer",
+        folderRef,
         error: String(error),
       },
     });
@@ -182,4 +224,92 @@ export async function saveNotebookAsDriveCopy(
     remoteUri,
     localUri,
   };
+}
+
+export async function copyDriveNotebookFile(
+  sourceIdOrUri: string,
+  targetFolder: string,
+  targetName?: string,
+): Promise<{ fileId: string; fileName: string; sourceUri: string; targetUri: string }> {
+  if (!sourceIdOrUri?.trim()) {
+    throw new Error("drive.copyNotebook requires a Drive file id or URI");
+  }
+  if (!targetFolder?.trim()) {
+    throw new Error(
+      "drive.copyNotebook requires a target Drive folder URI or folder id",
+    );
+  }
+
+  const sourceUri = sourceIdOrUri.includes("://")
+    ? sourceIdOrUri
+    : driveFileUrl(sourceIdOrUri.trim());
+  const targetFolderRef = targetFolder.includes("://")
+    ? targetFolder
+    : driveFolderUrl(targetFolder.trim());
+
+  const sourceItem = parseDriveItem(sourceUri);
+  if (sourceItem.type !== NotebookStoreItemType.File) {
+    throw new Error("drive.copyNotebook source must be a Drive file");
+  }
+  const destinationFolderItem = parseDriveItem(targetFolderRef);
+  if (destinationFolderItem.type !== NotebookStoreItemType.Folder) {
+    throw new Error("drive.copyNotebook target must be a Drive folder");
+  }
+
+  appLogger.info("Copying Google Drive notebook file", {
+    attrs: {
+      scope: "drive.transfer",
+      sourceUri,
+      targetFolderRef,
+    },
+  });
+
+  try {
+    const store = ensureDriveStore();
+    const metadata = await store.getMetadata(sourceUri);
+    if (!metadata || metadata.type !== NotebookStoreItemType.File) {
+      throw new Error(
+        "drive.copyNotebook source metadata is missing or not a file",
+      );
+    }
+
+    const fileName = targetName?.trim() || metadata.name?.trim();
+    if (!fileName) {
+      throw new Error("drive.copyNotebook requires a non-empty file name");
+    }
+
+    const sourceNotebook = await store.load(sourceUri);
+    const created = await store.create(targetFolderRef, fileName);
+    const saveResult = await store.save(created.uri, sourceNotebook);
+    if (saveResult?.conflicted) {
+      throw new Error("drive.copyNotebook failed due to save conflict");
+    }
+
+    const { id: fileId } = parseDriveItem(created.uri);
+    appLogger.info("Copied Google Drive notebook file", {
+      attrs: {
+        scope: "drive.transfer",
+        sourceUri,
+        targetUri: created.uri,
+        fileId,
+        fileName,
+      },
+    });
+    return {
+      fileId,
+      fileName,
+      sourceUri,
+      targetUri: created.uri,
+    };
+  } catch (error) {
+    appLogger.error("Failed to copy Google Drive notebook file", {
+      attrs: {
+        scope: "drive.transfer",
+        sourceUri,
+        targetFolderRef,
+        error: String(error),
+      },
+    });
+    throw error;
+  }
 }
