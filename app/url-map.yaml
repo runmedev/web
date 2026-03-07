@@ -18,3 +18,11 @@ pathMatchers:
       urlRewrite:
         pathPrefixRewrite: /index.html
     service: https://www.googleapis.com/compute/v1/projects/runme-lewi-dev/global/backendBuckets/runme-backend
+  # Rewrite /gdrive/callback -> /index.html (backend fetch)
+  # Without this the oauth flow fails because the redirect ends up trying to serve a static page.
+  - paths:
+    - /gdrive/callback
+    routeAction:
+      urlRewrite:
+        pathPrefixRewrite: /index.html
+    service: https://www.googleapis.com/compute/v1/projects/runme-lewi-dev/global/backendBuckets/runme-backend
