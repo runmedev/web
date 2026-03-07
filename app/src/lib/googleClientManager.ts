@@ -1,6 +1,5 @@
 export type GoogleOAuthClientConfig = {
   clientId: string;
-  clientSecret?: string;
   authFlow: GoogleDriveAuthFlow;
   authUxMode: GoogleDriveAuthUxMode;
 };
@@ -54,18 +53,15 @@ export class GoogleClientManager {
   private constructor() {
     const defaultClientId = "";
     const storedClientId = this.readOAuthClientIdFromStorage();
-    const storedClientSecret = this.readOAuthClientSecretFromStorage();
     const storedAuthFlow = this.readOAuthAuthFlowFromStorage();
     const storedAuthUxMode = this.readOAuthAuthUxModeFromStorage();
     const resolvedClientId = storedClientId ?? defaultClientId;
-    const resolvedClientSecret = storedClientSecret ?? undefined;
     const resolvedAuthFlow = storedAuthFlow ?? DEFAULT_AUTH_FLOW;
     const resolvedAuthUxMode =
       storedAuthUxMode ?? resolveDefaultUxModeForFlow(resolvedAuthFlow);
     this.config = {
       oauth: {
         clientId: resolvedClientId,
-        clientSecret: resolvedClientSecret,
         authFlow: resolvedAuthFlow,
         authUxMode: resolvedAuthUxMode,
       },
@@ -129,10 +125,6 @@ export class GoogleClientManager {
     return this.config.oauth;
   }
 
-  setClientSecret(clientSecret: string): GoogleOAuthClientConfig {
-    return this.setOAuthClient({ clientSecret });
-  }
-
   setAuthFlow(authFlow: GoogleDriveAuthFlow): GoogleOAuthClientConfig {
     return this.setOAuthClient({ authFlow });
   }
@@ -146,7 +138,6 @@ export class GoogleClientManager {
       | {
           client_id?: string;
           clientId?: string;
-          client_secret?: string;
           auth_flow?: string;
           authFlow?: string;
           oauthFlow?: string;
@@ -161,7 +152,6 @@ export class GoogleClientManager {
       parsed = JSON.parse(raw) as {
         client_id?: string;
         clientId?: string;
-        client_secret?: string;
         auth_flow?: string;
         authFlow?: string;
         oauthFlow?: string;
@@ -179,7 +169,6 @@ export class GoogleClientManager {
     if (!clientId) {
       throw new Error("OAuth client config is missing client_id");
     }
-    const clientSecret = parsed?.client_secret?.trim() ?? "";
     const rawAuthFlow =
       parsed?.auth_flow ?? parsed?.authFlow ?? parsed?.oauthFlow ?? parsed?.flow;
     const rawAuthUxMode =
@@ -202,7 +191,6 @@ export class GoogleClientManager {
 
     return this.setOAuthClient({
       clientId,
-      clientSecret: clientSecret.length > 0 ? clientSecret : undefined,
       authFlow: rawAuthFlow?.trim() as GoogleDriveAuthFlow | undefined,
       authUxMode: rawAuthUxMode?.trim() as GoogleDriveAuthUxMode | undefined,
     });
@@ -234,24 +222,6 @@ export class GoogleClientManager {
       const parsed = JSON.parse(raw) as { oauthClientId?: string } | null;
       const clientId = parsed?.oauthClientId?.trim();
       return clientId && clientId.length > 0 ? clientId : null;
-    } catch (error) {
-      console.warn("Failed to read Google OAuth client config", error);
-      return null;
-    }
-  }
-
-  private readOAuthClientSecretFromStorage(): string | null {
-    if (typeof window === "undefined" || !window.localStorage) {
-      return null;
-    }
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (!raw) {
-        return null;
-      }
-      const parsed = JSON.parse(raw) as { oauthClientSecret?: string } | null;
-      const clientSecret = parsed?.oauthClientSecret?.trim();
-      return clientSecret && clientSecret.length > 0 ? clientSecret : null;
     } catch (error) {
       console.warn("Failed to read Google OAuth client config", error);
       return null;
@@ -305,7 +275,6 @@ export class GoogleClientManager {
         STORAGE_KEY,
         JSON.stringify({
           oauthClientId: config.clientId,
-          oauthClientSecret: config.clientSecret,
           oauthAuthFlow: config.authFlow,
           oauthAuthUxMode: config.authUxMode,
         }),

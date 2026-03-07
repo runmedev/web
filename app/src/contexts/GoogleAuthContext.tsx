@@ -226,7 +226,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
 
   const exchangeAuthorizationCode = useCallback(
     async (code: string, codeVerifier: string): Promise<AccessTokenResponse> => {
-      const { clientId, clientSecret } = googleClientManager.getOAuthClient();
+      const { clientId } = googleClientManager.getOAuthClient();
       if (!clientId?.trim()) {
         throw new Error("Google OAuth client is not configured.");
       }
@@ -238,9 +238,6 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
         redirect_uri: getGoogleDriveOAuthCallbackUrl(),
         grant_type: "authorization_code",
       });
-      if (clientSecret?.trim()) {
-        body.set("client_secret", clientSecret.trim());
-      }
 
       const response = await fetch("https://oauth2.googleapis.com/token", {
         method: "POST",
@@ -365,7 +362,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       return null;
     }
 
-    const { clientId, clientSecret } = googleClientManager.getOAuthClient();
+    const { clientId } = googleClientManager.getOAuthClient();
     if (!clientId?.trim()) {
       throw new Error("Google OAuth client is not configured.");
     }
@@ -375,9 +372,6 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       grant_type: "refresh_token",
       refresh_token: refreshToken,
     });
-    if (clientSecret?.trim()) {
-      body.set("client_secret", clientSecret.trim());
-    }
 
     const response = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",

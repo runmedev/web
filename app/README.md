@@ -28,7 +28,7 @@ an OAuth credential with the following settings
 
 If you plan on hosting the app at your own domain you'll need to add the redirect URI at which your app gets served
 
-Save the clientID and client secret you'll need them in the next step.
+Save the clientID; you'll need it in the next step.
 
 ## Configure the web app
 
@@ -37,7 +37,6 @@ Open the web app at [http://localhost:5173](http://localhost:5173).
 Expand the App Console at the bottom of the screen and run the following commands to configure your oauth client.
 
 ```ini
-credentials.google.setClientSecret("<YOUR CLIENT SECRET>")
 credentials.google.setClientId("<YOUR CLIENT ID>")
 ```
 
@@ -76,7 +75,7 @@ In the app console run the following to set the discovery URL and scopes
 oidc.setGoogleDefaults()
 ```
 
-Then run the following to set your clientID and clientSecret to the same ones you set above for Google Drive.
+Then run the following to set your clientID to the same one you set above for Google Drive.
 
 ```sh
 oidc.setClientToDrive()
@@ -136,7 +135,6 @@ go run ./ agent --config=${HOME}/.runme-agent/config.dev.yaml serve
 
     googleDrive:
         clientID: "44661292282-bqhl39ugf2kn7r8vv4f6766jt0a7tom9.apps.googleusercontent.com"
-        clientSecret: ""
 
     chatkit:
         domainKey: "<chatkit-domain-key>"

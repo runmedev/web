@@ -89,8 +89,8 @@ export class OidcConfigManager {
   }
 
   setClientToDrive(): OidcConfig {
-    const { clientId, clientSecret } = googleClientManager.getOAuthClient();
-    return this.setConfig({ clientId, clientSecret });
+    const { clientId } = googleClientManager.getOAuthClient();
+    return this.setConfig({ clientId });
   }
 
   setScope(scope: string): OidcConfig {

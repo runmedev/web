@@ -57,7 +57,6 @@ export interface OidcRuntimeConfig {
 
 export interface GoogleDriveRuntimeConfig {
   clientId: string;
-  clientSecret: string;
   baseUrl: string;
   authFlow: GoogleDriveAuthFlow;
   authUxMode: GoogleDriveAuthUxMode;
@@ -370,7 +369,6 @@ function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
     },
     googleDrive: {
       clientId: "",
-      clientSecret: "",
       baseUrl: "",
       authFlow: "implicit",
       authUxMode: "popup",
@@ -446,7 +444,6 @@ export class RuntimeAppConfigSchema {
         ) ?? (authFlow === "pkce" ? "redirect" : "popup");
       parsed.googleDrive = {
         clientId: pickString(drive, ["clientId", "clientID"]),
-        clientSecret: pickString(drive, ["clientSecret", "client_secret"]),
         baseUrl: asNonEmptyString(drive.baseUrl),
         authFlow,
         authUxMode,
@@ -566,7 +563,6 @@ export function applyAppConfig(
   }
 
   const googleClientId = normalizeString(parsed.googleDrive.clientId);
-  const googleClientSecret = normalizeString(parsed.googleDrive.clientSecret);
   const googleAuthFlow = parsed.googleDrive.authFlow;
   const googleAuthUxMode = parsed.googleDrive.authUxMode;
   const skipGoogleDriveFromConfig =
@@ -578,7 +574,6 @@ export function applyAppConfig(
       try {
         googleOAuth = googleClientManager.setOAuthClient({
           clientId: googleClientId,
-          clientSecret: googleClientSecret,
           authFlow: googleAuthFlow,
           authUxMode: googleAuthUxMode,
         });
