@@ -12,6 +12,7 @@ oidc:
 
 googleDrive:
     clientID: "554943104515-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com"
+    clientSecret: "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"
     # Supported values: implicit (popup token flow), pkce (redirect code flow).
     authFlow: "pkce"
     authUxMode: "redirect"
