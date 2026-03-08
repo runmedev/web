@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,17 +20,31 @@ import (
 )
 
 const (
-	clientID      = "554943104515-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com"
-	redirectHost  = "localhost"
-	redirectPort  = 5173
-	redirectPath  = "/gdrive/callback"
-	authEndpoint  = "https://accounts.google.com/o/oauth2/v2/auth"
+	// Matches Cloud SDK defaults in googlecloudsdk/core/config.py.
+	clientID     = "32555940559.apps.googleusercontent.com"
+	clientSecret = "ZmssLNjJy2998hD4CTg2ejr2"
+
+	authEndpoint  = "https://accounts.google.com/o/oauth2/auth"
 	tokenEndpoint = "https://oauth2.googleapis.com/token"
+
+	redirectHost = "localhost"
+	redirectPath = "/"
+
+	// Matches Cloud SDK loopback port probing in core/credentials/flow.py.
+	portSearchStart = 8085
+	portSearchEnd   = portSearchStart + 100
 )
 
-var driveScopes = []string{
-	"https://www.googleapis.com/auth/drive",
-	"https://www.googleapis.com/auth/drive.install",
+// Matches CLOUDSDK_SCOPES + REAUTH_SCOPE in googlecloudsdk/core/config.py and
+// lib/surface/auth/login.py:GetScopes.
+var gcloudScopes = []string{
+	"openid",
+	"https://www.googleapis.com/auth/userinfo.email",
+	"https://www.googleapis.com/auth/cloud-platform",
+	"https://www.googleapis.com/auth/appengine.admin",
+	"https://www.googleapis.com/auth/sqlservice.login",
+	"https://www.googleapis.com/auth/compute",
+	"https://www.googleapis.com/auth/accounts.reauth",
 }
 
 type callbackResult struct {
@@ -45,26 +60,27 @@ type tokenResponse struct {
 	RefreshToken     string `json:"refresh_token"`
 	Scope            string `json:"scope"`
 	TokenType        string `json:"token_type"`
+	IDToken          string `json:"id_token"`
 	Error            string `json:"error"`
 	ErrorDescription string `json:"error_description"`
 }
 
 func main() {
-	if strings.Contains(clientID, "REPLACE_WITH_YOUR_CLIENT_ID") || strings.TrimSpace(clientID) == "" {
-		log.Fatalf("set clientID in %s before running", os.Args[0])
+	redirectPort, err := pickLoopbackPort(redirectHost, portSearchStart, portSearchEnd)
+	if err != nil {
+		log.Fatalf("failed to reserve local callback port: %v", err)
 	}
-
 	redirectURI := fmt.Sprintf("http://%s:%d%s", redirectHost, redirectPort, redirectPath)
+
 	state := mustRandomBase64URL(24)
-	codeVerifier := mustRandomBase64URL(64)
+	codeVerifier := mustPKCECodeVerifier(128)
 	codeChallenge := computeS256Challenge(codeVerifier)
 
 	callbackCh := make(chan callbackResult, 1)
-	server := newCallbackServer(state, callbackCh)
+	server := newCallbackServer(state, redirectPort, callbackCh)
 
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("callback server failed: %v", err)
 			callbackCh <- callbackResult{
 				OAuthError:       "server_error",
 				OAuthDescription: err.Error(),
@@ -124,10 +140,16 @@ func main() {
 	fmt.Printf("scope: %s\n", token.Scope)
 	fmt.Printf("expires_in: %d\n", token.ExpiresIn)
 	fmt.Printf("has_refresh_token: %t\n", strings.TrimSpace(token.RefreshToken) != "")
+	fmt.Printf("has_id_token: %t\n", strings.TrimSpace(token.IDToken) != "")
+	fmt.Printf("access_token: %s\n", token.AccessToken)
 	fmt.Printf("access_token_prefix: %s\n", prefix(token.AccessToken, 24))
 }
 
-func newCallbackServer(expectedState string, callbackCh chan<- callbackResult) *http.Server {
+func newCallbackServer(
+	expectedState string,
+	redirectPort int,
+	callbackCh chan<- callbackResult,
+) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc(redirectPath, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -158,10 +180,6 @@ func newCallbackServer(expectedState string, callbackCh chan<- callbackResult) *
 		}
 	})
 
-	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "PKCE debug server is running.")
-	})
-
 	return &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", redirectHost, redirectPort),
 		Handler:           mux,
@@ -178,13 +196,11 @@ func buildAuthURL(redirectURI, state, codeChallenge string) string {
 	q.Set("client_id", clientID)
 	q.Set("redirect_uri", redirectURI)
 	q.Set("response_type", "code")
-	q.Set("scope", strings.Join(driveScopes, " "))
+	q.Set("scope", strings.Join(gcloudScopes, " "))
 	q.Set("state", state)
 	q.Set("code_challenge", codeChallenge)
 	q.Set("code_challenge_method", "S256")
-	q.Set("include_granted_scopes", "true")
 	q.Set("access_type", "offline")
-	q.Set("prompt", "consent")
 	u.RawQuery = q.Encode()
 	return u.String()
 }
@@ -195,11 +211,11 @@ func exchangeAuthorizationCode(
 ) (tokenResponse, int, []byte, error) {
 	form := url.Values{}
 	form.Set("client_id", clientID)
+	form.Set("client_secret", clientSecret)
 	form.Set("code", code)
 	form.Set("code_verifier", codeVerifier)
 	form.Set("redirect_uri", redirectURI)
 	form.Set("grant_type", "authorization_code")
-	// Intentionally no client_secret. This matches the Drive PKCE browser flow.
 
 	req, err := http.NewRequestWithContext(
 		ctx,
@@ -236,9 +252,39 @@ func mustRandomBase64URL(numBytes int) string {
 	return base64.RawURLEncoding.EncodeToString(buf)
 }
 
+func mustPKCECodeVerifier(length int) string {
+	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
+	if length < 43 || length > 128 {
+		log.Fatalf("invalid PKCE verifier length %d", length)
+	}
+	out := make([]byte, length)
+	randBuf := make([]byte, length)
+	if _, err := rand.Read(randBuf); err != nil {
+		log.Fatalf("failed to read random bytes: %v", err)
+	}
+	for i := range out {
+		out[i] = chars[int(randBuf[i])%len(chars)]
+	}
+	return string(out)
+}
+
 func computeS256Challenge(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+func pickLoopbackPort(host string, startPort, endPort int) (int, error) {
+	for p := startPort; p <= endPort; p++ {
+		l, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, p))
+		if err != nil {
+			continue
+		}
+		if err := l.Close(); err != nil {
+			return 0, err
+		}
+		return p, nil
+	}
+	return 0, fmt.Errorf("no open port found between %d and %d", startPort, endPort)
 }
 
 func prettyPrintJSON(raw []byte) {
