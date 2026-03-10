@@ -577,6 +577,7 @@ describe("NotebookData.runCodeCell", () => {
         'console.log(typeof oidc.getStatus);',
         'console.log(typeof app.getDefaultConfigUrl);',
         'console.log(typeof app.openNotebook);',
+        'console.log(typeof app.setConfigFromYaml);',
       ].join("\n"),
     });
     const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });

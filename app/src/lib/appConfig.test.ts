@@ -309,4 +309,28 @@ describe("appConfig OIDC Google shorthand", () => {
     expect(enableAppConfigOverridesOnLoad()).toBe(false);
     expect(isLocalConfigPreferredOnLoad()).toBe(false);
   });
+
+  it("applies inline YAML via setAppConfigFromYaml", async () => {
+    const { setAppConfigFromYaml } = await loadModules();
+
+    const result = setAppConfigFromYaml(
+      [
+        "agent:",
+        "  endpoint: http://localhost:9977",
+        "  openai:",
+        "    authMethod: OAuth",
+        "    organization: org-inline",
+        "    project: proj-inline",
+      ].join("\n"),
+      "inline://test-config.yaml",
+    );
+
+    expect(result.url).toBe("inline://test-config.yaml");
+    expect(result.agentEndpoint).toBe("http://localhost:9977");
+    expect(result.responsesDirect).toMatchObject({
+      authMethod: "oauth",
+      openaiOrganization: "org-inline",
+      openaiProject: "proj-inline",
+    });
+  });
 });

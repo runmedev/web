@@ -14,6 +14,7 @@ import {
   getDefaultAppConfigUrl,
   isLocalConfigPreferredOnLoad,
   setAppConfig,
+  setAppConfigFromYaml,
   setLocalConfigPreferredOnLoad,
 } from "../appConfig";
 import { agentEndpointManager } from "../agentEndpointManager";
@@ -526,6 +527,23 @@ export function createAppJsGlobals({
           return applied;
         } catch (error) {
           const message = `Failed to apply app config: ${String(error)}`;
+          emitLine(sendOutput, message);
+          throw error;
+        }
+      },
+      setConfigFromYaml: async (yamlText: string, source?: string) => {
+        emitLine(sendOutput, "Applying app config YAML...");
+        try {
+          const applied = setAppConfigFromYaml(yamlText, source);
+          if (applied.warnings.length > 0) {
+            applied.warnings.forEach((warning) => {
+              emitLine(sendOutput, `Warning: ${warning}`);
+            });
+          }
+          emitLine(sendOutput, "App config applied.");
+          return applied;
+        } catch (error) {
+          const message = `Failed to apply app config YAML: ${String(error)}`;
           emitLine(sendOutput, message);
           throw error;
         }

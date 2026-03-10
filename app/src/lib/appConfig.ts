@@ -779,8 +779,20 @@ export async function setAppConfig(
     );
   }
   const text = await response.text();
-  const parsed = YAML.parse(text) as unknown;
-  return applyAppConfig(parsed, resolvedUrl, options);
+  return setAppConfigFromYaml(text, resolvedUrl, options);
+}
+
+export function setAppConfigFromYaml(
+  yamlText: string,
+  source = "inline://app-config.yaml",
+  options?: AppConfigApplyOptions,
+): AppliedAppConfig {
+  const normalizedYaml = typeof yamlText === "string" ? yamlText : "";
+  if (!normalizedYaml.trim()) {
+    throw new Error("App config YAML is empty");
+  }
+  const parsed = YAML.parse(normalizedYaml) as unknown;
+  return applyAppConfig(parsed, source, options);
 }
 
 export function isLocalConfigPreferredOnLoad(): boolean {
