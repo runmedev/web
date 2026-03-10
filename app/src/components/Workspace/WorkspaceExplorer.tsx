@@ -32,6 +32,7 @@ import { fetchDriveItemWithParents, parseDriveItem } from "../../storage/drive";
 import { LOCAL_FOLDER_URI } from "../../storage/local";
 import { useGoogleAuth } from "../../contexts/GoogleAuthContext";
 import { useCurrentDoc } from "../../contexts/CurrentDocContext";
+import { driveLinkCoordinator } from "../../lib/driveLinkCoordinator";
 
 interface ContextMenuState {
   uri: string;
@@ -306,14 +307,11 @@ export function WorkspaceExplorer() {
         let localUri = uri;
         if (!uri.startsWith("local://")) {
           try {
-            const parsed = parseDriveItem(uri);
-            if (parsed.type === NotebookStoreItemType.Folder) {
-              localUri = await store.updateFolder(uri);
-            } else {
-              localUri = await store.addFile(uri);
-            }
-            removeItem(uri);
-            addItem(localUri);
+            parseDriveItem(uri);
+            // Route remote Drive normalization through the coordinator so startup
+            // processing remains non-interactive and auth prompts stay user-initiated.
+            void driveLinkCoordinator.enqueue(uri, "manual");
+            continue;
           } catch (error) {
             console.error("Failed to normalize workspace entry", uri, error);
             continue;

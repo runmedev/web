@@ -211,7 +211,11 @@ function NotebookStoreInitializer({ agentEndpoint }: { agentEndpoint?: string })
       return;
     }
 
-    const driveStore = new DriveNotebookStore(ensureAccessToken);
+    // Background Drive store operations should never force an OAuth redirect.
+    // Interactive login is handled explicitly via UI actions (picker/status tab).
+    const driveStore = new DriveNotebookStore(() =>
+      ensureAccessToken({ interactive: false }),
+    );
     const localStore = new LocalNotebooks(driveStore);
 
     appState.setDriveNotebookStore(driveStore);

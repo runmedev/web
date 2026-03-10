@@ -9,7 +9,7 @@ import { driveLinkCoordinator } from "../lib/driveLinkCoordinator";
 export function DriveLinkCoordinatorHost() {
   const { ensureAccessToken } = useGoogleAuth();
   const { store } = useNotebookStore();
-  const { addItem, getItems } = useWorkspace();
+  const { addItem, getItems, removeItem } = useWorkspace();
   const { setCurrentDoc } = useCurrentDoc();
 
   useEffect(() => {
@@ -25,6 +25,7 @@ export function DriveLinkCoordinatorHost() {
       addFile: (remoteUri: string, name?: string) =>
         store.addFile(remoteUri, name),
       addWorkspaceItem: addItem,
+      removeWorkspaceItem: removeItem,
       getWorkspaceItems: getItems,
       openNotebook: (localUri: string) => {
         setCurrentDoc(localUri);
@@ -33,7 +34,7 @@ export function DriveLinkCoordinatorHost() {
 
     driveLinkCoordinator.consumeUrlIntentFromLocation();
     void driveLinkCoordinator.processPending();
-  }, [addItem, ensureAccessToken, getItems, setCurrentDoc, store]);
+  }, [addItem, ensureAccessToken, getItems, removeItem, setCurrentDoc, store]);
 
   return null;
 }

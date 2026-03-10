@@ -43,6 +43,7 @@ type DriveLinkCoordinatorDeps = {
   updateFolder: (remoteUri: string, name?: string) => Promise<string>;
   addFile: (remoteUri: string, name?: string) => Promise<string>;
   addWorkspaceItem: (localUri: string) => void;
+  removeWorkspaceItem: (uri: string) => void;
   getWorkspaceItems: () => string[];
   openNotebook: (localUri: string) => Promise<void> | void;
 };
@@ -364,6 +365,7 @@ class DriveLinkCoordinatorRuntime {
         if (!deps.getWorkspaceItems().includes(localFolderUri)) {
           deps.addWorkspaceItem(localFolderUri);
         }
+        deps.removeWorkspaceItem(intent.remoteUri);
       } else {
         const { item, parents } = await fetchDriveItemWithParents(
           intent.remoteUri,
@@ -383,6 +385,7 @@ class DriveLinkCoordinatorRuntime {
         }
 
         const localFileUri = await deps.addFile(item.uri, item.name);
+        deps.removeWorkspaceItem(intent.remoteUri);
         await deps.openNotebook(localFileUri);
       }
 
