@@ -299,6 +299,7 @@ afterEach(() => {
   appState.setDriveNotebookStore(null);
   appState.setLocalNotebooks(null);
   appState.setOpenNotebookHandler(null);
+  window.localStorage.removeItem("runme/responses-direct-config");
   runnerStore.clear();
   defaultRunnerName = null;
   harnessStore.clear();
@@ -702,6 +703,50 @@ describe("NotebookData.runCodeCell", () => {
     expect(stdoutText).toContain(
       "project-1: Runme Repo (/Users/jlewi/code/runmecodex/web, model=gpt-5-mini, sandbox=workspace-write, approval=never) (default)",
     );
+  });
+
+  it("exposes app.responsesDirect and credentials.openai helpers in appkernel cells", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-responses-direct-helpers",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        "console.log(typeof app.responsesDirect);",
+        'console.log(app.responsesDirect.setAuthMethod("APIKey").authMethod);',
+        'console.log(app.responsesDirect.setAPIKey("sk-test").apiKey ? "key-set" : "key-missing");',
+        "console.log(app.responsesDirect.get().authMethod);",
+        "console.log(typeof credentials.openai.setOpenAIProject);",
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "responses-direct-helpers.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("object");
+    expect(stdoutText).toContain("api_key");
+    expect(stdoutText).toContain("key-set");
+    expect(stdoutText).toContain("function");
   });
 
   it("supports drive.saveAsCurrentNotebook in appkernel cells", async () => {

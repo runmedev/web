@@ -37,6 +37,9 @@ import {
   updateDriveFileBytes,
 } from "../driveTransfer";
 import { appState } from "./AppState";
+import { getCodexProjectManager, type CodexProject } from "./codexProjectManager";
+import { type HarnessAdapter, getHarnessManager } from "./harnessManager";
+import { responsesDirectConfigManager } from "./responsesDirectConfigManager";
 import type { RunmeConsoleApi } from "./runmeConsole";
 import { getRunnersManager } from "./runnersManager";
 
@@ -152,6 +155,63 @@ export function createAppJsGlobals({
   };
 
   const runmeApi = createRunmeApi(runme, sendOutput);
+  const harnessManager = getHarnessManager();
+  const codexProjectManager = getCodexProjectManager();
+  const responsesDirect = responsesDirectConfigManager;
+
+  const normalizeHarnessAdapter = (value: string): HarnessAdapter => {
+    const normalized = (value ?? "").trim().toLowerCase();
+    if (normalized === "codex") {
+      return "codex";
+    }
+    if (
+      normalized === "responses" ||
+      normalized === "response"
+    ) {
+      return "responses";
+    }
+    if (
+      normalized === "responses-direct" ||
+      normalized === "responses_direct" ||
+      normalized === "responsesdirect"
+    ) {
+      return "responses-direct";
+    }
+    throw new Error(`Unsupported harness adapter: ${String(value)}`);
+  };
+
+  const formatHarness = (
+    harness: { name: string; baseUrl: string; adapter: HarnessAdapter },
+    options?: { includeDefaultMarker?: boolean },
+  ): string => {
+    const isDefault =
+      options?.includeDefaultMarker === true &&
+      harness.name === harnessManager.getDefaultName();
+    return `${harness.name}: ${harness.baseUrl} (${harness.adapter})${
+      isDefault ? " (default)" : ""
+    }`;
+  };
+
+  const formatDefaultHarness = (
+    harness: { name: string; baseUrl: string; adapter: HarnessAdapter },
+  ): string => {
+    return `Default harness: ${harness.name} (${harness.baseUrl}, ${harness.adapter})`;
+  };
+
+  const parseVectorStores = (value: string[] | string): string[] => {
+    if (Array.isArray(value)) {
+      return value
+        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+        .filter((entry): entry is string => entry.length > 0);
+    }
+    if (typeof value === "string") {
+      return value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+    }
+    return [];
+  };
 
   const openWorkspaceAndAdd = () => {
     const store = ensureFilesystemStore();
@@ -404,6 +464,27 @@ export function createAppJsGlobals({
     credentials: {
       google: googleClientManager,
       oidc: oidcConfigManager,
+      openai: {
+        get: () => responsesDirect.getSnapshot(),
+        setAuthMethod: (authMethod: string) => {
+          return responsesDirect.setAuthMethod(authMethod);
+        },
+        setOpenAIOrganization: (openaiOrganization: string) => {
+          return responsesDirect.setOpenAIOrganization(openaiOrganization);
+        },
+        setOpenAIProject: (openaiProject: string) => {
+          return responsesDirect.setOpenAIProject(openaiProject);
+        },
+        setVectorStores: (vectorStores: string[] | string) => {
+          return responsesDirect.setVectorStores(parseVectorStores(vectorStores));
+        },
+        setAPIKey: (apiKey: string) => {
+          return responsesDirect.setAPIKey(apiKey);
+        },
+        clearAPIKey: () => {
+          return responsesDirect.clearAPIKey();
+        },
+      },
     },
     app: {
       getDefaultConfigUrl: () => getDefaultAppConfigUrl(),
@@ -449,6 +530,145 @@ export function createAppJsGlobals({
           throw error;
         }
       },
+      harness: {
+        get: () => {
+          const harnesses = harnessManager.list();
+          if (harnesses.length === 0) {
+            const message = "No harnesses configured.";
+            emitLine(sendOutput, message);
+            return message;
+          }
+          const message = harnesses
+            .map((harness) =>
+              formatHarness(harness, { includeDefaultMarker: true }),
+            )
+            .join("\n");
+          emitLine(sendOutput, message);
+          return message;
+        },
+        update: (name: string, baseUrl: string, adapter: string) => {
+          const updated = harnessManager.update(
+            name,
+            baseUrl,
+            normalizeHarnessAdapter(adapter),
+          );
+          const message = `Harness ${updated.name} set to ${updated.baseUrl} (${updated.adapter})`;
+          emitLine(sendOutput, message);
+          return message;
+        },
+        delete: (name: string) => {
+          harnessManager.delete(name);
+          const message = `Harness ${name} deleted`;
+          emitLine(sendOutput, message);
+          return message;
+        },
+        getDefault: () => {
+          const message = formatDefaultHarness(harnessManager.getDefault());
+          emitLine(sendOutput, message);
+          return message;
+        },
+        setDefault: (name: string) => {
+          harnessManager.setDefault(name);
+          const message = `Default harness set to ${name}`;
+          emitLine(sendOutput, message);
+          return message;
+        },
+        getActiveChatkitUrl: () => {
+          const active = harnessManager.getDefault();
+          const chatkitUrl = harnessManager.resolveChatkitUrl(active);
+          const message = `Active ChatKit URL: ${chatkitUrl} (${active.name}, ${active.adapter})`;
+          emitLine(sendOutput, message);
+          return message;
+        },
+      },
+      codex: {
+        project: {
+          list: () => {
+            const projects = codexProjectManager.list();
+            if (projects.length === 0) {
+              const message = "No codex projects configured.";
+              emitLine(sendOutput, message);
+              return message;
+            }
+            const defaultProjectId = codexProjectManager.getDefaultId();
+            const message = projects
+              .map((project) => {
+                const isDefault = project.id === defaultProjectId;
+                return `${project.id}: ${project.name} (${project.cwd}, model=${project.model}, sandbox=${project.sandboxPolicy}, approval=${project.approvalPolicy})${
+                  isDefault ? " (default)" : ""
+                }`;
+              })
+              .join("\n");
+            emitLine(sendOutput, message);
+            return message;
+          },
+          create: (
+            name: string,
+            cwd: string,
+            model: string,
+            sandboxPolicy: string,
+            approvalPolicy: string,
+            personality: string,
+          ) => {
+            const created = codexProjectManager.create(
+              name,
+              cwd,
+              model,
+              sandboxPolicy,
+              approvalPolicy,
+              personality,
+            );
+            const message = `Codex project ${created.name} created (${created.id})`;
+            emitLine(sendOutput, message);
+            return message;
+          },
+          update: (id: string, patch: Partial<CodexProject>) => {
+            const updated = codexProjectManager.update(id, patch);
+            const message = `Codex project ${updated.name} updated (${updated.id})`;
+            emitLine(sendOutput, message);
+            return message;
+          },
+          delete: (id: string) => {
+            codexProjectManager.delete(id);
+            const message = `Codex project ${id} deleted`;
+            emitLine(sendOutput, message);
+            return message;
+          },
+          getDefault: () => {
+            const project = codexProjectManager.getDefault();
+            const message = `Default codex project: ${project.name} (${project.id}, cwd=${project.cwd}, model=${project.model})`;
+            emitLine(sendOutput, message);
+            return message;
+          },
+          setDefault: (id: string) => {
+            codexProjectManager.setDefault(id);
+            const message = `Default codex project set to ${id}`;
+            emitLine(sendOutput, message);
+            return message;
+          },
+        },
+      },
+      responsesDirect: {
+        get: () => responsesDirect.getSnapshot(),
+        setAuthMethod: (authMethod: string) => {
+          return responsesDirect.setAuthMethod(authMethod);
+        },
+        setOpenAIOrganization: (openaiOrganization: string) => {
+          return responsesDirect.setOpenAIOrganization(openaiOrganization);
+        },
+        setOpenAIProject: (openaiProject: string) => {
+          return responsesDirect.setOpenAIProject(openaiProject);
+        },
+        setVectorStores: (vectorStores: string[] | string) => {
+          return responsesDirect.setVectorStores(parseVectorStores(vectorStores));
+        },
+        setAPIKey: (apiKey: string) => {
+          return responsesDirect.setAPIKey(apiKey);
+        },
+        clearAPIKey: () => {
+          return responsesDirect.clearAPIKey();
+        },
+      },
     },
     help: () => {
       const message = [
@@ -462,7 +682,7 @@ export function createAppJsGlobals({
         "  oidc            - OIDC/OAuth configuration and auth status",
         "  googleClientManager - Google OAuth client settings",
         "  app             - App-level configuration helpers",
-        "  credentials     - Shorthand for google/oidc credential managers",
+        "  credentials     - Shorthand for google/oidc/openai credential managers",
         "",
         "Type <namespace>.help() for detailed commands, e.g. explorer.help()",
       ].join("\n");
