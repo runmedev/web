@@ -267,6 +267,50 @@ describe("CodexConversationController", () => {
     expect(controller.getSnapshot().currentThreadId).toBe("thread-bootstrap");
   });
 
+  it("does not treat previousResponseId as an active turn id when creating/selecting threads", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "thread/start") {
+        return {
+          thread: {
+            id: "thread-bootstrap",
+            title: "Bootstrap Thread",
+            cwd: "/workspace",
+            previous_response_id: "resp-old",
+          },
+        };
+      }
+      if (method === "thread/read") {
+        expect(params).toEqual({ threadId: "thread-1" });
+        return {
+          thread: {
+            id: "thread-1",
+            title: "One",
+            cwd: "/workspace",
+            previous_response_id: "resp-older",
+            items: [],
+          },
+        };
+      }
+      if (method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    await controller.ensureActiveThread();
+    expect(controller.getSnapshot().currentTurnId).toBeNull();
+
+    await controller.selectThread("thread-1");
+    expect(controller.getSnapshot().currentTurnId).toBeNull();
+
+    await controller.interruptActiveTurn();
+    expect(proxyClient.sendRequest).not.toHaveBeenCalledWith(
+      "turn/interrupt",
+      expect.anything(),
+    );
+  });
+
   it("returns cached thread details when items are already present", async () => {
     proxyClient.sendRequest.mockResolvedValueOnce({
       threads: [

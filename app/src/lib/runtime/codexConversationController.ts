@@ -526,7 +526,8 @@ class CodexConversationController {
   async selectThread(threadId: string): Promise<CodexConversationThread> {
     const thread = await this.getThread(threadId);
     this.currentThreadId = threadId;
-    this.currentTurnId = thread.previousResponseId ?? null;
+    // previousResponseId tracks ChatKit response continuity, not an active codex turn id.
+    this.currentTurnId = null;
     this.resumeRequired.add(threadId);
     this.notify();
     return thread;
@@ -584,7 +585,8 @@ class CodexConversationController {
       items: existing?.items ?? [],
     });
     this.currentThreadId = threadId;
-    this.currentTurnId = thread.previousResponseId ?? null;
+    // No active turn exists until turn/start (or turn/started) provides a real turn id.
+    this.currentTurnId = null;
     this.notify();
     return this.threads.get(threadId)!;
   }

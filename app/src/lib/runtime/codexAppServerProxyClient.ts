@@ -223,6 +223,7 @@ class CodexAppServerProxyClient {
   }
 
   disconnect(): void {
+    this.rejectPending(new Error("Codex app-server websocket disconnected"));
     if (this.ws) {
       try {
         this.ws.close();

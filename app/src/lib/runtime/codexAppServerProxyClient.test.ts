@@ -272,6 +272,33 @@ describe("CodexAppServerProxyClient", () => {
     expect(client.getSnapshot().lastError).toBe("proxy_closed");
   });
 
+  it("rejects pending requests when disconnect() replaces the websocket", async () => {
+    const client = createCodexAppServerProxyClientForTests({ wsFactory });
+    const connectPromise = client.connect(
+      "ws://localhost:1234/codex/app-server/ws",
+      "Bearer test-id-token",
+    );
+    sockets[0]?.emitOpen();
+    sockets[0]?.emitMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {},
+      }),
+    );
+    await connectPromise;
+
+    const responsePromise = client.sendRequest("turn/start", {
+      threadId: "thread_1",
+      input: "hello",
+    });
+    client.disconnect();
+
+    await expect(responsePromise).rejects.toThrow(
+      "Codex app-server websocket disconnected",
+    );
+  });
+
   it("logs websocket connection errors through appLogger", async () => {
     const client = createCodexAppServerProxyClientForTests({ wsFactory });
 
