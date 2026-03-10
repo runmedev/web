@@ -1,10 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatKit, useChatKit, ChatKitIcon } from "@openai/chatkit-react";
-import { parser_pb, useCell } from "../../contexts/CellContext";
+import { parser_pb, RunmeMetadataKey, useCell } from "../../contexts/CellContext";
 import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useOutput } from "../../contexts/OutputContext";
 import { useCurrentDoc } from "../../contexts/CurrentDocContext";
 import { create, fromJsonString, toJson } from "@bufbuild/protobuf";
+import {
+  useHarness,
+  buildChatkitUrl,
+  buildCodexAppServerWsUrl,
+  buildCodexBridgeWsUrl,
+  type HarnessProfile,
+} from "../../lib/runtime/harnessManager";
+import { getCodexToolBridge } from "../../lib/runtime/codexToolBridge";
+import { getCodexExecuteApprovalManager } from "../../lib/runtime/codexExecuteApprovalManager";
+import { getCodexAppServerProxyClient } from "../../lib/runtime/codexAppServerProxyClient";
+import { createCodexChatkitFetch } from "../../lib/runtime/codexChatkitFetch";
+import { createResponsesDirectChatkitFetch } from "../../lib/runtime/responsesDirectChatkitFetch";
+import {
+  getCodexConversationController,
+  useCodexConversationSnapshot,
+} from "../../lib/runtime/codexConversationController";
+import { useCodexProjects } from "../../lib/runtime/codexProjectManager";
+import { appLogger } from "../../lib/logging/runtime";
+import { responsesDirectConfigManager } from "../../lib/runtime/responsesDirectConfigManager";
 
 import { getAccessToken, getAuthData } from "../../token";
 import { getBrowserAdapter } from "../../browserAdapter.client";
@@ -17,10 +36,9 @@ import {
   GetCellsResponseSchema,
   ListCellsResponseSchema,
   ChatkitStateSchema,
+  NotebookServiceExecuteCellsResponseSchema,
 } from "../../protogen/oaiproto/aisre/notebooks_pb.js";
-import { useAgentEndpointSnapshot } from "../../lib/agentEndpointManager";
 import { getConfiguredChatKitDomainKey } from "../../lib/appConfig";
-
 class UserNotLoggedInError extends Error {
   constructor(message = "You must log in to use runme chat.") {
     super(message);
@@ -62,37 +80,80 @@ type SSEInterceptor = (rawEvent: string) => void;
 
 const useAuthorizedFetch = (
   getChatkitState: () => ReturnType<(typeof ChatkitStateSchema)["create"]>,
-  options?: { onSSEEvent?: SSEInterceptor },
+  options?: {
+    onSSEEvent?: SSEInterceptor;
+    baseFetch?: typeof fetch;
+    includeRunmeHeaders?: boolean;
+    includeChatkitState?: boolean;
+  },
 ) => {
-  const { onSSEEvent } = options ?? {};
+  const {
+    onSSEEvent,
+    baseFetch,
+    includeRunmeHeaders = true,
+    includeChatkitState = true,
+  } = options ?? {};
   return useMemo(() => {
+    const fetchImpl = baseFetch ?? fetch;
+    const resolveRequestBody = async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ): Promise<BodyInit | null | undefined> => {
+      if (init?.body != null) {
+        return init.body;
+      }
+      if (!(input instanceof Request)) {
+        return init?.body;
+      }
+      const clone = input.clone();
+      const contentType = clone.headers.get("content-type")?.toLowerCase() ?? "";
+      if (contentType.includes("multipart/form-data")) {
+        try {
+          return await clone.formData();
+        } catch {
+          return null;
+        }
+      }
+      if (contentType.includes("application/x-www-form-urlencoded")) {
+        try {
+          return new URLSearchParams(await clone.text());
+        } catch {
+          return null;
+        }
+      }
+      try {
+        return await clone.text();
+      } catch {
+        return null;
+      }
+    };
     const authorizedFetch: typeof fetch = async (
       input: RequestInfo | URL,
       init?: RequestInit,
     ) => {
       try {
-        const authData = await getAuthData();
-        const idToken = authData?.idToken ?? undefined;
-        const oaiAccessToken = await getAccessToken();
-        if (!oaiAccessToken) {          
-          throw new UserNotLoggedInError();
-        }
-
         const headers = new Headers(
           init?.headers ??
             (input instanceof Request ? input.headers : undefined),
         );
 
-        if (idToken) {
-          headers.set("Authorization", `Bearer ${idToken}`);
+        if (includeRunmeHeaders) {
+          const authData = await getAuthData();
+          const idToken = authData?.idToken ?? undefined;
+          const oaiAccessToken = await getAccessToken();
+          if (!oaiAccessToken) {
+            throw new UserNotLoggedInError();
+          }
+          if (idToken) {
+            headers.set("Authorization", `Bearer ${idToken}`);
+          }
+          headers.set("OpenAIAccessToken", oaiAccessToken);
         }
 
-        headers.set("OpenAIAccessToken", oaiAccessToken);
-
-        let body = init?.body;
+        let body = await resolveRequestBody(input, init);
         const method =
           init?.method ?? (input instanceof Request ? input.method : "GET");
-        if (method.toUpperCase() === "POST") {
+        if (includeChatkitState && method.toUpperCase() === "POST") {
           const state = getChatkitState();
           const chatkitStateJson = toJson(ChatkitStateSchema, state);
           if (body == null) {
@@ -132,7 +193,7 @@ const useAuthorizedFetch = (
           body,
         };
 
-        const response = await fetch(input, nextInit);
+        const response = await fetchImpl(input, nextInit);
         //return response;
         const isSSE =
           onSSEEvent &&
@@ -204,22 +265,57 @@ const useAuthorizedFetch = (
         return interceptedResponse;
       } catch (error) {
         console.error("ChatKit authorized fetch failed", error);
+        appLogger.error("ChatKit authorized fetch failed", {
+          attrs: {
+            scope: "chatkit.fetch",
+            error: String(error),
+          },
+        });
         throw error;
       }
     };
 
     return authorizedFetch;
-  }, [onSSEEvent, getChatkitState]);
+  }, [
+    baseFetch,
+    onSSEEvent,
+    getChatkitState,
+    includeRunmeHeaders,
+    includeChatkitState,
+  ]);
 };
 
-function ChatKitPanel() {
+type ChatKitPanelInnerProps = {
+  defaultHarness: HarnessProfile;
+};
+
+function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+  const [codexStreamError, setCodexStreamError] = useState<string | null>(null);
+  const [codexThreadBootstrapComplete, setCodexThreadBootstrapComplete] = useState(
+    defaultHarness.adapter !== "codex",
+  );
   const chatkitDomainKey = getConfiguredChatKitDomainKey();
-  const agentEndpoint = useAgentEndpointSnapshot();
-  const { getChatkitState, setChatkitState } = useCell();
+  const [showCodexDrawer, setShowCodexDrawer] = useState(false);
+  const syncedCodexStateRef = useRef<{
+    threadId: string | null;
+    previousResponseId: string | null;
+  }>({
+    threadId: null,
+    previousResponseId: null,
+  });
+  const chatkitActionsRef = useRef<{
+    setThreadId: (threadId: string | null, source?: string) => Promise<void>;
+    fetchUpdates: (source?: string) => Promise<void>;
+  } | null>(null);
+  const lastAppliedCodexThreadRef = useRef<string | null>(null);
+  const { getChatkitState } = useCell();
   const { getNotebookData, useNotebookSnapshot } = useNotebookContext();
   const { getCurrentDoc } = useCurrentDoc();
   const { getAllRenderers } = useOutput();
+  const codexProjects = useCodexProjects();
+  const { defaultProject } = codexProjects;
+  const codexConversation = useCodexConversationSnapshot();
   const currentDocUri = getCurrentDoc();
   const notebookSnapshot = useNotebookSnapshot(currentDocUri ?? "");
   const orderedCells = useMemo(
@@ -242,6 +338,168 @@ function ChatKitPanel() {
     },
     [currentDocUri, getAllRenderers, getNotebookData],
   );
+
+  const getLatestCells = useCallback((): Cell[] => {
+    if (!currentDocUri) {
+      return orderedCells;
+    }
+    const data = getNotebookData(currentDocUri);
+    return (data?.getNotebook().cells ?? orderedCells) as unknown as Cell[];
+  }, [currentDocUri, getNotebookData, orderedCells]);
+
+  const waitForCellExecutionToComplete = useCallback(
+    async (refId: string, timeoutMs = 60_000): Promise<void> => {
+      if (!currentDocUri) {
+        throw new Error("No active notebook for ExecuteCells");
+      }
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < timeoutMs) {
+        const data = getNotebookData(currentDocUri);
+        const updatedCell = data?.getNotebook().cells.find((cell) => cell.refId === refId);
+        const exitCode = updatedCell?.metadata?.[RunmeMetadataKey.ExitCode];
+        if (typeof exitCode === "string") {
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error(`Timed out waiting for cell execution to finish: ${refId}`);
+    },
+    [currentDocUri, getNotebookData],
+  );
+
+  const executeCellsWithApproval = useCallback(
+    async (bridgeCallId: string, refIds: string[]): Promise<Cell[]> => {
+      if (!currentDocUri) {
+        throw new Error("No active notebook for ExecuteCells");
+      }
+      const notebookData = getNotebookData(currentDocUri);
+      if (!notebookData) {
+        throw new Error("No active notebook data for ExecuteCells");
+      }
+      const normalizedRefIds = refIds.filter((id) => typeof id === "string" && id.trim() !== "");
+      if (normalizedRefIds.length === 0) {
+        throw new Error("ExecuteCells request missing refIds");
+      }
+
+      await getCodexExecuteApprovalManager().requestApproval(bridgeCallId, normalizedRefIds);
+
+      for (const refId of normalizedRefIds) {
+        const cellData = notebookData.getCell(refId);
+        if (!cellData) {
+          throw new Error(`Cell not found for ExecuteCells: ${refId}`);
+        }
+        cellData.run();
+      }
+
+      for (const refId of normalizedRefIds) {
+        await waitForCellExecutionToComplete(refId);
+      }
+
+      const latestCells = notebookData.getNotebook().cells as unknown as Cell[];
+      return normalizedRefIds
+        .map((refId) => latestCells.find((cell) => cell.refId === refId))
+        .filter((cell): cell is Cell => Boolean(cell));
+    },
+    [currentDocUri, getNotebookData, waitForCellExecutionToComplete],
+  );
+
+  const handleCodexBridgeToolCall = useCallback(
+    async ({
+      bridgeCallId,
+      toolCallInput,
+    }: {
+      bridgeCallId: string;
+      toolCallInput: unknown;
+    }): Promise<unknown> => {
+      let decodedInput;
+      try {
+        const payload =
+          typeof toolCallInput === "string"
+            ? toolCallInput
+            : JSON.stringify(toolCallInput ?? {});
+        decodedInput = fromJsonString(ToolCallInputSchema, payload);
+      } catch (error) {
+        const failedOutput = create(ToolCallOutputSchema, {
+          status: ToolCallOutput_Status.FAILED,
+          clientError: `Failed to decode tool params: ${error}`,
+        });
+        return toJson(ToolCallOutputSchema, failedOutput);
+      }
+
+      const toolOutput = create(ToolCallOutputSchema, {
+        callId: decodedInput.callId,
+        previousResponseId: decodedInput.previousResponseId,
+        status: ToolCallOutput_Status.SUCCESS,
+        clientError: "",
+      });
+      const latestCells = getLatestCells();
+      const cellMap = new Map<string, Cell>();
+      latestCells.forEach((cell) => {
+        cellMap.set(cell.refId, cell);
+      });
+
+      const inputCase = decodedInput.input?.case;
+      switch (inputCase) {
+        case "updateCells": {
+          const cells = decodedInput.input.value?.cells ?? [];
+          if (cells.length === 0) {
+            toolOutput.status = ToolCallOutput_Status.FAILED;
+            toolOutput.clientError = "UpdateCells invoked without cells payload";
+            break;
+          }
+          cells.forEach((updatedCell: Cell) => updateCell(updatedCell));
+          toolOutput.output = {
+            case: "updateCells",
+            value: create(UpdateCellsResponseSchema, { cells }),
+          };
+          break;
+        }
+        case "listCells": {
+          toolOutput.output = {
+            case: "listCells",
+            value: create(ListCellsResponseSchema, { cells: getLatestCells() }),
+          };
+          break;
+        }
+        case "getCells": {
+          const requestedRefs = decodedInput.input.value?.refIds ?? [];
+          const foundCells = requestedRefs
+            .map((id: string) => cellMap.get(id))
+            .filter((cell): cell is Cell => Boolean(cell));
+          toolOutput.output = {
+            case: "getCells",
+            value: create(GetCellsResponseSchema, { cells: foundCells }),
+          };
+          break;
+        }
+        case "executeCells": {
+          try {
+            const executedCells = await executeCellsWithApproval(
+              bridgeCallId,
+              decodedInput.input.value?.refIds ?? [],
+            );
+            toolOutput.output = {
+              case: "executeCells",
+              value: create(NotebookServiceExecuteCellsResponseSchema, {
+                cells: executedCells,
+              }),
+            };
+          } catch (error) {
+            toolOutput.status = ToolCallOutput_Status.FAILED;
+            toolOutput.clientError = String(error);
+          }
+          break;
+        }
+        default: {
+          toolOutput.status = ToolCallOutput_Status.FAILED;
+          toolOutput.clientError = `Unsupported codex notebook tool input: ${String(inputCase)}`;
+          break;
+        }
+      }
+      return toJson(ToolCallOutputSchema, toolOutput);
+    },
+    [executeCellsWithApproval, getLatestCells, updateCell],
+  );
   const handleSseEvent = useCallback(
     (rawEvent: string) => {
       const lines = rawEvent
@@ -260,6 +518,28 @@ function ChatKitPanel() {
 
         try {
           const parsed = JSON.parse(payload);
+          if (parsed?.type === "response.failed") {
+            const message =
+              typeof parsed?.error?.message === "string"
+                ? parsed.error.message
+                : "Codex request failed.";
+            appLogger.error("ChatKit response stream failed", {
+              attrs: {
+                scope: "chatkit.panel",
+                adapter: defaultHarness.adapter,
+                error: message,
+              },
+            });
+            setCodexStreamError(message);
+            continue;
+          }
+          if (
+            parsed?.type === "response.created" ||
+            parsed?.type === "response.output_text.delta" ||
+            parsed?.type === "response.completed"
+          ) {
+            setCodexStreamError(null);
+          }
           if (parsed?.type !== "aisre.chatkit.state") {
             continue;
           }
@@ -278,7 +558,26 @@ function ChatKitPanel() {
             ChatkitStateSchema,
             JSON.stringify(stateData),
           );
-          setChatkitState(state);
+          if (defaultHarness.adapter === "codex") {
+            appLogger.info("Ignoring Codex ChatKit state event", {
+              attrs: {
+                scope: "chatkit.panel",
+                adapter: defaultHarness.adapter,
+                threadId: state.threadId ?? null,
+                previousResponseId: state.previousResponseId ?? null,
+              },
+            });
+            continue;
+          }
+          appLogger.info("Received ChatKit state event", {
+            attrs: {
+              scope: "chatkit.panel",
+              adapter: defaultHarness.adapter,
+              threadId: state.threadId ?? null,
+              previousResponseId: state.previousResponseId ?? null,
+            },
+          });
+          // setChatkitState(state);
           if (state.previousResponseId || state.threadId) {
             console.log(
               "ChatKit state update",
@@ -297,30 +596,226 @@ function ChatKitPanel() {
         }
       }
     },
-    [setChatkitState],
+    [defaultHarness.adapter],
   );
-  const authorizedFetch = useAuthorizedFetch(getChatkitState, {
+  const codexFetch = useMemo(() => createCodexChatkitFetch(), []);
+  const responsesDirectFetch = useMemo(() => createResponsesDirectChatkitFetch(), []);
+  const getAuthorizedChatkitState = useCallback(() => {
+    if (defaultHarness.adapter !== "codex") {
+      return getChatkitState();
+    }
+    const controllerSnapshot = getCodexConversationController().getSnapshot();
+    return create(ChatkitStateSchema, {
+      threadId:
+        syncedCodexStateRef.current.threadId ??
+        controllerSnapshot.currentThreadId ??
+        "",
+      previousResponseId: syncedCodexStateRef.current.previousResponseId ?? "",
+    });
+  }, [defaultHarness.adapter, getChatkitState]);
+  const authorizedFetch = useAuthorizedFetch(getAuthorizedChatkitState, {
     onSSEEvent: handleSseEvent,
+    baseFetch:
+      defaultHarness.adapter === "codex"
+        ? codexFetch
+        : defaultHarness.adapter === "responses-direct"
+          ? responsesDirectFetch
+          : undefined,
+    includeRunmeHeaders: defaultHarness.adapter !== "responses-direct",
+    includeChatkitState: defaultHarness.adapter !== "responses-direct",
   });
 
   const chatkitApiUrl = useMemo(() => {
-    const base = agentEndpoint.endpoint ?? "";
-    try {
-      const url = new URL(base);
-      url.pathname = "/chatkit";
-      url.search = "";
-      url.hash = "";
-      return url.toString();
-    } catch {
-      return `${base.replace(/\/$/, "")}/chatkit`;
+    return buildChatkitUrl(defaultHarness.baseUrl, defaultHarness.adapter);
+  }, [defaultHarness.adapter, defaultHarness.baseUrl]);
+  const codexProxyWsUrl = useMemo(() => {
+    return buildCodexAppServerWsUrl(defaultHarness.baseUrl);
+  }, [defaultHarness.baseUrl]);
+  const codexBridgeUrl = useMemo(() => {
+    return buildCodexBridgeWsUrl(defaultHarness.baseUrl);
+  }, [defaultHarness.baseUrl]);
+  useEffect(() => {
+    appLogger.info("ChatKit host configured", {
+      attrs: {
+        scope: "chatkit.panel",
+        adapter: defaultHarness.adapter,
+        apiUrl: chatkitApiUrl,
+        domainKeyConfigured: Boolean(chatkitDomainKey),
+        selectedProjectId:
+          defaultHarness.adapter === "codex"
+            ? codexConversation.selectedProject.id
+            : null,
+      },
+    });
+  }, [
+    chatkitApiUrl,
+    chatkitDomainKey,
+    codexConversation.selectedProject.id,
+    defaultHarness.adapter,
+  ]);
+  const resolveCodexAuthorization = useCallback(async (): Promise<string> => {
+    const authData = await getAuthData();
+    const idToken = authData?.idToken?.trim();
+    if (!idToken) {
+      const message = "Codex websocket auth requires an OIDC id token";
+      appLogger.error(message, {
+        attrs: {
+          scope: "chatkit.codex_auth",
+          adapter: defaultHarness.adapter,
+          baseUrl: defaultHarness.baseUrl,
+        },
+      });
+      setShowLoginPrompt(true);
+      throw new UserNotLoggedInError(message);
     }
-  }, [agentEndpoint.endpoint]);
+    return `Bearer ${idToken}`;
+  }, [defaultHarness.adapter, defaultHarness.baseUrl]);
+
+  useEffect(() => {
+    if (defaultHarness.adapter !== "codex") {
+      return;
+    }
+    const controller = getCodexConversationController();
+    controller.setSelectedProject(defaultProject.id);
+  }, [defaultHarness.adapter, defaultProject.id]);
+
+  useEffect(() => {
+    const proxy = getCodexAppServerProxyClient();
+    if (defaultHarness.adapter !== "codex") {
+      setCodexThreadBootstrapComplete(true);
+      proxy.setAuthorizationResolver(null);
+      proxy.disconnect();
+      return;
+    }
+    setCodexThreadBootstrapComplete(false);
+    proxy.setAuthorizationResolver(resolveCodexAuthorization);
+    let canceled = false;
+    void (async () => {
+      try {
+        const authorization = await resolveCodexAuthorization();
+        if (canceled) {
+          return;
+        }
+        await proxy.connect(codexProxyWsUrl, authorization);
+        if (!canceled) {
+          const controller = getCodexConversationController();
+          await controller.refreshHistory();
+          const thread = await controller.ensureActiveThread();
+          // setChatkitState(
+          //   create(ChatkitStateSchema, {
+          //     threadId: thread.id,
+          //     previousResponseId: thread.previousResponseId ?? "",
+          //   }),
+          // );
+          syncedCodexStateRef.current = {
+            threadId: thread.id,
+            previousResponseId: thread.previousResponseId ?? null,
+          };
+          setCodexThreadBootstrapComplete(true);
+        }
+      } catch (error) {
+        if (canceled) {
+          return;
+        }
+        appLogger.error("Failed to connect codex app-server websocket", {
+          attrs: {
+            scope: "chatkit.codex_proxy",
+            error: String(error),
+            url: codexProxyWsUrl,
+          },
+        });
+        setCodexStreamError(`Failed to initialize Codex thread: ${String(error)}`);
+        setCodexThreadBootstrapComplete(true);
+      }
+    })();
+    return () => {
+      canceled = true;
+      proxy.setAuthorizationResolver(null);
+      proxy.disconnect();
+    };
+  }, [codexProxyWsUrl, defaultHarness.adapter, resolveCodexAuthorization]);
+
+  useEffect(() => {
+    if (defaultHarness.adapter !== "codex" || !codexThreadBootstrapComplete) {
+      lastAppliedCodexThreadRef.current = null;
+      return;
+    }
+    const threadId = syncedCodexStateRef.current.threadId;
+    if (!threadId || lastAppliedCodexThreadRef.current === threadId) {
+      return;
+    }
+    lastAppliedCodexThreadRef.current = threadId;
+    void chatkitActionsRef.current?.setThreadId(threadId, "bootstrap_sync");
+  }, [codexThreadBootstrapComplete, defaultHarness.adapter]);
+
+  useEffect(() => {
+    const bridge = getCodexToolBridge();
+    return bridge.subscribe(() => {
+      const snapshot = bridge.getSnapshot();
+      if (
+        defaultHarness.adapter === "codex" &&
+        (snapshot.state === "closed" || snapshot.state === "error")
+      ) {
+        getCodexExecuteApprovalManager().failAll("Codex bridge disconnected");
+      }
+    });
+  }, [defaultHarness.adapter]);
+
+  useEffect(() => {
+    const bridge = getCodexToolBridge();
+    if (defaultHarness.adapter !== "codex") {
+      bridge.setHandler(null);
+      return;
+    }
+    bridge.setHandler(handleCodexBridgeToolCall);
+    return () => {
+      bridge.setHandler(null);
+    };
+  }, [defaultHarness.adapter, handleCodexBridgeToolCall]);
+
+  useEffect(() => {
+    const bridge = getCodexToolBridge();
+    if (defaultHarness.adapter !== "codex") {
+      bridge.disconnect();
+      getCodexExecuteApprovalManager().failAll("Codex bridge disabled");
+      return;
+    }
+    let canceled = false;
+    void (async () => {
+      try {
+        const authorization = await resolveCodexAuthorization();
+        if (canceled) {
+          return;
+        }
+        await bridge.connect(codexBridgeUrl, authorization);
+      } catch (error) {
+        if (canceled) {
+          return;
+        }
+        appLogger.error("Failed to connect codex bridge websocket", {
+          attrs: {
+            scope: "chatkit.codex_bridge",
+            error: String(error),
+            url: codexBridgeUrl,
+          },
+        });
+      }
+    })();
+    return () => {
+      canceled = true;
+      bridge.disconnect();
+      getCodexExecuteApprovalManager().failAll("Codex bridge disconnected");
+    };
+  }, [codexBridgeUrl, defaultHarness.adapter, resolveCodexAuthorization]);
+
   const chatkit = useChatKit({
     api: {
       url: chatkitApiUrl,
       domainKey: chatkitDomainKey,
       fetch: authorizedFetch,
     },
+    initialThread:
+      defaultHarness.adapter === "codex" ? codexConversation.currentThreadId : undefined,
     theme: {
       colorScheme: "light",
       radius: "round",
@@ -374,9 +869,55 @@ function ChatKitPanel() {
     },
     header: {
       enabled: true,
+      title:
+        defaultHarness.adapter === "codex"
+          ? {
+              enabled: true,
+              text: codexConversation.selectedProject.name,
+            }
+          : undefined,
+      leftAction:
+        defaultHarness.adapter === "codex"
+          ? {
+              icon: showCodexDrawer ? "close" : "menu",
+              onClick: () => setShowCodexDrawer((previous) => !previous),
+            }
+          : undefined,
+      rightAction:
+        defaultHarness.adapter === "codex"
+          ? {
+              icon: "compose",
+              onClick: () => {
+                void (async () => {
+                  const controller = getCodexConversationController();
+                  controller.startNewChat();
+                  setCodexStreamError(null);
+                  syncedCodexStateRef.current = {
+                    threadId: null,
+                    previousResponseId: null,
+                  };
+                  const thread = await controller.ensureActiveThread();
+                  // setChatkitState(
+                  //   create(ChatkitStateSchema, {
+                  //     threadId: thread.id,
+                  //     previousResponseId: thread.previousResponseId ?? "",
+                  //   }),
+                  // );
+                  syncedCodexStateRef.current = {
+                    threadId: thread.id,
+                    previousResponseId: thread.previousResponseId ?? null,
+                  };
+                  await chatkitActionsRef.current?.setThreadId(
+                    thread.id,
+                    "header_new_chat",
+                  );
+                })();
+              },
+            }
+          : undefined,
     },
     history: {
-      enabled: true,
+      enabled: defaultHarness.adapter !== "codex",
     },
     onClientTool: async (invocation) => {
       const toolOutput = create(ToolCallOutputSchema, {
@@ -519,10 +1060,22 @@ function ChatKitPanel() {
     },
     onError: ({ error }) => {
       const promptForLogin = () => setShowLoginPrompt(true);
+      const errorText =
+        typeof error === "string"
+          ? error
+          : error && typeof error === "object" && "message" in error
+            ? String((error as { message?: unknown }).message)
+            : String(error);
 
       // This is a bit of a hacky way to check for authentication errors.
       // Chatkit throws a StreamError if the user isn't logged in. 
       void (async () => {
+        if (
+          defaultHarness.adapter === "responses-direct" &&
+          responsesDirectConfigManager.getSnapshot().authMethod !== "oauth"
+        ) {
+          return;
+        }
         const token = await getAccessToken();
         if (!token) {
           promptForLogin();
@@ -530,8 +1083,245 @@ function ChatKitPanel() {
       })();
 
       console.error("ChatKit error", error);
+      appLogger.error("ChatKit error", {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: defaultHarness.adapter,
+          baseUrl: defaultHarness.baseUrl,
+          error: errorText,
+        },
+      });
+    },
+    onThreadLoadStart: ({ threadId }) => {
+      console.log("[chatkit] thread load start", JSON.stringify({ threadId }));
+      appLogger.info("ChatKit thread load start", {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: defaultHarness.adapter,
+          threadId,
+        },
+      });
+    },
+    onThreadLoadEnd: ({ threadId }) => {
+      console.log("[chatkit] thread load end", JSON.stringify({ threadId }));
+      appLogger.info("ChatKit thread load end", {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: defaultHarness.adapter,
+          threadId,
+        },
+      });
+    },
+    onLog: ({ name, data }) => {
+      console.log("[chatkit] log", JSON.stringify({ name, data }));
+      appLogger.info("ChatKit diagnostic log", {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: defaultHarness.adapter,
+          name,
+          data: data ?? null,
+        },
+      });
+    },
+    onThreadChange: ({ threadId }) => {
+      const localChatkitState = getChatkitState();
+      const codexSnapshot =
+        defaultHarness.adapter === "codex"
+          ? getCodexConversationController().getSnapshot()
+          : null;
+      const stack = new Error("chatkit thread change").stack ?? null;
+      appLogger.info("ChatKit thread changed", {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: defaultHarness.adapter,
+          threadId: threadId ?? null,
+          localThreadId: localChatkitState.threadId ?? null,
+          localPreviousResponseId: localChatkitState.previousResponseId ?? null,
+          codexCurrentThreadId: codexSnapshot?.currentThreadId ?? null,
+          codexCurrentTurnId: codexSnapshot?.currentTurnId ?? null,
+          stack,
+        },
+      });
+      if (defaultHarness.adapter !== "codex") {
+        return;
+      }
+      if (!threadId) {
+        const codexThreadId = codexSnapshot?.currentThreadId;
+        if (codexThreadId) {
+          const codexThread = codexConversation.threads.find(
+            (thread) => thread.id === codexThreadId,
+          );
+          appLogger.info("Ignoring null ChatKit thread change while Codex thread is active", {
+            attrs: {
+              scope: "chatkit.panel",
+              adapter: defaultHarness.adapter,
+              threadId: null,
+              codexCurrentThreadId: codexThreadId,
+              codexCurrentTurnId: codexSnapshot?.currentTurnId ?? null,
+            },
+          });
+          // setChatkitState(
+          //   create(ChatkitStateSchema, {
+          //     threadId: codexThreadId,
+          //     previousResponseId: codexThread?.previousResponseId ?? "",
+          //   }),
+          // );
+          return;
+        }
+        // setChatkitState(create(ChatkitStateSchema, {}));
+        return;
+      }
+      const existing = codexConversation.threads.find((thread) => thread.id === threadId);
+      void existing;
+      // setChatkitState(
+      //   create(ChatkitStateSchema, {
+      //     threadId,
+      //     previousResponseId: existing?.previousResponseId ?? "",
+      //   }),
+      // );
     },
   });
+  const setChatkitThreadId = useCallback(
+    async (threadId: string | null, source = "panel_ref") => {
+      appLogger.info("Calling ChatKit setThreadId", {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: defaultHarness.adapter,
+          threadId,
+          source,
+        },
+      });
+      try {
+        await chatkit.setThreadId(threadId);
+        appLogger.info("ChatKit setThreadId completed", {
+          attrs: {
+            scope: "chatkit.panel",
+            adapter: defaultHarness.adapter,
+            threadId,
+            source,
+          },
+        });
+      } catch (error) {
+        appLogger.error("ChatKit setThreadId failed", {
+          attrs: {
+            scope: "chatkit.panel",
+            adapter: defaultHarness.adapter,
+            threadId,
+            source,
+            error: String(error),
+          },
+        });
+        throw error;
+      }
+    },
+    [chatkit, defaultHarness.adapter],
+  );
+  const fetchChatkitUpdates = useCallback(
+    async (source = "panel_ref") => {
+      appLogger.info("Calling ChatKit fetchUpdates", {
+        attrs: {
+          scope: "chatkit.panel",
+          adapter: defaultHarness.adapter,
+          source,
+        },
+      });
+      try {
+        await chatkit.fetchUpdates();
+        appLogger.info("ChatKit fetchUpdates completed", {
+          attrs: {
+            scope: "chatkit.panel",
+            adapter: defaultHarness.adapter,
+            source,
+          },
+        });
+      } catch (error) {
+        appLogger.error("ChatKit fetchUpdates failed", {
+          attrs: {
+            scope: "chatkit.panel",
+            adapter: defaultHarness.adapter,
+            source,
+            error: String(error),
+          },
+        });
+        throw error;
+      }
+    },
+    [chatkit, defaultHarness.adapter],
+  );
+  chatkitActionsRef.current = {
+    setThreadId: setChatkitThreadId,
+    fetchUpdates: fetchChatkitUpdates,
+  };
+
+  const handleCodexNewChat = useCallback(async () => {
+    const controller = getCodexConversationController();
+    controller.startNewChat();
+    setCodexStreamError(null);
+    syncedCodexStateRef.current = {
+      threadId: null,
+      previousResponseId: null,
+    };
+    const thread = await controller.ensureActiveThread();
+    // setChatkitState(
+    //   create(ChatkitStateSchema, {
+    //     threadId: thread.id,
+    //     previousResponseId: thread.previousResponseId ?? "",
+    //   }),
+    // );
+    syncedCodexStateRef.current = {
+      threadId: thread.id,
+      previousResponseId: thread.previousResponseId ?? null,
+    };
+    await chatkitActionsRef.current?.setThreadId(thread.id, "new_chat");
+  }, []);
+
+  const handleCodexSelectThread = useCallback(
+    async (threadId: string) => {
+      const controller = getCodexConversationController();
+      const thread = await controller.selectThread(threadId);
+      // setChatkitState(
+      //   create(ChatkitStateSchema, {
+      //     threadId: thread.id,
+      //     previousResponseId: thread.previousResponseId ?? "",
+      //   }),
+      // );
+      syncedCodexStateRef.current = {
+        threadId: thread.id,
+        previousResponseId: thread.previousResponseId ?? null,
+      };
+      await chatkitActionsRef.current?.setThreadId(thread.id, "select_thread");
+      await chatkitActionsRef.current?.fetchUpdates("select_thread");
+      setShowCodexDrawer(false);
+    },
+    [],
+  );
+
+  const handleCodexProjectChange = useCallback(
+    async (projectId: string) => {
+      const controller = getCodexConversationController();
+      controller.setSelectedProject(projectId);
+      controller.startNewChat();
+      setCodexStreamError(null);
+      syncedCodexStateRef.current = {
+        threadId: null,
+        previousResponseId: null,
+      };
+      await controller.refreshHistory();
+      const thread = await controller.ensureActiveThread();
+      // setChatkitState(
+      //   create(ChatkitStateSchema, {
+      //     threadId: thread.id,
+      //     previousResponseId: thread.previousResponseId ?? "",
+      //   }),
+      // );
+      syncedCodexStateRef.current = {
+        threadId: thread.id,
+        previousResponseId: thread.previousResponseId ?? null,
+      };
+      await chatkitActionsRef.current?.setThreadId(thread.id, "project_change");
+    },
+    [],
+  );
 
   const handleLogin = useCallback(() => {
     setShowLoginPrompt(false);
@@ -544,7 +1334,92 @@ function ChatKitPanel() {
 
   return (
     <div className="relative h-full w-full">
-      <ChatKit control={chatkit.control} className="block h-full w-full" />
+      {defaultHarness.adapter !== "codex" || codexThreadBootstrapComplete ? (
+        <ChatKit control={chatkit.control} className="block h-full w-full" />
+      ) : (
+        <div
+          data-testid="codex-chatkit-bootstrap"
+          className="flex h-full w-full items-center justify-center text-sm text-nb-text-muted"
+        >
+          Initializing Codex thread...
+        </div>
+      )}
+      {defaultHarness.adapter === "codex" && codexStreamError ? (
+        <div
+          data-testid="codex-stream-error"
+          className="absolute left-3 right-3 top-3 z-30 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 shadow-sm"
+        >
+          {codexStreamError}
+        </div>
+      ) : null}
+      {defaultHarness.adapter === "codex" && showCodexDrawer ? (
+        <div
+          data-testid="codex-project-drawer"
+          className="absolute inset-y-0 left-0 z-40 flex w-[280px] flex-col border-r border-nb-cell-border bg-white/95 shadow-lg"
+        >
+          <div className="border-b border-nb-cell-border px-3 py-3">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-nb-text-muted">
+              Codex Project
+            </div>
+            <select
+              data-testid="codex-project-select"
+              className="w-full rounded border border-nb-cell-border bg-white px-2 py-1 text-sm text-nb-text"
+              value={codexConversation.selectedProject.id}
+              onChange={(event) => {
+                void handleCodexProjectChange(event.target.value);
+              }}
+            >
+              {codexProjects.projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="mt-2 w-full rounded border border-nb-cell-border px-2 py-1 text-sm text-nb-text hover:bg-nb-surface-2"
+              onClick={() => {
+                void handleCodexNewChat();
+              }}
+            >
+              New chat
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-nb-text-muted">
+              Conversations
+            </div>
+            {codexConversation.loadingHistory ? (
+              <div className="text-sm text-nb-text-muted">Loading...</div>
+            ) : codexConversation.threads.length === 0 ? (
+              <div className="text-sm text-nb-text-muted">No conversations yet.</div>
+            ) : (
+              <div className="space-y-2">
+                {codexConversation.threads.map((thread) => (
+                  <button
+                    key={thread.id}
+                    type="button"
+                    data-testid={`codex-thread-${thread.id}`}
+                    className={`w-full rounded border px-2 py-2 text-left text-sm ${
+                      codexConversation.currentThreadId === thread.id
+                        ? "border-nb-accent bg-nb-surface-2"
+                        : "border-nb-cell-border bg-white"
+                    }`}
+                    onClick={() => {
+                      void handleCodexSelectThread(thread.id);
+                    }}
+                  >
+                    <div className="font-medium text-nb-text">{thread.title}</div>
+                    {thread.updatedAt ? (
+                      <div className="mt-1 text-xs text-nb-text-muted">{thread.updatedAt}</div>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
       {showLoginPrompt ? (
         <div className="pointer-events-auto absolute inset-0 z-50 flex items-center justify-center bg-white/90 p-4 text-sm">
           <div className="w-full max-w-sm rounded-nb-md border border-nb-cell-border bg-white p-4 shadow-nb-lg">
@@ -571,6 +1446,17 @@ function ChatKitPanel() {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function ChatKitPanel() {
+  const { defaultHarness } = useHarness();
+  const harnessSessionKey = `${defaultHarness.name}:${defaultHarness.baseUrl}:${defaultHarness.adapter}`;
+  return (
+    <ChatKitPanelInner
+      key={harnessSessionKey}
+      defaultHarness={defaultHarness}
+    />
   );
 }
 

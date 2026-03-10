@@ -15,6 +15,7 @@ import {
 import { agentEndpointManager } from "./agentEndpointManager";
 import { appLogger } from "./logging/runtime";
 import { getGoogleDriveBaseUrl, setGoogleDriveBaseUrl } from "./googleDriveRuntime";
+import { responsesDirectConfigManager } from "./runtime/responsesDirectConfigManager";
 
 type StoredRunner = {
   name: string;
@@ -70,6 +71,14 @@ export interface ChatkitRuntimeConfig {
 export interface AgentRuntimeConfig {
   endpoint: string;
   defaultRunnerEndpoint: string;
+  openai: AgentOpenAIRuntimeConfig;
+}
+
+export interface AgentOpenAIRuntimeConfig {
+  authMethod: string;
+  organization: string;
+  project: string;
+  vectorStores: string[];
 }
 
 export interface RuntimeAppConfig {
@@ -86,6 +95,13 @@ export type AppliedAppConfig = {
   agentEndpoint?: string;
   defaultRunnerEndpoint?: string;
   chatkitDomainKey?: string;
+  responsesDirect?: {
+    authMethod: string;
+    openaiOrganization: string;
+    openaiProject: string;
+    vectorStores: string[];
+    apiKeySet: boolean;
+  };
   warnings: string[];
 };
 
@@ -362,6 +378,12 @@ function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
     agent: {
       endpoint: "",
       defaultRunnerEndpoint: "",
+      openai: {
+        authMethod: "",
+        organization: "",
+        project: "",
+        vectorStores: [],
+      },
     },
     oidc: {
       clientExchange: false,
@@ -399,6 +421,9 @@ export class RuntimeAppConfigSchema {
     const oidcGoogle = asRecord(oidc?.google);
     const drive = asRecord(root.googleDrive);
     const chatkit = asRecord(root.chatkit);
+    const topLevelOpenAI = asRecord(root.openai);
+    const cloudAssistant = asRecord(root.cloudAssistant);
+    const agentOpenAI = asRecord(agent?.openai);
 
     parsed.agent = {
       endpoint:
@@ -407,6 +432,24 @@ export class RuntimeAppConfigSchema {
       defaultRunnerEndpoint:
         pickString(agent ?? {}, ["defaultRunnerEndpoint", "runnerEndpoint"]) ||
         asNonEmptyString(root.defaultRunnerEndpoint),
+      openai: {
+        authMethod:
+          pickString(agentOpenAI ?? {}, ["authMethod", "auth_method", "method"]) ||
+          pickString(topLevelOpenAI ?? {}, ["authMethod", "auth_method", "method"]),
+        organization:
+          pickString(agentOpenAI ?? {}, ["organization"]) ||
+          pickString(topLevelOpenAI ?? {}, ["organization"]),
+        project:
+          pickString(agentOpenAI ?? {}, ["project"]) ||
+          pickString(topLevelOpenAI ?? {}, ["project"]),
+        vectorStores: (() => {
+          const explicit = asStringArray(agentOpenAI?.vectorStores);
+          if (explicit.length > 0) {
+            return explicit;
+          }
+          return asStringArray(cloudAssistant?.vectorStores);
+        })(),
+      },
     };
 
     if (oidc) {
@@ -507,12 +550,27 @@ export function applyAppConfig(
   const hasOidcGoogleBlock = isRecord(rawOidc?.google);
   const hasGoogleDriveBlock = isRecord(rawConfig.googleDrive);
   const hasChatkitBlock = isRecord(rawConfig.chatkit);
+  const rawAgent = asRecord(rawConfig.agent);
+  const hasAgentOpenAIBlock = isRecord(asRecord(rawAgent?.openai));
+  const hasTopLevelOpenAIBlock = isRecord(rawConfig.openai);
+  const hasCloudAssistantBlock = isRecord(rawConfig.cloudAssistant);
+  const hasResponsesDirectConfigBlock =
+    hasAgentOpenAIBlock || hasTopLevelOpenAIBlock || hasCloudAssistantBlock;
   const warnings: string[] = [];
   let oidc: OidcConfig | undefined;
   let googleOAuth: GoogleOAuthClientConfig | undefined;
   let agentEndpoint: string | undefined;
   let defaultRunnerEndpoint: string | undefined;
   let chatkitDomainKey: string | undefined;
+  let responsesDirect:
+    | {
+        authMethod: string;
+        openaiOrganization: string;
+        openaiProject: string;
+        vectorStores: string[];
+        apiKeySet: boolean;
+      }
+    | undefined;
 
   const oidcConfig: Partial<OidcConfig> = {};
   const genericOidcConfig = parsed.oidc.generic;
@@ -657,6 +715,46 @@ export function applyAppConfig(
     warnings.push("ChatKit config missing domainKey");
   }
 
+  const configuredOpenAIAuthMethod = normalizeString(parsed.agent.openai.authMethod);
+  const configuredOpenAIOrganization = normalizeString(parsed.agent.openai.organization);
+  const configuredOpenAIProject = normalizeString(parsed.agent.openai.project);
+  const configuredVectorStores = parsed.agent.openai.vectorStores;
+
+  const shouldApplyResponsesDirectDefaults =
+    hasResponsesDirectConfigBlock || responsesDirectConfigManager.hasInitializedConfig();
+  const responsesDirectSnapshot = shouldApplyResponsesDirectDefaults
+    ? responsesDirectConfigManager.applyDefaults({
+        authMethod: configuredOpenAIAuthMethod,
+        openaiOrganization: configuredOpenAIOrganization,
+        openaiProject: configuredOpenAIProject,
+        vectorStores: configuredVectorStores,
+      })
+    : responsesDirectConfigManager.getSnapshot();
+  responsesDirect = {
+    authMethod: responsesDirectSnapshot.authMethod,
+    openaiOrganization: responsesDirectSnapshot.openaiOrganization,
+    openaiProject: responsesDirectSnapshot.openaiProject,
+    vectorStores: responsesDirectSnapshot.vectorStores,
+    apiKeySet: responsesDirectSnapshot.apiKey.length > 0,
+  };
+
+  if (hasResponsesDirectConfigBlock) {
+    if (responsesDirectSnapshot.authMethod === "oauth") {
+      if (!responsesDirectSnapshot.openaiOrganization) {
+        warnings.push(
+          "Direct Responses OAuth requires openai organization (agent.openai.organization)",
+        );
+      }
+      if (!responsesDirectSnapshot.openaiProject) {
+        warnings.push("Direct Responses OAuth requires openai project (agent.openai.project)");
+      }
+    } else if (!responsesDirectSnapshot.apiKey) {
+      warnings.push(
+        "Direct Responses API key auth selected; set API key via app.responsesDirect.setAPIKey(...)",
+      );
+    }
+  }
+
   return {
     url,
     oidc,
@@ -664,6 +762,7 @@ export function applyAppConfig(
     agentEndpoint,
     defaultRunnerEndpoint,
     chatkitDomainKey,
+    responsesDirect,
     warnings,
   };
 }
@@ -680,8 +779,20 @@ export async function setAppConfig(
     );
   }
   const text = await response.text();
-  const parsed = YAML.parse(text) as unknown;
-  return applyAppConfig(parsed, resolvedUrl, options);
+  return setAppConfigFromYaml(text, resolvedUrl, options);
+}
+
+export function setAppConfigFromYaml(
+  yamlText: string,
+  source = "inline://app-config.yaml",
+  options?: AppConfigApplyOptions,
+): AppliedAppConfig {
+  const normalizedYaml = typeof yamlText === "string" ? yamlText : "";
+  if (!normalizedYaml.trim()) {
+    throw new Error("App config YAML is empty");
+  }
+  const parsed = YAML.parse(normalizedYaml) as unknown;
+  return applyAppConfig(parsed, source, options);
 }
 
 export function isLocalConfigPreferredOnLoad(): boolean {

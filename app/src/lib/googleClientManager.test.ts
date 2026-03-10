@@ -1,0 +1,69 @@
+import { beforeEach, describe, expect, it } from "vitest";
+
+import {
+  GOOGLE_CLIENT_STORAGE_KEY,
+  GoogleClientManager,
+} from "./googleClientManager";
+
+function createManager(): GoogleClientManager {
+  (
+    GoogleClientManager as unknown as {
+      singleton: GoogleClientManager | null;
+    }
+  ).singleton = null;
+  return GoogleClientManager.instance();
+}
+
+describe("GoogleClientManager", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    (
+      GoogleClientManager as unknown as {
+        singleton: GoogleClientManager | null;
+      }
+    ).singleton = null;
+  });
+
+  it("reuses the OAuth client ID for Drive Picker config", () => {
+    const manager = createManager();
+
+    manager.setOAuthClient({
+      clientId: "554943104515-example.apps.googleusercontent.com",
+      clientSecret: "secret",
+    });
+
+    expect(manager.getDrivePickerConfig()).toEqual({
+      clientId: "554943104515-example.apps.googleusercontent.com",
+      developerKey: "",
+      appId: "554943104515",
+    });
+  });
+
+  it("persists picker-only config while keeping the client ID in OAuth config", () => {
+    const manager = createManager();
+
+    manager.setDrivePickerConfig({
+      clientId: "554943104515-example.apps.googleusercontent.com",
+      developerKey: "developer-key",
+      appId: "custom-app-id",
+    });
+
+    expect(manager.getOAuthClient()).toEqual({
+      clientId: "554943104515-example.apps.googleusercontent.com",
+    });
+    expect(manager.getDrivePickerConfig()).toEqual({
+      clientId: "554943104515-example.apps.googleusercontent.com",
+      developerKey: "developer-key",
+      appId: "custom-app-id",
+    });
+
+    const stored = JSON.parse(
+      window.localStorage.getItem(GOOGLE_CLIENT_STORAGE_KEY) ?? "{}",
+    ) as Record<string, string>;
+    expect(stored).toMatchObject({
+      oauthClientId: "554943104515-example.apps.googleusercontent.com",
+      drivePickerDeveloperKey: "developer-key",
+      drivePickerAppId: "custom-app-id",
+    });
+  });
+});

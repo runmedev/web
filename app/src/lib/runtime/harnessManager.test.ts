@@ -1,0 +1,137 @@
+// @vitest-environment jsdom
+import { beforeEach, describe, expect, it } from "vitest";
+
+import {
+  __resetHarnessManagerForTests,
+  buildCodexAppServerWsUrl,
+  buildCodexBridgeWsUrl,
+  buildChatkitUrl,
+  getHarnessManager,
+} from "./harnessManager";
+
+const HARNESS_STORAGE_KEY = "runme/harness";
+const LEGACY_SETTINGS_STORAGE_KEY = "cloudAssistantSettings";
+
+describe("harnessManager", () => {
+  beforeEach(() => {
+    localStorage.removeItem(HARNESS_STORAGE_KEY);
+    localStorage.removeItem(LEGACY_SETTINGS_STORAGE_KEY);
+    __resetHarnessManagerForTests();
+  });
+
+  it("bootstraps a default responses harness from window.location.origin", () => {
+    const mgr = getHarnessManager();
+    const active = mgr.getDefault();
+
+    expect(active.name).toBe("local-responses");
+    expect(active.adapter).toBe("responses");
+    expect(active.baseUrl).toBe(window.location.origin);
+    expect(mgr.resolveChatkitUrl(active)).toBe(
+      new URL("/chatkit", window.location.origin).toString(),
+    );
+  });
+
+  it("uses app.harness updates and default selection", () => {
+    const mgr = getHarnessManager();
+
+    mgr.update("alt", "http://127.0.0.1:7788", "responses");
+    mgr.setDefault("alt");
+
+    const active = mgr.getDefault();
+    expect(active.name).toBe("alt");
+    expect(active.baseUrl).toBe("http://127.0.0.1:7788");
+    expect(active.adapter).toBe("responses");
+    expect(mgr.resolveChatkitUrl(active)).toBe("http://127.0.0.1:7788/chatkit");
+  });
+
+  it("builds codex route for codex harnesses", () => {
+    expect(buildChatkitUrl("http://localhost:1234", "codex")).toBe(
+      "http://localhost:1234/codex/chatkit",
+    );
+  });
+
+  it("builds responses-direct route for direct OpenAI harnesses", () => {
+    expect(buildChatkitUrl("http://localhost:1234", "responses-direct")).toBe(
+      "http://localhost:1234/responses/direct/chatkit",
+    );
+  });
+
+  it("builds codex websocket bridge URL", () => {
+    expect(buildCodexBridgeWsUrl("http://localhost:1234")).toBe(
+      "ws://localhost:1234/codex/ws",
+    );
+    expect(buildCodexBridgeWsUrl("https://example.com/base")).toBe(
+      "wss://example.com/codex/ws",
+    );
+    expect(buildCodexBridgeWsUrl("http://localhost:1234", { forceReplace: true })).toBe(
+      "ws://localhost:1234/codex/ws?force_replace=true",
+    );
+  });
+
+  it("builds codex app-server websocket URL", () => {
+    expect(buildCodexAppServerWsUrl("http://localhost:1234")).toBe(
+      "ws://localhost:1234/codex/app-server/ws",
+    );
+    expect(buildCodexAppServerWsUrl("https://example.com/base")).toBe(
+      "wss://example.com/codex/app-server/ws",
+    );
+  });
+
+  it("migrates initial endpoint from legacy cloudAssistantSettings when present", () => {
+    localStorage.setItem(
+      LEGACY_SETTINGS_STORAGE_KEY,
+      JSON.stringify({ agentEndpoint: "http://legacy.example:9000" }),
+    );
+    __resetHarnessManagerForTests();
+
+    const mgr = getHarnessManager();
+    const active = mgr.getDefault();
+    expect(active.baseUrl).toBe("http://legacy.example:9000");
+    expect(active.adapter).toBe("responses");
+  });
+
+  it("syncs harness updates from storage events", () => {
+    const mgr = getHarnessManager();
+
+    localStorage.setItem(
+      HARNESS_STORAGE_KEY,
+      JSON.stringify({
+        harnesses: [
+          { name: "external-codex", baseUrl: "http://127.0.0.1:9999", adapter: "codex" },
+        ],
+        defaultHarnessName: "external-codex",
+      }),
+    );
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: HARNESS_STORAGE_KEY,
+        newValue: localStorage.getItem(HARNESS_STORAGE_KEY),
+      }),
+    );
+
+    const active = mgr.getDefault();
+    expect(active.name).toBe("external-codex");
+    expect(active.adapter).toBe("codex");
+    expect(active.baseUrl).toBe("http://127.0.0.1:9999");
+  });
+
+  it("syncs harness updates from same-window change events", () => {
+    const mgr = getHarnessManager();
+
+    localStorage.setItem(
+      HARNESS_STORAGE_KEY,
+      JSON.stringify({
+        harnesses: [
+          { name: "same-window-codex", baseUrl: "http://127.0.0.1:7777", adapter: "codex" },
+        ],
+        defaultHarnessName: "same-window-codex",
+      }),
+    );
+    window.dispatchEvent(new CustomEvent("runme:harness-changed"));
+
+    const active = mgr.getDefault();
+    expect(active.name).toBe("same-window-codex");
+    expect(active.adapter).toBe("codex");
+    expect(active.baseUrl).toBe("http://127.0.0.1:7777");
+  });
+});

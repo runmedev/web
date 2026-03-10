@@ -2,6 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 
 import { JSKernel } from "./jsKernel";
 
+function collectStdout(): {
+  output: string[];
+  onStdout: (data: string) => void;
+  onStderr: (data: string) => void;
+} {
+  const output: string[] = [];
+  return {
+    output,
+    onStdout: (data: string) => output.push(data),
+    onStderr: (data: string) => output.push(data),
+  };
+}
+
 describe("JSKernel", () => {
   it("merges injected app helpers with built-in app helpers", async () => {
     const stdout = vi.fn();
@@ -62,5 +75,93 @@ describe("JSKernel", () => {
     await kernel.run('console.log({ count: 1n, nested: { id: 2n } });');
 
     expect(stdout).toHaveBeenCalledWith('{"count":"1","nested":{"id":"2"}}\n');
+  });
+});
+
+describe("JSKernel app globals", () => {
+  it("preserves custom app namespaces like app.harness", async () => {
+    const streams = collectStdout();
+    const kernel = new JSKernel({
+      globals: {
+        app: {
+          harness: {
+            getDefault: () => "default-harness",
+          },
+        },
+      },
+      hooks: streams,
+    });
+
+    await kernel.run("console.log(app.harness.getDefault())");
+
+    expect(streams.output.join("")).toContain("default-harness");
+  });
+
+  it("preserves nested app namespaces like app.codex.project", async () => {
+    const streams = collectStdout();
+    const kernel = new JSKernel({
+      globals: {
+        app: {
+          codex: {
+            project: {
+              getDefault: () => "default-codex-project",
+            },
+          },
+        },
+      },
+      hooks: streams,
+    });
+
+    await kernel.run("console.log(app.codex.project.getDefault())");
+
+    expect(streams.output.join("")).toContain("default-codex-project");
+  });
+
+  it("keeps app.runners helpers while preserving app.harness", async () => {
+    const streams = collectStdout();
+    const kernel = new JSKernel({
+      globals: {
+        app: {
+          harness: {
+            getDefault: () => "default-harness",
+          },
+        },
+        runmeRunners: {
+          get: () => "runner-list",
+          update: () => "updated",
+          delete: () => "deleted",
+          getDefault: () => "default-runner",
+          setDefault: () => "set-default",
+        },
+      },
+      hooks: streams,
+    });
+
+    await kernel.run(`
+      app.runners.get();
+      console.log(app.harness.getDefault());
+    `);
+
+    const output = streams.output.join("");
+    expect(output).toContain("runner-list");
+    expect(output).toContain("default-harness");
+  });
+
+  it("retains existing app.runners when runmeRunners is not provided", async () => {
+    const streams = collectStdout();
+    const kernel = new JSKernel({
+      globals: {
+        app: {
+          runners: {
+            get: () => "custom-runner-get",
+          },
+        },
+      },
+      hooks: streams,
+    });
+
+    await kernel.run("console.log(app.runners.get())");
+
+    expect(streams.output.join("")).toContain("custom-runner-get");
   });
 });

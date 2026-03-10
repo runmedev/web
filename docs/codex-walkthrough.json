@@ -1,0 +1,170 @@
+{
+  "cells": [
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "# Codex Walkthrough Notebook\n\nThis notebook walks through configuring and validating the Codex harness in the Runme web app.\n\nUse this JSON notebook as the source template for your local copy.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01JCODX000000000000000001"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {},
+      "refId": "markup_codex_intro"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## 1) Copy This Notebook To Google Drive\n\nRun this first AppKernel JavaScript cell to create a Drive-backed copy of this notebook.\n\nSet `folderId` to your target Google Drive folder id before running.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01JCODX000000000000000002"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {},
+      "refId": "markup_copy_notebook"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "const folderId = \"<folder-id>\";\nconst includeTimestamp = false;\nif (!folderId || folderId.includes(\"<folder-id>\")) {\n  console.log(\"Set folderId to a Google Drive folder id before running this cell.\");\n} else {\n  try {\n    const nb = runme.getCurrentNotebook();\n    if (!nb) {\n      throw new Error(\"No active notebook handle available.\");\n    }\n    const sourceName =\n      (typeof nb.getName === \"function\" && nb.getName()) || \"codex-walkthrough\";\n    const baseName = sourceName.replace(/\\.(json|runme\\.md|md)$/i, \"\");\n    let fileName = `${baseName}-copy.json`;\n    if (includeTimestamp) {\n      const now = new Date();\n      const pad = (n) => String(n).padStart(2, \"0\");\n      const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;\n      fileName = `${baseName}-copy-${timestamp}.json`;\n    }\n    const result = await drive.saveAsCurrentNotebook(folderId, fileName);\n    console.log(result);\n    console.log(\"This tab is now pointing at the new Drive-backed copy.\");\n  } catch (err) {\n    console.error(\"Failed to save notebook as a Google Drive copy\", {\n      error: String(err),\n    });\n    throw err;\n  }\n}",
+      "languageId": "javascript",
+      "metadata": {
+        "runme.dev/id": "01JCODX000000000000000003",
+        "name": "copy-notebook-to-drive",
+        "runme.dev/runnerName": "appkernel-js"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {},
+      "refId": "code_copy_notebook_to_user_folder"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## 2) Start The Runner In Your Terminal (Not From Notebook)\n\nRunme cannot execute notebook code cells until a runner is available.\nStart the runner from your shell first, then return to this notebook.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01JCODX000000000000000004"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {},
+      "refId": "markup_ensure_runner"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "Open a terminal and run:\n\n```bash\nRUNME_AGENT_CONFIG=\"${RUNME_AGENT_CONFIG:-${HOME}/.runme-agent/config.dev.yaml}\"\nrunme agent --config=\"${RUNME_AGENT_CONFIG}\" serve\n```\n\nOptional check (new terminal):\n\n```bash\nnc -z localhost 9977 && echo \"runner is up\"\n```",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01JCODX000000000000000005"
+      },
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {},
+      "refId": "code_ensure_runme_runner"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## 3) Configure Runner, Codex Harness, And Project\n\nRun the next AppKernel cell. It configures:\n- default runner: `local` -> `ws://localhost:9977/ws`\n- default harness: `local-codex` -> `window.location.origin` (`codex` adapter)\n- default codex project: `Codex Walkthrough` scoped to `.`\n\nImportant:\n- The runner endpoint is the websocket used to execute notebook cells.\n- The codex harness base URL must be the Runme web/app-server origin that serves `/codex/app-server/ws` and `/codex/ws`.\n- In the common local setup, `window.location.origin` is the correct harness base URL. Do not point the codex harness at the runner websocket port.\n- Codex websocket auth now uses your current browser OIDC session. If you are not logged in, the app should prompt you to log in and the Logs pane should show `chatkit.codex_auth`, `chatkit.codex_proxy`, or `chatkit.codex_bridge` errors.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01JCODX000000000000000006"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {},
+      "refId": "markup_configure_harness"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "const runnerName = \"local\";\nconst runnerEndpoint = \"ws://localhost:9977/ws\";\nconst harnessName = \"local-codex\";\nconst harnessBaseUrl = window.location.origin;\nconst projectName = \"Codex Walkthrough\";\nconst projectCwd = \".\";\nconst projectModel = \"gpt-5\";\nconst projectSandboxPolicy = \"workspace-write\";\nconst projectApprovalPolicy = \"never\";\nconst projectPersonality = \"default\";\n\nif (!app?.runners || !app?.harness || !app?.codex?.project) {\n  throw new Error(\n    \"Missing app.runners, app.harness, or app.codex.project in AppKernel globals.\",\n  );\n}\n\nconst projectLines = String(app.codex.project.list() || \"\")\n  .split(\"\\n\")\n  .map((line) => line.trim())\n  .filter(Boolean);\n\nlet projectId = null;\nfor (const line of projectLines) {\n  const match = line.match(/^([^:]+):\\s*(.+?)\\s*\\((.+?),/);\n  if (!match) {\n    continue;\n  }\n  const [, id, name, cwd] = match;\n  if (name === projectName && cwd === projectCwd) {\n    projectId = id;\n    break;\n  }\n}\n\nlet projectCreateResult = \"existing\";\nif (!projectId) {\n  projectCreateResult = String(\n    app.codex.project.create(\n      projectName,\n      projectCwd,\n      projectModel,\n      projectSandboxPolicy,\n      projectApprovalPolicy,\n      projectPersonality,\n    ),\n  );\n  const match = projectCreateResult.match(/\\(([^)]+)\\)$/);\n  projectId = match?.[1] ?? null;\n}\n\nif (!projectId) {\n  throw new Error(`Could not resolve codex project id from: ${projectCreateResult}`);\n}\n\nconst result = {\n  runnerUpdate: app.runners.update(runnerName, runnerEndpoint),\n  runnerDefault: app.runners.setDefault(runnerName),\n  harnessUpdate: app.harness.update(harnessName, harnessBaseUrl, \"codex\"),\n  harnessDefault: app.harness.setDefault(harnessName),\n  activeChatkitUrl: app.harness.getActiveChatkitUrl(),\n  projectCreateResult,\n  projectDefault: app.codex.project.setDefault(projectId),\n  projectState: app.codex.project.getDefault(),\n};\n\nconsole.log(result);",
+      "languageId": "javascript",
+      "metadata": {
+        "runme.dev/id": "01JCODX000000000000000009",
+        "name": "configure-runner-and-codex-harness",
+        "runme.dev/runnerName": "appkernel-js"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {},
+      "refId": "code_configure_runner_and_codex_harness"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## 4) Validate Chat + Notebook Update Flow\n\n1. Open the **AI Chat** panel.\n2. Confirm the header shows the selected codex project.\n3. Enter:\n\n```text\nAdd a cell to print(\"hello world\")\n```\n\nExpected behavior:\n- Your user message is visible in the ChatKit transcript.\n- You see an assistant acknowledgement: `Ok, I'll add a cell to print(\"hello world\").`\n- A new notebook cell containing `print(\"hello world\")` appears.\n- A follow-up assistant message confirms the change: `Cell has been added.`\n\nIf the chat stays on the start screen or a codex websocket fails:\n- Re-run the configuration cell and verify `activeChatkitUrl` points at your Runme web/app-server origin.\n- Open the **Logs** pane and look for `chatkit.codex_auth`, `chatkit.codex_proxy`, or `chatkit.codex_bridge` errors.\n- The codex proxy websocket should connect to `/codex/app-server/ws` on the harness base URL.\n- The notebook bridge websocket should connect to `/codex/ws` on the same harness base URL.\n- If Runme server logs say `No session cookie or bearer token found`, the browser did not send the first websocket auth message successfully; that should now surface in the app logs as well.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01JCODX000000000000000007"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {},
+      "refId": "markup_validate_chat_flow"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## 5) Optional: Validate Execute Approval Path\n\nIf execution requires approval, use App Console:\n\n```javascript\napp.runCells([\"<cellID>\"])\n```\n\nReplace `<cellID>` with the pending cell id shown by the app.",
+      "languageId": "markdown",
+      "metadata": {
+        "runme.dev/id": "01JCODX000000000000000008"
+      },
+      "outputs": [],
+      "executionSummary": {
+        "success": false,
+        "timing": {
+          "startTime": "0",
+          "endTime": "0"
+        }
+      },
+      "textRange": {},
+      "refId": "markup_execute_approval"
+    }
+  ],
+  "metadata": {}
+}

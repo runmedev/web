@@ -1,0 +1,345 @@
+// @vitest-environment jsdom
+import { render, screen } from "@testing-library/react";
+import React from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type {
+  ChatKitAssistantMessageItem,
+  ChatKitStreamEvent,
+  ChatKitUserMessageItem,
+} from "./chatkitProtocol";
+import { createCodexConversationControllerForTests } from "./codexConversationController";
+
+const notificationHandlers = new Set<(notification: any) => void>();
+const proxyClient = {
+  sendRequest: vi.fn(),
+  subscribeNotifications: vi.fn((handler: (notification: any) => void) => {
+    notificationHandlers.add(handler);
+    return () => {
+      notificationHandlers.delete(handler);
+    };
+  }),
+};
+
+const project = {
+  id: "project-1",
+  name: "Runme Repo",
+  cwd: "/workspace",
+  model: "gpt-5",
+  approvalPolicy: "never",
+  sandboxPolicy: "workspace-write",
+  personality: "pragmatic",
+};
+
+const projectManager = {
+  getDefaultId: vi.fn(() => project.id),
+  getDefault: vi.fn(() => project),
+  get: vi.fn((id: string) => (id === project.id ? project : undefined)),
+  setDefault: vi.fn(),
+};
+
+vi.mock("./codexAppServerProxyClient", () => ({
+  getCodexAppServerProxyClient: () => proxyClient,
+}));
+
+vi.mock("./codexProjectManager", () => ({
+  getCodexProjectManager: () => projectManager,
+}));
+
+type RenderState = {
+  users: Map<string, ChatKitUserMessageItem>;
+  responses: Map<string, ChatKitAssistantMessageItem>;
+  order: string[];
+};
+
+function reduceEvents(events: ChatKitStreamEvent[]): RenderState {
+  const state: RenderState = {
+    users: new Map(),
+    responses: new Map(),
+    order: [],
+  };
+
+  for (const event of events) {
+    switch (event.type) {
+      case "thread.item.added": {
+        if (event.item.type === "user_message") {
+          state.users.set(event.item.id, {
+            ...event.item,
+            content: [...event.item.content],
+          });
+          state.order.push(event.item.id);
+          break;
+        }
+        if (event.item.type !== "assistant_message") {
+          break;
+        }
+        state.responses.set(event.item.id, {
+          ...event.item,
+          content: [...event.item.content],
+        });
+        state.order.push(event.item.id);
+        break;
+      }
+      case "thread.item.updated": {
+        const item = state.responses.get(event.item_id);
+        if (!item) {
+          break;
+        }
+        switch (event.update.type) {
+          case "assistant_message.content_part.added":
+            item.content = [
+              {
+                type: "output_text",
+                text: event.update.content.text,
+                annotations: [...event.update.content.annotations],
+              },
+            ];
+            break;
+          case "assistant_message.content_part.text_delta": {
+            const current = item.content[0]?.text ?? "";
+            item.content = [
+              { type: "output_text", text: `${current}${event.update.delta}` },
+            ];
+            break;
+          }
+          case "assistant_message.content_part.done":
+            item.content = [
+              {
+                type: "output_text",
+                text: event.update.content.text,
+                annotations: [...event.update.content.annotations],
+              },
+            ];
+            item.status = "completed";
+            break;
+        }
+        break;
+      }
+      case "thread.item.done": {
+        if (event.item.type === "user_message") {
+          state.users.set(event.item.id, {
+            ...event.item,
+            content: [...event.item.content],
+          });
+          if (!state.order.includes(event.item.id)) {
+            state.order.push(event.item.id);
+          }
+          break;
+        }
+        if (event.item.type !== "assistant_message") {
+          break;
+        }
+        state.responses.set(event.item.id, {
+          ...event.item,
+          content: [...event.item.content],
+        });
+        if (!state.order.includes(event.item.id)) {
+          state.order.push(event.item.id);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  return state;
+}
+
+function ContractRenderer({ events }: { events: ChatKitStreamEvent[] }) {
+  const state = reduceEvents(events);
+  return (
+    <div>
+      {state.order.map((itemId) => {
+        const item = state.responses.get(itemId);
+        if (item) {
+          return (
+            <article key={itemId} data-testid={`assistant-item-${itemId}`}>
+              {item.content[0]?.text ?? ""}
+            </article>
+          );
+        }
+        const user = state.users.get(itemId);
+        if (user) {
+          return (
+            <article key={itemId} data-testid={`user-item-${itemId}`}>
+              {user.content[0]?.text ?? ""}
+            </article>
+          );
+        }
+        return null;
+      })}
+    </div>
+  );
+}
+
+async function waitForNotificationsReady(
+  isReady: () => boolean,
+  attempts = 10,
+): Promise<void> {
+  for (let index = 0; index < attempts; index += 1) {
+    if (isReady()) {
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw new Error("notification handlers were not ready");
+}
+
+describe("ChatKit protocol render contract", () => {
+  beforeEach(() => {
+    proxyClient.sendRequest.mockReset();
+    proxyClient.subscribeNotifications.mockClear();
+    notificationHandlers.clear();
+  });
+
+  it("renders the assistant text produced by the codex conversation stream", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return { threadId: "thread-1", title: "Runme Repo" };
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+                delta: 'print("Hello, world!")',
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "msg-1",
+                  text: 'print("Hello, world!")',
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: { id: "turn-1", status: "completed" },
+              },
+            });
+          });
+        });
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: ChatKitStreamEvent[] = [];
+    await controller.streamUserMessage("print hello world in python", {}, {
+      emit: (payload) => events.push(payload),
+    });
+
+    render(<ContractRenderer events={events} />);
+
+    expect(screen.getByText("print hello world in python").textContent).toBe(
+      "print hello world in python",
+    );
+    expect(screen.getByTestId("assistant-item-msg-1").textContent).toBe(
+      'print("Hello, world!")',
+    );
+  });
+
+  it("renders partial assistant text before the turn completes", async () => {
+    let emitNotifications: (() => void) | null = null;
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return { threadId: "thread-1", title: "Runme Repo" };
+      }
+      if (method === "turn/start") {
+        emitNotifications = () => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "turn.message.started",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+                delta: "Hello",
+              },
+            });
+          });
+        };
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: ChatKitStreamEvent[] = [];
+    const streamPromise = controller.streamUserMessage("print hello world in python", {}, {
+      emit: (payload) => events.push(payload),
+    });
+
+    await waitForNotificationsReady(
+      () => notificationHandlers.size > 0 && emitNotifications !== null,
+    );
+    emitNotifications?.();
+    await Promise.resolve();
+
+    const { rerender } = render(<ContractRenderer events={events} />);
+
+    expect(screen.getByText("print hello world in python").textContent).toBe(
+      "print hello world in python",
+    );
+    expect(screen.getByTestId("assistant-item-msg-1").textContent).toBe(
+      "Hello",
+    );
+
+    notificationHandlers.forEach((handler) => {
+      handler({
+        jsonrpc: "2.0",
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "agentMessage",
+            id: "msg-1",
+            text: "Hello world",
+          },
+        },
+      });
+      handler({
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "completed" },
+        },
+      });
+    });
+
+    await streamPromise;
+    rerender(<ContractRenderer events={events} />);
+
+    expect(screen.getByTestId("assistant-item-msg-1").textContent).toBe(
+      "Hello world",
+    );
+  });
+});

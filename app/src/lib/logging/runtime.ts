@@ -55,6 +55,51 @@ function createLogID(): string {
   return `log-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function shouldMirrorToConsole(event: LogEvent): boolean {
+  if (!(import.meta.env?.DEV ?? false)) {
+    return false;
+  }
+
+  const scope = event.attrs?.scope;
+  if (typeof scope !== "string") {
+    return false;
+  }
+
+  return scope.startsWith("chatkit.") || scope.startsWith("codex");
+}
+
+function mirrorEventToConsole(event: LogEvent): void {
+  if (!shouldMirrorToConsole(event)) {
+    return;
+  }
+
+  const payload = {
+    ts: event.ts,
+    level: event.level,
+    message: event.message,
+    ...(event.attrs ? { attrs: event.attrs } : {}),
+  };
+
+  try {
+    switch (event.level) {
+      case "debug":
+        console.debug(`[appLogger] ${event.message}`, payload);
+        break;
+      case "info":
+        console.info(`[appLogger] ${event.message}`, payload);
+        break;
+      case "warn":
+        console.warn(`[appLogger] ${event.message}`, payload);
+        break;
+      case "error":
+        console.error(`[appLogger] ${event.message}`, payload);
+        break;
+    }
+  } catch {
+    // Logging must never fail because console is unavailable or proxied.
+  }
+}
+
 export interface LoggingRuntimeStore {
   log(level: LogLevel, message: string, options?: LogOptions): LogEvent;
   list(query?: LogQuery): LogEvent[];
@@ -88,6 +133,7 @@ class LoggingRuntime implements LoggingRuntimeStore {
       this.events.length = MAX_EVENTS;
     }
 
+    mirrorEventToConsole(event);
     this.listeners.forEach((listener) => listener());
     return event;
   }
@@ -116,6 +162,16 @@ export function createLoggingRuntime(): LoggingRuntimeStore {
 }
 
 export const loggingRuntime = createLoggingRuntime();
+
+declare global {
+  interface Window {
+    __appLoggingRuntime?: LoggingRuntimeStore;
+  }
+}
+
+if (typeof window !== "undefined" && import.meta.env?.DEV) {
+  window.__appLoggingRuntime = loggingRuntime;
+}
 
 /**
  * appLogger is a tiny convenience API that keeps call sites terse while

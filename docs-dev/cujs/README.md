@@ -17,6 +17,11 @@ from `docs-dev/cujs/`.
   - select `AppKernel (browser JS)` runner,
   - run JavaScript cells in-browser,
   - verify stdout/stderr and exit metadata updates in notebook outputs.
+- `ai.md` — assistant interaction flow:
+  - open ChatKit panel,
+  - configure assistant harness in App Console,
+  - type and send a message to the assistant,
+  - verify the assistant response is visible in the panel.
 
 ## How CUJs are executed
 

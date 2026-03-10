@@ -82,6 +82,8 @@ const SCENARIO_DRIVERS = [
   join(SCRIPT_DIR, "test-scenario-open-shared-drive-link.ts"),
   join(SCRIPT_DIR, "test-scenario-appkernel-javascript.ts"),
   join(SCRIPT_DIR, "test-scenario-no-runner-logs.ts"),
+  join(SCRIPT_DIR, "test-scenario-ai.ts"),
+  join(SCRIPT_DIR, "test-scenario-ai-codex.ts"),
 ];
 
 type BackendCommandConfig = {
@@ -107,6 +109,18 @@ type FakeDriveConfig = {
   host: string;
   port: number;
   baseUrl: string;
+  serverCommand: string;
+  serverEnv: NodeJS.ProcessEnv;
+};
+
+type FakeChatkitConfig = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  baseUrl: string;
+  healthUrl: string;
+  requestsUrl: string;
+  resetUrl: string;
   serverCommand: string;
   serverEnv: NodeJS.ProcessEnv;
 };
@@ -204,6 +218,38 @@ function resolveFakeDriveConfig(): FakeDriveConfig {
     host,
     port,
     baseUrl,
+    serverCommand,
+    serverEnv,
+  };
+}
+
+function resolveFakeChatkitConfig(): FakeChatkitConfig {
+  const enabled = (process.env.CUJ_FAKE_CHATKIT_ENABLED ?? "true").toLowerCase() !== "false";
+  const host = process.env.CUJ_FAKE_CHATKIT_HOST ?? "127.0.0.1";
+  const port = Number(process.env.CUJ_FAKE_CHATKIT_PORT ?? "19989");
+  const baseUrl = process.env.CUJ_FAKE_CHATKIT_BASE_URL ?? `http://${host}:${port}`;
+  const healthUrl = process.env.CUJ_FAKE_CHATKIT_HEALTH_URL ??
+    new URL("/healthz", baseUrl).toString();
+  const requestsUrl = process.env.CUJ_FAKE_CHATKIT_REQUESTS_URL ??
+    new URL("/requests", baseUrl).toString();
+  const resetUrl = process.env.CUJ_FAKE_CHATKIT_RESET_URL ??
+    new URL("/reset", baseUrl).toString();
+  const serverScript = join(REPO_ROOT, "testing", "aiservice", "main.go");
+  const serverCommand = process.env.CUJ_FAKE_CHATKIT_CMD ?? `go run ${shellQuote(serverScript)}`;
+  const serverEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    CUJ_FAKE_CHATKIT_HOST: host,
+    CUJ_FAKE_CHATKIT_PORT: `${port}`,
+  };
+
+  return {
+    enabled,
+    host,
+    port,
+    baseUrl,
+    healthUrl,
+    requestsUrl,
+    resetUrl,
     serverCommand,
     serverEnv,
   };
@@ -560,6 +606,18 @@ function parseAssertionResults(output: string): AssertionResult[] {
   return results;
 }
 
+function makeScenarioBrowserSession(baseSession: string | undefined, scenarioName: string): string {
+  const normalizedScenario = scenarioName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const normalizedBase = (baseSession ?? "").trim();
+  if (normalizedBase) {
+    return `${normalizedBase}-${normalizedScenario}`;
+  }
+  return `cuj-${Date.now()}-${normalizedScenario}`;
+}
+
 function resolveRepo(): string | null {
   if (process.env.GITHUB_REPOSITORY) {
     return process.env.GITHUB_REPOSITORY;
@@ -780,6 +838,7 @@ async function main(): Promise<void> {
   const backendUrl = process.env.CUJ_BACKEND_URL ?? "http://localhost:9977";
   const oidc = resolveOidcAuthConfig();
   const fakeDrive = resolveFakeDriveConfig();
+  const fakeChatkit = resolveFakeChatkitConfig();
   const frontendCmd = process.env.CUJ_FRONTEND_CMD ?? "pnpm run dev:app";
   const frontendCwd = resolve(process.env.CUJ_FRONTEND_CWD ?? REPO_ROOT);
   const configuredBackendCmd = process.env.CUJ_BACKEND_CMD?.trim() ?? "";
@@ -858,9 +917,36 @@ async function main(): Promise<void> {
 
       await waitForHttp(frontendUrl, 90_000, "frontend");
       await waitForHttp(backendUrl, 30_000, "backend");
+
+      if (fakeChatkit.enabled) {
+        if (!process.env.CUJ_FAKE_CHATKIT_CMD && run("command -v go", REPO_ROOT).status !== 0) {
+          throw new Error(
+            "CUJ fake ChatKit server requires Go. Install Go or set CUJ_FAKE_CHATKIT_CMD.",
+          );
+        }
+        const fakeChatkitUp = await fetch(fakeChatkit.healthUrl).then(() => true).catch(() => false);
+        if (!fakeChatkitUp) {
+          services.push(
+            startService(
+              "fake-chatkit",
+              fakeChatkit.serverCommand,
+              REPO_ROOT,
+              join(OUTPUT_DIR, "fake-chatkit.log"),
+              fakeChatkit.serverEnv,
+            ),
+          );
+        }
+        await waitForHttp(fakeChatkit.healthUrl, 30_000, "fake-chatkit");
+      }
     }
 
     const scenarioEnv: NodeJS.ProcessEnv = { ...process.env };
+    if (fakeChatkit.enabled) {
+      scenarioEnv.CUJ_FAKE_CHATKIT_BASE_URL = fakeChatkit.baseUrl;
+      scenarioEnv.CUJ_FAKE_CHATKIT_HEALTH_URL = fakeChatkit.healthUrl;
+      scenarioEnv.CUJ_FAKE_CHATKIT_REQUESTS_URL = fakeChatkit.requestsUrl;
+      scenarioEnv.CUJ_FAKE_CHATKIT_RESET_URL = fakeChatkit.resetUrl;
+    }
     if (oidc.enabled) {
       const tokens = readOidcTokenFile(oidc.tokenFile);
       const idToken = process.env.CUJ_ID_TOKEN ?? tokens?.id_token ?? "";
@@ -884,9 +970,31 @@ async function main(): Promise<void> {
     let failures = 0;
     const aggregateAssertions: Assertions = { total: 0, passed: 0, failed: 0 };
     const scenarioResults: ScenarioResult[] = [];
+    const scenarioFilterRaw = process.env.CUJ_SCENARIOS?.trim() ?? "";
+    const selectedScenarios = scenarioFilterRaw
+      ? new Set(
+          scenarioFilterRaw
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean),
+        )
+      : null;
+    const scenarioDrivers = selectedScenarios
+      ? SCENARIO_DRIVERS.filter((driver) => {
+          const basename = driver.split("/").at(-1) ?? driver;
+          const shortName = basename.replace(/^test-scenario-/, "").replace(/\.ts$/, "");
+          return selectedScenarios.has(basename) || selectedScenarios.has(shortName);
+        })
+      : SCENARIO_DRIVERS;
+    if (selectedScenarios && scenarioDrivers.length === 0) {
+      throw new Error(
+        `CUJ_SCENARIOS did not match any scenarios: ${[...selectedScenarios].join(", ")}`,
+      );
+    }
 
-    for (const scenarioDriver of SCENARIO_DRIVERS) {
+    for (const scenarioDriver of scenarioDrivers) {
       const basename = scenarioDriver.split("/").at(-1) ?? scenarioDriver;
+      const scenarioName = basename.replace(/^test-scenario-/, "").replace(/\.ts$/, "");
       console.log(`[CUJ] Running ${basename}`);
 
       const compileResult = run(
@@ -928,7 +1036,14 @@ async function main(): Promise<void> {
       }
 
       const compiled = join(GENERATED_DIR, `${basename.replace(/\.ts$/, "")}.js`);
-      const runResult = runNodeScript(compiled, APP_ROOT, scenarioEnv);
+      const scenarioRunEnv: NodeJS.ProcessEnv = {
+        ...scenarioEnv,
+        AGENT_BROWSER_SESSION: makeScenarioBrowserSession(
+          scenarioEnv.AGENT_BROWSER_SESSION,
+          scenarioName,
+        ),
+      };
+      const runResult = runNodeScript(compiled, APP_ROOT, scenarioRunEnv);
       printOutput(runResult.stdout, runResult.stderr);
 
       const assertions = parseAssertions(`${runResult.stdout}\n${runResult.stderr}`);
@@ -945,7 +1060,7 @@ async function main(): Promise<void> {
         });
       }
       scenarioResults.push({
-        scenario: basename.replace(/^test-scenario-/, "").replace(/\.ts$/, ""),
+        scenario: scenarioName,
         script: basename,
         status: runResult.status === 0 ? "PASS" : "FAIL",
         exit_code: runResult.status,
