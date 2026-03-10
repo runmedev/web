@@ -424,7 +424,7 @@ describe("CodexConversationController", () => {
     ).toHaveLength(2);
     expect(
       events.filter((event) => event?.type === "aisre.chatkit.state"),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(controller.getSnapshot().currentThreadId).toBe("thread-1");
     expect(controller.getSnapshot().currentTurnId).toBeNull();
   });
@@ -519,6 +519,139 @@ describe("CodexConversationController", () => {
       ]),
     );
     expect(controller.getSnapshot().currentThreadId).toBe("thread-1");
+  });
+
+  it("keeps rendering assistant output when a single turn emits multiple assistant messages", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return {
+          thread: {
+            id: "thread-1",
+            title: "Runme Repo",
+            cwd: "/workspace",
+          },
+        };
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+                delta: "I'll inspect the notebook cells to summarize its purpose.",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "msg-1",
+                  text: "I'll inspect the notebook cells to summarize its purpose.",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-2",
+                delta: "It's a minimal Runme notebook for configuring and using a local Codex instance.",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "msg-2",
+                  text: "It's a minimal Runme notebook for configuring and using a local Codex instance.",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: { id: "turn-1", status: "completed" },
+              },
+            });
+          });
+        });
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: any[] = [];
+    const nextState = await controller.streamUserMessage(
+      "What is this notebook about",
+      {},
+      {
+        emit: (payload) => events.push(payload),
+      },
+    );
+
+    expect(nextState).toEqual({
+      threadId: "thread-1",
+      previousResponseId: "turn-1",
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "response.output_text.done",
+          item_id: "msg-1",
+          text: "I'll inspect the notebook cells to summarize its purpose.",
+        }),
+        expect.objectContaining({
+          type: "response.output_text.done",
+          item_id: "msg-2",
+          text: "It's a minimal Runme notebook for configuring and using a local Codex instance.",
+        }),
+        expect.objectContaining({
+          type: "response.output_item.done",
+          item: expect.objectContaining({ id: "msg-1" }),
+        }),
+        expect.objectContaining({
+          type: "response.output_item.done",
+          item: expect.objectContaining({ id: "msg-2" }),
+        }),
+      ]),
+    );
+    expect(
+      events.filter((event) => event?.type === "response.completed"),
+    ).toEqual([
+      expect.objectContaining({
+        type: "response.completed",
+        response: expect.objectContaining({ id: "turn-1" }),
+      }),
+    ]);
+
+    const thread = controller
+      .getSnapshot()
+      .threads.find((item) => item.id === "thread-1");
+    const assistantItems = thread?.items.filter((item) => item.role === "assistant") ?? [];
+    expect(assistantItems).toHaveLength(2);
+    expect(assistantItems.at(0)?.content[0]?.text).toBe(
+      "I'll inspect the notebook cells to summarize its purpose.",
+    );
+    expect(assistantItems.at(1)?.content[0]?.text).toBe(
+      "It's a minimal Runme notebook for configuring and using a local Codex instance.",
+    );
   });
 
   it("emits user and assistant thread items for the streamed assistant text", async () => {

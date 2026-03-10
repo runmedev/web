@@ -648,13 +648,15 @@ class CodexConversationController {
     });
     this.notify();
 
-    let assistantText = "";
     let finished = false;
     let lastResponseId = "";
-    const responseTexts = new Map<string, string>();
-    const responseItemIds = new Map<string, string>();
+    const itemTexts = new Map<string, string>();
+    const responseItemIds = new Map<string, string[]>();
+    const itemResponseIds = new Map<string, string>();
     const responseCreatedAts = new Map<string, string>();
+    const itemCreatedAts = new Map<string, string>();
     const completedResponses = new Set<string>();
+    const completedItems = new Set<string>();
     let turnIdForNotifications: string | null = null;
     let resolveCompletion: (() => void) | null = null;
     let rejectCompletion: ((reason?: unknown) => void) | null = null;
@@ -711,21 +713,27 @@ class CodexConversationController {
         return;
       }
       const ensureMessageStarted = (responseId: string, itemId: string) => {
-        if (responseItemIds.has(responseId)) {
+        if (itemResponseIds.has(itemId)) {
           return;
         }
         const createdAt = new Date().toISOString();
-        responseItemIds.set(responseId, itemId);
-        responseCreatedAts.set(responseId, createdAt);
-        responseTexts.set(responseId, "");
-        emitLoggedChatkitEvent(sink, {
-          type: "response.created",
-          response: { id: responseId },
-        });
+        const itemIds = responseItemIds.get(responseId) ?? [];
+        const outputIndex = itemIds.length;
+        responseItemIds.set(responseId, [...itemIds, itemId]);
+        itemResponseIds.set(itemId, responseId);
+        itemTexts.set(itemId, "");
+        itemCreatedAts.set(itemId, createdAt);
+        if (!responseCreatedAts.has(responseId)) {
+          responseCreatedAts.set(responseId, createdAt);
+          emitLoggedChatkitEvent(sink, {
+            type: "response.created",
+            response: { id: responseId },
+          });
+        }
         emitLoggedChatkitEvent(sink, {
           type: "response.output_item.added",
           response_id: responseId,
-          output_index: 0,
+          output_index: outputIndex,
           item: {
             id: itemId,
             type: "message",
@@ -737,7 +745,7 @@ class CodexConversationController {
         emitLoggedChatkitEvent(sink, {
           type: "response.content_part.added",
           response_id: responseId,
-          output_index: 0,
+          output_index: outputIndex,
           item_id: itemId,
           content_index: 0,
           part: { type: "output_text", text: "" } satisfies ChatKitOutputTextPart,
@@ -775,13 +783,17 @@ class CodexConversationController {
       }
       if (mapped.kind === "delta") {
         ensureMessageStarted(mapped.responseId, mapped.itemId);
-        assistantText = (responseTexts.get(mapped.responseId) ?? "") + mapped.text;
-        responseTexts.set(mapped.responseId, assistantText);
+        const assistantText = (itemTexts.get(mapped.itemId) ?? "") + mapped.text;
+        itemTexts.set(mapped.itemId, assistantText);
         this.updateAssistantItem(threadId!, mapped.itemId, assistantText, "in_progress");
+        const outputIndex = Math.max(
+          0,
+          (responseItemIds.get(mapped.responseId) ?? []).indexOf(mapped.itemId),
+        );
         emitLoggedChatkitEvent(sink, {
           type: "response.output_text.delta",
           response_id: mapped.responseId,
-          output_index: 0,
+          output_index: outputIndex,
           item_id: mapped.itemId,
           content_index: 0,
           delta: mapped.text,
@@ -798,20 +810,35 @@ class CodexConversationController {
         return;
       }
       if (mapped.kind === "done") {
-        if (completedResponses.has(mapped.responseId)) {
+        if (completedItems.has(mapped.itemId)) {
           return;
         }
-        ensureMessageStarted(mapped.responseId, mapped.itemId);
-        assistantText = responseTexts.get(mapped.responseId) ?? "";
+        let assistantText = itemTexts.get(mapped.itemId) ?? "";
         if (mapped.text) {
           assistantText = mapped.text;
         }
-        responseTexts.set(mapped.responseId, assistantText);
+        const existingResponseItems = responseItemIds.get(mapped.responseId) ?? [];
+        const completedResponseTexts = existingResponseItems
+          .filter((id) => completedItems.has(id))
+          .map((id) => itemTexts.get(id) ?? "");
+        if (
+          !itemResponseIds.has(mapped.itemId) &&
+          mapped.itemId === `${mapped.responseId}-item` &&
+          completedResponseTexts.includes(assistantText)
+        ) {
+          return;
+        }
+        ensureMessageStarted(mapped.responseId, mapped.itemId);
+        itemTexts.set(mapped.itemId, assistantText);
         this.updateAssistantItem(threadId!, mapped.itemId, assistantText, "completed");
+        const outputIndex = Math.max(
+          0,
+          (responseItemIds.get(mapped.responseId) ?? []).indexOf(mapped.itemId),
+        );
         emitLoggedChatkitEvent(sink, {
           type: "response.output_text.done",
           response_id: mapped.responseId,
-          output_index: 0,
+          output_index: outputIndex,
           item_id: mapped.itemId,
           content_index: 0,
           text: assistantText,
@@ -819,7 +846,7 @@ class CodexConversationController {
         emitLoggedChatkitEvent(sink, {
           type: "response.content_part.done",
           response_id: mapped.responseId,
-          output_index: 0,
+          output_index: outputIndex,
           item_id: mapped.itemId,
           content_index: 0,
           part: {
@@ -843,7 +870,7 @@ class CodexConversationController {
         emitLoggedChatkitEvent(sink, {
           type: "response.output_item.done",
           response_id: mapped.responseId,
-          output_index: 0,
+          output_index: outputIndex,
           item: {
             id: mapped.itemId,
             type: "message",
@@ -859,33 +886,51 @@ class CodexConversationController {
             mapped.itemId,
             assistantText,
             "completed",
-            responseCreatedAts.get(mapped.responseId) ?? new Date().toISOString(),
-          ),
-        });
-        emitLoggedChatkitEvent(sink, {
-          type: "thread.item.done",
-          item: buildEndOfTurnItem(
-            threadId!,
-            mapped.responseId,
-            responseCreatedAts.get(mapped.responseId) ?? new Date().toISOString(),
+            itemCreatedAts.get(mapped.itemId) ?? new Date().toISOString(),
           ),
         });
         lastResponseId = mapped.responseId;
-        completedResponses.add(mapped.responseId);
+        completedItems.add(mapped.itemId);
         const updatedThread = this.threads.get(threadId!);
         if (updatedThread) {
           updatedThread.previousResponseId = lastResponseId;
           this.threads.set(threadId!, updatedThread);
         }
-        emitChatkitState(sink, threadId!, lastResponseId);
-        emitLoggedChatkitEvent(sink, {
-          type: "response.completed",
-          response: { id: mapped.responseId },
-        });
         this.notify();
         return;
       }
       if (mapped.kind === "completed") {
+        const responseIdsToComplete =
+          responseItemIds.size > 0
+            ? [...responseItemIds.keys()]
+            : [lastResponseId || turnIdForNotifications || `resp-${Date.now()}`];
+        responseIdsToComplete.forEach((responseId) => {
+          if (completedResponses.has(responseId)) {
+            return;
+          }
+          emitLoggedChatkitEvent(sink, {
+            type: "thread.item.done",
+            item: buildEndOfTurnItem(
+              threadId!,
+              responseId,
+              responseCreatedAts.get(responseId) ?? new Date().toISOString(),
+            ),
+          });
+          lastResponseId = responseId;
+        });
+        if (lastResponseId) {
+          emitChatkitState(sink, threadId!, lastResponseId);
+        }
+        responseIdsToComplete.forEach((responseId) => {
+          if (completedResponses.has(responseId)) {
+            return;
+          }
+          emitLoggedChatkitEvent(sink, {
+            type: "response.completed",
+            response: { id: responseId },
+          });
+          completedResponses.add(responseId);
+        });
         finished = true;
         resolveCompletion?.();
       }
