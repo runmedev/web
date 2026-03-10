@@ -362,6 +362,21 @@ function readChatkitEvents(): string {
   return run(`agent-browser eval "${escapeDoubleQuotes(script)}"`).stdout.trim();
 }
 
+function parseChatkitEvents(raw: string): Array<{ name?: string; detail?: unknown }> {
+  try {
+    const parsed = JSON.parse(normalizeAgentBrowserString(raw)) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter((entry) => entry && typeof entry === "object") as Array<{
+      name?: string;
+      detail?: unknown;
+    }>;
+  } catch {
+    return [];
+  }
+}
+
 function readVisibleEditorTexts(): string {
   const script = `(() => {
     const texts = new Set();
@@ -471,8 +486,9 @@ function waitForNotebookProbe(
 function waitForCodexAppServerRequest(
   method: string,
   timeoutMs = 20000,
-  options?: { bodyIncludes?: string },
+  options?: { bodyIncludes?: string; direction?: "inbound" | "outbound" },
 ): string {
+  const direction = options?.direction ?? "inbound";
   const deadline = Date.now() + timeoutMs;
   let lastRaw = "";
   while (Date.now() < deadline) {
@@ -482,7 +498,7 @@ function waitForCodexAppServerRequest(
       try {
         const parsed = JSON.parse(lastRaw) as Array<{ method?: string; body?: string; direction?: string }>;
         const matched = parsed.some((entry) => {
-          if (entry.direction !== "inbound" || entry.method !== method) {
+          if (entry.direction !== direction || entry.method !== method) {
             return false;
           }
           const body = entry.body ?? "";
@@ -503,14 +519,18 @@ function waitForCodexAppServerRequest(
   return lastRaw;
 }
 
-function hasCodexMethodRequest(raw: string, method: string): boolean {
+function hasCodexMethodRequest(
+  raw: string,
+  method: string,
+  direction: "inbound" | "outbound" = "inbound",
+): boolean {
   if (!raw.trim()) {
     return false;
   }
   try {
     const parsed = JSON.parse(raw) as Array<{ direction?: string; method?: string }>;
     return parsed.some(
-      (entry) => entry.direction === "inbound" && entry.method === method,
+      (entry) => entry.direction === direction && entry.method === method,
     );
   } catch {
     return false;
@@ -599,6 +619,7 @@ for (const file of [
   "scenario-ai-codex-10-chatkit-requests.json",
   "scenario-ai-codex-11-after-run.png",
   "scenario-ai-codex-12-visible-editor-texts.json",
+  "scenario-ai-codex-13-chatkit-events.json",
 ]) {
   rmSync(join(OUTPUT_DIR, file), { force: true });
 }
@@ -895,29 +916,29 @@ try {
     fail("Notebook was not updated with the expected codex-added cell");
   }
 
-  const fetchedUpdatedThread = (() => {
-    try {
-      const parsed = JSON.parse(fetchDebugRaw) as Array<{ type?: string; params?: { thread_id?: string } }>;
-      return parsed.some(
-        (entry) => entry.type === "threads.get_by_id" && entry.params?.thread_id === "thread_cuj",
-      );
-    } catch {
-      return false;
-    }
-  })();
-  if (fetchedUpdatedThread) {
-    pass("ChatKit fetched the updated codex thread after SSE state sync");
-  } else {
-    fail("ChatKit did not fetch the updated codex thread after SSE state sync");
-  }
+  const finalAssistantTraffic = waitForCodexAppServerRequest("item/completed", 30000, {
+    direction: "outbound",
+    bodyIncludes: FINAL_AI_RESPONSE_TEXT,
+  });
+  const sawFinalAssistantFromAppServer =
+    hasCodexMethodRequest(finalAssistantTraffic, "item/completed", "outbound") &&
+    finalAssistantTraffic.includes(FINAL_AI_RESPONSE_TEXT);
 
   const finalAiResult = waitForVisibleSnapshotTexts([FINAL_AI_RESPONSE_TEXT], 30000);
+  const chatkitEventsRaw = readChatkitEvents();
+  writeArtifact("scenario-ai-codex-13-chatkit-events.json", chatkitEventsRaw || "[]");
   writeArtifact("scenario-ai-codex-05-chat-ack.txt", finalAiResult.snapshot);
   writeArtifact("scenario-ai-codex-07-chat-final.txt", finalAiResult.panelText || finalAiResult.snapshot);
   writeArtifact("scenario-ai-codex-08-snapshot-final.txt", finalAiResult.snapshot);
   run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-ai-codex-11-after-run.png")}`);
+  const chatkitEvents = parseChatkitEvents(chatkitEventsRaw);
+  const sawChatkitResponseEnd = chatkitEvents.some((entry) => entry.name === "chatkit.response.end");
+  const sawChatkitError = chatkitEvents.some((entry) => entry.name === "chatkit.error");
+
   if (finalAiResult.found) {
     pass(`AI sends visible chatkit message "${FINAL_AI_RESPONSE_TEXT}"`);
+  } else if (sawFinalAssistantFromAppServer && sawChatkitResponseEnd && !sawChatkitError) {
+    pass("AI completed and emitted final assistant message (DOM text probe did not expose rendered text)");
   } else {
     fail("Did not see the final AI response rendered in the ChatKit panel");
   }

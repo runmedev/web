@@ -1014,7 +1014,7 @@ func buildAddedCellFromListResponse(raw string) (map[string]any, error) {
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
 		return nil, fmt.Errorf("unmarshal listCells response envelope: %w", err)
 	}
-	output := mapField(envelope, "tool_call_output", "toolCallOutput")
+	output := extractToolCallOutput(envelope)
 	if output == nil {
 		return nil, fmt.Errorf("listCells response missing tool_call_output")
 	}
@@ -1057,6 +1057,17 @@ func buildAddedCellFromListResponse(raw string) (map[string]any, error) {
 		return added, nil
 	}
 	return nil, fmt.Errorf("could not find cell with refId in listCells response")
+}
+
+func extractToolCallOutput(envelope map[string]any) map[string]any {
+	if output := mapField(envelope, "tool_call_output", "toolCallOutput"); output != nil {
+		return output
+	}
+	nested := mapField(envelope, "notebookToolCallResponse", "notebook_tool_call_response")
+	if nested == nil {
+		return nil
+	}
+	return mapField(nested, "output", "tool_call_output", "toolCallOutput")
 }
 
 func mapField(m map[string]any, keys ...string) map[string]any {

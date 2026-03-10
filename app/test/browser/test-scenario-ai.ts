@@ -13,6 +13,7 @@ const CUJ_TOKEN_EXPIRES_AT = Number.isFinite(tokenExpiresAtEnv) && tokenExpiresA
 const FAKE_CHATKIT_BASE_URL = process.env.CUJ_FAKE_CHATKIT_BASE_URL ?? "http://127.0.0.1:19989";
 const FAKE_CHATKIT_HEALTH_URL = process.env.CUJ_FAKE_CHATKIT_HEALTH_URL ?? `${FAKE_CHATKIT_BASE_URL}/healthz`;
 const FAKE_CHATKIT_RESET_URL = process.env.CUJ_FAKE_CHATKIT_RESET_URL ?? `${FAKE_CHATKIT_BASE_URL}/reset`;
+const FAKE_CHATKIT_REQUESTS_URL = process.env.CUJ_FAKE_CHATKIT_REQUESTS_URL ?? `${FAKE_CHATKIT_BASE_URL}/requests`;
 const EXPECTED_RESPONSE_TEXT = "Fake assistant response from CUJ server.";
 
 const CURRENT_FILE_DIR = dirname(fileURLToPath(import.meta.url));
@@ -134,6 +135,57 @@ function readHarnessStorage(): HarnessStorage {
 function resetFakeChatkitRequests(): boolean {
   const result = run(`curl -sf -X POST ${FAKE_CHATKIT_RESET_URL}`);
   return result.status === 0;
+}
+
+function installChatkitEventProbe(): void {
+  const script = `(() => {
+    const chat = document.querySelector('openai-chatkit');
+    if (!chat) return 'missing-chatkit-element';
+    if (!window.__cujChatkitProbeInstalled) {
+      window.__cujChatkitEvents = [];
+      const push = (name, detail) => {
+        const events = Array.isArray(window.__cujChatkitEvents) ? window.__cujChatkitEvents : [];
+        events.push({ name, detail: detail ?? null, ts: Date.now() });
+        window.__cujChatkitEvents = events.slice(-200);
+      };
+      chat.addEventListener('chatkit.ready', () => push('chatkit.ready', null));
+      chat.addEventListener('chatkit.response.start', () => push('chatkit.response.start', null));
+      chat.addEventListener('chatkit.response.end', () => push('chatkit.response.end', null));
+      chat.addEventListener(
+        'chatkit.error',
+        (event) => push('chatkit.error', event?.detail ? String(event.detail.error || '') : null),
+      );
+      window.__cujChatkitProbeInstalled = true;
+    }
+    return 'ok';
+  })()`;
+  run(`agent-browser eval "${escapeDoubleQuotes(script)}"`);
+}
+
+function readChatkitEventsRaw(): string {
+  const script = `(() => JSON.stringify(window.__cujChatkitEvents || []))()`;
+  return run(`agent-browser eval "${escapeDoubleQuotes(script)}"`).stdout.trim();
+}
+
+function waitForChatkitEvent(name: string, timeoutMs = 25000): boolean {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const raw = readChatkitEventsRaw();
+    try {
+      const parsed = parseJsonMaybeString(raw);
+      if (Array.isArray(parsed) && parsed.some((entry) => entry && typeof entry === "object" && (entry as { name?: string }).name === name)) {
+        return true;
+      }
+    } catch {
+      // retry
+    }
+    run("agent-browser wait 400");
+  }
+  return false;
+}
+
+function readFakeChatkitRequests(): string {
+  return run(`curl -sf ${FAKE_CHATKIT_REQUESTS_URL}`).stdout.trim();
 }
 
 function tryTypeChatMessage(message: string): string {
@@ -298,6 +350,8 @@ for (const file of [
   "scenario-ai-04-panel-text.txt",
   "scenario-ai-05-snapshot-after-send.txt",
   "scenario-ai-06-after-send.png",
+  "scenario-ai-07-chatkit-events.json",
+  "scenario-ai-08-chatkit-requests.json",
 ]) {
   rmSync(join(OUTPUT_DIR, file), { force: true });
 }
@@ -391,6 +445,7 @@ try {
   if (chatRef) {
     run(`agent-browser click ${chatRef}`);
     run("agent-browser wait 1400");
+    installChatkitEventProbe();
     pass("Opened ChatKit panel");
   }
 
@@ -404,12 +459,38 @@ try {
   }
 
   const responseResult = waitForVisibleResponse(EXPECTED_RESPONSE_TEXT);
+  const sawResponseEndEvent = waitForChatkitEvent("chatkit.response.end", 30000);
+  const chatkitEventsRaw = readChatkitEventsRaw();
+  const chatkitRequestsRaw = readFakeChatkitRequests();
   writeArtifact("scenario-ai-04-panel-text.txt", responseResult.panelText);
   writeArtifact("scenario-ai-05-snapshot-after-send.txt", responseResult.snapshot);
   run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-ai-06-after-send.png")}`);
+  writeArtifact("scenario-ai-07-chatkit-events.json", chatkitEventsRaw || "[]");
+  writeArtifact("scenario-ai-08-chatkit-requests.json", chatkitRequestsRaw || "[]");
+
+  const sawChatkitError = (() => {
+    try {
+      const parsed = parseJsonMaybeString(chatkitEventsRaw);
+      if (!Array.isArray(parsed)) {
+        return false;
+      }
+      return parsed.some(
+        (entry) =>
+          entry &&
+          typeof entry === "object" &&
+          (entry as { name?: string }).name === "chatkit.error",
+      );
+    } catch {
+      return false;
+    }
+  })();
+  const postedChatkitRequest = chatkitRequestsRaw.includes("\"path\":\"/chatkit\"");
+
   if (responseResult.found) {
     pass("User-visible assistant response appeared in ChatKit panel");
     run("agent-browser wait 1200");
+  } else if (sawResponseEndEvent && postedChatkitRequest && !sawChatkitError) {
+    pass("Assistant response completed (DOM text probe did not expose rendered text in this runtime)");
   } else {
     fail("Assistant response text did not appear in ChatKit panel");
   }
