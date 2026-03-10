@@ -654,6 +654,110 @@ describe("CodexConversationController", () => {
     );
   });
 
+  it("keeps the assistant item in progress until turn completion", async () => {
+    let emitNotifications: (() => void) | null = null;
+    let emitTurnCompleted: (() => void) | null = null;
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return {
+          thread: {
+            id: "thread-1",
+            title: "Runme Repo",
+            cwd: "/workspace",
+          },
+        };
+      }
+      if (method === "turn/start") {
+        emitNotifications = () => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+                delta: "I'll inspect the notebook cells to summarize its purpose.",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "msg-1",
+                  text: "I'll inspect the notebook cells to summarize its purpose.",
+                },
+              },
+            });
+          });
+        };
+        emitTurnCompleted = () => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: { id: "turn-1", status: "completed" },
+              },
+            });
+          });
+        };
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: any[] = [];
+    const streamPromise = controller.streamUserMessage("What is this notebook about", {}, {
+      emit: (payload) => events.push(payload),
+    });
+
+    for (let attempt = 0; attempt < 5 && !emitNotifications; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(emitNotifications).toBeTypeOf("function");
+    emitNotifications?.();
+    await Promise.resolve();
+
+    const threadBeforeCompletion = controller
+      .getSnapshot()
+      .threads.find((item) => item.id === "thread-1");
+    const assistantBeforeCompletion = threadBeforeCompletion?.items.find(
+      (item) => item.id === "msg-1",
+    );
+    expect(assistantBeforeCompletion).toEqual(
+      expect.objectContaining({
+        id: "msg-1",
+        status: "in_progress",
+        content: [
+          expect.objectContaining({
+            text: "I'll inspect the notebook cells to summarize its purpose.",
+          }),
+        ],
+      }),
+    );
+    expect(
+      events.filter(
+        (event) => event?.type === "thread.item.done" && event?.item?.id === "msg-1",
+      ),
+    ).toHaveLength(0);
+
+    emitTurnCompleted?.();
+    await streamPromise;
+
+    expect(
+      events.filter(
+        (event) => event?.type === "thread.item.done" && event?.item?.id === "msg-1",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("emits user and assistant thread items for the streamed assistant text", async () => {
     proxyClient.sendRequest.mockImplementation(async (method: string) => {
       if (method === "thread/start") {
