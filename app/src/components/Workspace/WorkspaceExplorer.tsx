@@ -176,7 +176,7 @@ function EditableTreeNode({
   return (
     <div
       style={style}
-      className="flex items-center gap-2 px-2 py-1 text-sm"
+      className="flex h-full items-center gap-2 overflow-hidden px-2 text-sm"
       onContextMenu={(event) => event.preventDefault()}
     >
       <input
@@ -676,7 +676,7 @@ function formatShortTimestamp(date: Date): string {
       return (
         <div
           style={style}
-          className="flex items-center gap-1.5 px-2 py-0.5 text-sm"
+          className="flex h-full items-center gap-1.5 overflow-hidden px-2 text-sm"
           data-node-id={data.uri}
           data-node-type={data.type}
           onContextMenu={handleContextMenu}
@@ -920,9 +920,9 @@ function formatShortTimestamp(date: Date): string {
             width={Math.max(0, width)}
             height={height}
             indent={20}
-            // react-arborist uses a fixed row height; increase this so multi-line
-            // filenames can wrap without overlapping adjacent rows.
-            rowHeight={32}
+            // react-arborist uses fixed row height. Keep this tall enough for
+            // larger font scaling so row content doesn't bleed into neighbors.
+            rowHeight={36}
             children={renderNode}
             onToggle={handleToggle}
             onClick={() => setContextMenu(null)}
