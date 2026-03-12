@@ -32,6 +32,7 @@ const PKCE_STATE_KEY = "runme/google-auth/pkce-state";
 const PKCE_CODE_VERIFIER_KEY = "runme/google-auth/pkce-code-verifier";
 const PKCE_RETURN_TO_KEY = "runme/google-auth/pkce-return-to";
 const PKCE_ERROR_KEY = "runme/google-auth/pkce-error";
+const IMPLICIT_PROMPT_MODE_KEY = "runme/google-auth/implicit-prompt-mode";
 
 interface AccessTokenInfo {
   token: string;
@@ -220,6 +221,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       window.localStorage.removeItem(PKCE_STATE_KEY);
       window.localStorage.removeItem(PKCE_CODE_VERIFIER_KEY);
       window.localStorage.removeItem(PKCE_RETURN_TO_KEY);
+      window.localStorage.removeItem(IMPLICIT_PROMPT_MODE_KEY);
       window.sessionStorage.removeItem(PKCE_ERROR_KEY);
     } catch (error) {
       console.error("Failed to clear Google PKCE state", error);
@@ -299,6 +301,41 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     const implicitToken = readImplicitRedirectTokenFromHash();
     const oauthError = params.get("error") ?? implicitToken?.error;
     if (oauthError) {
+      const attemptedPromptMode = window.localStorage.getItem(
+        IMPLICIT_PROMPT_MODE_KEY,
+      );
+      const shouldRetryWithConsent =
+        attemptedPromptMode === "none" &&
+        (oauthError === "interaction_required" ||
+          oauthError === "login_required" ||
+          oauthError === "consent_required");
+      if (shouldRetryWithConsent) {
+        clearPkceState();
+        const { clientId } = googleClientManager.getOAuthClient();
+        if (!clientId?.trim()) {
+          throw new Error("Google OAuth client is not configured.");
+        }
+        const state = globalThis.crypto?.randomUUID
+          ? globalThis.crypto.randomUUID()
+          : `${Date.now()}-${Math.random()}`;
+        const returnTo = getAppPath(APP_ROUTE_PATHS.home);
+
+        window.localStorage.setItem(PKCE_STATE_KEY, state);
+        window.localStorage.setItem(PKCE_RETURN_TO_KEY, returnTo);
+        window.localStorage.setItem(IMPLICIT_PROMPT_MODE_KEY, "consent");
+        window.localStorage.removeItem(PKCE_CODE_VERIFIER_KEY);
+
+        const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+        authUrl.searchParams.set("client_id", clientId);
+        authUrl.searchParams.set("redirect_uri", getGoogleDriveOAuthCallbackUrl());
+        authUrl.searchParams.set("response_type", "token");
+        authUrl.searchParams.set("scope", DRIVE_SCOPES.join(" "));
+        authUrl.searchParams.set("state", state);
+        authUrl.searchParams.set("include_granted_scopes", "true");
+        authUrl.searchParams.set("prompt", "consent");
+        window.location.assign(authUrl.toString());
+        return;
+      }
       const message =
         params.get("error_description") ??
         implicitToken?.errorDescription ??
@@ -403,7 +440,8 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     window.location.assign(authUrl.toString());
   }, []);
 
-  const startImplicitRedirect = useCallback(() => {
+  const startImplicitRedirect = useCallback(
+    (promptMode: "none" | "consent" = "none") => {
     const { clientId } = googleClientManager.getOAuthClient();
     if (!clientId?.trim()) {
       throw new Error("Google OAuth client is not configured.");
@@ -416,6 +454,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
 
     window.localStorage.setItem(PKCE_STATE_KEY, state);
     window.localStorage.setItem(PKCE_RETURN_TO_KEY, returnTo);
+    window.localStorage.setItem(IMPLICIT_PROMPT_MODE_KEY, promptMode);
     window.localStorage.removeItem(PKCE_CODE_VERIFIER_KEY);
 
     const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -425,10 +464,12 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     authUrl.searchParams.set("scope", DRIVE_SCOPES.join(" "));
     authUrl.searchParams.set("state", state);
     authUrl.searchParams.set("include_granted_scopes", "true");
-    authUrl.searchParams.set("prompt", "none");
+    authUrl.searchParams.set("prompt", promptMode);
 
     window.location.assign(authUrl.toString());
-  }, []);
+    },
+    [],
+  );
 
   const refreshAccessToken = useCallback(async (): Promise<string | null> => {
     const refreshToken = tokenInfoRef.current?.refreshToken?.trim();
