@@ -233,6 +233,31 @@ describe("appConfig OIDC Google shorthand", () => {
     );
   });
 
+  it("applies Google Drive implicit redirect auth mode when configured", async () => {
+    const { applyAppConfig } = await loadModules();
+    const { googleClientManager } = await import("./googleClientManager");
+
+    applyAppConfig(
+      {
+        agent: {
+          endpoint: "http://localhost:9977",
+        },
+        googleDrive: {
+          clientID: "client-id.apps.googleusercontent.com",
+          authFlow: "implicit",
+          authUxMode: "redirect",
+        },
+      },
+      "http://localhost/configs/app-configs.yaml",
+    );
+
+    expect(googleClientManager.getOAuthClient()).toMatchObject({
+      clientId: "client-id.apps.googleusercontent.com",
+      authFlow: "implicit",
+      authUxMode: "redirect",
+    });
+  });
+
   it("preserves local Google Drive config when local precedence is requested", async () => {
     const { applyAppConfig } = await loadModules();
     const { googleClientManager } = await import("./googleClientManager");

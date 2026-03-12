@@ -32,6 +32,7 @@ const PKCE_STATE_KEY = "runme/google-auth/pkce-state";
 const PKCE_CODE_VERIFIER_KEY = "runme/google-auth/pkce-code-verifier";
 const PKCE_RETURN_TO_KEY = "runme/google-auth/pkce-return-to";
 const PKCE_ERROR_KEY = "runme/google-auth/pkce-error";
+const IMPLICIT_PROMPT_MODE_KEY = "runme/google-auth/implicit-prompt-mode";
 
 interface AccessTokenInfo {
   token: string;
@@ -46,6 +47,7 @@ interface EnsureAccessTokenOptions {
 interface GoogleAuthContextType {
   ensureAccessToken: (options?: EnsureAccessTokenOptions) => Promise<string>;
   setAccessToken: (token: string, expiresIn?: number) => void;
+  isDriveSyncing: boolean;
 }
 
 type PendingHandlers = {
@@ -154,6 +156,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   const [tokenInfo, setTokenInfo] = useState<AccessTokenInfo | null>(
     loadStoredToken,
   );
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   // The remaining mutable pieces do not participate in rendering, so they are
   // stored in refs instead of state. This keeps React from re-rendering whenever
@@ -218,10 +221,28 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       window.localStorage.removeItem(PKCE_STATE_KEY);
       window.localStorage.removeItem(PKCE_CODE_VERIFIER_KEY);
       window.localStorage.removeItem(PKCE_RETURN_TO_KEY);
+      window.localStorage.removeItem(IMPLICIT_PROMPT_MODE_KEY);
       window.sessionStorage.removeItem(PKCE_ERROR_KEY);
     } catch (error) {
       console.error("Failed to clear Google PKCE state", error);
     }
+  }, []);
+
+  const readImplicitRedirectTokenFromHash = useCallback(() => {
+    const hash = window.location.hash.startsWith("#")
+      ? window.location.hash.slice(1)
+      : window.location.hash;
+    if (!hash) {
+      return null;
+    }
+    const params = new URLSearchParams(hash);
+    return {
+      accessToken: params.get("access_token"),
+      expiresInRaw: params.get("expires_in"),
+      state: params.get("state"),
+      error: params.get("error"),
+      errorDescription: params.get("error_description"),
+    };
   }, []);
 
   const exchangeAuthorizationCode = useCallback(
@@ -270,24 +291,63 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const handlePkceCallbackIfPresent = useCallback(async () => {
+  const handleRedirectCallbackIfPresent = useCallback(async () => {
     const callbackPath = new URL(getGoogleDriveOAuthCallbackUrl()).pathname;
     if (window.location.pathname !== callbackPath) {
       return;
     }
 
     const params = new URLSearchParams(window.location.search);
-    const oauthError = params.get("error");
+    const implicitToken = readImplicitRedirectTokenFromHash();
+    const oauthError = params.get("error") ?? implicitToken?.error;
     if (oauthError) {
+      const attemptedPromptMode = window.localStorage.getItem(
+        IMPLICIT_PROMPT_MODE_KEY,
+      );
+      const shouldRetryWithConsent =
+        attemptedPromptMode === "none" &&
+        (oauthError === "interaction_required" ||
+          oauthError === "login_required" ||
+          oauthError === "consent_required");
+      if (shouldRetryWithConsent) {
+        clearPkceState();
+        const { clientId } = googleClientManager.getOAuthClient();
+        if (!clientId?.trim()) {
+          throw new Error("Google OAuth client is not configured.");
+        }
+        const state = globalThis.crypto?.randomUUID
+          ? globalThis.crypto.randomUUID()
+          : `${Date.now()}-${Math.random()}`;
+        const returnTo = getAppPath(APP_ROUTE_PATHS.home);
+
+        window.localStorage.setItem(PKCE_STATE_KEY, state);
+        window.localStorage.setItem(PKCE_RETURN_TO_KEY, returnTo);
+        window.localStorage.setItem(IMPLICIT_PROMPT_MODE_KEY, "consent");
+        window.localStorage.removeItem(PKCE_CODE_VERIFIER_KEY);
+
+        const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+        authUrl.searchParams.set("client_id", clientId);
+        authUrl.searchParams.set("redirect_uri", getGoogleDriveOAuthCallbackUrl());
+        authUrl.searchParams.set("response_type", "token");
+        authUrl.searchParams.set("scope", DRIVE_SCOPES.join(" "));
+        authUrl.searchParams.set("state", state);
+        authUrl.searchParams.set("include_granted_scopes", "true");
+        authUrl.searchParams.set("prompt", "consent");
+        window.location.assign(authUrl.toString());
+        return;
+      }
       const message =
-        params.get("error_description") ?? `Google OAuth failed: ${oauthError}`;
+        params.get("error_description") ??
+        implicitToken?.errorDescription ??
+        `Google OAuth failed: ${oauthError}`;
       clearPkceState();
       throw new Error(message);
     }
 
     const code = params.get("code");
-    const state = params.get("state");
-    if (!code && !state) {
+    const state = params.get("state") ?? implicitToken?.state;
+    const accessToken = implicitToken?.accessToken;
+    if (!code && !state && !accessToken) {
       return;
     }
 
@@ -297,13 +357,29 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       window.localStorage.getItem(PKCE_RETURN_TO_KEY) ??
       getAppPath(APP_ROUTE_PATHS.home);
 
-    if (!code || !state || !storedState || !codeVerifier) {
+    if (!state || !storedState) {
       clearPkceState();
-      throw new Error("Google OAuth callback is missing required PKCE state.");
+      throw new Error("Google OAuth callback is missing required state.");
     }
     if (state !== storedState) {
       clearPkceState();
       throw new Error("Google OAuth callback state mismatch.");
+    }
+
+    if (accessToken) {
+      const expiresIn = Number.parseInt(implicitToken?.expiresInRaw ?? "", 10);
+      const resolvedExpiresIn = Number.isFinite(expiresIn) && expiresIn > 0
+        ? expiresIn
+        : 3600;
+      setAccessToken(accessToken, resolvedExpiresIn, { refreshToken: null });
+      clearPkceState();
+      window.location.replace(returnTo);
+      return;
+    }
+
+    if (!code || !codeVerifier) {
+      clearPkceState();
+      throw new Error("Google OAuth callback is missing required PKCE state.");
     }
 
     const tokenResponse = await exchangeAuthorizationCode(code, codeVerifier);
@@ -321,7 +397,12 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     });
     clearPkceState();
     window.location.replace(returnTo);
-  }, [clearPkceState, exchangeAuthorizationCode, setAccessToken]);
+  }, [
+    clearPkceState,
+    exchangeAuthorizationCode,
+    readImplicitRedirectTokenFromHash,
+    setAccessToken,
+  ]);
 
   const startPkceRedirect = useCallback(async () => {
     const { clientId } = googleClientManager.getOAuthClient();
@@ -358,6 +439,37 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
 
     window.location.assign(authUrl.toString());
   }, []);
+
+  const startImplicitRedirect = useCallback(
+    (promptMode: "none" | "consent" = "none") => {
+    const { clientId } = googleClientManager.getOAuthClient();
+    if (!clientId?.trim()) {
+      throw new Error("Google OAuth client is not configured.");
+    }
+
+    const state = globalThis.crypto?.randomUUID
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now()}-${Math.random()}`;
+    const returnTo = getAppPath(APP_ROUTE_PATHS.home);
+
+    window.localStorage.setItem(PKCE_STATE_KEY, state);
+    window.localStorage.setItem(PKCE_RETURN_TO_KEY, returnTo);
+    window.localStorage.setItem(IMPLICIT_PROMPT_MODE_KEY, promptMode);
+    window.localStorage.removeItem(PKCE_CODE_VERIFIER_KEY);
+
+    const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    authUrl.searchParams.set("client_id", clientId);
+    authUrl.searchParams.set("redirect_uri", getGoogleDriveOAuthCallbackUrl());
+    authUrl.searchParams.set("response_type", "token");
+    authUrl.searchParams.set("scope", DRIVE_SCOPES.join(" "));
+    authUrl.searchParams.set("state", state);
+    authUrl.searchParams.set("include_granted_scopes", "true");
+    authUrl.searchParams.set("prompt", promptMode);
+
+    window.location.assign(authUrl.toString());
+    },
+    [],
+  );
 
   const refreshAccessToken = useCallback(async (): Promise<string | null> => {
     const refreshToken = tokenInfoRef.current?.refreshToken?.trim();
@@ -416,8 +528,19 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   }, [tokenInfo]);
 
   useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 30_000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  const isDriveSyncing = Boolean(tokenInfo?.token && tokenInfo.expiresAt > nowMs);
+
+  useEffect(() => {
     callbackErrorRef.current = null;
-    const pending = handlePkceCallbackIfPresent().catch((error) => {
+    const pending = handleRedirectCallbackIfPresent().catch((error) => {
       callbackErrorRef.current = error;
       try {
         window.sessionStorage.setItem(PKCE_ERROR_KEY, String(error));
@@ -439,7 +562,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     callbackPromiseRef.current = pending.finally(() => {
       callbackPromiseRef.current = null;
     });
-  }, [handlePkceCallbackIfPresent]);
+  }, [handleRedirectCallbackIfPresent]);
 
   // Loads the Google Identity Services script exactly once. We memoise the
   // function so callers share the same pending promise, and we stash the promise
@@ -592,8 +715,12 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       }
 
       const oauthClient = googleClientManager.getOAuthClient();
-      if (oauthClient.authFlow === "pkce" || oauthClient.authUxMode === "redirect") {
+      if (oauthClient.authFlow === "pkce") {
         await startPkceRedirect();
+        throw new Error("Redirecting to Google OAuth for Drive authorization.");
+      }
+      if (oauthClient.authUxMode === "redirect") {
+        startImplicitRedirect();
         throw new Error("Redirecting to Google OAuth for Drive authorization.");
       }
 
@@ -639,7 +766,13 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     });
 
     return pendingPromiseRef.current;
-  }, [ensureTokenClient, refreshAccessToken, setAccessToken, startPkceRedirect]);
+  }, [
+    ensureTokenClient,
+    refreshAccessToken,
+    setAccessToken,
+    startImplicitRedirect,
+    startPkceRedirect,
+  ]);
 
   // useMemo caches the context value so React hands the same object reference to
   // consumers unless one of the dependencies changes. This prevents needless
@@ -647,9 +780,10 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       ensureAccessToken,
+      isDriveSyncing,
       setAccessToken,
     }),
-    [ensureAccessToken, setAccessToken],
+    [ensureAccessToken, isDriveSyncing, setAccessToken],
   );
 
   return (
