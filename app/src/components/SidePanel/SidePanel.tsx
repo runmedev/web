@@ -3,10 +3,13 @@ import {
   ChatBubbleLeftRightIcon,
   UserCircleIcon,
 } from "@heroicons/react/24/outline";
+import { CloudIcon as CloudSolidIcon } from "@heroicons/react/24/solid";
+import { useCallback, useState } from "react";
 
 import ChatKitPanel from "../ChatKit/ChatKitPanel";
 import WorkspaceExplorer from "../Workspace/WorkspaceExplorer";
 import { getBrowserAdapter, useBrowserAuthData } from "../../browserAdapter.client";
+import { useGoogleAuth } from "../../contexts/GoogleAuthContext";
 import { useSidePanel } from "../../contexts/SidePanelContext";
 
 const sideButtonBase = "group side-btn";
@@ -21,6 +24,25 @@ export function SidePanelToolbar() {
   const { activePanel, togglePanel } = useSidePanel();
   const authData = useBrowserAuthData();
   const browserAdapter = getBrowserAdapter();
+  const { ensureAccessToken, isDriveSyncing } = useGoogleAuth();
+  const [isDriveAuthPending, setIsDriveAuthPending] = useState(false);
+
+  const driveStatus = isDriveSyncing ? "Syncing" : "Not syncing";
+  const handleDriveStatusClick = useCallback(async () => {
+    if (isDriveSyncing || isDriveAuthPending) {
+      return;
+    }
+    setIsDriveAuthPending(true);
+    try {
+      await ensureAccessToken({ interactive: true });
+    } catch (error) {
+      if (!String(error).includes("Redirecting to Google OAuth")) {
+        console.error("Failed to start Google Drive auth flow", error);
+      }
+    } finally {
+      setIsDriveAuthPending(false);
+    }
+  }, [ensureAccessToken, isDriveAuthPending, isDriveSyncing]);
 
   return (
     <div className="flex h-full w-12 flex-col items-center justify-between">
@@ -51,6 +73,30 @@ export function SidePanelToolbar() {
         </button>
       </div>
       <div className="flex flex-col items-center gap-2 pb-2">
+        <button
+          type="button"
+          className={`${sideButtonBase} ${
+            isDriveSyncing || isDriveAuthPending
+              ? sideButtonActive
+              : sideButtonInactive
+          }`}
+          aria-label={`Google Drive status: ${driveStatus}`}
+          onClick={() => {
+            void handleDriveStatusClick();
+          }}
+        >
+          <span className="relative inline-flex h-5 w-5 items-center justify-center">
+            <CloudSolidIcon
+              className={`h-5 w-5 ${
+                isDriveSyncing ? "text-emerald-500" : "text-red-500"
+              }`}
+            />
+            {!isDriveSyncing && (
+              <span className="pointer-events-none absolute h-0.5 w-6 -rotate-45 rounded bg-red-600" />
+            )}
+          </span>
+          <span className={tooltipBase}>{`Google Drive: ${driveStatus}`}</span>
+        </button>
         <button
           type="button"
           className={`${sideButtonBase} ${sideButtonInactive}`}

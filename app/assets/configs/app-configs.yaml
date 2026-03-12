@@ -25,13 +25,9 @@ oidc:
 
 googleDrive:
     clientID: "554943104515-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com"
-    # Keep secrets split to reduce GitHub secret-scanning false positives on
-    # checked-in sample configs; runtime joins clientMaterial into clientSecret.
-    clientMaterial:
-        - "GOCSPX-3N-"
-        - "FPEy4XWoKzcVwSyt3yDz_Xwzo"
-    # Supported values: implicit (popup token flow), pkce (redirect code flow).
-    authFlow: "pkce"
+    # Supported values for authFlow: implicit (token), pkce (authorization code).
+    authFlow: "implicit"
+    # Supported values for authUxMode: popup, redirect.
     authUxMode: "redirect"
 
 chatkit:

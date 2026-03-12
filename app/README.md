@@ -137,6 +137,10 @@ go run ./ agent --config=${HOME}/.runme-agent/config.dev.yaml serve
     googleDrive:
         clientID: "44661292282-bqhl39ugf2kn7r8vv4f6766jt0a7tom9.apps.googleusercontent.com"
         clientSecret: ""
+        # Optional: implicit (token) or pkce (authorization code)
+        authFlow: "implicit"
+        # Optional: popup or redirect
+        authUxMode: "redirect"
 
     chatkit:
         domainKey: "<chatkit-domain-key>"
