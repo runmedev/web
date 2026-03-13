@@ -19,7 +19,9 @@ import {
   setLocalConfigPreferredOnLoad,
   setAppConfig,
 } from "./lib/appConfig";
+import { appLogger } from "./lib/logging/runtime";
 import { normalizeAppIndexUrl } from "./lib/appBase";
+import { ensurePersistentStorage } from "./lib/persistentStorage";
 
 type AppConfigApi = {
   getDefaultConfigUrl: () => string;
@@ -62,6 +64,32 @@ const noopBridge: RendererContext<void> = {
 setContext(noopBridge);
 
 normalizeAppIndexUrl();
+
+void ensurePersistentStorage().then((status) => {
+  switch (status) {
+    case "persisted":
+      appLogger.info("Requested persistent browser storage", {
+        attrs: { status },
+      });
+      break;
+    case "not-granted":
+      appLogger.warn("Browser declined persistent storage request", {
+        attrs: { status },
+      });
+      break;
+    case "error":
+      appLogger.warn("Persistent storage request failed", {
+        attrs: { status },
+      });
+      break;
+    case "already-persistent":
+    case "unsupported":
+      appLogger.debug("Persistent storage not changed", {
+        attrs: { status },
+      });
+      break;
+  }
+});
 
 // Initialize auth, then render
 maybeSetAppConfig().finally(() => {
