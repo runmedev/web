@@ -7,6 +7,7 @@ import { Subject, debounceTime } from "rxjs";
 import { parser_pb } from "../runme/client";
 import { aisreClientManager as runmeClientManager } from "../lib/aisreClientManager";
 import { appState } from "../lib/runtime/AppState";
+import { appLogger } from "../lib/logging/runtime";
 import { DriveNotebookStore } from "./drive";
 import {
   NotebookStoreItem,
@@ -45,6 +46,11 @@ export interface LocalFileRecord {
    * representation simple and defers parsing to the caller.
    */
   doc: string;
+  /**
+   * MD5 checksum of `doc`. Persisted so reconciler scans can detect local
+   * changes without re-hashing every file on each pass.
+   */
+  md5Checksum: string;
 }
 
 /**
@@ -123,6 +129,20 @@ export class LocalNotebooks extends Dexie {
           }
         });
       });
+    this.version(3)
+      .stores({
+        files: "&id, remoteId, lastRemoteChecksum, md5Checksum, name, lastSynced",
+        folders: "&id, remoteId, name, lastSynced",
+      })
+      .upgrade(async (tx) => {
+        await tx.table("files").toCollection().modify((file: any) => {
+          if (typeof file.md5Checksum !== "string") {
+            // Lazy backfill: keep migration cheap and compute missing checksums
+            // when we evaluate whether a file needs syncing.
+            file.md5Checksum = "";
+          }
+        });
+      });
 
     // Bind the table helpers so callers can access them directly.
     this.files = this.table("files");
@@ -170,6 +190,7 @@ export class LocalNotebooks extends Dexie {
       lastRemoteChecksum: "",
       lastSynced: "",
       doc: "",
+      md5Checksum: "",
     };
 
     await this.files.put(record);
@@ -335,38 +356,8 @@ export class LocalNotebooks extends Dexie {
     }
 
     await this.persistNotebook(uri, notebook);
-
-    // Enqueue sync
-    let subject = this.syncSubjects.get(uri);
-    if (!subject) {
-      subject = new Subject<void>();
-      const DEBOUNCE_TIME_MS = 20*1000; // 20 seconds
-      subject.pipe(debounceTime(DEBOUNCE_TIME_MS)).subscribe(async () => {
-        try {
-          await this.syncFile(uri);
-        } catch (error) {
-          console.error("Failed to synchronise notebook", uri, error);
-        }
-      });
-      this.syncSubjects.set(uri, subject);
-    }
-    subject.next();
-
-    // Enqueue markdown sync
-    let mdSubject = this.markdownSyncSubjects.get(uri);
-    if (!mdSubject) {
-      mdSubject = new Subject<void>();
-      const DEBOUNCE_TIME_MS = 20 * 1000; // 20 seconds
-      mdSubject.pipe(debounceTime(DEBOUNCE_TIME_MS)).subscribe(async () => {
-        try {
-          await this.syncMarkdownFile(uri);
-        } catch (error) {
-          console.error("Failed to synchronise markdown sidecar", uri, error);
-        }
-      });
-      this.markdownSyncSubjects.set(uri, mdSubject);
-    }
-    mdSubject.next();
+    this.enqueueSync(uri);
+    this.enqueueMarkdownSync(uri);
   }
 
   private async persistNotebook(
@@ -383,8 +374,9 @@ export class LocalNotebooks extends Dexie {
     const serialized = toJsonString(parser_pb.NotebookSchema, notebook, {
       emitDefaultValues: true,
     });
+    const checksum = checksumForSerializedNotebook(serialized);
 
-    await this.files.update(uri, { doc: serialized });
+    await this.files.update(uri, { doc: serialized, md5Checksum: checksum });
   }
 
   async load(uri: string): Promise<parser_pb.Notebook> {
@@ -444,6 +436,7 @@ export class LocalNotebooks extends Dexie {
       lastRemoteChecksum: "",
       lastSynced: nowIsoString(),
       doc: "",
+      md5Checksum: "",
     };
     await this.files.put(record);
 
@@ -621,6 +614,110 @@ export class LocalNotebooks extends Dexie {
     return `local://${type}/${uuid}`;
   }
 
+  /**
+   * Return local URIs for Drive-backed files that currently have unapplied
+   * local changes relative to the last known remote checksum.
+   *
+   * For migrated records where `md5Checksum` is missing/empty but `doc` exists,
+   * this method computes and persists the checksum lazily.
+   */
+  async listDriveBackedFilesNeedingSync(): Promise<string[]> {
+    const driveBackedFiles = await this.files
+      .where("remoteId")
+      .notEqual("")
+      .toArray();
+    const pending: string[] = [];
+
+    for (const record of driveBackedFiles) {
+      const localChecksum = await this.getOrBackfillLocalChecksum(record.id, record);
+      const lastRemoteChecksum = record.lastRemoteChecksum ?? "";
+      if (localChecksum !== lastRemoteChecksum) {
+        pending.push(record.id);
+      }
+    }
+
+    return pending;
+  }
+
+  /**
+   * Enqueue sync for every Drive-backed file that appears locally modified.
+   * Returns the list of enqueued local URIs.
+   */
+  async enqueueDriveBackedFilesNeedingSync(): Promise<string[]> {
+    const pending = await this.listDriveBackedFilesNeedingSync();
+    appLogger.info("Drive resync reconciliation evaluated pending files", {
+      attrs: {
+        scope: "storage.drive.sync",
+        code: "DRIVE_RESYNC_EVALUATED",
+        pendingCount: pending.length,
+        localUris: pending,
+      },
+    });
+    for (const uri of pending) {
+      appLogger.info("Requeued Drive-backed notebook for sync", {
+        attrs: {
+          scope: "storage.drive.sync",
+          code: "DRIVE_RESYNC_REQUEUED_FILE",
+          localUri: uri,
+        },
+      });
+      this.enqueueSync(uri);
+      this.enqueueMarkdownSync(uri);
+    }
+    return pending;
+  }
+
+  private enqueueSync(uri: string): void {
+    let subject = this.syncSubjects.get(uri);
+    if (!subject) {
+      subject = new Subject<void>();
+      const DEBOUNCE_TIME_MS = 20 * 1000; // 20 seconds
+      subject.pipe(debounceTime(DEBOUNCE_TIME_MS)).subscribe(async () => {
+        try {
+          await this.syncFile(uri);
+        } catch (error) {
+          console.error("Failed to synchronise notebook", uri, error);
+        }
+      });
+      this.syncSubjects.set(uri, subject);
+    }
+    subject.next();
+  }
+
+  private enqueueMarkdownSync(uri: string): void {
+    let mdSubject = this.markdownSyncSubjects.get(uri);
+    if (!mdSubject) {
+      mdSubject = new Subject<void>();
+      const DEBOUNCE_TIME_MS = 20 * 1000; // 20 seconds
+      mdSubject.pipe(debounceTime(DEBOUNCE_TIME_MS)).subscribe(async () => {
+        try {
+          await this.syncMarkdownFile(uri);
+        } catch (error) {
+          console.error("Failed to synchronise markdown sidecar", uri, error);
+        }
+      });
+      this.markdownSyncSubjects.set(uri, mdSubject);
+    }
+    mdSubject.next();
+  }
+
+  private async getOrBackfillLocalChecksum(
+    localUri: string,
+    record: LocalFileRecord,
+  ): Promise<string> {
+    const doc = record.doc ?? "";
+    if (typeof record.md5Checksum === "string") {
+      // Empty docs intentionally hash to "" and do not need backfill writes.
+      if (record.md5Checksum !== "" || doc === "") {
+        return record.md5Checksum;
+      }
+    }
+
+    const checksum = checksumForSerializedNotebook(doc);
+    await this.files.update(localUri, { md5Checksum: checksum });
+    return checksum;
+  }
+
   private async ensureFolderRecord(
     id: string,
     name: string,
@@ -709,7 +806,7 @@ export class LocalNotebooks extends Dexie {
 
     const lastReadChecksum = record.lastRemoteChecksum ?? "";
     const localDoc = record.doc ?? "";
-    const localChecksum = localDoc ? md5(localDoc) : "";
+    const localChecksum = await this.getOrBackfillLocalChecksum(localUri, record);
     let synced = false;
 
     // Case 1: The checksum reported by Drive matches the version we last
@@ -723,6 +820,7 @@ export class LocalNotebooks extends Dexie {
         (await this.driveStore.getChecksum(remoteUri)) ?? "";
       await this.files.update(localUri, {
         lastRemoteChecksum: updatedChecksum,
+        md5Checksum: localChecksum,
         lastSynced: nowIsoString(),
       });
       synced = true;
@@ -744,6 +842,7 @@ export class LocalNotebooks extends Dexie {
       );
       await this.files.update(localUri, {
         doc: serialized,
+        md5Checksum: checksumForSerializedNotebook(serialized),
         lastRemoteChecksum: currentRemoteChecksum,
         lastSynced: nowIsoString(),
       });
@@ -766,6 +865,7 @@ export class LocalNotebooks extends Dexie {
         );
         await this.files.update(localUri, {
           doc: serialized,
+          md5Checksum: checksumForSerializedNotebook(serialized),
           lastRemoteChecksum: currentRemoteChecksum,
           lastSynced: nowIsoString(),
         });
@@ -792,12 +892,14 @@ export class LocalNotebooks extends Dexie {
           (await this.driveStore.getChecksum(remoteUri)) ?? "";
         await this.files.update(localUri, {
           lastRemoteChecksum: updatedChecksum,
+          md5Checksum: localChecksum,
           lastSynced: nowIsoString(),
         });
         synced = true;
       } else if (lastReadChecksum) {
         await this.files.update(localUri, {
           lastRemoteChecksum: "",
+          md5Checksum: localChecksum,
           lastSynced: nowIsoString(),
         });
         synced = true;
@@ -906,6 +1008,10 @@ export class LocalNotebooks extends Dexie {
 }
 
 export default LocalNotebooks;
+
+function checksumForSerializedNotebook(serialized: string): string {
+  return serialized ? md5(serialized) : "";
+}
 
 function deserializeNotebook(json: string): parser_pb.Notebook {
   if (!json) {

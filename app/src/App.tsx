@@ -198,13 +198,14 @@ function App({ branding }: AppProps) {
 }
 
 function NotebookStoreInitializer({ agentEndpoint }: { agentEndpoint?: string }) {
-  const { ensureAccessToken } = useGoogleAuth();
+  const { ensureAccessToken, isDriveSyncing } = useGoogleAuth();
   const { store, setStore } = useNotebookStore();
   const { fsStore, setFsStore } = useFilesystemStore();
   const { contentsStore, setContentsStore } = useContentsStore();
   const instanceRef = useRef<LocalNotebooks | null>(null);
   const fsInstanceRef = useRef<FilesystemNotebookStore | null>(null);
   const contentsInstanceRef = useRef<ContentsNotebookStore | null>(null);
+  const wasDriveSyncingRef = useRef(false);
 
   useEffect(() => {
     if (instanceRef.current || store) {
@@ -224,6 +225,49 @@ function NotebookStoreInitializer({ agentEndpoint }: { agentEndpoint?: string })
     instanceRef.current = localStore;
     setStore(localStore);
   }, [ensureAccessToken, setStore, store]);
+
+  // When Drive auth/connectivity recovers, enqueue all drive-backed files with
+  // unapplied local edits so sync resumes without requiring a fresh manual edit.
+  useEffect(() => {
+    const localStore = instanceRef.current;
+    if (!localStore) {
+      return;
+    }
+
+    const becameSyncable = isDriveSyncing && !wasDriveSyncingRef.current;
+    wasDriveSyncingRef.current = isDriveSyncing;
+    if (!becameSyncable) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        appLogger.info("Drive sync became available; reconciling pending notebooks", {
+          attrs: {
+            scope: "storage.drive.sync",
+            code: "DRIVE_RESYNC_AUTH_RECOVERED",
+          },
+        });
+        const enqueued = await localStore.enqueueDriveBackedFilesNeedingSync();
+        appLogger.info("Drive resync reconciliation completed", {
+          attrs: {
+            scope: "storage.drive.sync",
+            code: "DRIVE_RESYNC_RECONCILE_COMPLETE",
+            enqueuedCount: enqueued.length,
+            localUris: enqueued,
+          },
+        });
+      } catch (error) {
+        appLogger.error("Failed to enqueue drive-backed notebooks for resync", {
+          attrs: {
+            scope: "storage.drive.sync",
+            code: "DRIVE_RESYNC_RECONCILE_FAILED",
+            error: String(error),
+          },
+        });
+      }
+    })();
+  }, [isDriveSyncing, store]);
 
   useEffect(() => {
     if (fsInstanceRef.current || fsStore) {
