@@ -60,6 +60,14 @@ type EnsureNotebookArgs = {
 const OPEN_NOTEBOOKS_STORAGE_KEY = "runme/openNotebooks";
 const LEGACY_OPEN_NOTEBOOKS_STORAGE_KEY = "aisre/openNotebooks";
 
+function isNotFoundError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return message.includes("not found");
+}
+
 function loadStoredOpenNotebooks(): NotebookStoreItem[] {
   if (typeof window === "undefined") {
     return [];
@@ -286,6 +294,16 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     [emit],
   );
 
+  const dropStaleNotebook = useCallback(
+    (uri: string) => {
+      const fallback = removeNotebook(uri);
+      if (getCurrentDoc() === uri) {
+        setCurrentDoc(fallback);
+      }
+    },
+    [getCurrentDoc, removeNotebook, setCurrentDoc],
+  );
+
   // Keep a cached list snapshot in sync for useSyncExternalStore consumers and persist to localStorage.
   useEffect(() => {
     // hasRestoredNotebooks.current guards against updating localStorage before we've restored from localStorage on window load
@@ -313,24 +331,34 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
         if (!entry) {
           continue;
         }
+        if (item.type !== NotebookStoreItemType.File) {
+          dropStaleNotebook(item.uri);
+          continue;
+        }
         const store = resolveStore(item.uri, notebookStore, fsStore, contentsStore);
         if (!store) {
           continue;
         }
         try {
-          const [metadata, notebook] = await Promise.all([
-            store.getMetadata(item.uri),
-            store.load(item.uri),
-          ]);
+          const metadata = await store.getMetadata(item.uri);
+          if (!metadata || metadata.type !== NotebookStoreItemType.File) {
+            dropStaleNotebook(item.uri);
+            continue;
+          }
+          const notebook = await store.load(item.uri);
           entry.data.loadNotebook(notebook, { persist: false });
           entry.loaded = true;
         } catch (error) {
+          if (isNotFoundError(error)) {
+            dropStaleNotebook(item.uri);
+            continue;
+          }
           console.error("Failed to load open notebook", item.uri, error);
         }
       }
     };
     void loadExisting();
-  }, [notebookStore, contentsStore, openNotebooks]);
+  }, [notebookStore, fsStore, contentsStore, openNotebooks, dropStaleNotebook]);
 
   // Ensure the current doc is loaded into NotebookData when it changes.
   useEffect(() => {
@@ -348,10 +376,12 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     }
     const load = async () => {
       try {
-        const [metadata, notebook] = await Promise.all([
-          store.getMetadata(uri),
-          store.load(uri),
-        ]);
+        const metadata = await store.getMetadata(uri);
+        if (!metadata || metadata.type !== NotebookStoreItemType.File) {
+          dropStaleNotebook(uri);
+          return;
+        }
+        const notebook = await store.load(uri);
         if (entry) {
           entry.data.loadNotebook(notebook, { persist: false });
           entry.loaded = true;
@@ -364,12 +394,16 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
           });
         }
       } catch (error) {
+        if (isNotFoundError(error)) {
+          dropStaleNotebook(uri);
+          return;
+        }
         console.error("Failed to load current document notebook", uri, error);
         setCurrentDoc(null);
       }
     };
     void load();
-  }, [ensureNotebook, getCurrentDoc, notebookStore, fsStore, contentsStore, setCurrentDoc]);
+  }, [ensureNotebook, getCurrentDoc, notebookStore, fsStore, contentsStore, setCurrentDoc, dropStaleNotebook]);
 
   const value = useMemo<NotebookContextValue>(
     () => ({
