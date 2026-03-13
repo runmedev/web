@@ -154,6 +154,12 @@ export function createAppJsGlobals({
     }
     await appState.openNotebook(uri);
   };
+  const resolveLocalMirrorStore = () => {
+    if (!appState.localNotebooks) {
+      throw new Error("Local notebook mirror store is not initialized yet.");
+    }
+    return appState.localNotebooks;
+  };
 
   const runmeApi = createRunmeApi(runme, sendOutput);
   const harnessManager = getHarnessManager();
@@ -869,6 +875,34 @@ export function createAppJsGlobals({
         );
         return result;
       },
+      listPendingSync: async () => {
+        const localStore = resolveLocalMirrorStore();
+        const pending = await localStore.listDriveBackedFilesNeedingSync();
+        if (pending.length === 0) {
+          emitLine(sendOutput, "No Drive-backed notebooks pending sync.");
+          return pending;
+        }
+        emitLine(
+          sendOutput,
+          `Drive-backed notebooks pending sync (${pending.length}):`,
+        );
+        pending.forEach((uri) => emitLine(sendOutput, `- ${uri}`));
+        return pending;
+      },
+      requeuePendingSync: async () => {
+        const localStore = resolveLocalMirrorStore();
+        const enqueued = await localStore.enqueueDriveBackedFilesNeedingSync();
+        if (enqueued.length === 0) {
+          emitLine(sendOutput, "No Drive-backed notebooks required requeue.");
+          return enqueued;
+        }
+        emitLine(
+          sendOutput,
+          `Requeued Drive-backed notebooks for sync (${enqueued.length}):`,
+        );
+        enqueued.forEach((uri) => emitLine(sendOutput, `- ${uri}`));
+        return enqueued;
+      },
       help: () => {
         return [
           "drive.list(folder)            - List Drive items in a folder",
@@ -876,6 +910,8 @@ export function createAppJsGlobals({
           "drive.update(id, bytes)        - Write UTF-8 bytes to a Drive file id/URI",
           "drive.saveAsCurrentNotebook(folder, fileName) - Save current notebook to Drive and switch current doc",
           "drive.copyNotebook(source, targetFolder, fileName?) - Copy a notebook file to another Drive folder",
+          "drive.listPendingSync()        - List Drive-backed local notebooks that currently need sync",
+          "drive.requeuePendingSync()     - Requeue all Drive-backed local notebooks that need sync",
           "drive.help()                   - Show this help",
         ].join("\n");
       },

@@ -573,6 +573,8 @@ describe("NotebookData.runCodeCell", () => {
         'console.log(typeof drive);',
         'console.log(typeof drive.create);',
         'console.log(typeof drive.saveAsCurrentNotebook);',
+        'console.log(typeof drive.listPendingSync);',
+        'console.log(typeof drive.requeuePendingSync);',
         'console.log(typeof googleClientManager.get);',
         'console.log(typeof oidc.getStatus);',
         'console.log(typeof app.getDefaultConfigUrl);',
@@ -806,6 +808,60 @@ describe("NotebookData.runCodeCell", () => {
       .join("");
     expect(stdoutText).toContain("saveas123");
     expect(stdoutText).toContain("local://file/saveas-copy");
+  });
+
+  it("supports drive.listPendingSync and drive.requeuePendingSync in appkernel cells", async () => {
+    const listPendingSync = vi
+      .fn()
+      .mockResolvedValue(["local://file/a", "local://file/b"]);
+    const requeuePendingSync = vi
+      .fn()
+      .mockResolvedValue(["local://file/a", "local://file/b"]);
+    appState.setLocalNotebooks({
+      listDriveBackedFilesNeedingSync: listPendingSync,
+      enqueueDriveBackedFilesNeedingSync: requeuePendingSync,
+    } as any);
+
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-drive-sync-helpers",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        "const pending = await drive.listPendingSync();",
+        "console.log(pending.join(','));",
+        "const requeued = await drive.requeuePendingSync();",
+        "console.log(requeued.join(','));",
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "drive-sync-helpers.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    expect(listPendingSync).toHaveBeenCalledTimes(1);
+    expect(requeuePendingSync).toHaveBeenCalledTimes(1);
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("local://file/a,local://file/b");
   });
 
   it("drops stale terminal output when rerunning a cell with appkernel", async () => {
