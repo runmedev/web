@@ -21,6 +21,8 @@ import {
 import { CellData } from "../../lib/notebookData";
 import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
+import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
+import { useContentsStore } from "../../contexts/ContentsStoreContext";
 import { useOutput } from "../../contexts/OutputContext";
 import CellConsole, { fontSettings } from "./CellConsole";
 import Editor from "./Editor";
@@ -47,6 +49,9 @@ import {
   DRIVE_LINK_STATUS_TAB_URI,
   useDriveLinkCoordinatorSnapshot,
 } from "../../lib/driveLinkCoordinator";
+import { parseDriveItem } from "../../storage/drive";
+import { NotebookStoreItemType } from "../../storage/notebook";
+import { resolveStore } from "../../storage/storeResolver";
 import DriveLinkStatusTab from "../DriveLinkStatusTab";
 import React from "react";
 
@@ -128,6 +133,26 @@ type SupportedLanguage =
 
 const outputTextDecoder = new TextDecoder();
 const ALWAYS_SKIP_MIMES = new Set<string>([MimeType.StatefulRunmeTerminal]);
+
+function isGoogleDriveFileUri(uri: string | null | undefined): uri is string {
+  if (!uri) {
+    return false;
+  }
+  let url: URL;
+  try {
+    url = new URL(uri);
+  } catch {
+    return false;
+  }
+  if (!/(^|\.)drive\.google\.com$/i.test(url.hostname)) {
+    return false;
+  }
+  try {
+    return parseDriveItem(uri).type === NotebookStoreItemType.File;
+  } catch {
+    return false;
+  }
+}
 
 function normalizeLanguageId(
   kind: parser_pb.CellKind,
@@ -923,6 +948,9 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
 
 export default function Actions() {
   const { useNotebookList, removeNotebook } = useNotebookContext();
+  const { store } = useNotebookStore();
+  const { fsStore } = useFilesystemStore();
+  const { contentsStore } = useContentsStore();
   const openNotebooks = useNotebookList();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const currentDocUri = getCurrentDoc();
@@ -935,6 +963,13 @@ export default function Actions() {
   // Empty-state hint visibility is stored locally so the hint panel can be
   // revealed on demand without cluttering the default view.
   const [showConsoleHints, setShowConsoleHints] = useState(false);
+  const [tabContextMenu, setTabContextMenu] = useState<{
+    x: number;
+    y: number;
+    docUri: string;
+    shareableUri: string;
+    googleDriveUri: string | null;
+  } | null>(null);
   const { runName } = useParams<{ runName?: string }>();
   //const { data: run } = useRun(runName);
   const [cellsInitialized, setCellsInitialized] = useState(false);
@@ -1058,6 +1093,157 @@ export default function Actions() {
     },
     [currentDocUri, removeNotebook, setCurrentDoc],
   );
+
+  useEffect(() => {
+    if (!tabContextMenu) {
+      return;
+    }
+    const handleClick = () => setTabContextMenu(null);
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setTabContextMenu(null);
+      }
+    };
+    window.addEventListener("click", handleClick);
+    window.addEventListener("keydown", handleKey);
+    return () => {
+      window.removeEventListener("click", handleClick);
+      window.removeEventListener("keydown", handleKey);
+    };
+  }, [tabContextMenu]);
+
+  const adjustedTabContextMenu = useMemo(() => {
+    if (!tabContextMenu) {
+      return null;
+    }
+    if (typeof window === "undefined") {
+      return tabContextMenu;
+    }
+    const itemCount = tabContextMenu.googleDriveUri ? 3 : 2;
+    const menuWidth = 220;
+    const menuHeight = itemCount * 36 + 8;
+    return {
+      ...tabContextMenu,
+      x: Math.max(0, Math.min(tabContextMenu.x, window.innerWidth - menuWidth)),
+      y: Math.max(
+        0,
+        Math.min(tabContextMenu.y, window.innerHeight - menuHeight),
+      ),
+    };
+  }, [tabContextMenu]);
+
+  const handleTabContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLElement>, docUri: string) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setTabContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        docUri,
+        shareableUri: docUri,
+        googleDriveUri: isGoogleDriveFileUri(docUri) ? docUri : null,
+      });
+
+      const notebookStore = resolveStore(docUri, store, fsStore, contentsStore);
+      if (!notebookStore) {
+        return;
+      }
+
+      void (async () => {
+        try {
+          const metadata = await notebookStore.getMetadata(docUri);
+          const remoteUri = metadata?.remoteUri?.trim() || null;
+          setTabContextMenu((current) => {
+            if (!current || current.docUri !== docUri) {
+              return current;
+            }
+            return {
+              ...current,
+              shareableUri: remoteUri ?? docUri,
+              googleDriveUri: isGoogleDriveFileUri(remoteUri) ? remoteUri : current.googleDriveUri,
+            };
+          });
+        } catch (error) {
+          appLogger.error("Failed to resolve tab metadata for context menu", {
+            attrs: {
+              scope: "storage.metadata",
+              code: "TAB_CONTEXT_METADATA_LOOKUP_FAILED",
+              docUri,
+              error: String(error),
+            },
+          });
+        }
+      })();
+    },
+    [contentsStore, fsStore, store],
+  );
+
+  const handleCopyTabShareableLink = useCallback(async () => {
+    if (!tabContextMenu) {
+      return;
+    }
+    try {
+      await copyNotebookShareUrl(tabContextMenu.shareableUri);
+    } catch (error) {
+      appLogger.error("Failed to copy shareable link from tab context menu", {
+        attrs: {
+          scope: "storage.share",
+          code: "TAB_COPY_SHAREABLE_LINK_FAILED",
+          uri: tabContextMenu.shareableUri,
+          error: String(error),
+        },
+      });
+    } finally {
+      setTabContextMenu(null);
+    }
+  }, [tabContextMenu]);
+
+  const handleCopyTabLocalUri = useCallback(async () => {
+    if (!tabContextMenu) {
+      return;
+    }
+    try {
+      if (typeof window === "undefined" || !window.navigator?.clipboard?.writeText) {
+        throw new Error("Clipboard access is unavailable in this browser");
+      }
+      await window.navigator.clipboard.writeText(tabContextMenu.docUri);
+    } catch (error) {
+      appLogger.error("Failed to copy local URI from tab context menu", {
+        attrs: {
+          scope: "storage.local",
+          code: "TAB_COPY_LOCAL_URI_FAILED",
+          uri: tabContextMenu.docUri,
+          error: String(error),
+        },
+      });
+    } finally {
+      setTabContextMenu(null);
+    }
+  }, [tabContextMenu]);
+
+  const handleCopyTabGoogleDriveLink = useCallback(async () => {
+    if (!tabContextMenu?.googleDriveUri) {
+      setTabContextMenu(null);
+      return;
+    }
+    try {
+      if (typeof window === "undefined" || !window.navigator?.clipboard?.writeText) {
+        throw new Error("Clipboard access is unavailable in this browser");
+      }
+      await window.navigator.clipboard.writeText(tabContextMenu.googleDriveUri);
+    } catch (error) {
+      appLogger.error("Failed to copy Google Drive link from tab context menu", {
+        attrs: {
+          scope: "storage.drive",
+          code: "TAB_COPY_GOOGLE_DRIVE_LINK_FAILED",
+          uri: tabContextMenu.googleDriveUri,
+          error: String(error),
+        },
+      });
+    } finally {
+      setTabContextMenu(null);
+    }
+  }, [tabContextMenu]);
 
   // Each document gets its own scroll container keyed by URI so the browser
   // does not reuse the previous document's scroll position.
@@ -1189,6 +1375,7 @@ export default function Actions() {
                 <Tabs.Trigger
                   value={doc.uri}
                   title={doc.name}
+                  onContextMenu={(event) => handleTabContextMenu(event, doc.uri)}
                   className="group flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-nb-sm transition-all duration-150 text-nb-text-muted border border-transparent data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:border-nb-border data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
                 >
                   <span className="truncate max-w-[140px]">{displayName}</span>
@@ -1209,6 +1396,50 @@ export default function Actions() {
               );
             })}
           </Tabs.List>
+          {adjustedTabContextMenu && (
+            <div
+              className="ctx-menu"
+              style={{
+                top: adjustedTabContextMenu.y,
+                left: adjustedTabContextMenu.x,
+              }}
+              onClick={(event) => event.stopPropagation()}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void handleCopyTabShareableLink();
+                }}
+              >
+                Copy Shareable Link
+              </button>
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void handleCopyTabLocalUri();
+                }}
+              >
+                Copy local URI
+              </button>
+              {adjustedTabContextMenu.googleDriveUri && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void handleCopyTabGoogleDriveLink();
+                  }}
+                >
+                  Copy Google Drive Link
+                </button>
+              )}
+            </div>
+          )}
           <div className="relative flex-1 min-h-0 overflow-hidden">
           {statusTabVisible && (
             <Tabs.Content
