@@ -42,6 +42,25 @@ vi.mock("../../contexts/NotebookContext", () => ({
   }),
 }));
 
+vi.mock("../../contexts/NotebookStoreContext", () => ({
+  useNotebookStore: () => ({
+    store: null,
+  }),
+}));
+
+vi.mock("../../contexts/FilesystemStoreContext", () => ({
+  useFilesystemStore: () => ({
+    fsStore: null,
+    setFsStore: () => {},
+  }),
+}));
+
+vi.mock("../../contexts/ContentsStoreContext", () => ({
+  useContentsStore: () => ({
+    store: null,
+  }),
+}));
+
 vi.mock("../../contexts/CurrentDocContext", () => ({
   useCurrentDoc: () => ({
     getCurrentDoc: () => null,
@@ -66,6 +85,11 @@ class StubCellData {
   snapshot: parser_pb.Cell;
   private listeners = new Set<() => void>();
   getRunnerName = () => "<default>";
+  getJupyterServerName = () => "";
+  getJupyterKernelID = () => "";
+  getJupyterKernelName = () => "";
+  setJupyterKernel = () => {};
+  clearJupyterKernel = () => {};
   update = vi.fn((nextCell: parser_pb.Cell) => {
     this.snapshot = clone(parser_pb.CellSchema, nextCell);
     this.listeners.forEach((listener) => listener());

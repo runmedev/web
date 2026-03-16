@@ -44,6 +44,7 @@ import {
   APPKERNEL_RUNNER_LABEL,
   APPKERNEL_RUNNER_NAME,
 } from "../../lib/runtime/appKernel";
+import { getJupyterManager } from "../../lib/runtime/jupyterManager";
 import {
   driveLinkCoordinator,
   DRIVE_LINK_STATUS_TAB_URI,
@@ -121,12 +122,14 @@ function RunActionButton({
 const LANGUAGE_OPTIONS = [
   { label: "Markdown", value: "markdown" },
   { label: "Bash", value: "bash" },
+  { label: "IPython", value: "ipython" },
   { label: "Python", value: "python" },
   { label: "JS", value: "javascript" },
 ] as const;
 
 type SupportedLanguage =
   | "bash"
+  | "ipython"
   | "javascript"
   | "markdown"
   | "python";
@@ -166,6 +169,9 @@ function normalizeLanguageId(
       }
       if (normalized === "python" || normalized === "py") {
         return "python";
+      }
+      if (normalized === "ipython") {
+        return "ipython";
       }
       if (
         normalized === "javascript" ||
@@ -241,7 +247,11 @@ function ActionOutputItemView({
         className="h-[420px] w-full rounded-md border border-nb-cell-border bg-white"
       />
     );
-  } else if (mime === "image/png") {
+  } else if (
+    mime === "image/png" ||
+    mime === "image/jpeg" ||
+    mime === "image/svg+xml"
+  ) {
     const base64 = uint8ArrayToBase64(item.data ?? new Uint8Array());
     const src = `data:${mime};base64,${base64}`;
     content = (
@@ -328,6 +338,12 @@ export function Action({
   const { getAllRenderers } = useOutput();
   const { store } = useNotebookStore();
   const { listRunners, defaultRunnerName } = useRunners();
+  const jupyterManager = useMemo(() => getJupyterManager(), []);
+  const jupyterVersion = useSyncExternalStore(
+    useCallback((listener) => jupyterManager.subscribe(listener), [jupyterManager]),
+    useCallback(() => jupyterManager.getVersion(), [jupyterManager]),
+    useCallback(() => jupyterManager.getVersion(), [jupyterManager]),
+  );
   const cell = useSyncExternalStore(
     useCallback(
       (listener) => cellData.subscribeToContentChange(listener),
@@ -509,6 +525,8 @@ export function Action({
         return "markdown";
       case "javascript":
         return "javascript";
+      case "ipython":
+        return "python";
       case "python":
         return "python";
       default:
@@ -524,11 +542,74 @@ export function Action({
     () => `runner-select-${cell?.refId ?? "unknown"}`,
     [cell?.refId],
   );
+  const kernelSelectId = useMemo(
+    () => `kernel-select-${cell?.refId ?? "unknown"}`,
+    [cell?.refId],
+  );
 
   var initialRunnerName = cellData.getRunnerName();
   if (!initialRunnerName) {
     initialRunnerName = DEFAULT_RUNNER_PLACEHOLDER;
   }
+  const resolvedRunnerName =
+    initialRunnerName === DEFAULT_RUNNER_PLACEHOLDER
+      ? (defaultRunnerName ?? "")
+      : initialRunnerName;
+
+  useEffect(() => {
+    if (selectedLanguage !== "ipython" || !resolvedRunnerName) {
+      return;
+    }
+    void jupyterManager.ensureRunnerData(resolvedRunnerName).catch((error) => {
+      console.error("Failed to load Jupyter kernels for runner", {
+        runner: resolvedRunnerName,
+        error,
+      });
+    });
+  }, [jupyterManager, resolvedRunnerName, selectedLanguage]);
+
+  const kernelOptions = useMemo(() => {
+    if (!resolvedRunnerName) {
+      return [];
+    }
+    return jupyterManager.getKernelOptionsForRunner(resolvedRunnerName);
+  }, [jupyterManager, jupyterVersion, resolvedRunnerName]);
+  const selectedKernelKey = useMemo(() => {
+    const serverName = cellData.getJupyterServerName();
+    const kernelID = cellData.getJupyterKernelID();
+    if (!serverName || !kernelID) {
+      return "";
+    }
+    return jupyterManager.getKernelOptionKey(serverName, kernelID);
+  }, [cellData, jupyterManager, jupyterVersion]);
+
+  useEffect(() => {
+    if (selectedLanguage !== "ipython") {
+      return;
+    }
+    if (selectedKernelKey) {
+      return;
+    }
+    if (kernelOptions.length !== 1) {
+      return;
+    }
+    const option = kernelOptions[0];
+    const parsed = jupyterManager.parseKernelOptionKey(option.key);
+    if (!parsed) {
+      return;
+    }
+    cellData.setJupyterKernel({
+      serverName: parsed.serverName,
+      kernelId: parsed.kernelId,
+      kernelName: option.label,
+    });
+  }, [
+    cellData,
+    jupyterManager,
+    kernelOptions,
+    selectedKernelKey,
+    selectedLanguage,
+  ]);
 
   const renderedOutputs = useMemo(() => {
     const hasTerminalOutput = (cell?.outputs ?? []).some((output) =>
@@ -556,9 +637,8 @@ export function Action({
     return <ActionOutputItems outputs={cell.outputs} />;
   }, [cell?.outputs]);
 
-  const handleLanguageChange = useCallback(    
+  const handleLanguageChange = useCallback(
     (event: ChangeEvent<HTMLSelectElement>) => {
-      console.log("handleLanguageChange", { value: event.target.value });      
       if (!cell) {
         return;
       }
@@ -569,10 +649,14 @@ export function Action({
       }
 
       const updatedCell = create(parser_pb.CellSchema, cell);
+      updatedCell.metadata ??= {};
       if (nextValue === "markdown") {
         setMarkdownEditRequest((request) => request + 1);
         updatedCell.kind = parser_pb.CellKind.MARKUP;
         updatedCell.languageId = "markdown";
+      } else if (nextValue === "ipython") {
+        updatedCell.kind = parser_pb.CellKind.CODE;
+        updatedCell.languageId = "ipython";
       } else if (nextValue === "javascript") {
         updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "javascript";
@@ -582,6 +666,11 @@ export function Action({
       } else {
         updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "bash";
+      }
+      if (nextValue !== "ipython") {
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName];
       }
 
       updateCellLocal(updatedCell);
@@ -779,6 +868,9 @@ export function Action({
                     return;
                   }
                   cellData.setRunner(nextName);
+                  if (selectedLanguage === "ipython") {
+                    cellData.clearJupyterKernel();
+                  }
                 }}
                 className="toolbar-select"
               >
@@ -794,6 +886,40 @@ export function Action({
                   </option>
                 ))}
               </select>
+              {selectedLanguage === "ipython" && (
+                <select
+                  id={kernelSelectId}
+                  value={selectedKernelKey}
+                  onChange={(event) => {
+                    const nextKey = event.target.value;
+                    if (!nextKey) {
+                      cellData.clearJupyterKernel();
+                      return;
+                    }
+                    const parsed = jupyterManager.parseKernelOptionKey(nextKey);
+                    if (!parsed) {
+                      return;
+                    }
+                    const option = kernelOptions.find((item) => item.key === nextKey);
+                    if (!option) {
+                      return;
+                    }
+                    cellData.setJupyterKernel({
+                      serverName: parsed.serverName,
+                      kernelId: parsed.kernelId,
+                      kernelName: option.label,
+                    });
+                  }}
+                  className="toolbar-select"
+                >
+                  <option value="">Select kernel</option>
+                  {kernelOptions.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              )}
               {sequenceLabel.trim() && (
                 <span className="text-[11px] font-mono text-nb-text-faint">
                   [{sequenceLabel}]

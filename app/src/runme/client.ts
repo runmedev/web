@@ -24,6 +24,9 @@ export enum RunmeMetadataKey {
   Pid = "runme.dev/pid",
   ExitCode = "runme.dev/exitCode",
   RunnerName = "runme.dev/runnerName",
+  JupyterServerName = "runme.dev/jupyterServerName",
+  JupyterKernelName = "runme.dev/jupyterKernelName",
+  JupyterKernelID = "runme.dev/jupyterKernelID",
 }
 
 export enum AgentMetadataKey {
