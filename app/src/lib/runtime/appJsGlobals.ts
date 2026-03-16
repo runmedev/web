@@ -360,9 +360,12 @@ export function createAppJsGlobals({
     },
     jupyter: {
       servers: {
-        get: async () => {
+        get: async (runnerName: string) => {
+          if (!runnerName?.trim()) {
+            throw new Error("Usage: jupyter.servers.get(runnerName)");
+          }
           try {
-            const servers = await jupyterManager.listServers();
+            const servers = await jupyterManager.listServers(runnerName);
             const message =
               servers.length === 0
                 ? "No Jupyter servers configured."
@@ -378,12 +381,16 @@ export function createAppJsGlobals({
       },
       kernels: {
         start: async (
+          runnerName: string,
           serverName: string,
           options?: { kernelSpec?: string; name?: string; path?: string },
         ) => {
+          if (!runnerName?.trim() || !serverName?.trim()) {
+            throw new Error("Usage: jupyter.kernels.start(runnerName, serverName, options?)");
+          }
           try {
-            const kernel = await jupyterManager.startKernel(serverName, options);
-            const message = `Started kernel ${kernel.id} on ${serverName} (${kernel.name})`;
+            const kernel = await jupyterManager.startKernel(runnerName, serverName, options);
+            const message = `Started kernel ${kernel.id} on ${runnerName}/${serverName} (${kernel.name})`;
             emitLine(sendOutput, message);
             emitLine(sendOutput, JSON.stringify(kernel, null, 2));
             return kernel;
@@ -393,12 +400,15 @@ export function createAppJsGlobals({
             throw error;
           }
         },
-        get: async (serverName: string) => {
+        get: async (runnerName: string, serverName: string) => {
+          if (!runnerName?.trim() || !serverName?.trim()) {
+            throw new Error("Usage: jupyter.kernels.get(runnerName, serverName)");
+          }
           try {
-            const kernels = await jupyterManager.listKernels(serverName);
+            const kernels = await jupyterManager.listKernels(runnerName, serverName);
             const message =
               kernels.length === 0
-                ? `No kernels running on ${serverName}.`
+                ? `No kernels running on ${runnerName}/${serverName}.`
                 : JSON.stringify(kernels, null, 2);
             emitLine(sendOutput, message);
             return kernels;
@@ -408,10 +418,13 @@ export function createAppJsGlobals({
             throw error;
           }
         },
-        stop: async (serverName: string, kernelNameOrId: string) => {
+        stop: async (runnerName: string, serverName: string, kernelNameOrId: string) => {
+          if (!runnerName?.trim() || !serverName?.trim() || !kernelNameOrId?.trim()) {
+            throw new Error("Usage: jupyter.kernels.stop(runnerName, serverName, kernelNameOrId)");
+          }
           try {
-            await jupyterManager.stopKernel(serverName, kernelNameOrId);
-            const message = `Stopped kernel ${kernelNameOrId} on ${serverName}`;
+            await jupyterManager.stopKernel(runnerName, serverName, kernelNameOrId);
+            const message = `Stopped kernel ${kernelNameOrId} on ${runnerName}/${serverName}`;
             emitLine(sendOutput, message);
             return message;
           } catch (error) {

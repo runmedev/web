@@ -47,6 +47,7 @@ no mounted folders.
 Scenario scripts in this folder implement scenario-based acceptance tests:
 
 - `test-scenario-hello-world.ts`
+- `test-scenario-jupyter.ts`
 - `test-scenario-no-runner-logs.ts`
 
 The hello-world scenario validates an end-to-end flow:

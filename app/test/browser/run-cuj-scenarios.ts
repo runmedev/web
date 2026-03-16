@@ -81,6 +81,7 @@ const SCENARIO_DRIVERS = [
   join(SCRIPT_DIR, "test-scenario-hello-world.ts"),
   join(SCRIPT_DIR, "test-scenario-open-shared-drive-link.ts"),
   join(SCRIPT_DIR, "test-scenario-appkernel-javascript.ts"),
+  join(SCRIPT_DIR, "test-scenario-jupyter.ts"),
   join(SCRIPT_DIR, "test-scenario-no-runner-logs.ts"),
   join(SCRIPT_DIR, "test-scenario-ai.ts"),
   join(SCRIPT_DIR, "test-scenario-ai-codex.ts"),

@@ -78,11 +78,12 @@ export function buildJupyterChannelsWebSocketURL(args: {
 
 class JupyterManager {
   private static singleton: JupyterManager | null = null;
+  private static readonly compositeKeySeparator = "\u001f";
 
   private version = 0;
   private listeners = new Set<() => void>();
-  private serversByName = new Map<string, JupyterServerRecord>();
-  private kernelsByServer = new Map<string, KernelCacheEntry[]>();
+  private serversByKey = new Map<string, JupyterServerRecord>();
+  private kernelsByServerKey = new Map<string, KernelCacheEntry[]>();
   private kernelAliases = new Map<string, string>();
   private ensureRunnerPromises = new Map<string, Promise<void>>();
 
@@ -115,28 +116,62 @@ class JupyterManager {
     });
   }
 
-  private resolveRunnerEndpoint(runnerName?: string): string {
+  private normalizeRunnerName(runnerName: string): string {
     const mgr = getRunnersManager();
-    const normalizedRunnerName = runnerName?.trim();
+    const normalizedRunnerName = runnerName.trim();
     const effectiveName =
-      !normalizedRunnerName ||
       normalizedRunnerName === DEFAULT_RUNNER_PLACEHOLDER
         ? mgr.getDefaultRunnerName() ?? ""
         : normalizedRunnerName;
+    if (!effectiveName) {
+      throw new Error("Runner name is required.");
+    }
+    return effectiveName;
+  }
+
+  private resolveRunnerEndpoint(runnerName: string): string {
+    const effectiveName = this.normalizeRunnerName(runnerName);
+    const mgr = getRunnersManager();
     const runner = effectiveName ? mgr.getWithFallback(effectiveName) : undefined;
     if (!runner?.endpoint) {
-      throw new Error("No runner endpoint configured.");
+      throw new Error(`No runner endpoint configured for ${effectiveName}.`);
     }
     return runner.endpoint;
   }
 
-  private getServerRunnerName(serverName: string): string {
-    const server = this.serversByName.get(serverName);
-    if (!server?.runner) {
-      const mgr = getRunnersManager();
-      return mgr.getDefaultRunnerName() ?? "";
+  private getServerKey(runnerName: string, serverName: string): string {
+    return `${runnerName}${JupyterManager.compositeKeySeparator}${serverName}`;
+  }
+
+  private isServerKeyForRunner(serverKey: string, runnerName: string): boolean {
+    return serverKey.startsWith(`${runnerName}${JupyterManager.compositeKeySeparator}`);
+  }
+
+  private getServerNameFromKey(serverKey: string): string {
+    const [, serverName = ""] = serverKey.split(JupyterManager.compositeKeySeparator, 2);
+    return serverName;
+  }
+
+  private getAliasKey(runnerName: string, serverName: string, alias: string): string {
+    return `${runnerName}${JupyterManager.compositeKeySeparator}${serverName}${JupyterManager.compositeKeySeparator}${alias}`;
+  }
+
+  private clearRunnerCache(runnerName: string): void {
+    for (const serverKey of this.serversByKey.keys()) {
+      if (this.isServerKeyForRunner(serverKey, runnerName)) {
+        this.serversByKey.delete(serverKey);
+      }
     }
-    return server.runner;
+    for (const serverKey of this.kernelsByServerKey.keys()) {
+      if (this.isServerKeyForRunner(serverKey, runnerName)) {
+        this.kernelsByServerKey.delete(serverKey);
+      }
+    }
+    for (const aliasKey of this.kernelAliases.keys()) {
+      if (aliasKey.startsWith(`${runnerName}${JupyterManager.compositeKeySeparator}`)) {
+        this.kernelAliases.delete(aliasKey);
+      }
+    }
   }
 
   private async fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
@@ -168,24 +203,36 @@ class JupyterManager {
     return JSON.parse(text) as T;
   }
 
-  private getAliasKey(serverName: string, alias: string): string {
-    return `${serverName}:${alias}`;
+  private resolveDefaultRunnerName(): string {
+    return getRunnersManager().getDefaultRunnerName() ?? "";
   }
 
-  async listServers(options?: { runnerName?: string }): Promise<JupyterServerRecord[]> {
-    const runnerEndpoint = this.resolveRunnerEndpoint(options?.runnerName);
+  async listServers(runnerName: string): Promise<JupyterServerRecord[]> {
+    const effectiveRunner = this.normalizeRunnerName(runnerName);
+    const runnerEndpoint = this.resolveRunnerEndpoint(effectiveRunner);
     const baseURL = runnerEndpointToHttpBase(runnerEndpoint);
-    const servers = await this.fetchJSON<JupyterServerRecord[]>(
+    const serversResponse = await this.fetchJSON<JupyterServerRecord[]>(
       `${baseURL}/v1/jupyter/servers`,
     );
-    this.serversByName.clear();
-    servers.forEach((server) => this.serversByName.set(server.name, server));
+    this.clearRunnerCache(effectiveRunner);
+    const servers = serversResponse.map((server) => ({
+      ...server,
+      runner: effectiveRunner,
+    }));
+    servers.forEach((server) => {
+      this.serversByKey.set(
+        this.getServerKey(effectiveRunner, server.name),
+        server,
+      );
+    });
     this.bumpVersion();
     return servers;
   }
 
-  async ensureRunnerData(runnerName?: string): Promise<void> {
-    const effectiveRunner = runnerName?.trim() || this.resolveDefaultRunnerName();
+  async ensureRunnerData(runnerName: string): Promise<void> {
+    const requestedRunner = runnerName.trim();
+    const effectiveRunner =
+      requestedRunner || this.resolveDefaultRunnerName();
     if (!effectiveRunner) {
       return;
     }
@@ -195,11 +242,10 @@ class JupyterManager {
       return;
     }
     const promise = (async () => {
-      const servers = await this.listServers({ runnerName: effectiveRunner });
-      const relevant = servers.filter((server) => server.runner === effectiveRunner);
+      const servers = await this.listServers(effectiveRunner);
       await Promise.all(
-        relevant.map(async (server) => {
-          await this.listKernels(server.name);
+        servers.map(async (server) => {
+          await this.listKernels(effectiveRunner, server.name);
         }),
       );
     })().finally(() => {
@@ -209,44 +255,52 @@ class JupyterManager {
     await promise;
   }
 
-  private resolveDefaultRunnerName(): string {
-    return getRunnersManager().getDefaultRunnerName() ?? "";
+  private async ensureServerLoaded(
+    runnerName: string,
+    serverName: string,
+  ): Promise<void> {
+    const serverKey = this.getServerKey(runnerName, serverName);
+    if (this.serversByKey.has(serverKey)) {
+      return;
+    }
+    await this.listServers(runnerName);
+    if (!this.serversByKey.has(serverKey)) {
+      throw new Error(`Jupyter server ${serverName} was not found on runner ${runnerName}.`);
+    }
   }
 
-  async listKernels(serverName: string): Promise<JupyterKernelModel[]> {
-    if (!this.serversByName.has(serverName)) {
-      await this.listServers();
-    }
-    const runnerName = this.getServerRunnerName(serverName);
-    const baseURL = runnerEndpointToHttpBase(this.resolveRunnerEndpoint(runnerName));
+  async listKernels(runnerName: string, serverName: string): Promise<JupyterKernelModel[]> {
+    const effectiveRunner = this.normalizeRunnerName(runnerName);
+    await this.ensureServerLoaded(effectiveRunner, serverName);
+    const baseURL = runnerEndpointToHttpBase(this.resolveRunnerEndpoint(effectiveRunner));
     const kernels = await this.fetchJSON<JupyterKernelModel[]>(
       `${baseURL}/v1/jupyter/servers/${encodePathSegment(serverName)}/kernels`,
     );
+    const serverKey = this.getServerKey(effectiveRunner, serverName);
     const existingLabels = new Map<string, string>();
-    (this.kernelsByServer.get(serverName) ?? []).forEach((entry) => {
+    (this.kernelsByServerKey.get(serverKey) ?? []).forEach((entry) => {
       existingLabels.set(entry.model.id, entry.label);
     });
     const next = kernels.map((model) => {
       const aliasLabel =
         existingLabels.get(model.id) ??
-        this.kernelAliases.get(this.getAliasKey(serverName, model.name));
+        this.kernelAliases.get(this.getAliasKey(effectiveRunner, serverName, model.name));
       const label = aliasLabel && aliasLabel.trim() ? aliasLabel : model.name || model.id;
       return { model, label };
     });
-    this.kernelsByServer.set(serverName, next);
+    this.kernelsByServerKey.set(serverKey, next);
     this.bumpVersion();
     return kernels;
   }
 
   async startKernel(
+    runnerName: string,
     serverName: string,
     options?: { kernelSpec?: string; name?: string; path?: string },
   ): Promise<JupyterKernelModel> {
-    if (!this.serversByName.has(serverName)) {
-      await this.listServers();
-    }
-    const runnerName = this.getServerRunnerName(serverName);
-    const baseURL = runnerEndpointToHttpBase(this.resolveRunnerEndpoint(runnerName));
+    const effectiveRunner = this.normalizeRunnerName(runnerName);
+    await this.ensureServerLoaded(effectiveRunner, serverName);
+    const baseURL = runnerEndpointToHttpBase(this.resolveRunnerEndpoint(effectiveRunner));
     const payload: Record<string, unknown> = {};
     if (options?.kernelSpec?.trim()) {
       payload.name = options.kernelSpec.trim();
@@ -269,55 +323,68 @@ class JupyterManager {
     const alias = options?.name?.trim();
     const label = alias || kernel.name || kernel.id;
     if (alias) {
-      this.kernelAliases.set(this.getAliasKey(serverName, alias), kernel.id);
+      this.kernelAliases.set(this.getAliasKey(effectiveRunner, serverName, alias), kernel.id);
     }
-    const existing = this.kernelsByServer.get(serverName) ?? [];
+    const serverKey = this.getServerKey(effectiveRunner, serverName);
+    const existing = this.kernelsByServerKey.get(serverKey) ?? [];
     const filtered = existing.filter((entry) => entry.model.id !== kernel.id);
     filtered.push({
       model: kernel,
       label,
     });
-    this.kernelsByServer.set(serverName, filtered);
+    this.kernelsByServerKey.set(serverKey, filtered);
     this.bumpVersion();
     return kernel;
   }
 
-  async stopKernel(serverName: string, kernelNameOrId: string): Promise<void> {
-    const kernelID = await this.resolveKernelID(serverName, kernelNameOrId);
+  async stopKernel(runnerName: string, serverName: string, kernelNameOrId: string): Promise<void> {
+    const effectiveRunner = this.normalizeRunnerName(runnerName);
+    const kernelID = await this.resolveKernelID(effectiveRunner, serverName, kernelNameOrId);
     if (!kernelID) {
       throw new Error(`Kernel ${kernelNameOrId} was not found.`);
     }
-    const runnerName = this.getServerRunnerName(serverName);
-    const baseURL = runnerEndpointToHttpBase(this.resolveRunnerEndpoint(runnerName));
+    const baseURL = runnerEndpointToHttpBase(this.resolveRunnerEndpoint(effectiveRunner));
     await this.fetchJSON<unknown>(
       `${baseURL}/v1/jupyter/servers/${encodePathSegment(serverName)}/kernels/${encodePathSegment(kernelID)}`,
       {
         method: "DELETE",
       },
     );
-    const existing = this.kernelsByServer.get(serverName) ?? [];
-    this.kernelsByServer.set(
-      serverName,
+    const serverKey = this.getServerKey(effectiveRunner, serverName);
+    const existing = this.kernelsByServerKey.get(serverKey) ?? [];
+    this.kernelsByServerKey.set(
+      serverKey,
       existing.filter((entry) => entry.model.id !== kernelID),
     );
     for (const [key, value] of this.kernelAliases.entries()) {
-      if (key.startsWith(`${serverName}:`) && value === kernelID) {
+      if (
+        key.startsWith(
+          `${effectiveRunner}${JupyterManager.compositeKeySeparator}${serverName}${JupyterManager.compositeKeySeparator}`,
+        ) &&
+        value === kernelID
+      ) {
         this.kernelAliases.delete(key);
       }
     }
     this.bumpVersion();
   }
 
-  async resolveKernelID(serverName: string, kernelNameOrId: string): Promise<string> {
+  async resolveKernelID(
+    runnerName: string,
+    serverName: string,
+    kernelNameOrId: string,
+  ): Promise<string> {
+    const effectiveRunner = this.normalizeRunnerName(runnerName);
     const trimmed = kernelNameOrId.trim();
     if (!trimmed) {
       return "";
     }
-    const aliasID = this.kernelAliases.get(this.getAliasKey(serverName, trimmed));
+    const aliasID = this.kernelAliases.get(this.getAliasKey(effectiveRunner, serverName, trimmed));
     if (aliasID) {
       return aliasID;
     }
-    const cached = this.kernelsByServer.get(serverName) ?? [];
+    const serverKey = this.getServerKey(effectiveRunner, serverName);
+    const cached = this.kernelsByServerKey.get(serverKey) ?? [];
     const fromCached =
       cached.find((entry) => entry.model.id === trimmed)?.model.id ??
       cached.find((entry) => entry.label === trimmed)?.model.id ??
@@ -325,8 +392,8 @@ class JupyterManager {
     if (fromCached) {
       return fromCached;
     }
-    await this.listKernels(serverName);
-    const refreshed = this.kernelsByServer.get(serverName) ?? [];
+    await this.listKernels(effectiveRunner, serverName);
+    const refreshed = this.kernelsByServerKey.get(serverKey) ?? [];
     return (
       refreshed.find((entry) => entry.model.id === trimmed)?.model.id ??
       refreshed.find((entry) => entry.label === trimmed)?.model.id ??
@@ -336,16 +403,14 @@ class JupyterManager {
   }
 
   getKernelOptionsForRunner(runnerName: string): JupyterKernelOption[] {
-    const resolvedRunner =
-      runnerName === DEFAULT_RUNNER_PLACEHOLDER
-        ? this.resolveDefaultRunnerName()
-        : runnerName;
+    const resolvedRunner = this.normalizeRunnerName(runnerName);
     const options: JupyterKernelOption[] = [];
-    for (const [serverName, server] of this.serversByName.entries()) {
-      if (server.runner !== resolvedRunner) {
+    for (const [serverKey] of this.serversByKey.entries()) {
+      if (!this.isServerKeyForRunner(serverKey, resolvedRunner)) {
         continue;
       }
-      const kernels = this.kernelsByServer.get(serverName) ?? [];
+      const serverName = this.getServerNameFromKey(serverKey);
+      const kernels = this.kernelsByServerKey.get(serverKey) ?? [];
       kernels.forEach((entry) => {
         const kernelID = entry.model.id;
         const label = entry.label || entry.model.name || kernelID;
