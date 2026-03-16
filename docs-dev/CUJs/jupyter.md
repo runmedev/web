@@ -5,7 +5,7 @@
 Define an end-to-end user journey where:
 
 1. User starts a Jupyter server from a Runme notebook cell.
-2. User registers that server in Runme via App Console APIs.
+2. User syncs running Jupyter server metadata into Runme config from a notebook cell.
 3. User starts/stops kernels via Runme APIs.
 4. Kernels appear as selectable runners for notebook cells.
 
@@ -20,7 +20,7 @@ Define an end-to-end user journey where:
 ## Data Model Assumption
 
 - Jupyter server records include:
-  - `name` (for example `local-jupyter`)
+  - `name` (for example `local-8888`)
   - `runner` (Runme host/proxy runner, for example `local`)
   - `baseUrl` (for example `http://127.0.0.1:8888`)
   - `token`
@@ -42,10 +42,45 @@ sleep 2
 4. In the same control notebook, user adds another bash cell and runs:
 
 ```bash
-jupyter server list --jsonlist
+python - <<'PY'
+import json
+import os
+import pathlib
+import subprocess
+from urllib.parse import urlparse, urlunparse
+
+config_dir = os.environ["RUNME_CONFIG_DIR"]
+jupyter_dir = pathlib.Path(config_dir) / "jupyter"
+jupyter_dir.mkdir(parents=True, exist_ok=True)
+
+servers = json.loads(
+    subprocess.check_output(["jupyter", "server", "list", "--jsonlist"], text=True)
+)
+
+for server in servers:
+    parsed = urlparse(server["url"])
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    name = f"local-{port}"
+    path = parsed.path or "/"
+    if not path.endswith("/"):
+        path += "/"
+    base_url = urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+    payload = {
+        "runner": "local",
+        "base_url": base_url,
+    }
+    if server.get("token"):
+        payload["token"] = server["token"]
+
+    output_path = jupyter_dir / f"{name}.json"
+    output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.chmod(output_path, 0o600)
+    print(f"synced {name} -> {output_path}")
+PY
 ```
 
-5. User sees JSON containing URL/token metadata for `http://127.0.0.1:8888`.
+5. User sees output containing `synced local-8888 -> ${RUNME_CONFIG_DIR}/jupyter/local-8888.json`.
 6. User opens Runme App Console.
 7. User ensures host runner exists for proxying (example):
 
@@ -54,40 +89,30 @@ app.runners.update("local", "ws://localhost:9977/ws");
 app.runners.setDefault("local");
 ```
 
-8. User registers Jupyter server in App Console:
-
-```javascript
-jupyter.servers.update("local-jupyter", {
-  runner: "local",
-  baseUrl: "http://127.0.0.1:8888",
-  token: "<token-from-jupyter-server-list>"
-});
-```
-
-9. User verifies registration:
+8. User verifies registered servers:
 
 ```javascript
 jupyter.servers.get();
 ```
 
-10. User sees `local-jupyter` in server list with runner `local`.
-11. User starts a kernel on that server:
+9. User sees `local-8888` in server list with runner `local`.
+10. User starts a kernel on that server:
 
 ```javascript
-jupyter.kernels.start("local-jupyter", {
+jupyter.kernels.start("local-8888", {
   kernelSpec: "python3",
   name: "py3-local-1"
 });
 ```
 
-12. User verifies kernel list:
+11. User verifies kernel list:
 
 ```javascript
-jupyter.kernels.get("local-jupyter");
+jupyter.kernels.get("local-8888");
 ```
 
-13. User sees kernel `py3-local-1` in running state with a kernel id.
-14. User opens a notebook with two Python cells:
+12. User sees kernel `py3-local-1` in running state with a kernel id.
+13. User opens a notebook with two Python cells:
 
 ```python
 # Cell A
@@ -100,46 +125,46 @@ print("set", shared_value)
 print("read", shared_value)
 ```
 
-15. For Cell A, user configures execution selectors:
+14. For Cell A, user configures execution selectors:
    - Language: `ipython`
    - Runner: `local` (host/proxy runner)
    - Kernel: `py3-local-1` (kernel runner)
-16. User runs Cell A and sees status transition idle -> running -> completed.
-17. User sees Cell A output: `set 42`.
-18. For Cell B, user sets the same execution selectors:
+15. User runs Cell A and sees status transition idle -> running -> completed.
+16. User sees Cell A output: `set 42`.
+17. For Cell B, user sets the same execution selectors:
    - Language: `ipython`
    - Runner: `local`
    - Kernel: `py3-local-1`
-19. User runs Cell B.
-20. User sees Cell B output: `read 42` (variable defined in Cell A is available).
-21. User opens Kernel dropdown for another cell and sees `py3-local-1` available.
-22. User stops the kernel in App Console:
+18. User runs Cell B.
+19. User sees Cell B output: `read 42` (variable defined in Cell A is available).
+20. User opens Kernel dropdown for another cell and sees `py3-local-1` available.
+21. User stops the kernel in App Console:
 
 ```javascript
-jupyter.kernels.stop("local-jupyter", "py3-local-1");
+jupyter.kernels.stop("local-8888", "py3-local-1");
 ```
 
-23. User verifies kernel is stopped:
+22. User verifies kernel is stopped:
 
 ```javascript
-jupyter.kernels.get("local-jupyter");
+jupyter.kernels.get("local-8888");
 ```
 
-24. User sees `py3-local-1` as stopped/absent from active kernel list.
-25. User returns to `jupyter-control.runme.md`, adds a bash cell, and runs:
+23. User sees `py3-local-1` as stopped/absent from active kernel list.
+24. User returns to `jupyter-control.runme.md`, adds a bash cell, and runs:
 
 ```bash
 jupyter server stop 8888
 ```
 
-26. User sees server stop confirmation in cell output.
+25. User sees server stop confirmation in cell output.
 
 ## Machine-Verifiable Acceptance Criteria
 
 - [ ] Jupyter server start command runs from a notebook bash cell and exits successfully.
-- [ ] `jupyter server list --jsonlist` runs from a notebook bash cell and emits URL/token metadata.
-- [ ] App Console accepts `jupyter.servers.update(name, info)` with `runner`, `baseUrl`, `token`.
-- [ ] `jupyter.servers.get()` includes `local-jupyter` with runner binding.
+- [ ] Sync bash cell runs `jupyter server list --jsonlist` and writes `${RUNME_CONFIG_DIR}/jupyter/local-8888.json`.
+- [ ] Sync bash cell writes config with restrictive permissions.
+- [ ] `jupyter.servers.get()` includes `local-8888` with runner binding.
 - [ ] App Console accepts `jupyter.kernels.start(server, options)` and returns kernel metadata.
 - [ ] `jupyter.kernels.get(server)` shows started kernel state and id.
 - [ ] Cell execution UI exposes `Language` selector and supports `ipython`.
