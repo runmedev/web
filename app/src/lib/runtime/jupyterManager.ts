@@ -30,6 +30,10 @@ type KernelCacheEntry = {
   label: string;
 };
 
+function normalizeKernelName(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 function encodePathSegment(value: string): string {
   return encodeURIComponent(value);
 }
@@ -301,6 +305,26 @@ class JupyterManager {
     const effectiveRunner = this.normalizeRunnerName(runnerName);
     await this.ensureServerLoaded(effectiveRunner, serverName);
     const baseURL = runnerEndpointToHttpBase(this.resolveRunnerEndpoint(effectiveRunner));
+    const requestedName = options?.name?.trim() || options?.kernelSpec?.trim() || "";
+    if (requestedName) {
+      const existing = await this.listKernels(effectiveRunner, serverName);
+      const requestedKey = normalizeKernelName(requestedName);
+      const duplicate = existing.find((kernel) => {
+        if (normalizeKernelName(kernel.name || "") === requestedKey) {
+          return true;
+        }
+        const serverKey = this.getServerKey(effectiveRunner, serverName);
+        const cached = this.kernelsByServerKey.get(serverKey) ?? [];
+        const cacheHit = cached.find((entry) => entry.model.id === kernel.id);
+        return normalizeKernelName(cacheHit?.label || "") === requestedKey;
+      });
+      if (duplicate) {
+        throw new Error(
+          `Kernel name "${requestedName}" already exists on ${effectiveRunner}/${serverName}.`,
+        );
+      }
+    }
+
     const payload: Record<string, unknown> = {};
     if (options?.kernelSpec?.trim()) {
       payload.name = options.kernelSpec.trim();
