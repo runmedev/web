@@ -20,7 +20,7 @@ Define an end-to-end user journey where:
 ## Data Model Assumption
 
 - Jupyter server records include:
-  - `name` (for example `local-8888`)
+  - `name` (for example `port-8888`)
   - `runner` (Runme host/proxy runner, for example `local`)
   - `baseUrl` (for example `http://127.0.0.1:8888`)
   - `token`
@@ -60,7 +60,7 @@ servers = json.loads(
 for server in servers:
     parsed = urlparse(server["url"])
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    name = f"local-{port}"
+    name = f"port-{port}"
     path = parsed.path or "/"
     if not path.endswith("/"):
         path += "/"
@@ -80,7 +80,7 @@ for server in servers:
 PY
 ```
 
-5. User sees output containing `synced local-8888 -> ${RUNME_CONFIG_DIR}/jupyter/local-8888.json`.
+5. User sees output containing `synced port-8888 -> ${RUNME_CONFIG_DIR}/jupyter/port-8888.json`.
 6. User opens Runme App Console.
 7. User ensures host runner exists for proxying (example):
 
@@ -95,11 +95,11 @@ app.runners.setDefault("local");
 jupyter.servers.get();
 ```
 
-9. User sees `local-8888` in server list with runner `local`.
+9. User sees `port-8888` in server list with runner `local`.
 10. User starts a kernel on that server:
 
 ```javascript
-jupyter.kernels.start("local-8888", {
+jupyter.kernels.start("port-8888", {
   kernelSpec: "python3",
   name: "py3-local-1"
 });
@@ -108,7 +108,7 @@ jupyter.kernels.start("local-8888", {
 11. User verifies kernel list:
 
 ```javascript
-jupyter.kernels.get("local-8888");
+jupyter.kernels.get("port-8888");
 ```
 
 12. User sees kernel `py3-local-1` in running state with a kernel id.
@@ -141,13 +141,13 @@ print("read", shared_value)
 21. User stops the kernel in App Console:
 
 ```javascript
-jupyter.kernels.stop("local-8888", "py3-local-1");
+jupyter.kernels.stop("port-8888", "py3-local-1");
 ```
 
 22. User verifies kernel is stopped:
 
 ```javascript
-jupyter.kernels.get("local-8888");
+jupyter.kernels.get("port-8888");
 ```
 
 23. User sees `py3-local-1` as stopped/absent from active kernel list.
@@ -162,9 +162,9 @@ jupyter server stop 8888
 ## Machine-Verifiable Acceptance Criteria
 
 - [ ] Jupyter server start command runs from a notebook bash cell and exits successfully.
-- [ ] Sync bash cell runs `jupyter server list --jsonlist` and writes `${RUNME_CONFIG_DIR}/jupyter/local-8888.json`.
+- [ ] Sync bash cell runs `jupyter server list --jsonlist` and writes `${RUNME_CONFIG_DIR}/jupyter/port-8888.json`.
 - [ ] Sync bash cell writes config with restrictive permissions.
-- [ ] `jupyter.servers.get()` includes `local-8888` with runner binding.
+- [ ] `jupyter.servers.get()` includes `port-8888` with runner binding.
 - [ ] App Console accepts `jupyter.kernels.start(server, options)` and returns kernel metadata.
 - [ ] `jupyter.kernels.get(server)` shows started kernel state and id.
 - [ ] Cell execution UI exposes `Language` selector and supports `ipython`.
