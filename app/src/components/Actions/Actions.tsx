@@ -575,13 +575,15 @@ export function Action({
     return jupyterManager.getKernelOptionsForRunner(resolvedRunnerName);
   }, [jupyterManager, jupyterVersion, resolvedRunnerName]);
   const selectedKernelKey = useMemo(() => {
-    const serverName = cellData.getJupyterServerName();
-    const kernelID = cellData.getJupyterKernelID();
+    const serverName =
+      (cell?.metadata?.[RunmeMetadataKey.JupyterServerName] as string | undefined) ?? "";
+    const kernelID =
+      (cell?.metadata?.[RunmeMetadataKey.JupyterKernelID] as string | undefined) ?? "";
     if (!serverName || !kernelID) {
       return "";
     }
     return jupyterManager.getKernelOptionKey(serverName, kernelID);
-  }, [cellData, jupyterManager, jupyterVersion]);
+  }, [cell, jupyterManager]);
 
   useEffect(() => {
     if (selectedLanguage !== "ipython") {
