@@ -1,13 +1,30 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { clone, create } from "@bufbuild/protobuf";
 import React from "react";
 import { APPKERNEL_RUNNER_NAME, APPKERNEL_RUNNER_LABEL } from "../../lib/runtime/appKernel";
 
-import { parser_pb, RunmeMetadataKey } from "../../runme/client";
+import { MimeType, parser_pb, RunmeMetadataKey } from "../../runme/client";
 import type { CellData } from "../../lib/notebookData";
 import { Action } from "./Actions";
+
+const editorMockState = vi.hoisted(() => ({
+  onChangeHandlers: [] as Array<(value: string) => void>,
+}));
+
+vi.mock("./Editor", () => ({
+  default: ({
+    value,
+    onChange,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+  }) => {
+    editorMockState.onChangeHandlers.push(onChange);
+    return <textarea data-testid="editor-proxy" readOnly value={value} />;
+  },
+}));
 
 // Minimal mocks for contexts Action consumes
 vi.mock("../../contexts/OutputContext", () => ({
@@ -39,6 +56,12 @@ vi.mock("../../contexts/NotebookContext", () => ({
     useNotebookSnapshot: () => null,
     useNotebookList: () => [],
     removeNotebook: () => {},
+  }),
+}));
+
+vi.mock("../../contexts/NotebookStoreContext", () => ({
+  useNotebookStore: () => ({
+    store: null,
   }),
 }));
 
@@ -129,6 +152,10 @@ class StubCellData {
 }
 
 describe("Action component", () => {
+  beforeEach(() => {
+    editorMockState.onChangeHandlers.length = 0;
+  });
+
   it("updates CellConsole key when runID changes", async () => {
     const cell =  create(parser_pb.CellSchema,{
       refId: "cell-1",
@@ -140,9 +167,9 @@ describe("Action component", () => {
       },
       value: "echo hi",
     });
-    const stub = new StubCellData(cell) as unknown as CellData;
+    const stub = new StubCellData(cell);
 
-    render(<Action cellData={stub} isFirst={false} />);
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
 
     const first = screen.getByTestId("cell-console") as HTMLElement;
     const firstKey = first.dataset.runkey;
@@ -169,9 +196,9 @@ describe("Action component", () => {
       },
       value: "echo hi",
     });
-    const stub = new StubCellData(cell) as unknown as CellData;
+    const stub = new StubCellData(cell);
 
-    render(<Action cellData={stub} isFirst={false} />);
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
     expect(screen.getByTestId("cell-console")).toBeTruthy();
 
     await act(async () => {
@@ -180,6 +207,53 @@ describe("Action component", () => {
     });
 
     expect(screen.queryByTestId("cell-console")).toBeNull();
+  });
+
+  it("preserves latest outputs when edit callback uses stale closure", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-stale-closure",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "bash",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.LastRunID]: "run-0",
+      },
+      value: "echo hi",
+    });
+    const stub = new StubCellData(cell) as unknown as CellData;
+
+    render(<Action cellData={stub} isFirst={false} />);
+
+    const staleOnChange = editorMockState.onChangeHandlers[0];
+    expect(staleOnChange).toBeTypeOf("function");
+
+    await act(async () => {
+      const withOutput = clone(parser_pb.CellSchema, stub.snapshot);
+      withOutput.outputs = [
+        create(parser_pb.CellOutputSchema, {
+          items: [
+            create(parser_pb.CellOutputItemSchema, {
+              mime: MimeType.VSCodeNotebookStdOut,
+              type: "Buffer",
+            }),
+          ],
+        }),
+      ];
+      stub.update(withOutput);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      staleOnChange?.("echo edited");
+      await Promise.resolve();
+    });
+
+    const latestUpdateCall = stub.update.mock.calls.at(-1);
+    const updatedCell = latestUpdateCall?.[0] as parser_pb.Cell;
+    expect(updatedCell.outputs).toHaveLength(1);
+    expect(updatedCell.outputs[0]?.items[0]?.mime).toBe(
+      MimeType.VSCodeNotebookStdOut,
+    );
   });
 
   it("shows language selector in markdown edit mode and converts to code language", () => {

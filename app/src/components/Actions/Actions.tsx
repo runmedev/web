@@ -8,7 +8,7 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import { create } from "@bufbuild/protobuf";
+import { clone, create } from "@bufbuild/protobuf";
 import { Button, ScrollArea, Tabs, Text } from "@radix-ui/themes";
 import { useParams } from "react-router-dom";
 
@@ -568,7 +568,11 @@ export function Action({
         return;
       }
 
-      const updatedCell = create(parser_pb.CellSchema, cell);
+      const latestCell = cellData.snapshot;
+      if (!latestCell) {
+        return;
+      }
+      const updatedCell = clone(parser_pb.CellSchema, latestCell);
       if (nextValue === "markdown") {
         setMarkdownEditRequest((request) => request + 1);
         updatedCell.kind = parser_pb.CellKind.MARKUP;
@@ -588,7 +592,7 @@ export function Action({
       setPid(null);
       setExitCode(null);
     },
-    [cell, selectedLanguage, updateCellLocal],
+    [cell, cellData, selectedLanguage, updateCellLocal],
   );
 
   // Determine if this cell is a markdown cell (either MARKUP kind or CODE with markdown language)
@@ -739,7 +743,11 @@ export function Action({
               fontSize={fontSettings.fontSize}
               fontFamily={fontSettings.fontFamily}
               onChange={(v) => {
-                const updated = create(parser_pb.CellSchema, cell);
+                const latestCell = cellData.snapshot;
+                if (!latestCell) {
+                  return;
+                }
+                const updated = clone(parser_pb.CellSchema, latestCell);
                 updated.value = v;
                 updateCellLocal(updated);
               }}
