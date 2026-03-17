@@ -21,6 +21,14 @@ const SCRIPT_DIR =
     : CURRENT_FILE_DIR;
 const OUTPUT_DIR = join(SCRIPT_DIR, "test-output");
 const MOVIE_PATH = join(OUTPUT_DIR, "scenario-jupyter-cuj-walkthrough.webm");
+const AGENT_BROWSER_SESSION = process.env.CUJ_AGENT_BROWSER_SESSION?.trim() ?? "";
+const AGENT_BROWSER_PROFILE = process.env.CUJ_AGENT_BROWSER_PROFILE?.trim() ?? "";
+const AGENT_BROWSER_HEADED = (process.env.CUJ_AGENT_BROWSER_HEADED ?? "false")
+  .trim()
+  .toLowerCase() === "true";
+const AGENT_BROWSER_KEEP_OPEN = (process.env.CUJ_AGENT_BROWSER_KEEP_OPEN ?? "false")
+  .trim()
+  .toLowerCase() === "true";
 
 let passCount = 0;
 let failCount = 0;
@@ -58,8 +66,9 @@ function toWsUrl(url: string): string {
 const BACKEND_WS = toWsUrl(BACKEND_URL);
 
 function run(command: string): { status: number; stdout: string; stderr: string } {
+  const effectiveCommand = withAgentBrowserOptions(command);
   const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "30000");
-  const result = spawnSync(command, {
+  const result = spawnSync(effectiveCommand, {
     shell: true,
     encoding: "utf-8",
     timeout: timeoutMs,
@@ -71,9 +80,9 @@ function run(command: string): { status: number; stdout: string; stderr: string 
       : "";
   const timedOut = errorCode === "ETIMEDOUT";
   const timeoutHint = timedOut
-    ? `\n[scenario-timeout] command timed out after ${timeoutMs}ms: ${command}\n`
+    ? `\n[scenario-timeout] command timed out after ${timeoutMs}ms: ${effectiveCommand}\n`
     : "";
-  if (timedOut && command.trim().startsWith("agent-browser ")) {
+  if (timedOut && effectiveCommand.trim().startsWith("agent-browser ")) {
     throw new Error(timeoutHint.trim());
   }
   return {
@@ -81,6 +90,40 @@ function run(command: string): { status: number; stdout: string; stderr: string 
     stdout: result.stdout ?? "",
     stderr: `${result.stderr ?? ""}${timeoutHint}`,
   };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function agentBrowserCommand(subcommand: string): string {
+  const parts: string[] = ["agent-browser"];
+  if (AGENT_BROWSER_SESSION) {
+    parts.push("--session", shellQuote(AGENT_BROWSER_SESSION));
+  }
+  if (AGENT_BROWSER_PROFILE) {
+    parts.push("--profile", shellQuote(AGENT_BROWSER_PROFILE));
+  }
+  if (AGENT_BROWSER_HEADED) {
+    parts.push("--headed");
+  }
+  parts.push(subcommand);
+  return parts.join(" ");
+}
+
+function withAgentBrowserOptions(command: string): string {
+  const trimmed = command.trimStart();
+  if (!trimmed.startsWith("agent-browser ")) {
+    return command;
+  }
+  if (
+    trimmed.startsWith("agent-browser --session ") ||
+    trimmed.startsWith("agent-browser --profile ") ||
+    trimmed.startsWith("agent-browser --headed ")
+  ) {
+    return command;
+  }
+  return agentBrowserCommand(trimmed.slice("agent-browser ".length));
 }
 
 function runOrThrow(command: string): string {
@@ -146,7 +189,7 @@ function runWithRetry(command: string, attempts = 3, waitMs = 1200): void {
     }
     lastError = result.stderr || result.stdout || `exit ${result.status}`;
     if (attempt < attempts - 1) {
-      run(`agent-browser wait ${waitMs}`);
+      run(agentBrowserCommand(`wait ${waitMs}`));
     }
   }
   throw new Error(`Command failed after ${attempts} attempts: ${command}\n${lastError}`);
@@ -154,7 +197,7 @@ function runWithRetry(command: string, attempts = 3, waitMs = 1200): void {
 
 function probeNotebook(): NotebookProbe {
   const raw = run(
-    `agent-browser eval "(async () => {
+    agentBrowserCommand(`eval "(async () => {
       const ln = window.app?.localNotebooks;
       if (!ln) return JSON.stringify({ status: 'missing-local-notebooks' });
       const rec = await ln.files.get('${SCENARIO_NOTEBOOK_URI}');
@@ -186,7 +229,7 @@ function probeNotebook(): NotebookProbe {
         };
       });
       return JSON.stringify({ status: 'ok', cells: decoded });
-    })()"`,
+    })()"`),
   ).stdout.trim();
 
   try {
@@ -207,26 +250,26 @@ function waitForNotebookProbe(
     if (predicate(probe)) {
       return probe;
     }
-    run("agent-browser wait 300");
+    run(agentBrowserCommand("wait 300"));
   }
   return probeNotebook();
 }
 
 function clickRun(cellRefId: string): boolean {
   const result = run(
-    `agent-browser eval "(async () => {
+    agentBrowserCommand(`eval "(async () => {
       const btn = document.querySelector('#cell-toolbar-${cellRefId} button[aria-label^=\\"Run\\"]');
       if (!btn) return 'missing-run-button';
       btn.click();
       return 'ok';
-    })()"`,
+    })()"`),
   ).stdout.trim();
   return result.includes("ok");
 }
 
 function getRenderedCellOutputText(cellRefId: string): string {
   const raw = run(
-    `agent-browser eval "(async () => {
+    agentBrowserCommand(`eval "(async () => {
       const el = document.getElementById('cell-output-${cellRefId}');
       if (!el) return '';
       const domText = el.innerText || el.textContent || '';
@@ -249,7 +292,7 @@ function getRenderedCellOutputText(cellRefId: string): string {
         }
       }
       return lines.join('\\n');
-    })()"`,
+    })()"`),
   ).stdout;
   return parseAgentEvalString(raw);
 }
@@ -265,21 +308,26 @@ function waitForRenderedCellOutput(
     if (pattern.test(text)) {
       return text;
     }
-    run("agent-browser wait 300");
+    run(agentBrowserCommand("wait 300"));
   }
   return getRenderedCellOutputText(cellRefId);
 }
 
 function finalizeAndExit(): never {
-  run("agent-browser wait 800");
-  run("agent-browser record stop");
-  run("agent-browser close");
+  run(agentBrowserCommand("wait 800"));
+  run(agentBrowserCommand("record stop"));
+  if (!AGENT_BROWSER_KEEP_OPEN) {
+    run(agentBrowserCommand("close"));
+  }
   console.log(`Assertions: ${totalCount}, Passed: ${passCount}, Failed: ${failCount}`);
   process.exit(failCount > 0 ? 1 : 0);
 }
 
 mkdirSync(OUTPUT_DIR, { recursive: true });
 for (const file of [
+  "scenario-jupyter-cuj-auth-existing.txt",
+  "scenario-jupyter-cuj-runner-seed.txt",
+  "scenario-jupyter-cuj-auth-fallback.txt",
   "scenario-jupyter-cuj-01-initial.png",
   "scenario-jupyter-cuj-seed-result.txt",
   "scenario-jupyter-cuj-02-after-seed.txt",
@@ -311,43 +359,121 @@ if (run(`curl -sf ${FRONTEND_URL}`).status !== 0) {
   process.exit(1);
 }
 
-runWithRetry(`agent-browser open ${FRONTEND_URL}`);
-runWithRetry(`agent-browser record restart ${MOVIE_PATH}`);
-run("agent-browser wait 3500");
+runWithRetry(agentBrowserCommand(`open ${FRONTEND_URL}`));
+run(agentBrowserCommand("record stop"));
+runWithRetry(agentBrowserCommand(`record restart ${MOVIE_PATH}`));
+run(agentBrowserCommand("wait 3500"));
+
+const backendWsLiteral = `'${BACKEND_WS.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+const runnerSeed = run(
+  agentBrowserCommand(`eval "(async () => {
+    let existing = [];
+    try {
+      const parsed = JSON.parse(localStorage.getItem('runme/runners') || '[]');
+      if (Array.isArray(parsed)) existing = parsed;
+    } catch {
+      existing = [];
+    }
+    const retained = existing.filter((runner) =>
+      runner &&
+      typeof runner === 'object' &&
+      runner.name !== 'local' &&
+      runner.name !== 'default'
+    );
+    retained.push({ name: 'local', endpoint: ${backendWsLiteral}, reconnect: true });
+    retained.push({ name: 'default', endpoint: ${backendWsLiteral}, reconnect: true });
+    localStorage.setItem('runme/runners', JSON.stringify(retained));
+    localStorage.setItem('runme/defaultRunner', 'local');
+    return 'ok';
+  })()"`),
+);
+const runnerSeedResult = `${runnerSeed.stdout}\n${runnerSeed.stderr}`.trim();
+writeArtifact("scenario-jupyter-cuj-runner-seed.txt", runnerSeedResult);
+if (runnerSeed.status === 0 && runnerSeedResult.includes("ok")) {
+  pass("Configured local runner endpoint before executing cells");
+} else {
+  fail("Failed to configure local runner endpoint");
+  finalizeAndExit();
+}
+
+let shouldReloadAfterConfig = true;
+let usedInjectedAuth = false;
 
 if (CUJ_ID_TOKEN) {
-  const idTokenLiteral = `'${CUJ_ID_TOKEN.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
-  const accessTokenLiteral = `'${CUJ_ACCESS_TOKEN.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
-  const backendWsLiteral = `'${BACKEND_WS.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
-  const authSeed = run(
-    `agent-browser eval "(async () => {
-      localStorage.setItem('oidc-auth', JSON.stringify({
-        access_token: ${accessTokenLiteral},
-        id_token: ${idTokenLiteral},
-        token_type: 'Bearer',
-        scope: 'openid email',
-        expires_at: ${CUJ_TOKEN_EXPIRES_AT}
-      }));
-      localStorage.setItem('runme/runners', JSON.stringify([
-        { name: 'local', endpoint: ${backendWsLiteral}, reconnect: true },
-        { name: 'default', endpoint: ${backendWsLiteral}, reconnect: true }
-      ]));
-      localStorage.setItem('runme/defaultRunner', 'local');
-      return localStorage.getItem('oidc-auth') ? 'ok' : 'missing';
-    })()"`,
+  const existingAuthProbe = run(
+    agentBrowserCommand(`eval "(async () => {
+      try {
+        const raw = localStorage.getItem('oidc-auth');
+        if (!raw) return JSON.stringify({ hasAuth: false });
+        const parsed = JSON.parse(raw);
+        const expiresAt = Number(parsed?.expires_at ?? 0);
+        const hasToken = typeof parsed?.id_token === 'string' && parsed.id_token.length > 0;
+        return JSON.stringify({
+          hasAuth: true,
+          hasToken,
+          expiresAt,
+          validForMs: expiresAt - Date.now(),
+        });
+      } catch {
+        return JSON.stringify({ hasAuth: false, parseError: true });
+      }
+    })()"`),
   );
-  const authSeedResult = `${authSeed.stdout}\n${authSeed.stderr}`.trim();
-  writeArtifact("scenario-jupyter-cuj-auth-seed.txt", authSeedResult);
-  if (authSeed.status === 0 && authSeedResult.includes("ok")) {
-    pass("Injected OIDC token and configured local runner");
-    run("agent-browser reload");
-    run("agent-browser wait 2200");
+  const existingAuthResult = `${existingAuthProbe.stdout}\n${existingAuthProbe.stderr}`.trim();
+  writeArtifact("scenario-jupyter-cuj-auth-existing.txt", existingAuthResult);
+
+  let shouldInject = true;
+  if (existingAuthProbe.status === 0) {
+    try {
+      const parsed = JSON.parse(parseAgentEvalString(existingAuthResult)) as {
+        hasAuth?: boolean;
+        hasToken?: boolean;
+        expiresAt?: number;
+      };
+      if (parsed.hasAuth && parsed.hasToken && Number(parsed.expiresAt ?? 0) > Date.now() + 60_000) {
+        shouldInject = false;
+      }
+    } catch {
+      // Continue with injection when probe cannot be parsed.
+    }
+  }
+
+  if (shouldInject) {
+    const idTokenLiteral = `'${CUJ_ID_TOKEN.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+    const accessTokenLiteral = `'${CUJ_ACCESS_TOKEN.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+    const authSeed = run(
+      agentBrowserCommand(`eval "(async () => {
+        localStorage.setItem('oidc-auth', JSON.stringify({
+          access_token: ${accessTokenLiteral},
+          id_token: ${idTokenLiteral},
+          token_type: 'Bearer',
+          scope: 'openid email',
+          expires_at: ${CUJ_TOKEN_EXPIRES_AT}
+        }));
+        return localStorage.getItem('oidc-auth') ? 'ok' : 'missing';
+      })()"`),
+    );
+    const authSeedResult = `${authSeed.stdout}\n${authSeed.stderr}`.trim();
+    writeArtifact("scenario-jupyter-cuj-auth-seed.txt", authSeedResult);
+    if (authSeed.status === 0 && authSeedResult.includes("ok")) {
+      pass("Injected OIDC token");
+      shouldReloadAfterConfig = true;
+      usedInjectedAuth = true;
+    } else {
+      fail("Failed to inject OIDC token");
+      finalizeAndExit();
+    }
   } else {
-    fail("Failed to inject OIDC token/local runner config");
+    pass("Using existing browser OIDC auth");
   }
 }
 
-run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-jupyter-cuj-01-initial.png")}`);
+if (shouldReloadAfterConfig) {
+  run(agentBrowserCommand("reload"));
+  run(agentBrowserCommand("wait 2200"));
+}
+
+run(agentBrowserCommand(`screenshot ${join(OUTPUT_DIR, "scenario-jupyter-cuj-01-initial.png")}`));
 
 const startServerCell = [
   "jupyter server stop 8888 >/dev/null 2>&1 || true",
@@ -365,6 +491,7 @@ const startServerCell = [
 ].join("\n");
 
 const syncFallbackConfigDir = OUTPUT_DIR.replace(/\\/g, "/");
+const serverAlias = `port-8888-${Date.now()}`;
 
 const syncServersCell = [
   "python - <<'PY'",
@@ -397,7 +524,9 @@ const syncServersCell = [
   "for server in servers:",
   "    parsed = urlparse(server['url'])",
   "    port = parsed.port or (443 if parsed.scheme == 'https' else 80)",
-  "    name = 'port-' + str(port)",
+  "    if port != 8888:",
+  "        continue",
+  `    name = '${serverAlias}'`,
   "    path = parsed.path or '/'",
   "    if not path.endswith('/'):",
   "        path += '/'",
@@ -411,6 +540,17 @@ const syncServersCell = [
   "    for config_dir in resolved_config_dirs:",
   "        jupyter_dir = pathlib.Path(config_dir) / 'jupyter'",
   "        jupyter_dir.mkdir(parents=True, exist_ok=True)",
+  `        exact = jupyter_dir / '${serverAlias}.json'`,
+  "        if exact.exists():",
+  "            try:",
+  "                exact.unlink()",
+  "            except OSError:",
+  "                pass",
+  "        for stale in jupyter_dir.glob('port-8888-*.json'):",
+  "            try:",
+  "                stale.unlink()",
+  "            except OSError:",
+  "                pass",
   "        output_path = jupyter_dir / (name + '.json')",
   "        output_path.write_text(json.dumps(payload, indent=2) + '\\n', encoding='utf-8')",
   "        os.chmod(output_path, 0o600)",
@@ -423,7 +563,32 @@ const setupKernelCell = [
   'console.log(app.runners.setDefault("local"));',
   "const servers = await jupyter.servers.get('local');",
   "console.log(JSON.stringify(servers));",
-  "const kernel = await jupyter.kernels.start('local', 'port-8888', { kernelSpec: 'python3', name: 'py3-local-1' });",
+  `const selectedServerName = '${serverAlias}';`,
+  "console.log('selected-server', selectedServerName);",
+  "for (let attempt = 1; attempt <= 30; attempt += 1) {",
+  "  try {",
+  "    await jupyter.kernels.get('local', selectedServerName);",
+  "    break;",
+  "  } catch (err) {",
+  "    const message = String(err && typeof err === 'object' && 'message' in err ? err.message : err);",
+  "    if (!/not found/i.test(message) || attempt === 30) throw err;",
+  "    console.log('server-alias-wait', attempt, message);",
+  "    await new Promise((resolve) => setTimeout(resolve, 1000));",
+  "  }",
+  "}",
+  "let kernel;",
+  "for (let attempt = 1; attempt <= 15; attempt += 1) {",
+  "  try {",
+  "    kernel = await jupyter.kernels.start('local', selectedServerName, { kernelSpec: 'python3', name: 'py3-local-1' });",
+  "    break;",
+  "  } catch (err) {",
+  "    const message = String(err && typeof err === 'object' && 'message' in err ? err.message : err);",
+  "    if (!/not found/i.test(message) || attempt === 15) throw err;",
+  "    console.log('kernel-start-retry', attempt, message);",
+  "    await new Promise((resolve) => setTimeout(resolve, 1000));",
+  "  }",
+  "}",
+  "if (!kernel) throw new Error('Failed to start kernel');",
   "console.log('kernel-ready', kernel.id);",
   "const nb = runme.getCurrentNotebook();",
   "for (const id of ['cell_ipy_a', 'cell_ipy_b']) {",
@@ -433,7 +598,7 @@ const setupKernelCell = [
   "  updated.metadata = {",
   "    ...(updated.metadata || {}),",
   "    'runme.dev/runnerName': 'local',",
-  "    'runme.dev/jupyterServerName': 'port-8888',",
+  "    'runme.dev/jupyterServerName': selectedServerName,",
   "    'runme.dev/jupyterKernelID': kernel.id,",
   "    'runme.dev/jupyterKernelName': 'py3-local-1',",
   "  };",
@@ -442,7 +607,12 @@ const setupKernelCell = [
 ].join("\n");
 
 const stopKernelCell = [
-  "await jupyter.kernels.stop('local', 'port-8888', 'py3-local-1');",
+  "const nb = runme.getCurrentNotebook();",
+  "const c = nb.getCell('cell_ipy_a');",
+  "const metadata = c?.snapshot?.metadata || {};",
+  "const serverName = metadata['runme.dev/jupyterServerName'];",
+  "if (!serverName || typeof serverName !== 'string') throw new Error('Missing jupyter server name metadata');",
+  "await jupyter.kernels.stop('local', serverName, 'py3-local-1');",
   "console.log('kernel-stopped');",
 ].join("\n");
 
@@ -527,7 +697,7 @@ const notebook = {
 const notebookBase64 = Buffer.from(JSON.stringify(notebook), "utf-8").toString("base64");
 
 const seedCommandResult = run(
-  `agent-browser eval "(async () => {
+  agentBrowserCommand(`eval "(async () => {
     const ln = window.app?.localNotebooks;
     if (!ln) return 'missing-local-notebooks';
     const notebookDoc = atob('${notebookBase64}');
@@ -545,7 +715,7 @@ const seedCommandResult = run(
     localStorage.setItem('runme/openNotebooks', JSON.stringify([{ uri: '${SCENARIO_NOTEBOOK_URI}', name: '${SCENARIO_NOTEBOOK_NAME}', type: 'file', children: [] }]));
     localStorage.setItem('runme/currentDoc', '${SCENARIO_NOTEBOOK_URI}');
     return 'ok';
-  })()"`,
+  })()"`),
 );
 const seedResult = `${seedCommandResult.stdout}\n${seedCommandResult.stderr}`;
 writeArtifact("scenario-jupyter-cuj-seed-result.txt", seedResult.trim());
@@ -557,30 +727,27 @@ if (seedResult.includes("ok")) {
   finalizeAndExit();
 }
 
-run("agent-browser reload");
-run("agent-browser wait 2200");
+run(agentBrowserCommand("reload"));
+run(agentBrowserCommand("wait 2200"));
 
-let snapshot = run("agent-browser snapshot -i").stdout;
+let snapshot = run(agentBrowserCommand("snapshot -i")).stdout;
 writeArtifact("scenario-jupyter-cuj-02-after-seed.txt", snapshot);
 
-const notebookPattern = new RegExp(escapeRegExp(SCENARIO_NOTEBOOK_NAME), "i");
-let notebookRef = firstRef(snapshot, notebookPattern);
-for (let attempt = 0; !notebookRef && attempt < 4; attempt += 1) {
-  run("agent-browser wait 600");
-  snapshot = run("agent-browser snapshot -i").stdout;
-  notebookRef = firstRef(snapshot, notebookPattern);
-}
-
-if (notebookRef) {
-  run(`agent-browser click ${notebookRef}`);
-  run("agent-browser wait 1200");
+const notebookReadyProbe = run(
+  agentBrowserCommand(`eval "(async () => {
+    const runButton = document.querySelector('#cell-toolbar-cell_start_server button[aria-label^=\\"Run\\"]');
+    return runButton ? 'ok' : 'missing-start-cell-run-button';
+  })()"`),
+);
+const notebookReadyResult = `${notebookReadyProbe.stdout}\n${notebookReadyProbe.stderr}`.trim();
+if (notebookReadyProbe.status === 0 && notebookReadyResult.includes("ok")) {
   pass("Opened jupyter CUJ notebook");
 } else {
-  fail("Could not find jupyter CUJ notebook tab");
+  fail("Could not find jupyter CUJ notebook run controls");
   finalizeAndExit();
 }
 
-snapshot = run("agent-browser snapshot -i").stdout;
+snapshot = run(agentBrowserCommand("snapshot -i")).stdout;
 writeArtifact("scenario-jupyter-cuj-03-opened.txt", snapshot);
 
 if (clickRun("cell_start_server")) {
@@ -635,13 +802,49 @@ probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_setup_kernel");
   return p.status === "ok" && !!c && c.exitCode === "0" && /kernel-ready\s+[a-f0-9-]+/i.test(c.decodedText ?? "");
 }, 45000);
-const setupCell = probe.cells?.find((cell) => cell.refId === "cell_setup_kernel");
-writeArtifact("scenario-jupyter-cuj-06-setup-output.txt", setupCell?.decodedText ?? "");
-if (
+let setupCell = probe.cells?.find((cell) => cell.refId === "cell_setup_kernel");
+let setupOutputText = setupCell?.decodedText ?? "";
+let setupSucceeded = (
   probe.status === "ok" &&
   setupCell?.exitCode === "0" &&
-  /kernel-ready\s+[a-f0-9-]+/i.test(setupCell.decodedText ?? "")
-) {
+  /kernel-ready\s+[a-f0-9-]+/i.test(setupOutputText)
+);
+
+if (!setupSucceeded && usedInjectedAuth && /forbidden/i.test(setupOutputText)) {
+  const authFallback = run(
+    agentBrowserCommand(`eval "(async () => {
+      localStorage.removeItem('oidc-auth');
+      return 'ok';
+    })()"`),
+  );
+  const authFallbackResult = `${authFallback.stdout}\n${authFallback.stderr}`.trim();
+  writeArtifact("scenario-jupyter-cuj-auth-fallback.txt", authFallbackResult);
+  if (authFallback.status === 0 && authFallbackResult.includes("ok")) {
+    pass("Cleared seeded OIDC token and retried setup");
+    run(agentBrowserCommand("reload"));
+    run(agentBrowserCommand("wait 2200"));
+    if (clickRun("cell_setup_kernel")) {
+      pass("Retried AppKernel setup cell");
+    } else {
+      fail("Failed to trigger AppKernel setup retry");
+      finalizeAndExit();
+    }
+    probe = waitForNotebookProbe((p) => {
+      const c = p.cells?.find((cell) => cell.refId === "cell_setup_kernel");
+      return p.status === "ok" && !!c && c.exitCode === "0" && /kernel-ready\s+[a-f0-9-]+/i.test(c.decodedText ?? "");
+    }, 45000);
+    setupCell = probe.cells?.find((cell) => cell.refId === "cell_setup_kernel");
+    setupOutputText = setupCell?.decodedText ?? "";
+    setupSucceeded = (
+      probe.status === "ok" &&
+      setupCell?.exitCode === "0" &&
+      /kernel-ready\s+[a-f0-9-]+/i.test(setupOutputText)
+    );
+  }
+}
+
+writeArtifact("scenario-jupyter-cuj-06-setup-output.txt", setupOutputText);
+if (setupSucceeded) {
   pass("AppKernel setup cell started kernel and bound IPython cells");
 } else {
   fail("AppKernel setup cell did not produce expected kernel-ready output");

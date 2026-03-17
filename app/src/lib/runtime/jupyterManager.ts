@@ -268,9 +268,8 @@ class JupyterManager {
       return;
     }
     await this.listServers(runnerName);
-    if (!this.serversByKey.has(serverKey)) {
-      throw new Error(`Jupyter server ${serverName} was not found on runner ${runnerName}.`);
-    }
+    // Do not fail hard here. The backend registry supports reload-on-miss
+    // for server names that may not be present in the current list snapshot.
   }
 
   async listKernels(runnerName: string, serverName: string): Promise<JupyterKernelModel[]> {
