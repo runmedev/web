@@ -150,10 +150,6 @@ function lastRef(snapshot: string, pattern: RegExp): string | null {
   return currentRefMatches.at(-1)?.[1] ?? null;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function escapeDoubleQuotes(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
@@ -620,7 +616,7 @@ function waitForCodexUpdateTraffic(timeoutMs = 30000): string {
           return body.includes("\"bridge_update\"") || body.includes("\"call_update\"");
         });
         const hasUpdateResponse =
-          joined.includes("\"bridge_update\"") &&
+          (joined.includes("\"bridge_update\"") || joined.includes("\"call_update\"")) &&
           joined.includes("\"updateCells\"") &&
           hasInboundUpdateResponse;
         if (hasUpdateResponse) {
@@ -642,6 +638,7 @@ for (const file of [
   "scenario-ai-codex-02-console.txt",
   "scenario-ai-codex-02-harness-storage.json",
   "scenario-ai-codex-03-opened-notebook.txt",
+  "scenario-ai-codex-03-open-ready.txt",
   "scenario-ai-codex-03-proxy-debug.json",
   "scenario-ai-codex-04-send.txt",
   "scenario-ai-codex-04-fetch-debug.json",
@@ -746,6 +743,15 @@ try {
         remoteId: '',
         lastRemoteChecksum: ''
       });
+      localStorage.setItem('runme/openNotebooks', JSON.stringify([
+        {
+          uri: 'local://file/${SCENARIO_NOTEBOOK_NAME}',
+          name: '${SCENARIO_NOTEBOOK_NAME}',
+          type: 'file',
+          children: []
+        }
+      ]));
+      localStorage.setItem('runme/currentDoc', 'local://file/${SCENARIO_NOTEBOOK_NAME}');
       return 'ok';
     })()"`,
   ).stdout;
@@ -809,6 +815,9 @@ try {
     }
   }
 
+  run("agent-browser reload");
+  run("agent-browser wait 2200");
+
   snapshot = run("agent-browser snapshot -i").stdout;
   const collapseBottomPaneRef = firstRef(snapshot, /Collapse bottom pane/i);
   if (collapseBottomPaneRef) {
@@ -816,28 +825,20 @@ try {
     run("agent-browser wait 700");
   }
 
-  snapshot = run("agent-browser snapshot -i").stdout;
-  const expandFolderRef = firstRef(snapshot, /button "Expand folder"/i);
-  if (expandFolderRef) {
-    run(`agent-browser click ${expandFolderRef}`);
-    run("agent-browser wait 900");
-    snapshot = run("agent-browser snapshot -i").stdout;
-  }
-  const notebookPattern = new RegExp(escapeRegExp(SCENARIO_NOTEBOOK_NAME), "i");
-  let notebookRef = firstRef(snapshot, notebookPattern);
-  for (let attempt = 0; !notebookRef && attempt < 4; attempt += 1) {
-    run("agent-browser wait 700");
-    snapshot = run("agent-browser snapshot -i").stdout;
-    notebookRef = firstRef(snapshot, notebookPattern);
-  }
-  if (notebookRef) {
-    run(`agent-browser click ${notebookRef}`);
-    run("agent-browser wait 1500");
+  const notebookReadyProbe = run(
+    `agent-browser eval "(async () => {
+      const runButton = document.querySelector('#cell-toolbar-${SCENARIO_CELL_ID} button[aria-label^=\\"Run\\"]');
+      return runButton ? 'ok' : 'missing-cell-run-button';
+    })()"`,
+  );
+  const notebookReadyResult = `${notebookReadyProbe.stdout}\n${notebookReadyProbe.stderr}`.trim();
+  writeArtifact("scenario-ai-codex-03-opened-notebook.txt", run("agent-browser snapshot -i").stdout);
+  writeArtifact("scenario-ai-codex-03-open-ready.txt", notebookReadyResult);
+  if (notebookReadyProbe.status === 0 && notebookReadyResult.includes("ok")) {
     pass("Opened codex scenario notebook");
   } else {
-    fail("Could not find codex scenario notebook in explorer");
+    fail("Could not open codex scenario notebook");
   }
-  writeArtifact("scenario-ai-codex-03-opened-notebook.txt", run("agent-browser snapshot -i").stdout);
 
   const chatSnapshot = run("agent-browser snapshot").stdout;
   const chatRef = firstRef(chatSnapshot, /AI Chat|ChatKit panel/i);
