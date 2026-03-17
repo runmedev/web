@@ -654,7 +654,7 @@ const notebook = {
     {
       refId: "cell_ipy_a",
       kind: 2,
-      languageId: "ipython",
+      languageId: "jupyter",
       value: "shared_value = 42\nprint(\"set\", shared_value)",
       metadata: {
         "runme.dev/runnerName": "local",
@@ -664,7 +664,7 @@ const notebook = {
     {
       refId: "cell_ipy_b",
       kind: 2,
-      languageId: "ipython",
+      languageId: "jupyter",
       value: "print(\"read\", shared_value)",
       metadata: {
         "runme.dev/runnerName": "local",

@@ -613,7 +613,7 @@ export class NotebookData {
     const requestedRunnerName =
       (cell.metadata?.[RunmeMetadataKey.RunnerName] as string | undefined) ?? "";
     const useAppKernel = isAppKernelRunnerName(requestedRunnerName);
-    const useJupyterKernel = normalizedLanguage === "ipython";
+    const useJupyterKernel = normalizedLanguage === "jupyter" || normalizedLanguage === "ipython";
     const runner = useAppKernel ? undefined : this.getRunner(cell);
     if (!useAppKernel && (!runner || !runner.endpoint)) {
       console.error("No runner available for cell", cell.refId);
@@ -922,7 +922,7 @@ export class NotebookData {
 
     if (!serverName || !selectedKernelID) {
       showToast({
-        message: "Select a Jupyter kernel before running an IPython cell.",
+        message: "Select a Jupyter kernel before running a Jupyter cell.",
         tone: "error",
       });
       const updated = this.getCellProto(refId);

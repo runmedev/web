@@ -122,14 +122,14 @@ function RunActionButton({
 const LANGUAGE_OPTIONS = [
   { label: "Markdown", value: "markdown" },
   { label: "Bash", value: "bash" },
-  { label: "Jupyter", value: "ipython" },
+  { label: "Jupyter", value: "jupyter" },
   { label: "Python", value: "python" },
   { label: "JS", value: "javascript" },
 ] as const;
 
 type SupportedLanguage =
   | "bash"
-  | "ipython"
+  | "jupyter"
   | "javascript"
   | "markdown"
   | "python";
@@ -170,8 +170,8 @@ function normalizeLanguageId(
       if (normalized === "python" || normalized === "py") {
         return "python";
       }
-      if (normalized === "ipython") {
-        return "ipython";
+      if (normalized === "jupyter" || normalized === "ipython") {
+        return "jupyter";
       }
       if (
         normalized === "javascript" ||
@@ -525,7 +525,7 @@ export function Action({
         return "markdown";
       case "javascript":
         return "javascript";
-      case "ipython":
+      case "jupyter":
         return "python";
       case "python":
         return "python";
@@ -557,7 +557,7 @@ export function Action({
       : initialRunnerName;
 
   useEffect(() => {
-    if (selectedLanguage !== "ipython" || !resolvedRunnerName) {
+    if (selectedLanguage !== "jupyter" || !resolvedRunnerName) {
       return;
     }
     void jupyterManager.ensureRunnerData(resolvedRunnerName).catch((error) => {
@@ -586,7 +586,7 @@ export function Action({
   }, [cell, jupyterManager]);
 
   useEffect(() => {
-    if (selectedLanguage !== "ipython") {
+    if (selectedLanguage !== "jupyter") {
       return;
     }
     if (selectedKernelKey) {
@@ -656,9 +656,9 @@ export function Action({
         setMarkdownEditRequest((request) => request + 1);
         updatedCell.kind = parser_pb.CellKind.MARKUP;
         updatedCell.languageId = "markdown";
-      } else if (nextValue === "ipython") {
+      } else if (nextValue === "jupyter") {
         updatedCell.kind = parser_pb.CellKind.CODE;
-        updatedCell.languageId = "ipython";
+        updatedCell.languageId = "jupyter";
       } else if (nextValue === "javascript") {
         updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "javascript";
@@ -669,7 +669,7 @@ export function Action({
         updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "bash";
       }
-      if (nextValue !== "ipython") {
+      if (nextValue !== "jupyter") {
         delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName];
         delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID];
         delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName];
@@ -870,7 +870,7 @@ export function Action({
                     return;
                   }
                   cellData.setRunner(nextName);
-                  if (selectedLanguage === "ipython") {
+                  if (selectedLanguage === "jupyter") {
                     cellData.clearJupyterKernel();
                   }
                 }}
@@ -888,7 +888,7 @@ export function Action({
                   </option>
                 ))}
               </select>
-              {selectedLanguage === "ipython" && (
+              {selectedLanguage === "jupyter" && (
                 <select
                   id={kernelSelectId}
                   value={selectedKernelKey}
