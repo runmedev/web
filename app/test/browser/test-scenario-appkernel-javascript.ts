@@ -12,6 +12,14 @@ const SCRIPT_DIR =
     : CURRENT_FILE_DIR;
 const OUTPUT_DIR = join(SCRIPT_DIR, "test-output");
 const MOVIE_PATH = join(OUTPUT_DIR, "scenario-appkernel-javascript-walkthrough.webm");
+const AGENT_BROWSER_SESSION = process.env.CUJ_AGENT_BROWSER_SESSION?.trim() ?? "";
+const AGENT_BROWSER_PROFILE = process.env.CUJ_AGENT_BROWSER_PROFILE?.trim() ?? "";
+const AGENT_BROWSER_HEADED = (process.env.CUJ_AGENT_BROWSER_HEADED ?? "false")
+  .trim()
+  .toLowerCase() === "true";
+const AGENT_BROWSER_KEEP_OPEN = (process.env.CUJ_AGENT_BROWSER_KEEP_OPEN ?? "false")
+  .trim()
+  .toLowerCase() === "true";
 
 let passCount = 0;
 let failCount = 0;
@@ -30,8 +38,9 @@ type NotebookProbe = {
 };
 
 function run(command: string): { status: number; stdout: string; stderr: string } {
+  const effectiveCommand = withAgentBrowserOptions(command);
   const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "20000");
-  const result = spawnSync(command, {
+  const result = spawnSync(effectiveCommand, {
     shell: true,
     encoding: "utf-8",
     timeout: timeoutMs,
@@ -42,6 +51,31 @@ function run(command: string): { status: number; stdout: string; stderr: string 
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
   };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function withAgentBrowserOptions(command: string): string {
+  const trimmed = command.trimStart();
+  if (!trimmed.startsWith("agent-browser ")) {
+    return command;
+  }
+  const leadingWhitespace = command.slice(0, command.length - trimmed.length);
+  const subcommand = trimmed.slice("agent-browser ".length);
+  const args: string[] = [];
+  if (AGENT_BROWSER_SESSION) {
+    args.push("--session", shellQuote(AGENT_BROWSER_SESSION));
+  }
+  if (AGENT_BROWSER_PROFILE) {
+    args.push("--profile", shellQuote(AGENT_BROWSER_PROFILE));
+  }
+  if (AGENT_BROWSER_HEADED) {
+    args.push("--headed");
+  }
+  const prefix = ["agent-browser", ...args].join(" ");
+  return `${leadingWhitespace}${prefix} ${subcommand}`;
 }
 
 function runOrThrow(command: string): string {
@@ -340,6 +374,10 @@ const seedResult = run(
       remoteId: '',
       lastRemoteChecksum: ''
     });
+    localStorage.setItem('runme/openNotebooks', JSON.stringify([
+      { uri: 'local://file/${SCENARIO_NOTEBOOK_NAME}', name: '${SCENARIO_NOTEBOOK_NAME}', type: 'file', children: [] }
+    ]));
+    localStorage.setItem('runme/currentDoc', 'local://file/${SCENARIO_NOTEBOOK_NAME}');
     return 'ok';
   })()"`,
 ).stdout;
@@ -353,27 +391,21 @@ if (seedResult.includes("ok")) {
 let snapshot = run("agent-browser snapshot -i").stdout;
 writeArtifact("scenario-appkernel-javascript-02-after-seed.txt", snapshot);
 
-const expandFolderRef = firstRef(snapshot, /button "Expand folder"/i);
-if (expandFolderRef) {
-  run(`agent-browser click ${expandFolderRef}`);
-  run("agent-browser wait 900");
-  snapshot = run("agent-browser snapshot -i").stdout;
-}
-
-const notebookPattern = new RegExp(escapeRegExp(SCENARIO_NOTEBOOK_NAME), "i");
-let notebookRef = firstRef(snapshot, notebookPattern);
-for (let attempt = 0; !notebookRef && attempt < 4; attempt += 1) {
-  run("agent-browser wait 700");
-  snapshot = run("agent-browser snapshot -i").stdout;
-  notebookRef = firstRef(snapshot, notebookPattern);
-}
-
-if (notebookRef) {
-  run(`agent-browser click ${notebookRef}`);
-  run("agent-browser wait 1800");
+run("agent-browser reload");
+run("agent-browser wait 2200");
+const notebookReadyProbe = run(
+  `agent-browser eval "(async () => {
+    const runnerSelect = document.getElementById('runner-select-cell_appkernel_a');
+    const runButton = document.querySelector('#cell-toolbar-cell_appkernel_a button[aria-label^=\\"Run\\"]');
+    return runnerSelect && runButton ? 'ok' : 'missing-runner-or-run-button';
+  })()"`,
+);
+const notebookReadyResult = `${notebookReadyProbe.stdout}\n${notebookReadyProbe.stderr}`.trim();
+writeArtifact("scenario-appkernel-javascript-02b-ready.txt", notebookReadyResult);
+if (notebookReadyProbe.status === 0 && notebookReadyResult.includes("ok")) {
   pass("Opened AppKernel scenario notebook");
 } else {
-  fail("Could not find AppKernel scenario notebook in explorer");
+  fail("Could not find AppKernel scenario notebook run controls");
 }
 
 snapshot = run("agent-browser snapshot -i").stdout;
@@ -521,7 +553,9 @@ run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-appkernel-javascript-
 scrollCellIntoView("cell_appkernel_a");
 run("agent-browser wait 2500");
 run("agent-browser record stop");
-run("agent-browser close");
+if (!AGENT_BROWSER_KEEP_OPEN) {
+  run("agent-browser close");
+}
 
 console.log(`Movie: ${MOVIE_PATH}`);
 console.log(`Assertions: ${totalCount}, Passed: ${passCount}, Failed: ${failCount}`);

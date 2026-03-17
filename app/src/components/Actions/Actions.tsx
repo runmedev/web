@@ -122,7 +122,7 @@ function RunActionButton({
 const LANGUAGE_OPTIONS = [
   { label: "Markdown", value: "markdown" },
   { label: "Bash", value: "bash" },
-  { label: "IPython", value: "ipython" },
+  { label: "Jupyter", value: "ipython" },
   { label: "Python", value: "python" },
   { label: "JS", value: "javascript" },
 ] as const;

@@ -81,6 +81,23 @@ Run all implemented CUJs:
 pnpm -C app run cuj:run
 ```
 
+To run CUJs against a specific existing `agent-browser` session/profile (for
+example, a logged-in browser), set:
+
+```bash
+CUJ_AGENT_BROWSER_SESSION=runmecodex \
+CUJ_AGENT_BROWSER_PROFILE="$HOME/chrome-profiles/runmecodex" \
+CUJ_AGENT_BROWSER_HEADED=true \
+pnpm -C app run cuj:run
+```
+
+To keep the browser session open after a scenario (useful when reusing an
+already logged-in session), add:
+
+```bash
+CUJ_AGENT_BROWSER_KEEP_OPEN=true
+```
+
 The CUJ runner starts a local Go OIDC fake server
 (`testing/cuj-oidc-server.go`) and a Runme backend configured to trust JWTs
 from that issuer.

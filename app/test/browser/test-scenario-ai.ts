@@ -23,6 +23,14 @@ const SCRIPT_DIR =
     : CURRENT_FILE_DIR;
 const OUTPUT_DIR = join(SCRIPT_DIR, "test-output");
 const MOVIE_PATH = join(OUTPUT_DIR, "scenario-ai-walkthrough.webm");
+const AGENT_BROWSER_SESSION = process.env.CUJ_AGENT_BROWSER_SESSION?.trim() ?? "";
+const AGENT_BROWSER_PROFILE = process.env.CUJ_AGENT_BROWSER_PROFILE?.trim() ?? "";
+const AGENT_BROWSER_HEADED = (process.env.CUJ_AGENT_BROWSER_HEADED ?? "false")
+  .trim()
+  .toLowerCase() === "true";
+const AGENT_BROWSER_KEEP_OPEN = (process.env.CUJ_AGENT_BROWSER_KEEP_OPEN ?? "false")
+  .trim()
+  .toLowerCase() === "true";
 
 type HarnessStorage = {
   harnesses?: Array<{
@@ -38,8 +46,9 @@ let failCount = 0;
 let totalCount = 0;
 
 function run(command: string): { status: number; stdout: string; stderr: string } {
+  const effectiveCommand = withAgentBrowserOptions(command);
   const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "10000");
-  const result = spawnSync(command, {
+  const result = spawnSync(effectiveCommand, {
     shell: true,
     encoding: "utf-8",
     timeout: timeoutMs,
@@ -51,9 +60,9 @@ function run(command: string): { status: number; stdout: string; stderr: string 
       : "";
   const timedOut = errorCode === "ETIMEDOUT";
   const timeoutHint = timedOut
-    ? `\n[scenario-timeout] command timed out after ${timeoutMs}ms: ${command}\n`
+    ? `\n[scenario-timeout] command timed out after ${timeoutMs}ms: ${effectiveCommand}\n`
     : "";
-  if (timedOut && command.trim().startsWith("agent-browser ")) {
+  if (timedOut && effectiveCommand.trim().startsWith("agent-browser ")) {
     throw new Error(timeoutHint.trim());
   }
   return {
@@ -61,6 +70,31 @@ function run(command: string): { status: number; stdout: string; stderr: string 
     stdout: result.stdout ?? "",
     stderr: `${result.stderr ?? ""}${timeoutHint}`,
   };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function withAgentBrowserOptions(command: string): string {
+  const trimmed = command.trimStart();
+  if (!trimmed.startsWith("agent-browser ")) {
+    return command;
+  }
+  const leadingWhitespace = command.slice(0, command.length - trimmed.length);
+  const subcommand = trimmed.slice("agent-browser ".length);
+  const args: string[] = [];
+  if (AGENT_BROWSER_SESSION) {
+    args.push("--session", shellQuote(AGENT_BROWSER_SESSION));
+  }
+  if (AGENT_BROWSER_PROFILE) {
+    args.push("--profile", shellQuote(AGENT_BROWSER_PROFILE));
+  }
+  if (AGENT_BROWSER_HEADED) {
+    args.push("--headed");
+  }
+  const prefix = ["agent-browser", ...args].join(" ");
+  return `${leadingWhitespace}${prefix} ${subcommand}`;
 }
 
 function runOrThrow(command: string): string {
@@ -503,7 +537,9 @@ try {
   if (CUJ_ID_TOKEN) {
     run(`agent-browser eval "localStorage.removeItem('oidc-auth'); 'ok'"`);
   }
-  run("agent-browser close");
+  if (!AGENT_BROWSER_KEEP_OPEN) {
+    run("agent-browser close");
+  }
 }
 
 console.log(`Movie: ${MOVIE_PATH}`);
