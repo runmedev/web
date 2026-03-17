@@ -220,9 +220,9 @@ describe("Action component", () => {
       },
       value: "echo hi",
     });
-    const stub = new StubCellData(cell) as unknown as CellData;
+    const stub = new StubCellData(cell);
 
-    render(<Action cellData={stub} isFirst={false} />);
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
 
     const staleOnChange = editorMockState.onChangeHandlers[0];
     expect(staleOnChange).toBeTypeOf("function");
