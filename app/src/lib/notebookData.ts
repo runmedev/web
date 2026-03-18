@@ -983,7 +983,6 @@ export class NotebookData {
     let sawExecuteReply = false;
     let sawIdle = false;
     let exitCode = 0;
-    let completionTimer: ReturnType<typeof setTimeout> | null = null;
 
     const appendTruncationNotice = () => {
       if (didTruncate) {
@@ -1130,10 +1129,6 @@ export class NotebookData {
         return;
       }
       completed = true;
-      if (completionTimer) {
-        clearTimeout(completionTimer);
-        completionTimer = null;
-      }
       const updated = this.getCellProto(refId);
       if (updated) {
         const currentRunID =
@@ -1153,23 +1148,6 @@ export class NotebookData {
       } catch {
         // no-op
       }
-    };
-
-    const refreshCompletionTimer = () => {
-      if (completed) {
-        return;
-      }
-      if (completionTimer) {
-        clearTimeout(completionTimer);
-      }
-      completionTimer = setTimeout(() => {
-        appendText(
-          "stderr",
-          "Connection lost; output may be incomplete. Re-run the cell.\n",
-        );
-        updateCellOutputs(false);
-        markCompleted(1);
-      }, 30000);
     };
 
     socket.onopen = () => {
@@ -1195,15 +1173,12 @@ export class NotebookData {
         },
       };
       socket.send(JSON.stringify(executeRequest));
-      refreshCompletionTimer();
     };
 
     socket.onmessage = (event) => {
       if (completed) {
         return;
       }
-      refreshCompletionTimer();
-
       if (typeof event.data !== "string") {
         return;
       }
@@ -1304,6 +1279,8 @@ export class NotebookData {
       if (completed) {
         return;
       }
+      // Long-running Jupyter executions can be quiet; completion is gated on
+      // protocol signals, not "no message for N seconds".
       if (!sawExecuteReply || !sawIdle) {
         appendText(
           "stderr",
