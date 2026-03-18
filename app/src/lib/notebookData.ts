@@ -612,7 +612,8 @@ export class NotebookData {
     const normalizedLanguage = (cell.languageId ?? "").trim().toLowerCase();
     const requestedRunnerName =
       (cell.metadata?.[RunmeMetadataKey.RunnerName] as string | undefined) ?? "";
-    const useAppKernel = isAppKernelRunnerName(requestedRunnerName);
+    const useAppKernel =
+      normalizedLanguage === "javascript" || isAppKernelRunnerName(requestedRunnerName);
     const useJupyterKernel = normalizedLanguage === "jupyter" || normalizedLanguage === "ipython";
     const runner = useAppKernel ? undefined : this.getRunner(cell);
     if (!useAppKernel && (!runner || !runner.endpoint)) {
@@ -1532,6 +1533,7 @@ export class CellData {
   }
 
   setJupyterKernel(selection: {
+    runnerName?: string;
     serverName: string;
     kernelId: string;
     kernelName: string;
@@ -1545,6 +1547,9 @@ export class CellData {
       selection.kernelId;
     (snap.metadata as any)[RunmeMetadataKey.JupyterKernelName] =
       selection.kernelName;
+    if (selection.runnerName && selection.runnerName !== DEFAULT_RUNNER_PLACEHOLDER) {
+      (snap.metadata as any)[RunmeMetadataKey.RunnerName] = selection.runnerName;
+    }
     this.notebook.updateCell(snap);
   }
 

@@ -2,6 +2,8 @@ import { getRunnersManager, DEFAULT_RUNNER_PLACEHOLDER } from "./runnersManager"
 import { getAuthData } from "../../token";
 import { getBrowserAdapter } from "../../browserAdapter.client";
 
+const KERNEL_ALIASES_STORAGE_KEY = "runme/jupyterKernelAliases";
+
 export type JupyterServerRecord = {
   name: string;
   runner: string;
@@ -20,6 +22,7 @@ export type JupyterKernelModel = {
 export type JupyterKernelOption = {
   key: string;
   label: string;
+  runnerName: string;
   serverName: string;
   kernelId: string;
   kernelName: string;
@@ -89,7 +92,12 @@ class JupyterManager {
   private serversByKey = new Map<string, JupyterServerRecord>();
   private kernelsByServerKey = new Map<string, KernelCacheEntry[]>();
   private kernelAliases = new Map<string, string>();
+  private persistedKernelAliasesByKernel = new Map<string, string>();
   private ensureRunnerPromises = new Map<string, Promise<void>>();
+
+  private constructor() {
+    this.loadKernelAliasesFromStorage();
+  }
 
   static getInstance(): JupyterManager {
     if (!JupyterManager.singleton) {
@@ -158,6 +166,141 @@ class JupyterManager {
 
   private getAliasKey(runnerName: string, serverName: string, alias: string): string {
     return `${runnerName}${JupyterManager.compositeKeySeparator}${serverName}${JupyterManager.compositeKeySeparator}${alias}`;
+  }
+
+  private getKernelAliasKey(runnerName: string, serverName: string, kernelID: string): string {
+    return `${runnerName}${JupyterManager.compositeKeySeparator}${serverName}${JupyterManager.compositeKeySeparator}${kernelID}`;
+  }
+
+  private parseKernelAliasKey(
+    key: string,
+  ): { runnerName: string; serverName: string; kernelId: string } | null {
+    const parts = key.split(JupyterManager.compositeKeySeparator);
+    if (parts.length !== 3) {
+      return null;
+    }
+    const [runnerName, serverName, kernelId] = parts;
+    if (!runnerName || !serverName || !kernelId) {
+      return null;
+    }
+    return { runnerName, serverName, kernelId };
+  }
+
+  private loadKernelAliasesFromStorage(): void {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(KERNEL_ALIASES_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        return;
+      }
+      parsed.forEach((entry) => {
+        if (
+          entry &&
+          typeof entry === "object" &&
+          typeof (entry as any).runnerName === "string" &&
+          typeof (entry as any).serverName === "string" &&
+          typeof (entry as any).kernelId === "string" &&
+          typeof (entry as any).alias === "string"
+        ) {
+          const runnerName = (entry as any).runnerName.trim();
+          const serverName = (entry as any).serverName.trim();
+          const kernelId = (entry as any).kernelId.trim();
+          const alias = (entry as any).alias.trim();
+          if (runnerName && serverName && kernelId && alias) {
+            this.persistedKernelAliasesByKernel.set(
+              this.getKernelAliasKey(runnerName, serverName, kernelId),
+              alias,
+            );
+          }
+          return;
+        }
+        // Backwards compatibility with old storage shape: { key, alias }.
+        if (
+          entry &&
+          typeof entry === "object" &&
+          typeof (entry as any).key === "string" &&
+          typeof (entry as any).alias === "string"
+        ) {
+          const key = (entry as any).key.trim();
+          const alias = (entry as any).alias.trim();
+          if (key && alias) {
+            this.persistedKernelAliasesByKernel.set(key, alias);
+          }
+        }
+      });
+    } catch (error) {
+      console.error("Failed to load Jupyter kernel aliases from storage", error);
+    }
+  }
+
+  private persistKernelAliasesToStorage(): void {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      const serialized = [...this.persistedKernelAliasesByKernel.entries()].map(
+        ([key, alias]) => ({
+          ...(this.parseKernelAliasKey(key) ?? { key }),
+          alias,
+        }),
+      );
+      window.localStorage.setItem(KERNEL_ALIASES_STORAGE_KEY, JSON.stringify(serialized));
+    } catch (error) {
+      console.error("Failed to persist Jupyter kernel aliases to storage", error);
+    }
+  }
+
+  private setPersistedKernelAlias(
+    runnerName: string,
+    serverName: string,
+    kernelID: string,
+    alias: string,
+  ): void {
+    const key = this.getKernelAliasKey(runnerName, serverName, kernelID);
+    const trimmedAlias = alias.trim();
+    if (!trimmedAlias) {
+      this.persistedKernelAliasesByKernel.delete(key);
+    } else {
+      this.persistedKernelAliasesByKernel.set(key, trimmedAlias);
+    }
+    this.persistKernelAliasesToStorage();
+  }
+
+  private getPersistedKernelAlias(
+    runnerName: string,
+    serverName: string,
+    kernelID: string,
+  ): string {
+    return this.persistedKernelAliasesByKernel.get(
+      this.getKernelAliasKey(runnerName, serverName, kernelID),
+    ) ?? "";
+  }
+
+  private rebuildAliasLookupForServer(
+    runnerName: string,
+    serverName: string,
+    entries: KernelCacheEntry[],
+  ): void {
+    const prefix = `${runnerName}${JupyterManager.compositeKeySeparator}${serverName}${JupyterManager.compositeKeySeparator}`;
+    for (const key of this.kernelAliases.keys()) {
+      if (key.startsWith(prefix)) {
+        this.kernelAliases.delete(key);
+      }
+    }
+    entries.forEach((entry) => {
+      const label = entry.label?.trim() ?? "";
+      const modelName = entry.model.name?.trim() ?? "";
+      if (!label || normalizeKernelName(label) === normalizeKernelName(modelName)) {
+        return;
+      }
+      this.kernelAliases.set(this.getAliasKey(runnerName, serverName, label), entry.model.id);
+    });
   }
 
   private clearRunnerCache(runnerName: string): void {
@@ -285,13 +428,13 @@ class JupyterManager {
       existingLabels.set(entry.model.id, entry.label);
     });
     const next = kernels.map((model) => {
-      const aliasLabel =
-        existingLabels.get(model.id) ??
-        this.kernelAliases.get(this.getAliasKey(effectiveRunner, serverName, model.name));
+      const aliasLabel = existingLabels.get(model.id) ||
+        this.getPersistedKernelAlias(effectiveRunner, serverName, model.id);
       const label = aliasLabel && aliasLabel.trim() ? aliasLabel : model.name || model.id;
       return { model, label };
     });
     this.kernelsByServerKey.set(serverKey, next);
+    this.rebuildAliasLookupForServer(effectiveRunner, serverName, next);
     this.bumpVersion();
     return kernels;
   }
@@ -304,10 +447,10 @@ class JupyterManager {
     const effectiveRunner = this.normalizeRunnerName(runnerName);
     await this.ensureServerLoaded(effectiveRunner, serverName);
     const baseURL = runnerEndpointToHttpBase(this.resolveRunnerEndpoint(effectiveRunner));
-    const requestedName = options?.name?.trim() || options?.kernelSpec?.trim() || "";
-    if (requestedName) {
+    const alias = options?.name?.trim() ?? "";
+    if (alias) {
       const existing = await this.listKernels(effectiveRunner, serverName);
-      const requestedKey = normalizeKernelName(requestedName);
+      const requestedKey = normalizeKernelName(alias);
       const duplicate = existing.find((kernel) => {
         if (normalizeKernelName(kernel.name || "") === requestedKey) {
           return true;
@@ -319,7 +462,7 @@ class JupyterManager {
       });
       if (duplicate) {
         throw new Error(
-          `Kernel name "${requestedName}" already exists on ${effectiveRunner}/${serverName}.`,
+          `Kernel alias "${alias}" already exists on ${effectiveRunner}/${serverName}.`,
         );
       }
     }
@@ -343,10 +486,11 @@ class JupyterManager {
       },
     );
 
-    const alias = options?.name?.trim();
     const label = alias || kernel.name || kernel.id;
     if (alias) {
-      this.kernelAliases.set(this.getAliasKey(effectiveRunner, serverName, alias), kernel.id);
+      this.setPersistedKernelAlias(effectiveRunner, serverName, kernel.id, alias);
+    } else {
+      this.setPersistedKernelAlias(effectiveRunner, serverName, kernel.id, "");
     }
     const serverKey = this.getServerKey(effectiveRunner, serverName);
     const existing = this.kernelsByServerKey.get(serverKey) ?? [];
@@ -356,6 +500,7 @@ class JupyterManager {
       label,
     });
     this.kernelsByServerKey.set(serverKey, filtered);
+    this.rebuildAliasLookupForServer(effectiveRunner, serverName, filtered);
     this.bumpVersion();
     return kernel;
   }
@@ -375,20 +520,10 @@ class JupyterManager {
     );
     const serverKey = this.getServerKey(effectiveRunner, serverName);
     const existing = this.kernelsByServerKey.get(serverKey) ?? [];
-    this.kernelsByServerKey.set(
-      serverKey,
-      existing.filter((entry) => entry.model.id !== kernelID),
-    );
-    for (const [key, value] of this.kernelAliases.entries()) {
-      if (
-        key.startsWith(
-          `${effectiveRunner}${JupyterManager.compositeKeySeparator}${serverName}${JupyterManager.compositeKeySeparator}`,
-        ) &&
-        value === kernelID
-      ) {
-        this.kernelAliases.delete(key);
-      }
-    }
+    const remaining = existing.filter((entry) => entry.model.id !== kernelID);
+    this.kernelsByServerKey.set(serverKey, remaining);
+    this.setPersistedKernelAlias(effectiveRunner, serverName, kernelID, "");
+    this.rebuildAliasLookupForServer(effectiveRunner, serverName, remaining);
     this.bumpVersion();
   }
 
@@ -438,8 +573,9 @@ class JupyterManager {
         const kernelID = entry.model.id;
         const label = entry.label || entry.model.name || kernelID;
         options.push({
-          key: `${encodePathSegment(serverName)}:${encodePathSegment(kernelID)}`,
+          key: this.getKernelOptionKey(serverName, kernelID, resolvedRunner),
           label,
+          runnerName: resolvedRunner,
           serverName,
           kernelId: kernelID,
           kernelName: entry.model.name || label,
@@ -452,21 +588,39 @@ class JupyterManager {
 
   parseKernelOptionKey(
     key: string,
-  ): { serverName: string; kernelId: string } | null {
+  ): { runnerName?: string; serverName: string; kernelId: string } | null {
     if (!key || !key.includes(":")) {
       return null;
     }
-    const [serverEncoded, kernelEncoded] = key.split(":", 2);
-    if (!serverEncoded || !kernelEncoded) {
-      return null;
+    const parts = key.split(":");
+    if (parts.length === 2) {
+      const [serverEncoded, kernelEncoded] = parts;
+      if (!serverEncoded || !kernelEncoded) {
+        return null;
+      }
+      return {
+        serverName: decodePathSegment(serverEncoded),
+        kernelId: decodePathSegment(kernelEncoded),
+      };
     }
-    return {
-      serverName: decodePathSegment(serverEncoded),
-      kernelId: decodePathSegment(kernelEncoded),
-    };
+    if (parts.length === 3) {
+      const [runnerEncoded, serverEncoded, kernelEncoded] = parts;
+      if (!runnerEncoded || !serverEncoded || !kernelEncoded) {
+        return null;
+      }
+      return {
+        runnerName: decodePathSegment(runnerEncoded),
+        serverName: decodePathSegment(serverEncoded),
+        kernelId: decodePathSegment(kernelEncoded),
+      };
+    }
+    return null;
   }
 
-  getKernelOptionKey(serverName: string, kernelId: string): string {
+  getKernelOptionKey(serverName: string, kernelId: string, runnerName?: string): string {
+    if (runnerName && runnerName.trim()) {
+      return `${encodePathSegment(runnerName)}:${encodePathSegment(serverName)}:${encodePathSegment(kernelId)}`;
+    }
     return `${encodePathSegment(serverName)}:${encodePathSegment(kernelId)}`;
   }
 }
