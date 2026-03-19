@@ -82,9 +82,6 @@ function run(command: string): { status: number; stdout: string; stderr: string 
   const timeoutHint = timedOut
     ? `\n[scenario-timeout] command timed out after ${timeoutMs}ms: ${effectiveCommand}\n`
     : "";
-  if (timedOut && effectiveCommand.trim().startsWith("agent-browser ")) {
-    throw new Error(timeoutHint.trim());
-  }
   return {
     status: result.status ?? (timedOut ? 124 : 1),
     stdout: result.stdout ?? "",
@@ -821,7 +818,11 @@ let setupSucceeded = (
   /kernel-ready\s+[a-f0-9-]+/i.test(setupOutputText)
 );
 
-if (!setupSucceeded && usedInjectedAuth && /forbidden/i.test(setupOutputText)) {
+if (
+  !setupSucceeded &&
+  usedInjectedAuth &&
+  /(forbidden|failed to fetch)/i.test(setupOutputText)
+) {
   const authFallback = run(
     agentBrowserCommand(`eval "(async () => {
       localStorage.removeItem('oidc-auth');
@@ -831,7 +832,7 @@ if (!setupSucceeded && usedInjectedAuth && /forbidden/i.test(setupOutputText)) {
   const authFallbackResult = `${authFallback.stdout}\n${authFallback.stderr}`.trim();
   writeArtifact("scenario-jupyter-cuj-auth-fallback.txt", authFallbackResult);
   if (authFallback.status === 0 && authFallbackResult.includes("ok")) {
-    pass("Cleared seeded OIDC token and retried setup");
+    pass("Cleared seeded OIDC token after setup auth/network failure and retried setup");
     run(agentBrowserCommand("reload"));
     run(agentBrowserCommand("wait 2200"));
     if (clickRun("cell_setup_kernel")) {

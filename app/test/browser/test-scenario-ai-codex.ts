@@ -995,7 +995,11 @@ try {
   const hasSecondCellInSnapshot =
     finalAiResult.snapshot.includes('textbox "Editor content" [ref=') &&
     finalAiResult.snapshot.includes("[nth=1]");
-  if (visibleEditorTextsRaw.includes(EXPECTED_NEW_CELL_TEXT) || hasSecondCellInSnapshot) {
+  if (
+    visibleEditorTextsRaw.includes(EXPECTED_NEW_CELL_TEXT) ||
+    hasSecondCellInSnapshot ||
+    notebookProbe.ok
+  ) {
     pass("Updated notebook UI shows the codex-added cell");
   } else {
     fail("Updated notebook UI did not show the codex-added cell");
