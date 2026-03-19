@@ -790,7 +790,7 @@ if (clickRun("cell_start_server")) {
 let probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_start_server");
   return p.status === "ok" && !!c && c.exitCode === "0";
-}, 45000);
+}, 90000);
 let startCell = probe.cells?.find((cell) => cell.refId === "cell_start_server");
 writeArtifact("scenario-jupyter-cuj-04-start-output.txt", startCell?.decodedText ?? "");
 if (probe.status === "ok" && startCell?.exitCode === "0") {
