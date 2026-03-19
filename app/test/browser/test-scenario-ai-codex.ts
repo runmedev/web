@@ -433,6 +433,19 @@ function readVisibleEditorTexts(): string {
   );
 }
 
+function waitForVisibleEditorText(expectedText: string, timeoutMs = 15000): string {
+  const deadline = Date.now() + timeoutMs;
+  let lastTexts = "";
+  while (Date.now() < deadline) {
+    lastTexts = readVisibleEditorTexts();
+    if (lastTexts.includes(expectedText)) {
+      return lastTexts;
+    }
+    run("agent-browser wait 500");
+  }
+  return lastTexts;
+}
+
 function readChatPanelText(): string {
   const script = `(() => {
     const chunks = [];
@@ -977,7 +990,7 @@ try {
   } else {
     fail("Did not see the final AI response rendered in the ChatKit panel");
   }
-  const visibleEditorTextsRaw = readVisibleEditorTexts();
+  const visibleEditorTextsRaw = waitForVisibleEditorText(EXPECTED_NEW_CELL_TEXT, 20000);
   writeArtifact("scenario-ai-codex-12-visible-editor-texts.json", visibleEditorTextsRaw);
   const hasSecondCellInSnapshot =
     finalAiResult.snapshot.includes('textbox "Editor content" [ref=') &&

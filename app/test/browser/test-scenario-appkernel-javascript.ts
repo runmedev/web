@@ -188,19 +188,6 @@ function waitForNotebookProbe(
   return probeNotebook();
 }
 
-function setRunnerSelect(cellRefId: string, runnerName: string): boolean {
-  const result = run(
-    `agent-browser eval "(async () => {
-      const sel = document.getElementById('runner-select-${cellRefId}');
-      if (!sel) return 'missing-select';
-      sel.value = '${runnerName}';
-      sel.dispatchEvent(new Event('change', { bubbles: true }));
-      return sel.value;
-    })()"`,
-  ).stdout.trim();
-  return result.includes(runnerName);
-}
-
 function clickRun(cellRefId: string): boolean {
   const result = run(
     `agent-browser eval "(async () => {
@@ -395,9 +382,8 @@ run("agent-browser reload");
 run("agent-browser wait 2200");
 const notebookReadyProbe = run(
   `agent-browser eval "(async () => {
-    const runnerSelect = document.getElementById('runner-select-cell_appkernel_a');
     const runButton = document.querySelector('#cell-toolbar-cell_appkernel_a button[aria-label^=\\"Run\\"]');
-    return runnerSelect && runButton ? 'ok' : 'missing-runner-or-run-button';
+    return runButton ? 'ok' : 'missing-run-button';
   })()"`,
 );
 const notebookReadyResult = `${notebookReadyProbe.stdout}\n${notebookReadyProbe.stderr}`.trim();
@@ -411,26 +397,17 @@ if (notebookReadyProbe.status === 0 && notebookReadyResult.includes("ok")) {
 snapshot = run("agent-browser snapshot -i").stdout;
 writeArtifact("scenario-appkernel-javascript-03-opened.txt", snapshot);
 
-const runnerOptions = run(
+const runnerSelectorState = run(
   `agent-browser eval "(async () => {
     const sel = document.getElementById('runner-select-cell_appkernel_a');
-    if (!sel) return JSON.stringify([]);
-    return JSON.stringify(Array.from(sel.options).map((o) => ({ value: o.value, label: o.textContent || '' })));
+    return sel ? 'present' : 'missing';
   })()"`,
 ).stdout.trim();
-writeArtifact("scenario-appkernel-javascript-runner-options.json", runnerOptions);
-if (/AppKernel \(browser JS\)/.test(runnerOptions)) {
-  pass("Runner selector includes AppKernel (browser JS)");
+writeArtifact("scenario-appkernel-javascript-runner-selector-state.txt", runnerSelectorState);
+if (runnerSelectorState.includes("missing")) {
+  pass("JS cells hide runner selector and default to AppKernel");
 } else {
-  fail("Runner selector missing AppKernel (browser JS)");
-}
-
-for (const refId of ["cell_appkernel_a", "cell_appkernel_b", "cell_appkernel_c"]) {
-  if (setRunnerSelect(refId, "appkernel-js")) {
-    pass(`Selected AppKernel runner for ${refId}`);
-  } else {
-    fail(`Failed to select AppKernel runner for ${refId}`);
-  }
+  fail("JS cell unexpectedly shows runner selector");
 }
 
 if (clickRun("cell_appkernel_a")) {

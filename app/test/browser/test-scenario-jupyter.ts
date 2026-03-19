@@ -255,6 +255,24 @@ function waitForNotebookProbe(
   return probeNotebook();
 }
 
+function waitForRunButton(cellRefId: string, timeoutMs = 12000): boolean {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const probe = run(
+      agentBrowserCommand(`eval "(async () => {
+        const runButton = document.querySelector('#cell-toolbar-${cellRefId} button[aria-label^=\\"Run\\"]');
+        return runButton ? 'ok' : 'missing-run-button';
+      })()"`),
+    );
+    const result = `${probe.stdout}\n${probe.stderr}`.trim();
+    if (probe.status === 0 && result.includes("ok")) {
+      return true;
+    }
+    run(agentBrowserCommand("wait 400"));
+  }
+  return false;
+}
+
 function clickRun(cellRefId: string): boolean {
   const result = run(
     agentBrowserCommand(`eval "(async () => {
@@ -733,14 +751,7 @@ run(agentBrowserCommand("wait 2200"));
 let snapshot = run(agentBrowserCommand("snapshot -i")).stdout;
 writeArtifact("scenario-jupyter-cuj-02-after-seed.txt", snapshot);
 
-const notebookReadyProbe = run(
-  agentBrowserCommand(`eval "(async () => {
-    const runButton = document.querySelector('#cell-toolbar-cell_start_server button[aria-label^=\\"Run\\"]');
-    return runButton ? 'ok' : 'missing-start-cell-run-button';
-  })()"`),
-);
-const notebookReadyResult = `${notebookReadyProbe.stdout}\n${notebookReadyProbe.stderr}`.trim();
-if (notebookReadyProbe.status === 0 && notebookReadyResult.includes("ok")) {
+if (waitForRunButton("cell_start_server")) {
   pass("Opened jupyter CUJ notebook");
 } else {
   fail("Could not find jupyter CUJ notebook run controls");
