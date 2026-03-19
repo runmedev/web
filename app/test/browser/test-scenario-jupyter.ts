@@ -219,10 +219,12 @@ function probeNotebook(): NotebookProbe {
           }
         }
         const meta = cell?.metadata && typeof cell.metadata === 'object' ? cell.metadata : {};
+        const rawExitCode = meta['runme.dev/exitCode'];
+        const rawPID = meta['runme.dev/pid'];
         return {
           refId: cell?.refId || '',
-          exitCode: meta['runme.dev/exitCode'] || '',
-          pid: meta['runme.dev/pid'] || '',
+          exitCode: rawExitCode === undefined || rawExitCode === null ? '' : String(rawExitCode),
+          pid: rawPID === undefined || rawPID === null ? '' : String(rawPID),
           decodedText: decodedChunks.join('\\n'),
         };
       });
