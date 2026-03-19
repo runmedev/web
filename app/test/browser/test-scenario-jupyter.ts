@@ -66,6 +66,20 @@ function toWsUrl(url: string): string {
 
 const BACKEND_WS = toWsUrl(BACKEND_URL);
 
+function normalizeLoopbackHost(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname === "localhost") {
+      parsed.hostname = "127.0.0.1";
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+const BACKEND_WS_LOOPBACK = normalizeLoopbackHost(BACKEND_WS);
+
 function run(command: string): { status: number; stdout: string; stderr: string } {
   const effectiveCommand = withAgentBrowserOptions(command);
   const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "30000");
@@ -615,7 +629,7 @@ const syncServersCell = [
 ].join("\n");
 
 const setupKernelCell = [
-  `console.log(app.runners.update("local", "${BACKEND_WS}"));`,
+  `console.log(app.runners.update("local", "${BACKEND_WS_LOOPBACK}"));`,
   'console.log(app.runners.setDefault("local"));',
   "const isTransientKernelError = (message) => /(not found|failed to fetch|networkerror|econnrefused|load failed)/i.test(message);",
   "let servers;",
