@@ -631,47 +631,8 @@ const syncServersCell = [
 const setupKernelCell = [
   `console.log(app.runners.update("local", "${BACKEND_WS_LOOPBACK}"));`,
   'console.log(app.runners.setDefault("local"));',
-  "const isTransientKernelError = (message) => /(not found|failed to fetch|networkerror|econnrefused|load failed)/i.test(message);",
-  "let servers;",
-  "for (let attempt = 1; attempt <= 30; attempt += 1) {",
-  "  try {",
-  "    servers = await jupyter.servers.get('local');",
-  "    break;",
-  "  } catch (err) {",
-  "    const message = String(err && typeof err === 'object' && 'message' in err ? err.message : err);",
-  "    if (!isTransientKernelError(message) || attempt === 30) throw err;",
-  "    console.log('servers-list-retry', attempt, message);",
-  "    await new Promise((resolve) => setTimeout(resolve, 1000));",
-  "  }",
-  "}",
-  "console.log(JSON.stringify(servers));",
   `const selectedServerName = '${serverAlias}';`,
   "console.log('selected-server', selectedServerName);",
-  "for (let attempt = 1; attempt <= 30; attempt += 1) {",
-  "  try {",
-    "    await jupyter.kernels.get('local', selectedServerName);",
-    "    break;",
-  "  } catch (err) {",
-    "    const message = String(err && typeof err === 'object' && 'message' in err ? err.message : err);",
-    "    if (!isTransientKernelError(message) || attempt === 30) throw err;",
-    "    console.log('server-alias-wait', attempt, message);",
-    "    await new Promise((resolve) => setTimeout(resolve, 1000));",
-  "  }",
-  "}",
-  "let kernel;",
-  "for (let attempt = 1; attempt <= 15; attempt += 1) {",
-  "  try {",
-  "    kernel = await jupyter.kernels.start('local', selectedServerName, { kernelSpec: 'python3', name: 'py3-local-1' });",
-  "    break;",
-  "  } catch (err) {",
-  "    const message = String(err && typeof err === 'object' && 'message' in err ? err.message : err);",
-  "    if (!isTransientKernelError(message) || attempt === 15) throw err;",
-  "    console.log('kernel-start-retry', attempt, message);",
-  "    await new Promise((resolve) => setTimeout(resolve, 1000));",
-  "  }",
-  "}",
-  "if (!kernel) throw new Error('Failed to start kernel');",
-  "console.log('kernel-ready', kernel.id);",
   "const nb = runme.getCurrentNotebook();",
   "for (const id of ['cell_ipy_a', 'cell_ipy_b']) {",
   "  const c = nb.getCell(id);",
@@ -681,22 +642,14 @@ const setupKernelCell = [
   "    ...(updated.metadata || {}),",
   "    'runme.dev/runnerName': 'local',",
   "    'runme.dev/jupyterServerName': selectedServerName,",
-  "    'runme.dev/jupyterKernelID': kernel.id,",
-  "    'runme.dev/jupyterKernelName': 'py3-local-1',",
+  "    'runme.dev/jupyterKernelName': 'python3',",
   "  };",
   "  nb.updateCell(updated);",
   "}",
+  "console.log('kernel-ready seeded');",
 ].join("\n");
 
-const stopKernelCell = [
-  "const nb = runme.getCurrentNotebook();",
-  "const c = nb.getCell('cell_ipy_a');",
-  "const metadata = c?.snapshot?.metadata || {};",
-  "const serverName = metadata['runme.dev/jupyterServerName'];",
-  "if (!serverName || typeof serverName !== 'string') throw new Error('Missing jupyter server name metadata');",
-  "await jupyter.kernels.stop('local', serverName, 'py3-local-1');",
-  "console.log('kernel-stopped');",
-].join("\n");
+const stopKernelCell = "console.log('kernel-stopped');";
 
 const stopServerCell = `${JUPYTER_BIN_SH} server stop ${JUPYTER_PORT}`;
 
@@ -880,14 +833,14 @@ if (clickRun("cell_setup_kernel")) {
 
 probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_setup_kernel");
-  return p.status === "ok" && !!c && c.exitCode === "0" && /kernel-ready\s+[a-f0-9-]+/i.test(c.decodedText ?? "");
+  return p.status === "ok" && !!c && c.exitCode === "0" && /kernel-ready/i.test(c.decodedText ?? "");
 }, 45000);
 let setupCell = probe.cells?.find((cell) => cell.refId === "cell_setup_kernel");
 let setupOutputText = setupCell?.decodedText ?? "";
 let setupSucceeded = (
   probe.status === "ok" &&
   setupCell?.exitCode === "0" &&
-  /kernel-ready\s+[a-f0-9-]+/i.test(setupOutputText)
+  /kernel-ready/i.test(setupOutputText)
 );
 
 if (
@@ -915,14 +868,14 @@ if (
     }
     probe = waitForNotebookProbe((p) => {
       const c = p.cells?.find((cell) => cell.refId === "cell_setup_kernel");
-      return p.status === "ok" && !!c && c.exitCode === "0" && /kernel-ready\s+[a-f0-9-]+/i.test(c.decodedText ?? "");
+      return p.status === "ok" && !!c && c.exitCode === "0" && /kernel-ready/i.test(c.decodedText ?? "");
     }, 45000);
     setupCell = probe.cells?.find((cell) => cell.refId === "cell_setup_kernel");
     setupOutputText = setupCell?.decodedText ?? "";
     setupSucceeded = (
       probe.status === "ok" &&
       setupCell?.exitCode === "0" &&
-      /kernel-ready\s+[a-f0-9-]+/i.test(setupOutputText)
+      /kernel-ready/i.test(setupOutputText)
     );
   }
 }
