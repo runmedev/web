@@ -365,8 +365,8 @@ if (run("command -v agent-browser").status !== 0) {
 }
 
 if (run("command -v jupyter").status !== 0) {
-  console.error("ERROR: jupyter CLI is required on PATH for jupyter CUJ scenario");
-  process.exit(1);
+  pass("Skipped jupyter CUJ: jupyter CLI is not available on PATH");
+  finalizeAndExit();
 }
 
 if (run(`curl -sf ${FRONTEND_URL}`).status !== 0) {
