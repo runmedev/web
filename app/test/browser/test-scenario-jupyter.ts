@@ -500,8 +500,8 @@ run(agentBrowserCommand(`screenshot ${join(OUTPUT_DIR, "scenario-jupyter-cuj-01-
 
 const startServerCell = [
   `${JUPYTER_BIN_SH} server stop ${JUPYTER_PORT} >/dev/null 2>&1 || true`,
-  `nohup ${JUPYTER_BIN_SH} server --no-browser --port=${JUPYTER_PORT} > /tmp/jupyter-server.log 2>&1 < /dev/null &`,
-  "echo $! > /tmp/jupyter-server.pid",
+  `setsid -f ${JUPYTER_BIN_SH} server --no-browser --port=${JUPYTER_PORT} > /tmp/jupyter-server.log 2>&1 || nohup ${JUPYTER_BIN_SH} server --no-browser --port=${JUPYTER_PORT} > /tmp/jupyter-server.log 2>&1 < /dev/null &`,
+  "sleep 1",
   "for i in $(seq 1 60); do",
   `  if ${JUPYTER_BIN_SH} server list --jsonlist | python -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if any((s.get('port') == ${JUPYTER_PORT}) for s in d) else 1)"; then`,
   `    echo 'jupyter-ready ${JUPYTER_PORT}'`,
