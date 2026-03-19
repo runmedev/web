@@ -369,6 +369,13 @@ if (run("command -v jupyter").status !== 0) {
   console.error("ERROR: jupyter CLI is required on PATH for jupyter CUJ scenario");
   process.exit(1);
 }
+const jupyterBinResult = run("command -v jupyter");
+const JUPYTER_BIN = (jupyterBinResult.stdout || "").trim().split(/\r?\n/)[0]?.trim() ?? "";
+if (!JUPYTER_BIN) {
+  console.error("ERROR: unable to resolve jupyter CLI path for jupyter CUJ scenario");
+  process.exit(1);
+}
+const JUPYTER_BIN_SH = shellQuote(JUPYTER_BIN);
 
 if (run(`curl -sf ${FRONTEND_URL}`).status !== 0) {
   console.error(`ERROR: frontend is not running at ${FRONTEND_URL}`);
@@ -492,11 +499,11 @@ if (shouldReloadAfterConfig) {
 run(agentBrowserCommand(`screenshot ${join(OUTPUT_DIR, "scenario-jupyter-cuj-01-initial.png")}`));
 
 const startServerCell = [
-  `jupyter server stop ${JUPYTER_PORT} >/dev/null 2>&1 || true`,
-  `nohup jupyter server --no-browser --port=${JUPYTER_PORT} > /tmp/jupyter-server.log 2>&1 < /dev/null &`,
+  `${JUPYTER_BIN_SH} server stop ${JUPYTER_PORT} >/dev/null 2>&1 || true`,
+  `nohup ${JUPYTER_BIN_SH} server --no-browser --port=${JUPYTER_PORT} > /tmp/jupyter-server.log 2>&1 < /dev/null &`,
   "echo $! > /tmp/jupyter-server.pid",
   "for i in $(seq 1 60); do",
-  `  if jupyter server list --jsonlist | python -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if any((s.get('port') == ${JUPYTER_PORT}) for s in d) else 1)"; then`,
+  `  if ${JUPYTER_BIN_SH} server list --jsonlist | python -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if any((s.get('port') == ${JUPYTER_PORT}) for s in d) else 1)"; then`,
   `    echo 'jupyter-ready ${JUPYTER_PORT}'`,
   "    exit 0",
   "  fi",
@@ -519,6 +526,7 @@ const syncServersCell = [
   "import subprocess",
   "from urllib.parse import urlparse, urlunparse",
   "",
+  `jupyter_bin = ${JSON.stringify(JUPYTER_BIN)}`,
   "candidate_config_dirs = []",
   "env_config_dir = os.environ.get('RUNME_CONFIG_DIR')",
   "if env_config_dir:",
@@ -536,7 +544,7 @@ const syncServersCell = [
   "    seen.add(normalized)",
   "    resolved_config_dirs.append(normalized)",
   "",
-  "servers = json.loads(subprocess.check_output(['jupyter', 'server', 'list', '--jsonlist'], text=True))",
+  "servers = json.loads(subprocess.check_output([jupyter_bin, 'server', 'list', '--jsonlist'], text=True))",
   "if not servers:",
   "    raise RuntimeError('No running jupyter servers found')",
   "for server in servers:",
@@ -646,7 +654,7 @@ const stopKernelCell = [
   "console.log('kernel-stopped');",
 ].join("\n");
 
-const stopServerCell = `jupyter server stop ${JUPYTER_PORT}`;
+const stopServerCell = `${JUPYTER_BIN_SH} server stop ${JUPYTER_PORT}`;
 
 const notebook = {
   metadata: {},
