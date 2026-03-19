@@ -7,6 +7,7 @@ const FRONTEND_URL = process.env.CUJ_FRONTEND_URL ?? "http://localhost:5173";
 const BACKEND_URL = process.env.CUJ_BACKEND_URL ?? "http://localhost:9977";
 const SCENARIO_NOTEBOOK_NAME = "scenario-jupyter-cuj.runme.md";
 const SCENARIO_NOTEBOOK_URI = `local://file/${SCENARIO_NOTEBOOK_NAME}`;
+const JUPYTER_PORT = Number(process.env.CUJ_JUPYTER_PORT ?? "18888");
 const CUJ_ID_TOKEN = process.env.CUJ_ID_TOKEN?.trim() ?? "";
 const CUJ_ACCESS_TOKEN = process.env.CUJ_ACCESS_TOKEN?.trim() ?? CUJ_ID_TOKEN;
 const tokenExpiresAtEnv = Number(process.env.CUJ_TOKEN_EXPIRES_AT ?? "");
@@ -491,22 +492,24 @@ if (shouldReloadAfterConfig) {
 run(agentBrowserCommand(`screenshot ${join(OUTPUT_DIR, "scenario-jupyter-cuj-01-initial.png")}`));
 
 const startServerCell = [
-  "jupyter server stop 8888 >/dev/null 2>&1 || true",
-  "nohup jupyter server --no-browser --port=8888 > /tmp/jupyter-server.log 2>&1 < /dev/null &",
+  `jupyter server stop ${JUPYTER_PORT} >/dev/null 2>&1 || true`,
+  `nohup jupyter server --no-browser --port=${JUPYTER_PORT} > /tmp/jupyter-server.log 2>&1 < /dev/null &`,
   "echo $! > /tmp/jupyter-server.pid",
-  "for i in $(seq 1 20); do",
-  "  if jupyter server list --jsonlist | python -c \"import json,sys; d=json.load(sys.stdin); sys.exit(0 if any((s.get('port') == 8888) for s in d) else 1)\"; then",
-  "    echo 'jupyter-ready 8888'",
+  "for i in $(seq 1 60); do",
+  `  if jupyter server list --jsonlist | python -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if any((s.get('port') == ${JUPYTER_PORT}) for s in d) else 1)"; then`,
+  `    echo 'jupyter-ready ${JUPYTER_PORT}'`,
   "    exit 0",
   "  fi",
   "  sleep 1",
   "done",
-  "echo 'jupyter server on port 8888 did not become ready' >&2",
+  `echo 'jupyter server on port ${JUPYTER_PORT} did not become ready' >&2`,
+  "echo '--- /tmp/jupyter-server.log ---' >&2",
+  "tail -n 200 /tmp/jupyter-server.log >&2 || true",
   "exit 1",
 ].join("\n");
 
 const syncFallbackConfigDir = OUTPUT_DIR.replace(/\\/g, "/");
-const serverAlias = `port-8888-${Date.now()}`;
+const serverAlias = `port-${JUPYTER_PORT}-${Date.now()}`;
 
 const syncServersCell = [
   "python - <<'PY'",
@@ -539,7 +542,7 @@ const syncServersCell = [
   "for server in servers:",
   "    parsed = urlparse(server['url'])",
   "    port = parsed.port or (443 if parsed.scheme == 'https' else 80)",
-  "    if port != 8888:",
+  `    if port != ${JUPYTER_PORT}:`,
   "        continue",
   `    name = '${serverAlias}'`,
   "    path = parsed.path or '/'",
@@ -561,7 +564,7 @@ const syncServersCell = [
   "                exact.unlink()",
   "            except OSError:",
   "                pass",
-  "        for stale in jupyter_dir.glob('port-8888-*.json'):",
+  `        for stale in jupyter_dir.glob('port-${JUPYTER_PORT}-*.json'):`,
   "            try:",
   "                stale.unlink()",
   "            except OSError:",
@@ -576,19 +579,31 @@ const syncServersCell = [
 const setupKernelCell = [
   `console.log(app.runners.update("local", "${BACKEND_WS}"));`,
   'console.log(app.runners.setDefault("local"));',
-  "const servers = await jupyter.servers.get('local');",
+  "const isTransientKernelError = (message) => /(not found|failed to fetch|networkerror|econnrefused|load failed)/i.test(message);",
+  "let servers;",
+  "for (let attempt = 1; attempt <= 30; attempt += 1) {",
+  "  try {",
+  "    servers = await jupyter.servers.get('local');",
+  "    break;",
+  "  } catch (err) {",
+  "    const message = String(err && typeof err === 'object' && 'message' in err ? err.message : err);",
+  "    if (!isTransientKernelError(message) || attempt === 30) throw err;",
+  "    console.log('servers-list-retry', attempt, message);",
+  "    await new Promise((resolve) => setTimeout(resolve, 1000));",
+  "  }",
+  "}",
   "console.log(JSON.stringify(servers));",
   `const selectedServerName = '${serverAlias}';`,
   "console.log('selected-server', selectedServerName);",
   "for (let attempt = 1; attempt <= 30; attempt += 1) {",
   "  try {",
-  "    await jupyter.kernels.get('local', selectedServerName);",
-  "    break;",
+    "    await jupyter.kernels.get('local', selectedServerName);",
+    "    break;",
   "  } catch (err) {",
-  "    const message = String(err && typeof err === 'object' && 'message' in err ? err.message : err);",
-  "    if (!/not found/i.test(message) || attempt === 30) throw err;",
-  "    console.log('server-alias-wait', attempt, message);",
-  "    await new Promise((resolve) => setTimeout(resolve, 1000));",
+    "    const message = String(err && typeof err === 'object' && 'message' in err ? err.message : err);",
+    "    if (!isTransientKernelError(message) || attempt === 30) throw err;",
+    "    console.log('server-alias-wait', attempt, message);",
+    "    await new Promise((resolve) => setTimeout(resolve, 1000));",
   "  }",
   "}",
   "let kernel;",
@@ -598,7 +613,7 @@ const setupKernelCell = [
   "    break;",
   "  } catch (err) {",
   "    const message = String(err && typeof err === 'object' && 'message' in err ? err.message : err);",
-  "    if (!/not found/i.test(message) || attempt === 15) throw err;",
+  "    if (!isTransientKernelError(message) || attempt === 15) throw err;",
   "    console.log('kernel-start-retry', attempt, message);",
   "    await new Promise((resolve) => setTimeout(resolve, 1000));",
   "  }",
@@ -631,7 +646,7 @@ const stopKernelCell = [
   "console.log('kernel-stopped');",
 ].join("\n");
 
-const stopServerCell = "jupyter server stop 8888";
+const stopServerCell = `jupyter server stop ${JUPYTER_PORT}`;
 
 const notebook = {
   metadata: {},
@@ -785,16 +800,21 @@ if (clickRun("cell_sync_servers")) {
 
 probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_sync_servers");
-  return p.status === "ok" && !!c && c.exitCode === "0" && /synced\s+port-8888/i.test(c.decodedText ?? "");
+  return (
+    p.status === "ok" &&
+    !!c &&
+    c.exitCode === "0" &&
+    new RegExp(`synced\\s+port-${JUPYTER_PORT}`, "i").test(c.decodedText ?? "")
+  );
 }, 45000);
 const syncCell = probe.cells?.find((cell) => cell.refId === "cell_sync_servers");
 writeArtifact("scenario-jupyter-cuj-05-sync-output.txt", syncCell?.decodedText ?? "");
 if (
   probe.status === "ok" &&
   syncCell?.exitCode === "0" &&
-  /synced\s+port-8888/i.test(syncCell.decodedText ?? "")
+  new RegExp(`synced\\s+port-${JUPYTER_PORT}`, "i").test(syncCell.decodedText ?? "")
 ) {
-  pass("Server sync bash cell wrote port-8888 config");
+  pass(`Server sync bash cell wrote port-${JUPYTER_PORT} config`);
 } else {
   fail("Server sync bash cell did not write expected config output");
   finalizeAndExit();
