@@ -3,6 +3,11 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import svgr from "vite-plugin-svgr";
 
+const backendProxyTarget =
+  process.env.VITE_BACKEND_PROXY_TARGET ??
+  process.env.CUJ_BACKEND_URL ??
+  "http://127.0.0.1:9977";
+
 // https://vite.dev/config/
 export default defineConfig({
   // Use root-relative assets so LB rewrites to /index.html still load bundles from /.
@@ -24,6 +29,18 @@ export default defineConfig({
     }),
   ],
   server: {
+    proxy: {
+      "/ws": {
+        target: backendProxyTarget,
+        changeOrigin: true,
+        ws: true,
+      },
+      "/v1": {
+        target: backendProxyTarget,
+        changeOrigin: true,
+        ws: true,
+      },
+    },
     headers: {
       // Set these if when we enable webcontainers
       //"Cross-Origin-Opener-Policy": "same-origin",
