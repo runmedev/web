@@ -68,7 +68,7 @@ function toWsUrl(url: string): string {
   }
 }
 
-const FRONTEND_WS = toWsUrl(FRONTEND_URL);
+const BACKEND_WS = toWsUrl(BACKEND_URL);
 
 function run(command: string): { status: number; stdout: string; stderr: string } {
   const effectiveCommand = withAgentBrowserOptions(command);
@@ -398,7 +398,7 @@ run(agentBrowserCommand("record stop"));
 runWithRetry(agentBrowserCommand(`record restart ${MOVIE_PATH}`));
 run(agentBrowserCommand("wait 3500"));
 
-const runnerWsLiteral = `'${FRONTEND_WS.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+const runnerWsLiteral = `'${BACKEND_WS.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 const runnerSeed = run(
   agentBrowserCommand(`eval "(async () => {
     let existing = [];
@@ -625,7 +625,7 @@ const syncServersCell = [
 ].join("\n");
 
 const setupKernelCell = [
-  `console.log(app.runners.update("local", "${FRONTEND_WS}"));`,
+  `console.log(app.runners.update("local", "${BACKEND_WS}"));`,
   'console.log(app.runners.setDefault("local"));',
   `const selectedServerName = '${serverAlias}';`,
   `const selectedKernelAlias = '${kernelAlias}';`,
