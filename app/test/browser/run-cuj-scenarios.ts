@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -607,6 +608,59 @@ function parseAssertionResults(output: string): AssertionResult[] {
   return results;
 }
 
+function parseMoviePaths(output: string): string[] {
+  const paths: string[] = [];
+  const pattern = /^Movie:\s+(.+\.webm)\s*$/gim;
+  let match: RegExpExecArray | null = null;
+  while ((match = pattern.exec(output)) !== null) {
+    const path = (match[1] ?? "").trim();
+    if (path) {
+      paths.push(path);
+    }
+  }
+  return [...new Set(paths)];
+}
+
+async function waitForFileToExistAndStabilize(path: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastSize = -1;
+  let stableReads = 0;
+  while (Date.now() < deadline) {
+    try {
+      const fileStat = await stat(path);
+      if (fileStat.isFile() && fileStat.size > 0) {
+        if (fileStat.size === lastSize) {
+          stableReads += 1;
+          if (stableReads >= 2) {
+            return;
+          }
+        } else {
+          lastSize = fileStat.size;
+          stableReads = 0;
+        }
+      }
+    } catch {
+      // Keep polling until timeout.
+    }
+    await new Promise((resolvePoll) => setTimeout(resolvePoll, 400));
+  }
+  throw new Error(`Timed out waiting for movie artifact at ${path}`);
+}
+
+async function waitForScenarioMovies(output: string): Promise<string[]> {
+  const moviePaths = parseMoviePaths(output);
+  const timeoutMs = Number(process.env.CUJ_MOVIE_WAIT_TIMEOUT_MS ?? "60000");
+  const missing: string[] = [];
+  for (const moviePath of moviePaths) {
+    try {
+      await waitForFileToExistAndStabilize(moviePath, timeoutMs);
+    } catch {
+      missing.push(moviePath);
+    }
+  }
+  return missing;
+}
+
 function makeScenarioBrowserSession(baseSession: string | undefined, scenarioName: string): string {
   const normalizedScenario = scenarioName
     .toLowerCase()
@@ -1044,14 +1098,26 @@ async function main(): Promise<void> {
           scenarioName,
         ),
       };
-      const runResult = runNodeScript(compiled, APP_ROOT, scenarioRunEnv);
+      let runResult = runNodeScript(compiled, APP_ROOT, scenarioRunEnv);
       printOutput(runResult.stdout, runResult.stderr);
 
-      const assertions = parseAssertions(`${runResult.stdout}\n${runResult.stderr}`);
+      let outputCombined = `${runResult.stdout}\n${runResult.stderr}`;
+      const missingMovies = await waitForScenarioMovies(outputCombined);
+      if (missingMovies.length > 0) {
+        const missingMoviesMessage = `[FAIL] Missing scenario movie artifacts: ${missingMovies.join(", ")}`;
+        console.error(missingMoviesMessage);
+        outputCombined = `${outputCombined}\n${missingMoviesMessage}`;
+        runResult = {
+          ...runResult,
+          status: runResult.status === 0 ? 1 : runResult.status,
+          stderr: `${runResult.stderr}\n${missingMoviesMessage}\n`,
+        };
+      }
+
+      const assertions = parseAssertions(outputCombined);
       aggregateAssertions.total += assertions.total;
       aggregateAssertions.passed += assertions.passed;
       aggregateAssertions.failed += assertions.failed;
-      const outputCombined = `${runResult.stdout}\n${runResult.stderr}`;
       const failureMessages = parseFailureMessages(outputCombined);
       const assertionResults = parseAssertionResults(outputCombined);
       if (runResult.status !== 0 && assertionResults.length === 0) {
