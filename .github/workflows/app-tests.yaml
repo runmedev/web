@@ -139,13 +139,23 @@ jobs:
           agent-browser --version
           agent-browser install
 
-      - name: Install Runme CLI
+      - name: Checkout Runme (main)
+        uses: actions/checkout@v4
+        with:
+          repository: runmedev/runme
+          ref: main
+          path: runme-src
+          fetch-depth: 1
+
+      - name: Build Runme CLI from source
         shell: bash
         run: |
           set -euo pipefail
-          npm install -g runme
-          runme --version
-          runme agent --help >/dev/null
+          mkdir -p "${GITHUB_WORKSPACE}/bin"
+          cd runme-src
+          go build -o "${GITHUB_WORKSPACE}/bin/runme" .
+          "${GITHUB_WORKSPACE}/bin/runme" --version
+          "${GITHUB_WORKSPACE}/bin/runme" agent --help >/dev/null
 
       - name: Run CUJ orchestrator
         shell: bash
@@ -165,6 +175,7 @@ jobs:
           CUJ_CMD_TIMEOUT_MS: "120000"
           CUJ_SCENARIO_TIMEOUT_MS: "120000"
           CUJ_SCENARIO_CMD_TIMEOUT_MS: "10000"
+          CUJ_RUNME_AGENT_BIN: ${{ github.workspace }}/bin/runme
         run: |
           set -euo pipefail
           pnpm -C app run cuj:run
