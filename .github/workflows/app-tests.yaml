@@ -135,9 +135,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm install -g agent-browser
+          npm install -g agent-browser@0.21.2
           agent-browser --version
-          agent-browser install --with-deps
+          agent-browser install
 
       - name: Checkout Runme (main)
         uses: actions/checkout@v4
