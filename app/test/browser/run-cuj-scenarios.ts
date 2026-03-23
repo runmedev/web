@@ -647,9 +647,8 @@ async function waitForFileToExistAndStabilize(path: string, timeoutMs: number): 
   throw new Error(`Timed out waiting for movie artifact at ${path}`);
 }
 
-async function waitForScenarioMovies(output: string): Promise<string[]> {
-  const moviePaths = parseMoviePaths(output);
-  const timeoutMs = Number(process.env.CUJ_MOVIE_WAIT_TIMEOUT_MS ?? "60000");
+async function waitForScenarioMovies(moviePaths: string[]): Promise<string[]> {
+  const timeoutMs = Number(process.env.CUJ_MOVIE_WAIT_TIMEOUT_MS ?? "12000");
   const missing: string[] = [];
   for (const moviePath of moviePaths) {
     try {
@@ -1025,6 +1024,7 @@ async function main(): Promise<void> {
     let failures = 0;
     const aggregateAssertions: Assertions = { total: 0, passed: 0, failed: 0 };
     const scenarioResults: ScenarioResult[] = [];
+    const expectedMoviePaths = new Set<string>();
     const scenarioFilterRaw = process.env.CUJ_SCENARIOS?.trim() ?? "";
     const selectedScenarios = scenarioFilterRaw
       ? new Set(
@@ -1101,17 +1101,9 @@ async function main(): Promise<void> {
       let runResult = runNodeScript(compiled, APP_ROOT, scenarioRunEnv);
       printOutput(runResult.stdout, runResult.stderr);
 
-      let outputCombined = `${runResult.stdout}\n${runResult.stderr}`;
-      const missingMovies = await waitForScenarioMovies(outputCombined);
-      if (missingMovies.length > 0) {
-        const missingMoviesMessage = `[FAIL] Missing scenario movie artifacts: ${missingMovies.join(", ")}`;
-        console.error(missingMoviesMessage);
-        outputCombined = `${outputCombined}\n${missingMoviesMessage}`;
-        runResult = {
-          ...runResult,
-          status: runResult.status === 0 ? 1 : runResult.status,
-          stderr: `${runResult.stderr}\n${missingMoviesMessage}\n`,
-        };
+      const outputCombined = `${runResult.stdout}\n${runResult.stderr}`;
+      for (const moviePath of parseMoviePaths(outputCombined)) {
+        expectedMoviePaths.add(moviePath);
       }
 
       const assertions = parseAssertions(outputCombined);
@@ -1145,6 +1137,14 @@ async function main(): Promise<void> {
         console.log(`[CUJ] Completed ${basename}`);
       }
       console.log("");
+    }
+
+    const missingMovies = await waitForScenarioMovies([...expectedMoviePaths]);
+    if (missingMovies.length > 0) {
+      failures += 1;
+      console.error(
+        `[CUJ] Missing movie artifacts after scenario execution: ${missingMovies.join(", ")}`,
+      );
     }
 
     const repo = resolveRepo();
