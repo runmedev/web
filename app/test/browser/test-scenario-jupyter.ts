@@ -340,6 +340,29 @@ function waitForRunButton(cellRefId: string, timeoutMs = 12000): boolean {
   return false;
 }
 
+function waitForCellRunStart(
+  cellRefId: string,
+  previousRunID = "",
+  timeoutMs = 8000,
+): { started: boolean; runID: string } {
+  const priorRunID = String(previousRunID ?? "").trim();
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const probe = probeNotebook();
+    const cell = probe.cells?.find((entry) => entry.refId === cellRefId);
+    const runID = String(cell?.lastRunID ?? "").trim();
+    if (probe.status === "ok" && runID.length > 0 && runID !== priorRunID) {
+      return { started: true, runID };
+    }
+    waitInBrowser(250);
+  }
+  return { started: false, runID: "" };
+}
+
+function captureStepScreenshot(filename: string): void {
+  run(agentBrowserCommand(`screenshot ${join(OUTPUT_DIR, filename)}`));
+}
+
 function configureNotebookFocusedLayout(attempts = 3): { ok: boolean; detail: string } {
   let lastDetail = "no-attempt";
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -404,19 +427,31 @@ function configureNotebookFocusedLayout(attempts = 3): { ok: boolean; detail: st
 }
 
 function clickRun(cellRefId: string): boolean {
-  scrollCellIntoView(cellRefId);
-  run(agentBrowserCommand("wait 220"));
-  const result = run(
-    agentBrowserCommand(`eval "(async () => {
-      const btn = document.querySelector('#cell-toolbar-${cellRefId} button[aria-label^=\\"Run\\"]');
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    scrollCellIntoView(cellRefId);
+    waitInBrowser(220);
+    const detail = evalInBrowser(`(async () => {
+      const toolbar = document.getElementById('cell-toolbar-${cellRefId}');
+      const candidates = toolbar
+        ? Array.from(toolbar.querySelectorAll('button[aria-label], button'))
+        : [];
+      const btn = candidates.find((candidate) => {
+        const label = (candidate.getAttribute('aria-label') || '').trim();
+        const text = (candidate.textContent || '').trim();
+        return /^run/i.test(label) || /^run/i.test(text);
+      });
       if (!btn) return 'missing-run-button';
-      btn.scrollIntoView({ block: 'center', inline: 'nearest' });
+      btn.scrollIntoView({ block: 'start', inline: 'nearest' });
       await new Promise((resolve) => setTimeout(resolve, 100));
       btn.click();
       return 'ok';
-    })()"`),
-  ).stdout.trim();
-  return result.includes("ok");
+    })()`);
+    if (detail.includes("ok")) {
+      return true;
+    }
+    waitInBrowser(250);
+  }
+  return false;
 }
 
 function scrollCellIntoView(cellRefId: string): boolean {
@@ -732,8 +767,10 @@ for (const file of [
   "scenario-jupyter-cuj-06c-kernel-select-b.txt",
   "scenario-jupyter-cuj-06c-kernel-dropdown-b-options.txt",
   "scenario-jupyter-cuj-06c-kernel-dropdown-b.png",
+  "scenario-jupyter-cuj-07a-ipy-a-trigger.png",
   "scenario-jupyter-cuj-07-ipy-a-output.txt",
   "scenario-jupyter-cuj-08-ipy-b-output.txt",
+  "scenario-jupyter-cuj-09a-stop-server-trigger.png",
   "scenario-jupyter-cuj-09-stop-output.txt",
   "scenario-jupyter-cuj-10-probe.json",
 ]) {
@@ -1427,10 +1464,18 @@ if (
   finalizeAndExit();
 }
 
-if (clickRun("cell_ipy_a")) {
+const ipyARunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_ipy_a")?.lastRunID ?? "").trim();
+const ipyATriggeredByClick = clickRun("cell_ipy_a");
+captureStepScreenshot("scenario-jupyter-cuj-07a-ipy-a-trigger.png");
+if (ipyATriggeredByClick) {
   pass("Triggered IPython cell A");
 } else {
-  fail("Failed to trigger IPython cell A");
+  const ipyAStarted = waitForCellRunStart("cell_ipy_a", ipyARunIDBefore, 7000);
+  if (ipyAStarted.started) {
+    pass("Triggered IPython cell A (detected run start despite missing click ack)");
+  } else {
+    fail("Failed to trigger IPython cell A");
+  }
 }
 probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_ipy_a");
@@ -1485,10 +1530,18 @@ if (probe.status === "ok" && stopKernelProbe?.exitCode === "0") {
   fail("Kernel stop cell failed");
 }
 
-if (clickRun("cell_stop_server")) {
+const stopServerRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_stop_server")?.lastRunID ?? "").trim();
+const stopServerTriggeredByClick = clickRun("cell_stop_server");
+captureStepScreenshot("scenario-jupyter-cuj-09a-stop-server-trigger.png");
+if (stopServerTriggeredByClick) {
   pass("Triggered server stop bash cell");
 } else {
-  fail("Failed to trigger server stop bash cell");
+  const stopServerStarted = waitForCellRunStart("cell_stop_server", stopServerRunIDBefore, 7000);
+  if (stopServerStarted.started) {
+    pass("Triggered server stop bash cell (detected run start despite missing click ack)");
+  } else {
+    fail("Failed to trigger server stop bash cell");
+  }
 }
 
 probe = waitForNotebookProbe((p) => {
