@@ -321,6 +321,7 @@ function buildDefaultSummary(): CujSummary {
 
 export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<UploadResult> {
   const outputDir = resolve(options.outputDir ?? process.env.CUJ_OUTPUT_DIR ?? "test/browser/test-output");
+  console.log(`Uploading CUJ artifacts from ${outputDir}`);
   const outputStat = await stat(outputDir).catch(() => null);
   if (!outputStat || !outputStat.isDirectory()) {
     throw new Error(`CUJ output directory not found: ${outputDir}`);
@@ -390,13 +391,20 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
   ]);
 
   const absoluteFiles = await listFilesRecursive(outputDir);
-  const filesToUpload = absoluteFiles
+  const filesByRelative = absoluteFiles
     .map((absolute) => ({
       absolute,
       relative: relativePath(outputDir, absolute),
     }))
-    .filter((file) => !excluded.has(file.relative))
     .sort((a, b) => a.relative.localeCompare(b.relative));
+
+  // Print out all the files to debug why movies aren't being uploaded.
+  for (const file of filesByRelative) {
+    const uploadAction = excluded.has(file.relative) ? "SKIP" : "UPLOAD";
+    console.log(`[CUJ upload] ${uploadAction}: ${file.relative}`);
+  }
+
+  const filesToUpload = filesByRelative.filter((file) => !excluded.has(file.relative));
 
   if (filesToUpload.length === 0) {
     throw new Error(`No files found to upload in ${outputDir}`);
