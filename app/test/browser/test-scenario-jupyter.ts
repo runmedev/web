@@ -72,6 +72,7 @@ function toWsUrl(url: string): string {
 
 const BACKEND_WS = toWsUrl(BACKEND_URL);
 
+// TODO(jlewi): This should really be shared tooling for all the scenarios.
 function run(command: string): { status: number; stdout: string; stderr: string } {
   const effectiveCommand = withAgentBrowserOptions(command);
   console.log(`Running command: ${effectiveCommand}`);
