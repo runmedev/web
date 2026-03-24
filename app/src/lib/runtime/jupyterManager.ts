@@ -1,6 +1,7 @@
 import { getRunnersManager, DEFAULT_RUNNER_PLACEHOLDER } from "./runnersManager";
 import { getAuthData } from "../../token";
 import { getBrowserAdapter } from "../../browserAdapter.client";
+import { appLogger } from "../logging/runtime";
 
 const KERNEL_ALIASES_STORAGE_KEY = "runme/jupyterKernelAliases";
 
@@ -327,18 +328,49 @@ class JupyterManager {
       authData?.idToken?.trim() ??
       getBrowserAdapter().simpleAuth?.idToken?.trim() ??
       "";
+    const method = (init?.method ?? "GET").toUpperCase();
     const headers = new Headers(init?.headers);
     if (token) {
       headers.set("Authorization", `Bearer ${token}`);
     }
-    const response = await fetch(url, {
-      ...init,
-      credentials: "include",
-      headers,
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        ...init,
+        credentials: "include",
+        headers,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appLogger.error("Jupyter request failed before receiving a response", {
+        attrs: {
+          scope: "jupyter.fetch",
+          method,
+          url,
+          hasAuthToken: Boolean(token),
+          error: message,
+        },
+      });
+      throw new Error(`Jupyter request failed (${method} ${url}): ${message}`);
+    }
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(text || `Request failed with ${response.status}`);
+      const bodyPreview = text.slice(0, 400);
+      appLogger.error("Jupyter request returned non-success response", {
+        attrs: {
+          scope: "jupyter.fetch",
+          method,
+          url,
+          status: response.status,
+          statusText: response.statusText,
+          bodyPreview,
+        },
+      });
+      throw new Error(
+        `Jupyter request failed (${method} ${url}) with ${response.status} ${response.statusText}: ${
+          bodyPreview || "<empty body>"
+        }`,
+      );
     }
     if (response.status === 204 || response.status === 205) {
       return undefined as T;
@@ -347,7 +379,24 @@ class JupyterManager {
     if (!text.trim()) {
       return undefined as T;
     }
-    return JSON.parse(text) as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const bodyPreview = text.slice(0, 400);
+      appLogger.error("Jupyter response was not valid JSON", {
+        attrs: {
+          scope: "jupyter.fetch",
+          method,
+          url,
+          error: message,
+          bodyPreview,
+        },
+      });
+      throw new Error(
+        `Invalid JSON from Jupyter request (${method} ${url}): ${message}. Body: ${bodyPreview}`,
+      );
+    }
   }
 
   private resolveDefaultRunnerName(): string {
