@@ -167,7 +167,7 @@ function buildBackendOrigins(frontendUrl: string): string[] {
 function resolveOidcAuthConfig(): OidcAuthConfig {
   const enabled = (process.env.CUJ_USE_AUTH ?? "true").toLowerCase() !== "false";
   const host = process.env.CUJ_OIDC_HOST ?? "127.0.0.1";
-  const port = Number(process.env.CUJ_OIDC_PORT ?? "9988");
+  const port = Number(process.env.CUJ_OIDC_PORT ?? "19988");
   const issuer = process.env.CUJ_OIDC_ISSUER ?? `http://${host}:${port}`;
   const discoveryUrl = process.env.CUJ_OIDC_DISCOVERY_URL ??
     `${issuer}/.well-known/openid-configuration`;
