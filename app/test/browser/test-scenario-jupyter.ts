@@ -340,6 +340,69 @@ function waitForRunButton(cellRefId: string, timeoutMs = 12000): boolean {
   return false;
 }
 
+function configureNotebookFocusedLayout(attempts = 3): { ok: boolean; detail: string } {
+  let lastDetail = "no-attempt";
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const detail = evalInBrowser(`(async () => {
+      const result = {
+        appConsoleCollapsed: false,
+        sidePanelCollapsed: false,
+        activePanelLabel: '',
+      };
+      try {
+        localStorage.setItem('runme.appConsoleCollapsed', 'true');
+        localStorage.removeItem('aisre.appConsoleCollapsed');
+      } catch {}
+      try {
+        localStorage.removeItem('runme.sidePanel.active');
+        localStorage.removeItem('aisre.sidePanel.active');
+      } catch {}
+
+      const appConsoleCollapseButton = document.querySelector('#app-console-header button[aria-label=\"Collapse app console\"]');
+      if (appConsoleCollapseButton instanceof HTMLButtonElement) {
+        appConsoleCollapseButton.click();
+      }
+
+      const activePanelButton = document.querySelector(
+        'button[aria-label=\"Toggle Explorer panel\"][aria-pressed=\"true\"], button[aria-label=\"Toggle ChatKit panel\"][aria-pressed=\"true\"]'
+      );
+      if (activePanelButton instanceof HTMLButtonElement) {
+        result.activePanelLabel = activePanelButton.getAttribute('aria-label') || '';
+        activePanelButton.click();
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 120));
+
+      const appConsoleStillExpanded = Boolean(
+        document.querySelector('#app-console-header button[aria-label=\"Collapse app console\"]')
+      );
+      const activePanelStillVisible = Boolean(
+        document.querySelector(
+          'button[aria-label=\"Toggle Explorer panel\"][aria-pressed=\"true\"], button[aria-label=\"Toggle ChatKit panel\"][aria-pressed=\"true\"]'
+        )
+      );
+      result.appConsoleCollapsed = !appConsoleStillExpanded;
+      result.sidePanelCollapsed = !activePanelStillVisible;
+      return JSON.stringify(result);
+    })()`);
+
+    lastDetail = detail;
+    try {
+      const parsed = JSON.parse(detail) as {
+        appConsoleCollapsed?: boolean;
+        sidePanelCollapsed?: boolean;
+      };
+      if (parsed.appConsoleCollapsed && parsed.sidePanelCollapsed) {
+        return { ok: true, detail };
+      }
+    } catch {
+      // Retry when output is not parseable.
+    }
+    waitInBrowser(250);
+  }
+  return { ok: false, detail: lastDetail };
+}
+
 function clickRun(cellRefId: string): boolean {
   scrollCellIntoView(cellRefId);
   run(agentBrowserCommand("wait 220"));
@@ -650,8 +713,10 @@ for (const file of [
   "scenario-jupyter-cuj-runner-seed.txt",
   "scenario-jupyter-cuj-auth-fallback.txt",
   "scenario-jupyter-cuj-01-initial.png",
+  "scenario-jupyter-cuj-01a-layout.txt",
   "scenario-jupyter-cuj-seed-result.txt",
   "scenario-jupyter-cuj-02-after-seed.txt",
+  "scenario-jupyter-cuj-02a-layout-post-seed.txt",
   "scenario-jupyter-cuj-03-opened.txt",
   "scenario-jupyter-cuj-04-start-output.txt",
   "scenario-jupyter-cuj-05-sync-output.txt",
@@ -810,6 +875,14 @@ if (CUJ_ID_TOKEN) {
 if (shouldReloadAfterConfig) {
   run(agentBrowserCommand("reload"));
   run(agentBrowserCommand("wait 2200"));
+}
+
+const initialLayout = configureNotebookFocusedLayout();
+writeArtifact("scenario-jupyter-cuj-01a-layout.txt", initialLayout.detail);
+if (initialLayout.ok) {
+  pass("Applied notebook-focused layout (app console minimized, side panel collapsed)");
+} else {
+  fail(`Could not fully apply notebook-focused layout (${initialLayout.detail})`);
 }
 
 run(agentBrowserCommand(`screenshot ${join(OUTPUT_DIR, "scenario-jupyter-cuj-01-initial.png")}`));
@@ -1120,6 +1193,14 @@ if (seedResult.includes("ok")) {
 
 run(agentBrowserCommand("reload"));
 run(agentBrowserCommand("wait 2200"));
+
+const postSeedLayout = configureNotebookFocusedLayout();
+writeArtifact("scenario-jupyter-cuj-02a-layout-post-seed.txt", postSeedLayout.detail);
+if (postSeedLayout.ok) {
+  pass("Re-applied notebook-focused layout after notebook reload");
+} else {
+  fail(`Could not re-apply notebook-focused layout after notebook reload (${postSeedLayout.detail})`);
+}
 
 let snapshot = run(agentBrowserCommand("snapshot -i")).stdout;
 writeArtifact("scenario-jupyter-cuj-02-after-seed.txt", snapshot);
