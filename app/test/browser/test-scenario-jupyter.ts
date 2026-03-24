@@ -1072,8 +1072,19 @@ const setupKernelCell = [
 ].join("\n");
 
 const stopKernelCell = [
-  `await jupyter.kernels.stop('local', '${serverAlias}', '${kernelAlias}');`,
-  "console.log('kernel-stopped');",
+  `const selectedServerName = '${serverAlias}';`,
+  "const nb = runme.getCurrentNotebook();",
+  "const ipyA = nb?.getCell('cell_ipy_a')?.snapshot;",
+  "const ipyB = nb?.getCell('cell_ipy_b')?.snapshot;",
+  "const kernelIdA = typeof ipyA?.metadata?.['runme.dev/jupyterKernelID'] === 'string' ? ipyA.metadata['runme.dev/jupyterKernelID'].trim() : '';",
+  "const kernelIdB = typeof ipyB?.metadata?.['runme.dev/jupyterKernelID'] === 'string' ? ipyB.metadata['runme.dev/jupyterKernelID'].trim() : '';",
+  "const kernelId = kernelIdA || kernelIdB;",
+  "if (!kernelId) {",
+  "  throw new Error('Missing runme.dev/jupyterKernelID on IPython cell metadata');",
+  "}",
+  "console.log('[stop] using-kernel-id', kernelId);",
+  "await jupyter.kernels.stop('local', selectedServerName, kernelId);",
+  "console.log('kernel-stopped', kernelId);",
 ].join("\n");
 
 const stopServerCell = [
