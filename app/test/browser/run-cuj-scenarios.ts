@@ -1183,7 +1183,7 @@ async function main(): Promise<void> {
     writeFileSync(scenarioResultsPath, JSON.stringify(scenarioResults, null, 2), "utf-8");
 
     const shouldUpload = (process.env.CUJ_UPLOAD ?? "true").toLowerCase() !== "false";
-    if (shouldUpload) {
+    if (shouldUpload) {      
       const uploadPrefix = process.env.CUJ_ARTIFACT_PREFIX ??
         (repo
           ? `cuj-runs/${repo.replace(/\//g, "-")}/${summary.run_id}/${summary.run_attempt}`

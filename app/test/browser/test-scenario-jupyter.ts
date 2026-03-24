@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { waitForCellExecution } from "./notebook-execution.js";
@@ -530,6 +530,16 @@ function captureSetupDiagnostics(serverName: string): string {
 function finalizeAndExit(): never {
   run(agentBrowserCommand("wait 800"));
   run(agentBrowserCommand("record stop"));
+  const movieExists = existsSync(MOVIE_PATH);
+  const movieSizeBytes = movieExists ? statSync(MOVIE_PATH).size : 0;
+  console.log(
+    `[movie-check] path=${MOVIE_PATH} exists=${movieExists} size_bytes=${movieSizeBytes}`,
+  );
+  if (movieExists && movieSizeBytes > 0) {
+    pass(`Movie exists after record stop: ${MOVIE_PATH}`);
+  } else {
+    fail(`Movie missing or empty after record stop: ${MOVIE_PATH}`);
+  }
   if (!AGENT_BROWSER_KEEP_OPEN) {
     console.log("Closing agent browser session...");
     run(agentBrowserCommand("close"));
