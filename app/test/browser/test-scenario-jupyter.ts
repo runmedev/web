@@ -76,6 +76,7 @@ function run(command: string): { status: number; stdout: string; stderr: string 
   const effectiveCommand = withAgentBrowserOptions(command);
   console.log(`Running command: ${effectiveCommand}`);
   const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "30000");
+  const maxLogChars = Number(process.env.CUJ_SCENARIO_CMD_LOG_CHARS ?? "4000");
   const result = spawnSync(effectiveCommand, {
     shell: true,
     encoding: "utf-8",
@@ -90,11 +91,23 @@ function run(command: string): { status: number; stdout: string; stderr: string 
   const timeoutHint = timedOut
     ? `\n[scenario-timeout] command timed out after ${timeoutMs}ms: ${effectiveCommand}\n`
     : "";
-  return {
-    status: result.status ?? (timedOut ? 124 : 1),
-    stdout: result.stdout ?? "",
-    stderr: `${result.stderr ?? ""}${timeoutHint}`,
+  const status = result.status ?? (timedOut ? 124 : 1);
+  const stdout = result.stdout ?? "";
+  const stderr = `${result.stderr ?? ""}${timeoutHint}`;
+  const clip = (value: string): string => {
+    if (!Number.isFinite(maxLogChars) || maxLogChars <= 0 || value.length <= maxLogChars) {
+      return value;
+    }
+    return `${value.slice(0, maxLogChars)}\n...[truncated ${value.length - maxLogChars} chars]...`;
   };
+  console.log(`[run-result] status=${status} command=${effectiveCommand}`);
+  if (stdout.trim()) {
+    console.log(`[run-stdout]\n${clip(stdout)}`);
+  }
+  if (stderr.trim()) {
+    console.log(`[run-stderr]\n${clip(stderr)}`);
+  }
+  return { status, stdout, stderr };
 }
 
 function shellQuote(value: string): string {
@@ -527,15 +540,74 @@ function captureSetupDiagnostics(serverName: string): string {
   return parseAgentEvalString(`${raw.stdout}\n${raw.stderr}`.trim());
 }
 
+function sleepMs(ms: number): void {
+  const timeoutMs = Number.isFinite(ms) && ms > 0 ? Math.floor(ms) : 0;
+  if (timeoutMs <= 0) {
+    return;
+  }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, timeoutMs);
+}
+
+function waitForMovieFile(
+  path: string,
+  timeoutMs = 15000,
+  pollMs = 250,
+): { exists: boolean; sizeBytes: number; stable: boolean; waitedMs: number } {
+  const started = Date.now();
+  const deadline = started + timeoutMs;
+  let lastSize = -1;
+  let stableCount = 0;
+
+  while (Date.now() <= deadline) {
+    if (existsSync(path)) {
+      const sizeBytes = statSync(path).size;
+      if (sizeBytes > 0) {
+        if (sizeBytes === lastSize) {
+          stableCount += 1;
+        } else {
+          stableCount = 0;
+        }
+        if (stableCount >= 2) {
+          return {
+            exists: true,
+            sizeBytes,
+            stable: true,
+            waitedMs: Date.now() - started,
+          };
+        }
+      }
+      lastSize = sizeBytes;
+    }
+    sleepMs(pollMs);
+  }
+
+  const exists = existsSync(path);
+  const sizeBytes = exists ? statSync(path).size : 0;
+  return {
+    exists,
+    sizeBytes,
+    stable: false,
+    waitedMs: Date.now() - started,
+  };
+}
+
 function finalizeAndExit(): never {
   run(agentBrowserCommand("wait 800"));
-  run(agentBrowserCommand("record stop"));
-  const movieExists = existsSync(MOVIE_PATH);
-  const movieSizeBytes = movieExists ? statSync(MOVIE_PATH).size : 0;
+  const recordStop = run(agentBrowserCommand("record stop"));
+  const recordStopOutput = `${recordStop.stdout}\n${recordStop.stderr}`.trim();
   console.log(
-    `[movie-check] path=${MOVIE_PATH} exists=${movieExists} size_bytes=${movieSizeBytes}`,
+    `[movie-check] record-stop status=${recordStop.status} output=${JSON.stringify(recordStopOutput)}`,
   );
-  if (movieExists && movieSizeBytes > 0) {
+  if (recordStop.status === 0) {
+    pass("record stop command succeeded");
+  } else {
+    fail(`record stop command failed with status ${recordStop.status}`);
+  }
+  const movieProbe = waitForMovieFile(MOVIE_PATH);
+  console.log(
+    `[movie-check] path=${MOVIE_PATH} exists=${movieProbe.exists} size_bytes=${movieProbe.sizeBytes} stable=${movieProbe.stable} waited_ms=${movieProbe.waitedMs}`,
+  );
+  if (movieProbe.exists && movieProbe.sizeBytes > 0) {
     pass(`Movie exists after record stop: ${MOVIE_PATH}`);
   } else {
     fail(`Movie missing or empty after record stop: ${MOVIE_PATH}`);
