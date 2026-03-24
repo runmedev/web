@@ -175,6 +175,8 @@ jobs:
           CUJ_CMD_TIMEOUT_MS: "120000"
           CUJ_SCENARIO_TIMEOUT_MS: "120000"
           CUJ_SCENARIO_CMD_TIMEOUT_MS: "10000"
+          # DO NOT COMMIT: temporary scope to jupyter-only CUJ to speed CI iteration while debugging movie artifacts.
+          CUJ_SCENARIOS: "jupyter"
           CUJ_RUNME_AGENT_BIN: ${{ github.workspace }}/bin/runme
         run: |
           set -euo pipefail
