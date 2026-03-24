@@ -91,8 +91,6 @@ AGENT_BROWSER_HEADED=true \
 pnpm -C app run cuj:run
 ```
 
-`CUJ_AGENT_BROWSER_*` env vars are still accepted for backward compatibility.
-
 To keep the browser session open after a scenario (useful when reusing an
 already logged-in session), add:
 
