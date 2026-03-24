@@ -29,12 +29,20 @@ const SCRIPT_DIR =
     : CURRENT_FILE_DIR;
 const OUTPUT_DIR = join(SCRIPT_DIR, "test-output");
 const MOVIE_PATH = join(OUTPUT_DIR, "scenario-hello-world-walkthrough.webm");
-const AGENT_BROWSER_SESSION = process.env.CUJ_AGENT_BROWSER_SESSION?.trim() ?? "";
-const AGENT_BROWSER_PROFILE = process.env.CUJ_AGENT_BROWSER_PROFILE?.trim() ?? "";
-const AGENT_BROWSER_HEADED = (process.env.CUJ_AGENT_BROWSER_HEADED ?? "false")
+const AGENT_BROWSER_SESSION = (
+  process.env.AGENT_BROWSER_SESSION ??
+  process.env.CUJ_AGENT_BROWSER_SESSION ??
+  ""
+).trim();
+const AGENT_BROWSER_PROFILE = (
+  process.env.AGENT_BROWSER_PROFILE ??
+  process.env.CUJ_AGENT_BROWSER_PROFILE ??
+  ""
+).trim();
+const AGENT_BROWSER_HEADED = (process.env.AGENT_BROWSER_HEADED ?? process.env.CUJ_AGENT_BROWSER_HEADED ?? "false")
   .trim()
   .toLowerCase() === "true";
-const AGENT_BROWSER_KEEP_OPEN = (process.env.CUJ_AGENT_BROWSER_KEEP_OPEN ?? "false")
+const AGENT_BROWSER_KEEP_OPEN = (process.env.AGENT_BROWSER_KEEP_OPEN ?? process.env.CUJ_AGENT_BROWSER_KEEP_OPEN ?? "false")
   .trim()
   .toLowerCase() === "true";
 

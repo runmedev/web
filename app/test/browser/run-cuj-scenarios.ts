@@ -672,6 +672,41 @@ function makeScenarioBrowserSession(baseSession: string | undefined, scenarioNam
   return `cuj-${Date.now()}-${normalizedScenario}`;
 }
 
+function chooseBrowserEnvValue(
+  env: NodeJS.ProcessEnv,
+  primaryKey: string,
+  fallbackKey: string,
+): string | undefined {
+  const primary = env[primaryKey]?.trim();
+  if (primary) {
+    return primary;
+  }
+  const fallback = env[fallbackKey]?.trim();
+  if (fallback) {
+    return fallback;
+  }
+  return undefined;
+}
+
+function buildScenarioBrowserEnv(
+  env: NodeJS.ProcessEnv,
+  scenarioName: string,
+): NodeJS.ProcessEnv {
+  const sessionBase = chooseBrowserEnvValue(env, "AGENT_BROWSER_SESSION", "CUJ_AGENT_BROWSER_SESSION");
+  const scenarioSession = makeScenarioBrowserSession(sessionBase, scenarioName);
+  const profile = chooseBrowserEnvValue(env, "AGENT_BROWSER_PROFILE", "CUJ_AGENT_BROWSER_PROFILE");
+  const headed = chooseBrowserEnvValue(env, "AGENT_BROWSER_HEADED", "CUJ_AGENT_BROWSER_HEADED");
+  const keepOpen = chooseBrowserEnvValue(env, "AGENT_BROWSER_KEEP_OPEN", "CUJ_AGENT_BROWSER_KEEP_OPEN");
+  return {
+    ...env,
+    AGENT_BROWSER_SESSION: scenarioSession,
+    CUJ_AGENT_BROWSER_SESSION: scenarioSession,
+    ...(profile ? { AGENT_BROWSER_PROFILE: profile, CUJ_AGENT_BROWSER_PROFILE: profile } : {}),
+    ...(headed ? { AGENT_BROWSER_HEADED: headed, CUJ_AGENT_BROWSER_HEADED: headed } : {}),
+    ...(keepOpen ? { AGENT_BROWSER_KEEP_OPEN: keepOpen, CUJ_AGENT_BROWSER_KEEP_OPEN: keepOpen } : {}),
+  };
+}
+
 function resolveRepo(): string | null {
   if (process.env.GITHUB_REPOSITORY) {
     return process.env.GITHUB_REPOSITORY;
@@ -1091,13 +1126,7 @@ async function main(): Promise<void> {
       }
 
       const compiled = join(GENERATED_DIR, `${basename.replace(/\.ts$/, "")}.js`);
-      const scenarioRunEnv: NodeJS.ProcessEnv = {
-        ...scenarioEnv,
-        AGENT_BROWSER_SESSION: makeScenarioBrowserSession(
-          scenarioEnv.AGENT_BROWSER_SESSION,
-          scenarioName,
-        ),
-      };
+      const scenarioRunEnv: NodeJS.ProcessEnv = buildScenarioBrowserEnv(scenarioEnv, scenarioName);
       let runResult = runNodeScript(compiled, APP_ROOT, scenarioRunEnv);
       printOutput(runResult.stdout, runResult.stderr);
 

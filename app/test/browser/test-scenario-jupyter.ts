@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { waitForCellExecution } from "./notebook-execution.js";
 
 const FRONTEND_URL = process.env.CUJ_FRONTEND_URL ?? "http://localhost:5173";
 const BACKEND_URL = process.env.CUJ_BACKEND_URL ?? "http://localhost:9977";
@@ -22,12 +23,20 @@ const SCRIPT_DIR =
     : CURRENT_FILE_DIR;
 const OUTPUT_DIR = join(SCRIPT_DIR, "test-output");
 const MOVIE_PATH = join(OUTPUT_DIR, "scenario-jupyter-cuj-walkthrough.webm");
-const AGENT_BROWSER_SESSION = process.env.CUJ_AGENT_BROWSER_SESSION?.trim() ?? "";
-const AGENT_BROWSER_PROFILE = process.env.CUJ_AGENT_BROWSER_PROFILE?.trim() ?? "";
-const AGENT_BROWSER_HEADED = (process.env.CUJ_AGENT_BROWSER_HEADED ?? "false")
+const AGENT_BROWSER_SESSION = (
+  process.env.AGENT_BROWSER_SESSION ??
+  process.env.CUJ_AGENT_BROWSER_SESSION ??
+  ""
+).trim();
+const AGENT_BROWSER_PROFILE = (
+  process.env.AGENT_BROWSER_PROFILE ??
+  process.env.CUJ_AGENT_BROWSER_PROFILE ??
+  ""
+).trim();
+const AGENT_BROWSER_HEADED = (process.env.AGENT_BROWSER_HEADED ?? process.env.CUJ_AGENT_BROWSER_HEADED ?? "false")
   .trim()
   .toLowerCase() === "true";
-const AGENT_BROWSER_KEEP_OPEN = (process.env.CUJ_AGENT_BROWSER_KEEP_OPEN ?? "false")
+const AGENT_BROWSER_KEEP_OPEN = (process.env.AGENT_BROWSER_KEEP_OPEN ?? process.env.CUJ_AGENT_BROWSER_KEEP_OPEN ?? "false")
   .trim()
   .toLowerCase() === "true";
 
@@ -37,6 +46,7 @@ let totalCount = 0;
 
 type ProbeCell = {
   refId?: string;
+  lastRunID?: string;
   exitCode?: string;
   pid?: string;
   decodedText?: string;
@@ -72,6 +82,7 @@ const BACKEND_WS = toWsUrl(BACKEND_URL);
 
 function run(command: string): { status: number; stdout: string; stderr: string } {
   const effectiveCommand = withAgentBrowserOptions(command);
+  console.log(`Running command: ${effectiveCommand}`);
   const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "30000");
   const result = spawnSync(effectiveCommand, {
     shell: true,
@@ -98,7 +109,7 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
-function agentBrowserCommand(subcommand: string): string {
+function agentBrowserCommand(subcommand: string): string {  
   const parts: string[] = ["agent-browser"];
   if (AGENT_BROWSER_SESSION) {
     parts.push("--session", shellQuote(AGENT_BROWSER_SESSION));
@@ -223,10 +234,12 @@ function probeNotebook(): NotebookProbe {
           }
         }
         const meta = cell?.metadata && typeof cell.metadata === 'object' ? cell.metadata : {};
+        const rawLastRunID = meta['runme.dev/lastRunID'];
         const rawExitCode = meta['runme.dev/exitCode'];
         const rawPID = meta['runme.dev/pid'];
         return {
           refId: cell?.refId || '',
+          lastRunID: rawLastRunID === undefined || rawLastRunID === null ? '' : String(rawLastRunID),
           exitCode: rawExitCode === undefined || rawExitCode === null ? '' : String(rawExitCode),
           pid: rawPID === undefined || rawPID === null ? '' : String(rawPID),
           decodedText: decodedChunks.join('\\n'),
@@ -263,6 +276,25 @@ function waitForNotebookProbe(
   return probeNotebook();
 }
 
+function waitForCellExecutionCompletion(
+  cellRefId: string,
+  previousRunID = "",
+  timeoutMs = 60000,
+) {
+  return waitForCellExecution<NotebookProbe, ProbeCell>({
+    cellRefId,
+    previousRunID,
+    timeoutMs,
+    pollMs: 300,
+    expectedProbeStatus: "ok",
+    probe: probeNotebook,
+    wait: (ms: number) => {
+      const waitMs = Number.isFinite(ms) && ms > 0 ? Math.floor(ms) : 1;
+      run(agentBrowserCommand(`wait ${waitMs}`));
+    },
+  });
+}
+
 function waitForRunButton(cellRefId: string, timeoutMs = 12000): boolean {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -282,15 +314,123 @@ function waitForRunButton(cellRefId: string, timeoutMs = 12000): boolean {
 }
 
 function clickRun(cellRefId: string): boolean {
+  scrollCellIntoView(cellRefId);
+  run(agentBrowserCommand("wait 220"));
   const result = run(
     agentBrowserCommand(`eval "(async () => {
       const btn = document.querySelector('#cell-toolbar-${cellRefId} button[aria-label^=\\"Run\\"]');
       if (!btn) return 'missing-run-button';
+      btn.scrollIntoView({ block: 'center', inline: 'nearest' });
+      await new Promise((resolve) => setTimeout(resolve, 100));
       btn.click();
       return 'ok';
     })()"`),
   ).stdout.trim();
   return result.includes("ok");
+}
+
+function scrollCellIntoView(cellRefId: string): boolean {
+  const raw = run(
+    agentBrowserCommand(`eval "(async () => {
+      const toolbar = document.getElementById('cell-toolbar-${cellRefId}');
+      const runButton = toolbar?.querySelector('button[aria-label^=\\\"Run\\\"]');
+      const output = document.getElementById('cell-output-${cellRefId}');
+      const action = document.getElementById('code-action-${cellRefId}');
+      const target = runButton || toolbar || action || output;
+      if (!target) return 'missing';
+      target.scrollIntoView({ block: 'center', inline: 'nearest' });
+      return 'ok';
+    })()"`),
+  ).stdout;
+  return parseAgentEvalString(raw).includes("ok");
+}
+
+function selectKernelForCell(
+  cellRefId: string,
+  kernelAlias: string,
+  timeoutMs = 30000,
+): { ok: boolean; detail: string } {
+  const escapedAlias = kernelAlias.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  const started = Date.now();
+  let lastDetail = "no-attempt";
+  while (Date.now() - started < timeoutMs) {
+    scrollCellIntoView(cellRefId);
+    const raw = run(
+      agentBrowserCommand(`eval "(async () => {
+        const select = document.getElementById('kernel-select-${cellRefId}');
+        if (!select || !(select instanceof HTMLSelectElement)) {
+          return 'missing-select';
+        }
+        const options = Array.from(select.options ?? []).map((option) => ({
+          value: option.value,
+          label: (option.textContent || '').trim(),
+        }));
+        const target = options.find((option) =>
+          option.label === '${escapedAlias}' ||
+          option.label.includes('${escapedAlias}')
+        );
+        if (!target) {
+          return 'missing-option:' + options.map((option) => option.label).join('|');
+        }
+        if (select.value !== target.value) {
+          select.value = target.value;
+          select.dispatchEvent(new Event('input', { bubbles: true }));
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        const selected = (select.selectedOptions?.[0]?.textContent || '').trim();
+        return 'selected:' + selected + ':' + select.value;
+      })()"`),
+    );
+    lastDetail = parseAgentEvalString(raw.stdout || raw.stderr || "").trim();
+    if (lastDetail.startsWith("selected:")) {
+      return { ok: true, detail: lastDetail };
+    }
+    run(agentBrowserCommand("wait 300"));
+  }
+  return { ok: false, detail: lastDetail };
+}
+
+function captureKernelDropdownSnapshot(
+  cellRefId: string,
+  screenshotName: string,
+  optionsName: string,
+): { ok: boolean; detail: string } {
+  scrollCellIntoView(cellRefId);
+  run(agentBrowserCommand("wait 200"));
+  const inspect = run(
+    agentBrowserCommand(`eval "(async () => {
+      const select = document.getElementById('kernel-select-${cellRefId}');
+      if (!select || !(select instanceof HTMLSelectElement)) {
+        return JSON.stringify({ status: 'missing-select', options: [] });
+      }
+      const options = Array.from(select.options ?? []).map((option) => ({
+        value: option.value,
+        label: (option.textContent || '').trim(),
+      }));
+      // Force a listbox-style render so screenshot captures all visible options.
+      const visibleRows = Math.max(2, Math.min(options.length, 8));
+      select.size = visibleRows;
+      select.style.minWidth = '320px';
+      select.style.height = 'auto';
+      select.focus();
+      return JSON.stringify({ status: 'ok', visibleRows, options });
+    })()"`),
+  );
+  const detail = parseAgentEvalString(`${inspect.stdout}\n${inspect.stderr}`.trim());
+  writeArtifact(optionsName, detail);
+  run(agentBrowserCommand(`screenshot ${join(OUTPUT_DIR, screenshotName)}`));
+  // Restore normal select rendering.
+  run(
+    agentBrowserCommand(`eval "(async () => {
+      const select = document.getElementById('kernel-select-${cellRefId}');
+      if (!select || !(select instanceof HTMLSelectElement)) return 'missing-select';
+      select.size = 0;
+      select.style.minWidth = '';
+      select.style.height = '';
+      return 'ok';
+    })()"`),
+  );
+  return { ok: inspect.status === 0, detail };
 }
 
 function getRenderedCellOutputText(cellRefId: string): string {
@@ -339,11 +479,70 @@ function waitForRenderedCellOutput(
   return getRenderedCellOutputText(cellRefId);
 }
 
+function captureSetupDiagnostics(serverName: string): string {
+  const escapedServerName = serverName.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  const raw = run(
+    agentBrowserCommand(`eval "(async () => {
+      const out = {};
+      try {
+        out.runnersGet = app.runners.get();
+      } catch (error) {
+        out.runnersGetError = String(error);
+      }
+      try {
+        out.runnersGetDefault = app.runners.getDefault();
+      } catch (error) {
+        out.runnersGetDefaultError = String(error);
+      }
+      try {
+        out.servers = await jupyter.servers.get('local');
+      } catch (error) {
+        out.serversError = String(error);
+      }
+      try {
+        out.kernels = await jupyter.kernels.get('local', '${escapedServerName}');
+      } catch (error) {
+        out.kernelsError = String(error);
+      }
+      try {
+        const selectA = document.getElementById('kernel-select-cell_ipy_a');
+        const selectB = document.getElementById('kernel-select-cell_ipy_b');
+        const readOptions = (select) => {
+          if (!select || !(select instanceof HTMLSelectElement)) return [];
+          return Array.from(select.options ?? []).map((option) => ({
+            value: option.value,
+            label: (option.textContent || '').trim(),
+          }));
+        };
+        out.kernelSelectAOptions = readOptions(selectA);
+        out.kernelSelectBOptions = readOptions(selectB);
+      } catch (error) {
+        out.kernelSelectError = String(error);
+      }
+      try {
+        const setupRunButton = document.querySelector('#cell-toolbar-cell_setup_kernel button[aria-label]');
+        out.setupRunButton = {
+          ariaLabel: setupRunButton?.getAttribute?.('aria-label') || '',
+          text: (setupRunButton?.textContent || '').trim(),
+          disabled: Boolean(setupRunButton && 'disabled' in setupRunButton ? setupRunButton.disabled : false),
+        };
+      } catch (error) {
+        out.setupRunButtonError = String(error);
+      }
+      return JSON.stringify(out, null, 2);
+    })()"`),
+  );
+  return parseAgentEvalString(`${raw.stdout}\n${raw.stderr}`.trim());
+}
+
 function finalizeAndExit(): never {
   run(agentBrowserCommand("wait 800"));
   run(agentBrowserCommand("record stop"));
   if (!AGENT_BROWSER_KEEP_OPEN) {
+    console.log("Closing agent browser session...");
     run(agentBrowserCommand("close"));
+  } else {
+    console.log("Keeping agent browser session open as per configuration");
   }
   console.log(`Assertions: ${totalCount}, Passed: ${passCount}, Failed: ${failCount}`);
   process.exit(failCount > 0 ? 1 : 0);
@@ -362,6 +561,16 @@ for (const file of [
   "scenario-jupyter-cuj-05-sync-output.txt",
   "scenario-jupyter-cuj-06a-kernel-output.txt",
   "scenario-jupyter-cuj-06-setup-output.txt",
+  "scenario-jupyter-cuj-06-setup-rendered-output.txt",
+  "scenario-jupyter-cuj-06-setup-cell-probe.json",
+  "scenario-jupyter-cuj-06-setup-diagnostics.json",
+  "scenario-jupyter-cuj-06-setup-screenshot.png",
+  "scenario-jupyter-cuj-06b-kernel-select-a.txt",
+  "scenario-jupyter-cuj-06b-kernel-dropdown-a-options.txt",
+  "scenario-jupyter-cuj-06b-kernel-dropdown-a.png",
+  "scenario-jupyter-cuj-06c-kernel-select-b.txt",
+  "scenario-jupyter-cuj-06c-kernel-dropdown-b-options.txt",
+  "scenario-jupyter-cuj-06c-kernel-dropdown-b.png",
   "scenario-jupyter-cuj-07-ipy-a-output.txt",
   "scenario-jupyter-cuj-08-ipy-b-output.txt",
   "scenario-jupyter-cuj-09-stop-output.txt",
@@ -625,31 +834,35 @@ const syncServersCell = [
 ].join("\n");
 
 const setupKernelCell = [
-  `console.log(app.runners.update("local", "${BACKEND_WS}"));`,
-  'console.log(app.runners.setDefault("local"));',
   `const selectedServerName = '${serverAlias}';`,
   `const selectedKernelAlias = '${kernelAlias}';`,
-  "console.log('selected-server', selectedServerName);",
-  "const kernel = await jupyter.kernels.start('local', selectedServerName, {",
-  "  kernelSpec: 'python3',",
-  "  name: selectedKernelAlias,",
-  "});",
-  "console.log('kernel-started', kernel.id, kernel.name);",
-  "const nb = runme.getCurrentNotebook();",
-  "for (const id of ['cell_ipy_a', 'cell_ipy_b']) {",
-  "  const c = nb.getCell(id);",
-  "  if (!c || !c.snapshot) continue;",
-  "  const updated = structuredClone(c.snapshot);",
-  "  updated.metadata = {",
-  "    ...(updated.metadata || {}),",
-  "    'runme.dev/runnerName': 'local',",
-  "    'runme.dev/jupyterServerName': selectedServerName,",
-  "    'runme.dev/jupyterKernelID': kernel.id,",
-  "    'runme.dev/jupyterKernelName': selectedKernelAlias,",
-  "  };",
-  "  nb.updateCell(updated);",
+  "console.log('[setup] begin', selectedServerName, selectedKernelAlias);",
+  "try {",
+  `  const updateMessage = app.runners.update("local", "${BACKEND_WS}");`,
+  "  console.log('[setup] app.runners.update', updateMessage);",
+  "  const defaultMessage = app.runners.setDefault('local');",
+  "  console.log('[setup] app.runners.setDefault', defaultMessage);",
+  "  try {",
+  "    const servers = await jupyter.servers.get('local');",
+  "    console.log('[setup] jupyter.servers.get', JSON.stringify(servers));",
+  "  } catch (serverError) {",
+  "    console.error('[setup] jupyter.servers.get error', String(serverError));",
+  "  }",
+  "  const kernel = await jupyter.kernels.start('local', selectedServerName, {",
+  "    kernelSpec: 'python3',",
+  "    name: selectedKernelAlias,",
+  "  });",
+  "  console.log('[setup] kernel-started', JSON.stringify(kernel));",
+  "  const kernels = await jupyter.kernels.get('local', selectedServerName);",
+  "  console.log('[setup] jupyter.kernels.get', JSON.stringify(kernels));",
+  "  console.log('kernel-ready', kernel.id, selectedServerName, selectedKernelAlias);",
+  "} catch (error) {",
+  "  const message = error instanceof Error ? error.message : String(error);",
+  "  const stack = error instanceof Error && error.stack ? error.stack : '';",
+  "  console.error('[setup] error', message);",
+  "  if (stack) console.error('[setup] stack', stack);",
+  "  throw error;",
   "}",
-  "console.log('kernel-ready', kernel.id);",
 ].join("\n");
 
 const stopKernelCell = [
@@ -872,39 +1085,22 @@ if (
   finalizeAndExit();
 }
 
+const setupRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_setup_kernel")?.lastRunID ?? "").trim();
 if (clickRun("cell_setup_kernel")) {
   pass("Triggered AppKernel setup cell");
 } else {
   fail("Failed to trigger AppKernel setup cell");
+  finalizeAndExit();
 }
 
-probe = waitForNotebookProbe((p) => {
-  const c = p.cells?.find((cell) => cell.refId === "cell_setup_kernel");
-  const ipyA = p.cells?.find((cell) => cell.refId === "cell_ipy_a");
-  const ipyB = p.cells?.find((cell) => cell.refId === "cell_ipy_b");
-  return (
-    p.status === "ok" &&
-    !!c &&
-    c.exitCode === "0" &&
-    !!ipyA &&
-    !!ipyB &&
-    ipyA.jupyterServerName === serverAlias &&
-    ipyB.jupyterServerName === serverAlias &&
-    /[a-f0-9-]{8,}/i.test(ipyA.jupyterKernelID ?? "") &&
-    /[a-f0-9-]{8,}/i.test(ipyB.jupyterKernelID ?? "")
-  );
-}, 45000);
-let setupCell = probe.cells?.find((cell) => cell.refId === "cell_setup_kernel");
+let setupWaitResult = waitForCellExecutionCompletion("cell_setup_kernel", setupRunIDBefore, 90000);
+probe = setupWaitResult.probe;
+let setupCell = setupWaitResult.cell ?? probe.cells?.find((cell) => cell.refId === "cell_setup_kernel");
 let setupOutputText = setupCell?.decodedText ?? "";
-let ipyACell = probe.cells?.find((cell) => cell.refId === "cell_ipy_a");
-let ipyBCell = probe.cells?.find((cell) => cell.refId === "cell_ipy_b");
 let setupSucceeded = (
+  setupWaitResult.ok &&
   probe.status === "ok" &&
-  setupCell?.exitCode === "0" &&
-  ipyACell?.jupyterServerName === serverAlias &&
-  ipyBCell?.jupyterServerName === serverAlias &&
-  /[a-f0-9-]{8,}/i.test(ipyACell?.jupyterKernelID ?? "") &&
-  /[a-f0-9-]{8,}/i.test(ipyBCell?.jupyterKernelID ?? "")
+  setupCell?.exitCode === "0"
 );
 
 if (
@@ -924,67 +1120,131 @@ if (
     pass("Cleared seeded OIDC token after setup auth/network failure and retried setup");
     run(agentBrowserCommand("reload"));
     run(agentBrowserCommand("wait 2200"));
+    const retryRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_setup_kernel")?.lastRunID ?? "").trim();
     if (clickRun("cell_setup_kernel")) {
       pass("Retried AppKernel setup cell");
     } else {
       fail("Failed to trigger AppKernel setup retry");
       finalizeAndExit();
     }
-    probe = waitForNotebookProbe((p) => {
-      const c = p.cells?.find((cell) => cell.refId === "cell_setup_kernel");
-      const ipyA = p.cells?.find((cell) => cell.refId === "cell_ipy_a");
-      const ipyB = p.cells?.find((cell) => cell.refId === "cell_ipy_b");
-      return (
-        p.status === "ok" &&
-        !!c &&
-        c.exitCode === "0" &&
-        !!ipyA &&
-        !!ipyB &&
-        ipyA.jupyterServerName === serverAlias &&
-        ipyB.jupyterServerName === serverAlias &&
-        /[a-f0-9-]{8,}/i.test(ipyA.jupyterKernelID ?? "") &&
-        /[a-f0-9-]{8,}/i.test(ipyB.jupyterKernelID ?? "")
-      );
-    }, 45000);
-    setupCell = probe.cells?.find((cell) => cell.refId === "cell_setup_kernel");
+    setupWaitResult = waitForCellExecutionCompletion("cell_setup_kernel", retryRunIDBefore, 90000);
+    probe = setupWaitResult.probe;
+    setupCell = setupWaitResult.cell ?? probe.cells?.find((cell) => cell.refId === "cell_setup_kernel");
     setupOutputText = setupCell?.decodedText ?? "";
-    ipyACell = probe.cells?.find((cell) => cell.refId === "cell_ipy_a");
-    ipyBCell = probe.cells?.find((cell) => cell.refId === "cell_ipy_b");
     setupSucceeded = (
+      setupWaitResult.ok &&
       probe.status === "ok" &&
-      setupCell?.exitCode === "0" &&
-      ipyACell?.jupyterServerName === serverAlias &&
-      ipyBCell?.jupyterServerName === serverAlias &&
-      /[a-f0-9-]{8,}/i.test(ipyACell?.jupyterKernelID ?? "") &&
-      /[a-f0-9-]{8,}/i.test(ipyBCell?.jupyterKernelID ?? "")
+      setupCell?.exitCode === "0"
     );
   }
 }
 
 writeArtifact("scenario-jupyter-cuj-06-setup-output.txt", setupOutputText);
+writeArtifact("scenario-jupyter-cuj-06-setup-cell-probe.json", JSON.stringify(setupCell ?? {}, null, 2));
+writeArtifact(
+  "scenario-jupyter-cuj-06-setup-rendered-output.txt",
+  getRenderedCellOutputText("cell_setup_kernel"),
+);
+writeArtifact("scenario-jupyter-cuj-06-setup-diagnostics.json", captureSetupDiagnostics(serverAlias));
+scrollCellIntoView("cell_setup_kernel");
+run(agentBrowserCommand(`screenshot ${join(OUTPUT_DIR, "scenario-jupyter-cuj-06-setup-screenshot.png")}`));
+if (!setupWaitResult.ok) {
+  fail(
+    `AppKernel setup cell did not complete (${setupWaitResult.reason})`,
+  );
+  finalizeAndExit();
+}
+
+if (!/kernel-started|kernel-ready/i.test(setupOutputText)) {
+  fail("AppKernel setup cell completed but did not report kernel-started/kernel-ready");
+  finalizeAndExit();
+}
+
+if (setupSucceeded) {
+  pass("AppKernel setup cell exited successfully");
+} else {
+  fail(
+    `AppKernel setup cell exited unsuccessfully (status=${probe.status}, exitCode=${setupCell?.exitCode ?? ""})`,
+  );
+  finalizeAndExit();
+}
+
+const kernelSelectA = selectKernelForCell("cell_ipy_a", kernelAlias);
+captureKernelDropdownSnapshot(
+  "cell_ipy_a",
+  "scenario-jupyter-cuj-06b-kernel-dropdown-a.png",
+  "scenario-jupyter-cuj-06b-kernel-dropdown-a-options.txt",
+);
+writeArtifact("scenario-jupyter-cuj-06b-kernel-select-a.txt", kernelSelectA.detail);
+if (kernelSelectA.ok) {
+  pass("Selected Jupyter kernel from dropdown for cell A");
+} else {
+  fail(`Failed to select Jupyter kernel from dropdown for cell A (${kernelSelectA.detail})`);
+  finalizeAndExit();
+}
+
+const kernelSelectB = selectKernelForCell("cell_ipy_b", kernelAlias);
+captureKernelDropdownSnapshot(
+  "cell_ipy_b",
+  "scenario-jupyter-cuj-06c-kernel-dropdown-b.png",
+  "scenario-jupyter-cuj-06c-kernel-dropdown-b-options.txt",
+);
+writeArtifact("scenario-jupyter-cuj-06c-kernel-select-b.txt", kernelSelectB.detail);
+if (kernelSelectB.ok) {
+  pass("Selected Jupyter kernel from dropdown for cell B");
+} else {
+  fail(`Failed to select Jupyter kernel from dropdown for cell B (${kernelSelectB.detail})`);
+  finalizeAndExit();
+}
+
+probe = waitForNotebookProbe((p) => {
+  const ipyA = p.cells?.find((cell) => cell.refId === "cell_ipy_a");
+  const ipyB = p.cells?.find((cell) => cell.refId === "cell_ipy_b");
+  return (
+    p.status === "ok" &&
+    !!ipyA &&
+    !!ipyB &&
+    ipyA.jupyterServerName === serverAlias &&
+    ipyB.jupyterServerName === serverAlias &&
+    /[a-f0-9-]{8,}/i.test(ipyA.jupyterKernelID ?? "") &&
+    /[a-f0-9-]{8,}/i.test(ipyB.jupyterKernelID ?? "") &&
+    ipyA.jupyterKernelName === kernelAlias &&
+    ipyB.jupyterKernelName === kernelAlias
+  );
+}, 45000);
+const ipyAMeta = probe.cells?.find((cell) => cell.refId === "cell_ipy_a");
+const ipyBMeta = probe.cells?.find((cell) => cell.refId === "cell_ipy_b");
 writeArtifact(
   "scenario-jupyter-cuj-06a-kernel-output.txt",
   JSON.stringify(
     {
       ipyA: {
-        jupyterServerName: ipyACell?.jupyterServerName ?? "",
-        jupyterKernelID: ipyACell?.jupyterKernelID ?? "",
-        jupyterKernelName: ipyACell?.jupyterKernelName ?? "",
+        jupyterServerName: ipyAMeta?.jupyterServerName ?? "",
+        jupyterKernelID: ipyAMeta?.jupyterKernelID ?? "",
+        jupyterKernelName: ipyAMeta?.jupyterKernelName ?? "",
       },
       ipyB: {
-        jupyterServerName: ipyBCell?.jupyterServerName ?? "",
-        jupyterKernelID: ipyBCell?.jupyterKernelID ?? "",
-        jupyterKernelName: ipyBCell?.jupyterKernelName ?? "",
+        jupyterServerName: ipyBMeta?.jupyterServerName ?? "",
+        jupyterKernelID: ipyBMeta?.jupyterKernelID ?? "",
+        jupyterKernelName: ipyBMeta?.jupyterKernelName ?? "",
       },
     },
     null,
     2,
   ),
 );
-if (setupSucceeded) {
-  pass("AppKernel setup cell started kernel and bound Jupyter cells");
+if (
+  probe.status === "ok" &&
+  ipyAMeta?.jupyterServerName === serverAlias &&
+  ipyBMeta?.jupyterServerName === serverAlias &&
+  /[a-f0-9-]{8,}/i.test(ipyAMeta?.jupyterKernelID ?? "") &&
+  /[a-f0-9-]{8,}/i.test(ipyBMeta?.jupyterKernelID ?? "") &&
+  ipyAMeta?.jupyterKernelName === kernelAlias &&
+  ipyBMeta?.jupyterKernelName === kernelAlias
+) {
+  pass("Jupyter kernel selection persisted to cell metadata via dropdown");
 } else {
-  fail("AppKernel setup cell did not bind kernel metadata for Jupyter cells");
+  fail("Jupyter dropdown selection did not persist kernel metadata");
   finalizeAndExit();
 }
 
