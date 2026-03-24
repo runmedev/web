@@ -2,7 +2,11 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { waitForCellExecution } from "./notebook-execution.js";
+import {
+  scrollToBottomOfNotebook,
+  scrollToTopOfCell,
+  waitForCellExecution,
+} from "./notebook-execution.js";
 
 const FRONTEND_URL = process.env.CUJ_FRONTEND_URL ?? "http://localhost:5173";
 const BACKEND_URL = process.env.CUJ_BACKEND_URL ?? "http://localhost:9977";
@@ -186,6 +190,10 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function escapeDoubleQuotes(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 function parseAgentEvalString(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -197,6 +205,16 @@ function parseAgentEvalString(raw: string): string {
   } catch {
     return trimmed;
   }
+}
+
+function evalInBrowser(script: string): string {
+  const raw = run(agentBrowserCommand(`eval "${escapeDoubleQuotes(script)}"`));
+  return parseAgentEvalString(`${raw.stdout}\n${raw.stderr}`.trim());
+}
+
+function waitInBrowser(ms: number): void {
+  const waitMs = Number.isFinite(ms) && ms > 0 ? Math.floor(ms) : 1;
+  run(agentBrowserCommand(`wait ${waitMs}`));
 }
 
 function runWithRetry(command: string, attempts = 3, waitMs = 1200): void {
@@ -287,7 +305,7 @@ function waitForCellExecutionCompletion(
   previousRunID = "",
   timeoutMs = 60000,
 ) {
-  return waitForCellExecution<NotebookProbe, ProbeCell>({
+  const result = waitForCellExecution<NotebookProbe, ProbeCell>({
     cellRefId,
     previousRunID,
     timeoutMs,
@@ -295,10 +313,13 @@ function waitForCellExecutionCompletion(
     expectedProbeStatus: "ok",
     probe: probeNotebook,
     wait: (ms: number) => {
-      const waitMs = Number.isFinite(ms) && ms > 0 ? Math.floor(ms) : 1;
-      run(agentBrowserCommand(`wait ${waitMs}`));
+      waitInBrowser(ms);
     },
   });
+  if (result.ok) {
+    scrollToBottomOfNotebookView();
+  }
+  return result;
 }
 
 function waitForRunButton(cellRefId: string, timeoutMs = 12000): boolean {
@@ -336,19 +357,19 @@ function clickRun(cellRefId: string): boolean {
 }
 
 function scrollCellIntoView(cellRefId: string): boolean {
-  const raw = run(
-    agentBrowserCommand(`eval "(async () => {
-      const toolbar = document.getElementById('cell-toolbar-${cellRefId}');
-      const runButton = toolbar?.querySelector('button[aria-label^=\\\"Run\\\"]');
-      const output = document.getElementById('cell-output-${cellRefId}');
-      const action = document.getElementById('code-action-${cellRefId}');
-      const target = runButton || toolbar || action || output;
-      if (!target) return 'missing';
-      target.scrollIntoView({ block: 'center', inline: 'nearest' });
-      return 'ok';
-    })()"`),
-  ).stdout;
-  return parseAgentEvalString(raw).includes("ok");
+  return scrollToTopOfCell(cellRefId, {
+    evaluate: evalInBrowser,
+    wait: waitInBrowser,
+    settleMs: 120,
+  });
+}
+
+function scrollToBottomOfNotebookView(): boolean {
+  return scrollToBottomOfNotebook({
+    evaluate: evalInBrowser,
+    wait: waitInBrowser,
+    settleMs: 120,
+  });
 }
 
 function selectKernelForCell(
@@ -1123,6 +1144,7 @@ let probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_start_server");
   return p.status === "ok" && !!c && c.exitCode === "0";
 }, 90000);
+scrollToBottomOfNotebookView();
 let startCell = probe.cells?.find((cell) => cell.refId === "cell_start_server");
 writeArtifact("scenario-jupyter-cuj-04-start-output.txt", startCell?.decodedText ?? "");
 if (probe.status === "ok" && startCell?.exitCode === "0") {
@@ -1147,6 +1169,7 @@ probe = waitForNotebookProbe((p) => {
     new RegExp(`synced\\s+port-${JUPYTER_PORT}`, "i").test(c.decodedText ?? "")
   );
 }, 45000);
+scrollToBottomOfNotebookView();
 const syncCell = probe.cells?.find((cell) => cell.refId === "cell_sync_servers");
 writeArtifact("scenario-jupyter-cuj-05-sync-output.txt", syncCell?.decodedText ?? "");
 if (
@@ -1332,6 +1355,7 @@ probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_ipy_a");
   return p.status === "ok" && !!c && c.exitCode === "0" && /set\s+42/i.test(c.decodedText ?? "");
 }, 45000);
+scrollToBottomOfNotebookView();
 const ipyAProbeCell = probe.cells?.find((cell) => cell.refId === "cell_ipy_a");
 const ipyAOutput = ipyAProbeCell?.decodedText ?? getRenderedCellOutputText("cell_ipy_a");
 writeArtifact("scenario-jupyter-cuj-07-ipy-a-output.txt", ipyAOutput);
@@ -1351,6 +1375,7 @@ probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_ipy_b");
   return p.status === "ok" && !!c && c.exitCode === "0" && /read\s+42/i.test(c.decodedText ?? "");
 }, 45000);
+scrollToBottomOfNotebookView();
 const ipyBProbeCell = probe.cells?.find((cell) => cell.refId === "cell_ipy_b");
 const ipyBOutput = ipyBProbeCell?.decodedText ?? getRenderedCellOutputText("cell_ipy_b");
 writeArtifact("scenario-jupyter-cuj-08-ipy-b-output.txt", ipyBOutput);
@@ -1371,6 +1396,7 @@ probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_stop_kernel");
   return p.status === "ok" && !!c && c.exitCode === "0";
 }, 30000);
+scrollToBottomOfNotebookView();
 const stopKernelProbe = probe.cells?.find((cell) => cell.refId === "cell_stop_kernel");
 if (probe.status === "ok" && stopKernelProbe?.exitCode === "0") {
   pass("Kernel stop cell exited successfully");
@@ -1388,6 +1414,7 @@ probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_stop_server");
   return p.status === "ok" && !!c && c.exitCode === "0";
 }, 45000);
+scrollToBottomOfNotebookView();
 const stopServerProbe = probe.cells?.find((cell) => cell.refId === "cell_stop_server");
 writeArtifact("scenario-jupyter-cuj-09-stop-output.txt", stopServerProbe?.decodedText ?? "");
 if (probe.status === "ok" && stopServerProbe?.exitCode === "0") {

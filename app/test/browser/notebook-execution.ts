@@ -34,6 +34,76 @@ export type WaitForCellExecutionOptions<
   wait: (ms: number) => void;
 };
 
+export type NotebookScrollOptions = {
+  evaluate: (script: string) => string;
+  wait?: (ms: number) => void;
+  settleMs?: number;
+};
+
+function escapeSingleQuotedJs(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
+function settleAfterScroll(wait: ((ms: number) => void) | undefined, settleMs: number): void {
+  if (!wait) {
+    return;
+  }
+  const ms = Number.isFinite(settleMs) && settleMs > 0 ? Math.floor(settleMs) : 0;
+  if (ms > 0) {
+    wait(ms);
+  }
+}
+
+/**
+ * Scroll so the target cell's toolbar (cell top) is aligned near the viewport top.
+ */
+export function scrollToTopOfCell(
+  cellRefId: string,
+  options: NotebookScrollOptions,
+): boolean {
+  const { evaluate, wait, settleMs = 120 } = options;
+  const escapedCellRefId = escapeSingleQuotedJs(cellRefId);
+  const result = evaluate(`(() => {
+    const toolbar = document.getElementById('cell-toolbar-${escapedCellRefId}');
+    const runButton = toolbar?.querySelector('button[aria-label^="Run"]');
+    const action = document.getElementById('code-action-${escapedCellRefId}');
+    const output = document.getElementById('cell-output-${escapedCellRefId}');
+    const target = toolbar || runButton || action || output;
+    if (!target) return 'missing';
+    target.scrollIntoView({ block: 'start', inline: 'nearest' });
+    return 'ok';
+  })()`);
+  const ok = result.includes("ok");
+  if (ok) {
+    settleAfterScroll(wait, settleMs);
+  }
+  return ok;
+}
+
+/**
+ * Scroll notebook/document view to its bottom to keep freshly appended output visible.
+ */
+export function scrollToBottomOfNotebook(options: NotebookScrollOptions): boolean {
+  const { evaluate, wait, settleMs = 120 } = options;
+  const result = evaluate(`(() => {
+    const notebookRoot = document.getElementById('documents');
+    if (notebookRoot && notebookRoot.scrollHeight > notebookRoot.clientHeight) {
+      notebookRoot.scrollTop = notebookRoot.scrollHeight;
+    }
+    const docHeight = Math.max(
+      document.documentElement?.scrollHeight || 0,
+      document.body?.scrollHeight || 0
+    );
+    window.scrollTo({ top: docHeight, left: 0, behavior: 'auto' });
+    return 'ok';
+  })()`);
+  const ok = result.includes("ok");
+  if (ok) {
+    settleAfterScroll(wait, settleMs);
+  }
+  return ok;
+}
+
 /**
  * Wait for a single notebook cell execution to reach a terminal state.
  *
