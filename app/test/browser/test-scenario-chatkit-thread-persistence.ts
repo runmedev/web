@@ -272,6 +272,92 @@ function waitForComposer(timeoutMs = 15000): boolean {
   return false;
 }
 
+type SidePanelName = "explorer" | "chatkit";
+
+function readSidePanelPressedState(): {
+  explorerPressed: string | null;
+  chatkitPressed: string | null;
+} {
+  const script = `(() => JSON.stringify({
+    explorerPressed: document.querySelector('button[aria-label="Toggle Explorer panel"]')?.getAttribute('aria-pressed') ?? null,
+    chatkitPressed: document.querySelector('button[aria-label="Toggle ChatKit panel"]')?.getAttribute('aria-pressed') ?? null,
+  }))()`;
+  const raw = normalizeAgentBrowserString(
+    run(`agent-browser eval "${escapeDoubleQuotes(script)}"`).stdout,
+  );
+  try {
+    const parsed = JSON.parse(raw) as {
+      explorerPressed?: string | null;
+      chatkitPressed?: string | null;
+    };
+    return {
+      explorerPressed: parsed.explorerPressed ?? null,
+      chatkitPressed: parsed.chatkitPressed ?? null,
+    };
+  } catch {
+    return {
+      explorerPressed: null,
+      chatkitPressed: null,
+    };
+  }
+}
+
+function waitForActiveSidePanel(panel: SidePanelName, timeoutMs = 5000): boolean {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = readSidePanelPressedState();
+    if (
+      panel === "explorer" &&
+      state.explorerPressed === "true" &&
+      state.chatkitPressed === "false"
+    ) {
+      return true;
+    }
+    if (
+      panel === "chatkit" &&
+      state.chatkitPressed === "true" &&
+      state.explorerPressed === "false"
+    ) {
+      return true;
+    }
+    run("agent-browser wait 300");
+  }
+  return false;
+}
+
+function switchToSidePanelOrThrow({
+  name,
+  buttonPattern,
+  activePanel,
+}: {
+  name: string;
+  buttonPattern: RegExp;
+  activePanel: SidePanelName;
+}): void {
+  const deadline = Date.now() + 10000;
+  let lastError = "unknown error";
+  while (Date.now() < deadline) {
+    const snapshot = run("agent-browser snapshot").stdout;
+    const ref = firstRef(snapshot, buttonPattern);
+    if (!ref) {
+      lastError = `missing ${name} button ref`;
+      run("agent-browser wait 300");
+      continue;
+    }
+    const clickResult = run(`agent-browser click ${ref}`);
+    if (clickResult.status !== 0) {
+      lastError = `click failed (${clickResult.status}): ${clickResult.stderr || clickResult.stdout || "no output"}`;
+      run("agent-browser wait 300");
+      continue;
+    }
+    if (waitForActiveSidePanel(activePanel, 4000)) {
+      return;
+    }
+    lastError = `side panel did not become active after click (${name})`;
+  }
+  throw new Error(`Failed to switch to ${name}: ${lastError}`);
+}
+
 mkdirSync(OUTPUT_DIR, { recursive: true });
 rmSync(MOVIE_PATH, { force: true });
 for (const file of [
@@ -343,19 +429,7 @@ try {
   const initialSnapshot = run("agent-browser snapshot").stdout;
   writeArtifact("scenario-chatkit-thread-persistence-01-snapshot.txt", initialSnapshot);
 
-  const chatRef = firstRef(initialSnapshot, /AI Chat|ChatKit panel|Toggle ChatKit panel/i);
-  const explorerRef = firstRef(
-    initialSnapshot,
-    /File Explorer|Explorer panel|Toggle Explorer panel/i,
-  );
   const consoleRef = firstRef(initialSnapshot, /console-input|terminal input/i);
-
-  if (!chatRef) {
-    fail("Could not find AI Chat button in side panel");
-  }
-  if (!explorerRef) {
-    fail("Could not find Explorer button in side panel");
-  }
   if (!consoleRef) {
     fail("Could not find AppConsole terminal input");
   }
@@ -375,11 +449,12 @@ try {
     }
   }
 
-  if (chatRef) {
-    run(`agent-browser click ${chatRef}`);
-    run("agent-browser wait 1200");
-    pass("Opened ChatKit panel");
-  }
+  switchToSidePanelOrThrow({
+    name: "ChatKit",
+    buttonPattern: /AI Chat|ChatKit panel|Toggle ChatKit panel/i,
+    activePanel: "chatkit",
+  });
+  pass("Opened ChatKit panel");
 
   if (!waitForComposer()) {
     fail("ChatKit composer did not appear");
@@ -396,18 +471,20 @@ try {
   const beforeSwitchValue = readComposerValue();
   run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-chatkit-thread-persistence-03-before-switch.png")}`);
 
-  if (explorerRef) {
-    run(`agent-browser click ${explorerRef}`);
-    run("agent-browser wait 1000");
-    pass("Switched to Explorer tab");
-  }
+  switchToSidePanelOrThrow({
+    name: "Explorer",
+    buttonPattern: /File Explorer|Explorer panel|Toggle Explorer panel/i,
+    activePanel: "explorer",
+  });
+  pass("Switched to Explorer tab");
   run(`agent-browser screenshot ${join(OUTPUT_DIR, "scenario-chatkit-thread-persistence-04-explorer.png")}`);
 
-  if (chatRef) {
-    run(`agent-browser click ${chatRef}`);
-    run("agent-browser wait 1200");
-    pass("Returned to ChatKit tab");
-  }
+  switchToSidePanelOrThrow({
+    name: "ChatKit",
+    buttonPattern: /AI Chat|ChatKit panel|Toggle ChatKit panel/i,
+    activePanel: "chatkit",
+  });
+  pass("Returned to ChatKit tab");
 
   const afterReturnValue = readComposerValue();
   const afterReturnSnapshot = run("agent-browser snapshot").stdout;
