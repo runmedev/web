@@ -4,7 +4,7 @@ import {
   UserCircleIcon,
 } from "@heroicons/react/24/outline";
 import { CloudIcon as CloudSolidIcon } from "@heroicons/react/24/solid";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import ChatKitPanel from "../ChatKit/ChatKitPanel";
 import WorkspaceExplorer from "../Workspace/WorkspaceExplorer";
@@ -117,24 +117,37 @@ export function SidePanelToolbar() {
 
 export function SidePanelContent() {
   const { activePanel } = useSidePanel();
+  const [hasActivatedChatKit, setHasActivatedChatKit] = useState(
+    activePanel === "chatkit",
+  );
+  const shouldRenderChatKit = hasActivatedChatKit || activePanel === "chatkit";
+
+  useEffect(() => {
+    if (activePanel === "chatkit") {
+      setHasActivatedChatKit(true);
+    }
+  }, [activePanel]);
 
   if (!activePanel) {
     return null;
   }
 
-  if (activePanel === "explorer") {
-    return (
-      <div className="flex h-full min-h-0 w-full">
+  return (
+    <div className="relative h-full min-h-0 w-full">
+      <div
+        className={`h-full min-h-0 w-full ${activePanel === "explorer" ? "flex" : "hidden"}`}
+        aria-hidden={activePanel !== "explorer"}
+      >
         <WorkspaceExplorer />
       </div>
-    );
-  }
-  if (activePanel === "chatkit") {
-    return (
-      <div className="flex h-full min-h-0 w-full overflow-hidden">
-        <ChatKitPanel />
-      </div>
-    );
-  }
-  return null;
+      {shouldRenderChatKit ? (
+        <div
+          className={`h-full min-h-0 w-full overflow-hidden ${activePanel === "chatkit" ? "flex" : "hidden"}`}
+          aria-hidden={activePanel !== "chatkit"}
+        >
+          <ChatKitPanel />
+        </div>
+      ) : null}
+    </div>
+  );
 }
