@@ -43,6 +43,7 @@ import { type HarnessAdapter, getHarnessManager } from "./harnessManager";
 import { responsesDirectConfigManager } from "./responsesDirectConfigManager";
 import type { RunmeConsoleApi } from "./runmeConsole";
 import { getRunnersManager } from "./runnersManager";
+import { getJupyterManager } from "./jupyterManager";
 
 type SendOutput = (data: string) => void;
 
@@ -162,6 +163,7 @@ export function createAppJsGlobals({
   };
 
   const runmeApi = createRunmeApi(runme, sendOutput);
+  const jupyterManager = getJupyterManager();
   const harnessManager = getHarnessManager();
   const codexProjectManager = getCodexProjectManager();
   const responsesDirect = responsesDirectConfigManager;
@@ -354,6 +356,83 @@ export function createAppJsGlobals({
           appState.syncRunnerDefault(name);
         }
         return `Default runner set to ${name}`;
+      },
+    },
+    jupyter: {
+      servers: {
+        get: async (runnerName: string) => {
+          if (!runnerName?.trim()) {
+            throw new Error("Usage: jupyter.servers.get(runnerName)");
+          }
+          try {
+            const servers = await jupyterManager.listServers(runnerName);
+            const message =
+              servers.length === 0
+                ? "No Jupyter servers configured."
+                : JSON.stringify(servers, null, 2);
+            emitLine(sendOutput, message);
+            return servers;
+          } catch (error) {
+            const message = `Failed to list Jupyter servers: ${String(error)}`;
+            emitLine(sendOutput, message);
+            throw error;
+          }
+        },
+      },
+      kernels: {
+        start: async (
+          runnerName: string,
+          serverName: string,
+          options?: { kernelSpec?: string; name?: string; path?: string },
+        ) => {
+          if (!runnerName?.trim() || !serverName?.trim()) {
+            throw new Error("Usage: jupyter.kernels.start(runnerName, serverName, options?)");
+          }
+          try {
+            const kernel = await jupyterManager.startKernel(runnerName, serverName, options);
+            const message = `Started kernel ${kernel.id} on ${runnerName}/${serverName} (${kernel.name})`;
+            emitLine(sendOutput, message);
+            emitLine(sendOutput, JSON.stringify(kernel, null, 2));
+            return kernel;
+          } catch (error) {
+            const message = `Failed to start Jupyter kernel: ${String(error)}`;
+            emitLine(sendOutput, message);
+            throw error;
+          }
+        },
+        get: async (runnerName: string, serverName: string) => {
+          if (!runnerName?.trim() || !serverName?.trim()) {
+            throw new Error("Usage: jupyter.kernels.get(runnerName, serverName)");
+          }
+          try {
+            const kernels = await jupyterManager.listKernels(runnerName, serverName);
+            const message =
+              kernels.length === 0
+                ? `No kernels running on ${runnerName}/${serverName}.`
+                : JSON.stringify(kernels, null, 2);
+            emitLine(sendOutput, message);
+            return kernels;
+          } catch (error) {
+            const message = `Failed to list Jupyter kernels: ${String(error)}`;
+            emitLine(sendOutput, message);
+            throw error;
+          }
+        },
+        stop: async (runnerName: string, serverName: string, kernelNameOrId: string) => {
+          if (!runnerName?.trim() || !serverName?.trim() || !kernelNameOrId?.trim()) {
+            throw new Error("Usage: jupyter.kernels.stop(runnerName, serverName, kernelNameOrId)");
+          }
+          try {
+            await jupyterManager.stopKernel(runnerName, serverName, kernelNameOrId);
+            const message = `Stopped kernel ${kernelNameOrId} on ${runnerName}/${serverName}`;
+            emitLine(sendOutput, message);
+            return message;
+          } catch (error) {
+            const message = `Failed to stop Jupyter kernel: ${String(error)}`;
+            emitLine(sendOutput, message);
+            throw error;
+          }
+        },
       },
     },
     agent: {
@@ -700,6 +779,7 @@ export function createAppJsGlobals({
         "  runme           - Notebook helpers (run all, clear outputs)",
         "  explorer        - Manage workspace folders and notebooks",
         "  runmeRunners    - Configure runner endpoints",
+        "  jupyter         - Manage Jupyter servers and kernels",
         "  agent           - Configure assistant/API agent endpoint",
         "  files           - Import local files and access their bytes",
         "  drive           - List/create/copy/update Google Drive notebook files",

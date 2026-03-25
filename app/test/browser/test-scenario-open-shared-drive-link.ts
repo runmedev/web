@@ -20,6 +20,14 @@ const SCRIPT_DIR =
     : CURRENT_FILE_DIR;
 const OUTPUT_DIR = join(SCRIPT_DIR, "test-output");
 const MOVIE_PATH = join(OUTPUT_DIR, "scenario-open-shared-drive-link-walkthrough.webm");
+const AGENT_BROWSER_SESSION = process.env.AGENT_BROWSER_SESSION?.trim() ?? "";
+const AGENT_BROWSER_PROFILE = process.env.AGENT_BROWSER_PROFILE?.trim() ?? "";
+const AGENT_BROWSER_HEADED = (process.env.AGENT_BROWSER_HEADED ?? "false")
+  .trim()
+  .toLowerCase() === "true";
+const AGENT_BROWSER_KEEP_OPEN = (process.env.AGENT_BROWSER_KEEP_OPEN ?? "false")
+  .trim()
+  .toLowerCase() === "true";
 const STATUS_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-01-status-tab.png");
 const FILE_LOADED_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-02-file-loaded.png");
 const DOCUMENT_SHARE_MENU_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-03-document-share-menu.png");
@@ -32,8 +40,9 @@ let failCount = 0;
 let totalCount = 0;
 
 function run(command: string): { status: number; stdout: string; stderr: string } {
+  const effectiveCommand = withAgentBrowserOptions(command);
   const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "20000");
-  const result = spawnSync(command, {
+  const result = spawnSync(effectiveCommand, {
     shell: true,
     encoding: "utf-8",
     timeout: timeoutMs,
@@ -44,6 +53,31 @@ function run(command: string): { status: number; stdout: string; stderr: string 
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
   };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function withAgentBrowserOptions(command: string): string {
+  const trimmed = command.trimStart();
+  if (!trimmed.startsWith("agent-browser ")) {
+    return command;
+  }
+  const leadingWhitespace = command.slice(0, command.length - trimmed.length);
+  const subcommand = trimmed.slice("agent-browser ".length);
+  const args: string[] = [];
+  if (AGENT_BROWSER_SESSION) {
+    args.push("--session", shellQuote(AGENT_BROWSER_SESSION));
+  }
+  if (AGENT_BROWSER_PROFILE) {
+    args.push("--profile", shellQuote(AGENT_BROWSER_PROFILE));
+  }
+  if (AGENT_BROWSER_HEADED) {
+    args.push("--headed");
+  }
+  const prefix = ["agent-browser", ...args].join(" ");
+  return `${leadingWhitespace}${prefix} ${subcommand}`;
 }
 
 function runOrThrow(command: string): string {
@@ -454,7 +488,9 @@ takeScreenshot(FOLDER_LOADED_SCREENSHOT);
 
 run("agent-browser wait 1200");
 run("agent-browser record stop");
-run("agent-browser close");
+if (!AGENT_BROWSER_KEEP_OPEN) {
+  run("agent-browser close");
+}
 console.log(`Movie: ${MOVIE_PATH}`);
 console.log(`Assertions: ${totalCount}, Passed: ${passCount}, Failed: ${failCount}`);
 process.exit(failCount === 0 ? 0 : 1);

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { clone, create } from "@bufbuild/protobuf";
 import React from "react";
-import { APPKERNEL_RUNNER_NAME, APPKERNEL_RUNNER_LABEL } from "../../lib/runtime/appKernel";
+import { APPKERNEL_RUNNER_NAME } from "../../lib/runtime/appKernel";
 
 import { parser_pb, RunmeMetadataKey } from "../../runme/client";
 import type { CellData } from "../../lib/notebookData";
@@ -42,10 +42,45 @@ vi.mock("../../contexts/NotebookContext", () => ({
   }),
 }));
 
+vi.mock("../../contexts/NotebookStoreContext", () => ({
+  useNotebookStore: () => ({
+    store: null,
+  }),
+}));
+
+vi.mock("../../contexts/FilesystemStoreContext", () => ({
+  useFilesystemStore: () => ({
+    fsStore: null,
+    setFsStore: () => {},
+  }),
+}));
+
+vi.mock("../../contexts/ContentsStoreContext", () => ({
+  useContentsStore: () => ({
+    store: null,
+  }),
+}));
+
 vi.mock("../../contexts/CurrentDocContext", () => ({
   useCurrentDoc: () => ({
     getCurrentDoc: () => null,
     setCurrentDoc: () => {},
+  }),
+}));
+
+vi.mock("../../lib/runtime/jupyterManager", () => ({
+  getJupyterManager: () => ({
+    subscribe: () => () => {},
+    getVersion: () => 0,
+    ensureRunnerData: async () => {},
+    getKernelOptionsForRunner: () => [],
+    getKernelOptionKey: (serverName: string, kernelId: string) => `${serverName}:${kernelId}`,
+    parseKernelOptionKey: (key: string) => {
+      if (!key.includes(":")) return null;
+      const [serverName, kernelId] = key.split(":", 2);
+      if (!serverName || !kernelId) return null;
+      return { serverName, kernelId };
+    },
   }),
 }));
 
@@ -66,6 +101,21 @@ class StubCellData {
   snapshot: parser_pb.Cell;
   private listeners = new Set<() => void>();
   getRunnerName = () => "<default>";
+  getJupyterServerName = () => "";
+  getJupyterKernelID = () => "";
+  getJupyterKernelName = () => "";
+  setRunner = vi.fn((name: string) => {
+    const next = clone(parser_pb.CellSchema, this.snapshot);
+    next.metadata = { ...(next.metadata ?? {}) };
+    if (name === "<default>") {
+      delete next.metadata[RunmeMetadataKey.RunnerName];
+    } else {
+      next.metadata[RunmeMetadataKey.RunnerName] = name;
+    }
+    this.update(next);
+  });
+  setJupyterKernel = () => {};
+  clearJupyterKernel = () => {};
   update = vi.fn((nextCell: parser_pb.Cell) => {
     this.snapshot = clone(parser_pb.CellSchema, nextCell);
     this.listeners.forEach((listener) => listener());
@@ -232,27 +282,62 @@ describe("Action component", () => {
     expect(updatedCell.languageId).toBe("markdown");
   });
 
-  it("includes AppKernel in the runner selector", () => {
+  it("hides the second selector for javascript cells", () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-runner-select",
       kind: parser_pb.CellKind.CODE,
       languageId: "javascript",
       outputs: [],
-      metadata: {},
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
       value: 'console.log("hi")',
     });
     const stub = new StubCellData(cell);
 
     render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
 
-    const runnerSelect = document.getElementById("runner-select-cell-runner-select") as
-      | HTMLSelectElement
-      | null;
-    expect(runnerSelect).toBeTruthy();
+    const runnerSelect = document.getElementById("runner-select-cell-runner-select");
+    const kernelSelect = document.getElementById("kernel-select-cell-runner-select");
+    expect(runnerSelect).toBeNull();
+    expect(kernelSelect).toBeNull();
+  });
 
-    const appKernelOption = Array.from(runnerSelect!.options).find(
-      (option) => option.value === APPKERNEL_RUNNER_NAME,
-    );
-    expect(appKernelOption?.textContent).toBe(APPKERNEL_RUNNER_LABEL);
+  it("shows runner selector for python cells", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-python-select",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "python",
+      outputs: [],
+      metadata: {},
+      value: "print('hi')",
+    });
+    const stub = new StubCellData(cell);
+
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
+
+    const runnerSelect = document.getElementById("runner-select-cell-python-select");
+    const kernelSelect = document.getElementById("kernel-select-cell-python-select");
+    expect(runnerSelect).toBeTruthy();
+    expect(kernelSelect).toBeNull();
+  });
+
+  it("shows kernel selector (not runner selector) for jupyter cells", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-jupyter-select",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "jupyter",
+      outputs: [],
+      metadata: {},
+      value: "print('hi')",
+    });
+    const stub = new StubCellData(cell);
+
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
+
+    const runnerSelect = document.getElementById("runner-select-cell-jupyter-select");
+    const kernelSelect = document.getElementById("kernel-select-cell-jupyter-select");
+    expect(runnerSelect).toBeNull();
+    expect(kernelSelect).toBeTruthy();
   });
 });

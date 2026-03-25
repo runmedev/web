@@ -41,9 +41,10 @@ import { useCurrentDoc } from "../../contexts/CurrentDocContext";
 import { useRunners } from "../../contexts/RunnersContext";
 import { DEFAULT_RUNNER_PLACEHOLDER } from "../../lib/runtime/runnersManager";
 import {
-  APPKERNEL_RUNNER_LABEL,
   APPKERNEL_RUNNER_NAME,
+  isAppKernelRunnerName,
 } from "../../lib/runtime/appKernel";
+import { getJupyterManager } from "../../lib/runtime/jupyterManager";
 import {
   driveLinkCoordinator,
   DRIVE_LINK_STATUS_TAB_URI,
@@ -121,12 +122,14 @@ function RunActionButton({
 const LANGUAGE_OPTIONS = [
   { label: "Markdown", value: "markdown" },
   { label: "Bash", value: "bash" },
+  { label: "Jupyter", value: "jupyter" },
   { label: "Python", value: "python" },
   { label: "JS", value: "javascript" },
 ] as const;
 
 type SupportedLanguage =
   | "bash"
+  | "jupyter"
   | "javascript"
   | "markdown"
   | "python";
@@ -166,6 +169,9 @@ function normalizeLanguageId(
       }
       if (normalized === "python" || normalized === "py") {
         return "python";
+      }
+      if (normalized === "jupyter" || normalized === "ipython") {
+        return "jupyter";
       }
       if (
         normalized === "javascript" ||
@@ -241,7 +247,11 @@ function ActionOutputItemView({
         className="h-[420px] w-full rounded-md border border-nb-cell-border bg-white"
       />
     );
-  } else if (mime === "image/png") {
+  } else if (
+    mime === "image/png" ||
+    mime === "image/jpeg" ||
+    mime === "image/svg+xml"
+  ) {
     const base64 = uint8ArrayToBase64(item.data ?? new Uint8Array());
     const src = `data:${mime};base64,${base64}`;
     content = (
@@ -328,6 +338,12 @@ export function Action({
   const { getAllRenderers } = useOutput();
   const { store } = useNotebookStore();
   const { listRunners, defaultRunnerName } = useRunners();
+  const jupyterManager = useMemo(() => getJupyterManager(), []);
+  const jupyterVersion = useSyncExternalStore(
+    useCallback((listener) => jupyterManager.subscribe(listener), [jupyterManager]),
+    useCallback(() => jupyterManager.getVersion(), [jupyterManager]),
+    useCallback(() => jupyterManager.getVersion(), [jupyterManager]),
+  );
   const cell = useSyncExternalStore(
     useCallback(
       (listener) => cellData.subscribeToContentChange(listener),
@@ -509,6 +525,8 @@ export function Action({
         return "markdown";
       case "javascript":
         return "javascript";
+      case "jupyter":
+        return "python";
       case "python":
         return "python";
       default:
@@ -524,11 +542,159 @@ export function Action({
     () => `runner-select-${cell?.refId ?? "unknown"}`,
     [cell?.refId],
   );
+  const kernelSelectId = useMemo(
+    () => `kernel-select-${cell?.refId ?? "unknown"}`,
+    [cell?.refId],
+  );
 
   var initialRunnerName = cellData.getRunnerName();
   if (!initialRunnerName) {
     initialRunnerName = DEFAULT_RUNNER_PLACEHOLDER;
   }
+  const runnerSelectionName =
+    selectedLanguage === "jupyter" && isAppKernelRunnerName(initialRunnerName)
+      ? DEFAULT_RUNNER_PLACEHOLDER
+      : initialRunnerName;
+  const resolvedRunnerName =
+    runnerSelectionName === DEFAULT_RUNNER_PLACEHOLDER
+      ? (defaultRunnerName ?? "")
+      : runnerSelectionName;
+  const showRunnerSelector = selectedLanguage === "bash" || selectedLanguage === "python";
+  const showKernelSelector = selectedLanguage === "jupyter";
+  const runnerSelectValue =
+    isAppKernelRunnerName(initialRunnerName) ? DEFAULT_RUNNER_PLACEHOLDER : initialRunnerName;
+  const hasJupyterSelection =
+    Boolean(cell?.metadata?.[RunmeMetadataKey.JupyterServerName]) ||
+    Boolean(cell?.metadata?.[RunmeMetadataKey.JupyterKernelID]) ||
+    Boolean(cell?.metadata?.[RunmeMetadataKey.JupyterKernelName]);
+  const availableRunnerNames = useMemo(
+    () => listRunners().map((runner) => runner.name).filter((name) => !isAppKernelRunnerName(name)),
+    [listRunners],
+  );
+  const jupyterRunnerNames = useMemo(() => {
+    const names = new Set<string>();
+    if (resolvedRunnerName) {
+      names.add(resolvedRunnerName);
+    }
+    availableRunnerNames.forEach((name) => names.add(name));
+    return [...names];
+  }, [availableRunnerNames, resolvedRunnerName]);
+
+  useEffect(() => {
+    if (selectedLanguage !== "jupyter") {
+      return;
+    }
+    if (jupyterRunnerNames.length === 0) {
+      return;
+    }
+    void Promise.all(
+      jupyterRunnerNames.map((runnerName) =>
+        jupyterManager.ensureRunnerData(runnerName).catch((error) => {
+          console.error("Failed to load Jupyter kernels for runner", {
+            runner: runnerName,
+            error,
+          });
+        }),
+      ),
+    );
+  }, [jupyterManager, jupyterRunnerNames, resolvedRunnerName, selectedLanguage]);
+
+  useEffect(() => {
+    if (selectedLanguage === "javascript" && !isAppKernelRunnerName(initialRunnerName)) {
+      cellData.setRunner(APPKERNEL_RUNNER_NAME);
+      if (hasJupyterSelection) {
+        cellData.clearJupyterKernel();
+      }
+      return;
+    }
+    if (selectedLanguage === "markdown") {
+      if (initialRunnerName !== DEFAULT_RUNNER_PLACEHOLDER) {
+        cellData.setRunner(DEFAULT_RUNNER_PLACEHOLDER);
+      }
+      if (hasJupyterSelection) {
+        cellData.clearJupyterKernel();
+      }
+      return;
+    }
+    if (selectedLanguage === "jupyter" && isAppKernelRunnerName(initialRunnerName)) {
+      cellData.setRunner(DEFAULT_RUNNER_PLACEHOLDER);
+      if (hasJupyterSelection) {
+        cellData.clearJupyterKernel();
+      }
+    }
+  }, [cellData, hasJupyterSelection, initialRunnerName, selectedLanguage]);
+
+  const kernelOptions = useMemo(() => {
+    if (!showKernelSelector || jupyterRunnerNames.length === 0) {
+      return [];
+    }
+    const deduped = new Map<string, ReturnType<typeof jupyterManager.getKernelOptionsForRunner>[number]>();
+    jupyterRunnerNames.forEach((runnerName) => {
+      try {
+        const options = jupyterManager.getKernelOptionsForRunner(runnerName);
+        options.forEach((option) => {
+          deduped.set(option.key, option);
+        });
+      } catch (error) {
+        console.error("Failed to build Jupyter kernel options for runner", {
+          runner: runnerName,
+          error,
+        });
+      }
+    });
+    return [...deduped.values()].sort(
+      (a, b) =>
+        a.label.localeCompare(b.label) ||
+        a.runnerName.localeCompare(b.runnerName),
+    );
+  }, [jupyterManager, jupyterRunnerNames, jupyterVersion, showKernelSelector]);
+  const selectedKernelKey = useMemo(() => {
+    const serverName =
+      (cell?.metadata?.[RunmeMetadataKey.JupyterServerName] as string | undefined) ?? "";
+    const kernelID =
+      (cell?.metadata?.[RunmeMetadataKey.JupyterKernelID] as string | undefined) ?? "";
+    if (!serverName || !kernelID) {
+      return "";
+    }
+    const runnerName =
+      (cell?.metadata?.[RunmeMetadataKey.RunnerName] as string | undefined) ?? "";
+    if (runnerName && !isAppKernelRunnerName(runnerName)) {
+      return jupyterManager.getKernelOptionKey(serverName, kernelID, runnerName);
+    }
+    if (resolvedRunnerName) {
+      return jupyterManager.getKernelOptionKey(serverName, kernelID, resolvedRunnerName);
+    }
+    return jupyterManager.getKernelOptionKey(serverName, kernelID);
+  }, [cell, jupyterManager, resolvedRunnerName]);
+
+  useEffect(() => {
+    if (selectedLanguage !== "jupyter") {
+      return;
+    }
+    if (selectedKernelKey) {
+      return;
+    }
+    if (kernelOptions.length !== 1) {
+      return;
+    }
+    const option = kernelOptions[0];
+    const parsed = jupyterManager.parseKernelOptionKey(option.key);
+    if (!parsed) {
+      return;
+    }
+    cellData.setJupyterKernel({
+      runnerName: option.runnerName,
+      serverName: parsed.serverName,
+      kernelId: parsed.kernelId,
+      kernelName: option.label,
+    });
+  }, [
+    cellData,
+    jupyterManager,
+    kernelOptions,
+    selectedKernelKey,
+    selectedLanguage,
+  ]);
 
   const renderedOutputs = useMemo(() => {
     const hasTerminalOutput = (cell?.outputs ?? []).some((output) =>
@@ -556,9 +722,8 @@ export function Action({
     return <ActionOutputItems outputs={cell.outputs} />;
   }, [cell?.outputs]);
 
-  const handleLanguageChange = useCallback(    
+  const handleLanguageChange = useCallback(
     (event: ChangeEvent<HTMLSelectElement>) => {
-      console.log("handleLanguageChange", { value: event.target.value });      
       if (!cell) {
         return;
       }
@@ -569,19 +734,47 @@ export function Action({
       }
 
       const updatedCell = create(parser_pb.CellSchema, cell);
+      updatedCell.metadata ??= {};
       if (nextValue === "markdown") {
         setMarkdownEditRequest((request) => request + 1);
         updatedCell.kind = parser_pb.CellKind.MARKUP;
         updatedCell.languageId = "markdown";
+        delete updatedCell.metadata[RunmeMetadataKey.RunnerName];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName];
+      } else if (nextValue === "jupyter") {
+        updatedCell.kind = parser_pb.CellKind.CODE;
+        updatedCell.languageId = "jupyter";
+        delete updatedCell.metadata[RunmeMetadataKey.RunnerName];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName];
       } else if (nextValue === "javascript") {
         updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "javascript";
+        updatedCell.metadata[RunmeMetadataKey.RunnerName] = APPKERNEL_RUNNER_NAME;
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName];
       } else if (nextValue === "python") {
         updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "python";
+        if (isAppKernelRunnerName(updatedCell.metadata[RunmeMetadataKey.RunnerName])) {
+          delete updatedCell.metadata[RunmeMetadataKey.RunnerName];
+        }
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName];
       } else {
         updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "bash";
+        if (isAppKernelRunnerName(updatedCell.metadata[RunmeMetadataKey.RunnerName])) {
+          delete updatedCell.metadata[RunmeMetadataKey.RunnerName];
+        }
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName];
       }
 
       updateCellLocal(updatedCell);
@@ -765,35 +958,68 @@ export function Action({
                   </option>
                 ))}
               </select>
-              <select
-                id={runnerSelectId}
-                value={initialRunnerName}
-                onChange={(event) => {
-                  const nextName = event.target.value;
-                  const names = new Set(listRunners().map((r) => r.name));
-                  if (
-                    !names.has(nextName) &&
-                    nextName !== DEFAULT_RUNNER_PLACEHOLDER &&
-                    nextName !== APPKERNEL_RUNNER_NAME
-                  ) {
-                    return;
-                  }
-                  cellData.setRunner(nextName);
-                }}
-                className="toolbar-select"
-              >
-                <option value="<default>">
-                  {defaultRunnerName ? `${defaultRunnerName}` : "default"}
-                </option>
-                <option value={APPKERNEL_RUNNER_NAME}>
-                  {APPKERNEL_RUNNER_LABEL}
-                </option>
-                {listRunners().map((runner) => (
-                  <option key={runner.name} value={runner.name}>
-                    {runner.name}
+              {showRunnerSelector && (
+                <select
+                  id={runnerSelectId}
+                  value={runnerSelectValue}
+                  onChange={(event) => {
+                    const nextName = event.target.value;
+                    const names = new Set(listRunners().map((r) => r.name));
+                    if (
+                      !names.has(nextName) &&
+                      nextName !== DEFAULT_RUNNER_PLACEHOLDER
+                    ) {
+                      return;
+                    }
+                    cellData.setRunner(nextName);
+                  }}
+                  className="toolbar-select"
+                >
+                  <option value={DEFAULT_RUNNER_PLACEHOLDER}>
+                    {defaultRunnerName ? `${defaultRunnerName}` : "default"}
                   </option>
-                ))}
-              </select>
+                  {listRunners().map((runner) => (
+                    <option key={runner.name} value={runner.name}>
+                      {runner.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {showKernelSelector && (
+                <select
+                  id={kernelSelectId}
+                  value={selectedKernelKey}
+                  onChange={(event) => {
+                    const nextKey = event.target.value;
+                    if (!nextKey) {
+                      cellData.clearJupyterKernel();
+                      return;
+                    }
+                    const parsed = jupyterManager.parseKernelOptionKey(nextKey);
+                    if (!parsed) {
+                      return;
+                    }
+                    const option = kernelOptions.find((item) => item.key === nextKey);
+                    if (!option) {
+                      return;
+                    }
+                    cellData.setJupyterKernel({
+                      runnerName: option.runnerName,
+                      serverName: parsed.serverName,
+                      kernelId: parsed.kernelId,
+                      kernelName: option.label,
+                    });
+                  }}
+                  className="toolbar-select"
+                >
+                  <option value="">Select kernel</option>
+                  {kernelOptions.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              )}
               {sequenceLabel.trim() && (
                 <span className="text-[11px] font-mono text-nb-text-faint">
                   [{sequenceLabel}]

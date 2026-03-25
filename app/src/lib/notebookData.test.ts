@@ -519,6 +519,41 @@ describe("NotebookData.runCodeCell", () => {
     expect(new TextDecoder().decode(stdoutItem!.data)).toContain("hello");
   });
 
+  it("executes javascript with AppKernel even when runner metadata is not set", async () => {
+    getWithFallback.mockReturnValueOnce(undefined);
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-no-runner",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {},
+      value: 'console.log("hello-no-runner");',
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "test-notebook.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    const runID = model.runCodeCell(cell);
+    expect(runID).toBe("run-generated");
+
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutItem = updated?.outputs
+      .flatMap((o) => o.items)
+      .find((i) => i.mime === MimeType.VSCodeNotebookStdOut);
+    expect(stdoutItem).toBeTruthy();
+    expect(new TextDecoder().decode(stdoutItem!.data)).toContain("hello-no-runner");
+  });
+
   it("supports runme helper access inside appkernel javascript cells", async () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-appkernel-helper",

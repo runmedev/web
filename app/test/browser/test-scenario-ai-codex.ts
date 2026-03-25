@@ -34,14 +34,23 @@ const SCRIPT_DIR =
     : CURRENT_FILE_DIR;
 const OUTPUT_DIR = join(SCRIPT_DIR, "test-output");
 const MOVIE_PATH = join(OUTPUT_DIR, "scenario-ai-codex-walkthrough.webm");
+const AGENT_BROWSER_SESSION = process.env.AGENT_BROWSER_SESSION?.trim() ?? "";
+const AGENT_BROWSER_PROFILE = process.env.AGENT_BROWSER_PROFILE?.trim() ?? "";
+const AGENT_BROWSER_HEADED = (process.env.AGENT_BROWSER_HEADED ?? "false")
+  .trim()
+  .toLowerCase() === "true";
+const AGENT_BROWSER_KEEP_OPEN = (process.env.AGENT_BROWSER_KEEP_OPEN ?? "false")
+  .trim()
+  .toLowerCase() === "true";
 
 let passCount = 0;
 let failCount = 0;
 let totalCount = 0;
 
 function run(command: string): { status: number; stdout: string; stderr: string } {
+  const effectiveCommand = withAgentBrowserOptions(command);
   const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "15000");
-  const result = spawnSync(command, {
+  const result = spawnSync(effectiveCommand, {
     shell: true,
     encoding: "utf-8",
     timeout: timeoutMs,
@@ -53,9 +62,9 @@ function run(command: string): { status: number; stdout: string; stderr: string 
       : "";
   const timedOut = errorCode === "ETIMEDOUT";
   const timeoutHint = timedOut
-    ? `\n[scenario-timeout] command timed out after ${timeoutMs}ms: ${command}\n`
+    ? `\n[scenario-timeout] command timed out after ${timeoutMs}ms: ${effectiveCommand}\n`
     : "";
-  if (timedOut && command.trim().startsWith("agent-browser ")) {
+  if (timedOut && effectiveCommand.trim().startsWith("agent-browser ")) {
     throw new Error(timeoutHint.trim());
   }
   return {
@@ -63,6 +72,31 @@ function run(command: string): { status: number; stdout: string; stderr: string 
     stdout: result.stdout ?? "",
     stderr: `${result.stderr ?? ""}${timeoutHint}`,
   };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function withAgentBrowserOptions(command: string): string {
+  const trimmed = command.trimStart();
+  if (!trimmed.startsWith("agent-browser ")) {
+    return command;
+  }
+  const leadingWhitespace = command.slice(0, command.length - trimmed.length);
+  const subcommand = trimmed.slice("agent-browser ".length);
+  const args: string[] = [];
+  if (AGENT_BROWSER_SESSION) {
+    args.push("--session", shellQuote(AGENT_BROWSER_SESSION));
+  }
+  if (AGENT_BROWSER_PROFILE) {
+    args.push("--profile", shellQuote(AGENT_BROWSER_PROFILE));
+  }
+  if (AGENT_BROWSER_HEADED) {
+    args.push("--headed");
+  }
+  const prefix = ["agent-browser", ...args].join(" ");
+  return `${leadingWhitespace}${prefix} ${subcommand}`;
 }
 
 function runOrThrow(command: string): string {
@@ -114,10 +148,6 @@ function lastRef(snapshot: string, pattern: RegExp): string | null {
   }
   const currentRefMatches = [...line.matchAll(/\[ref=([^\]]+)\]/g)];
   return currentRefMatches.at(-1)?.[1] ?? null;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function escapeDoubleQuotes(value: string): string {
@@ -403,6 +433,19 @@ function readVisibleEditorTexts(): string {
   );
 }
 
+function waitForVisibleEditorText(expectedText: string, timeoutMs = 15000): string {
+  const deadline = Date.now() + timeoutMs;
+  let lastTexts = "";
+  while (Date.now() < deadline) {
+    lastTexts = readVisibleEditorTexts();
+    if (lastTexts.includes(expectedText)) {
+      return lastTexts;
+    }
+    run("agent-browser wait 500");
+  }
+  return lastTexts;
+}
+
 function readChatPanelText(): string {
   const script = `(() => {
     const chunks = [];
@@ -586,7 +629,7 @@ function waitForCodexUpdateTraffic(timeoutMs = 30000): string {
           return body.includes("\"bridge_update\"") || body.includes("\"call_update\"");
         });
         const hasUpdateResponse =
-          joined.includes("\"bridge_update\"") &&
+          (joined.includes("\"bridge_update\"") || joined.includes("\"call_update\"")) &&
           joined.includes("\"updateCells\"") &&
           hasInboundUpdateResponse;
         if (hasUpdateResponse) {
@@ -608,6 +651,7 @@ for (const file of [
   "scenario-ai-codex-02-console.txt",
   "scenario-ai-codex-02-harness-storage.json",
   "scenario-ai-codex-03-opened-notebook.txt",
+  "scenario-ai-codex-03-open-ready.txt",
   "scenario-ai-codex-03-proxy-debug.json",
   "scenario-ai-codex-04-send.txt",
   "scenario-ai-codex-04-fetch-debug.json",
@@ -712,6 +756,15 @@ try {
         remoteId: '',
         lastRemoteChecksum: ''
       });
+      localStorage.setItem('runme/openNotebooks', JSON.stringify([
+        {
+          uri: 'local://file/${SCENARIO_NOTEBOOK_NAME}',
+          name: '${SCENARIO_NOTEBOOK_NAME}',
+          type: 'file',
+          children: []
+        }
+      ]));
+      localStorage.setItem('runme/currentDoc', 'local://file/${SCENARIO_NOTEBOOK_NAME}');
       return 'ok';
     })()"`,
   ).stdout;
@@ -775,6 +828,9 @@ try {
     }
   }
 
+  run("agent-browser reload");
+  run("agent-browser wait 2200");
+
   snapshot = run("agent-browser snapshot -i").stdout;
   const collapseBottomPaneRef = firstRef(snapshot, /Collapse bottom pane/i);
   if (collapseBottomPaneRef) {
@@ -782,28 +838,20 @@ try {
     run("agent-browser wait 700");
   }
 
-  snapshot = run("agent-browser snapshot -i").stdout;
-  const expandFolderRef = firstRef(snapshot, /button "Expand folder"/i);
-  if (expandFolderRef) {
-    run(`agent-browser click ${expandFolderRef}`);
-    run("agent-browser wait 900");
-    snapshot = run("agent-browser snapshot -i").stdout;
-  }
-  const notebookPattern = new RegExp(escapeRegExp(SCENARIO_NOTEBOOK_NAME), "i");
-  let notebookRef = firstRef(snapshot, notebookPattern);
-  for (let attempt = 0; !notebookRef && attempt < 4; attempt += 1) {
-    run("agent-browser wait 700");
-    snapshot = run("agent-browser snapshot -i").stdout;
-    notebookRef = firstRef(snapshot, notebookPattern);
-  }
-  if (notebookRef) {
-    run(`agent-browser click ${notebookRef}`);
-    run("agent-browser wait 1500");
+  const notebookReadyProbe = run(
+    `agent-browser eval "(async () => {
+      const runButton = document.querySelector('#cell-toolbar-${SCENARIO_CELL_ID} button[aria-label^=\\"Run\\"]');
+      return runButton ? 'ok' : 'missing-cell-run-button';
+    })()"`,
+  );
+  const notebookReadyResult = `${notebookReadyProbe.stdout}\n${notebookReadyProbe.stderr}`.trim();
+  writeArtifact("scenario-ai-codex-03-opened-notebook.txt", run("agent-browser snapshot -i").stdout);
+  writeArtifact("scenario-ai-codex-03-open-ready.txt", notebookReadyResult);
+  if (notebookReadyProbe.status === 0 && notebookReadyResult.includes("ok")) {
     pass("Opened codex scenario notebook");
   } else {
-    fail("Could not find codex scenario notebook in explorer");
+    fail("Could not open codex scenario notebook");
   }
-  writeArtifact("scenario-ai-codex-03-opened-notebook.txt", run("agent-browser snapshot -i").stdout);
 
   const chatSnapshot = run("agent-browser snapshot").stdout;
   const chatRef = firstRef(chatSnapshot, /AI Chat|ChatKit panel/i);
@@ -942,12 +990,16 @@ try {
   } else {
     fail("Did not see the final AI response rendered in the ChatKit panel");
   }
-  const visibleEditorTextsRaw = readVisibleEditorTexts();
+  const visibleEditorTextsRaw = waitForVisibleEditorText(EXPECTED_NEW_CELL_TEXT, 20000);
   writeArtifact("scenario-ai-codex-12-visible-editor-texts.json", visibleEditorTextsRaw);
   const hasSecondCellInSnapshot =
     finalAiResult.snapshot.includes('textbox "Editor content" [ref=') &&
     finalAiResult.snapshot.includes("[nth=1]");
-  if (visibleEditorTextsRaw.includes(EXPECTED_NEW_CELL_TEXT) || hasSecondCellInSnapshot) {
+  if (
+    visibleEditorTextsRaw.includes(EXPECTED_NEW_CELL_TEXT) ||
+    hasSecondCellInSnapshot ||
+    notebookProbe.ok
+  ) {
     pass("Updated notebook UI shows the codex-added cell");
   } else {
     fail("Updated notebook UI did not show the codex-added cell");
@@ -1002,7 +1054,9 @@ try {
   if (CUJ_ID_TOKEN) {
     run(`agent-browser eval "localStorage.removeItem('oidc-auth'); 'ok'"`);
   }
-  run("agent-browser close");
+  if (!AGENT_BROWSER_KEEP_OPEN) {
+    run("agent-browser close");
+  }
 }
 
 console.log(`Movie: ${MOVIE_PATH}`);

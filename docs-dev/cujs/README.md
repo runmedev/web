@@ -22,6 +22,11 @@ from `docs-dev/cujs/`.
   - configure assistant harness in App Console,
   - type and send a message to the assistant,
   - verify the assistant response is visible in the panel.
+- `jupyter.md` — minimal Jupyter integration flow:
+  - start local Jupyter Server with `jupyter server --no-browser`,
+  - configure Jupyter runner via Runme proxy,
+  - run one Python cell,
+  - verify expected stdout is rendered in the notebook.
 
 ## How CUJs are executed
 

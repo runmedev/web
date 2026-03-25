@@ -321,6 +321,7 @@ function buildDefaultSummary(): CujSummary {
 
 export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<UploadResult> {
   const outputDir = resolve(options.outputDir ?? process.env.CUJ_OUTPUT_DIR ?? "test/browser/test-output");
+  console.log(`Uploading CUJ artifacts from ${outputDir}`);
   const outputStat = await stat(outputDir).catch(() => null);
   if (!outputStat || !outputStat.isDirectory()) {
     throw new Error(`CUJ output directory not found: ${outputDir}`);
@@ -390,13 +391,20 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
   ]);
 
   const absoluteFiles = await listFilesRecursive(outputDir);
-  const filesToUpload = absoluteFiles
+  const filesByRelative = absoluteFiles
     .map((absolute) => ({
       absolute,
       relative: relativePath(outputDir, absolute),
     }))
-    .filter((file) => !excluded.has(file.relative))
     .sort((a, b) => a.relative.localeCompare(b.relative));
+
+  // Print out all the files to debug why movies aren't being uploaded.
+  for (const file of filesByRelative) {
+    const uploadAction = excluded.has(file.relative) ? "SKIP" : "UPLOAD";
+    console.log(`[CUJ upload] ${uploadAction}: ${file.relative}`);
+  }
+
+  const filesToUpload = filesByRelative.filter((file) => !excluded.has(file.relative));
 
   if (filesToUpload.length === 0) {
     throw new Error(`No files found to upload in ${outputDir}`);
@@ -420,6 +428,18 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
 
   const movieUrl = urlByName.get("scenario-hello-world-walkthrough.webm") ?? "";
   const noRunnerMovieUrl = urlByName.get("scenario-no-runner-logs-walkthrough.webm") ?? "";
+  const movieUploads = uploaded.filter((file) => file.relative_path.toLowerCase().endsWith(".webm"));
+  const movieLinksHtml = movieUploads.length > 0
+    ? `<ul>${
+      movieUploads.map((file) =>
+        `<li><a href="${file.url}">${escapeHtml(file.relative_path)}</a></li>`
+      ).join("\n")
+    }</ul>`
+    : "<p>none found</p>";
+  const moviePreviewHtml = movieUploads.map((file) =>
+    `<h3>Movie Preview: ${escapeHtml(file.relative_path)}</h3><video controls preload="metadata" src="${file.url}"></video>`
+  ).join("\n");
+  const movieLinksMd = movieUploads.map((file) => `- ${file.relative_path}: ${file.url}`);
   const initialPngUrl = urlByName.get("scenario-hello-world-01-initial.png") ?? "";
   const afterRunPngUrl = urlByName.get("scenario-hello-world-06-after-run.png") ?? "";
   const afterRunTxtUrl = urlByName.get("scenario-hello-world-06-after-run.txt") ?? "";
@@ -519,6 +539,7 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
   <ul>
     <li>Hello-world movie: <a href="${movieUrl}">${movieUrl || "not found"}</a></li>
     <li>No-runner movie: <a href="${noRunnerMovieUrl}">${noRunnerMovieUrl || "not found"}</a></li>
+    <li>All movies (${movieUploads.length})</li>
     <li>Initial PNG: <a href="${initialPngUrl}">${initialPngUrl || "not found"}</a></li>
     <li>After-run PNG: <a href="${afterRunPngUrl}">${afterRunPngUrl || "not found"}</a></li>
     <li>After-run TXT: <a href="${afterRunTxtUrl}">${afterRunTxtUrl || "not found"}</a></li>
@@ -528,6 +549,8 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     <li>Backend log: <a href="${backendLogUrl}">${backendLogUrl || "not found"}</a></li>
     <li>CUJ log: <a href="${runLogUrl}">${runLogUrl || "not found"}</a></li>
   </ul>
+  <h3>Movie Files</h3>
+  ${movieLinksHtml}
   ${
     scenarioResults.length > 0
       ? `<h2>Scenario Status</h2>
@@ -572,13 +595,8 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
       : ""
   }
   ${
-    movieUrl
-      ? `<h3>Hello-world Movie Preview</h3><video controls preload="metadata" src="${movieUrl}"></video>`
-      : ""
-  }
-  ${
-    noRunnerMovieUrl
-      ? `<h3>No-runner Movie Preview</h3><video controls preload="metadata" src="${noRunnerMovieUrl}"></video>`
+    moviePreviewHtml
+      ? `<h2>Movie Previews</h2>${moviePreviewHtml}`
       : ""
   }
   ${
@@ -636,6 +654,7 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     "",
     `- Hello-world movie: ${movieUrl || "not found"}`,
     `- No-runner movie: ${noRunnerMovieUrl || "not found"}`,
+    `- Movie files: ${movieUploads.length}`,
     `- Initial PNG: ${initialPngUrl || "not found"}`,
     `- After-run PNG: ${afterRunPngUrl || "not found"}`,
     `- After-run TXT: ${afterRunTxtUrl || "not found"}`,
@@ -644,6 +663,9 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     `- Scenario results JSON: ${scenarioResultsUrl || "not found"}`,
     `- Backend log: ${backendLogUrl || "not found"}`,
     `- CUJ log: ${runLogUrl || "not found"}`,
+    ...(movieLinksMd.length > 0
+      ? ["", "## Movie files", "", ...movieLinksMd]
+      : ["", "## Movie files", "", "- none found"]),
     ...(scenarioResults.length > 0
       ? [
           "",
@@ -745,6 +767,7 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     urls: {
       movie: movieUrl,
       no_runner_movie: noRunnerMovieUrl,
+      movies: movieUploads.map((file) => ({ path: file.relative_path, url: file.url })),
       initial_png: initialPngUrl,
       after_run_png: afterRunPngUrl,
       after_run_txt: afterRunTxtUrl,

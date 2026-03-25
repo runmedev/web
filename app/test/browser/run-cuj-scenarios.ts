@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -81,6 +82,7 @@ const SCENARIO_DRIVERS = [
   join(SCRIPT_DIR, "test-scenario-hello-world.ts"),
   join(SCRIPT_DIR, "test-scenario-open-shared-drive-link.ts"),
   join(SCRIPT_DIR, "test-scenario-appkernel-javascript.ts"),
+  join(SCRIPT_DIR, "test-scenario-jupyter.ts"),
   join(SCRIPT_DIR, "test-scenario-no-runner-logs.ts"),
   join(SCRIPT_DIR, "test-scenario-ai.ts"),
   join(SCRIPT_DIR, "test-scenario-ai-codex.ts"),
@@ -165,7 +167,7 @@ function buildBackendOrigins(frontendUrl: string): string[] {
 function resolveOidcAuthConfig(): OidcAuthConfig {
   const enabled = (process.env.CUJ_USE_AUTH ?? "true").toLowerCase() !== "false";
   const host = process.env.CUJ_OIDC_HOST ?? "127.0.0.1";
-  const port = Number(process.env.CUJ_OIDC_PORT ?? "9988");
+  const port = Number(process.env.CUJ_OIDC_PORT ?? "19988");
   const issuer = process.env.CUJ_OIDC_ISSUER ?? `http://${host}:${port}`;
   const discoveryUrl = process.env.CUJ_OIDC_DISCOVERY_URL ??
     `${issuer}/.well-known/openid-configuration`;
@@ -606,6 +608,58 @@ function parseAssertionResults(output: string): AssertionResult[] {
   return results;
 }
 
+function parseMoviePaths(output: string): string[] {
+  const paths: string[] = [];
+  const pattern = /^Movie:\s+(.+\.webm)\s*$/gim;
+  let match: RegExpExecArray | null = null;
+  while ((match = pattern.exec(output)) !== null) {
+    const path = (match[1] ?? "").trim();
+    if (path) {
+      paths.push(path);
+    }
+  }
+  return [...new Set(paths)];
+}
+
+async function waitForFileToExistAndStabilize(path: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastSize = -1;
+  let stableReads = 0;
+  while (Date.now() < deadline) {
+    try {
+      const fileStat = await stat(path);
+      if (fileStat.isFile() && fileStat.size > 0) {
+        if (fileStat.size === lastSize) {
+          stableReads += 1;
+          if (stableReads >= 2) {
+            return;
+          }
+        } else {
+          lastSize = fileStat.size;
+          stableReads = 0;
+        }
+      }
+    } catch {
+      // Keep polling until timeout.
+    }
+    await new Promise((resolvePoll) => setTimeout(resolvePoll, 400));
+  }
+  throw new Error(`Timed out waiting for movie artifact at ${path}`);
+}
+
+async function waitForScenarioMovies(moviePaths: string[]): Promise<string[]> {
+  const timeoutMs = Number(process.env.CUJ_MOVIE_WAIT_TIMEOUT_MS ?? "12000");
+  const missing: string[] = [];
+  for (const moviePath of moviePaths) {
+    try {
+      await waitForFileToExistAndStabilize(moviePath, timeoutMs);
+    } catch {
+      missing.push(moviePath);
+    }
+  }
+  return missing;
+}
+
 function makeScenarioBrowserSession(baseSession: string | undefined, scenarioName: string): string {
   const normalizedScenario = scenarioName
     .toLowerCase()
@@ -616,6 +670,24 @@ function makeScenarioBrowserSession(baseSession: string | undefined, scenarioNam
     return `${normalizedBase}-${normalizedScenario}`;
   }
   return `cuj-${Date.now()}-${normalizedScenario}`;
+}
+
+function buildScenarioBrowserEnv(
+  env: NodeJS.ProcessEnv,
+  scenarioName: string,
+): NodeJS.ProcessEnv {
+  const sessionBase = env.AGENT_BROWSER_SESSION?.trim();
+  const scenarioSession = makeScenarioBrowserSession(sessionBase, scenarioName);
+  const profile = env.AGENT_BROWSER_PROFILE?.trim();
+  const headed = env.AGENT_BROWSER_HEADED?.trim();
+  const keepOpen = env.AGENT_BROWSER_KEEP_OPEN?.trim();
+  return {
+    ...env,
+    AGENT_BROWSER_SESSION: scenarioSession,
+    ...(profile ? { AGENT_BROWSER_PROFILE: profile } : {}),
+    ...(headed ? { AGENT_BROWSER_HEADED: headed } : {}),
+    ...(keepOpen ? { AGENT_BROWSER_KEEP_OPEN: keepOpen } : {}),
+  };
 }
 
 function resolveRepo(): string | null {
@@ -970,6 +1042,7 @@ async function main(): Promise<void> {
     let failures = 0;
     const aggregateAssertions: Assertions = { total: 0, passed: 0, failed: 0 };
     const scenarioResults: ScenarioResult[] = [];
+    const expectedMoviePaths = new Set<string>();
     const scenarioFilterRaw = process.env.CUJ_SCENARIOS?.trim() ?? "";
     const selectedScenarios = scenarioFilterRaw
       ? new Set(
@@ -1036,21 +1109,19 @@ async function main(): Promise<void> {
       }
 
       const compiled = join(GENERATED_DIR, `${basename.replace(/\.ts$/, "")}.js`);
-      const scenarioRunEnv: NodeJS.ProcessEnv = {
-        ...scenarioEnv,
-        AGENT_BROWSER_SESSION: makeScenarioBrowserSession(
-          scenarioEnv.AGENT_BROWSER_SESSION,
-          scenarioName,
-        ),
-      };
-      const runResult = runNodeScript(compiled, APP_ROOT, scenarioRunEnv);
+      const scenarioRunEnv: NodeJS.ProcessEnv = buildScenarioBrowserEnv(scenarioEnv, scenarioName);
+      let runResult = runNodeScript(compiled, APP_ROOT, scenarioRunEnv);
       printOutput(runResult.stdout, runResult.stderr);
 
-      const assertions = parseAssertions(`${runResult.stdout}\n${runResult.stderr}`);
+      const outputCombined = `${runResult.stdout}\n${runResult.stderr}`;
+      for (const moviePath of parseMoviePaths(outputCombined)) {
+        expectedMoviePaths.add(moviePath);
+      }
+
+      const assertions = parseAssertions(outputCombined);
       aggregateAssertions.total += assertions.total;
       aggregateAssertions.passed += assertions.passed;
       aggregateAssertions.failed += assertions.failed;
-      const outputCombined = `${runResult.stdout}\n${runResult.stderr}`;
       const failureMessages = parseFailureMessages(outputCombined);
       const assertionResults = parseAssertionResults(outputCombined);
       if (runResult.status !== 0 && assertionResults.length === 0) {
@@ -1080,6 +1151,14 @@ async function main(): Promise<void> {
       console.log("");
     }
 
+    const missingMovies = await waitForScenarioMovies([...expectedMoviePaths]);
+    if (missingMovies.length > 0) {
+      failures += 1;
+      console.error(
+        `[CUJ] Missing movie artifacts after scenario execution: ${missingMovies.join(", ")}`,
+      );
+    }
+
     const repo = resolveRepo();
     const prNumber = resolvePrNumber();
     if (repo && !process.env.GITHUB_REPOSITORY) {
@@ -1104,7 +1183,7 @@ async function main(): Promise<void> {
     writeFileSync(scenarioResultsPath, JSON.stringify(scenarioResults, null, 2), "utf-8");
 
     const shouldUpload = (process.env.CUJ_UPLOAD ?? "true").toLowerCase() !== "false";
-    if (shouldUpload) {
+    if (shouldUpload) {      
       const uploadPrefix = process.env.CUJ_ARTIFACT_PREFIX ??
         (repo
           ? `cuj-runs/${repo.replace(/\//g, "-")}/${summary.run_id}/${summary.run_attempt}`

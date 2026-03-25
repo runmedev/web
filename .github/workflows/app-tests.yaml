@@ -96,6 +96,20 @@ jobs:
         with:
           go-version: "1.23.x"
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Jupyter
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install "jupyterlab>=4,<5" "ipykernel>=6,<7"
+          jupyter --version
+          jupyter kernelspec list
+
       - name: Enable corepack
         shell: bash
         run: |
@@ -121,17 +135,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm install -g agent-browser
+          npm install -g agent-browser@0.21.2
           agent-browser --version
           agent-browser install
 
-      - name: Install Runme CLI
+      - name: Install ffmpeg
         shell: bash
         run: |
           set -euo pipefail
-          npm install -g runme
-          runme --version
-          runme agent --help >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+
+      - name: Checkout Runme (main)
+        uses: actions/checkout@v4
+        with:
+          repository: runmedev/runme
+          ref: main
+          path: runme-src
+          fetch-depth: 1
+
+      - name: Build Runme CLI from source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/bin"
+          cd runme-src
+          go build -o "${GITHUB_WORKSPACE}/bin/runme" .
+          "${GITHUB_WORKSPACE}/bin/runme" --version
+          "${GITHUB_WORKSPACE}/bin/runme" agent --help >/dev/null
 
       - name: Run CUJ orchestrator
         shell: bash
@@ -151,6 +183,7 @@ jobs:
           CUJ_CMD_TIMEOUT_MS: "120000"
           CUJ_SCENARIO_TIMEOUT_MS: "120000"
           CUJ_SCENARIO_CMD_TIMEOUT_MS: "10000"
+          CUJ_RUNME_AGENT_BIN: ${{ github.workspace }}/bin/runme
         run: |
           set -euo pipefail
           pnpm -C app run cuj:run

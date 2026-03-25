@@ -22,6 +22,9 @@ import {
   DEFAULT_RUNNER_PLACEHOLDER,
   getRunnersManager,
 } from "./runtime/runnersManager";
+import {
+  buildJupyterChannelsWebSocketURL,
+} from "./runtime/jupyterManager";
 import { createAppJsGlobals } from "./runtime/appJsGlobals";
 import { createRunmeConsoleApi } from "./runtime/runmeConsole";
 import { JSKernel } from "./runtime/jsKernel";
@@ -36,6 +39,7 @@ import { buildExecuteRequest } from "./runme";
 import type { Runner } from "./runner";
 import { showToast } from "./toast";
 import { appLogger } from "./logging/runtime";
+import { getBrowserAdapter } from "../browserAdapter.client";
 
 export type NotebookSnapshot = {
   readonly uri: string;
@@ -73,6 +77,36 @@ function createStdTextOutputs(
       ],
     }),
   ];
+}
+
+function createTextOutputItem(
+  mime: string,
+  text: string,
+): parser_pb.CellOutputItem {
+  return create(parser_pb.CellOutputItemSchema, {
+    mime,
+    type: "Buffer",
+    data: encodeCellOutputBytes(text),
+  });
+}
+
+const JUPYTER_LIMITS = {
+  textBytesPerExecution: 16 * 1024 * 1024,
+  richBytesPerItem: 10 * 1024 * 1024,
+  totalBytesPerExecution: 32 * 1024 * 1024,
+} as const;
+
+function decodeBase64ToBytes(value: string): Uint8Array {
+  try {
+    const binary = globalThis.atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  } catch {
+    return new Uint8Array();
+  }
 }
 
 type Listener = () => void;
@@ -375,6 +409,7 @@ export class NotebookData {
   private snapshotCache: NotebookSnapshot;
   private loaded: boolean;
   private activeStreams: Map<string, StreamsLike> = new Map();
+  private activeJupyterSockets: Map<string, WebSocket> = new Map();
 
   private refToCellData: Map<string, CellData> = new Map();
   // Debounce auto-save writes so keystrokes don't trigger a full disk write
@@ -574,9 +609,12 @@ export class NotebookData {
       return "";
     }
 
+    const normalizedLanguage = (cell.languageId ?? "").trim().toLowerCase();
     const requestedRunnerName =
       (cell.metadata?.[RunmeMetadataKey.RunnerName] as string | undefined) ?? "";
-    const useAppKernel = isAppKernelRunnerName(requestedRunnerName);
+    const useAppKernel =
+      normalizedLanguage === "javascript" || isAppKernelRunnerName(requestedRunnerName);
+    const useJupyterKernel = normalizedLanguage === "jupyter" || normalizedLanguage === "ipython";
     const runner = useAppKernel ? undefined : this.getRunner(cell);
     if (!useAppKernel && (!runner || !runner.endpoint)) {
       console.error("No runner available for cell", cell.refId);
@@ -591,6 +629,10 @@ export class NotebookData {
     // starting a new run to avoid leaking sockets.
     const existing = this.activeStreams.get(cell.refId);
     existing?.close();
+    this.activeStreams.delete(cell.refId);
+    const existingJupyterSocket = this.activeJupyterSockets.get(cell.refId);
+    existingJupyterSocket?.close();
+    this.activeJupyterSockets.delete(cell.refId);
 
     // Bump sequence and attach to metadata.
     this.sequence += 1;
@@ -599,10 +641,15 @@ export class NotebookData {
     delete cell.metadata[RunmeMetadataKey.Pid];
     cell.metadata[RunmeMetadataKey.Sequence] = this.sequence.toString();
 
-    // Strip outputs except terminal to avoid stale output accumulation.
-    cell.outputs = cell.outputs.filter((o) =>
-      o.items.some((oi) => oi.mime === MimeType.StatefulRunmeTerminal),
-    );
+    // Clear outputs on each execution start for Jupyter/IPython; for other
+    // runners keep terminal output only so reruns don't show stale non-terminal data.
+    if (useJupyterKernel) {
+      cell.outputs = [];
+    } else {
+      cell.outputs = cell.outputs.filter((o) =>
+        o.items.some((oi) => oi.mime === MimeType.StatefulRunmeTerminal),
+      );
+    }
 
     const runID = genRunID();
     cell.metadata[RunmeMetadataKey.LastRunID] = runID;
@@ -610,6 +657,11 @@ export class NotebookData {
 
     if (useAppKernel) {
       this.runCodeCellLocallyWithAppKernel(cell, runID);
+      return runID;
+    }
+
+    if (useJupyterKernel) {
+      this.runCodeCellWithJupyterKernel(cell, runID, runner!);
       return runID;
     }
 
@@ -854,6 +906,404 @@ export class NotebookData {
       });
   }
 
+  private runCodeCellWithJupyterKernel(
+    cell: parser_pb.Cell,
+    runID: string,
+    runner: Runner,
+  ): void {
+    const refId = cell.refId;
+    const source = cell.value ?? "";
+    const serverName =
+      (cell.metadata?.[RunmeMetadataKey.JupyterServerName] as string | undefined) ??
+      "";
+    const selectedKernelID =
+      (cell.metadata?.[RunmeMetadataKey.JupyterKernelID] as string | undefined) ?? "";
+    const selectedKernelName =
+      (cell.metadata?.[RunmeMetadataKey.JupyterKernelName] as string | undefined) ?? "";
+
+    if (!serverName || !selectedKernelID) {
+      showToast({
+        message: "Select a Jupyter kernel before running a Jupyter cell.",
+        tone: "error",
+      });
+      const updated = this.getCellProto(refId);
+      if (updated) {
+        updated.metadata ??= {};
+        updated.metadata[RunmeMetadataKey.ExitCode] = "1";
+        delete updated.metadata[RunmeMetadataKey.Pid];
+        updated.outputs = createStdTextOutputs(
+          "",
+          "Jupyter kernel is not selected for this cell.\n",
+        );
+        this.updateCell(updated);
+      }
+      return;
+    }
+
+    let channelsURL: string;
+    try {
+      const idToken = getBrowserAdapter().simpleAuth?.idToken?.trim() ?? "";
+      channelsURL = buildJupyterChannelsWebSocketURL({
+        runnerEndpoint: runner.endpoint,
+        serverName,
+        kernelId: selectedKernelID,
+        authorization: idToken ? `Bearer ${idToken}` : "",
+      });
+    } catch (error) {
+      showToast({
+        message: "Failed to create Jupyter channels URL from runner endpoint.",
+        tone: "error",
+      });
+      const updated = this.getCellProto(refId);
+      if (updated) {
+        updated.metadata ??= {};
+        updated.metadata[RunmeMetadataKey.ExitCode] = "1";
+        delete updated.metadata[RunmeMetadataKey.Pid];
+        updated.outputs = createStdTextOutputs(
+          "",
+          `Invalid runner endpoint for Jupyter: ${runner.endpoint}\n`,
+        );
+        this.updateCell(updated);
+      }
+      return;
+    }
+
+    const socket = new WebSocket(channelsURL);
+    this.activeJupyterSockets.set(refId, socket);
+
+    const executeMsgID = crypto.randomUUID().replace(/-/g, "");
+    const sessionID = crypto.randomUUID().replace(/-/g, "");
+    const textDecoder = new TextDecoder();
+    const richOutputs: parser_pb.CellOutput[] = [];
+    let stdoutText = "";
+    let stderrText = "";
+    let textBytes = 0;
+    let totalBytes = 0;
+    let didTruncate = false;
+    let completed = false;
+    let sawExecuteReply = false;
+    let sawIdle = false;
+    let exitCode = 0;
+
+    const appendTruncationNotice = () => {
+      if (didTruncate) {
+        return;
+      }
+      didTruncate = true;
+      const notice = "[runme] Jupyter output truncated due to v0 output limits.\n";
+      const noticeBytes = encodeCellOutputBytes(notice);
+      const allowed = Math.max(
+        0,
+        Math.min(
+          noticeBytes.length,
+          JUPYTER_LIMITS.textBytesPerExecution - textBytes,
+          JUPYTER_LIMITS.totalBytesPerExecution - totalBytes,
+        ),
+      );
+      if (allowed <= 0) {
+        return;
+      }
+      stderrText += textDecoder.decode(noticeBytes.slice(0, allowed));
+      textBytes += allowed;
+      totalBytes += allowed;
+    };
+
+    const appendText = (target: "stdout" | "stderr", value: string) => {
+      if (!value) {
+        return;
+      }
+      const encoded = encodeCellOutputBytes(value);
+      const allowed = Math.max(
+        0,
+        Math.min(
+          encoded.length,
+          JUPYTER_LIMITS.textBytesPerExecution - textBytes,
+          JUPYTER_LIMITS.totalBytesPerExecution - totalBytes,
+        ),
+      );
+      if (allowed <= 0) {
+        appendTruncationNotice();
+        return;
+      }
+      const chunk = textDecoder.decode(encoded.slice(0, allowed));
+      if (target === "stdout") {
+        stdoutText += chunk;
+      } else {
+        stderrText += chunk;
+      }
+      textBytes += allowed;
+      totalBytes += allowed;
+      if (allowed < encoded.length) {
+        appendTruncationNotice();
+      }
+    };
+
+    const appendRichItem = (mime: string, data: Uint8Array) => {
+      let payload = data;
+      if (payload.length > JUPYTER_LIMITS.richBytesPerItem) {
+        payload = payload.slice(0, JUPYTER_LIMITS.richBytesPerItem);
+        appendTruncationNotice();
+      }
+      const allowed = Math.max(
+        0,
+        Math.min(payload.length, JUPYTER_LIMITS.totalBytesPerExecution - totalBytes),
+      );
+      if (allowed <= 0) {
+        appendTruncationNotice();
+        return;
+      }
+      const trimmed = payload.slice(0, allowed);
+      totalBytes += trimmed.length;
+      if (trimmed.length < payload.length) {
+        appendTruncationNotice();
+      }
+      richOutputs.push(
+        create(parser_pb.CellOutputSchema, {
+          items: [
+            create(parser_pb.CellOutputItemSchema, {
+              mime,
+              type: "Buffer",
+              data: trimmed,
+            }),
+          ],
+        }),
+      );
+    };
+
+    const pushDisplayBundle = (bundle: Record<string, unknown> | undefined) => {
+      if (!bundle || typeof bundle !== "object") {
+        return;
+      }
+      if (typeof bundle["text/html"] === "string") {
+        appendRichItem("text/html", encodeCellOutputBytes(bundle["text/html"] as string));
+        return;
+      }
+      if (typeof bundle["image/png"] === "string") {
+        appendRichItem("image/png", decodeBase64ToBytes(bundle["image/png"] as string));
+        return;
+      }
+      if (typeof bundle["image/jpeg"] === "string") {
+        appendRichItem("image/jpeg", decodeBase64ToBytes(bundle["image/jpeg"] as string));
+        return;
+      }
+      if (typeof bundle["image/svg+xml"] === "string") {
+        appendRichItem("image/svg+xml", encodeCellOutputBytes(bundle["image/svg+xml"] as string));
+        return;
+      }
+      if (typeof bundle["text/plain"] === "string") {
+        appendRichItem("text/plain", encodeCellOutputBytes(bundle["text/plain"] as string));
+      }
+    };
+
+    const updateCellOutputs = (transient: boolean) => {
+      const updated = this.getCellProto(refId);
+      if (!updated) {
+        return false;
+      }
+      const currentRunID =
+        typeof updated.metadata?.[RunmeMetadataKey.LastRunID] === "string"
+          ? updated.metadata[RunmeMetadataKey.LastRunID]
+          : "";
+      if (currentRunID !== runID) {
+        return false;
+      }
+
+      const nextOutputs: parser_pb.CellOutput[] = [];
+      if (stdoutText.length > 0 || stderrText.length > 0) {
+        nextOutputs.push(
+          create(parser_pb.CellOutputSchema, {
+            items: [
+              createTextOutputItem(MimeType.VSCodeNotebookStdOut, stdoutText),
+              createTextOutputItem(MimeType.VSCodeNotebookStdErr, stderrText),
+            ],
+          }),
+        );
+      }
+      nextOutputs.push(...richOutputs);
+      updated.outputs = nextOutputs;
+      this.updateCell(updated, { transient });
+      return true;
+    };
+
+    const markCompleted = (code: number) => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      const updated = this.getCellProto(refId);
+      if (updated) {
+        const currentRunID =
+          typeof updated.metadata?.[RunmeMetadataKey.LastRunID] === "string"
+            ? updated.metadata[RunmeMetadataKey.LastRunID]
+            : "";
+        if (currentRunID === runID) {
+          updated.metadata ??= {};
+          updated.metadata[RunmeMetadataKey.ExitCode] = `${code}`;
+          delete updated.metadata[RunmeMetadataKey.Pid];
+          this.updateCell(updated);
+        }
+      }
+      this.activeJupyterSockets.delete(refId);
+      try {
+        socket.close();
+      } catch {
+        // no-op
+      }
+    };
+
+    socket.onopen = () => {
+      const executeRequest = {
+        channel: "shell",
+        header: {
+          msg_id: executeMsgID,
+          username: "runme",
+          session: sessionID,
+          date: new Date().toISOString(),
+          msg_type: "execute_request",
+          version: "5.3",
+        },
+        parent_header: {},
+        metadata: {},
+        content: {
+          code: source,
+          silent: false,
+          store_history: true,
+          user_expressions: {},
+          allow_stdin: false,
+          stop_on_error: true,
+        },
+      };
+      socket.send(JSON.stringify(executeRequest));
+    };
+
+    socket.onmessage = (event) => {
+      if (completed) {
+        return;
+      }
+      if (typeof event.data !== "string") {
+        return;
+      }
+      let message: Record<string, any>;
+      try {
+        message = JSON.parse(event.data) as Record<string, any>;
+      } catch {
+        return;
+      }
+      const msgType =
+        (message.msg_type as string | undefined) ??
+        (message.header?.msg_type as string | undefined) ??
+        "";
+      const parentMsgID = (message.parent_header?.msg_id as string | undefined) ?? "";
+      if (parentMsgID && parentMsgID !== executeMsgID) {
+        return;
+      }
+
+      switch (msgType) {
+        case "stream": {
+          const streamName = (message.content?.name as string | undefined) ?? "stdout";
+          const text = (message.content?.text as string | undefined) ?? "";
+          appendText(streamName === "stderr" ? "stderr" : "stdout", text);
+          updateCellOutputs(true);
+          break;
+        }
+        case "error": {
+          const traceback = Array.isArray(message.content?.traceback)
+            ? (message.content.traceback as string[]).join("\n")
+            : "";
+          const ename = (message.content?.ename as string | undefined) ?? "Error";
+          const evalue = (message.content?.evalue as string | undefined) ?? "";
+          appendText("stderr", `${ename}: ${evalue}\n${traceback}\n`);
+          exitCode = 1;
+          updateCellOutputs(true);
+          break;
+        }
+        case "display_data":
+        case "execute_result":
+        case "update_display_data": {
+          const dataBundle = message.content?.data as Record<string, unknown> | undefined;
+          pushDisplayBundle(dataBundle);
+          updateCellOutputs(true);
+          break;
+        }
+        case "input_request": {
+          appendText(
+            "stderr",
+            "Jupyter input_request is not supported in v0. Re-run with non-interactive code.\n",
+          );
+          exitCode = 1;
+          updateCellOutputs(true);
+          break;
+        }
+        case "execute_reply": {
+          sawExecuteReply = true;
+          if (message.content?.status && message.content.status !== "ok") {
+            exitCode = 1;
+          }
+          if (sawIdle) {
+            updateCellOutputs(false);
+            markCompleted(exitCode);
+          }
+          break;
+        }
+        case "status": {
+          if (message.content?.execution_state === "idle") {
+            sawIdle = true;
+            if (sawExecuteReply) {
+              updateCellOutputs(false);
+              markCompleted(exitCode);
+            }
+          }
+          break;
+        }
+        case "clear_output": {
+          // v0 behavior: ignore in-band clear_output; we clear at execution start.
+          break;
+        }
+        default:
+          break;
+      }
+    };
+
+    socket.onerror = () => {
+      if (completed) {
+        return;
+      }
+      appendText(
+        "stderr",
+        "Connection lost; output may be incomplete. Re-run the cell.\n",
+      );
+      updateCellOutputs(false);
+      markCompleted(1);
+    };
+
+    socket.onclose = () => {
+      if (completed) {
+        return;
+      }
+      // Long-running Jupyter executions can be quiet; completion is gated on
+      // protocol signals, not "no message for N seconds".
+      if (!sawExecuteReply || !sawIdle) {
+        appendText(
+          "stderr",
+          "Connection lost; output may be incomplete. Re-run the cell.\n",
+        );
+        updateCellOutputs(false);
+        markCompleted(1);
+      }
+    };
+
+    appLogger.info("Started Jupyter kernel cell execution", {
+      attrs: {
+        scope: "jupyter.runner",
+        refId,
+        runID,
+        serverName,
+        kernelID: selectedKernelID,
+        kernelName: selectedKernelName,
+      },
+    });
+  }
+
   private getRunner(cell: parser_pb.Cell): Runner | undefined {
     const runnerMgr = getRunnersManager();
     const runnerName =
@@ -1080,6 +1530,52 @@ export class CellData {
       (snap.metadata as any)[RunmeMetadataKey.RunnerName] = name;      
     }
     this.notebook.updateCell(snap);
+  }
+
+  setJupyterKernel(selection: {
+    runnerName?: string;
+    serverName: string;
+    kernelId: string;
+    kernelName: string;
+  }): void {
+    const snap = this.snapshot;
+    if (!snap) return;
+    snap.metadata ??= {};
+    (snap.metadata as any)[RunmeMetadataKey.JupyterServerName] =
+      selection.serverName;
+    (snap.metadata as any)[RunmeMetadataKey.JupyterKernelID] =
+      selection.kernelId;
+    (snap.metadata as any)[RunmeMetadataKey.JupyterKernelName] =
+      selection.kernelName;
+    if (selection.runnerName && selection.runnerName !== DEFAULT_RUNNER_PLACEHOLDER) {
+      (snap.metadata as any)[RunmeMetadataKey.RunnerName] = selection.runnerName;
+    }
+    this.notebook.updateCell(snap);
+  }
+
+  clearJupyterKernel(): void {
+    const snap = this.snapshot;
+    if (!snap) return;
+    snap.metadata ??= {};
+    delete (snap.metadata as any)[RunmeMetadataKey.JupyterServerName];
+    delete (snap.metadata as any)[RunmeMetadataKey.JupyterKernelID];
+    delete (snap.metadata as any)[RunmeMetadataKey.JupyterKernelName];
+    this.notebook.updateCell(snap);
+  }
+
+  getJupyterServerName(): string {
+    const value = this.snapshot?.metadata?.[RunmeMetadataKey.JupyterServerName];
+    return typeof value === "string" ? value : "";
+  }
+
+  getJupyterKernelID(): string {
+    const value = this.snapshot?.metadata?.[RunmeMetadataKey.JupyterKernelID];
+    return typeof value === "string" ? value : "";
+  }
+
+  getJupyterKernelName(): string {
+    const value = this.snapshot?.metadata?.[RunmeMetadataKey.JupyterKernelName];
+    return typeof value === "string" ? value : "";
   }
 
   update(cell: parser_pb.Cell): void {
