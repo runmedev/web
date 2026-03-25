@@ -35,9 +35,15 @@ let passCount = 0;
 let failCount = 0;
 let totalCount = 0;
 
-function run(command: string): { status: number; stdout: string; stderr: string } {
+function run(
+  command: string,
+  options?: {
+    timeoutMs?: number;
+    throwOnAgentBrowserTimeout?: boolean;
+  },
+): { status: number; stdout: string; stderr: string } {
   const effectiveCommand = withAgentBrowserOptions(command);
-  const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "10000");
+  const timeoutMs = options?.timeoutMs ?? Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "10000");
   const result = spawnSync(effectiveCommand, {
     shell: true,
     encoding: "utf-8",
@@ -52,7 +58,12 @@ function run(command: string): { status: number; stdout: string; stderr: string 
   const timeoutHint = timedOut
     ? `\n[scenario-timeout] command timed out after ${timeoutMs}ms: ${effectiveCommand}\n`
     : "";
-  if (timedOut && effectiveCommand.trim().startsWith("agent-browser ")) {
+  const shouldThrowOnTimeout = options?.throwOnAgentBrowserTimeout ?? true;
+  if (
+    timedOut &&
+    shouldThrowOnTimeout &&
+    effectiveCommand.trim().startsWith("agent-browser ")
+  ) {
     throw new Error(timeoutHint.trim());
   }
   return {
@@ -517,7 +528,10 @@ try {
   fail(`Scenario execution error: ${String(error)}`);
 } finally {
   if (startedRecording) {
-    run("agent-browser record stop");
+    run("agent-browser record stop", {
+      timeoutMs: 30000,
+      throwOnAgentBrowserTimeout: false,
+    });
   }
   if (CUJ_ID_TOKEN) {
     run(`agent-browser eval "localStorage.removeItem('oidc-auth'); 'ok'"`);
