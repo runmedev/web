@@ -89,6 +89,15 @@ const SANDBOX_SRC_DOC = `<!doctype html>
           help: () => hostCall("runme.help", []),
         };
 
+        const notebooks = {
+          help: (topic) => hostCall("notebooks.help", [topic]),
+          list: (query) => hostCall("notebooks.list", [query]),
+          get: (target) => hostCall("notebooks.get", [target]),
+          update: (args) => hostCall("notebooks.update", [args]),
+          delete: (target) => hostCall("notebooks.delete", [target]),
+          execute: (args) => hostCall("notebooks.execute", [args]),
+        };
+
         const help = () => {
           consoleProxy.log("Sandbox JS helpers:");
           consoleProxy.log("- runme.clear([target])");
@@ -97,6 +106,11 @@ const SANDBOX_SRC_DOC = `<!doctype html>
           consoleProxy.log("- runme.rerun([target])");
           consoleProxy.log("- runme.getCurrentNotebook()");
           consoleProxy.log("- runme.help()");
+          consoleProxy.log("- notebooks.help([topic])");
+          consoleProxy.log("- notebooks.list([query])");
+          consoleProxy.log("- notebooks.get([target])");
+          consoleProxy.log("- notebooks.update({ target?, expectedRevision?, operations })");
+          consoleProxy.log("- notebooks.execute({ target?, refIds })");
           consoleProxy.log("- help()");
         };
 
@@ -106,10 +120,11 @@ const SANDBOX_SRC_DOC = `<!doctype html>
             const runner = new Function(
               "console",
               "runme",
+              "notebooks",
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, help);
+            await runner(consoleProxy, runme, notebooks, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });
@@ -184,6 +199,12 @@ export class SandboxJSKernel {
       "runme.rerun",
       "runme.getCurrentNotebook",
       "runme.help",
+      "notebooks.help",
+      "notebooks.list",
+      "notebooks.get",
+      "notebooks.update",
+      "notebooks.delete",
+      "notebooks.execute",
     ],
   }: {
     bridge: SandboxBridge;

@@ -1,4 +1,5 @@
 import { create } from "@bufbuild/protobuf";
+import md5 from "md5";
 
 import { RunmeMetadataKey, parser_pb } from "../../runme/client";
 
@@ -13,6 +14,102 @@ export type NotebookDataLike = {
   getNotebook: () => parser_pb.Notebook;
   updateCell: (cell: parser_pb.Cell) => void;
   getCell: (refId: string) => CellRunnerLike | null;
+  appendCodeCell?: (languageId?: string | null) => parser_pb.Cell;
+  addCodeCellAfter?: (
+    targetRefId: string,
+    languageId?: string | null,
+  ) => parser_pb.Cell | null;
+  addCodeCellBefore?: (
+    targetRefId: string,
+    languageId?: string | null,
+  ) => parser_pb.Cell | null;
+  removeCell?: (refId: string) => void;
+};
+
+export type NotebookSummary = {
+  uri: string;
+  name: string;
+  isOpen: boolean;
+  source: "local" | "fs" | "contents" | "drive";
+};
+
+export type NotebookQuery = {
+  openOnly?: boolean;
+  uriPrefix?: string;
+  nameContains?: string;
+  limit?: number;
+};
+
+export type NotebookHandle = {
+  uri: string;
+  revision: string;
+};
+
+export type NotebookTarget = { uri: string } | { handle: NotebookHandle };
+
+export type NotebookDocument = {
+  summary: NotebookSummary;
+  handle: NotebookHandle;
+  notebook: parser_pb.Notebook;
+};
+
+export type CellPatch = {
+  value?: string;
+  languageId?: string;
+  metadata?: Record<string, string>;
+  outputs?: parser_pb.CellOutput[];
+};
+
+export type CellLocation =
+  | { index: number }
+  | { beforeRefId: string }
+  | { afterRefId: string };
+
+export type InsertCellSpec = {
+  kind: "code" | "markup";
+  languageId?: string;
+  value?: string;
+  metadata?: Record<string, string>;
+};
+
+export type NotebookMutation =
+  | {
+      op: "insert";
+      at: CellLocation;
+      cells: InsertCellSpec[];
+    }
+  | {
+      op: "update";
+      refId: string;
+      patch: CellPatch;
+    }
+  | {
+      op: "remove";
+      refIds: string[];
+    };
+
+export type NotebookMethod =
+  | "list"
+  | "get"
+  | "update"
+  | "delete"
+  | "execute";
+
+export type NotebooksApi = {
+  help: (topic?: NotebookMethod) => Promise<string>;
+  list: (query?: NotebookQuery) => Promise<NotebookSummary[]>;
+  get: (target?: NotebookTarget) => Promise<NotebookDocument>;
+  update: (args: {
+    target?: NotebookTarget;
+    expectedRevision?: string;
+    operations: NotebookMutation[];
+    reason?: string;
+  }) => Promise<NotebookDocument>;
+  delete: (target: NotebookTarget) => Promise<void>;
+  execute: (args: {
+    target?: NotebookTarget;
+    refIds: string[];
+  }) => Promise<{ handle: NotebookHandle; cells: parser_pb.Cell[] }>;
 };
 
 export type RunmeConsoleApi = {
@@ -23,6 +120,336 @@ export type RunmeConsoleApi = {
   rerun: (target?: unknown) => string;
   help: () => string;
 };
+
+function inferNotebookSource(uri: string): NotebookSummary["source"] {
+  const normalized = (uri ?? "").toLowerCase();
+  if (normalized.startsWith("local://")) {
+    return "local";
+  }
+  if (normalized.startsWith("fs://") || normalized.startsWith("file://")) {
+    return "fs";
+  }
+  if (normalized.startsWith("contents://")) {
+    return "contents";
+  }
+  if (normalized.startsWith("https://drive.google.com/")) {
+    return "drive";
+  }
+  return "local";
+}
+
+function createRevision(notebook: parser_pb.Notebook): string {
+  // Deterministic content hash used for optimistic checks in runtime helpers.
+  return md5(JSON.stringify(notebook));
+}
+
+function makeHandle(notebook: NotebookDataLike): NotebookHandle {
+  return {
+    uri: notebook.getUri(),
+    revision: createRevision(notebook.getNotebook()),
+  };
+}
+
+function makeDocument(notebook: NotebookDataLike): NotebookDocument {
+  const handle = makeHandle(notebook);
+  return {
+    summary: {
+      uri: notebook.getUri(),
+      name: notebook.getName(),
+      isOpen: true,
+      source: inferNotebookSource(notebook.getUri()),
+    },
+    handle,
+    notebook: notebook.getNotebook(),
+  };
+}
+
+function resolveTargetUri(target?: NotebookTarget): string | null {
+  if (!target || typeof target !== "object") {
+    return null;
+  }
+  if ("uri" in target && typeof target.uri === "string" && target.uri.trim() !== "") {
+    return target.uri.trim();
+  }
+  if (
+    "handle" in target &&
+    target.handle &&
+    typeof target.handle.uri === "string" &&
+    target.handle.uri.trim() !== ""
+  ) {
+    return target.handle.uri.trim();
+  }
+  return null;
+}
+
+function resolveInsertIndex(
+  notebook: NotebookDataLike,
+  at: CellLocation,
+): { beforeRefId?: string; afterRefId?: string; append?: true } {
+  const cells = notebook.getNotebook().cells ?? [];
+  if ("beforeRefId" in at) {
+    return { beforeRefId: at.beforeRefId };
+  }
+  if ("afterRefId" in at) {
+    return { afterRefId: at.afterRefId };
+  }
+  const rawIndex = at.index;
+  if (!Number.isInteger(rawIndex)) {
+    throw new Error(`Invalid insert index: ${String(rawIndex)}`);
+  }
+  if (cells.length === 0) {
+    return { append: true };
+  }
+  let normalizedIndex = rawIndex;
+  if (rawIndex < 0) {
+    normalizedIndex = cells.length + rawIndex + 1;
+  }
+  if (normalizedIndex <= 0) {
+    return { beforeRefId: cells[0]?.refId };
+  }
+  if (normalizedIndex >= cells.length) {
+    return { append: true };
+  }
+  return { beforeRefId: cells[normalizedIndex]?.refId };
+}
+
+function applyInsertedCellSpec(
+  notebook: NotebookDataLike,
+  inserted: parser_pb.Cell,
+  spec: InsertCellSpec,
+): void {
+  const updated = create(parser_pb.CellSchema, inserted);
+  updated.kind =
+    spec.kind === "markup" ? parser_pb.CellKind.MARKUP : parser_pb.CellKind.CODE;
+  updated.languageId =
+    spec.languageId ??
+    (spec.kind === "markup" ? "markdown" : updated.languageId ?? "javascript");
+  if (typeof spec.value === "string") {
+    updated.value = spec.value;
+  }
+  if (spec.metadata) {
+    updated.metadata = {
+      ...(updated.metadata ?? {}),
+      ...spec.metadata,
+    };
+  }
+  notebook.updateCell(updated);
+}
+
+function insertCells(
+  notebook: NotebookDataLike,
+  at: CellLocation,
+  specs: InsertCellSpec[],
+): void {
+  if (!Array.isArray(specs) || specs.length === 0) {
+    return;
+  }
+  if (
+    typeof notebook.appendCodeCell !== "function" ||
+    typeof notebook.addCodeCellBefore !== "function" ||
+    typeof notebook.addCodeCellAfter !== "function"
+  ) {
+    throw new Error("Notebook does not support insert operations.");
+  }
+
+  const location = resolveInsertIndex(notebook, at);
+  if (location.beforeRefId) {
+    for (let i = specs.length - 1; i >= 0; i -= 1) {
+      const inserted = notebook.addCodeCellBefore(
+        location.beforeRefId,
+        specs[i]?.languageId ?? "javascript",
+      );
+      if (!inserted) {
+        throw new Error(`Failed to insert before cell: ${location.beforeRefId}`);
+      }
+      applyInsertedCellSpec(notebook, inserted, specs[i]);
+    }
+    return;
+  }
+
+  if (location.afterRefId) {
+    let anchor = location.afterRefId;
+    for (const spec of specs) {
+      const inserted = notebook.addCodeCellAfter(anchor, spec.languageId ?? "javascript");
+      if (!inserted) {
+        throw new Error(`Failed to insert after cell: ${anchor}`);
+      }
+      applyInsertedCellSpec(notebook, inserted, spec);
+      anchor = inserted.refId;
+    }
+    return;
+  }
+
+  for (const spec of specs) {
+    const inserted = notebook.appendCodeCell(spec.languageId ?? "javascript");
+    applyInsertedCellSpec(notebook, inserted, spec);
+  }
+}
+
+function updateCellPatch(
+  notebook: NotebookDataLike,
+  refId: string,
+  patch: CellPatch,
+): void {
+  const existing = notebook.getNotebook().cells.find((cell) => cell.refId === refId);
+  if (!existing) {
+    throw new Error(`Cell not found: ${refId}`);
+  }
+  const updated = create(parser_pb.CellSchema, existing);
+  if (typeof patch.value === "string") {
+    updated.value = patch.value;
+  }
+  if (typeof patch.languageId === "string") {
+    updated.languageId = patch.languageId;
+  }
+  if (patch.metadata) {
+    updated.metadata = {
+      ...(updated.metadata ?? {}),
+      ...patch.metadata,
+    };
+  }
+  if (Array.isArray(patch.outputs)) {
+    updated.outputs = patch.outputs;
+  }
+  notebook.updateCell(updated);
+}
+
+export function createNotebooksApi({
+  resolveNotebook,
+  listNotebooks,
+}: {
+  resolveNotebook: (target?: unknown) => NotebookDataLike | null;
+  listNotebooks?: () => NotebookDataLike[];
+}): NotebooksApi {
+  const resolveNotebookByTarget = (target?: NotebookTarget): NotebookDataLike => {
+    const uri = resolveTargetUri(target);
+    const resolved = uri ? resolveNotebook(uri) : resolveNotebook();
+    if (!resolved) {
+      throw new Error("No notebook found for the requested target.");
+    }
+    return resolved;
+  };
+
+  const listKnownNotebooks = (): NotebookDataLike[] => {
+    const listed = listNotebooks?.() ?? [];
+    if (listed.length > 0) {
+      return listed;
+    }
+    const current = resolveNotebook();
+    return current ? [current] : [];
+  };
+
+  const help = async (topic?: NotebookMethod) => {
+    if (topic === "list") {
+      return "notebooks.list(query?: { openOnly?: boolean; uriPrefix?: string; nameContains?: string; limit?: number }): Promise<NotebookSummary[]>";
+    }
+    if (topic === "get") {
+      return "notebooks.get(target?: { uri } | { handle: { uri, revision } }): Promise<NotebookDocument>";
+    }
+    if (topic === "update") {
+      return "notebooks.update({ target?, expectedRevision?, operations: NotebookMutation[] }): Promise<NotebookDocument>";
+    }
+    if (topic === "delete") {
+      return "notebooks.delete(target): Promise<void>";
+    }
+    if (topic === "execute") {
+      return "notebooks.execute({ target?, refIds: string[] }): Promise<{ handle, cells }>";
+    }
+    return [
+      "Notebook SDK methods:",
+      "- notebooks.list(query?)",
+      "- notebooks.get(target?)",
+      "- notebooks.update({ target?, expectedRevision?, operations })",
+      "- notebooks.delete(target)",
+      "- notebooks.execute({ target?, refIds })",
+      "- notebooks.help(topic?)",
+    ].join("\n");
+  };
+
+  return {
+    help,
+    list: async (query?: NotebookQuery) => {
+      const all = listKnownNotebooks();
+      let result = all.map((notebook) => ({
+        uri: notebook.getUri(),
+        name: notebook.getName(),
+        isOpen: true,
+        source: inferNotebookSource(notebook.getUri()),
+      }));
+      if (query?.uriPrefix) {
+        result = result.filter((item) => item.uri.startsWith(query.uriPrefix!));
+      }
+      if (query?.nameContains) {
+        const needle = query.nameContains.toLowerCase();
+        result = result.filter((item) => item.name.toLowerCase().includes(needle));
+      }
+      if (typeof query?.limit === "number" && query.limit >= 0) {
+        result = result.slice(0, query.limit);
+      }
+      return result;
+    },
+    get: async (target?: NotebookTarget) => {
+      const notebook = resolveNotebookByTarget(target);
+      return makeDocument(notebook);
+    },
+    update: async (args) => {
+      const notebook = resolveNotebookByTarget(args.target);
+      const beforeHandle = makeHandle(notebook);
+      if (
+        args.expectedRevision &&
+        args.expectedRevision.trim() !== "" &&
+        args.expectedRevision !== beforeHandle.revision
+      ) {
+        throw new Error(
+          `Revision mismatch: expected ${args.expectedRevision}, actual ${beforeHandle.revision}`,
+        );
+      }
+
+      for (const operation of args.operations ?? []) {
+        if (operation.op === "insert") {
+          insertCells(notebook, operation.at, operation.cells);
+          continue;
+        }
+        if (operation.op === "update") {
+          updateCellPatch(notebook, operation.refId, operation.patch);
+          continue;
+        }
+        if (operation.op === "remove") {
+          if (typeof notebook.removeCell !== "function") {
+            throw new Error("Notebook does not support remove operations.");
+          }
+          for (const refId of operation.refIds ?? []) {
+            notebook.removeCell(refId);
+          }
+        }
+      }
+
+      return makeDocument(notebook);
+    },
+    delete: async (_target: NotebookTarget) => {
+      throw new Error("notebooks.delete is not supported in v0 runtime.");
+    },
+    execute: async (args) => {
+      const notebook = resolveNotebookByTarget(args.target);
+      const executedCells: parser_pb.Cell[] = [];
+      for (const refId of args.refIds ?? []) {
+        const cellRunner = notebook.getCell(refId);
+        if (!cellRunner) {
+          throw new Error(`Cell not found: ${refId}`);
+        }
+        cellRunner.run();
+        const cell = notebook.getNotebook().cells.find((candidate) => candidate.refId === refId);
+        if (cell) {
+          executedCells.push(cell);
+        }
+      }
+      return {
+        handle: makeHandle(notebook),
+        cells: executedCells,
+      };
+    },
+  };
+}
 
 function formatNotebookLabel(notebook: NotebookDataLike): string {
   const name = notebook.getName();

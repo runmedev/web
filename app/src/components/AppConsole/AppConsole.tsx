@@ -190,6 +190,11 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
           openNotebook: (uri) => {
             setCurrentDoc(uri);
           },
+          resolveNotebook: resolveNotebookData,
+          listNotebooks: () =>
+            openNotebooks
+              .map((item) => getNotebookData(item.uri))
+              .filter((item): item is NotebookDataLike => Boolean(item)),
           runnerSync: {
             onUpdated: (runner) => {
               updateRunner(
@@ -223,9 +228,11 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       deleteRunner,
       getItems,
       getNotebookData,
+      openNotebooks,
       resolveNotebookStore,
       ensureFilesystemStore,
       removeItem,
+      resolveNotebookData,
       runme,
       sendStdout,
       setDefaultRunner,

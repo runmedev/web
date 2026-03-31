@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { RunmeMetadataKey, parser_pb } from "../../contexts/CellContext";
 import {
+  createNotebooksApi,
   createRunmeConsoleApi,
   type NotebookDataLike,
 } from "./runmeConsole";
@@ -70,6 +71,71 @@ class FakeNotebookData implements NotebookDataLike {
 
   getCell(refId: string): FakeCellRunner | null {
     return this.runners.get(refId) ?? null;
+  }
+
+  appendCodeCell(languageId?: string | null): parser_pb.Cell {
+    const cell = create(parser_pb.CellSchema, {
+      refId: `cell-${Math.random().toString(36).slice(2, 8)}`,
+      kind: parser_pb.CellKind.CODE,
+      languageId: languageId ?? "javascript",
+      value: "",
+      outputs: [],
+      metadata: {},
+    });
+    this.notebook.cells = [...(this.notebook.cells ?? []), cell];
+    return cell;
+  }
+
+  addCodeCellAfter(
+    targetRefId: string,
+    languageId?: string | null,
+  ): parser_pb.Cell | null {
+    const cells = this.notebook.cells ?? [];
+    const index = cells.findIndex((cell) => cell.refId === targetRefId);
+    if (index < 0) {
+      return null;
+    }
+    const cell = create(parser_pb.CellSchema, {
+      refId: `cell-${Math.random().toString(36).slice(2, 8)}`,
+      kind: parser_pb.CellKind.CODE,
+      languageId: languageId ?? "javascript",
+      value: "",
+      outputs: [],
+      metadata: {},
+    });
+    const next = [...cells];
+    next.splice(index + 1, 0, cell);
+    this.notebook.cells = next;
+    return cell;
+  }
+
+  addCodeCellBefore(
+    targetRefId: string,
+    languageId?: string | null,
+  ): parser_pb.Cell | null {
+    const cells = this.notebook.cells ?? [];
+    const index = cells.findIndex((cell) => cell.refId === targetRefId);
+    if (index < 0) {
+      return null;
+    }
+    const cell = create(parser_pb.CellSchema, {
+      refId: `cell-${Math.random().toString(36).slice(2, 8)}`,
+      kind: parser_pb.CellKind.CODE,
+      languageId: languageId ?? "javascript",
+      value: "",
+      outputs: [],
+      metadata: {},
+    });
+    const next = [...cells];
+    next.splice(index, 0, cell);
+    this.notebook.cells = next;
+    return cell;
+  }
+
+  removeCell(refId: string): void {
+    this.notebook.cells = (this.notebook.cells ?? []).filter(
+      (cell) => cell.refId !== refId,
+    );
   }
 }
 
@@ -270,5 +336,90 @@ describe("createRunmeConsoleApi", () => {
     expect(message).toContain("runme.clear(target)");
     expect(message).toContain("runme.runAll(target)");
     expect(message).toContain("runme.rerun(target)");
+  });
+});
+
+describe("createNotebooksApi", () => {
+  it("gets current notebook and returns handle + document", async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell("cell-a", "echo a")],
+    });
+    const model = new FakeNotebookData("local://one", "One", notebook);
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    });
+
+    const document = await api.get();
+
+    expect(document.summary.uri).toBe("local://one");
+    expect(document.summary.name).toBe("One");
+    expect(document.handle.uri).toBe("local://one");
+    expect(document.handle.revision.length).toBeGreaterThan(0);
+    expect(document.notebook.cells[0]?.refId).toBe("cell-a");
+  });
+
+  it("lists notebooks with query filters", async () => {
+    const a = new FakeNotebookData(
+      "local://one",
+      "Notebook One",
+      create(parser_pb.NotebookSchema, { cells: [] }),
+    );
+    const b = new FakeNotebookData(
+      "local://two",
+      "Notebook Two",
+      create(parser_pb.NotebookSchema, { cells: [] }),
+    );
+    const api = createNotebooksApi({
+      resolveNotebook: () => a,
+      listNotebooks: () => [a, b],
+    });
+
+    const listed = await api.list({ nameContains: "two" });
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.uri).toBe("local://two");
+  });
+
+  it("applies insert/update/remove mutations", async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell("cell-a", "echo a"), codeCell("cell-b", "echo b")],
+    });
+    const model = new FakeNotebookData("local://one", "One", notebook);
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    });
+
+    const updated = await api.update({
+      operations: [
+        {
+          op: "insert",
+          at: { afterRefId: "cell-a" },
+          cells: [{ kind: "code", languageId: "javascript", value: "console.log('x')" }],
+        },
+      ],
+    });
+    expect(updated.notebook.cells.length).toBe(3);
+
+    const insertedRefId =
+      updated.notebook.cells.find((cell) => cell.refId !== "cell-a" && cell.refId !== "cell-b")
+        ?.refId ?? "";
+
+    const afterPatch = await api.update({
+      operations: [
+        {
+          op: "update",
+          refId: insertedRefId,
+          patch: { value: "console.log('updated')" },
+        },
+      ],
+    });
+    const inserted = afterPatch.notebook.cells.find((cell) => cell.refId === insertedRefId);
+    expect(inserted?.value).toContain("updated");
+
+    const afterRemove = await api.update({
+      operations: [{ op: "remove", refIds: [insertedRefId] }],
+    });
+    expect(afterRemove.notebook.cells.find((cell) => cell.refId === insertedRefId)).toBeUndefined();
   });
 });

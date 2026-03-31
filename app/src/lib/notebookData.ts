@@ -26,7 +26,12 @@ import {
   buildJupyterChannelsWebSocketURL,
 } from "./runtime/jupyterManager";
 import { createAppJsGlobals } from "./runtime/appJsGlobals";
-import { createRunmeConsoleApi, type RunmeConsoleApi } from "./runtime/runmeConsole";
+import {
+  createNotebooksApi,
+  createRunmeConsoleApi,
+  type NotebooksApi,
+  type RunmeConsoleApi,
+} from "./runtime/runmeConsole";
 import { JSKernel } from "./runtime/jsKernel";
 import { SandboxJSKernel } from "./runtime/sandboxJsKernel";
 import {
@@ -817,6 +822,34 @@ export class NotebookData {
     const runmeApi = createRunmeConsoleApi({
       resolveNotebook: () => this,
     });
+    const notebooksApi = createNotebooksApi({
+      resolveNotebook: (target?: unknown) => {
+        if (!target) {
+          return this;
+        }
+        if (typeof target === "string" && target === this.getUri()) {
+          return this;
+        }
+        if (
+          typeof target === "object" &&
+          target &&
+          "uri" in target &&
+          (target as { uri?: string }).uri === this.getUri()
+        ) {
+          return this;
+        }
+        if (
+          typeof target === "object" &&
+          target &&
+          "handle" in target &&
+          (target as { handle?: { uri?: string } }).handle?.uri === this.getUri()
+        ) {
+          return this;
+        }
+        return null;
+      },
+      listNotebooks: () => [this],
+    });
 
     let stdout = "";
     let stderr = "";
@@ -850,13 +883,45 @@ export class NotebookData {
           ? new SandboxJSKernel({
               bridge: {
                 call: async (method, args) =>
-                  this.handleSandboxAppKernelCall(method, args, runmeApi),
+                  this.handleSandboxAppKernelCall(
+                    method,
+                    args,
+                    runmeApi,
+                    notebooksApi,
+                  ),
               },
               hooks,
             }).run(source)
           : new JSKernel({
               globals: createAppJsGlobals({
                 runme: runmeApi,
+                resolveNotebook: (target?: unknown) => {
+                  if (!target) {
+                    return this;
+                  }
+                  if (typeof target === "string" && target === this.getUri()) {
+                    return this;
+                  }
+                  if (
+                    typeof target === "object" &&
+                    target &&
+                    "uri" in target &&
+                    (target as { uri?: string }).uri === this.getUri()
+                  ) {
+                    return this;
+                  }
+                  if (
+                    typeof target === "object" &&
+                    target &&
+                    "handle" in target &&
+                    (target as { handle?: { uri?: string } }).handle?.uri ===
+                      this.getUri()
+                  ) {
+                    return this;
+                  }
+                  return null;
+                },
+                listNotebooks: () => [this],
               }),
               hooks,
             }).run(source)
@@ -930,6 +995,7 @@ export class NotebookData {
     method: string,
     args: unknown[],
     runmeApi: RunmeConsoleApi,
+    notebooksApi: NotebooksApi,
   ): Promise<unknown> {
     const target = args[0];
     switch (method) {
@@ -954,6 +1020,18 @@ export class NotebookData {
           cellCount: notebook.getNotebook().cells.length,
         };
       }
+      case "notebooks.help":
+        return notebooksApi.help(args[0] as any);
+      case "notebooks.list":
+        return notebooksApi.list((args[0] as any) ?? undefined);
+      case "notebooks.get":
+        return notebooksApi.get((args[0] as any) ?? undefined);
+      case "notebooks.update":
+        return notebooksApi.update((args[0] as any) ?? { operations: [] });
+      case "notebooks.delete":
+        return notebooksApi.delete(args[0] as any);
+      case "notebooks.execute":
+        return notebooksApi.execute((args[0] as any) ?? { refIds: [] });
       default:
         throw new Error(`Unsupported sandbox AppKernel method: ${method}`);
     }
