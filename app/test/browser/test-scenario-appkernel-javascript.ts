@@ -425,7 +425,11 @@ if (runnerSelectorState.includes("missing")) {
     selectedLabel?: string;
   } = {};
   try {
-    parsed = JSON.parse(runnerSelectorState);
+    const parsedOnce = JSON.parse(runnerSelectorState) as unknown;
+    parsed =
+      typeof parsedOnce === "string"
+        ? (JSON.parse(parsedOnce) as typeof parsed)
+        : (parsedOnce as typeof parsed);
   } catch {
     parsed = {};
   }
