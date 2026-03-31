@@ -10,9 +10,10 @@ outputs using the standard notebook output model.
 
 1. User opens the web app.
 2. User opens or creates a notebook with a JavaScript code cell.
-3. User selects the `AppKernel` runner for that cell (or makes it the default).
+3. User selects the JS runner mode for that cell (`browser` or `sandbox`).
 4. User runs the cell.
-5. The cell executes in-browser via `JSKernel`.
+5. The cell executes locally via AppKernel (`JSKernel` for browser mode, sandbox
+   kernel for sandbox mode).
 6. The notebook cell shows stdout/stderr output and exit status in the normal
    notebook output area.
 
@@ -20,6 +21,7 @@ outputs using the standard notebook output model.
 
 - `AppKernel` supports only `javascript` language cells.
 - Execution is local/in-browser (no Runme backend websocket required).
+- JS cells show runner mode selector with `browser` (default) and `sandbox`.
 - Output is emitted as notebook `CellOutput[]` updates.
 - Rich output should use MIME-based outputs (for example `text/html`) rather
   than imperative DOM mutation APIs.
@@ -60,7 +62,7 @@ throw new Error("appkernel expected test error");
 ## User Journey
 
 1. Open the notebook fixture.
-2. Set the cell runner to `AppKernel (browser JS)` for Cell A (and optionally default it).
+2. Set the JS runner mode to `browser` for Cell A (default expected).
 3. Run Cell A.
 4. Verify stdout output appears in the notebook cell output area.
 5. Run Cell B.
@@ -70,7 +72,8 @@ throw new Error("appkernel expected test error");
 
 ## Machine-Verifiable Acceptance Criteria
 
-- [ ] Runner selector includes `AppKernel (browser JS)`.
+- [ ] JS runner selector includes `browser` and `sandbox`.
+- [ ] JS runner selector defaults to `browser`.
 - [ ] Selecting `AppKernel` does not require a remote runner endpoint.
 - [ ] Running Cell A updates the cell output with stdout containing `appkernel hello`.
 - [ ] Running Cell A produces no websocket runner error toast.
@@ -118,8 +121,8 @@ transport.
 
 1. Open the app.
 2. Open fixture notebook `appkernel-javascript-test.runme.md`.
-3. Verify runner selector includes `AppKernel (browser JS)`.
-4. Set Cell A runner to `AppKernel (browser JS)`.
+3. Verify JS runner selector includes `browser` and `sandbox`.
+4. Verify selected runner defaults to `browser`.
 5. Run Cell A.
 6. Assert output contains:
    - `appkernel hello`
@@ -136,7 +139,8 @@ transport.
 #### Machine-verifiable assertions (script level)
 
 - DOM assertions:
-  - runner selector option text contains `AppKernel (browser JS)`
+  - JS runner selector options contain `browser` and `sandbox`
+  - selected JS runner value is `browser` by default
   - Cell A output region contains expected stdout text
   - Cell C output region contains expected error text
 - App state assertions (`agent-browser eval`):
