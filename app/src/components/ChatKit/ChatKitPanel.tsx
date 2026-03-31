@@ -70,6 +70,10 @@ const CHATKIT_STARTER_PROMPTS = [
   },
 ] as const;
 
+// Transitional: NotebookService currently exposes multiple notebook-specific tools.
+// Design direction is to simplify the agent-facing surface to a single
+// "execute JavaScript" capability and route notebook mutations through the
+// sandbox NotebooksApi.
 const TOOL_PREFIX = "agent_tools_v1_NotebookService_";
 
 const UPDATE_CELLS_TOOL = TOOL_PREFIX + "UpdateCells";
