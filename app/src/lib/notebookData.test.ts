@@ -48,6 +48,59 @@ vi.mock("@runmedev/renderers", () => {
   };
 });
 
+vi.mock("./runtime/sandboxJsKernel", () => ({
+  SandboxJSKernel: class {
+    private readonly bridge: {
+      call: (method: string, args: unknown[]) => Promise<unknown> | unknown;
+    };
+    private readonly hooks: {
+      onStdout?: (data: string) => void;
+      onStderr?: (data: string) => void;
+      onExit?: (exitCode: number) => void;
+    };
+
+    constructor({
+      bridge,
+      hooks = {},
+    }: {
+      bridge: {
+        call: (method: string, args: unknown[]) => Promise<unknown> | unknown;
+      };
+      hooks?: {
+        onStdout?: (data: string) => void;
+        onStderr?: (data: string) => void;
+        onExit?: (exitCode: number) => void;
+      };
+    }) {
+      this.bridge = bridge;
+      this.hooks = hooks;
+    }
+
+    async run(source: string): Promise<void> {
+      let exitCode = 0;
+      try {
+        if (source.includes("runme.getCurrentNotebook")) {
+          const notebook = (await this.bridge.call(
+            "runme.getCurrentNotebook",
+            [],
+          )) as { name?: string; cellCount?: number } | null;
+          this.hooks.onStdout?.(`${notebook?.name ?? ""}\n`);
+          this.hooks.onStdout?.(`${notebook?.cellCount ?? ""}\n`);
+        }
+        if (source.includes("runme.clear")) {
+          const message = await this.bridge.call("runme.clear", [undefined]);
+          this.hooks.onStdout?.(`${String(message)}\n`);
+        }
+      } catch (error) {
+        exitCode = 1;
+        this.hooks.onStderr?.(`${String(error)}\n`);
+      } finally {
+        this.hooks.onExit?.(exitCode);
+      }
+    }
+  },
+}));
+
 const runnerStore = new Map<string, any>();
 let defaultRunnerName: string | null = null;
 const getWithFallback = vi.fn((name?: string | null) => {
