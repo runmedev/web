@@ -169,4 +169,93 @@ describe("responsesDirectChatkitFetch", () => {
       }),
     );
   });
+
+  it("includes ExecuteCode function tool in Responses request payload", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      sseResponse([
+        { type: "response.created", response: { id: "resp-tools" } },
+        { type: "response.completed", response: { id: "resp-tools" } },
+      ]),
+    );
+
+    const fetchFn = createResponsesDirectChatkitFetch();
+    const response = await fetchFn("/responses/direct/chatkit", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "threads.create",
+        params: {
+          input: {
+            content: [{ type: "input_text", text: "run code" }],
+            attachments: [],
+            inference_options: { model: "gpt-5.2" },
+          },
+        },
+      }),
+    });
+
+    await response.text();
+
+    const requestInit = fetchMock.mock.calls.at(0)?.[1];
+    const requestBody = JSON.parse(String(requestInit?.body ?? "{}")) as {
+      tools?: Array<Record<string, unknown>>;
+    };
+    const executeCodeTool = (requestBody.tools ?? []).find(
+      (tool) =>
+        tool?.type === "function" &&
+        tool?.name === "ExecuteCode",
+    ) as Record<string, unknown> | undefined;
+
+    expect(executeCodeTool).toBeDefined();
+    expect(executeCodeTool?.strict).toBe(true);
+    expect(executeCodeTool?.parameters).toEqual({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        code: { type: "string" },
+      },
+      required: ["code"],
+    });
+  });
+
+  it("propagates call_id and previous_response_id on tool-call items", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      sseResponse([
+        { type: "response.created", response: { id: "resp-prev" } },
+        {
+          type: "response.function_call_arguments.done",
+          item_id: "tool-item-1",
+          call_id: "call-1",
+          name: "ExecuteCode",
+          arguments: "{\"code\":\"console.log('hi')\"}",
+        },
+        { type: "response.completed", response: { id: "resp-prev" } },
+      ]),
+    );
+
+    const fetchFn = createResponsesDirectChatkitFetch();
+    const response = await fetchFn("/responses/direct/chatkit", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "threads.create",
+        params: {
+          input: {
+            content: [{ type: "input_text", text: "run code" }],
+            attachments: [],
+            inference_options: { model: "gpt-5.2" },
+          },
+        },
+      }),
+    });
+
+    const body = await response.text();
+    expect(body).toContain("\"type\":\"client_tool_call\"");
+    expect(body).toContain("\"call_id\":\"call-1\"");
+    expect(body).toContain("\"previous_response_id\":\"resp-prev\"");
+  });
 });

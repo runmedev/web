@@ -1,203 +1,257 @@
-import { appLogger } from "../logging/runtime";
-import { getAccessToken } from "../../token";
-import { responsesDirectConfigManager } from "./responsesDirectConfigManager";
-import type { ChatKitThreadDetail } from "./chatkitProtocol";
+import { getAccessToken } from '../../token'
+import { appLogger } from '../logging/runtime'
+import type { ChatKitThreadDetail } from './chatkitProtocol'
+import { responsesDirectConfigManager } from './responsesDirectConfigManager'
 
-type JsonRecord = Record<string, unknown>;
+type JsonRecord = Record<string, unknown>
 
 type BodyPayload = {
-  raw: unknown;
-  json: JsonRecord;
-};
+  raw: unknown
+  json: JsonRecord
+}
 
 type StoredThread = {
-  id: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  previousResponseId?: string;
-  model: string;
-  items: JsonRecord[];
-};
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  previousResponseId?: string
+  model: string
+  items: JsonRecord[]
+}
 
-const DEFAULT_OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
-const DEFAULT_MODEL = "gpt-5.2";
+const DEFAULT_OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses'
+const DEFAULT_MODEL = 'gpt-5.2'
+const EXECUTE_CODE_TOOL_NAME = 'ExecuteCode'
+
+function buildCodeModeToolDefinition(): JsonRecord {
+  return {
+    type: 'function',
+    name: EXECUTE_CODE_TOOL_NAME,
+    description:
+      'Execute JavaScript in AppKernel and return one merged stdout/stderr output string.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        code: {
+          type: 'string',
+        },
+      },
+      required: ['code'],
+    },
+  }
+}
+
+function buildResponsesTools(vectorStores: string[]): JsonRecord[] {
+  const tools: JsonRecord[] = [buildCodeModeToolDefinition()]
+  if (vectorStores.length > 0) {
+    tools.push({
+      type: 'file_search',
+      max_num_results: 5,
+      vector_store_ids: vectorStores,
+    })
+  }
+  return tools
+}
 
 function resolveResponsesApiUrl(responsesApiBaseUrl: string): string {
-  const normalized = responsesApiBaseUrl.trim().replace(/\/+$/, "");
+  const normalized = responsesApiBaseUrl.trim().replace(/\/+$/, '')
   if (!normalized) {
-    return DEFAULT_OPENAI_RESPONSES_URL;
+    return DEFAULT_OPENAI_RESPONSES_URL
   }
   try {
-    const url = new URL(normalized);
-    if (!url.pathname || url.pathname === "/") {
-      url.pathname = "/v1/responses";
-      url.search = "";
-      url.hash = "";
+    const url = new URL(normalized)
+    if (!url.pathname || url.pathname === '/') {
+      url.pathname = '/v1/responses'
+      url.search = ''
+      url.hash = ''
     }
-    return url.toString();
+    return url.toString()
   } catch (error) {
-    appLogger.warn("Invalid responses-direct baseUrl override; using OpenAI default", {
-      attrs: {
-        scope: "chatkit.responses_direct",
-        baseUrl: normalized,
-        error: String(error),
-      },
-    });
-    return DEFAULT_OPENAI_RESPONSES_URL;
+    appLogger.warn(
+      'Invalid responses-direct baseUrl override; using OpenAI default',
+      {
+        attrs: {
+          scope: 'chatkit.responses_direct',
+          baseUrl: normalized,
+          error: String(error),
+        },
+      }
+    )
+    return DEFAULT_OPENAI_RESPONSES_URL
   }
 }
 
-async function resolveBody(input: RequestInfo | URL, init?: RequestInit): Promise<BodyInit | null | undefined> {
+async function resolveBody(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): Promise<BodyInit | null | undefined> {
   if (init?.body != null) {
-    return init.body;
+    return init.body
   }
   if (!(input instanceof Request)) {
-    return init?.body;
+    return init?.body
   }
-  const clone = input.clone();
-  const contentType = clone.headers.get("content-type")?.toLowerCase() ?? "";
-  if (contentType.includes("multipart/form-data")) {
+  const clone = input.clone()
+  const contentType = clone.headers.get('content-type')?.toLowerCase() ?? ''
+  if (contentType.includes('multipart/form-data')) {
     try {
-      return await clone.formData();
+      return await clone.formData()
     } catch {
-      return null;
+      return null
     }
   }
-  if (contentType.includes("application/x-www-form-urlencoded")) {
+  if (contentType.includes('application/x-www-form-urlencoded')) {
     try {
-      return new URLSearchParams(await clone.text());
+      return new URLSearchParams(await clone.text())
     } catch {
-      return null;
+      return null
     }
   }
   try {
-    return await clone.text();
+    return await clone.text()
   } catch {
-    return null;
+    return null
   }
 }
 
-async function readBody(input: RequestInfo | URL, init?: RequestInit): Promise<BodyPayload> {
-  const body = await resolveBody(input, init);
-  if (typeof body === "string") {
+async function readBody(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): Promise<BodyPayload> {
+  const body = await resolveBody(input, init)
+  if (typeof body === 'string') {
     try {
-      const parsed = JSON.parse(body) as JsonRecord;
-      return { raw: parsed, json: parsed };
+      const parsed = JSON.parse(body) as JsonRecord
+      return { raw: parsed, json: parsed }
     } catch {
-      return { raw: body, json: {} };
+      return { raw: body, json: {} }
     }
   }
   if (body instanceof FormData) {
-    const json: JsonRecord = {};
+    const json: JsonRecord = {}
     body.forEach((value, key) => {
-      if (typeof value === "string") {
+      if (typeof value === 'string') {
         try {
-          json[key] = JSON.parse(value);
+          json[key] = JSON.parse(value)
         } catch {
-          json[key] = value;
+          json[key] = value
         }
       }
-    });
-    return { raw: json, json };
+    })
+    return { raw: json, json }
   }
   if (body instanceof URLSearchParams) {
-    const json: JsonRecord = {};
+    const json: JsonRecord = {}
     body.forEach((value, key) => {
-      json[key] = value;
-    });
-    return { raw: json, json };
+      json[key] = value
+    })
+    return { raw: json, json }
   }
-  return { raw: null, json: {} };
+  return { raw: null, json: {} }
 }
 
 function asRecord(value: unknown): JsonRecord {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
   }
-  return value as JsonRecord;
+  return value as JsonRecord
 }
 
 function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+  return typeof value === 'string' && value.trim().length > 0
+    ? value
+    : undefined
 }
 
 function randomId(prefix: string): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return `${prefix}_${crypto.randomUUID()}`;
+  if (
+    typeof crypto !== 'undefined' &&
+    typeof crypto.randomUUID === 'function'
+  ) {
+    return `${prefix}_${crypto.randomUUID()}`
   }
-  return `${prefix}_${Math.random().toString(36).slice(2, 12)}`;
+  return `${prefix}_${Math.random().toString(36).slice(2, 12)}`
 }
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
     headers: {
-      "content-type": "application/json",
+      'content-type': 'application/json',
     },
-  });
+  })
 }
 
 function getPayloadRecord(payload: JsonRecord): JsonRecord {
   const params =
-    payload.params && typeof payload.params === "object" && !Array.isArray(payload.params)
+    payload.params &&
+    typeof payload.params === 'object' &&
+    !Array.isArray(payload.params)
       ? (payload.params as JsonRecord)
-      : null;
-  return params ?? payload;
+      : null
+  return params ?? payload
 }
 
 function extractInput(payload: JsonRecord): {
-  text: string;
-  model: string;
+  text: string
+  model: string
 } {
-  const source = getPayloadRecord(payload);
-  const inputRecord = asRecord(source.input);
-  const content = Array.isArray(inputRecord.content) ? inputRecord.content : [];
+  const source = getPayloadRecord(payload)
+  const inputRecord = asRecord(source.input)
+  const content = Array.isArray(inputRecord.content) ? inputRecord.content : []
   const text = content
     .map((item) => {
-      const part = asRecord(item);
-      return asString(part.text) ?? asString(part.value) ?? "";
+      const part = asRecord(item)
+      return asString(part.text) ?? asString(part.value) ?? ''
     })
-    .join("")
-    .trim();
-  const inference = asRecord(inputRecord.inference_options);
-  const model = asString(inference.model) ?? DEFAULT_MODEL;
-  return { text, model };
+    .join('')
+    .trim()
+  const inference = asRecord(inputRecord.inference_options)
+  const model = asString(inference.model) ?? DEFAULT_MODEL
+  return { text, model }
 }
 
 function toOutputString(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
+  if (typeof value === 'string') {
+    return value
   }
   if (value == null) {
-    return "";
+    return ''
   }
   try {
-    return JSON.stringify(value);
+    return JSON.stringify(value)
   } catch {
-    return String(value);
+    return String(value)
   }
 }
 
 function extractToolOutput(payload: JsonRecord): {
-  callId: string;
-  previousResponseId: string;
-  output: string;
+  callId: string
+  previousResponseId: string
+  output: string
 } {
-  const source = getPayloadRecord(payload);
-  const result = asRecord(source.result);
-  const callId = asString(result.callId) ?? asString(result.call_id) ?? "";
+  const source = getPayloadRecord(payload)
+  const result = asRecord(source.result)
+  const callId = asString(result.callId) ?? asString(result.call_id) ?? ''
   const previousResponseId =
-    asString(result.previousResponseId) ?? asString(result.previous_response_id) ?? "";
-  const clientError = asString(result.clientError) ?? asString(result.client_error) ?? "";
-  const outputValue = result.output ?? result.result;
+    asString(result.previousResponseId) ??
+    asString(result.previous_response_id) ??
+    ''
+  const clientError =
+    asString(result.clientError) ?? asString(result.client_error) ?? ''
+  const outputValue = result.output ?? result.result
   const output =
-    clientError.length > 0 ? `Tool execution failed: ${clientError}` : toOutputString(outputValue);
-  return { callId, previousResponseId, output };
+    clientError.length > 0
+      ? `Tool execution failed: ${clientError}`
+      : toOutputString(outputValue)
+  return { callId, previousResponseId, output }
 }
 
 function readThreadId(payload: JsonRecord): string {
-  const source = getPayloadRecord(payload);
+  const source = getPayloadRecord(payload)
   return (
     asString(source.id) ??
     asString(source.thread_id) ??
@@ -205,519 +259,521 @@ function readThreadId(payload: JsonRecord): string {
     asString(payload.id) ??
     asString(payload.thread_id) ??
     asString(payload.threadId) ??
-    ""
-  );
+    ''
+  )
 }
 
 function buildThreadDetail(thread: StoredThread): ChatKitThreadDetail {
   const messages = {
     data: thread.items,
     has_more: false,
-  };
+  }
   return {
     id: thread.id,
     title: thread.title,
     created_at: thread.createdAt,
     updated_at: thread.updatedAt,
-    status: { type: "active" },
+    status: { type: 'active' },
     metadata: {},
     items: messages,
     messages,
-  };
+  }
 }
 
 function withUpdatedThreadTitle(thread: StoredThread, text: string): void {
-  if (thread.title !== "New conversation") {
-    return;
+  if (thread.title !== 'New conversation') {
+    return
   }
-  const trimmed = text.trim();
+  const trimmed = text.trim()
   if (!trimmed) {
-    return;
+    return
   }
-  const shortened = trimmed.slice(0, 80);
-  thread.title = shortened;
+  const shortened = trimmed.slice(0, 80)
+  thread.title = shortened
 }
 
 async function resolveResponsesDirectHeaders(): Promise<Headers> {
-  const config = responsesDirectConfigManager.getSnapshot();
+  const config = responsesDirectConfigManager.getSnapshot()
   const headers = new Headers({
-    "content-type": "application/json",
-  });
+    'content-type': 'application/json',
+  })
 
-  if (config.authMethod === "api_key") {
-    const apiKey = config.apiKey.trim();
+  if (config.authMethod === 'api_key') {
+    const apiKey = config.apiKey.trim()
     if (!apiKey) {
       throw new Error(
-        "Direct Responses API key auth selected but no key is configured. Run app.responsesDirect.setAPIKey(...).",
-      );
+        'Direct Responses API key auth selected but no key is configured. Run app.responsesDirect.setAPIKey(...).'
+      )
     }
-    headers.set("Authorization", `Bearer ${apiKey}`);
-    return headers;
+    headers.set('Authorization', `Bearer ${apiKey}`)
+    return headers
   }
 
-  const oauthToken = (await getAccessToken()).trim();
+  const oauthToken = (await getAccessToken()).trim()
   if (!oauthToken) {
-    throw new Error("Direct Responses OAuth requires ChatGPT sign-in.");
+    throw new Error('Direct Responses OAuth requires ChatGPT sign-in.')
   }
   if (!config.openaiOrganization) {
     throw new Error(
-      "Direct Responses OAuth requires OpenAI organization. Set agent.openai.organization in app-configs.yaml or use app.responsesDirect.setOpenAIOrganization(...).",
-    );
+      'Direct Responses OAuth requires OpenAI organization. Set agent.openai.organization in app-configs.yaml or use app.responsesDirect.setOpenAIOrganization(...).'
+    )
   }
   if (!config.openaiProject) {
     throw new Error(
-      "Direct Responses OAuth requires OpenAI project. Set agent.openai.project in app-configs.yaml or use app.responsesDirect.setOpenAIProject(...).",
-    );
+      'Direct Responses OAuth requires OpenAI project. Set agent.openai.project in app-configs.yaml or use app.responsesDirect.setOpenAIProject(...).'
+    )
   }
 
-  headers.set("Authorization", `Bearer ${oauthToken}`);
-  headers.set("OpenAI-Organization", config.openaiOrganization);
-  headers.set("OpenAI-Project", config.openaiProject);
-  return headers;
+  headers.set('Authorization', `Bearer ${oauthToken}`)
+  headers.set('OpenAI-Organization', config.openaiOrganization)
+  headers.set('OpenAI-Project', config.openaiProject)
+  return headers
 }
 
 function buildOpenAIResponsesRequestForInput(options: {
-  text: string;
-  model: string;
-  previousResponseId?: string;
-  vectorStores: string[];
+  text: string
+  model: string
+  previousResponseId?: string
+  vectorStores: string[]
 }): JsonRecord {
   const payload: JsonRecord = {
     model: options.model || DEFAULT_MODEL,
     stream: true,
     input: [
       {
-        role: "user",
+        role: 'user',
         content: [
           {
-            type: "input_text",
+            type: 'input_text',
             text: options.text,
           },
         ],
       },
     ],
     parallel_tool_calls: false,
-  };
+  }
 
   if (options.previousResponseId) {
-    payload.previous_response_id = options.previousResponseId;
+    payload.previous_response_id = options.previousResponseId
   }
 
-  if (options.vectorStores.length > 0) {
-    payload.tools = [
-      {
-        type: "file_search",
-        max_num_results: 5,
-        vector_store_ids: options.vectorStores,
-      },
-    ];
-  }
+  payload.tools = buildResponsesTools(options.vectorStores)
 
-  return payload;
+  return payload
 }
 
 function buildOpenAIResponsesRequestForToolOutput(options: {
-  callId: string;
-  output: string;
-  model: string;
-  previousResponseId?: string;
-  vectorStores: string[];
+  callId: string
+  output: string
+  model: string
+  previousResponseId?: string
+  vectorStores: string[]
 }): JsonRecord {
   const payload: JsonRecord = {
     model: options.model || DEFAULT_MODEL,
     stream: true,
     input: [
       {
-        type: "function_call_output",
+        type: 'function_call_output',
         call_id: options.callId,
         output: options.output,
       },
     ],
     parallel_tool_calls: false,
-  };
+  }
 
   if (options.previousResponseId) {
-    payload.previous_response_id = options.previousResponseId;
+    payload.previous_response_id = options.previousResponseId
   }
 
-  if (options.vectorStores.length > 0) {
-    payload.tools = [
-      {
-        type: "file_search",
-        max_num_results: 5,
-        vector_store_ids: options.vectorStores,
-      },
-    ];
-  }
+  payload.tools = buildResponsesTools(options.vectorStores)
 
-  return payload;
+  return payload
 }
 
 async function readErrorBody(response: Response): Promise<string> {
   try {
-    const text = await response.text();
-    return text || `${response.status} ${response.statusText}`;
+    const text = await response.text()
+    return text || `${response.status} ${response.statusText}`
   } catch {
-    return `${response.status} ${response.statusText}`;
+    return `${response.status} ${response.statusText}`
   }
 }
 
 async function consumeSSE(
   response: Response,
   onEvent: (event: JsonRecord) => void,
-  signal?: AbortSignal | null,
+  signal?: AbortSignal | null
 ): Promise<void> {
   if (!response.body) {
-    throw new Error("Responses API returned no stream body");
+    throw new Error('Responses API returned no stream body')
   }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
 
   while (true) {
     if (signal?.aborted) {
-      throw new Error(String(signal.reason ?? "Request aborted"));
+      throw new Error(String(signal.reason ?? 'Request aborted'))
     }
-    const { done, value } = await reader.read();
+    const { done, value } = await reader.read()
     if (done) {
-      break;
+      break
     }
-    buffer += decoder.decode(value, { stream: true });
-    let boundary = buffer.indexOf("\n\n");
+    buffer += decoder.decode(value, { stream: true })
+    let boundary = buffer.indexOf('\n\n')
     while (boundary !== -1) {
-      const block = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const lines = block.split("\n");
+      const block = buffer.slice(0, boundary)
+      buffer = buffer.slice(boundary + 2)
+      const lines = block.split('\n')
       const dataLines = lines
         .map((line) => line.trim())
-        .filter((line) => line.startsWith("data:"))
+        .filter((line) => line.startsWith('data:'))
         .map((line) => line.slice(5).trim())
-        .filter((line) => line.length > 0);
+        .filter((line) => line.length > 0)
       if (dataLines.length > 0) {
-        const data = dataLines.join("\n");
-        if (data !== "[DONE]") {
+        const data = dataLines.join('\n')
+        if (data !== '[DONE]') {
           try {
-            onEvent(JSON.parse(data) as JsonRecord);
+            onEvent(JSON.parse(data) as JsonRecord)
           } catch (error) {
-            appLogger.warn("Failed to parse OpenAI responses SSE event", {
+            appLogger.warn('Failed to parse OpenAI responses SSE event', {
               attrs: {
-                scope: "chatkit.responses_direct",
+                scope: 'chatkit.responses_direct',
                 error: String(error),
                 payload: data,
               },
-            });
+            })
           }
         }
       }
-      boundary = buffer.indexOf("\n\n");
+      boundary = buffer.indexOf('\n\n')
     }
   }
 }
 
 function buildStreamResponse(
   producer: (sink: { emit: (payload: unknown) => void }) => Promise<void>,
-  options?: { signal?: AbortSignal | null },
+  options?: { signal?: AbortSignal | null }
 ): Response {
-  const encoder = new TextEncoder();
+  const encoder = new TextEncoder()
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      let closed = false;
+      let closed = false
       const emit = (payload: unknown) => {
         if (closed) {
-          return;
+          return
         }
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
-      };
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify(payload)}\n\n`)
+        )
+      }
       const close = () => {
         if (closed) {
-          return;
+          return
         }
-        closed = true;
-        controller.close();
-      };
+        closed = true
+        controller.close()
+      }
 
       if (options?.signal?.aborted) {
         emit({
-          type: "response.failed",
-          error: { message: String(options.signal.reason ?? "Request aborted") },
-        });
-        close();
-        return;
+          type: 'response.failed',
+          error: {
+            message: String(options.signal.reason ?? 'Request aborted'),
+          },
+        })
+        close()
+        return
       }
 
       if (options?.signal) {
         options.signal.addEventListener(
-          "abort",
+          'abort',
           () => {
             if (!closed) {
               emit({
-                type: "response.failed",
-                error: { message: String(options.signal?.reason ?? "Request aborted") },
-              });
+                type: 'response.failed',
+                error: {
+                  message: String(options.signal?.reason ?? 'Request aborted'),
+                },
+              })
             }
-            close();
+            close()
           },
-          { once: true },
-        );
+          { once: true }
+        )
       }
 
       void producer({ emit })
         .catch((error) => {
           emit({
-            type: "response.failed",
+            type: 'response.failed',
             error: { message: String(error) },
-          });
-          appLogger.error("Direct Responses stream producer failed", {
+          })
+          appLogger.error('Direct Responses stream producer failed', {
             attrs: {
-              scope: "chatkit.responses_direct",
+              scope: 'chatkit.responses_direct',
               error: String(error),
             },
-          });
+          })
         })
         .finally(() => {
-          close();
-        });
+          close()
+        })
     },
-  });
+  })
 
   return new Response(stream, {
     status: 200,
     headers: {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-      connection: "keep-alive",
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
     },
-  });
+  })
 }
 
 export function createResponsesDirectChatkitFetch(options?: {
-  responsesApiBaseUrl?: string;
+  responsesApiBaseUrl?: string
 }): typeof fetch {
-  const responsesApiUrl = resolveResponsesApiUrl(options?.responsesApiBaseUrl ?? "");
-  const threads = new Map<string, StoredThread>();
+  const responsesApiUrl = resolveResponsesApiUrl(
+    options?.responsesApiBaseUrl ?? ''
+  )
+  const threads = new Map<string, StoredThread>()
 
   const ensureThread = (threadId?: string): StoredThread => {
-    const normalized = threadId?.trim() ?? "";
+    const normalized = threadId?.trim() ?? ''
     if (normalized && threads.has(normalized)) {
-      return threads.get(normalized)!;
+      return threads.get(normalized)!
     }
-    const now = new Date().toISOString();
+    const now = new Date().toISOString()
     const created: StoredThread = {
-      id: normalized || randomId("thread"),
-      title: "New conversation",
+      id: normalized || randomId('thread'),
+      title: 'New conversation',
       createdAt: now,
       updatedAt: now,
       model: DEFAULT_MODEL,
       items: [],
-    };
-    threads.set(created.id, created);
-    return created;
-  };
+    }
+    threads.set(created.id, created)
+    return created
+  }
 
   const streamOpenAI = async (options: {
-    thread: StoredThread;
-    responsesApiUrl: string;
-    requestPayload: JsonRecord;
-    emit: (payload: unknown) => void;
-    signal?: AbortSignal | null;
+    thread: StoredThread
+    responsesApiUrl: string
+    requestPayload: JsonRecord
+    emit: (payload: unknown) => void
+    signal?: AbortSignal | null
   }): Promise<void> => {
-    const headers = await resolveResponsesDirectHeaders();
+    const headers = await resolveResponsesDirectHeaders()
     const response = await fetch(options.responsesApiUrl, {
-      method: "POST",
+      method: 'POST',
       headers,
       body: JSON.stringify(options.requestPayload),
       signal: options.signal ?? undefined,
-    });
+    })
     if (!response.ok) {
-      throw new Error(await readErrorBody(response));
+      throw new Error(await readErrorBody(response))
     }
 
-    const assistantTextByItem = new Map<string, string>();
+    const assistantTextByItem = new Map<string, string>()
 
     await consumeSSE(
       response,
       (event) => {
-        const type = asString(event.type) ?? "";
+        const type = asString(event.type) ?? ''
         if (!type) {
-          return;
+          return
         }
         switch (type) {
-          case "response.created": {
-            const responseRecord = asRecord(event.response);
-            const responseId = asString(responseRecord.id);
+          case 'response.created': {
+            const responseRecord = asRecord(event.response)
+            const responseId = asString(responseRecord.id)
             if (responseId) {
-              options.thread.previousResponseId = responseId;
-              options.thread.updatedAt = new Date().toISOString();
+              options.thread.previousResponseId = responseId
+              options.thread.updatedAt = new Date().toISOString()
               options.emit({
-                type: "aisre.chatkit.state",
+                type: 'aisre.chatkit.state',
                 item: {
                   state: {
                     threadId: options.thread.id,
                     previousResponseId: responseId,
                   },
                 },
-              });
+              })
             }
-            return;
+            return
           }
-          case "response.output_item.added": {
-            const item = asRecord(event.item);
-            if (asString(item.type) !== "message") {
-              return;
+          case 'response.output_item.added': {
+            const item = asRecord(event.item)
+            if (asString(item.type) !== 'message') {
+              return
             }
-            const itemId = asString(item.id) ?? randomId("assistant");
-            assistantTextByItem.set(itemId, "");
+            const itemId = asString(item.id) ?? randomId('assistant')
+            assistantTextByItem.set(itemId, '')
             options.emit({
-              type: "thread.item.added",
+              type: 'thread.item.added',
               item: {
                 id: itemId,
-                type: "assistant_message",
+                type: 'assistant_message',
                 thread_id: options.thread.id,
                 created_at: new Date().toISOString(),
-                status: "in_progress",
+                status: 'in_progress',
                 content: [],
               },
-            });
+            })
             options.emit({
-              type: "thread.item.updated",
+              type: 'thread.item.updated',
               item_id: itemId,
               update: {
-                type: "assistant_message.content_part.added",
+                type: 'assistant_message.content_part.added',
                 content_index: 0,
                 content: {
-                  type: "output_text",
-                  text: "",
+                  type: 'output_text',
+                  text: '',
                   annotations: [],
                 },
               },
-            });
-            return;
+            })
+            return
           }
-          case "response.output_text.delta": {
-            const itemId = asString(event.item_id);
-            const delta = asString(event.delta) ?? "";
+          case 'response.output_text.delta': {
+            const itemId = asString(event.item_id)
+            const delta = asString(event.delta) ?? ''
             if (!itemId || !delta) {
-              return;
+              return
             }
-            assistantTextByItem.set(itemId, `${assistantTextByItem.get(itemId) ?? ""}${delta}`);
+            assistantTextByItem.set(
+              itemId,
+              `${assistantTextByItem.get(itemId) ?? ''}${delta}`
+            )
             options.emit({
-              type: "thread.item.updated",
+              type: 'thread.item.updated',
               item_id: itemId,
               update: {
-                type: "assistant_message.content_part.text_delta",
+                type: 'assistant_message.content_part.text_delta',
                 content_index: 0,
                 delta,
               },
-            });
-            return;
+            })
+            return
           }
-          case "response.output_item.done": {
-            const item = asRecord(event.item);
-            if (asString(item.type) !== "message") {
-              return;
+          case 'response.output_item.done': {
+            const item = asRecord(event.item)
+            if (asString(item.type) !== 'message') {
+              return
             }
-            const itemId = asString(item.id) ?? randomId("assistant");
-            const parts = Array.isArray(item.content) ? item.content : [];
+            const itemId = asString(item.id) ?? randomId('assistant')
+            const parts = Array.isArray(item.content) ? item.content : []
             const textFromDone = parts
-              .map((part) => asString(asRecord(part).text) ?? "")
-              .join("");
-            const finalText = textFromDone || assistantTextByItem.get(itemId) || "";
+              .map((part) => asString(asRecord(part).text) ?? '')
+              .join('')
+            const finalText =
+              textFromDone || assistantTextByItem.get(itemId) || ''
             options.emit({
-              type: "thread.item.updated",
+              type: 'thread.item.updated',
               item_id: itemId,
               update: {
-                type: "assistant_message.content_part.done",
+                type: 'assistant_message.content_part.done',
                 content_index: 0,
                 content: {
-                  type: "output_text",
+                  type: 'output_text',
                   text: finalText,
                   annotations: [],
                 },
               },
-            });
+            })
             const assistantItem: JsonRecord = {
               id: itemId,
-              type: "assistant_message",
+              type: 'assistant_message',
               thread_id: options.thread.id,
               created_at: new Date().toISOString(),
-              status: "completed",
+              status: 'completed',
               content: [
                 {
-                  type: "output_text",
+                  type: 'output_text',
                   text: finalText,
                   annotations: [],
                 },
               ],
-            };
-            options.thread.items.push(assistantItem);
-            options.thread.updatedAt = new Date().toISOString();
-            return;
+            }
+            options.thread.items.push(assistantItem)
+            options.thread.updatedAt = new Date().toISOString()
+            return
           }
-          case "response.function_call_arguments.done": {
-            const callId = asString(event.call_id) ?? "";
-            const itemId = asString(event.item_id) ?? randomId("tool");
-            const name = asString(event.name) ?? "unknown_tool";
-            let argumentsObject: unknown = {};
-            const argumentsRaw = asString(event.arguments) ?? "{}";
+          case 'response.function_call_arguments.done': {
+            const callId = asString(event.call_id) ?? ''
+            const itemId = asString(event.item_id) ?? randomId('tool')
+            const name = asString(event.name) ?? 'unknown_tool'
+            let argumentsObject: JsonRecord = {}
+            const argumentsRaw = asString(event.arguments) ?? '{}'
             try {
-              argumentsObject = JSON.parse(argumentsRaw);
+              argumentsObject = asRecord(JSON.parse(argumentsRaw))
             } catch {
-              argumentsObject = {};
+              argumentsObject = {}
+            }
+            argumentsObject.call_id = callId
+            if (options.thread.previousResponseId) {
+              argumentsObject.previous_response_id =
+                options.thread.previousResponseId
             }
             const toolItem: JsonRecord = {
               id: itemId,
-              type: "client_tool_call",
+              type: 'client_tool_call',
               thread_id: options.thread.id,
               created_at: new Date().toISOString(),
-              status: "pending",
+              status: 'pending',
               call_id: callId,
               name,
               arguments: argumentsObject,
-            };
-            options.thread.items.push(toolItem);
-            options.thread.updatedAt = new Date().toISOString();
+            }
+            options.thread.items.push(toolItem)
+            options.thread.updatedAt = new Date().toISOString()
             options.emit({
-              type: "thread.item.done",
+              type: 'thread.item.done',
               item: toolItem,
-            });
-            return;
+            })
+            return
           }
-          case "response.completed": {
+          case 'response.completed': {
             const endOfTurn: JsonRecord = {
-              id: randomId("end"),
-              type: "end_of_turn",
+              id: randomId('end'),
+              type: 'end_of_turn',
               thread_id: options.thread.id,
               created_at: new Date().toISOString(),
-            };
-            options.thread.items.push(endOfTurn);
-            options.thread.updatedAt = new Date().toISOString();
+            }
+            options.thread.items.push(endOfTurn)
+            options.thread.updatedAt = new Date().toISOString()
             options.emit({
-              type: "thread.item.done",
+              type: 'thread.item.done',
               item: endOfTurn,
-            });
-            return;
+            })
+            return
           }
           default:
-            return;
+            return
         }
       },
-      options.signal,
-    );
-  };
+      options.signal
+    )
+  }
 
   return async (input: RequestInfo | URL, init?: RequestInit) => {
-    const { json } = await readBody(input, init);
-    const requestType = asString(getPayloadRecord(json).type) ?? asString(json.type) ?? "";
-    appLogger.info("Direct Responses ChatKit fetch request", {
+    const { json } = await readBody(input, init)
+    const requestType =
+      asString(getPayloadRecord(json).type) ?? asString(json.type) ?? ''
+    appLogger.info('Direct Responses ChatKit fetch request', {
       attrs: {
-        scope: "chatkit.responses_direct",
+        scope: 'chatkit.responses_direct',
         responsesApiUrl,
         requestType,
         payload: json,
       },
-    });
+    })
 
-    if (requestType === "threads.list") {
+    if (requestType === 'threads.list') {
       const payload = {
         data: [...threads.values()].map((thread) => ({
           id: thread.id,
@@ -725,55 +781,60 @@ export function createResponsesDirectChatkitFetch(options?: {
           updated_at: thread.updatedAt,
         })),
         has_more: false,
-      };
-      return jsonResponse(payload);
-    }
-
-    if (requestType === "threads.get_by_id" || requestType === "threads.get") {
-      const threadId = readThreadId(json);
-      const thread = threadId ? threads.get(threadId) : undefined;
-      if (!thread) {
-        return new Response(JSON.stringify({ error: "thread_not_found" }), {
-          status: 404,
-          headers: { "content-type": "application/json" },
-        });
       }
-      return jsonResponse(buildThreadDetail(thread));
+      return jsonResponse(payload)
     }
 
-    if (requestType === "items.list" || requestType === "messages.list") {
-      const threadId = readThreadId(json);
-      const thread = threadId ? threads.get(threadId) : undefined;
+    if (requestType === 'threads.get_by_id' || requestType === 'threads.get') {
+      const threadId = readThreadId(json)
+      const thread = threadId ? threads.get(threadId) : undefined
+      if (!thread) {
+        return new Response(JSON.stringify({ error: 'thread_not_found' }), {
+          status: 404,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      return jsonResponse(buildThreadDetail(thread))
+    }
+
+    if (requestType === 'items.list' || requestType === 'messages.list') {
+      const threadId = readThreadId(json)
+      const thread = threadId ? threads.get(threadId) : undefined
       return jsonResponse({
         data: thread?.items ?? [],
         has_more: false,
-      });
+      })
     }
 
-    if (requestType === "threads.create" || requestType === "threads.add_user_message") {
-      const payload = getPayloadRecord(json);
-      const { text, model } = extractInput(json);
+    if (
+      requestType === 'threads.create' ||
+      requestType === 'threads.add_user_message'
+    ) {
+      const payload = getPayloadRecord(json)
+      const { text, model } = extractInput(json)
       if (!text) {
         return jsonResponse({
           data: null,
-          error: "missing_user_input",
-        });
+          error: 'missing_user_input',
+        })
       }
 
       const requestedThreadId =
-        requestType === "threads.add_user_message" ? readThreadId(json) : undefined;
-      const thread = ensureThread(requestedThreadId);
-      thread.model = model || thread.model || DEFAULT_MODEL;
-      withUpdatedThreadTitle(thread, text);
+        requestType === 'threads.add_user_message'
+          ? readThreadId(json)
+          : undefined
+      const thread = ensureThread(requestedThreadId)
+      thread.model = model || thread.model || DEFAULT_MODEL
+      withUpdatedThreadTitle(thread, text)
 
       const userItem: JsonRecord = {
-        id: randomId("msg"),
-        type: "user_message",
+        id: randomId('msg'),
+        type: 'user_message',
         thread_id: thread.id,
         created_at: new Date().toISOString(),
         content: [
           {
-            type: "input_text",
+            type: 'input_text',
             text,
           },
         ],
@@ -782,69 +843,71 @@ export function createResponsesDirectChatkitFetch(options?: {
         inference_options: {
           model: model || DEFAULT_MODEL,
         },
-      };
-      thread.items.push(userItem);
-      thread.updatedAt = new Date().toISOString();
+      }
+      thread.items.push(userItem)
+      thread.updatedAt = new Date().toISOString()
 
-      const vectorStores = responsesDirectConfigManager.getSnapshot().vectorStores;
+      const vectorStores =
+        responsesDirectConfigManager.getSnapshot().vectorStores
       const requestPayload = buildOpenAIResponsesRequestForInput({
         text,
         model: model || thread.model || DEFAULT_MODEL,
         previousResponseId: thread.previousResponseId,
         vectorStores,
-      });
+      })
 
       return buildStreamResponse(
         async (sink) => {
-          if (requestType === "threads.create") {
+          if (requestType === 'threads.create') {
             sink.emit({
-              type: "thread.created",
+              type: 'thread.created',
               thread: {
                 id: thread.id,
                 title: thread.title,
                 created_at: thread.createdAt,
               },
-            });
+            })
           }
           sink.emit({
-            type: "thread.item.added",
+            type: 'thread.item.added',
             item: userItem,
-          });
+          })
           sink.emit({
-            type: "thread.item.done",
+            type: 'thread.item.done',
             item: userItem,
-          });
+          })
           await streamOpenAI({
             thread,
             responsesApiUrl,
             requestPayload,
             emit: sink.emit,
             signal: init?.signal ?? null,
-          });
+          })
         },
-        { signal: init?.signal ?? null },
-      );
+        { signal: init?.signal ?? null }
+      )
     }
 
-    if (requestType === "threads.add_client_tool_output") {
-      const threadId = readThreadId(json);
+    if (requestType === 'threads.add_client_tool_output') {
+      const threadId = readThreadId(json)
       if (!threadId) {
-        return jsonResponse({ data: null, error: "thread_id_required" });
+        return jsonResponse({ data: null, error: 'thread_id_required' })
       }
-      const thread = ensureThread(threadId);
-      const { callId, previousResponseId, output } = extractToolOutput(json);
+      const thread = ensureThread(threadId)
+      const { callId, previousResponseId, output } = extractToolOutput(json)
       if (!callId) {
-        return jsonResponse({ data: null, error: "call_id_required" });
+        return jsonResponse({ data: null, error: 'call_id_required' })
       }
 
-      const vectorStores = responsesDirectConfigManager.getSnapshot().vectorStores;
+      const vectorStores =
+        responsesDirectConfigManager.getSnapshot().vectorStores
       const requestPayload = buildOpenAIResponsesRequestForToolOutput({
         callId,
         output,
         model: thread.model || DEFAULT_MODEL,
         previousResponseId: previousResponseId || thread.previousResponseId,
         vectorStores,
-      });
+      })
 
       return buildStreamResponse(
         async (sink) => {
@@ -854,17 +917,17 @@ export function createResponsesDirectChatkitFetch(options?: {
             requestPayload,
             emit: sink.emit,
             signal: init?.signal ?? null,
-          });
+          })
         },
-        { signal: init?.signal ?? null },
-      );
+        { signal: init?.signal ?? null }
+      )
     }
 
     return jsonResponse({
       data: null,
       error: requestType
         ? `unsupported_responses_direct_request:${requestType}`
-        : "unsupported_responses_direct_request:missing_type",
-    });
-  };
+        : 'unsupported_responses_direct_request:missing_type',
+    })
+  }
 }
