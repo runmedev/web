@@ -603,7 +603,14 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     [defaultHarness.adapter],
   );
   const codexFetch = useMemo(() => createCodexChatkitFetch(), []);
-  const responsesDirectFetch = useMemo(() => createResponsesDirectChatkitFetch(), []);
+  const responsesDirectFetch = useMemo(
+    () =>
+      createResponsesDirectChatkitFetch({
+        responsesApiBaseUrl:
+          defaultHarness.adapter === "responses-direct" ? defaultHarness.baseUrl : "",
+      }),
+    [defaultHarness.adapter, defaultHarness.baseUrl],
+  );
   const getAuthorizedChatkitState = useCallback(() => {
     if (defaultHarness.adapter !== "codex") {
       return getChatkitState();
@@ -622,11 +629,9 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     baseFetch:
       defaultHarness.adapter === "codex"
         ? codexFetch
-        : defaultHarness.adapter === "responses-direct"
-          ? responsesDirectFetch
-          : undefined,
-    includeRunmeHeaders: defaultHarness.adapter !== "responses-direct",
-    includeChatkitState: defaultHarness.adapter !== "responses-direct",
+        : responsesDirectFetch,
+    includeRunmeHeaders: defaultHarness.adapter === "codex",
+    includeChatkitState: defaultHarness.adapter === "codex",
   });
 
   const chatkitApiUrl = useMemo(() => {

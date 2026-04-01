@@ -10,38 +10,34 @@ import {
 } from "./harnessManager";
 
 const HARNESS_STORAGE_KEY = "runme/harness";
-const LEGACY_SETTINGS_STORAGE_KEY = "cloudAssistantSettings";
 
 describe("harnessManager", () => {
   beforeEach(() => {
     localStorage.removeItem(HARNESS_STORAGE_KEY);
-    localStorage.removeItem(LEGACY_SETTINGS_STORAGE_KEY);
     __resetHarnessManagerForTests();
   });
 
-  it("bootstraps a default responses harness from window.location.origin", () => {
+  it("bootstraps a default responses-direct harness with empty baseUrl", () => {
     const mgr = getHarnessManager();
     const active = mgr.getDefault();
 
     expect(active.name).toBe("local-responses");
-    expect(active.adapter).toBe("responses");
-    expect(active.baseUrl).toBe(window.location.origin);
-    expect(mgr.resolveChatkitUrl(active)).toBe(
-      new URL("/chatkit", window.location.origin).toString(),
-    );
+    expect(active.adapter).toBe("responses-direct");
+    expect(active.baseUrl).toBe("");
+    expect(mgr.resolveChatkitUrl(active)).toBe("/responses/direct/chatkit");
   });
 
   it("uses app.harness updates and default selection", () => {
     const mgr = getHarnessManager();
 
-    mgr.update("alt", "http://127.0.0.1:7788", "responses");
+    mgr.update("alt", "http://127.0.0.1:7788", "responses-direct");
     mgr.setDefault("alt");
 
     const active = mgr.getDefault();
     expect(active.name).toBe("alt");
     expect(active.baseUrl).toBe("http://127.0.0.1:7788");
-    expect(active.adapter).toBe("responses");
-    expect(mgr.resolveChatkitUrl(active)).toBe("http://127.0.0.1:7788/chatkit");
+    expect(active.adapter).toBe("responses-direct");
+    expect(mgr.resolveChatkitUrl(active)).toBe("http://127.0.0.1:7788/responses/direct/chatkit");
   });
 
   it("builds codex route for codex harnesses", () => {
@@ -54,6 +50,7 @@ describe("harnessManager", () => {
     expect(buildChatkitUrl("http://localhost:1234", "responses-direct")).toBe(
       "http://localhost:1234/responses/direct/chatkit",
     );
+    expect(buildChatkitUrl("", "responses-direct")).toBe("/responses/direct/chatkit");
   });
 
   it("builds codex websocket bridge URL", () => {
@@ -77,17 +74,42 @@ describe("harnessManager", () => {
     );
   });
 
-  it("migrates initial endpoint from legacy cloudAssistantSettings when present", () => {
+  it("migrates stored responses harness adapters to responses-direct", () => {
     localStorage.setItem(
-      LEGACY_SETTINGS_STORAGE_KEY,
-      JSON.stringify({ agentEndpoint: "http://legacy.example:9000" }),
+      HARNESS_STORAGE_KEY,
+      JSON.stringify({
+        harnesses: [
+          { name: "legacy", baseUrl: "http://127.0.0.1:9090", adapter: "responses" },
+        ],
+        defaultHarnessName: "legacy",
+      }),
     );
     __resetHarnessManagerForTests();
 
     const mgr = getHarnessManager();
     const active = mgr.getDefault();
-    expect(active.baseUrl).toBe("http://legacy.example:9000");
-    expect(active.adapter).toBe("responses");
+    expect(active.name).toBe("legacy");
+    expect(active.baseUrl).toBe("");
+    expect(active.adapter).toBe("responses-direct");
+    expect(mgr.resolveChatkitUrl(active)).toBe("/responses/direct/chatkit");
+  });
+
+  it("allows empty baseUrl for responses-direct adapter", () => {
+    const mgr = getHarnessManager();
+    mgr.update("openai-default", "", "responses-direct");
+    mgr.setDefault("openai-default");
+
+    const active = mgr.getDefault();
+    expect(active.name).toBe("openai-default");
+    expect(active.baseUrl).toBe("");
+    expect(active.adapter).toBe("responses-direct");
+  });
+
+  it("rejects empty baseUrl for codex adapter", () => {
+    const mgr = getHarnessManager();
+    expect(() => mgr.update("codex-local", "", "codex")).toThrow(
+      "Harness baseUrl is required for codex adapter",
+    );
   });
 
   it("syncs harness updates from storage events", () => {

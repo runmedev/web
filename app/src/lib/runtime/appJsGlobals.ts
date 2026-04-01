@@ -180,23 +180,28 @@ export function createAppJsGlobals({
   const codexProjectManager = getCodexProjectManager();
   const responsesDirect = responsesDirectConfigManager;
 
-  const normalizeHarnessAdapter = (value: string): HarnessAdapter => {
+  const normalizeHarnessAdapter = (
+    value: string,
+  ): { adapter: HarnessAdapter; warning?: string } => {
     const normalized = (value ?? "").trim().toLowerCase();
     if (normalized === "codex") {
-      return "codex";
+      return { adapter: "codex" };
     }
     if (
       normalized === "responses" ||
       normalized === "response"
     ) {
-      return "responses";
+      return {
+        adapter: "responses-direct",
+        warning: `Harness adapter "${value}" is deprecated; using "responses-direct" instead.`,
+      };
     }
     if (
       normalized === "responses-direct" ||
       normalized === "responses_direct" ||
       normalized === "responsesdirect"
     ) {
-      return "responses-direct";
+      return { adapter: "responses-direct" };
     }
     throw new Error(`Unsupported harness adapter: ${String(value)}`);
   };
@@ -663,12 +668,15 @@ export function createAppJsGlobals({
           return message;
         },
         update: (name: string, baseUrl: string, adapter: string) => {
+          const normalized = normalizeHarnessAdapter(adapter);
           const updated = harnessManager.update(
             name,
             baseUrl,
-            normalizeHarnessAdapter(adapter),
+            normalized.adapter,
           );
-          const message = `Harness ${updated.name} set to ${updated.baseUrl} (${updated.adapter})`;
+          const message = normalized.warning
+            ? `Harness ${updated.name} set to ${updated.baseUrl} (${updated.adapter})\nWarning: ${normalized.warning}`
+            : `Harness ${updated.name} set to ${updated.baseUrl} (${updated.adapter})`;
           emitLine(sendOutput, message);
           return message;
         },

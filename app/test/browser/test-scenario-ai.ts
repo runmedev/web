@@ -457,7 +457,7 @@ try {
     fail("Could not find AppConsole terminal input");
   } else {
     pass("Found AppConsole terminal input");
-    runAppConsoleCommand(consoleRef, `app.harness.update("fake", "${FAKE_CHATKIT_BASE_URL}", "responses")`);
+    runAppConsoleCommand(consoleRef, `app.harness.update("fake", "${FAKE_CHATKIT_BASE_URL}", "responses-direct")`);
     runAppConsoleCommand(consoleRef, 'app.harness.setDefault("fake")');
     const consoleOutput = runAppConsoleCommand(consoleRef, "app.harness.get()");
     const harnessStorage = readHarnessStorage();
@@ -468,7 +468,7 @@ try {
     const activeHarness = (harnessStorage.harnesses ?? []).find((entry) => entry?.name === "fake");
     const isDefault = harnessStorage.defaultHarnessName === "fake";
     const validHarness = activeHarness?.baseUrl === FAKE_CHATKIT_BASE_URL &&
-      activeHarness?.adapter === "responses";
+      activeHarness?.adapter === "responses-direct";
     if (isDefault && validHarness) {
       pass("Configured assistant harness via AppConsole");
     } else {
@@ -518,7 +518,9 @@ try {
       return false;
     }
   })();
-  const postedChatkitRequest = chatkitRequestsRaw.includes("\"path\":\"/chatkit\"");
+  const postedChatkitRequest =
+    chatkitRequestsRaw.includes("\"path\":\"/v1/responses\"") ||
+    chatkitRequestsRaw.includes("\"path\":\"/responses/direct/chatkit\"");
 
   if (responseResult.found) {
     pass("User-visible assistant response appeared in ChatKit panel");

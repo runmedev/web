@@ -23,6 +23,31 @@ type StoredThread = {
 const DEFAULT_OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const DEFAULT_MODEL = "gpt-5.2";
 
+function resolveResponsesApiUrl(responsesApiBaseUrl: string): string {
+  const normalized = responsesApiBaseUrl.trim().replace(/\/+$/, "");
+  if (!normalized) {
+    return DEFAULT_OPENAI_RESPONSES_URL;
+  }
+  try {
+    const url = new URL(normalized);
+    if (!url.pathname || url.pathname === "/") {
+      url.pathname = "/v1/responses";
+      url.search = "";
+      url.hash = "";
+    }
+    return url.toString();
+  } catch (error) {
+    appLogger.warn("Invalid responses-direct baseUrl override; using OpenAI default", {
+      attrs: {
+        scope: "chatkit.responses_direct",
+        baseUrl: normalized,
+        error: String(error),
+      },
+    });
+    return DEFAULT_OPENAI_RESPONSES_URL;
+  }
+}
+
 async function resolveBody(input: RequestInfo | URL, init?: RequestInit): Promise<BodyInit | null | undefined> {
   if (init?.body != null) {
     return init.body;
@@ -465,7 +490,10 @@ function buildStreamResponse(
   });
 }
 
-export function createResponsesDirectChatkitFetch(): typeof fetch {
+export function createResponsesDirectChatkitFetch(options?: {
+  responsesApiBaseUrl?: string;
+}): typeof fetch {
+  const responsesApiUrl = resolveResponsesApiUrl(options?.responsesApiBaseUrl ?? "");
   const threads = new Map<string, StoredThread>();
 
   const ensureThread = (threadId?: string): StoredThread => {
@@ -488,12 +516,13 @@ export function createResponsesDirectChatkitFetch(): typeof fetch {
 
   const streamOpenAI = async (options: {
     thread: StoredThread;
+    responsesApiUrl: string;
     requestPayload: JsonRecord;
     emit: (payload: unknown) => void;
     signal?: AbortSignal | null;
   }): Promise<void> => {
     const headers = await resolveResponsesDirectHeaders();
-    const response = await fetch(DEFAULT_OPENAI_RESPONSES_URL, {
+    const response = await fetch(options.responsesApiUrl, {
       method: "POST",
       headers,
       body: JSON.stringify(options.requestPayload),
@@ -682,6 +711,7 @@ export function createResponsesDirectChatkitFetch(): typeof fetch {
     appLogger.info("Direct Responses ChatKit fetch request", {
       attrs: {
         scope: "chatkit.responses_direct",
+        responsesApiUrl,
         requestType,
         payload: json,
       },
@@ -786,6 +816,7 @@ export function createResponsesDirectChatkitFetch(): typeof fetch {
           });
           await streamOpenAI({
             thread,
+            responsesApiUrl,
             requestPayload,
             emit: sink.emit,
             signal: init?.signal ?? null,
@@ -819,6 +850,7 @@ export function createResponsesDirectChatkitFetch(): typeof fetch {
         async (sink) => {
           await streamOpenAI({
             thread,
+            responsesApiUrl,
             requestPayload,
             emit: sink.emit,
             signal: init?.signal ?? null,
