@@ -448,7 +448,7 @@ try {
   if (consoleRef) {
     runAppConsoleCommand(
       consoleRef,
-      `app.harness.update("fake", "${FAKE_CHATKIT_BASE_URL}", "responses")`,
+      `app.harness.update("fake", "${FAKE_CHATKIT_BASE_URL}", "responses-direct")`,
     );
     runAppConsoleCommand(consoleRef, 'app.harness.setDefault("fake")');
     const harnessStorage = readHarnessStorage();

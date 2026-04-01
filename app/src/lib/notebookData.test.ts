@@ -157,7 +157,7 @@ const harnessStore = new Map<
   {
     name: string;
     baseUrl: string;
-    adapter: "responses" | "responses-direct" | "codex";
+    adapter: "responses-direct" | "codex";
   }
 >();
 let defaultHarnessName: string | null = null;
@@ -173,7 +173,7 @@ const harnessManager = {
       first ?? {
         name: "local-responses",
         baseUrl: "http://localhost",
-        adapter: "responses",
+        adapter: "responses-direct",
       }
     );
   }),
@@ -181,7 +181,7 @@ const harnessManager = {
     (
       name: string,
       baseUrl: string,
-      adapter: "responses" | "responses-direct" | "codex",
+      adapter: "responses-direct" | "codex",
     ) => {
       const next = { name, baseUrl, adapter };
       harnessStore.set(name, next);
@@ -206,15 +206,13 @@ const harnessManager = {
     (
       profile: {
         baseUrl: string;
-        adapter: "responses" | "responses-direct" | "codex";
+        adapter: "responses-direct" | "codex";
       },
     ) =>
       `${profile.baseUrl}/${
         profile.adapter === "codex"
           ? "chatkit-codex"
-          : profile.adapter === "responses-direct"
-            ? "chatkit-responses-direct"
-            : "chatkit"
+          : "chatkit-responses-direct"
       }`,
   ),
 };

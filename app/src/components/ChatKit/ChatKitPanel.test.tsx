@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { create } from "@bufbuild/protobuf";
 import { ChatkitStateSchema } from "../../protogen/oaiproto/aisre/notebooks_pb.js";
 
-type HarnessAdapter = "responses" | "responses-direct" | "codex";
+type HarnessAdapter = "responses-direct" | "codex";
 
 let harnessState: { defaultHarness: { name: string; baseUrl: string; adapter: HarnessAdapter } };
 let codexProjectsState: {
@@ -180,7 +180,7 @@ describe("ChatKitPanel codex harness routing", () => {
       defaultHarness: {
         name: "default",
         baseUrl: "http://127.0.0.1:31337",
-        adapter: "responses",
+        adapter: "responses-direct",
       },
     };
     codexProjectsState = {
@@ -233,11 +233,11 @@ describe("ChatKitPanel codex harness routing", () => {
     cleanup();
   });
 
-  it("routes ChatKit to /chatkit and does not connect codex bridge for responses harness", () => {
+  it("routes ChatKit to responses-direct and does not connect codex bridge", () => {
     render(<ChatKitPanel />);
 
     const config = useChatKitMock.mock.calls.at(0)?.[0];
-    expect(config.api.url).toBe("http://127.0.0.1:31337/chatkit");
+    expect(config.api.url).toBe("http://127.0.0.1:31337/responses/direct/chatkit");
     expect(bridgeMock.connect).not.toHaveBeenCalled();
     expect(bridgeMock.disconnect).toHaveBeenCalled();
   });
@@ -382,7 +382,7 @@ describe("ChatKitPanel codex harness routing", () => {
     const { rerender } = render(<ChatKitPanel />);
 
     expect(useChatKitMock.mock.calls.at(-1)?.[0]?.api?.url).toBe(
-      "http://127.0.0.1:31337/chatkit",
+      "http://127.0.0.1:31337/responses/direct/chatkit",
     );
 
     harnessState.defaultHarness = {
@@ -409,12 +409,12 @@ describe("ChatKitPanel codex harness routing", () => {
 
     harnessState.defaultHarness = {
       ...harnessState.defaultHarness,
-      adapter: "responses",
+      adapter: "responses-direct",
     };
     rerender(<ChatKitPanel />);
 
     expect(useChatKitMock.mock.calls.at(-1)?.[0]?.api?.url).toBe(
-      "http://127.0.0.1:31337/chatkit",
+      "http://127.0.0.1:31337/responses/direct/chatkit",
     );
     expect(bridgeMock.disconnect).toHaveBeenCalled();
     expect(proxyMock.disconnect).toHaveBeenCalled();
@@ -701,7 +701,7 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(appLoggerMock.error).toHaveBeenCalledWith("ChatKit error", {
       attrs: {
         scope: "chatkit.panel",
-        adapter: "responses",
+        adapter: "responses-direct",
         baseUrl: "http://127.0.0.1:31337",
         error: "thread is not materialized yet",
       },

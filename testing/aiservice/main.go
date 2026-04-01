@@ -1119,7 +1119,7 @@ func main() {
 		}
 
 		switch r.URL.Path {
-		case "/chatkit", "/chatkit-codex":
+		case "/chatkit", "/chatkit-codex", "/responses/direct/chatkit", "/v1/responses":
 			handleChatkit(w, r)
 		case "/codex/app-server/ws":
 			handleCodexAppServerWebSocket(w, r)

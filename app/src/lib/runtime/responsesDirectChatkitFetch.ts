@@ -22,6 +22,39 @@ type StoredThread = {
 
 const DEFAULT_OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const DEFAULT_MODEL = "gpt-5.2";
+const CHATKIT_DIRECT_ROUTE = "/responses/direct/chatkit";
+
+function resolveRequestUrl(input: RequestInfo | URL): URL | null {
+  try {
+    if (input instanceof URL) {
+      return input;
+    }
+    if (typeof input === "string") {
+      return new URL(input);
+    }
+    if (input instanceof Request) {
+      return new URL(input.url);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function resolveResponsesApiUrl(input: RequestInfo | URL): string {
+  const requestUrl = resolveRequestUrl(input);
+  if (!requestUrl) {
+    return DEFAULT_OPENAI_RESPONSES_URL;
+  }
+  // Allow local CUJ fake AI service to emulate OpenAI Responses without changing production defaults.
+  if (
+    requestUrl.pathname === CHATKIT_DIRECT_ROUTE &&
+    requestUrl.hostname === "127.0.0.1"
+  ) {
+    return new URL("/v1/responses", requestUrl.origin).toString();
+  }
+  return DEFAULT_OPENAI_RESPONSES_URL;
+}
 
 async function resolveBody(input: RequestInfo | URL, init?: RequestInit): Promise<BodyInit | null | undefined> {
   if (init?.body != null) {
@@ -488,12 +521,13 @@ export function createResponsesDirectChatkitFetch(): typeof fetch {
 
   const streamOpenAI = async (options: {
     thread: StoredThread;
+    responsesApiUrl: string;
     requestPayload: JsonRecord;
     emit: (payload: unknown) => void;
     signal?: AbortSignal | null;
   }): Promise<void> => {
     const headers = await resolveResponsesDirectHeaders();
-    const response = await fetch(DEFAULT_OPENAI_RESPONSES_URL, {
+    const response = await fetch(options.responsesApiUrl, {
       method: "POST",
       headers,
       body: JSON.stringify(options.requestPayload),
@@ -678,10 +712,12 @@ export function createResponsesDirectChatkitFetch(): typeof fetch {
 
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     const { json } = await readBody(input, init);
+    const responsesApiUrl = resolveResponsesApiUrl(input);
     const requestType = asString(getPayloadRecord(json).type) ?? asString(json.type) ?? "";
     appLogger.info("Direct Responses ChatKit fetch request", {
       attrs: {
         scope: "chatkit.responses_direct",
+        responsesApiUrl,
         requestType,
         payload: json,
       },
@@ -786,6 +822,7 @@ export function createResponsesDirectChatkitFetch(): typeof fetch {
           });
           await streamOpenAI({
             thread,
+            responsesApiUrl,
             requestPayload,
             emit: sink.emit,
             signal: init?.signal ?? null,
@@ -819,6 +856,7 @@ export function createResponsesDirectChatkitFetch(): typeof fetch {
         async (sink) => {
           await streamOpenAI({
             thread,
+            responsesApiUrl,
             requestPayload,
             emit: sink.emit,
             signal: init?.signal ?? null,

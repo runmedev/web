@@ -19,29 +19,29 @@ describe("harnessManager", () => {
     __resetHarnessManagerForTests();
   });
 
-  it("bootstraps a default responses harness from window.location.origin", () => {
+  it("bootstraps a default responses-direct harness from window.location.origin", () => {
     const mgr = getHarnessManager();
     const active = mgr.getDefault();
 
     expect(active.name).toBe("local-responses");
-    expect(active.adapter).toBe("responses");
+    expect(active.adapter).toBe("responses-direct");
     expect(active.baseUrl).toBe(window.location.origin);
     expect(mgr.resolveChatkitUrl(active)).toBe(
-      new URL("/chatkit", window.location.origin).toString(),
+      new URL("/responses/direct/chatkit", window.location.origin).toString(),
     );
   });
 
   it("uses app.harness updates and default selection", () => {
     const mgr = getHarnessManager();
 
-    mgr.update("alt", "http://127.0.0.1:7788", "responses");
+    mgr.update("alt", "http://127.0.0.1:7788", "responses-direct");
     mgr.setDefault("alt");
 
     const active = mgr.getDefault();
     expect(active.name).toBe("alt");
     expect(active.baseUrl).toBe("http://127.0.0.1:7788");
-    expect(active.adapter).toBe("responses");
-    expect(mgr.resolveChatkitUrl(active)).toBe("http://127.0.0.1:7788/chatkit");
+    expect(active.adapter).toBe("responses-direct");
+    expect(mgr.resolveChatkitUrl(active)).toBe("http://127.0.0.1:7788/responses/direct/chatkit");
   });
 
   it("builds codex route for codex harnesses", () => {
@@ -87,7 +87,28 @@ describe("harnessManager", () => {
     const mgr = getHarnessManager();
     const active = mgr.getDefault();
     expect(active.baseUrl).toBe("http://legacy.example:9000");
-    expect(active.adapter).toBe("responses");
+    expect(active.adapter).toBe("responses-direct");
+  });
+
+  it("migrates stored responses harness adapters to responses-direct", () => {
+    localStorage.setItem(
+      HARNESS_STORAGE_KEY,
+      JSON.stringify({
+        harnesses: [
+          { name: "legacy", baseUrl: "http://127.0.0.1:9090", adapter: "responses" },
+        ],
+        defaultHarnessName: "legacy",
+      }),
+    );
+    __resetHarnessManagerForTests();
+
+    const mgr = getHarnessManager();
+    const active = mgr.getDefault();
+    expect(active.name).toBe("legacy");
+    expect(active.adapter).toBe("responses-direct");
+    expect(mgr.resolveChatkitUrl(active)).toBe(
+      "http://127.0.0.1:9090/responses/direct/chatkit",
+    );
   });
 
   it("syncs harness updates from storage events", () => {

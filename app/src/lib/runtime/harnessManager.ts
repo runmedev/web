@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-export type HarnessAdapter = "responses" | "responses-direct" | "codex";
+export type HarnessAdapter = "responses-direct" | "codex";
 
 export interface HarnessProfile {
   name: string;
@@ -25,13 +25,19 @@ const DEFAULT_HARNESS_NAME = "local-responses";
 const HARNESS_CHANGED_EVENT = "runme:harness-changed";
 
 const CHATKIT_ROUTE_BY_ADAPTER: Record<HarnessAdapter, string> = {
-  responses: "/chatkit",
   "responses-direct": "/responses/direct/chatkit",
   codex: "/codex/chatkit",
 };
 
 function isHarnessAdapter(value: unknown): value is HarnessAdapter {
-  return value === "responses" || value === "responses-direct" || value === "codex";
+  return value === "responses-direct" || value === "codex";
+}
+
+function normalizeStoredHarnessAdapter(value: unknown): HarnessAdapter | null {
+  if (value === "responses") {
+    return "responses-direct";
+  }
+  return isHarnessAdapter(value) ? value : null;
 }
 
 function normalizeName(value: string): string {
@@ -50,7 +56,8 @@ function defaultBaseUrl(): string {
 }
 
 export function buildChatkitUrl(baseUrl: string, adapter: HarnessAdapter): string {
-  const route = CHATKIT_ROUTE_BY_ADAPTER[adapter] ?? CHATKIT_ROUTE_BY_ADAPTER.responses;
+  const route =
+    CHATKIT_ROUTE_BY_ADAPTER[adapter] ?? CHATKIT_ROUTE_BY_ADAPTER["responses-direct"];
   try {
     const url = new URL(baseUrl);
     url.pathname = route;
@@ -108,7 +115,7 @@ function createDefaultHarness(baseUrl = defaultBaseUrl()): HarnessProfile {
   return {
     name: DEFAULT_HARNESS_NAME,
     baseUrl,
-    adapter: "responses",
+    adapter: "responses-direct",
   };
 }
 
@@ -278,12 +285,13 @@ class HarnessManager {
       const harnesses = new Map<string, HarnessProfile>();
 
       for (const entry of entries) {
+        const adapter = normalizeStoredHarnessAdapter(entry?.adapter);
         if (
           !entry ||
           typeof entry !== "object" ||
           typeof entry.name !== "string" ||
           typeof entry.baseUrl !== "string" ||
-          !isHarnessAdapter(entry.adapter)
+          !adapter
         ) {
           continue;
         }
@@ -295,7 +303,7 @@ class HarnessManager {
         harnesses.set(name, {
           name,
           baseUrl,
-          adapter: entry.adapter,
+          adapter,
         });
       }
 
