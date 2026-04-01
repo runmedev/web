@@ -25,12 +25,14 @@ const DEFAULT_MODEL = "gpt-5.2";
 const CHATKIT_DIRECT_ROUTE = "/responses/direct/chatkit";
 
 function resolveRequestUrl(input: RequestInfo | URL): URL | null {
+  const baseOrigin =
+    typeof window !== "undefined" ? window.location.origin : "http://localhost";
   try {
     if (input instanceof URL) {
       return input;
     }
     if (typeof input === "string") {
-      return new URL(input);
+      return new URL(input, baseOrigin);
     }
     if (input instanceof Request) {
       return new URL(input.url);
@@ -46,11 +48,14 @@ function resolveResponsesApiUrl(input: RequestInfo | URL): string {
   if (!requestUrl) {
     return DEFAULT_OPENAI_RESPONSES_URL;
   }
-  // Allow local CUJ fake AI service to emulate OpenAI Responses without changing production defaults.
-  if (
-    requestUrl.pathname === CHATKIT_DIRECT_ROUTE &&
-    requestUrl.hostname === "127.0.0.1"
-  ) {
+  if (requestUrl.pathname !== CHATKIT_DIRECT_ROUTE) {
+    return DEFAULT_OPENAI_RESPONSES_URL;
+  }
+  const currentOrigin =
+    typeof window !== "undefined" ? window.location.origin : "";
+  // responses-direct uses OpenAI by default. Non-default harness origins are
+  // treated as explicit endpoint overrides (used by CUJ and local fake servers).
+  if (requestUrl.origin && requestUrl.origin !== currentOrigin) {
     return new URL("/v1/responses", requestUrl.origin).toString();
   }
   return DEFAULT_OPENAI_RESPONSES_URL;

@@ -20,7 +20,6 @@ export type HarnessSnapshot = {
 };
 
 const HARNESS_STORAGE_KEY = "runme/harness";
-const LEGACY_SETTINGS_STORAGE_KEY = "cloudAssistantSettings";
 const DEFAULT_HARNESS_NAME = "local-responses";
 const HARNESS_CHANGED_EVENT = "runme:harness-changed";
 
@@ -48,16 +47,12 @@ function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
-function defaultBaseUrl(): string {
-  if (typeof window === "undefined") {
-    return "http://localhost";
-  }
-  return window.location.origin;
-}
-
 export function buildChatkitUrl(baseUrl: string, adapter: HarnessAdapter): string {
   const route =
     CHATKIT_ROUTE_BY_ADAPTER[adapter] ?? CHATKIT_ROUTE_BY_ADAPTER["responses-direct"];
+  if (!baseUrl.trim()) {
+    return route;
+  }
   try {
     const url = new URL(baseUrl);
     url.pathname = route;
@@ -111,7 +106,7 @@ export function buildCodexAppServerWsUrl(baseUrl: string): string {
   }
 }
 
-function createDefaultHarness(baseUrl = defaultBaseUrl()): HarnessProfile {
+function createDefaultHarness(baseUrl = ""): HarnessProfile {
   return {
     name: DEFAULT_HARNESS_NAME,
     baseUrl,
@@ -192,11 +187,11 @@ class HarnessManager {
     if (!nextName) {
       throw new Error("Harness name is required");
     }
-    if (!nextBaseUrl) {
-      throw new Error("Harness baseUrl is required");
-    }
     if (!isHarnessAdapter(adapter)) {
       throw new Error(`Unsupported harness adapter: ${String(adapter)}`);
+    }
+    if (adapter === "codex" && !nextBaseUrl) {
+      throw new Error("Harness baseUrl is required for codex adapter");
     }
     const next: HarnessProfile = {
       name: nextName,
@@ -245,7 +240,7 @@ class HarnessManager {
 
   private ensureDefaultHarness(): void {
     if (this.harnesses.size === 0) {
-      const fallback = createDefaultHarness(this.readLegacyAgentEndpoint() ?? defaultBaseUrl());
+      const fallback = createDefaultHarness();
       this.harnesses.set(fallback.name, fallback);
       this.defaultHarnessName = fallback.name;
       this.persist();
@@ -273,7 +268,7 @@ class HarnessManager {
     try {
       const raw = window.localStorage.getItem(HARNESS_STORAGE_KEY);
       if (!raw) {
-        const fallback = createDefaultHarness(this.readLegacyAgentEndpoint() ?? defaultBaseUrl());
+        const fallback = createDefaultHarness();
         return {
           harnesses: new Map([[fallback.name, fallback]]),
           defaultHarnessName: fallback.name,
@@ -285,19 +280,29 @@ class HarnessManager {
       const harnesses = new Map<string, HarnessProfile>();
 
       for (const entry of entries) {
+        const rawAdapter = entry?.adapter;
         const adapter = normalizeStoredHarnessAdapter(entry?.adapter);
         if (
           !entry ||
           typeof entry !== "object" ||
           typeof entry.name !== "string" ||
-          typeof entry.baseUrl !== "string" ||
           !adapter
         ) {
           continue;
         }
         const name = normalizeName(entry.name);
-        const baseUrl = normalizeBaseUrl(entry.baseUrl);
-        if (!name || !baseUrl) {
+        let baseUrl = normalizeBaseUrl(
+          typeof entry.baseUrl === "string" ? entry.baseUrl : "",
+        );
+        // Legacy "responses" entries targeted runme /chatkit, not the upstream
+        // Responses API. After migration to responses-direct, default to OpenAI.
+        if (rawAdapter === "responses") {
+          baseUrl = "";
+        }
+        if (!name) {
+          continue;
+        }
+        if (adapter === "codex" && !baseUrl) {
           continue;
         }
         harnesses.set(name, {
@@ -308,7 +313,7 @@ class HarnessManager {
       }
 
       if (harnesses.size === 0) {
-        const fallback = createDefaultHarness(this.readLegacyAgentEndpoint() ?? defaultBaseUrl());
+        const fallback = createDefaultHarness();
         return {
           harnesses: new Map([[fallback.name, fallback]]),
           defaultHarnessName: fallback.name,
@@ -329,31 +334,11 @@ class HarnessManager {
       };
     } catch (error) {
       console.error("Failed to load harnesses from storage", error);
-      const fallback = createDefaultHarness(this.readLegacyAgentEndpoint() ?? defaultBaseUrl());
+      const fallback = createDefaultHarness();
       return {
         harnesses: new Map([[fallback.name, fallback]]),
         defaultHarnessName: fallback.name,
       };
-    }
-  }
-
-  private readLegacyAgentEndpoint(): string | null {
-    if (typeof window === "undefined") {
-      return null;
-    }
-    try {
-      const raw = window.localStorage.getItem(LEGACY_SETTINGS_STORAGE_KEY);
-      if (!raw) {
-        return null;
-      }
-      const parsed = JSON.parse(raw) as { agentEndpoint?: unknown };
-      if (typeof parsed?.agentEndpoint !== "string") {
-        return null;
-      }
-      const endpoint = normalizeBaseUrl(parsed.agentEndpoint);
-      return endpoint.length > 0 ? endpoint : null;
-    } catch {
-      return null;
     }
   }
 
@@ -395,10 +380,7 @@ class HarnessManager {
   }
 
   private handleStorage(event: StorageEvent): void {
-    if (
-      event.key !== HARNESS_STORAGE_KEY &&
-      event.key !== LEGACY_SETTINGS_STORAGE_KEY
-    ) {
+    if (event.key !== HARNESS_STORAGE_KEY) {
       return;
     }
     this.syncFromStorage();

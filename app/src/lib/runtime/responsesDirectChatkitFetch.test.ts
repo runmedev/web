@@ -58,7 +58,7 @@ describe("responsesDirectChatkitFetch", () => {
       );
 
     const fetchFn = createResponsesDirectChatkitFetch();
-    const response = await fetchFn("http://localhost/responses/direct/chatkit", {
+    const response = await fetchFn("/responses/direct/chatkit", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -108,7 +108,7 @@ describe("responsesDirectChatkitFetch", () => {
     );
 
     const fetchFn = createResponsesDirectChatkitFetch();
-    const response = await fetchFn("http://localhost/responses/direct/chatkit", {
+    const response = await fetchFn("/responses/direct/chatkit", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -130,5 +130,41 @@ describe("responsesDirectChatkitFetch", () => {
     expect(headers.get("Authorization")).toBe("Bearer sk-api-key");
     expect(headers.get("OpenAI-Organization")).toBeNull();
     expect(headers.get("OpenAI-Project")).toBeNull();
+  });
+
+  it("uses non-default harness origin as explicit responses endpoint override", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      sseResponse([
+        { type: "response.created", response: { id: "resp-3" } },
+        { type: "response.completed", response: { id: "resp-3" } },
+      ]),
+    );
+
+    const fetchFn = createResponsesDirectChatkitFetch();
+    const response = await fetchFn("http://127.0.0.1:19989/responses/direct/chatkit", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "threads.create",
+        params: {
+          input: {
+            content: [{ type: "input_text", text: "hello override" }],
+            attachments: [],
+            inference_options: {},
+          },
+        },
+      }),
+    });
+
+    await response.text();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:19989/v1/responses",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.any(Headers),
+      }),
+    );
   });
 });
