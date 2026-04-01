@@ -4,7 +4,7 @@ import md5 from "md5";
 import { RunmeMetadataKey, parser_pb } from "../../runme/client";
 
 type CellRunnerLike = {
-  run: () => void;
+  run: () => void | Promise<void>;
   getRunID: () => string;
 };
 
@@ -120,6 +120,15 @@ export type RunmeConsoleApi = {
   rerun: (target?: unknown) => string;
   help: () => string;
 };
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "then" in value &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
+}
 
 function inferNotebookSource(uri: string): NotebookSummary["source"] {
   const normalized = (uri ?? "").toLowerCase();
@@ -437,7 +446,10 @@ export function createNotebooksApi({
         if (!cellRunner) {
           throw new Error(`Cell not found: ${refId}`);
         }
-        cellRunner.run();
+        const runResult = cellRunner.run();
+        if (isPromiseLike(runResult)) {
+          await runResult;
+        }
         const cell = notebook.getNotebook().cells.find((candidate) => candidate.refId === refId);
         if (cell) {
           executedCells.push(cell);

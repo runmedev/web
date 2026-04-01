@@ -263,6 +263,173 @@ describe("responsesDirectChatkitFetch", () => {
     expect(body).toContain("\"previous_response_id\":\"resp-prev\"");
   });
 
+  it("falls back call_id to item_id only when item_id already looks like a call id", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      sseResponse([
+        { type: "response.created", response: { id: "resp-prev" } },
+        {
+          type: "response.function_call_arguments.done",
+          item_id: "call_fallback_from_item_id",
+          name: "ExecuteCode",
+          arguments: "{\"code\":\"console.log('hi')\"}",
+        },
+        { type: "response.completed", response: { id: "resp-prev" } },
+      ]),
+    );
+
+    const fetchFn = createResponsesDirectChatkitFetch();
+    const response = await fetchFn("/responses/direct/chatkit", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "threads.create",
+        params: {
+          input: {
+            content: [{ type: "input_text", text: "run code" }],
+            attachments: [],
+            inference_options: { model: "gpt-5.2" },
+          },
+        },
+      }),
+    });
+
+    const body = await response.text();
+    expect(body).toContain("\"type\":\"client_tool_call\"");
+    expect(body).toContain("\"call_id\":\"call_fallback_from_item_id\"");
+    expect(body).toContain("\"previous_response_id\":\"resp-prev\"");
+  });
+
+  it("recovers call_id from function_call output item when arguments.done omits call_id", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      sseResponse([
+        { type: "response.created", response: { id: "resp-prev" } },
+        {
+          type: "response.output_item.added",
+          item: {
+            id: "fc_abc123",
+            type: "function_call",
+            name: "ExecuteCode",
+            call_id: "call_84MJLvWD9WwoH8CO9DPT2CNy",
+          },
+        },
+        {
+          type: "response.function_call_arguments.done",
+          item_id: "fc_abc123",
+          arguments: "{\"code\":\"console.log('hi')\"}",
+        },
+        { type: "response.completed", response: { id: "resp-prev" } },
+      ]),
+    );
+
+    const fetchFn = createResponsesDirectChatkitFetch();
+    const response = await fetchFn("/responses/direct/chatkit", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "threads.create",
+        params: {
+          input: {
+            content: [{ type: "input_text", text: "run code" }],
+            attachments: [],
+            inference_options: { model: "gpt-5.2" },
+          },
+        },
+      }),
+    });
+
+    const body = await response.text();
+    expect(body).toContain("\"type\":\"client_tool_call\"");
+    expect(body).toContain("\"call_id\":\"call_84MJLvWD9WwoH8CO9DPT2CNy\"");
+    expect(body).not.toContain("\"call_id\":\"fc_abc123\"");
+  });
+
+  it("does not treat function-call item ids as call_id when no call_id is provided", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      sseResponse([
+        { type: "response.created", response: { id: "resp-prev" } },
+        {
+          type: "response.function_call_arguments.done",
+          item_id: "fc_no_call_id_present",
+          name: "ExecuteCode",
+          arguments: "{\"code\":\"console.log('hi')\"}",
+        },
+        { type: "response.completed", response: { id: "resp-prev" } },
+      ]),
+    );
+
+    const fetchFn = createResponsesDirectChatkitFetch();
+    const response = await fetchFn("/responses/direct/chatkit", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "threads.create",
+        params: {
+          input: {
+            content: [{ type: "input_text", text: "run code" }],
+            attachments: [],
+            inference_options: { model: "gpt-5.2" },
+          },
+        },
+      }),
+    });
+
+    const body = await response.text();
+    expect(body).toContain("\"type\":\"client_tool_call\"");
+    expect(body).not.toContain("\"call_id\":\"fc_no_call_id_present\"");
+  });
+
+  it("recovers tool name from function_call output item when arguments.done omits name", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      sseResponse([
+        { type: "response.created", response: { id: "resp-prev" } },
+        {
+          type: "response.output_item.added",
+          item: {
+            id: "tool-item-name-fallback",
+            type: "function_call",
+            name: "ExecuteCode",
+          },
+        },
+        {
+          type: "response.function_call_arguments.done",
+          item_id: "tool-item-name-fallback",
+          call_id: "call-name-fallback",
+          arguments: "{\"code\":\"console.log('hi')\"}",
+        },
+        { type: "response.completed", response: { id: "resp-prev" } },
+      ]),
+    );
+
+    const fetchFn = createResponsesDirectChatkitFetch();
+    const response = await fetchFn("/responses/direct/chatkit", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "threads.create",
+        params: {
+          input: {
+            content: [{ type: "input_text", text: "run code" }],
+            attachments: [],
+            inference_options: { model: "gpt-5.2" },
+          },
+        },
+      }),
+    });
+
+    const body = await response.text();
+    expect(body).toContain("\"type\":\"client_tool_call\"");
+    expect(body).toContain("\"name\":\"ExecuteCode\"");
+    expect(body).not.toContain("\"name\":\"unknown_tool\"");
+  });
+
   it("includes code mode instructions in tool-output requests", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       sseResponse([

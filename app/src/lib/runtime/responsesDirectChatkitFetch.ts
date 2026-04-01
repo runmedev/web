@@ -589,6 +589,8 @@ export function createResponsesDirectChatkitFetch(options?: {
     }
 
     const assistantTextByItem = new Map<string, string>()
+    const toolNameByItem = new Map<string, string>()
+    const toolCallIdByItem = new Map<string, string>()
 
     await consumeSSE(
       response,
@@ -618,6 +620,18 @@ export function createResponsesDirectChatkitFetch(options?: {
           }
           case 'response.output_item.added': {
             const item = asRecord(event.item)
+            if (asString(item.type) === 'function_call') {
+              const itemId = asString(item.id)
+              const toolName = asString(item.name)
+              const toolCallId = asString(item.call_id)
+              if (itemId && toolName) {
+                toolNameByItem.set(itemId, toolName)
+              }
+              if (itemId && toolCallId) {
+                toolCallIdByItem.set(itemId, toolCallId)
+              }
+              return
+            }
             if (asString(item.type) !== 'message') {
               return
             }
@@ -714,9 +728,20 @@ export function createResponsesDirectChatkitFetch(options?: {
             return
           }
           case 'response.function_call_arguments.done': {
-            const callId = asString(event.call_id) ?? ''
             const itemId = asString(event.item_id) ?? randomId('tool')
-            const name = asString(event.name) ?? 'unknown_tool'
+            const fallbackCallId = itemId.startsWith('call_')
+              ? itemId
+              : undefined
+            const callId =
+              asString(event.call_id) ??
+              asString(asRecord(event.item).call_id) ??
+              toolCallIdByItem.get(itemId) ??
+              fallbackCallId
+            const name =
+              asString(event.name) ??
+              toolNameByItem.get(itemId) ??
+              asString(asRecord(event.item).name) ??
+              EXECUTE_CODE_TOOL_NAME
             let argumentsObject: JsonRecord = {}
             const argumentsRaw = asString(event.arguments) ?? '{}'
             try {

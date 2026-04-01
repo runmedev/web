@@ -129,13 +129,6 @@ function parseExecuteCodePayload(value: unknown): {
   }
 }
 
-function isExecuteCodeToolName(name: string): boolean {
-  if (name === EXECUTE_CODE_DIRECT_TOOL || name === EXECUTE_CODE_TOOL) {
-    return true
-  }
-  return name.endsWith('ExecuteCode')
-}
-
 function buildExecuteCodeToolOutput(args: {
   callId: string
   previousResponseId: string
@@ -1122,51 +1115,76 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         clientError: '',
       })
 
-      if (isExecuteCodeToolName(invocation.name)) {
-        const executeCodePayload = parseExecuteCodePayload(invocation.params)
-        if (!executeCodePayload?.callId) {
-          toolOutput.status = ToolCallOutput_Status.FAILED
-          toolOutput.clientError =
-            'ExecuteCode is missing call_id in tool params'
-          return toJson(ToolCallOutputSchema, toolOutput) as Record<
-            string,
-            unknown
-          >
-        }
-        const callId = executeCodePayload.callId
-        const previousResponseId = executeCodePayload.previousResponseId
-        try {
-          const result = await codeModeExecutor.execute({
-            code: executeCodePayload.code,
-            source: 'chatkit',
-          })
-          if (invocation.name === EXECUTE_CODE_DIRECT_TOOL) {
-            return {
+      switch (invocation.name) {
+        case EXECUTE_CODE_DIRECT_TOOL:
+        case EXECUTE_CODE_TOOL: {
+          const executeCodePayload = parseExecuteCodePayload(invocation.params)
+          if (!executeCodePayload) {
+            toolOutput.status = ToolCallOutput_Status.FAILED
+            toolOutput.clientError =
+              'ExecuteCode tool invoked without valid code payload'
+            return toJson(ToolCallOutputSchema, toolOutput) as Record<
+              string,
+              unknown
+            >
+          }
+          if (!executeCodePayload.callId) {
+            toolOutput.status = ToolCallOutput_Status.FAILED
+            toolOutput.clientError =
+              'ExecuteCode is missing call_id in tool params'
+            return toJson(ToolCallOutputSchema, toolOutput) as Record<
+              string,
+              unknown
+            >
+          }
+
+          const callId = executeCodePayload.callId
+          const previousResponseId = executeCodePayload.previousResponseId
+          try {
+            const result = await codeModeExecutor.execute({
+              code: executeCodePayload.code,
+              source: 'chatkit',
+            })
+            if (invocation.name === EXECUTE_CODE_DIRECT_TOOL) {
+              return {
+                callId,
+                previousResponseId,
+                output: result.output,
+              }
+            }
+            return buildExecuteCodeToolOutput({
               callId,
               previousResponseId,
               output: result.output,
+            })
+          } catch (error) {
+            if (invocation.name === EXECUTE_CODE_DIRECT_TOOL) {
+              return {
+                callId,
+                previousResponseId,
+                output: getCodeModeErrorOutput(error),
+                clientError: String(error),
+              }
             }
-          }
-          return buildExecuteCodeToolOutput({
-            callId,
-            previousResponseId,
-            output: result.output,
-          })
-        } catch (error) {
-          if (invocation.name === EXECUTE_CODE_DIRECT_TOOL) {
-            return {
+            return buildExecuteCodeToolOutput({
               callId,
               previousResponseId,
               output: getCodeModeErrorOutput(error),
               clientError: String(error),
-            }
+            })
           }
-          return buildExecuteCodeToolOutput({
-            callId,
-            previousResponseId,
-            output: getCodeModeErrorOutput(error),
-            clientError: String(error),
-          })
+        }
+        case UPDATE_CELLS_TOOL:
+        case GET_CELLS_TOOL:
+        case LIST_CELLS_TOOL:
+          break
+        default: {
+          toolOutput.status = ToolCallOutput_Status.FAILED
+          toolOutput.clientError = `Unknown tool ${invocation.name}`
+          return toJson(ToolCallOutputSchema, toolOutput) as Record<
+            string,
+            unknown
+          >
         }
       }
 

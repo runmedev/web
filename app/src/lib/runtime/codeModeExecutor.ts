@@ -75,6 +75,19 @@ export function createCodeModeExecutor(options: {
         )
       }
 
+      appLogger.info('Code mode execution started', {
+        attrs: {
+          scope: 'chatkit.code_mode',
+          source,
+          mode,
+          timeoutMs,
+          maxOutputBytes,
+          maxCodeBytes,
+          code: normalizedCode,
+          codeBytes,
+        },
+      })
+
       const runmeApi = createRunmeConsoleApi({
         resolveNotebook,
       })
@@ -197,6 +210,8 @@ export function createCodeModeExecutor(options: {
             mode,
             timeoutMs,
             maxOutputBytes,
+            code: normalizedCode,
+            output,
             error: String(error),
           },
         })
@@ -207,8 +222,21 @@ export function createCodeModeExecutor(options: {
         }
       }
 
+      const output = chunks.join('')
+      appLogger.info('Code mode execution completed', {
+        attrs: {
+          scope: 'chatkit.code_mode',
+          source,
+          mode,
+          code: normalizedCode,
+          output,
+          outputBytes,
+          truncated,
+        },
+      })
+
       return {
-        output: chunks.join(''),
+        output,
       }
     },
   }

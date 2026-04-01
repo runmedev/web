@@ -291,19 +291,37 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(String(result.clientError ?? "")).not.toContain('key "code" is unknown');
   });
 
-  it("handles ExecuteCode params for any tool name ending in ExecuteCode", async () => {
+  it("handles ExecuteCode params for direct ExecuteCode tool name", async () => {
     render(<ChatKitPanel />);
     const config = useChatKitMock.mock.calls.at(0)?.[0];
 
     const result = await config.onClientTool({
-      name: "custom_namespace_ExecuteCode",
+      name: "ExecuteCode",
       params: {
-        call_id: "call-suffix",
-        code: "console.log('suffix')",
+        call_id: "call-direct",
+        code: "console.log('direct')",
       },
     });
 
-    expect(result.callId).toBe("call-suffix");
+    expect(result.callId).toBe("call-direct");
+    expect(String(result.clientError ?? "")).not.toContain("Failed to decode tool params");
+    expect(String(result.clientError ?? "")).not.toContain('key "code" is unknown');
+  });
+
+  it("returns unknown tool error for unrecognized tool names", async () => {
+    render(<ChatKitPanel />);
+    const config = useChatKitMock.mock.calls.at(0)?.[0];
+
+    const result = await config.onClientTool({
+      name: "unknown_tool_name",
+      params: {
+        call_id: "",
+        previous_response_id: "resp-1",
+        code: "console.log('payload-shape')",
+      },
+    });
+
+    expect(String(result.clientError ?? "")).toContain("Unknown tool unknown_tool_name");
     expect(String(result.clientError ?? "")).not.toContain("Failed to decode tool params");
     expect(String(result.clientError ?? "")).not.toContain('key "code" is unknown');
   });

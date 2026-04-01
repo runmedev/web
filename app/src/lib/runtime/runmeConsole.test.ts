@@ -11,7 +11,7 @@ import {
 } from "./runmeConsole";
 
 type FakeCellRunner = {
-  run: () => void;
+  run: () => void | Promise<void>;
   getRunID: () => string;
   calls: number;
 };
@@ -421,5 +421,35 @@ describe("createNotebooksApi", () => {
       operations: [{ op: "remove", refIds: [insertedRefId] }],
     });
     expect(afterRemove.notebook.cells.find((cell) => cell.refId === insertedRefId)).toBeUndefined();
+  });
+
+  it("awaits asynchronous cell execution in notebooks.execute", async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell("cell-a", "echo a")],
+    });
+    const model = new FakeNotebookData("local://one", "One", notebook);
+    const runner = model.getCell("cell-a");
+    if (!runner) {
+      throw new Error("expected runner for cell-a");
+    }
+
+    let completed = false;
+    runner.run = async () => {
+      runner.calls += 1;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 10);
+      });
+      completed = true;
+    };
+
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    });
+
+    await api.execute({ refIds: ["cell-a"] });
+
+    expect(completed).toBe(true);
+    expect(runner.calls).toBe(1);
   });
 });

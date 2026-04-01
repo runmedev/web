@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { create } from '@bufbuild/protobuf'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../../runme/client'
+import { appLogger } from '../logging/runtime'
 import {
   createCodeModeExecutor,
   getCodeModeErrorOutput,
@@ -23,6 +24,7 @@ const createNotebook = () => {
 
 describe('codeModeExecutor', () => {
   it('merges stdout and stderr into one ordered output string', async () => {
+    const infoSpy = vi.spyOn(appLogger, 'info')
     const notebook = createNotebook()
     const executor = createCodeModeExecutor({
       mode: 'browser',
@@ -44,6 +46,17 @@ describe('codeModeExecutor', () => {
     expect(result.output.indexOf('two')).toBeLessThan(
       result.output.indexOf('three')
     )
+    const started = infoSpy.mock.calls.find(
+      ([message]) => message === 'Code mode execution started'
+    )
+    const completed = infoSpy.mock.calls.find(
+      ([message]) => message === 'Code mode execution completed'
+    )
+    expect(started?.[1]?.attrs?.code).toContain("console.log('one')")
+    expect(completed?.[1]?.attrs?.output).toContain('one')
+    expect(completed?.[1]?.attrs?.output).toContain('two')
+    expect(completed?.[1]?.attrs?.output).toContain('three')
+    infoSpy.mockRestore()
   })
 
   it('truncates output when it exceeds the configured output budget', async () => {
