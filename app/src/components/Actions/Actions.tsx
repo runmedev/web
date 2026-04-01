@@ -42,6 +42,7 @@ import { useRunners } from "../../contexts/RunnersContext";
 import { DEFAULT_RUNNER_PLACEHOLDER } from "../../lib/runtime/runnersManager";
 import {
   APPKERNEL_RUNNER_NAME,
+  APPKERNEL_SANDBOX_RUNNER_NAME,
   isAppKernelRunnerName,
 } from "../../lib/runtime/appKernel";
 import { getJupyterManager } from "../../lib/runtime/jupyterManager";
@@ -125,6 +126,11 @@ const LANGUAGE_OPTIONS = [
   { label: "Jupyter", value: "jupyter" },
   { label: "Python", value: "python" },
   { label: "JS", value: "javascript" },
+] as const;
+
+const JAVASCRIPT_RUNNER_OPTIONS = [
+  { label: "browser", value: APPKERNEL_RUNNER_NAME },
+  { label: "sandbox", value: APPKERNEL_SANDBOX_RUNNER_NAME },
 ] as const;
 
 type SupportedLanguage =
@@ -551,6 +557,7 @@ export function Action({
   if (!initialRunnerName) {
     initialRunnerName = DEFAULT_RUNNER_PLACEHOLDER;
   }
+  const isJavascriptLanguage = selectedLanguage === "javascript";
   const runnerSelectionName =
     selectedLanguage === "jupyter" && isAppKernelRunnerName(initialRunnerName)
       ? DEFAULT_RUNNER_PLACEHOLDER
@@ -559,10 +566,19 @@ export function Action({
     runnerSelectionName === DEFAULT_RUNNER_PLACEHOLDER
       ? (defaultRunnerName ?? "")
       : runnerSelectionName;
-  const showRunnerSelector = selectedLanguage === "bash" || selectedLanguage === "python";
+  const showRunnerSelector =
+    selectedLanguage === "bash" ||
+    selectedLanguage === "python" ||
+    isJavascriptLanguage;
   const showKernelSelector = selectedLanguage === "jupyter";
   const runnerSelectValue =
-    isAppKernelRunnerName(initialRunnerName) ? DEFAULT_RUNNER_PLACEHOLDER : initialRunnerName;
+    isJavascriptLanguage
+      ? initialRunnerName === APPKERNEL_SANDBOX_RUNNER_NAME
+        ? APPKERNEL_SANDBOX_RUNNER_NAME
+        : APPKERNEL_RUNNER_NAME
+      : isAppKernelRunnerName(initialRunnerName)
+        ? DEFAULT_RUNNER_PLACEHOLDER
+        : initialRunnerName;
   const hasJupyterSelection =
     Boolean(cell?.metadata?.[RunmeMetadataKey.JupyterServerName]) ||
     Boolean(cell?.metadata?.[RunmeMetadataKey.JupyterKernelID]) ||
@@ -964,6 +980,16 @@ export function Action({
                   value={runnerSelectValue}
                   onChange={(event) => {
                     const nextName = event.target.value;
+                    if (isJavascriptLanguage) {
+                      const validJsRunner = JAVASCRIPT_RUNNER_OPTIONS.some(
+                        (option) => option.value === nextName,
+                      );
+                      if (!validJsRunner) {
+                        return;
+                      }
+                      cellData.setRunner(nextName);
+                      return;
+                    }
                     const names = new Set(listRunners().map((r) => r.name));
                     if (
                       !names.has(nextName) &&
@@ -975,14 +1001,26 @@ export function Action({
                   }}
                   className="toolbar-select"
                 >
-                  <option value={DEFAULT_RUNNER_PLACEHOLDER}>
-                    {defaultRunnerName ? `${defaultRunnerName}` : "default"}
-                  </option>
-                  {listRunners().map((runner) => (
-                    <option key={runner.name} value={runner.name}>
-                      {runner.name}
-                    </option>
-                  ))}
+                  {isJavascriptLanguage ? (
+                    JAVASCRIPT_RUNNER_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))
+                  ) : (
+                    <>
+                      <option value={DEFAULT_RUNNER_PLACEHOLDER}>
+                        {defaultRunnerName ? `${defaultRunnerName}` : "default"}
+                      </option>
+                      {listRunners()
+                        .filter((runner) => !isAppKernelRunnerName(runner.name))
+                        .map((runner) => (
+                          <option key={runner.name} value={runner.name}>
+                            {runner.name}
+                          </option>
+                        ))}
+                    </>
+                  )}
                 </select>
               )}
               {showKernelSelector && (

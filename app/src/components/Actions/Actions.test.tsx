@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { clone, create } from "@bufbuild/protobuf";
 import React from "react";
-import { APPKERNEL_RUNNER_NAME } from "../../lib/runtime/appKernel";
+import {
+  APPKERNEL_RUNNER_NAME,
+  APPKERNEL_SANDBOX_RUNNER_NAME,
+} from "../../lib/runtime/appKernel";
 
 import { parser_pb, RunmeMetadataKey } from "../../runme/client";
 import type { CellData } from "../../lib/notebookData";
@@ -282,7 +285,7 @@ describe("Action component", () => {
     expect(updatedCell.languageId).toBe("markdown");
   });
 
-  it("hides the second selector for javascript cells", () => {
+  it("shows browser/sandbox runner selector for javascript cells", () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-runner-select",
       kind: parser_pb.CellKind.CODE,
@@ -299,8 +302,41 @@ describe("Action component", () => {
 
     const runnerSelect = document.getElementById("runner-select-cell-runner-select");
     const kernelSelect = document.getElementById("kernel-select-cell-runner-select");
-    expect(runnerSelect).toBeNull();
+    expect(runnerSelect).toBeTruthy();
     expect(kernelSelect).toBeNull();
+    const select = runnerSelect as HTMLSelectElement;
+    expect(select.value).toBe(APPKERNEL_RUNNER_NAME);
+    const optionValues = [...select.options].map((option) => option.value);
+    expect(optionValues).toEqual([
+      APPKERNEL_RUNNER_NAME,
+      APPKERNEL_SANDBOX_RUNNER_NAME,
+    ]);
+  });
+
+  it("switches javascript runner to sandbox", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-runner-sandbox",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: 'console.log("hi")',
+    });
+    const stub = new StubCellData(cell);
+
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
+
+    const runnerSelect = document.getElementById(
+      "runner-select-cell-runner-sandbox",
+    ) as HTMLSelectElement | null;
+    expect(runnerSelect).toBeTruthy();
+    fireEvent.change(runnerSelect!, {
+      target: { value: APPKERNEL_SANDBOX_RUNNER_NAME },
+    });
+
+    expect(stub.setRunner).toHaveBeenCalledWith(APPKERNEL_SANDBOX_RUNNER_NAME);
   });
 
   it("shows runner selector for python cells", () => {

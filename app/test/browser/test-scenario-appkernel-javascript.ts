@@ -400,14 +400,53 @@ writeArtifact("scenario-appkernel-javascript-03-opened.txt", snapshot);
 const runnerSelectorState = run(
   `agent-browser eval "(async () => {
     const sel = document.getElementById('runner-select-cell_appkernel_a');
-    return sel ? 'present' : 'missing';
+    if (!sel) return 'missing';
+    const options = Array.from(sel.querySelectorAll('option')).map((opt) => ({
+      value: opt.value,
+      label: (opt.textContent || '').trim().toLowerCase(),
+      selected: opt.selected,
+    }));
+    const selected = options.find((opt) => opt.selected) || null;
+    return JSON.stringify({
+      state: 'present',
+      value: sel.value || '',
+      options,
+      selectedLabel: selected?.label || '',
+    });
   })()"`,
 ).stdout.trim();
 writeArtifact("scenario-appkernel-javascript-runner-selector-state.txt", runnerSelectorState);
 if (runnerSelectorState.includes("missing")) {
-  pass("JS cells hide runner selector and default to AppKernel");
+  fail("JS cell runner selector is missing");
 } else {
-  fail("JS cell unexpectedly shows runner selector");
+  let parsed: {
+    value?: string;
+    options?: Array<{ value?: string; label?: string }>;
+    selectedLabel?: string;
+  } = {};
+  try {
+    const parsedOnce = JSON.parse(runnerSelectorState) as unknown;
+    parsed =
+      typeof parsedOnce === "string"
+        ? (JSON.parse(parsedOnce) as typeof parsed)
+        : (parsedOnce as typeof parsed);
+  } catch {
+    parsed = {};
+  }
+  const labels = (parsed.options ?? [])
+    .map((opt) => (opt.label ?? "").toLowerCase())
+    .filter((label) => label.length > 0);
+  const hasBrowser = labels.includes("browser");
+  const hasSandbox = labels.includes("sandbox");
+  const browserSelected =
+    parsed.value === "appkernel-js" || parsed.selectedLabel === "browser";
+  if (hasBrowser && hasSandbox && browserSelected) {
+    pass("JS cells show browser/sandbox runner selector and default to browser");
+  } else {
+    fail(
+      `JS runner selector state unexpected: ${runnerSelectorState}`,
+    );
+  }
 }
 
 if (clickRun("cell_appkernel_a")) {

@@ -41,7 +41,11 @@ import { appState } from "./AppState";
 import { getCodexProjectManager, type CodexProject } from "./codexProjectManager";
 import { type HarnessAdapter, getHarnessManager } from "./harnessManager";
 import { responsesDirectConfigManager } from "./responsesDirectConfigManager";
-import type { RunmeConsoleApi } from "./runmeConsole";
+import {
+  createNotebooksApi,
+  type NotebookDataLike,
+  type RunmeConsoleApi,
+} from "./runmeConsole";
 import { getRunnersManager } from "./runnersManager";
 import { getJupyterManager } from "./jupyterManager";
 
@@ -122,6 +126,8 @@ export function createAppJsGlobals({
   workspace,
   openNotebook,
   runnerSync,
+  resolveNotebook,
+  listNotebooks,
 }: {
   runme: RunmeConsoleApi;
   sendOutput?: SendOutput;
@@ -130,6 +136,8 @@ export function createAppJsGlobals({
   workspace?: WorkspaceApi;
   openNotebook?: (uri: string) => void | Promise<void>;
   runnerSync?: RunnerSync;
+  resolveNotebook?: (target?: unknown) => NotebookDataLike | null;
+  listNotebooks?: () => NotebookDataLike[];
 }) {
   const getWorkspaceItems = () =>
     workspace?.getItems?.() ?? appState.getWorkspaceItems();
@@ -163,6 +171,10 @@ export function createAppJsGlobals({
   };
 
   const runmeApi = createRunmeApi(runme, sendOutput);
+  const notebooksApi = createNotebooksApi({
+    resolveNotebook: resolveNotebook ?? (() => runme.getCurrentNotebook()),
+    listNotebooks,
+  });
   const jupyterManager = getJupyterManager();
   const harnessManager = getHarnessManager();
   const codexProjectManager = getCodexProjectManager();
@@ -292,6 +304,7 @@ export function createAppJsGlobals({
 
   return {
     runme: runmeApi,
+    notebooks: notebooksApi,
     runmeRunners: {
       get: () => {
         const mgr = getRunnersManager();

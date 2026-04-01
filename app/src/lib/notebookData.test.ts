@@ -3,7 +3,10 @@ import { create } from "@bufbuild/protobuf";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { parser_pb, MimeType, RunmeMetadataKey } from "../contexts/CellContext";
 import type { StreamsLike } from "@runmedev/renderers";
-import { APPKERNEL_RUNNER_NAME } from "./runtime/appKernel";
+import {
+  APPKERNEL_RUNNER_NAME,
+  APPKERNEL_SANDBOX_RUNNER_NAME,
+} from "./runtime/appKernel";
 import { appState } from "./runtime/AppState";
 
 const mockRunner = {
@@ -47,6 +50,66 @@ vi.mock("@runmedev/renderers", () => {
     setContext: vi.fn(),
   };
 });
+
+vi.mock("./runtime/sandboxJsKernel", () => ({
+  SandboxJSKernel: class {
+    private readonly bridge: {
+      call: (method: string, args: unknown[]) => Promise<unknown> | unknown;
+    };
+    private readonly hooks: {
+      onStdout?: (data: string) => void;
+      onStderr?: (data: string) => void;
+      onExit?: (exitCode: number) => void;
+    };
+
+    constructor({
+      bridge,
+      hooks = {},
+    }: {
+      bridge: {
+        call: (method: string, args: unknown[]) => Promise<unknown> | unknown;
+      };
+      hooks?: {
+        onStdout?: (data: string) => void;
+        onStderr?: (data: string) => void;
+        onExit?: (exitCode: number) => void;
+      };
+    }) {
+      this.bridge = bridge;
+      this.hooks = hooks;
+    }
+
+    async run(source: string): Promise<void> {
+      let exitCode = 0;
+      try {
+        if (source.includes("runme.getCurrentNotebook")) {
+          const notebook = (await this.bridge.call(
+            "runme.getCurrentNotebook",
+            [],
+          )) as { name?: string; cellCount?: number } | null;
+          this.hooks.onStdout?.(`${notebook?.name ?? ""}\n`);
+          this.hooks.onStdout?.(`${notebook?.cellCount ?? ""}\n`);
+        }
+        if (source.includes("runme.clear")) {
+          const message = await this.bridge.call("runme.clear", [undefined]);
+          this.hooks.onStdout?.(`${String(message)}\n`);
+        }
+        if (source.includes("notebooks.get")) {
+          const doc = (await this.bridge.call("notebooks.get", [
+            undefined,
+          ])) as { summary?: { name?: string }; notebook?: { cells?: unknown[] } };
+          this.hooks.onStdout?.(`${doc?.summary?.name ?? ""}\n`);
+          this.hooks.onStdout?.(`${doc?.notebook?.cells?.length ?? 0}\n`);
+        }
+      } catch (error) {
+        exitCode = 1;
+        this.hooks.onStderr?.(`${String(error)}\n`);
+      } finally {
+        this.hooks.onExit?.(exitCode);
+      }
+    }
+  },
+}));
 
 const runnerStore = new Map<string, any>();
 let defaultRunnerName: string | null = null;
@@ -593,6 +656,86 @@ describe("NotebookData.runCodeCell", () => {
       .join("");
     expect(stdoutText).toContain("true");
     expect(stdoutText).toContain("helper-notebook.runme.md");
+  });
+
+  it("exposes notebooks.get helper inside browser appkernel javascript cells", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-notebooks-get-browser",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        "const doc = await notebooks.get();",
+        "console.log(doc.summary.name);",
+        "console.log(doc.notebook.cells.length);",
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "browser-notebooks-get.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("browser-notebooks-get.runme.md");
+    expect(stdoutText).toContain("1");
+  });
+
+  it("exposes notebooks.get helper inside sandbox appkernel javascript cells", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-notebooks-get-sandbox",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_SANDBOX_RUNNER_NAME,
+      },
+      value: [
+        "const doc = await notebooks.get();",
+        "console.log(doc.summary.name);",
+        "console.log(doc.notebook.cells.length);",
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "sandbox-notebooks-get.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("sandbox-notebooks-get.runme.md");
+    expect(stdoutText).toContain("1");
   });
 
   it("exposes drive and google helper namespaces in appkernel cells", async () => {

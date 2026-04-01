@@ -26,9 +26,19 @@ import {
   buildJupyterChannelsWebSocketURL,
 } from "./runtime/jupyterManager";
 import { createAppJsGlobals } from "./runtime/appJsGlobals";
-import { createRunmeConsoleApi } from "./runtime/runmeConsole";
+import {
+  createNotebooksApi,
+  createRunmeConsoleApi,
+  type NotebooksApi,
+  type RunmeConsoleApi,
+} from "./runtime/runmeConsole";
 import { JSKernel } from "./runtime/jsKernel";
-import { isAppKernelRunnerName } from "./runtime/appKernel";
+import { SandboxJSKernel } from "./runtime/sandboxJsKernel";
+import {
+  type AppKernelRunnerMode,
+  isAppKernelRunnerName,
+  resolveAppKernelRunnerMode,
+} from "./runtime/appKernel";
 import {
   Streams,
   Heartbeat,
@@ -612,6 +622,7 @@ export class NotebookData {
     const normalizedLanguage = (cell.languageId ?? "").trim().toLowerCase();
     const requestedRunnerName =
       (cell.metadata?.[RunmeMetadataKey.RunnerName] as string | undefined) ?? "";
+    const appKernelMode = resolveAppKernelRunnerMode(requestedRunnerName);
     const useAppKernel =
       normalizedLanguage === "javascript" || isAppKernelRunnerName(requestedRunnerName);
     const useJupyterKernel = normalizedLanguage === "jupyter" || normalizedLanguage === "ipython";
@@ -656,7 +667,7 @@ export class NotebookData {
     this.updateCell(cell);
 
     if (useAppKernel) {
-      this.runCodeCellLocallyWithAppKernel(cell, runID);
+      this.runCodeCellWithAppKernel(cell, runID, appKernelMode);
       return runID;
     }
 
@@ -800,13 +811,45 @@ export class NotebookData {
     });
   }
 
-  private runCodeCellLocallyWithAppKernel(
+  private runCodeCellWithAppKernel(
     cell: parser_pb.Cell,
     runID: string,
+    mode: AppKernelRunnerMode,
   ): void {
     const refId = cell.refId;
     const languageId = (cell.languageId ?? "").trim().toLowerCase();
     const source = cell.value ?? "";
+    const runmeApi = createRunmeConsoleApi({
+      resolveNotebook: () => this,
+    });
+    const notebooksApi = createNotebooksApi({
+      resolveNotebook: (target?: unknown) => {
+        if (!target) {
+          return this;
+        }
+        if (typeof target === "string" && target === this.getUri()) {
+          return this;
+        }
+        if (
+          typeof target === "object" &&
+          target &&
+          "uri" in target &&
+          (target as { uri?: string }).uri === this.getUri()
+        ) {
+          return this;
+        }
+        if (
+          typeof target === "object" &&
+          target &&
+          "handle" in target &&
+          (target as { handle?: { uri?: string } }).handle?.uri === this.getUri()
+        ) {
+          return this;
+        }
+        return null;
+      },
+      listNotebooks: () => [this],
+    });
 
     let stdout = "";
     let stderr = "";
@@ -818,31 +861,70 @@ export class NotebookData {
         refId,
         runID,
         languageId,
+        mode,
       },
     });
 
-    const kernel = new JSKernel({
-      globals: createAppJsGlobals({
-        runme: createRunmeConsoleApi({
-          resolveNotebook: () => this,
-        }),
-      }),
-      hooks: {
-        onStdout: (data) => {
-          stdout += data;
-        },
-        onStderr: (data) => {
-          stderr += data;
-        },
-        onExit: (code) => {
-          finalExitCode = code;
-        },
+    const hooks = {
+      onStdout: (data: string) => {
+        stdout += data;
       },
-    });
+      onStderr: (data: string) => {
+        stderr += data;
+      },
+      onExit: (code: number) => {
+        finalExitCode = code;
+      },
+    };
 
     const runPromise =
       languageId === "javascript"
-        ? kernel.run(source)
+        ? mode === "sandbox"
+          ? new SandboxJSKernel({
+              bridge: {
+                call: async (method, args) =>
+                  this.handleSandboxAppKernelCall(
+                    method,
+                    args,
+                    runmeApi,
+                    notebooksApi,
+                  ),
+              },
+              hooks,
+            }).run(source)
+          : new JSKernel({
+              globals: createAppJsGlobals({
+                runme: runmeApi,
+                resolveNotebook: (target?: unknown) => {
+                  if (!target) {
+                    return this;
+                  }
+                  if (typeof target === "string" && target === this.getUri()) {
+                    return this;
+                  }
+                  if (
+                    typeof target === "object" &&
+                    target &&
+                    "uri" in target &&
+                    (target as { uri?: string }).uri === this.getUri()
+                  ) {
+                    return this;
+                  }
+                  if (
+                    typeof target === "object" &&
+                    target &&
+                    "handle" in target &&
+                    (target as { handle?: { uri?: string } }).handle?.uri ===
+                      this.getUri()
+                  ) {
+                    return this;
+                  }
+                  return null;
+                },
+                listNotebooks: () => [this],
+              }),
+              hooks,
+            }).run(source)
         : Promise.resolve().then(() => {
             appLogger.error("Unsupported AppKernel language", {
               attrs: {
@@ -850,6 +932,7 @@ export class NotebookData {
                 refId,
                 runID,
                 languageId,
+                mode,
               },
             });
             stderr += "AppKernel only supports javascript cells in v0.\n";
@@ -865,6 +948,7 @@ export class NotebookData {
             refId,
             runID,
             languageId,
+            mode,
             error: String(error),
           },
         });
@@ -898,12 +982,59 @@ export class NotebookData {
             refId,
             runID,
             languageId,
+            mode,
             exitCode: finalExitCode,
             stdoutBytes: stdout.length,
             stderrBytes: stderr.length,
           },
         });
       });
+  }
+
+  private async handleSandboxAppKernelCall(
+    method: string,
+    args: unknown[],
+    runmeApi: RunmeConsoleApi,
+    notebooksApi: NotebooksApi,
+  ): Promise<unknown> {
+    const target = args[0];
+    switch (method) {
+      case "runme.clear":
+        return runmeApi.clear(target);
+      case "runme.clearOutputs":
+        return runmeApi.clearOutputs(target);
+      case "runme.runAll":
+        return runmeApi.runAll(target);
+      case "runme.rerun":
+        return runmeApi.rerun(target);
+      case "runme.help":
+        return runmeApi.help();
+      case "runme.getCurrentNotebook": {
+        const notebook = runmeApi.getCurrentNotebook();
+        if (!notebook) {
+          return null;
+        }
+        return {
+          uri: notebook.getUri(),
+          name: notebook.getName(),
+          cellCount: notebook.getNotebook().cells.length,
+        };
+      }
+      case "notebooks.help":
+        return notebooksApi.help(args[0] as any);
+      case "notebooks.list":
+        return notebooksApi.list((args[0] as any) ?? undefined);
+      case "notebooks.get":
+        return notebooksApi.get((args[0] as any) ?? undefined);
+      case "notebooks.update":
+        return notebooksApi.update((args[0] as any) ?? { operations: [] });
+      case "notebooks.delete":
+        return notebooksApi.delete(args[0] as any);
+      case "notebooks.execute":
+        return notebooksApi.execute((args[0] as any) ?? { refIds: [] });
+      default:
+        throw new Error(`Unsupported sandbox AppKernel method: ${method}`);
+    }
   }
 
   private runCodeCellWithJupyterKernel(

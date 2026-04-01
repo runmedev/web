@@ -467,12 +467,22 @@ if (
 
 run("agent-browser wait 1500");
 
-run("agent-browser record stop");
+try {
+  run("agent-browser record stop");
+} catch (error) {
+  // Avoid marking the scenario failed when recording teardown times out.
+  console.warn(`[WARN] Failed to stop agent-browser recording: ${String(error)}`);
+}
 if (CUJ_ID_TOKEN) {
   run(`agent-browser eval "localStorage.removeItem('oidc-auth'); 'ok'"`);
 }
 if (!AGENT_BROWSER_KEEP_OPEN) {
-  run("agent-browser close");
+  try {
+    run("agent-browser close");
+  } catch (error) {
+    // Browser shutdown races should not mask assertion outcomes.
+    console.warn(`[WARN] Failed to close agent-browser session: ${String(error)}`);
+  }
 }
 
 console.log(`Movie: ${MOVIE_PATH}`);
