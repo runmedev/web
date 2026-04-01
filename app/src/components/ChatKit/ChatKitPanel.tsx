@@ -603,7 +603,14 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     [defaultHarness.adapter],
   );
   const codexFetch = useMemo(() => createCodexChatkitFetch(), []);
-  const responsesDirectFetch = useMemo(() => createResponsesDirectChatkitFetch(), []);
+  const responsesDirectFetch = useMemo(
+    () =>
+      createResponsesDirectChatkitFetch({
+        responsesApiBaseUrl:
+          defaultHarness.adapter === "responses-direct" ? defaultHarness.baseUrl : "",
+      }),
+    [defaultHarness.adapter, defaultHarness.baseUrl],
+  );
   const getAuthorizedChatkitState = useCallback(() => {
     if (defaultHarness.adapter !== "codex") {
       return getChatkitState();

@@ -22,43 +22,30 @@ type StoredThread = {
 
 const DEFAULT_OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const DEFAULT_MODEL = "gpt-5.2";
-const CHATKIT_DIRECT_ROUTE = "/responses/direct/chatkit";
 
-function resolveRequestUrl(input: RequestInfo | URL): URL | null {
-  const baseOrigin =
-    typeof window !== "undefined" ? window.location.origin : "http://localhost";
+function resolveResponsesApiUrl(responsesApiBaseUrl: string): string {
+  const normalized = responsesApiBaseUrl.trim().replace(/\/+$/, "");
+  if (!normalized) {
+    return DEFAULT_OPENAI_RESPONSES_URL;
+  }
   try {
-    if (input instanceof URL) {
-      return input;
+    const url = new URL(normalized);
+    if (!url.pathname || url.pathname === "/") {
+      url.pathname = "/v1/responses";
+      url.search = "";
+      url.hash = "";
     }
-    if (typeof input === "string") {
-      return new URL(input, baseOrigin);
-    }
-    if (input instanceof Request) {
-      return new URL(input.url);
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function resolveResponsesApiUrl(input: RequestInfo | URL): string {
-  const requestUrl = resolveRequestUrl(input);
-  if (!requestUrl) {
+    return url.toString();
+  } catch (error) {
+    appLogger.warn("Invalid responses-direct baseUrl override; using OpenAI default", {
+      attrs: {
+        scope: "chatkit.responses_direct",
+        baseUrl: normalized,
+        error: String(error),
+      },
+    });
     return DEFAULT_OPENAI_RESPONSES_URL;
   }
-  if (requestUrl.pathname !== CHATKIT_DIRECT_ROUTE) {
-    return DEFAULT_OPENAI_RESPONSES_URL;
-  }
-  const currentOrigin =
-    typeof window !== "undefined" ? window.location.origin : "";
-  // responses-direct uses OpenAI by default. Non-default harness origins are
-  // treated as explicit endpoint overrides (used by CUJ and local fake servers).
-  if (requestUrl.origin && requestUrl.origin !== currentOrigin) {
-    return new URL("/v1/responses", requestUrl.origin).toString();
-  }
-  return DEFAULT_OPENAI_RESPONSES_URL;
 }
 
 async function resolveBody(input: RequestInfo | URL, init?: RequestInit): Promise<BodyInit | null | undefined> {
@@ -503,7 +490,10 @@ function buildStreamResponse(
   });
 }
 
-export function createResponsesDirectChatkitFetch(): typeof fetch {
+export function createResponsesDirectChatkitFetch(options?: {
+  responsesApiBaseUrl?: string;
+}): typeof fetch {
+  const responsesApiUrl = resolveResponsesApiUrl(options?.responsesApiBaseUrl ?? "");
   const threads = new Map<string, StoredThread>();
 
   const ensureThread = (threadId?: string): StoredThread => {
@@ -717,7 +707,6 @@ export function createResponsesDirectChatkitFetch(): typeof fetch {
 
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     const { json } = await readBody(input, init);
-    const responsesApiUrl = resolveResponsesApiUrl(input);
     const requestType = asString(getPayloadRecord(json).type) ?? asString(json.type) ?? "";
     appLogger.info("Direct Responses ChatKit fetch request", {
       attrs: {

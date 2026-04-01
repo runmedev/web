@@ -132,7 +132,7 @@ describe("responsesDirectChatkitFetch", () => {
     expect(headers.get("OpenAI-Project")).toBeNull();
   });
 
-  it("uses non-default harness origin as explicit responses endpoint override", async () => {
+  it("uses explicit responses baseUrl override", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       sseResponse([
         { type: "response.created", response: { id: "resp-3" } },
@@ -140,8 +140,10 @@ describe("responsesDirectChatkitFetch", () => {
       ]),
     );
 
-    const fetchFn = createResponsesDirectChatkitFetch();
-    const response = await fetchFn("http://127.0.0.1:19989/responses/direct/chatkit", {
+    const fetchFn = createResponsesDirectChatkitFetch({
+      responsesApiBaseUrl: "http://127.0.0.1:19989",
+    });
+    const response = await fetchFn("/responses/direct/chatkit", {
       method: "POST",
       headers: {
         "content-type": "application/json",
