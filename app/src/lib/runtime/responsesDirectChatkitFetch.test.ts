@@ -201,6 +201,7 @@ describe("responsesDirectChatkitFetch", () => {
     const requestInit = fetchMock.mock.calls.at(0)?.[1];
     const requestBody = JSON.parse(String(requestInit?.body ?? "{}")) as {
       tools?: Array<Record<string, unknown>>;
+      instructions?: string;
     };
     const executeCodeTool = (requestBody.tools ?? []).find(
       (tool) =>
@@ -218,6 +219,9 @@ describe("responsesDirectChatkitFetch", () => {
       },
       required: ["code"],
     });
+    expect(requestBody.instructions).toContain("single tool: ExecuteCode");
+    expect(requestBody.instructions).toContain("help()");
+    expect(requestBody.instructions).toContain("notebooks.help");
   });
 
   it("propagates call_id and previous_response_id on tool-call items", async () => {
@@ -257,5 +261,43 @@ describe("responsesDirectChatkitFetch", () => {
     expect(body).toContain("\"type\":\"client_tool_call\"");
     expect(body).toContain("\"call_id\":\"call-1\"");
     expect(body).toContain("\"previous_response_id\":\"resp-prev\"");
+  });
+
+  it("includes code mode instructions in tool-output requests", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      sseResponse([
+        { type: "response.created", response: { id: "resp-tool-output" } },
+        { type: "response.completed", response: { id: "resp-tool-output" } },
+      ]),
+    );
+
+    const fetchFn = createResponsesDirectChatkitFetch();
+    const response = await fetchFn("/responses/direct/chatkit", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "threads.add_client_tool_output",
+        params: {
+          id: "thread-test",
+          result: {
+            call_id: "call-1",
+            previous_response_id: "resp-prev",
+            output: "ok",
+          },
+        },
+      }),
+    });
+
+    await response.text();
+    const requestInit = fetchMock.mock.calls.at(0)?.[1];
+    const requestBody = JSON.parse(String(requestInit?.body ?? "{}")) as {
+      instructions?: string;
+      input?: Array<Record<string, unknown>>;
+    };
+    expect(requestBody.instructions).toContain("single tool: ExecuteCode");
+    expect(requestBody.instructions).toContain("notebooks.update");
+    expect(requestBody.input?.[0]?.type).toBe("function_call_output");
   });
 });

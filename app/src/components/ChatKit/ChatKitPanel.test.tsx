@@ -272,6 +272,42 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(bridgeMock.connect).not.toHaveBeenCalled();
   });
 
+  it("handles ExecuteCode params with top-level code for NotebookService tool names", async () => {
+    render(<ChatKitPanel />);
+    const config = useChatKitMock.mock.calls.at(0)?.[0];
+
+    const result = await config.onClientTool({
+      name: "agent_tools_v1_NotebookService_ExecuteCode",
+      params: {
+        call_id: "call-top-level",
+        previous_response_id: "resp-1",
+        code: "console.log('ok')",
+      },
+    });
+
+    expect(result.callId).toBe("call-top-level");
+    expect(result.previousResponseId).toBe("resp-1");
+    expect(String(result.clientError ?? "")).not.toContain("Failed to decode tool params");
+    expect(String(result.clientError ?? "")).not.toContain('key "code" is unknown');
+  });
+
+  it("handles ExecuteCode params for any tool name ending in ExecuteCode", async () => {
+    render(<ChatKitPanel />);
+    const config = useChatKitMock.mock.calls.at(0)?.[0];
+
+    const result = await config.onClientTool({
+      name: "custom_namespace_ExecuteCode",
+      params: {
+        call_id: "call-suffix",
+        code: "console.log('suffix')",
+      },
+    });
+
+    expect(result.callId).toBe("call-suffix");
+    expect(String(result.clientError ?? "")).not.toContain("Failed to decode tool params");
+    expect(String(result.clientError ?? "")).not.toContain('key "code" is unknown');
+  });
+
   it("routes ChatKit to /codex/app-server/ws and connects codex bridge + proxy websocket", async () => {
     harnessState.defaultHarness.adapter = "codex";
 

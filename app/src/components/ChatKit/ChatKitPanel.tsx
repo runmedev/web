@@ -114,8 +114,10 @@ function parseExecuteCodePayload(value: unknown): {
     }
   }
   const root = asRecord(value)
-  const executeCode = asRecord(root.executeCode ?? root.execute_code)
-  if (!('code' in executeCode)) {
+  const executeCodeCandidate = root.executeCode ?? root.execute_code ?? root
+  const executeCode = asRecord(executeCodeCandidate)
+  const code = asString(executeCode.code)
+  if (!code) {
     return null
   }
   return {
@@ -123,8 +125,15 @@ function parseExecuteCodePayload(value: unknown): {
     previousResponseId: asString(
       root.previousResponseId ?? root.previous_response_id
     ),
-    code: asString(executeCode.code),
+    code,
   }
+}
+
+function isExecuteCodeToolName(name: string): boolean {
+  if (name === EXECUTE_CODE_DIRECT_TOOL || name === EXECUTE_CODE_TOOL) {
+    return true
+  }
+  return name.endsWith('ExecuteCode')
 }
 
 function buildExecuteCodeToolOutput(args: {
@@ -1113,18 +1122,9 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         clientError: '',
       })
 
-      if (invocation.name === EXECUTE_CODE_DIRECT_TOOL) {
-        const params =
-          invocation.params && typeof invocation.params === 'object'
-            ? (invocation.params as Record<string, unknown>)
-            : {}
-        const callId =
-          typeof params.call_id === 'string'
-            ? params.call_id
-            : typeof params.callId === 'string'
-              ? params.callId
-              : ''
-        if (!callId) {
+      if (isExecuteCodeToolName(invocation.name)) {
+        const executeCodePayload = parseExecuteCodePayload(invocation.params)
+        if (!executeCodePayload?.callId) {
           toolOutput.status = ToolCallOutput_Status.FAILED
           toolOutput.clientError =
             'ExecuteCode is missing call_id in tool params'
@@ -1133,60 +1133,37 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
             unknown
           >
         }
-        toolOutput.callId = callId
-        toolOutput.previousResponseId =
-          typeof params.previous_response_id === 'string'
-            ? params.previous_response_id
-            : typeof params.previousResponseId === 'string'
-              ? params.previousResponseId
-              : ''
-
-        const code = typeof params.code === 'string' ? params.code : ''
-        try {
-          const result = await codeModeExecutor.execute({
-            code,
-            source: 'chatkit',
-          })
-          return {
-            callId,
-            previousResponseId: toolOutput.previousResponseId,
-            output: result.output,
-          }
-        } catch (error) {
-          return {
-            callId,
-            previousResponseId: toolOutput.previousResponseId,
-            output: getCodeModeErrorOutput(error),
-            clientError: String(error),
-          }
-        }
-      }
-
-      if (invocation.name === EXECUTE_CODE_TOOL) {
-        const executeCodePayload = parseExecuteCodePayload(invocation.params)
-        if (!executeCodePayload) {
-          toolOutput.status = ToolCallOutput_Status.FAILED
-          toolOutput.clientError =
-            'ExecuteCode tool invoked without executeCode payload'
-          return toJson(ToolCallOutputSchema, toolOutput) as Record<
-            string,
-            unknown
-          >
-        }
+        const callId = executeCodePayload.callId
+        const previousResponseId = executeCodePayload.previousResponseId
         try {
           const result = await codeModeExecutor.execute({
             code: executeCodePayload.code,
             source: 'chatkit',
           })
+          if (invocation.name === EXECUTE_CODE_DIRECT_TOOL) {
+            return {
+              callId,
+              previousResponseId,
+              output: result.output,
+            }
+          }
           return buildExecuteCodeToolOutput({
-            callId: executeCodePayload.callId,
-            previousResponseId: executeCodePayload.previousResponseId,
+            callId,
+            previousResponseId,
             output: result.output,
           })
         } catch (error) {
+          if (invocation.name === EXECUTE_CODE_DIRECT_TOOL) {
+            return {
+              callId,
+              previousResponseId,
+              output: getCodeModeErrorOutput(error),
+              clientError: String(error),
+            }
+          }
           return buildExecuteCodeToolOutput({
-            callId: executeCodePayload.callId,
-            previousResponseId: executeCodePayload.previousResponseId,
+            callId,
+            previousResponseId,
             output: getCodeModeErrorOutput(error),
             clientError: String(error),
           })

@@ -23,6 +23,14 @@ type StoredThread = {
 const DEFAULT_OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses'
 const DEFAULT_MODEL = 'gpt-5.2'
 const EXECUTE_CODE_TOOL_NAME = 'ExecuteCode'
+const CODE_MODE_INSTRUCTIONS = [
+  'You are operating a Runme notebook through a single tool: ExecuteCode.',
+  'ExecuteCode runs JavaScript in AppKernel and exposes helpers: runme, notebooks, and help.',
+  'When you need notebook API details, call help() and notebooks.help() (or notebooks.help("update"), notebooks.help("get"), notebooks.help("execute")).',
+  'For notebook edits, inspect current state with notebooks.get(), then apply precise changes with notebooks.update({ target?, expectedRevision?, operations }).',
+  'Use notebooks.execute({ target?, refIds }) only when execution is requested.',
+  'Use console.log for concise progress/output and prefer small, deterministic code snippets.',
+].join('\n')
 
 function buildCodeModeToolDefinition(): JsonRecord {
   return {
@@ -339,6 +347,7 @@ function buildOpenAIResponsesRequestForInput(options: {
   const payload: JsonRecord = {
     model: options.model || DEFAULT_MODEL,
     stream: true,
+    instructions: CODE_MODE_INSTRUCTIONS,
     input: [
       {
         role: 'user',
@@ -372,6 +381,7 @@ function buildOpenAIResponsesRequestForToolOutput(options: {
   const payload: JsonRecord = {
     model: options.model || DEFAULT_MODEL,
     stream: true,
+    instructions: CODE_MODE_INSTRUCTIONS,
     input: [
       {
         type: 'function_call_output',
