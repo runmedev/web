@@ -95,9 +95,8 @@ Files currently implementing converter behavior:
 
 Notes:
 
-- `runme/pkg/agent/ai/chatkit/datamodel.go` is also used by `pkg/agent/codex/*` today, so converter deletion requires either:
-  - moving shared chatkit-shaped DTOs to `pkg/agent/codex` (preferred), or
-  - keeping a minimal shared package with only DTOs and no Responses converter.
+- Keep `runme/pkg/agent/ai/chatkit/datamodel.go` where it is. It is shared ChatKit datamodel/DTO code used by `pkg/agent/codex/*`.
+- This cleanup removes the server-side converter path, not the shared ChatKit datamodel types.
 
 ### 3) Cleanup dead/legacy Codex ChatKit adapter usage (optional but recommended in same cleanup)
 
