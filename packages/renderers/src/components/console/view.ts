@@ -832,8 +832,14 @@ export class ConsoleView extends LitElement {
 
   #updateTerminalTheme(): void {
     const foregroundColor = this.#getThemeHexColor(terminalCSS('foreground'))
+    const termBg = this.#getThemeHexColor(terminalCSS('background'))
+    const backgroundColor =
+      termBg && termBg.startsWith('#')
+        ? termBg
+        : this.#getThemeHexColor(vscodeCSS('editor', 'background'))
 
     const terminalTheme: ITheme = {
+      background: backgroundColor,
       foreground: foregroundColor,
       cursor:
         this.#getThemeHexColor(vscodeCSS('terminalCursor', 'foreground')) ||
