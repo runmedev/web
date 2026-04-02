@@ -220,8 +220,13 @@ describe("responsesDirectChatkitFetch", () => {
       required: ["code"],
     });
     expect(requestBody.instructions).toContain("single tool: ExecuteCode");
-    expect(requestBody.instructions).toContain("help()");
+    expect(requestBody.instructions).toContain("await help()");
     expect(requestBody.instructions).toContain("notebooks.help");
+    expect(requestBody.instructions).toContain("Always await helper calls");
+    expect(requestBody.instructions).toContain("doc.notebook.cells");
+    expect(requestBody.instructions).toContain("new TextDecoder().decode(item.data)");
+    expect(requestBody.instructions).toContain('op="insert"');
+    expect(requestBody.instructions).toContain('Do not use JSON Patch style mutations');
   });
 
   it("propagates call_id and previous_response_id on tool-call items", async () => {
@@ -465,6 +470,7 @@ describe("responsesDirectChatkitFetch", () => {
     };
     expect(requestBody.instructions).toContain("single tool: ExecuteCode");
     expect(requestBody.instructions).toContain("notebooks.update");
+    expect(requestBody.instructions).toContain("Always await helper calls");
     expect(requestBody.input?.[0]?.type).toBe("function_call_output");
   });
 });

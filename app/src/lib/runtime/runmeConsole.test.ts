@@ -423,6 +423,60 @@ describe("createNotebooksApi", () => {
     expect(afterRemove.notebook.cells.find((cell) => cell.refId === insertedRefId)).toBeUndefined();
   });
 
+  it("rejects string notebook targets with an actionable error", async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell("cell-a", "echo a")],
+    });
+    const model = new FakeNotebookData("local://one", "One", notebook);
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    });
+
+    await expect(api.get("local://one" as any)).rejects.toThrow(
+      'Use target: { uri: "local://..." } or target: { handle: { uri: "local://...", revision: "..." } }.',
+    );
+  });
+
+  it("rejects unsupported notebooks.update operations with a concrete insert example", async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell("cell-a", "echo a")],
+    });
+    const model = new FakeNotebookData("local://one", "One", notebook);
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    });
+
+    await expect(
+      api.update({
+        target: { uri: "local://one" },
+        operations: [{ op: "add", path: "/cells/-", value: {} } as any],
+      }),
+    ).rejects.toThrow(
+      'Supported ops are "insert", "update", and "remove". To append a cell, use operations: [{ op: "insert", at: { index: -1 }, cells: [{ kind: "code", languageId: "python", value: "print(\\"hello\\")" }] }].',
+    );
+  });
+
+  it("rejects non-array notebooks.update operations", async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell("cell-a", "echo a")],
+    });
+    const model = new FakeNotebookData("local://one", "One", notebook);
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    });
+
+    await expect(
+      api.update({
+        operations: { op: "insert" } as any,
+      }),
+    ).rejects.toThrow(
+      'Invalid notebooks.update operations: expected an array of notebook mutations',
+    );
+  });
+
   it("awaits asynchronous cell execution in notebooks.execute", async () => {
     const notebook = create(parser_pb.NotebookSchema, {
       cells: [codeCell("cell-a", "echo a")],

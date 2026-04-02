@@ -174,8 +174,14 @@ function makeDocument(notebook: NotebookDataLike): NotebookDocument {
 }
 
 function resolveTargetUri(target?: NotebookTarget): string | null {
-  if (!target || typeof target !== "object") {
+  if (target === undefined) {
     return null;
+  }
+  if (!target || typeof target !== "object") {
+    throw new Error(
+      `Invalid notebook target ${JSON.stringify(target)}. ` +
+        `Use target: { uri: "local://..." } or target: { handle: { uri: "local://...", revision: "..." } }.`,
+    );
   }
   if ("uri" in target && typeof target.uri === "string" && target.uri.trim() !== "") {
     return target.uri.trim();
@@ -184,11 +190,14 @@ function resolveTargetUri(target?: NotebookTarget): string | null {
     "handle" in target &&
     target.handle &&
     typeof target.handle.uri === "string" &&
-    target.handle.uri.trim() !== ""
+      target.handle.uri.trim() !== ""
   ) {
     return target.handle.uri.trim();
   }
-  return null;
+  throw new Error(
+    `Invalid notebook target ${JSON.stringify(target)}. ` +
+      `Use target: { uri: "local://..." } or target: { handle: { uri: "local://...", revision: "..." } }.`,
+  );
 }
 
 function resolveInsertIndex(
@@ -323,6 +332,19 @@ function updateCellPatch(
   notebook.updateCell(updated);
 }
 
+function formatNotebookMutationError(index: number, operation: unknown): string {
+  const op =
+    operation && typeof operation === "object" && "op" in operation
+      ? JSON.stringify((operation as { op?: unknown }).op)
+      : JSON.stringify(operation);
+  return (
+    `Unsupported notebooks.update operation at operations[${index}]: ${op}. ` +
+    `Supported ops are "insert", "update", and "remove". ` +
+    `To append a cell, use ` +
+    `operations: [{ op: "insert", at: { index: -1 }, cells: [{ kind: "code", languageId: "python", value: "print(\\"hello\\")" }] }].`
+  );
+}
+
 export function createNotebooksApi({
   resolveNotebook,
   listNotebooks,
@@ -414,7 +436,16 @@ export function createNotebooksApi({
         );
       }
 
-      for (const operation of args.operations ?? []) {
+      const operations = args.operations ?? [];
+      if (!Array.isArray(operations)) {
+        throw new Error(
+          `Invalid notebooks.update operations: expected an array of notebook mutations, got ${JSON.stringify(
+            operations,
+          )}.`,
+        );
+      }
+
+      for (const [index, operation] of operations.entries()) {
         if (operation.op === "insert") {
           insertCells(notebook, operation.at, operation.cells);
           continue;
@@ -430,7 +461,9 @@ export function createNotebooksApi({
           for (const refId of operation.refIds ?? []) {
             notebook.removeCell(refId);
           }
+          continue;
         }
+        throw new Error(formatNotebookMutationError(index, operation));
       }
 
       return makeDocument(notebook);

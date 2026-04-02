@@ -1627,13 +1627,27 @@ export class CellData {
     this.notebook.removeCell(this.refId);
   }
 
-  run(): void {
+  async run(): Promise<void> {
     const cell = this.snapshot;
-    if (!cell) return;
+    if (!cell) {
+      return;
+    }
     const runID = this.notebook.runCodeCell(cell);
     // Update the snapshot after running to pick up any metadata changes.
     this.cachedSnapshot = this.notebook.getCellSnapshot(this.refId);
     this.emitRunIDChange(runID ?? "");
+    if (!runID || this.hasRunCompleted(runID)) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const unsubscribe = this.subscribeToContentChange(() => {
+        this.cachedSnapshot = this.notebook.getCellSnapshot(this.refId);
+        if (this.hasRunCompleted(runID)) {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
   }
 
   getStreams(): StreamsLike | undefined {
@@ -1718,5 +1732,15 @@ export class CellData {
       return requested;
     }
     return DEFAULT_RUNNER_PLACEHOLDER;
+  }
+
+  private hasRunCompleted(runID: string): boolean {
+    const snap = this.notebook.getCellSnapshot(this.refId);
+    if (!snap) {
+      return true;
+    }
+    const activeRunID = snap.metadata?.[RunmeMetadataKey.LastRunID];
+    const exitCode = snap.metadata?.[RunmeMetadataKey.ExitCode];
+    return activeRunID !== runID || typeof exitCode === "string";
   }
 }

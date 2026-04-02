@@ -580,6 +580,40 @@ describe("NotebookData.runCodeCell", () => {
     expect(new TextDecoder().decode(stdoutItem!.data)).toContain("hello");
   });
 
+  it("awaits AppKernel completion from CellData.run before returning", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-await-run",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: 'console.log("awaited appkernel output");',
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "test-notebook.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+    const cellData = model.getCell(cell.refId);
+    expect(cellData).toBeTruthy();
+
+    await cellData!.run();
+
+    const updated = model.getCellSnapshot(cell.refId);
+    expect(updated?.metadata?.[RunmeMetadataKey.ExitCode]).toBe("0");
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("awaited appkernel output");
+  });
+
   it("executes javascript with AppKernel even when runner metadata is not set", async () => {
     getWithFallback.mockReturnValueOnce(undefined);
     const cell = create(parser_pb.CellSchema, {
