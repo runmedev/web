@@ -30,7 +30,7 @@ runme run build
 runme run test
 ```
 
-```sh {"terminalRows":"24"}
+```sh {"terminalRows":"31"}
 pnpm run publish-packages
 git add packages/*/package*.json
 git add packages/*/CHANGELOG.md

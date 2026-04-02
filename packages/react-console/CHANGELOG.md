@@ -1,5 +1,13 @@
 # @runmedev/react-console
 
+## 3.16.8
+
+### Patch Changes
+
+- Fix terminal background color in light theme
+- Updated dependencies
+  - @runmedev/renderers@3.16.8
+
 ## 3.16.7
 
 ### Patch Changes

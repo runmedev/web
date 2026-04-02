@@ -1,5 +1,11 @@
 # @runmedev/renderers
 
+## 3.16.8
+
+### Patch Changes
+
+- Fix terminal background color in light theme
+
 ## 3.16.7
 
 ### Patch Changes
