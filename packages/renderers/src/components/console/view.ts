@@ -868,8 +868,9 @@ export class ConsoleView extends LitElement {
   #getThemeHexColor(variableName: string): string | undefined {
     const terminalContainer = this.shadowRoot?.querySelector('#terminal')
     return (
-      getComputedStyle(terminalContainer!).getPropertyValue(variableName) ??
-      undefined
+      getComputedStyle(terminalContainer!)
+        .getPropertyValue(variableName)
+        ?.trim() || undefined
     )
   }
 
