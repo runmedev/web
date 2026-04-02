@@ -1,4 +1,5 @@
 import { appLogger } from "../logging/runtime";
+import { SANDBOX_NOTEBOOKS_API_METHODS } from "./notebooksApiBridge";
 
 type KernelHooks = {
   onStdout?: (data: string) => void;
@@ -89,14 +90,16 @@ const SANDBOX_SRC_DOC = `<!doctype html>
           help: () => hostCall("runme.help", []),
         };
 
-        const notebooks = {
-          help: (topic) => hostCall("notebooks.help", [topic]),
-          list: (query) => hostCall("notebooks.list", [query]),
-          get: (target) => hostCall("notebooks.get", [target]),
-          update: (args) => hostCall("notebooks.update", [args]),
-          delete: (target) => hostCall("notebooks.delete", [target]),
-          execute: (args) => hostCall("notebooks.execute", [args]),
-        };
+        const createSandboxNotebooksApiClient = (callHost) => ({
+          help: (topic) => callHost("notebooks.help", [topic]),
+          list: (query) => callHost("notebooks.list", [query]),
+          get: (target) => callHost("notebooks.get", [target]),
+          update: (args) => callHost("notebooks.update", [args]),
+          delete: (target) => callHost("notebooks.delete", [target]),
+          execute: (args) => callHost("notebooks.execute", [args]),
+        });
+
+        const notebooks = createSandboxNotebooksApiClient(hostCall);
 
         const help = () => {
           consoleProxy.log("Sandbox JS helpers:");
@@ -199,12 +202,7 @@ export class SandboxJSKernel {
       "runme.rerun",
       "runme.getCurrentNotebook",
       "runme.help",
-      "notebooks.help",
-      "notebooks.list",
-      "notebooks.get",
-      "notebooks.update",
-      "notebooks.delete",
-      "notebooks.execute",
+      ...SANDBOX_NOTEBOOKS_API_METHODS,
     ],
   }: {
     bridge: SandboxBridge;

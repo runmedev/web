@@ -736,6 +736,111 @@ describe("NotebookData.runCodeCell", () => {
     expect(stdoutText).toContain("1");
   });
 
+  it("exposes notebooks.list across open notebooks inside browser appkernel javascript cells", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-notebooks-list-browser",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        "const list = await notebooks.list();",
+        "console.log(JSON.stringify(list.map((item) => item.name).sort()));",
+        "console.log(list.length);",
+      ].join("\n"),
+    });
+    const primaryNotebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const secondaryNotebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: "cell-secondary",
+          kind: parser_pb.CellKind.CODE,
+          languageId: "javascript",
+          outputs: [],
+          metadata: {},
+          value: "console.log('secondary')",
+        }),
+      ],
+    });
+
+    const byUri = new Map<string, InstanceType<typeof NotebookData>>();
+    let primaryModel: InstanceType<typeof NotebookData> | null = null;
+    const resolveTargetUri = (target?: unknown): string | null => {
+      if (typeof target === "string" && target.trim() !== "") {
+        return target.trim();
+      }
+      if (
+        typeof target === "object" &&
+        target &&
+        "uri" in target &&
+        typeof (target as { uri?: unknown }).uri === "string" &&
+        (target as { uri: string }).uri.trim() !== ""
+      ) {
+        return (target as { uri: string }).uri.trim();
+      }
+      if (
+        typeof target === "object" &&
+        target &&
+        "handle" in target &&
+        typeof (target as { handle?: { uri?: unknown } }).handle?.uri ===
+          "string" &&
+        (
+          target as { handle: { uri: string } }
+        ).handle.uri.trim() !== ""
+      ) {
+        return (target as { handle: { uri: string } }).handle.uri.trim();
+      }
+      return null;
+    };
+    const resolveNotebook = (target?: unknown) => {
+      const targetUri = resolveTargetUri(target);
+      if (!targetUri) {
+        return primaryModel;
+      }
+      return byUri.get(targetUri) ?? null;
+    };
+    const listNotebooks = () => Array.from(byUri.values());
+
+    primaryModel = new NotebookData({
+      notebook: primaryNotebook,
+      uri: "nb://primary",
+      name: "primary-notebooks-list.runme.md",
+      notebookStore: null,
+      loaded: true,
+      resolveNotebookForAppKernel: resolveNotebook,
+      listNotebooksForAppKernel: listNotebooks,
+    });
+    const secondaryModel = new NotebookData({
+      notebook: secondaryNotebook,
+      uri: "nb://secondary",
+      name: "secondary-notebooks-list.runme.md",
+      notebookStore: null,
+      loaded: true,
+      resolveNotebookForAppKernel: resolveNotebook,
+      listNotebooksForAppKernel: listNotebooks,
+    });
+    byUri.set(primaryModel.getUri(), primaryModel);
+    byUri.set(secondaryModel.getUri(), secondaryModel);
+
+    primaryModel.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = primaryModel?.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = primaryModel.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("primary-notebooks-list.runme.md");
+    expect(stdoutText).toContain("secondary-notebooks-list.runme.md");
+    expect(stdoutText).toContain("2");
+  });
+
   it("exposes drive and google helper namespaces in appkernel cells", async () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-appkernel-drive-helpers",

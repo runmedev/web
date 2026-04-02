@@ -382,13 +382,15 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   } | null>(null)
   const lastAppliedCodexThreadRef = useRef<string | null>(null)
   const { getChatkitState } = useCell()
-  const { getNotebookData, useNotebookSnapshot } = useNotebookContext()
+  const { getNotebookData, useNotebookSnapshot, useNotebookList } =
+    useNotebookContext()
   const { getCurrentDoc } = useCurrentDoc()
   const { getAllRenderers } = useOutput()
   const codexProjects = useCodexProjects()
   const { defaultProject } = codexProjects
   const codexConversation = useCodexConversationSnapshot()
   const currentDocUri = getCurrentDoc()
+  const openNotebookList = useNotebookList()
   const notebookSnapshot = useNotebookSnapshot(currentDocUri ?? '')
   const orderedCells = useMemo(
     () => notebookSnapshot?.notebook.cells ?? [],
@@ -466,11 +468,27 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         mode: 'sandbox',
         resolveNotebook: resolveCodeModeNotebook,
         listNotebooks: () => {
-          const current = resolveCodeModeNotebook()
-          return current ? [current] : []
+          const uris = new Set<string>()
+          for (const notebook of openNotebookList) {
+            if (typeof notebook?.uri === 'string' && notebook.uri.trim()) {
+              uris.add(notebook.uri)
+            }
+          }
+          if (currentDocUri) {
+            uris.add(currentDocUri)
+          }
+          return Array.from(uris)
+            .map((uri) => resolveCodeModeNotebook(uri))
+            .filter(
+              (
+                notebook
+              ): notebook is NonNullable<
+                ReturnType<typeof resolveCodeModeNotebook>
+              > => Boolean(notebook)
+            )
         },
       }),
-    [resolveCodeModeNotebook]
+    [currentDocUri, openNotebookList, resolveCodeModeNotebook]
   )
 
   const waitForCellExecutionToComplete = useCallback(

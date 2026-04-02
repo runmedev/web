@@ -13,6 +13,7 @@ import {
 import { create } from "@bufbuild/protobuf";
 import { NotebookData, type NotebookSnapshot } from "../lib/notebookData";
 import { parser_pb } from "./CellContext";
+import { type NotebookDataLike } from "../lib/runtime/runmeConsole";
 import { useNotebookStore } from "./NotebookStoreContext";
 import { useContentsStore } from "./ContentsStoreContext";
 import { useFilesystemStore } from "./FilesystemStoreContext";
@@ -184,6 +185,33 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
           cells: [],
           metadata: {},
         });
+      const resolveTargetUri = (target?: unknown): string | null => {
+        if (typeof target === "string" && target.trim() !== "") {
+          return target.trim();
+        }
+        if (
+          typeof target === "object" &&
+          target &&
+          "uri" in target &&
+          typeof (target as { uri?: unknown }).uri === "string" &&
+          (target as { uri: string }).uri.trim() !== ""
+        ) {
+          return (target as { uri: string }).uri.trim();
+        }
+        if (
+          typeof target === "object" &&
+          target &&
+          "handle" in target &&
+          typeof (target as { handle?: { uri?: unknown } }).handle?.uri ===
+            "string" &&
+          (
+            target as { handle: { uri: string } }
+          ).handle.uri.trim() !== ""
+        ) {
+          return (target as { handle: { uri: string } }).handle.uri.trim();
+        }
+        return null;
+      };
       const effectiveStore = resolveStore(
         uri,
         notebookStore,
@@ -196,6 +224,41 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
         notebook: initialNotebook,
         notebookStore: effectiveStore ?? null,
         loaded,
+        resolveNotebookForAppKernel: (target?: unknown) => {
+          const targetUri = resolveTargetUri(target)
+          if (!targetUri) {
+            return storeRef.current.get(uri)?.data ?? null
+          }
+          return storeRef.current.get(targetUri)?.data ?? null
+        },
+        listNotebooksForAppKernel: () => {
+          const notebooksByUri = new Map<string, NotebookDataLike>()
+          for (const entry of storeRef.current.values()) {
+            notebooksByUri.set(entry.data.getUri(), entry.data)
+          }
+          for (const item of listCacheRef.current) {
+            if (!item?.uri || notebooksByUri.has(item.uri)) {
+              continue
+            }
+            const emptyNotebook = create(parser_pb.NotebookSchema, {
+              cells: [],
+              metadata: {},
+            })
+            const placeholder = {
+              getUri: () => item.uri,
+              getName: () => item.name ?? item.uri,
+              getNotebook: () => emptyNotebook,
+              updateCell: () => {},
+              getCell: () => null,
+            } satisfies NotebookDataLike
+            notebooksByUri.set(item.uri, placeholder)
+          }
+          const current = storeRef.current.get(uri)?.data
+          if (current && !notebooksByUri.has(current.getUri())) {
+            notebooksByUri.set(current.getUri(), current)
+          }
+          return Array.from(notebooksByUri.values())
+        },
       });
       const unsubscribe = data.subscribe(() => emit());
       storeRef.current.set(uri, { data, unsubscribe, loaded });
@@ -243,7 +306,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
   // On first availability of notebookStore, restore placeholders for any
   // notebooks persisted in localStorage so subscribers can attach immediately.
   useEffect(() => {
-    if (hasRestoredNotebooks.current || !notebookStore) {
+    if (hasRestoredNotebooks.current) {
       return;
     }
     const stored = loadStoredOpenNotebooks();
@@ -264,7 +327,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     });
     //setOpenNotebooks(stored);
     hasRestoredNotebooks.current = true;
-  }, [ensureNotebook, notebookStore]);
+  }, [ensureNotebook, notebookStore, contentsStore, fsStore]);
 
   const useNotebookList = useCallback(() => {
     return openNotebooks;

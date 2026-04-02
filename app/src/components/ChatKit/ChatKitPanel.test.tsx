@@ -103,6 +103,7 @@ vi.mock("../../contexts/NotebookContext", () => ({
   useNotebookContext: () => ({
     getNotebookData: () => undefined,
     useNotebookSnapshot: () => ({ notebook: { cells: [] } }),
+    useNotebookList: () => [],
   }),
 }));
 

@@ -3,9 +3,13 @@ import { createAppJsGlobals } from './appJsGlobals'
 import { JSKernel } from './jsKernel'
 import {
   type NotebookDataLike,
-  createNotebooksApi,
   createRunmeConsoleApi,
 } from './runmeConsole'
+import {
+  type NotebooksApiBridgeServer,
+  createHostNotebooksApi,
+  createNotebooksApiBridgeServer,
+} from './notebooksApiBridge'
 import { SandboxJSKernel } from './sandboxJsKernel'
 
 export type CodeModeSource = 'chatkit' | 'codex'
@@ -91,9 +95,11 @@ export function createCodeModeExecutor(options: {
       const runmeApi = createRunmeConsoleApi({
         resolveNotebook,
       })
-      const notebooksApi = createNotebooksApi({
-        resolveNotebook,
-        listNotebooks,
+      const notebooksApiBridgeServer = createNotebooksApiBridgeServer({
+        notebooksApi: createHostNotebooksApi({
+          resolveNotebook,
+          listNotebooks,
+        }),
       })
 
       const chunks: string[] = []
@@ -135,52 +141,13 @@ export function createCodeModeExecutor(options: {
                 onStderr: appendOutput,
               },
               bridge: {
-                call: async (method, args) => {
-                  const target = args[0]
-                  switch (method) {
-                    case 'runme.clear':
-                      return runmeApi.clear(target)
-                    case 'runme.clearOutputs':
-                      return runmeApi.clearOutputs(target)
-                    case 'runme.runAll':
-                      return runmeApi.runAll(target)
-                    case 'runme.rerun':
-                      return runmeApi.rerun(target)
-                    case 'runme.help':
-                      return runmeApi.help()
-                    case 'runme.getCurrentNotebook': {
-                      const notebook = runmeApi.getCurrentNotebook()
-                      if (!notebook) {
-                        return null
-                      }
-                      return {
-                        uri: notebook.getUri(),
-                        name: notebook.getName(),
-                        cellCount: notebook.getNotebook().cells.length,
-                      }
-                    }
-                    case 'notebooks.help':
-                      return notebooksApi.help(args[0] as any)
-                    case 'notebooks.list':
-                      return notebooksApi.list((args[0] as any) ?? undefined)
-                    case 'notebooks.get':
-                      return notebooksApi.get((args[0] as any) ?? undefined)
-                    case 'notebooks.update':
-                      return notebooksApi.update(
-                        (args[0] as any) ?? { operations: [] }
-                      )
-                    case 'notebooks.delete':
-                      return notebooksApi.delete(args[0] as any)
-                    case 'notebooks.execute':
-                      return notebooksApi.execute(
-                        (args[0] as any) ?? { refIds: [] }
-                      )
-                    default:
-                      throw new Error(
-                        `Unsupported sandbox AppKernel method: ${method}`
-                      )
-                  }
-                },
+                call: (method, args) =>
+                  handleSandboxAppKernelBridgeCall({
+                    method,
+                    args,
+                    runmeApi,
+                    notebooksApiBridgeServer,
+                  }),
               },
             }).run(normalizedCode)
           : new JSKernel({
@@ -239,5 +206,50 @@ export function createCodeModeExecutor(options: {
         output,
       }
     },
+  }
+}
+
+async function handleSandboxAppKernelBridgeCall({
+  method,
+  args,
+  runmeApi,
+  notebooksApiBridgeServer,
+}: {
+  method: string
+  args: unknown[]
+  runmeApi: ReturnType<typeof createRunmeConsoleApi>
+  notebooksApiBridgeServer: NotebooksApiBridgeServer
+}): Promise<unknown> {
+  const target = args[0]
+  switch (method) {
+    case 'runme.clear':
+      return runmeApi.clear(target)
+    case 'runme.clearOutputs':
+      return runmeApi.clearOutputs(target)
+    case 'runme.runAll':
+      return runmeApi.runAll(target)
+    case 'runme.rerun':
+      return runmeApi.rerun(target)
+    case 'runme.help':
+      return runmeApi.help()
+    case 'runme.getCurrentNotebook': {
+      const notebook = runmeApi.getCurrentNotebook()
+      if (!notebook) {
+        return null
+      }
+      return {
+        uri: notebook.getUri(),
+        name: notebook.getName(),
+        cellCount: notebook.getNotebook().cells.length,
+      }
+    }
+    default:
+      if (method.startsWith('notebooks.')) {
+        return notebooksApiBridgeServer.handleMessage({
+          method,
+          args,
+        })
+      }
+      throw new Error(`Unsupported sandbox AppKernel method: ${method}`)
   }
 }
