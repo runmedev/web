@@ -220,6 +220,18 @@ describe("responsesDirectChatkitFetch", () => {
       required: ["code"],
     });
     expect(requestBody.instructions).toContain("single tool: ExecuteCode");
+    expect(requestBody.instructions).toContain("embedded in the Runme app ChatKit panel");
+    expect(requestBody.instructions).toContain("agent harnesses");
+    expect(requestBody.instructions).toContain(
+      "https://drive.google.com/drive/folders/1Qdg_VA4ZBlOKojJqW2CqSVuJ2p2I4yS5",
+    );
+    expect(requestBody.instructions).toContain("console.log(explorer.mountDrive(");
+    expect(requestBody.instructions).toContain("call notebooks.get({ handle: result.handle }) to verify the new cell exists");
+    expect(requestBody.instructions).toContain('report the new cell refId');
+    expect(requestBody.instructions).toContain(
+      "tell the user to click Run on that cell manually",
+    );
+    expect(requestBody.instructions).toContain('"runme.dev/runnerName": "appkernel-js"');
     expect(requestBody.instructions).toContain("await help()");
     expect(requestBody.instructions).toContain("notebooks.help");
     expect(requestBody.instructions).toContain("Always await helper calls");
