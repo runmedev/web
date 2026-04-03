@@ -173,7 +173,14 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
   const ensureNotebook = useCallback(
     ({ uri, name, notebook, loaded = false }: EnsureNotebookArgs) => {
       const existing = storeRef.current.get(uri);
+      const effectiveStore = resolveStore(
+        uri,
+        notebookStore,
+        fsStore,
+        contentsStore,
+      );
       if (existing) {
+        existing.data.setNotebookStore(effectiveStore ?? null);
         return existing.data;
       }
       const resolvedName =
@@ -212,12 +219,6 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
         }
         return null;
       };
-      const effectiveStore = resolveStore(
-        uri,
-        notebookStore,
-        fsStore,
-        contentsStore,
-      );
       const data = new NotebookData({
         uri,
         name: resolvedName,
@@ -416,6 +417,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
         if (!store) {
           continue;
         }
+        entry.data.setNotebookStore(store);
         try {
           const metadata = await store.getMetadata(item.uri);
           if (!metadata || metadata.type !== NotebookStoreItemType.File) {

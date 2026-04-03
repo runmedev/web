@@ -659,6 +659,13 @@ export class NotebookData {
     this.schedulePersist();
   }
 
+  setNotebookStore(notebookStore: NotebookSaveStore | null): void {
+    if (!notebookStore || this.notebookStore) {
+      return;
+    }
+    this.notebookStore = notebookStore;
+  }
+
   // Returns the runID if the cell was started successfully.
   // empty string otherwise
   runCodeCell(cell: parser_pb.Cell): string {

@@ -517,6 +517,36 @@ describe("NotebookData cell defaults", () => {
   });
 });
 
+describe("NotebookData persistence", () => {
+  it("adopts a notebook store after construction and persists later edits", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const notebook = create(parser_pb.NotebookSchema, { cells: [] });
+    const model = new NotebookData({
+      notebook,
+      uri: "local://file/restored-before-store.md",
+      name: "restored-before-store.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.setNotebookStore({ save });
+    model.appendCodeCell("javascript");
+
+    await waitForCondition(() => save.mock.calls.length > 0, 1500);
+
+    expect(save).toHaveBeenCalledWith(
+      "local://file/restored-before-store.md",
+      expect.objectContaining({
+        cells: expect.arrayContaining([
+          expect.objectContaining({
+            languageId: "javascript",
+          }),
+        ]),
+      }),
+    );
+  });
+});
+
 describe("NotebookData.runCodeCell", () => {
   it("returns empty run id when no runner is available", () => {
     getWithFallback.mockReturnValueOnce(undefined);
