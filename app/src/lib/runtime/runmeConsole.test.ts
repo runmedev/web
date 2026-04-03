@@ -359,6 +359,28 @@ describe("createNotebooksApi", () => {
     expect(document.notebook.cells[0]?.refId).toBe("cell-a");
   });
 
+  it("uses the current notebook when notebooks.get omits target", async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell("cell-a", "echo a")],
+    });
+    const current = new FakeNotebookData("local://current", "Current", notebook);
+    const resolveNotebook = vi.fn((target?: unknown) => {
+      if (target === undefined) {
+        return current;
+      }
+      return null;
+    });
+    const api = createNotebooksApi({
+      resolveNotebook,
+      listNotebooks: () => [current],
+    });
+
+    const document = await api.get();
+
+    expect(document.handle.uri).toBe("local://current");
+    expect(resolveNotebook).toHaveBeenCalledWith();
+  });
+
   it("lists notebooks with query filters", async () => {
     const a = new FakeNotebookData(
       "local://one",
@@ -391,6 +413,7 @@ describe("createNotebooksApi", () => {
     });
 
     const updated = await api.update({
+      target: { uri: "local://one" },
       operations: [
         {
           op: "insert",
@@ -406,6 +429,7 @@ describe("createNotebooksApi", () => {
         ?.refId ?? "";
 
     const afterPatch = await api.update({
+      target: { handle: updated.handle },
       operations: [
         {
           op: "update",
@@ -418,9 +442,29 @@ describe("createNotebooksApi", () => {
     expect(inserted?.value).toContain("updated");
 
     const afterRemove = await api.update({
+      target: { handle: afterPatch.handle },
       operations: [{ op: "remove", refIds: [insertedRefId] }],
     });
     expect(afterRemove.notebook.cells.find((cell) => cell.refId === insertedRefId)).toBeUndefined();
+  });
+
+  it("rejects notebooks.update without an explicit target", async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell("cell-a", "echo a")],
+    });
+    const model = new FakeNotebookData("local://one", "One", notebook);
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    });
+
+    await expect(
+      api.update({
+        operations: [{ op: "remove", refIds: ["cell-a"] }],
+      }),
+    ).rejects.toThrow(
+      "notebooks.update requires an explicit target notebook.",
+    );
   });
 
   it("rejects string notebook targets with an actionable error", async () => {
@@ -470,6 +514,7 @@ describe("createNotebooksApi", () => {
 
     await expect(
       api.update({
+        target: { uri: "local://one" },
         operations: { op: "insert" } as any,
       }),
     ).rejects.toThrow(
@@ -501,9 +546,31 @@ describe("createNotebooksApi", () => {
       listNotebooks: () => [model],
     });
 
-    await api.execute({ refIds: ["cell-a"] });
+    await api.execute({
+      target: { uri: "local://one" },
+      refIds: ["cell-a"],
+    });
 
     expect(completed).toBe(true);
     expect(runner.calls).toBe(1);
+  });
+
+  it("rejects notebooks.execute without an explicit target", async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell("cell-a", "echo a")],
+    });
+    const model = new FakeNotebookData("local://one", "One", notebook);
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    });
+
+    await expect(
+      api.execute({
+        refIds: ["cell-a"],
+      }),
+    ).rejects.toThrow(
+      "notebooks.execute requires an explicit target notebook.",
+    );
   });
 });

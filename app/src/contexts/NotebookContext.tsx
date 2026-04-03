@@ -380,6 +380,20 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     persistOpenNotebooks(openNotebooks);
   }, [openNotebooks]);
 
+  // If notebooks are open but no current document is selected, promote the first
+  // open notebook to be the active document so notebook helpers can resolve the
+  // UI's visible notebook by default.
+  useEffect(() => {
+    if (getCurrentDoc() || openNotebooks.length === 0) {
+      return;
+    }
+    const fallbackUri = openNotebooks[0]?.uri?.trim();
+    if (!fallbackUri) {
+      return;
+    }
+    setCurrentDoc(fallbackUri);
+  }, [getCurrentDoc, openNotebooks, setCurrentDoc]);
+
   // Load any notebooks that were open last session once a store is available.
   useEffect(() => {
     if (!notebookStore && !contentsStore) {

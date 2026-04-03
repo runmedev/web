@@ -200,6 +200,27 @@ function resolveTargetUri(target?: NotebookTarget): string | null {
   );
 }
 
+function formatMissingTargetError(method: "update" | "delete" | "execute"): string {
+  if (method === "update") {
+    return (
+      "notebooks.update requires an explicit target notebook. " +
+      "Pass target: { handle: doc.handle } after const doc = await notebooks.get(), " +
+      'or target: { uri: "local://..." }.'
+    );
+  }
+  if (method === "execute") {
+    return (
+      "notebooks.execute requires an explicit target notebook. " +
+      "Pass target: { handle: doc.handle } after const doc = await notebooks.get(), " +
+      'or target: { uri: "local://..." }.'
+    );
+  }
+  return (
+    "notebooks.delete requires an explicit target notebook. " +
+    'Pass target: { uri: "local://..." } or target: { handle: { uri: "local://...", revision: "..." } }.'
+  );
+}
+
 function resolveInsertIndex(
   notebook: NotebookDataLike,
   at: CellLocation,
@@ -361,6 +382,16 @@ export function createNotebooksApi({
     return resolved;
   };
 
+  const resolveNotebookByRequiredTarget = (
+    method: "update" | "delete" | "execute",
+    target?: NotebookTarget,
+  ): NotebookDataLike => {
+    if (target === undefined) {
+      throw new Error(formatMissingTargetError(method));
+    }
+    return resolveNotebookByTarget(target);
+  };
+
   const listKnownNotebooks = (): NotebookDataLike[] => {
     const listed = listNotebooks?.() ?? [];
     if (listed.length > 0) {
@@ -375,24 +406,24 @@ export function createNotebooksApi({
       return "notebooks.list(query?: { openOnly?: boolean; uriPrefix?: string; nameContains?: string; limit?: number }): Promise<NotebookSummary[]>";
     }
     if (topic === "get") {
-      return "notebooks.get(target?: { uri } | { handle: { uri, revision } }): Promise<NotebookDocument>";
+      return "notebooks.get(target?: { uri } | { handle: { uri, revision } }): Promise<NotebookDocument>. When target is omitted, returns the current notebook selected in the UI.";
     }
     if (topic === "update") {
-      return "notebooks.update({ target?, expectedRevision?, operations: NotebookMutation[] }): Promise<NotebookDocument>";
+      return "notebooks.update({ target, expectedRevision?, operations: NotebookMutation[] }): Promise<NotebookDocument>. target is required.";
     }
     if (topic === "delete") {
-      return "notebooks.delete(target): Promise<void>";
+      return "notebooks.delete(target): Promise<void>. target is required.";
     }
     if (topic === "execute") {
-      return "notebooks.execute({ target?, refIds: string[] }): Promise<{ handle, cells }>";
+      return "notebooks.execute({ target, refIds: string[] }): Promise<{ handle, cells }>. target is required.";
     }
     return [
       "Notebook SDK methods:",
       "- notebooks.list(query?)",
-      "- notebooks.get(target?)",
-      "- notebooks.update({ target?, expectedRevision?, operations })",
+      "- notebooks.get(target?)              # omitted target = current UI notebook",
+      "- notebooks.update({ target, expectedRevision?, operations })",
       "- notebooks.delete(target)",
-      "- notebooks.execute({ target?, refIds })",
+      "- notebooks.execute({ target, refIds })",
       "- notebooks.help(topic?)",
     ].join("\n");
   };
@@ -424,7 +455,7 @@ export function createNotebooksApi({
       return makeDocument(notebook);
     },
     update: async (args) => {
-      const notebook = resolveNotebookByTarget(args.target);
+      const notebook = resolveNotebookByRequiredTarget("update", args.target);
       const beforeHandle = makeHandle(notebook);
       if (
         args.expectedRevision &&
@@ -469,10 +500,11 @@ export function createNotebooksApi({
       return makeDocument(notebook);
     },
     delete: async (_target: NotebookTarget) => {
+      resolveNotebookByRequiredTarget("delete", _target);
       throw new Error("notebooks.delete is not supported in v0 runtime.");
     },
     execute: async (args) => {
-      const notebook = resolveNotebookByTarget(args.target);
+      const notebook = resolveNotebookByRequiredTarget("execute", args.target);
       const executedCells: parser_pb.Cell[] = [];
       for (const refId of args.refIds ?? []) {
         const cellRunner = notebook.getCell(refId);

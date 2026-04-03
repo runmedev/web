@@ -191,8 +191,11 @@ Design notes:
   (`beforeRefId`/`afterRefId`).
 - SDK owns enum/string normalization so model code does not manually encode
   protobuf details like `CellKind`.
-- When `target` is omitted, calls resolve to a session-pinned default notebook
-  selected at run start (not the live currently selected UI tab).
+- When `target` is omitted on `notebooks.get()`, the call resolves to the
+  notebook that is currently active in the UI at execution time. This is
+  syntactic sugar for the common "inspect the active notebook" case.
+- `notebooks.update(...)`, `notebooks.execute(...)`, and `notebooks.delete(...)`
+  require an explicit `target` so writes and execution remain unambiguous.
 
 ### Layer 1b: Example Snippets
 
@@ -203,7 +206,7 @@ console.log(await notebooks.help("update")); // update(...) signature + examples
 ```
 
 ```ts
-// 1) Get the current (session-pinned) notebook and its contents
+// 1) Get the current notebook selected in the UI and its contents
 const current = await notebooks.get();
 console.log(current.handle.uri, current.handle.revision);
 console.log(current.notebook);
@@ -387,7 +390,8 @@ To fix "wrong notebook updated":
 - Host rejects writes to notebooks outside the session allowlist.
 - Host rejects stale writes when revision no longer matches.
 
-No write operation can implicitly target "current notebook".
+No write or execute operation can implicitly target "current notebook"; only
+`notebooks.get()` supports the omitted-target shorthand.
 
 ## Storage and IndexedDB
 
@@ -572,7 +576,8 @@ Current:
 Planned:
 
 - `HostNotebooksApi.list/get` target resolution uses `NotebookContext` data (or an
-  extracted registry service) so targeting is explicit and tab-safe.
+  extracted registry service). `get()` without a target returns the active UI
+  notebook; all write/execute methods require an explicit target handle or URI.
 - This directly addresses wrong-notebook writes from implicit "current tab"
   behavior.
 

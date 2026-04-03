@@ -111,9 +111,9 @@ const SANDBOX_SRC_DOC = `<!doctype html>
           consoleProxy.log("- runme.help()");
           consoleProxy.log("- notebooks.help([topic])");
           consoleProxy.log("- notebooks.list([query])");
-          consoleProxy.log("- notebooks.get([target])");
-          consoleProxy.log("- notebooks.update({ target?, expectedRevision?, operations })");
-          consoleProxy.log("- notebooks.execute({ target?, refIds })");
+          consoleProxy.log("- notebooks.get([target]) # omitted target = current UI notebook");
+          consoleProxy.log("- notebooks.update({ target, expectedRevision?, operations })");
+          consoleProxy.log("- notebooks.execute({ target, refIds })");
           consoleProxy.log("- help()");
         };
 
