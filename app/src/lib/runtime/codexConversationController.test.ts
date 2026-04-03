@@ -473,6 +473,72 @@ describe("CodexConversationController", () => {
     expect(controller.getSnapshot().currentTurnId).toBeNull();
   });
 
+  it("ignores a stale ChatKit thread id when the controller already has a current thread", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "thread/start") {
+        return { threadId: "thread-fresh", title: "Runme Repo" };
+      }
+      if (method === "turn/start") {
+        expect(params).toEqual(
+          expect.objectContaining({
+            threadId: "thread-fresh",
+          }),
+        );
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "turn.message.started",
+              params: {
+                threadId: "thread-fresh",
+                turnId: "turn-1",
+                responseId: "resp-1",
+                itemId: "msg-1",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn.output_text.done",
+              params: {
+                threadId: "thread-fresh",
+                turnId: "turn-1",
+                responseId: "resp-1",
+                itemId: "msg-1",
+                text: "done",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn.completed",
+              params: {
+                threadId: "thread-fresh",
+                turnId: "turn-1",
+              },
+            });
+          });
+        });
+        return { turnId: "turn-1", itemId: "msg-1" };
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: any[] = [];
+    const nextState = await controller.streamUserMessage(
+      "hello",
+      { threadId: "thread-stale", previousResponseId: "resp-stale" },
+      {
+        emit: (payload) => events.push(payload),
+      },
+    );
+
+    expect(nextState).toEqual({
+      threadId: "thread-fresh",
+      previousResponseId: "resp-1",
+    });
+    expect(controller.getSnapshot().currentThreadId).toBe("thread-fresh");
+  });
+
   it("maps item-based codex notifications into ChatKit-compatible events", async () => {
     proxyClient.sendRequest.mockImplementation(async (method: string) => {
       if (method === "thread/start") {

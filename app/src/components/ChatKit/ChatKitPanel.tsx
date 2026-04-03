@@ -890,6 +890,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       return
     }
     setCodexThreadBootstrapComplete(false)
+    setCodexStreamError(null)
     proxy.setAuthorizationResolver(resolveCodexAuthorization)
     let canceled = false
     void (async () => {
@@ -913,6 +914,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
             threadId: thread.id,
             previousResponseId: thread.previousResponseId ?? null,
           }
+          setCodexStreamError(null)
           setCodexThreadBootstrapComplete(true)
         }
       } catch (error) {

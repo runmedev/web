@@ -610,9 +610,20 @@ class CodexConversationController {
     const proxy = getCodexAppServerProxyClient();
     const project = this.getSnapshot().selectedProject;
     const activeThread = await this.ensureActiveThread();
-    let threadId = chatkitState.threadId ?? this.currentThreadId ?? activeThread.id;
+    let threadId = this.currentThreadId ?? activeThread.id;
     if (!threadId) {
       throw new Error("No active Codex thread available before turn/start");
+    }
+    if (chatkitState.threadId && chatkitState.threadId !== threadId) {
+      appLogger.info("Ignoring stale Codex ChatKit thread id", {
+        attrs: {
+          scope: "chatkit.codex_controller",
+          chatkitStateThreadId: chatkitState.threadId,
+          currentThreadId: this.currentThreadId,
+          activeThreadId: activeThread.id,
+          selectedThreadId: threadId,
+        },
+      });
     }
 
     if (this.resumeRequired.has(threadId)) {
