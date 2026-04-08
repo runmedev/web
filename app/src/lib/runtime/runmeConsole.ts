@@ -4,7 +4,7 @@ import md5 from "md5";
 import { RunmeMetadataKey, parser_pb } from "../../runme/client";
 
 type CellRunnerLike = {
-  run: () => void;
+  run: () => void | Promise<void>;
   getRunID: () => string;
 };
 
@@ -121,6 +121,15 @@ export type RunmeConsoleApi = {
   help: () => string;
 };
 
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "then" in value &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
+}
+
 function inferNotebookSource(uri: string): NotebookSummary["source"] {
   const normalized = (uri ?? "").toLowerCase();
   if (normalized.startsWith("local://")) {
@@ -165,8 +174,14 @@ function makeDocument(notebook: NotebookDataLike): NotebookDocument {
 }
 
 function resolveTargetUri(target?: NotebookTarget): string | null {
-  if (!target || typeof target !== "object") {
+  if (target === undefined) {
     return null;
+  }
+  if (!target || typeof target !== "object") {
+    throw new Error(
+      `Invalid notebook target ${JSON.stringify(target)}. ` +
+        `Use target: { uri: "local://..." } or target: { handle: { uri: "local://...", revision: "..." } }.`,
+    );
   }
   if ("uri" in target && typeof target.uri === "string" && target.uri.trim() !== "") {
     return target.uri.trim();
@@ -175,11 +190,35 @@ function resolveTargetUri(target?: NotebookTarget): string | null {
     "handle" in target &&
     target.handle &&
     typeof target.handle.uri === "string" &&
-    target.handle.uri.trim() !== ""
+      target.handle.uri.trim() !== ""
   ) {
     return target.handle.uri.trim();
   }
-  return null;
+  throw new Error(
+    `Invalid notebook target ${JSON.stringify(target)}. ` +
+      `Use target: { uri: "local://..." } or target: { handle: { uri: "local://...", revision: "..." } }.`,
+  );
+}
+
+function formatMissingTargetError(method: "update" | "delete" | "execute"): string {
+  if (method === "update") {
+    return (
+      "notebooks.update requires an explicit target notebook. " +
+      "Pass target: { handle: doc.handle } after const doc = await notebooks.get(), " +
+      'or target: { uri: "local://..." }.'
+    );
+  }
+  if (method === "execute") {
+    return (
+      "notebooks.execute requires an explicit target notebook. " +
+      "Pass target: { handle: doc.handle } after const doc = await notebooks.get(), " +
+      'or target: { uri: "local://..." }.'
+    );
+  }
+  return (
+    "notebooks.delete requires an explicit target notebook. " +
+    'Pass target: { uri: "local://..." } or target: { handle: { uri: "local://...", revision: "..." } }.'
+  );
 }
 
 function resolveInsertIndex(
@@ -314,6 +353,19 @@ function updateCellPatch(
   notebook.updateCell(updated);
 }
 
+function formatNotebookMutationError(index: number, operation: unknown): string {
+  const op =
+    operation && typeof operation === "object" && "op" in operation
+      ? JSON.stringify((operation as { op?: unknown }).op)
+      : JSON.stringify(operation);
+  return (
+    `Unsupported notebooks.update operation at operations[${index}]: ${op}. ` +
+    `Supported ops are "insert", "update", and "remove". ` +
+    `To append a cell, use ` +
+    `operations: [{ op: "insert", at: { index: -1 }, cells: [{ kind: "code", languageId: "python", value: "print(\\"hello\\")" }] }].`
+  );
+}
+
 export function createNotebooksApi({
   resolveNotebook,
   listNotebooks,
@@ -330,6 +382,16 @@ export function createNotebooksApi({
     return resolved;
   };
 
+  const resolveNotebookByRequiredTarget = (
+    method: "update" | "delete" | "execute",
+    target?: NotebookTarget,
+  ): NotebookDataLike => {
+    if (target === undefined) {
+      throw new Error(formatMissingTargetError(method));
+    }
+    return resolveNotebookByTarget(target);
+  };
+
   const listKnownNotebooks = (): NotebookDataLike[] => {
     const listed = listNotebooks?.() ?? [];
     if (listed.length > 0) {
@@ -344,24 +406,24 @@ export function createNotebooksApi({
       return "notebooks.list(query?: { openOnly?: boolean; uriPrefix?: string; nameContains?: string; limit?: number }): Promise<NotebookSummary[]>";
     }
     if (topic === "get") {
-      return "notebooks.get(target?: { uri } | { handle: { uri, revision } }): Promise<NotebookDocument>";
+      return "notebooks.get(target?: { uri } | { handle: { uri, revision } }): Promise<NotebookDocument>. When target is omitted, returns the current notebook selected in the UI.";
     }
     if (topic === "update") {
-      return "notebooks.update({ target?, expectedRevision?, operations: NotebookMutation[] }): Promise<NotebookDocument>";
+      return "notebooks.update({ target, expectedRevision?, operations: NotebookMutation[] }): Promise<NotebookDocument>. target is required.";
     }
     if (topic === "delete") {
-      return "notebooks.delete(target): Promise<void>";
+      return "notebooks.delete(target): Promise<void>. target is required.";
     }
     if (topic === "execute") {
-      return "notebooks.execute({ target?, refIds: string[] }): Promise<{ handle, cells }>";
+      return "notebooks.execute({ target, refIds: string[] }): Promise<{ handle, cells }>. target is required.";
     }
     return [
       "Notebook SDK methods:",
       "- notebooks.list(query?)",
-      "- notebooks.get(target?)",
-      "- notebooks.update({ target?, expectedRevision?, operations })",
+      "- notebooks.get(target?)              # omitted target = current UI notebook",
+      "- notebooks.update({ target, expectedRevision?, operations })",
       "- notebooks.delete(target)",
-      "- notebooks.execute({ target?, refIds })",
+      "- notebooks.execute({ target, refIds })",
       "- notebooks.help(topic?)",
     ].join("\n");
   };
@@ -393,7 +455,7 @@ export function createNotebooksApi({
       return makeDocument(notebook);
     },
     update: async (args) => {
-      const notebook = resolveNotebookByTarget(args.target);
+      const notebook = resolveNotebookByRequiredTarget("update", args.target);
       const beforeHandle = makeHandle(notebook);
       if (
         args.expectedRevision &&
@@ -405,7 +467,16 @@ export function createNotebooksApi({
         );
       }
 
-      for (const operation of args.operations ?? []) {
+      const operations = args.operations ?? [];
+      if (!Array.isArray(operations)) {
+        throw new Error(
+          `Invalid notebooks.update operations: expected an array of notebook mutations, got ${JSON.stringify(
+            operations,
+          )}.`,
+        );
+      }
+
+      for (const [index, operation] of operations.entries()) {
         if (operation.op === "insert") {
           insertCells(notebook, operation.at, operation.cells);
           continue;
@@ -421,23 +492,29 @@ export function createNotebooksApi({
           for (const refId of operation.refIds ?? []) {
             notebook.removeCell(refId);
           }
+          continue;
         }
+        throw new Error(formatNotebookMutationError(index, operation));
       }
 
       return makeDocument(notebook);
     },
     delete: async (_target: NotebookTarget) => {
+      resolveNotebookByRequiredTarget("delete", _target);
       throw new Error("notebooks.delete is not supported in v0 runtime.");
     },
     execute: async (args) => {
-      const notebook = resolveNotebookByTarget(args.target);
+      const notebook = resolveNotebookByRequiredTarget("execute", args.target);
       const executedCells: parser_pb.Cell[] = [];
       for (const refId of args.refIds ?? []) {
         const cellRunner = notebook.getCell(refId);
         if (!cellRunner) {
           throw new Error(`Cell not found: ${refId}`);
         }
-        cellRunner.run();
+        const runResult = cellRunner.run();
+        if (isPromiseLike(runResult)) {
+          await runResult;
+        }
         const cell = notebook.getNotebook().cells.find((candidate) => candidate.refId === refId);
         if (cell) {
           executedCells.push(cell);

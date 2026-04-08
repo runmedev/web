@@ -13,6 +13,7 @@ import {
 import { create } from "@bufbuild/protobuf";
 import { NotebookData, type NotebookSnapshot } from "../lib/notebookData";
 import { parser_pb } from "./CellContext";
+import { type NotebookDataLike } from "../lib/runtime/runmeConsole";
 import { useNotebookStore } from "./NotebookStoreContext";
 import { useContentsStore } from "./ContentsStoreContext";
 import { useFilesystemStore } from "./FilesystemStoreContext";
@@ -172,7 +173,14 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
   const ensureNotebook = useCallback(
     ({ uri, name, notebook, loaded = false }: EnsureNotebookArgs) => {
       const existing = storeRef.current.get(uri);
+      const effectiveStore = resolveStore(
+        uri,
+        notebookStore,
+        fsStore,
+        contentsStore,
+      );
       if (existing) {
+        existing.data.setNotebookStore(effectiveStore ?? null);
         return existing.data;
       }
       const resolvedName =
@@ -184,18 +192,74 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
           cells: [],
           metadata: {},
         });
-      const effectiveStore = resolveStore(
-        uri,
-        notebookStore,
-        fsStore,
-        contentsStore,
-      );
+      const resolveTargetUri = (target?: unknown): string | null => {
+        if (typeof target === "string" && target.trim() !== "") {
+          return target.trim();
+        }
+        if (
+          typeof target === "object" &&
+          target &&
+          "uri" in target &&
+          typeof (target as { uri?: unknown }).uri === "string" &&
+          (target as { uri: string }).uri.trim() !== ""
+        ) {
+          return (target as { uri: string }).uri.trim();
+        }
+        if (
+          typeof target === "object" &&
+          target &&
+          "handle" in target &&
+          typeof (target as { handle?: { uri?: unknown } }).handle?.uri ===
+            "string" &&
+          (
+            target as { handle: { uri: string } }
+          ).handle.uri.trim() !== ""
+        ) {
+          return (target as { handle: { uri: string } }).handle.uri.trim();
+        }
+        return null;
+      };
       const data = new NotebookData({
         uri,
         name: resolvedName,
         notebook: initialNotebook,
         notebookStore: effectiveStore ?? null,
         loaded,
+        resolveNotebookForAppKernel: (target?: unknown) => {
+          const targetUri = resolveTargetUri(target)
+          if (!targetUri) {
+            return storeRef.current.get(uri)?.data ?? null
+          }
+          return storeRef.current.get(targetUri)?.data ?? null
+        },
+        listNotebooksForAppKernel: () => {
+          const notebooksByUri = new Map<string, NotebookDataLike>()
+          for (const entry of storeRef.current.values()) {
+            notebooksByUri.set(entry.data.getUri(), entry.data)
+          }
+          for (const item of listCacheRef.current) {
+            if (!item?.uri || notebooksByUri.has(item.uri)) {
+              continue
+            }
+            const emptyNotebook = create(parser_pb.NotebookSchema, {
+              cells: [],
+              metadata: {},
+            })
+            const placeholder = {
+              getUri: () => item.uri,
+              getName: () => item.name ?? item.uri,
+              getNotebook: () => emptyNotebook,
+              updateCell: () => {},
+              getCell: () => null,
+            } satisfies NotebookDataLike
+            notebooksByUri.set(item.uri, placeholder)
+          }
+          const current = storeRef.current.get(uri)?.data
+          if (current && !notebooksByUri.has(current.getUri())) {
+            notebooksByUri.set(current.getUri(), current)
+          }
+          return Array.from(notebooksByUri.values())
+        },
       });
       const unsubscribe = data.subscribe(() => emit());
       storeRef.current.set(uri, { data, unsubscribe, loaded });
@@ -243,7 +307,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
   // On first availability of notebookStore, restore placeholders for any
   // notebooks persisted in localStorage so subscribers can attach immediately.
   useEffect(() => {
-    if (hasRestoredNotebooks.current || !notebookStore) {
+    if (hasRestoredNotebooks.current) {
       return;
     }
     const stored = loadStoredOpenNotebooks();
@@ -264,7 +328,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     });
     //setOpenNotebooks(stored);
     hasRestoredNotebooks.current = true;
-  }, [ensureNotebook, notebookStore]);
+  }, [ensureNotebook, notebookStore, contentsStore, fsStore]);
 
   const useNotebookList = useCallback(() => {
     return openNotebooks;
@@ -317,6 +381,20 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     persistOpenNotebooks(openNotebooks);
   }, [openNotebooks]);
 
+  // If notebooks are open but no current document is selected, promote the first
+  // open notebook to be the active document so notebook helpers can resolve the
+  // UI's visible notebook by default.
+  useEffect(() => {
+    if (getCurrentDoc() || openNotebooks.length === 0) {
+      return;
+    }
+    const fallbackUri = openNotebooks[0]?.uri?.trim();
+    if (!fallbackUri) {
+      return;
+    }
+    setCurrentDoc(fallbackUri);
+  }, [getCurrentDoc, openNotebooks, setCurrentDoc]);
+
   // Load any notebooks that were open last session once a store is available.
   useEffect(() => {
     if (!notebookStore && !contentsStore) {
@@ -339,6 +417,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
         if (!store) {
           continue;
         }
+        entry.data.setNotebookStore(store);
         try {
           const metadata = await store.getMetadata(item.uri);
           if (!metadata || metadata.type !== NotebookStoreItemType.File) {

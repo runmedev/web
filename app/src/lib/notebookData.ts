@@ -27,11 +27,15 @@ import {
 } from "./runtime/jupyterManager";
 import { createAppJsGlobals } from "./runtime/appJsGlobals";
 import {
-  createNotebooksApi,
   createRunmeConsoleApi,
-  type NotebooksApi,
+  type NotebookDataLike,
   type RunmeConsoleApi,
 } from "./runtime/runmeConsole";
+import {
+  type NotebooksApiBridgeServer,
+  createHostNotebooksApi,
+  createNotebooksApiBridgeServer,
+} from "./runtime/notebooksApiBridge";
 import { JSKernel } from "./runtime/jsKernel";
 import { SandboxJSKernel } from "./runtime/sandboxJsKernel";
 import {
@@ -426,6 +430,10 @@ export class NotebookData {
   // (and in dev, a Vite page reload) on every change.
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly persistDelayMs = 750;
+  private readonly resolveNotebookForAppKernel: (
+    target?: unknown,
+  ) => NotebookDataLike | null;
+  private readonly listNotebooksForAppKernel: () => NotebookDataLike[];
 
   constructor({
     notebook,
@@ -433,12 +441,16 @@ export class NotebookData {
     name,
     notebookStore,
     loaded = false,
+    resolveNotebookForAppKernel,
+    listNotebooksForAppKernel,
   }: {
     notebook: parser_pb.Notebook;
     uri: string;
     name: string;
     notebookStore: NotebookSaveStore | null;
     loaded?: boolean;
+    resolveNotebookForAppKernel?: (target?: unknown) => NotebookDataLike | null;
+    listNotebooksForAppKernel?: () => NotebookDataLike[];
   }) {
     this.uri = uri;
     this.name = name;
@@ -448,6 +460,42 @@ export class NotebookData {
     this.sequence = this.computeHighestSequence();
     this.rebuildIndex();
     this.snapshotCache = this.buildSnapshot();
+    this.resolveNotebookForAppKernel =
+      resolveNotebookForAppKernel ??
+      ((target?: unknown) => {
+        if (!target || this.matchesNotebookTarget(target)) {
+          return this;
+        }
+        return null;
+      });
+    this.listNotebooksForAppKernel =
+      listNotebooksForAppKernel ??
+      (() => {
+        return [this];
+      });
+  }
+
+  private matchesNotebookTarget(target: unknown): boolean {
+    if (typeof target === "string") {
+      return target === this.getUri();
+    }
+    if (
+      typeof target === "object" &&
+      target &&
+      "uri" in target &&
+      (target as { uri?: string }).uri === this.getUri()
+    ) {
+      return true;
+    }
+    if (
+      typeof target === "object" &&
+      target &&
+      "handle" in target &&
+      (target as { handle?: { uri?: string } }).handle?.uri === this.getUri()
+    ) {
+      return true;
+    }
+    return false;
   }
 
   /** Subscribe to changes. Returns an unsubscribe function. */
@@ -609,6 +657,13 @@ export class NotebookData {
     this.snapshotCache = this.buildSnapshot();
     this.emit();
     this.schedulePersist();
+  }
+
+  setNotebookStore(notebookStore: NotebookSaveStore | null): void {
+    if (!notebookStore || this.notebookStore) {
+      return;
+    }
+    this.notebookStore = notebookStore;
   }
 
   // Returns the runID if the cell was started successfully.
@@ -822,33 +877,11 @@ export class NotebookData {
     const runmeApi = createRunmeConsoleApi({
       resolveNotebook: () => this,
     });
-    const notebooksApi = createNotebooksApi({
-      resolveNotebook: (target?: unknown) => {
-        if (!target) {
-          return this;
-        }
-        if (typeof target === "string" && target === this.getUri()) {
-          return this;
-        }
-        if (
-          typeof target === "object" &&
-          target &&
-          "uri" in target &&
-          (target as { uri?: string }).uri === this.getUri()
-        ) {
-          return this;
-        }
-        if (
-          typeof target === "object" &&
-          target &&
-          "handle" in target &&
-          (target as { handle?: { uri?: string } }).handle?.uri === this.getUri()
-        ) {
-          return this;
-        }
-        return null;
-      },
-      listNotebooks: () => [this],
+    const notebooksApiBridgeServer = createNotebooksApiBridgeServer({
+      notebooksApi: createHostNotebooksApi({
+        resolveNotebook: this.resolveNotebookForAppKernel,
+        listNotebooks: this.listNotebooksForAppKernel,
+      }),
     });
 
     let stdout = "";
@@ -887,7 +920,7 @@ export class NotebookData {
                     method,
                     args,
                     runmeApi,
-                    notebooksApi,
+                    notebooksApiBridgeServer,
                   ),
               },
               hooks,
@@ -895,33 +928,8 @@ export class NotebookData {
           : new JSKernel({
               globals: createAppJsGlobals({
                 runme: runmeApi,
-                resolveNotebook: (target?: unknown) => {
-                  if (!target) {
-                    return this;
-                  }
-                  if (typeof target === "string" && target === this.getUri()) {
-                    return this;
-                  }
-                  if (
-                    typeof target === "object" &&
-                    target &&
-                    "uri" in target &&
-                    (target as { uri?: string }).uri === this.getUri()
-                  ) {
-                    return this;
-                  }
-                  if (
-                    typeof target === "object" &&
-                    target &&
-                    "handle" in target &&
-                    (target as { handle?: { uri?: string } }).handle?.uri ===
-                      this.getUri()
-                  ) {
-                    return this;
-                  }
-                  return null;
-                },
-                listNotebooks: () => [this],
+                resolveNotebook: this.resolveNotebookForAppKernel,
+                listNotebooks: this.listNotebooksForAppKernel,
               }),
               hooks,
             }).run(source)
@@ -995,7 +1003,7 @@ export class NotebookData {
     method: string,
     args: unknown[],
     runmeApi: RunmeConsoleApi,
-    notebooksApi: NotebooksApi,
+    notebooksApiBridgeServer: NotebooksApiBridgeServer,
   ): Promise<unknown> {
     const target = args[0];
     switch (method) {
@@ -1020,19 +1028,13 @@ export class NotebookData {
           cellCount: notebook.getNotebook().cells.length,
         };
       }
-      case "notebooks.help":
-        return notebooksApi.help(args[0] as any);
-      case "notebooks.list":
-        return notebooksApi.list((args[0] as any) ?? undefined);
-      case "notebooks.get":
-        return notebooksApi.get((args[0] as any) ?? undefined);
-      case "notebooks.update":
-        return notebooksApi.update((args[0] as any) ?? { operations: [] });
-      case "notebooks.delete":
-        return notebooksApi.delete(args[0] as any);
-      case "notebooks.execute":
-        return notebooksApi.execute((args[0] as any) ?? { refIds: [] });
       default:
+        if (method.startsWith("notebooks.")) {
+          return notebooksApiBridgeServer.handleMessage({
+            method,
+            args,
+          });
+        }
         throw new Error(`Unsupported sandbox AppKernel method: ${method}`);
     }
   }
@@ -1632,13 +1634,27 @@ export class CellData {
     this.notebook.removeCell(this.refId);
   }
 
-  run(): void {
+  async run(): Promise<void> {
     const cell = this.snapshot;
-    if (!cell) return;
+    if (!cell) {
+      return;
+    }
     const runID = this.notebook.runCodeCell(cell);
     // Update the snapshot after running to pick up any metadata changes.
     this.cachedSnapshot = this.notebook.getCellSnapshot(this.refId);
     this.emitRunIDChange(runID ?? "");
+    if (!runID || this.hasRunCompleted(runID)) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const unsubscribe = this.subscribeToContentChange(() => {
+        this.cachedSnapshot = this.notebook.getCellSnapshot(this.refId);
+        if (this.hasRunCompleted(runID)) {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
   }
 
   getStreams(): StreamsLike | undefined {
@@ -1723,5 +1739,15 @@ export class CellData {
       return requested;
     }
     return DEFAULT_RUNNER_PLACEHOLDER;
+  }
+
+  private hasRunCompleted(runID: string): boolean {
+    const snap = this.notebook.getCellSnapshot(this.refId);
+    if (!snap) {
+      return true;
+    }
+    const activeRunID = snap.metadata?.[RunmeMetadataKey.LastRunID];
+    const exitCode = snap.metadata?.[RunmeMetadataKey.ExitCode];
+    return activeRunID !== runID || typeof exitCode === "string";
   }
 }

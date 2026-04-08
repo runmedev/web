@@ -517,6 +517,36 @@ describe("NotebookData cell defaults", () => {
   });
 });
 
+describe("NotebookData persistence", () => {
+  it("adopts a notebook store after construction and persists later edits", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const notebook = create(parser_pb.NotebookSchema, { cells: [] });
+    const model = new NotebookData({
+      notebook,
+      uri: "local://file/restored-before-store.md",
+      name: "restored-before-store.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.setNotebookStore({ save });
+    model.appendCodeCell("javascript");
+
+    await waitForCondition(() => save.mock.calls.length > 0, 1500);
+
+    expect(save).toHaveBeenCalledWith(
+      "local://file/restored-before-store.md",
+      expect.objectContaining({
+        cells: expect.arrayContaining([
+          expect.objectContaining({
+            languageId: "javascript",
+          }),
+        ]),
+      }),
+    );
+  });
+});
+
 describe("NotebookData.runCodeCell", () => {
   it("returns empty run id when no runner is available", () => {
     getWithFallback.mockReturnValueOnce(undefined);
@@ -578,6 +608,40 @@ describe("NotebookData.runCodeCell", () => {
       .find((i) => i.mime === MimeType.VSCodeNotebookStdOut);
     expect(stdoutItem).toBeTruthy();
     expect(new TextDecoder().decode(stdoutItem!.data)).toContain("hello");
+  });
+
+  it("awaits AppKernel completion from CellData.run before returning", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-await-run",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: 'console.log("awaited appkernel output");',
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "test-notebook.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+    const cellData = model.getCell(cell.refId);
+    expect(cellData).toBeTruthy();
+
+    await cellData!.run();
+
+    const updated = model.getCellSnapshot(cell.refId);
+    expect(updated?.metadata?.[RunmeMetadataKey.ExitCode]).toBe("0");
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("awaited appkernel output");
   });
 
   it("executes javascript with AppKernel even when runner metadata is not set", async () => {
@@ -734,6 +798,111 @@ describe("NotebookData.runCodeCell", () => {
       .join("");
     expect(stdoutText).toContain("sandbox-notebooks-get.runme.md");
     expect(stdoutText).toContain("1");
+  });
+
+  it("exposes notebooks.list across open notebooks inside browser appkernel javascript cells", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-notebooks-list-browser",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        "const list = await notebooks.list();",
+        "console.log(JSON.stringify(list.map((item) => item.name).sort()));",
+        "console.log(list.length);",
+      ].join("\n"),
+    });
+    const primaryNotebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const secondaryNotebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: "cell-secondary",
+          kind: parser_pb.CellKind.CODE,
+          languageId: "javascript",
+          outputs: [],
+          metadata: {},
+          value: "console.log('secondary')",
+        }),
+      ],
+    });
+
+    const byUri = new Map<string, InstanceType<typeof NotebookData>>();
+    let primaryModel: InstanceType<typeof NotebookData> | null = null;
+    const resolveTargetUri = (target?: unknown): string | null => {
+      if (typeof target === "string" && target.trim() !== "") {
+        return target.trim();
+      }
+      if (
+        typeof target === "object" &&
+        target &&
+        "uri" in target &&
+        typeof (target as { uri?: unknown }).uri === "string" &&
+        (target as { uri: string }).uri.trim() !== ""
+      ) {
+        return (target as { uri: string }).uri.trim();
+      }
+      if (
+        typeof target === "object" &&
+        target &&
+        "handle" in target &&
+        typeof (target as { handle?: { uri?: unknown } }).handle?.uri ===
+          "string" &&
+        (
+          target as { handle: { uri: string } }
+        ).handle.uri.trim() !== ""
+      ) {
+        return (target as { handle: { uri: string } }).handle.uri.trim();
+      }
+      return null;
+    };
+    const resolveNotebook = (target?: unknown) => {
+      const targetUri = resolveTargetUri(target);
+      if (!targetUri) {
+        return primaryModel;
+      }
+      return byUri.get(targetUri) ?? null;
+    };
+    const listNotebooks = () => Array.from(byUri.values());
+
+    primaryModel = new NotebookData({
+      notebook: primaryNotebook,
+      uri: "nb://primary",
+      name: "primary-notebooks-list.runme.md",
+      notebookStore: null,
+      loaded: true,
+      resolveNotebookForAppKernel: resolveNotebook,
+      listNotebooksForAppKernel: listNotebooks,
+    });
+    const secondaryModel = new NotebookData({
+      notebook: secondaryNotebook,
+      uri: "nb://secondary",
+      name: "secondary-notebooks-list.runme.md",
+      notebookStore: null,
+      loaded: true,
+      resolveNotebookForAppKernel: resolveNotebook,
+      listNotebooksForAppKernel: listNotebooks,
+    });
+    byUri.set(primaryModel.getUri(), primaryModel);
+    byUri.set(secondaryModel.getUri(), secondaryModel);
+
+    primaryModel.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = primaryModel?.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = primaryModel.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("primary-notebooks-list.runme.md");
+    expect(stdoutText).toContain("secondary-notebooks-list.runme.md");
+    expect(stdoutText).toContain("2");
   });
 
   it("exposes drive and google helper namespaces in appkernel cells", async () => {
