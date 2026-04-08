@@ -485,4 +485,44 @@ describe("responsesDirectChatkitFetch", () => {
     expect(requestBody.instructions).toContain("Always await helper calls");
     expect(requestBody.input?.[0]?.type).toBe("function_call_output");
   });
+
+  it("preserves partial tool output when client execution fails", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      sseResponse([
+        { type: "response.created", response: { id: "resp-tool-error" } },
+        { type: "response.completed", response: { id: "resp-tool-error" } },
+      ]),
+    );
+
+    const fetchFn = createResponsesDirectChatkitFetch();
+    const response = await fetchFn("/responses/direct/chatkit", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "threads.add_client_tool_output",
+        params: {
+          id: "thread-test",
+          result: {
+            call_id: "call-1",
+            previous_response_id: "resp-prev",
+            output: "started\npartial stderr",
+            client_error: "ExecuteCode timed out after 20ms",
+          },
+        },
+      }),
+    });
+
+    await response.text();
+    const requestInit = fetchMock.mock.calls.at(0)?.[1];
+    const requestBody = JSON.parse(String(requestInit?.body ?? "{}")) as {
+      input?: Array<Record<string, unknown>>;
+    };
+    expect(requestBody.input?.[0]?.output).toContain("started");
+    expect(requestBody.input?.[0]?.output).toContain("partial stderr");
+    expect(requestBody.input?.[0]?.output).toContain(
+      "Tool execution failed: ExecuteCode timed out after 20ms",
+    );
+  });
 });

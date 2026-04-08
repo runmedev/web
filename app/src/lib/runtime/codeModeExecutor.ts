@@ -133,6 +133,7 @@ export function createCodeModeExecutor(options: {
         listNotebooks,
       })
 
+      const abortController = new AbortController()
       const kernelRun =
         mode === 'sandbox'
           ? new SandboxJSKernel({
@@ -149,7 +150,7 @@ export function createCodeModeExecutor(options: {
                     notebooksApiBridgeServer,
                   }),
               },
-            }).run(normalizedCode)
+            }).run(normalizedCode, { signal: abortController.signal })
           : new JSKernel({
               globals,
               hooks: {
@@ -165,6 +166,7 @@ export function createCodeModeExecutor(options: {
           new Promise<void>((_resolve, reject) => {
             timer = setTimeout(() => {
               reject(new Error(`ExecuteCode timed out after ${timeoutMs}ms`))
+              abortController.abort()
             }, timeoutMs)
           }),
         ])

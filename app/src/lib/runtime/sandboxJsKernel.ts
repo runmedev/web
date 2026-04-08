@@ -7,6 +7,10 @@ type KernelHooks = {
   onExit?: (exitCode: number) => void;
 };
 
+type RunOptions = {
+  signal?: AbortSignal | null;
+};
+
 type SandboxBridge = {
   call: (method: string, args: unknown[]) => Promise<unknown> | unknown;
 };
@@ -218,10 +222,20 @@ export class SandboxJSKernel {
     };
   }
 
-  async run(code: string): Promise<void> {
+  async run(code: string, options: RunOptions = {}): Promise<void> {
     const runId = ++this.runCounter;
     this.activeRunId = runId;
     let exitCode = 0;
+    let session: SandboxSession | null = null;
+    let disposed = false;
+
+    const disposeSession = () => {
+      if (disposed || !session) {
+        return;
+      }
+      disposed = true;
+      session.dispose();
+    };
 
     const stdout = (data: string) => {
       if (this.activeRunId !== runId) {
@@ -237,9 +251,25 @@ export class SandboxJSKernel {
     };
 
     try {
-      const session = await this.createSession();
-      await new Promise<void>((resolve) => {
-        session.port.onmessage = (event: MessageEvent<SandboxMessage>) => {
+      if (options.signal?.aborted) {
+        throw new Error("Sandbox JS execution cancelled.");
+      }
+      session = await this.createSession();
+      if (options.signal?.aborted) {
+        throw new Error("Sandbox JS execution cancelled.");
+      }
+      const activeSession = session;
+      await new Promise<void>((resolve, reject) => {
+        const abortRun = () => {
+          exitCode = 1;
+          if (this.activeRunId === runId) {
+            this.activeRunId = null;
+          }
+          disposeSession();
+          reject(new Error("Sandbox JS execution cancelled."));
+        };
+        options.signal?.addEventListener("abort", abortRun, { once: true });
+        activeSession.port.onmessage = (event: MessageEvent<SandboxMessage>) => {
           const payload = event.data;
           if (!payload || typeof payload !== "object") {
             return;
@@ -252,19 +282,20 @@ export class SandboxJSKernel {
               stderr(String(payload.data ?? ""));
               break;
             case "host-call":
-              void this.handleHostCall(session.port, payload, runId);
+              void this.handleHostCall(activeSession.port, payload, runId);
               break;
             case "exit":
               exitCode = Number(payload.exitCode ?? 1);
+              options.signal?.removeEventListener("abort", abortRun);
               resolve();
               break;
             default:
               break;
           }
         };
-        session.port.postMessage({ type: "run", code });
+        activeSession.port.postMessage({ type: "run", code });
       });
-      session.dispose();
+      disposeSession();
     } catch (error) {
       exitCode = 1;
       appLogger.error("SandboxJSKernel execution failed", {
@@ -280,6 +311,7 @@ export class SandboxJSKernel {
       if (this.activeRunId === runId) {
         this.activeRunId = null;
       }
+      disposeSession();
       this.hooks.onExit(exitCode);
     }
   }

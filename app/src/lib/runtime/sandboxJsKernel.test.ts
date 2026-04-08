@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { SandboxJSKernel } from "./sandboxJsKernel";
 
-type Scenario = "success" | "disallowed";
+type Scenario = "success" | "disallowed" | "hang";
 
 class MockSandboxPort {
   onmessage: ((event: MessageEvent<any>) => void) | null = null;
@@ -29,6 +29,8 @@ class MockSandboxPort {
           method: "runme.clear",
           args: [undefined],
         });
+      } else if (this.scenario === "hang") {
+        this.emit({ type: "stdout", data: "started\n" });
       } else {
         this.emit({
           type: "host-call",
@@ -77,6 +79,7 @@ class TestableSandboxJSKernel extends SandboxJSKernel {
   constructor(
     private readonly port: MockSandboxPort,
     options: ConstructorParameters<typeof SandboxJSKernel>[0],
+    private readonly disposeSession = () => {},
   ) {
     super(options);
   }
@@ -85,7 +88,7 @@ class TestableSandboxJSKernel extends SandboxJSKernel {
     return {
       iframe: {} as HTMLIFrameElement,
       port: this.port as unknown as MessagePort,
-      dispose: () => {},
+      dispose: this.disposeSession,
     };
   }
 }
@@ -154,5 +157,41 @@ describe("SandboxJSKernel", () => {
 
     expect(stderr).toContain("Sandbox method not allowed: runme.clear");
     expect(exitCode).toBe(1);
+  });
+
+  it("disposes the sandbox session when aborted", async () => {
+    let stdout = "";
+    let stderr = "";
+    let exitCode = -1;
+    const disposeSession = vi.fn();
+    const abortController = new AbortController();
+    const kernel = new TestableSandboxJSKernel(new MockSandboxPort("hang"), {
+      bridge: {
+        call: vi.fn(async () => "ignored"),
+      },
+      hooks: {
+        onStdout: (data) => {
+          stdout += data;
+        },
+        onStderr: (data) => {
+          stderr += data;
+        },
+        onExit: (code) => {
+          exitCode = code;
+        },
+      },
+    }, disposeSession);
+
+    const run = kernel.run("await new Promise(() => {});", {
+      signal: abortController.signal,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    abortController.abort();
+    await run;
+
+    expect(stdout).toContain("started");
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(1);
+    expect(disposeSession).toHaveBeenCalledTimes(1);
   });
 });

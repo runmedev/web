@@ -265,10 +265,13 @@ function extractToolOutput(payload: JsonRecord): {
   const clientError =
     asString(result.clientError) ?? asString(result.client_error) ?? ''
   const outputValue = result.output ?? result.result
+  const outputText = toOutputString(outputValue)
   const output =
     clientError.length > 0
-      ? `Tool execution failed: ${clientError}`
-      : toOutputString(outputValue)
+      ? [outputText, `Tool execution failed: ${clientError}`]
+          .filter((part) => part.length > 0)
+          .join('\n')
+      : outputText
   return { callId, previousResponseId, output }
 }
 
