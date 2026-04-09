@@ -17,6 +17,10 @@ import {
 // Local folder URI is a special folder that contains all notebooks which are local (i.e. not synced to Drive)
 export const LOCAL_FOLDER_URI = "local://folder/local";
 
+const NOTEBOOK_JSON_WRITE_OPTIONS = {
+  emitDefaultValues: true,
+} as unknown as Parameters<typeof toJsonString>[2];
+
 /**
  * LocalFileRecord captures the information needed to persist a notebook locally.
  *
@@ -118,12 +122,12 @@ export class LocalNotebooks extends Dexie {
         folders: "&id, remoteId, name, lastSynced",
       })
       .upgrade(async (tx) => {
-        await tx.table("files").toCollection().modify((file: any) => {
+        await tx.table("files").toCollection().modify((file: Partial<LocalFileRecord>) => {
           if (typeof file.lastSynced !== "string") {
             file.lastSynced = "";
           }
         });
-        await tx.table("folders").toCollection().modify((folder: any) => {
+        await tx.table("folders").toCollection().modify((folder: Partial<LocalFolderRecord>) => {
           if (typeof folder.lastSynced !== "string") {
             folder.lastSynced = "";
           }
@@ -135,7 +139,7 @@ export class LocalNotebooks extends Dexie {
         folders: "&id, remoteId, name, lastSynced",
       })
       .upgrade(async (tx) => {
-        await tx.table("files").toCollection().modify((file: any) => {
+        await tx.table("files").toCollection().modify((file: Partial<LocalFileRecord>) => {
           if (typeof file.md5Checksum !== "string") {
             // Lazy backfill: keep migration cheap and compute missing checksums
             // when we evaluate whether a file needs syncing.
@@ -371,9 +375,11 @@ export class LocalNotebooks extends Dexie {
       );
     }
 
-    const serialized = toJsonString(parser_pb.NotebookSchema, notebook, {
-      emitDefaultValues: true,
-    });
+    const serialized = toJsonString(
+      parser_pb.NotebookSchema,
+      notebook,
+      NOTEBOOK_JSON_WRITE_OPTIONS,
+    );
     const checksum = checksumForSerializedNotebook(serialized);
 
     await this.files.update(uri, { doc: serialized, md5Checksum: checksum });
@@ -457,9 +463,43 @@ export class LocalNotebooks extends Dexie {
       void (async () => {
         try {
           const newFile = await this.driveStore.create(parent.remoteId as string, name);
+          let lastRemoteChecksum = "";
+          try {
+            lastRemoteChecksum =
+              (await this.driveStore.getChecksum(newFile.uri)) ?? "";
+          } catch (error) {
+            appLogger.warn("Failed to record checksum for new Drive notebook", {
+              attrs: {
+                scope: "storage.drive.sync",
+                localUri: fileUri,
+                remoteUri: newFile.uri,
+                error: String(error),
+              },
+            });
+          }
+          const currentRecord = await this.files.get(fileUri);
+          const hasLocalContent = serializedNotebookHasUserContent(
+            currentRecord?.doc ?? "",
+          );
           await this.files.update(fileUri, {
             remoteId: newFile.uri,
+            lastRemoteChecksum,
+            lastSynced: hasLocalContent ? "" : nowIsoString(),
           });
+          if (hasLocalContent) {
+            try {
+              await this.syncFile(fileUri);
+            } catch (error) {
+              appLogger.warn("Failed to sync local notebook after Drive create", {
+                attrs: {
+                  scope: "storage.drive.sync",
+                  localUri: fileUri,
+                  remoteUri: newFile.uri,
+                  error: String(error),
+                },
+              });
+            }
+          }
           if (typeof window !== "undefined") {
             window.dispatchEvent(
               new CustomEvent("local-notebook-updated", {
@@ -585,13 +625,16 @@ export class LocalNotebooks extends Dexie {
     try {
       const notebook = deserializeNotebook(record.doc ?? "");
       const client = runmeClientManager.get();
-      markdownBytes = await client.serializeNotebook(notebook, {
-        outputs: {
-          enabled: true,
-          // Summary controls information about execution. I don't think we need that.
-          summary: false,
-        },
-      });
+      markdownBytes = await client.serializeNotebook(
+        notebook,
+        create(parser_pb.SerializeRequestOptionsSchema, {
+          outputs: create(parser_pb.SerializeRequestOutputOptionsSchema, {
+            enabled: true,
+            // Summary controls information about execution. I don't think we need that.
+            summary: false,
+          }),
+        }),
+      );
     } catch (error) {
       console.error("Failed to serialize notebook to markdown", error);
       return;
@@ -829,17 +872,42 @@ export class LocalNotebooks extends Dexie {
 
     // Case 2: We have never read the remote file (the cache holds an empty
     // checksum) but Drive reports a concrete checksum. Download the remote
-    // copy and store it locally so future edits work against a consistent
-    // baseline.
+    // copy only if the local record has no user-authored content. Otherwise,
+    // prefer the local IndexedDB content because overwriting it risks data loss.
     if (!lastReadChecksum && currentRemoteChecksum) {
+      if (serializedNotebookHasUserContent(localDoc)) {
+        appLogger.warn(
+          "Forking local notebook because Drive exists without a baseline checksum",
+          {
+            attrs: {
+              scope: "storage.drive.sync",
+              localUri,
+              remoteUri,
+              remoteChecksum: currentRemoteChecksum,
+              localChecksum,
+            },
+          },
+        );
+        await this.handleConflict(localUri, record, currentRemoteChecksum);
+        synced = true;
+        return;
+      }
+
       const remoteNotebook = await this.driveStore.load(remoteUri);
       const serialized = toJsonString(
         parser_pb.NotebookSchema,
         remoteNotebook,
-        {
-          emitDefaultValues: true,
-        },
+        NOTEBOOK_JSON_WRITE_OPTIONS,
       );
+      logRemoteOverwriteLocalDoc({
+        localUri,
+        remoteUri,
+        localChecksum,
+        remoteChecksum: currentRemoteChecksum,
+        reason: "no-local-baseline-checksum",
+        localDoc,
+        remoteDoc: serialized,
+      });
       await this.files.update(localUri, {
         doc: serialized,
         md5Checksum: checksumForSerializedNotebook(serialized),
@@ -859,10 +927,17 @@ export class LocalNotebooks extends Dexie {
         const serialized = toJsonString(
           parser_pb.NotebookSchema,
           remoteNotebook,
-          {
-            emitDefaultValues: true,
-          },
+          NOTEBOOK_JSON_WRITE_OPTIONS,
         );
+        logRemoteOverwriteLocalDoc({
+          localUri,
+          remoteUri,
+          localChecksum,
+          remoteChecksum: currentRemoteChecksum,
+          reason: "local-matches-previous-remote-baseline",
+          localDoc,
+          remoteDoc: serialized,
+        });
         await this.files.update(localUri, {
           doc: serialized,
           md5Checksum: checksumForSerializedNotebook(serialized),
@@ -935,8 +1010,28 @@ export class LocalNotebooks extends Dexie {
     const newName = `${baseName}.${timestamp}.json`;
 
     const newFile = await this.driveStore.create(parentRemoteUri, newName);
-    const notebook = deserializeNotebook(record.doc ?? "");
-    await this.driveStore.save(newFile.uri, notebook);
+    const localDoc = record.doc ?? "";
+    const parseResult = parseSerializedNotebook(localDoc);
+    if (parseResult.ok) {
+      await this.driveStore.save(newFile.uri, parseResult.notebook);
+    } else {
+      appLogger.warn(
+        "Saving raw local notebook JSON to conflict file because parsing failed",
+        {
+          attrs: {
+            scope: "storage.drive.sync",
+            localUri,
+            newRemoteUri: newFile.uri,
+            error: String(parseResult.error),
+          },
+        },
+      );
+      await this.driveStore.saveContent(
+        newFile.uri,
+        localDoc,
+        "application/json",
+      );
+    }
 
     await this.files.update(localUri, {
       name: newName,
@@ -969,9 +1064,10 @@ export class LocalNotebooks extends Dexie {
   private async findParentFolder(
     childUri: string,
   ): Promise<LocalFolderRecord | null> {
-    return this.folders
+    const folder = await this.folders
       .filter((folder) => folder.children.includes(childUri))
       .first();
+    return folder ?? null;
   }
 
   private async syncFolder(localUri: string): Promise<void> {
@@ -1017,14 +1113,87 @@ function deserializeNotebook(json: string): parser_pb.Notebook {
   if (!json) {
     return create(parser_pb.NotebookSchema, { cells: [] });
   }
+  const parsed = parseSerializedNotebook(json);
+  if (parsed.ok) {
+    return parsed.notebook;
+  }
+  console.error(
+    "Falling back to empty notebook due to parse failure",
+    parsed.error,
+  );
+  return create(parser_pb.NotebookSchema, { cells: [] });
+}
+
+function parseSerializedNotebook(json: string):
+  | { ok: true; notebook: parser_pb.Notebook }
+  | { ok: false; error: unknown } {
   try {
-    return fromJsonString(parser_pb.NotebookSchema, json, {
+    return {
+      ok: true,
+      notebook: fromJsonString(parser_pb.NotebookSchema, json, {
+        ignoreUnknownFields: true,
+      }),
+    };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+function serializedNotebookHasUserContent(json: string): boolean {
+  if (!json) {
+    return false;
+  }
+  try {
+    const notebook = fromJsonString(parser_pb.NotebookSchema, json, {
       ignoreUnknownFields: true,
     });
+    return (
+      notebook.cells.length > 0 ||
+      Object.keys(notebook.metadata ?? {}).length > 0
+    );
   } catch (error) {
-    console.error("Falling back to empty notebook due to parse failure", error);
-    return create(parser_pb.NotebookSchema, { cells: [] });
+    appLogger.warn("Preserving unparsable local notebook content", {
+      attrs: {
+        scope: "storage.drive.sync",
+        error: String(error),
+      },
+    });
+    return true;
   }
+}
+
+function logRemoteOverwriteLocalDoc({
+  localUri,
+  remoteUri,
+  localChecksum,
+  remoteChecksum,
+  reason,
+  localDoc,
+  remoteDoc,
+}: {
+  localUri: string;
+  remoteUri: string;
+  localChecksum: string;
+  remoteChecksum: string;
+  reason: string;
+  localDoc: string;
+  remoteDoc: string;
+}): void {
+  if (localDoc === remoteDoc) {
+    return;
+  }
+  appLogger.warn("Overwriting local notebook content with Drive content", {
+    attrs: {
+      scope: "storage.drive.sync",
+      localUri,
+      remoteUri,
+      localChecksum,
+      remoteChecksum,
+      reason,
+      localBytes: new TextEncoder().encode(localDoc).byteLength,
+      remoteBytes: new TextEncoder().encode(remoteDoc).byteLength,
+    },
+  });
 }
 
 function formatTimestamp(date: Date): string {
