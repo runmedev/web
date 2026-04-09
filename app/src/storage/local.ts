@@ -8,7 +8,7 @@ import { parser_pb } from "../runme/client";
 import { aisreClientManager as runmeClientManager } from "../lib/aisreClientManager";
 import { appState } from "../lib/runtime/AppState";
 import { appLogger } from "../lib/logging/runtime";
-import { DriveNotebookStore, parseDriveItem } from "./drive";
+import { DriveNotebookStore, isDriveItemUri } from "./drive";
 import type { ContentsNotebookStore } from "./contents";
 import type { FilesystemNotebookStore } from "./fs";
 import {
@@ -1438,14 +1438,7 @@ function needsSync(lastSynced: string | undefined, maxAgeMs: number): boolean {
 }
 
 function isDriveUri(uri: string | undefined): boolean {
-  if (!uri) {
-    return false;
-  }
-  try {
-    return parseDriveItem(uri) !== null;
-  } catch {
-    return false;
-  }
+  return isDriveItemUri(uri);
 }
 
 function isLocalFileUpstream(
