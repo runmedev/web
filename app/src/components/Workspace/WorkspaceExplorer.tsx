@@ -26,6 +26,7 @@ import {
   NotebookStoreItem,
   NotebookStoreItemType,
 } from "../../storage/notebook";
+import type { StorageBrowser } from "../../storage/browser";
 import { isFileSystemAccessSupported } from "../../storage/fs";
 import { fetchDriveItemWithParents, parseDriveItem } from "../../storage/drive";
 import { LOCAL_FOLDER_URI } from "../../storage/local";
@@ -53,28 +54,6 @@ type TreeNode = {
   parentUri?: string;
   children?: TreeNode[];
 };
-
-/**
- * Minimal storage facade used by WorkspaceExplorer to render and mutate the
- * workspace file tree.
- *
- * This is deliberately a browser/explorer API, not the notebook persistence
- * API used by editor tabs. It can point at the local IndexedDB mirror
- * (LocalNotebooks) or at an upstream folder source (FilesystemNotebookStore or
- * ContentsNotebookStore) because the explorer must list upstream directory
- * children before a file is open.
- *
- * Keep load/save out of this contract. When the user opens an upstream
- * fs:// or contents:// file, NotebookContext loads that upstream notebook once,
- * mirrors it into LocalNotebooks, and switches the editor to the resulting
- * local://file/... URI.
- */
-interface StorageBrowser {
-  list(uri: string): Promise<NotebookStoreItem[]>;
-  getMetadata(uri: string): Promise<NotebookStoreItem | null>;
-  create(parentUri: string, name: string): Promise<NotebookStoreItem>;
-  rename(uri: string, name: string): Promise<NotebookStoreItem>;
-}
 
 function createPlaceholderNode(uri: string, label: string): TreeNode {
   return {
