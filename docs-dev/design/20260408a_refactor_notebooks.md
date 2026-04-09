@@ -18,8 +18,7 @@ Recommended changes:
    - browser-only IndexedDB
    - Google Drive upstream
    - local filesystem upstream
-5. Remove or demote `NotebookStore` as a UI-facing abstraction after the mirror
-   path is complete.
+5. Remove the `NotebookStore` CRUD interface after the mirror path is complete.
 
 ## Background
 
@@ -35,6 +34,50 @@ Drive-backed notebooks the local record stores:
 [Issue 157](https://github.com/runmedev/web/issues/157) proposes consolidating
 notebook storage: use `runme-local-notebooks` as the canonical local mirror, and
 treat local filesystem plus `contents://` as upstream backends, just like Drive.
+When the refactor is complete, `runme-fs-workspaces` should be removed.
+
+## History: How the Abstraction Drift Happened
+
+The original storage shape was direct-to-backend:
+
+```text
+UI / NotebookData -> NotebookStore -> Google Drive
+```
+
+At that point `NotebookStore` made sense as a common CRUD interface. The UI
+could call `load/save/list/create/rename/getMetadata` on whichever backend
+owned the URI.
+
+We then changed the Google Drive design to be local-first:
+
+```text
+UI / NotebookData
+  -> local://file/<id>
+  -> LocalNotebooks / IndexedDB
+  -> DriveNotebookStore / Google Drive
+```
+
+After that shift, `LocalNotebooks` became the app-facing store for browser-only
+and Drive-backed notebooks. Google Drive became an upstream sync target, not the
+identity opened in editor tabs.
+
+The drift happened because later filesystem and contents support reused the old
+`NotebookStore` direct-backend pattern instead of joining the local-mirror
+pattern:
+
+```text
+Filesystem notebook -> FilesystemNotebookStore / runme-fs-workspaces
+Contents notebook -> ContentsNotebookStore
+```
+
+The result is two competing abstractions:
+
+- `LocalNotebooks`: local-first mirror and sync owner
+- `NotebookStore`: direct CRUD interface plus URI router target
+
+The cleanup in this doc is to finish the design shift: make `LocalNotebooks`
+the single app-facing notebook store, treat Drive/filesystem/contents as
+upstreams, and remove the old `NotebookStore` routing layer.
 
 ## Current Interface Model
 
@@ -133,16 +176,15 @@ remoteId = file:///absolute/path/to/notebook.json
 Then the URI scheme selects the upstream. Empty string stops being part of the
 state machine.
 
-Do not migrate Google Drive upstream identity to a new `gdrive://` scheme as
-part of this work. The existing Drive URL is already the upstream URI and keeps
-sharing/copy-link behavior aligned with the user's mental model.
+Use the canonical URI for the upstream resource. For a Google Drive file, that
+is the existing `https://drive.google.com/...` URL. Backend selection should be
+derived by parsing the URI in `remoteId`; do not invent a replacement URI scheme
+when the upstream system already has a canonical URI.
 
 Migration note: backfill empty `remoteId` values to the record's local `id`,
 then remove empty-string special cases.
 
-## Proposal 3: Make LocalNotebooks the App-Facing Store
-
-Do not add a new public `NotebookUpstreamBackend` interface yet.
+## Proposal 3: Make LocalNotebooks the App-Facing Store and Remove NotebookStore
 
 First clean up the existing abstraction boundary:
 
@@ -153,17 +195,21 @@ First clean up the existing abstraction boundary:
   into `LocalNotebooks`
 - delete `resolveStore(...)` / `storeForUri(...)` call paths after all open
   notebook URIs are `local://file/<id>`
-- then evaluate whether the remaining raw-backend code needs a formal
-  interface
+- delete the `NotebookStore` interface after the UI/editor no longer uses
+  URI-based store routing
 
 In this target shape, `LocalNotebooks` owns IndexedDB records, checksum
 comparison, sync scheduling, conflict handling, and local recovery policy.
 Drive/filesystem/contents code is an implementation detail behind
 `LocalNotebooks`, selected by the URI stored in `remoteId`.
 
-This should let us remove or demote the current `NotebookStore` interface as a
-UI-facing concept. We may still keep shared data types such as
-`NotebookStoreItem` or replace them with clearer local-mirror metadata types.
+Remove the current `NotebookStore` CRUD interface rather than preserving it as a
+parallel abstraction. We may still keep shared data types such as
+`NotebookStoreItem` temporarily, or replace them with clearer local-mirror
+metadata types.
+
+Keep `NotebookSaveStore` if it remains useful. It is the narrow autosave seam
+that `NotebookData` calls, and it does not route among storage backends.
 
 ## Proposal 4: Treat Browser-Only IndexedDB as a First-Class Backend
 
@@ -196,10 +242,11 @@ with tooltip "Stored only in this browser."
 6. Remove `resolveStore(...)` from the notebook tab/editor load path.
 7. Change Explorer open-file behavior so fs/contents entries are mirrored
    before opening an editor tab.
-8. Remove or shrink `runme-fs-workspaces` once local filesystem mirrors live in
-   `runme-local-notebooks`.
-9. Revisit `NotebookStore`; delete it if it is no longer pulling its weight, or
-   keep it as a private raw-backend helper.
+8. Migrate existing `runme-fs-workspaces` entries into `runme-local-notebooks`.
+9. Delete the `runme-fs-workspaces` IndexedDB database and associated registry
+   code after the migration path is in place.
+10. Delete the `NotebookStore` interface and update raw backend classes so they
+   no longer implement it.
 
 ## Test Plan
 
