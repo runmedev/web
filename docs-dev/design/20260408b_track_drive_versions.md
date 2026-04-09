@@ -358,10 +358,13 @@ only when we need tabs to update immediately after metadata-only sync events.
 
 ## Proposal 6: Block Drive New-File Creation While Drive Auth Is Unavailable
 
-Start with the simpler UX:
+Start with the simpler UX, but do not rely on a preflight auth check as the
+correctness mechanism. A token that is valid before creation can still expire
+before the network request finishes. The invariant should be stronger:
 
-If the user is creating a new file from a mounted Google Drive folder, require
-Drive auth before creating any local notebook record.
+If the user is creating a new file from a mounted Google Drive folder, do not
+create the local notebook mirror until the Drive file has been created
+successfully and we have its Drive URI.
 
 Current gap after PR #168: `WorkspaceExplorer` calls `LocalNotebooks.create`
 for local mirrored Drive folders. `LocalNotebooks.create` creates a
@@ -375,11 +378,16 @@ case we should remove.
 Flow:
 
 1. User clicks "new file" in a Drive folder.
-2. UI checks Drive auth.
-3. If auth is available, create the Drive file first.
-4. Create the IndexedDB mirror only after Drive returns the file ID.
-5. Persist initial notebook content locally.
-6. Upload that same content and store checksum/revision metadata.
+2. `LocalNotebooks.create(...)` detects that the parent is Drive-backed.
+3. It awaits `DriveNotebookStore.create(parent.remoteId, name)`.
+4. If Drive auth is missing, expired, or fails during the request, the awaited
+   Drive create rejects.
+5. On rejection, do not create a local notebook record; surface auth-required
+   or create-failed UI.
+6. On success, create the IndexedDB mirror using the returned Drive URI as
+   `remoteId`.
+7. Persist the same initial notebook content locally and store checksum/revision
+   metadata.
 
 If auth is unavailable:
 
@@ -390,6 +398,14 @@ If auth is unavailable:
 
 This avoids creating an IndexedDB-only notebook when the user intended to create
 a Drive-backed notebook.
+
+This does not eliminate all token-expiry races. A token can still expire after
+the Drive file is created and before a later autosave. That is acceptable if the
+local mirror already has a Drive `remoteId`: the save should move into
+`pending` or `error` sync state and retry after auth is restored. The bug to
+avoid here is the initial-create failure mode where the notebook is accidentally
+left as browser-only because Drive creation failed after the local record was
+already inserted.
 
 ## Deferred Option: Pending Upstream Creation Queue
 
