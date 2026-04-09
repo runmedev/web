@@ -58,12 +58,6 @@ vi.mock("../../contexts/FilesystemStoreContext", () => ({
   }),
 }));
 
-vi.mock("../../contexts/ContentsStoreContext", () => ({
-  useContentsStore: () => ({
-    store: null,
-  }),
-}));
-
 vi.mock("../../contexts/CurrentDocContext", () => ({
   useCurrentDoc: () => ({
     getCurrentDoc: () => null,

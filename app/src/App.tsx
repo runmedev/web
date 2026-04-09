@@ -27,16 +27,11 @@ import {
   GoogleAuthProvider,
   useGoogleAuth,
 } from "./contexts/GoogleAuthContext";
-import { ContentsNotebookStore } from "./storage/contents";
 import { DriveNotebookStore } from "./storage/drive";
 import { FilesystemNotebookStore } from "./storage/fs";
 import { isFileSystemAccessSupported } from "./storage/fs";
 import LocalNotebooks from "./storage/local";
 import { CurrentDocProvider } from "./contexts/CurrentDocContext";
-import {
-  ContentsStoreProvider,
-  useContentsStore,
-} from "./contexts/ContentsStoreContext";
 import {
   FilesystemStoreProvider,
   useFilesystemStore,
@@ -153,11 +148,8 @@ function App({ branding }: AppProps) {
             <WorkspaceProvider>
               <NotebookStoreProvider>
               <FilesystemStoreProvider>
-              <ContentsStoreProvider>
               <CurrentDocProvider>
-                  <NotebookStoreInitializer
-                    agentEndpoint={configuredAgentEndpoint}
-                  />
+                  <NotebookStoreInitializer />
                   <DriveLinkCoordinatorHost />
                   <SettingsProvider
                     agentEndpoint={configuredAgentEndpoint}
@@ -186,7 +178,6 @@ function App({ branding }: AppProps) {
                     </RunnersProvider>
                   </SettingsProvider>                
                 </CurrentDocProvider>
-              </ContentsStoreProvider>
               </FilesystemStoreProvider>
               </NotebookStoreProvider>
             </WorkspaceProvider>
@@ -197,14 +188,12 @@ function App({ branding }: AppProps) {
   );
 }
 
-function NotebookStoreInitializer({ agentEndpoint }: { agentEndpoint?: string }) {
+function NotebookStoreInitializer() {
   const { ensureAccessToken, isDriveSyncing } = useGoogleAuth();
   const { store, setStore } = useNotebookStore();
   const { fsStore, setFsStore } = useFilesystemStore();
-  const { contentsStore, setContentsStore } = useContentsStore();
   const instanceRef = useRef<LocalNotebooks | null>(null);
   const fsInstanceRef = useRef<FilesystemNotebookStore | null>(null);
-  const contentsInstanceRef = useRef<ContentsNotebookStore | null>(null);
   const wasDriveSyncingRef = useRef(false);
 
   useEffect(() => {
@@ -219,7 +208,6 @@ function NotebookStoreInitializer({ agentEndpoint }: { agentEndpoint?: string })
     );
     const localStore = new LocalNotebooks(driveStore);
     localStore.setFilesystemStore(fsInstanceRef.current);
-    localStore.setContentsStore(contentsInstanceRef.current);
 
     appState.setDriveNotebookStore(driveStore);
     appState.setLocalNotebooks(localStore);
@@ -287,33 +275,6 @@ function NotebookStoreInitializer({ agentEndpoint }: { agentEndpoint?: string })
     fsInstanceRef.current = filesystemStore;
     setFsStore(filesystemStore);
   }, [fsStore, setFsStore]);
-
-  useEffect(() => {
-    if (contentsInstanceRef.current || contentsStore) {
-      return;
-    }
-
-    if (!agentEndpoint) {
-      return;
-    }
-
-    const contentsStoreInstance = new ContentsNotebookStore(
-      agentEndpoint,
-      async () => {
-        const authData = await getAuthData();
-        const token = authData?.idToken || "";
-        if (token) {
-          return { Authorization: `Bearer ${token}` };
-        }
-        return {};
-      },
-    );
-
-    appState.setContentsStore(contentsStoreInstance);
-    instanceRef.current?.setContentsStore(contentsStoreInstance);
-    contentsInstanceRef.current = contentsStoreInstance;
-    setContentsStore(contentsStoreInstance);
-  }, [agentEndpoint, contentsStore, setContentsStore]);
 
   return null;
 }

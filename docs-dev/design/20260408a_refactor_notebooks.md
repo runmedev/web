@@ -13,11 +13,9 @@ and one-time imports, but editor tabs should save/load through the local mirror.
 Status in PR #168:
 
 1. Done: use `LocalNotebooks` / IndexedDB as the local mirror for editable
-   browser-only, Google Drive, File System Access, and contents-service
-   notebooks.
-2. Done: when an `fs://...` or `contents://...` file is opened,
-   `NotebookContext` mirrors it and switches the editor tab to
-   `local://file/<id>`.
+   browser-only, Google Drive, and File System Access notebooks.
+2. Done: when an `fs://...` file is opened, `NotebookContext` mirrors it and
+   switches the editor tab to `local://file/<id>`.
 3. Done for files: keep `remoteId`, but backfill empty values and treat it as a
    non-empty upstream URI. Browser-only notebooks use `remoteId === id`.
 4. Done: remove the old `NotebookStore` CRUD/routing interface.
@@ -25,7 +23,8 @@ Status in PR #168:
    `WorkspaceExplorer` for workspace trees.
 6. Deferred: migrate/delete `runme-fs-workspaces`. It still stores persisted
    File System Access handles for workspace roots.
-7. Deferred: add a discoverable UI for contents-service workspace roots.
+7. Done: remove the web-side `ContentsNotebookStore`. Investigation found that
+   the matching runme backend service was intentionally not implemented.
 
 ## Background
 
@@ -42,6 +41,13 @@ Drive-backed notebooks the local record stores:
 notebook storage: use `runme-local-notebooks` as the canonical local mirror, and
 treat local filesystem plus `contents://` as upstream backends, just like Drive.
 When the refactor is complete, `runme-fs-workspaces` should be removed.
+
+Important contents-service correction: the `contents://` idea was superseded by
+the File System Access API plan in
+[runmedev/runme#1025](https://github.com/runmedev/runme/issues/1025). A local
+runme checkout contains no `runme.contents.v1` proto, generated code, server
+handler, or route registration. Do not carry contents support forward unless a
+real backend and product entry point are added.
 
 ## History: How the Abstraction Drift Happened
 
@@ -68,13 +74,14 @@ After that shift, `LocalNotebooks` became the app-facing store for browser-only
 and Drive-backed notebooks. Google Drive became an upstream sync target, not the
 identity opened in editor tabs.
 
-The drift happened because later filesystem and contents support reused the old
+The drift happened because later File System Access support reused the old
 `NotebookStore` direct-backend pattern instead of joining the local-mirror
-pattern:
+pattern. Web also accumulated an experimental contents-service client even
+though the corresponding runme backend was not built:
 
 ```text
 Filesystem notebook -> FilesystemNotebookStore / runme-fs-workspaces
-Contents notebook -> ContentsNotebookStore
+Contents notebook -> ContentsNotebookStore -> unimplemented runme.contents.v1 service
 ```
 
 The result is two competing abstractions:
@@ -83,8 +90,9 @@ The result is two competing abstractions:
 - `NotebookStore`: direct CRUD interface plus URI router target
 
 The cleanup in this doc is to finish the design shift: make `LocalNotebooks`
-the single app-facing notebook store, treat Drive/filesystem/contents as
-upstreams, and remove the old `NotebookStore` routing layer.
+the single app-facing notebook store, treat Drive/filesystem as upstreams,
+delete contents-service dead code, and remove the old `NotebookStore` routing
+layer.
 
 ## Current Interface Model
 
@@ -100,9 +108,6 @@ Today's relevant layers are:
 - `FilesystemNotebookStore`: local filesystem backend with a separate IndexedDB
   handle database; it implements enough of `StorageBrowser` to browse selected
   workspace roots
-- `ContentsNotebookStore`: HTTP contents-service backend; it implements enough
-  of `StorageBrowser` to browse `contents://.../dir/...` roots when one is in
-  the workspace
 - `NotebookStoreContext`: legacy-named React context that exposes
   `LocalNotebooks`, not an arbitrary store
 
@@ -120,17 +125,17 @@ The workspace explorer still has a separate browsing path:
 ```text
 WorkspaceExplorer
   -> StorageBrowser
-  -> LocalNotebooks | FilesystemNotebookStore | ContentsNotebookStore
+  -> LocalNotebooks | FilesystemNotebookStore
 ```
 
 That split is intentional. The explorer must be able to list upstream folders
 before any notebook has been opened/mirrored. The editor should not load or
 save directly through those upstream browser adapters.
 
-When an upstream file is opened:
+When a filesystem file is opened:
 
 ```text
-fs://... or contents://... selected in explorer
+fs://... selected in explorer
   -> NotebookContext loads once from the upstream store
   -> LocalNotebooks.addNotebook(upstreamUri, name, notebook)
   -> current/open document changes to local://file/<id>
@@ -150,13 +155,11 @@ Support upstream categories explicitly:
 | IndexedDB only | browser-only notebook; no external file | `local://file/<same-id>` |
 | Google Drive | Drive blob file | current `https://drive.google.com/...` URL |
 | File System Access | browser handle-backed file | current `fs://workspace/.../file/...` URI |
-| Contents service | remote contents-service file | current `contents://<host>/file/...` URI |
 
 Use the canonical app URI for the upstream resource. For Drive this is the
 shareable `https://drive.google.com/...` URL. For File System Access this is
 currently the handle-backed `fs://...` URI; browsers do not expose a stable
-absolute OS path. For the contents service this is the `contents://...` URI
-that identifies the configured service plus relative path.
+absolute OS path.
 
 ## Proposal 2: Make `remoteId` an Explicit Upstream URI
 
@@ -199,13 +202,6 @@ id = local://file/123
 remoteId = fs://workspace/<workspace-id>/file/<path>
 ```
 
-For contents-service-backed notebooks:
-
-```text
-id = local://file/123
-remoteId = contents://localhost:9977/file/path%2Fto%2Fnotebook.json
-```
-
 Then the URI scheme selects the upstream. Empty string stops being part of the
 state machine.
 
@@ -223,8 +219,8 @@ they must not treat arbitrary URI strings as Drive IDs.
 First clean up the existing abstraction boundary:
 
 - make `LocalNotebooks` the app-facing notebook store
-- stop routing UI/editor save-load flows directly to filesystem, contents, or
-  raw Drive stores
+- stop routing UI/editor save-load flows directly to filesystem or raw Drive
+  stores
 - mirror notebooks from Google Drive, filesystem, and IndexedDB-only records
   into `LocalNotebooks`
 - delete `resolveStore(...)` / `storeForUri(...)` call paths after all open
@@ -234,8 +230,8 @@ First clean up the existing abstraction boundary:
 
 In this target shape, `LocalNotebooks` owns IndexedDB records, checksum
 comparison, sync scheduling, conflict handling, and local recovery policy.
-Drive/filesystem/contents code is an implementation detail behind
-`LocalNotebooks`, selected by the URI stored in `remoteId`.
+Drive/filesystem code is an implementation detail behind `LocalNotebooks`,
+selected by the URI stored in `remoteId`.
 
 PR #168 removes the old `NotebookStore` CRUD interface rather than preserving
 it as a parallel abstraction. We still keep shared metadata types such as
@@ -292,12 +288,11 @@ with tooltip "Stored only in this browser."
    - set `remoteId = fs://...`
    - store file contents in `doc`
    - store content checksum in `md5Checksum`
-5. Done: add contents-service mirror/import path using `remoteId =
-   contents://...`.
+5. Done: remove the contents-service mirror/import path.
 6. Done: change `NotebookContext` / editor load/save to operate on local URIs.
 7. Done: remove `resolveStore(...)` from the notebook tab/editor load path.
-8. Done: change Explorer open-file behavior so fs/contents entries are
-   mirrored before opening an editor tab.
+8. Done: change Explorer open-file behavior so fs entries are mirrored before
+   opening an editor tab.
 9. Done: delete the `NotebookStore` interface and stop typing raw backend
    classes as generic notebook stores.
 10. Done: add `StorageBrowser` as the workspace explorer's narrow storage
@@ -369,25 +364,23 @@ and its registry code.
 
 ### Contents Service
 
-`ContentsNotebookStore` is real code, but it is only partially surfaced to
-users:
+Remove contents-service storage code from the web app.
 
-- The app creates a `ContentsNotebookStore` when an agent endpoint is
-  configured.
-- `WorkspaceExplorer` can browse a `contents://.../dir/...` workspace item if
-  that URI is already present in workspace state.
-- `NotebookContext` can open a `contents://.../file/...` URI, mirror it into
-  `LocalNotebooks`, and move the editor to a `local://file/<id>` URI.
-- `LocalNotebooks` can sync local edits back to `contents://...` through the
-  contents store when it is available.
-- `CurrentDocContext` accepts a `?doc=contents://.../file/...` URL.
-- The App Console can open an explicit contents URI through
-  `app.openNotebook(uri)`.
+Findings:
 
-There is not currently a discoverable end-user UI equivalent to "Connect remote
-contents workspace." The app also does not automatically mount
-`contentsStore.getRootUri()` in WorkspaceExplorer. Treat contents support as a
-backend capability plus developer/power-user entry point until we add that UI.
+- `app/src/storage/contents.ts` is a custom HTTP client for
+  `/runme.contents.v1.ContentsService/{List,Read,Write,Rename,Stat}`.
+- A local runme checkout does not define or generate a `runme.contents.v1`
+  service.
+- A local runme checkout does not register a matching HTTP/Connect handler.
+- `runmedev/runme#1025` explicitly changed direction: use the browser File
+  System Access API for local files and keep the Go backend focused on
+  execution / parser services.
+- The current web UI has no discoverable "connect contents workspace" action.
+
+Conclusion: contents-service support was dead-end code in this repo. PR #168
+deletes the web client/context/routing/tests. Do not add it back unless we
+revive the backend service and add a product entry point.
 
 ## Test Plan
 
@@ -405,18 +398,14 @@ backend capability plus developer/power-user entry point until we add that UI.
   upload happens through the mirror sync path.
 - Save edits to filesystem-backed notebook and verify local mirror changes
   first; filesystem write-back uses the upstream URI recorded in `remoteId`.
-- Open a `contents://.../file/...` notebook with a configured contents store and
-  verify the open tab becomes `local://file/<id>` while `remoteId` remains the
-  contents URI.
 - Reload the app and verify open notebooks restore from local URIs.
-- Verify `WorkspaceExplorer` can still browse `fs://...` and `contents://...`
-  folder roots through `StorageBrowser`.
+- Verify `WorkspaceExplorer` can still browse `fs://...` folder roots through
+  `StorageBrowser`.
+- Verify stale `contents://...` current/open/workspace entries are ignored or
+  removed without creating new editor tabs.
 
 ## Open Questions
 
-- What user-facing action should mount a contents-service root? Options include
-  automatically mounting `contentsStore.getRootUri()`, adding a remote contents
-  button to the explorer, or exposing it through a server/workspace picker.
 - Do folders get the same `remoteId = id` invariant as files? PR #168 focuses
   the required non-empty upstream invariant on file records.
 - Should `NotebookStoreContext` be renamed now that it exposes

@@ -123,8 +123,7 @@ The app supports multiple notebook storage backends:
 
 - `DriveNotebookStore` - Google Drive via GAPI
 - `FilesystemNotebookStore` - Browser File System Access API
-- `ContentsNotebookStore` - HTTP API via agent endpoint
-- `LocalNotebooks` - In-memory session storage
+- `LocalNotebooks` - IndexedDB-backed local mirror and app-facing notebook store
 
 ## Protobuf Types
 

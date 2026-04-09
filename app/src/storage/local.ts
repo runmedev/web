@@ -9,7 +9,6 @@ import { aisreClientManager as runmeClientManager } from "../lib/aisreClientMana
 import { appState } from "../lib/runtime/AppState";
 import { appLogger } from "../lib/logging/runtime";
 import { DriveNotebookStore, isDriveItemUri } from "./drive";
-import type { ContentsNotebookStore } from "./contents";
 import type { FilesystemNotebookStore } from "./fs";
 import {
   NotebookStoreItem,
@@ -102,7 +101,6 @@ export class LocalNotebooks extends Dexie {
 
   private readonly driveStore: DriveNotebookStore;
   private filesystemStore: FilesystemNotebookStore | null = null;
-  private contentsStore: ContentsNotebookStore | null = null;
 
   private readonly syncSubjects = new Map<string, Subject<void>>();
   private readonly markdownSyncSubjects = new Map<string, Subject<void>>();
@@ -177,10 +175,6 @@ export class LocalNotebooks extends Dexie {
 
   setFilesystemStore(store: FilesystemNotebookStore | null): void {
     this.filesystemStore = store;
-  }
-
-  setContentsStore(store: ContentsNotebookStore | null): void {
-    this.contentsStore = store;
   }
 
   /**
@@ -911,7 +905,7 @@ export class LocalNotebooks extends Dexie {
       return;
     }
 
-    if (isFilesystemUri(record.remoteId) || isContentsUri(record.remoteId)) {
+    if (isFilesystemUri(record.remoteId)) {
       await this.syncSerializedNotebookUpstream(localUri, record);
       return;
     }
@@ -1089,9 +1083,6 @@ export class LocalNotebooks extends Dexie {
   } | null {
     if (isFilesystemUri(upstreamUri)) {
       return this.filesystemStore;
-    }
-    if (isContentsUri(upstreamUri)) {
-      return this.contentsStore;
     }
     return null;
   }
@@ -1462,8 +1453,4 @@ function publicRemoteUri(record: { id: string; remoteId: string }): string | und
 
 function isFilesystemUri(uri: string | undefined): boolean {
   return uri?.startsWith("fs://") ?? false;
-}
-
-function isContentsUri(uri: string | undefined): boolean {
-  return uri?.startsWith("contents://") ?? false;
 }

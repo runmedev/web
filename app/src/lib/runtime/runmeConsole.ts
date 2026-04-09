@@ -30,7 +30,7 @@ export type NotebookSummary = {
   uri: string;
   name: string;
   isOpen: boolean;
-  source: "local" | "fs" | "contents" | "drive";
+  source: "local" | "fs" | "drive";
 };
 
 export type NotebookQuery = {
@@ -137,9 +137,6 @@ function inferNotebookSource(uri: string): NotebookSummary["source"] {
   }
   if (normalized.startsWith("fs://") || normalized.startsWith("file://")) {
     return "fs";
-  }
-  if (normalized.startsWith("contents://")) {
-    return "contents";
   }
   if (normalized.startsWith("https://drive.google.com/")) {
     return "drive";

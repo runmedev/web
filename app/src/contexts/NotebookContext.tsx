@@ -15,7 +15,6 @@ import { NotebookData, type NotebookSnapshot } from "../lib/notebookData";
 import { parser_pb } from "./CellContext";
 import { type NotebookDataLike } from "../lib/runtime/runmeConsole";
 import { useNotebookStore } from "./NotebookStoreContext";
-import { useContentsStore } from "./ContentsStoreContext";
 import { useFilesystemStore } from "./FilesystemStoreContext";
 import { useCurrentDoc } from "./CurrentDocContext";
 import {
@@ -77,12 +76,8 @@ function isNotFoundError(error: unknown): boolean {
 function isWaitingForUpstreamStore(
   uri: string,
   fsStore: unknown,
-  contentsStore: unknown,
 ): boolean {
-  return (
-    (uri.startsWith("fs://") && !fsStore) ||
-    (uri.startsWith("contents://") && !contentsStore)
-  );
+  return uri.startsWith("fs://") && !fsStore;
 }
 
 function loadStoredOpenNotebooks(): NotebookStoreItem[] {
@@ -184,7 +179,6 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     });
   }, []);
   const { store: notebookStore } = useNotebookStore();
-  const { contentsStore } = useContentsStore();
   const { fsStore } = useFilesystemStore();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const hasRestoredNotebooks = useRef(false);
@@ -342,7 +336,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     });
     //setOpenNotebooks(stored);
     hasRestoredNotebooks.current = true;
-  }, [ensureNotebook, notebookStore, contentsStore, fsStore]);
+  }, [ensureNotebook, notebookStore, fsStore]);
 
   const useNotebookList = useCallback(() => {
     return openNotebooks;
@@ -417,11 +411,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
         };
       }
 
-      const upstreamStore = uri.startsWith("fs://")
-        ? fsStore
-        : uri.startsWith("contents://")
-          ? contentsStore
-          : null;
+      const upstreamStore = uri.startsWith("fs://") ? fsStore : null;
       if (!upstreamStore) {
         return null;
       }
@@ -441,7 +431,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
         notebook: localNotebook,
       };
     },
-    [contentsStore, fsStore, notebookStore],
+    [fsStore, notebookStore],
   );
 
   // Keep a cached list snapshot in sync for useSyncExternalStore consumers and persist to localStorage.
@@ -489,7 +479,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
           dropStaleNotebook(item.uri);
           continue;
         }
-        if (isWaitingForUpstreamStore(item.uri, fsStore, contentsStore)) {
+        if (isWaitingForUpstreamStore(item.uri, fsStore)) {
           continue;
         }
         entry.data.setNotebookStore(notebookStore);
@@ -532,7 +522,6 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     ensureNotebook,
     getCurrentDoc,
     fsStore,
-    contentsStore,
     loadNotebookIntoLocalMirror,
     notebookStore,
     openNotebooks,
@@ -549,7 +538,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     if (!notebookStore) {
       return;
     }
-    if (isWaitingForUpstreamStore(uri, fsStore, contentsStore)) {
+    if (isWaitingForUpstreamStore(uri, fsStore)) {
       return;
     }
     let entry = storeRef.current.get(uri);
@@ -597,7 +586,6 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     ensureNotebook,
     getCurrentDoc,
     fsStore,
-    contentsStore,
     loadNotebookIntoLocalMirror,
     notebookStore,
     removeNotebookEntry,

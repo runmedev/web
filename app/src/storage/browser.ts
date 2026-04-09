@@ -7,14 +7,13 @@ import type { NotebookStoreItem } from "./notebook";
  * This is the "can the user browse this storage system?" contract. Backends
  * that satisfy it can be shown in WorkspaceExplorer as folder/file trees,
  * regardless of whether the backend is the local IndexedDB mirror
- * (LocalNotebooks) or an upstream folder source (FilesystemNotebookStore or
- * ContentsNotebookStore).
+ * (LocalNotebooks) or an upstream folder source (FilesystemNotebookStore).
  *
  * It is deliberately not the notebook editor's persistence API: keep
  * notebook-content load/save out of this interface. When the user opens an
- * upstream fs:// or contents:// file, NotebookContext loads that upstream
- * notebook once, mirrors it into LocalNotebooks, and switches the editor to the
- * resulting local://file/... URI.
+ * upstream fs:// file, NotebookContext loads that upstream notebook once,
+ * mirrors it into LocalNotebooks, and switches the editor to the resulting
+ * local://file/... URI.
  */
 export interface StorageBrowser {
   list(uri: string): Promise<NotebookStoreItem[]>;
