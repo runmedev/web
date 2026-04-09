@@ -54,12 +54,27 @@ type TreeNode = {
   children?: TreeNode[];
 };
 
-type ExplorerNotebookSource = {
+/**
+ * Minimal storage facade used by WorkspaceExplorer to render and mutate the
+ * workspace file tree.
+ *
+ * This is deliberately a browser/explorer API, not the notebook persistence
+ * API used by editor tabs. It can point at the local IndexedDB mirror
+ * (LocalNotebooks) or at an upstream folder source (FilesystemNotebookStore or
+ * ContentsNotebookStore) because the explorer must list upstream directory
+ * children before a file is open.
+ *
+ * Keep load/save out of this contract. When the user opens an upstream
+ * fs:// or contents:// file, NotebookContext loads that upstream notebook once,
+ * mirrors it into LocalNotebooks, and switches the editor to the resulting
+ * local://file/... URI.
+ */
+interface StorageBrowser {
   list(uri: string): Promise<NotebookStoreItem[]>;
   getMetadata(uri: string): Promise<NotebookStoreItem | null>;
   create(parentUri: string, name: string): Promise<NotebookStoreItem>;
   rename(uri: string, name: string): Promise<NotebookStoreItem>;
-};
+}
 
 function createPlaceholderNode(uri: string, label: string): TreeNode {
   return {
@@ -213,20 +228,19 @@ function EditableTreeNode({
  * Workspace folder browsing can still target raw upstream adapters. Opening an
  * upstream file mirrors it through LocalNotebooks before an editor tab loads.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function storeForUri(
   uri: string,
-  localStore: any,
-  fsStoreInstance: ExplorerNotebookSource | null,
-  contentsStoreInstance?: ExplorerNotebookSource | null,
-): ExplorerNotebookSource | null {
+  localStore: StorageBrowser | null,
+  fsStoreInstance: StorageBrowser | null,
+  contentsStoreInstance?: StorageBrowser | null,
+): StorageBrowser | null {
   if (uri.startsWith("contents://")) {
     return contentsStoreInstance ?? null;
   }
   if (uri.startsWith("fs://")) {
     return fsStoreInstance;
   }
-  return localStore as ExplorerNotebookSource | null;
+  return localStore;
 }
 
 export function WorkspaceExplorer() {
@@ -309,7 +323,7 @@ export function WorkspaceExplorer() {
           continue;
         }
 
-        let localUri = uri;
+        const localUri = uri;
         if (!uri.startsWith("local://")) {
           try {
             parseDriveItem(uri);
@@ -542,14 +556,14 @@ export function WorkspaceExplorer() {
           });
         } else {
           // Local/Drive store: use getMetadata() + children array.
-          const folderMetadata = await (store as any).getMetadata(uri);
+          const folderMetadata = await targetStore.getMetadata(uri);
           if (!folderMetadata || folderMetadata.type !== NotebookStoreItemType.Folder) {
             throw new Error(`URI ${uri} is not a folder or metadata is missing.`);
           }
 
           childNodes = [];
           for (const childUri of folderMetadata.children) {
-            const childMetadata = await (store as any).getMetadata(childUri);
+            const childMetadata = await targetStore.getMetadata(childUri);
             if (childMetadata?.type === NotebookStoreItemType.Folder) {
               childNodes.push(
                 createFolderNode(childMetadata.uri, childMetadata.name, {
