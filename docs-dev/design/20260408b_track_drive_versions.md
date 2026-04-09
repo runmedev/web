@@ -112,7 +112,6 @@ Illustrative shape:
 interface UpstreamVersion {
   checksum?: string;
   revisionId?: string;
-  objectVersion?: string;
   modifiedTime?: string;
   sizeBytes?: number;
 }
@@ -130,7 +129,8 @@ clear `lastSyncError`.
 Backend examples:
 
 - Google Drive fills `checksum = files.md5Checksum`,
-  `revisionId = files.headRevisionId`, and `objectVersion = files.version`.
+  `revisionId = files.headRevisionId`, and may later fill `modifiedTime` or
+  `sizeBytes` if those help diagnostics.
 - File System Access fills `checksum` by hashing the serialized file contents.
   It may later fill `modifiedTime` and `sizeBytes` from `File` metadata, but it
   does not need a `revisionId`.
@@ -151,6 +151,10 @@ The Drive `files.get` response has several version-like fields:
 Drive `files.version` is deliberately broader than content. Google documents it
 as a monotonically increasing number reflecting every server-side file change,
 including changes that are not visible to the user.
+
+Do not persist `files.version` as part of `UpstreamVersion` unless we add a
+separate diagnostics-only use case. It is too broad for sync correctness and is
+not the user-visible revision identity we need for restore/version UI.
 
 Drive `headRevisionId` corresponds to the current content revision for our JSON
 blob files. It is the API-level identity closest to the "Current version" row in
@@ -187,14 +191,14 @@ function toUpstreamVersion(metadata: DriveFileMetadata): UpstreamVersion {
   return {
     checksum: metadata.md5Checksum,
     revisionId: metadata.headRevisionId,
-    objectVersion: metadata.version,
   };
 }
 ```
 
 Update the Drive store to fetch and return this object in metadata paths that
 currently fetch `md5Checksum,headRevisionId,version` but keep only
-`md5Checksum`.
+`md5Checksum`. As part of this change, stop requesting `version` from
+`VERSION_FIELDS` unless a concrete diagnostics-only use case is added.
 
 Current code detail: `DriveNotebookStore` already defines:
 
@@ -210,7 +214,6 @@ new ad hoc `getHeadRevisionId` calls:
 interface DriveVersionMetadata {
   md5Checksum?: string;
   headRevisionId?: string;
-  version?: string;
 }
 
 class DriveNotebookStore {
