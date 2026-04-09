@@ -261,8 +261,6 @@ attrs:
   upstreamChecksum
   previousUpstreamRevisionId
   upstreamRevisionId
-  previousUpstreamObjectVersion
-  upstreamObjectVersion
   localBytes
   upstreamBytes
   reason
@@ -278,7 +276,6 @@ attrs:
   remoteId
   uploadedChecksum
   uploadedRevisionId
-  uploadedObjectVersion
 ```
 
 This gives support/debugging enough information to compare IndexedDB state,
@@ -525,16 +522,11 @@ old blob revision forever.
 - Modify local and upstream concurrently; verify conflict path still preserves
   local content.
 
-## Open Questions
+## Resolved Decisions
 
-- Should the sync indicator live in the tab, the notebook toolbar, or both?
-  - Decision: tab should be sufficient to start with
-- Should successful immediate sync show a toast, or is the indicator transition
-  sufficient?
-  - Decision: Don't show a toast
-- Should we keep a bounded local recovery snapshot for every upstream-to-local
-  overwrite?
-  - Decision: not right now
-- Should we mark the current Drive revision `keepForever` when a user explicitly
-  asks to preserve or restore it?
-  - Decision: not right now
+- The sync indicator should live in the tab to start.
+- Successful immediate sync should use the indicator transition; do not add a
+  toast in the first implementation.
+- Do not keep a bounded local recovery snapshot for every upstream-to-local
+  overwrite in this pass.
+- Do not mark the current Drive revision `keepForever` in this pass.
