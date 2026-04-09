@@ -876,28 +876,8 @@ export class LocalNotebooks extends Dexie {
     // prefer the local IndexedDB content because overwriting it risks data loss.
     if (!lastReadChecksum && currentRemoteChecksum) {
       if (serializedNotebookHasUserContent(localDoc)) {
-        const parseResult = parseSerializedNotebook(localDoc);
-        if (!parseResult.ok) {
-          appLogger.warn(
-            "Forking unparsable local notebook instead of overwriting Drive",
-            {
-              attrs: {
-                scope: "storage.drive.sync",
-                localUri,
-                remoteUri,
-                remoteChecksum: currentRemoteChecksum,
-                localChecksum,
-                error: String(parseResult.error),
-              },
-            },
-          );
-          await this.handleConflict(localUri, record, currentRemoteChecksum);
-          synced = true;
-          return;
-        }
-
         appLogger.warn(
-          "Pushing local notebook to Drive without a baseline checksum",
+          "Forking local notebook because Drive exists without a baseline checksum",
           {
             attrs: {
               scope: "storage.drive.sync",
@@ -908,14 +888,7 @@ export class LocalNotebooks extends Dexie {
             },
           },
         );
-        await this.driveStore.save(remoteUri, parseResult.notebook);
-        const updatedChecksum =
-          (await this.driveStore.getChecksum(remoteUri)) ?? "";
-        await this.files.update(localUri, {
-          lastRemoteChecksum: updatedChecksum,
-          md5Checksum: localChecksum,
-          lastSynced: nowIsoString(),
-        });
+        await this.handleConflict(localUri, record, currentRemoteChecksum);
         synced = true;
         return;
       }
@@ -1037,8 +1010,28 @@ export class LocalNotebooks extends Dexie {
     const newName = `${baseName}.${timestamp}.json`;
 
     const newFile = await this.driveStore.create(parentRemoteUri, newName);
-    const notebook = deserializeNotebook(record.doc ?? "");
-    await this.driveStore.save(newFile.uri, notebook);
+    const localDoc = record.doc ?? "";
+    const parseResult = parseSerializedNotebook(localDoc);
+    if (parseResult.ok) {
+      await this.driveStore.save(newFile.uri, parseResult.notebook);
+    } else {
+      appLogger.warn(
+        "Saving raw local notebook JSON to conflict file because parsing failed",
+        {
+          attrs: {
+            scope: "storage.drive.sync",
+            localUri,
+            newRemoteUri: newFile.uri,
+            error: String(parseResult.error),
+          },
+        },
+      );
+      await this.driveStore.saveContent(
+        newFile.uri,
+        localDoc,
+        "application/json",
+      );
+    }
 
     await this.files.update(localUri, {
       name: newName,
