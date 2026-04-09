@@ -30,8 +30,9 @@ Recommended changes:
 4. Add a small per-notebook sync-state indicator in the tab bar.
 5. Let users click the indicator to force immediate sync through
    `LocalNotebooks.sync(localUri)`.
-6. Reject new Drive-file creation while Drive auth is unavailable until we have
-   a durable pending-upstream-creation queue.
+6. Persist pending Drive-file creation state so users can create locally while
+   Drive auth is unavailable, then complete upstream creation after auth
+   recovers.
 
 Keep using content checksum (`md5Checksum`) and upstream content checksum
 (`lastRemoteChecksum`) as the sync/conflict predicate where possible. Upstream
@@ -93,6 +94,11 @@ The supported upstreams after PR #168 are:
 | Google Drive | `https://drive.google.com/...` | Drive-only flows must use `isDriveItemUri`, not permissive `parseDriveItem`. |
 | File System Access | `fs://workspace/<workspace-id>/file/<path>` | Browser handle-backed upstream; do not document this as `file://`. |
 
+Current PR #168 code normalizes empty `remoteId` values to `id` for existing
+records. Introducing `remoteId === ""` as a pending-upstream-create state would
+therefore be a new explicit state, not the current browser-only representation.
+Proposal 6 describes that new state.
+
 The contents-service path has been removed. Do not design new sync/version
 state around `contents://...` unless a real backend service and product entry
 point are reintroduced.
@@ -119,12 +125,13 @@ interface UpstreamVersion {
 interface LocalFileRecord {
   lastUpstreamVersion?: UpstreamVersion;
   lastSyncError?: string;
+  parentRemoteIdWhenCreated?: string;
 }
 ```
 
 Adding these fields requires a new Dexie migration after schema version 4.
 Backfill should leave `lastUpstreamVersion` undefined for existing records and
-clear `lastSyncError`.
+clear `lastSyncError` and `parentRemoteIdWhenCreated`.
 
 Backend examples:
 
@@ -314,6 +321,7 @@ type NotebookSyncStatus =
   | "local-only"
   | "synced"
   | "pending"
+  | "pending-upstream-create"
   | "syncing"
   | "error";
 
@@ -321,6 +329,7 @@ interface NotebookSyncState {
   status: NotebookSyncStatus;
   localUri: string;
   remoteId: string;
+  parentRemoteIdWhenCreated?: string;
   lastSynced?: string;
   lastUpstreamVersion?: UpstreamVersion;
   lastError?: string;
@@ -343,7 +352,10 @@ needed.
 
 `getSyncState` can be derived from the existing fields at first:
 
-- `remoteId === id` or `remoteId` is empty: `local-only`
+- `remoteId === id`: `local-only`
+- `remoteId === "" && parentRemoteIdWhenCreated`:
+  `pending-upstream-create`
+- `remoteId === ""` without `parentRemoteIdWhenCreated`: `error`
 - upstream is Drive or `fs://...` and `md5Checksum === lastRemoteChecksum`:
   `synced`
 - upstream is Drive or `fs://...` and `md5Checksum !== lastRemoteChecksum`:
@@ -356,15 +368,12 @@ The first implementation can omit `subscribeSync` and poll/recompute when
 NotebookData emits, if that is enough for the tab indicator. Add a subscription
 only when we need tabs to update immediately after metadata-only sync events.
 
-## Proposal 6: Block Drive New-File Creation While Drive Auth Is Unavailable
+## Proposal 6: Persist Pending Drive New-File Creation
 
-Start with the simpler UX, but do not rely on a preflight auth check as the
-correctness mechanism. A token that is valid before creation can still expire
-before the network request finishes. The invariant should be stronger:
-
-If the user is creating a new file from a mounted Google Drive folder, do not
-create the local notebook mirror until the Drive file has been created
-successfully and we have its Drive URI.
+Allow local document creation even when Drive auth is unavailable, but make the
+missing upstream creation state explicit and durable. Do not rely on a preflight
+auth check; a token that is valid before creation can still expire before the
+network request finishes.
 
 Current gap after PR #168: `WorkspaceExplorer` calls `LocalNotebooks.create`
 for local mirrored Drive folders. `LocalNotebooks.create` creates a
@@ -383,29 +392,47 @@ local file whose `remoteId` looks browser-only. We can infer that it sits under 
 Drive-backed local folder, but there is no explicit "pending Drive create for
 parent X" state on the file.
 
+Add a transitory parent snapshot to `LocalFileRecord`, for example:
+
+```ts
+interface LocalFileRecord {
+  remoteId: string; // "" while pending upstream creation
+  parentRemoteIdWhenCreated?: string;
+}
+```
+
+`parentRemoteIdWhenCreated` should contain the parent's upstream URI at the time
+the local file was created, for example the Drive folder URL. It is deliberately
+not a live parent pointer and should not be kept up to date if the remote file or
+folder is later moved in Google Drive. Once the Drive file is created and
+`remoteId` is set to the Drive file URL, clear `parentRemoteIdWhenCreated`.
+
 Flow:
 
 1. User clicks "new file" in a Drive folder.
 2. `LocalNotebooks.create(...)` detects that the parent is Drive-backed.
-3. It awaits `DriveNotebookStore.create(parent.remoteId, name)`.
-4. If Drive auth is missing, expired, or fails during the request, the awaited
-   Drive create rejects.
-5. On rejection, do not create a local notebook record; surface auth-required
-   or create-failed UI.
-6. On success, create the IndexedDB mirror using the returned Drive URI as
-   `remoteId`.
-7. Persist the same initial notebook content locally and store checksum/revision
-   metadata.
+3. It creates the local record with `remoteId = ""` and
+   `parentRemoteIdWhenCreated = parent.remoteId`.
+4. It adds the local file URI to the local folder's `children`.
+5. It attempts `DriveNotebookStore.create(parent.remoteId, name)` immediately if
+   auth is available.
+6. If Drive create succeeds, set `remoteId` to the Drive file URL, clear
+   `parentRemoteIdWhenCreated`, and store checksum/revision metadata.
+7. If Drive auth is missing, expired, or the app reloads before the async create
+   completes, keep the local file and show it as pending upstream creation.
 
 If auth is unavailable:
 
-1. Do not create a local notebook.
-2. Start login flow or show an auth-required error.
-3. Keep the user in the same Explorer location.
-4. Ask the user to retry creation after auth completes.
+1. Keep the local notebook.
+2. Surface a pending/error sync state on the notebook tab.
+3. On explicit sync or the next background sync after auth is restored, create
+   the Drive file under `parentRemoteIdWhenCreated`.
+4. After successful creation, clear `parentRemoteIdWhenCreated` and continue
+   normal sync using the assigned Drive `remoteId`.
 
-This avoids creating an IndexedDB-only notebook when the user intended to create
-a Drive-backed notebook.
+This avoids silently converting a Drive-intended notebook into a browser-only
+notebook. The local record is allowed to exist first, but it carries enough
+state to complete the upstream creation later.
 
 This does not eliminate all token-expiry races. A token can still expire after
 the Drive file is created and before a later autosave. That is acceptable if the
@@ -415,18 +442,17 @@ avoid here is the initial-create failure mode where the notebook is accidentally
 left as browser-only because Drive creation failed after the local record was
 already inserted.
 
-If we decide to keep a local-first create flow, we should make that state
-explicit instead of relying on folder-child inference. That would require adding
-fields such as `pendingUpstreamParentId`, `pendingUpstreamName`, and
-`lastSyncError`, then a startup reconciler that resumes or surfaces pending
-Drive creates. That is effectively the pending-upstream-creation queue described
-below, so the simpler first step should be remote-first create for Drive-backed
-folders.
+The reconciler should treat `remoteId === "" && parentRemoteIdWhenCreated` as
+"pending upstream creation". If `remoteId === ""` without
+`parentRemoteIdWhenCreated`, treat it as malformed/legacy state and surface an
+error instead of guessing a parent from `LocalFolderRecord.children`.
 
-## Deferred Option: Pending Upstream Creation Queue
+## Deferred Option: General Pending Upstream Creation Queue
 
-Offline upstream-file creation can be supported later, but only with an explicit
-pending creation model.
+The `parentRemoteIdWhenCreated` approach is the smallest durable fix for Drive
+new-file creation. A more general queue can be supported later if we need
+multi-backend offline creation, richer retry state, or multiple pending upstream
+operations per local notebook.
 
 That model would need to persist:
 
@@ -474,22 +500,26 @@ old blob revision forever.
    `LocalNotebooks.sync(localUri)` method for immediate sync.
 7. Add tab-level sync indicator using the sync-state API.
 8. Wire red/failed indicator clicks to immediate sync or required auth/reconnect.
-9. Change Explorer/LocalNotebooks "new Drive file" flow to require auth before
-   creating the local mirror.
-10. Add tests for expired-auth new-file creation.
+9. Change Explorer/LocalNotebooks "new Drive file" flow to persist pending
+   upstream creation state when Drive create cannot complete immediately.
+10. Add tests for expired-auth new-file creation and retry.
 
 ## Test Plan
 
-- Create a Drive-backed notebook and verify IndexedDB records checksum,
-  head revision ID, and Drive version after initial upload.
+- Create a Drive-backed notebook and verify IndexedDB records checksum and head
+  revision ID after initial upload.
 - Create a browser-only notebook and verify sync state is IndexedDB-only.
 - Open/mirror a filesystem notebook and verify sync state uses `fs://...`.
 - Edit a Drive-backed notebook while auth is unavailable; verify tab indicator
   turns red.
 - Click red indicator after restoring auth; verify upload happens immediately
   and indicator turns green.
-- Create new notebook from a Drive folder while auth is unavailable; verify no
-  local file record is created and the UI prompts for login.
+- Create new notebook from a Drive folder while auth is unavailable; verify a
+  local file record is created with `remoteId === ""` and
+  `parentRemoteIdWhenCreated` set to the Drive folder URL.
+- Restore auth and sync the pending notebook; verify the Drive file is created,
+  `remoteId` is set to the Drive file URL, and `parentRemoteIdWhenCreated` is
+  cleared.
 - Modify upstream Drive content from another browser session; verify local
   overwrite is logged with previous and current revision metadata.
 - Modify local and upstream concurrently; verify conflict path still preserves
