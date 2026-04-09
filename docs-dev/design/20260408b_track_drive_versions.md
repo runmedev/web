@@ -181,19 +181,14 @@ checksum comparison.
 
 ## Proposal 2: Persist Drive Revision Provenance
 
-Drive metadata should be adapted into `UpstreamVersion`, not exposed to tab UI
-as a Google-specific state object.
+`LocalNotebooks` remains the app-facing API. Notebook tabs and other UI should
+ask `LocalNotebooks` for sync/version state; they should not import
+`DriveNotebookStore`, call Drive APIs, or receive a Google-specific status
+object.
 
-Illustrative shape:
-
-```ts
-function toUpstreamVersion(metadata: DriveFileMetadata): UpstreamVersion {
-  return {
-    checksum: metadata.md5Checksum,
-    revisionId: metadata.headRevisionId,
-  };
-}
-```
+The Drive-specific work in this proposal is only an internal adapter step:
+capture the Drive metadata that `LocalNotebooks` needs to persist
+`lastRemoteChecksum` and `lastUpstreamVersion`.
 
 Update the Drive store to fetch and return this object in metadata paths that
 currently fetch `md5Checksum,headRevisionId,version` but keep only
@@ -207,8 +202,8 @@ const VERSION_FIELDS = "md5Checksum,headRevisionId,version";
 ```
 
 It requests those fields in `load`, `save`, and `getChecksum`, but it only
-reads/persists `md5Checksum`. Add a typed metadata adapter rather than adding
-new ad hoc `getHeadRevisionId` calls:
+reads/persists `md5Checksum`. Add a typed metadata return value rather than
+adding new ad hoc `getHeadRevisionId` calls:
 
 ```ts
 interface DriveVersionMetadata {
@@ -217,12 +212,23 @@ interface DriveVersionMetadata {
 }
 
 class DriveNotebookStore {
-  getVersion(uri: string): Promise<UpstreamVersion | null>;
+  getVersionMetadata(uri: string): Promise<DriveVersionMetadata | null>;
 }
 ```
 
-Then `LocalNotebooks.syncFile(...)` can update both `lastRemoteChecksum` and
-`lastUpstreamVersion` from the same metadata read.
+Then `LocalNotebooks.syncFile(...)` can translate that Drive metadata into the
+generic `LocalFileRecord` fields:
+
+```ts
+lastRemoteChecksum = metadata.md5Checksum ?? "";
+lastUpstreamVersion = {
+  checksum: metadata.md5Checksum,
+  revisionId: metadata.headRevisionId,
+};
+```
+
+This translation belongs inside `LocalNotebooks` or a private storage helper,
+not in the tab UI.
 
 ## Proposal 3: Structured Logging for Overwrites and Revision Transitions
 
