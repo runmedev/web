@@ -4,7 +4,6 @@ import { parser_pb } from "../runme/client";
 import { getGoogleDriveBaseUrl } from "../lib/googleDriveRuntime";
 import {
   type ConflictResult,
-  NotebookStore,
   NotebookStoreItem,
   NotebookStoreItemType,
 } from "./notebook";
@@ -606,7 +605,7 @@ function extractBody(response: { body?: string; result?: unknown }): string {
   throw new Error("Google Drive response did not include any content");
 }
 
-export class DriveNotebookStore implements NotebookStore {
+export class DriveNotebookStore {
   // ensureAccessToken is injected because it comes from the GoogleAuthContext
   constructor(private readonly ensureAccessToken: () => Promise<string>) {}
 

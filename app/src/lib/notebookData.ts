@@ -8,7 +8,8 @@ import {
 
 /**
  * Minimal store interface used by NotebookData for auto-saving.
- * Both LocalNotebooks and ContentsNotebookStore satisfy this contract.
+ * NotebookData should normally receive LocalNotebooks so editor autosaves land
+ * in the IndexedDB mirror before any upstream sync runs.
  */
 export interface NotebookSaveStore {
   save(uri: string, notebook: parser_pb.Notebook): Promise<unknown>;

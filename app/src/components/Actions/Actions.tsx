@@ -21,8 +21,6 @@ import {
 import { CellData } from "../../lib/notebookData";
 import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
-import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
-import { useContentsStore } from "../../contexts/ContentsStoreContext";
 import { useOutput } from "../../contexts/OutputContext";
 import CellConsole, { fontSettings } from "./CellConsole";
 import Editor from "./Editor";
@@ -53,7 +51,6 @@ import {
 } from "../../lib/driveLinkCoordinator";
 import { parseDriveItem } from "../../storage/drive";
 import { NotebookStoreItemType } from "../../storage/notebook";
-import { resolveStore } from "../../storage/storeResolver";
 import DriveLinkStatusTab from "../DriveLinkStatusTab";
 import React from "react";
 
@@ -1213,8 +1210,6 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
 export default function Actions() {
   const { useNotebookList, removeNotebook } = useNotebookContext();
   const { store } = useNotebookStore();
-  const { fsStore } = useFilesystemStore();
-  const { contentsStore } = useContentsStore();
   const openNotebooks = useNotebookList();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const currentDocUri = getCurrentDoc();
@@ -1408,14 +1403,13 @@ export default function Actions() {
         googleDriveUri: isGoogleDriveFileUri(docUri) ? docUri : null,
       });
 
-      const notebookStore = resolveStore(docUri, store, fsStore, contentsStore);
-      if (!notebookStore) {
+      if (!store || !docUri.startsWith("local://")) {
         return;
       }
 
       void (async () => {
         try {
-          const metadata = await notebookStore.getMetadata(docUri);
+          const metadata = await store.getMetadata(docUri);
           const remoteUri = metadata?.remoteUri?.trim() || null;
           setTabContextMenu((current) => {
             if (!current || current.docUri !== docUri) {
@@ -1439,7 +1433,7 @@ export default function Actions() {
         }
       })();
     },
-    [contentsStore, fsStore, store],
+    [store],
   );
 
   const handleCopyTabShareableLink = useCallback(async () => {

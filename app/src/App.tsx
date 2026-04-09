@@ -218,6 +218,8 @@ function NotebookStoreInitializer({ agentEndpoint }: { agentEndpoint?: string })
       ensureAccessToken({ interactive: false }),
     );
     const localStore = new LocalNotebooks(driveStore);
+    localStore.setFilesystemStore(fsInstanceRef.current);
+    localStore.setContentsStore(contentsInstanceRef.current);
 
     appState.setDriveNotebookStore(driveStore);
     appState.setLocalNotebooks(localStore);
@@ -280,6 +282,7 @@ function NotebookStoreInitializer({ agentEndpoint }: { agentEndpoint?: string })
 
     const filesystemStore = new FilesystemNotebookStore();
     appState.setFilesystemStore(filesystemStore);
+    instanceRef.current?.setFilesystemStore(filesystemStore);
 
     fsInstanceRef.current = filesystemStore;
     setFsStore(filesystemStore);
@@ -307,6 +310,7 @@ function NotebookStoreInitializer({ agentEndpoint }: { agentEndpoint?: string })
     );
 
     appState.setContentsStore(contentsStoreInstance);
+    instanceRef.current?.setContentsStore(contentsStoreInstance);
     contentsInstanceRef.current = contentsStoreInstance;
     setContentsStore(contentsStoreInstance);
   }, [agentEndpoint, contentsStore, setContentsStore]);

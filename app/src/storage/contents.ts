@@ -2,7 +2,6 @@ import { create, fromJsonString, toJsonString } from "@bufbuild/protobuf";
 
 import { parser_pb } from "../runme/client";
 import {
-  NotebookStore,
   NotebookStoreItem,
   NotebookStoreItemType,
 } from "./notebook";
@@ -153,15 +152,16 @@ function utf8ToBase64(str: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * ContentsNotebookStore implements `NotebookStore` using the backend
- * ContentsService (ConnectRPC). It talks to the Go backend over HTTP,
+ * ContentsNotebookStore is the backend contents-service adapter. The editor
+ * works against LocalNotebooks; this class lists/loads/saves upstream files by
+ * talking to the Go backend over HTTP,
  * making it automatable in tests and CI (no user gestures required).
  *
  * URI scheme:
  *   contents://<host:port>/file/<encodedRelativePath>
  *   contents://<host:port>/dir/<encodedRelativePath>
  */
-export class ContentsNotebookStore implements NotebookStore {
+export class ContentsNotebookStore {
   private readonly baseURL: string;
   private readonly getAuthHeaders: () => Promise<Record<string, string>>;
 
@@ -216,7 +216,7 @@ export class ContentsNotebookStore implements NotebookStore {
   }
 
   // -----------------------------------------------------------------------
-  // NotebookStore implementation
+  // File/directory operations
   // -----------------------------------------------------------------------
 
   async list(uri: string): Promise<NotebookStoreItem[]> {

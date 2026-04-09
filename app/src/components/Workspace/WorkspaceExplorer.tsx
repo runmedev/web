@@ -23,7 +23,6 @@ import {
 } from "../../lib/shareLinks";
 import { showToast } from "../../lib/toast";
 import {
-  NotebookStore,
   NotebookStoreItem,
   NotebookStoreItemType,
 } from "../../storage/notebook";
@@ -53,6 +52,13 @@ type TreeNode = {
   remoteUri?: string;
   parentUri?: string;
   children?: TreeNode[];
+};
+
+type ExplorerNotebookSource = {
+  list(uri: string): Promise<NotebookStoreItem[]>;
+  getMetadata(uri: string): Promise<NotebookStoreItem | null>;
+  create(parentUri: string, name: string): Promise<NotebookStoreItem>;
+  rename(uri: string, name: string): Promise<NotebookStoreItem>;
 };
 
 function createPlaceholderNode(uri: string, label: string): TreeNode {
@@ -203,25 +209,24 @@ function EditableTreeNode({
 // In addition to viewing Google Drive folders it also supports "local://" URIs
 // which are stored in the browser's IndexedDB.
 /**
- * Return the appropriate NotebookStore for a given URI.
- * - `contents://` URIs route to the ContentsNotebookStore.
- * - `fs://` URIs route to the FilesystemNotebookStore.
- * - Everything else routes to the LocalNotebooks (Drive-backed) store.
+ * Return the explorer source for a given URI.
+ * Workspace folder browsing can still target raw upstream adapters. Opening an
+ * upstream file mirrors it through LocalNotebooks before an editor tab loads.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function storeForUri(
   uri: string,
   localStore: any,
-  fsStoreInstance: NotebookStore | null,
-  contentsStoreInstance?: NotebookStore | null,
-): NotebookStore | null {
+  fsStoreInstance: ExplorerNotebookSource | null,
+  contentsStoreInstance?: ExplorerNotebookSource | null,
+): ExplorerNotebookSource | null {
   if (uri.startsWith("contents://")) {
     return contentsStoreInstance ?? null;
   }
   if (uri.startsWith("fs://")) {
     return fsStoreInstance;
   }
-  return localStore as NotebookStore | null;
+  return localStore as ExplorerNotebookSource | null;
 }
 
 export function WorkspaceExplorer() {

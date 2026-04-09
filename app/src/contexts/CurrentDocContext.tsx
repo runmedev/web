@@ -8,10 +8,17 @@ import {
   useState,
 } from "react";
 
-import { isContentsUri, isFsUri } from "../storage/storeResolver";
 import { appState } from "../lib/runtime/AppState";
 
 const CURRENT_DOC_STORAGE_KEY = "runme/currentDoc";
+
+function isContentsUri(uri: string): boolean {
+  return uri.startsWith("contents://");
+}
+
+function isFsUri(uri: string): boolean {
+  return uri.startsWith("fs://");
+}
 
 interface CurrentDocContextValue {
   getCurrentDoc: () => string | null;

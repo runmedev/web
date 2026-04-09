@@ -22,7 +22,6 @@ import {
   NotebookStoreItem,
   NotebookStoreItemType,
 } from "../storage/notebook";
-import { resolveStore } from "../storage/storeResolver";
 
 type NotebookContextValue = {
   getNotebookData: (uri: string) => NotebookData | undefined;
@@ -47,6 +46,12 @@ type StoreEntry = {
   loaded: boolean;
 };
 
+type NotebookLoadResult = {
+  uri: string;
+  name: string;
+  notebook: parser_pb.Notebook;
+};
+
 type EnsureNotebookArgs = {
   /** Canonical URI that keys the NotebookData instance. */
   uri: string;
@@ -67,6 +72,17 @@ function isNotFoundError(error: unknown): boolean {
   }
   const message = error.message.toLowerCase();
   return message.includes("not found");
+}
+
+function isWaitingForUpstreamStore(
+  uri: string,
+  fsStore: unknown,
+  contentsStore: unknown,
+): boolean {
+  return (
+    (uri.startsWith("fs://") && !fsStore) ||
+    (uri.startsWith("contents://") && !contentsStore)
+  );
 }
 
 function loadStoredOpenNotebooks(): NotebookStoreItem[] {
@@ -107,6 +123,9 @@ function loadStoredOpenNotebooks(): NotebookStoreItem[] {
             ? (candidate.children as string[])
             : [],
           remoteUri: candidate.remoteUri,
+          parents: Array.isArray(candidate.parents)
+            ? (candidate.parents as string[])
+            : [],
         } satisfies NotebookStoreItem;
       })
       .filter((item): item is NotebookStoreItem => Boolean(item));
@@ -173,14 +192,8 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
   const ensureNotebook = useCallback(
     ({ uri, name, notebook, loaded = false }: EnsureNotebookArgs) => {
       const existing = storeRef.current.get(uri);
-      const effectiveStore = resolveStore(
-        uri,
-        notebookStore,
-        fsStore,
-        contentsStore,
-      );
       if (existing) {
-        existing.data.setNotebookStore(effectiveStore ?? null);
+        existing.data.setNotebookStore(notebookStore ?? null);
         return existing.data;
       }
       const resolvedName =
@@ -223,7 +236,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
         uri,
         name: resolvedName,
         notebook: initialNotebook,
-        notebookStore: effectiveStore ?? null,
+        notebookStore: notebookStore ?? null,
         loaded,
         resolveNotebookForAppKernel: (target?: unknown) => {
           const targetUri = resolveTargetUri(target)
@@ -270,16 +283,17 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
         }
         const item: NotebookStoreItem = {
           uri,
-          name,
+          name: resolvedName,
           type: NotebookStoreItemType.File,
           children: [],
+          parents: [],
         };
         return [...prev, item];
       });
       emit();
       return data;
     },
-    [emit, notebookStore, contentsStore],
+    [emit, notebookStore],
   );
 
   const getNotebookData = useCallback((uri: string) => {
@@ -358,6 +372,19 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     [emit],
   );
 
+  const removeNotebookEntry = useCallback(
+    (uri: string) => {
+      const entry = storeRef.current.get(uri);
+      if (entry) {
+        entry.unsubscribe();
+      }
+      storeRef.current.delete(uri);
+      setOpenNotebooks((prev) => prev.filter((item) => item.uri !== uri));
+      emit();
+    },
+    [emit],
+  );
+
   const dropStaleNotebook = useCallback(
     (uri: string) => {
       const fallback = removeNotebook(uri);
@@ -366,6 +393,55 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
       }
     },
     [getCurrentDoc, removeNotebook, setCurrentDoc],
+  );
+
+  const loadNotebookIntoLocalMirror = useCallback(
+    async (
+      uri: string,
+      fallbackName?: string,
+    ): Promise<NotebookLoadResult | null> => {
+      if (!notebookStore) {
+        return null;
+      }
+
+      if (uri.startsWith("local://file/")) {
+        const metadata = await notebookStore.getMetadata(uri);
+        if (!metadata || metadata.type !== NotebookStoreItemType.File) {
+          return null;
+        }
+        const notebook = await notebookStore.load(uri);
+        return {
+          uri,
+          name: metadata.name,
+          notebook,
+        };
+      }
+
+      const upstreamStore = uri.startsWith("fs://")
+        ? fsStore
+        : uri.startsWith("contents://")
+          ? contentsStore
+          : null;
+      if (!upstreamStore) {
+        return null;
+      }
+
+      const metadata = await upstreamStore.getMetadata(uri);
+      if (!metadata || metadata.type !== NotebookStoreItemType.File) {
+        return null;
+      }
+      const notebook = await upstreamStore.load(uri);
+      const name = metadata.name ?? fallbackName ?? uri;
+      const localUri = await notebookStore.addNotebook(uri, name, notebook);
+      const localNotebook = await notebookStore.load(localUri);
+
+      return {
+        uri: localUri,
+        name,
+        notebook: localNotebook,
+      };
+    },
+    [contentsStore, fsStore, notebookStore],
   );
 
   // Keep a cached list snapshot in sync for useSyncExternalStore consumers and persist to localStorage.
@@ -397,12 +473,12 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
 
   // Load any notebooks that were open last session once a store is available.
   useEffect(() => {
-    if (!notebookStore && !contentsStore) {
+    if (!notebookStore) {
       return;
     }
     const loadExisting = async () => {
       for (const item of openNotebooks) {
-        const entry = storeRef.current.get(item.uri);
+        let entry = storeRef.current.get(item.uri);
         if (entry?.loaded) {
           continue;
         }
@@ -413,20 +489,34 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
           dropStaleNotebook(item.uri);
           continue;
         }
-        const store = resolveStore(item.uri, notebookStore, fsStore, contentsStore);
-        if (!store) {
+        if (isWaitingForUpstreamStore(item.uri, fsStore, contentsStore)) {
           continue;
         }
-        entry.data.setNotebookStore(store);
+        entry.data.setNotebookStore(notebookStore);
         try {
-          const metadata = await store.getMetadata(item.uri);
-          if (!metadata || metadata.type !== NotebookStoreItemType.File) {
+          const loaded = await loadNotebookIntoLocalMirror(item.uri, item.name);
+          if (!loaded) {
             dropStaleNotebook(item.uri);
             continue;
           }
-          const notebook = await store.load(item.uri);
-          entry.data.loadNotebook(notebook, { persist: false });
-          entry.loaded = true;
+          if (loaded.uri !== item.uri) {
+            removeNotebookEntry(item.uri);
+            if (getCurrentDoc() === item.uri) {
+              setCurrentDoc(loaded.uri);
+            }
+            entry = undefined;
+          }
+          const data = entry?.data ?? ensureNotebook({
+            uri: loaded.uri,
+            name: loaded.name,
+            loaded: false,
+          });
+          data.setNotebookStore(notebookStore);
+          data.loadNotebook(loaded.notebook, { persist: false });
+          const loadedEntry = storeRef.current.get(loaded.uri);
+          if (loadedEntry) {
+            loadedEntry.loaded = true;
+          }
         } catch (error) {
           if (isNotFoundError(error)) {
             dropStaleNotebook(item.uri);
@@ -437,7 +527,18 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
       }
     };
     void loadExisting();
-  }, [notebookStore, fsStore, contentsStore, openNotebooks, dropStaleNotebook]);
+  }, [
+    dropStaleNotebook,
+    ensureNotebook,
+    getCurrentDoc,
+    fsStore,
+    contentsStore,
+    loadNotebookIntoLocalMirror,
+    notebookStore,
+    openNotebooks,
+    removeNotebookEntry,
+    setCurrentDoc,
+  ]);
 
   // Ensure the current doc is loaded into NotebookData when it changes.
   useEffect(() => {
@@ -445,30 +546,39 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     if (!uri) {
       return;
     }
-    const store = resolveStore(uri, notebookStore, fsStore, contentsStore);
-    if (!store) {
+    if (!notebookStore) {
       return;
     }
-    const entry = storeRef.current.get(uri);
+    if (isWaitingForUpstreamStore(uri, fsStore, contentsStore)) {
+      return;
+    }
+    let entry = storeRef.current.get(uri);
     if (entry?.loaded) {
       return;
     }
     const load = async () => {
       try {
-        const metadata = await store.getMetadata(uri);
-        if (!metadata || metadata.type !== NotebookStoreItemType.File) {
+        const loaded = await loadNotebookIntoLocalMirror(uri);
+        if (!loaded) {
           dropStaleNotebook(uri);
           return;
         }
-        const notebook = await store.load(uri);
+        const targetUri = loaded.uri;
+        if (targetUri !== uri) {
+          removeNotebookEntry(uri);
+          setCurrentDoc(targetUri);
+          entry = storeRef.current.get(targetUri);
+        }
+
         if (entry) {
-          entry.data.loadNotebook(notebook, { persist: false });
+          entry.data.setNotebookStore(notebookStore);
+          entry.data.loadNotebook(loaded.notebook, { persist: false });
           entry.loaded = true;
         } else {
           ensureNotebook({
-            uri,
-            name: metadata?.name ?? uri,
-            notebook,
+            uri: targetUri,
+            name: loaded.name,
+            notebook: loaded.notebook,
             loaded: true,
           });
         }
@@ -482,7 +592,17 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
       }
     };
     void load();
-  }, [ensureNotebook, getCurrentDoc, notebookStore, fsStore, contentsStore, setCurrentDoc, dropStaleNotebook]);
+  }, [
+    dropStaleNotebook,
+    ensureNotebook,
+    getCurrentDoc,
+    fsStore,
+    contentsStore,
+    loadNotebookIntoLocalMirror,
+    notebookStore,
+    removeNotebookEntry,
+    setCurrentDoc,
+  ]);
 
   const value = useMemo<NotebookContextValue>(
     () => ({
