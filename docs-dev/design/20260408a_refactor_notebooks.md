@@ -248,6 +248,64 @@ with tooltip "Stored only in this browser."
 10. Delete the `NotebookStore` interface and update raw backend classes so they
    no longer implement it.
 
+## Data Migration and Compatibility
+
+There are two existing browser-side databases to account for:
+
+```text
+runme-local-notebooks
+runme-fs-workspaces
+```
+
+The migration should be incremental and compatible with users who already have
+local-only, Drive-backed, and filesystem-backed notebooks.
+
+### `runme-local-notebooks`
+
+Add a Dexie schema migration for the `files` table.
+
+For each `LocalFileRecord`:
+
+1. Ensure `md5Checksum` exists, preserving the existing lazy-backfill behavior.
+2. If `remoteId` is a non-empty string, keep it as-is.
+3. If `remoteId` is missing or empty, set `remoteId = id`.
+4. Preserve `doc`, `name`, `lastRemoteChecksum`, `lastSynced`, and
+   `markdownUri`.
+
+This makes existing browser-only notebooks explicit without changing their
+local identity.
+
+### `runme-fs-workspaces`
+
+Filesystem migration is more involved because this database stores browser
+`FileSystemDirectoryHandle` and `FileSystemFileHandle` objects, not just paths.
+
+Migration target for each notebook file that should remain open/editable:
+
+```text
+LocalFileRecord.id = local://file/<new uuid>
+LocalFileRecord.remoteId = file://<canonical path if available>
+LocalFileRecord.doc = latest readable JSON
+LocalFileRecord.md5Checksum = md5(doc)
+```
+
+Because the File System Access API does not expose absolute OS paths, the first
+implementation may need to use a stable app URI for the handle-backed upstream,
+or require the user to reconnect a workspace before we can construct a useful
+`file://...` URI.
+
+Do not delete `runme-fs-workspaces` until:
+
+- existing workspace roots can either be imported into `runme-local-notebooks`
+  or shown as "reconnect required"
+- open notebook tabs that used `fs://workspace/...` restore to their mirrored
+  `local://file/<id>` records
+- users have a recoverable path if a persisted File System Access handle no
+  longer has permission
+
+After that compatibility path ships, delete the `runme-fs-workspaces` database
+and its registry code.
+
 ## Test Plan
 
 - Create a browser-only notebook and verify `remoteId === id`.
