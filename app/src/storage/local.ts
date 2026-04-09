@@ -876,6 +876,26 @@ export class LocalNotebooks extends Dexie {
     // prefer the local IndexedDB content because overwriting it risks data loss.
     if (!lastReadChecksum && currentRemoteChecksum) {
       if (serializedNotebookHasUserContent(localDoc)) {
+        const parseResult = parseSerializedNotebook(localDoc);
+        if (!parseResult.ok) {
+          appLogger.warn(
+            "Forking unparsable local notebook instead of overwriting Drive",
+            {
+              attrs: {
+                scope: "storage.drive.sync",
+                localUri,
+                remoteUri,
+                remoteChecksum: currentRemoteChecksum,
+                localChecksum,
+                error: String(parseResult.error),
+              },
+            },
+          );
+          await this.handleConflict(localUri, record, currentRemoteChecksum);
+          synced = true;
+          return;
+        }
+
         appLogger.warn(
           "Pushing local notebook to Drive without a baseline checksum",
           {
@@ -888,8 +908,7 @@ export class LocalNotebooks extends Dexie {
             },
           },
         );
-        const notebook = deserializeNotebook(localDoc);
-        await this.driveStore.save(remoteUri, notebook);
+        await this.driveStore.save(remoteUri, parseResult.notebook);
         const updatedChecksum =
           (await this.driveStore.getChecksum(remoteUri)) ?? "";
         await this.files.update(localUri, {
@@ -1101,13 +1120,29 @@ function deserializeNotebook(json: string): parser_pb.Notebook {
   if (!json) {
     return create(parser_pb.NotebookSchema, { cells: [] });
   }
+  const parsed = parseSerializedNotebook(json);
+  if (parsed.ok) {
+    return parsed.notebook;
+  }
+  console.error(
+    "Falling back to empty notebook due to parse failure",
+    parsed.error,
+  );
+  return create(parser_pb.NotebookSchema, { cells: [] });
+}
+
+function parseSerializedNotebook(json: string):
+  | { ok: true; notebook: parser_pb.Notebook }
+  | { ok: false; error: unknown } {
   try {
-    return fromJsonString(parser_pb.NotebookSchema, json, {
-      ignoreUnknownFields: true,
-    });
+    return {
+      ok: true,
+      notebook: fromJsonString(parser_pb.NotebookSchema, json, {
+        ignoreUnknownFields: true,
+      }),
+    };
   } catch (error) {
-    console.error("Falling back to empty notebook due to parse failure", error);
-    return create(parser_pb.NotebookSchema, { cells: [] });
+    return { ok: false, error };
   }
 }
 
