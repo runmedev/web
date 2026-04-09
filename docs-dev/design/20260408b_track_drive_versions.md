@@ -375,6 +375,14 @@ Drive `remoteId`. Because `DriveNotebookStore` uses non-interactive
 Drive create fail and leave the notebook as browser-only. This is exactly the
 case we should remove.
 
+`LocalFileRecord` does not currently store its parent folder ID. Parent
+membership is persisted on `LocalFolderRecord.children`, and `LocalNotebooks`
+can recover a file's parent by scanning folders. That means a reload after the
+local file insert but before the async Drive create completes leaves a durable
+local file whose `remoteId` looks browser-only. We can infer that it sits under a
+Drive-backed local folder, but there is no explicit "pending Drive create for
+parent X" state on the file.
+
 Flow:
 
 1. User clicks "new file" in a Drive folder.
@@ -406,6 +414,14 @@ local mirror already has a Drive `remoteId`: the save should move into
 avoid here is the initial-create failure mode where the notebook is accidentally
 left as browser-only because Drive creation failed after the local record was
 already inserted.
+
+If we decide to keep a local-first create flow, we should make that state
+explicit instead of relying on folder-child inference. That would require adding
+fields such as `pendingUpstreamParentId`, `pendingUpstreamName`, and
+`lastSyncError`, then a startup reconciler that resumes or surfaces pending
+Drive creates. That is effectively the pending-upstream-creation queue described
+below, so the simpler first step should be remote-first create for Drive-backed
+folders.
 
 ## Deferred Option: Pending Upstream Creation Queue
 
