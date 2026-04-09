@@ -104,19 +104,6 @@ else
     exit 1
 fi
 
-# Check backend auth mode (informational)
-auth_response=$(curl -s -o /dev/null -w "%{http_code}" \
-    -X POST "http://localhost:$BACKEND_PORT/runme.contents.v1.ContentsService/List" \
-    -H "Content-Type: application/json" \
-    -d '{"path":""}' 2>/dev/null || echo "000")
-if [ "$auth_response" = "401" ]; then
-    log "Backend auth is enabled (401). Use authenticated CUJ flow for execution checks."
-elif [ "$auth_response" = "200" ]; then
-    pass "Backend accepted unauthenticated request"
-else
-    log "Backend returned HTTP $auth_response (may still work - ContentsService might not be enabled)"
-fi
-
 # ============================================================
 # Test 1: Open the app and verify initial UI
 # ============================================================
@@ -136,7 +123,7 @@ agent-browser wait 3000 2>/dev/null || true
 screenshot "01-initial-load"
 
 # ============================================================
-# Test 2: Verify Explorer renders (no picker button)
+# Test 2: Verify Explorer renders
 # ============================================================
 
 log ""
@@ -150,13 +137,6 @@ if echo "$snapshot_output" | grep -qi -e "explorer" -e "notebooks" -e "folder" -
     pass "Explorer panel is visible"
 else
     fail "Explorer panel not found in snapshot"
-fi
-
-# Verify no directory picker button (showDirectoryPicker is for FilesystemStore)
-if echo "$snapshot_output" | grep -qi "pick.*folder\|choose.*directory\|open.*folder\|showDirectoryPicker"; then
-    fail "Directory picker button found (should not be present in ContentsService mode)"
-else
-    pass "No directory picker button (correct for ContentsService mode)"
 fi
 
 screenshot "02-explorer-view"

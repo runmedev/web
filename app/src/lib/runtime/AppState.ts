@@ -1,4 +1,3 @@
-import { ContentsNotebookStore } from "../../storage/contents";
 import { DriveNotebookStore } from "../../storage/drive";
 import { FilesystemNotebookStore } from "../../storage/fs";
 import LocalNotebooks from "../../storage/local";
@@ -23,7 +22,6 @@ type RunnerHandlers = {
 export class AppState {
   private static singleton: AppState | null = null;
 
-  contentsStore: ContentsNotebookStore | null = null;
   driveNotebookStore: DriveNotebookStore | null = null;
   filesystemStore: FilesystemNotebookStore | null = null;
   localNotebooks: LocalNotebooks | null = null;
@@ -51,10 +49,6 @@ export class AppState {
 
   setLocalNotebooks(store: LocalNotebooks | null): void {
     this.localNotebooks = store;
-  }
-
-  setContentsStore(store: ContentsNotebookStore | null): void {
-    this.contentsStore = store;
   }
 
   setOpenNotebookHandler(

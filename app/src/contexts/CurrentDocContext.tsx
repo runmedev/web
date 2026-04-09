@@ -8,10 +8,13 @@ import {
   useState,
 } from "react";
 
-import { isContentsUri, isFsUri } from "../storage/storeResolver";
 import { appState } from "../lib/runtime/AppState";
 
 const CURRENT_DOC_STORAGE_KEY = "runme/currentDoc";
+
+function isFsUri(uri: string): boolean {
+  return uri.startsWith("fs://");
+}
 
 interface CurrentDocContextValue {
   getCurrentDoc: () => string | null;
@@ -58,11 +61,6 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
     }
 
     if (doc.startsWith("local://")) {
-      setCurrentDocState(doc);
-      return;
-    }
-
-    if (isContentsUri(doc)) {
       setCurrentDocState(doc);
       return;
     }

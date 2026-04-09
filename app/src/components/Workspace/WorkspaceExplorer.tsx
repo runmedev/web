@@ -16,19 +16,22 @@ import { GoogleDrivePickerButton } from "./GoogleDrivePickerButton";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
-import { useContentsStore } from "../../contexts/ContentsStoreContext";
 import { appLogger } from "../../lib/logging/runtime";
 import {
   copyNotebookShareUrl,
 } from "../../lib/shareLinks";
 import { showToast } from "../../lib/toast";
 import {
-  NotebookStore,
   NotebookStoreItem,
   NotebookStoreItemType,
 } from "../../storage/notebook";
+import type { StorageBrowser } from "../../storage/browser";
 import { isFileSystemAccessSupported } from "../../storage/fs";
-import { fetchDriveItemWithParents, parseDriveItem } from "../../storage/drive";
+import {
+  fetchDriveItemWithParents,
+  isDriveItemUri,
+  parseDriveItem,
+} from "../../storage/drive";
 import { LOCAL_FOLDER_URI } from "../../storage/local";
 import { useGoogleAuth } from "../../contexts/GoogleAuthContext";
 import { useCurrentDoc } from "../../contexts/CurrentDocContext";
@@ -203,32 +206,25 @@ function EditableTreeNode({
 // In addition to viewing Google Drive folders it also supports "local://" URIs
 // which are stored in the browser's IndexedDB.
 /**
- * Return the appropriate NotebookStore for a given URI.
- * - `contents://` URIs route to the ContentsNotebookStore.
- * - `fs://` URIs route to the FilesystemNotebookStore.
- * - Everything else routes to the LocalNotebooks (Drive-backed) store.
+ * Return the explorer source for a given URI.
+ * Workspace folder browsing can still target raw upstream adapters. Opening an
+ * upstream file mirrors it through LocalNotebooks before an editor tab loads.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function storeForUri(
   uri: string,
-  localStore: any,
-  fsStoreInstance: NotebookStore | null,
-  contentsStoreInstance?: NotebookStore | null,
-): NotebookStore | null {
-  if (uri.startsWith("contents://")) {
-    return contentsStoreInstance ?? null;
-  }
+  localStore: StorageBrowser | null,
+  fsStoreInstance: StorageBrowser | null,
+): StorageBrowser | null {
   if (uri.startsWith("fs://")) {
     return fsStoreInstance;
   }
-  return localStore as NotebookStore | null;
+  return localStore;
 }
 
 export function WorkspaceExplorer() {
   const { getItems, addItem, removeItem } = useWorkspace();
   const { store } = useNotebookStore();
   const { fsStore } = useFilesystemStore();
-  const { contentsStore } = useContentsStore();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const currentDoc = getCurrentDoc();
   const { ensureAccessToken } = useGoogleAuth();
@@ -285,37 +281,22 @@ export function WorkspaceExplorer() {
           continue;
         }
 
-        // contents:// workspace roots are handled by the contents store.
-        if (uri.startsWith("contents://")) {
-          if (!contentsStore) {
-            continue;
-          }
-          try {
-            const metadata = await contentsStore.getMetadata(uri);
-            const name = metadata?.name ?? "Server Files";
-            const type = metadata?.type ?? NotebookStoreItemType.Folder;
-            if (type !== NotebookStoreItemType.Folder) {
-              continue;
-            }
-            folderNodes.push(createFolderNode(uri, name));
-          } catch (error) {
-            console.error("Failed to load contents workspace metadata", uri, error);
-          }
-          continue;
-        }
-
-        let localUri = uri;
+        const localUri = uri;
         if (!uri.startsWith("local://")) {
-          try {
-            parseDriveItem(uri);
+          if (isDriveItemUri(uri)) {
             // Route remote Drive normalization through the coordinator so startup
             // processing remains non-interactive and auth prompts stay user-initiated.
             void driveLinkCoordinator.enqueue(uri, "manual");
-            continue;
-          } catch (error) {
-            console.error("Failed to normalize workspace entry", uri, error);
-            continue;
+          } else {
+            appLogger.warn("Removing unsupported workspace entry", {
+              attrs: {
+                scope: "storage.workspace",
+                uri,
+              },
+            });
+            removeItem(uri);
           }
+          continue;
         }
 
         const metadata = await store.getMetadata(localUri);
@@ -349,7 +330,7 @@ export function WorkspaceExplorer() {
     return () => {
       cancelled = true;
     };
-  }, [addItem, contentsStore, fsStore, removeItem, store, workspaceUris]);
+  }, [addItem, fsStore, removeItem, store, workspaceUris]);
 
   useEffect(() => {
     // Coordinate with the global current-doc context. Whenever a Drive-backed
@@ -364,7 +345,7 @@ export function WorkspaceExplorer() {
       return;
     }
 
-    if (currentDoc.startsWith("fs://") || currentDoc.startsWith("contents://")) {
+    if (currentDoc.startsWith("fs://")) {
       handledDocRef.current = currentDoc;
       return;
     }
@@ -510,7 +491,7 @@ export function WorkspaceExplorer() {
 
   const fetchChildren = useCallback(
     async (uri: string) => {
-      const targetStore = storeForUri(uri, store, fsStore, contentsStore);
+      const targetStore = storeForUri(uri, store, fsStore);
       if (!targetStore) {
         return;
       }
@@ -524,8 +505,8 @@ export function WorkspaceExplorer() {
       try {
         let childNodes: TreeNode[];
 
-        if (uri.startsWith("fs://") || uri.startsWith("contents://")) {
-          // Filesystem / Contents store: use list() which returns items directly.
+        if (uri.startsWith("fs://")) {
+          // Filesystem store: use list() which returns items directly.
           const items = await targetStore.list(uri);
           childNodes = items.map((item) => {
             if (item.type === NotebookStoreItemType.Folder) {
@@ -537,14 +518,14 @@ export function WorkspaceExplorer() {
           });
         } else {
           // Local/Drive store: use getMetadata() + children array.
-          const folderMetadata = await (store as any).getMetadata(uri);
+          const folderMetadata = await targetStore.getMetadata(uri);
           if (!folderMetadata || folderMetadata.type !== NotebookStoreItemType.Folder) {
             throw new Error(`URI ${uri} is not a folder or metadata is missing.`);
           }
 
           childNodes = [];
           for (const childUri of folderMetadata.children) {
-            const childMetadata = await (store as any).getMetadata(childUri);
+            const childMetadata = await targetStore.getMetadata(childUri);
             if (childMetadata?.type === NotebookStoreItemType.Folder) {
               childNodes.push(
                 createFolderNode(childMetadata.uri, childMetadata.name, {
@@ -583,12 +564,12 @@ export function WorkspaceExplorer() {
         );
       }
     },
-    [contentsStore, fsStore, store],
+    [fsStore, store],
   );
 
   const handleFileOpen = useCallback(
     async (nodeData: TreeNode) => {
-      const targetStore = storeForUri(nodeData.uri, store, fsStore, contentsStore);
+      const targetStore = storeForUri(nodeData.uri, store, fsStore);
       if (!targetStore) {
         return;
       }
@@ -608,12 +589,12 @@ export function WorkspaceExplorer() {
         );
       }
     },
-    [contentsStore, fsStore, setCurrentDoc, store],
+    [fsStore, setCurrentDoc, store],
   );
 
   const handleCreateDocument = useCallback(
     async (folderUri: string) => {
-      const targetStore = storeForUri(folderUri, store, fsStore, contentsStore);
+      const targetStore = storeForUri(folderUri, store, fsStore);
       if (!targetStore) {
         return;
       }
@@ -630,7 +611,7 @@ export function WorkspaceExplorer() {
         setErrorMessage("Unable to create a new document. Please try again.");
       }
     },
-    [contentsStore, fetchChildren, fsStore, store],
+    [fetchChildren, fsStore, store],
   );
 
 function formatShortTimestamp(date: Date): string {
@@ -779,7 +760,7 @@ function formatShortTimestamp(date: Date): string {
     }) => {
       void id;
       const target = node.data;
-      const targetStore = storeForUri(target.uri, store, fsStore, contentsStore);
+      const targetStore = storeForUri(target.uri, store, fsStore);
       if (!targetStore) {
         node.reset();
         return;
@@ -808,7 +789,7 @@ function formatShortTimestamp(date: Date): string {
         node.reset();
       }
     },
-    [contentsStore, fetchChildren, fsStore, store],
+    [fetchChildren, fsStore, store],
   );
 
   const handleOpenLocalFolder = useCallback(async () => {
@@ -942,8 +923,7 @@ function formatShortTimestamp(date: Date): string {
         >
           {contextMenu.type === NotebookStoreItemType.File ? (
             <>
-              {!contextMenu.uri.startsWith("fs://") &&
-                !contextMenu.uri.startsWith("contents://") && (
+              {!contextMenu.uri.startsWith("fs://") && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -1013,8 +993,7 @@ function formatShortTimestamp(date: Date): string {
             </>
           ) : contextMenu.type === NotebookStoreItemType.Folder ? (
             <>
-              {!contextMenu.uri.startsWith("fs://") &&
-                !contextMenu.uri.startsWith("contents://") && (
+              {!contextMenu.uri.startsWith("fs://") && (
               <button
                 type="button"
                 className="ctx-menu-item"

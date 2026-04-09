@@ -104,7 +104,7 @@ export function generateSessionName(): string {
   return now.toISOString().replace(/[:.]/g, "-");
 }
 
-export { ContentsNotebookStore } from "./contents";
 export { FsDatabase } from "./fsdb";
 export type { WorkspaceRecord, FsEntryRecord } from "./fsdb";
 export { FilesystemNotebookStore, isFileSystemAccessSupported } from "./fs";
+export type { StorageBrowser } from "./browser";

@@ -4,7 +4,6 @@ import { parser_pb } from "../runme/client";
 import { getGoogleDriveBaseUrl } from "../lib/googleDriveRuntime";
 import {
   type ConflictResult,
-  NotebookStore,
   NotebookStoreItem,
   NotebookStoreItemType,
 } from "./notebook";
@@ -584,6 +583,47 @@ export function parseDriveItem(uri: string): DriveItem {
   return { id, type };
 }
 
+export function isDriveItemUri(uri: string | undefined): boolean {
+  if (!uri) {
+    return false;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(uri);
+  } catch {
+    return false;
+  }
+
+  if (
+    (url.protocol !== "https:" && url.protocol !== "http:") ||
+    url.hostname !== "drive.google.com"
+  ) {
+    return false;
+  }
+
+  const pathname = url.pathname;
+  const hasDrivePathId =
+    /\/drive\/folders\/[^/]+/.test(pathname) ||
+    /\/file\/d\/[^/]+/.test(pathname) ||
+    /\/d\/[^/]+/.test(pathname);
+  const hasLegacyQueryId =
+    (pathname === "/open" || pathname === "/uc") &&
+    !!url.searchParams.get("id");
+  const hasHashId = /(?:^|[#&?])id=[^&]+/.test(url.hash);
+
+  if (!hasDrivePathId && !hasLegacyQueryId && !hasHashId) {
+    return false;
+  }
+
+  try {
+    parseDriveItem(uri);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function createInitialNotebookJson(): string {
   const notebook = create(parser_pb.NotebookSchema, {
     cells: [],
@@ -606,7 +646,7 @@ function extractBody(response: { body?: string; result?: unknown }): string {
   throw new Error("Google Drive response did not include any content");
 }
 
-export class DriveNotebookStore implements NotebookStore {
+export class DriveNotebookStore {
   // ensureAccessToken is injected because it comes from the GoogleAuthContext
   constructor(private readonly ensureAccessToken: () => Promise<string>) {}
 

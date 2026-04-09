@@ -67,8 +67,7 @@ function nowIso(): string {
 function isLocalUri(uri: string): boolean {
   return (
     uri.startsWith("local://") ||
-    uri.startsWith("fs://") ||
-    uri.startsWith("contents://")
+    uri.startsWith("fs://")
   );
 }
 

@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import { NotebookStoreItemType } from "./notebook";
-import { parseDriveItem } from "./drive";
+import { isDriveItemUri, parseDriveItem } from "./drive";
 
 describe("parseDriveItem", () => {
   it("extracts id from file share URL", () => {
@@ -53,5 +53,23 @@ describe("parseDriveItem", () => {
       id: "not-drive",
       type: NotebookStoreItemType.File,
     });
+  });
+});
+
+describe("isDriveItemUri", () => {
+  it("accepts supported Drive URL forms", () => {
+    expect(isDriveItemUri("https://drive.google.com/file/d/file123/view")).toBe(true);
+    expect(isDriveItemUri("https://drive.google.com/drive/folders/folder123")).toBe(true);
+    expect(isDriveItemUri("https://drive.google.com/open?id=open123")).toBe(true);
+    expect(isDriveItemUri("https://drive.google.com/uc?export=download&id=download123")).toBe(true);
+  });
+
+  it("rejects local mirror, filesystem, contents, raw id, and generic URL inputs", () => {
+    expect(isDriveItemUri("local://file/notebook123")).toBe(false);
+    expect(isDriveItemUri("fs://workspace/ws123/file/notebook.json")).toBe(false);
+    expect(isDriveItemUri("contents://localhost:9977/file/notebook.json")).toBe(false);
+    expect(isDriveItemUri("0BwwA4oUTeiV1UVNwOHItT0xfa2M")).toBe(false);
+    expect(isDriveItemUri("https://example.com/not-drive")).toBe(false);
+    expect(isDriveItemUri("https://drive.google.com/not-a-drive-item")).toBe(false);
   });
 });

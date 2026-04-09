@@ -3,7 +3,6 @@ import { v4 as uuidv4 } from "uuid";
 
 import { parser_pb } from "../runme/client";
 import {
-  NotebookStore,
   NotebookStoreItem,
   NotebookStoreItemType,
 } from "./notebook";
@@ -179,7 +178,8 @@ export function isFileSystemAccessSupported(): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * FilesystemNotebookStore implements `NotebookStore` using the browser
+ * FilesystemNotebookStore is the local filesystem adapter. The editor works
+ * against LocalNotebooks; this class lists/loads/saves upstream files using the
  * File System Access API. Notebooks are stored as `.json` files on the local
  * filesystem, and workspace/file handle metadata is cached in IndexedDB via
  * `FsDatabase`.
@@ -188,7 +188,7 @@ export function isFileSystemAccessSupported(): boolean {
  *   fs://workspace/<workspaceId>/file/<encodedRelativePath>
  *   fs://workspace/<workspaceId>/dir/<encodedRelativePath>
  */
-export class FilesystemNotebookStore implements NotebookStore {
+export class FilesystemNotebookStore {
   private readonly db: FsDatabase;
 
   /** In-memory base revision map keyed by entry record id. */
@@ -199,7 +199,7 @@ export class FilesystemNotebookStore implements NotebookStore {
   }
 
   // -----------------------------------------------------------------------
-  // Workspace management (not part of NotebookStore interface)
+  // Workspace management
   // -----------------------------------------------------------------------
 
   /**
@@ -267,7 +267,7 @@ export class FilesystemNotebookStore implements NotebookStore {
   }
 
   // -----------------------------------------------------------------------
-  // NotebookStore implementation
+  // File/directory operations
   // -----------------------------------------------------------------------
 
   async list(uri: string): Promise<NotebookStoreItem[]> {
