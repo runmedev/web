@@ -45,7 +45,7 @@ function createTestStore(driveStore: unknown) {
   localStore.folders = createMockTable<LocalFolderRecord>();
   localStore.driveStore = driveStore;
   localStore.filesystemStore = null;
-  localStore.inFlightSyncs = new Set();
+  localStore.inFlightSyncs = new Map();
   localStore.syncListeners = new Map();
   localStore.syncSubjects = new Map();
   localStore.markdownSyncSubjects = new Map();
@@ -210,5 +210,65 @@ describe("LocalNotebooks pending Drive create", () => {
       "{malformed-json",
       "application/json",
     );
+  });
+
+  it("serializes overlapping sync calls for the same pending Drive file", async () => {
+    const parentRemoteUri = "https://drive.google.com/drive/folders/folder123";
+    const remoteUri = "https://drive.google.com/file/d/file123/view";
+    let releaseCreate!: () => void;
+    let createStarted!: () => void;
+    const createStartedPromise = new Promise<void>((resolve) => {
+      createStarted = resolve;
+    });
+    const releaseCreatePromise = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const driveStore = {
+      create: vi.fn(async () => {
+        createStarted();
+        await releaseCreatePromise;
+        return {
+          uri: remoteUri,
+          name: "draft.json",
+          type: NotebookStoreItemType.File,
+          children: [],
+          parents: [parentRemoteUri],
+        };
+      }),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: "checksum-1",
+        headRevisionId: "revision-1",
+      })),
+      getMetadata: vi.fn(async () => ({
+        uri: remoteUri,
+        name: "draft.json",
+        type: NotebookStoreItemType.File,
+        children: [],
+        parents: [parentRemoteUri],
+      })),
+      save: vi.fn(async () => ({ conflicted: false })),
+    };
+    const store = createTestStore(driveStore);
+    await store.files.put({
+      id: "local://file/pending",
+      name: "draft.json",
+      remoteId: "",
+      parentRemoteIdWhenCreated: parentRemoteUri,
+      lastRemoteChecksum: "",
+      lastSynced: "",
+      doc: "",
+      md5Checksum: "",
+    });
+
+    const firstSync = store.sync("local://file/pending");
+    await createStartedPromise;
+    const secondSync = store.sync("local://file/pending");
+    releaseCreate();
+    await Promise.all([firstSync, secondSync]);
+
+    const record = await store.files.get("local://file/pending");
+    expect(record?.remoteId).toBe(remoteUri);
+    expect(record?.parentRemoteIdWhenCreated).toBeUndefined();
+    expect(driveStore.create).toHaveBeenCalledTimes(1);
   });
 });

@@ -139,7 +139,7 @@ export class LocalNotebooks extends Dexie {
 
   private readonly syncSubjects = new Map<string, Subject<void>>();
   private readonly markdownSyncSubjects = new Map<string, Subject<void>>();
-  private readonly inFlightSyncs = new Set<string>();
+  private readonly inFlightSyncs = new Map<string, Promise<void>>();
   private readonly syncListeners = new Map<string, Set<() => void>>();
 
   constructor(
@@ -1008,18 +1008,32 @@ export class LocalNotebooks extends Dexie {
   }
 
   private async syncFile(localUri: string): Promise<void> {
-    this.inFlightSyncs.add(localUri);
+    const existingSync = this.inFlightSyncs.get(localUri);
+    if (existingSync) {
+      return existingSync;
+    }
+
+    const operation = Promise.resolve().then(async () => {
+      try {
+        await this.syncFileInner(localUri);
+        await this.files.update(localUri, { lastSyncError: undefined });
+      } catch (error) {
+        await this.files.update(localUri, { lastSyncError: String(error) });
+        throw error;
+      }
+    });
+    this.inFlightSyncs.set(localUri, operation);
     this.notifySync(localUri);
-    try {
-      await this.syncFileInner(localUri);
-      await this.files.update(localUri, { lastSyncError: undefined });
-    } catch (error) {
-      await this.files.update(localUri, { lastSyncError: String(error) });
-      throw error;
-    } finally {
+
+    const cleanup = () => {
+      if (this.inFlightSyncs.get(localUri) !== operation) {
+        return;
+      }
       this.inFlightSyncs.delete(localUri);
       this.notifySync(localUri);
-    }
+    };
+    void operation.then(cleanup, cleanup);
+    return operation;
   }
 
   private async syncFileInner(localUri: string): Promise<void> {
