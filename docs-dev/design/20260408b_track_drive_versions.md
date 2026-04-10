@@ -198,14 +198,13 @@ capture the Drive metadata that `LocalNotebooks` needs to persist
 `lastRemoteChecksum` and `lastUpstreamVersion`.
 
 Update the Drive store to fetch and return this object in metadata paths that
-currently fetch `md5Checksum,headRevisionId,version` but keep only
-`md5Checksum`. As part of this change, stop requesting `version` from
+currently fetch only the checksum. As part of this change, keep `version` out of
 `VERSION_FIELDS` unless a concrete diagnostics-only use case is added.
 
 Current code detail: `DriveNotebookStore` already defines:
 
 ```ts
-const VERSION_FIELDS = "md5Checksum,headRevisionId,version";
+const VERSION_FIELDS = "md5Checksum,headRevisionId";
 ```
 
 It requests those fields in `load`, `save`, and `getChecksum`, but it only

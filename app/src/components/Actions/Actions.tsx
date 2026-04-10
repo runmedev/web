@@ -50,6 +50,7 @@ import {
   useDriveLinkCoordinatorSnapshot,
 } from "../../lib/driveLinkCoordinator";
 import { parseDriveItem } from "../../storage/drive";
+import type { NotebookSyncState } from "../../storage/local";
 import { NotebookStoreItemType } from "../../storage/notebook";
 import DriveLinkStatusTab from "../DriveLinkStatusTab";
 import React from "react";
@@ -86,6 +87,149 @@ TabPanel.displayName = "TabPanel";
 // (preserving scroll/Monaco layout) while hiding inactive tabs without stacking
 // them. Inactive tabs are taken out of flow via absolute positioning and hidden
 // visibility so they don't visually overlap yet retain their state.
+
+function syncIndicatorPresentation(state: NotebookSyncState | null): {
+  label: string;
+  className: string;
+  clickable: boolean;
+} {
+  switch (state?.status) {
+    case "synced":
+      return {
+        label: "Notebook is synced",
+        className: "bg-emerald-500",
+        clickable: false,
+      };
+    case "pending":
+      return {
+        label: "Notebook has local changes pending upstream sync. Click to sync now.",
+        className: "bg-red-500",
+        clickable: true,
+      };
+    case "pending-upstream-create":
+      return {
+        label: "Notebook is waiting for its upstream file to be created. Click to sync now.",
+        className: "bg-amber-500",
+        clickable: true,
+      };
+    case "syncing":
+      return {
+        label: "Notebook is syncing",
+        className: "bg-sky-500 animate-pulse",
+        clickable: false,
+      };
+    case "error":
+      return {
+        label: state.lastError
+          ? `Notebook sync failed: ${state.lastError}. Click to retry.`
+          : "Notebook sync failed. Click to retry.",
+        className: "bg-red-700",
+        clickable: true,
+      };
+    case "local-only":
+      return {
+        label: "Notebook is stored only in this browser",
+        className: "border border-nb-text-faint bg-transparent",
+        clickable: false,
+      };
+    default:
+      return {
+        label: "Notebook sync state is loading",
+        className: "border border-nb-text-faint bg-transparent",
+        clickable: false,
+      };
+  }
+}
+
+function NotebookSyncIndicator({ docUri }: { docUri: string }) {
+  const { store } = useNotebookStore();
+  const [syncState, setSyncState] = useState<NotebookSyncState | null>(null);
+
+  useEffect(() => {
+    if (!store || !docUri.startsWith("local://file/")) {
+      setSyncState(null);
+      return;
+    }
+
+    let cancelled = false;
+    const refresh = () => {
+      void (async () => {
+        try {
+          const next = await store.getSyncState(docUri);
+          if (!cancelled) {
+            setSyncState(next);
+          }
+        } catch (error) {
+          if (!cancelled) {
+            setSyncState({
+              status: "error",
+              localUri: docUri,
+              remoteId: "",
+              lastError: String(error),
+            });
+          }
+        }
+      })();
+    };
+
+    refresh();
+    const unsubscribe = store.subscribeSync(docUri, refresh);
+    const onSyncUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<{ uri?: string }>).detail;
+      if (detail?.uri === docUri) {
+        refresh();
+      }
+    };
+    window.addEventListener("local-notebook-sync-updated", onSyncUpdated);
+    window.addEventListener("local-notebook-updated", onSyncUpdated);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      window.removeEventListener("local-notebook-sync-updated", onSyncUpdated);
+      window.removeEventListener("local-notebook-updated", onSyncUpdated);
+    };
+  }, [docUri, store]);
+
+  const presentation = syncIndicatorPresentation(syncState);
+  const handleClick = useCallback(
+    (event: ReactMouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!store || !presentation.clickable) {
+        return;
+      }
+      void store.sync(docUri).catch((error) => {
+        appLogger.warn("Notebook tab immediate sync failed", {
+          attrs: {
+            scope: "storage.local.sync",
+            localUri: docUri,
+            error: String(error),
+          },
+        });
+      });
+    },
+    [docUri, presentation.clickable, store],
+  );
+
+  if (!store || !docUri.startsWith("local://file/")) {
+    return null;
+  }
+
+  return (
+    <button
+      type="button"
+      aria-label={presentation.label}
+      title={presentation.label}
+      className="inline-flex h-5 w-5 items-center justify-center rounded-full"
+      onClick={handleClick}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <span
+        className={`block h-2.5 w-2.5 rounded-full ${presentation.className}`}
+      />
+    </button>
+  );
+}
 
 /** Compact icon-only run button that sits in the cell toolbar.
  *  Shows a spinner while running, otherwise always shows the play icon. */
@@ -1623,7 +1767,7 @@ export default function Actions() {
               </Tabs.Trigger>
             </div>
           )}
-          {openNotebooks.map((doc) => {              
+          {openNotebooks.map((doc) => {
             const displayName =
               doc.name ||
               doc.uri.split("/").filter(Boolean).pop() ||
@@ -1638,19 +1782,20 @@ export default function Actions() {
                 >
                   <span className="truncate max-w-[140px]">{displayName}</span>
                 </Tabs.Trigger>
-                  <button
-                    type="button"
-                    className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-nb-xs text-nb-text-faint transition-all duration-150 hover:text-nb-text hover:bg-nb-surface-2"
-                    aria-label={`Close ${displayName}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      handleCloseTab(doc.uri);
-                    }}
-                    onMouseDown={(event) => event.stopPropagation()}
-                  >
-                    <XMarkIcon className="h-3 w-3" />
-                  </button>
-                </div>
+                <NotebookSyncIndicator docUri={doc.uri} />
+                <button
+                  type="button"
+                  className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-nb-xs text-nb-text-faint transition-all duration-150 hover:text-nb-text hover:bg-nb-surface-2"
+                  aria-label={`Close ${displayName}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleCloseTab(doc.uri);
+                  }}
+                  onMouseDown={(event) => event.stopPropagation()}
+                >
+                  <XMarkIcon className="h-3 w-3" />
+                </button>
+              </div>
               );
             })}
           </Tabs.List>
