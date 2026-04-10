@@ -7,7 +7,12 @@ Issues:
 - https://github.com/runmedev/web/issues/165
 - https://github.com/runmedev/web/issues/157
 
-Depends on: `docs-dev/design/20260408a_refactor_notebooks.md`
+Builds on:
+
+- `docs-dev/design/20260408a_refactor_notebooks.md`
+- PR #168, which removed the old `NotebookStore` routing path, made
+  `LocalNotebooks` the app-facing notebook store, and removed the unused
+  contents-service storage path.
 
 ## Summary
 
@@ -16,19 +21,23 @@ local-vs-upstream state explicit to the user.
 
 Recommended changes:
 
-1. Track optional upstream revision metadata alongside content checksums.
+1. Track optional upstream revision metadata alongside content checksums in
+   `LocalFileRecord`.
 2. Adapt Google Drive revision metadata into that generic upstream-version
-   model.
-3. Add generic logging for every sync transition that can replace local mirror
-   content.
+   model without making notebook tabs Drive-specific.
+3. Generalize the existing overwrite logging so every upstream-to-local
+   replacement includes revision/checksum context.
 4. Add a small per-notebook sync-state indicator in the tab bar.
-5. Let users click the indicator to force immediate sync.
-6. Reject new Drive-file creation while Drive auth is unavailable until we have
-   a durable pending-upstream-creation queue.
+5. Let users click the indicator to force immediate sync through
+   `LocalNotebooks.sync(localUri)`.
+6. Persist pending Drive-file creation state so users can create locally while
+   Drive auth is unavailable, then complete upstream creation after auth
+   recovers.
 
-Keep using content checksum (`md5Checksum`) as the sync/conflict predicate where
-possible. Upstream revision IDs should be persisted as provenance and diagnostic
-metadata, not as the only proof that two notebook payloads are equal.
+Keep using content checksum (`md5Checksum`) and upstream content checksum
+(`lastRemoteChecksum`) as the sync/conflict predicate where possible. Upstream
+revision IDs should be persisted as provenance and diagnostic metadata, not as
+the only proof that two notebook payloads are equal.
 
 ## Background
 
@@ -41,10 +50,62 @@ reproduced the loss, but investigation found two risky areas:
    can produce a browser-only local notebook instead of a Drive-backed mirror.
 
 PR #167 added conservative Drive sync guards and logging. This document captures
-follow-up work that should happen after the #157 / local-mirror cleanup.
+follow-up work that should happen after the #157 / local-mirror cleanup. PR
+#168 has now landed that cleanup.
 
 The UI should render "is my local notebook mirror synced to its upstream?", not
 "is my Google Drive file synced?".
+
+## Current Refactored Code State
+
+The app-facing notebook path is now:
+
+```text
+NotebookData / editor tabs
+  -> local://file/<id>
+  -> LocalNotebooks / IndexedDB
+  -> optional upstream selected by LocalFileRecord.remoteId
+```
+
+`LocalFileRecord` currently stores:
+
+```ts
+interface LocalFileRecord {
+  id: string;                 // local://file/<uuid>
+  name: string;
+  remoteId: string;           // local://file/<uuid> | fs://... | Drive HTTPS URL
+  markdownUri?: string;
+  lastRemoteChecksum: string;
+  lastSynced: string;
+  doc: string;
+  md5Checksum: string;
+}
+```
+
+`lastRemoteChecksum` is a legacy field name. After the refactor it is the last
+observed upstream content checksum for Drive and File System Access, not only
+Google Drive.
+
+The supported upstreams after PR #168 are:
+
+| Upstream | `remoteId` shape | Notes |
+| --- | --- | --- |
+| Browser-only IndexedDB | `remoteId === id` (`local://file/<uuid>`) | No external sync target. |
+| Google Drive | `https://drive.google.com/...` | Drive-only flows must use `isDriveItemUri`, not permissive `parseDriveItem`. |
+| File System Access | `fs://workspace/<workspace-id>/file/<path>` | Browser handle-backed upstream; do not document this as `file://`. |
+
+Current PR #168 code normalizes empty `remoteId` values to `id` for existing
+records. Introducing `remoteId === ""` as a pending-upstream-create state would
+therefore be a new explicit state, not the current browser-only representation.
+Proposal 6 describes that new state.
+
+The contents-service path has been removed. Do not design new sync/version
+state around `contents://...` unless a real backend service and product entry
+point are reintroduced.
+
+`StorageBrowser` is now the narrow workspace-tree contract used by
+`WorkspaceExplorer`. It is not the editor persistence API and deliberately does
+not include notebook content load/save.
 
 ## Proposal 1: Model Upstream Versions as Optional Metadata
 
@@ -57,22 +118,29 @@ Illustrative shape:
 interface UpstreamVersion {
   checksum?: string;
   revisionId?: string;
-  objectVersion?: string;
   modifiedTime?: string;
   sizeBytes?: number;
 }
 
 interface LocalFileRecord {
   lastUpstreamVersion?: UpstreamVersion;
+  lastSyncError?: string;
+  parentRemoteIdWhenCreated?: string;
 }
 ```
+
+Adding these fields requires a new Dexie migration after schema version 4.
+Backfill should leave `lastUpstreamVersion` undefined for existing records and
+clear `lastSyncError` and `parentRemoteIdWhenCreated`.
 
 Backend examples:
 
 - Google Drive fills `checksum = files.md5Checksum`,
-  `revisionId = files.headRevisionId`, and `objectVersion = files.version`.
-- Local filesystem can fill `checksum` by hashing file contents. It may also
-  fill `modifiedTime` and `sizeBytes`, but it does not need a `revisionId`.
+  `revisionId = files.headRevisionId`, and may later fill `modifiedTime` or
+  `sizeBytes` if those help diagnostics.
+- File System Access fills `checksum` by hashing the serialized file contents.
+  It may later fill `modifiedTime` and `sizeBytes` from `File` metadata, but it
+  does not need a `revisionId`.
 - Browser-only IndexedDB notebooks can omit upstream revision metadata, or use
   the local checksum as the only version signal.
 
@@ -90,6 +158,10 @@ The Drive `files.get` response has several version-like fields:
 Drive `files.version` is deliberately broader than content. Google documents it
 as a monotonically increasing number reflecting every server-side file change,
 including changes that are not visible to the user.
+
+Do not persist `files.version` as part of `UpstreamVersion` unless we add a
+separate diagnostics-only use case. It is too broad for sync correctness and is
+not the user-visible revision identity we need for restore/version UI.
 
 Drive `headRevisionId` corresponds to the current content revision for our JSON
 blob files. It is the API-level identity closest to the "Current version" row in
@@ -116,35 +188,71 @@ checksum comparison.
 
 ## Proposal 2: Persist Drive Revision Provenance
 
-Drive metadata should be adapted into `UpstreamVersion`, not exposed to tab UI
-as a Google-specific state object.
+`LocalNotebooks` remains the app-facing API. Notebook tabs and other UI should
+ask `LocalNotebooks` for sync/version state; they should not import
+`DriveNotebookStore`, call Drive APIs, or receive a Google-specific status
+object.
 
-Illustrative shape:
+The Drive-specific work in this proposal is only an internal adapter step:
+capture the Drive metadata that `LocalNotebooks` needs to persist
+`lastRemoteChecksum` and `lastUpstreamVersion`.
+
+Update the Drive store to fetch and return this object in metadata paths that
+currently fetch only the checksum. As part of this change, keep `version` out of
+`VERSION_FIELDS` unless a concrete diagnostics-only use case is added.
+
+Current code detail: `DriveNotebookStore` already defines:
 
 ```ts
-function toUpstreamVersion(metadata: DriveFileMetadata): UpstreamVersion {
-  return {
-    checksum: metadata.md5Checksum,
-    revisionId: metadata.headRevisionId,
-    objectVersion: metadata.version,
-  };
+const VERSION_FIELDS = "md5Checksum,headRevisionId";
+```
+
+It requests those fields in `load`, `save`, and `getChecksum`, but it only
+reads/persists `md5Checksum`. Add a typed metadata return value rather than
+adding new ad hoc `getHeadRevisionId` calls:
+
+```ts
+interface DriveVersionMetadata {
+  md5Checksum?: string;
+  headRevisionId?: string;
+}
+
+class DriveNotebookStore {
+  getVersionMetadata(uri: string): Promise<DriveVersionMetadata | null>;
 }
 ```
 
-Update the Drive store to fetch and return this object in metadata paths that
-currently fetch `md5Checksum,headRevisionId,version` but keep only
-`md5Checksum`.
+Then `LocalNotebooks.syncFile(...)` can translate that Drive metadata into the
+generic `LocalFileRecord` fields:
+
+```ts
+lastRemoteChecksum = metadata.md5Checksum ?? "";
+lastUpstreamVersion = {
+  checksum: metadata.md5Checksum,
+  revisionId: metadata.headRevisionId,
+};
+```
+
+This translation belongs inside `LocalNotebooks` or a private storage helper,
+not in the tab UI.
 
 ## Proposal 3: Structured Logging for Overwrites and Revision Transitions
 
 Use `appLogger` for sync events that are important for data-loss diagnosis.
+
+Current code already logs upstream-to-local replacement via
+`logRemoteOverwriteLocalDoc(...)`, but the event is still named
+"Overwriting local notebook content with Drive content" and only includes
+checksums/byte counts. Because the same helper is used by the filesystem
+upstream path, rename the event and scope to be upstream-generic when adding
+version metadata.
 
 Log before replacing local notebook JSON with upstream JSON:
 
 ```text
 event: Overwriting local notebook content with upstream content
 attrs:
-  scope: storage.notebook.sync
+  scope: storage.local.sync
   localUri
   remoteId
   localChecksum
@@ -152,8 +260,6 @@ attrs:
   upstreamChecksum
   previousUpstreamRevisionId
   upstreamRevisionId
-  previousUpstreamObjectVersion
-  upstreamObjectVersion
   localBytes
   upstreamBytes
   reason
@@ -164,12 +270,11 @@ Log after successful upload:
 ```text
 event: Uploaded local notebook content to upstream
 attrs:
-  scope: storage.notebook.sync
+  scope: storage.local.sync
   localUri
   remoteId
   uploadedChecksum
   uploadedRevisionId
-  uploadedObjectVersion
 ```
 
 This gives support/debugging enough information to compare IndexedDB state,
@@ -201,9 +306,9 @@ Clicking it should bypass the existing debounce and try to save now.
 
 ## Proposal 5: Add Generic Mirror Sync State
 
-After the Issue 157 refactor, expose sync state in terms of the local mirror and
-its optional upstream. Do not expose a Google-Drive-specific status object to
-notebook tabs.
+With the Issue 157 refactor landed, expose sync state in terms of the local
+mirror and its optional upstream. Do not expose a Google-Drive-specific status
+object to notebook tabs.
 
 Illustrative shape:
 
@@ -212,6 +317,7 @@ type NotebookSyncStatus =
   | "local-only"
   | "synced"
   | "pending"
+  | "pending-upstream-create"
   | "syncing"
   | "error";
 
@@ -219,6 +325,7 @@ interface NotebookSyncState {
   status: NotebookSyncStatus;
   localUri: string;
   remoteId: string;
+  parentRemoteIdWhenCreated?: string;
   lastSynced?: string;
   lastUpstreamVersion?: UpstreamVersion;
   lastError?: string;
@@ -230,48 +337,118 @@ Then expose these through the local mirror service:
 ```ts
 class LocalNotebooks {
   getSyncState(localUri: string): Promise<NotebookSyncState>;
-  syncNow(localUri: string): Promise<void>;
   subscribeSync(localUri: string, listener: () => void): () => void;
 }
 ```
 
-`syncNow` should call the same synchronization state machine as the debounced
-background sync; it should not create a second upload path.
+Do not add a second upload path. The class already exposes
+`sync(localUri: string): Promise<void>`; the UI click handler can call that
+method directly or through a thin `syncNow` alias if a clearer UI-facing name is
+needed.
+
+`getSyncState` can be derived from the existing fields at first:
+
+- `remoteId === id`: `local-only`
+- `remoteId === "" && parentRemoteIdWhenCreated`:
+  `pending-upstream-create`
+- `remoteId === ""` without `parentRemoteIdWhenCreated`: `error`
+- upstream is Drive or `fs://...` and `md5Checksum === lastRemoteChecksum`:
+  `synced`
+- upstream is Drive or `fs://...` and `md5Checksum !== lastRemoteChecksum`:
+  `pending`
+- current in-memory sync subject is running: `syncing`
+- last sync attempt failed: `error` once we add `lastSyncError` or equivalent
+  metadata
 
 The first implementation can omit `subscribeSync` and poll/recompute when
 NotebookData emits, if that is enough for the tab indicator. Add a subscription
 only when we need tabs to update immediately after metadata-only sync events.
 
-## Proposal 6: Block Drive New-File Creation While Drive Auth Is Unavailable
+## Proposal 6: Persist Pending Drive New-File Creation
 
-Start with the simpler UX:
+Allow local document creation even when Drive auth is unavailable, but make the
+missing upstream creation state explicit and durable. Do not rely on a preflight
+auth check; a token that is valid before creation can still expire before the
+network request finishes.
 
-If the user is creating a new file from a mounted Google Drive folder, require
-Drive auth before creating any local notebook record.
+Current gap after PR #168: `WorkspaceExplorer` calls `LocalNotebooks.create`
+for local mirrored Drive folders. `LocalNotebooks.create` creates a
+`local://file/...` record first, then asynchronously calls
+`DriveNotebookStore.create(parent.remoteId, name)` if the parent folder has a
+Drive `remoteId`. Because `DriveNotebookStore` uses non-interactive
+`ensureAccessToken({ interactive: false })`, expired auth can make that async
+Drive create fail and leave the notebook as browser-only. This is exactly the
+case we should remove.
+
+`LocalFileRecord` does not currently store its parent folder ID. Parent
+membership is persisted on `LocalFolderRecord.children`, and `LocalNotebooks`
+can recover a file's parent by scanning folders. That means a reload after the
+local file insert but before the async Drive create completes leaves a durable
+local file whose `remoteId` looks browser-only. We can infer that it sits under a
+Drive-backed local folder, but there is no explicit "pending Drive create for
+parent X" state on the file.
+
+Add a transitory parent snapshot to `LocalFileRecord`, for example:
+
+```ts
+interface LocalFileRecord {
+  remoteId: string; // "" while pending upstream creation
+  parentRemoteIdWhenCreated?: string;
+}
+```
+
+`parentRemoteIdWhenCreated` should contain the parent's upstream URI at the time
+the local file was created, for example the Drive folder URL. It is deliberately
+not a live parent pointer and should not be kept up to date if the remote file or
+folder is later moved in Google Drive. Once the Drive file is created and
+`remoteId` is set to the Drive file URL, clear `parentRemoteIdWhenCreated`.
 
 Flow:
 
 1. User clicks "new file" in a Drive folder.
-2. UI checks Drive auth.
-3. If auth is available, create the Drive file first.
-4. Create the IndexedDB mirror only after Drive returns the file ID.
-5. Persist initial notebook content locally.
-6. Upload that same content and store checksum/revision metadata.
+2. `LocalNotebooks.create(...)` detects that the parent is Drive-backed.
+3. It creates the local record with `remoteId = ""` and
+   `parentRemoteIdWhenCreated = parent.remoteId`.
+4. It adds the local file URI to the local folder's `children`.
+5. It attempts `DriveNotebookStore.create(parent.remoteId, name)` immediately if
+   auth is available.
+6. If Drive create succeeds, set `remoteId` to the Drive file URL, clear
+   `parentRemoteIdWhenCreated`, and store checksum/revision metadata.
+7. If Drive auth is missing, expired, or the app reloads before the async create
+   completes, keep the local file and show it as pending upstream creation.
 
 If auth is unavailable:
 
-1. Do not create a local notebook.
-2. Start login flow or show an auth-required error.
-3. Keep the user in the same Explorer location.
-4. Ask the user to retry creation after auth completes.
+1. Keep the local notebook.
+2. Surface a pending/error sync state on the notebook tab.
+3. On explicit sync or the next background sync after auth is restored, create
+   the Drive file under `parentRemoteIdWhenCreated`.
+4. After successful creation, clear `parentRemoteIdWhenCreated` and continue
+   normal sync using the assigned Drive `remoteId`.
 
-This avoids creating an IndexedDB-only notebook when the user intended to create
-a Drive-backed notebook.
+This avoids silently converting a Drive-intended notebook into a browser-only
+notebook. The local record is allowed to exist first, but it carries enough
+state to complete the upstream creation later.
 
-## Deferred Option: Pending Upstream Creation Queue
+This does not eliminate all token-expiry races. A token can still expire after
+the Drive file is created and before a later autosave. That is acceptable if the
+local mirror already has a Drive `remoteId`: the save should move into
+`pending` or `error` sync state and retry after auth is restored. The bug to
+avoid here is the initial-create failure mode where the notebook is accidentally
+left as browser-only because Drive creation failed after the local record was
+already inserted.
 
-Offline upstream-file creation can be supported later, but only with an explicit
-pending creation model.
+The reconciler should treat `remoteId === "" && parentRemoteIdWhenCreated` as
+"pending upstream creation". If `remoteId === ""` without
+`parentRemoteIdWhenCreated`, treat it as malformed/legacy state and surface an
+error instead of guessing a parent from `LocalFolderRecord.children`.
+
+## Deferred Option: General Pending Upstream Creation Queue
+
+The `parentRemoteIdWhenCreated` approach is the smallest durable fix for Drive
+new-file creation. A more general queue can be supported later if we need
+multi-backend offline creation, richer retry state, or multiple pending upstream
+operations per local notebook.
 
 That model would need to persist:
 
@@ -308,46 +485,47 @@ old blob revision forever.
 ## Rollout Plan
 
 1. Land the Issue 165 defensive overwrite fix.
-2. Implement the Issue 157 local-mirror consolidation described in
+2. Done: implement the Issue 157 local-mirror consolidation described in
    `20260408a_refactor_notebooks.md`.
 3. Add optional `UpstreamVersion` metadata to local mirror records.
 4. Adapt Drive metadata into `UpstreamVersion`.
-5. Add structured appLogger events for uploads, downloads, conflicts, and
-   local-overwrite.
-6. Add generic `syncNow` and sync-state API on the local mirror service.
+5. Generalize structured appLogger events for uploads, downloads, conflicts,
+   and local-overwrite, preserving the existing overwrite logging but adding
+   revision metadata.
+6. Add generic sync-state API on the local mirror service; use the existing
+   `LocalNotebooks.sync(localUri)` method for immediate sync.
 7. Add tab-level sync indicator using the sync-state API.
 8. Wire red/failed indicator clicks to immediate sync or required auth/reconnect.
-9. Change Explorer "new Drive file" flow to require auth before creating the
-   local mirror.
-10. Add tests for expired-auth new-file creation.
+9. Change Explorer/LocalNotebooks "new Drive file" flow to persist pending
+   upstream creation state when Drive create cannot complete immediately.
+10. Add tests for expired-auth new-file creation and retry.
 
 ## Test Plan
 
-- Create a Drive-backed notebook and verify IndexedDB records checksum,
-  head revision ID, and Drive version after initial upload.
+- Create a Drive-backed notebook and verify IndexedDB records checksum and head
+  revision ID after initial upload.
 - Create a browser-only notebook and verify sync state is IndexedDB-only.
-- Open/mirror a filesystem notebook and verify sync state uses `file://...`.
+- Open/mirror a filesystem notebook and verify sync state uses `fs://...`.
 - Edit a Drive-backed notebook while auth is unavailable; verify tab indicator
   turns red.
 - Click red indicator after restoring auth; verify upload happens immediately
   and indicator turns green.
-- Create new notebook from a Drive folder while auth is unavailable; verify no
-  local file record is created and the UI prompts for login.
+- Create new notebook from a Drive folder while auth is unavailable; verify a
+  local file record is created with `remoteId === ""` and
+  `parentRemoteIdWhenCreated` set to the Drive folder URL.
+- Restore auth and sync the pending notebook; verify the Drive file is created,
+  `remoteId` is set to the Drive file URL, and `parentRemoteIdWhenCreated` is
+  cleared.
 - Modify upstream Drive content from another browser session; verify local
   overwrite is logged with previous and current revision metadata.
 - Modify local and upstream concurrently; verify conflict path still preserves
   local content.
 
-## Open Questions
+## Resolved Decisions
 
-- Should the sync indicator live in the tab, the notebook toolbar, or both?
-  - Decision: tab should be sufficient to start with
-- Should successful immediate sync show a toast, or is the indicator transition
-  sufficient?
-  - Decision: Don't show a toast
-- Should we keep a bounded local recovery snapshot for every upstream-to-local
-  overwrite?
-  - Decision: not right now
-- Should we mark the current Drive revision `keepForever` when a user explicitly
-  asks to preserve or restore it?
-  - Decision: not right now
+- The sync indicator should live in the tab to start.
+- Successful immediate sync should use the indicator transition; do not add a
+  toast in the first implementation.
+- Do not keep a bounded local recovery snapshot for every upstream-to-local
+  overwrite in this pass.
+- Do not mark the current Drive revision `keepForever` in this pass.

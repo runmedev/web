@@ -10,9 +10,9 @@ import {
 
 const GAPI_SCRIPT_SRC = "https://apis.google.com/js/api.js";
 
-// VERSION_FIELDS is the fields we want to return when fetching metadata to determine the file version
+// VERSION_FIELDS is the fields we want to return when fetching metadata to determine the file content version.
 // https://developers.google.com/workspace/drive/api/guides/fields-parameter
-const VERSION_FIELDS = "md5Checksum,headRevisionId,version";
+const VERSION_FIELDS = "md5Checksum,headRevisionId";
 
 let gapiScriptPromise: Promise<void> | null = null;
 let clientPromise: Promise<GapiDriveFilesClient> | null = null;
@@ -528,6 +528,11 @@ type DriveFileMetadata = {
   parents?: string[];
 };
 
+export interface DriveVersionMetadata {
+  md5Checksum?: string;
+  headRevisionId?: string;
+}
+
 export function parseDriveItem(uri: string): DriveItem {
   if (!uri) {
     throw new Error("Google Drive URI must be provided");
@@ -811,21 +816,22 @@ export class DriveNotebookStore {
   }
 
   async getChecksum(uri: string): Promise<string | null> {
+    return (await this.getVersionMetadata(uri))?.md5Checksum ?? null;
+  }
+
+  async getVersionMetadata(uri: string): Promise<DriveVersionMetadata | null> {
     const { id, type } = parseDriveItem(uri);
     if (type !== NotebookStoreItemType.File) {
-      throw new Error("DriveNotebookStore.getChecksum expects a file URI");
+      throw new Error("DriveNotebookStore.getVersionMetadata expects a file URI");
     }
     const client = await this.getFilesClient();
     const metadataResponse = await client.get({
       fileId: id,
       supportsAllDrives: true,
-      //fields: "md5Checksum",
       fields: VERSION_FIELDS,
     });
-    return (
-      (metadataResponse.result as { md5Checksum?: string } | undefined)
-        ?.md5Checksum ?? null
-    );
+    const result = metadataResponse.result as DriveVersionMetadata | undefined;
+    return result ?? null;
   }
 
   async rename(uri: string, name: string): Promise<NotebookStoreItem> {

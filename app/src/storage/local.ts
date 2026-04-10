@@ -8,7 +8,11 @@ import { parser_pb } from "../runme/client";
 import { aisreClientManager as runmeClientManager } from "../lib/aisreClientManager";
 import { appState } from "../lib/runtime/AppState";
 import { appLogger } from "../lib/logging/runtime";
-import { DriveNotebookStore, isDriveItemUri } from "./drive";
+import {
+  DriveNotebookStore,
+  type DriveVersionMetadata,
+  isDriveItemUri,
+} from "./drive";
 import type { FilesystemNotebookStore } from "./fs";
 import {
   NotebookStoreItem,
@@ -36,6 +40,8 @@ export interface LocalFileRecord {
   name: string;
   /** Upstream URI. Browser-only notebooks use the same local://file/... URI. */
   remoteId: string;
+  /** Creation-time upstream parent URI used to finish a pending remote create. */
+  parentRemoteIdWhenCreated?: string;
   /** Remote Drive URI of the Markdown sidecar (e.g. *.index.md) if present. */
   markdownUri?: string;
   /**
@@ -45,6 +51,10 @@ export interface LocalFileRecord {
   lastRemoteChecksum: string;
   /** ISO timestamp of the last successful sync with Drive (empty if never). */
   lastSynced: string;
+  /** Last successfully observed upstream revision/checksum metadata. */
+  lastUpstreamVersion?: UpstreamVersion;
+  /** Last sync failure, if any. Cleared after successful sync. */
+  lastSyncError?: string;
   /**
    * JSON serialized notebook document. Using a string keeps the IndexedDB
    * representation simple and defers parsing to the caller.
@@ -55,6 +65,31 @@ export interface LocalFileRecord {
    * changes without re-hashing every file on each pass.
    */
   md5Checksum: string;
+}
+
+export interface UpstreamVersion {
+  checksum?: string;
+  revisionId?: string;
+  modifiedTime?: string;
+  sizeBytes?: number;
+}
+
+export type NotebookSyncStatus =
+  | "local-only"
+  | "synced"
+  | "pending"
+  | "pending-upstream-create"
+  | "syncing"
+  | "error";
+
+export interface NotebookSyncState {
+  status: NotebookSyncStatus;
+  localUri: string;
+  remoteId: string;
+  parentRemoteIdWhenCreated?: string;
+  lastSynced?: string;
+  lastUpstreamVersion?: UpstreamVersion;
+  lastError?: string;
 }
 
 /**
@@ -104,6 +139,8 @@ export class LocalNotebooks extends Dexie {
 
   private readonly syncSubjects = new Map<string, Subject<void>>();
   private readonly markdownSyncSubjects = new Map<string, Subject<void>>();
+  private readonly inFlightSyncs = new Map<string, Promise<void>>();
+  private readonly syncListeners = new Map<string, Set<() => void>>();
 
   constructor(
     driveStore: DriveNotebookStore,
@@ -158,6 +195,18 @@ export class LocalNotebooks extends Dexie {
           if (typeof file.remoteId !== "string" || file.remoteId === "") {
             file.remoteId = file.id ?? "";
           }
+        });
+      });
+    this.version(5)
+      .stores({
+        files: "&id, remoteId, lastRemoteChecksum, md5Checksum, name, lastSynced",
+        folders: "&id, remoteId, name, lastSynced",
+      })
+      .upgrade(async (tx) => {
+        await tx.table("files").toCollection().modify((file: Partial<LocalFileRecord>) => {
+          delete file.lastUpstreamVersion;
+          delete file.lastSyncError;
+          delete file.parentRemoteIdWhenCreated;
         });
       });
 
@@ -264,7 +313,9 @@ export class LocalNotebooks extends Dexie {
           doc: serialized,
           md5Checksum: checksum,
           lastRemoteChecksum: checksum,
+          lastUpstreamVersion: { checksum },
           lastSynced: nowIsoString(),
+          lastSyncError: undefined,
         });
       }
       return existing.id;
@@ -276,6 +327,7 @@ export class LocalNotebooks extends Dexie {
       name,
       remoteId: upstreamUri,
       lastRemoteChecksum: checksum,
+      lastUpstreamVersion: { checksum },
       lastSynced: nowIsoString(),
       doc: serialized,
       md5Checksum: checksum,
@@ -354,6 +406,20 @@ export class LocalNotebooks extends Dexie {
       }
     }
 
+    const existingChildren = existingFolder?.children ?? [];
+    for (const childUri of existingChildren) {
+      const childRecord = childUri.startsWith("local://file/")
+        ? await this.files.get(childUri)
+        : null;
+      if (
+        childRecord?.remoteId === "" &&
+        childRecord.parentRemoteIdWhenCreated === remoteUri &&
+        !childUris.includes(childUri)
+      ) {
+        childUris.push(childUri);
+      }
+    }
+
     await this.folders.update(folderId, {
       name: resolvedName,
       children: childUris,
@@ -374,6 +440,67 @@ export class LocalNotebooks extends Dexie {
     }
 
     throw new Error(`Unsupported local URI format: ${localUri}`);
+  }
+
+  subscribeSync(localUri: string, listener: () => void): () => void {
+    let listeners = this.syncListeners.get(localUri);
+    if (!listeners) {
+      listeners = new Set();
+      this.syncListeners.set(localUri, listeners);
+    }
+    listeners.add(listener);
+    return () => {
+      const current = this.syncListeners.get(localUri);
+      if (!current) {
+        return;
+      }
+      current.delete(listener);
+      if (current.size === 0) {
+        this.syncListeners.delete(localUri);
+      }
+    };
+  }
+
+  async getSyncState(localUri: string): Promise<NotebookSyncState> {
+    const record = await this.files.get(localUri);
+    if (!record) {
+      return {
+        status: "error",
+        localUri,
+        remoteId: "",
+        lastError: `Local notebook record not found for ${localUri}`,
+      };
+    }
+
+    if (this.inFlightSyncs.has(localUri)) {
+      return syncStateForRecord(record, "syncing");
+    }
+
+    if (record.remoteId === "" && record.parentRemoteIdWhenCreated) {
+      return syncStateForRecord(
+        record,
+        record.lastSyncError ? "error" : "pending-upstream-create",
+      );
+    }
+
+    if (record.remoteId === "") {
+      return syncStateForRecord(record, "error", "Missing upstream URI");
+    }
+
+    if (isLocalFileUpstream(record.remoteId, record.id)) {
+      return syncStateForRecord(record, "local-only");
+    }
+
+    if (record.lastSyncError) {
+      return syncStateForRecord(record, "error");
+    }
+
+    const localChecksum = await this.getOrBackfillLocalChecksum(localUri, record);
+    const upstreamChecksum = record.lastRemoteChecksum ?? "";
+    return syncStateForRecord(
+      { ...record, md5Checksum: localChecksum },
+      localChecksum === upstreamChecksum ? "synced" : "pending",
+    );
   }
 
   async getMetadata(uri: string): Promise<NotebookStoreItem | null> {
@@ -462,6 +589,7 @@ export class LocalNotebooks extends Dexie {
     const checksum = checksumForSerializedNotebook(serialized);
 
     await this.files.update(uri, { doc: serialized, md5Checksum: checksum });
+    this.notifySync(uri);
   }
 
   async load(uri: string): Promise<parser_pb.Notebook> {
@@ -480,7 +608,17 @@ export class LocalNotebooks extends Dexie {
     if (shouldSync) {
       // Best-effort attempt to ensure the local cache reflects the latest remote state
       // before we hydrate the notebook for the caller.
-      await this.syncFile(uri);
+      try {
+        await this.syncFile(uri);
+      } catch (error) {
+        appLogger.warn("Continuing with local notebook after sync-on-load failed", {
+          attrs: {
+            scope: "storage.local.sync",
+            localUri: uri,
+            error: String(error),
+          },
+        });
+      }
 
       const refreshed = await this.files.get(uri);
       if (!refreshed) {
@@ -514,12 +652,14 @@ export class LocalNotebooks extends Dexie {
     }
 
     const fileUri = this.generateLocalUri("file");
+    const isDriveBackedParent = isDriveUri(parent.remoteId);
     const record: LocalFileRecord = {
       id: fileUri,
       name,
-      remoteId: fileUri,
+      remoteId: isDriveBackedParent ? "" : fileUri,
+      parentRemoteIdWhenCreated: isDriveBackedParent ? parent.remoteId : undefined,
       lastRemoteChecksum: "",
-      lastSynced: nowIsoString(),
+      lastSynced: isDriveBackedParent ? "" : nowIsoString(),
       doc: "",
       md5Checksum: "",
     };
@@ -530,7 +670,7 @@ export class LocalNotebooks extends Dexie {
       lastSynced: nowIsoString(),
     });
 
-    if (typeof window !== "undefined") {
+    if (canDispatchWindowEvents()) {
       window.dispatchEvent(
         new CustomEvent("local-notebook-updated", {
           detail: { uri: fileUri, name, remoteUri: undefined },
@@ -538,60 +678,19 @@ export class LocalNotebooks extends Dexie {
       );
     }
 
-    if (isDriveUri(parent.remoteId)) {
+    if (isDriveBackedParent) {
       void (async () => {
         try {
-          const newFile = await this.driveStore.create(parent.remoteId as string, name);
-          let lastRemoteChecksum = "";
-          try {
-            lastRemoteChecksum =
-              (await this.driveStore.getChecksum(newFile.uri)) ?? "";
-          } catch (error) {
-            appLogger.warn("Failed to record checksum for new Drive notebook", {
-              attrs: {
-                scope: "storage.drive.sync",
-                localUri: fileUri,
-                remoteUri: newFile.uri,
-                error: String(error),
-              },
-            });
-          }
-          const currentRecord = await this.files.get(fileUri);
-          const hasLocalContent = serializedNotebookHasUserContent(
-            currentRecord?.doc ?? "",
-          );
-          await this.files.update(fileUri, {
-            remoteId: newFile.uri,
-            lastRemoteChecksum,
-            lastSynced: hasLocalContent ? "" : nowIsoString(),
-          });
-          if (hasLocalContent) {
-            try {
-              await this.syncFile(fileUri);
-            } catch (error) {
-              appLogger.warn("Failed to sync local notebook after Drive create", {
-                attrs: {
-                  scope: "storage.drive.sync",
-                  localUri: fileUri,
-                  remoteUri: newFile.uri,
-                  error: String(error),
-                },
-              });
-            }
-          }
-          if (typeof window !== "undefined") {
-            window.dispatchEvent(
-              new CustomEvent("local-notebook-updated", {
-                detail: {
-                  uri: fileUri,
-                  name: newFile.name ?? name,
-                  remoteUri: newFile.uri,
-                },
-              }),
-            );
-          }
+          await this.syncFile(fileUri);
         } catch (error) {
-          console.error("Failed to create remote Drive notebook", error);
+          appLogger.warn("Pending Drive notebook creation did not complete", {
+            attrs: {
+              scope: "storage.drive.sync",
+              localUri: fileUri,
+              parentRemoteUri: parent.remoteId,
+              error: String(error),
+            },
+          });
         }
       })();
     }
@@ -620,7 +719,7 @@ export class LocalNotebooks extends Dexie {
 
     const parentFolder = await this.findParentFolder(uri);
 
-    if (typeof window !== "undefined") {
+    if (canDispatchWindowEvents()) {
       window.dispatchEvent(
         new CustomEvent("local-notebook-updated", {
           detail: { uri, name, remoteUri: publicRemoteUri(record) },
@@ -745,11 +844,18 @@ export class LocalNotebooks extends Dexie {
    */
   async listDriveBackedFilesNeedingSync(): Promise<string[]> {
     const driveBackedFiles = await this.files
-      .filter((record) => isDriveUri(record.remoteId))
+      .filter((record) =>
+        isDriveUri(record.remoteId) ||
+        Boolean(record.parentRemoteIdWhenCreated),
+      )
       .toArray();
     const pending: string[] = [];
 
     for (const record of driveBackedFiles) {
+      if (record.remoteId === "" && record.parentRemoteIdWhenCreated) {
+        pending.push(record.id);
+        continue;
+      }
       const localChecksum = await this.getOrBackfillLocalChecksum(record.id, record);
       const lastRemoteChecksum = record.lastRemoteChecksum ?? "";
       if (localChecksum !== lastRemoteChecksum) {
@@ -803,6 +909,26 @@ export class LocalNotebooks extends Dexie {
       this.syncSubjects.set(uri, subject);
     }
     subject.next();
+  }
+
+  private notifySync(uri: string): void {
+    const listeners = this.syncListeners.get(uri);
+    if (listeners) {
+      for (const listener of listeners) {
+        try {
+          listener();
+        } catch (error) {
+          console.error("Local notebook sync listener failed", error);
+        }
+      }
+    }
+    if (canDispatchWindowEvents()) {
+      window.dispatchEvent(
+        new CustomEvent("local-notebook-sync-updated", {
+          detail: { uri },
+        }),
+      );
+    }
   }
 
   private enqueueMarkdownSync(uri: string): void {
@@ -882,7 +1008,36 @@ export class LocalNotebooks extends Dexie {
   }
 
   private async syncFile(localUri: string): Promise<void> {
-    const record = await this.files.get(localUri);
+    const existingSync = this.inFlightSyncs.get(localUri);
+    if (existingSync) {
+      return existingSync;
+    }
+
+    const operation = Promise.resolve().then(async () => {
+      try {
+        await this.syncFileInner(localUri);
+        await this.files.update(localUri, { lastSyncError: undefined });
+      } catch (error) {
+        await this.files.update(localUri, { lastSyncError: String(error) });
+        throw error;
+      }
+    });
+    this.inFlightSyncs.set(localUri, operation);
+    this.notifySync(localUri);
+
+    const cleanup = () => {
+      if (this.inFlightSyncs.get(localUri) !== operation) {
+        return;
+      }
+      this.inFlightSyncs.delete(localUri);
+      this.notifySync(localUri);
+    };
+    void operation.then(cleanup, cleanup);
+    return operation;
+  }
+
+  private async syncFileInner(localUri: string): Promise<void> {
+    let record = await this.files.get(localUri);
     if (!record) {
       throw new Error(`Local notebook record not found for ${localUri}`);
     }
@@ -890,17 +1045,26 @@ export class LocalNotebooks extends Dexie {
     // Files that do not have a remote counterpart live exclusively in
     // IndexedDB. There is nothing to synchronise for those entries, so we can
     // exit early once we've confirmed the local metadata exists.
+    let completedPendingCreate = false;
     if (!record.remoteId) {
-      await this.files.update(localUri, {
-        remoteId: localUri,
-        lastSynced: nowIsoString(),
-      });
-      return;
+      if (!record.parentRemoteIdWhenCreated) {
+        throw new Error(
+          `Local notebook ${localUri} is missing remoteId and pending parent`,
+        );
+      }
+      await this.completePendingDriveCreate(localUri, record);
+      completedPendingCreate = true;
+      const updated = await this.files.get(localUri);
+      if (!updated?.remoteId) {
+        throw new Error(`Failed to create Drive file for pending notebook ${localUri}`);
+      }
+      record = updated;
     }
 
     if (isLocalFileUpstream(record.remoteId, localUri)) {
       await this.files.update(localUri, {
         lastSynced: nowIsoString(),
+        lastSyncError: undefined,
       });
       return;
     }
@@ -931,10 +1095,13 @@ export class LocalNotebooks extends Dexie {
 
     // Fetch the current checksum from Drive. We treat "missing" as an empty
     // string so downstream comparisons remain simple string equality checks.
+    let currentVersion: UpstreamVersion = {};
     let currentRemoteChecksum = "";
     try {
-      currentRemoteChecksum =
-        (await this.driveStore.getChecksum(remoteUri)) ?? "";
+      currentVersion = driveMetadataToUpstreamVersion(
+        await this.driveStore.getVersionMetadata(remoteUri),
+      );
+      currentRemoteChecksum = currentVersion.checksum ?? "";
     } catch (error) {
       console.error(
         "Failed to retrieve remote checksum while synchronising",
@@ -954,14 +1121,17 @@ export class LocalNotebooks extends Dexie {
     // the local content is authoritative. We can safely push our data back to
     // Drive without risking data loss.
     if (currentRemoteChecksum === lastReadChecksum) {
-      const notebook = deserializeNotebook(localDoc);
-      await this.driveStore.save(remoteUri, notebook);
-      const updatedChecksum =
-        (await this.driveStore.getChecksum(remoteUri)) ?? "";
+      await this.saveLocalDocToDrive(localUri, remoteUri, localDoc);
+      const updatedVersion = driveMetadataToUpstreamVersion(
+        await this.driveStore.getVersionMetadata(remoteUri),
+      );
+      const updatedChecksum = updatedVersion.checksum ?? "";
       await this.files.update(localUri, {
         lastRemoteChecksum: updatedChecksum,
+        lastUpstreamVersion: updatedVersion,
         md5Checksum: localChecksum,
         lastSynced: nowIsoString(),
+        lastSyncError: undefined,
       });
       synced = true;
       return;
@@ -972,6 +1142,23 @@ export class LocalNotebooks extends Dexie {
     // copy only if the local record has no user-authored content. Otherwise,
     // prefer the local IndexedDB content because overwriting it risks data loss.
     if (!lastReadChecksum && currentRemoteChecksum) {
+      if (completedPendingCreate && serializedNotebookHasUserContent(localDoc)) {
+        await this.saveLocalDocToDrive(localUri, remoteUri, localDoc);
+        const updatedVersion = driveMetadataToUpstreamVersion(
+          await this.driveStore.getVersionMetadata(remoteUri),
+        );
+        const updatedChecksum = updatedVersion.checksum ?? "";
+        await this.files.update(localUri, {
+          lastRemoteChecksum: updatedChecksum,
+          lastUpstreamVersion: updatedVersion,
+          md5Checksum: localChecksum,
+          lastSynced: nowIsoString(),
+          lastSyncError: undefined,
+        });
+        synced = true;
+        return;
+      }
+
       if (serializedNotebookHasUserContent(localDoc)) {
         appLogger.warn(
           "Forking local notebook because Drive exists without a baseline checksum",
@@ -1000,12 +1187,16 @@ export class LocalNotebooks extends Dexie {
         reason: "no-local-baseline-checksum",
         localDoc,
         remoteDoc: serialized,
+        previousUpstreamRevisionId: record.lastUpstreamVersion?.revisionId,
+        upstreamRevisionId: currentVersion.revisionId,
       });
       await this.files.update(localUri, {
         doc: serialized,
         md5Checksum: checksumForSerializedNotebook(serialized),
         lastRemoteChecksum: currentRemoteChecksum,
+        lastUpstreamVersion: currentVersion,
         lastSynced: nowIsoString(),
+        lastSyncError: undefined,
       });
       synced = true;
       return;
@@ -1026,12 +1217,16 @@ export class LocalNotebooks extends Dexie {
           reason: "local-matches-previous-remote-baseline",
           localDoc,
           remoteDoc: serialized,
+          previousUpstreamRevisionId: record.lastUpstreamVersion?.revisionId,
+          upstreamRevisionId: currentVersion.revisionId,
         });
         await this.files.update(localUri, {
           doc: serialized,
           md5Checksum: checksumForSerializedNotebook(serialized),
           lastRemoteChecksum: currentRemoteChecksum,
+          lastUpstreamVersion: currentVersion,
           lastSynced: nowIsoString(),
+          lastSyncError: undefined,
         });
         synced = true;
         return;
@@ -1050,21 +1245,26 @@ export class LocalNotebooks extends Dexie {
     // keep the baseline empty.
     if (!currentRemoteChecksum) {
       if (localDoc) {
-        const notebook = deserializeNotebook(localDoc);
-        await this.driveStore.save(remoteUri, notebook);
-        const updatedChecksum =
-          (await this.driveStore.getChecksum(remoteUri)) ?? "";
+        await this.saveLocalDocToDrive(localUri, remoteUri, localDoc);
+        const updatedVersion = driveMetadataToUpstreamVersion(
+          await this.driveStore.getVersionMetadata(remoteUri),
+        );
+        const updatedChecksum = updatedVersion.checksum ?? "";
         await this.files.update(localUri, {
           lastRemoteChecksum: updatedChecksum,
+          lastUpstreamVersion: updatedVersion,
           md5Checksum: localChecksum,
           lastSynced: nowIsoString(),
+          lastSyncError: undefined,
         });
         synced = true;
       } else if (lastReadChecksum) {
         await this.files.update(localUri, {
           lastRemoteChecksum: "",
+          lastUpstreamVersion: currentVersion,
           md5Checksum: localChecksum,
           lastSynced: nowIsoString(),
+          lastSyncError: undefined,
         });
         synced = true;
       }
@@ -1073,7 +1273,106 @@ export class LocalNotebooks extends Dexie {
     if (!synced) {
       await this.files.update(localUri, {
         lastSynced: nowIsoString(),
+        lastSyncError: undefined,
       });
+    }
+  }
+
+  private async saveLocalDocToDrive(
+    localUri: string,
+    remoteUri: string,
+    localDoc: string,
+  ): Promise<void> {
+    if (!localDoc) {
+      await this.driveStore.save(
+        remoteUri,
+        create(parser_pb.NotebookSchema, { cells: [] }),
+      );
+      return;
+    }
+
+    const parseResult = parseSerializedNotebook(localDoc);
+    if (parseResult.ok) {
+      await this.driveStore.save(remoteUri, parseResult.notebook);
+      return;
+    }
+
+    appLogger.warn("Saving raw local notebook JSON because parsing failed", {
+      attrs: {
+        scope: "storage.drive.sync",
+        localUri,
+        remoteUri,
+        error: String(parseResult.error),
+      },
+    });
+    await this.driveStore.saveContent(remoteUri, localDoc, "application/json");
+  }
+
+  private async completePendingDriveCreate(
+    localUri: string,
+    record: LocalFileRecord,
+  ): Promise<void> {
+    const parentRemoteUri = record.parentRemoteIdWhenCreated;
+    if (!parentRemoteUri) {
+      throw new Error(`Missing pending Drive parent for ${localUri}`);
+    }
+    if (!isDriveUri(parentRemoteUri)) {
+      throw new Error(
+        `Pending upstream parent is not a Drive folder for ${localUri}: ${parentRemoteUri}`,
+      );
+    }
+
+    const newFile = await this.driveStore.create(parentRemoteUri, record.name);
+    let version: UpstreamVersion = {};
+    try {
+      version = driveMetadataToUpstreamVersion(
+        await this.driveStore.getVersionMetadata(newFile.uri),
+      );
+    } catch (error) {
+      appLogger.warn("Failed to record version metadata for new Drive notebook", {
+        attrs: {
+          scope: "storage.drive.sync",
+          localUri,
+          remoteUri: newFile.uri,
+          error: String(error),
+        },
+      });
+    }
+    const currentRecord = await this.files.get(localUri);
+    const localDoc = currentRecord?.doc ?? record.doc ?? "";
+    const hasLocalContent = serializedNotebookHasUserContent(localDoc);
+
+    await this.files.update(localUri, {
+      name: newFile.name ?? record.name,
+      remoteId: newFile.uri,
+      parentRemoteIdWhenCreated: undefined,
+      lastRemoteChecksum: version.checksum ?? "",
+      lastUpstreamVersion: version,
+      lastSynced: hasLocalContent ? "" : nowIsoString(),
+      lastSyncError: undefined,
+    });
+
+    appLogger.info("Created pending Drive notebook upstream file", {
+      attrs: {
+        scope: "storage.drive.sync",
+        localUri,
+        parentRemoteUri,
+        remoteUri: newFile.uri,
+        upstreamChecksum: version.checksum,
+        upstreamRevisionId: version.revisionId,
+      },
+    });
+
+    if (canDispatchWindowEvents()) {
+      window.dispatchEvent(
+        new CustomEvent("local-notebook-updated", {
+          detail: {
+            uri: localUri,
+            name: newFile.name ?? record.name,
+            remoteUri: newFile.uri,
+          },
+        }),
+      );
     }
   }
 
@@ -1115,7 +1414,11 @@ export class LocalNotebooks extends Dexie {
         doc: upstreamDoc,
         md5Checksum: checksumForSerializedNotebook(upstreamDoc),
         lastRemoteChecksum: checksumForSerializedNotebook(upstreamDoc),
+        lastUpstreamVersion: {
+          checksum: checksumForSerializedNotebook(upstreamDoc),
+        },
         lastSynced: nowIsoString(),
+        lastSyncError: undefined,
       });
       return;
     }
@@ -1139,7 +1442,11 @@ export class LocalNotebooks extends Dexie {
           doc: upstreamDoc,
           md5Checksum: upstreamChecksum,
           lastRemoteChecksum: upstreamChecksum,
+          lastUpstreamVersion: {
+            checksum: upstreamChecksum,
+          },
           lastSynced: nowIsoString(),
+          lastSyncError: undefined,
         });
         return;
       }
@@ -1173,8 +1480,12 @@ export class LocalNotebooks extends Dexie {
     await upstreamStore.save(upstreamUri, parseResult.notebook);
     await this.files.update(localUri, {
       lastRemoteChecksum: localChecksum,
+      lastUpstreamVersion: {
+        checksum: localChecksum,
+      },
       md5Checksum: localChecksum,
       lastSynced: nowIsoString(),
+      lastSyncError: undefined,
     });
   }
 
@@ -1223,11 +1534,30 @@ export class LocalNotebooks extends Dexie {
       );
     }
 
+    let newFileVersion: UpstreamVersion = {};
+    try {
+      newFileVersion = driveMetadataToUpstreamVersion(
+        await this.driveStore.getVersionMetadata(newFile.uri),
+      );
+    } catch (error) {
+      appLogger.warn("Failed to record version metadata for conflict Drive notebook", {
+        attrs: {
+          scope: "storage.drive.sync",
+          localUri,
+          remoteUri: newFile.uri,
+          error: String(error),
+        },
+      });
+    }
+
     await this.files.update(localUri, {
       name: newName,
       remoteId: newFile.uri,
-      lastRemoteChecksum: "",
+      parentRemoteIdWhenCreated: undefined,
+      lastRemoteChecksum: newFileVersion.checksum ?? "",
+      lastUpstreamVersion: newFileVersion,
       lastSynced: nowIsoString(),
+      lastSyncError: undefined,
     });
 
     console.warn("Notebook conflict resolved by creating a new file", {
@@ -1238,7 +1568,7 @@ export class LocalNotebooks extends Dexie {
       remoteChecksum,
     });
 
-    if (typeof window !== "undefined") {
+    if (canDispatchWindowEvents()) {
       window.dispatchEvent(
         new CustomEvent("local-notebook-updated", {
           detail: {
@@ -1360,11 +1690,38 @@ function serializedNotebookHasUserContent(json: string): boolean {
   }
 }
 
+function driveMetadataToUpstreamVersion(
+  metadata: DriveVersionMetadata | null,
+): UpstreamVersion {
+  return {
+    checksum: metadata?.md5Checksum,
+    revisionId: metadata?.headRevisionId,
+  };
+}
+
+function syncStateForRecord(
+  record: LocalFileRecord,
+  status: NotebookSyncStatus,
+  fallbackError?: string,
+): NotebookSyncState {
+  return {
+    status,
+    localUri: record.id,
+    remoteId: record.remoteId,
+    parentRemoteIdWhenCreated: record.parentRemoteIdWhenCreated,
+    lastSynced: record.lastSynced || undefined,
+    lastUpstreamVersion: record.lastUpstreamVersion,
+    lastError: record.lastSyncError || fallbackError,
+  };
+}
+
 function logRemoteOverwriteLocalDoc({
   localUri,
   remoteUri,
   localChecksum,
   remoteChecksum,
+  previousUpstreamRevisionId,
+  upstreamRevisionId,
   reason,
   localDoc,
   remoteDoc,
@@ -1373,6 +1730,8 @@ function logRemoteOverwriteLocalDoc({
   remoteUri: string;
   localChecksum: string;
   remoteChecksum: string;
+  previousUpstreamRevisionId?: string;
+  upstreamRevisionId?: string;
   reason: string;
   localDoc: string;
   remoteDoc: string;
@@ -1380,13 +1739,15 @@ function logRemoteOverwriteLocalDoc({
   if (localDoc === remoteDoc) {
     return;
   }
-  appLogger.warn("Overwriting local notebook content with Drive content", {
+  appLogger.warn("Overwriting local notebook content with upstream content", {
     attrs: {
-      scope: "storage.drive.sync",
+      scope: "storage.local.sync",
       localUri,
       remoteUri,
       localChecksum,
       remoteChecksum,
+      previousUpstreamRevisionId,
+      upstreamRevisionId,
       reason,
       localBytes: new TextEncoder().encode(localDoc).byteLength,
       remoteBytes: new TextEncoder().encode(remoteDoc).byteLength,
@@ -1415,6 +1776,13 @@ function stripTimestampSuffix(name: string): string {
 
 function nowIsoString(): string {
   return new Date().toISOString();
+}
+
+function canDispatchWindowEvents(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.dispatchEvent === "function"
+  );
 }
 
 function needsSync(lastSynced: string | undefined, maxAgeMs: number): boolean {
