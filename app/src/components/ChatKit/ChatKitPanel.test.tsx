@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { create } from "@bufbuild/protobuf";
 import { ChatkitStateSchema } from "../../protogen/oaiproto/aisre/notebooks_pb.js";
 
-type HarnessAdapter = "responses-direct" | "codex";
+type HarnessAdapter = "responses-direct" | "codex" | "codex-wasm";
 
 let harnessState: { defaultHarness: { name: string; baseUrl: string; adapter: HarnessAdapter } };
 let codexProjectsState: {
@@ -78,6 +78,7 @@ const codexControllerMock = {
   })),
 };
 const codexFetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+const codexWasmFetchMock = vi.fn(async () => new Response(null, { status: 200 }));
 const responsesDirectFetchMock = vi.fn(async () => new Response(null, { status: 200 }));
 
 vi.mock("@openai/chatkit-react", () => ({
@@ -144,6 +145,10 @@ vi.mock("../../lib/runtime/codexAppServerProxyClient", () => ({
 
 vi.mock("../../lib/runtime/codexChatkitFetch", () => ({
   createCodexChatkitFetch: () => codexFetchMock,
+}));
+
+vi.mock("../../lib/runtime/codexWasmChatkitFetch", () => ({
+  createCodexWasmChatkitFetch: () => codexWasmFetchMock,
 }));
 
 vi.mock("../../lib/runtime/responsesDirectChatkitFetch", () => ({
@@ -224,6 +229,7 @@ describe("ChatKitPanel codex harness routing", () => {
     codexControllerMock.getSnapshot.mockClear();
     codexControllerMock.selectThread.mockClear();
     codexFetchMock.mockClear();
+    codexWasmFetchMock.mockClear();
     responsesDirectFetchMock.mockClear();
     approvalMgrMock.failAll.mockClear();
     appLoggerMock.info.mockClear();
@@ -269,6 +275,36 @@ describe("ChatKitPanel codex harness routing", () => {
     });
 
     expect(responsesDirectFetchMock).toHaveBeenCalled();
+    expect(codexFetchMock).not.toHaveBeenCalled();
+    expect(bridgeMock.connect).not.toHaveBeenCalled();
+  });
+
+  it("routes ChatKit to codex-wasm adapter URL and uses codex-wasm fetch", async () => {
+    harnessState.defaultHarness.adapter = "codex-wasm";
+
+    render(<ChatKitPanel />);
+
+    const config = useChatKitMock.mock.calls.at(0)?.[0];
+    expect(config.api.url).toBe("http://127.0.0.1:31337/codex/wasm/chatkit");
+
+    await act(async () => {
+      await config.api.fetch("http://127.0.0.1:31337/codex/wasm/chatkit", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "threads.create",
+          params: {
+            input: {
+              content: [{ type: "input_text", text: "hello codex wasm" }],
+            },
+          },
+        }),
+      });
+    });
+
+    expect(codexWasmFetchMock).toHaveBeenCalled();
     expect(codexFetchMock).not.toHaveBeenCalled();
     expect(bridgeMock.connect).not.toHaveBeenCalled();
   });

@@ -20,6 +20,7 @@ import { getCodexToolBridge } from '../../lib/runtime/codexToolBridge'
 import { getCodexExecuteApprovalManager } from '../../lib/runtime/codexExecuteApprovalManager'
 import { getCodexAppServerProxyClient } from '../../lib/runtime/codexAppServerProxyClient'
 import { createCodexChatkitFetch } from '../../lib/runtime/codexChatkitFetch'
+import { createCodexWasmChatkitFetch } from '../../lib/runtime/codexWasmChatkitFetch'
 import { createResponsesDirectChatkitFetch } from '../../lib/runtime/responsesDirectChatkitFetch'
 import {
   createCodeModeExecutor,
@@ -796,6 +797,13 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     [defaultHarness.adapter]
   )
   const codexFetch = useMemo(() => createCodexChatkitFetch(), [])
+  const codexWasmFetch = useMemo(
+    () =>
+      createCodexWasmChatkitFetch({
+        codeModeExecutor,
+      }),
+    [codeModeExecutor]
+  )
   const responsesDirectFetch = useMemo(
     () =>
       createResponsesDirectChatkitFetch({
@@ -822,7 +830,11 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const authorizedFetch = useAuthorizedFetch(getAuthorizedChatkitState, {
     onSSEEvent: handleSseEvent,
     baseFetch:
-      defaultHarness.adapter === 'codex' ? codexFetch : responsesDirectFetch,
+      defaultHarness.adapter === 'codex'
+        ? codexFetch
+        : defaultHarness.adapter === 'codex-wasm'
+          ? codexWasmFetch
+          : responsesDirectFetch,
     includeRunmeHeaders: defaultHarness.adapter === 'codex',
     includeChatkitState: defaultHarness.adapter === 'codex',
   })

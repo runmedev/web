@@ -188,6 +188,13 @@ export function createAppJsGlobals({
       return { adapter: "codex" };
     }
     if (
+      normalized === "codex-wasm" ||
+      normalized === "codex_wasm" ||
+      normalized === "codexwasm"
+    ) {
+      return { adapter: "codex-wasm" };
+    }
+    if (
       normalized === "responses" ||
       normalized === "response"
     ) {

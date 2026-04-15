@@ -46,6 +46,13 @@ describe("harnessManager", () => {
     );
   });
 
+  it("builds codex-wasm route for local codex wasm harnesses", () => {
+    expect(buildChatkitUrl("http://localhost:1234", "codex-wasm")).toBe(
+      "http://localhost:1234/codex/wasm/chatkit",
+    );
+    expect(buildChatkitUrl("", "codex-wasm")).toBe("/codex/wasm/chatkit");
+  });
+
   it("builds responses-direct route for direct OpenAI harnesses", () => {
     expect(buildChatkitUrl("http://localhost:1234", "responses-direct")).toBe(
       "http://localhost:1234/responses/direct/chatkit",
@@ -103,6 +110,18 @@ describe("harnessManager", () => {
     expect(active.name).toBe("openai-default");
     expect(active.baseUrl).toBe("");
     expect(active.adapter).toBe("responses-direct");
+  });
+
+  it("allows empty baseUrl for codex-wasm adapter", () => {
+    const mgr = getHarnessManager();
+    mgr.update("local-codex-wasm", "", "codex-wasm");
+    mgr.setDefault("local-codex-wasm");
+
+    const active = mgr.getDefault();
+    expect(active.name).toBe("local-codex-wasm");
+    expect(active.baseUrl).toBe("");
+    expect(active.adapter).toBe("codex-wasm");
+    expect(mgr.resolveChatkitUrl(active)).toBe("/codex/wasm/chatkit");
   });
 
   it("rejects empty baseUrl for codex adapter", () => {

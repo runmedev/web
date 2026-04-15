@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-export type HarnessAdapter = "responses-direct" | "codex";
+export type HarnessAdapter = "responses-direct" | "codex" | "codex-wasm";
 
 export interface HarnessProfile {
   name: string;
@@ -26,10 +26,11 @@ const HARNESS_CHANGED_EVENT = "runme:harness-changed";
 const CHATKIT_ROUTE_BY_ADAPTER: Record<HarnessAdapter, string> = {
   "responses-direct": "/responses/direct/chatkit",
   codex: "/codex/chatkit",
+  "codex-wasm": "/codex/wasm/chatkit",
 };
 
 function isHarnessAdapter(value: unknown): value is HarnessAdapter {
-  return value === "responses-direct" || value === "codex";
+  return value === "responses-direct" || value === "codex" || value === "codex-wasm";
 }
 
 function normalizeStoredHarnessAdapter(value: unknown): HarnessAdapter | null {
@@ -280,7 +281,7 @@ class HarnessManager {
       const harnesses = new Map<string, HarnessProfile>();
 
       for (const entry of entries) {
-        const rawAdapter = entry?.adapter;
+        const wasLegacyResponses = entry?.adapter === "responses";
         const adapter = normalizeStoredHarnessAdapter(entry?.adapter);
         if (
           !entry ||
@@ -296,7 +297,7 @@ class HarnessManager {
         );
         // Legacy "responses" entries targeted runme /chatkit, not the upstream
         // Responses API. After migration to responses-direct, default to OpenAI.
-        if (rawAdapter === "responses") {
+        if (wasLegacyResponses) {
           baseUrl = "";
         }
         if (!name) {
