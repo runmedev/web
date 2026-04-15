@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from 'react'
 import { ChatKit, useChatKit, ChatKitIcon } from '@openai/chatkit-react'
 import {
   parser_pb,
@@ -11,6 +18,7 @@ import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import { create, fromJsonString, toJson } from '@bufbuild/protobuf'
 import {
   useHarness,
+  getHarnessManager,
   buildChatkitUrl,
   buildCodexAppServerWsUrl,
   buildCodexBridgeWsUrl,
@@ -1750,13 +1758,51 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
 }
 
 function ChatKitPanel() {
-  const { defaultHarness } = useHarness()
+  const { harnesses, defaultHarness } = useHarness()
+  const harnessManager = useMemo(() => getHarnessManager(), [])
   const harnessSessionKey = `${defaultHarness.name}:${defaultHarness.baseUrl}:${defaultHarness.adapter}`
+
+  const handleHarnessChange = useCallback(
+    (event: ChangeEvent<HTMLSelectElement>) => {
+      const nextHarnessName = event.target.value
+      if (!nextHarnessName || nextHarnessName === defaultHarness.name) {
+        return
+      }
+      harnessManager.setDefault(nextHarnessName)
+    },
+    [defaultHarness.name, harnessManager]
+  )
+
   return (
-    <ChatKitPanelInner
-      key={harnessSessionKey}
-      defaultHarness={defaultHarness}
-    />
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="min-h-0 flex-1">
+        <ChatKitPanelInner
+          key={harnessSessionKey}
+          defaultHarness={defaultHarness}
+        />
+      </div>
+      <div className="border-t border-nb-cell-border bg-white px-3 py-2">
+        <label
+          htmlFor="chatkit-harness-select"
+          className="mb-1 block text-xs font-medium text-nb-text-muted"
+        >
+          Harness
+        </label>
+        <select
+          id="chatkit-harness-select"
+          data-testid="chatkit-harness-select"
+          className="w-full rounded border border-nb-cell-border bg-white px-2 py-1 text-sm text-nb-text"
+          value={defaultHarness.name}
+          onChange={handleHarnessChange}
+        >
+          {harnesses.map((harness) => (
+            <option key={harness.name} value={harness.name}>
+              {`${harness.name} (${harness.adapter})`}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
   )
 }
 
