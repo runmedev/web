@@ -2,6 +2,8 @@ import { resolveAppUrl } from '../appBase'
 
 export type BrowserCodexInstance = {
   set_api_key(apiKey: string): void
+  setSessionOptions(options: BrowserSessionOptions): void
+  clearSessionOptions(): void
   set_code_executor(executor: (input: string) => string | Promise<string>): void
   clear_code_executor(): void
   submit_turn(
@@ -13,6 +15,17 @@ export type BrowserCodexInstance = {
 export type BrowserCodexConstructor = new (
   apiKey: string
 ) => BrowserCodexInstance
+
+export type BrowserInstructionOverrides = {
+  base?: string
+  developer?: string
+  user?: string
+}
+
+export type BrowserSessionOptions = {
+  cwd?: string
+  instructions?: BrowserInstructionOverrides
+}
 
 export type CodexWasmGeneratedModule = {
   default: (moduleOrPath?: string | URL | Request) => Promise<unknown>
@@ -26,9 +39,7 @@ export function getCodexWasmAssetUrls(): { moduleUrl: string; wasmUrl: URL } {
     moduleUrl: resolveAppUrl(
       'generated/codex-wasm/codex_wasm_harness.js'
     ).toString(),
-    wasmUrl: resolveAppUrl(
-      'generated/codex-wasm/codex_wasm_harness_bg.wasm'
-    ),
+    wasmUrl: resolveAppUrl('generated/codex-wasm/codex_wasm_harness_bg.wasm'),
   }
 }
 

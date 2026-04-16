@@ -3,10 +3,11 @@ import {
   getCodeModeErrorOutput,
 } from './codeModeExecutor'
 import {
-  loadCodexWasmModule,
   type BrowserCodexInstance,
+  loadCodexWasmModule,
 } from './codexWasmHarnessLoader'
 import { responsesDirectConfigManager } from './responsesDirectConfigManager'
+import { buildRunmeCodexWasmSessionOptions } from './runmeChatkitPrompts'
 
 export type CodexWasmSessionEvent = Record<string, unknown>
 
@@ -15,19 +16,6 @@ export type CodexWasmSession = {
     prompt: string
     onEvent: (event: CodexWasmSessionEvent) => void
   }): Promise<string>
-}
-
-const RUNME_CODE_MODE_PROMPT_PREFIX = [
-  'You are operating inside the Runme app ChatKit panel in a browser.',
-  'When you need to inspect or modify notebooks, use Codex code mode.',
-  'Executed JavaScript runs in the Runme browser sandbox.',
-  'The runtime inside executed code exposes helpers named runme, notebooks, and help.',
-  'Always await helper calls before reading or logging their results.',
-  'Use concise JavaScript snippets and report concrete notebook-visible results.',
-].join('\n')
-
-function buildPrompt(prompt: string): string {
-  return `${RUNME_CODE_MODE_PROMPT_PREFIX}\n\nUser request:\n${prompt}`
 }
 
 function normalizeString(value: unknown): string {
@@ -56,6 +44,7 @@ export function createCodexWasmSession(options: {
 
     const browserCodex = await browserCodexPromise
     browserCodex.set_api_key(apiKey)
+    browserCodex.setSessionOptions(buildRunmeCodexWasmSessionOptions())
     browserCodex.set_code_executor(async (input: string) => {
       let request: {
         source?: unknown
@@ -108,7 +97,7 @@ export function createCodexWasmSession(options: {
     async submitTurn(args) {
       const browserCodex = await getBrowserCodex()
       const submissionId = await browserCodex.submit_turn(
-        buildPrompt(args.prompt),
+        normalizeString(args.prompt),
         (event: unknown) => {
           if (event && typeof event === 'object' && !Array.isArray(event)) {
             args.onEvent(event as CodexWasmSessionEvent)
