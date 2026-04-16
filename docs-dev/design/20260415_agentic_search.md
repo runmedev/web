@@ -13,8 +13,8 @@ feels closer to `ripgrep` (`rg`) than to semantic retrieval.
 
 The v0 platform should provide:
 
-- policy-governed `fetch` for remote reads,
-- policy-governed OPFS primitives for local persistence,
+- `GET`-oriented network reads for remote fetches,
+- OPFS primitives for local persistence,
 - enough browser runtime context for the agent to write JavaScript that fetches
   manifests, downloads files, persists them, and searches them,
 - a path for the agent to retain reusable snippets and patterns via memory.
@@ -50,13 +50,90 @@ The browser environment changes a few constraints:
 - the agent still needs concrete instructions about which sources exist and how
   to query them.
 
+## Background
+
+### What native Codex already does
+
+In the native Codex codebase, project-level instructions are pulled from
+`AGENTS.md` files and appended to the user instructions. The implementation is
+in [`project_doc.rs`](/Users/jlewi/code/codex/codex-rs/core/src/project_doc.rs).
+It walks from repo root to cwd, reads `AGENTS.md`, and injects that text into
+the prompt.
+
+Native Codex also exposes general-purpose tools such as shell/command tools and
+optionally `js_repl`. The `js_repl` instructions explicitly tell the model to
+use `codex.tool(...)` to call normal tools, including shell tools, from inside
+JavaScript.
+
+That means native Codex usually gets filesystem context in one of three ways:
+
+- prompt context from `AGENTS.md`,
+- shell-style inspection of the local checkout with tools like `rg`, `find`,
+  `sed`, and `cat`,
+- JavaScript that calls those tools through `codex.tool(...)` when `js_repl` is
+  enabled.
+
+There is a `codex-file-search` crate in the Codex repo, but it is currently
+used for fuzzy file search in the TUI and app-server UI flows. It is not the
+primary model-facing filesystem retrieval mechanism that the browser harness can
+simply inherit.
+
+### What the current WASM harness actually does
+
+The current browser harness in
+[`codex-rs/wasm-harness/src/browser.rs`](/Users/jlewi/code/codex/codex-rs/wasm-harness/src/browser.rs)
+starts a real `CodexThread` and injects one browser-side code executor. The
+browser-facing API is:
+
+- `new BrowserCodex(apiKey)`
+- `set_api_key(...)`
+- `set_code_executor(...)`
+- `submit_turn(prompt, on_event)`
+
+Important current limitations:
+
+- the WASM build does not automatically read project docs; the wasm variant in
+  [`project_doc_wasm.rs`](/Users/jlewi/code/codex/codex-rs/core/src/project_doc_wasm.rs)
+  returns `None`,
+- the exec-server filesystem implementation on wasm is unsupported,
+- nested code-mode tools are disabled on wasm because
+  `build_enabled_tools(...)` returns an empty list under `#[cfg(target_arch =
+  "wasm32")]`.
+
+So the browser harness does not currently inherit desktop Codex's filesystem
+or shell-oriented retrieval surface. We have to provide that browser runtime
+context ourselves.
+
+### What output Code Mode returns to the model
+
+In the WASM harness, the JS executor returns JSON of the form:
+
+```json
+{
+  "output": "...",
+  "stored_values": {},
+  "error_text": null
+}
+```
+
+`BrowserCodeModeRuntime` turns `output` into a
+`FunctionCallOutputContentItem::InputText`, and Codex prepends a status header
+such as `Script completed` and wall time before sending the tool result back to
+the model.
+
+In the current Runme integration, that `output` string comes from
+[`codeModeExecutor.ts`](/Users/jlewi/code/runmecodex/web/app/src/lib/runtime/codeModeExecutor.ts),
+which captures stdout and stderr from the sandbox JS kernel and returns one
+merged output string. In practice, that means code-mode output is effectively
+"whatever the code printed to stdout/stderr", plus the Codex status wrapper.
+
 ## Goals
 
 - Let `codex-wasm` answer Runme product and implementation questions using
   Runme docs and source.
 - Support at least the public `runmedev/web` repository in v0.
 - Expose low-level browser capabilities that let sandboxed agent-authored code
-  fetch, persist, and search corpus data without human approval inside policy.
+  fetch, persist, and search corpus data without human approval in v0.
 - Cache fetched text locally in the browser.
 - Return or derive stable source URIs, file paths, and snippets.
 - Make policy the primary control point for safety.
@@ -75,21 +152,75 @@ The browser environment changes a few constraints:
 - No requirement to design a bespoke host-provided search SDK before the agent
   can search.
 
-## Initial Corpus Scope
+## Proposal
+
+### Overview
+
+For v0, we should assume the agent answers Runme questions by writing
+JavaScript in AppKernel against low-level browser APIs, not by calling a
+host-owned search SDK.
+
+The intended flow for a question such as "How do you configure a runner in
+Runme?" is:
+
+1. The harness prompt tells the agent that public Runme source lives in
+   `runmedev/web` and that cached repos should be laid out in OPFS under
+   `/code/${ORG}/${REPO}`.
+2. The agent writes JS that checks whether `/code/runmedev/web` already exists
+   in OPFS.
+3. If the repo is missing or stale, the agent uses policy-approved network reads
+   to fetch the GitHub tree manifest for `runmedev/web@main`, iterates the
+   returned `blob` entries, fetches relevant files, and writes them into
+   `/code/runmedev/web/...`.
+4. The agent writes JS that recursively walks files under that cached tree,
+   applies lexical matching with JavaScript regexes or substring checks, and
+   finds relevant sections in docs and source.
+5. The agent prints or otherwise returns the matched snippets and paths through
+   code-mode output.
+6. Codex then uses those snippets as immediate working context to answer the
+   user's question.
+
+For the runner example, the agent should search terms such as:
+
+- `runner`
+- `runnerName`
+- `runme.dev/runnerName`
+- `configure runner`
+- `AppKernel`
+
+and inspect the matching docs/source before answering.
+
+The explicit v0 posture is:
+
+- expose low-level OPFS and network primitives,
+- let the agent author the crawl/cache/search code it needs,
+- defer higher-level SDK functions until later.
+
+We should be explicit about why we are deferring higher-level SDKs: the desired
+end state is that the AI learns the patterns it needs, retains reusable code via
+memories or snippets, and only later graduates the most stable patterns into
+host-owned abstractions.
+
+### Initial Corpus and OPFS Layout
 
 For v0, the initial unattended corpus should be the public `runmedev/web`
 repository at `main`.
 
-This is not meant to introduce a new host-owned source abstraction. It is
-simply the initial policy/config choice for what the sandboxed agent is allowed
-to fetch and cache without approval.
+We should assume the agent caches repos in OPFS under a layout like:
 
-Recommended scope:
+```text
+/code/runmedev/web/
+```
 
-- GitHub tree manifests under `https://api.github.com/repos/runmedev/web/`
-- raw file content under `https://raw.githubusercontent.com/runmedev/web/main/`
+That directory should contain a repo-like mirror of fetched files, for example:
 
-with an allowlist roughly like:
+```text
+/code/runmedev/web/docs/...
+/code/runmedev/web/docs-dev/...
+/code/runmedev/web/app/src/...
+```
+
+Recommended include scope:
 
 - `docs/**`
 - `docs-dev/**`
@@ -98,48 +229,109 @@ with an allowlist roughly like:
 - top-level text files such as `README*`, `AGENTS.md`, `package.json`,
   `pnpm-lock.yaml`
 
-and excludes for:
+Recommended excludes:
 
 - `node_modules/**`
 - generated protobuf output where not useful for product questions
 - binary assets, large media, and build output
 
-This keeps the first corpus aligned with the questions we expect users to ask
-about Runme while avoiding low-value files, without requiring a broader
-source-root abstraction in v0.
+This keeps the first corpus aligned with likely user questions while keeping
+search and sync cost bounded.
 
-## Minimum Low-Level Capability
+### Low-Level APIs in AppKernel
+
+The low-level AppKernel/browser substrate for this design should be:
+
+1. a subset of OPFS
+2. a network read API, either raw `fetch` or a thin `GET`-oriented wrapper
+
+Representative API shape:
+
+```ts
+type OpfsApi = {
+  exists(path: string): Promise<boolean>;
+  readText(path: string): Promise<string>;
+  writeText(path: string, text: string): Promise<void>;
+  readBytes(path: string): Promise<Uint8Array>;
+  writeBytes(path: string, bytes: Uint8Array): Promise<void>;
+  list(path: string): Promise<Array<{ name: string; kind: "file" | "directory" }>>;
+  mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  stat(path: string): Promise<{ kind: "file" | "directory"; size?: number; mtime?: string }>;
+  remove(path: string, options?: { recursive?: boolean }): Promise<void>;
+};
+
+type NetworkApi = {
+  get(url: string, options?: {
+    headers?: Record<string, string>;
+    responseType?: "text" | "bytes" | "json";
+  }): Promise<{
+    ok: boolean;
+    status: number;
+    headers: Record<string, string>;
+    text?: string;
+    bytes?: Uint8Array;
+    json?: unknown;
+  }>;
+};
+```
+
+This `OpfsApi` is intentionally **not** the native browser OPFS API. Native
+OPFS is handle-based:
+
+- `navigator.storage.getDirectory()`
+- `FileSystemDirectoryHandle.getDirectoryHandle(...)`
+- `FileSystemDirectoryHandle.getFileHandle(...)`
+- `FileSystemFileHandle.getFile()`
+- `FileSystemFileHandle.createWritable()`
+
+It does not provide direct path-based helpers such as `exists(path)`,
+`readText(path)`, or `mkdir(path, { recursive: true })`. Those are convenience
+operations we would implement on top of the native handle API.
+
+If raw `fetch` is easier to wire than a thin `get(...)` wrapper, raw `fetch` is
+acceptable. The more important point is that the API is policy-governed and
+available inside AppKernel code mode.
+
+For v0, these APIs should be enough. We do not need a hand-crafted cache/search
+SDK before the agent can operate.
+
+We should implement this path-based API in both:
+
+- the Sandbox Kernel
+- the browser-mode kernel
+
+so that the same AppKernel JavaScript can run in either mode without branching
+on the storage implementation.
+
+### Policy
+
+For v0, we should keep policy simple:
+
+- all OPFS operations are assumed safe for the AI agent
+- all HTTP `GET` requests are assumed safe
+
+That is enough to support the initial crawl/cache/search workflow without
+introducing a more complicated policy system up front.
+
+In the future, we can define and enforce a richer policy mechanism covering
+things such as:
+
+- allowed HTTP methods
+- allowed URI prefixes/domains
+- response size, timeout, and content-type limits
+- writable OPFS namespaces
+- operations that require approval
+
+For now, this proposal assumes the low-level substrate is broadly available and
+that stricter enforcement is a follow-on design.
+
+### GitHub Fetch Flow
 
 The transport primitive can be plain HTTP `GET`, but raw blob `GET` alone is
-not enough to recurse a repository.
+not enough to recurse a repository. To crawl a repo, the agent also needs a
+tree or manifest endpoint that it can fetch over `GET`.
 
-There are two cases:
-
-1. `GET` against a known file URL such as
-   `raw.githubusercontent.com/.../path/to/file.md` is sufficient to fetch one
-   blob.
-2. To crawl a repo, the runtime also needs a `GET`-addressable manifest or tree
-   endpoint that lists paths under a revision.
-
-So the correct answer is:
-
-- `GET` is sufficient as a transport primitive,
-- but only if the runtime can call endpoints that return directory/tree
-  metadata,
-- and only if the host already knows how to turn those results into file fetch
-  URLs.
-
-For GitHub public repos, the runtime should use:
-
-- a tree/contents manifest endpoint to enumerate files at a ref,
-- raw file fetch URLs to fetch file contents.
-
-The model should not be asked to discover GitHub URL conventions or recurse an
-HTML directory listing on its own.
-
-### GitHub tree enumeration details
-
-For v0, the preferred enumeration endpoint is the GitHub Git Trees API:
+For GitHub public repos, the preferred enumeration endpoint is:
 
 ```text
 GET https://api.github.com/repos/{owner}/{repo}/git/trees/{ref}?recursive=1
@@ -153,8 +345,6 @@ GET https://api.github.com/repos/runmedev/web/git/trees/main?recursive=1
 
 Important behavior:
 
-- with `recursive=1`, the response includes descendants under the requested
-  tree,
 - entries with `type: "blob"` are files,
 - entries with `type: "tree"` are directories,
 - for `blob` entries, `path` is already the canonical repo-relative file path.
@@ -171,22 +361,19 @@ Example `blob` entry:
 }
 ```
 
-In this case, the canonical repo-relative file path is simply:
+In this case, the canonical repo-relative file path is:
 
 ```text
 docs/design/20260331_remove_chatkit_responses_runme_converter.md
 ```
 
-The runtime should persist that `path` value directly in search metadata.
+The agent should use that `path` when writing the file into OPFS:
 
-If the runtime uses a non-recursive tree response instead, then each `tree`
-entry represents a directory. In that mode, full file paths must be built by
-recursing into child tree URLs and joining parent `path` values with descendant
-paths. We should avoid that extra complexity in v0 unless the recursive tree
-response is truncated.
+```text
+/code/runmedev/web/docs/design/20260331_remove_chatkit_responses_runme_converter.md
+```
 
-For content fetches, prefer raw GitHub URLs built from the repo, ref, and
-repo-relative `path`:
+For content fetches, prefer raw GitHub URLs built from repo, ref, and path:
 
 ```text
 https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}
@@ -198,418 +385,179 @@ Example:
 https://raw.githubusercontent.com/runmedev/web/main/docs/design/20260331_remove_chatkit_responses_runme_converter.md
 ```
 
-The `url` field in the tree response is a Git object API URL, not the
-canonical file path and not the preferred file-content URL for this design.
+The `url` field in the tree response is a Git object API URL, not the preferred
+file-content URL for this design.
 
-## Capability Layers
+### Ripgrep-Style Search Workflow
 
-This design should separate three layers.
+The intended search behavior is lexical and file-oriented, closer to `ripgrep`
+than to vector retrieval.
 
-### 1) Sandbox primitives
+In practice, the agent should:
 
-These are the low-level capabilities available to sandboxed AI-generated
-JavaScript without human approval, subject to policy.
+1. recursively walk files under `/code/runmedev/web/`,
+2. filter by path patterns if useful,
+3. read file contents,
+4. apply JavaScript lexical matching using `RegExp`, substring matching, or
+   other JS/TS libraries when needed,
+5. collect file path + snippet + line context,
+6. use that material as context for the final answer.
 
-Recommended v0 primitives:
+This is fundamentally a search over individual files. It is not a requirement
+that v0 build a formal full-text index first.
 
-- `fetch` for remote reads
-- OPFS file and directory operations
-- structured `postMessage` bridges that implement those primitives inside the
-  existing sandbox kernel
+For the expected corpus size, simple recursive scanning over cached files is a
+reasonable starting point. If latency later becomes a problem, we can add an
+incremental index over the same OPFS-backed corpus.
 
-Representative OPFS-oriented API shape:
+### Browser Storage Design
 
-```ts
-type OpfsApi = {
-  readText(path: string): Promise<string>;
-  writeText(path: string, text: string): Promise<void>;
-  readBytes(path: string): Promise<Uint8Array>;
-  writeBytes(path: string, bytes: Uint8Array): Promise<void>;
-  list(path: string): Promise<Array<{ name: string; kind: "file" | "directory" }>>;
-  mkdir(path: string): Promise<void>;
-  stat(path: string): Promise<{ kind: "file" | "directory"; size?: number; mtime?: string }>;
-  remove(path: string, options?: { recursive?: boolean }): Promise<void>;
-};
+OPFS should hold the agent-managed repo mirror and derived artifacts. IndexedDB
+via Dexie can still be useful for metadata, manifests, and future indexes, but
+the primary mental model for v0 should be "the agent is writing a repo mirror
+under `/code/...` in OPFS".
 
-type FetchApi = {
-  fetch(input: string, init?: {
-    method?: string;
-    headers?: Record<string, string>;
-    body?: string | Uint8Array;
-  }): Promise<{
-    ok: boolean;
-    status: number;
-    headers: Record<string, string>;
-    text?: string;
-    bytes?: Uint8Array;
-  }>;
-};
+Suggested layout:
+
+```text
+/code/runmedev/web/...
+/derived/runmedev/web/...
+/memories/...
 ```
-
-These are intentionally low-level. They are enough for the agent to:
-
-1. fetch a GitHub tree manifest,
-2. iterate over entries,
-3. fetch individual files,
-4. persist them in OPFS,
-5. build its own lexical scan or local index in JavaScript.
-
-### 2) Policy
-
-Policy is the primary safety boundary.
-
-For this design, policy should answer:
-
-- which HTTP methods are allowed without approval,
-- which URI prefixes/domains are allowed,
-- what response size, timeout, and content-type limits apply,
-- which OPFS paths are writable,
-- which operations require approval.
-
-Example v0 policy posture:
-
-- allow `GET` to:
-  - `https://api.github.com/repos/runmedev/web/`
-  - `https://raw.githubusercontent.com/runmedev/web/`
-- deny or require approval for `POST`, `PUT`, `PATCH`, `DELETE`
-- allow OPFS reads/writes under a harness-owned prefix such as
-  `/agent-cache/runmedev-web/`
-- enforce maximum response size and per-file size limits
-
-This is the right place to control exfiltration risk. The question is not
-whether the agent has raw primitives; the question is what those primitives are
-allowed to touch without approval.
-
-### 3) Higher-level SDKs
-
-Higher-level helpers may still be useful, but they are a separate decision.
-
-Examples:
-
-- a GitHub tree walker,
-- a blob cache helper,
-- a line-index builder,
-- a lexical search helper,
-- a refresh/checkpoint helper.
-
-This document does not recommend requiring those SDKs in v0. The initial
-expectation should be that the agent writes JavaScript using the low-level
-primitives above, and that reusable patterns can later be standardized once we
-observe what the agent actually needs.
-
-## Recommended GitHub Retrieval Flow
-
-Rather than expose a bespoke host search service immediately, v0 should assume
-the agent writes JavaScript that performs the following flow:
-
-1. fetch the GitHub recursive tree manifest for the target ref,
-2. filter entries to `type === "blob"` and allowed paths,
-3. derive raw content URLs from `{owner, repo, ref, path}`,
-4. fetch file contents,
-5. write normalized blobs into OPFS,
-6. scan cached blobs lexically or build a local index over them.
-
-That keeps the platform substrate small while still supporting rich retrieval
-behaviors.
-
-## Browser Storage Design
-
-Use a hybrid layout:
-
-- IndexedDB via Dexie for metadata, manifests, and optional index tables.
-- OPFS for raw normalized blob bodies, derived artifacts, and agent-authored
-  cache state.
-
-This fits the existing repo shape:
-
-- the web app already uses Dexie-backed stores such as
-  `runme-local-notebooks` and `runme-fs-workspaces`,
-- the app already has `ensurePersistentStorage()` for requesting persistent
-  browser storage,
-- OPFS gives better behavior for larger file-like blobs than storing every body
-  directly inside IndexedDB rows.
-
-For this design, OPFS is not hidden from the agent behind a host-owned search
-service. OPFS is part of the substrate the sandboxed agent uses to persist its
-own cache and derived files.
-
-### Proposed Local Schema
-
-```ts
-type SearchBlobRecord = {
-  uri: string;           // e.g. github://runmedev/web/main/app/src/...
-  rootId: string;
-  path: string;
-  revision: string;
-  sha?: string;
-  sizeBytes: number;
-  fetchedAt: string;
-  contentType: string;
-  bodyKey: string;       // OPFS path or content-addressed key
-  lineIndexKey?: string; // optional derived line-offset table
-};
-
-type SearchRootStateRecord = {
-  id: string;
-  title: string;
-  kind: string;
-  revision?: string;
-  syncedAt?: string;
-  lastSyncError?: string;
-};
-```
-
-Recommended layout:
-
-- Dexie table `searchRoots`
-- Dexie table `searchBlobs`
-- OPFS directory `search-blobs/`
-- OPFS directory `search-derived/`
-- OPFS directory `search-memories/` or similar scratch area for reusable
-  agent-authored helper code if we decide to persist snippets locally
-
-If OPFS is unavailable, fall back to storing small bodies in IndexedDB so the
-feature still works, just less efficiently.
-
-### OPFS API surface
 
 At the browser level, OPFS is reached through:
 
 - `navigator.storage.getDirectory()`
 
 which returns a `FileSystemDirectoryHandle` for the origin-private root. The
-underlying platform APIs include:
-
-- `getDirectoryHandle(...)`
-- `getFileHandle(...)`
-- `entries()`, `keys()`, `values()`
-- `removeEntry(...)`
-- `FileSystemFileHandle.getFile()`
-- `FileSystemFileHandle.createWritable()`
-- `FileSystemFileHandle.createSyncAccessHandle()` in dedicated workers
+underlying platform APIs include `getDirectoryHandle(...)`,
+`getFileHandle(...)`, directory iteration, `removeEntry(...)`,
+`createWritable()`, and `createSyncAccessHandle()` in dedicated workers.
 
 The sandbox kernel does not need to expose those browser objects directly. It
 can expose a simpler RPC-style OPFS API over `postMessage` that maps onto them.
 
-## Search Strategy
+We should use the same path-based wrapper contract in both sandbox and
+browser-mode kernels. That way agent-authored code can say
+`await opfs.readText("/code/runmedev/web/README.md")` regardless of whether the
+current AppKernel execution is running in the sandbox iframe or the direct
+browser JS kernel.
 
-### V0: Ripgrep-Style Scan Over Cached Blobs
+### Requirements for the Codex WASM Harness
 
-Do not make a full-text index a prerequisite for v0.
+To make this proposal work, the `codex-wasm` harness needs to provide more than
+just a generic code executor.
 
-For the first corpus size, agent-authored JavaScript running in the browser can
-scan cached text blobs fast enough if we keep the corpus narrow and text-only.
-This is closer to the `ripgrep` mental model the user already has:
+Required v0 capabilities:
 
-- query a cached corpus,
-- return file/line/snippet matches,
-- open the file if needed.
+1. System prompt injection  
+   The browser harness must provide explicit system/developer instructions
+   describing:
+   - that code runs inside AppKernel,
+   - that OPFS and network APIs are available,
+   - the approved OPFS path layout,
+   - the approved GitHub URL prefixes,
+   - the expectation that the agent should fetch/cache/search source itself.
 
-Implementation outline:
+   This is necessary because the wasm build currently does not read project docs
+   from `AGENTS.md` on its own.
 
-1. fetch and maintain normalized text blobs,
-2. maintain per-file line offsets or compute them on demand,
-3. execute substring or regex search in a worker-friendly loop,
-4. collect top matches,
-5. rank by:
-   - exact path/name hits first,
-   - then exact text matches,
-   - then shorter path distance and fresher files.
+2. Low-level bridge APIs in code mode  
+   AppKernel code mode must expose the OPFS/network primitives described above.
 
-This avoids premature complexity and gives us a direct baseline for latency.
+3. Stable code-mode output semantics  
+   The agent needs predictable tool output. Today the browser executor returns
+   one merged `output` string, and Codex wraps that in a status header. That is
+   workable for v0, but the harness should preserve that behavior explicitly so
+   agent-authored retrieval code can rely on printed snippets showing up in tool
+   output.
 
-### V1: Optional Incremental Local Index
+4. Sufficient code payload/runtime limits  
+   The harness needs enough code size, output size, and timeout budget for
+   crawl/search tasks. The current defaults in Runme are oriented toward short
+   snippets and may need adjustment as soon as the agent starts walking repos.
 
-If warm-cache search latency is not good enough, add an incremental inverted
-index over the same blob corpus.
+5. Reusable per-turn or cross-turn state  
+   The current WASM bridge already supports `stored_values` in the code-mode
+   runtime contract. We should preserve or extend that path so the agent can
+   retain helper functions and small bits of state across executions.
 
-Recommended first index shape:
+6. Memory integration  
+   If the product direction is "let the AI evolve the SDK it needs", then the
+   harness needs a memory mechanism that lets the agent retain successful
+   crawl/cache/search code snippets and reuse them later.
 
-- tokenize normalized text into lowercase terms,
-- store `(term -> [uri, positions])` postings in IndexedDB,
-- optionally add a trigram index for substring queries.
+### System Prompt Shape
 
-We should not start with embeddings or vector search. The dominant query style
-for code/docs lookup is still lexical:
-
-- API names,
-- config keys,
-- file names,
-- URLs,
-- feature labels,
-- exact phrases from errors or UI text.
-
-## Sync and Freshness Model
-
-The runtime should support revision-aware caches per root, but v0 should assume
-the first cache manager is agent-authored JavaScript running on top of the
-low-level primitives.
-
-Recommended policy:
-
-1. on first use, sync the root manifest,
-2. fetch blobs lazily as the agent searches/opens,
-3. opportunistically prefetch high-value files under `docs/`, `docs-dev/`, and
-   `README*`,
-4. on later turns, compare the root revision and only refetch changed files.
-
-For GitHub-backed roots, the cache key should include:
-
-- repo identity,
-- ref or resolved commit SHA,
-- path,
-- blob SHA when available.
-
-Agent-authored search code should preserve freshness metadata so the agent can
-say whether it searched cached data from a specific sync time or revision.
-
-## Query UX for the Agent
-
-The derived search results should look like a code search tool, not like
-document retrieval.
-
-Example result:
-
-```json
-{
-  "matches": [
-    {
-      "uri": "github://runmedev/web/main/app/src/lib/runtime/codexWasmSession.ts",
-      "rootId": "github://runmedev/web?ref=main",
-      "path": "app/src/lib/runtime/codexWasmSession.ts",
-      "line": 16,
-      "snippet": "const RUNME_CODE_MODE_PROMPT_PREFIX = ["
-    }
-  ]
-}
-```
-
-This is the important behavioral point: the model should search by terms that
-look like how engineers search locally, even if the initial implementation is a
-library the agent writes for itself rather than a built-in host tool.
-
-Examples:
-
-- search for `"codex wasm prompt"` under cached `app/src/**`
-- search for `"ExecuteCode"` under cached `app/src/**`
-- search for `"Runme public docs"` under cached `docs/**`
-
-## Codex WASM Harness Integration
-
-For this design, the important integration point is not a native search tool.
-It is the low-level capability bridge exposed to sandboxed JavaScript in the
-`codex-wasm` harness.
-
-Rationale:
-
-- safety is controlled by policy over the bridge,
-- the agent can evolve its own retrieval code rather than waiting for bespoke
-  host SDKs,
-- the same substrate can later support more than GitHub search,
-- AppKernel code mode remains the place where agent-authored JS runs.
-
-Recommended layering:
-
-1. `codex-wasm` exposes low-level `fetch` + OPFS capabilities into sandboxed
-   code mode.
-2. Policy enforcement happens at the kernel/bridge boundary.
-3. Agent-authored JS performs crawl/cache/search work.
-4. Later host SDKs remain optional and can be added once justified by usage.
-
-## System and User Instruction Shape
-
-The harness should tell Codex three things clearly:
+The harness prompt should tell Codex three things clearly:
 
 1. what low-level capabilities exist,
 2. what policy boundaries apply,
-3. what known corpora or URL patterns are expected.
+3. what repo layout and retrieval workflow are expected.
 
 Recommended system prompt addition:
 
 ```text
 You are operating inside the Runme app ChatKit panel in a browser.
-Sandboxed JavaScript can make policy-approved fetch requests and can persist
-files in origin-private browser storage. Use those capabilities to fetch Runme
-source manifests and files, cache them locally, and search them lexically when
-the user asks how Runme works, where a feature is implemented, or what a Runme
-document says.
+Executed JavaScript runs in AppKernel. Inside AppKernel you have access to
+policy-approved browser storage and network APIs.
 
-Allowed sources for unattended reads include:
-- https://api.github.com/repos/runmedev/web/
-- https://raw.githubusercontent.com/runmedev/web/
+Use OPFS as a local repo cache under /code/${ORG}/${REPO}. For Runme source
+questions, prefer caching runmedev/web under /code/runmedev/web.
 
-Persist reusable cache state under the approved OPFS prefix. Preserve revision
-and path metadata so you can explain freshness and provenance in your answer.
+If /code/runmedev/web is missing or stale, fetch the GitHub tree manifest from
+https://api.github.com/repos/runmedev/web/ and fetch file contents from
+https://raw.githubusercontent.com/runmedev/web/. Persist fetched files in OPFS,
+then search them lexically with JavaScript before answering.
+
+For now, assume HTTP GET and OPFS operations are available without approval.
+Preserve path and revision metadata when you report findings.
 ```
 
-If we add more allowed corpora later, include them explicitly in the prompt and
-policy configuration rather than expecting the model to infer them.
+### Why We Are Deferring Higher-Level SDKs
 
-The user-facing prompt does not need to teach OPFS internals, but the system
-prompt should make the runtime capability model explicit.
+We should be explicit that v0 is intentionally not defining a bespoke search
+SDK.
 
-## V0 Recommendation
+The reason is not that higher-level SDKs are always bad. The reason is that the
+desired product behavior is:
 
-For the first version, do the following:
+- expose minimal primitives first,
+- let the agent discover which retrieval patterns actually matter,
+- preserve those patterns via memory/snippets,
+- standardize only the patterns that prove stable and broadly useful.
 
-1. Expose policy-governed `fetch` primitives to sandboxed JS.
-2. Expose policy-governed OPFS primitives to sandboxed JS.
-3. Add policy for unattended `GET` access to the relevant GitHub endpoints for
-   `runmedev/web`.
-4. Request persistent browser storage when available.
-5. Seed the system prompt with the approved URL prefixes and cache/freshness
-   expectations.
-6. Expect the agent to write JS that fetches the GitHub tree manifest, downloads
-   files, writes them to OPFS, and searches them lexically.
-7. Invest early in browser/Codex memory so the agent can retain and reuse those
-   snippets rather than rediscovering them every session.
+That is a better fit for the "agentic search" goal than freezing a host-owned
+API surface too early.
 
-This is enough to answer "what is Runme?", "where is codex-wasm implemented?",
-"what do the design docs say about Drive agentic search?", and similar
-questions without introducing a full search engine or bespoke retrieval SDK
-first.
+### V0 Implementation Sketch
 
-## Why This Is Better Than Starting With an Index
-
-The strongest argument for this design is that it gives us the right capability
-surface early:
-
-- explicit safety and policy boundaries,
-- a reusable browser substrate for fetch + persistence,
-- room for the agent to evolve retrieval code,
-- prompt instructions aligned with the actual runtime.
-
-If we start by designing an index or a host-owned search SDK before we have
-those pieces, we risk solving the wrong problem. `ripgrep` is effective because
-lexical search over files is a strong workflow; the browser equivalent should
-first make that workflow possible.
+1. Add sandbox-kernel RPCs for policy-governed OPFS operations.
+2. Add sandbox-kernel RPCs for policy-governed network reads (`fetch` or
+   `get`).
+3. Request persistent browser storage when available.
+4. Update the `codex-wasm` prompt prefix so it describes:
+   - AppKernel runtime,
+   - OPFS path layout,
+   - the availability of OPFS operations and HTTP `GET`,
+   - the expected fetch/cache/search workflow.
+5. Ensure AppKernel code mode has enough timeout/output budget for crawl/search
+   snippets.
+6. Add or plan a memory path so the agent can retain successful crawl/cache/search
+   snippets across sessions.
 
 ## Open Questions
 
-- Should v0 policy allow only `runmedev/web`, or should it include another
-  public Runme repo?
-- Do we want background warmup for high-value files on app load, or only after
-  the first Runme-related question?
-- Should the initial agent-authored search library support regex in v0, or
-  should it start with substring plus path filtering only?
-- Is revision checking done on every turn, or only when the user explicitly
-  asks for refresh/current data?
+- Should the network API be raw `fetch`, or do we want a slightly narrower
+  `get(...)` helper?
+- Do we want to reserve a second OPFS namespace for derived artifacts such as
+  line indexes or cached match results?
+- How much output budget is needed before crawl/search snippets become usable in
+  practice?
 - What memory mechanism should Codex/browser use to preserve reusable
   crawl/cache/search snippets across sessions?
 - At what point should agent-evolved patterns graduate into first-class SDKs or
   tools owned by the host runtime?
-
-## Implementation Sketch
-
-1. Add sandbox-kernel RPCs for policy-governed `fetch`.
-2. Add sandbox-kernel RPCs for policy-governed OPFS operations.
-3. Add policy configuration for allowed GitHub URL prefixes, methods, and size
-   limits.
-4. Add Dexie metadata tables for manifests and cached blobs.
-5. Add an OPFS-backed cache layout for fetched blob bodies and derived files.
-6. Extend the `codex-wasm` prompt prefix with the capability/policy guidance.
-7. Build or enable a memory path for Codex/browser to retain reusable
-   crawl/cache/search snippets.
 
 ## References
 
