@@ -1,16 +1,20 @@
 import { appLogger } from '../logging/runtime'
 import { createAppJsGlobals } from './appJsGlobals'
-import { JSKernel } from './jsKernel'
 import {
-  type NotebookDataLike,
-  createRunmeConsoleApi,
-} from './runmeConsole'
+  createAppKernelNetworkApi,
+  createAppKernelOpfsApi,
+} from './appKernelLowLevelApis'
+import { JSKernel } from './jsKernel'
 import {
   type NotebooksApiBridgeServer,
   createHostNotebooksApi,
   createNotebooksApiBridgeServer,
 } from './notebooksApiBridge'
-import { SandboxJSKernel } from './sandboxJsKernel'
+import { type NotebookDataLike, createRunmeConsoleApi } from './runmeConsole'
+import {
+  CODE_MODE_SANDBOX_ALLOWED_METHODS,
+  SandboxJSKernel,
+} from './sandboxJsKernel'
 
 export type CodeModeSource = 'chatkit' | 'codex'
 export type CodeModeRunnerMode = 'browser' | 'sandbox'
@@ -95,6 +99,8 @@ export function createCodeModeExecutor(options: {
       const runmeApi = createRunmeConsoleApi({
         resolveNotebook,
       })
+      const opfsApi = createAppKernelOpfsApi()
+      const networkApi = createAppKernelNetworkApi()
       const notebooksApiBridgeServer = createNotebooksApiBridgeServer({
         notebooksApi: createHostNotebooksApi({
           resolveNotebook,
@@ -131,6 +137,8 @@ export function createCodeModeExecutor(options: {
         sendOutput: appendOutput,
         resolveNotebook,
         listNotebooks,
+        opfsApi,
+        networkApi,
       })
 
       const abortController = new AbortController()
@@ -141,12 +149,15 @@ export function createCodeModeExecutor(options: {
                 onStdout: appendOutput,
                 onStderr: appendOutput,
               },
+              allowedMethods: CODE_MODE_SANDBOX_ALLOWED_METHODS,
               bridge: {
                 call: (method, args) =>
                   handleSandboxAppKernelBridgeCall({
                     method,
                     args,
                     runmeApi,
+                    opfsApi,
+                    networkApi,
                     notebooksApiBridgeServer,
                   }),
               },
@@ -215,11 +226,15 @@ async function handleSandboxAppKernelBridgeCall({
   method,
   args,
   runmeApi,
+  opfsApi,
+  networkApi,
   notebooksApiBridgeServer,
 }: {
   method: string
   args: unknown[]
   runmeApi: ReturnType<typeof createRunmeConsoleApi>
+  opfsApi: ReturnType<typeof createAppKernelOpfsApi>
+  networkApi: ReturnType<typeof createAppKernelNetworkApi>
   notebooksApiBridgeServer: NotebooksApiBridgeServer
 }): Promise<unknown> {
   const target = args[0]
@@ -234,6 +249,50 @@ async function handleSandboxAppKernelBridgeCall({
       return runmeApi.rerun(target)
     case 'runme.help':
       return runmeApi.help()
+    case 'opfs.exists':
+      return opfsApi.exists(String(args[0] ?? ''))
+    case 'opfs.readText':
+      return opfsApi.readText(String(args[0] ?? ''))
+    case 'opfs.writeText':
+      return opfsApi.writeText(String(args[0] ?? ''), String(args[1] ?? ''))
+    case 'opfs.readBytes':
+      return opfsApi.readBytes(String(args[0] ?? ''))
+    case 'opfs.writeBytes': {
+      const bytesArg = args[1]
+      const bytes =
+        bytesArg instanceof Uint8Array
+          ? bytesArg
+          : Array.isArray(bytesArg)
+            ? new Uint8Array(bytesArg)
+            : new Uint8Array()
+      return opfsApi.writeBytes(String(args[0] ?? ''), bytes)
+    }
+    case 'opfs.list':
+      return opfsApi.list(String(args[0] ?? ''))
+    case 'opfs.mkdir':
+      return opfsApi.mkdir(
+        String(args[0] ?? ''),
+        args[1] as {
+          recursive?: boolean
+        }
+      )
+    case 'opfs.stat':
+      return opfsApi.stat(String(args[0] ?? ''))
+    case 'opfs.remove':
+      return opfsApi.remove(
+        String(args[0] ?? ''),
+        args[1] as {
+          recursive?: boolean
+        }
+      )
+    case 'net.get':
+      return networkApi.get(
+        String(args[0] ?? ''),
+        (args[1] as {
+          headers?: Record<string, string>
+          responseType?: 'text' | 'bytes' | 'json'
+        }) ?? undefined
+      )
     case 'runme.getCurrentNotebook': {
       const notebook = runmeApi.getCurrentNotebook()
       if (!notebook) {
