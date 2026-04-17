@@ -5,9 +5,51 @@ import type {
 
 const DB_NAME = "runme-codex-wasm";
 const STORE_NAME = "event-journal";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let inMemoryEntries: CodexWasmJournalEntry[] = [];
+
+function createJournalStore(db: IDBDatabase): IDBObjectStore {
+  const store = db.createObjectStore(STORE_NAME, {
+    autoIncrement: true,
+  });
+  ensureJournalIndexes(store);
+  return store;
+}
+
+function ensureJournalIndexes(store: IDBObjectStore): void {
+  if (!store.indexNames.contains("sessionId")) {
+    store.createIndex("sessionId", "sessionId", { unique: false });
+  }
+  if (!store.indexNames.contains("threadId")) {
+    store.createIndex("threadId", "threadId", { unique: false });
+  }
+  if (!store.indexNames.contains("turnId")) {
+    store.createIndex("turnId", "turnId", { unique: false });
+  }
+  if (!store.indexNames.contains("sessionSeq")) {
+    store.createIndex("sessionSeq", ["sessionId", "seq"], { unique: true });
+  }
+}
+
+function isLegacyJournalStoreSchema(store: Pick<IDBObjectStore, "keyPath" | "autoIncrement">): boolean {
+  return store.keyPath === "seq" && store.autoIncrement === false;
+}
+
+function migrateLegacyJournalStore(
+  db: IDBDatabase,
+  store: IDBObjectStore,
+): void {
+  const request = store.getAll();
+  request.onsuccess = () => {
+    const entries = (request.result as CodexWasmJournalEntry[]) ?? [];
+    db.deleteObjectStore(STORE_NAME);
+    const nextStore = createJournalStore(db);
+    entries.forEach((entry) => {
+      nextStore.add(entry);
+    });
+  };
+}
 
 function hasIndexedDb(): boolean {
   return typeof indexedDB !== "undefined";
@@ -22,13 +64,19 @@ function openDatabase(): Promise<IDBDatabase | null> {
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, {
-          keyPath: "seq",
-        });
-        store.createIndex("sessionId", "sessionId", { unique: false });
-        store.createIndex("threadId", "threadId", { unique: false });
-        store.createIndex("turnId", "turnId", { unique: false });
+        createJournalStore(db);
+        return;
       }
+      const transaction = request.transaction;
+      if (!transaction) {
+        return;
+      }
+      const store = transaction.objectStore(STORE_NAME);
+      if (isLegacyJournalStoreSchema(store)) {
+        migrateLegacyJournalStore(db, store);
+        return;
+      }
+      ensureJournalIndexes(store);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error("Failed to open IndexedDB"));
@@ -85,7 +133,7 @@ export async function appendCodexWasmJournalEntry(
     return;
   }
   await withStore("readwrite", (store) => {
-    store.put(entry);
+    store.add(entry);
   });
 }
 
@@ -146,3 +194,7 @@ export async function resetCodexWasmJournalEntries(): Promise<void> {
     store.clear();
   });
 }
+
+export const __testing = {
+  isLegacyJournalStoreSchema,
+};
