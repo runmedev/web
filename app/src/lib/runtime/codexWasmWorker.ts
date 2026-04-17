@@ -5,6 +5,7 @@ import {
   queryCodexWasmJournalEntries,
   resetCodexWasmJournalEntries,
 } from "./codexWasmEventJournal";
+import { adaptCodexWasmEvent } from "./codexWasmEventAdapter";
 import type {
   CodexWasmAppServerNotification,
   CodexWasmJournalEntry,
@@ -45,6 +46,8 @@ type WorkerState = {
   sessionId: string;
   seq: number;
   app: BrowserAppServerInstance | null;
+  currentThreadId?: string;
+  currentTurnId?: string;
   bridgeRequestId: number;
   pendingBridgeResponses: Map<
     number,
@@ -61,6 +64,8 @@ const state: WorkerState = {
   sessionId: `codex-wasm-${Math.random().toString(36).slice(2, 10)}`,
   seq: 1,
   app: null,
+  currentThreadId: undefined,
+  currentTurnId: undefined,
   bridgeRequestId: 1,
   pendingBridgeResponses: new Map(),
 };
@@ -157,17 +162,21 @@ function createCodeExecutorBridge(): (input: string) => Promise<string> {
   };
 }
 
-function normalizeNotification(event: unknown): CodexWasmAppServerNotification | null {
-  const record = asRecord(event);
-  const method = asString(record.method);
-  if (!method) {
-    return null;
+function normalizeNotifications(event: unknown): CodexWasmAppServerNotification[] {
+  return adaptCodexWasmEvent(event, {
+    threadId: state.currentThreadId,
+    turnId: state.currentTurnId,
+  });
+}
+
+function updateTrackedIds(value: unknown): void {
+  const { threadId, turnId } = extractThreadTurnIds(value);
+  if (threadId) {
+    state.currentThreadId = threadId;
   }
-  return {
-    jsonrpc: "2.0",
-    method,
-    params: record.params,
-  };
+  if (turnId) {
+    state.currentTurnId = turnId;
+  }
 }
 
 async function ensureConnected(
@@ -181,22 +190,29 @@ async function ensureConnected(
     const BrowserAppServer = generated.BrowserAppServer!;
     const app = new BrowserAppServer(apiKey);
     app.setEventHandler((event: unknown) => {
-      const notification = normalizeNotification(event);
-      if (!notification) {
-        return;
-      }
-      const { threadId, turnId } = extractThreadTurnIds(notification.params);
-      void appendEntry({
-        direction: "server_to_client",
-        kind: "notification",
-        method: notification.method,
-        threadId,
-        turnId,
-        payload: notification,
-      });
-      postMessageToMain({
-        type: "notification",
-        notification,
+      const notifications = normalizeNotifications(event);
+      notifications.forEach((notification) => {
+        const { threadId, turnId } = extractThreadTurnIds(notification.params);
+        if (threadId) {
+          state.currentThreadId = threadId;
+        }
+        if (notification.method === "turn/completed") {
+          state.currentTurnId = undefined;
+        } else if (turnId) {
+          state.currentTurnId = turnId;
+        }
+        void appendEntry({
+          direction: "server_to_client",
+          kind: "notification",
+          method: notification.method,
+          threadId,
+          turnId,
+          payload: notification,
+        });
+        postMessageToMain({
+          type: "notification",
+          notification,
+        });
       });
     });
     app.set_code_executor(createCodeExecutorBridge());
@@ -249,6 +265,7 @@ async function handleMessage(message: CodexWasmWorkerRequest): Promise<unknown> 
         params: message.params ?? {},
       };
       const ids = extractThreadTurnIds(message.params);
+      updateTrackedIds(message.params);
       await appendEntry({
         direction: "client_to_server",
         kind: "request",
@@ -260,6 +277,7 @@ async function handleMessage(message: CodexWasmWorkerRequest): Promise<unknown> 
       });
       const result = await state.app.request(payload);
       const resultIds = extractThreadTurnIds(result);
+      updateTrackedIds(result);
       await appendEntry({
         direction: "server_to_client",
         kind: "request_result",
@@ -280,6 +298,7 @@ async function handleMessage(message: CodexWasmWorkerRequest): Promise<unknown> 
         params: message.params ?? {},
       };
       const ids = extractThreadTurnIds(message.params);
+      updateTrackedIds(message.params);
       await appendEntry({
         direction: "client_to_server",
         kind: "request",
