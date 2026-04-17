@@ -30,8 +30,8 @@ const projectManager = {
   setDefault: vi.fn(),
 };
 
-vi.mock("./codexAppServerProxyClient", () => ({
-  getCodexAppServerProxyClient: () => proxyClient,
+vi.mock("./codexAppServerClient", () => ({
+  getCodexAppServerClient: () => proxyClient,
 }));
 
 vi.mock("./codexProjectManager", () => ({

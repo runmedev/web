@@ -5,9 +5,9 @@ import {
   type CodexProject,
 } from "./codexProjectManager";
 import {
-  getCodexAppServerProxyClient,
+  getCodexAppServerClient,
   type CodexProxyJsonRpcNotification,
-} from "./codexAppServerProxyClient";
+} from "./codexAppServerClient";
 import { logCodexEvent } from "./codexLogging";
 import type {
   ChatKitAssistantMessageItem,
@@ -463,7 +463,7 @@ class CodexConversationController {
 
   async refreshHistory(): Promise<void> {
     const project = this.getSnapshot().selectedProject;
-    const proxy = getCodexAppServerProxyClient();
+    const proxy = getCodexAppServerClient();
     this.loadingHistory = true;
     this.historyError = null;
     this.notify();
@@ -508,7 +508,7 @@ class CodexConversationController {
     if (existing && existing.items.length > 0) {
       return existing;
     }
-    const proxy = getCodexAppServerProxyClient();
+    const proxy = getCodexAppServerClient();
     const result = await proxy.sendRequest("thread/read", { threadId });
     const detail = parseThreadDetail(result);
     if (!detail) {
@@ -543,7 +543,7 @@ class CodexConversationController {
       return this.getThread(currentThreadId);
     }
 
-    const proxy = getCodexAppServerProxyClient();
+    const proxy = getCodexAppServerClient();
     const project = this.getSnapshot().selectedProject;
     const created = asRecord(
       await proxy.sendRequest("thread/start", this.buildProjectDefaults(project)),
@@ -595,7 +595,7 @@ class CodexConversationController {
     if (!this.currentThreadId || !this.currentTurnId) {
       return;
     }
-    const proxy = getCodexAppServerProxyClient();
+    const proxy = getCodexAppServerClient();
     await proxy.sendRequest("turn/interrupt", {
       threadId: this.currentThreadId,
       turnId: this.currentTurnId,
@@ -607,7 +607,7 @@ class CodexConversationController {
     chatkitState: ChatKitStateValue,
     sink: CodexStreamSink,
   ): Promise<ChatKitStateValue> {
-    const proxy = getCodexAppServerProxyClient();
+    const proxy = getCodexAppServerClient();
     const project = this.getSnapshot().selectedProject;
     const activeThread = await this.ensureActiveThread();
     let threadId = this.currentThreadId ?? activeThread.id;

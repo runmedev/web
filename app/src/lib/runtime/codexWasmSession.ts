@@ -38,7 +38,13 @@ export function createCodexWasmSession(options: {
     if (!browserCodexPromise) {
       browserCodexPromise = (async () => {
         const generated = await loadCodexWasmModule()
-        return new generated.BrowserCodex(apiKey)
+        const BrowserCodex = generated.BrowserCodex
+        if (!BrowserCodex) {
+          throw new Error(
+            'Generated codex wasm bundle does not export BrowserCodex.'
+          )
+        }
+        return new BrowserCodex(apiKey)
       })()
     }
 

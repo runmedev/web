@@ -57,7 +57,9 @@ const approvalMgrMock = {
   failAll: vi.fn(),
 };
 const proxyMock = {
-  connect: vi.fn(async () => {}),
+  useTransport: vi.fn(),
+  connectProxy: vi.fn(async () => {}),
+  connectWasm: vi.fn(async () => {}),
   disconnect: vi.fn(),
   setAuthorizationResolver: vi.fn(),
 };
@@ -85,7 +87,6 @@ const codexControllerMock = {
   })),
 };
 const codexFetchMock = vi.fn(async () => new Response(null, { status: 200 }));
-const codexWasmFetchMock = vi.fn(async () => new Response(null, { status: 200 }));
 const responsesDirectFetchMock = vi.fn(async () => new Response(null, { status: 200 }));
 
 vi.mock("@openai/chatkit-react", () => ({
@@ -146,20 +147,29 @@ vi.mock("../../lib/runtime/codexExecuteApprovalManager", () => ({
   getCodexExecuteApprovalManager: () => approvalMgrMock,
 }));
 
-vi.mock("../../lib/runtime/codexAppServerProxyClient", () => ({
-  getCodexAppServerProxyClient: () => proxyMock,
+vi.mock("../../lib/runtime/codexAppServerClient", () => ({
+  getCodexAppServerClient: () => proxyMock,
 }));
 
 vi.mock("../../lib/runtime/codexChatkitFetch", () => ({
   createCodexChatkitFetch: () => codexFetchMock,
 }));
 
-vi.mock("../../lib/runtime/codexWasmChatkitFetch", () => ({
-  createCodexWasmChatkitFetch: () => codexWasmFetchMock,
-}));
-
 vi.mock("../../lib/runtime/responsesDirectChatkitFetch", () => ({
   createResponsesDirectChatkitFetch: () => responsesDirectFetchMock,
+}));
+
+vi.mock("../../lib/runtime/responsesDirectConfigManager", () => ({
+  responsesDirectConfigManager: {
+    getSnapshot: () => ({
+      authMethod: "api_key",
+      apiKey: "sk-test",
+    }),
+  },
+  useResponsesDirectConfigSnapshot: () => ({
+    authMethod: "api_key",
+    apiKey: "sk-test",
+  }),
 }));
 
 vi.mock("../../lib/runtime/codexConversationController", () => ({
@@ -247,8 +257,11 @@ describe("ChatKitPanel codex harness routing", () => {
     bridgeMock.setHandler.mockClear();
     bridgeMock.subscribe.mockClear();
     bridgeMock.getSnapshot.mockClear();
-    proxyMock.connect.mockClear();
+    proxyMock.useTransport.mockClear();
+    proxyMock.connectProxy.mockClear();
+    proxyMock.connectWasm.mockClear();
     proxyMock.disconnect.mockClear();
+    proxyMock.setAuthorizationResolver.mockClear();
     codexControllerMock.setSelectedProject.mockClear();
     codexControllerMock.refreshHistory.mockClear();
     codexControllerMock.startNewChat.mockClear();
@@ -256,7 +269,6 @@ describe("ChatKitPanel codex harness routing", () => {
     codexControllerMock.getSnapshot.mockClear();
     codexControllerMock.selectThread.mockClear();
     codexFetchMock.mockClear();
-    codexWasmFetchMock.mockClear();
     responsesDirectFetchMock.mockClear();
     approvalMgrMock.failAll.mockClear();
     appLoggerMock.info.mockClear();
@@ -322,7 +334,7 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(bridgeMock.connect).not.toHaveBeenCalled();
   });
 
-  it("routes ChatKit to codex-wasm adapter URL and uses codex-wasm fetch", async () => {
+  it("routes ChatKit to codex-wasm adapter URL and initializes the wasm app-server client", async () => {
     harnessState.defaultHarness.adapter = "codex-wasm";
 
     render(<ChatKitPanel />);
@@ -347,8 +359,13 @@ describe("ChatKitPanel codex harness routing", () => {
       });
     });
 
-    expect(codexWasmFetchMock).toHaveBeenCalled();
-    expect(codexFetchMock).not.toHaveBeenCalled();
+    expect(codexFetchMock).toHaveBeenCalled();
+    await waitFor(() => expect(proxyMock.useTransport).toHaveBeenCalledWith("wasm"));
+    await waitFor(() =>
+      expect(proxyMock.connectWasm).toHaveBeenCalledWith({
+        apiKey: "sk-test",
+      }),
+    );
     expect(bridgeMock.connect).not.toHaveBeenCalled();
   });
 
@@ -420,7 +437,10 @@ describe("ChatKitPanel codex harness routing", () => {
       ),
     );
     await waitFor(() =>
-      expect(proxyMock.connect).toHaveBeenCalledWith(
+      expect(proxyMock.useTransport).toHaveBeenCalledWith("proxy"),
+    );
+    await waitFor(() =>
+      expect(proxyMock.connectProxy).toHaveBeenCalledWith(
         "ws://127.0.0.1:31337/codex/app-server/ws",
         "Bearer test-id-token",
       ),
@@ -535,7 +555,7 @@ describe("ChatKitPanel codex harness routing", () => {
       ),
     );
     await waitFor(() =>
-      expect(proxyMock.connect).toHaveBeenCalledWith(
+      expect(proxyMock.connectProxy).toHaveBeenCalledWith(
         "ws://127.0.0.1:31337/codex/app-server/ws",
         "Bearer test-id-token",
       ),
