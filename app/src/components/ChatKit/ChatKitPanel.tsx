@@ -864,6 +864,8 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const codexBridgeUrl = useMemo(() => {
     return buildCodexBridgeWsUrl(defaultHarness.baseUrl)
   }, [defaultHarness.baseUrl])
+  const codexWasmApiKey =
+    defaultHarness.adapter === 'codex-wasm' ? responsesDirectConfig.apiKey : ''
   useEffect(() => {
     appLogger.info('ChatKit host configured', {
       attrs: {
@@ -941,7 +943,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           proxy.useTransport('wasm')
           proxy.setAuthorizationResolver(null)
           await proxy.connectWasm({
-            apiKey: responsesDirectConfig.apiKey,
+            apiKey: codexWasmApiKey,
           })
         }
         if (!canceled) {
@@ -981,10 +983,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       proxy.disconnect()
     }
   }, [
+    codexWasmApiKey,
     codexProxyWsUrl,
     defaultHarness.adapter,
     resolveCodexAuthorization,
-    responsesDirectConfig.apiKey,
   ])
 
   useEffect(() => {

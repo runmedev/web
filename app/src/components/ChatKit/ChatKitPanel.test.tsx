@@ -23,6 +23,10 @@ let codexConversationState: {
   loadingHistory: boolean;
   historyError: string | null;
 };
+let responsesDirectConfigState: {
+  authMethod: string;
+  apiKey: string;
+};
 let bridgeSnapshot: { state: "idle" | "connecting" | "open" | "closed" | "error"; url: string | null; lastError: string | null };
 let bridgeListener: (() => void) | null;
 let setThreadIdMock: ReturnType<typeof vi.fn>;
@@ -161,15 +165,9 @@ vi.mock("../../lib/runtime/responsesDirectChatkitFetch", () => ({
 
 vi.mock("../../lib/runtime/responsesDirectConfigManager", () => ({
   responsesDirectConfigManager: {
-    getSnapshot: () => ({
-      authMethod: "api_key",
-      apiKey: "sk-test",
-    }),
+    getSnapshot: () => responsesDirectConfigState,
   },
-  useResponsesDirectConfigSnapshot: () => ({
-    authMethod: "api_key",
-    apiKey: "sk-test",
-  }),
+  useResponsesDirectConfigSnapshot: () => responsesDirectConfigState,
 }));
 
 vi.mock("../../lib/runtime/codexConversationController", () => ({
@@ -236,6 +234,10 @@ describe("ChatKitPanel codex harness routing", () => {
       currentTurnId: null,
       loadingHistory: false,
       historyError: null,
+    };
+    responsesDirectConfigState = {
+      authMethod: "api_key",
+      apiKey: "sk-test",
     };
     bridgeSnapshot = {
       state: "idle",
@@ -459,6 +461,33 @@ describe("ChatKitPanel codex harness routing", () => {
         }),
       }),
     );
+  });
+
+  it("does not reconnect codex proxy transport when only the responses-direct API key changes", async () => {
+    harnessState.defaultHarness.adapter = "codex";
+
+    const { rerender } = render(<ChatKitPanel />);
+
+    await waitFor(() =>
+      expect(proxyMock.connectProxy).toHaveBeenCalledWith(
+        "ws://127.0.0.1:31337/codex/app-server/ws",
+        "Bearer test-id-token",
+      ),
+    );
+
+    proxyMock.connectProxy.mockClear();
+    proxyMock.disconnect.mockClear();
+
+    responsesDirectConfigState = {
+      ...responsesDirectConfigState,
+      apiKey: "sk-updated",
+    };
+    rerender(<ChatKitPanel />);
+
+    await waitFor(() => {
+      expect(proxyMock.connectProxy).not.toHaveBeenCalled();
+      expect(proxyMock.disconnect).not.toHaveBeenCalled();
+    });
   });
 
   it("bootstraps a codex thread on load and passes it to ChatKit as initialThread", async () => {
