@@ -11,7 +11,10 @@ import {
   createNotebooksApiBridgeServer,
 } from './notebooksApiBridge'
 import { type NotebookDataLike, createRunmeConsoleApi } from './runmeConsole'
-import { SandboxJSKernel } from './sandboxJsKernel'
+import {
+  CODE_MODE_SANDBOX_ALLOWED_METHODS,
+  SandboxJSKernel,
+} from './sandboxJsKernel'
 
 export type CodeModeSource = 'chatkit' | 'codex'
 export type CodeModeRunnerMode = 'browser' | 'sandbox'
@@ -146,6 +149,7 @@ export function createCodeModeExecutor(options: {
                 onStdout: appendOutput,
                 onStderr: appendOutput,
               },
+              allowedMethods: CODE_MODE_SANDBOX_ALLOWED_METHODS,
               bridge: {
                 call: (method, args) =>
                   handleSandboxAppKernelBridgeCall({

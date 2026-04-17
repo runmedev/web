@@ -58,6 +58,19 @@ function isNotFoundError(error: unknown): boolean {
         (error as { name?: unknown }).name === 'NotFoundError'
 }
 
+function isTypeMismatchError(error: unknown): boolean {
+  return error instanceof DOMException
+    ? error.name === 'TypeMismatchError'
+    : typeof error === 'object' &&
+        error !== null &&
+        'name' in error &&
+        (error as { name?: unknown }).name === 'TypeMismatchError'
+}
+
+function isMissingHandleError(error: unknown): boolean {
+  return isNotFoundError(error) || isTypeMismatchError(error)
+}
+
 async function getNativeOpfsRoot(): Promise<FileSystemDirectoryHandle> {
   const storage = navigator.storage
   if (!storage || typeof storage.getDirectory !== 'function') {
@@ -90,7 +103,7 @@ async function tryGetDirectoryHandle(
   try {
     return await getDirectoryHandle(root, segments)
   } catch (error) {
-    if (isNotFoundError(error)) {
+    if (isMissingHandleError(error)) {
       return null
     }
     throw error
@@ -113,7 +126,7 @@ async function tryGetFileHandle(
   try {
     return await parent.getFileHandle(segments.at(-1) ?? '')
   } catch (error) {
-    if (isNotFoundError(error)) {
+    if (isMissingHandleError(error)) {
       return null
     }
     throw error

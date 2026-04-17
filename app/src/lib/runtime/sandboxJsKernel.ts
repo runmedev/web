@@ -32,7 +32,101 @@ const SANDBOX_INIT_MESSAGE = 'runme-appkernel-sandbox-init'
 const LOAD_TIMEOUT_MS = 3_000
 const READY_TIMEOUT_MS = 3_000
 
-const SANDBOX_SRC_DOC = `<!doctype html>
+const DEFAULT_SANDBOX_ALLOWED_METHODS = [
+  'runme.clear',
+  'runme.clearOutputs',
+  'runme.runAll',
+  'runme.rerun',
+  'runme.getCurrentNotebook',
+  'runme.help',
+  ...SANDBOX_NOTEBOOKS_API_METHODS,
+]
+
+const LOW_LEVEL_SANDBOX_ALLOWED_METHODS = [
+  'opfs.exists',
+  'opfs.readText',
+  'opfs.writeText',
+  'opfs.readBytes',
+  'opfs.writeBytes',
+  'opfs.list',
+  'opfs.mkdir',
+  'opfs.stat',
+  'opfs.remove',
+  'net.get',
+]
+
+export const CODE_MODE_SANDBOX_ALLOWED_METHODS = [
+  ...DEFAULT_SANDBOX_ALLOWED_METHODS,
+  ...LOW_LEVEL_SANDBOX_ALLOWED_METHODS,
+]
+
+function buildSandboxSrcDoc(options: {
+  enableOpfs: boolean
+  enableNet: boolean
+}): string {
+  const opfsHelper = options.enableOpfs
+    ? `
+        const opfs = {
+          exists: (path) => hostCall("opfs.exists", [path]),
+          readText: (path) => hostCall("opfs.readText", [path]),
+          writeText: (path, text) => hostCall("opfs.writeText", [path, text]),
+          readBytes: (path) => hostCall("opfs.readBytes", [path]),
+          writeBytes: (path, bytes) => hostCall("opfs.writeBytes", [path, bytes]),
+          list: (path) => hostCall("opfs.list", [path]),
+          mkdir: (path, options) => hostCall("opfs.mkdir", [path, options]),
+          stat: (path) => hostCall("opfs.stat", [path]),
+          remove: (path, options) => hostCall("opfs.remove", [path, options]),
+          help: () => {
+            consoleProxy.log("opfs.exists(path)");
+            consoleProxy.log("opfs.readText(path)");
+            consoleProxy.log("opfs.writeText(path, text)");
+            consoleProxy.log("opfs.readBytes(path)");
+            consoleProxy.log("opfs.writeBytes(path, bytes)");
+            consoleProxy.log("opfs.list(path)");
+            consoleProxy.log("opfs.mkdir(path, { recursive? })");
+            consoleProxy.log("opfs.stat(path)");
+            consoleProxy.log("opfs.remove(path, { recursive? })");
+            consoleProxy.log("opfs.help()");
+          },
+        };
+      `
+    : 'const opfs = undefined;'
+
+  const netHelper = options.enableNet
+    ? `
+        const net = {
+          get: (url, options) => hostCall("net.get", [url, options]),
+          help: () => {
+            consoleProxy.log("net.get(url, { headers?, responseType? })");
+            consoleProxy.log("net.help()");
+          },
+        };
+      `
+    : 'const net = undefined;'
+
+  const opfsHelpLines = options.enableOpfs
+    ? `
+          consoleProxy.log("- opfs.exists(path)");
+          consoleProxy.log("- opfs.readText(path)");
+          consoleProxy.log("- opfs.writeText(path, text)");
+          consoleProxy.log("- opfs.readBytes(path)");
+          consoleProxy.log("- opfs.writeBytes(path, bytes)");
+          consoleProxy.log("- opfs.list(path)");
+          consoleProxy.log("- opfs.mkdir(path, { recursive? })");
+          consoleProxy.log("- opfs.stat(path)");
+          consoleProxy.log("- opfs.remove(path, { recursive? })");
+          consoleProxy.log("- opfs.help()");
+      `
+    : ''
+
+  const netHelpLines = options.enableNet
+    ? `
+          consoleProxy.log("- net.get(url, { headers?, responseType? })");
+          consoleProxy.log("- net.help()");
+      `
+    : ''
+
+  return `<!doctype html>
 <html>
   <head><meta charset="utf-8" /></head>
   <body>
@@ -94,37 +188,9 @@ const SANDBOX_SRC_DOC = `<!doctype html>
           help: () => hostCall("runme.help", []),
         };
 
-        const opfs = {
-          exists: (path) => hostCall("opfs.exists", [path]),
-          readText: (path) => hostCall("opfs.readText", [path]),
-          writeText: (path, text) => hostCall("opfs.writeText", [path, text]),
-          readBytes: (path) => hostCall("opfs.readBytes", [path]),
-          writeBytes: (path, bytes) => hostCall("opfs.writeBytes", [path, bytes]),
-          list: (path) => hostCall("opfs.list", [path]),
-          mkdir: (path, options) => hostCall("opfs.mkdir", [path, options]),
-          stat: (path) => hostCall("opfs.stat", [path]),
-          remove: (path, options) => hostCall("opfs.remove", [path, options]),
-          help: () => {
-            consoleProxy.log("opfs.exists(path)");
-            consoleProxy.log("opfs.readText(path)");
-            consoleProxy.log("opfs.writeText(path, text)");
-            consoleProxy.log("opfs.readBytes(path)");
-            consoleProxy.log("opfs.writeBytes(path, bytes)");
-            consoleProxy.log("opfs.list(path)");
-            consoleProxy.log("opfs.mkdir(path, { recursive? })");
-            consoleProxy.log("opfs.stat(path)");
-            consoleProxy.log("opfs.remove(path, { recursive? })");
-            consoleProxy.log("opfs.help()");
-          },
-        };
+        ${opfsHelper}
 
-        const net = {
-          get: (url, options) => hostCall("net.get", [url, options]),
-          help: () => {
-            consoleProxy.log("net.get(url, { headers?, responseType? })");
-            consoleProxy.log("net.help()");
-          },
-        };
+        ${netHelper}
 
         const createSandboxNotebooksApiClient = (callHost) => ({
           help: (topic) => callHost("notebooks.help", [topic]),
@@ -145,18 +211,8 @@ const SANDBOX_SRC_DOC = `<!doctype html>
           consoleProxy.log("- runme.rerun([target])");
           consoleProxy.log("- runme.getCurrentNotebook()");
           consoleProxy.log("- runme.help()");
-          consoleProxy.log("- opfs.exists(path)");
-          consoleProxy.log("- opfs.readText(path)");
-          consoleProxy.log("- opfs.writeText(path, text)");
-          consoleProxy.log("- opfs.readBytes(path)");
-          consoleProxy.log("- opfs.writeBytes(path, bytes)");
-          consoleProxy.log("- opfs.list(path)");
-          consoleProxy.log("- opfs.mkdir(path, { recursive? })");
-          consoleProxy.log("- opfs.stat(path)");
-          consoleProxy.log("- opfs.remove(path, { recursive? })");
-          consoleProxy.log("- opfs.help()");
-          consoleProxy.log("- net.get(url, { headers?, responseType? })");
-          consoleProxy.log("- net.help()");
+          ${opfsHelpLines}
+          ${netHelpLines}
           consoleProxy.log("- notebooks.help([topic])");
           consoleProxy.log("- notebooks.list([query])");
           consoleProxy.log("- notebooks.get([target]) # omitted target = current UI notebook");
@@ -229,6 +285,7 @@ const SANDBOX_SRC_DOC = `<!doctype html>
     </script>
   </body>
 </html>`
+}
 
 /**
  * SandboxJSKernel executes JavaScript in a sandboxed iframe and only exposes a
@@ -245,25 +302,7 @@ export class SandboxJSKernel {
   constructor({
     bridge,
     hooks = {},
-    allowedMethods = [
-      'runme.clear',
-      'runme.clearOutputs',
-      'runme.runAll',
-      'runme.rerun',
-      'runme.getCurrentNotebook',
-      'runme.help',
-      'opfs.exists',
-      'opfs.readText',
-      'opfs.writeText',
-      'opfs.readBytes',
-      'opfs.writeBytes',
-      'opfs.list',
-      'opfs.mkdir',
-      'opfs.stat',
-      'opfs.remove',
-      'net.get',
-      ...SANDBOX_NOTEBOOKS_API_METHODS,
-    ],
+    allowedMethods = DEFAULT_SANDBOX_ALLOWED_METHODS,
   }: {
     bridge: SandboxBridge
     hooks?: KernelHooks
@@ -424,7 +463,12 @@ export class SandboxJSKernel {
     iframe.setAttribute('sandbox', 'allow-scripts')
     iframe.setAttribute('aria-hidden', 'true')
     iframe.style.display = 'none'
-    iframe.srcdoc = SANDBOX_SRC_DOC
+    iframe.srcdoc = buildSandboxSrcDoc({
+      enableOpfs: LOW_LEVEL_SANDBOX_ALLOWED_METHODS.some((method) =>
+        this.allowedMethods.has(method)
+      ),
+      enableNet: this.allowedMethods.has('net.get'),
+    })
 
     await new Promise<void>((resolve, reject) => {
       const timeoutId = setTimeout(() => {

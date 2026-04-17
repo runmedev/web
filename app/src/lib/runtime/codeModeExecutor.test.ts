@@ -128,6 +128,9 @@ describe('codeModeExecutor', () => {
           path === '/' ? '' : (path.split('/').filter(Boolean).at(-1) ?? ''),
         async getDirectoryHandle(name: string, options?: { create?: boolean }) {
           const childPath = normalizePath(`${path}/${name}`)
+          if (files.has(childPath)) {
+            throw new DOMException('wrong kind', 'TypeMismatchError')
+          }
           if (!directories.has(childPath)) {
             if (!options?.create) {
               throw new DOMException('missing', 'NotFoundError')
@@ -138,6 +141,9 @@ describe('codeModeExecutor', () => {
         },
         async getFileHandle(name: string, options?: { create?: boolean }) {
           const childPath = normalizePath(`${path}/${name}`)
+          if (directories.has(childPath)) {
+            throw new DOMException('wrong kind', 'TypeMismatchError')
+          }
           if (!files.has(childPath)) {
             if (!options?.create) {
               throw new DOMException('missing', 'NotFoundError')
@@ -282,6 +288,7 @@ describe('codeModeExecutor', () => {
         "console.log(await opfs.exists('/code/runmedev/web.txt'));",
         "console.log(await opfs.readText('/code/runmedev/web.txt'));",
         "console.log(JSON.stringify(await opfs.list('/code/runmedev')));",
+        "console.log(JSON.stringify(await opfs.stat('/code/runmedev')));",
         "const response = await net.get('https://example.test/docs');",
         'console.log(response.status);',
         'console.log(response.text);',
@@ -291,6 +298,7 @@ describe('codeModeExecutor', () => {
     expect(result.output).toContain('true')
     expect(result.output).toContain('hello')
     expect(result.output).toContain('"name":"web.txt"')
+    expect(result.output).toContain('"kind":"directory"')
     expect(result.output).toContain('200')
     expect(result.output).toContain('network-response')
   })

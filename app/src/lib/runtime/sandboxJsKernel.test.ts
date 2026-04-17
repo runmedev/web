@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
 
-import { SandboxJSKernel } from './sandboxJsKernel'
+import {
+  CODE_MODE_SANDBOX_ALLOWED_METHODS,
+  SandboxJSKernel,
+} from './sandboxJsKernel'
 
 type Scenario = 'success' | 'disallowed' | 'hang' | 'lowLevel'
 
@@ -90,7 +93,7 @@ class MockSandboxPort {
     }
 
     if (type === 'host-error') {
-      if (this.scenario === 'disallowed') {
+      if (this.scenario === 'disallowed' || this.scenario === 'lowLevel') {
         this.emit({ type: 'stderr', data: String(message.error ?? '') + '\n' })
         this.emit({ type: 'exit', exitCode: 1 })
       }
@@ -234,7 +237,34 @@ describe('SandboxJSKernel', () => {
     expect(disposeSession).toHaveBeenCalledTimes(1)
   })
 
-  it('allows low-level opfs and net bridge methods by default', async () => {
+  it('rejects low-level opfs and net bridge methods by default', async () => {
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async () => null)
+
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('lowLevel'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run("console.log('noop');")
+
+    expect(bridgeCall).not.toHaveBeenCalled()
+    expect(stderr).toContain('Sandbox method not allowed: opfs.readText')
+    expect(exitCode).toBe(1)
+  })
+
+  it('allows low-level opfs and net bridge methods in code mode', async () => {
     let stdout = ''
     let stderr = ''
     let exitCode = -1
@@ -252,6 +282,7 @@ describe('SandboxJSKernel', () => {
       new MockSandboxPort('lowLevel'),
       {
         bridge: { call: bridgeCall },
+        allowedMethods: CODE_MODE_SANDBOX_ALLOWED_METHODS,
         hooks: {
           onStdout: (data) => {
             stdout += data
