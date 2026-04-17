@@ -37,7 +37,8 @@ export function adaptCodexWasmEvent(
     return [buildNotification(method, record.params)];
   }
 
-  if (asString(record.type) !== "raw_core_event") {
+  const eventType = asString(record.type);
+  if (eventType !== "raw_core_event" && eventType !== "coreEvent") {
     return [];
   }
 

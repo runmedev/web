@@ -58,6 +58,37 @@ describe("adaptCodexWasmEvent", () => {
     ]);
   });
 
+  it("accepts the browser harness coreEvent envelope", () => {
+    expect(
+      adaptCodexWasmEvent(
+        {
+          type: "coreEvent",
+          event: {
+            id: "turn-1",
+            msg: {
+              type: "agent_message_delta",
+              delta: "bonjour",
+            },
+          },
+        },
+        {
+          threadId: "thread-1",
+        },
+      ),
+    ).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "turn-1-item",
+          delta: "bonjour",
+        },
+      },
+    ]);
+  });
+
   it("adapts raw core turn completion into completed item and turn notifications", () => {
     expect(
       adaptCodexWasmEvent(
