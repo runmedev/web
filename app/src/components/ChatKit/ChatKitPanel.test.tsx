@@ -366,6 +366,14 @@ describe("ChatKitPanel codex harness routing", () => {
     await waitFor(() =>
       expect(proxyMock.connectWasm).toHaveBeenCalledWith({
         apiKey: "sk-test",
+        sessionOptions: expect.objectContaining({
+          cwd: "/workspace",
+          instructions: expect.objectContaining({
+            developer: expect.stringContaining(
+              "Executed JavaScript runs inside the Runme AppKernel runtime.",
+            ),
+          }),
+        }),
       }),
     );
     expect(bridgeMock.connect).not.toHaveBeenCalled();

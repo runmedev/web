@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS } from "./runmeChatkitPrompts";
 
 const project = {
   id: "project-1",
@@ -353,6 +354,7 @@ describe("CodexConversationController", () => {
       approvalPolicy: "never",
       sandboxPolicy: "workspace-write",
       personality: "pragmatic",
+      developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
     });
     expect(thread).toEqual(
       expect.objectContaining({
@@ -644,6 +646,52 @@ describe("CodexConversationController", () => {
       previousResponseId: "resp-1",
     });
     expect(controller.getSnapshot().currentThreadId).toBe("thread-fresh");
+  });
+
+  it("resumes threads with Runme developer instructions", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "thread/read") {
+        expect(params).toEqual({ threadId: "thread-1" });
+        return {
+          thread: {
+            id: "thread-1",
+            title: "Existing Thread",
+            cwd: "/workspace",
+            turns: [],
+          },
+        };
+      }
+      if (method === "thread/resume") {
+        expect(params).toEqual(
+          expect.objectContaining({
+            threadId: "thread-1",
+            cwd: "/workspace",
+            developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
+          }),
+        );
+        return { thread: { id: "thread-1" } };
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "turn.completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+              },
+            });
+          });
+        });
+        return { turnId: "turn-1" };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    await controller.selectThread("thread-1");
+    await controller.streamUserMessage("hello", {}, { emit: vi.fn() });
   });
 
   it("maps item-based codex notifications into ChatKit-compatible events", async () => {

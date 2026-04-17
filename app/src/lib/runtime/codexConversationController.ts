@@ -4,6 +4,7 @@ import {
   getCodexProjectManager,
   type CodexProject,
 } from "./codexProjectManager";
+import { RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS } from "./runmeChatkitPrompts";
 import {
   getCodexAppServerClient,
   type CodexProxyJsonRpcNotification,
@@ -1157,6 +1158,7 @@ class CodexConversationController {
       approvalPolicy: project.approvalPolicy,
       sandboxPolicy: project.sandboxPolicy,
       personality: project.personality,
+      developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
       writableRoots: project.writableRoots,
     };
   }

@@ -38,6 +38,7 @@ import {
   useCodexConversationSnapshot,
 } from '../../lib/runtime/codexConversationController'
 import { useCodexProjects } from '../../lib/runtime/codexProjectManager'
+import { buildRunmeCodexWasmSessionOptions } from '../../lib/runtime/runmeChatkitPrompts'
 import { appLogger } from '../../lib/logging/runtime'
 import {
   responsesDirectConfigManager,
@@ -944,6 +945,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           proxy.setAuthorizationResolver(null)
           await proxy.connectWasm({
             apiKey: codexWasmApiKey,
+            sessionOptions: buildRunmeCodexWasmSessionOptions(),
           })
         }
         if (!canceled) {
