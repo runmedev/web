@@ -114,7 +114,6 @@ describe("CodexAppServerProxyClient", () => {
     expect(JSON.parse(sockets[0]?.sent[1] ?? "{}")).toEqual({
       jsonrpc: "2.0",
       method: "initialized",
-      params: {},
     });
     expect(appLoggerMock.info).toHaveBeenCalledWith(
       "Codex proxy request",

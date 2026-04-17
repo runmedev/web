@@ -324,7 +324,6 @@ class CodexAppServerProxyClient {
     const payload = JSON.stringify({
       jsonrpc: "2.0",
       method: "initialized",
-      params: {},
     });
     logCodexEvent("Codex proxy notification", {
       scope: "chatkit.codex_proxy",
@@ -335,7 +334,6 @@ class CodexAppServerProxyClient {
       payload: {
         jsonrpc: "2.0",
         method: "initialized",
-        params: {},
       },
     });
     this.ws.send(payload);

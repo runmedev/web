@@ -207,7 +207,6 @@ async function ensureConnected(
     }
     await app.notify({
       method: "initialized",
-      params: {},
     });
     state.app = app;
     await appendEntry({
