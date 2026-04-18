@@ -8,6 +8,10 @@ import {
   APPKERNEL_SANDBOX_RUNNER_NAME,
 } from "./runtime/appKernel";
 import { appState } from "./runtime/AppState";
+import {
+  appendCodexWasmJournalEntry,
+  resetCodexWasmJournalEntries,
+} from "./runtime/codexWasmEventJournal";
 
 const mockRunner = {
   name: "mock-runner",
@@ -358,7 +362,7 @@ beforeAll(async () => {
   ({ bindStreamsToCell, NotebookData } = await import("./notebookData"));
 });
 
-afterEach(() => {
+afterEach(async () => {
   appState.setDriveNotebookStore(null);
   appState.setLocalNotebooks(null);
   appState.setOpenNotebookHandler(null);
@@ -369,6 +373,7 @@ afterEach(() => {
   defaultHarnessName = null;
   codexProjectStore.clear();
   defaultCodexProjectId = null;
+  await resetCodexWasmJournalEntries();
 });
 
 async function waitForCondition(
@@ -1053,6 +1058,110 @@ describe("NotebookData.runCodeCell", () => {
     expect(stdoutText).toContain(
       "project-1: Runme Repo (/Users/jlewi/code/runmecodex/web, model=gpt-5-mini, sandbox=workspace-write, approval=never) (default)",
     );
+  });
+
+  it("exposes codex turn journal helpers in appkernel cells", async () => {
+    await resetCodexWasmJournalEntries();
+    await appendCodexWasmJournalEntry({
+      seq: 1,
+      ts: "2026-04-18T00:00:00.000Z",
+      sessionId: "session-1",
+      threadId: "thread-1",
+      turnId: "turn-older",
+      direction: "server_to_client",
+      kind: "notification",
+      method: "turn/started",
+      payload: { method: "turn/started" },
+    });
+    await appendCodexWasmJournalEntry({
+      seq: 2,
+      ts: "2026-04-18T00:00:01.000Z",
+      sessionId: "session-1",
+      threadId: "thread-1",
+      turnId: "turn-older",
+      direction: "server_to_client",
+      kind: "notification",
+      method: "turn/completed",
+      payload: { method: "turn/completed" },
+    });
+    await appendCodexWasmJournalEntry({
+      seq: 3,
+      ts: "2026-04-18T00:00:02.000Z",
+      sessionId: "session-1",
+      threadId: "thread-1",
+      turnId: "turn-latest",
+      direction: "server_to_client",
+      kind: "notification",
+      method: "turn/started",
+      payload: { method: "turn/started" },
+    });
+    await appendCodexWasmJournalEntry({
+      seq: 4,
+      ts: "2026-04-18T00:00:03.000Z",
+      sessionId: "session-1",
+      threadId: "thread-1",
+      turnId: "turn-latest",
+      direction: "server_to_client",
+      kind: "notification",
+      method: "item/agentMessage/delta",
+      payload: { method: "item/agentMessage/delta" },
+    });
+    await appendCodexWasmJournalEntry({
+      seq: 5,
+      ts: "2026-04-18T00:00:04.000Z",
+      sessionId: "session-1",
+      threadId: "thread-1",
+      turnId: "turn-latest",
+      direction: "server_to_client",
+      kind: "notification",
+      method: "turn/completed",
+      payload: { method: "turn/completed" },
+    });
+
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-codex-turns-helpers",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        "const turns = await codex.turns.list();",
+        "console.log(turns[0].turnId);",
+        "console.log(turns[0].eventCount);",
+        "const events = await codex.turns.getEvents(turns[0].turnId);",
+        "console.log(events.map((event) => event.method).join(','));",
+        "console.log(app.codex.turns === codex.turns);",
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "codex-turns-helpers.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("turn-latest");
+    expect(stdoutText).toContain("\n3\n");
+    expect(stdoutText).toContain(
+      "turn/started,item/agentMessage/delta,turn/completed",
+    );
+    expect(stdoutText).toContain("true");
   });
 
   it("exposes app.responsesDirect and credentials.openai helpers in appkernel cells", async () => {

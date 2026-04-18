@@ -4,6 +4,7 @@ import {
   createAppKernelNetworkApi,
   createAppKernelOpfsApi,
 } from './appKernelLowLevelApis'
+import { getCodexTurnEvents, listCodexTurns } from './codexTurns'
 import { JSKernel } from './jsKernel'
 import {
   type NotebooksApiBridgeServer,
@@ -304,6 +305,13 @@ async function handleSandboxAppKernelBridgeCall({
         cellCount: notebook.getNotebook().cells.length,
       }
     }
+    case 'codex.turns.list':
+      return await listCodexTurns()
+    case 'codex.turns.getEvents':
+      return await getCodexTurnEvents(
+        String(args[0] ?? ''),
+        (args[1] as { sessionId?: string }) ?? undefined
+      )
     default:
       if (method.startsWith('notebooks.')) {
         return notebooksApiBridgeServer.handleMessage({

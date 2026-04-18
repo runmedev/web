@@ -6,7 +6,7 @@ import {
   SandboxJSKernel,
 } from './sandboxJsKernel'
 
-type Scenario = 'success' | 'disallowed' | 'hang' | 'lowLevel'
+type Scenario = 'success' | 'disallowed' | 'hang' | 'lowLevel' | 'codex'
 
 class MockSandboxPort {
   onmessage: ((event: MessageEvent<any>) => void) | null = null
@@ -45,6 +45,19 @@ class MockSandboxPort {
           callId: 2,
           method: 'net.get',
           args: ['https://example.test/docs'],
+        })
+      } else if (this.scenario === 'codex') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'codex.turns.list',
+          args: [],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 2,
+          method: 'codex.turns.getEvents',
+          args: ['turn-latest', undefined],
         })
       } else if (this.scenario === 'hang') {
         this.emit({ type: 'stdout', data: 'started\n' })
@@ -85,6 +98,20 @@ class MockSandboxPort {
           this.emit({
             type: 'stdout',
             data: `${JSON.stringify(this.hostResults.get(2) ?? null)}\n`,
+          })
+          this.emit({ type: 'exit', exitCode: 0 })
+        } else if (this.scenario === 'codex') {
+          const turns = this.hostResults.get(1) as
+            | Array<{ turnId?: string }>
+            | undefined
+          const events = this.hostResults.get(2) as Array<unknown> | undefined
+          this.emit({
+            type: 'stdout',
+            data: `${turns?.[0]?.turnId ?? ''}\n`,
+          })
+          this.emit({
+            type: 'stdout',
+            data: `${events?.length ?? 0}\n`,
           })
           this.emit({ type: 'exit', exitCode: 0 })
         }
@@ -307,6 +334,48 @@ describe('SandboxJSKernel', () => {
     ])
     expect(stdout).toContain('cached-doc')
     expect(stdout).toContain('"status":200')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports codex turn journal helpers through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'codex.turns.list') {
+        return [{ turnId: 'turn-latest' }]
+      }
+      if (method === 'codex.turns.getEvents') {
+        return [{ seq: 1 }, { seq: 2 }, { seq: 3 }]
+      }
+      return null
+    })
+
+    const kernel = new TestableSandboxJSKernel(new MockSandboxPort('codex'), {
+      bridge: { call: bridgeCall },
+      hooks: {
+        onStdout: (data) => {
+          stdout += data
+        },
+        onStderr: (data) => {
+          stderr += data
+        },
+        onExit: (code) => {
+          exitCode = code
+        },
+      },
+    })
+
+    await kernel.run("console.log('noop');")
+
+    expect(bridgeCall).toHaveBeenCalledWith('codex.turns.list', [])
+    expect(bridgeCall).toHaveBeenCalledWith('codex.turns.getEvents', [
+      'turn-latest',
+      undefined,
+    ])
+    expect(stdout).toContain('turn-latest')
+    expect(stdout).toContain('\n3\n')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
   })
