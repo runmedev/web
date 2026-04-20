@@ -5,6 +5,7 @@ import {
 } from "./codexAppServerProxyClient";
 import { getCodexWasmAppServerClient } from "./codexWasmAppServerClient";
 import type { BrowserSessionOptions } from "./codexWasmHarnessLoader";
+import type { CodexWasmCodeExecutor } from "./codexWasmWorkerClient";
 
 export type CodexAppServerTransport = "proxy" | "wasm";
 export type { CodexProxyJsonRpcNotification };
@@ -71,6 +72,10 @@ class CodexAppServerClient {
 
   setAuthorizationResolver(resolver: (() => Promise<string>) | null): void {
     getCodexAppServerProxyClient().setAuthorizationResolver(resolver);
+  }
+
+  setCodeExecutor(executor: CodexWasmCodeExecutor | null): void {
+    getCodexWasmAppServerClient().setCodeExecutor(executor);
   }
 
   async connectProxy(url: string, authorization: string): Promise<void> {

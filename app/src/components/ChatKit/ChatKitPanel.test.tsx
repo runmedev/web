@@ -65,6 +65,7 @@ const proxyMock = {
   connectProxy: vi.fn(async () => {}),
   connectWasm: vi.fn(async () => {}),
   disconnect: vi.fn(),
+  setCodeExecutor: vi.fn(),
   setAuthorizationResolver: vi.fn(),
 };
 const codexControllerMock = {
@@ -263,6 +264,7 @@ describe("ChatKitPanel codex harness routing", () => {
     proxyMock.connectProxy.mockClear();
     proxyMock.connectWasm.mockClear();
     proxyMock.disconnect.mockClear();
+    proxyMock.setCodeExecutor.mockClear();
     proxyMock.setAuthorizationResolver.mockClear();
     codexControllerMock.setSelectedProject.mockClear();
     codexControllerMock.refreshHistory.mockClear();
@@ -363,6 +365,7 @@ describe("ChatKitPanel codex harness routing", () => {
 
     expect(codexFetchMock).toHaveBeenCalled();
     await waitFor(() => expect(proxyMock.useTransport).toHaveBeenCalledWith("wasm"));
+    expect(proxyMock.setCodeExecutor).toHaveBeenCalledWith(expect.any(Function));
     await waitFor(() =>
       expect(proxyMock.connectWasm).toHaveBeenCalledWith({
         apiKey: "sk-test",

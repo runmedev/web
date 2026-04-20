@@ -33,6 +33,7 @@ import {
   createCodeModeExecutor,
   getCodeModeErrorOutput,
 } from '../../lib/runtime/codeModeExecutor'
+import { createCodexWasmCodeExecutor } from '../../lib/runtime/codexWasmCodeExecutor'
 import {
   getCodexConversationController,
   useCodexConversationSnapshot,
@@ -915,6 +916,22 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     const controller = getCodexConversationController()
     controller.setSelectedProject(defaultProject.id)
   }, [defaultHarness.adapter, defaultProject.id])
+
+  useEffect(() => {
+    const proxy = getCodexAppServerClient()
+    if (defaultHarness.adapter !== 'codex-wasm') {
+      proxy.setCodeExecutor(null)
+      return
+    }
+    proxy.setCodeExecutor(
+      createCodexWasmCodeExecutor({
+        codeModeExecutor,
+      })
+    )
+    return () => {
+      proxy.setCodeExecutor(null)
+    }
+  }, [codeModeExecutor, defaultHarness.adapter])
 
   useEffect(() => {
     const proxy = getCodexAppServerClient()

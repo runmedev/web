@@ -57,11 +57,12 @@ describe('codexWasmSession', () => {
 
   it('configures session instructions and forwards the raw user prompt', async () => {
     submitTurnMock.mockResolvedValueOnce('submission-1')
+    const executeMock = vi.fn(async () => ({ output: 'hello from code mode' }))
 
     const { createCodexWasmSession } = await import('./codexWasmSession')
     const session = createCodexWasmSession({
       codeModeExecutor: {
-        execute: vi.fn(async () => ({ output: '' })),
+        execute: executeMock,
       },
     })
 
@@ -82,6 +83,25 @@ describe('codexWasmSession', () => {
       },
     })
     expect(setCodeExecutorMock).toHaveBeenCalledTimes(1)
+    const codeExecutor = setCodeExecutorMock.mock.calls[0]?.[0]
+    expect(codeExecutor).toBeTypeOf('function')
+    await expect(
+      codeExecutor(
+        JSON.stringify({
+          source: 'console.log("hello")',
+          stored_values: { previous: 'value' },
+        })
+      )
+    ).resolves.toBe(
+      JSON.stringify({
+        output: 'hello from code mode',
+        stored_values: { previous: 'value' },
+      })
+    )
+    expect(executeMock).toHaveBeenCalledWith({
+      code: 'console.log("hello")',
+      source: 'codex',
+    })
     expect(submitTurnMock).toHaveBeenCalledWith(
       'How do I configure a runner in Runme?',
       expect.any(Function)

@@ -73,7 +73,7 @@ function createDefaultProject(): CodexProject {
     id: DEFAULT_PROJECT_ID,
     name: "Local Project",
     cwd: ".",
-    model: "gpt-5",
+    model: "gpt-5.4",
     approvalPolicy: "never",
     sandboxPolicy: "workspace-write",
     personality: DEFAULT_CODEX_PERSONALITY,

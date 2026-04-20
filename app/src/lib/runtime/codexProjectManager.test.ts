@@ -21,7 +21,7 @@ describe("codexProjectManager", () => {
     expect(active.id).toBe("local-default");
     expect(active.name).toBe("Local Project");
     expect(active.cwd).toBe(".");
-    expect(active.model).toBe("gpt-5");
+    expect(active.model).toBe("gpt-5.4");
     expect(active.approvalPolicy).toBe("never");
     expect(active.sandboxPolicy).toBe("workspace-write");
     expect(active.personality).toBe("pragmatic");

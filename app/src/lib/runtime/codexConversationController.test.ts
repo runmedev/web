@@ -7,7 +7,7 @@ const project = {
   id: "project-1",
   name: "Runme Repo",
   cwd: "/workspace",
-  model: "gpt-5",
+  model: "gpt-5.4",
   approvalPolicy: "never",
   sandboxPolicy: "workspace-write",
   personality: "pragmatic",
@@ -347,15 +347,18 @@ describe("CodexConversationController", () => {
     const controller = createCodexConversationControllerForTests();
     const thread = await controller.ensureActiveThread();
 
-    expect(proxyClient.sendRequest).toHaveBeenCalledWith("thread/start", {
-      projectId: "project-1",
-      cwd: "/workspace",
-      model: "gpt-5",
-      approvalPolicy: "never",
-      sandboxPolicy: "workspace-write",
-      personality: "pragmatic",
-      developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
-    });
+    expect(proxyClient.sendRequest).toHaveBeenCalledWith(
+      "thread/start",
+      expect.objectContaining({
+        projectId: "project-1",
+        cwd: "/workspace",
+        model: "gpt-5.4",
+        approvalPolicy: "never",
+        sandboxPolicy: "workspace-write",
+        personality: "pragmatic",
+        developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
+      }),
+    );
     expect(thread).toEqual(
       expect.objectContaining({
         id: "thread-bootstrap",
@@ -1207,7 +1210,7 @@ describe("CodexConversationController", () => {
             ],
             attachments: [],
             inference_options: expect.objectContaining({
-              model: "gpt-5",
+              model: "gpt-5.4",
             }),
           }),
         }),

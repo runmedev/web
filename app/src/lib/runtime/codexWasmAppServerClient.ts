@@ -1,7 +1,7 @@
 import { appLogger } from "../logging/runtime";
 import { getCodexWasmAssetUrls, type BrowserSessionOptions } from "./codexWasmHarnessLoader";
 import type { CodexProxyJsonRpcNotification } from "./codexAppServerProxyClient";
-import { CodexWasmWorkerClient } from "./codexWasmWorkerClient";
+import { CodexWasmWorkerClient, type CodexWasmCodeExecutor } from "./codexWasmWorkerClient";
 
 export type CodexWasmClientState = "idle" | "connecting" | "open" | "closed" | "error";
 
@@ -52,6 +52,10 @@ class CodexWasmAppServerClient {
     return () => {
       this.notificationHandlers.delete(handler);
     };
+  }
+
+  setCodeExecutor(executor: CodexWasmCodeExecutor | null): void {
+    this.workerClient.setCodeExecutor(executor);
   }
 
   async connect(options: {
@@ -118,6 +122,7 @@ class CodexWasmAppServerClient {
 
   resetForTests(): void {
     this.disconnect();
+    this.workerClient.setCodeExecutor(null);
     this.listeners.clear();
     this.notificationHandlers.clear();
     this.lastError = null;

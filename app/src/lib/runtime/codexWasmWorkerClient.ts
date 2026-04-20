@@ -9,8 +9,10 @@ import type {
 } from "./codexWasmWorkerProtocol";
 
 export type CodexWasmWorkerFactory = () => Worker;
+export type CodexWasmCodeExecutor = (input: string) => string | Promise<string>;
 
 type WorkerNotificationHandler = (notification: CodexWasmAppServerNotification) => void;
+type BridgeRequestMessage = Extract<CodexWasmWorkerResponse, { type: "bridge/request" }>;
 
 function createDefaultCodeExecutorResult(errorText: string): string {
   return JSON.stringify({
@@ -24,6 +26,7 @@ export class CodexWasmWorkerClient {
   private worker: Worker | null = null;
   private readonly workerFactory: CodexWasmWorkerFactory;
   private nextId = 1;
+  private codeExecutor: CodexWasmCodeExecutor | null = null;
   private pending = new Map<
     number,
     {
@@ -47,6 +50,10 @@ export class CodexWasmWorkerClient {
     return () => {
       this.notificationHandlers.delete(handler);
     };
+  }
+
+  setCodeExecutor(executor: CodexWasmCodeExecutor | null): void {
+    this.codeExecutor = executor;
   }
 
   async connect(options: {
@@ -151,15 +158,7 @@ export class CodexWasmWorkerClient {
     }
 
     if (message.type === "bridge/request") {
-      const result = createDefaultCodeExecutorResult(
-        "Codex wasm code execution bridge is not implemented in this Runme web checkout.",
-      );
-      this.worker?.postMessage({
-        type: "bridge/response",
-        id: this.nextId++,
-        bridgeRequestId: message.bridgeRequestId,
-        result,
-      } satisfies CodexWasmWorkerRequest);
+      void this.handleBridgeRequest(message);
       return;
     }
 
@@ -178,5 +177,40 @@ export class CodexWasmWorkerClient {
   private rejectPending(error: Error): void {
     this.pending.forEach(({ reject }) => reject(error));
     this.pending.clear();
+  }
+
+  private async handleBridgeRequest(message: BridgeRequestMessage): Promise<void> {
+    if (!this.codeExecutor) {
+      this.postMessageToWorker({
+        type: "bridge/response",
+        bridgeRequestId: message.bridgeRequestId,
+        result: createDefaultCodeExecutorResult(
+          "Codex wasm code execution bridge is not configured in the main thread.",
+        ),
+      });
+      return;
+    }
+
+    try {
+      const result = await this.codeExecutor(message.input);
+      this.postMessageToWorker({
+        type: "bridge/response",
+        bridgeRequestId: message.bridgeRequestId,
+        result: typeof result === "string" ? result : String(result ?? ""),
+      });
+    } catch (error) {
+      this.postMessageToWorker({
+        type: "bridge/error",
+        bridgeRequestId: message.bridgeRequestId,
+        error: String(error),
+      });
+    }
+  }
+
+  private postMessageToWorker(message: CodexWasmWorkerRequestWithoutId): void {
+    this.worker?.postMessage({
+      ...message,
+      id: this.nextId++,
+    } satisfies CodexWasmWorkerRequest);
   }
 }

@@ -25,7 +25,7 @@ const project = {
   id: "project-1",
   name: "Runme Repo",
   cwd: "/workspace",
-  model: "gpt-5",
+  model: "gpt-5.4",
   approvalPolicy: "never",
   sandboxPolicy: "workspace-write",
   personality: "pragmatic",
@@ -38,8 +38,8 @@ const projectManager = {
   setDefault: vi.fn(),
 };
 
-vi.mock("./codexAppServerProxyClient", () => ({
-  getCodexAppServerProxyClient: () => proxyClient,
+vi.mock("./codexAppServerClient", () => ({
+  getCodexAppServerClient: () => proxyClient,
 }));
 
 vi.mock("./codexProjectManager", () => ({

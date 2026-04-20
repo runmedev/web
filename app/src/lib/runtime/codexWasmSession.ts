@@ -1,7 +1,7 @@
 import {
   type CodeModeExecutor,
-  getCodeModeErrorOutput,
 } from './codeModeExecutor'
+import { createCodexWasmCodeExecutor } from './codexWasmCodeExecutor'
 import {
   type BrowserCodexInstance,
   loadCodexWasmModule,
@@ -51,51 +51,11 @@ export function createCodexWasmSession(options: {
     const browserCodex = await browserCodexPromise
     browserCodex.set_api_key(apiKey)
     browserCodex.setSessionOptions(buildRunmeCodexWasmSessionOptions())
-    browserCodex.set_code_executor(async (input: string) => {
-      let request: {
-        source?: unknown
-        stored_values?: unknown
-      } = {}
-      try {
-        request = JSON.parse(input) as {
-          source?: unknown
-          stored_values?: unknown
-        }
-      } catch (error) {
-        return JSON.stringify({
-          output: '',
-          stored_values: {},
-          error_text: `Invalid code executor request: ${error}`,
-        })
-      }
-
-      try {
-        const result = await options.codeModeExecutor.execute({
-          code: normalizeString(request.source),
-          source: 'codex',
-        })
-        return JSON.stringify({
-          output: result.output,
-          stored_values:
-            request.stored_values &&
-            typeof request.stored_values === 'object' &&
-            !Array.isArray(request.stored_values)
-              ? request.stored_values
-              : {},
-        })
-      } catch (error) {
-        return JSON.stringify({
-          output: getCodeModeErrorOutput(error),
-          stored_values:
-            request.stored_values &&
-            typeof request.stored_values === 'object' &&
-            !Array.isArray(request.stored_values)
-              ? request.stored_values
-              : {},
-          error_text: String(error),
-        })
-      }
-    })
+    browserCodex.set_code_executor(
+      createCodexWasmCodeExecutor({
+        codeModeExecutor: options.codeModeExecutor,
+      })
+    )
     return browserCodex
   }
 
