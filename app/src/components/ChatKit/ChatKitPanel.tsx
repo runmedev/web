@@ -1117,6 +1117,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           id: 'gpt-5',
           label: 'GPT-5',
         },
+        {
+          id: 'gpt-5.4',
+          label: 'GPT-5.4',
+        },
         // gpt-5.2 appears to be about 2x as slow as gpt-4.1-mini-2025-04-14
         // but for a simple query that's 2s vs 1s so not a huge difference
         // This is still 10x faster than gpt 5 which took about 10x and felt like

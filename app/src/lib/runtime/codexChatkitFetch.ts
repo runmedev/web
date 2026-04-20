@@ -335,31 +335,43 @@ function getPayloadRecord(payload: Record<string, unknown>): Record<string, unkn
   return params ?? payload;
 }
 
-function extractInput(payload: Record<string, unknown>): string {
+function extractInput(payload: Record<string, unknown>): {
+  text: string;
+  model?: string;
+} {
   const source = getPayloadRecord(payload);
   const direct = asString(source.input);
   if (direct) {
-    return direct;
+    return { text: direct };
   }
   const inputRecord =
     source.input && typeof source.input === "object" && !Array.isArray(source.input)
       ? (source.input as Record<string, unknown>)
       : null;
   if (inputRecord) {
+    const inference =
+      inputRecord.inference_options &&
+      typeof inputRecord.inference_options === "object" &&
+      !Array.isArray(inputRecord.inference_options)
+        ? (inputRecord.inference_options as Record<string, unknown>)
+        : null;
     const content = inputRecord.content;
     if (Array.isArray(content)) {
-      return content
-        .map((item) => {
-          if (!item || typeof item !== "object" || Array.isArray(item)) {
-            return "";
-          }
-          const record = item as Record<string, unknown>;
-          return asString(record.text) ?? asString(record.value) ?? "";
-        })
-        .join("");
+      return {
+        text: content
+          .map((item) => {
+            if (!item || typeof item !== "object" || Array.isArray(item)) {
+              return "";
+            }
+            const record = item as Record<string, unknown>;
+            return asString(record.text) ?? asString(record.value) ?? "";
+          })
+          .join(""),
+        model: asString(inference?.model),
+      };
     }
   }
-  return "";
+  return { text: "" };
 }
 
 function extractChatKitState(payload: Record<string, unknown>): ChatKitStateValue {
@@ -487,7 +499,7 @@ export function createCodexChatkitFetch(): typeof fetch {
         return jsonResponse(derivedPayload);
       }
 
-      const inputText = extractInput(json);
+      const { text: inputText, model } = extractInput(json);
       if (!inputText) {
         const errorPayload = {
           data: null,
@@ -514,7 +526,7 @@ export function createCodexChatkitFetch(): typeof fetch {
       const streamId = createCodexStreamId();
       return buildStreamResponse(
         async (sink) => {
-          await controller.streamUserMessage(inputText, chatkitState, sink);
+          await controller.streamUserMessage(inputText, chatkitState, sink, model);
         },
         {
           signal: init?.signal ?? null,

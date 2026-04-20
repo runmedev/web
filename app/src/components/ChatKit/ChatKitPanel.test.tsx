@@ -382,6 +382,20 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(bridgeMock.connect).not.toHaveBeenCalled();
   });
 
+  it("includes gpt-5.4 in the ChatKit composer model list", () => {
+    render(<ChatKitPanel />);
+
+    const config = useChatKitMock.mock.calls.at(0)?.[0];
+    expect(config.composer.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "gpt-5.4",
+          label: "GPT-5.4",
+        }),
+      ]),
+    );
+  });
+
   it("handles ExecuteCode params with top-level code for NotebookService tool names", async () => {
     render(<ChatKitPanel />);
     const config = useChatKitMock.mock.calls.at(0)?.[0];

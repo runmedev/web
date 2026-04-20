@@ -15,6 +15,7 @@ const defaultStreamUserMessage = async (
   _input: string,
   _state: unknown,
   sink: { emit: (payload: unknown) => void },
+  _model?: string,
 ) => {
   sink.emit({ type: "response.created", response: { id: "turn-1" } });
   sink.emit({ type: "response.output_text.delta", delta: "hello" });
@@ -177,6 +178,35 @@ describe("createCodexChatkitFetch", () => {
       data: [{ id: "thread-1", title: "One", updated_at: "2026-02-26T00:00:00Z" }],
       has_more: false,
     });
+  });
+
+  it("forwards the ChatKit-selected model to the codex controller", async () => {
+    const fetchFn = createCodexChatkitFetch();
+
+    await fetchFn("http://localhost/codex/chatkit", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "threads.create",
+        params: {
+          input: {
+            content: [{ type: "input_text", text: "hello" }],
+            inference_options: {
+              model: "gpt-5.4",
+            },
+          },
+        },
+      }),
+    });
+
+    expect(controller.streamUserMessage).toHaveBeenCalledWith(
+      "hello",
+      {
+        threadId: undefined,
+        previousResponseId: undefined,
+      },
+      expect.any(Object),
+      "gpt-5.4",
+    );
   });
 
   it("handles threads.get_by_id requests", async () => {
@@ -418,6 +448,7 @@ describe("createCodexChatkitFetch", () => {
       "hello",
       { threadId: undefined, previousResponseId: undefined },
       expect.any(Object),
+      undefined,
     );
     expect(body).toContain('"type":"response.created"');
     expect(body).toContain('"delta":"hello"');
@@ -444,6 +475,7 @@ describe("createCodexChatkitFetch", () => {
       "hello from request",
       { threadId: undefined, previousResponseId: undefined },
       expect.any(Object),
+      undefined,
     );
     expect(body).toContain('"type":"response.created"');
   });
@@ -468,6 +500,7 @@ describe("createCodexChatkitFetch", () => {
       "hello from nested params",
       { threadId: undefined, previousResponseId: undefined },
       expect.any(Object),
+      undefined,
     );
     expect(body).toContain('"type":"response.created"');
   });
