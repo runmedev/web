@@ -33,6 +33,7 @@ import {
   createCodeModeExecutor,
   getCodeModeErrorOutput,
 } from '../../lib/runtime/codeModeExecutor'
+import { createCodexWasmCodeExecutor } from '../../lib/runtime/codexWasmCodeExecutor'
 import {
   getCodexConversationController,
   useCodexConversationSnapshot,
@@ -918,6 +919,22 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
 
   useEffect(() => {
     const proxy = getCodexAppServerClient()
+    if (defaultHarness.adapter !== 'codex-wasm') {
+      proxy.setCodeExecutor(null)
+      return
+    }
+    proxy.setCodeExecutor(
+      createCodexWasmCodeExecutor({
+        codeModeExecutor,
+      })
+    )
+    return () => {
+      proxy.setCodeExecutor(null)
+    }
+  }, [codeModeExecutor, defaultHarness.adapter])
+
+  useEffect(() => {
+    const proxy = getCodexAppServerClient()
     if (
       defaultHarness.adapter !== 'codex' &&
       defaultHarness.adapter !== 'codex-wasm'
@@ -1099,6 +1116,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         {
           id: 'gpt-5',
           label: 'GPT-5',
+        },
+        {
+          id: 'gpt-5.4',
+          label: 'GPT-5.4',
         },
         // gpt-5.2 appears to be about 2x as slow as gpt-4.1-mini-2025-04-14
         // but for a simple query that's 2s vs 1s so not a huge difference

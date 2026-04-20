@@ -7,7 +7,7 @@ const project = {
   id: "project-1",
   name: "Runme Repo",
   cwd: "/workspace",
-  model: "gpt-5",
+  model: "gpt-5.4",
   approvalPolicy: "never",
   sandboxPolicy: "workspace-write",
   personality: "pragmatic",
@@ -347,15 +347,18 @@ describe("CodexConversationController", () => {
     const controller = createCodexConversationControllerForTests();
     const thread = await controller.ensureActiveThread();
 
-    expect(proxyClient.sendRequest).toHaveBeenCalledWith("thread/start", {
-      projectId: "project-1",
-      cwd: "/workspace",
-      model: "gpt-5",
-      approvalPolicy: "never",
-      sandboxPolicy: "workspace-write",
-      personality: "pragmatic",
-      developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
-    });
+    expect(proxyClient.sendRequest).toHaveBeenCalledWith(
+      "thread/start",
+      expect.objectContaining({
+        projectId: "project-1",
+        cwd: "/workspace",
+        model: "gpt-5.4",
+        approvalPolicy: "never",
+        sandboxPolicy: "workspace-write",
+        personality: "pragmatic",
+        developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
+      }),
+    );
     expect(thread).toEqual(
       expect.objectContaining({
         id: "thread-bootstrap",
@@ -364,6 +367,64 @@ describe("CodexConversationController", () => {
       }),
     );
     expect(controller.getSnapshot().currentThreadId).toBe("thread-bootstrap");
+  });
+
+  it("uses a per-request model override for thread start and turn start", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "thread/start") {
+        expect(params).toEqual(
+          expect.objectContaining({
+            model: "gpt-5.4",
+          }),
+        );
+        return {
+          thread: {
+            id: "thread-override",
+            title: "Override Thread",
+            cwd: "/workspace",
+          },
+        };
+      }
+      if (method === "turn/start") {
+        expect(params).toEqual(
+          expect.objectContaining({
+            threadId: "thread-override",
+            model: "gpt-5.4",
+          }),
+        );
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-override",
+                turnId: "turn-override",
+              },
+            });
+          });
+        });
+        return { turnId: "turn-override" };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: any[] = [];
+    await controller.streamUserMessage("hello", {}, { emit: (payload) => events.push(payload) }, "gpt-5.4");
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "thread.item.added",
+          item: expect.objectContaining({
+            inference_options: {
+              model: "gpt-5.4",
+            },
+          }),
+        }),
+      ]),
+    );
   });
 
   it("does not treat previousResponseId as an active turn id when creating/selecting threads", async () => {
@@ -692,6 +753,56 @@ describe("CodexConversationController", () => {
     const controller = createCodexConversationControllerForTests();
     await controller.selectThread("thread-1");
     await controller.streamUserMessage("hello", {}, { emit: vi.fn() });
+  });
+
+  it("uses a per-request model override when resuming an existing thread", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "thread/read") {
+        return {
+          thread: {
+            id: "thread-1",
+            title: "Existing Thread",
+            cwd: "/workspace",
+            turns: [],
+          },
+        };
+      }
+      if (method === "thread/resume") {
+        expect(params).toEqual(
+          expect.objectContaining({
+            threadId: "thread-1",
+            model: "gpt-5.4",
+          }),
+        );
+        return { thread: { id: "thread-1" } };
+      }
+      if (method === "turn/start") {
+        expect(params).toEqual(
+          expect.objectContaining({
+            threadId: "thread-1",
+            model: "gpt-5.4",
+          }),
+        );
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+              },
+            });
+          });
+        });
+        return { turnId: "turn-1" };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    await controller.selectThread("thread-1");
+    await controller.streamUserMessage("hello", {}, { emit: vi.fn() }, "gpt-5.4");
   });
 
   it("maps item-based codex notifications into ChatKit-compatible events", async () => {
@@ -1207,7 +1318,7 @@ describe("CodexConversationController", () => {
             ],
             attachments: [],
             inference_options: expect.objectContaining({
-              model: "gpt-5",
+              model: "gpt-5.4",
             }),
           }),
         }),

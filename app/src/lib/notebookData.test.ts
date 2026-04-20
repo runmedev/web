@@ -252,7 +252,7 @@ const codexProjectManager = {
         id: "local-default",
         name: "Local Project",
         cwd: ".",
-        model: "gpt-5",
+        model: "gpt-5.4",
         approvalPolicy: "never",
         sandboxPolicy: "workspace-write",
         personality: "default",

@@ -558,7 +558,7 @@ class CodexConversationController {
     return thread;
   }
 
-  async ensureActiveThread(): Promise<CodexConversationThread> {
+  async ensureActiveThread(modelOverride?: string): Promise<CodexConversationThread> {
     const currentThreadId = this.currentThreadId;
     if (currentThreadId) {
       const existing = this.threads.get(currentThreadId);
@@ -571,7 +571,10 @@ class CodexConversationController {
     const proxy = getCodexAppServerClient();
     const project = this.getSnapshot().selectedProject;
     const created = asRecord(
-      await proxy.sendRequest("thread/start", this.buildProjectDefaults(project)),
+      await proxy.sendRequest(
+        "thread/start",
+        this.buildProjectDefaults(project, modelOverride),
+      ),
     );
     const threadId =
       asString(created.threadId) ??
@@ -631,10 +634,12 @@ class CodexConversationController {
     input: string,
     chatkitState: ChatKitStateValue,
     sink: CodexStreamSink,
+    modelOverride?: string,
   ): Promise<ChatKitStateValue> {
     const proxy = getCodexAppServerClient();
     const project = this.getSnapshot().selectedProject;
-    const activeThread = await this.ensureActiveThread();
+    const effectiveModel = asString(modelOverride) ?? project.model;
+    const activeThread = await this.ensureActiveThread(effectiveModel);
     let threadId = this.currentThreadId ?? activeThread.id;
     if (!threadId) {
       throw new Error("No active Codex thread available before turn/start");
@@ -655,7 +660,7 @@ class CodexConversationController {
       const project = this.getSnapshot().selectedProject;
       await proxy.sendRequest("thread/resume", {
         threadId,
-        ...this.buildProjectDefaults(project),
+        ...this.buildProjectDefaults(project, effectiveModel),
       });
       this.resumeRequired.delete(threadId);
     }
@@ -671,7 +676,7 @@ class CodexConversationController {
         userItem.id,
         input,
         userCreatedAt,
-        project.model,
+        effectiveModel,
       ),
     });
     emitLoggedChatkitEvent(sink, {
@@ -681,7 +686,7 @@ class CodexConversationController {
         userItem.id,
         input,
         userCreatedAt,
-        project.model,
+        effectiveModel,
       ),
     });
     this.notify();
@@ -1101,6 +1106,7 @@ class CodexConversationController {
         await proxy.sendRequest("turn/start", {
           threadId,
           input: buildTurnInput(input),
+          model: effectiveModel,
         }),
       );
       const turnId =
@@ -1150,11 +1156,11 @@ class CodexConversationController {
     };
   }
 
-  private buildProjectDefaults(project: CodexProject): JsonRecord {
+  private buildProjectDefaults(project: CodexProject, modelOverride?: string): JsonRecord {
     return {
       projectId: project.id,
       cwd: project.cwd,
-      model: project.model,
+      model: asString(modelOverride) ?? project.model,
       approvalPolicy: project.approvalPolicy,
       sandboxPolicy: project.sandboxPolicy,
       personality: project.personality,
