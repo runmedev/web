@@ -479,7 +479,12 @@ try {
   console.warn(`[WARN] Failed to stop agent-browser recording: ${String(error)}`);
 }
 if (CUJ_ID_TOKEN) {
-  run(`agent-browser eval "localStorage.removeItem('oidc-auth'); 'ok'"`);
+  try {
+    run(`agent-browser eval "localStorage.removeItem('oidc-auth'); 'ok'"`);
+  } catch (error) {
+    // Auth cleanup should not mask a successful scenario outcome.
+    console.warn(`[WARN] Failed to clear OIDC auth token: ${String(error)}`);
+  }
 }
 if (!AGENT_BROWSER_KEEP_OPEN) {
   try {
