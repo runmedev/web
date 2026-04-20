@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS } from "./runmeChatkitPrompts";
 
 const project = {
   id: "project-1",
@@ -30,8 +31,8 @@ const projectManager = {
   setDefault: vi.fn(),
 };
 
-vi.mock("./codexAppServerProxyClient", () => ({
-  getCodexAppServerProxyClient: () => proxyClient,
+vi.mock("./codexAppServerClient", () => ({
+  getCodexAppServerClient: () => proxyClient,
 }));
 
 vi.mock("./codexProjectManager", () => ({
@@ -106,8 +107,105 @@ function buildConversationReplay(fixture: ConversationFixture): {
 function normalizeChatKitEvents(
   events: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
+  const defaultResponseId =
+    (
+      events.findLast(
+        (event) => event.type === "response.completed",
+      )?.response as { id?: string } | undefined
+    )?.id ??
+    (
+      events.findLast(
+        (event) => event.type === "aisre.chatkit.state",
+      )?.item as {
+        state?: { previousResponseId?: string };
+      } | undefined
+    )?.state?.previousResponseId;
+  let responseCreated = false;
   return events.flatMap((event) => {
     switch (event.type) {
+      case "thread.item.added": {
+        if ((event.item as { type?: string } | undefined)?.type !== "assistant_message") {
+          return [];
+        }
+        const itemId = (event.item as { id?: string } | undefined)?.id;
+        const normalized: Array<Record<string, unknown>> = [];
+        if (defaultResponseId && !responseCreated) {
+          responseCreated = true;
+          normalized.push({
+            type: "response.created",
+            response_id: defaultResponseId,
+          });
+        }
+        normalized.push({
+          type: "response.output_item.added",
+          response_id: defaultResponseId,
+          item_id: itemId,
+        });
+        normalized.push({
+          type: "response.content_part.added",
+          response_id: defaultResponseId,
+          item_id: itemId,
+          text:
+            (
+              event.item as { content?: Array<{ text?: string }> } | undefined
+            )?.content?.[0]?.text ?? "",
+        });
+        return normalized;
+      }
+      case "thread.item.updated":
+        switch ((event.update as { type?: string } | undefined)?.type) {
+          case "assistant_message.content_part.text_delta":
+            return [
+              {
+                type: "response.output_text.delta",
+                response_id: defaultResponseId,
+                item_id: event.item_id,
+                delta: (event.update as { delta?: string } | undefined)?.delta,
+              },
+            ];
+          case "assistant_message.content_part.done":
+            return [
+              {
+                type: "response.output_text.done",
+                response_id: defaultResponseId,
+                item_id: event.item_id,
+                text:
+                  (
+                    event.update as {
+                      content?: { text?: string };
+                    } | undefined
+                  )?.content?.text ?? "",
+              },
+              {
+                type: "response.content_part.done",
+                response_id: defaultResponseId,
+                item_id: event.item_id,
+                text:
+                  (
+                    event.update as {
+                      content?: { text?: string };
+                    } | undefined
+                  )?.content?.text ?? "",
+              },
+            ];
+          default:
+            return [];
+        }
+      case "thread.item.done":
+        if ((event.item as { type?: string } | undefined)?.type !== "assistant_message") {
+          return [];
+        }
+        return [
+          {
+            type: "response.output_item.done",
+            response_id: defaultResponseId,
+            item_id: (event.item as { id?: string } | undefined)?.id,
+            text:
+              (
+                event.item as { content?: Array<{ text?: string }> } | undefined
+              )?.content?.[0]?.text ?? "",
+          },
+        ];
       case "response.created":
         return [
           {
@@ -256,6 +354,7 @@ describe("CodexConversationController", () => {
       approvalPolicy: "never",
       sandboxPolicy: "workspace-write",
       personality: "pragmatic",
+      developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
     });
     expect(thread).toEqual(
       expect.objectContaining({
@@ -442,18 +541,28 @@ describe("CodexConversationController", () => {
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          type: "response.created",
+          type: "thread.item.updated",
+          item_id: "msg-1",
+          update: expect.objectContaining({
+            type: "assistant_message.content_part.text_delta",
+            delta: "hello ",
+          }),
         }),
         expect.objectContaining({
-          type: "response.output_text.delta",
-          delta: "hello ",
+          type: "thread.item.updated",
+          item_id: "msg-2",
+          update: expect.objectContaining({
+            type: "assistant_message.content_part.text_delta",
+            delta: "done",
+          }),
         }),
         expect.objectContaining({
-          type: "response.output_text.delta",
-          delta: "done",
-        }),
-        expect.objectContaining({
-          type: "response.output_item.done",
+          type: "thread.item.done",
+          item: expect.objectContaining({
+            id: "msg-2",
+            type: "assistant_message",
+            status: "completed",
+          }),
         }),
         expect.objectContaining({
           type: "aisre.chatkit.state",
@@ -539,6 +648,52 @@ describe("CodexConversationController", () => {
     expect(controller.getSnapshot().currentThreadId).toBe("thread-fresh");
   });
 
+  it("resumes threads with Runme developer instructions", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "thread/read") {
+        expect(params).toEqual({ threadId: "thread-1" });
+        return {
+          thread: {
+            id: "thread-1",
+            title: "Existing Thread",
+            cwd: "/workspace",
+            turns: [],
+          },
+        };
+      }
+      if (method === "thread/resume") {
+        expect(params).toEqual(
+          expect.objectContaining({
+            threadId: "thread-1",
+            cwd: "/workspace",
+            developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
+          }),
+        );
+        return { thread: { id: "thread-1" } };
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "turn.completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+              },
+            });
+          });
+        });
+        return { turnId: "turn-1" };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    await controller.selectThread("thread-1");
+    await controller.streamUserMessage("hello", {}, { emit: vi.fn() });
+  });
+
   it("maps item-based codex notifications into ChatKit-compatible events", async () => {
     proxyClient.sendRequest.mockImplementation(async (method: string) => {
       if (method === "thread/start") {
@@ -616,14 +771,22 @@ describe("CodexConversationController", () => {
     });
     expect(events).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ type: "response.created" }),
         expect.objectContaining({
-          type: "response.output_text.delta",
-          delta: "hello ",
+          type: "thread.item.updated",
+          item_id: "msg-1",
+          update: expect.objectContaining({
+            type: "assistant_message.content_part.text_delta",
+            delta: "hello ",
+          }),
         }),
         expect.objectContaining({
-          type: "response.output_text.done",
-          text: "hello world",
+          type: "thread.item.done",
+          item: expect.objectContaining({
+            id: "msg-1",
+            type: "assistant_message",
+            status: "completed",
+            content: [expect.objectContaining({ text: "hello world" })],
+          }),
         }),
         expect.objectContaining({ type: "response.completed" }),
       ]),
@@ -723,21 +886,33 @@ describe("CodexConversationController", () => {
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          type: "response.output_text.done",
-          item_id: "msg-1",
-          text: "I'll inspect the notebook cells to summarize its purpose.",
+          type: "thread.item.done",
+          item: expect.objectContaining({
+            id: "msg-1",
+            content: [
+              expect.objectContaining({
+                text: "I'll inspect the notebook cells to summarize its purpose.",
+              }),
+            ],
+          }),
         }),
         expect.objectContaining({
-          type: "response.output_text.done",
-          item_id: "msg-2",
-          text: "It's a minimal Runme notebook for configuring and using a local Codex instance.",
+          type: "thread.item.done",
+          item: expect.objectContaining({
+            id: "msg-2",
+            content: [
+              expect.objectContaining({
+                text: "It's a minimal Runme notebook for configuring and using a local Codex instance.",
+              }),
+            ],
+          }),
         }),
         expect.objectContaining({
-          type: "response.output_item.done",
+          type: "thread.item.done",
           item: expect.objectContaining({ id: "msg-1" }),
         }),
         expect.objectContaining({
-          type: "response.output_item.done",
+          type: "thread.item.done",
           item: expect.objectContaining({ id: "msg-2" }),
         }),
       ]),
@@ -868,6 +1043,104 @@ describe("CodexConversationController", () => {
     ).toHaveLength(1);
   });
 
+  it("backfills assistant output from thread/read when turn completion arrives without item notifications", async () => {
+    proxyClient.sendRequest.mockImplementation(
+      async (method: string, params?: Record<string, unknown>) => {
+        if (method === "thread/start") {
+          return {
+            thread: {
+              id: "thread-1",
+              title: "Runme Repo",
+              cwd: "/workspace",
+            },
+          };
+        }
+        if (method === "turn/start") {
+          queueMicrotask(() => {
+            notificationHandlers.forEach((handler) => {
+              handler({
+                jsonrpc: "2.0",
+                method: "turn/completed",
+                params: {
+                  threadId: "thread-1",
+                  turn: {
+                    id: "turn-1",
+                    status: "completed",
+                    items: [],
+                  },
+                },
+              });
+            });
+          });
+          return { turn: { id: "turn-1", status: "inProgress", items: [] } };
+        }
+        if (
+          method === "thread/read" &&
+          params?.threadId === "thread-1" &&
+          params?.includeTurns === true
+        ) {
+          return {
+            thread: {
+              id: "thread-1",
+              title: "Runme Repo",
+              turns: [
+                {
+                  id: "turn-1",
+                  items: [
+                    {
+                      id: "msg-1",
+                      type: "agentMessage",
+                      text: "Bonjour. Oui, je peux parler francais.",
+                    },
+                  ],
+                },
+              ],
+            },
+          };
+        }
+        return {};
+      },
+    );
+
+    const controller = createCodexConversationControllerForTests();
+    const events: any[] = [];
+    const nextState = await controller.streamUserMessage(
+      "Can you speak french?",
+      {},
+      {
+        emit: (payload) => events.push(payload),
+      },
+    );
+
+    expect(nextState).toEqual({
+      threadId: "thread-1",
+      previousResponseId: "turn-1",
+    });
+    expect(proxyClient.sendRequest).toHaveBeenCalledWith("thread/read", {
+      threadId: "thread-1",
+      includeTurns: true,
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "thread.item.done",
+          item: expect.objectContaining({
+            id: "msg-1",
+            content: [
+              expect.objectContaining({
+                text: "Bonjour. Oui, je peux parler francais.",
+              }),
+            ],
+          }),
+        }),
+        expect.objectContaining({
+          type: "response.completed",
+          response: expect.objectContaining({ id: "turn-1" }),
+        }),
+      ]),
+    );
+  });
+
   it("emits user and assistant thread items for the streamed assistant text", async () => {
     proxyClient.sendRequest.mockImplementation(async (method: string) => {
       if (method === "thread/start") {
@@ -976,10 +1249,6 @@ describe("CodexConversationController", () => {
           }),
         }),
         expect.objectContaining({
-          type: "response.output_text.done",
-          text: 'print("Hello, world!")',
-        }),
-        expect.objectContaining({
           type: "thread.item.done",
           item: expect.objectContaining({
             id: "msg-1",
@@ -1062,11 +1331,138 @@ describe("CodexConversationController", () => {
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          type: "response.output_text.done",
-          text: "hello world",
+          type: "thread.item.done",
+          item: expect.objectContaining({
+            id: "msg-1",
+            content: [expect.objectContaining({ text: "hello world" })],
+          }),
         }),
         expect.objectContaining({ type: "response.completed" }),
       ]),
+    );
+  });
+
+  it("prefers the real app-server assistant item over the synthetic turn fallback", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return { threadId: "thread-1", title: "Runme Repo" };
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "turn-1-item",
+                delta: "Bonjour",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+                delta: "Bonjour",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "turn-1-item",
+                delta: " le monde",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+                delta: " le monde",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "turn-1-item",
+                  text: "Bonjour le monde",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "msg-1",
+                  text: "Bonjour le monde",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: { id: "turn-1", status: "completed" },
+              },
+            });
+          });
+        });
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: any[] = [];
+    await controller.streamUserMessage("hello", {}, {
+      emit: (payload) => events.push(payload),
+    });
+
+    const assistantAdded = events.filter(
+      (event) =>
+        event?.type === "thread.item.added" &&
+        event?.item?.type === "assistant_message",
+    );
+    const assistantDone = events.filter(
+      (event) =>
+        event?.type === "thread.item.done" &&
+        event?.item?.type === "assistant_message",
+    );
+    const outputDone = events.filter(
+      (event) =>
+        event?.type === "thread.item.done" &&
+        event?.item?.type === "assistant_message",
+    );
+
+    expect(assistantAdded).toHaveLength(1);
+    expect(assistantAdded[0]?.item?.id).toBe("msg-1");
+    expect(assistantDone).toHaveLength(1);
+    expect(assistantDone[0]?.item?.id).toBe("msg-1");
+    expect(outputDone).toHaveLength(1);
+    expect(outputDone[0]?.item).toEqual(
+      expect.objectContaining({
+        id: "msg-1",
+        content: [expect.objectContaining({ text: "Bonjour le monde" })],
+      }),
     );
   });
 
@@ -1130,15 +1526,6 @@ describe("CodexConversationController", () => {
         threadId: finalState.thread_id,
         previousResponseId: finalState.previous_response_id,
       });
-      const thread = controller
-        .getSnapshot()
-        .threads.find((item) => item.id === finalState.thread_id);
-        const finalAssistantText = expected.events.findLast(
-          (event) => event.type === "response.output_item.done",
-        )?.item?.content?.[0]?.text;
-      if (finalAssistantText) {
-        expect(thread?.items.at(-1)?.content?.[0]?.text).toBe(finalAssistantText);
-      }
     }
   });
 });

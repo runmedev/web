@@ -26,9 +26,8 @@ import {
 } from '../../lib/runtime/harnessManager'
 import { getCodexToolBridge } from '../../lib/runtime/codexToolBridge'
 import { getCodexExecuteApprovalManager } from '../../lib/runtime/codexExecuteApprovalManager'
-import { getCodexAppServerProxyClient } from '../../lib/runtime/codexAppServerProxyClient'
+import { getCodexAppServerClient } from '../../lib/runtime/codexAppServerClient'
 import { createCodexChatkitFetch } from '../../lib/runtime/codexChatkitFetch'
-import { createCodexWasmChatkitFetch } from '../../lib/runtime/codexWasmChatkitFetch'
 import { createResponsesDirectChatkitFetch } from '../../lib/runtime/responsesDirectChatkitFetch'
 import {
   createCodeModeExecutor,
@@ -39,8 +38,12 @@ import {
   useCodexConversationSnapshot,
 } from '../../lib/runtime/codexConversationController'
 import { useCodexProjects } from '../../lib/runtime/codexProjectManager'
+import { buildRunmeCodexWasmSessionOptions } from '../../lib/runtime/runmeChatkitPrompts'
 import { appLogger } from '../../lib/logging/runtime'
-import { responsesDirectConfigManager } from '../../lib/runtime/responsesDirectConfigManager'
+import {
+  responsesDirectConfigManager,
+  useResponsesDirectConfigSnapshot,
+} from '../../lib/runtime/responsesDirectConfigManager'
 
 import { getAccessToken, getAuthData } from '../../token'
 import { getBrowserAdapter } from '../../browserAdapter.client'
@@ -375,7 +378,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false)
   const [codexStreamError, setCodexStreamError] = useState<string | null>(null)
   const [codexThreadBootstrapComplete, setCodexThreadBootstrapComplete] =
-    useState(defaultHarness.adapter !== 'codex')
+    useState(
+      defaultHarness.adapter !== 'codex' &&
+        defaultHarness.adapter !== 'codex-wasm'
+    )
   const chatkitDomainKey = getConfiguredChatKitDomainKey()
   const [showCodexDrawer, setShowCodexDrawer] = useState(false)
   const syncedCodexStateRef = useRef<{
@@ -395,6 +401,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     useNotebookContext()
   const { getCurrentDoc } = useCurrentDoc()
   const { getAllRenderers } = useOutput()
+  const responsesDirectConfig = useResponsesDirectConfigSnapshot()
   const codexProjects = useCodexProjects()
   const { defaultProject } = codexProjects
   const codexConversation = useCodexConversationSnapshot()
@@ -764,7 +771,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
             ChatkitStateSchema,
             JSON.stringify(stateData)
           )
-          if (defaultHarness.adapter === 'codex') {
+          if (
+            defaultHarness.adapter === 'codex' ||
+            defaultHarness.adapter === 'codex-wasm'
+          ) {
             appLogger.info('Ignoring Codex ChatKit state event', {
               attrs: {
                 scope: 'chatkit.panel',
@@ -805,13 +815,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     [defaultHarness.adapter]
   )
   const codexFetch = useMemo(() => createCodexChatkitFetch(), [])
-  const codexWasmFetch = useMemo(
-    () =>
-      createCodexWasmChatkitFetch({
-        codeModeExecutor,
-      }),
-    [codeModeExecutor]
-  )
   const responsesDirectFetch = useMemo(
     () =>
       createResponsesDirectChatkitFetch({
@@ -823,7 +826,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     [defaultHarness.adapter, defaultHarness.baseUrl]
   )
   const getAuthorizedChatkitState = useCallback(() => {
-    if (defaultHarness.adapter !== 'codex') {
+    if (
+      defaultHarness.adapter !== 'codex' &&
+      defaultHarness.adapter !== 'codex-wasm'
+    ) {
       return getChatkitState()
     }
     const controllerSnapshot = getCodexConversationController().getSnapshot()
@@ -838,13 +844,16 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const authorizedFetch = useAuthorizedFetch(getAuthorizedChatkitState, {
     onSSEEvent: handleSseEvent,
     baseFetch:
-      defaultHarness.adapter === 'codex'
+      defaultHarness.adapter === 'codex' ||
+      defaultHarness.adapter === 'codex-wasm'
         ? codexFetch
-        : defaultHarness.adapter === 'codex-wasm'
-          ? codexWasmFetch
-          : responsesDirectFetch,
-    includeRunmeHeaders: defaultHarness.adapter === 'codex',
-    includeChatkitState: defaultHarness.adapter === 'codex',
+        : defaultHarness.adapter === 'responses-direct'
+          ? responsesDirectFetch
+          : undefined,
+    includeRunmeHeaders:
+      defaultHarness.adapter !== 'responses-direct' &&
+      defaultHarness.adapter !== 'codex-wasm',
+    includeChatkitState: defaultHarness.adapter !== 'responses-direct',
   })
 
   const chatkitApiUrl = useMemo(() => {
@@ -856,6 +865,8 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const codexBridgeUrl = useMemo(() => {
     return buildCodexBridgeWsUrl(defaultHarness.baseUrl)
   }, [defaultHarness.baseUrl])
+  const codexWasmApiKey =
+    defaultHarness.adapter === 'codex-wasm' ? responsesDirectConfig.apiKey : ''
   useEffect(() => {
     appLogger.info('ChatKit host configured', {
       attrs: {
@@ -864,7 +875,8 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         apiUrl: chatkitApiUrl,
         domainKeyConfigured: Boolean(chatkitDomainKey),
         selectedProjectId:
-          defaultHarness.adapter === 'codex'
+          defaultHarness.adapter === 'codex' ||
+          defaultHarness.adapter === 'codex-wasm'
             ? codexConversation.selectedProject.id
             : null,
       },
@@ -894,7 +906,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   }, [defaultHarness.adapter, defaultHarness.baseUrl])
 
   useEffect(() => {
-    if (defaultHarness.adapter !== 'codex') {
+    if (
+      defaultHarness.adapter !== 'codex' &&
+      defaultHarness.adapter !== 'codex-wasm'
+    ) {
       return
     }
     const controller = getCodexConversationController()
@@ -902,8 +917,11 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   }, [defaultHarness.adapter, defaultProject.id])
 
   useEffect(() => {
-    const proxy = getCodexAppServerProxyClient()
-    if (defaultHarness.adapter !== 'codex') {
+    const proxy = getCodexAppServerClient()
+    if (
+      defaultHarness.adapter !== 'codex' &&
+      defaultHarness.adapter !== 'codex-wasm'
+    ) {
       setCodexThreadBootstrapComplete(true)
       proxy.setAuthorizationResolver(null)
       proxy.disconnect()
@@ -911,25 +929,29 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     }
     setCodexThreadBootstrapComplete(false)
     setCodexStreamError(null)
-    proxy.setAuthorizationResolver(resolveCodexAuthorization)
     let canceled = false
     void (async () => {
       try {
-        const authorization = await resolveCodexAuthorization()
-        if (canceled) {
-          return
+        if (defaultHarness.adapter === 'codex') {
+          proxy.useTransport('proxy')
+          proxy.setAuthorizationResolver(resolveCodexAuthorization)
+          const authorization = await resolveCodexAuthorization()
+          if (canceled) {
+            return
+          }
+          await proxy.connectProxy(codexProxyWsUrl, authorization)
+        } else {
+          proxy.useTransport('wasm')
+          proxy.setAuthorizationResolver(null)
+          await proxy.connectWasm({
+            apiKey: codexWasmApiKey,
+            sessionOptions: buildRunmeCodexWasmSessionOptions(),
+          })
         }
-        await proxy.connect(codexProxyWsUrl, authorization)
         if (!canceled) {
           const controller = getCodexConversationController()
           await controller.refreshHistory()
           const thread = await controller.ensureActiveThread()
-          // setChatkitState(
-          //   create(ChatkitStateSchema, {
-          //     threadId: thread.id,
-          //     previousResponseId: thread.previousResponseId ?? "",
-          //   }),
-          // );
           syncedCodexStateRef.current = {
             threadId: thread.id,
             previousResponseId: thread.previousResponseId ?? null,
@@ -941,11 +963,14 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         if (canceled) {
           return
         }
-        appLogger.error('Failed to connect codex app-server websocket', {
+        appLogger.error('Failed to initialize codex app-server client', {
           attrs: {
-            scope: 'chatkit.codex_proxy',
+            scope: 'chatkit.codex_client',
             error: String(error),
-            url: codexProxyWsUrl,
+            url:
+              defaultHarness.adapter === 'codex'
+                ? codexProxyWsUrl
+                : 'wasm://browser-app-server',
           },
         })
         setCodexStreamError(
@@ -959,10 +984,19 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       proxy.setAuthorizationResolver(null)
       proxy.disconnect()
     }
-  }, [codexProxyWsUrl, defaultHarness.adapter, resolveCodexAuthorization])
+  }, [
+    codexWasmApiKey,
+    codexProxyWsUrl,
+    defaultHarness.adapter,
+    resolveCodexAuthorization,
+  ])
 
   useEffect(() => {
-    if (defaultHarness.adapter !== 'codex' || !codexThreadBootstrapComplete) {
+    if (
+      (defaultHarness.adapter !== 'codex' &&
+        defaultHarness.adapter !== 'codex-wasm') ||
+      !codexThreadBootstrapComplete
+    ) {
       lastAppliedCodexThreadRef.current = null
       return
     }
@@ -979,7 +1013,8 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     return bridge.subscribe(() => {
       const snapshot = bridge.getSnapshot()
       if (
-        defaultHarness.adapter === 'codex' &&
+        (defaultHarness.adapter === 'codex' ||
+          defaultHarness.adapter === 'codex-wasm') &&
         (snapshot.state === 'closed' || snapshot.state === 'error')
       ) {
         getCodexExecuteApprovalManager().failAll('Codex bridge disconnected')
@@ -1041,7 +1076,8 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       fetch: authorizedFetch,
     },
     initialThread:
-      defaultHarness.adapter === 'codex'
+      defaultHarness.adapter === 'codex' ||
+      defaultHarness.adapter === 'codex-wasm'
         ? codexConversation.currentThreadId
         : undefined,
     theme: {
@@ -1098,21 +1134,24 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     header: {
       enabled: true,
       title:
-        defaultHarness.adapter === 'codex'
+        defaultHarness.adapter === 'codex' ||
+        defaultHarness.adapter === 'codex-wasm'
           ? {
               enabled: true,
               text: codexConversation.selectedProject.name,
             }
           : undefined,
       leftAction:
-        defaultHarness.adapter === 'codex'
+        defaultHarness.adapter === 'codex' ||
+        defaultHarness.adapter === 'codex-wasm'
           ? {
               icon: showCodexDrawer ? 'close' : 'menu',
               onClick: () => setShowCodexDrawer((previous) => !previous),
             }
           : undefined,
       rightAction:
-        defaultHarness.adapter === 'codex'
+        defaultHarness.adapter === 'codex' ||
+        defaultHarness.adapter === 'codex-wasm'
           ? {
               icon: 'compose',
               onClick: () => {
@@ -1145,7 +1184,9 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           : undefined,
     },
     history: {
-      enabled: defaultHarness.adapter !== 'codex',
+      enabled:
+        defaultHarness.adapter !== 'codex' &&
+        defaultHarness.adapter !== 'codex-wasm',
     },
     onClientTool: async (invocation) => {
       const toolOutput = create(ToolCallOutputSchema, {
@@ -1429,7 +1470,8 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     onThreadChange: ({ threadId }) => {
       const localChatkitState = getChatkitState()
       const codexSnapshot =
-        defaultHarness.adapter === 'codex'
+        defaultHarness.adapter === 'codex' ||
+        defaultHarness.adapter === 'codex-wasm'
           ? getCodexConversationController().getSnapshot()
           : null
       const stack = new Error('chatkit thread change').stack ?? null
@@ -1445,7 +1487,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           stack,
         },
       })
-      if (defaultHarness.adapter !== 'codex') {
+      if (
+        defaultHarness.adapter !== 'codex' &&
+        defaultHarness.adapter !== 'codex-wasm'
+      ) {
         return
       }
       if (!threadId) {
@@ -1636,7 +1681,9 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
 
   return (
     <div className="relative h-full w-full">
-      {defaultHarness.adapter !== 'codex' || codexThreadBootstrapComplete ? (
+      {(defaultHarness.adapter !== 'codex' &&
+        defaultHarness.adapter !== 'codex-wasm') ||
+      codexThreadBootstrapComplete ? (
         <ChatKit control={chatkit.control} className="block h-full w-full" />
       ) : (
         <div
@@ -1646,7 +1693,9 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           Initializing Codex thread...
         </div>
       )}
-      {defaultHarness.adapter === 'codex' && codexStreamError ? (
+      {(defaultHarness.adapter === 'codex' ||
+        defaultHarness.adapter === 'codex-wasm') &&
+      codexStreamError ? (
         <div
           data-testid="codex-stream-error"
           className="absolute left-3 right-3 top-3 z-30 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 shadow-sm"
@@ -1654,7 +1703,9 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           {codexStreamError}
         </div>
       ) : null}
-      {defaultHarness.adapter === 'codex' && showCodexDrawer ? (
+      {(defaultHarness.adapter === 'codex' ||
+        defaultHarness.adapter === 'codex-wasm') &&
+      showCodexDrawer ? (
         <div
           data-testid="codex-project-drawer"
           className="absolute inset-y-0 left-0 z-40 flex w-[280px] flex-col border-r border-nb-cell-border bg-white/95 shadow-lg"

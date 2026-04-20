@@ -46,6 +46,7 @@ import {
   type CodexProject,
   getCodexProjectManager,
 } from './codexProjectManager'
+import { getCodexTurnEvents, listCodexTurns } from './codexTurns'
 import { type HarnessAdapter, getHarnessManager } from './harnessManager'
 import { getJupyterManager } from './jupyterManager'
 import { responsesDirectConfigManager } from './responsesDirectConfigManager'
@@ -190,6 +191,103 @@ export function createAppJsGlobals({
   const harnessManager = getHarnessManager()
   const codexProjectManager = getCodexProjectManager()
   const responsesDirect = responsesDirectConfigManager
+  const codexTurnsHelp = [
+    'codex.turns.list()                       - List recorded Codex turns from the local browser journal',
+    'codex.turns.getEvents(turnId, options?) - Return journal rows for a given turn id',
+    '  options.sessionId                      - Optional session filter when turn ids must be disambiguated',
+    '  Example: const [latest] = await codex.turns.list(); console.log(await codex.turns.getEvents(latest.turnId));',
+    'codex.turns.help()                      - Show this help',
+  ].join('\n')
+  const codexProjectApi = {
+    list: () => {
+      const projects = codexProjectManager.list()
+      if (projects.length === 0) {
+        const message = 'No codex projects configured.'
+        emitLine(sendOutput, message)
+        return message
+      }
+      const defaultProjectId = codexProjectManager.getDefaultId()
+      const message = projects
+        .map((project) => {
+          const isDefault = project.id === defaultProjectId
+          return `${project.id}: ${project.name} (${project.cwd}, model=${project.model}, sandbox=${project.sandboxPolicy}, approval=${project.approvalPolicy})${
+            isDefault ? ' (default)' : ''
+          }`
+        })
+        .join('\n')
+      emitLine(sendOutput, message)
+      return message
+    },
+    create: (
+      name: string,
+      cwd: string,
+      model: string,
+      sandboxPolicy: string,
+      approvalPolicy: string,
+      personality: string
+    ) => {
+      const created = codexProjectManager.create(
+        name,
+        cwd,
+        model,
+        sandboxPolicy,
+        approvalPolicy,
+        personality
+      )
+      const message = `Codex project ${created.name} created (${created.id})`
+      emitLine(sendOutput, message)
+      return message
+    },
+    update: (id: string, patch: Partial<CodexProject>) => {
+      const updated = codexProjectManager.update(id, patch)
+      const message = `Codex project ${updated.name} updated (${updated.id})`
+      emitLine(sendOutput, message)
+      return message
+    },
+    delete: (id: string) => {
+      codexProjectManager.delete(id)
+      const message = `Codex project ${id} deleted`
+      emitLine(sendOutput, message)
+      return message
+    },
+    getDefault: () => {
+      const project = codexProjectManager.getDefault()
+      const message = `Default codex project: ${project.name} (${project.id}, cwd=${project.cwd}, model=${project.model})`
+      emitLine(sendOutput, message)
+      return message
+    },
+    setDefault: (id: string) => {
+      codexProjectManager.setDefault(id)
+      const message = `Default codex project set to ${id}`
+      emitLine(sendOutput, message)
+      return message
+    },
+  }
+  const codexTurnsApi = {
+    list: async () => await listCodexTurns(),
+    getEvents: async (
+      turnId: string,
+      options?: {
+        sessionId?: string
+      }
+    ) => await getCodexTurnEvents(String(turnId ?? ''), options),
+    help: () => {
+      emitLine(sendOutput, codexTurnsHelp)
+      return codexTurnsHelp
+    },
+  }
+  const codexApi = {
+    help: () => {
+      const message = [
+        'codex.project.* - Manage configured Codex projects',
+        codexTurnsHelp,
+      ].join('\n')
+      emitLine(sendOutput, message)
+      return message
+    },
+    project: codexProjectApi,
+    turns: codexTurnsApi,
+  }
 
   const normalizeHarnessAdapter = (
     value: string
@@ -327,6 +425,7 @@ export function createAppJsGlobals({
   return {
     runme: runmeApi,
     notebooks: notebooksApi,
+    codex: codexApi,
     opfs: {
       exists: (path: string) => {
         if (!opfsApi) {
@@ -845,73 +944,7 @@ export function createAppJsGlobals({
           return message
         },
       },
-      codex: {
-        project: {
-          list: () => {
-            const projects = codexProjectManager.list()
-            if (projects.length === 0) {
-              const message = 'No codex projects configured.'
-              emitLine(sendOutput, message)
-              return message
-            }
-            const defaultProjectId = codexProjectManager.getDefaultId()
-            const message = projects
-              .map((project) => {
-                const isDefault = project.id === defaultProjectId
-                return `${project.id}: ${project.name} (${project.cwd}, model=${project.model}, sandbox=${project.sandboxPolicy}, approval=${project.approvalPolicy})${
-                  isDefault ? ' (default)' : ''
-                }`
-              })
-              .join('\n')
-            emitLine(sendOutput, message)
-            return message
-          },
-          create: (
-            name: string,
-            cwd: string,
-            model: string,
-            sandboxPolicy: string,
-            approvalPolicy: string,
-            personality: string
-          ) => {
-            const created = codexProjectManager.create(
-              name,
-              cwd,
-              model,
-              sandboxPolicy,
-              approvalPolicy,
-              personality
-            )
-            const message = `Codex project ${created.name} created (${created.id})`
-            emitLine(sendOutput, message)
-            return message
-          },
-          update: (id: string, patch: Partial<CodexProject>) => {
-            const updated = codexProjectManager.update(id, patch)
-            const message = `Codex project ${updated.name} updated (${updated.id})`
-            emitLine(sendOutput, message)
-            return message
-          },
-          delete: (id: string) => {
-            codexProjectManager.delete(id)
-            const message = `Codex project ${id} deleted`
-            emitLine(sendOutput, message)
-            return message
-          },
-          getDefault: () => {
-            const project = codexProjectManager.getDefault()
-            const message = `Default codex project: ${project.name} (${project.id}, cwd=${project.cwd}, model=${project.model})`
-            emitLine(sendOutput, message)
-            return message
-          },
-          setDefault: (id: string) => {
-            codexProjectManager.setDefault(id)
-            const message = `Default codex project set to ${id}`
-            emitLine(sendOutput, message)
-            return message
-          },
-        },
-      },
+      codex: codexApi,
       responsesDirect: {
         get: () => responsesDirect.getSnapshot(),
         setAuthMethod: (authMethod: string) => {
@@ -942,6 +975,7 @@ export function createAppJsGlobals({
         '  runme           - Notebook helpers (run all, clear outputs)',
         '  opfs            - Origin-private browser file storage helpers',
         '  net             - Browser network helpers',
+        '  codex           - Codex project and turn-journal helpers',
         '  explorer        - Manage workspace folders and notebooks',
         '  runmeRunners    - Configure runner endpoints',
         '  jupyter         - Manage Jupyter servers and kernels',
