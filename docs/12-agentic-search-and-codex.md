@@ -36,6 +36,9 @@ app.harness.setDefault("browser-codex")
 app.harness.getActiveChatkitUrl()
 ```
 
+When using codex the URI should be the baseURL of the runner that is proxying connections
+to Codex.
+
 ## Codex project commands
 
 ```js
