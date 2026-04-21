@@ -2,33 +2,33 @@
 # It will be used by the frontend to configure itself.
 # This is the configuration for local development.
 agent:
-    endpoint: "http://localhost:5191"
-    defaultRunnerEndpoint: "ws://localhost:5191/ws"
-    openai:
-        # Supported values: OAuth, APIKey
-        authMethod: "OAuth"
-        # Required when authMethod is OAuth.
-        # Replace with your OpenAI organization and project values.
-        organization: "org-not-set"
-        project: "proj-not-set"
-        # Optional file-search vector stores for direct Responses mode.
-        vectorStores: []
+  endpoint: 'http://localhost:5191'
+  defaultRunnerEndpoint: 'ws://localhost:5191/ws'
+  openai:
+    # Supported values: OAuth, APIKey
+    authMethod: 'OAuth'
+    # Required when authMethod is OAuth.
+    # Replace with your OpenAI organization and project values.
+    organization: 'org-not-set'
+    project: 'proj-not-set'
+    # Optional file-search vector stores for direct Responses mode.
+    vectorStores: []
 
 oidc:
-    # OIDC callback handling should happen in the browser.
-    clientExchange: true
+  # OIDC callback handling should happen in the browser.
+  clientExchange: true
 
-    # Use google as the OIDC provider
-    google:
-        clientID: "554943104515-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com"
-        clientSecret: "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"
+  # Use google as the OIDC provider
+  google:
+    clientID: '554943104515-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com'
+    clientSecret: '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'
 
 googleDrive:
-    clientID: "554943104515-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com"
-    # Supported values for authFlow: implicit (token), pkce (authorization code).
-    authFlow: "implicit"
-    # Supported values for authUxMode: popup, redirect.
-    authUxMode: "redirect"
+  clientID: '554943104515-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com'
+  # Supported values for authFlow: implicit (token), pkce (authorization code).
+  authFlow: 'implicit'
+  # Supported values for authUxMode: popup, redirect, new_tab.
+  authUxMode: 'new_tab'
 
 chatkit:
-    domainKey: "domain_pk_69a4995c6a28819687dae60b7fff88150c50b644747c389a"
+  domainKey: 'domain_pk_69a4995c6a28819687dae60b7fff88150c50b644747c389a'

@@ -1,278 +1,291 @@
-import YAML from "yaml";
+import YAML from 'yaml'
 
-import type { OidcConfig } from "../auth/oidcConfig";
-import { OIDC_STORAGE_KEY, oidcConfigManager } from "../auth/oidcConfig";
-import { getOidcCallbackUrl, resolveAppUrl } from "./appBase";
+import type { OidcConfig } from '../auth/oidcConfig'
+import { OIDC_STORAGE_KEY, oidcConfigManager } from '../auth/oidcConfig'
+import { agentEndpointManager } from './agentEndpointManager'
+import { getOidcCallbackUrl, resolveAppUrl } from './appBase'
 import type {
   GoogleDriveAuthFlow,
   GoogleDriveAuthUxMode,
   GoogleOAuthClientConfig,
-} from "./googleClientManager";
+} from './googleClientManager'
 import {
   GOOGLE_CLIENT_STORAGE_KEY,
   googleClientManager,
-} from "./googleClientManager";
-import { agentEndpointManager } from "./agentEndpointManager";
-import { appLogger } from "./logging/runtime";
-import { getGoogleDriveBaseUrl, setGoogleDriveBaseUrl } from "./googleDriveRuntime";
-import { responsesDirectConfigManager } from "./runtime/responsesDirectConfigManager";
+} from './googleClientManager'
+import {
+  getGoogleDriveBaseUrl,
+  setGoogleDriveBaseUrl,
+} from './googleDriveRuntime'
+import { appLogger } from './logging/runtime'
+import { responsesDirectConfigManager } from './runtime/responsesDirectConfigManager'
 
 type StoredRunner = {
-  name: string;
-  endpoint: string;
-  reconnect: boolean;
-};
+  name: string
+  endpoint: string
+  reconnect: boolean
+}
 
-export const SETTINGS_STORAGE_KEY = "cloudAssistantSettings";
-const RUNNERS_STORAGE_KEY = "runme/runners";
-const LEGACY_RUNNERS_STORAGE_KEY = "aisre/runners";
-const DEFAULT_RUNNER_NAME_STORAGE_KEY = "runme/defaultRunner";
-const LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY = "aisre/defaultRunner";
-const DEFAULT_RUNNER_NAME = "default";
-export const APP_CONFIG_PATH_DEFAULT = "configs/app-configs.yaml";
-export const APP_CONFIG_PREFER_LOCAL_STORAGE_KEY = "runme/app-config/prefer-local";
+export const SETTINGS_STORAGE_KEY = 'cloudAssistantSettings'
+const RUNNERS_STORAGE_KEY = 'runme/runners'
+const LEGACY_RUNNERS_STORAGE_KEY = 'aisre/runners'
+const DEFAULT_RUNNER_NAME_STORAGE_KEY = 'runme/defaultRunner'
+const LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY = 'aisre/defaultRunner'
+const DEFAULT_RUNNER_NAME = 'default'
+export const APP_CONFIG_PATH_DEFAULT = 'configs/app-configs.yaml'
+export const APP_CONFIG_PREFER_LOCAL_STORAGE_KEY =
+  'runme/app-config/prefer-local'
 
 export type AppConfigApplyOptions = {
-  preserveLocalConfiguration?: boolean;
-};
+  preserveLocalConfiguration?: boolean
+}
 
 export interface OidcGenericRuntimeConfig {
-  clientId: string;
-  clientSecret: string;
-  discoveryUrl: string;
-  issuer: string;
-  redirectUrl: string;
-  scopes: string[];
+  clientId: string
+  clientSecret: string
+  discoveryUrl: string
+  issuer: string
+  redirectUrl: string
+  scopes: string[]
 }
 
 export interface OidcGoogleRuntimeConfig {
-  clientId: string;
-  clientSecret: string;
+  clientId: string
+  clientSecret: string
 }
 
 export interface OidcRuntimeConfig {
-  clientExchange: boolean;
-  generic: OidcGenericRuntimeConfig;
-  google: OidcGoogleRuntimeConfig;
+  clientExchange: boolean
+  generic: OidcGenericRuntimeConfig
+  google: OidcGoogleRuntimeConfig
 }
 
 export interface GoogleDriveRuntimeConfig {
-  clientId: string;
-  clientSecret: string;
-  baseUrl: string;
-  authFlow: GoogleDriveAuthFlow;
-  authUxMode: GoogleDriveAuthUxMode;
+  clientId: string
+  clientSecret: string
+  baseUrl: string
+  authFlow: GoogleDriveAuthFlow
+  authUxMode: GoogleDriveAuthUxMode
 }
 
 export interface ChatkitRuntimeConfig {
-  domainKey: string;
+  domainKey: string
 }
 
 export interface AgentRuntimeConfig {
-  endpoint: string;
-  defaultRunnerEndpoint: string;
-  openai: AgentOpenAIRuntimeConfig;
+  endpoint: string
+  defaultRunnerEndpoint: string
+  openai: AgentOpenAIRuntimeConfig
 }
 
 export interface AgentOpenAIRuntimeConfig {
-  authMethod: string;
-  organization: string;
-  project: string;
-  vectorStores: string[];
+  authMethod: string
+  organization: string
+  project: string
+  vectorStores: string[]
 }
 
 export interface RuntimeAppConfig {
-  agent: AgentRuntimeConfig;
-  oidc: OidcRuntimeConfig;
-  googleDrive: GoogleDriveRuntimeConfig;
-  chatkit: ChatkitRuntimeConfig;
+  agent: AgentRuntimeConfig
+  oidc: OidcRuntimeConfig
+  googleDrive: GoogleDriveRuntimeConfig
+  chatkit: ChatkitRuntimeConfig
 }
 
 export type AppliedAppConfig = {
-  url: string;
-  oidc?: OidcConfig;
-  googleOAuth?: GoogleOAuthClientConfig;
-  agentEndpoint?: string;
-  defaultRunnerEndpoint?: string;
-  chatkitDomainKey?: string;
+  url: string
+  oidc?: OidcConfig
+  googleOAuth?: GoogleOAuthClientConfig
+  agentEndpoint?: string
+  defaultRunnerEndpoint?: string
+  chatkitDomainKey?: string
   responsesDirect?: {
-    authMethod: string;
-    openaiOrganization: string;
-    openaiProject: string;
-    vectorStores: string[];
-    apiKeySet: boolean;
-  };
-  warnings: string[];
-};
+    authMethod: string
+    openaiOrganization: string
+    openaiProject: string
+    vectorStores: string[]
+    apiKeySet: boolean
+  }
+  warnings: string[]
+}
 
 function normalizeString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
+  if (typeof value !== 'string') {
+    return undefined
   }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
   }
-  return value as Record<string, unknown>;
+  return value as Record<string, unknown>
 }
 
 function asNonEmptyString(value: unknown): string {
-  if (typeof value !== "string") {
-    return "";
+  if (typeof value !== 'string') {
+    return ''
   }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : "";
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : ''
 }
 
 function asBoolean(value: unknown): boolean {
-  return typeof value === "boolean" ? value : false;
+  return typeof value === 'boolean' ? value : false
 }
 
-function asGoogleDriveAuthFlow(value: unknown): GoogleDriveAuthFlow | undefined {
-  if (typeof value !== "string") {
-    return undefined;
+function asGoogleDriveAuthFlow(
+  value: unknown
+): GoogleDriveAuthFlow | undefined {
+  if (typeof value !== 'string') {
+    return undefined
   }
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "implicit" || normalized === "pkce") {
-    return normalized;
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'implicit' || normalized === 'pkce') {
+    return normalized
   }
-  return undefined;
+  return undefined
 }
 
 function asGoogleDriveAuthUxMode(
-  value: unknown,
+  value: unknown
 ): GoogleDriveAuthUxMode | undefined {
-  if (typeof value !== "string") {
-    return undefined;
+  if (typeof value !== 'string') {
+    return undefined
   }
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "popup" || normalized === "redirect") {
-    return normalized;
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'popup' || normalized === 'redirect') {
+    return normalized
   }
-  return undefined;
+  if (
+    normalized === 'new_tab' ||
+    normalized === 'new-tab' ||
+    normalized === 'tab'
+  ) {
+    return 'new_tab'
+  }
+  return undefined
 }
 
 function asStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
-    return [];
+    return []
   }
   const values = value
     .map((item) => asNonEmptyString(item))
-    .filter((item): item is string => Boolean(item));
-  return values;
+    .filter((item): item is string => Boolean(item))
+  return values
 }
 
 function readSettingsFromStorage(storage: Storage): Record<string, unknown> {
-  const settingsRaw = storage.getItem(SETTINGS_STORAGE_KEY);
+  const settingsRaw = storage.getItem(SETTINGS_STORAGE_KEY)
   if (!settingsRaw) {
-    return {};
+    return {}
   }
   try {
-    return JSON.parse(settingsRaw) as Record<string, unknown>;
+    return JSON.parse(settingsRaw) as Record<string, unknown>
   } catch (error) {
-    appLogger.warn("Failed to parse cloudAssistantSettings; resetting.", {
+    appLogger.warn('Failed to parse cloudAssistantSettings; resetting.', {
       attrs: {
-        scope: "config.app",
-        code: "APP_CONFIG_SETTINGS_PARSE_FAILED",
+        scope: 'config.app',
+        code: 'APP_CONFIG_SETTINGS_PARSE_FAILED',
         error: String(error),
       },
-    });
-    return {};
+    })
+    return {}
   }
 }
 
 function writeSettingsToStorage(
   storage: Storage,
-  settings: Record<string, unknown>,
+  settings: Record<string, unknown>
 ): void {
-  storage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  storage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings))
 }
 
 export function resolveDefaultRunnerEndpointFallback(): string {
-  if (typeof window === "undefined") {
-    return "";
+  if (typeof window === 'undefined') {
+    return ''
   }
-  const protocol = window.location.protocol === "http:" ? "ws:" : "wss:";
-  return `${protocol}//${window.location.host}/ws`;
+  const protocol = window.location.protocol === 'http:' ? 'ws:' : 'wss:'
+  return `${protocol}//${window.location.host}/ws`
 }
 
 function readStoredRunnerEndpoint(storage: Storage): string | undefined {
   const raw =
     storage.getItem(RUNNERS_STORAGE_KEY) ??
-    storage.getItem(LEGACY_RUNNERS_STORAGE_KEY);
+    storage.getItem(LEGACY_RUNNERS_STORAGE_KEY)
   if (!raw) {
-    return undefined;
+    return undefined
   }
 
   try {
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = JSON.parse(raw) as unknown
     if (!Array.isArray(parsed)) {
-      return undefined;
+      return undefined
     }
 
     const defaultRunnerName = normalizeString(
       storage.getItem(DEFAULT_RUNNER_NAME_STORAGE_KEY) ??
-        storage.getItem(LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY),
-    );
+        storage.getItem(LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY)
+    )
 
     const normalized = parsed
       .map((item) => {
-        const runner = asRecord(item);
+        const runner = asRecord(item)
         if (!runner) {
-          return null;
+          return null
         }
-        const name = normalizeString(runner.name);
-        const endpoint = normalizeString(runner.endpoint);
+        const name = normalizeString(runner.name)
+        const endpoint = normalizeString(runner.endpoint)
         if (!name || !endpoint) {
-          return null;
+          return null
         }
-        return { name, endpoint };
+        return { name, endpoint }
       })
       .filter((item): item is { name: string; endpoint: string } =>
-        Boolean(item),
-      );
+        Boolean(item)
+      )
 
     if (normalized.length === 0) {
-      return undefined;
+      return undefined
     }
 
     if (defaultRunnerName) {
       const defaultRunner = normalized.find(
-        (runner) => runner.name === defaultRunnerName,
-      );
+        (runner) => runner.name === defaultRunnerName
+      )
       if (defaultRunner) {
-        return defaultRunner.endpoint;
+        return defaultRunner.endpoint
       }
     }
 
-    return normalized[0].endpoint;
+    return normalized[0].endpoint
   } catch (error) {
-    appLogger.warn("Failed to parse runners storage", {
+    appLogger.warn('Failed to parse runners storage', {
       attrs: {
-        scope: "config.app",
-        code: "APP_CONFIG_RUNNERS_PARSE_FAILED",
+        scope: 'config.app',
+        code: 'APP_CONFIG_RUNNERS_PARSE_FAILED',
         error: String(error),
       },
-    });
-    return undefined;
+    })
+    return undefined
   }
 }
 
 function hasConfiguredRunners(storage: Storage): boolean {
   if (readStoredRunnerEndpoint(storage)) {
-    return true;
+    return true
   }
-  const settings = readSettingsFromStorage(storage);
-  const settingsWebApp = asRecord(settings.webApp);
-  return Boolean(normalizeString(settingsWebApp?.runner));
+  const settings = readSettingsFromStorage(storage)
+  const settingsWebApp = asRecord(settings.webApp)
+  return Boolean(normalizeString(settingsWebApp?.runner))
 }
 
 function seedDefaultRunner(storage: Storage, endpoint: string): void {
@@ -280,108 +293,105 @@ function seedDefaultRunner(storage: Storage, endpoint: string): void {
     name: DEFAULT_RUNNER_NAME,
     endpoint,
     reconnect: true,
-  };
+  }
 
-  storage.setItem(RUNNERS_STORAGE_KEY, JSON.stringify([runner]));
-  storage.removeItem(LEGACY_RUNNERS_STORAGE_KEY);
-  storage.setItem(DEFAULT_RUNNER_NAME_STORAGE_KEY, runner.name);
-  storage.removeItem(LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY);
+  storage.setItem(RUNNERS_STORAGE_KEY, JSON.stringify([runner]))
+  storage.removeItem(LEGACY_RUNNERS_STORAGE_KEY)
+  storage.setItem(DEFAULT_RUNNER_NAME_STORAGE_KEY, runner.name)
+  storage.removeItem(LEGACY_DEFAULT_RUNNER_NAME_STORAGE_KEY)
 }
 
 export function getConfiguredAgentEndpoint(): string {
-  return agentEndpointManager.get();
+  return agentEndpointManager.get()
 }
 
 export function getConfiguredDefaultRunnerEndpoint(): string {
-  if (typeof window === "undefined" || !window.localStorage) {
-    return resolveDefaultRunnerEndpointFallback();
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return resolveDefaultRunnerEndpointFallback()
   }
 
-  const storage = window.localStorage;
-  const storedRunnerEndpoint = readStoredRunnerEndpoint(storage);
+  const storage = window.localStorage
+  const storedRunnerEndpoint = readStoredRunnerEndpoint(storage)
   if (storedRunnerEndpoint) {
-    return storedRunnerEndpoint;
+    return storedRunnerEndpoint
   }
 
-  const settings = readSettingsFromStorage(storage);
-  const settingsWebApp = asRecord(settings.webApp);
+  const settings = readSettingsFromStorage(storage)
+  const settingsWebApp = asRecord(settings.webApp)
   return (
     normalizeString(settingsWebApp?.runner) ??
     resolveDefaultRunnerEndpointFallback()
-  );
+  )
 }
 
 export function resolveDefaultChatKitDomainKeyFallback(): string {
-  const envValue = normalizeString(import.meta.env.VITE_CHATKIT_DOMAIN_KEY);
+  const envValue = normalizeString(import.meta.env.VITE_CHATKIT_DOMAIN_KEY)
   if (envValue) {
-    return envValue;
+    return envValue
   }
   if (
-    typeof window !== "undefined" &&
-    window.location.hostname === "localhost"
+    typeof window !== 'undefined' &&
+    window.location.hostname === 'localhost'
   ) {
-    return "domain_pk_localhost_dev";
+    return 'domain_pk_localhost_dev'
   }
-  return "domain_pk_68f8054e7da081908cc1972e9167ec270895bf04413e753b";
+  return 'domain_pk_68f8054e7da081908cc1972e9167ec270895bf04413e753b'
 }
 
 function readStoredChatKitDomainKey(storage: Storage): string | undefined {
-  const settings = readSettingsFromStorage(storage);
-  const settingsChatkit = asRecord(settings.chatkit);
-  return normalizeString(settingsChatkit?.domainKey);
+  const settings = readSettingsFromStorage(storage)
+  const settingsChatkit = asRecord(settings.chatkit)
+  return normalizeString(settingsChatkit?.domainKey)
 }
 
 export function getConfiguredChatKitDomainKey(): string {
-  if (typeof window === "undefined" || !window.localStorage) {
-    return resolveDefaultChatKitDomainKeyFallback();
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return resolveDefaultChatKitDomainKeyFallback()
   }
 
   return (
     readStoredChatKitDomainKey(window.localStorage) ??
     resolveDefaultChatKitDomainKeyFallback()
-  );
+  )
 }
 
-function pickString(
-  source: Record<string, unknown>,
-  keys: string[],
-): string {
+function pickString(source: Record<string, unknown>, keys: string[]): string {
   for (const key of keys) {
-    const value = asNonEmptyString(source[key]);
+    const value = asNonEmptyString(source[key])
     if (value) {
-      return value;
+      return value
     }
   }
-  return "";
+  return ''
 }
 
 function createDefaultOidcGenericRuntimeConfig(): OidcGenericRuntimeConfig {
   return {
-    clientId: "",
-    clientSecret: "",
-    discoveryUrl: "",
-    issuer: "",
-    redirectUrl: "",
+    clientId: '',
+    clientSecret: '',
+    discoveryUrl: '',
+    issuer: '',
+    redirectUrl: '',
     scopes: [],
-  };
+  }
 }
 
 function createDefaultOidcGoogleRuntimeConfig(): OidcGoogleRuntimeConfig {
   return {
-    clientId: "",
-    clientSecret: "",
-  };
+    clientId: '',
+    clientSecret: '',
+  }
 }
 
 function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
   return {
     agent: {
-      endpoint: "",
-      defaultRunnerEndpoint: "",
+      endpoint: '',
+      defaultRunnerEndpoint: '',
       openai: {
-        authMethod: "",
-        organization: "",
-        project: "",
+        authMethod: '',
+        organization: '',
+        project: '',
         vectorStores: [],
       },
     },
@@ -391,16 +401,16 @@ function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
       google: createDefaultOidcGoogleRuntimeConfig(),
     },
     googleDrive: {
-      clientId: "",
-      clientSecret: "",
-      baseUrl: "",
-      authFlow: "implicit",
-      authUxMode: "popup",
+      clientId: '',
+      clientSecret: '',
+      baseUrl: '',
+      authFlow: 'implicit',
+      authUxMode: 'new_tab',
     },
     chatkit: {
-      domainKey: "",
+      domainKey: '',
     },
-  };
+  }
 }
 
 /**
@@ -409,236 +419,243 @@ function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
  */
 export class RuntimeAppConfigSchema {
   static fromUnknown(value: unknown): RuntimeAppConfig {
-    const parsed = createDefaultRuntimeAppConfig();
-    const root = asRecord(value);
+    const parsed = createDefaultRuntimeAppConfig()
+    const root = asRecord(value)
     if (!root) {
-      return parsed;
+      return parsed
     }
 
-    const agent = asRecord(root.agent);
-    const oidc = asRecord(root.oidc);
-    const oidcGeneric = asRecord(oidc?.generic);
-    const oidcGoogle = asRecord(oidc?.google);
-    const drive = asRecord(root.googleDrive);
-    const chatkit = asRecord(root.chatkit);
-    const topLevelOpenAI = asRecord(root.openai);
-    const cloudAssistant = asRecord(root.cloudAssistant);
-    const agentOpenAI = asRecord(agent?.openai);
+    const agent = asRecord(root.agent)
+    const oidc = asRecord(root.oidc)
+    const oidcGeneric = asRecord(oidc?.generic)
+    const oidcGoogle = asRecord(oidc?.google)
+    const drive = asRecord(root.googleDrive)
+    const chatkit = asRecord(root.chatkit)
+    const topLevelOpenAI = asRecord(root.openai)
+    const cloudAssistant = asRecord(root.cloudAssistant)
+    const agentOpenAI = asRecord(agent?.openai)
 
     parsed.agent = {
       endpoint:
-        pickString(agent ?? {}, ["endpoint", "agentEndpoint"]) ||
+        pickString(agent ?? {}, ['endpoint', 'agentEndpoint']) ||
         asNonEmptyString(root.agentEndpoint),
       defaultRunnerEndpoint:
-        pickString(agent ?? {}, ["defaultRunnerEndpoint", "runnerEndpoint"]) ||
+        pickString(agent ?? {}, ['defaultRunnerEndpoint', 'runnerEndpoint']) ||
         asNonEmptyString(root.defaultRunnerEndpoint),
       openai: {
         authMethod:
-          pickString(agentOpenAI ?? {}, ["authMethod", "auth_method", "method"]) ||
-          pickString(topLevelOpenAI ?? {}, ["authMethod", "auth_method", "method"]),
+          pickString(agentOpenAI ?? {}, [
+            'authMethod',
+            'auth_method',
+            'method',
+          ]) ||
+          pickString(topLevelOpenAI ?? {}, [
+            'authMethod',
+            'auth_method',
+            'method',
+          ]),
         organization:
-          pickString(agentOpenAI ?? {}, ["organization"]) ||
-          pickString(topLevelOpenAI ?? {}, ["organization"]),
+          pickString(agentOpenAI ?? {}, ['organization']) ||
+          pickString(topLevelOpenAI ?? {}, ['organization']),
         project:
-          pickString(agentOpenAI ?? {}, ["project"]) ||
-          pickString(topLevelOpenAI ?? {}, ["project"]),
+          pickString(agentOpenAI ?? {}, ['project']) ||
+          pickString(topLevelOpenAI ?? {}, ['project']),
         vectorStores: (() => {
-          const explicit = asStringArray(agentOpenAI?.vectorStores);
+          const explicit = asStringArray(agentOpenAI?.vectorStores)
           if (explicit.length > 0) {
-            return explicit;
+            return explicit
           }
-          return asStringArray(cloudAssistant?.vectorStores);
+          return asStringArray(cloudAssistant?.vectorStores)
         })(),
       },
-    };
+    }
 
     if (oidc) {
-      parsed.oidc.clientExchange = asBoolean(oidc.clientExchange);
+      parsed.oidc.clientExchange = asBoolean(oidc.clientExchange)
     }
     if (oidcGeneric) {
       parsed.oidc.generic = {
-        clientId: pickString(oidcGeneric, ["clientId", "clientID"]),
+        clientId: pickString(oidcGeneric, ['clientId', 'clientID']),
         clientSecret: pickString(oidcGeneric, [
-          "clientSecret",
-          "client_secret",
+          'clientSecret',
+          'client_secret',
         ]),
-        discoveryUrl: pickString(oidcGeneric, ["discoveryUrl", "discoveryURL"]),
-        issuer: pickString(oidcGeneric, ["issuer"]),
-        redirectUrl: pickString(oidcGeneric, ["redirectUrl", "redirectURL"]),
+        discoveryUrl: pickString(oidcGeneric, ['discoveryUrl', 'discoveryURL']),
+        issuer: pickString(oidcGeneric, ['issuer']),
+        redirectUrl: pickString(oidcGeneric, ['redirectUrl', 'redirectURL']),
         scopes: asStringArray(oidcGeneric.scopes),
-      };
+      }
     }
     if (oidcGoogle) {
       parsed.oidc.google = {
-        clientId: pickString(oidcGoogle, ["clientId", "clientID"]),
-        clientSecret: pickString(oidcGoogle, ["clientSecret", "client_secret"]),
-      };
+        clientId: pickString(oidcGoogle, ['clientId', 'clientID']),
+        clientSecret: pickString(oidcGoogle, ['clientSecret', 'client_secret']),
+      }
     }
 
     if (drive) {
       const hasClientMaterial =
-        Object.prototype.hasOwnProperty.call(drive, "clientMaterial") ||
-        Object.prototype.hasOwnProperty.call(drive, "client_material");
+        Object.prototype.hasOwnProperty.call(drive, 'clientMaterial') ||
+        Object.prototype.hasOwnProperty.call(drive, 'client_material')
       const clientMaterial = asStringArray(
-        drive.clientMaterial ?? drive.client_material,
-      ).join("");
+        drive.clientMaterial ?? drive.client_material
+      ).join('')
       const authFlow =
         asGoogleDriveAuthFlow(
-          drive.authFlow ?? drive.auth_flow ?? drive.oauthFlow ?? drive.flow,
-        ) ?? "implicit";
+          drive.authFlow ?? drive.auth_flow ?? drive.oauthFlow ?? drive.flow
+        ) ?? 'implicit'
       const authUxMode =
         asGoogleDriveAuthUxMode(
           drive.authUxMode ??
             drive.auth_ux_mode ??
             drive.oauthUxMode ??
-            drive.uxMode,
-        ) ?? (authFlow === "pkce" ? "redirect" : "popup");
+            drive.uxMode
+        ) ?? 'new_tab'
       parsed.googleDrive = {
-        clientId: pickString(drive, ["clientId", "clientID"]),
+        clientId: pickString(drive, ['clientId', 'clientID']),
         clientSecret: hasClientMaterial
           ? clientMaterial
-          : pickString(drive, ["clientSecret", "client_secret"]),
+          : pickString(drive, ['clientSecret', 'client_secret']),
         baseUrl: asNonEmptyString(drive.baseUrl),
         authFlow,
         authUxMode,
-      };
+      }
     }
 
     if (chatkit) {
       parsed.chatkit = {
-        domainKey: pickString(chatkit, ["domainKey", "domain_key"]),
-      };
+        domainKey: pickString(chatkit, ['domainKey', 'domain_key']),
+      }
     }
 
-    return parsed;
+    return parsed
   }
 }
 
 export function getDefaultAppConfigUrl(): string {
-  if (typeof window === "undefined") {
-    return APP_CONFIG_PATH_DEFAULT;
+  if (typeof window === 'undefined') {
+    return APP_CONFIG_PATH_DEFAULT
   }
-  return resolveAppUrl(APP_CONFIG_PATH_DEFAULT).toString();
+  return resolveAppUrl(APP_CONFIG_PATH_DEFAULT).toString()
 }
 
 export function applyAppConfig(
   rawConfig: unknown,
   url: string,
-  options?: AppConfigApplyOptions,
+  options?: AppConfigApplyOptions
 ): AppliedAppConfig {
   if (!isRecord(rawConfig)) {
-    throw new Error("App config is empty or invalid");
+    throw new Error('App config is empty or invalid')
   }
   const preserveLocalConfiguration = Boolean(
-    options?.preserveLocalConfiguration,
-  );
+    options?.preserveLocalConfiguration
+  )
   const localStorageRef =
-    typeof window !== "undefined" && window.localStorage
+    typeof window !== 'undefined' && window.localStorage
       ? window.localStorage
-      : null;
-  const hasLocalOidcConfig = Boolean(
-    localStorageRef?.getItem(OIDC_STORAGE_KEY),
-  );
+      : null
+  const hasLocalOidcConfig = Boolean(localStorageRef?.getItem(OIDC_STORAGE_KEY))
   const hasLocalDriveConfig = Boolean(
-    localStorageRef?.getItem(GOOGLE_CLIENT_STORAGE_KEY),
-  );
-  const hasLocalDriveRuntimeBaseUrl = Boolean(getGoogleDriveBaseUrl());
+    localStorageRef?.getItem(GOOGLE_CLIENT_STORAGE_KEY)
+  )
+  const hasLocalDriveRuntimeBaseUrl = Boolean(getGoogleDriveBaseUrl())
 
-  const parsed = RuntimeAppConfigSchema.fromUnknown(rawConfig);
-  const hasOidcBlock = isRecord(rawConfig.oidc);
-  const rawOidc = asRecord(rawConfig.oidc);
-  const hasOidcGoogleBlock = isRecord(rawOidc?.google);
-  const hasGoogleDriveBlock = isRecord(rawConfig.googleDrive);
-  const hasChatkitBlock = isRecord(rawConfig.chatkit);
-  const rawAgent = asRecord(rawConfig.agent);
-  const hasAgentOpenAIBlock = isRecord(asRecord(rawAgent?.openai));
-  const hasTopLevelOpenAIBlock = isRecord(rawConfig.openai);
-  const hasCloudAssistantBlock = isRecord(rawConfig.cloudAssistant);
+  const parsed = RuntimeAppConfigSchema.fromUnknown(rawConfig)
+  const hasOidcBlock = isRecord(rawConfig.oidc)
+  const rawOidc = asRecord(rawConfig.oidc)
+  const hasOidcGoogleBlock = isRecord(rawOidc?.google)
+  const hasGoogleDriveBlock = isRecord(rawConfig.googleDrive)
+  const hasChatkitBlock = isRecord(rawConfig.chatkit)
+  const rawAgent = asRecord(rawConfig.agent)
+  const hasAgentOpenAIBlock = isRecord(asRecord(rawAgent?.openai))
+  const hasTopLevelOpenAIBlock = isRecord(rawConfig.openai)
+  const hasCloudAssistantBlock = isRecord(rawConfig.cloudAssistant)
   const hasResponsesDirectConfigBlock =
-    hasAgentOpenAIBlock || hasTopLevelOpenAIBlock || hasCloudAssistantBlock;
-  const warnings: string[] = [];
-  let oidc: OidcConfig | undefined;
-  let googleOAuth: GoogleOAuthClientConfig | undefined;
-  let agentEndpoint: string | undefined;
-  let defaultRunnerEndpoint: string | undefined;
-  let chatkitDomainKey: string | undefined;
+    hasAgentOpenAIBlock || hasTopLevelOpenAIBlock || hasCloudAssistantBlock
+  const warnings: string[] = []
+  let oidc: OidcConfig | undefined
+  let googleOAuth: GoogleOAuthClientConfig | undefined
+  let agentEndpoint: string | undefined
+  let defaultRunnerEndpoint: string | undefined
+  let chatkitDomainKey: string | undefined
   let responsesDirect:
     | {
-        authMethod: string;
-        openaiOrganization: string;
-        openaiProject: string;
-        vectorStores: string[];
-        apiKeySet: boolean;
+        authMethod: string
+        openaiOrganization: string
+        openaiProject: string
+        vectorStores: string[]
+        apiKeySet: boolean
       }
-    | undefined;
+    | undefined
 
-  const oidcConfig: Partial<OidcConfig> = {};
-  const genericOidcConfig = parsed.oidc.generic;
-  const googleOidcConfig = parsed.oidc.google;
-  const googleOidcClientId = normalizeString(googleOidcConfig.clientId);
-  const googleOidcClientSecret = normalizeString(googleOidcConfig.clientSecret);
+  const oidcConfig: Partial<OidcConfig> = {}
+  const genericOidcConfig = parsed.oidc.generic
+  const googleOidcConfig = parsed.oidc.google
+  const googleOidcClientId = normalizeString(googleOidcConfig.clientId)
+  const googleOidcClientSecret = normalizeString(googleOidcConfig.clientSecret)
   const oidcScope =
     genericOidcConfig.scopes.length > 0
-      ? genericOidcConfig.scopes.join(" ")
-      : undefined;
-  const discoveryUrl = normalizeString(genericOidcConfig.discoveryUrl);
+      ? genericOidcConfig.scopes.join(' ')
+      : undefined
+  const discoveryUrl = normalizeString(genericOidcConfig.discoveryUrl)
   const clientId =
-    googleOidcClientId ?? normalizeString(genericOidcConfig.clientId);
+    googleOidcClientId ?? normalizeString(genericOidcConfig.clientId)
   const clientSecret =
-    googleOidcClientSecret ?? normalizeString(genericOidcConfig.clientSecret);
-  const redirectUri = normalizeString(genericOidcConfig.redirectUrl);
-  const configuredChatkitDomainKey = normalizeString(parsed.chatkit.domainKey);
-  const skipOidcFromConfig =
-    preserveLocalConfiguration && hasLocalOidcConfig;
+    googleOidcClientSecret ?? normalizeString(genericOidcConfig.clientSecret)
+  const redirectUri = normalizeString(genericOidcConfig.redirectUrl)
+  const configuredChatkitDomainKey = normalizeString(parsed.chatkit.domainKey)
+  const skipOidcFromConfig = preserveLocalConfiguration && hasLocalOidcConfig
   if (skipOidcFromConfig) {
     try {
-      oidc = oidcConfigManager.getConfig();
+      oidc = oidcConfigManager.getConfig()
     } catch {
-      oidc = undefined;
+      oidc = undefined
     }
   } else {
     if (hasOidcGoogleBlock) {
-      oidcConfigManager.setGoogleDefaults();
+      oidcConfigManager.setGoogleDefaults()
     }
     if (discoveryUrl) {
-      oidcConfig.discoveryUrl = discoveryUrl;
+      oidcConfig.discoveryUrl = discoveryUrl
     }
     if (clientId) {
-      oidcConfig.clientId = clientId;
+      oidcConfig.clientId = clientId
     }
     if (clientSecret) {
-      oidcConfig.clientSecret = clientSecret;
+      oidcConfig.clientSecret = clientSecret
     }
     if (redirectUri) {
-      oidcConfig.redirectUri = redirectUri;
+      oidcConfig.redirectUri = redirectUri
     }
     if (oidcScope) {
-      oidcConfig.scope = oidcScope;
+      oidcConfig.scope = oidcScope
     }
     if (Object.keys(oidcConfig).length > 0) {
-      if (!oidcConfig.redirectUri && typeof window !== "undefined") {
-        oidcConfig.redirectUri = getOidcCallbackUrl();
+      if (!oidcConfig.redirectUri && typeof window !== 'undefined') {
+        oidcConfig.redirectUri = getOidcCallbackUrl()
       }
       try {
-        oidc = oidcConfigManager.setConfig(oidcConfig);
+        oidc = oidcConfigManager.setConfig(oidcConfig)
       } catch (error) {
-        warnings.push(`OIDC config not applied: ${String(error)}`);
+        warnings.push(`OIDC config not applied: ${String(error)}`)
       }
     } else if (hasOidcGoogleBlock) {
-      warnings.push("OIDC Google config missing clientID/clientId");
+      warnings.push('OIDC Google config missing clientID/clientId')
     } else if (hasOidcBlock) {
-      warnings.push("OIDC config present but no applicable generic values found");
+      warnings.push(
+        'OIDC config present but no applicable generic values found'
+      )
     }
   }
 
-  const googleClientId = normalizeString(parsed.googleDrive.clientId);
-  const googleClientSecret = normalizeString(parsed.googleDrive.clientSecret);
-  const googleAuthFlow = parsed.googleDrive.authFlow;
-  const googleAuthUxMode = parsed.googleDrive.authUxMode;
+  const googleClientId = normalizeString(parsed.googleDrive.clientId)
+  const googleClientSecret = normalizeString(parsed.googleDrive.clientSecret)
+  const googleAuthFlow = parsed.googleDrive.authFlow
+  const googleAuthUxMode = parsed.googleDrive.authUxMode
   const skipGoogleDriveFromConfig =
-    preserveLocalConfiguration && hasLocalDriveConfig;
+    preserveLocalConfiguration && hasLocalDriveConfig
   if (skipGoogleDriveFromConfig) {
-    googleOAuth = googleClientManager.getOAuthClient();
+    googleOAuth = googleClientManager.getOAuthClient()
   } else {
     if (googleClientId) {
       try {
@@ -647,81 +664,86 @@ export function applyAppConfig(
           clientSecret: googleClientSecret,
           authFlow: googleAuthFlow,
           authUxMode: googleAuthUxMode,
-        });
+        })
       } catch (error) {
-        warnings.push(`Google OAuth config not applied: ${String(error)}`);
+        warnings.push(`Google OAuth config not applied: ${String(error)}`)
       }
     } else if (hasGoogleDriveBlock) {
-      warnings.push("Google Drive config missing clientID/clientId");
+      warnings.push('Google Drive config missing clientID/clientId')
     }
   }
   if (
     parsed.googleDrive.baseUrl &&
     !(preserveLocalConfiguration && hasLocalDriveRuntimeBaseUrl)
   ) {
-    setGoogleDriveBaseUrl(parsed.googleDrive.baseUrl);
+    setGoogleDriveBaseUrl(parsed.googleDrive.baseUrl)
   }
 
   if (localStorageRef) {
-    const settings = readSettingsFromStorage(localStorageRef);
-    const settingsWebApp = asRecord(settings.webApp);
-    const settingsChatkit = asRecord(settings.chatkit);
-    const configAgentEndpoint = normalizeString(parsed.agent.endpoint);
-    const hadAgentOverride = agentEndpointManager.hasOverride();
-    agentEndpointManager.setDefaultEndpoint(configAgentEndpoint);
+    const settings = readSettingsFromStorage(localStorageRef)
+    const settingsWebApp = asRecord(settings.webApp)
+    const settingsChatkit = asRecord(settings.chatkit)
+    const configAgentEndpoint = normalizeString(parsed.agent.endpoint)
+    const hadAgentOverride = agentEndpointManager.hasOverride()
+    agentEndpointManager.setDefaultEndpoint(configAgentEndpoint)
     if (!configAgentEndpoint && !hadAgentOverride) {
       warnings.push(
-        "App config missing agent.endpoint; defaulting to window.location.origin",
-      );
+        'App config missing agent.endpoint; defaulting to window.location.origin'
+      )
     }
-    agentEndpoint = agentEndpointManager.get();
+    agentEndpoint = agentEndpointManager.get()
 
     const configRunnerEndpoint = normalizeString(
-      parsed.agent.defaultRunnerEndpoint,
-    );
-    const hasStoredRunnerEndpoint = hasConfiguredRunners(localStorageRef);
+      parsed.agent.defaultRunnerEndpoint
+    )
+    const hasStoredRunnerEndpoint = hasConfiguredRunners(localStorageRef)
 
     if (!hasStoredRunnerEndpoint && configRunnerEndpoint) {
-      defaultRunnerEndpoint = configRunnerEndpoint;
-      seedDefaultRunner(localStorageRef, configRunnerEndpoint);
+      defaultRunnerEndpoint = configRunnerEndpoint
+      seedDefaultRunner(localStorageRef, configRunnerEndpoint)
 
       const webApp = {
         ...(settingsWebApp ?? {}),
         runner: configRunnerEndpoint,
-      };
-      settings.webApp = webApp;
-      writeSettingsToStorage(localStorageRef, settings);
+      }
+      settings.webApp = webApp
+      writeSettingsToStorage(localStorageRef, settings)
     } else if (hasStoredRunnerEndpoint) {
-      defaultRunnerEndpoint = readStoredRunnerEndpoint(localStorageRef);
+      defaultRunnerEndpoint = readStoredRunnerEndpoint(localStorageRef)
     }
 
-    const storedChatkitDomainKey = readStoredChatKitDomainKey(localStorageRef);
+    const storedChatkitDomainKey = readStoredChatKitDomainKey(localStorageRef)
     if (!storedChatkitDomainKey && configuredChatkitDomainKey) {
-      chatkitDomainKey = configuredChatkitDomainKey;
+      chatkitDomainKey = configuredChatkitDomainKey
       settings.chatkit = {
         ...(settingsChatkit ?? {}),
         domainKey: configuredChatkitDomainKey,
-      };
-      writeSettingsToStorage(localStorageRef, settings);
+      }
+      writeSettingsToStorage(localStorageRef, settings)
     } else {
-      chatkitDomainKey = storedChatkitDomainKey;
+      chatkitDomainKey = storedChatkitDomainKey
     }
   }
 
   if (!chatkitDomainKey) {
-    chatkitDomainKey = configuredChatkitDomainKey;
+    chatkitDomainKey = configuredChatkitDomainKey
   }
   if (hasChatkitBlock && !configuredChatkitDomainKey) {
-    warnings.push("ChatKit config missing domainKey");
+    warnings.push('ChatKit config missing domainKey')
   }
 
-  const configuredOpenAIAuthMethod = normalizeString(parsed.agent.openai.authMethod);
-  const configuredOpenAIOrganization = normalizeString(parsed.agent.openai.organization);
-  const configuredOpenAIProject = normalizeString(parsed.agent.openai.project);
-  const configuredVectorStores = parsed.agent.openai.vectorStores;
+  const configuredOpenAIAuthMethod = normalizeString(
+    parsed.agent.openai.authMethod
+  )
+  const configuredOpenAIOrganization = normalizeString(
+    parsed.agent.openai.organization
+  )
+  const configuredOpenAIProject = normalizeString(parsed.agent.openai.project)
+  const configuredVectorStores = parsed.agent.openai.vectorStores
 
   const shouldApplyResponsesDirectDefaults =
-    hasResponsesDirectConfigBlock || responsesDirectConfigManager.hasInitializedConfig();
+    hasResponsesDirectConfigBlock ||
+    responsesDirectConfigManager.hasInitializedConfig()
   const responsesDirectSnapshot = shouldApplyResponsesDirectDefaults
     ? responsesDirectConfigManager.applyDefaults({
         authMethod: configuredOpenAIAuthMethod,
@@ -729,29 +751,31 @@ export function applyAppConfig(
         openaiProject: configuredOpenAIProject,
         vectorStores: configuredVectorStores,
       })
-    : responsesDirectConfigManager.getSnapshot();
+    : responsesDirectConfigManager.getSnapshot()
   responsesDirect = {
     authMethod: responsesDirectSnapshot.authMethod,
     openaiOrganization: responsesDirectSnapshot.openaiOrganization,
     openaiProject: responsesDirectSnapshot.openaiProject,
     vectorStores: responsesDirectSnapshot.vectorStores,
     apiKeySet: responsesDirectSnapshot.apiKey.length > 0,
-  };
+  }
 
   if (hasResponsesDirectConfigBlock) {
-    if (responsesDirectSnapshot.authMethod === "oauth") {
+    if (responsesDirectSnapshot.authMethod === 'oauth') {
       if (!responsesDirectSnapshot.openaiOrganization) {
         warnings.push(
-          "Direct Responses OAuth requires openai organization (agent.openai.organization)",
-        );
+          'Direct Responses OAuth requires openai organization (agent.openai.organization)'
+        )
       }
       if (!responsesDirectSnapshot.openaiProject) {
-        warnings.push("Direct Responses OAuth requires openai project (agent.openai.project)");
+        warnings.push(
+          'Direct Responses OAuth requires openai project (agent.openai.project)'
+        )
       }
     } else if (!responsesDirectSnapshot.apiKey) {
       warnings.push(
-        "Direct Responses API key auth selected; set API key via app.responsesDirect.setAPIKey(...)",
-      );
+        'Direct Responses API key auth selected; set API key via app.responsesDirect.setAPIKey(...)'
+      )
     }
   }
 
@@ -764,101 +788,101 @@ export function applyAppConfig(
     chatkitDomainKey,
     responsesDirect,
     warnings,
-  };
+  }
 }
 
 export async function setAppConfig(
   url?: string,
-  options?: AppConfigApplyOptions,
+  options?: AppConfigApplyOptions
 ): Promise<AppliedAppConfig> {
-  const resolvedUrl = normalizeString(url) ?? getDefaultAppConfigUrl();
-  const response = await fetch(resolvedUrl, { cache: "no-store" });
+  const resolvedUrl = normalizeString(url) ?? getDefaultAppConfigUrl()
+  const response = await fetch(resolvedUrl, { cache: 'no-store' })
   if (!response.ok) {
     throw new Error(
-      `Failed to fetch app config (${response.status} ${response.statusText})`,
-    );
+      `Failed to fetch app config (${response.status} ${response.statusText})`
+    )
   }
-  const text = await response.text();
-  return setAppConfigFromYaml(text, resolvedUrl, options);
+  const text = await response.text()
+  return setAppConfigFromYaml(text, resolvedUrl, options)
 }
 
 export function setAppConfigFromYaml(
   yamlText: string,
-  source = "inline://app-config.yaml",
-  options?: AppConfigApplyOptions,
+  source = 'inline://app-config.yaml',
+  options?: AppConfigApplyOptions
 ): AppliedAppConfig {
-  const normalizedYaml = typeof yamlText === "string" ? yamlText : "";
+  const normalizedYaml = typeof yamlText === 'string' ? yamlText : ''
   if (!normalizedYaml.trim()) {
-    throw new Error("App config YAML is empty");
+    throw new Error('App config YAML is empty')
   }
-  const parsed = YAML.parse(normalizedYaml) as unknown;
-  return applyAppConfig(parsed, source, options);
+  const parsed = YAML.parse(normalizedYaml) as unknown
+  return applyAppConfig(parsed, source, options)
 }
 
 export function isLocalConfigPreferredOnLoad(): boolean {
-  if (typeof window === "undefined" || !window.localStorage) {
-    return false;
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return false
   }
   return (
     normalizeString(
-      window.localStorage.getItem(APP_CONFIG_PREFER_LOCAL_STORAGE_KEY),
-    ) === "true"
-  );
+      window.localStorage.getItem(APP_CONFIG_PREFER_LOCAL_STORAGE_KEY)
+    ) === 'true'
+  )
 }
 
 export function setLocalConfigPreferredOnLoad(preferLocal: boolean): boolean {
-  if (typeof window === "undefined" || !window.localStorage) {
-    return preferLocal;
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return preferLocal
   }
   window.localStorage.setItem(
     APP_CONFIG_PREFER_LOCAL_STORAGE_KEY,
-    preferLocal ? "true" : "false",
-  );
-  return preferLocal;
+    preferLocal ? 'true' : 'false'
+  )
+  return preferLocal
 }
 
 export function disableAppConfigOverridesOnLoad(): boolean {
-  return setLocalConfigPreferredOnLoad(true);
+  return setLocalConfigPreferredOnLoad(true)
 }
 
 export function enableAppConfigOverridesOnLoad(): boolean {
-  return setLocalConfigPreferredOnLoad(false);
+  return setLocalConfigPreferredOnLoad(false)
 }
 
 export async function maybeSetAppConfig(): Promise<AppliedAppConfig | null> {
-  if (typeof window === "undefined" || !window.localStorage) {
-    return null;
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return null
   }
-  const preserveLocalConfiguration = isLocalConfigPreferredOnLoad();
-  appLogger.info("Attempting app config preload", {
+  const preserveLocalConfiguration = isLocalConfigPreferredOnLoad()
+  appLogger.info('Attempting app config preload', {
     attrs: {
-      scope: "config.app",
-      code: "APP_CONFIG_PRELOAD_ATTEMPT",
+      scope: 'config.app',
+      code: 'APP_CONFIG_PRELOAD_ATTEMPT',
       preserveLocalConfiguration,
     },
-  });
+  })
 
   try {
     const applied = await setAppConfig(undefined, {
       preserveLocalConfiguration,
-    });
-    appLogger.info("App config loaded.", {
+    })
+    appLogger.info('App config loaded.', {
       attrs: {
-        scope: "config.app",
-        code: "APP_CONFIG_LOADED",
+        scope: 'config.app',
+        code: 'APP_CONFIG_LOADED',
         url: applied.url,
         warningCount: applied.warnings.length,
       },
-    });
-    return applied;
+    })
+    return applied
   } catch (error) {
-    appLogger.warn("Skipping app config preload", {
+    appLogger.warn('Skipping app config preload', {
       attrs: {
-        scope: "config.app",
-        code: "APP_CONFIG_PRELOAD_FAILED",
+        scope: 'config.app',
+        code: 'APP_CONFIG_PRELOAD_FAILED',
         error: String(error),
       },
-    });
-    return null;
+    })
+    return null
   }
 }

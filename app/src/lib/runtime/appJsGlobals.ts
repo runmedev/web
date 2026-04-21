@@ -737,7 +737,7 @@ export function createAppJsGlobals({
         clientId?: string
         clientSecret?: string
         authFlow?: 'implicit' | 'pkce'
-        authUxMode?: 'popup' | 'redirect'
+        authUxMode?: 'popup' | 'redirect' | 'new_tab'
       }) => googleClientManager.setOAuthClient(config),
       setClientId: (clientId: string) =>
         googleClientManager.setOAuthClient({ clientId }),
@@ -745,7 +745,7 @@ export function createAppJsGlobals({
         googleClientManager.setClientSecret(clientSecret),
       setAuthFlow: (authFlow: 'implicit' | 'pkce') =>
         googleClientManager.setAuthFlow(authFlow),
-      setAuthUxMode: (authUxMode: 'popup' | 'redirect') =>
+      setAuthUxMode: (authUxMode: 'popup' | 'redirect' | 'new_tab') =>
         googleClientManager.setAuthUxMode(authUxMode),
       setFromJson: (raw: string) =>
         googleClientManager.setOAuthClientFromJson(raw),
