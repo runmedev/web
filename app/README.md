@@ -21,10 +21,10 @@ In order to be able to access Google Drive.
 Follow the [Google docs](https://support.google.com/cloud/answer/15549257?sjid=2630967979572079554-NC) for creating
 an OAuth credential with the following settings
 
-* Application Type: Web Application
-* Authorized redirect URIs:
-   - http://localhost:5173
-   - http://localhost:5174
+- Application Type: Web Application
+- Authorized redirect URIs:
+  - http://localhost:5173
+  - http://localhost:5174
 
 If you plan on hosting the app at your own domain you'll need to add the redirect URI at which your app gets served
 
@@ -48,9 +48,9 @@ Refresh the webapp for the settings to take effect.
 You need to signon into the app in order to authenticate to the different services the app talks to (e.g. kernels and the AI backend).
 You do this with OIDC. You'll need an OIDC provider such as
 
-* Google
-* Microsoft Entra
-* GitHub
+- Google
+- Microsoft Entra
+- GitHub
 
 ### Using Google
 
@@ -109,9 +109,9 @@ cp ${REPODIR}$/app/config.dev.yaml \
 
 Make the relevant changes to your config
 
-* Set the path to your OpenAI API Key
-* Change your email in the IAM rules
-* Add the Google OAuth Client ID
+- Set the path to your OpenAI API Key
+- Change your email in the IAM rules
+- Add the Google OAuth Client ID
 
 ```sh
 go run ./ agent --config=${HOME}/.runme-agent/config.dev.yaml serve
@@ -119,37 +119,36 @@ go run ./ agent --config=${HOME}/.runme-agent/config.dev.yaml serve
 
 # Configure the server to serve app configuration
 
-* You can configure the app with one command by hosting the application configuration at a URL
-* For example you can put a YAML files into the assets directory (e.g. `${HOME}/.runme-agent/assets/configs/app-configs.yaml`) to
+- You can configure the app with one command by hosting the application configuration at a URL
+- For example you can put a YAML files into the assets directory (e.g. `${HOME}/.runme-agent/assets/configs/app-configs.yaml`) to
   host the OIDC and Google Drive configuration that the App should use. For example.
 
   ```yaml
   # app-configs.yaml is a file that will be served by the server as a static asset.
-    # It will be used by the frontend to configure itself.
-    # The agent mints OAuth tokens for the user to login to the assistant and the runners
-    oidc:
-        # OIDC callback handling should happen in the browser.
-        clientExchange: true    
-        google:
-            # Runtime config applies Google defaults automatically when this block is present.
-            clientID: "44661292282-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com"
+  # It will be used by the frontend to configure itself.
+  # The agent mints OAuth tokens for the user to login to the assistant and the runners
+  oidc:
+    # OIDC callback handling should happen in the browser.
+    clientExchange: true
+    google:
+      # Runtime config applies Google defaults automatically when this block is present.
+      clientID: '44661292282-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com'
 
-    googleDrive:
-        clientID: "44661292282-bqhl39ugf2kn7r8vv4f6766jt0a7tom9.apps.googleusercontent.com"
-        clientSecret: ""
-        # Optional: implicit (token) or pkce (authorization code)
-        authFlow: "implicit"
-        # Optional: popup or redirect
-        authUxMode: "redirect"
+  googleDrive:
+    clientID: '44661292282-bqhl39ugf2kn7r8vv4f6766jt0a7tom9.apps.googleusercontent.com'
+    clientSecret: ''
+    # Optional: implicit (token) or pkce (authorization code)
+    authFlow: 'implicit'
+    # Optional: popup, redirect, or new_tab
+    authUxMode: 'new_tab'
 
-    chatkit:
-        domainKey: "<chatkit-domain-key>"
+  chatkit:
+    domainKey: '<chatkit-domain-key>'
   ```
 
   If you need to override the discovery URL, redirect URL, or scopes explicitly, add an `oidc.generic` block alongside `oidc.google`.
 
-
-* Then in the web in the console you can do.
+- Then in the web in the console you can do.
 
   ```
   app.setConfig(app.getDefaultConfigUrl())
@@ -165,7 +164,7 @@ In the app console.
 app.runners.update("localhost","ws://localhost:9977/ws")
 ```
 
-* Change the port to whatever port your runme agent is serving on
+- Change the port to whatever port your runme agent is serving on
 
 ## Deployment
 
@@ -181,12 +180,12 @@ This repo includes a GitHub Actions workflow at `.github/workflows/publish-app-a
 
 The artifact is published as:
 
-* `ghcr.io/runmedev/app-assets:sha-<commit-sha>`
-* `ghcr.io/runmedev/app-assets:latest` (for `main`)
+- `ghcr.io/runmedev/app-assets:sha-<commit-sha>`
+- `ghcr.io/runmedev/app-assets:latest` (for `main`)
 
 It uses a custom artifact type:
 
-* `application/vnd.runmeweb.assets.v1`
+- `application/vnd.runmeweb.assets.v1`
 
 ### Pull and extract the static assets
 

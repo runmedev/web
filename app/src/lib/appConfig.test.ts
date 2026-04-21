@@ -1,361 +1,386 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 async function loadModules() {
-  vi.resetModules();
-  const appConfig = await import("./appConfig");
-  const oidcConfig = await import("../auth/oidcConfig");
+  vi.resetModules()
+  const appConfig = await import('./appConfig')
+  const oidcConfig = await import('../auth/oidcConfig')
   return {
     ...appConfig,
     ...oidcConfig,
-  };
+  }
 }
 
-describe("appConfig OIDC Google shorthand", () => {
+describe('appConfig OIDC Google shorthand', () => {
   beforeEach(() => {
-    window.localStorage.clear();
-    window.history.replaceState(null, "", "/index.html");
-  });
+    window.localStorage.clear()
+    window.history.replaceState(null, '', '/index.html')
+  })
 
-  it("applies Google defaults when oidc.google is configured", async () => {
-    const { applyAppConfig } = await loadModules();
+  it('applies Google defaults when oidc.google is configured', async () => {
+    const { applyAppConfig } = await loadModules()
 
     const result = applyAppConfig(
       {
         agent: {
-          endpoint: "http://localhost:9977",
+          endpoint: 'http://localhost:9977',
         },
         oidc: {
           google: {
-            clientID: "client-id.apps.googleusercontent.com",
+            clientID: 'client-id.apps.googleusercontent.com',
           },
         },
       },
-      "http://localhost/configs/app-configs.yaml",
-    );
+      'http://localhost/configs/app-configs.yaml'
+    )
 
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toEqual([])
     expect(result.oidc).toMatchObject({
       discoveryUrl:
-        "https://accounts.google.com/.well-known/openid-configuration",
-      clientId: "client-id.apps.googleusercontent.com",
-      scope: "openid https://www.googleapis.com/auth/userinfo.email",
+        'https://accounts.google.com/.well-known/openid-configuration',
+      clientId: 'client-id.apps.googleusercontent.com',
+      scope: 'openid https://www.googleapis.com/auth/userinfo.email',
       extraAuthParams: {
-        access_type: "offline",
-        prompt: "consent",
+        access_type: 'offline',
+        prompt: 'consent',
       },
-    });
+    })
     expect(result.oidc?.redirectUri).toMatch(
-      /^http:\/\/localhost(:\d+)?\/oidc\/callback$/,
-    );
-  });
+      /^http:\/\/localhost(:\d+)?\/oidc\/callback$/
+    )
+  })
 
-  it("allows setGoogleDefaults before the client ID is set", async () => {
-    const { oidcConfigManager } = await loadModules();
+  it('allows setGoogleDefaults before the client ID is set', async () => {
+    const { oidcConfigManager } = await loadModules()
 
-    expect(() => oidcConfigManager.setGoogleDefaults()).not.toThrow();
+    expect(() => oidcConfigManager.setGoogleDefaults()).not.toThrow()
 
     const config = oidcConfigManager.setClientId(
-      "client-id.apps.googleusercontent.com",
-    );
+      'client-id.apps.googleusercontent.com'
+    )
 
     expect(config.discoveryUrl).toBe(
-      "https://accounts.google.com/.well-known/openid-configuration",
-    );
+      'https://accounts.google.com/.well-known/openid-configuration'
+    )
     expect(config.scope).toBe(
-      "openid https://www.googleapis.com/auth/userinfo.email",
-    );
-    expect(config.clientId).toBe("client-id.apps.googleusercontent.com");
+      'openid https://www.googleapis.com/auth/userinfo.email'
+    )
+    expect(config.clientId).toBe('client-id.apps.googleusercontent.com')
     expect(config.extraAuthParams).toEqual({
-      access_type: "offline",
-      prompt: "consent",
-    });
-  });
+      access_type: 'offline',
+      prompt: 'consent',
+    })
+  })
 
-  it("stores the ChatKit domain key from app config in local storage", async () => {
-    const { applyAppConfig, getConfiguredChatKitDomainKey } = await loadModules();
+  it('stores the ChatKit domain key from app config in local storage', async () => {
+    const { applyAppConfig, getConfiguredChatKitDomainKey } =
+      await loadModules()
 
     const result = applyAppConfig(
       {
         agent: {
-          endpoint: "http://localhost:9977",
+          endpoint: 'http://localhost:9977',
         },
         chatkit: {
-          domainKey: "domain_pk_configured",
+          domainKey: 'domain_pk_configured',
         },
       },
-      "http://localhost/configs/app-configs.yaml",
-    );
+      'http://localhost/configs/app-configs.yaml'
+    )
 
-    expect(result.warnings).toEqual([]);
-    expect(result.chatkitDomainKey).toBe("domain_pk_configured");
-    expect(getConfiguredChatKitDomainKey()).toBe("domain_pk_configured");
+    expect(result.warnings).toEqual([])
+    expect(result.chatkitDomainKey).toBe('domain_pk_configured')
+    expect(getConfiguredChatKitDomainKey()).toBe('domain_pk_configured')
 
     const stored = JSON.parse(
-      window.localStorage.getItem("cloudAssistantSettings") ?? "{}",
-    );
+      window.localStorage.getItem('cloudAssistantSettings') ?? '{}'
+    )
     expect(stored.chatkit).toEqual({
-      domainKey: "domain_pk_configured",
-    });
-  });
+      domainKey: 'domain_pk_configured',
+    })
+  })
 
-  it("falls back to the existing ChatKit localhost default when no config is stored", async () => {
-    const { getConfiguredChatKitDomainKey } = await loadModules();
+  it('falls back to the existing ChatKit localhost default when no config is stored', async () => {
+    const { getConfiguredChatKitDomainKey } = await loadModules()
 
-    expect(getConfiguredChatKitDomainKey()).toBe("domain_pk_localhost_dev");
-  });
+    expect(getConfiguredChatKitDomainKey()).toBe('domain_pk_localhost_dev')
+  })
 
-  it("applies direct Responses OpenAI config from agent.openai", async () => {
-    const { applyAppConfig } = await loadModules();
+  it('applies direct Responses OpenAI config from agent.openai', async () => {
+    const { applyAppConfig } = await loadModules()
 
     const result = applyAppConfig(
       {
         agent: {
-          endpoint: "http://localhost:9977",
+          endpoint: 'http://localhost:9977',
           openai: {
-            authMethod: "OAuth",
-            organization: "org-test",
-            project: "proj-test",
-            vectorStores: ["vs_1", "vs_2"],
+            authMethod: 'OAuth',
+            organization: 'org-test',
+            project: 'proj-test',
+            vectorStores: ['vs_1', 'vs_2'],
           },
         },
       },
-      "http://localhost/configs/app-configs.yaml",
-    );
+      'http://localhost/configs/app-configs.yaml'
+    )
 
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toEqual([])
     expect(result.responsesDirect).toEqual({
-      authMethod: "oauth",
-      openaiOrganization: "org-test",
-      openaiProject: "proj-test",
-      vectorStores: ["vs_1", "vs_2"],
+      authMethod: 'oauth',
+      openaiOrganization: 'org-test',
+      openaiProject: 'proj-test',
+      vectorStores: ['vs_1', 'vs_2'],
       apiKeySet: false,
-    });
-  });
+    })
+  })
 
-  it("supports go-style top-level OpenAI and cloudAssistant vectorStores", async () => {
-    const { applyAppConfig } = await loadModules();
+  it('supports go-style top-level OpenAI and cloudAssistant vectorStores', async () => {
+    const { applyAppConfig } = await loadModules()
 
     const result = applyAppConfig(
       {
         agent: {
-          endpoint: "http://localhost:9977",
+          endpoint: 'http://localhost:9977',
         },
         openai: {
-          authMethod: "OAuth",
-          organization: "org-top-level",
-          project: "proj-top-level",
+          authMethod: 'OAuth',
+          organization: 'org-top-level',
+          project: 'proj-top-level',
         },
         cloudAssistant: {
-          vectorStores: ["vs_top"],
+          vectorStores: ['vs_top'],
         },
       },
-      "http://localhost/configs/app-configs.yaml",
-    );
+      'http://localhost/configs/app-configs.yaml'
+    )
 
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toEqual([])
     expect(result.responsesDirect).toEqual({
-      authMethod: "oauth",
-      openaiOrganization: "org-top-level",
-      openaiProject: "proj-top-level",
-      vectorStores: ["vs_top"],
+      authMethod: 'oauth',
+      openaiOrganization: 'org-top-level',
+      openaiProject: 'proj-top-level',
+      vectorStores: ['vs_top'],
       apiKeySet: false,
-    });
-  });
+    })
+  })
 
-  it("warns when direct Responses is configured for API key auth without a key", async () => {
-    const { applyAppConfig } = await loadModules();
+  it('warns when direct Responses is configured for API key auth without a key', async () => {
+    const { applyAppConfig } = await loadModules()
 
     const result = applyAppConfig(
       {
         agent: {
-          endpoint: "http://localhost:9977",
+          endpoint: 'http://localhost:9977',
           openai: {
-            authMethod: "APIKey",
+            authMethod: 'APIKey',
           },
         },
       },
-      "http://localhost/configs/app-configs.yaml",
-    );
+      'http://localhost/configs/app-configs.yaml'
+    )
 
-    expect(result.responsesDirect?.authMethod).toBe("api_key");
+    expect(result.responsesDirect?.authMethod).toBe('api_key')
     expect(result.warnings).toContain(
-      "Direct Responses API key auth selected; set API key via app.responsesDirect.setAPIKey(...)",
-    );
-  });
+      'Direct Responses API key auth selected; set API key via app.responsesDirect.setAPIKey(...)'
+    )
+  })
 
-  it("preserves the runtime Google Drive base URL when config omits it", async () => {
-    const { applyAppConfig } = await loadModules();
+  it('preserves the runtime Google Drive base URL when config omits it', async () => {
+    const { applyAppConfig } = await loadModules()
     const { setGoogleDriveBaseUrl, getGoogleDriveBaseUrl } = await import(
-      "./googleDriveRuntime"
-    );
+      './googleDriveRuntime'
+    )
 
-    setGoogleDriveBaseUrl("http://127.0.0.1:9090");
-
-    applyAppConfig(
-      {
-        agent: {
-          endpoint: "http://localhost:9977",
-        },
-        googleDrive: {
-          clientID: "client-id.apps.googleusercontent.com",
-        },
-      },
-      "http://localhost/configs/app-configs.yaml",
-    );
-
-    expect(getGoogleDriveBaseUrl()).toBe("http://127.0.0.1:9090");
-  });
-
-  it("applies Google Drive PKCE auth flow when configured", async () => {
-    const { applyAppConfig } = await loadModules();
-    const { googleClientManager } = await import("./googleClientManager");
+    setGoogleDriveBaseUrl('http://127.0.0.1:9090')
 
     applyAppConfig(
       {
         agent: {
-          endpoint: "http://localhost:9977",
+          endpoint: 'http://localhost:9977',
         },
         googleDrive: {
-          clientID: "client-id.apps.googleusercontent.com",
-          authFlow: "pkce",
+          clientID: 'client-id.apps.googleusercontent.com',
         },
       },
-      "http://localhost/configs/app-configs.yaml",
-    );
+      'http://localhost/configs/app-configs.yaml'
+    )
+
+    expect(getGoogleDriveBaseUrl()).toBe('http://127.0.0.1:9090')
+  })
+
+  it('applies Google Drive PKCE auth flow when configured', async () => {
+    const { applyAppConfig } = await loadModules()
+    const { googleClientManager } = await import('./googleClientManager')
+
+    applyAppConfig(
+      {
+        agent: {
+          endpoint: 'http://localhost:9977',
+        },
+        googleDrive: {
+          clientID: 'client-id.apps.googleusercontent.com',
+          authFlow: 'pkce',
+        },
+      },
+      'http://localhost/configs/app-configs.yaml'
+    )
 
     expect(googleClientManager.getOAuthClient()).toMatchObject({
-      clientId: "client-id.apps.googleusercontent.com",
-      authFlow: "pkce",
-      authUxMode: "redirect",
-    });
+      clientId: 'client-id.apps.googleusercontent.com',
+      authFlow: 'pkce',
+      authUxMode: 'new_tab',
+    })
     expect(googleClientManager.getDrivePickerConfig().clientId).toBe(
-      "client-id.apps.googleusercontent.com",
-    );
-  });
+      'client-id.apps.googleusercontent.com'
+    )
+  })
 
-  it("applies Google Drive implicit redirect auth mode when configured", async () => {
-    const { applyAppConfig } = await loadModules();
-    const { googleClientManager } = await import("./googleClientManager");
+  it('applies Google Drive implicit redirect auth mode when configured', async () => {
+    const { applyAppConfig } = await loadModules()
+    const { googleClientManager } = await import('./googleClientManager')
 
     applyAppConfig(
       {
         agent: {
-          endpoint: "http://localhost:9977",
+          endpoint: 'http://localhost:9977',
         },
         googleDrive: {
-          clientID: "client-id.apps.googleusercontent.com",
-          authFlow: "implicit",
-          authUxMode: "redirect",
+          clientID: 'client-id.apps.googleusercontent.com',
+          authFlow: 'implicit',
+          authUxMode: 'redirect',
         },
       },
-      "http://localhost/configs/app-configs.yaml",
-    );
+      'http://localhost/configs/app-configs.yaml'
+    )
 
     expect(googleClientManager.getOAuthClient()).toMatchObject({
-      clientId: "client-id.apps.googleusercontent.com",
-      authFlow: "implicit",
-      authUxMode: "redirect",
-    });
-  });
+      clientId: 'client-id.apps.googleusercontent.com',
+      authFlow: 'implicit',
+      authUxMode: 'redirect',
+    })
+  })
 
-  it("preserves local Google Drive config when local precedence is requested", async () => {
-    const { applyAppConfig } = await loadModules();
-    const { googleClientManager } = await import("./googleClientManager");
+  it('defaults Google Drive auth UX mode to new_tab when not configured', async () => {
+    const { applyAppConfig } = await loadModules()
+    const { googleClientManager } = await import('./googleClientManager')
+
+    applyAppConfig(
+      {
+        agent: {
+          endpoint: 'http://localhost:9977',
+        },
+        googleDrive: {
+          clientID: 'client-id.apps.googleusercontent.com',
+          authFlow: 'implicit',
+        },
+      },
+      'http://localhost/configs/app-configs.yaml'
+    )
+
+    expect(googleClientManager.getOAuthClient()).toMatchObject({
+      clientId: 'client-id.apps.googleusercontent.com',
+      authFlow: 'implicit',
+      authUxMode: 'new_tab',
+    })
+  })
+
+  it('preserves local Google Drive config when local precedence is requested', async () => {
+    const { applyAppConfig } = await loadModules()
+    const { googleClientManager } = await import('./googleClientManager')
 
     googleClientManager.setOAuthClient({
-      clientId: "local-client.apps.googleusercontent.com",
-      authFlow: "pkce",
-      authUxMode: "redirect",
-    });
+      clientId: 'local-client.apps.googleusercontent.com',
+      authFlow: 'pkce',
+      authUxMode: 'redirect',
+    })
 
     applyAppConfig(
       {
         agent: {
-          endpoint: "http://localhost:9977",
+          endpoint: 'http://localhost:9977',
         },
         googleDrive: {
-          clientID: "config-client.apps.googleusercontent.com",
-          authFlow: "implicit",
+          clientID: 'config-client.apps.googleusercontent.com',
+          authFlow: 'implicit',
         },
       },
-      "http://localhost/configs/app-configs.yaml",
+      'http://localhost/configs/app-configs.yaml',
       {
         preserveLocalConfiguration: true,
-      },
-    );
+      }
+    )
 
     expect(googleClientManager.getOAuthClient()).toMatchObject({
-      clientId: "local-client.apps.googleusercontent.com",
-      authFlow: "pkce",
-      authUxMode: "redirect",
-    });
-  });
+      clientId: 'local-client.apps.googleusercontent.com',
+      authFlow: 'pkce',
+      authUxMode: 'redirect',
+    })
+  })
 
-  it("uses joined googleDrive clientMaterial as clientSecret when provided", async () => {
-    const { applyAppConfig } = await loadModules();
-    const { googleClientManager } = await import("./googleClientManager");
+  it('uses joined googleDrive clientMaterial as clientSecret when provided', async () => {
+    const { applyAppConfig } = await loadModules()
+    const { googleClientManager } = await import('./googleClientManager')
 
     applyAppConfig(
       {
         agent: {
-          endpoint: "http://localhost:9977",
+          endpoint: 'http://localhost:9977',
         },
         googleDrive: {
-          clientID: "client-id.apps.googleusercontent.com",
-          clientSecret: "ignored-client-secret",
-          clientMaterial: ["GOCSPX-3N-", "FPEy4XWoKz", "cVwSyt3yDz_Xwzo"],
+          clientID: 'client-id.apps.googleusercontent.com',
+          clientSecret: 'ignored-client-secret',
+          clientMaterial: ['GOCSPX-3N-', 'FPEy4XWoKz', 'cVwSyt3yDz_Xwzo'],
         },
       },
-      "http://localhost/configs/app-configs.yaml",
-    );
+      'http://localhost/configs/app-configs.yaml'
+    )
 
     expect(googleClientManager.getOAuthClient()).toMatchObject({
-      clientId: "client-id.apps.googleusercontent.com",
-      clientSecret: "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",
-    });
-  });
+      clientId: 'client-id.apps.googleusercontent.com',
+      clientSecret: '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',
+    })
+  })
 
-  it("toggles app-config local precedence on load", async () => {
+  it('toggles app-config local precedence on load', async () => {
     const {
       disableAppConfigOverridesOnLoad,
       enableAppConfigOverridesOnLoad,
       isLocalConfigPreferredOnLoad,
       setLocalConfigPreferredOnLoad,
-    } = await loadModules();
+    } = await loadModules()
 
-    expect(isLocalConfigPreferredOnLoad()).toBe(false);
+    expect(isLocalConfigPreferredOnLoad()).toBe(false)
 
-    expect(disableAppConfigOverridesOnLoad()).toBe(true);
-    expect(isLocalConfigPreferredOnLoad()).toBe(true);
+    expect(disableAppConfigOverridesOnLoad()).toBe(true)
+    expect(isLocalConfigPreferredOnLoad()).toBe(true)
 
-    expect(setLocalConfigPreferredOnLoad(false)).toBe(false);
-    expect(isLocalConfigPreferredOnLoad()).toBe(false);
+    expect(setLocalConfigPreferredOnLoad(false)).toBe(false)
+    expect(isLocalConfigPreferredOnLoad()).toBe(false)
 
-    expect(enableAppConfigOverridesOnLoad()).toBe(false);
-    expect(isLocalConfigPreferredOnLoad()).toBe(false);
-  });
+    expect(enableAppConfigOverridesOnLoad()).toBe(false)
+    expect(isLocalConfigPreferredOnLoad()).toBe(false)
+  })
 
-  it("applies inline YAML via setAppConfigFromYaml", async () => {
-    const { setAppConfigFromYaml } = await loadModules();
+  it('applies inline YAML via setAppConfigFromYaml', async () => {
+    const { setAppConfigFromYaml } = await loadModules()
 
     const result = setAppConfigFromYaml(
       [
-        "agent:",
-        "  endpoint: http://localhost:9977",
-        "  openai:",
-        "    authMethod: OAuth",
-        "    organization: org-inline",
-        "    project: proj-inline",
-      ].join("\n"),
-      "inline://test-config.yaml",
-    );
+        'agent:',
+        '  endpoint: http://localhost:9977',
+        '  openai:',
+        '    authMethod: OAuth',
+        '    organization: org-inline',
+        '    project: proj-inline',
+      ].join('\n'),
+      'inline://test-config.yaml'
+    )
 
-    expect(result.url).toBe("inline://test-config.yaml");
-    expect(result.agentEndpoint).toBe("http://localhost:9977");
+    expect(result.url).toBe('inline://test-config.yaml')
+    expect(result.agentEndpoint).toBe('http://localhost:9977')
     expect(result.responsesDirect).toMatchObject({
-      authMethod: "oauth",
-      openaiOrganization: "org-inline",
-      openaiProject: "proj-inline",
-    });
-  });
-});
+      authMethod: 'oauth',
+      openaiOrganization: 'org-inline',
+      openaiProject: 'proj-inline',
+    })
+  })
+})
