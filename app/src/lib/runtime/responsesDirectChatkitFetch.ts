@@ -1,6 +1,13 @@
 import { getAccessToken } from '../../token'
 import { appLogger } from '../logging/runtime'
 import type { ChatKitThreadDetail } from './chatkitProtocol'
+import { createChatKitFetchFromAdapter } from './createChatKitFetchFromAdapter'
+import type {
+  HarnessChatKitAdapter,
+  HarnessChatKitEventSink,
+  HarnessChatKitMessageRequest,
+  HarnessChatKitToolResultRequest,
+} from './harnessChatKitAdapter'
 import { responsesDirectConfigManager } from './responsesDirectConfigManager'
 import { RUNME_RESPONSES_DIRECT_INSTRUCTIONS } from './runmeChatkitPrompts'
 
@@ -540,9 +547,9 @@ function buildStreamResponse(
   })
 }
 
-export function createResponsesDirectChatkitFetch(options?: {
+export function createResponsesDirectChatKitAdapter(options?: {
   responsesApiBaseUrl?: string
-}): typeof fetch {
+}): HarnessChatKitAdapter {
   const responsesApiUrl = resolveResponsesApiUrl(
     options?.responsesApiBaseUrl ?? ''
   )
@@ -791,72 +798,33 @@ export function createResponsesDirectChatkitFetch(options?: {
     )
   }
 
-  return async (input: RequestInfo | URL, init?: RequestInit) => {
-    const { json } = await readBody(input, init)
-    const requestType =
-      asString(getPayloadRecord(json).type) ?? asString(json.type) ?? ''
-    appLogger.info('Direct Responses ChatKit fetch request', {
-      attrs: {
-        scope: 'chatkit.responses_direct',
-        responsesApiUrl,
-        requestType,
-        payload: json,
-      },
-    })
-
-    if (requestType === 'threads.list') {
-      const payload = {
-        data: [...threads.values()].map((thread) => ({
-          id: thread.id,
-          title: thread.title,
-          updated_at: thread.updatedAt,
-        })),
-        has_more: false,
-      }
-      return jsonResponse(payload)
-    }
-
-    if (requestType === 'threads.get_by_id' || requestType === 'threads.get') {
-      const threadId = readThreadId(json)
+  return {
+    historyEnabled: true,
+    async listThreads() {
+      return [...threads.values()].map((thread) => ({
+        id: thread.id,
+        title: thread.title,
+        updated_at: thread.updatedAt,
+      }))
+    },
+    async getThread(threadId: string) {
       const thread = threadId ? threads.get(threadId) : undefined
       if (!thread) {
-        return new Response(JSON.stringify({ error: 'thread_not_found' }), {
-          status: 404,
-          headers: { 'content-type': 'application/json' },
-        })
+        throw new Error('thread_not_found')
       }
-      return jsonResponse(buildThreadDetail(thread))
-    }
-
-    if (requestType === 'items.list' || requestType === 'messages.list') {
-      const threadId = readThreadId(json)
+      return buildThreadDetail(thread)
+    },
+    async listItems(threadId: string) {
       const thread = threadId ? threads.get(threadId) : undefined
-      return jsonResponse({
-        data: thread?.items ?? [],
-        has_more: false,
-      })
-    }
-
-    if (
-      requestType === 'threads.create' ||
-      requestType === 'threads.add_user_message'
-    ) {
-      const payload = getPayloadRecord(json)
-      const { text, model } = extractInput(json)
-      if (!text) {
-        return jsonResponse({
-          data: null,
-          error: 'missing_user_input',
-        })
-      }
-
-      const requestedThreadId =
-        requestType === 'threads.add_user_message'
-          ? readThreadId(json)
-          : undefined
-      const thread = ensureThread(requestedThreadId)
-      thread.model = model || thread.model || DEFAULT_MODEL
-      withUpdatedThreadTitle(thread, text)
+      return thread?.items ?? []
+    },
+    async streamUserMessage(
+      request: HarnessChatKitMessageRequest,
+      sink: HarnessChatKitEventSink
+    ): Promise<void> {
+      const thread = ensureThread(request.createThread ? undefined : request.threadId)
+      thread.model = request.model || thread.model || DEFAULT_MODEL
+      withUpdatedThreadTitle(thread, request.input)
 
       const userItem: JsonRecord = {
         id: randomId('msg'),
@@ -866,13 +834,12 @@ export function createResponsesDirectChatkitFetch(options?: {
         content: [
           {
             type: 'input_text',
-            text,
+            text: request.input,
           },
         ],
         attachments: [],
-        quoted_text: asString(asRecord(payload.input).quoted_text),
         inference_options: {
-          model: model || DEFAULT_MODEL,
+          model: request.model || DEFAULT_MODEL,
         },
       }
       thread.items.push(userItem)
@@ -881,84 +848,70 @@ export function createResponsesDirectChatkitFetch(options?: {
       const vectorStores =
         responsesDirectConfigManager.getSnapshot().vectorStores
       const requestPayload = buildOpenAIResponsesRequestForInput({
-        text,
-        model: model || thread.model || DEFAULT_MODEL,
+        text: request.input,
+        model: request.model || thread.model || DEFAULT_MODEL,
         previousResponseId: thread.previousResponseId,
         vectorStores,
       })
 
-      return buildStreamResponse(
-        async (sink) => {
-          if (requestType === 'threads.create') {
-            sink.emit({
-              type: 'thread.created',
-              thread: {
-                id: thread.id,
-                title: thread.title,
-                created_at: thread.createdAt,
-              },
-            })
-          }
-          sink.emit({
-            type: 'thread.item.added',
-            item: userItem,
-          })
-          sink.emit({
-            type: 'thread.item.done',
-            item: userItem,
-          })
-          await streamOpenAI({
-            thread,
-            responsesApiUrl,
-            requestPayload,
-            emit: sink.emit,
-            signal: init?.signal ?? null,
-          })
-        },
-        { signal: init?.signal ?? null }
-      )
-    }
-
-    if (requestType === 'threads.add_client_tool_output') {
-      const threadId = readThreadId(json)
-      if (!threadId) {
-        return jsonResponse({ data: null, error: 'thread_id_required' })
+      if (request.createThread) {
+        sink.emit({
+          type: 'thread.created',
+          thread: {
+            id: thread.id,
+            title: thread.title,
+            created_at: thread.createdAt,
+          },
+        } as never)
       }
-      const thread = ensureThread(threadId)
-      const { callId, previousResponseId, output } = extractToolOutput(json)
-      if (!callId) {
-        return jsonResponse({ data: null, error: 'call_id_required' })
-      }
-
+      sink.emit({
+        type: 'thread.item.added',
+        item: userItem,
+      } as never)
+      sink.emit({
+        type: 'thread.item.done',
+        item: userItem,
+      } as never)
+      await streamOpenAI({
+        thread,
+        responsesApiUrl,
+        requestPayload,
+        emit: sink.emit,
+        signal: request.signal ?? null,
+      })
+    },
+    async submitToolResult(
+      request: HarnessChatKitToolResultRequest,
+      sink: HarnessChatKitEventSink
+    ): Promise<void> {
+      const thread = ensureThread(request.threadId)
       const vectorStores =
         responsesDirectConfigManager.getSnapshot().vectorStores
       const requestPayload = buildOpenAIResponsesRequestForToolOutput({
-        callId,
-        output,
+        callId: request.callId,
+        output: toOutputString(request.output),
         model: thread.model || DEFAULT_MODEL,
-        previousResponseId: previousResponseId || thread.previousResponseId,
+        previousResponseId: thread.previousResponseId,
         vectorStores,
       })
-
-      return buildStreamResponse(
-        async (sink) => {
-          await streamOpenAI({
-            thread,
-            responsesApiUrl,
-            requestPayload,
-            emit: sink.emit,
-            signal: init?.signal ?? null,
-          })
-        },
-        { signal: init?.signal ?? null }
-      )
-    }
-
-    return jsonResponse({
-      data: null,
-      error: requestType
-        ? `unsupported_responses_direct_request:${requestType}`
-        : 'unsupported_responses_direct_request:missing_type',
-    })
+      await streamOpenAI({
+        thread,
+        responsesApiUrl,
+        requestPayload,
+        emit: sink.emit,
+        signal: request.signal ?? null,
+      })
+    },
   }
+}
+
+export function createResponsesDirectChatkitFetch(options?: {
+  responsesApiBaseUrl?: string
+}): typeof fetch {
+  return createChatKitFetchFromAdapter(
+    createResponsesDirectChatKitAdapter(options),
+    {
+      unsupportedRequestPrefix: 'unsupported_responses_direct_request',
+    }
+  )
 }
