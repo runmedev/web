@@ -72,6 +72,55 @@ chatkit:
 
 When `oidc.google` is present, runtime config loading applies the same Google OIDC defaults as `oidc.setGoogleDefaults()` and then sets the configured client ID. Use `oidc.generic` when you need to override the discovery URL, redirect URL, or scopes explicitly.
 
+## Google Drive auth configuration
+
+`googleDrive` runtime config controls Drive auth independently from the app's main OIDC login.
+
+Supported fields:
+
+- `clientID`: Google OAuth client ID used for Drive authorization.
+- `clientSecret`: optional client secret; mainly relevant for code-exchange flows.
+- `baseUrl`: optional Drive API base URL override for fake/test servers.
+- `authFlow`: either `implicit` or `pkce`.
+- `authUxMode`: either `popup`, `redirect`, or `new_tab`.
+
+Example:
+
+```yaml
+googleDrive:
+  clientID: "<google-drive-client-id>"
+  clientSecret: ""
+  authFlow: "implicit"
+  authUxMode: "new_tab"
+```
+
+Behavior:
+
+- `authFlow: implicit`
+  - requests a browser access token directly from Google.
+  - works with `popup`, `redirect`, or `new_tab`.
+- `authFlow: pkce`
+  - uses authorization code + PKCE.
+  - works with `redirect` or `new_tab`.
+
+UX modes:
+
+- `popup`
+  - keeps the current tab in place and uses the Google popup/token client path.
+  - only applies to implicit auth.
+- `redirect`
+  - navigates the current tab to Google and returns through the Drive callback route.
+- `new_tab`
+  - opens the Drive auth flow in a separate tab and leaves the original tab in place.
+  - this is the default mode for new Drive auth configuration.
+  - after callback completion, the original tab picks up the updated token from browser storage.
+
+Recommended choices:
+
+- Default to `implicit` + `new_tab` for the least disruptive browser flow.
+- Use `pkce` + `new_tab` if you want PKCE but still want to avoid taking over the current tab.
+- Use `redirect` only when current-tab navigation is explicitly preferred.
+
 ## Vite Dev Server Support
 
 Yes, this works with Vite.
