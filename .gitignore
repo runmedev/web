@@ -39,7 +39,7 @@ packages/react-console/gen
 
 # CUJ generated outputs
 /app/.generated/
-/app/assets/generated/
+/app/assets/generated
 /app/test/browser/.generated/
 /app/test/browser/test-output/*
 
