@@ -266,6 +266,18 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     []
   )
 
+  const hasRedirectAuthHandoffInProgress = useCallback(() => {
+    try {
+      const state = window.localStorage.getItem(PKCE_STATE_KEY)
+      const handoffMode = window.localStorage.getItem(AUTH_HANDOFF_MODE_KEY)
+      return Boolean(
+        state && (handoffMode === 'redirect' || handoffMode === 'new_tab')
+      )
+    } catch {
+      return false
+    }
+  }, [])
+
   const readImplicitRedirectTokenFromHash = useCallback(() => {
     const hash = window.location.hash.startsWith('#')
       ? window.location.hash.slice(1)
@@ -799,6 +811,11 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
         }
 
         const oauthClient = googleClientManager.getOAuthClient()
+        if (hasRedirectAuthHandoffInProgress()) {
+          throw new Error(
+            'Redirecting to Google OAuth for Drive authorization.'
+          )
+        }
         if (oauthClient.authFlow === 'pkce') {
           await startPkceRedirect(
             oauthClient.authUxMode === 'redirect' ? 'redirect' : 'new_tab'
@@ -865,6 +882,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     },
     [
       ensureTokenClient,
+      hasRedirectAuthHandoffInProgress,
       refreshAccessToken,
       setAccessToken,
       startImplicitRedirect,

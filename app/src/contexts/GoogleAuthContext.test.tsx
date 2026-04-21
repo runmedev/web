@@ -9,6 +9,7 @@ const PKCE_STATE_KEY = 'runme/google-auth/pkce-state'
 const PKCE_CODE_VERIFIER_KEY = 'runme/google-auth/pkce-code-verifier'
 const PKCE_RETURN_TO_KEY = 'runme/google-auth/pkce-return-to'
 const IMPLICIT_PROMPT_MODE_KEY = 'runme/google-auth/implicit-prompt-mode'
+const AUTH_HANDOFF_MODE_KEY = 'runme/google-auth/handoff-mode'
 const STORAGE_KEY = 'runme/google-auth/token'
 
 function CaptureAuth(props: {
@@ -88,6 +89,29 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     expect(window.localStorage.getItem(PKCE_RETURN_TO_KEY)).toBe('/')
     expect(window.localStorage.getItem(IMPLICIT_PROMPT_MODE_KEY)).toBe('none')
     expect(window.localStorage.getItem(PKCE_CODE_VERIFIER_KEY)).toBeNull()
+  })
+
+  it('does not relaunch new-tab auth while a handoff is already in progress', async () => {
+    googleClientManager.setOAuthClient({
+      authFlow: 'implicit',
+      authUxMode: 'new_tab',
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const openSpy = vi
+      .spyOn(window, 'open')
+      .mockReturnValue(window as unknown as Window)
+    const auth = await renderWithGoogleAuthProvider()
+
+    await expect(auth.ensureAccessToken()).rejects.toThrow()
+    const initialState = window.localStorage.getItem(PKCE_STATE_KEY)
+
+    await expect(auth.ensureAccessToken()).rejects.toThrow()
+
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    expect(window.localStorage.getItem(PKCE_STATE_KEY)).toBe(initialState)
+    expect(window.localStorage.getItem(PKCE_RETURN_TO_KEY)).toBe('/')
+    expect(window.localStorage.getItem(IMPLICIT_PROMPT_MODE_KEY)).toBe('none')
+    expect(window.localStorage.getItem(AUTH_HANDOFF_MODE_KEY)).toBe('new_tab')
   })
 
   it('syncs stored tokens from another tab via the storage event', async () => {
