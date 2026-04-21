@@ -58,6 +58,16 @@ Both codex modes share the same high-level conversation model:
 The important distinction is that the shared conversation state is the same,
 but transport bootstrap and transport-local state are different.
 
+#### Projects in Codex
+
+Projects in Codex are collections of information (CWD, approval policy, etc...) that are used
+to configure threads. A project is not an object in Codex's app-server. It is a collection
+of configuration defined in Codex's desktop app that is used to configure threads.
+
+
+
+### Responses Direct
+
 Runme also has a responses-based harness path:
 
 - `responses-direct`:
@@ -362,97 +372,6 @@ connections, or conversation controller state.
 This refactor should keep that split explicit instead of extending
 `HarnessManager` into a mixed config-plus-runtime object.
 
-### Proposed Runtime Manager
-
-Add a separate singleton runtime cache, for example:
-
-- `app/src/lib/runtime/harnessRuntimeManager.ts`
-
-Its responsibility would be to manage live runtime instances keyed by harness
-name.
-
-Conceptually:
-
-```ts
-type HarnessRuntime = {
-  profile: HarnessProfile;
-  start(): Promise<void>;
-  stop(): void;
-  controller: CodexConversationController;
-  appServerClient: CodexAppServerClient;
-};
-
-interface HarnessRuntimeManager {
-  getOrCreate(name: string): HarnessRuntime;
-  reconcile(profile: HarnessProfile): void;
-  remove(name: string): void;
-}
-```
-
-The important idea is that `HarnessManager` remains the source of truth for
-persisted harness configuration, while `HarnessRuntimeManager` owns ephemeral
-runtime/session state.
-
-### Why `reconcile(...)` Is Better Than `invalidateIfConfigChanged(...)`
-
-The preferred API is `reconcile(profile)`.
-
-`invalidateIfConfigChanged(...)` describes one implementation strategy, but it
-hard-codes the assumption that config changes are always handled by tearing down
-the old runtime.
-
-`reconcile(...)` is a better interface because:
-
-- it describes the higher-level job: make runtime state match config state
-- it gives the manager flexibility to decide whether to keep, invalidate, or
-  later migrate a runtime
-- it composes naturally with `HarnessManager.update(...)` and
-  `HarnessManager.delete(...)`
-- it keeps lifecycle policy inside the runtime manager instead of leaking it to
-  callers
-
-For the initial implementation, `reconcile(...)` should still be conservative.
-If a harness runtime already exists and a material field changes, such as
-`adapter` or `baseUrl`, `reconcile(...)` should:
-
-1. stop the existing runtime
-1. remove it from the cache
-1. let the next `getOrCreate(...)` lazily construct a fresh runtime
-
-So the public API should be `reconcile(...)`, while the initial behavior is
-effectively "invalidate and recreate lazily on next use."
-
-### Integration With `app.harness.update(...)`
-
-When harness config changes, the two managers should coordinate like this:
-
-1. `HarnessManager.update(...)` persists the new profile
-1. `HarnessRuntimeManager.reconcile(updatedProfile)` adjusts any existing live
-   runtime for that harness
-
-Similarly:
-
-- `HarnessManager.delete(name)` should be paired with
-  `HarnessRuntimeManager.remove(name)`
-- default harness selection changes should not require immediate runtime
-  creation; the active caller can still use `getOrCreate(...)` lazily
-
-### How ChatKit Would Use It
-
-With this split, ChatKit does not need to own transport bootstrap details
-directly.
-
-Instead it can:
-
-1. read the selected harness from `HarnessManager`
-1. call `HarnessRuntimeManager.getOrCreate(harness.name)`
-1. call `runtime.start()` if needed
-1. use the runtime's ChatKit binding through a thin UI wrapper
-
-That keeps harness lifecycle management out of React effects while preserving
-lazy initialization.
-
-
 ## Proposal: Standardize Harness Runtime Integration
 
 We should standardize around the idea that each harness owns:
@@ -478,8 +397,9 @@ Split the abstraction into three levels:
    persisted configuration such as name, adapter, and base URL
 1. `HarnessRuntime`
    live runtime/session state for one configured harness
-1. `HarnessChatKitBinding`
-   a harness-owned ChatKit adapter plus minimal UI-facing metadata
+1. `HarnessChatKitAdapter`
+   the single ChatKit-facing surface for both protocol operations and minimal
+   UI-facing metadata
 
 Conceptually:
 
@@ -515,6 +435,10 @@ type HarnessChatKitEventSink = {
 };
 
 interface HarnessChatKitAdapter {
+  initialThreadId?: string;
+  historyEnabled: boolean;
+  onThreadSelected?: (threadId: string | null) => Promise<void>;
+  onNewConversation?: () => Promise<string | null>;
   listThreads(
     request?: HarnessChatKitThreadRequest,
   ): Promise<ChatKitThreadSummary[]>;
@@ -536,35 +460,17 @@ interface HarnessChatKitAdapter {
   ): Promise<void>;
 }
 
-type HarnessChatKitBinding = {
-  adapter: HarnessChatKitAdapter;
-  initialThreadId?: string;
-  historyEnabled: boolean;
-  onThreadSelected?: (threadId: string | null) => Promise<void>;
-  onNewConversation?: () => Promise<string | null>;
-};
-
 interface HarnessRuntime {
   readonly profile: HarnessProfile;
   start(): Promise<void>;
   stop(): void;
-  createChatKitBinding(): HarnessChatKitBinding;
+  createChatKitAdapter(): HarnessChatKitAdapter;
 }
 ```
 
 The important point is that `HarnessRuntime` owns harness-specific conversation
 state internally. `ChatKitPanel` should not read or write `previousResponseId`,
 `chatkit_state`, or other harness-private fields.
-
-If `useChatKit(...)` still requires a `fetch` callback, `ChatKitPanel` can keep
-a very small adapter that translates ChatKit SDK requests into
-`HarnessChatKitAdapter` method calls. That wrapper belongs at the UI boundary,
-not in the harness interface itself.
-
-### Why Each Interface Member Exists
-
-The proposed interfaces should be read as a minimal ownership boundary, not as
-just a list of convenient methods.
 
 For `HarnessRuntime`:
 
@@ -579,15 +485,12 @@ For `HarnessRuntime`:
   exists because these runtimes hold live resources that must be cleaned up,
   such as websocket connections, worker instances, bridge handlers, and pending
   approvals
-- `createChatKitBinding()`
+- `createChatKitAdapter()`
   exists so the runtime can expose only the UI-facing capabilities ChatKit
   needs, without exposing the runtime's internal controller/client objects
 
-For `HarnessChatKitBinding`:
+For `HarnessChatKitAdapter`:
 
-- `adapter`
-  is the narrow protocol surface the UI uses for thread/message/tool operations;
-  this is the core replacement for generic `fetch`
 - `initialThreadId`
   exists because ChatKit wants to know which thread to show first, but that
   choice should come from the harness runtime rather than from React-owned
@@ -602,9 +505,6 @@ For `HarnessChatKitBinding`:
   exists because starting a new conversation may require harness-specific logic
   such as resetting runtime continuity state, creating a fresh thread, or
   returning a new active thread id
-
-For `HarnessChatKitAdapter`:
-
 - `listThreads`, `getThread`, and `listItems`
   exist because ChatKit needs read operations for history and thread display,
   and those should be expressed directly instead of encoded into fake HTTP
@@ -619,6 +519,105 @@ For `HarnessChatKitAdapter`:
 The overall rule is: each member should correspond to a real responsibility the
 harness runtime already owns today, while removing transport and continuity
 details from `ChatKitPanel`.
+
+
+### `fetch` is a thin wrapper
+
+`fetch` should remain only as a thin ChatKit SDK
+compatibility wrapper.
+
+The implementation should live in a shared helper, for example:
+
+- `app/src/lib/runtime/createChatKitFetchFromAdapter.ts`
+
+Its job is:
+
+1. parse the incoming ChatKit SDK request body
+1. map the request to one `HarnessChatKitAdapter` method
+1. serialize the result back into either:
+   - JSON for non-streaming read operations
+   - `text/event-stream` for streaming operations
+
+That wrapper should not:
+
+- inject `chatkit_state`
+- keep `previousResponseId`
+- mutate harness continuity state
+- implement harness-specific tool logic
+- implement transport-specific auth/bootstrap logic
+
+Those responsibilities stay inside the harness runtime.
+
+Conceptually:
+
+```ts
+function createChatKitFetchFromAdapter(
+  adapter: HarnessChatKitAdapter,
+): typeof fetch {
+  return async (input, init) => {
+    const request = await parseChatKitRequest(input, init);
+
+    switch (request.type) {
+      case "threads.list":
+        return jsonResponse({
+          data: await adapter.listThreads({
+            signal: init?.signal ?? null,
+          }),
+          has_more: false,
+        });
+
+      case "threads.get":
+      case "threads.get_by_id":
+        return jsonResponse(
+          await adapter.getThread(request.threadId, {
+            signal: init?.signal ?? null,
+          }),
+        );
+
+      case "items.list":
+      case "messages.list":
+        return jsonResponse({
+          data: await adapter.listItems(request.threadId, {
+            signal: init?.signal ?? null,
+          }),
+          has_more: false,
+        });
+
+      case "threads.create":
+      case "threads.add_user_message":
+        return buildSseResponse((sink) =>
+          adapter.streamUserMessage(
+            {
+              threadId: request.threadId,
+              input: request.input,
+              model: request.model,
+              signal: init?.signal ?? null,
+            },
+            sink,
+          ),
+        );
+
+      case "threads.add_client_tool_output":
+        return buildSseResponse((sink) =>
+          adapter.submitToolResult(
+            {
+              threadId: request.threadId,
+              callId: request.callId,
+              output: request.output,
+              signal: init?.signal ?? null,
+            },
+            sink,
+          ),
+        );
+    }
+  };
+}
+```
+
+So `fetch` is still present, but only as a serializer/deserializer shim for the
+ChatKit SDK. The harness boundary itself remains operation-shaped, not
+transport-shaped.
+
 
 ### Harness-Owned Conversation State
 
