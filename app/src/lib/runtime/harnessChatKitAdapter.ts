@@ -20,6 +20,7 @@ export type HarnessChatKitMessageRequest = {
 export type HarnessChatKitToolResultRequest = {
   threadId: string;
   callId: string;
+  previousResponseId?: string;
   output: unknown;
   signal?: AbortSignal | null;
 };
@@ -30,11 +31,19 @@ export type HarnessChatKitEventSink = {
   emit(event: ChatKitStreamEvent): void;
 };
 
+export type HarnessClientToolInvocation = {
+  name: string;
+  params?: unknown;
+};
+
 export interface HarnessChatKitAdapter {
   initialThreadId?: string;
   historyEnabled: boolean;
   onThreadSelected?: (threadId: string | null) => Promise<void>;
   onNewConversation?: () => Promise<string | null>;
+  invokeClientTool?: (
+    invocation: HarnessClientToolInvocation,
+  ) => Promise<Record<string, unknown>>;
   listThreads(
     request?: HarnessChatKitThreadRequest,
   ): Promise<ChatKitThreadSummary[]>;

@@ -122,11 +122,14 @@ export function createCodexChatKitAdapter(
       request: HarnessChatKitMessageRequest,
       sink: HarnessChatKitEventSink,
     ): Promise<void> {
+      if (
+        request.threadId &&
+        controller.getSnapshot().currentThreadId !== request.threadId
+      ) {
+        await controller.selectThread(request.threadId);
+      }
       await controller.streamUserMessage(
         request.input,
-        {
-          threadId: request.threadId,
-        },
         sink,
         request.model,
       );
@@ -141,7 +144,16 @@ export function createCodexChatKitAdapter(
 }
 
 export function createCodexChatkitFetch(): typeof fetch {
-  return createChatKitFetchFromAdapter(createCodexChatKitAdapter(), {
+  return createChatKitFetchFromAdapter(
+    createCodexChatKitAdapter(),
+    buildCodexChatKitFetchOptions(),
+  );
+}
+
+export function buildCodexChatKitFetchOptions(): Parameters<
+  typeof createChatKitFetchFromAdapter
+>[1] {
+  return {
     unsupportedRequestPrefix: "unsupported_codex_chatkit_request",
     onUnsupportedRequest: (requestType, payload) => {
       appLogger.error("Unsupported Codex ChatKit fetch request", {
@@ -179,5 +191,5 @@ export function createCodexChatkitFetch(): typeof fetch {
         ignored: "Codex ChatKit stream abort ignored after stream settled",
       },
     },
-  });
+  };
 }

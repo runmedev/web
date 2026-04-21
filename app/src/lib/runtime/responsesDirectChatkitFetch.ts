@@ -609,15 +609,6 @@ export function createResponsesDirectChatKitAdapter(options?: {
             if (responseId) {
               options.thread.previousResponseId = responseId
               options.thread.updatedAt = new Date().toISOString()
-              options.emit({
-                type: 'aisre.chatkit.state',
-                item: {
-                  state: {
-                    threadId: options.thread.id,
-                    previousResponseId: responseId,
-                  },
-                },
-              })
             }
             return
           }
@@ -885,13 +876,21 @@ export function createResponsesDirectChatKitAdapter(options?: {
       sink: HarnessChatKitEventSink
     ): Promise<void> {
       const thread = ensureThread(request.threadId)
+      const toolResultRecord = asRecord(request.output)
+      const toolResult =
+        Object.keys(toolResultRecord).length > 0
+          ? extractToolOutput({ result: toolResultRecord })
+          : null
       const vectorStores =
         responsesDirectConfigManager.getSnapshot().vectorStores
       const requestPayload = buildOpenAIResponsesRequestForToolOutput({
         callId: request.callId,
-        output: toOutputString(request.output),
+        output: toolResult?.output ?? toOutputString(request.output),
         model: thread.model || DEFAULT_MODEL,
-        previousResponseId: thread.previousResponseId,
+        previousResponseId:
+          request.previousResponseId ??
+          toolResult?.previousResponseId ??
+          thread.previousResponseId,
         vectorStores,
       })
       await streamOpenAI({

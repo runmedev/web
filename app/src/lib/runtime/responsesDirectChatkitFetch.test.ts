@@ -81,7 +81,6 @@ describe("responsesDirectChatkitFetch", () => {
     expect(body).toContain('"type":"thread.item.updated"');
     expect(body).toContain("print('hello world')");
     expect(body).toContain('"type":"thread.item.done"');
-    expect(body).toContain('"type":"aisre.chatkit.state"');
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.openai.com/v1/responses",

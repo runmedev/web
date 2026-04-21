@@ -1,13 +1,4 @@
-import {
-  ReactNode,
-  createContext,
-  useCallback,
-  useContext,
-  useMemo,
-  useRef,
-} from "react";
-
-import { clone, create } from "@bufbuild/protobuf";
+import { create } from "@bufbuild/protobuf";
 
 import {
   AgentMetadataKey,
@@ -15,63 +6,6 @@ import {
   RunmeMetadataKey,
   parser_pb,
 } from "../runme/client";
-import { ChatkitStateSchema } from "../protogen/oaiproto/aisre/notebooks_pb";
-
-// TODO(jlewi): Rename this to ChatkitContext. It no longer stores CellContext data; just chatkit state.
-
-export type CellContextType = {
-  getChatkitState: () => ReturnType<typeof createChatkitState>;
-  setChatkitState: (state: ReturnType<typeof createChatkitState>) => void;
-};
-
-const CellContext = createContext<CellContextType | undefined>(undefined);
-
-// eslint-disable-next-line react-refresh/only-export-components
-export const useCell = () => {
-  const context = useContext(CellContext);
-  if (!context) {
-    throw new Error("useCell must be used within a CellProvider");
-  }
-  return context;
-};
-
-function createChatkitState() {
-  return create(ChatkitStateSchema, {
-    previousResponseId: "",
-    threadId: "",
-  });
-}
-
-export interface CellProviderProps {
-  children: ReactNode;
-}
-
-export const CellProvider = ({ children }: CellProviderProps) => {
-  const chatkitStateRef = useRef(createChatkitState());
-
-  const getChatkitState = useCallback(() => {
-    return clone(ChatkitStateSchema, chatkitStateRef.current);
-  }, []);
-
-  const setChatkitState = useCallback(
-    (nextState: ReturnType<typeof createChatkitState>) => {
-      chatkitStateRef.current = clone(ChatkitStateSchema, nextState);
-    },
-    [],
-  );
-
-  const contextValue = useMemo<CellContextType>(
-    () => ({
-      getChatkitState,
-      setChatkitState,
-    }),
-    [getChatkitState, setChatkitState],
-  );
-
-  return (
-    <CellContext.Provider value={contextValue}>{children}</CellContext.Provider>
-  );
-};
 
 // singleton text encoder for non-streaming output
 const textEncoder = new TextEncoder();

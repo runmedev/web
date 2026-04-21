@@ -23,6 +23,7 @@ type ParsedChatKitRequest =
       type: "threads.add_client_tool_output";
       threadId: string;
       callId: string;
+      previousResponseId?: string;
       output: unknown;
     }
   | { type: "unsupported"; requestType?: string };
@@ -150,13 +151,27 @@ function readThreadId(payload: JsonRecord): string {
 
 function extractToolOutput(payload: JsonRecord): {
   callId: string;
+  previousResponseId?: string;
   output: unknown;
 } {
   const source = getPayloadRecord(payload);
   const result = asRecord(source.result);
+  const hasStructuredToolResult =
+    "clientError" in result ||
+    "client_error" in result ||
+    "previousResponseId" in result ||
+    "previous_response_id" in result;
+  const output = hasStructuredToolResult
+    ? result
+    : result.output ??
+      result.result ??
+      (Object.keys(result).length > 0 ? result : source.result);
   return {
     callId: asString(result.callId) ?? asString(result.call_id) ?? "",
-    output: result.output ?? result.result,
+    previousResponseId:
+      asString(result.previousResponseId) ??
+      asString(result.previous_response_id),
+    output,
   };
 }
 
@@ -197,12 +212,13 @@ function parseChatKitRequest(payload: JsonRecord): ParsedChatKitRequest {
   }
   if (requestType === "threads.add_client_tool_output") {
     const threadId = readThreadId(payload);
-    const { callId, output } = extractToolOutput(payload);
+    const { callId, previousResponseId, output } = extractToolOutput(payload);
     if (threadId && callId) {
       return {
         type: "threads.add_client_tool_output",
         threadId,
         callId,
+        previousResponseId,
         output,
       };
     }
@@ -262,6 +278,26 @@ function buildSseResponse(
       };
 
       if (options?.signal?.aborted) {
+        if (options?.log?.abortMessages) {
+          appLogger.info(options.log.abortMessages.signaled, {
+            attrs: {
+              scope: options.log.scope,
+              aborted: options.signal.aborted,
+              ...logContext,
+            },
+          });
+        }
+        void Promise.resolve(options?.onAbort?.()).finally(() => {
+          if (options?.log?.abortMessages) {
+            appLogger.info(options.log.abortMessages.completed, {
+              attrs: {
+                scope: options.log.scope,
+                aborted: options.signal?.aborted ?? false,
+                ...logContext,
+              },
+            });
+          }
+        });
         emit({
           type: "response.failed",
           error: { message: String(options.signal.reason ?? "Request aborted") },
@@ -467,6 +503,7 @@ export function createChatKitFetchFromAdapter(
             {
               threadId: request.threadId,
               callId: request.callId,
+              previousResponseId: request.previousResponseId,
               output: request.output,
               signal: init?.signal ?? null,
             },

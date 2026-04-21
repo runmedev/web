@@ -16,7 +16,6 @@ import { WebAppConfig } from "@buf/stateful_runme.bufbuild_es/agent/v1/webapp_pb
 import NotFound from "./components/NotFound";
 import { SettingsProvider } from "./contexts/SettingsContext";
 import { OutputProvider } from "./contexts/OutputContext";
-import { CellProvider } from "./contexts/CellContext";
 import { WorkspaceProvider } from "./contexts/WorkspaceContext";
 import {
   NotebookStoreProvider,
@@ -167,12 +166,10 @@ function App({ branding }: AppProps) {
                     >
                       <OutputProvider>
                         <NotebookProvider>
-                          <CellProvider>
-                            <SidePanelProvider>
-                              <GlobalToast />
-                              <AppRouter />
-                            </SidePanelProvider>
-                          </CellProvider>
+                          <SidePanelProvider>
+                            <GlobalToast />
+                            <AppRouter />
+                          </SidePanelProvider>
                         </NotebookProvider>
                       </OutputProvider>
                     </RunnersProvider>

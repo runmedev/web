@@ -241,7 +241,7 @@ describe("ChatKit protocol render contract", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: ChatKitStreamEvent[] = [];
-    await controller.streamUserMessage("print hello world in python", {}, {
+    await controller.streamUserMessage("print hello world in python", {
       emit: (payload) => events.push(payload),
     });
 
@@ -292,7 +292,7 @@ describe("ChatKit protocol render contract", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: ChatKitStreamEvent[] = [];
-    const streamPromise = controller.streamUserMessage("print hello world in python", {}, {
+    const streamPromise = controller.streamUserMessage("print hello world in python", {
       emit: (payload) => events.push(payload),
     });
 

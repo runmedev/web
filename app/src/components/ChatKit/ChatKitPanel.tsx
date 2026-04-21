@@ -6,40 +6,40 @@ import {
   useState,
   type ChangeEvent,
 } from 'react'
-import { ChatKit, useChatKit, ChatKitIcon } from '@openai/chatkit-react'
+import { ChatKit, useChatKit } from '@openai/chatkit-react'
 import {
   parser_pb,
   RunmeMetadataKey,
-  useCell,
 } from '../../contexts/CellContext'
 import { useNotebookContext } from '../../contexts/NotebookContext'
 import { useOutput } from '../../contexts/OutputContext'
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
-import { create, fromJsonString, toJson } from '@bufbuild/protobuf'
 import {
   useHarness,
   getHarnessManager,
   buildChatkitUrl,
-  buildCodexAppServerWsUrl,
-  buildCodexBridgeWsUrl,
   type HarnessProfile,
 } from '../../lib/runtime/harnessManager'
-import { getCodexToolBridge } from '../../lib/runtime/codexToolBridge'
+import {
+  buildCodexChatKitFetchOptions,
+} from '../../lib/runtime/codexChatkitFetch'
+import { createCodeModeExecutor } from '../../lib/runtime/codeModeExecutor'
+import { createChatKitFetchFromAdapter } from '../../lib/runtime/createChatKitFetchFromAdapter'
+import { useCodexConversationSnapshot } from '../../lib/runtime/codexConversationController'
 import { getCodexExecuteApprovalManager } from '../../lib/runtime/codexExecuteApprovalManager'
-import { getCodexAppServerClient } from '../../lib/runtime/codexAppServerClient'
-import { createCodexChatkitFetch } from '../../lib/runtime/codexChatkitFetch'
-import { createResponsesDirectChatkitFetch } from '../../lib/runtime/responsesDirectChatkitFetch'
+import type {
+  HarnessChatKitAdapter,
+  HarnessRuntime,
+} from '../../lib/runtime/harnessChatKitAdapter'
+import { getHarnessRuntimeManager } from '../../lib/runtime/harnessRuntimeManager'
 import {
-  createCodeModeExecutor,
-  getCodeModeErrorOutput,
-} from '../../lib/runtime/codeModeExecutor'
-import { createCodexWasmCodeExecutor } from '../../lib/runtime/codexWasmCodeExecutor'
+  createChatKitNotebookToolInvoker,
+  createCodexBridgeToolHandler,
+} from '../../lib/runtime/notebookToolHandlers'
 import {
-  getCodexConversationController,
-  useCodexConversationSnapshot,
-} from '../../lib/runtime/codexConversationController'
-import { useCodexProjects } from '../../lib/runtime/codexProjectManager'
-import { buildRunmeCodexWasmSessionOptions } from '../../lib/runtime/runmeChatkitPrompts'
+  getCodexProjectManager,
+  useCodexProjects,
+} from '../../lib/runtime/codexProjectManager'
 import { appLogger } from '../../lib/logging/runtime'
 import {
   responsesDirectConfigManager,
@@ -49,16 +49,6 @@ import {
 import { getAccessToken, getAuthData } from '../../token'
 import { getBrowserAdapter } from '../../browserAdapter.client'
 import { type Cell } from '../../protogen/runme/parser/v1/parser_pb.js'
-import {
-  ToolCallInputSchema,
-  ToolCallOutputSchema,
-  ToolCallOutput_Status,
-  UpdateCellsResponseSchema,
-  GetCellsResponseSchema,
-  ListCellsResponseSchema,
-  ChatkitStateSchema,
-  NotebookServiceExecuteCellsResponseSchema,
-} from '../../protogen/oaiproto/aisre/notebooks_pb.js'
 import { getConfiguredChatKitDomainKey } from '../../lib/appConfig'
 class UserNotLoggedInError extends Error {
   constructor(message = 'You must log in to use runme chat.') {
@@ -95,191 +85,19 @@ const CHATKIT_STARTER_PROMPTS = [
 // Design direction is to simplify the agent-facing surface to a single
 // "execute JavaScript" capability and route notebook mutations through the
 // sandbox NotebooksApi.
-const TOOL_PREFIX = 'agent_tools_v1_NotebookService_'
-
-const UPDATE_CELLS_TOOL = TOOL_PREFIX + 'UpdateCells'
-const LIST_CELLS_TOOL = TOOL_PREFIX + 'ListCells'
-const GET_CELLS_TOOL = TOOL_PREFIX + 'GetCells'
-const EXECUTE_CODE_TOOL = TOOL_PREFIX + 'ExecuteCode'
-const EXECUTE_CODE_DIRECT_TOOL = 'ExecuteCode'
-
-function asRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return {}
-  }
-  return value as Record<string, unknown>
-}
-
-function asString(value: unknown): string {
-  return typeof value === 'string' ? value : ''
-}
-
-function parseExecuteCodePayload(value: unknown): {
-  callId: string
-  previousResponseId: string
-  code: string
-} | null {
-  if (typeof value === 'string') {
-    try {
-      return parseExecuteCodePayload(JSON.parse(value))
-    } catch {
-      return null
-    }
-  }
-  const root = asRecord(value)
-  const executeCodeCandidate = root.executeCode ?? root.execute_code ?? root
-  const executeCode = asRecord(executeCodeCandidate)
-  const code = asString(executeCode.code)
-  if (!code) {
-    return null
-  }
-  return {
-    callId: asString(root.callId ?? root.call_id),
-    previousResponseId: asString(
-      root.previousResponseId ?? root.previous_response_id
-    ),
-    code,
-  }
-}
-
-function buildExecuteCodeToolOutput(args: {
-  callId: string
-  previousResponseId: string
-  output: string
-  clientError?: string
-}): Record<string, unknown> {
-  const hasError = Boolean(
-    args.clientError && args.clientError.trim().length > 0
-  )
-  return {
-    callId: args.callId,
-    previousResponseId: args.previousResponseId,
-    status: hasError ? 'STATUS_FAILED' : 'STATUS_SUCCESS',
-    clientError: args.clientError ?? '',
-    executeCode: {
-      output: args.output,
-    },
-  }
-}
-
 type SSEInterceptor = (rawEvent: string) => void
-
-const useAuthorizedFetch = (
-  getChatkitState: () => ReturnType<(typeof ChatkitStateSchema)['create']>,
-  options?: {
-    onSSEEvent?: SSEInterceptor
-    baseFetch?: typeof fetch
-    includeRunmeHeaders?: boolean
-    includeChatkitState?: boolean
-  }
+const useInterceptedFetch = (
+  baseFetch?: typeof fetch,
+  onSSEEvent?: SSEInterceptor
 ) => {
-  const {
-    onSSEEvent,
-    baseFetch,
-    includeRunmeHeaders = true,
-    includeChatkitState = true,
-  } = options ?? {}
   return useMemo(() => {
     const fetchImpl = baseFetch ?? fetch
-    const resolveRequestBody = async (
-      input: RequestInfo | URL,
-      init?: RequestInit
-    ): Promise<BodyInit | null | undefined> => {
-      if (init?.body != null) {
-        return init.body
-      }
-      if (!(input instanceof Request)) {
-        return init?.body
-      }
-      const clone = input.clone()
-      const contentType = clone.headers.get('content-type')?.toLowerCase() ?? ''
-      if (contentType.includes('multipart/form-data')) {
-        try {
-          return await clone.formData()
-        } catch {
-          return null
-        }
-      }
-      if (contentType.includes('application/x-www-form-urlencoded')) {
-        try {
-          return new URLSearchParams(await clone.text())
-        } catch {
-          return null
-        }
-      }
-      try {
-        return await clone.text()
-      } catch {
-        return null
-      }
-    }
-    const authorizedFetch: typeof fetch = async (
+    const interceptedFetch: typeof fetch = async (
       input: RequestInfo | URL,
       init?: RequestInit
     ) => {
       try {
-        const headers = new Headers(
-          init?.headers ??
-            (input instanceof Request ? input.headers : undefined)
-        )
-
-        if (includeRunmeHeaders) {
-          const authData = await getAuthData()
-          const idToken = authData?.idToken ?? undefined
-          const oaiAccessToken = await getAccessToken()
-          if (!oaiAccessToken) {
-            throw new UserNotLoggedInError()
-          }
-          if (idToken) {
-            headers.set('Authorization', `Bearer ${idToken}`)
-          }
-          headers.set('OpenAIAccessToken', oaiAccessToken)
-        }
-
-        let body = await resolveRequestBody(input, init)
-        const method =
-          init?.method ?? (input instanceof Request ? input.method : 'GET')
-        if (includeChatkitState && method.toUpperCase() === 'POST') {
-          const state = getChatkitState()
-          const chatkitStateJson = toJson(ChatkitStateSchema, state)
-          if (body == null) {
-            body = JSON.stringify({ chatkit_state: chatkitStateJson })
-            headers.set('Content-Type', 'application/json')
-          } else {
-            if (typeof body === 'string') {
-              try {
-                const parsed = JSON.parse(body)
-                parsed.chatkit_state = chatkitStateJson
-                body = JSON.stringify(parsed)
-              } catch {
-                const payload = new FormData()
-                payload.append('payload', body)
-                payload.append(
-                  'chatkit_state',
-                  JSON.stringify(chatkitStateJson)
-                )
-                body = payload
-              }
-            } else if (body instanceof FormData) {
-              body.set('chatkit_state', JSON.stringify(chatkitStateJson))
-            } else if (body instanceof URLSearchParams) {
-              body.set('chatkit_state', JSON.stringify(chatkitStateJson))
-            } else if (body instanceof Blob || body instanceof ArrayBuffer) {
-              const payload = new FormData()
-              payload.append('payload', new Blob([body]))
-              payload.append('chatkit_state', JSON.stringify(chatkitStateJson))
-              body = payload
-            }
-          }
-        }
-
-        const nextInit: RequestInit = {
-          ...init,
-          headers,
-          body,
-        }
-
-        const response = await fetchImpl(input, nextInit)
+        const response = await fetchImpl(input, init)
         //return response;
         const isSSE =
           onSSEEvent &&
@@ -350,8 +168,8 @@ const useAuthorizedFetch = (
 
         return interceptedResponse
       } catch (error) {
-        console.error('ChatKit authorized fetch failed', error)
-        appLogger.error('ChatKit authorized fetch failed', {
+        console.error('ChatKit fetch failed', error)
+        appLogger.error('ChatKit fetch failed', {
           attrs: {
             scope: 'chatkit.fetch',
             error: String(error),
@@ -361,14 +179,8 @@ const useAuthorizedFetch = (
       }
     }
 
-    return authorizedFetch
-  }, [
-    baseFetch,
-    onSSEEvent,
-    getChatkitState,
-    includeRunmeHeaders,
-    includeChatkitState,
-  ])
+    return interceptedFetch
+  }, [baseFetch, onSSEEvent])
 }
 
 type ChatKitPanelInnerProps = {
@@ -376,6 +188,7 @@ type ChatKitPanelInnerProps = {
 }
 
 function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
+  const emptyCells = useMemo(() => [] as Cell[], [])
   const [showLoginPrompt, setShowLoginPrompt] = useState(false)
   const [codexStreamError, setCodexStreamError] = useState<string | null>(null)
   const [codexThreadBootstrapComplete, setCodexThreadBootstrapComplete] =
@@ -383,21 +196,18 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       defaultHarness.adapter !== 'codex' &&
         defaultHarness.adapter !== 'codex-wasm'
     )
+  const [activeAdapter, setActiveAdapter] = useState<HarnessChatKitAdapter | null>(
+    null
+  )
   const chatkitDomainKey = getConfiguredChatKitDomainKey()
   const [showCodexDrawer, setShowCodexDrawer] = useState(false)
-  const syncedCodexStateRef = useRef<{
-    threadId: string | null
-    previousResponseId: string | null
-  }>({
-    threadId: null,
-    previousResponseId: null,
-  })
+  const runtimeRef = useRef<HarnessRuntime | null>(null)
   const chatkitActionsRef = useRef<{
     setThreadId: (threadId: string | null, source?: string) => Promise<void>
     fetchUpdates: (source?: string) => Promise<void>
   } | null>(null)
-  const lastAppliedCodexThreadRef = useRef<string | null>(null)
-  const { getChatkitState } = useCell()
+  const lastAppliedThreadRef = useRef<string | null>(null)
+  const harnessRuntimeManager = useMemo(() => getHarnessRuntimeManager(), [])
   const { getNotebookData, useNotebookSnapshot, useNotebookList } =
     useNotebookContext()
   const { getCurrentDoc } = useCurrentDoc()
@@ -413,30 +223,40 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     () => notebookSnapshot?.notebook.cells ?? [],
     [notebookSnapshot]
   )
+  const getNotebookDataRef = useRef(getNotebookData)
+  getNotebookDataRef.current = getNotebookData
+  const getAllRenderersRef = useRef(getAllRenderers)
+  getAllRenderersRef.current = getAllRenderers
+  const orderedCellsRef = useRef<Cell[]>(emptyCells)
+  orderedCellsRef.current = orderedCells as Cell[]
+  const openNotebookListRef = useRef(openNotebookList)
+  openNotebookListRef.current = openNotebookList
+  const currentDocUriRef = useRef(currentDocUri)
+  currentDocUriRef.current = currentDocUri
   const updateCell = useCallback(
     (cell: Cell) => {
-      if (!cell?.refId || !currentDocUri) {
+      if (!cell?.refId || !currentDocUriRef.current) {
         return
       }
-      const data = getNotebookData(currentDocUri)
+      const data = getNotebookDataRef.current(currentDocUriRef.current)
       if (!data) {
         return
       }
-      for (const renderer of getAllRenderers().values()) {
+      for (const renderer of getAllRenderersRef.current().values()) {
         renderer.onCellUpdate(cell as unknown as parser_pb.Cell)
       }
       data.updateCell(cell as unknown as parser_pb.Cell)
     },
-    [currentDocUri, getAllRenderers, getNotebookData]
+    []
   )
 
   const getLatestCells = useCallback((): Cell[] => {
-    if (!currentDocUri) {
-      return orderedCells
+    if (!currentDocUriRef.current) {
+      return orderedCellsRef.current
     }
-    const data = getNotebookData(currentDocUri)
-    return (data?.getNotebook().cells ?? orderedCells) as unknown as Cell[]
-  }, [currentDocUri, getNotebookData, orderedCells])
+    const data = getNotebookDataRef.current(currentDocUriRef.current)
+    return (data?.getNotebook().cells ?? orderedCellsRef.current) as unknown as Cell[]
+  }, [])
 
   const resolveCodeModeNotebook = useCallback(
     (target?: unknown) => {
@@ -454,7 +274,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       if (!targetUri) {
         return null
       }
-      const data = getNotebookData(targetUri)
+      const data = getNotebookDataRef.current(targetUri)
       if (!data) {
         return null
       }
@@ -464,7 +284,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         getName: () => data.getName(),
         getNotebook: () => data.getNotebook(),
         updateCell: (cell: parser_pb.Cell) => {
-          for (const renderer of getAllRenderers().values()) {
+          for (const renderer of getAllRenderersRef.current().values()) {
             renderer.onCellUpdate(cell)
           }
           data.updateCell(cell)
@@ -476,7 +296,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         removeCell: data.removeCell?.bind(data),
       }
     },
-    [currentDocUri, getAllRenderers, getNotebookData]
+    []
   )
 
   const codeModeExecutor = useMemo(
@@ -486,13 +306,13 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         resolveNotebook: resolveCodeModeNotebook,
         listNotebooks: () => {
           const uris = new Set<string>()
-          for (const notebook of openNotebookList) {
+          for (const notebook of openNotebookListRef.current) {
             if (typeof notebook?.uri === 'string' && notebook.uri.trim()) {
               uris.add(notebook.uri)
             }
           }
-          if (currentDocUri) {
-            uris.add(currentDocUri)
+          if (currentDocUriRef.current) {
+            uris.add(currentDocUriRef.current)
           }
           return Array.from(uris)
             .map((uri) => resolveCodeModeNotebook(uri))
@@ -505,7 +325,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
             )
         },
       }),
-    [currentDocUri, openNotebookList, resolveCodeModeNotebook]
+    [resolveCodeModeNotebook]
   )
 
   const waitForCellExecutionToComplete = useCallback(
@@ -515,7 +335,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       }
       const startedAt = Date.now()
       while (Date.now() - startedAt < timeoutMs) {
-        const data = getNotebookData(currentDocUri)
+        const data = getNotebookDataRef.current(currentDocUri)
         const updatedCell = data
           ?.getNotebook()
           .cells.find((cell) => cell.refId === refId)
@@ -529,7 +349,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         `Timed out waiting for cell execution to finish: ${refId}`
       )
     },
-    [currentDocUri, getNotebookData]
+    [currentDocUri]
   )
 
   const executeCellsWithApproval = useCallback(
@@ -537,7 +357,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       if (!currentDocUri) {
         throw new Error('No active notebook for ExecuteCells')
       }
-      const notebookData = getNotebookData(currentDocUri)
+      const notebookData = getNotebookDataRef.current(currentDocUri)
       if (!notebookData) {
         throw new Error('No active notebook data for ExecuteCells')
       }
@@ -570,149 +390,27 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         .map((refId) => latestCells.find((cell) => cell.refId === refId))
         .filter((cell): cell is Cell => Boolean(cell))
     },
-    [currentDocUri, getNotebookData, waitForCellExecutionToComplete]
+    [currentDocUri, waitForCellExecutionToComplete]
   )
 
-  const handleCodexBridgeToolCall = useCallback(
-    async ({
-      bridgeCallId,
-      toolCallInput,
-    }: {
-      bridgeCallId: string
-      toolCallInput: unknown
-    }): Promise<unknown> => {
-      const rawExecuteCodePayload = parseExecuteCodePayload(toolCallInput)
-      if (rawExecuteCodePayload) {
-        const callId = rawExecuteCodePayload.callId || bridgeCallId
-        try {
-          const result = await codeModeExecutor.execute({
-            code: rawExecuteCodePayload.code,
-            source: 'codex',
-          })
-          return buildExecuteCodeToolOutput({
-            callId,
-            previousResponseId: rawExecuteCodePayload.previousResponseId,
-            output: result.output,
-          })
-        } catch (error) {
-          return buildExecuteCodeToolOutput({
-            callId,
-            previousResponseId: rawExecuteCodePayload.previousResponseId,
-            output: getCodeModeErrorOutput(error),
-            clientError: String(error),
-          })
-        }
-      }
-
-      let decodedInput
-      try {
-        const payload =
-          typeof toolCallInput === 'string'
-            ? toolCallInput
-            : JSON.stringify(toolCallInput ?? {})
-        decodedInput = fromJsonString(ToolCallInputSchema, payload)
-      } catch (error) {
-        const failedOutput = create(ToolCallOutputSchema, {
-          status: ToolCallOutput_Status.FAILED,
-          clientError: `Failed to decode tool params: ${error}`,
-        })
-        return toJson(ToolCallOutputSchema, failedOutput)
-      }
-
-      const toolOutput = create(ToolCallOutputSchema, {
-        callId: decodedInput.callId,
-        previousResponseId: decodedInput.previousResponseId,
-        status: ToolCallOutput_Status.SUCCESS,
-        clientError: '',
-      })
-      const latestCells = getLatestCells()
-      const cellMap = new Map<string, Cell>()
-      latestCells.forEach((cell) => {
-        cellMap.set(cell.refId, cell)
-      })
-
-      const inputCase = String(decodedInput.input?.case ?? '')
-      switch (inputCase) {
-        case 'updateCells': {
-          const cells = decodedInput.input.value?.cells ?? []
-          if (cells.length === 0) {
-            toolOutput.status = ToolCallOutput_Status.FAILED
-            toolOutput.clientError = 'UpdateCells invoked without cells payload'
-            break
-          }
-          cells.forEach((updatedCell: Cell) => updateCell(updatedCell))
-          toolOutput.output = {
-            case: 'updateCells',
-            value: create(UpdateCellsResponseSchema, { cells }),
-          }
-          break
-        }
-        case 'listCells': {
-          toolOutput.output = {
-            case: 'listCells',
-            value: create(ListCellsResponseSchema, { cells: getLatestCells() }),
-          }
-          break
-        }
-        case 'getCells': {
-          const requestedRefs = decodedInput.input.value?.refIds ?? []
-          const foundCells = requestedRefs
-            .map((id: string) => cellMap.get(id))
-            .filter((cell): cell is Cell => Boolean(cell))
-          toolOutput.output = {
-            case: 'getCells',
-            value: create(GetCellsResponseSchema, { cells: foundCells }),
-          }
-          break
-        }
-        case 'executeCells': {
-          try {
-            const executedCells = await executeCellsWithApproval(
-              bridgeCallId,
-              decodedInput.input.value?.refIds ?? []
-            )
-            toolOutput.output = {
-              case: 'executeCells',
-              value: create(NotebookServiceExecuteCellsResponseSchema, {
-                cells: executedCells,
-              }),
-            }
-          } catch (error) {
-            toolOutput.status = ToolCallOutput_Status.FAILED
-            toolOutput.clientError = String(error)
-          }
-          break
-        }
-        case 'executeCode': {
-          const code = decodedInput.input.value?.code ?? ''
-          try {
-            const result = await codeModeExecutor.execute({
-              code,
-              source: 'codex',
-            })
-            return buildExecuteCodeToolOutput({
-              callId: decodedInput.callId || bridgeCallId,
-              previousResponseId: decodedInput.previousResponseId ?? '',
-              output: result.output,
-            })
-          } catch (error) {
-            return buildExecuteCodeToolOutput({
-              callId: decodedInput.callId || bridgeCallId,
-              previousResponseId: decodedInput.previousResponseId ?? '',
-              output: getCodeModeErrorOutput(error),
-              clientError: String(error),
-            })
-          }
-        }
-        default: {
-          toolOutput.status = ToolCallOutput_Status.FAILED
-          toolOutput.clientError = `Unsupported codex notebook tool input: ${String(inputCase)}`
-          break
-        }
-      }
-      return toJson(ToolCallOutputSchema, toolOutput) as Record<string, unknown>
-    },
+  const handleCodexBridgeToolCall = useMemo(
+    () =>
+      createCodexBridgeToolHandler({
+        codeModeExecutor,
+        getLatestCells,
+        updateCell,
+        executeCellsWithApproval,
+      }),
     [codeModeExecutor, executeCellsWithApproval, getLatestCells, updateCell]
+  )
+  const handleChatKitClientTool = useMemo(
+    () =>
+      createChatKitNotebookToolInvoker({
+        codeModeExecutor,
+        getLatestCells,
+        updateCell,
+      }),
+    [codeModeExecutor, getLatestCells, updateCell]
   )
   const handleSseEvent = useCallback(
     (rawEvent: string) => {
@@ -754,60 +452,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           ) {
             setCodexStreamError(null)
           }
-          if (parsed?.type !== 'aisre.chatkit.state') {
-            continue
-          }
-
-          const item = parsed?.item ?? parsed?.Item
-          if (!item) {
-            continue
-          }
-
-          const stateData = item.state ?? item.State ?? item
-          if (!stateData) {
-            continue
-          }
-
-          const state = fromJsonString(
-            ChatkitStateSchema,
-            JSON.stringify(stateData)
-          )
-          if (
-            defaultHarness.adapter === 'codex' ||
-            defaultHarness.adapter === 'codex-wasm'
-          ) {
-            appLogger.info('Ignoring Codex ChatKit state event', {
-              attrs: {
-                scope: 'chatkit.panel',
-                adapter: defaultHarness.adapter,
-                threadId: state.threadId ?? null,
-                previousResponseId: state.previousResponseId ?? null,
-              },
-            })
-            continue
-          }
-          appLogger.info('Received ChatKit state event', {
-            attrs: {
-              scope: 'chatkit.panel',
-              adapter: defaultHarness.adapter,
-              threadId: state.threadId ?? null,
-              previousResponseId: state.previousResponseId ?? null,
-            },
-          })
-          // setChatkitState(state);
-          if (state.previousResponseId || state.threadId) {
-            console.log(
-              'ChatKit state update',
-              JSON.stringify(
-                {
-                  previous_response_id: state.previousResponseId,
-                  thread_id: state.threadId,
-                },
-                null,
-                2
-              )
-            )
-          }
         } catch (error) {
           console.error('Failed to parse SSE state event', error, payload)
         }
@@ -815,59 +459,28 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     },
     [defaultHarness.adapter]
   )
-  const codexFetch = useMemo(() => createCodexChatkitFetch(), [])
-  const responsesDirectFetch = useMemo(
-    () =>
-      createResponsesDirectChatkitFetch({
-        responsesApiBaseUrl:
-          defaultHarness.adapter === 'responses-direct'
-            ? defaultHarness.baseUrl
-            : '',
-      }),
-    [defaultHarness.adapter, defaultHarness.baseUrl]
-  )
-  const getAuthorizedChatkitState = useCallback(() => {
-    if (
-      defaultHarness.adapter !== 'codex' &&
-      defaultHarness.adapter !== 'codex-wasm'
-    ) {
-      return getChatkitState()
+  const baseFetch = useMemo(() => {
+    if (!activeAdapter) {
+      return undefined
     }
-    const controllerSnapshot = getCodexConversationController().getSnapshot()
-    return create(ChatkitStateSchema, {
-      threadId:
-        syncedCodexStateRef.current.threadId ??
-        controllerSnapshot.currentThreadId ??
-        '',
-      previousResponseId: syncedCodexStateRef.current.previousResponseId ?? '',
-    })
-  }, [defaultHarness.adapter, getChatkitState])
-  const authorizedFetch = useAuthorizedFetch(getAuthorizedChatkitState, {
-    onSSEEvent: handleSseEvent,
-    baseFetch:
+    if (
       defaultHarness.adapter === 'codex' ||
       defaultHarness.adapter === 'codex-wasm'
-        ? codexFetch
-        : defaultHarness.adapter === 'responses-direct'
-          ? responsesDirectFetch
-          : undefined,
-    includeRunmeHeaders:
-      defaultHarness.adapter !== 'responses-direct' &&
-      defaultHarness.adapter !== 'codex-wasm',
-    includeChatkitState: defaultHarness.adapter !== 'responses-direct',
-  })
+    ) {
+      return createChatKitFetchFromAdapter(
+        activeAdapter,
+        buildCodexChatKitFetchOptions()
+      )
+    }
+    return createChatKitFetchFromAdapter(activeAdapter, {
+      unsupportedRequestPrefix: 'unsupported_responses_direct_request',
+    })
+  }, [activeAdapter, defaultHarness.adapter])
+  const interceptedFetch = useInterceptedFetch(baseFetch, handleSseEvent)
 
   const chatkitApiUrl = useMemo(() => {
     return buildChatkitUrl(defaultHarness.baseUrl, defaultHarness.adapter)
   }, [defaultHarness.adapter, defaultHarness.baseUrl])
-  const codexProxyWsUrl = useMemo(() => {
-    return buildCodexAppServerWsUrl(defaultHarness.baseUrl)
-  }, [defaultHarness.baseUrl])
-  const codexBridgeUrl = useMemo(() => {
-    return buildCodexBridgeWsUrl(defaultHarness.baseUrl)
-  }, [defaultHarness.baseUrl])
-  const codexWasmApiKey =
-    defaultHarness.adapter === 'codex-wasm' ? responsesDirectConfig.apiKey : ''
   useEffect(() => {
     appLogger.info('ChatKit host configured', {
       attrs: {
@@ -906,197 +519,119 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     return `Bearer ${idToken}`
   }, [defaultHarness.adapter, defaultHarness.baseUrl])
 
-  useEffect(() => {
-    if (
-      defaultHarness.adapter !== 'codex' &&
-      defaultHarness.adapter !== 'codex-wasm'
-    ) {
-      return
-    }
-    const controller = getCodexConversationController()
-    controller.setSelectedProject(defaultProject.id)
-  }, [defaultHarness.adapter, defaultProject.id])
+  const selectedProjectId =
+    defaultHarness.adapter === 'codex' || defaultHarness.adapter === 'codex-wasm'
+      ? defaultProject.id
+      : undefined
+  const codexBridgeHandler =
+    defaultHarness.adapter === 'codex' ? handleCodexBridgeToolCall : undefined
+  const wasmApiKey =
+    defaultHarness.adapter === 'codex-wasm'
+      ? responsesDirectConfig.apiKey
+      : undefined
+  const responsesApiBaseUrl =
+    defaultHarness.adapter === 'responses-direct'
+      ? defaultHarness.baseUrl
+      : undefined
+  const clientToolInvoker =
+    defaultHarness.adapter === 'responses-direct'
+      ? handleChatKitClientTool
+      : undefined
 
   useEffect(() => {
-    const proxy = getCodexAppServerClient()
-    if (defaultHarness.adapter !== 'codex-wasm') {
-      proxy.setCodeExecutor(null)
-      return
-    }
-    proxy.setCodeExecutor(
-      createCodexWasmCodeExecutor({
-        codeModeExecutor,
-      })
+    const runtime = harnessRuntimeManager.getOrCreate({
+      profile: defaultHarness,
+      projectId: selectedProjectId,
+      resolveAuthorization:
+        defaultHarness.adapter === 'codex'
+          ? resolveCodexAuthorization
+          : undefined,
+      codeModeExecutor,
+      codexBridgeHandler,
+      wasmApiKey,
+      responsesApiBaseUrl,
+      clientToolInvoker,
+    })
+    runtimeRef.current = runtime
+    lastAppliedThreadRef.current = null
+    setActiveAdapter(runtime.createChatKitAdapter())
+    setCodexThreadBootstrapComplete(
+      defaultHarness.adapter !== 'codex' &&
+        defaultHarness.adapter !== 'codex-wasm'
     )
-    return () => {
-      proxy.setCodeExecutor(null)
-    }
-  }, [codeModeExecutor, defaultHarness.adapter])
-
-  useEffect(() => {
-    const proxy = getCodexAppServerClient()
-    if (
-      defaultHarness.adapter !== 'codex' &&
-      defaultHarness.adapter !== 'codex-wasm'
-    ) {
-      setCodexThreadBootstrapComplete(true)
-      proxy.setAuthorizationResolver(null)
-      proxy.disconnect()
-      return
-    }
-    setCodexThreadBootstrapComplete(false)
     setCodexStreamError(null)
+
     let canceled = false
     void (async () => {
       try {
-        if (defaultHarness.adapter === 'codex') {
-          proxy.useTransport('proxy')
-          proxy.setAuthorizationResolver(resolveCodexAuthorization)
-          const authorization = await resolveCodexAuthorization()
-          if (canceled) {
-            return
-          }
-          await proxy.connectProxy(codexProxyWsUrl, authorization)
-        } else {
-          proxy.useTransport('wasm')
-          proxy.setAuthorizationResolver(null)
-          await proxy.connectWasm({
-            apiKey: codexWasmApiKey,
-            sessionOptions: buildRunmeCodexWasmSessionOptions(),
-          })
+        await runtime.start()
+        if (canceled) {
+          return
         }
-        if (!canceled) {
-          const controller = getCodexConversationController()
-          await controller.refreshHistory()
-          const thread = await controller.ensureActiveThread()
-          syncedCodexStateRef.current = {
-            threadId: thread.id,
-            previousResponseId: thread.previousResponseId ?? null,
-          }
-          setCodexStreamError(null)
-          setCodexThreadBootstrapComplete(true)
-        }
+        setActiveAdapter(runtime.createChatKitAdapter())
+        setCodexThreadBootstrapComplete(true)
       } catch (error) {
         if (canceled) {
           return
         }
-        appLogger.error('Failed to initialize codex app-server client', {
+        appLogger.error('Failed to initialize harness runtime', {
           attrs: {
-            scope: 'chatkit.codex_client',
+            scope: 'chatkit.harness_runtime',
+            adapter: defaultHarness.adapter,
             error: String(error),
-            url:
-              defaultHarness.adapter === 'codex'
-                ? codexProxyWsUrl
-                : 'wasm://browser-app-server',
+            harness: defaultHarness.name,
           },
         })
-        setCodexStreamError(
-          `Failed to initialize Codex thread: ${String(error)}`
-        )
+        setCodexStreamError(`Failed to initialize harness: ${String(error)}`)
         setCodexThreadBootstrapComplete(true)
       }
     })()
+
     return () => {
       canceled = true
-      proxy.setAuthorizationResolver(null)
-      proxy.disconnect()
+      runtime.stop()
+      if (runtimeRef.current === runtime) {
+        runtimeRef.current = null
+      }
+      setActiveAdapter(null)
     }
   }, [
-    codexWasmApiKey,
-    codexProxyWsUrl,
-    defaultHarness.adapter,
+    clientToolInvoker,
+    codeModeExecutor,
+    codexBridgeHandler,
+    defaultHarness,
+    harnessRuntimeManager,
+    responsesApiBaseUrl,
     resolveCodexAuthorization,
+    selectedProjectId,
+    wasmApiKey,
   ])
 
   useEffect(() => {
     if (
       (defaultHarness.adapter !== 'codex' &&
         defaultHarness.adapter !== 'codex-wasm') ||
-      !codexThreadBootstrapComplete
+      !codexThreadBootstrapComplete ||
+      !activeAdapter
     ) {
-      lastAppliedCodexThreadRef.current = null
+      lastAppliedThreadRef.current = null
       return
     }
-    const threadId = syncedCodexStateRef.current.threadId
-    if (!threadId || lastAppliedCodexThreadRef.current === threadId) {
+    const threadId = activeAdapter.initialThreadId ?? null
+    if (!threadId || lastAppliedThreadRef.current === threadId) {
       return
     }
-    lastAppliedCodexThreadRef.current = threadId
+    lastAppliedThreadRef.current = threadId
     void chatkitActionsRef.current?.setThreadId(threadId, 'bootstrap_sync')
-  }, [codexThreadBootstrapComplete, defaultHarness.adapter])
-
-  useEffect(() => {
-    const bridge = getCodexToolBridge()
-    return bridge.subscribe(() => {
-      const snapshot = bridge.getSnapshot()
-      if (
-        (defaultHarness.adapter === 'codex' ||
-          defaultHarness.adapter === 'codex-wasm') &&
-        (snapshot.state === 'closed' || snapshot.state === 'error')
-      ) {
-        getCodexExecuteApprovalManager().failAll('Codex bridge disconnected')
-      }
-    })
-  }, [defaultHarness.adapter])
-
-  useEffect(() => {
-    const bridge = getCodexToolBridge()
-    if (defaultHarness.adapter !== 'codex') {
-      bridge.setHandler(null)
-      return
-    }
-    bridge.setHandler(handleCodexBridgeToolCall)
-    return () => {
-      bridge.setHandler(null)
-    }
-  }, [defaultHarness.adapter, handleCodexBridgeToolCall])
-
-  useEffect(() => {
-    const bridge = getCodexToolBridge()
-    if (defaultHarness.adapter !== 'codex') {
-      bridge.disconnect()
-      getCodexExecuteApprovalManager().failAll('Codex bridge disabled')
-      return
-    }
-    let canceled = false
-    void (async () => {
-      try {
-        const authorization = await resolveCodexAuthorization()
-        if (canceled) {
-          return
-        }
-        await bridge.connect(codexBridgeUrl, authorization)
-      } catch (error) {
-        if (canceled) {
-          return
-        }
-        appLogger.error('Failed to connect codex bridge websocket', {
-          attrs: {
-            scope: 'chatkit.codex_bridge',
-            error: String(error),
-            url: codexBridgeUrl,
-          },
-        })
-      }
-    })()
-    return () => {
-      canceled = true
-      bridge.disconnect()
-      getCodexExecuteApprovalManager().failAll('Codex bridge disconnected')
-    }
-  }, [codexBridgeUrl, defaultHarness.adapter, resolveCodexAuthorization])
+  }, [activeAdapter, codexThreadBootstrapComplete, defaultHarness.adapter])
 
   const chatkit = useChatKit({
     api: {
       url: chatkitApiUrl,
       domainKey: chatkitDomainKey,
-      fetch: authorizedFetch,
+      fetch: interceptedFetch,
     },
-    initialThread:
-      defaultHarness.adapter === 'codex' ||
-      defaultHarness.adapter === 'codex-wasm'
-        ? codexConversation.currentThreadId
-        : undefined,
+    initialThread: activeAdapter?.initialThreadId,
     theme: {
       colorScheme: 'light',
       radius: 'round',
@@ -1177,251 +712,33 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
               icon: 'compose',
               onClick: () => {
                 void (async () => {
-                  const controller = getCodexConversationController()
-                  controller.startNewChat()
                   setCodexStreamError(null)
-                  syncedCodexStateRef.current = {
-                    threadId: null,
-                    previousResponseId: null,
+                  const threadId =
+                    (await activeAdapter?.onNewConversation?.()) ?? null
+                  if (threadId) {
+                    await chatkitActionsRef.current?.setThreadId(
+                      threadId,
+                      'header_new_chat'
+                    )
+                    await chatkitActionsRef.current?.fetchUpdates(
+                      'header_new_chat'
+                    )
                   }
-                  const thread = await controller.ensureActiveThread()
-                  // setChatkitState(
-                  //   create(ChatkitStateSchema, {
-                  //     threadId: thread.id,
-                  //     previousResponseId: thread.previousResponseId ?? "",
-                  //   }),
-                  // );
-                  syncedCodexStateRef.current = {
-                    threadId: thread.id,
-                    previousResponseId: thread.previousResponseId ?? null,
-                  }
-                  await chatkitActionsRef.current?.setThreadId(
-                    thread.id,
-                    'header_new_chat'
-                  )
                 })()
               },
             }
           : undefined,
     },
     history: {
-      enabled:
-        defaultHarness.adapter !== 'codex' &&
-        defaultHarness.adapter !== 'codex-wasm',
+      enabled: activeAdapter?.historyEnabled ?? false,
     },
     onClientTool: async (invocation) => {
-      const toolOutput = create(ToolCallOutputSchema, {
-        callId: '',
-        previousResponseId: '',
-        status: ToolCallOutput_Status.SUCCESS,
-        clientError: '',
-      })
-
-      switch (invocation.name) {
-        case EXECUTE_CODE_DIRECT_TOOL:
-        case EXECUTE_CODE_TOOL: {
-          const executeCodePayload = parseExecuteCodePayload(invocation.params)
-          if (!executeCodePayload) {
-            toolOutput.status = ToolCallOutput_Status.FAILED
-            toolOutput.clientError =
-              'ExecuteCode tool invoked without valid code payload'
-            return toJson(ToolCallOutputSchema, toolOutput) as Record<
-              string,
-              unknown
-            >
-          }
-          if (!executeCodePayload.callId) {
-            toolOutput.status = ToolCallOutput_Status.FAILED
-            toolOutput.clientError =
-              'ExecuteCode is missing call_id in tool params'
-            return toJson(ToolCallOutputSchema, toolOutput) as Record<
-              string,
-              unknown
-            >
-          }
-
-          const callId = executeCodePayload.callId
-          const previousResponseId = executeCodePayload.previousResponseId
-          try {
-            const result = await codeModeExecutor.execute({
-              code: executeCodePayload.code,
-              source: 'chatkit',
-            })
-            if (invocation.name === EXECUTE_CODE_DIRECT_TOOL) {
-              return {
-                callId,
-                previousResponseId,
-                output: result.output,
-              }
-            }
-            return buildExecuteCodeToolOutput({
-              callId,
-              previousResponseId,
-              output: result.output,
-            })
-          } catch (error) {
-            if (invocation.name === EXECUTE_CODE_DIRECT_TOOL) {
-              return {
-                callId,
-                previousResponseId,
-                output: getCodeModeErrorOutput(error),
-                clientError: String(error),
-              }
-            }
-            return buildExecuteCodeToolOutput({
-              callId,
-              previousResponseId,
-              output: getCodeModeErrorOutput(error),
-              clientError: String(error),
-            })
-          }
-        }
-        case UPDATE_CELLS_TOOL:
-        case GET_CELLS_TOOL:
-        case LIST_CELLS_TOOL:
-          break
-        default: {
-          toolOutput.status = ToolCallOutput_Status.FAILED
-          toolOutput.clientError = `Unknown tool ${invocation.name}`
-          return toJson(ToolCallOutputSchema, toolOutput) as Record<
-            string,
-            unknown
-          >
-        }
+      if (!activeAdapter?.invokeClientTool) {
+        throw new Error(
+          `Harness ${defaultHarness.adapter} does not support ChatKit client tools`
+        )
       }
-
-      let decodedInput
-      try {
-        const payload =
-          typeof invocation.params === 'string'
-            ? invocation.params
-            : JSON.stringify(invocation.params ?? {})
-        decodedInput = fromJsonString(ToolCallInputSchema, payload)
-      } catch (error) {
-        console.error('Failed to decode tool params', error, invocation.params)
-        toolOutput.status = ToolCallOutput_Status.FAILED
-        toolOutput.clientError = `Failed to decode tool params: ${error}`
-        return {
-          success: false,
-          result: toJson(ToolCallOutputSchema, toolOutput),
-        }
-      }
-
-      toolOutput.callId = decodedInput.callId
-      toolOutput.previousResponseId = decodedInput.previousResponseId
-
-      const inputCase = String(decodedInput.input?.case ?? '')
-      const cellMap = new Map<string, Cell>()
-      orderedCells.forEach((cell) => {
-        cellMap.set(cell.refId, cell)
-      })
-
-      switch (invocation.name) {
-        case UPDATE_CELLS_TOOL: {
-          console.log(`[ChatKit tool] ${invocation.name}`, decodedInput)
-          if (inputCase !== 'updateCells') {
-            toolOutput.status = ToolCallOutput_Status.FAILED
-            toolOutput.clientError =
-              'UpdateCells tool invoked without updateCells payload'
-            break
-          }
-
-          const updateCellsRequest = decodedInput.input.value
-          if (!updateCellsRequest) {
-            toolOutput.status = ToolCallOutput_Status.FAILED
-            toolOutput.clientError = 'UpdateCells request missing payload'
-            break
-          }
-
-          const cells: Cell[] = updateCellsRequest.cells ?? []
-          if (cells.length === 0) {
-            toolOutput.status = ToolCallOutput_Status.FAILED
-            toolOutput.clientError = 'UpdateCells invoked without cells payload'
-          }
-
-          cells.forEach((updatedCell: Cell) => {
-            try {
-              if (!updatedCell?.refId) {
-                console.warn('Received cell without refId', updatedCell)
-                return
-              }
-
-              updateCell(updatedCell)
-            } catch (error) {
-              console.error(
-                'Failed to process UpdateCell payload',
-                error,
-                updatedCell
-              )
-              toolOutput.status = ToolCallOutput_Status.FAILED
-              toolOutput.clientError = `Failed to process UpdateCell payload: ${error}`
-            }
-          })
-
-          toolOutput.output = {
-            case: 'updateCells',
-            value: create(UpdateCellsResponseSchema, {
-              cells,
-            }),
-          }
-          break
-        }
-        case GET_CELLS_TOOL: {
-          console.log(`[ChatKit tool] ${invocation.name}`, decodedInput)
-          if (inputCase !== 'getCells') {
-            toolOutput.status = ToolCallOutput_Status.FAILED
-            toolOutput.clientError =
-              'GetCells tool invoked without getCells payload'
-            break
-          }
-
-          const getCellsRequest = decodedInput.input.value
-          if (!getCellsRequest) {
-            toolOutput.status = ToolCallOutput_Status.FAILED
-            toolOutput.clientError = 'GetCells request missing payload'
-            break
-          }
-
-          const requestedRefs = getCellsRequest.refIds ?? []
-          const foundCells = requestedRefs
-            .map((id) => {
-              const cell = cellMap.get(id)
-              if (!cell) {
-                console.warn(`Requested cell ${id} not found`)
-              }
-              return cell
-            })
-            .filter((cell): cell is Cell => Boolean(cell))
-
-          toolOutput.output = {
-            case: 'getCells',
-            value: create(GetCellsResponseSchema, {
-              cells: foundCells,
-            }),
-          }
-          break
-        }
-        case LIST_CELLS_TOOL: {
-          console.log(`[ChatKit tool] ${invocation.name}`, decodedInput)
-          toolOutput.output = {
-            case: 'listCells',
-            value: create(ListCellsResponseSchema, {
-              cells: orderedCells,
-            }),
-          }
-          break
-        }
-        default: {
-          toolOutput.status = ToolCallOutput_Status.FAILED
-          toolOutput.clientError = `Unknown tool ${invocation.name}`
-          return toJson(ToolCallOutputSchema, toolOutput) as Record<
-            string,
-            unknown
-          >
-        }
-      }
-
-      return toJson(ToolCallOutputSchema, toolOutput) as Record<string, unknown>
+      return activeAdapter.invokeClientTool(invocation)
     },
     onError: ({ error }) => {
       const promptForLogin = () => setShowLoginPrompt(true)
@@ -1489,70 +806,44 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       })
     },
     onThreadChange: ({ threadId }) => {
-      const localChatkitState = getChatkitState()
-      const codexSnapshot =
-        defaultHarness.adapter === 'codex' ||
-        defaultHarness.adapter === 'codex-wasm'
-          ? getCodexConversationController().getSnapshot()
-          : null
-      const stack = new Error('chatkit thread change').stack ?? null
+      if (
+        threadId == null &&
+        (defaultHarness.adapter === 'codex' ||
+          defaultHarness.adapter === 'codex-wasm') &&
+        codexConversation.currentThreadId
+      ) {
+        appLogger.info(
+          'Ignoring null ChatKit thread change while Codex thread is active',
+          {
+            attrs: {
+              scope: 'chatkit.panel',
+              adapter: defaultHarness.adapter,
+              threadId: null,
+              codexCurrentThreadId: codexConversation.currentThreadId,
+              codexCurrentTurnId: codexConversation.currentTurnId,
+            },
+          }
+        )
+        return
+      }
       appLogger.info('ChatKit thread changed', {
         attrs: {
           scope: 'chatkit.panel',
           adapter: defaultHarness.adapter,
           threadId: threadId ?? null,
-          localThreadId: localChatkitState.threadId ?? null,
-          localPreviousResponseId: localChatkitState.previousResponseId ?? null,
-          codexCurrentThreadId: codexSnapshot?.currentThreadId ?? null,
-          codexCurrentTurnId: codexSnapshot?.currentTurnId ?? null,
-          stack,
+          codexCurrentThreadId:
+            defaultHarness.adapter === 'codex' ||
+            defaultHarness.adapter === 'codex-wasm'
+              ? codexConversation.currentThreadId
+              : null,
+          codexCurrentTurnId:
+            defaultHarness.adapter === 'codex' ||
+            defaultHarness.adapter === 'codex-wasm'
+              ? codexConversation.currentTurnId
+              : null,
         },
       })
-      if (
-        defaultHarness.adapter !== 'codex' &&
-        defaultHarness.adapter !== 'codex-wasm'
-      ) {
-        return
-      }
-      if (!threadId) {
-        const codexThreadId = codexSnapshot?.currentThreadId
-        if (codexThreadId) {
-          const codexThread = codexConversation.threads.find(
-            (thread) => thread.id === codexThreadId
-          )
-          appLogger.info(
-            'Ignoring null ChatKit thread change while Codex thread is active',
-            {
-              attrs: {
-                scope: 'chatkit.panel',
-                adapter: defaultHarness.adapter,
-                threadId: null,
-                codexCurrentThreadId: codexThreadId,
-                codexCurrentTurnId: codexSnapshot?.currentTurnId ?? null,
-              },
-            }
-          )
-          // setChatkitState(
-          //   create(ChatkitStateSchema, {
-          //     threadId: codexThreadId,
-          //     previousResponseId: codexThread?.previousResponseId ?? "",
-          //   }),
-          // );
-          return
-        }
-        // setChatkitState(create(ChatkitStateSchema, {}));
-        return
-      }
-      const existing = codexConversation.threads.find(
-        (thread) => thread.id === threadId
-      )
-      void existing
-      // setChatkitState(
-      //   create(ChatkitStateSchema, {
-      //     threadId,
-      //     previousResponseId: existing?.previousResponseId ?? "",
-      //   }),
-      // );
+      void activeAdapter?.onThreadSelected?.(threadId ?? null)
     },
   })
   const setChatkitThreadId = useCallback(
@@ -1628,67 +919,26 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   }
 
   const handleCodexNewChat = useCallback(async () => {
-    const controller = getCodexConversationController()
-    controller.startNewChat()
     setCodexStreamError(null)
-    syncedCodexStateRef.current = {
-      threadId: null,
-      previousResponseId: null,
+    const threadId = (await activeAdapter?.onNewConversation?.()) ?? null
+    if (!threadId) {
+      return
     }
-    const thread = await controller.ensureActiveThread()
-    // setChatkitState(
-    //   create(ChatkitStateSchema, {
-    //     threadId: thread.id,
-    //     previousResponseId: thread.previousResponseId ?? "",
-    //   }),
-    // );
-    syncedCodexStateRef.current = {
-      threadId: thread.id,
-      previousResponseId: thread.previousResponseId ?? null,
-    }
-    await chatkitActionsRef.current?.setThreadId(thread.id, 'new_chat')
-  }, [])
+    await chatkitActionsRef.current?.setThreadId(threadId, 'new_chat')
+    await chatkitActionsRef.current?.fetchUpdates('new_chat')
+  }, [activeAdapter])
 
   const handleCodexSelectThread = useCallback(async (threadId: string) => {
-    const controller = getCodexConversationController()
-    const thread = await controller.selectThread(threadId)
-    // setChatkitState(
-    //   create(ChatkitStateSchema, {
-    //     threadId: thread.id,
-    //     previousResponseId: thread.previousResponseId ?? "",
-    //   }),
-    // );
-    syncedCodexStateRef.current = {
-      threadId: thread.id,
-      previousResponseId: thread.previousResponseId ?? null,
-    }
-    await chatkitActionsRef.current?.setThreadId(thread.id, 'select_thread')
+    await activeAdapter?.onThreadSelected?.(threadId)
+    await chatkitActionsRef.current?.setThreadId(threadId, 'select_thread')
     await chatkitActionsRef.current?.fetchUpdates('select_thread')
     setShowCodexDrawer(false)
-  }, [])
+  }, [activeAdapter])
 
   const handleCodexProjectChange = useCallback(async (projectId: string) => {
-    const controller = getCodexConversationController()
-    controller.setSelectedProject(projectId)
-    controller.startNewChat()
+    getCodexProjectManager().setDefault(projectId)
     setCodexStreamError(null)
-    syncedCodexStateRef.current = {
-      threadId: null,
-      previousResponseId: null,
-    }
-    await controller.refreshHistory()
-    const thread = await controller.ensureActiveThread()
-    // setChatkitState(
-    //   create(ChatkitStateSchema, {
-    //     threadId: thread.id,
-    //     previousResponseId: thread.previousResponseId ?? "",
-    //   }),
-    // );
-    syncedCodexStateRef.current = {
-      threadId: thread.id,
-      previousResponseId: thread.previousResponseId ?? null,
-    }
-    await chatkitActionsRef.current?.setThreadId(thread.id, 'project_change')
+    setShowCodexDrawer(false)
   }, [])
 
   const handleLogin = useCallback(() => {

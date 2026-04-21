@@ -13,16 +13,11 @@ vi.mock("../logging/runtime", () => ({
 
 const defaultStreamUserMessage = async (
   _input: string,
-  _state: unknown,
   sink: { emit: (payload: unknown) => void },
   _model?: string,
 ) => {
   sink.emit({ type: "response.created", response: { id: "turn-1" } });
   sink.emit({ type: "response.output_text.delta", delta: "hello" });
-  sink.emit({
-    type: "aisre.chatkit.state",
-    item: { state: { threadId: "thread-1", previousResponseId: "turn-1" } },
-  });
   sink.emit({ type: "response.completed", response: { id: "turn-1" } });
   return { threadId: "thread-1", previousResponseId: "turn-1" };
 };
@@ -200,10 +195,6 @@ describe("createCodexChatkitFetch", () => {
 
     expect(controller.streamUserMessage).toHaveBeenCalledWith(
       "hello",
-      {
-        threadId: undefined,
-        previousResponseId: undefined,
-      },
       expect.any(Object),
       "gpt-5.4",
     );
@@ -439,14 +430,12 @@ describe("createCodexChatkitFetch", () => {
       method: "POST",
       body: JSON.stringify({
         input: "hello",
-        chatkit_state: {},
       }),
     });
 
     const body = await response.text();
     expect(controller.streamUserMessage).toHaveBeenCalledWith(
       "hello",
-      { threadId: undefined, previousResponseId: undefined },
       expect.any(Object),
       undefined,
     );
@@ -464,7 +453,6 @@ describe("createCodexChatkitFetch", () => {
       },
       body: JSON.stringify({
         input: "hello from request",
-        chatkit_state: {},
       }),
     });
 
@@ -473,7 +461,6 @@ describe("createCodexChatkitFetch", () => {
 
     expect(controller.streamUserMessage).toHaveBeenCalledWith(
       "hello from request",
-      { threadId: undefined, previousResponseId: undefined },
       expect.any(Object),
       undefined,
     );
@@ -489,7 +476,6 @@ describe("createCodexChatkitFetch", () => {
           input: {
             content: [{ text: "hello from nested params" }],
           },
-          chatkit_state: {},
         },
       }),
     });
@@ -498,7 +484,6 @@ describe("createCodexChatkitFetch", () => {
 
     expect(controller.streamUserMessage).toHaveBeenCalledWith(
       "hello from nested params",
-      { threadId: undefined, previousResponseId: undefined },
       expect.any(Object),
       undefined,
     );
@@ -508,7 +493,7 @@ describe("createCodexChatkitFetch", () => {
   it("closes the SSE stream cleanly when the request is aborted", async () => {
     const fetchFn = createCodexChatkitFetch();
     controller.streamUserMessage.mockImplementationOnce(
-      async (_input: string, _state: unknown, sink: { emit: (payload: unknown) => void }) => {
+      async (_input: string, sink: { emit: (payload: unknown) => void }) => {
         sink.emit({ type: "response.created", response: { id: "turn-1" } });
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 0);
@@ -521,7 +506,6 @@ describe("createCodexChatkitFetch", () => {
       method: "POST",
       body: JSON.stringify({
         input: "hello",
-        chatkit_state: {},
       }),
       signal: abortController.signal,
     });
@@ -568,7 +552,6 @@ describe("createCodexChatkitFetch", () => {
       method: "POST",
       body: JSON.stringify({
         input: "hello",
-        chatkit_state: {},
       }),
       signal: abortController.signal,
     });
@@ -604,7 +587,6 @@ describe("createCodexChatkitFetch", () => {
       method: "POST",
       body: JSON.stringify({
         input: "hello",
-        chatkit_state: {},
       }),
     });
 

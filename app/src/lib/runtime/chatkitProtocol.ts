@@ -5,11 +5,6 @@
 // protocol that our Codex adapter emits and consumes. When behavior diverges,
 // align this file to the Python definitions first and then update the adapter
 // and tests to match.
-export type ChatKitStateValue = {
-  threadId?: string;
-  previousResponseId?: string;
-};
-
 export type ChatKitOutputTextPart = {
   type: "output_text";
   text: string;
@@ -124,10 +119,12 @@ export type ChatKitResponseOutputItemDoneEvent = {
   item: ChatKitMessageItem;
 };
 
-export type ChatKitStateEvent = {
-  type: "aisre.chatkit.state";
-  item: {
-    state: ChatKitStateValue;
+export type ChatKitThreadCreatedEvent = {
+  type: "thread.created";
+  thread: {
+    id: string;
+    title: string;
+    created_at: string;
   };
 };
 
@@ -194,7 +191,7 @@ export type ChatKitStreamEvent =
   | ChatKitResponseOutputTextDoneEvent
   | ChatKitResponseContentPartDoneEvent
   | ChatKitResponseOutputItemDoneEvent
-  | ChatKitStateEvent
+  | ChatKitThreadCreatedEvent
   | ChatKitResponseCompletedEvent
   | ChatKitResponseFailedEvent
   | ChatKitThreadItemAddedEvent
