@@ -42,6 +42,15 @@ function resolveDefaultUxModeForFlow(
   return DEFAULT_AUTH_UX_MODE_FOR_FLOW[flow]
 }
 
+function derivePickerAppId(clientId: string): string | null {
+  const trimmed = clientId.trim()
+  if (!trimmed) {
+    return null
+  }
+  const candidate = trimmed.split('-')[0]?.trim() ?? ''
+  return /^\d+$/.test(candidate) ? candidate : null
+}
+
 type GoogleClientConfig = {
   oauth: GoogleOAuthClientConfig
   drivePicker: GoogleDrivePickerConfig
@@ -54,14 +63,19 @@ export class GoogleClientManager {
   private constructor() {
     const defaultClientId = ''
     const storedClientId = this.readOAuthClientIdFromStorage()
+    const storedPickerClientId = this.readDrivePickerClientIdFromStorage()
     const storedClientSecret = this.readOAuthClientSecretFromStorage()
     const storedAuthFlow = this.readOAuthAuthFlowFromStorage()
     const storedAuthUxMode = this.readOAuthAuthUxModeFromStorage()
-    const resolvedClientId = storedClientId ?? defaultClientId
+    const storedDeveloperKey = this.readDrivePickerDeveloperKeyFromStorage()
+    const storedAppId = this.readDrivePickerAppIdFromStorage()
+    const resolvedClientId =
+      storedClientId ?? storedPickerClientId ?? defaultClientId
     const resolvedClientSecret = storedClientSecret ?? undefined
     const resolvedAuthFlow = storedAuthFlow ?? DEFAULT_AUTH_FLOW
     const resolvedAuthUxMode =
       storedAuthUxMode ?? resolveDefaultUxModeForFlow(resolvedAuthFlow)
+    const resolvedDrivePickerClientId = storedPickerClientId ?? resolvedClientId
     this.config = {
       oauth: {
         clientId: resolvedClientId,
@@ -70,10 +84,12 @@ export class GoogleClientManager {
         authUxMode: resolvedAuthUxMode,
       },
       drivePicker: {
-        clientId: resolvedClientId,
-        developerKey: '',
-        // TODO(jlewi): Do we still need this
-        appId: 'notavalidappid',
+        clientId: resolvedDrivePickerClientId,
+        developerKey: storedDeveloperKey ?? '',
+        appId:
+          storedAppId ??
+          derivePickerAppId(resolvedDrivePickerClientId) ??
+          'notavalidappid',
       },
     }
   }
@@ -115,6 +131,8 @@ export class GoogleClientManager {
         ? resolveDefaultUxModeForFlow(nextAuthFlow)
         : this.config.oauth.authUxMode)
 
+    const previousDrivePickerClientId = this.config.drivePicker.clientId
+    const previousDerivedAppId = derivePickerAppId(previousDrivePickerClientId)
     this.config.oauth = {
       ...this.config.oauth,
       ...config,
@@ -125,9 +143,14 @@ export class GoogleClientManager {
       this.config.drivePicker = {
         ...this.config.drivePicker,
         clientId: config.clientId,
+        appId:
+          this.config.drivePicker.appId === 'notavalidappid' ||
+          this.config.drivePicker.appId === previousDerivedAppId
+            ? derivePickerAppId(config.clientId) ?? this.config.drivePicker.appId
+            : this.config.drivePicker.appId,
       }
     }
-    this.persistOAuthClient(this.config.oauth)
+    this.persistConfig()
     return this.config.oauth
   }
 
@@ -217,11 +240,74 @@ export class GoogleClientManager {
   setDrivePickerConfig(
     config: Partial<GoogleDrivePickerConfig>
   ): GoogleDrivePickerConfig {
+    if (config.clientId !== undefined) {
+      this.config.oauth = {
+        ...this.config.oauth,
+        clientId: config.clientId,
+      }
+    }
     this.config.drivePicker = {
       ...this.config.drivePicker,
       ...config,
     }
+    this.persistConfig()
     return this.config.drivePicker
+  }
+
+  private readDrivePickerClientIdFromStorage(): string | null {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return null
+    }
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY)
+      if (!raw) {
+        return null
+      }
+      const parsed = JSON.parse(raw) as { drivePickerClientId?: string } | null
+      const clientId = parsed?.drivePickerClientId?.trim()
+      return clientId && clientId.length > 0 ? clientId : null
+    } catch (error) {
+      console.warn('Failed to read Google Drive Picker client config', error)
+      return null
+    }
+  }
+
+  private readDrivePickerDeveloperKeyFromStorage(): string | null {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return null
+    }
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY)
+      if (!raw) {
+        return null
+      }
+      const parsed = JSON.parse(raw) as {
+        drivePickerDeveloperKey?: string
+      } | null
+      const developerKey = parsed?.drivePickerDeveloperKey?.trim()
+      return developerKey && developerKey.length > 0 ? developerKey : null
+    } catch (error) {
+      console.warn('Failed to read Google Drive Picker developer key', error)
+      return null
+    }
+  }
+
+  private readDrivePickerAppIdFromStorage(): string | null {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return null
+    }
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY)
+      if (!raw) {
+        return null
+      }
+      const parsed = JSON.parse(raw) as { drivePickerAppId?: string } | null
+      const appId = parsed?.drivePickerAppId?.trim()
+      return appId && appId.length > 0 ? appId : null
+    } catch (error) {
+      console.warn('Failed to read Google Drive Picker app id', error)
+      return null
+    }
   }
 
   private readOAuthClientIdFromStorage(): string | null {
@@ -298,7 +384,7 @@ export class GoogleClientManager {
     }
   }
 
-  private persistOAuthClient(config: GoogleOAuthClientConfig): void {
+  private persistConfig(): void {
     if (typeof window === 'undefined' || !window.localStorage) {
       return
     }
@@ -306,10 +392,13 @@ export class GoogleClientManager {
       window.localStorage.setItem(
         STORAGE_KEY,
         JSON.stringify({
-          oauthClientId: config.clientId,
-          oauthClientSecret: config.clientSecret,
-          oauthAuthFlow: config.authFlow,
-          oauthAuthUxMode: config.authUxMode,
+          oauthClientId: this.config.oauth.clientId,
+          oauthClientSecret: this.config.oauth.clientSecret,
+          oauthAuthFlow: this.config.oauth.authFlow,
+          oauthAuthUxMode: this.config.oauth.authUxMode,
+          drivePickerClientId: this.config.drivePicker.clientId,
+          drivePickerDeveloperKey: this.config.drivePicker.developerKey,
+          drivePickerAppId: this.config.drivePicker.appId,
         })
       )
     } catch (error) {
