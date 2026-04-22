@@ -2,12 +2,19 @@
 
 ## Status
 
-Current proposal.
+Initial implementation landed.
 
-The core runtime seam exists. The remaining work is:
+The core runtime seam now has:
 
-- add a small browser-side eval entrypoint
-- add a Node/TS driver that launches a real browser and calls that entrypoint
+- a reusable page-scoped `CodeModeExecutor` builder
+- a browser-side eval entrypoint exposed by `RunmeEvalHost`
+- a Node/TS eval driver at `app/test/evals/runMinimalEvals.ts`
+- first passing local evals for:
+  - `codex` via fake proxy/app-server
+  - `responses-direct` via fake `/v1/responses`
+
+The main remaining work is the real `codex-wasm` eval path against a live API
+key/runtime configuration.
 
 ## Summary
 
@@ -419,37 +426,36 @@ For evals, this means:
 
 ## Remaining Additions For Minimal Evals
 
-### 1. Add a tiny browser-side eval entrypoint
+The minimal eval foundation now exists in code:
 
-We still need a small browser-side helper, likely test-only, that exposes the
-runtime seam to Playwright/CDP.
+- `app/src/lib/runtime/pageCodeModeExecutor.ts`
+- `app/src/components/Evals/RunmeEvalHost.tsx`
+- `app/test/evals/runMinimalEvals.ts`
 
-That helper should do only this:
+The remaining additions below are the still-open pieces beyond that first
+working slice.
 
-- construct the same runtime inputs `ChatKitPanel` constructs
-  - `codeModeExecutor`
-  - `codexBridgeHandler` for proxy mode
-  - auth resolver for proxy mode
-- call `HarnessRuntimeManager.getOrCreate(...)`
-- `start()` the runtime
-- `streamUserMessage(...)`
-- collect emitted events
-- return notebook / trace / journal / OPFS snapshots
+### 1. Extend the passing suite from local fake harnesses to real `codex-wasm`
 
-This can be a small `window.__runmeEval` bridge or a test-only imported module.
+The current executable slice proves the harness/runtime seam and the browser
+entrypoint, but the passing local suite is still built around deterministic
+fake backends.
 
-### 2. Extract the page-scoped `codeModeExecutor` builder into a reusable helper
+The next step is to add a real `codex-wasm` run mode that:
 
-This is the recommended approach.
+- supplies a real OpenAI API key
+- points assertions at wasm journal rows and OPFS state
+- verifies the worker-backed app-server path rather than the fake proxy path
 
-The main logic that still lives in `ChatKitPanel` is the page-state wiring for:
+### 2. Keep the shared page-scoped `codeModeExecutor` builder as the only notebook wiring seam
 
-- `resolveCodeModeNotebook(...)`
-- `listNotebooks(...)`
-- renderer/notebook update hooks
+This extraction has been implemented and should remain the single place that
+builds the notebook-aware code execution environment used by:
 
-For notebook-mutation evals, we should extract that logic into a reusable
-helper rather than reconstruct it separately inside an eval driver.
+- `ChatKitPanel`
+- the eval bridge
+- `codex-wasm`
+- `responses-direct`
 
 #### Why extraction is the right approach
 
@@ -564,7 +570,7 @@ With this extraction, the browser-side eval entrypoint can:
 That keeps the eval path aligned with the real notebook/runtime wiring instead
 of approximating it.
 
-### 3. Add request/journal capture helpers
+### 3. Add richer request/journal capture helpers
 
 Minimal evals should capture:
 
@@ -575,21 +581,16 @@ Minimal evals should capture:
 This can be done in the browser helper rather than by changing production
 runtime APIs much further.
 
-### 4. Add a Node/TS driver
+### 4. Grow the Node/TS driver beyond the first local suite
 
-Add a script, for example:
+The current driver is `app/test/evals/runMinimalEvals.ts`.
 
-- `app/test/evals/runCodexEval.ts`
+The next additions should be:
 
-Responsibilities:
-
-- launch headless Chromium
-- open the app
-- call the browser eval helper
-- seed notebook state if needed
-- submit prompt
-- run assertions
-- print structured pass/fail output
+- explicit suite selection / filtering
+- structured JSON result output for CI
+- `codex-wasm`-specific configuration inputs
+- agentic-search assertions over OPFS repo cache contents
 
 ## Initial Eval Suite
 

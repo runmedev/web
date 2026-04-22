@@ -250,11 +250,58 @@ func handleChatkit(w http.ResponseWriter, r *http.Request) {
 		writeCodexChatkitSSE(w)
 		return
 	}
+	if r.URL.Path == "/v1/responses" {
+		writeResponsesDirectSSE(w, string(body))
+		return
+	}
 	events := []string{
 		`{"type":"response.created","response":{"id":"resp_cuj"}}`,
 		`{"type":"response.output_text.delta","delta":"Fake assistant response from CUJ server."}`,
 		`{"type":"aisre.chatkit.state","item":{"state":{"threadId":"thread_cuj","previousResponseId":"resp_cuj"}}}`,
 		`{"type":"response.completed","response":{"id":"resp_cuj"}}`,
+	}
+	for _, event := range events {
+		writeSSE(w, event)
+		time.Sleep(8 * time.Millisecond)
+	}
+}
+
+func writeResponsesDirectSSE(w http.ResponseWriter, requestBody string) {
+	if strings.Contains(requestBody, `"type":"function_call_output"`) {
+		finalRespID := "resp_cuj_responses_2"
+		finalItemID := "msg_cuj_responses_2"
+		finalText := `Cell has been added.`
+		events := []string{
+			fmt.Sprintf(`{"type":"response.created","response":{"id":"%s"}}`, finalRespID),
+			fmt.Sprintf(`{"type":"response.output_item.added","response_id":"%s","output_index":0,"item":{"id":"%s","type":"message","status":"in_progress","role":"assistant","content":[]}}`, finalRespID, finalItemID),
+			fmt.Sprintf(`{"type":"response.output_text.delta","response_id":"%s","output_index":0,"item_id":"%s","content_index":0,"delta":%q}`, finalRespID, finalItemID, finalText),
+			fmt.Sprintf(`{"type":"response.output_item.done","response_id":"%s","output_index":0,"item":{"id":"%s","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":%q}]}}`, finalRespID, finalItemID, finalText),
+			fmt.Sprintf(`{"type":"response.completed","response":{"id":"%s"}}`, finalRespID),
+		}
+		for _, event := range events {
+			writeSSE(w, event)
+			time.Sleep(8 * time.Millisecond)
+		}
+		return
+	}
+
+	toolRespID := "resp_cuj_responses_1"
+	toolItemID := "tool_cuj_responses_1"
+	toolCallID := "call_cuj_responses_1"
+	code := strings.Join([]string{
+		"const doc = await notebooks.get();",
+		"await notebooks.update({",
+		"  target: { handle: doc.handle },",
+		`  operations: [{ op: "insert", at: { index: -1 }, cells: [{ kind: "code", languageId: "python", value: 'print("hello world")' }] }],`,
+		"});",
+		`console.log("Cell added.");`,
+	}, "\n")
+	toolArguments := fmt.Sprintf(`{"code":%q}`, code)
+	events := []string{
+		fmt.Sprintf(`{"type":"response.created","response":{"id":"%s"}}`, toolRespID),
+		fmt.Sprintf(`{"type":"response.output_item.added","response_id":"%s","output_index":0,"item":{"id":"%s","type":"function_call","call_id":"%s","name":"ExecuteCode"}}`, toolRespID, toolItemID, toolCallID),
+		fmt.Sprintf(`{"type":"response.function_call_arguments.done","response_id":"%s","item_id":"%s","call_id":"%s","name":"ExecuteCode","arguments":%q}`, toolRespID, toolItemID, toolCallID, toolArguments),
+		fmt.Sprintf(`{"type":"response.completed","response":{"id":"%s"}}`, toolRespID),
 	}
 	for _, event := range events {
 		writeSSE(w, event)

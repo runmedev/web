@@ -48,6 +48,7 @@ import { SidePanelProvider } from "./contexts/SidePanelContext";
 import { appState } from "./lib/runtime/AppState";
 import GlobalToast from "./components/Toast";
 import DriveLinkCoordinatorHost from "./components/DriveLinkCoordinatorHost";
+import { RunmeEvalHost } from "./components/Evals/RunmeEvalHost";
 import { appLogger } from "./lib/logging/runtime";
 import {
   getConfiguredAgentEndpoint,
@@ -167,6 +168,7 @@ function App({ branding }: AppProps) {
                       <OutputProvider>
                         <NotebookProvider>
                           <SidePanelProvider>
+                            <RunmeEvalHost />
                             <GlobalToast />
                             <AppRouter />
                           </SidePanelProvider>

@@ -11,6 +11,7 @@ import {
   parser_pb,
 } from '../../contexts/CellContext'
 import { useNotebookContext } from '../../contexts/NotebookContext'
+import { useOutput } from '../../contexts/OutputContext'
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import {
   useHarness,
@@ -21,8 +22,8 @@ import {
 import {
   buildCodexChatKitFetchOptions,
 } from '../../lib/runtime/codexChatKitAdapter'
-import { createCodeModeExecutor } from '../../lib/runtime/codeModeExecutor'
 import { createChatKitFetchFromAdapter } from '../../lib/runtime/createChatKitFetchFromAdapter'
+import { buildPageCodeModeExecutor } from '../../lib/runtime/pageCodeModeExecutor'
 import { useCodexConversationSnapshot } from '../../lib/runtime/codexConversationController'
 import type {
   HarnessChatKitAdapter,
@@ -204,6 +205,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const harnessRuntimeManager = useMemo(() => getHarnessRuntimeManager(), [])
   const { getNotebookData, useNotebookList } =
     useNotebookContext()
+  const { getAllRenderers } = useOutput()
   const { getCurrentDoc } = useCurrentDoc()
   const responsesDirectConfig = useResponsesDirectConfigSnapshot()
   const codexProjects = useCodexProjects()
@@ -217,75 +219,19 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   openNotebookListRef.current = openNotebookList
   const currentDocUriRef = useRef(currentDocUri)
   currentDocUriRef.current = currentDocUri
-
-  const resolveCodeModeNotebook = useCallback(
-    (target?: unknown) => {
-      const targetUri =
-        typeof target === 'string'
-          ? target
-          : typeof target === 'object' && target && 'uri' in target
-            ? (target as { uri?: string }).uri
-            : typeof target === 'object' &&
-                target &&
-                'handle' in target &&
-                (target as { handle?: { uri?: string } }).handle?.uri
-              ? (target as { handle?: { uri?: string } }).handle?.uri
-              : currentDocUriRef.current
-      if (!targetUri) {
-        return null
-      }
-      const data = getNotebookDataRef.current(targetUri)
-      if (!data) {
-        return null
-      }
-
-      return {
-        getUri: () => data.getUri(),
-        getName: () => data.getName(),
-        getNotebook: () => data.getNotebook(),
-        updateCell: (cell: parser_pb.Cell) => {
-          for (const renderer of getAllRenderersRef.current().values()) {
-            renderer.onCellUpdate(cell)
-          }
-          data.updateCell(cell)
-        },
-        getCell: (refId: string) => data.getCell(refId),
-        appendCodeCell: data.appendCodeCell?.bind(data),
-        addCodeCellAfter: data.addCodeCellAfter?.bind(data),
-        addCodeCellBefore: data.addCodeCellBefore?.bind(data),
-        removeCell: data.removeCell?.bind(data),
-      }
-    },
-    []
-  )
+  const getAllRenderersRef = useRef(getAllRenderers)
+  getAllRenderersRef.current = getAllRenderers
 
   const codeModeExecutor = useMemo(
     () =>
-      createCodeModeExecutor({
-        mode: 'sandbox',
-        resolveNotebook: resolveCodeModeNotebook,
-        listNotebooks: () => {
-          const uris = new Set<string>()
-          for (const notebook of openNotebookListRef.current) {
-            if (typeof notebook?.uri === 'string' && notebook.uri.trim()) {
-              uris.add(notebook.uri)
-            }
-          }
-          if (currentDocUriRef.current) {
-            uris.add(currentDocUriRef.current)
-          }
-          return Array.from(uris)
-            .map((uri) => resolveCodeModeNotebook(uri))
-            .filter(
-              (
-                notebook
-              ): notebook is NonNullable<
-                ReturnType<typeof resolveCodeModeNotebook>
-              > => Boolean(notebook)
-            )
-        },
+      buildPageCodeModeExecutor({
+        getNotebookData: (uri) => getNotebookDataRef.current(uri),
+        getOpenNotebookUris: () =>
+          openNotebookListRef.current.map((notebook) => notebook.uri),
+        getCurrentDocUri: () => currentDocUriRef.current,
+        getRenderers: () => getAllRenderersRef.current().values(),
       }),
-    [resolveCodeModeNotebook]
+    []
   )
 
   const handleCodexBridgeToolCall = useMemo(

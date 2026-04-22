@@ -8,6 +8,8 @@
     "sync:codex-wasm": "node tools/sync_codex_wasm_assets.mjs",
     "typecheck": "tsc -p tsconfig.app.json --noEmit",
     "build": "vite build",
+    "evals:build": "tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/evals/.generated test/evals/runMinimalEvals.ts",
+    "evals:run": "pnpm run evals:build && node test/evals/.generated/runMinimalEvals.js",
     "cuj:build": "tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/browser/.generated test/browser/run-cuj-scenarios.ts",
     "cuj:run": "pnpm run cuj:build && node test/browser/.generated/run-cuj-scenarios.js",
     "cuj:upload": "tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/browser/.generated test/browser/upload-cuj-artifacts.ts && node test/browser/.generated/upload-cuj-artifacts.js",
