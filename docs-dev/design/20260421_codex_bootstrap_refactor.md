@@ -87,7 +87,7 @@ Codex uses a different conversation model:
 
 - `CodexConversationController` owns thread list, current thread, current turn,
   and resume behavior
-- `codexChatkitFetch.ts` still accepts `chatkit_state` on input because it is
+- `codexChatKitAdapter.ts` still accepts `chatkit_state` on input because it is
   shaped like a ChatKit fetch shim
 - `ChatKitPanel` maintains `syncedCodexStateRef` and explicitly ignores Codex
   state events instead of treating ChatKit state as the source of truth

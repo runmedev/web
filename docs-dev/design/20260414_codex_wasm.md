@@ -20,7 +20,7 @@ bringing over heavier Codex runtime features such as Recorder.
 Today we have two harness shapes:
 
 - `responses-direct`: a browser-local turn loop in
-  [responsesDirectChatkitFetch.ts](/Users/jlewi/code/runmecodex/web/app/src/lib/runtime/responsesDirectChatkitFetch.ts)
+  [responsesDirectChatKitAdapter.ts](/Users/jlewi/code/runmecodex/web/app/src/lib/runtime/responsesDirectChatKitAdapter.ts)
   that talks directly to the Responses API and executes browser tools locally.
 - `codex`: a remote Codex app-server path that depends on `/codex/chatkit`,
   `/codex/ws`, and `/codex/app-server/ws`.
@@ -538,7 +538,7 @@ The injected guidance should cover at least:
 
 This keeps the behavior aligned with the current `responses-direct` design,
 which already relies on detailed browser-specific instructions in
-[responsesDirectChatkitFetch.ts](/Users/jlewi/code/runmecodex/web/app/src/lib/runtime/responsesDirectChatkitFetch.ts).
+[responsesDirectChatKitAdapter.ts](/Users/jlewi/code/runmecodex/web/app/src/lib/runtime/responsesDirectChatKitAdapter.ts).
 
 TODO: revisit this section once the Codex WASM browser API settles. The wrapper
 now uses the true Codex submit path, but the exact configuration surface for
@@ -853,6 +853,6 @@ Browser E2E:
 - Codex WASM harness README:
   [README.md](/Users/jlewi/code/codex/codex-rs/wasm-harness/README.md)
 - Current browser-direct harness:
-  [responsesDirectChatkitFetch.ts](/Users/jlewi/code/runmecodex/web/app/src/lib/runtime/responsesDirectChatkitFetch.ts)
+  [responsesDirectChatKitAdapter.ts](/Users/jlewi/code/runmecodex/web/app/src/lib/runtime/responsesDirectChatKitAdapter.ts)
 - Current code mode design:
   [20260331_code_mode.md](/Users/jlewi/code/runmecodex/web/docs-dev/design/20260331_code_mode.md)

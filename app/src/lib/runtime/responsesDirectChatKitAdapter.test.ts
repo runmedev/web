@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createResponsesDirectChatkitFetch } from "./responsesDirectChatkitFetch";
+import { createResponsesDirectChatkitFetch } from "./responsesDirectChatKitAdapter";
 import { __resetResponsesDirectConfigManagerForTests } from "./responsesDirectConfigManager";
 
 vi.mock("../../token", () => ({
@@ -18,7 +18,7 @@ function sseResponse(payloads: Array<Record<string, unknown>>): Response {
   });
 }
 
-describe("responsesDirectChatkitFetch", () => {
+describe("responsesDirectChatKitAdapter", () => {
   beforeEach(async () => {
     vi.restoreAllMocks();
     localStorage.removeItem("runme/responses-direct-config");

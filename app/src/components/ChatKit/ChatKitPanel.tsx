@@ -22,7 +22,7 @@ import {
 } from '../../lib/runtime/harnessManager'
 import {
   buildCodexChatKitFetchOptions,
-} from '../../lib/runtime/codexChatkitFetch'
+} from '../../lib/runtime/codexChatKitAdapter'
 import { createCodeModeExecutor } from '../../lib/runtime/codeModeExecutor'
 import { createChatKitFetchFromAdapter } from '../../lib/runtime/createChatKitFetchFromAdapter'
 import { useCodexConversationSnapshot } from '../../lib/runtime/codexConversationController'

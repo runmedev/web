@@ -83,7 +83,7 @@ vi.mock("./codexConversationController", () => ({
   getCodexConversationController: () => controller,
 }));
 
-import { createCodexChatkitFetch } from "./codexChatkitFetch";
+import { createCodexChatkitFetch } from "./codexChatKitAdapter";
 
 function expectUserThreadItem(item: unknown): void {
   expect(item).toEqual(

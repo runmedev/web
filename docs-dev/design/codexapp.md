@@ -716,7 +716,7 @@ Test strategy:
 
 - feed the captured proxy transcript into `CodexConversationController`
 - verify the resulting ChatKit-facing thread/item model
-- verify the resulting synthetic SSE event stream produced by `codexChatkitFetch`
+- verify the resulting synthetic SSE event stream produced by `codexChatKitAdapter`
 - verify the final ChatKit-visible assistant message contains the expected Python code such as `print("Hello, world!")`
 
 This should become the main regression test for the ChatKit `<->` Codex conversion layer.
@@ -730,7 +730,7 @@ Before debugging more rendering failures, implement in this order:
 1. Add structured raw-protocol logging in Runme and browser code.
 2. Capture and redact one or more real Codex conversations with the manual Runme smoke test.
 3. Add transcript fixtures derived from those captures.
-4. Add replay tests in the web repo for `CodexConversationController` and `codexChatkitFetch`.
+4. Add replay tests in the web repo for `CodexConversationController` and `codexChatKitAdapter`.
 5. Only then adjust the adapter implementation until the replay tests and live browser flow both pass.
 
 ## Rollout Plan

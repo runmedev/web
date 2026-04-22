@@ -6,7 +6,7 @@ import {
   CodexWasmHarnessRuntime,
 } from "./codexHarnessRuntimes";
 import type { CodexToolBridgeHandler } from "./codexToolBridge";
-import { createResponsesDirectChatKitAdapter } from "./responsesDirectChatkitFetch";
+import { createResponsesDirectChatKitAdapter } from "./responsesDirectChatKitAdapter";
 
 export type CreateHarnessRuntimeOptions = {
   profile: HarnessProfile;

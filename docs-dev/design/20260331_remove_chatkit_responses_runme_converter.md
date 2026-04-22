@@ -144,7 +144,7 @@ File:
 Changes:
 
 - Eliminate logic branches that treat `responses` differently from `responses-direct`.
-- For non-codex harness, always use `responsesDirectChatkitFetch`.
+- For non-codex harness, always use `responsesDirectChatKitAdapter`.
 - Keep codex logic unchanged.
 
 ### 4) Update unit/component tests for harness modes
@@ -175,7 +175,7 @@ Current issue:
 
 Required adjustment options:
 
-1. Add test-only override for Responses API base URL in `responsesDirectChatkitFetch`, then point CUJ to fake service implementing `/v1/responses`.
+1. Add test-only override for Responses API base URL in `responsesDirectChatKitAdapter`, then point CUJ to fake service implementing `/v1/responses`.
 2. Move this CUJ to codex-only path and retire fake `/chatkit` assertions.
 
 Option (1) is preferred to preserve non-codex coverage without external OpenAI dependency in CI.

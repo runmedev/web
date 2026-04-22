@@ -1,6 +1,6 @@
 import { getCodexExecuteApprovalManager } from "./codexExecuteApprovalManager";
 import { getCodexAppServerClient } from "./codexAppServerClient";
-import { createCodexChatKitAdapter } from "./codexChatkitFetch";
+import { createCodexChatKitAdapter } from "./codexChatKitAdapter";
 import { getCodexConversationController } from "./codexConversationController";
 import type { CodeModeExecutor } from "./codeModeExecutor";
 import type { HarnessChatKitAdapter, HarnessRuntime } from "./harnessChatKitAdapter";

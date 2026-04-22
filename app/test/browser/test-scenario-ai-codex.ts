@@ -902,7 +902,7 @@ try {
   const fetchDebugRaw = normalizeAgentBrowserString(
     run(
       `agent-browser eval "${escapeDoubleQuotes(
-        `(() => JSON.stringify(window.__codexChatkitFetchDebug || []))()`,
+        `(() => JSON.stringify(window.__codexChatKitAdapterDebug || []))()`,
       )}"`,
     ).stdout,
   );
