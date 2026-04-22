@@ -193,8 +193,8 @@ includes both:
 - transport setup that both modes need in some form before the controller can
   successfully make requests
 
-That is why a single bootstrap helper makes sense even though the two transport
-modes have different prerequisites.
+That is why the two concrete Codex runtime classes should share common helper
+functions even though the two transport modes have different prerequisites.
 
 ### Mode 1: In-Browser `codex-wasm`
 
@@ -270,8 +270,8 @@ That means proxy mode is really two coordinated channels:
 - the app-server request/notification channel
 - the notebook tool-call bridge channel
 
-The bootstrap helper needs to make that coordination explicit, because today it
-is spread across multiple `useEffect` blocks in `ChatKitPanel`.
+The concrete proxy runtime needs to make that coordination explicit, because
+today it is spread across multiple `useEffect` blocks in `ChatKitPanel`.
 
 ## Problem: ChatKitPanel should not own Codex initialiation
 
@@ -736,53 +736,103 @@ we can preserve current behavior:
 
 ## Proposed Refactor
 
-Introduce a small runtime orchestrator, for example:
+`HarnessRuntimeManager` should remain a cache plus factory. It should not own
+Codex lifecycle logic directly, and it should not call through a separate
+bootstrap singleton.
 
-- `app/src/lib/runtime/codexHarnessBootstrap.ts`
+Instead, it should instantiate concrete runtime classes:
 
-This module should export an app-level helper such as:
+- `CodexProxyHarnessRuntime`
+- `CodexWasmHarnessRuntime`
+- `ResponsesDirectHarnessRuntime`
+
+Each runtime instance should own its own `start()` and `stop()` methods.
+
+### Concrete Codex Runtime Classes
+
+The Codex runtimes should live in a module such as:
+
+- `app/src/lib/runtime/codexHarnessRuntimes.ts`
+
+Shape:
 
 ```ts
-type CodexHarnessMode = "codex" | "codex-wasm";
+interface HarnessRuntime {
+  start(): Promise<void>;
+  stop(): void;
+  createChatKitAdapter(): HarnessChatKitAdapter;
+}
 
-type StartCodexHarnessOptions = {
-  mode: CodexHarnessMode;
-  projectId?: string;
-  proxyUrl?: string;
-  resolveAuthorization?: () => Promise<string>;
-  wasmApiKey?: string;
-  wasmSessionOptions?: BrowserSessionOptions;
-  wasmCodeExecutor?: CodexWasmCodeExecutor | null;
-};
+class CodexProxyHarnessRuntime implements HarnessRuntime {
+  start(): Promise<void>;
+  stop(): void;
+}
 
-type StartCodexHarnessResult = {
-  threadId: string;
-  previousResponseId?: string | null;
-};
-
-interface CodexHarnessBootstrap {
-  start(options: StartCodexHarnessOptions): Promise<StartCodexHarnessResult>;
+class CodexWasmHarnessRuntime implements HarnessRuntime {
+  start(): Promise<void>;
   stop(): void;
 }
 ```
 
-### Responsibilities of the bootstrap helper
+### Shared Codex Helper Functions
 
-`start(...)` should do exactly the work now embedded in `ChatKitPanel`:
+We should not use a common base class. The proxy and wasm runtimes share some
+steps, but the lifecycle differences are operational enough that inheritance
+would hide important behavior.
+
+Instead, reuse should happen through small helper functions used by both
+classes, for example:
+
+- apply selected project to `CodexConversationController`
+- refresh thread history
+- ensure the active thread
+- clear `CodexAppServerClient` transport-local state
+- configure or clear the `CodexToolBridge`
+
+That keeps each runtime's `start()` and `stop()` explicit while still removing
+duplication.
+
+### Responsibilities of `CodexProxyHarnessRuntime`
+
+`start()` should:
 
 - optionally set selected project on `CodexConversationController`
-- configure code executor when mode is `codex-wasm`
-- select app-server transport
-- connect proxy or wasm client
-- connect the tool bridge when mode is `codex`
+- select proxy transport on `CodexAppServerClient`
+- install the authorization resolver
+- resolve authorization
+- connect the proxy client
+- connect and monitor `CodexToolBridge`
 - refresh history
 - ensure an active thread
-- return the bootstrapped thread info
 
 `stop()` should:
 
+- clear bridge handler and subscriptions
+- disconnect the bridge
+- fail pending execute approvals
 - clear authorization resolver
-- clear wasm code executor
+- clear app-server client state
+- disconnect the app-server client
+
+### Responsibilities of `CodexWasmHarnessRuntime`
+
+`start()` should:
+
+- optionally set selected project on `CodexConversationController`
+- build and install the wasm code executor
+- select wasm transport on `CodexAppServerClient`
+- clear any proxy authorization resolver
+- connect the wasm client
+- ensure the bridge is disabled
+- refresh history
+- ensure an active thread
+
+`stop()` should:
+
+- clear any installed bridge state
+- fail any pending approvals conservatively
+- clear the wasm code executor
+- clear authorization resolver
 - disconnect the app-server client
 
 ## Thin Prompt Helper
@@ -829,11 +879,12 @@ non-ChatKit callers.
 ## Decision
 
 Use singleton services for the long-lived Codex runtime objects, but move the
-bootstrap sequence out of `ChatKitPanel` into an explicit runtime orchestrator.
+Codex lifecycle sequence out of `ChatKitPanel` into concrete runtime classes
+selected by `HarnessRuntimeManager`.
 
 That gives us the right ownership split:
 
 - singleton state for runtime identity and continuity
-- explicit APIs for startup, shutdown, and prompt execution
+- explicit runtime instance methods for startup, shutdown, and prompt execution
 - React as a consumer of runtime state rather than the owner of runtime side
   effects
