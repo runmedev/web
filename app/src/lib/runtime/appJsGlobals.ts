@@ -48,6 +48,7 @@ import {
 } from './codexProjectManager'
 import { getCodexTurnEvents, listCodexTurns } from './codexTurns'
 import { type HarnessAdapter, getHarnessManager } from './harnessManager'
+import { getHarnessRuntimeManager } from './harnessRuntimeManager'
 import { getJupyterManager } from './jupyterManager'
 import { responsesDirectConfigManager } from './responsesDirectConfigManager'
 import {
@@ -189,6 +190,7 @@ export function createAppJsGlobals({
   })
   const jupyterManager = getJupyterManager()
   const harnessManager = getHarnessManager()
+  const harnessRuntimeManager = getHarnessRuntimeManager()
   const codexProjectManager = getCodexProjectManager()
   const responsesDirect = responsesDirectConfigManager
   const codexTurnsHelp = [
@@ -913,6 +915,7 @@ export function createAppJsGlobals({
             baseUrl,
             normalized.adapter
           )
+          harnessRuntimeManager.reconcile(updated)
           const message = normalized.warning
             ? `Harness ${updated.name} set to ${updated.baseUrl} (${updated.adapter})\nWarning: ${normalized.warning}`
             : `Harness ${updated.name} set to ${updated.baseUrl} (${updated.adapter})`
@@ -921,6 +924,7 @@ export function createAppJsGlobals({
         },
         delete: (name: string) => {
           harnessManager.delete(name)
+          harnessRuntimeManager.remove(name)
           const message = `Harness ${name} deleted`
           emitLine(sendOutput, message)
           return message

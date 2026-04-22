@@ -112,14 +112,7 @@ function normalizeChatKitEvents(
       events.findLast(
         (event) => event.type === "response.completed",
       )?.response as { id?: string } | undefined
-    )?.id ??
-    (
-      events.findLast(
-        (event) => event.type === "aisre.chatkit.state",
-      )?.item as {
-        state?: { previousResponseId?: string };
-      } | undefined
-    )?.state?.previousResponseId;
+    )?.id;
   let responseCreated = false;
   return events.flatMap((event) => {
     switch (event.type) {
@@ -269,22 +262,6 @@ function normalizeChatKitEvents(
               )?.content?.[0]?.text ?? "",
           },
         ];
-      case "aisre.chatkit.state":
-        return [
-          {
-            type: "aisre.chatkit.state",
-            thread_id: (
-              event.item as {
-                state?: { threadId?: string; previousResponseId?: string };
-              } | undefined
-            )?.state?.threadId,
-            previous_response_id: (
-              event.item as {
-                state?: { threadId?: string; previousResponseId?: string };
-              } | undefined
-            )?.state?.previousResponseId,
-          },
-        ];
       case "response.completed":
         return [
           {
@@ -296,6 +273,12 @@ function normalizeChatKitEvents(
         return [];
     }
   });
+}
+
+function normalizeExpectedFixtureEvents(
+  events: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  return events.filter((event) => event.type !== "aisre.chatkit.state");
 }
 
 describe("CodexConversationController", () => {
@@ -411,7 +394,7 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: any[] = [];
-    await controller.streamUserMessage("hello", {}, { emit: (payload) => events.push(payload) }, "gpt-5.4");
+    await controller.streamUserMessage("hello", { emit: (payload) => events.push(payload) }, "gpt-5.4");
 
     expect(events).toEqual(
       expect.arrayContaining([
@@ -589,7 +572,6 @@ describe("CodexConversationController", () => {
     const events: any[] = [];
     const nextState = await controller.streamUserMessage(
       'print("hello")',
-      {},
       {
         emit: (payload) => events.push(payload),
       },
@@ -626,9 +608,6 @@ describe("CodexConversationController", () => {
           }),
         }),
         expect.objectContaining({
-          type: "aisre.chatkit.state",
-        }),
-        expect.objectContaining({
           type: "response.completed",
         }),
       ]),
@@ -636,9 +615,6 @@ describe("CodexConversationController", () => {
     expect(
       events.filter((event) => event?.type === "response.completed"),
     ).toHaveLength(2);
-    expect(
-      events.filter((event) => event?.type === "aisre.chatkit.state"),
-    ).toHaveLength(1);
     expect(controller.getSnapshot().currentThreadId).toBe("thread-1");
     expect(controller.getSnapshot().currentTurnId).toBeNull();
   });
@@ -696,7 +672,6 @@ describe("CodexConversationController", () => {
     const events: any[] = [];
     const nextState = await controller.streamUserMessage(
       "hello",
-      { threadId: "thread-stale", previousResponseId: "resp-stale" },
       {
         emit: (payload) => events.push(payload),
       },
@@ -752,7 +727,7 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     await controller.selectThread("thread-1");
-    await controller.streamUserMessage("hello", {}, { emit: vi.fn() });
+    await controller.streamUserMessage("hello", { emit: vi.fn() });
   });
 
   it("uses a per-request model override when resuming an existing thread", async () => {
@@ -802,7 +777,7 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     await controller.selectThread("thread-1");
-    await controller.streamUserMessage("hello", {}, { emit: vi.fn() }, "gpt-5.4");
+    await controller.streamUserMessage("hello", { emit: vi.fn() }, "gpt-5.4");
   });
 
   it("maps item-based codex notifications into ChatKit-compatible events", async () => {
@@ -870,7 +845,6 @@ describe("CodexConversationController", () => {
     const events: any[] = [];
     const nextState = await controller.streamUserMessage(
       'print("hello")',
-      {},
       {
         emit: (payload) => events.push(payload),
       },
@@ -984,7 +958,6 @@ describe("CodexConversationController", () => {
     const events: any[] = [];
     const nextState = await controller.streamUserMessage(
       "What is this notebook about",
-      {},
       {
         emit: (payload) => events.push(payload),
       },
@@ -1110,7 +1083,7 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: any[] = [];
-    const streamPromise = controller.streamUserMessage("What is this notebook about", {}, {
+    const streamPromise = controller.streamUserMessage("What is this notebook about", {
       emit: (payload) => events.push(payload),
     });
 
@@ -1217,7 +1190,6 @@ describe("CodexConversationController", () => {
     const events: any[] = [];
     const nextState = await controller.streamUserMessage(
       "Can you speak french?",
-      {},
       {
         emit: (payload) => events.push(payload),
       },
@@ -1300,7 +1272,7 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: any[] = [];
-    await controller.streamUserMessage("print hello world in python", {}, {
+    await controller.streamUserMessage("print hello world in python", {
       emit: (payload) => events.push(payload),
     });
 
@@ -1428,7 +1400,7 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: any[] = [];
-    const promise = controller.streamUserMessage("hello", {}, {
+    const promise = controller.streamUserMessage("hello", {
       emit: (payload) => events.push(payload),
     });
 
@@ -1544,7 +1516,7 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: any[] = [];
-    await controller.streamUserMessage("hello", {}, {
+    await controller.streamUserMessage("hello", {
       emit: (payload) => events.push(payload),
     });
 
@@ -1621,22 +1593,21 @@ describe("CodexConversationController", () => {
     const events: Array<Record<string, unknown>> = [];
     const nextState = await controller.streamUserMessage(
       fixture.prompt,
-      {},
       {
         emit: (payload) => events.push(payload as Record<string, unknown>),
       },
     );
 
-    expect(normalizeChatKitEvents(events)).toEqual(expected.events);
+    expect(normalizeChatKitEvents(events)).toEqual(
+      normalizeExpectedFixtureEvents(expected.events),
+    );
 
     const finalState = expected.events.findLast(
-      (event) => event.type === "aisre.chatkit.state",
+      (event) => event.type === "response.completed",
     );
     if (finalState) {
-      expect(nextState).toEqual({
-        threadId: finalState.thread_id,
-        previousResponseId: finalState.previous_response_id,
-      });
+      expect(nextState.previousResponseId).toBe(finalState.response_id);
+      expect(nextState.threadId).toBeTypeOf("string");
     }
   });
 });

@@ -31,6 +31,10 @@ Current numbered docs:
 - [14-authentication-and-app-configuration.md](14-authentication-and-app-configuration.md)
 - [15-logs-diagnostics-and-troubleshooting.md](15-logs-diagnostics-and-troubleshooting.md)
 
+Additional topical docs:
+
+- [using-codex.md](using-codex.md)
+
 These docs intentionally exclude implementation-only material such as deployment
 internals and design proposals. Internal notes remain under `docs-dev/` and
 `docs/design/`.

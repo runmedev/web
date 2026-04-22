@@ -15,7 +15,6 @@ import type {
   ChatKitEndOfTurnItem,
   ChatKitInputTextPart,
   ChatKitOutputTextPart,
-  ChatKitStateValue,
   ChatKitStreamEvent,
   ChatKitUserMessageItem,
 } from "./chatkitProtocol";
@@ -80,22 +79,6 @@ function emitLoggedChatkitEvent(sink: CodexStreamSink, payload: ChatKitStreamEve
       null,
   });
   sink.emit(payload);
-}
-
-function emitChatkitState(
-  sink: CodexStreamSink,
-  threadId: string,
-  previousResponseId?: string,
-): void {
-  emitLoggedChatkitEvent(sink, {
-    type: "aisre.chatkit.state",
-    item: {
-      state: {
-        threadId,
-        previousResponseId,
-      },
-    },
-  });
 }
 
 function buildAssistantThreadItem(
@@ -632,10 +615,9 @@ class CodexConversationController {
 
   async streamUserMessage(
     input: string,
-    chatkitState: ChatKitStateValue,
     sink: CodexStreamSink,
     modelOverride?: string,
-  ): Promise<ChatKitStateValue> {
+  ): Promise<{ threadId: string; previousResponseId: string }> {
     const proxy = getCodexAppServerClient();
     const project = this.getSnapshot().selectedProject;
     const effectiveModel = asString(modelOverride) ?? project.model;
@@ -643,17 +625,6 @@ class CodexConversationController {
     let threadId = this.currentThreadId ?? activeThread.id;
     if (!threadId) {
       throw new Error("No active Codex thread available before turn/start");
-    }
-    if (chatkitState.threadId && chatkitState.threadId !== threadId) {
-      appLogger.info("Ignoring stale Codex ChatKit thread id", {
-        attrs: {
-          scope: "chatkit.codex_controller",
-          chatkitStateThreadId: chatkitState.threadId,
-          currentThreadId: this.currentThreadId,
-          activeThreadId: activeThread.id,
-          selectedThreadId: threadId,
-        },
-      });
     }
 
     if (this.resumeRequired.has(threadId)) {
@@ -1076,9 +1047,6 @@ class CodexConversationController {
           });
           lastResponseId = responseId;
         });
-        if (lastResponseId) {
-          emitChatkitState(sink, threadId!, lastResponseId);
-        }
         responseIdsToComplete.forEach((responseId) => {
           if (completedResponses.has(responseId)) {
             return;
@@ -1134,7 +1102,6 @@ class CodexConversationController {
       updatedThread.previousResponseId = lastResponseId;
       this.threads.set(threadId, updatedThread);
     } else {
-      emitChatkitState(sink, threadId, lastResponseId);
       emitLoggedChatkitEvent(sink, {
         type: "response.completed",
         response: { id: lastResponseId },

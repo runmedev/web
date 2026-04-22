@@ -23,7 +23,6 @@ const FAKE_CODEX_REQUESTS_URL = process.env.CUJ_FAKE_CODEX_REQUESTS_URL ?? `${FA
 const USER_PROMPT_TEXT = `Add a cell to print("hello world")`;
 const FINAL_AI_RESPONSE_TEXT = "Cell has been added.";
 const EXPECTED_NEW_CELL_TEXT = `print("hello world")`;
-const EXPECTED_NEW_CELL_ID = "cell_ai_codex_added";
 const SEEDED_THREAD_TITLE = "Earlier conversation";
 const SEEDED_THREAD_ASSISTANT_TEXT = "Previous assistant answer.";
 
@@ -611,7 +610,7 @@ function hasPromptInTurnStart(raw: string, expectedPrompt: string): boolean {
   }
 }
 
-function waitForCodexUpdateTraffic(timeoutMs = 30000): string {
+function waitForCodexExecuteCodeTraffic(timeoutMs = 30000): string {
   const deadline = Date.now() + timeoutMs;
   let lastRaw = "";
   while (Date.now() < deadline) {
@@ -626,11 +625,11 @@ function waitForCodexUpdateTraffic(timeoutMs = 30000): string {
             return false;
           }
           const body = entry.body ?? "";
-          return body.includes("\"bridge_update\"") || body.includes("\"call_update\"");
+          return body.includes("\"bridge_execute\"") || body.includes("\"call_execute\"");
         });
         const hasUpdateResponse =
-          (joined.includes("\"bridge_update\"") || joined.includes("\"call_update\"")) &&
-          joined.includes("\"updateCells\"") &&
+          (joined.includes("\"bridge_execute\"") || joined.includes("\"call_execute\"")) &&
+          joined.includes("\"executeCode\"") &&
           hasInboundUpdateResponse;
         if (hasUpdateResponse) {
           return lastRaw;
@@ -902,7 +901,7 @@ try {
   const fetchDebugRaw = normalizeAgentBrowserString(
     run(
       `agent-browser eval "${escapeDoubleQuotes(
-        `(() => JSON.stringify(window.__codexChatkitFetchDebug || []))()`,
+        `(() => JSON.stringify(window.__codexChatKitAdapterDebug || []))()`,
       )}"`,
     ).stdout,
   );
@@ -924,11 +923,14 @@ try {
     fail("Observed turn/start request but the expected user prompt was missing");
   }
 
-  const codexUpdateTraffic = waitForCodexUpdateTraffic();
-  if (codexUpdateTraffic.includes("bridge_update") && codexUpdateTraffic.includes("updateCells")) {
-    pass(`Fake code server sends websocket response to add a cell with ${EXPECTED_NEW_CELL_TEXT}`);
+  const codexUpdateTraffic = waitForCodexExecuteCodeTraffic();
+  if (
+    codexUpdateTraffic.includes("bridge_execute") &&
+    codexUpdateTraffic.includes("executeCode")
+  ) {
+    pass(`Fake code server sends ExecuteCode traffic to add a cell with ${EXPECTED_NEW_CELL_TEXT}`);
   } else {
-    fail("Did not observe complete codex websocket updateCells traffic");
+    fail("Did not observe complete codex websocket ExecuteCode traffic");
   }
 
   const notebookProbeScript = `(async () => {
@@ -938,7 +940,9 @@ try {
     if (!rec) return JSON.stringify({ status: 'missing-notebook-record' });
     const doc = JSON.parse(rec.doc || '{}');
     const cells = Array.isArray(doc.cells) ? doc.cells : [];
-    const addedCell = cells.find((cell) => cell?.refId === '${EXPECTED_NEW_CELL_ID}');
+    const addedCell = cells.find((cell) =>
+      typeof cell?.value === 'string' && cell.value.includes(${JSON.stringify(EXPECTED_NEW_CELL_TEXT)})
+    );
     return JSON.stringify({
       status: 'ok',
       cellsCount: cells.length,
@@ -952,7 +956,8 @@ try {
     (parsed) =>
       parsed?.status === "ok" &&
       Number(parsed?.cellsCount ?? 0) >= 2 &&
-      parsed?.addedRefId === EXPECTED_NEW_CELL_ID &&
+      typeof parsed?.addedRefId === "string" &&
+      parsed.addedRefId.length > 0 &&
       typeof parsed?.addedValue === "string" &&
       parsed.addedValue.includes(EXPECTED_NEW_CELL_TEXT),
     30000,
@@ -992,9 +997,9 @@ try {
   }
   const visibleEditorTextsRaw = waitForVisibleEditorText(EXPECTED_NEW_CELL_TEXT, 20000);
   writeArtifact("scenario-ai-codex-12-visible-editor-texts.json", visibleEditorTextsRaw);
-  const hasSecondCellInSnapshot =
-    finalAiResult.snapshot.includes('textbox "Editor content" [ref=') &&
-    finalAiResult.snapshot.includes("[nth=1]");
+  const hasSecondCellInSnapshot = /textbox "Editor content" \[ref=[^\]]+\] \[nth=1\]/.test(
+    finalAiResult.snapshot,
+  );
   if (
     visibleEditorTextsRaw.includes(EXPECTED_NEW_CELL_TEXT) ||
     hasSecondCellInSnapshot ||
@@ -1010,7 +1015,7 @@ try {
     pass("No codex bridge error banner was shown");
   }
 
-  const codexRequestsRaw = waitForCodexUpdateTraffic(5000);
+  const codexRequestsRaw = waitForCodexExecuteCodeTraffic(5000);
   const appServerRequestsRaw = waitForCodexAppServerRequest("turn/start", 5000, {
     bodyIncludes: USER_PROMPT_TEXT,
   });
@@ -1019,26 +1024,26 @@ try {
   try {
     const codexMessages = JSON.parse(codexRequestsRaw) as Array<{ body?: string; direction?: string }>;
     const allBodies = codexMessages.map((m) => m.body ?? "").join("\n");
-    const hasList = /bridge_list|call_list/.test(allBodies);
-    const hasUpdate = /bridge_update|call_update/.test(allBodies);
+    const hasExecute = /bridge_execute|call_execute/.test(allBodies);
     const hasAddedCellText = codexMessages.some((message) => {
       if (message.direction !== "outbound" || !message.body) {
         return false;
       }
       try {
         const parsed = JSON.parse(message.body) as {
-          tool_call_input?: { updateCells?: { cells?: Array<{ value?: string }> } };
+          tool_call_input?: {
+            executeCode?: { code?: string };
+          };
         };
-        const cells = parsed.tool_call_input?.updateCells?.cells ?? [];
-        return cells.some((cell) => cell?.value === EXPECTED_NEW_CELL_TEXT);
+        return parsed.tool_call_input?.executeCode?.code?.includes(EXPECTED_NEW_CELL_TEXT) ?? false;
       } catch {
         return false;
       }
     });
-    if (hasList && hasUpdate && hasAddedCellText) {
-      pass("Fake codex websocket server observed list/update tool call traffic");
+    if (hasExecute && hasAddedCellText) {
+      pass("Fake codex websocket server observed ExecuteCode tool call traffic");
     } else {
-      fail("Missing expected list/update traffic in fake codex websocket logs");
+      fail("Missing expected ExecuteCode traffic in fake codex websocket logs");
     }
   } catch (error) {
     fail(`Failed to parse fake codex websocket logs: ${String(error)}`);
