@@ -41,11 +41,11 @@ describe('GoogleClientManager', () => {
     expect(manager.getDrivePickerConfig()).toEqual({
       clientId: '554943104515-example.apps.googleusercontent.com',
       developerKey: '',
-      appId: '554943104515',
+      appId: 'notavalidappid',
     })
   })
 
-  it('persists picker-only config while keeping the client ID in OAuth config', () => {
+  it('updates picker-only config without changing the OAuth client config', () => {
     const manager = createManager()
 
     manager.setDrivePickerConfig({
@@ -55,7 +55,7 @@ describe('GoogleClientManager', () => {
     })
 
     expect(manager.getOAuthClient()).toEqual({
-      clientId: '554943104515-example.apps.googleusercontent.com',
+      clientId: '',
       clientSecret: undefined,
       authFlow: 'implicit',
       authUxMode: 'new_tab',
@@ -69,14 +69,7 @@ describe('GoogleClientManager', () => {
     const stored = JSON.parse(
       window.localStorage.getItem(GOOGLE_CLIENT_STORAGE_KEY) ?? '{}'
     ) as Record<string, string | undefined>
-    expect(stored).toMatchObject({
-      oauthClientId: '554943104515-example.apps.googleusercontent.com',
-      drivePickerClientId: '554943104515-example.apps.googleusercontent.com',
-      drivePickerDeveloperKey: 'developer-key',
-      drivePickerAppId: 'custom-app-id',
-      oauthAuthFlow: 'implicit',
-      oauthAuthUxMode: 'new_tab',
-    })
+    expect(stored).toEqual({})
   })
 
   it('defaults new Drive auth sessions to opening in a new tab', () => {
