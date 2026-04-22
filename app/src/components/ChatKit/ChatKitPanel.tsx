@@ -270,7 +270,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
                 'handle' in target &&
                 (target as { handle?: { uri?: string } }).handle?.uri
               ? (target as { handle?: { uri?: string } }).handle?.uri
-              : currentDocUri
+              : currentDocUriRef.current
       if (!targetUri) {
         return null
       }
@@ -330,12 +330,13 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
 
   const waitForCellExecutionToComplete = useCallback(
     async (refId: string, timeoutMs = 60_000): Promise<void> => {
-      if (!currentDocUri) {
+      const activeDocUri = currentDocUriRef.current
+      if (!activeDocUri) {
         throw new Error('No active notebook for ExecuteCells')
       }
       const startedAt = Date.now()
       while (Date.now() - startedAt < timeoutMs) {
-        const data = getNotebookDataRef.current(currentDocUri)
+        const data = getNotebookDataRef.current(activeDocUri)
         const updatedCell = data
           ?.getNotebook()
           .cells.find((cell) => cell.refId === refId)
@@ -349,15 +350,16 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         `Timed out waiting for cell execution to finish: ${refId}`
       )
     },
-    [currentDocUri]
+    []
   )
 
   const executeCellsWithApproval = useCallback(
     async (bridgeCallId: string, refIds: string[]): Promise<Cell[]> => {
-      if (!currentDocUri) {
+      const activeDocUri = currentDocUriRef.current
+      if (!activeDocUri) {
         throw new Error('No active notebook for ExecuteCells')
       }
-      const notebookData = getNotebookDataRef.current(currentDocUri)
+      const notebookData = getNotebookDataRef.current(activeDocUri)
       if (!notebookData) {
         throw new Error('No active notebook data for ExecuteCells')
       }
@@ -390,7 +392,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         .map((refId) => latestCells.find((cell) => cell.refId === refId))
         .filter((cell): cell is Cell => Boolean(cell))
     },
-    [currentDocUri, waitForCellExecutionToComplete]
+    [waitForCellExecutionToComplete]
   )
 
   const handleCodexBridgeToolCall = useMemo(

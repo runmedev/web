@@ -25,6 +25,7 @@ let responsesDirectConfigState: {
   authMethod: string;
   apiKey: string;
 };
+let currentDocUriState: string | null;
 let bridgeSnapshot: { state: "idle" | "connecting" | "open" | "closed" | "error"; url: string | null; lastError: string | null };
 let bridgeListener: (() => void) | null;
 let setThreadIdMock: ReturnType<typeof vi.fn>;
@@ -155,7 +156,7 @@ vi.mock("../../contexts/OutputContext", () => ({
 
 vi.mock("../../contexts/CurrentDocContext", () => ({
   useCurrentDoc: () => ({
-    getCurrentDoc: () => null,
+    getCurrentDoc: () => currentDocUriState,
   }),
 }));
 
@@ -259,6 +260,7 @@ describe("ChatKitPanel codex harness routing", () => {
       authMethod: "api_key",
       apiKey: "sk-test",
     };
+    currentDocUriState = null;
     bridgeSnapshot = {
       state: "idle",
       url: null,
@@ -544,6 +546,34 @@ describe("ChatKitPanel codex harness routing", () => {
     await waitFor(() => {
       expect(proxyMock.connectProxy).not.toHaveBeenCalled();
       expect(proxyMock.disconnect).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not restart codex runtime when the active notebook changes", async () => {
+    harnessState.defaultHarness.adapter = "codex";
+
+    const { rerender } = render(<ChatKitPanel />);
+
+    await waitFor(() =>
+      expect(proxyMock.connectProxy).toHaveBeenCalledWith(
+        "ws://127.0.0.1:31337/codex/app-server/ws",
+        "Bearer test-id-token",
+      ),
+    );
+
+    proxyMock.connectProxy.mockClear();
+    proxyMock.disconnect.mockClear();
+    bridgeMock.connect.mockClear();
+    bridgeMock.disconnect.mockClear();
+
+    currentDocUriState = "file:///tmp/other.notebook.md";
+    rerender(<ChatKitPanel />);
+
+    await waitFor(() => {
+      expect(proxyMock.connectProxy).not.toHaveBeenCalled();
+      expect(proxyMock.disconnect).not.toHaveBeenCalled();
+      expect(bridgeMock.connect).not.toHaveBeenCalled();
+      expect(bridgeMock.disconnect).not.toHaveBeenCalled();
     });
   });
 
