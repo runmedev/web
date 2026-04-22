@@ -3,14 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,38 +16,55 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 const (
-	githubAPI        = "https://api.github.com"
-	defaultRunmeRepo = "runmedev/runme"
-	defaultWebRepo   = "runmedev/web"
-	defaultAssetsDir = "kodata/assets"
-	shortSHALen      = 8
+	defaultWebRepo     = "runmedev/web"
+	defaultCodexRepo   = "openai/codex"
+	defaultCodexBranch = "dev/jlewi/wasm"
+	defaultBucket      = "gs://runme-hosted"
+	shortSHALen        = 8
+	versionFileName    = "version.yaml"
 )
 
-type config struct {
-	runmeBranch string
-	webBranch   string
+var hashedAssetPattern = regexp.MustCompile(`\.[A-Za-z0-9_-]{8,}\.[^.]+$`)
 
-	runmeRepo string
+type config struct {
+	webBranch string
+
+	codexBranch string
+
 	webRepo   string
+	codexRepo string
+	bucket    string
 
 	dryRun bool
 
 	tmpBase string
 }
 
-type githubBranchResponse struct {
-	Commit struct {
-		SHA string `json:"sha"`
-	} `json:"commit"`
+type repoSource struct {
+	identity    string
+	cloneSource string
 }
 
-type registryAuthChallenge struct {
-	Realm   string
-	Service string
-	Scope   string
+type releaseVersion struct {
+	BuildDate   string `yaml:"buildDate"`
+	WebRepo     string `yaml:"webRepo"`
+	WebBranch   string `yaml:"webBranch"`
+	WebCommit   string `yaml:"webCommit"`
+	CodexRepo   string `yaml:"codexRepo"`
+	CodexBranch string `yaml:"codexBranch"`
+	CodexCommit string `yaml:"codexCommit"`
+	Bucket      string `yaml:"bucket"`
+}
+
+type publishFile struct {
+	src          string
+	dst          string
+	cacheControl string
+	group        int
 }
 
 func main() {
@@ -64,463 +77,355 @@ func main() {
 func newRootCmd() *cobra.Command {
 	cfg := config{}
 	cmd := &cobra.Command{
-		Use:   "releaser --runme=<branch> --web=<branch>",
-		Short: "Build and publish runme image with embedded web static assets",
+		Use:   "releaser --web=<branch>",
+		Short: "Build and publish web.runme.dev static assets",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return run(cmd.Context(), cfg)
 		},
 	}
 
-	cmd.Flags().StringVar(&cfg.runmeBranch, "runme", "", "branch name in runmedev/runme")
-	cmd.Flags().StringVar(&cfg.webBranch, "web", "", "branch name in runmedev/web")
-	cmd.Flags().StringVar(&cfg.runmeRepo, "runme-repo", defaultRunmeRepo, "GitHub repo in org/repo format")
-	cmd.Flags().StringVar(&cfg.webRepo, "web-repo", defaultWebRepo, "GitHub repo in org/repo format")
-	cmd.Flags().BoolVar(&cfg.dryRun, "dry-run", false, "execute build flow but do not push image to registry")
+	cmd.Flags().StringVar(&cfg.webBranch, "web", "", "branch name in the web repo")
+	cmd.Flags().StringVar(&cfg.codexBranch, "codex", defaultCodexBranch, "branch name in the codex repo")
+	cmd.Flags().StringVar(&cfg.webRepo, "web-repo", defaultWebRepo, "web repo slug, URL, or local path")
+	cmd.Flags().StringVar(&cfg.codexRepo, "codex-repo", defaultCodexRepo, "codex repo slug, URL, or local path")
+	cmd.Flags().StringVar(&cfg.bucket, "bucket", defaultBucket, "destination bucket URL (gs://...) or local directory")
+	cmd.Flags().BoolVar(&cfg.dryRun, "dry-run", false, "build and evaluate publish state without uploading")
 	cmd.Flags().StringVar(&cfg.tmpBase, "tmpdir", os.TempDir(), "base temporary directory")
-	_ = cmd.MarkFlagRequired("runme")
 	_ = cmd.MarkFlagRequired("web")
 
 	return cmd
 }
 
 func run(ctx context.Context, cfg config) error {
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-	ghToken := firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN"))
-
-	runmeOwner, runmeRepoName, err := parseGitHubRepo(cfg.runmeRepo)
+	webSource, err := resolveRepoSource(cfg.webRepo)
 	if err != nil {
-		return fmt.Errorf("invalid --runme-repo: %w", err)
+		return fmt.Errorf("resolve --web-repo: %w", err)
 	}
-	webOwner, webRepoName, err := parseGitHubRepo(cfg.webRepo)
+	codexSource, err := resolveRepoSource(cfg.codexRepo)
 	if err != nil {
-		return fmt.Errorf("invalid --web-repo: %w", err)
+		return fmt.Errorf("resolve --codex-repo: %w", err)
 	}
 
-	runmeSHA, err := githubBranchHead(ctx, httpClient, runmeOwner, runmeRepoName, cfg.runmeBranch, ghToken)
-	if err != nil {
-		return fmt.Errorf("resolve runme branch head: %w", err)
-	}
-	webSHA, err := githubBranchHead(ctx, httpClient, webOwner, webRepoName, cfg.webBranch, ghToken)
+	webSHA, err := gitRemoteBranchHead(ctx, webSource.cloneSource, cfg.webBranch)
 	if err != nil {
 		return fmt.Errorf("resolve web branch head: %w", err)
 	}
-
-	tag := fmt.Sprintf("runme-%s-web-%s", shortSHA(runmeSHA, shortSHALen), shortSHA(webSHA, shortSHALen))
-	ghcrRepoRef := "ghcr.io/" + cfg.runmeRepo
-	imageRef := fmt.Sprintf("%s:%s", ghcrRepoRef, tag)
-
-	registryUser, registryToken := registryCredentials()
-	exists, err := imageExists(ctx, httpClient, cfg.runmeRepo, tag, registryUser, registryToken)
+	codexSHA, err := gitRemoteBranchHead(ctx, codexSource.cloneSource, cfg.codexBranch)
 	if err != nil {
-		return fmt.Errorf("check image existence: %w", err)
+		return fmt.Errorf("resolve codex branch head: %w", err)
 	}
-	if exists {
+
+	version := releaseVersion{
+		BuildDate:   time.Now().Format(time.RFC3339),
+		WebRepo:     webSource.identity,
+		WebBranch:   cfg.webBranch,
+		WebCommit:   webSHA,
+		CodexRepo:   codexSource.identity,
+		CodexBranch: cfg.codexBranch,
+		CodexCommit: codexSHA,
+		Bucket:      cfg.bucket,
+	}
+
+	current, exists, err := readVersion(ctx, cfg.bucket)
+	if err != nil {
+		return fmt.Errorf("read current version marker: %w", err)
+	}
+	if exists && versionMatches(version, current) {
 		if cfg.dryRun {
-			fmt.Printf("image already exists (continuing due to dry-run): %s\n", imageRef)
+			fmt.Printf("release already current (continuing due to dry-run): web=%s codex=%s bucket=%s\n", shortSHA(webSHA, shortSHALen), shortSHA(codexSHA, shortSHALen), cfg.bucket)
 		} else {
-			fmt.Printf("image already exists: %s\n", imageRef)
+			fmt.Printf("release already current: web=%s codex=%s bucket=%s\n", shortSHA(webSHA, shortSHALen), shortSHA(codexSHA, shortSHALen), cfg.bucket)
 			return nil
 		}
 	}
 
-	workDir := filepath.Join(cfg.tmpBase, fmt.Sprintf("runme-%s-web-%s", runmeSHA, webSHA))
+	workDir := filepath.Join(cfg.tmpBase, fmt.Sprintf("web-%s-codex-%s", shortSHA(webSHA, shortSHALen), shortSHA(codexSHA, shortSHALen)))
+	if err := os.RemoveAll(workDir); err != nil {
+		return fmt.Errorf("clean working directory: %w", err)
+	}
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return fmt.Errorf("create working directory: %w", err)
 	}
 	fmt.Printf("working directory: %s\n", workDir)
 
-	runmeDir := filepath.Join(workDir, "runme")
 	webDir := filepath.Join(workDir, "web")
+	codexDir := filepath.Join(workDir, "codex")
 
-	if err := gitCloneAndCheckout(ctx, runmeDir, runmeOwner, runmeRepoName, cfg.runmeBranch, runmeSHA); err != nil {
-		return fmt.Errorf("clone runme repository: %w", err)
-	}
-	if err := gitCloneAndCheckout(ctx, webDir, webOwner, webRepoName, cfg.webBranch, webSHA); err != nil {
+	if err := gitCloneAndCheckout(ctx, webDir, webSource.cloneSource, cfg.webBranch, webSHA); err != nil {
 		return fmt.Errorf("clone web repository: %w", err)
 	}
-
-	for _, cmdline := range []string{
-		"pnpm install --frozen-lockfile",
-		"pnpm run build:renderers",
-		"pnpm -C app run build",
-	} {
-		if err := runShell(ctx, webDir, nil, cmdline); err != nil {
-			return fmt.Errorf("build web static assets (%q): %w", cmdline, err)
-		}
+	if err := gitCloneAndCheckout(ctx, codexDir, codexSource.cloneSource, cfg.codexBranch, codexSHA); err != nil {
+		return fmt.Errorf("clone codex repository: %w", err)
 	}
 
-	srcAssets := filepath.Join(webDir, "app", "dist")
-	if err := assertDir(srcAssets); err != nil {
-		return fmt.Errorf("validate built web assets: %w", err)
+	if err := buildReleasePayload(ctx, webDir, codexDir); err != nil {
+		return err
 	}
 
-	destRel := defaultAssetsDir
-	destAssets := filepath.Join(runmeDir, filepath.Clean(destRel))
-	fmt.Printf("copying assets: %s -> %s\n", srcAssets, destAssets)
-	if err := replaceDirContents(srcAssets, destAssets); err != nil {
-		return fmt.Errorf("copy web assets into runme repo: %w", err)
+	distDir := filepath.Join(webDir, "app", "dist")
+	if err := assertDir(distDir); err != nil {
+		return fmt.Errorf("validate build output: %w", err)
 	}
-	if err := writeVersionYAML(destAssets, runmeSHA, cfg.runmeBranch, webSHA, cfg.webBranch); err != nil {
+	if err := assertFile(filepath.Join(distDir, "index.html")); err != nil {
+		return fmt.Errorf("validate index.html: %w", err)
+	}
+	if err := assertFile(filepath.Join(distDir, "generated", "codex-wasm", "codex_wasm_harness.js")); err != nil {
+		return fmt.Errorf("validate codex wasm JS asset: %w", err)
+	}
+	if err := assertFile(filepath.Join(distDir, "generated", "codex-wasm", "codex_wasm_harness_bg.wasm")); err != nil {
+		return fmt.Errorf("validate codex wasm WASM asset: %w", err)
+	}
+
+	if err := writeVersionYAML(distDir, version); err != nil {
 		return fmt.Errorf("write version file: %w", err)
 	}
 
-	koEnv, cleanup, err := koEnv(ghcrRepoRef, registryUser, registryToken)
+	files, err := collectPublishFiles(distDir)
 	if err != nil {
-		return fmt.Errorf("prepare ko auth env: %w", err)
-	}
-	defer cleanup()
-
-	koArgs := []string{"build", "./", "--bare", "--platform=linux/amd64,linux/arm64", "--tags", tag, "--sbom=none"}
-	if cfg.dryRun {
-		koArgs = append(koArgs, "--push=false")
-	}
-	if err := runCmd(ctx, runmeDir, mergeEnv(os.Environ(), koEnv), "ko", koArgs...); err != nil {
-		return fmt.Errorf("publish multi-arch image with ko: %w", err)
+		return fmt.Errorf("collect publish files: %w", err)
 	}
 
 	if cfg.dryRun {
-		fmt.Printf("dry-run complete (image not pushed): %s\n", imageRef)
-	} else {
-		fmt.Printf("published image: %s\n", imageRef)
+		fmt.Printf("dry-run complete; would publish %d files to %s\n", len(files), cfg.bucket)
+		for _, file := range files {
+			fmt.Printf("  %s -> %s [%s]\n", file.src, destinationURL(cfg.bucket, file.dst), file.cacheControl)
+		}
+		return nil
 	}
+
+	for _, file := range files {
+		if err := uploadFile(ctx, cfg.bucket, file); err != nil {
+			return fmt.Errorf("upload %s: %w", file.dst, err)
+		}
+	}
+
+	fmt.Printf("published %d files to %s\n", len(files), cfg.bucket)
 	return nil
 }
 
-func githubBranchHead(ctx context.Context, client *http.Client, owner, repo, branch, token string) (string, error) {
-	u := fmt.Sprintf("%s/repos/%s/%s/branches/%s", githubAPI, owner, repo, url.PathEscape(branch))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+func buildReleasePayload(ctx context.Context, webDir, codexDir string) error {
+	for _, cmdline := range []string{
+		"pnpm install --frozen-lockfile",
+		"pnpm run build:renderers",
+	} {
+		if err := runShell(ctx, webDir, nil, cmdline); err != nil {
+			return fmt.Errorf("build web prerequisites (%q): %w", cmdline, err)
+		}
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
-		return "", fmt.Errorf("github branches API %s returned %d: %s", u, resp.StatusCode, strings.TrimSpace(string(b)))
+	if err := runCmd(ctx, codexDir, nil, "rustup", "target", "add", "wasm32-unknown-unknown"); err != nil {
+		return fmt.Errorf("ensure wasm target: %w", err)
 	}
 
-	var payload githubBranchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", err
+	wasmHarnessDir := filepath.Join(codexDir, "codex-rs", "wasm-harness")
+	if err := runShell(ctx, wasmHarnessDir, nil, "./scripts/build-browser-demo.sh"); err != nil {
+		return fmt.Errorf("build codex wasm harness: %w", err)
 	}
-	if payload.Commit.SHA == "" {
-		return "", errors.New("empty commit sha from github API")
+
+	wasmPkgDir := filepath.Join(wasmHarnessDir, "examples", "pkg")
+	syncEnv := append(os.Environ(), "CODEX_WASM_PKG_DIR="+wasmPkgDir)
+	if err := runShell(ctx, filepath.Join(webDir, "app"), syncEnv, "pnpm run sync:codex-wasm"); err != nil {
+		return fmt.Errorf("sync codex wasm assets: %w", err)
 	}
-	return payload.Commit.SHA, nil
+
+	if err := runShell(ctx, webDir, nil, "pnpm build:app"); err != nil {
+		return fmt.Errorf("build web app: %w", err)
+	}
+
+	return nil
 }
 
-func imageExists(ctx context.Context, client *http.Client, repo, tag, user, token string) (bool, error) {
-	manifestURL := fmt.Sprintf("https://ghcr.io/v2/%s/manifests/%s", repo, tag)
-	challenge, status, err := headManifest(ctx, client, manifestURL, "")
+func collectPublishFiles(distDir string) ([]publishFile, error) {
+	files := []publishFile{}
+	err := filepath.WalkDir(distDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		rel, err := filepath.Rel(distDir, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+
+		cacheControl, group := classifyFile(rel)
+		files = append(files, publishFile{
+			src:          path,
+			dst:          rel,
+			cacheControl: cacheControl,
+			group:        group,
+		})
+		return nil
+	})
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	switch status {
-	case http.StatusOK:
-		return true, nil
-	case http.StatusNotFound:
-		return false, nil
-	case http.StatusUnauthorized:
-		if challenge == nil {
-			return false, errors.New("received 401 from ghcr without auth challenge")
+
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].group == files[j].group {
+			return files[i].dst < files[j].dst
 		}
-		bearer, err := fetchRegistryBearer(ctx, client, *challenge, user, token)
-		if err != nil {
-			return false, err
-		}
-		_, status, err = headManifest(ctx, client, manifestURL, bearer)
-		if err != nil {
-			return false, err
-		}
-		if status == http.StatusOK {
-			return true, nil
-		}
-		if status == http.StatusNotFound {
-			return false, nil
-		}
-		return false, fmt.Errorf("unexpected ghcr manifest response status %d", status)
+		return files[i].group < files[j].group
+	})
+
+	return files, nil
+}
+
+func classifyFile(rel string) (string, int) {
+	name := filepath.Base(rel)
+	switch {
+	case rel == versionFileName:
+		return "no-cache, max-age=0, must-revalidate", 3
+	case rel == "index.html":
+		return "no-cache, max-age=0, must-revalidate", 2
+	case hashedAssetPattern.MatchString(name):
+		return "public, max-age=31536000, immutable", 0
 	default:
-		return false, fmt.Errorf("unexpected ghcr manifest response status %d", status)
+		return "no-cache, max-age=0, must-revalidate", 1
 	}
 }
 
-func headManifest(ctx context.Context, client *http.Client, manifestURL, bearer string) (*registryAuthChallenge, int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, manifestURL, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("Accept", strings.Join([]string{
-		"application/vnd.oci.image.index.v1+json",
-		"application/vnd.docker.distribution.manifest.list.v2+json",
-		"application/vnd.oci.image.manifest.v1+json",
-		"application/vnd.docker.distribution.manifest.v2+json",
-	}, ","))
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
+func uploadFile(ctx context.Context, bucket string, file publishFile) error {
+	if strings.HasPrefix(bucket, "gs://") {
+		return runCmd(
+			ctx,
+			"",
+			nil,
+			"gcloud",
+			"storage",
+			"cp",
+			"--cache-control="+file.cacheControl,
+			file.src,
+			destinationURL(bucket, file.dst),
+		)
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, 0, err
+	target := destinationURL(bucket, file.dst)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		challenge := parseWWWAuthenticate(resp.Header.Get("Www-Authenticate"))
-		return challenge, resp.StatusCode, nil
-	}
-	return nil, resp.StatusCode, nil
+	return copyFile(file.src, target)
 }
 
-func fetchRegistryBearer(ctx context.Context, client *http.Client, c registryAuthChallenge, user, token string) (string, error) {
-	if c.Realm == "" {
-		return "", errors.New("empty auth realm")
-	}
-	u, err := url.Parse(c.Realm)
-	if err != nil {
-		return "", err
-	}
-	q := u.Query()
-	if c.Service != "" {
-		q.Set("service", c.Service)
-	}
-	if c.Scope != "" {
-		q.Set("scope", c.Scope)
-	}
-	u.RawQuery = q.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return "", err
-	}
-	if token != "" {
-		req.SetBasicAuth(firstNonEmpty(user, "oauth2"), token)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
-		return "", fmt.Errorf("ghcr token service returned %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-
-	var body struct {
-		Token       string `json:"token"`
-		AccessToken string `json:"access_token"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", err
-	}
-	out := firstNonEmpty(body.Token, body.AccessToken)
-	if out == "" {
-		return "", errors.New("token service returned empty token")
-	}
-	return out, nil
-}
-
-func parseWWWAuthenticate(h string) *registryAuthChallenge {
-	h = strings.TrimSpace(h)
-	if !strings.HasPrefix(strings.ToLower(h), "bearer ") {
-		return nil
-	}
-	params := strings.TrimSpace(h[len("Bearer "):])
-	re := regexp.MustCompile(`(\w+)="([^"]*)"`)
-	matches := re.FindAllStringSubmatch(params, -1)
-	if len(matches) == 0 {
-		return nil
-	}
-	out := &registryAuthChallenge{}
-	for _, m := range matches {
-		switch strings.ToLower(m[1]) {
-		case "realm":
-			out.Realm = m[2]
-		case "service":
-			out.Service = m[2]
-		case "scope":
-			out.Scope = m[2]
+func readVersion(ctx context.Context, bucket string) (releaseVersion, bool, error) {
+	if strings.HasPrefix(bucket, "gs://") {
+		out, err := runCmdOutput(ctx, "", nil, "gcloud", "storage", "cat", destinationURL(bucket, versionFileName))
+		if err != nil {
+			if strings.Contains(err.Error(), "No URLs matched") || strings.Contains(err.Error(), "404") {
+				return releaseVersion{}, false, nil
+			}
+			return releaseVersion{}, false, err
 		}
+		return parseVersionYAML(out)
 	}
-	return out
+
+	path := destinationURL(bucket, versionFileName)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return releaseVersion{}, false, nil
+		}
+		return releaseVersion{}, false, err
+	}
+	return parseVersionYAML(content)
 }
 
-func gitCloneAndCheckout(ctx context.Context, dst, owner, repo, branch, sha string) error {
-	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
-	if err := runCmd(ctx, "", nil, "git", "clone", "--depth", "1", "--branch", branch, repoURL, dst); err != nil {
+func parseVersionYAML(content []byte) (releaseVersion, bool, error) {
+	var version releaseVersion
+	if err := yaml.Unmarshal(content, &version); err != nil {
+		return releaseVersion{}, false, err
+	}
+	return version, true, nil
+}
+
+func writeVersionYAML(distDir string, version releaseVersion) error {
+	content, err := yaml.Marshal(version)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(distDir, versionFileName), content, 0o644)
+}
+
+func versionMatches(desired, current releaseVersion) bool {
+	return desired.WebRepo == current.WebRepo &&
+		desired.WebBranch == current.WebBranch &&
+		desired.WebCommit == current.WebCommit &&
+		desired.CodexRepo == current.CodexRepo &&
+		desired.CodexBranch == current.CodexBranch &&
+		desired.CodexCommit == current.CodexCommit &&
+		desired.Bucket == current.Bucket
+}
+
+func resolveRepoSource(value string) (repoSource, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return repoSource{}, errors.New("empty repo")
+	}
+
+	if strings.HasPrefix(value, "https://") || strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "ssh://") || strings.HasPrefix(value, "git@") || strings.HasPrefix(value, "file://") {
+		return repoSource{identity: value, cloneSource: value}, nil
+	}
+
+	if _, err := os.Stat(value); err == nil {
+		abs, err := filepath.Abs(value)
+		if err != nil {
+			return repoSource{}, err
+		}
+		return repoSource{identity: abs, cloneSource: abs}, nil
+	}
+
+	if isGitHubSlug(value) {
+		return repoSource{
+			identity:    value,
+			cloneSource: "https://github.com/" + value + ".git",
+		}, nil
+	}
+
+	return repoSource{}, fmt.Errorf("unsupported repo value %q", value)
+}
+
+func isGitHubSlug(value string) bool {
+	parts := strings.Split(value, "/")
+	return len(parts) == 2 && parts[0] != "" && parts[1] != ""
+}
+
+func gitRemoteBranchHead(ctx context.Context, repo, branch string) (string, error) {
+	out, err := runCmdOutput(ctx, "", nil, "git", "ls-remote", repo, "refs/heads/"+branch)
+	if err != nil {
+		return "", err
+	}
+	line := strings.TrimSpace(string(out))
+	if line == "" {
+		return "", fmt.Errorf("branch %q not found in %s", branch, repo)
+	}
+
+	fields := strings.Fields(line)
+	if len(fields) < 1 || fields[0] == "" {
+		return "", fmt.Errorf("unexpected git ls-remote output for %s %s: %q", repo, branch, line)
+	}
+	return fields[0], nil
+}
+
+func gitCloneAndCheckout(ctx context.Context, dst, repo, branch, sha string) error {
+	cloneSource := repo
+	if isLocalPath(repo) {
+		cloneSource = "file://" + filepath.ToSlash(repo)
+	}
+	if err := runCmd(ctx, "", nil, "git", "clone", "--depth", "1", "--branch", branch, cloneSource, dst); err != nil {
 		return err
 	}
 	return runCmd(ctx, dst, nil, "git", "checkout", sha)
 }
 
-func detectRunmeAssetsDir(runmeDir string) (string, error) {
-	if fromWorkflow := detectFromWorkflowFiles(runmeDir); fromWorkflow != "" {
-		return fromWorkflow, nil
+func destinationURL(bucket, rel string) string {
+	rel = filepath.ToSlash(rel)
+	if strings.HasPrefix(bucket, "gs://") {
+		return strings.TrimRight(bucket, "/") + "/" + strings.TrimLeft(rel, "/")
 	}
-	if fromEmbed := detectFromEmbedPatterns(runmeDir); fromEmbed != "" {
-		return fromEmbed, nil
-	}
-
-	candidates := []string{
-		"assets",
-		"web/assets",
-		"web/dist",
-		"pkg/web/assets",
-		"pkg/web/dist",
-		"internal/web/assets",
-		"internal/web/dist",
-	}
-	for _, rel := range candidates {
-		if dirExists(filepath.Join(runmeDir, rel)) {
-			return rel, nil
-		}
-	}
-	return "", errors.New("unable to infer destination for static assets")
-}
-
-func detectFromWorkflowFiles(runmeDir string) string {
-	workflowDir := filepath.Join(runmeDir, ".github", "workflows")
-	entries, err := os.ReadDir(workflowDir)
-	if err != nil {
-		return ""
-	}
-
-	dests := map[string]struct{}{}
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || (!strings.HasSuffix(name, ".yml") && !strings.HasSuffix(name, ".yaml")) {
-			continue
-		}
-		content, err := os.ReadFile(filepath.Join(workflowDir, name))
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(content), "\n") {
-			if !strings.Contains(line, "app/dist") {
-				continue
-			}
-			if rel := extractDestinationPath(line); rel != "" {
-				dests[rel] = struct{}{}
-			}
-		}
-	}
-
-	if len(dests) == 1 {
-		for k := range dests {
-			return k
-		}
-	}
-	return ""
-}
-
-func detectFromEmbedPatterns(runmeDir string) string {
-	type dirScore struct {
-		dir   string
-		score int
-	}
-	scores := map[string]int{}
-	err := filepath.WalkDir(runmeDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if strings.Contains(path, "/.git") || strings.Contains(path, "/vendor") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		for _, line := range strings.Split(string(b), "\n") {
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(line, "//go:embed ") {
-				continue
-			}
-			patterns := strings.Fields(strings.TrimPrefix(line, "//go:embed "))
-			for _, p := range patterns {
-				if !strings.Contains(p, "assets") && !strings.Contains(p, "dist") && !strings.Contains(p, "web") {
-					continue
-				}
-				p = strings.Trim(p, "\"`")
-				abs := filepath.Clean(filepath.Join(filepath.Dir(path), p))
-				rel, err := filepath.Rel(runmeDir, abs)
-				if err != nil {
-					continue
-				}
-				rel = strings.TrimSuffix(rel, "/*")
-				rel = strings.TrimSuffix(rel, "/")
-				if rel == "." || strings.HasPrefix(rel, "..") {
-					continue
-				}
-				scores[filepath.ToSlash(rel)]++
-			}
-		}
-		return nil
-	})
-	if err != nil || len(scores) == 0 {
-		return ""
-	}
-
-	all := make([]dirScore, 0, len(scores))
-	for k, v := range scores {
-		all = append(all, dirScore{dir: k, score: v})
-	}
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].score == all[j].score {
-			return all[i].dir < all[j].dir
-		}
-		return all[i].score > all[j].score
-	})
-
-	return all[0].dir
-}
-
-func extractDestinationPath(line string) string {
-	line = strings.TrimSpace(line)
-	line = strings.ReplaceAll(line, "\t", " ")
-	line = strings.ReplaceAll(line, "\"", "")
-	line = strings.ReplaceAll(line, "'", "")
-	parts := strings.Fields(line)
-	if len(parts) < 3 {
-		return ""
-	}
-	last := parts[len(parts)-1]
-	last = strings.TrimSuffix(last, "/")
-	last = strings.TrimSuffix(last, "/.")
-
-	prefixes := []string{"$RUNME_DIR/", "${RUNME_DIR}/", "$GITHUB_WORKSPACE/", "${GITHUB_WORKSPACE}/runme/", "runme/"}
-	for _, p := range prefixes {
-		if strings.HasPrefix(last, p) {
-			last = strings.TrimPrefix(last, p)
-			break
-		}
-	}
-	if last == "" || strings.HasPrefix(last, "$") || strings.Contains(last, "${") {
-		return ""
-	}
-	if strings.HasPrefix(last, "/") {
-		return ""
-	}
-	if strings.HasPrefix(last, "./") {
-		last = strings.TrimPrefix(last, "./")
-	}
-	return filepath.ToSlash(last)
+	return filepath.Join(bucket, filepath.FromSlash(rel))
 }
 
 func runShell(ctx context.Context, dir string, env []string, command string) error {
@@ -540,6 +445,28 @@ func runCmd(ctx context.Context, dir string, env []string, name string, args ...
 	return cmd.Run()
 }
 
+func runCmdOutput(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	if len(env) > 0 {
+		cmd.Env = env
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		if stderr.Len() == 0 {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.Bytes(), nil
+}
+
 func assertDir(path string) error {
 	st, err := os.Stat(path)
 	if err != nil {
@@ -551,145 +478,56 @@ func assertDir(path string) error {
 	return nil
 }
 
-func replaceDirContents(src, dst string) error {
-	if err := assertDir(src); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(dst)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if err := os.RemoveAll(filepath.Join(dst, e.Name())); err != nil {
-			return err
-		}
-	}
-	return copyDir(src, dst)
-}
-
-func copyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		in, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer in.Close()
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(out, in)
-		closeErr := out.Close()
-		if err != nil {
-			return err
-		}
-		return closeErr
-	})
-}
-
-func dirExists(path string) bool {
+func assertFile(path string) error {
 	st, err := os.Stat(path)
-	return err == nil && st.IsDir()
-}
-
-func registryCredentials() (string, string) {
-	user := firstNonEmpty(
-		os.Getenv("GHCR_USERNAME"),
-		os.Getenv("GITHUB_ACTOR"),
-		os.Getenv("GITHUB_REPOSITORY_OWNER"),
-	)
-	token := firstNonEmpty(
-		os.Getenv("GHCR_TOKEN"),
-		os.Getenv("CR_PAT"),
-		os.Getenv("GITHUB_TOKEN"),
-	)
-	return user, token
-}
-
-func koEnv(ghcrRepoRef, user, token string) ([]string, func(), error) {
-	if token == "" {
-		return []string{"KO_DOCKER_REPO=" + ghcrRepoRef}, func() {}, nil
-	}
-
-	cfgDir, err := os.MkdirTemp("", "releaser-docker-config-")
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-	cleanup := func() { _ = os.RemoveAll(cfgDir) }
-
-	username := firstNonEmpty(user, "oauth2")
-	auth := base64.StdEncoding.EncodeToString([]byte(username + ":" + token))
-
-	content := bytes.NewBuffer(nil)
-	fmt.Fprintf(content, "{\n  \"auths\": {\n    \"ghcr.io\": {\n      \"auth\": \"%s\"\n    }\n  }\n}\n", auth)
-
-	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), content.Bytes(), 0o600); err != nil {
-		cleanup()
-		return nil, nil, err
+	if st.IsDir() {
+		return fmt.Errorf("not a file: %s", path)
 	}
-
-	env := []string{
-		"KO_DOCKER_REPO=" + ghcrRepoRef,
-		"DOCKER_CONFIG=" + cfgDir,
-	}
-	return env, cleanup, nil
+	return nil
 }
 
-func parseGitHubRepo(v string) (string, string, error) {
-	v = strings.TrimSpace(v)
-	parts := strings.Split(v, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", fmt.Errorf("expected org/repo, got %q", v)
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
 	}
-	return parts[0], parts[1], nil
+	defer in.Close()
+
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
-func mergeEnv(base, extra []string) []string {
-	kv := map[string]string{}
-	for _, e := range base {
-		if k, v, ok := strings.Cut(e, "="); ok {
-			kv[k] = v
-		}
+func isLocalPath(value string) bool {
+	if value == "" {
+		return false
 	}
-	for _, e := range extra {
-		if k, v, ok := strings.Cut(e, "="); ok {
-			kv[k] = v
-		}
+	if strings.HasPrefix(value, "file://") {
+		return false
 	}
-	out := make([]string, 0, len(kv))
-	for k, v := range kv {
-		out = append(out, k+"="+v)
+	if filepath.IsAbs(value) {
+		return true
 	}
-	sort.Strings(out)
-	return out
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
+	if strings.HasPrefix(value, ".") {
+		return true
 	}
-	return ""
+	_, err := os.Stat(value)
+	return err == nil
 }
 
 func shortSHA(sha string, n int) string {
@@ -698,21 +536,4 @@ func shortSHA(sha string, n int) string {
 		return sha
 	}
 	return sha[:n]
-}
-
-func writeVersionYAML(assetsDir, runmeSHA, runmeBranch, webSHA, webBranch string) error {
-	loc, err := time.LoadLocation("America/Los_Angeles")
-	if err != nil {
-		return err
-	}
-	buildDate := time.Now().In(loc).Format("2006-01-02-15:04:05 MST")
-	content := fmt.Sprintf(
-		"buildDate: %s\nrunmeCommit: %s\nrunmeBranch: %s\nwebCommit: %s\nwebBranch: %s\n",
-		buildDate,
-		runmeSHA,
-		runmeBranch,
-		webSHA,
-		webBranch,
-	)
-	return os.WriteFile(filepath.Join(assetsDir, "version.yaml"), []byte(content), 0o644)
 }

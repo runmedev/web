@@ -1,37 +1,51 @@
 # releaser
 
-Build/publish helper for a combined `runmedev/runme` image that includes web static assets from `runmedev/web`.
+Build/publish helper for `web.runme.dev`.
+
+The tool clones the web repo and the Codex repo, builds the Codex WASM harness,
+syncs the generated assets into the web app, builds `app/dist`, writes
+`version.yaml`, and publishes the result to a bucket.
 
 ## Invocation
 
 ```bash
-go run . --runme=<branch> --web=<branch>
+go run . --web=<branch>
 ```
 
-The tool:
+Useful flags:
 
-1. Resolves latest commit SHA for each branch via GitHub API.
-2. Checks whether `ghcr.io/<runme-repo>:runme-<runmeShortSHA>-web-<webShortSHA>` exists.
-3. Exits if the image exists.
-4. If missing, creates `${TMPDIR}/runme-<runmeSHA>-web-<webSHA>`, clones both repos, builds web assets, copies assets into runme, and publishes a multi-arch image via `ko`.
+- `--codex=<branch>`: Codex branch to build for the WASM harness. Defaults to
+  `dev/jlewi/wasm`.
+- `--web-repo=<repo>`: web repo slug, URL, or local path. Defaults to
+  `runmedev/web`.
+- `--codex-repo=<repo>`: Codex repo slug, URL, or local path. Defaults to
+  `openai/codex`.
+- `--bucket=<dest>`: destination `gs://...` bucket or local directory. Defaults
+  to `gs://runme-hosted`.
+- `--dry-run=true`: build and report what would be published without uploading.
+- `--tmpdir=<path>`: override the temporary workspace base.
 
-## Auth
+## What it does
 
-Supported environment variables:
+1. Resolves the requested web and Codex branch heads with `git ls-remote`.
+2. Reads `<bucket>/version.yaml`.
+3. Exits if the published version already matches the desired inputs, unless
+   `--dry-run` is set.
+4. Clones the web and Codex repos into a temporary workspace.
+5. Builds the Codex WASM harness from `codex-rs/wasm-harness`.
+6. Runs `pnpm run sync:codex-wasm` in `app/`.
+7. Builds `app/dist`.
+8. Publishes the built files and uploads `version.yaml` last.
 
-- `GITHUB_TOKEN` (works in GitHub Actions and locally if token has package scopes)
-- `GH_TOKEN`
-- `GHCR_TOKEN`
-- `CR_PAT`
-- `GHCR_USERNAME`
-- `GITHUB_ACTOR`
-- `GITHUB_REPOSITORY_OWNER`
+## Requirements
 
-If a token is present, the tool generates a temporary Docker config for `ko` pushes.
+- `git`
+- `go`
+- `pnpm`
+- `rustup`
+- `cargo`
+- `wasm-bindgen`
+- `gcloud` when publishing to `gs://...`
 
-## Useful overrides
-
-- `--runme-repo=<org/repo>`: source repo and GHCR image repo (default `runmedev/runme`).
-- `--web-repo=<org/repo>`: source repo for web assets (default `runmedev/web`).
-- `--dry-run=true`: run build and `ko` packaging with `--push=false` (no registry push).
-- `--tmpdir=<path>`: override temporary workspace base.
+For local end-to-end testing you can point `--bucket` at a normal directory
+instead of GCS.

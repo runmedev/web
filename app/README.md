@@ -168,33 +168,20 @@ app.runners.update("localhost","ws://localhost:9977/ws")
 
 ## Deployment
 
-The web app can be published as a static-assets OCI artifact (not a runnable container image).
+The web app is deployed as static files for `web.runme.dev`.
 
-### Publish static assets to GHCR
+### Publish static assets to GCS
 
-This repo includes a GitHub Actions workflow at `.github/workflows/publish-app-assets-oci.yaml` that:
+This repo includes a GitHub Actions workflow at `.github/workflows/releaser.yaml`
+and a releaser binary under `releaser/` that:
 
-1. Builds the app with `pnpm -C app run build`
-2. Packages `app/dist` into `app-assets.tgz` with files under `assets/`
-3. Pushes the tarball to GHCR as an OCI artifact using `oras`
+1. Clones the web repo and the Codex repo
+2. Builds the Codex WASM harness
+3. Runs `pnpm -C app run sync:codex-wasm`
+4. Builds `app/dist`
+5. Publishes the built files to `gs://runme-hosted`
+6. Uploads `version.yaml` last as the release marker
 
-The artifact is published as:
-
-- `ghcr.io/runmedev/app-assets:sha-<commit-sha>`
-- `ghcr.io/runmedev/app-assets:latest` (for `main`)
-
-It uses a custom artifact type:
-
-- `application/vnd.runmeweb.assets.v1`
-
-### Pull and extract the static assets
-
-Install [ORAS](https://oras.land/) and then pull/extract:
-
-```sh
-oras pull ghcr.io/runmedev/app-assets:latest
-mkdir -p site
-tar -xzf app-assets.tgz -C site
-```
-
-After extraction, the app files are in `site/assets/` and can be served by any static file server or uploaded to object storage/CDN.
+The releaser is level-based. It reads `gs://runme-hosted/version.yaml` and
+skips the publish if the deployed `webCommit` and `codexCommit` already match
+the desired inputs.
