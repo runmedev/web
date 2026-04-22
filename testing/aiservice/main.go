@@ -960,37 +960,42 @@ func runCodexScript(ws *wsConn) error {
 	if !waitForCodexTurnStarted(30 * time.Second) {
 		return fmt.Errorf("timed out waiting for codex turn/start request")
 	}
-	if err := sendCodexToolRequest(ws, "bridge_list", map[string]any{
-		"callId":             "call_list",
+	if err := sendCodexToolRequest(ws, "bridge_execute", map[string]any{
+		"callId":             "call_execute",
 		"previousResponseId": "resp_cuj",
-		"listCells":          map[string]any{},
-	}); err != nil {
-		return err
-	}
-	listRespRaw, err := ws.ReadText()
-	if err != nil {
-		return fmt.Errorf("read listCells response: %w", err)
-	}
-	appendCodexBridgeMessage("inbound", "NotebookToolCallResponse", listRespRaw)
-	targetCell, err := buildAddedCellFromListResponse(listRespRaw)
-	if err != nil {
-		return err
-	}
-
-	if err := sendCodexToolRequest(ws, "bridge_update", map[string]any{
-		"callId":             "call_update",
-		"previousResponseId": "resp_cuj",
-		"updateCells": map[string]any{
-			"cells": []any{targetCell},
+		"executeCode": map[string]any{
+			"code": strings.Join([]string{
+				"const doc = await notebooks.get();",
+				"const updated = await notebooks.update({",
+				"  target: { handle: doc.handle },",
+				"  expectedRevision: doc.handle.revision,",
+				"  operations: [{",
+				`    op: "insert",`,
+				"    at: { index: -1 },",
+				"    cells: [{",
+				`      kind: "code",`,
+				`      languageId: "python",`,
+				`      value: 'print("hello world")',`,
+				"    }],",
+				"  }],",
+				"});",
+				"const refreshed = await notebooks.get({ handle: updated.handle });",
+				"const cells = refreshed.notebook?.cells ?? [];",
+				"const added = cells.at(-1);",
+				`console.log(JSON.stringify({ refId: added?.refId ?? "", value: added?.value ?? "" }));`,
+			}, "\n"),
 		},
 	}); err != nil {
 		return err
 	}
-	updateRespRaw, err := ws.ReadText()
+	executeRespRaw, err := ws.ReadText()
 	if err != nil {
-		return fmt.Errorf("read updateCells response: %w", err)
+		return fmt.Errorf("read ExecuteCode response: %w", err)
 	}
-	appendCodexBridgeMessage("inbound", "NotebookToolCallResponse", updateRespRaw)
+	appendCodexBridgeMessage("inbound", "NotebookToolCallResponse", executeRespRaw)
+	if !codexToolCallSucceeded(executeRespRaw) {
+		return fmt.Errorf("ExecuteCode tool call failed")
+	}
 	noteCodexUpdateComplete()
 	return nil
 }
@@ -1009,54 +1014,26 @@ func sendCodexToolRequest(ws *wsConn, bridgeCallID string, toolCallInput map[str
 	return ws.WriteText(string(payload))
 }
 
-func buildAddedCellFromListResponse(raw string) (map[string]any, error) {
+func codexToolCallSucceeded(raw string) bool {
 	var envelope map[string]any
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
-		return nil, fmt.Errorf("unmarshal listCells response envelope: %w", err)
+		return false
 	}
 	output := extractToolCallOutput(envelope)
 	if output == nil {
-		return nil, fmt.Errorf("listCells response missing tool_call_output")
+		return false
 	}
-	listCells := mapField(output, "listCells", "list_cells")
-	if listCells == nil {
-		return nil, fmt.Errorf("listCells response missing listCells payload")
+	status, _ := output["status"].(string)
+	if status != "" && status != "STATUS_SUCCESS" {
+		return false
 	}
-	cellsAny, ok := listCells["cells"].([]any)
-	if !ok || len(cellsAny) == 0 {
-		return nil, fmt.Errorf("listCells response missing cells")
+	executeCode := mapField(output, "executeCode", "execute_code")
+	if executeCode == nil {
+		return true
 	}
-	for _, item := range cellsAny {
-		cell, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		refID, _ := cell["refId"].(string)
-		if refID == "" {
-			if alt, _ := cell["ref_id"].(string); alt != "" {
-				refID = alt
-			}
-		}
-		if refID == "" {
-			continue
-		}
-		added := deepCopyMap(cell)
-		added["refId"] = "cell_ai_codex_added"
-		added["value"] = `print("hello world")`
-		added["languageId"] = "python"
-		added["outputs"] = []any{}
-		if _, ok := added["kind"]; !ok {
-			added["kind"] = float64(2)
-		}
-		metadata := mapField(added, "metadata")
-		if metadata == nil {
-			metadata = map[string]any{}
-			added["metadata"] = metadata
-		}
-		metadata["runner"] = "local"
-		return added, nil
-	}
-	return nil, fmt.Errorf("could not find cell with refId in listCells response")
+	executeOutput, _ := executeCode["output"].(string)
+	return !strings.Contains(executeOutput, "SyntaxError:") &&
+		!strings.Contains(executeOutput, "Tool execution failed:")
 }
 
 func extractToolCallOutput(envelope map[string]any) map[string]any {
@@ -1081,29 +1058,6 @@ func mapField(m map[string]any, keys ...string) map[string]any {
 		}
 	}
 	return nil
-}
-
-func deepCopyMap(in map[string]any) map[string]any {
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = deepCopyValue(v)
-	}
-	return out
-}
-
-func deepCopyValue(v any) any {
-	switch typed := v.(type) {
-	case map[string]any:
-		return deepCopyMap(typed)
-	case []any:
-		out := make([]any, len(typed))
-		for i := range typed {
-			out[i] = deepCopyValue(typed[i])
-		}
-		return out
-	default:
-		return typed
-	}
 }
 
 func main() {
