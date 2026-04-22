@@ -41,10 +41,11 @@ const TEST_DIR = GENERATED_DIR.endsWith("/.generated") || GENERATED_DIR.endsWith
 const APP_ROOT = resolve(TEST_DIR, "..", "..");
 const REPO_ROOT = resolve(APP_ROOT, "..");
 const OUTPUT_DIR = join(TEST_DIR, "eval-output");
-const FRONTEND_URL = process.env.RUNME_EVAL_FRONTEND_URL ?? "http://localhost:5173";
+const FRONTEND_URL = process.env.RUNME_EVAL_FRONTEND_URL ?? "http://localhost:5174";
 const FAKE_AI_BASE_URL = process.env.RUNME_EVAL_FAKE_AI_BASE_URL ?? "http://127.0.0.1:19989";
 const FAKE_AI_HEALTH_URL = `${FAKE_AI_BASE_URL}/healthz`;
 const FAKE_AI_RESET_URL = `${FAKE_AI_BASE_URL}/reset`;
+const FRONTEND_PORT = new URL(FRONTEND_URL).port || "5174";
 const AGENT_BROWSER_SESSION = process.env.AGENT_BROWSER_SESSION?.trim() ?? "";
 const AGENT_BROWSER_PROFILE = process.env.AGENT_BROWSER_PROFILE?.trim() ?? "";
 const AGENT_BROWSER_HEADED = (process.env.AGENT_BROWSER_HEADED ?? "false")
@@ -160,7 +161,7 @@ async function ensureFrontend(): Promise<ServiceHandle | null> {
   } catch {
     const handle = startService(
       "frontend",
-      "pnpm -C app run dev -- --host 127.0.0.1 --port 5173",
+      `pnpm -C app run dev -- --host localhost --port ${FRONTEND_PORT}`,
       REPO_ROOT,
     );
     await waitForHttpReady(FRONTEND_URL);
