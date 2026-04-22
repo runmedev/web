@@ -9,10 +9,8 @@ import {
 import { ChatKit, useChatKit } from '@openai/chatkit-react'
 import {
   parser_pb,
-  RunmeMetadataKey,
 } from '../../contexts/CellContext'
 import { useNotebookContext } from '../../contexts/NotebookContext'
-import { useOutput } from '../../contexts/OutputContext'
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import {
   useHarness,
@@ -26,14 +24,12 @@ import {
 import { createCodeModeExecutor } from '../../lib/runtime/codeModeExecutor'
 import { createChatKitFetchFromAdapter } from '../../lib/runtime/createChatKitFetchFromAdapter'
 import { useCodexConversationSnapshot } from '../../lib/runtime/codexConversationController'
-import { getCodexExecuteApprovalManager } from '../../lib/runtime/codexExecuteApprovalManager'
 import type {
   HarnessChatKitAdapter,
   HarnessRuntime,
 } from '../../lib/runtime/harnessChatKitAdapter'
 import { getHarnessRuntimeManager } from '../../lib/runtime/harnessRuntimeManager'
 import {
-  createChatKitNotebookToolInvoker,
   createCodexBridgeToolHandler,
 } from '../../lib/runtime/notebookToolHandlers'
 import {
@@ -48,7 +44,6 @@ import {
 
 import { getAccessToken, getAuthData } from '../../token'
 import { getBrowserAdapter } from '../../browserAdapter.client'
-import { type Cell } from '../../protogen/runme/parser/v1/parser_pb.js'
 import { getConfiguredChatKitDomainKey } from '../../lib/appConfig'
 class UserNotLoggedInError extends Error {
   constructor(message = 'You must log in to use runme chat.') {
@@ -188,7 +183,6 @@ type ChatKitPanelInnerProps = {
 }
 
 function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
-  const emptyCells = useMemo(() => [] as Cell[], [])
   const [showLoginPrompt, setShowLoginPrompt] = useState(false)
   const [codexStreamError, setCodexStreamError] = useState<string | null>(null)
   const [codexThreadBootstrapComplete, setCodexThreadBootstrapComplete] =
@@ -208,55 +202,21 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   } | null>(null)
   const lastAppliedThreadRef = useRef<string | null>(null)
   const harnessRuntimeManager = useMemo(() => getHarnessRuntimeManager(), [])
-  const { getNotebookData, useNotebookSnapshot, useNotebookList } =
+  const { getNotebookData, useNotebookList } =
     useNotebookContext()
   const { getCurrentDoc } = useCurrentDoc()
-  const { getAllRenderers } = useOutput()
   const responsesDirectConfig = useResponsesDirectConfigSnapshot()
   const codexProjects = useCodexProjects()
   const { defaultProject } = codexProjects
   const codexConversation = useCodexConversationSnapshot()
   const currentDocUri = getCurrentDoc()
   const openNotebookList = useNotebookList()
-  const notebookSnapshot = useNotebookSnapshot(currentDocUri ?? '')
-  const orderedCells = useMemo(
-    () => notebookSnapshot?.notebook.cells ?? [],
-    [notebookSnapshot]
-  )
   const getNotebookDataRef = useRef(getNotebookData)
   getNotebookDataRef.current = getNotebookData
-  const getAllRenderersRef = useRef(getAllRenderers)
-  getAllRenderersRef.current = getAllRenderers
-  const orderedCellsRef = useRef<Cell[]>(emptyCells)
-  orderedCellsRef.current = orderedCells as Cell[]
   const openNotebookListRef = useRef(openNotebookList)
   openNotebookListRef.current = openNotebookList
   const currentDocUriRef = useRef(currentDocUri)
   currentDocUriRef.current = currentDocUri
-  const updateCell = useCallback(
-    (cell: Cell) => {
-      if (!cell?.refId || !currentDocUriRef.current) {
-        return
-      }
-      const data = getNotebookDataRef.current(currentDocUriRef.current)
-      if (!data) {
-        return
-      }
-      for (const renderer of getAllRenderersRef.current().values()) {
-        renderer.onCellUpdate(cell as unknown as parser_pb.Cell)
-      }
-      data.updateCell(cell as unknown as parser_pb.Cell)
-    },
-    []
-  )
-
-  const getLatestCells = useCallback((): Cell[] => {
-    if (!currentDocUriRef.current) {
-      return orderedCellsRef.current
-    }
-    const data = getNotebookDataRef.current(currentDocUriRef.current)
-    return (data?.getNotebook().cells ?? orderedCellsRef.current) as unknown as Cell[]
-  }, [])
 
   const resolveCodeModeNotebook = useCallback(
     (target?: unknown) => {
@@ -328,91 +288,12 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     [resolveCodeModeNotebook]
   )
 
-  const waitForCellExecutionToComplete = useCallback(
-    async (refId: string, timeoutMs = 60_000): Promise<void> => {
-      const activeDocUri = currentDocUriRef.current
-      if (!activeDocUri) {
-        throw new Error('No active notebook for ExecuteCells')
-      }
-      const startedAt = Date.now()
-      while (Date.now() - startedAt < timeoutMs) {
-        const data = getNotebookDataRef.current(activeDocUri)
-        const updatedCell = data
-          ?.getNotebook()
-          .cells.find((cell) => cell.refId === refId)
-        const exitCode = updatedCell?.metadata?.[RunmeMetadataKey.ExitCode]
-        if (typeof exitCode === 'string') {
-          return
-        }
-        await new Promise((resolve) => setTimeout(resolve, 100))
-      }
-      throw new Error(
-        `Timed out waiting for cell execution to finish: ${refId}`
-      )
-    },
-    []
-  )
-
-  const executeCellsWithApproval = useCallback(
-    async (bridgeCallId: string, refIds: string[]): Promise<Cell[]> => {
-      const activeDocUri = currentDocUriRef.current
-      if (!activeDocUri) {
-        throw new Error('No active notebook for ExecuteCells')
-      }
-      const notebookData = getNotebookDataRef.current(activeDocUri)
-      if (!notebookData) {
-        throw new Error('No active notebook data for ExecuteCells')
-      }
-      const normalizedRefIds = refIds.filter(
-        (id) => typeof id === 'string' && id.trim() !== ''
-      )
-      if (normalizedRefIds.length === 0) {
-        throw new Error('ExecuteCells request missing refIds')
-      }
-
-      await getCodexExecuteApprovalManager().requestApproval(
-        bridgeCallId,
-        normalizedRefIds
-      )
-
-      for (const refId of normalizedRefIds) {
-        const cellData = notebookData.getCell(refId)
-        if (!cellData) {
-          throw new Error(`Cell not found for ExecuteCells: ${refId}`)
-        }
-        cellData.run()
-      }
-
-      for (const refId of normalizedRefIds) {
-        await waitForCellExecutionToComplete(refId)
-      }
-
-      const latestCells = notebookData.getNotebook().cells as unknown as Cell[]
-      return normalizedRefIds
-        .map((refId) => latestCells.find((cell) => cell.refId === refId))
-        .filter((cell): cell is Cell => Boolean(cell))
-    },
-    [waitForCellExecutionToComplete]
-  )
-
   const handleCodexBridgeToolCall = useMemo(
     () =>
       createCodexBridgeToolHandler({
         codeModeExecutor,
-        getLatestCells,
-        updateCell,
-        executeCellsWithApproval,
       }),
-    [codeModeExecutor, executeCellsWithApproval, getLatestCells, updateCell]
-  )
-  const handleChatKitClientTool = useMemo(
-    () =>
-      createChatKitNotebookToolInvoker({
-        codeModeExecutor,
-        getLatestCells,
-        updateCell,
-      }),
-    [codeModeExecutor, getLatestCells, updateCell]
+    [codeModeExecutor]
   )
   const handleSseEvent = useCallback(
     (rawEvent: string) => {
@@ -535,10 +416,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     defaultHarness.adapter === 'responses-direct'
       ? defaultHarness.baseUrl
       : undefined
-  const clientToolInvoker =
-    defaultHarness.adapter === 'responses-direct'
-      ? handleChatKitClientTool
-      : undefined
 
   useEffect(() => {
     const runtime = harnessRuntimeManager.getOrCreate({
@@ -552,7 +429,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       codexBridgeHandler,
       wasmApiKey,
       responsesApiBaseUrl,
-      clientToolInvoker,
     })
     runtimeRef.current = runtime
     lastAppliedThreadRef.current = null
@@ -598,7 +474,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       setActiveAdapter(null)
     }
   }, [
-    clientToolInvoker,
     codeModeExecutor,
     codexBridgeHandler,
     defaultHarness,
@@ -733,14 +608,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     },
     history: {
       enabled: activeAdapter?.historyEnabled ?? false,
-    },
-    onClientTool: async (invocation) => {
-      if (!activeAdapter?.invokeClientTool) {
-        throw new Error(
-          `Harness ${defaultHarness.adapter} does not support ChatKit client tools`
-        )
-      }
-      return activeAdapter.invokeClientTool(invocation)
     },
     onError: ({ error }) => {
       const promptForLogin = () => setShowLoginPrompt(true)

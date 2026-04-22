@@ -21,6 +21,8 @@ The proposed refactor is:
   integration per harness
 - standardize the harness-to-ChatKit boundary around a narrow adapter interface
   instead of generic `fetch` and UI-managed state
+- remove ChatKit-managed tool continuation so harnesses own ExecuteCode/tool
+  handling internally
 
 The goal is to move runtime initialization and harness-specific state handling
 out of React effects and into explicit runtime services.
@@ -122,9 +124,9 @@ explicit that:
 
 Tool behavior is also split across layers in an inconsistent way:
 
-- responses-direct relies on ChatKit `onClientTool` in `ChatKitPanel` for
-  ExecuteCode and notebook tools
-- Codex proxy uses `CodexToolBridge` plus `CodexExecuteApprovalManager`
+- responses-direct used to rely on ChatKit `onClientTool` in `ChatKitPanel`
+  for ExecuteCode continuation
+- Codex proxy uses `CodexToolBridge`
 - Codex wasm uses the worker bridge and installed wasm code executor
 
 So today ChatKit UI code still knows too much about harness-specific tool
@@ -263,7 +265,6 @@ pieces:
   `idle | connecting | open | closed | error`
 - authorization resolver state and token refresh behavior
 - `CodexToolBridge` websocket state and registered request handler
-- pending execute approvals tracked by `CodexExecuteApprovalManager`
 
 That means proxy mode is really two coordinated channels:
 
@@ -454,10 +455,6 @@ interface HarnessChatKitAdapter {
     request: HarnessChatKitMessageRequest,
     sink: HarnessChatKitEventSink,
   ): Promise<void>;
-  submitToolResult(
-    request: HarnessChatKitToolResultRequest,
-    sink: HarnessChatKitEventSink,
-  ): Promise<void>;
 }
 
 interface HarnessRuntime {
@@ -483,8 +480,7 @@ For `HarnessRuntime`:
   startup, history refresh, or active-thread creation
 - `stop()`
   exists because these runtimes hold live resources that must be cleaned up,
-  such as websocket connections, worker instances, bridge handlers, and pending
-  approvals
+  such as websocket connections, worker instances, and bridge handlers
 - `createChatKitAdapter()`
   exists so the runtime can expose only the UI-facing capabilities ChatKit
   needs, without exposing the runtime's internal controller/client objects
@@ -512,9 +508,14 @@ For `HarnessChatKitAdapter`:
 - `streamUserMessage`
   exists because sending a user message is the main streaming operation and it
   naturally maps to an event sink rather than a `fetch` abstraction
-- `submitToolResult`
-  exists because tool-result continuation is a distinct harness operation and
-  should not be hidden inside generic UI callbacks or ad hoc request parsing
+
+Tool continuation stays harness-internal. ChatKit should not participate in a
+generic client-tool loop, because:
+
+- responses-direct can intercept tool calls and submit `function_call_output`
+  back to the Responses API itself
+- Codex bridge traffic is already a harness/runtime concern rather than a
+  ChatKit concern
 
 The overall rule is: each member should correspond to a real responsibility the
 harness runtime already owns today, while removing transport and continuity
@@ -597,18 +598,6 @@ function createChatKitFetchFromAdapter(
           ),
         );
 
-      case "threads.add_client_tool_output":
-        return buildSseResponse((sink) =>
-          adapter.submitToolResult(
-            {
-              threadId: request.threadId,
-              callId: request.callId,
-              output: request.output,
-              signal: init?.signal ?? null,
-            },
-            sink,
-          ),
-        );
     }
   };
 }
@@ -632,7 +621,7 @@ harness-owned runtime concept, not a generic UI-managed protobuf shape.
 
 This means ChatKit should only deal in the pieces it actually needs:
 
-- a narrow adapter for thread/message/tool operations
+- a narrow adapter for thread/message operations
 - an initial thread id, if any
 - thread selection callbacks
 
@@ -698,14 +687,13 @@ Tool handling should also move behind the harness boundary.
 
 The intended ownership becomes:
 
-- responses-direct harness runtime executes or routes ExecuteCode/notebook tools
-- Codex proxy harness runtime owns bridge setup and execute approval handling
+- responses-direct harness runtime executes ExecuteCode internally and submits
+  tool output back to Responses before ChatKit sees the result
+- Codex proxy harness runtime owns bridge setup
 - Codex wasm harness runtime owns the wasm code executor bridge
 
 `ChatKitPanel` should no longer decode harness-specific tool payloads itself.
-If ChatKit still requires an `onClientTool` callback, the UI wrapper should
-delegate that callback to the active harness adapter rather than implementing
-tool semantics in `ChatKitPanel`.
+The adapter boundary should stop at message/thread operations.
 
 ### Immediate Cleanup Targets
 
@@ -715,7 +703,10 @@ Based on the current code, this refactor should aim to:
    `useAuthorizedFetch`
 1. remove harness-specific `previousResponseId` handling from `ChatKitPanel`
 1. stop using ChatKit state as a generic carrier for harness continuity data
-1. move `onClientTool` behavior out of `ChatKitPanel` and into harness runtimes
+1. remove `onClientTool` and `threads.add_client_tool_output` from the supported
+   ChatKit path
+1. make responses-direct own its own ExecuteCode continuation loop
+1. simplify Codex bridge handling to ExecuteCode only
 1. move auth/header behavior behind the harness boundary where possible
 1. keep browser-local ChatKit-to-Responses conversion as the only supported
    responses-direct conversion path
@@ -809,7 +800,6 @@ duplication.
 
 - clear bridge handler and subscriptions
 - disconnect the bridge
-- fail pending execute approvals
 - clear authorization resolver
 - clear app-server client state
 - disconnect the app-server client

@@ -19,13 +19,6 @@ type ParsedChatKitRequest =
       createThread: boolean;
       requestTypeLabel: string;
     }
-  | {
-      type: "threads.add_client_tool_output";
-      threadId: string;
-      callId: string;
-      previousResponseId?: string;
-      output: unknown;
-    }
   | { type: "unsupported"; requestType?: string };
 
 async function resolveBody(
@@ -149,32 +142,6 @@ function readThreadId(payload: JsonRecord): string {
   );
 }
 
-function extractToolOutput(payload: JsonRecord): {
-  callId: string;
-  previousResponseId?: string;
-  output: unknown;
-} {
-  const source = getPayloadRecord(payload);
-  const result = asRecord(source.result);
-  const hasStructuredToolResult =
-    "clientError" in result ||
-    "client_error" in result ||
-    "previousResponseId" in result ||
-    "previous_response_id" in result;
-  const output = hasStructuredToolResult
-    ? result
-    : result.output ??
-      result.result ??
-      (Object.keys(result).length > 0 ? result : source.result);
-  return {
-    callId: asString(result.callId) ?? asString(result.call_id) ?? "",
-    previousResponseId:
-      asString(result.previousResponseId) ??
-      asString(result.previous_response_id),
-    output,
-  };
-}
-
 function parseChatKitRequest(payload: JsonRecord): ParsedChatKitRequest {
   const requestType = asString(getPayloadRecord(payload).type) ?? asString(payload.type);
   if (requestType === "threads.list") {
@@ -209,19 +176,6 @@ function parseChatKitRequest(payload: JsonRecord): ParsedChatKitRequest {
       createThread: false,
       requestTypeLabel: "message_stream",
     };
-  }
-  if (requestType === "threads.add_client_tool_output") {
-    const threadId = readThreadId(payload);
-    const { callId, previousResponseId, output } = extractToolOutput(payload);
-    if (threadId && callId) {
-      return {
-        type: "threads.add_client_tool_output",
-        threadId,
-        callId,
-        previousResponseId,
-        output,
-      };
-    }
   }
   return { type: "unsupported", requestType };
 }
@@ -395,8 +349,6 @@ export function createChatKitFetchFromAdapter(
   options?: {
     unsupportedRequestPrefix?: string;
     missingUserInputError?: string;
-    missingThreadIdError?: string;
-    missingCallIdError?: string;
     onUnsupportedRequest?: (requestType: string | undefined, payload: JsonRecord) => void;
     onAbort?: () => Promise<void> | void;
     streamLog?: {
@@ -417,8 +369,6 @@ export function createChatKitFetchFromAdapter(
   const unsupportedRequestPrefix =
     options?.unsupportedRequestPrefix ?? "unsupported_chatkit_request";
   const missingUserInputError = options?.missingUserInputError ?? "missing_user_input";
-  const missingThreadIdError = options?.missingThreadIdError ?? "thread_id_required";
-  const missingCallIdError = options?.missingCallIdError ?? "call_id_required";
 
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     const { json } = await readBody(input, init);
@@ -478,38 +428,6 @@ export function createChatKitFetchFromAdapter(
                   abortMessages: options.streamLog.abortMessages,
                 }
               : undefined,
-          });
-      case "threads.add_client_tool_output":
-        if (!request.threadId) {
-          return jsonResponse({
-            data: null,
-            error: missingThreadIdError,
-          });
-        }
-        if (!request.callId) {
-          return jsonResponse({
-            data: null,
-            error: missingCallIdError,
-          });
-        }
-        if (!adapter.submitToolResult) {
-          return jsonResponse({
-            data: null,
-            error: `${unsupportedRequestPrefix}:threads.add_client_tool_output`,
-          });
-        }
-        return buildSseResponse((sink) =>
-          adapter.submitToolResult!(
-            {
-              threadId: request.threadId,
-              callId: request.callId,
-              previousResponseId: request.previousResponseId,
-              output: request.output,
-              signal: init?.signal ?? null,
-            },
-            sink,
-          ), {
-            signal: init?.signal ?? null,
           });
       case "unsupported":
       default:

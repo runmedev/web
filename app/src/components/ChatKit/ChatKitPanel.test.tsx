@@ -27,7 +27,6 @@ let responsesDirectConfigState: {
 };
 let currentDocUriState: string | null;
 let bridgeSnapshot: { state: "idle" | "connecting" | "open" | "closed" | "error"; url: string | null; lastError: string | null };
-let bridgeListener: (() => void) | null;
 let setThreadIdMock: ReturnType<typeof vi.fn>;
 let fetchUpdatesMock: ReturnType<typeof vi.fn>;
 const useChatKitMock = vi.fn();
@@ -47,20 +46,8 @@ const bridgeMock = {
   connect: vi.fn(),
   disconnect: vi.fn(),
   setHandler: vi.fn(),
-  subscribe: vi.fn((listener: () => void) => {
-    bridgeListener = listener;
-    return () => {
-      if (bridgeListener === listener) {
-        bridgeListener = null;
-      }
-    };
-  }),
+  subscribe: vi.fn(() => vi.fn()),
   getSnapshot: vi.fn(() => bridgeSnapshot),
-};
-const approvalMgrMock = {
-  requestApproval: vi.fn(),
-  approve: vi.fn(),
-  failAll: vi.fn(),
 };
 const proxyMock = {
   useTransport: vi.fn(),
@@ -148,12 +135,6 @@ vi.mock("../../contexts/NotebookContext", () => ({
   }),
 }));
 
-vi.mock("../../contexts/OutputContext", () => ({
-  useOutput: () => ({
-    getAllRenderers: () => new Map(),
-  }),
-}));
-
 vi.mock("../../contexts/CurrentDocContext", () => ({
   useCurrentDoc: () => ({
     getCurrentDoc: () => currentDocUriState,
@@ -173,10 +154,6 @@ vi.mock("../../browserAdapter.client", () => ({
 
 vi.mock("../../lib/runtime/codexToolBridge", () => ({
   getCodexToolBridge: () => bridgeMock,
-}));
-
-vi.mock("../../lib/runtime/codexExecuteApprovalManager", () => ({
-  getCodexExecuteApprovalManager: () => approvalMgrMock,
 }));
 
 vi.mock("../../lib/runtime/codexAppServerClient", () => ({
@@ -266,7 +243,6 @@ describe("ChatKitPanel codex harness routing", () => {
       url: null,
       lastError: null,
     };
-    bridgeListener = null;
     setThreadIdMock = vi.fn(async () => {});
     fetchUpdatesMock = vi.fn(async () => {});
     useChatKitMock.mockReset();
@@ -299,7 +275,6 @@ describe("ChatKitPanel codex harness routing", () => {
     codexControllerMock.interruptActiveTurn.mockClear();
     codexControllerMock.selectThread.mockClear();
     codexProjectManagerMock.setDefault.mockClear();
-    approvalMgrMock.failAll.mockClear();
     appLoggerMock.info.mockClear();
     appLoggerMock.error.mockClear();
   });
@@ -424,63 +399,6 @@ describe("ChatKitPanel codex harness routing", () => {
         }),
       ]),
     );
-  });
-
-  it("handles ExecuteCode params with top-level code for NotebookService tool names", async () => {
-    render(<ChatKitPanel />);
-    await waitForChatKitToRerender();
-    const config = getLatestChatKitConfig();
-
-    const result = await config.onClientTool({
-      name: "agent_tools_v1_NotebookService_ExecuteCode",
-      params: {
-        call_id: "call-top-level",
-        previous_response_id: "resp-1",
-        code: "console.log('ok')",
-      },
-    });
-
-    expect(result.callId).toBe("call-top-level");
-    expect(result.previousResponseId).toBe("resp-1");
-    expect(String(result.clientError ?? "")).not.toContain("Failed to decode tool params");
-    expect(String(result.clientError ?? "")).not.toContain('key "code" is unknown');
-  });
-
-  it("handles ExecuteCode params for direct ExecuteCode tool name", async () => {
-    render(<ChatKitPanel />);
-    await waitForChatKitToRerender();
-    const config = getLatestChatKitConfig();
-
-    const result = await config.onClientTool({
-      name: "ExecuteCode",
-      params: {
-        call_id: "call-direct",
-        code: "console.log('direct')",
-      },
-    });
-
-    expect(result.callId).toBe("call-direct");
-    expect(String(result.clientError ?? "")).not.toContain("Failed to decode tool params");
-    expect(String(result.clientError ?? "")).not.toContain('key "code" is unknown');
-  });
-
-  it("returns unknown tool error for unrecognized tool names", async () => {
-    render(<ChatKitPanel />);
-    await waitForChatKitToRerender();
-    const config = getLatestChatKitConfig();
-
-    const result = await config.onClientTool({
-      name: "unknown_tool_name",
-      params: {
-        call_id: "",
-        previous_response_id: "resp-1",
-        code: "console.log('payload-shape')",
-      },
-    });
-
-    expect(String(result.clientError ?? "")).toContain("Unknown tool unknown_tool_name");
-    expect(String(result.clientError ?? "")).not.toContain("Failed to decode tool params");
-    expect(String(result.clientError ?? "")).not.toContain('key "code" is unknown');
   });
 
   it("routes ChatKit to /codex/app-server/ws and connects codex bridge + proxy websocket", async () => {
@@ -619,23 +537,6 @@ describe("ChatKitPanel codex harness routing", () => {
       expect.any(Object),
       undefined,
     );
-  });
-
-  it("clears pending approvals on codex bridge disconnect without showing an in-panel error banner", () => {
-    harnessState.defaultHarness.adapter = "codex";
-    bridgeSnapshot = {
-      state: "error",
-      url: "ws://127.0.0.1:31337/codex/ws",
-      lastError: "codex_ws_already_connected",
-    };
-
-    render(<ChatKitPanel />);
-    act(() => {
-      bridgeListener?.();
-    });
-
-    expect(screen.queryByTestId("codex-bridge-error")).toBeNull();
-    expect(approvalMgrMock.failAll).toHaveBeenCalledWith("Codex bridge disconnected");
   });
 
   it("switches chatkit endpoint immediately when harness default changes", async () => {

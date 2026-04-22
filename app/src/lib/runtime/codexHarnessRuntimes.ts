@@ -1,4 +1,3 @@
-import { getCodexExecuteApprovalManager } from "./codexExecuteApprovalManager";
 import { getCodexAppServerClient } from "./codexAppServerClient";
 import { createCodexChatKitAdapter } from "./codexChatKitAdapter";
 import { getCodexConversationController } from "./codexConversationController";
@@ -47,13 +46,11 @@ function clearCodexClient(): void {
 
 function clearCodexBridge(
   cleanup: (() => void) | null,
-  reason: string,
 ): null {
   const bridge = getCodexToolBridge();
   cleanup?.();
   bridge.setHandler(null);
   bridge.disconnect();
-  getCodexExecuteApprovalManager().failAll(reason);
   return null;
 }
 
@@ -64,18 +61,15 @@ function configureCodexBridge(options: {
 }): () => void {
   const bridge = getCodexToolBridge();
   bridge.setHandler(options.bridgeHandler ?? null);
-  const cleanup = bridge.subscribe(() => {
-    const snapshot = bridge.getSnapshot();
-    if (snapshot.state === "closed" || snapshot.state === "error") {
-      getCodexExecuteApprovalManager().failAll("Codex bridge disconnected");
-    }
-  });
   void Promise.resolve(
     bridge.connect(options.bridgeUrl, options.authorization),
   ).catch(() => {
     // Bridge connection errors are surfaced through bridge snapshot state/logging.
   });
-  return cleanup;
+  return () => {
+    bridge.setHandler(null);
+    bridge.disconnect();
+  };
 }
 
 export class CodexProxyHarnessRuntime implements HarnessRuntime {
@@ -124,10 +118,7 @@ export class CodexProxyHarnessRuntime implements HarnessRuntime {
   }
 
   stop(): void {
-    this.bridgeSubscriptionCleanup = clearCodexBridge(
-      this.bridgeSubscriptionCleanup,
-      "Codex bridge disconnected",
-    );
+    this.bridgeSubscriptionCleanup = clearCodexBridge(this.bridgeSubscriptionCleanup);
     clearCodexClient();
     this.started = false;
   }
@@ -171,7 +162,7 @@ export class CodexWasmHarnessRuntime implements HarnessRuntime {
         apiKey: this.options.wasmApiKey ?? "",
         sessionOptions: buildRunmeCodexWasmSessionOptions(),
       });
-      clearCodexBridge(null, "Codex bridge disabled");
+      clearCodexBridge(null);
       await refreshCodexConversationState();
       this.started = true;
     } catch (error) {
@@ -181,7 +172,7 @@ export class CodexWasmHarnessRuntime implements HarnessRuntime {
   }
 
   stop(): void {
-    clearCodexBridge(null, "Codex bridge disconnected");
+    clearCodexBridge(null);
     clearCodexClient();
     this.started = false;
   }

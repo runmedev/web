@@ -117,7 +117,6 @@ export class JSKernel {
               "- app.runners.getDefault(): show default runner",
               "- app.runners.setDefault(name): set default runner",
               "- app.codex.project.list(): list configured codex projects",
-              '- app.runCells(["cellID"]): approve pending codex ExecuteCells',
               "- notebooks.list(): list known notebooks",
               "- notebooks.get([target]): get notebook document and handle; omitted target = current UI notebook",
               "- notebooks.update({ target, operations, ... }): apply notebook mutations",

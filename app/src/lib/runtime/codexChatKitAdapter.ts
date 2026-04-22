@@ -12,7 +12,6 @@ import type {
   HarnessChatKitAdapter,
   HarnessChatKitEventSink,
   HarnessChatKitMessageRequest,
-  HarnessChatKitToolResultRequest,
 } from "./harnessChatKitAdapter";
 
 function toChatKitThreadItems(
@@ -133,12 +132,6 @@ export function createCodexChatKitAdapter(
         sink,
         request.model,
       );
-    },
-    async submitToolResult(
-      _request: HarnessChatKitToolResultRequest,
-      _sink: HarnessChatKitEventSink,
-    ): Promise<void> {
-      throw new Error("Codex ChatKit adapter does not accept client tool output");
     },
   };
 }

@@ -17,23 +17,10 @@ export type HarnessChatKitMessageRequest = {
   signal?: AbortSignal | null;
 };
 
-export type HarnessChatKitToolResultRequest = {
-  threadId: string;
-  callId: string;
-  previousResponseId?: string;
-  output: unknown;
-  signal?: AbortSignal | null;
-};
-
 export type HarnessChatKitItem = unknown;
 
 export type HarnessChatKitEventSink = {
   emit(event: ChatKitStreamEvent): void;
-};
-
-export type HarnessClientToolInvocation = {
-  name: string;
-  params?: unknown;
 };
 
 export interface HarnessChatKitAdapter {
@@ -41,9 +28,6 @@ export interface HarnessChatKitAdapter {
   historyEnabled: boolean;
   onThreadSelected?: (threadId: string | null) => Promise<void>;
   onNewConversation?: () => Promise<string | null>;
-  invokeClientTool?: (
-    invocation: HarnessClientToolInvocation,
-  ) => Promise<Record<string, unknown>>;
   listThreads(
     request?: HarnessChatKitThreadRequest,
   ): Promise<ChatKitThreadSummary[]>;
@@ -57,10 +41,6 @@ export interface HarnessChatKitAdapter {
   ): Promise<HarnessChatKitItem[]>;
   streamUserMessage(
     request: HarnessChatKitMessageRequest,
-    sink: HarnessChatKitEventSink,
-  ): Promise<void>;
-  submitToolResult?(
-    request: HarnessChatKitToolResultRequest,
     sink: HarnessChatKitEventSink,
   ): Promise<void>;
 }

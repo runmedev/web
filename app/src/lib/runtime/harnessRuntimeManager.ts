@@ -16,7 +16,6 @@ export type CreateHarnessRuntimeOptions = {
   codexBridgeHandler?: CodexToolBridgeHandler;
   wasmApiKey?: string;
   responsesApiBaseUrl?: string;
-  clientToolInvoker?: HarnessChatKitAdapter["invokeClientTool"];
 };
 
 class ResponsesDirectHarnessRuntime implements HarnessRuntime {
@@ -27,8 +26,8 @@ class ResponsesDirectHarnessRuntime implements HarnessRuntime {
     this.profile = options.profile;
     this.adapter = createResponsesDirectChatKitAdapter({
       responsesApiBaseUrl: options.responsesApiBaseUrl ?? options.profile.baseUrl,
+      codeModeExecutor: options.codeModeExecutor,
     });
-    this.adapter.invokeClientTool = options.clientToolInvoker;
   }
 
   async start(): Promise<void> {}
@@ -66,8 +65,7 @@ class HarnessRuntimeManager {
     return (
       left.codeModeExecutor === right.codeModeExecutor &&
       left.codexBridgeHandler === right.codexBridgeHandler &&
-      left.resolveAuthorization === right.resolveAuthorization &&
-      left.clientToolInvoker === right.clientToolInvoker
+      left.resolveAuthorization === right.resolveAuthorization
     );
   }
 

@@ -1,22 +1,19 @@
 import { getAccessToken } from '../../token'
 import { appLogger } from '../logging/runtime'
+import type { CodeModeExecutor } from './codeModeExecutor'
+import { getCodeModeErrorOutput } from './codeModeExecutor'
 import type { ChatKitThreadDetail } from './chatkitProtocol'
 import { createChatKitFetchFromAdapter } from './createChatKitFetchFromAdapter'
 import type {
   HarnessChatKitAdapter,
   HarnessChatKitEventSink,
   HarnessChatKitMessageRequest,
-  HarnessChatKitToolResultRequest,
 } from './harnessChatKitAdapter'
+import { parseExecuteCodePayload } from './notebookToolHandlers'
 import { responsesDirectConfigManager } from './responsesDirectConfigManager'
 import { RUNME_RESPONSES_DIRECT_INSTRUCTIONS } from './runmeChatkitPrompts'
 
 type JsonRecord = Record<string, unknown>
-
-type BodyPayload = {
-  raw: unknown
-  json: JsonRecord
-}
 
 type StoredThread = {
   id: string
@@ -92,75 +89,6 @@ function resolveResponsesApiUrl(responsesApiBaseUrl: string): string {
   }
 }
 
-async function resolveBody(
-  input: RequestInfo | URL,
-  init?: RequestInit
-): Promise<BodyInit | null | undefined> {
-  if (init?.body != null) {
-    return init.body
-  }
-  if (!(input instanceof Request)) {
-    return init?.body
-  }
-  const clone = input.clone()
-  const contentType = clone.headers.get('content-type')?.toLowerCase() ?? ''
-  if (contentType.includes('multipart/form-data')) {
-    try {
-      return await clone.formData()
-    } catch {
-      return null
-    }
-  }
-  if (contentType.includes('application/x-www-form-urlencoded')) {
-    try {
-      return new URLSearchParams(await clone.text())
-    } catch {
-      return null
-    }
-  }
-  try {
-    return await clone.text()
-  } catch {
-    return null
-  }
-}
-
-async function readBody(
-  input: RequestInfo | URL,
-  init?: RequestInit
-): Promise<BodyPayload> {
-  const body = await resolveBody(input, init)
-  if (typeof body === 'string') {
-    try {
-      const parsed = JSON.parse(body) as JsonRecord
-      return { raw: parsed, json: parsed }
-    } catch {
-      return { raw: body, json: {} }
-    }
-  }
-  if (body instanceof FormData) {
-    const json: JsonRecord = {}
-    body.forEach((value, key) => {
-      if (typeof value === 'string') {
-        try {
-          json[key] = JSON.parse(value)
-        } catch {
-          json[key] = value
-        }
-      }
-    })
-    return { raw: json, json }
-  }
-  if (body instanceof URLSearchParams) {
-    const json: JsonRecord = {}
-    body.forEach((value, key) => {
-      json[key] = value
-    })
-    return { raw: json, json }
-  }
-  return { raw: null, json: {} }
-}
-
 function asRecord(value: unknown): JsonRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return {}
@@ -182,96 +110,6 @@ function randomId(prefix: string): string {
     return `${prefix}_${crypto.randomUUID()}`
   }
   return `${prefix}_${Math.random().toString(36).slice(2, 12)}`
-}
-
-function jsonResponse(payload: unknown): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: {
-      'content-type': 'application/json',
-    },
-  })
-}
-
-function getPayloadRecord(payload: JsonRecord): JsonRecord {
-  const params =
-    payload.params &&
-    typeof payload.params === 'object' &&
-    !Array.isArray(payload.params)
-      ? (payload.params as JsonRecord)
-      : null
-  return params ?? payload
-}
-
-function extractInput(payload: JsonRecord): {
-  text: string
-  model: string
-} {
-  const source = getPayloadRecord(payload)
-  const inputRecord = asRecord(source.input)
-  const content = Array.isArray(inputRecord.content) ? inputRecord.content : []
-  const text = content
-    .map((item) => {
-      const part = asRecord(item)
-      return asString(part.text) ?? asString(part.value) ?? ''
-    })
-    .join('')
-    .trim()
-  const inference = asRecord(inputRecord.inference_options)
-  const model = asString(inference.model) ?? DEFAULT_MODEL
-  return { text, model }
-}
-
-function toOutputString(value: unknown): string {
-  if (typeof value === 'string') {
-    return value
-  }
-  if (value == null) {
-    return ''
-  }
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value)
-  }
-}
-
-function extractToolOutput(payload: JsonRecord): {
-  callId: string
-  previousResponseId: string
-  output: string
-} {
-  const source = getPayloadRecord(payload)
-  const result = asRecord(source.result)
-  const callId = asString(result.callId) ?? asString(result.call_id) ?? ''
-  const previousResponseId =
-    asString(result.previousResponseId) ??
-    asString(result.previous_response_id) ??
-    ''
-  const clientError =
-    asString(result.clientError) ?? asString(result.client_error) ?? ''
-  const outputValue = result.output ?? result.result
-  const outputText = toOutputString(outputValue)
-  const output =
-    clientError.length > 0
-      ? [outputText, `Tool execution failed: ${clientError}`]
-          .filter((part) => part.length > 0)
-          .join('\n')
-      : outputText
-  return { callId, previousResponseId, output }
-}
-
-function readThreadId(payload: JsonRecord): string {
-  const source = getPayloadRecord(payload)
-  return (
-    asString(source.id) ??
-    asString(source.thread_id) ??
-    asString(source.threadId) ??
-    asString(payload.id) ??
-    asString(payload.thread_id) ??
-    asString(payload.threadId) ??
-    ''
-  )
 }
 
 function buildThreadDetail(thread: StoredThread): ChatKitThreadDetail {
@@ -465,90 +303,74 @@ async function consumeSSE(
   }
 }
 
-function buildStreamResponse(
-  producer: (sink: { emit: (payload: unknown) => void }) => Promise<void>,
-  options?: { signal?: AbortSignal | null }
-): Response {
-  const encoder = new TextEncoder()
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      let closed = false
-      const emit = (payload: unknown) => {
-        if (closed) {
-          return
-        }
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify(payload)}\n\n`)
-        )
-      }
-      const close = () => {
-        if (closed) {
-          return
-        }
-        closed = true
-        controller.close()
-      }
+type PendingToolContinuation = {
+  callId: string
+  output: string
+}
 
-      if (options?.signal?.aborted) {
-        emit({
-          type: 'response.failed',
-          error: {
-            message: String(options.signal.reason ?? 'Request aborted'),
-          },
-        })
-        close()
-        return
-      }
+async function executeResponsesToolCall(args: {
+  codeModeExecutor?: CodeModeExecutor
+  toolName: string
+  callId: string
+  previousResponseId?: string
+  argumentsRaw: string
+}): Promise<PendingToolContinuation> {
+  let parsedArguments: JsonRecord = {}
+  try {
+    parsedArguments = asRecord(JSON.parse(args.argumentsRaw))
+  } catch {
+    parsedArguments = {}
+  }
+  const enrichedPayload = {
+    ...parsedArguments,
+    call_id: args.callId,
+    previous_response_id: args.previousResponseId ?? '',
+  }
+  const executeCodePayload = parseExecuteCodePayload(enrichedPayload)
+  if (!executeCodePayload) {
+    return {
+      callId: args.callId,
+      output: 'Tool execution failed: ExecuteCode tool invoked without valid code payload',
+    }
+  }
 
-      if (options?.signal) {
-        options.signal.addEventListener(
-          'abort',
-          () => {
-            if (!closed) {
-              emit({
-                type: 'response.failed',
-                error: {
-                  message: String(options.signal?.reason ?? 'Request aborted'),
-                },
-              })
-            }
-            close()
-          },
-          { once: true }
-        )
-      }
+  if (args.toolName !== EXECUTE_CODE_TOOL_NAME) {
+    return {
+      callId: args.callId,
+      output: `Tool execution failed: Unsupported tool ${args.toolName}`,
+    }
+  }
 
-      void producer({ emit })
-        .catch((error) => {
-          emit({
-            type: 'response.failed',
-            error: { message: String(error) },
-          })
-          appLogger.error('Direct Responses stream producer failed', {
-            attrs: {
-              scope: 'chatkit.responses_direct',
-              error: String(error),
-            },
-          })
-        })
-        .finally(() => {
-          close()
-        })
-    },
-  })
+  if (!args.codeModeExecutor) {
+    return {
+      callId: args.callId,
+      output:
+        'Tool execution failed: ExecuteCode is unavailable because no code mode executor is configured',
+    }
+  }
 
-  return new Response(stream, {
-    status: 200,
-    headers: {
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-cache',
-      connection: 'keep-alive',
-    },
-  })
+  try {
+    const result = await args.codeModeExecutor.execute({
+      code: executeCodePayload.code,
+      source: 'chatkit',
+    })
+    return {
+      callId: args.callId,
+      output: result.output,
+    }
+  } catch (error) {
+    const output = getCodeModeErrorOutput(error)
+    const failureMessage = `Tool execution failed: ${String(error)}`
+    return {
+      callId: args.callId,
+      output: output ? `${output}\n${failureMessage}` : failureMessage,
+    }
+  }
 }
 
 export function createResponsesDirectChatKitAdapter(options?: {
   responsesApiBaseUrl?: string
+  codeModeExecutor?: CodeModeExecutor
 }): HarnessChatKitAdapter {
   const responsesApiUrl = resolveResponsesApiUrl(
     options?.responsesApiBaseUrl ?? ''
@@ -579,214 +401,220 @@ export function createResponsesDirectChatKitAdapter(options?: {
     requestPayload: JsonRecord
     emit: (payload: unknown) => void
     signal?: AbortSignal | null
+    codeModeExecutor?: CodeModeExecutor
   }): Promise<void> => {
-    const headers = await resolveResponsesDirectHeaders()
-    const response = await fetch(options.responsesApiUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(options.requestPayload),
-      signal: options.signal ?? undefined,
-    })
-    if (!response.ok) {
-      throw new Error(await readErrorBody(response))
-    }
+    let nextPayload: JsonRecord | null = options.requestPayload
+    while (nextPayload) {
+      const currentPayload = nextPayload
+      nextPayload = null
 
-    const assistantTextByItem = new Map<string, string>()
-    const toolNameByItem = new Map<string, string>()
-    const toolCallIdByItem = new Map<string, string>()
+      const headers = await resolveResponsesDirectHeaders()
+      const response = await fetch(options.responsesApiUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(currentPayload),
+        signal: options.signal ?? undefined,
+      })
+      if (!response.ok) {
+        throw new Error(await readErrorBody(response))
+      }
 
-    await consumeSSE(
-      response,
-      (event) => {
-        const type = asString(event.type) ?? ''
-        if (!type) {
-          return
-        }
-        switch (type) {
-          case 'response.created': {
-            const responseRecord = asRecord(event.response)
-            const responseId = asString(responseRecord.id)
-            if (responseId) {
-              options.thread.previousResponseId = responseId
-              options.thread.updatedAt = new Date().toISOString()
-            }
+      const assistantTextByItem = new Map<string, string>()
+      const toolNameByItem = new Map<string, string>()
+      const toolCallIdByItem = new Map<string, string>()
+      let pendingToolContinuationPromise:
+        | Promise<PendingToolContinuation>
+        | null = null
+
+      await consumeSSE(
+        response,
+        (event) => {
+          const type = asString(event.type) ?? ''
+          if (!type) {
             return
           }
-          case 'response.output_item.added': {
-            const item = asRecord(event.item)
-            if (asString(item.type) === 'function_call') {
-              const itemId = asString(item.id)
-              const toolName = asString(item.name)
-              const toolCallId = asString(item.call_id)
-              if (itemId && toolName) {
-                toolNameByItem.set(itemId, toolName)
-              }
-              if (itemId && toolCallId) {
-                toolCallIdByItem.set(itemId, toolCallId)
+          switch (type) {
+            case 'response.created': {
+              const responseRecord = asRecord(event.response)
+              const responseId = asString(responseRecord.id)
+              if (responseId) {
+                options.thread.previousResponseId = responseId
+                options.thread.updatedAt = new Date().toISOString()
               }
               return
             }
-            if (asString(item.type) !== 'message') {
+            case 'response.output_item.added': {
+              const item = asRecord(event.item)
+              if (asString(item.type) === 'function_call') {
+                const itemId = asString(item.id)
+                const toolName = asString(item.name)
+                const toolCallId = asString(item.call_id)
+                if (itemId && toolName) {
+                  toolNameByItem.set(itemId, toolName)
+                }
+                if (itemId && toolCallId) {
+                  toolCallIdByItem.set(itemId, toolCallId)
+                }
+                return
+              }
+              if (asString(item.type) !== 'message') {
+                return
+              }
+              const itemId = asString(item.id) ?? randomId('assistant')
+              assistantTextByItem.set(itemId, '')
+              options.emit({
+                type: 'thread.item.added',
+                item: {
+                  id: itemId,
+                  type: 'assistant_message',
+                  thread_id: options.thread.id,
+                  created_at: new Date().toISOString(),
+                  status: 'in_progress',
+                  content: [],
+                },
+              })
+              options.emit({
+                type: 'thread.item.updated',
+                item_id: itemId,
+                update: {
+                  type: 'assistant_message.content_part.added',
+                  content_index: 0,
+                  content: {
+                    type: 'output_text',
+                    text: '',
+                    annotations: [],
+                  },
+                },
+              })
               return
             }
-            const itemId = asString(item.id) ?? randomId('assistant')
-            assistantTextByItem.set(itemId, '')
-            options.emit({
-              type: 'thread.item.added',
-              item: {
+            case 'response.output_text.delta': {
+              const itemId = asString(event.item_id)
+              const delta = asString(event.delta) ?? ''
+              if (!itemId || !delta) {
+                return
+              }
+              assistantTextByItem.set(
+                itemId,
+                `${assistantTextByItem.get(itemId) ?? ''}${delta}`
+              )
+              options.emit({
+                type: 'thread.item.updated',
+                item_id: itemId,
+                update: {
+                  type: 'assistant_message.content_part.text_delta',
+                  content_index: 0,
+                  delta,
+                },
+              })
+              return
+            }
+            case 'response.output_item.done': {
+              const item = asRecord(event.item)
+              if (asString(item.type) !== 'message') {
+                return
+              }
+              const itemId = asString(item.id) ?? randomId('assistant')
+              const parts = Array.isArray(item.content) ? item.content : []
+              const textFromDone = parts
+                .map((part) => asString(asRecord(part).text) ?? '')
+                .join('')
+              const finalText =
+                textFromDone || assistantTextByItem.get(itemId) || ''
+              options.emit({
+                type: 'thread.item.updated',
+                item_id: itemId,
+                update: {
+                  type: 'assistant_message.content_part.done',
+                  content_index: 0,
+                  content: {
+                    type: 'output_text',
+                    text: finalText,
+                    annotations: [],
+                  },
+                },
+              })
+              const assistantItem: JsonRecord = {
                 id: itemId,
                 type: 'assistant_message',
                 thread_id: options.thread.id,
                 created_at: new Date().toISOString(),
-                status: 'in_progress',
-                content: [],
-              },
-            })
-            options.emit({
-              type: 'thread.item.updated',
-              item_id: itemId,
-              update: {
-                type: 'assistant_message.content_part.added',
-                content_index: 0,
-                content: {
-                  type: 'output_text',
-                  text: '',
-                  annotations: [],
-                },
-              },
-            })
-            return
-          }
-          case 'response.output_text.delta': {
-            const itemId = asString(event.item_id)
-            const delta = asString(event.delta) ?? ''
-            if (!itemId || !delta) {
+                status: 'completed',
+                content: [
+                  {
+                    type: 'output_text',
+                    text: finalText,
+                    annotations: [],
+                  },
+                ],
+              }
+              options.thread.items.push(assistantItem)
+              options.thread.updatedAt = new Date().toISOString()
               return
             }
-            assistantTextByItem.set(
-              itemId,
-              `${assistantTextByItem.get(itemId) ?? ''}${delta}`
-            )
-            options.emit({
-              type: 'thread.item.updated',
-              item_id: itemId,
-              update: {
-                type: 'assistant_message.content_part.text_delta',
-                content_index: 0,
-                delta,
-              },
-            })
-            return
-          }
-          case 'response.output_item.done': {
-            const item = asRecord(event.item)
-            if (asString(item.type) !== 'message') {
+            case 'response.function_call_arguments.done': {
+              const itemId = asString(event.item_id) ?? randomId('tool')
+              const fallbackCallId = itemId.startsWith('call_')
+                ? itemId
+                : undefined
+              const callId =
+                asString(event.call_id) ??
+                asString(asRecord(event.item).call_id) ??
+                toolCallIdByItem.get(itemId) ??
+                fallbackCallId
+              if (!callId) {
+                throw new Error('Responses function call missing call_id')
+              }
+              const name =
+                asString(event.name) ??
+                toolNameByItem.get(itemId) ??
+                asString(asRecord(event.item).name) ??
+                EXECUTE_CODE_TOOL_NAME
+              const argumentsRaw = asString(event.arguments) ?? '{}'
+              pendingToolContinuationPromise = executeResponsesToolCall({
+                codeModeExecutor: options.codeModeExecutor,
+                toolName: name,
+                callId,
+                previousResponseId: options.thread.previousResponseId,
+                argumentsRaw,
+              })
               return
             }
-            const itemId = asString(item.id) ?? randomId('assistant')
-            const parts = Array.isArray(item.content) ? item.content : []
-            const textFromDone = parts
-              .map((part) => asString(asRecord(part).text) ?? '')
-              .join('')
-            const finalText =
-              textFromDone || assistantTextByItem.get(itemId) || ''
-            options.emit({
-              type: 'thread.item.updated',
-              item_id: itemId,
-              update: {
-                type: 'assistant_message.content_part.done',
-                content_index: 0,
-                content: {
-                  type: 'output_text',
-                  text: finalText,
-                  annotations: [],
-                },
-              },
-            })
-            const assistantItem: JsonRecord = {
-              id: itemId,
-              type: 'assistant_message',
-              thread_id: options.thread.id,
-              created_at: new Date().toISOString(),
-              status: 'completed',
-              content: [
-                {
-                  type: 'output_text',
-                  text: finalText,
-                  annotations: [],
-                },
-              ],
-            }
-            options.thread.items.push(assistantItem)
-            options.thread.updatedAt = new Date().toISOString()
-            return
+            case 'response.completed':
+            default:
+              return
           }
-          case 'response.function_call_arguments.done': {
-            const itemId = asString(event.item_id) ?? randomId('tool')
-            const fallbackCallId = itemId.startsWith('call_')
-              ? itemId
-              : undefined
-            const callId =
-              asString(event.call_id) ??
-              asString(asRecord(event.item).call_id) ??
-              toolCallIdByItem.get(itemId) ??
-              fallbackCallId
-            const name =
-              asString(event.name) ??
-              toolNameByItem.get(itemId) ??
-              asString(asRecord(event.item).name) ??
-              EXECUTE_CODE_TOOL_NAME
-            let argumentsObject: JsonRecord = {}
-            const argumentsRaw = asString(event.arguments) ?? '{}'
-            try {
-              argumentsObject = asRecord(JSON.parse(argumentsRaw))
-            } catch {
-              argumentsObject = {}
-            }
-            argumentsObject.call_id = callId
-            if (options.thread.previousResponseId) {
-              argumentsObject.previous_response_id =
-                options.thread.previousResponseId
-            }
-            const toolItem: JsonRecord = {
-              id: itemId,
-              type: 'client_tool_call',
-              thread_id: options.thread.id,
-              created_at: new Date().toISOString(),
-              status: 'pending',
-              call_id: callId,
-              name,
-              arguments: argumentsObject,
-            }
-            options.thread.items.push(toolItem)
-            options.thread.updatedAt = new Date().toISOString()
-            options.emit({
-              type: 'thread.item.done',
-              item: toolItem,
-            })
-            return
-          }
-          case 'response.completed': {
-            const endOfTurn: JsonRecord = {
-              id: randomId('end'),
-              type: 'end_of_turn',
-              thread_id: options.thread.id,
-              created_at: new Date().toISOString(),
-            }
-            options.thread.items.push(endOfTurn)
-            options.thread.updatedAt = new Date().toISOString()
-            options.emit({
-              type: 'thread.item.done',
-              item: endOfTurn,
-            })
-            return
-          }
-          default:
-            return
-        }
-      },
-      options.signal
-    )
+        },
+        options.signal
+      )
+
+      const pendingToolContinuation = pendingToolContinuationPromise
+        ? await pendingToolContinuationPromise
+        : null
+      if (pendingToolContinuation) {
+        nextPayload = buildOpenAIResponsesRequestForToolOutput({
+          callId: pendingToolContinuation.callId,
+          output: pendingToolContinuation.output,
+          model: options.thread.model || DEFAULT_MODEL,
+          previousResponseId: options.thread.previousResponseId,
+          vectorStores: responsesDirectConfigManager.getSnapshot().vectorStores,
+        })
+        continue
+      }
+
+      const endOfTurn: JsonRecord = {
+        id: randomId('end'),
+        type: 'end_of_turn',
+        thread_id: options.thread.id,
+        created_at: new Date().toISOString(),
+      }
+      options.thread.items.push(endOfTurn)
+      options.thread.updatedAt = new Date().toISOString()
+      options.emit({
+        type: 'thread.item.done',
+        item: endOfTurn,
+      })
+    }
   }
 
   return {
@@ -869,36 +697,7 @@ export function createResponsesDirectChatKitAdapter(options?: {
         requestPayload,
         emit: sink.emit,
         signal: request.signal ?? null,
-      })
-    },
-    async submitToolResult(
-      request: HarnessChatKitToolResultRequest,
-      sink: HarnessChatKitEventSink
-    ): Promise<void> {
-      const thread = ensureThread(request.threadId)
-      const toolResultRecord = asRecord(request.output)
-      const toolResult =
-        Object.keys(toolResultRecord).length > 0
-          ? extractToolOutput({ result: toolResultRecord })
-          : null
-      const vectorStores =
-        responsesDirectConfigManager.getSnapshot().vectorStores
-      const requestPayload = buildOpenAIResponsesRequestForToolOutput({
-        callId: request.callId,
-        output: toolResult?.output ?? toOutputString(request.output),
-        model: thread.model || DEFAULT_MODEL,
-        previousResponseId:
-          request.previousResponseId ??
-          toolResult?.previousResponseId ??
-          thread.previousResponseId,
-        vectorStores,
-      })
-      await streamOpenAI({
-        thread,
-        responsesApiUrl,
-        requestPayload,
-        emit: sink.emit,
-        signal: request.signal ?? null,
+        codeModeExecutor: options?.codeModeExecutor,
       })
     },
   }
@@ -906,6 +705,7 @@ export function createResponsesDirectChatKitAdapter(options?: {
 
 export function createResponsesDirectChatkitFetch(options?: {
   responsesApiBaseUrl?: string
+  codeModeExecutor?: CodeModeExecutor
 }): typeof fetch {
   return createChatKitFetchFromAdapter(
     createResponsesDirectChatKitAdapter(options),
