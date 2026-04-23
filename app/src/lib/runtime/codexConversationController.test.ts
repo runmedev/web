@@ -16,6 +16,7 @@ const project = {
 const notificationHandlers = new Set<(notification: any) => void>();
 const proxyClient = {
   sendRequest: vi.fn(),
+  getTransport: vi.fn(() => "proxy"),
   subscribeNotifications: vi.fn((handler: (notification: any) => void) => {
     notificationHandlers.add(handler);
     return () => {
@@ -285,6 +286,8 @@ describe("CodexConversationController", () => {
   beforeEach(() => {
     vi.useRealTimers();
     proxyClient.sendRequest.mockReset();
+    proxyClient.getTransport.mockReset();
+    proxyClient.getTransport.mockReturnValue("proxy");
     proxyClient.subscribeNotifications.mockClear();
     notificationHandlers.clear();
     projectManager.setDefault.mockClear();
@@ -311,6 +314,20 @@ describe("CodexConversationController", () => {
         previousResponseId: "turn-1",
       }),
     ]);
+  });
+
+  it("omits cwd when refreshing history over the wasm transport", async () => {
+    proxyClient.getTransport.mockReturnValue("wasm");
+    proxyClient.sendRequest.mockResolvedValueOnce({
+      threads: [
+        { id: "thread-1", title: "One", last_turn_id: "turn-1" },
+      ],
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    await controller.refreshHistory();
+
+    expect(proxyClient.sendRequest).toHaveBeenCalledWith("thread/list", {});
   });
 
   it("ensures an active thread by creating one when no current thread exists", async () => {
@@ -350,6 +367,37 @@ describe("CodexConversationController", () => {
       }),
     );
     expect(controller.getSnapshot().currentThreadId).toBe("thread-bootstrap");
+  });
+
+  it("omits cwd when creating a thread over the wasm transport", async () => {
+    proxyClient.getTransport.mockReturnValue("wasm");
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return {
+          thread: {
+            id: "thread-bootstrap",
+            title: "Bootstrap Thread",
+          },
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    await controller.ensureActiveThread();
+
+    expect(proxyClient.sendRequest).toHaveBeenCalledWith(
+      "thread/start",
+      expect.objectContaining({
+        projectId: "project-1",
+        model: "gpt-5.4",
+        approvalPolicy: "never",
+        sandboxPolicy: "workspace-write",
+      }),
+    );
+    expect(
+      (proxyClient.sendRequest.mock.calls.at(-1)?.[1] as Record<string, unknown>)?.cwd,
+    ).toBeUndefined();
   });
 
   it("uses a per-request model override for thread start and turn start", async () => {

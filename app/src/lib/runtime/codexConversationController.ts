@@ -476,9 +476,10 @@ class CodexConversationController {
     this.historyError = null;
     this.notify();
     try {
-      const result = await proxy.sendRequest("thread/list", {
-        cwd: project.cwd,
-      });
+      const result = await proxy.sendRequest(
+        "thread/list",
+        this.buildProjectScope(project),
+      );
       const record = asRecord(result);
       const entries = Array.isArray(record.threads)
         ? (record.threads as unknown[])
@@ -1126,13 +1127,25 @@ class CodexConversationController {
   private buildProjectDefaults(project: CodexProject, modelOverride?: string): JsonRecord {
     return {
       projectId: project.id,
-      cwd: project.cwd,
+      ...this.buildProjectScope(project),
       model: asString(modelOverride) ?? project.model,
       approvalPolicy: project.approvalPolicy,
       sandboxPolicy: project.sandboxPolicy,
       personality: project.personality,
       developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
       writableRoots: project.writableRoots,
+    };
+  }
+
+  private buildProjectScope(project: CodexProject): JsonRecord {
+    const client = getCodexAppServerClient() as {
+      getTransport?: () => string;
+    };
+    if (client.getTransport?.() === "wasm") {
+      return {};
+    }
+    return {
+      cwd: project.cwd,
     };
   }
 

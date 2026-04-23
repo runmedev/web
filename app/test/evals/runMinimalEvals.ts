@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { createWriteStream, mkdirSync } from "node:fs";
+import { createWriteStream, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,6 +17,7 @@ type EvalResultSummary = {
 type RunmeEvalResult = {
   assistantText: string;
   requestLog: Array<{ method: string }>;
+  wasmJournal: unknown[];
   notebook: {
     uri: string;
     cells: Array<{ value: string }>;
@@ -42,10 +43,28 @@ const APP_ROOT = resolve(TEST_DIR, "..", "..");
 const REPO_ROOT = resolve(APP_ROOT, "..");
 const OUTPUT_DIR = join(TEST_DIR, "eval-output");
 const FRONTEND_URL = process.env.RUNME_EVAL_FRONTEND_URL ?? "http://localhost:5174";
+const EVAL_BACKEND = (process.env.RUNME_EVAL_BACKEND ?? "fake").trim().toLowerCase();
 const FAKE_AI_BASE_URL = process.env.RUNME_EVAL_FAKE_AI_BASE_URL ?? "http://127.0.0.1:19989";
 const FAKE_AI_HEALTH_URL = `${FAKE_AI_BASE_URL}/healthz`;
 const FAKE_AI_RESET_URL = `${FAKE_AI_BASE_URL}/reset`;
 const FRONTEND_PORT = new URL(FRONTEND_URL).port || "5174";
+const DEFAULT_OPENAI_API_KEY_FILE =
+  "/Users/jlewi/secrets/openai.org-openai-internal-project-aisre-name-oaictl-jlewi.key";
+const OPENAI_API_KEY_FILE =
+  process.env.RUNME_EVAL_OPENAI_API_KEY_FILE ??
+  process.env.OPENAI_API_KEY_FILE ??
+  DEFAULT_OPENAI_API_KEY_FILE;
+const OPENAI_RESPONSES_BASE_URL =
+  process.env.RUNME_EVAL_OPENAI_BASE_URL ?? "https://api.openai.com";
+const OPENAI_ORGANIZATION =
+  process.env.RUNME_EVAL_OPENAI_ORGANIZATION ??
+  process.env.OPENAI_ORGANIZATION ??
+  "";
+const OPENAI_PROJECT =
+  process.env.RUNME_EVAL_OPENAI_PROJECT ??
+  process.env.OPENAI_PROJECT_ID ??
+  process.env.OPENAI_PROJECT ??
+  "";
 const AGENT_BROWSER_SESSION = process.env.AGENT_BROWSER_SESSION?.trim() ?? "";
 const AGENT_BROWSER_PROFILE = process.env.AGENT_BROWSER_PROFILE?.trim() ?? "";
 const AGENT_BROWSER_HEADED = (process.env.AGENT_BROWSER_HEADED ?? "false")
@@ -56,6 +75,22 @@ mkdirSync(OUTPUT_DIR, { recursive: true });
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function isLiveBackend(): boolean {
+  return EVAL_BACKEND === "live" || EVAL_BACKEND === "openai" || EVAL_BACKEND === "real";
+}
+
+function resolveOpenAIApiKey(): string {
+  const direct = process.env.RUNME_EVAL_OPENAI_API_KEY?.trim() ?? process.env.OPENAI_API_KEY?.trim() ?? "";
+  if (direct) {
+    return direct;
+  }
+  try {
+    return readFileSync(OPENAI_API_KEY_FILE, "utf-8").trim();
+  } catch {
+    return "";
+  }
 }
 
 function withAgentBrowserOptions(command: string): string {
@@ -170,6 +205,9 @@ async function ensureFrontend(): Promise<ServiceHandle | null> {
 }
 
 async function ensureFakeAi(): Promise<ServiceHandle | null> {
+  if (isLiveBackend()) {
+    return null;
+  }
   try {
     await waitForHttpReady(FAKE_AI_HEALTH_URL, 3000);
     return null;
@@ -185,6 +223,9 @@ async function ensureFakeAi(): Promise<ServiceHandle | null> {
 }
 
 async function resetFakeAi(): Promise<void> {
+  if (isLiveBackend()) {
+    return;
+  }
   await fetchWithTimeout(FAKE_AI_RESET_URL, 5000, { method: "POST" });
 }
 
@@ -226,11 +267,18 @@ function createNotebook(name: string): { uri: string } {
   );
 }
 
-function configureResponsesDirect(): void {
+function configureResponsesDirect(options?: {
+  authMethod?: "oauth" | "api_key";
+  apiKey?: string;
+  openaiOrganization?: string;
+  openaiProject?: string;
+}): void {
   evaluateJson<boolean>(
     `JSON.stringify((await window.__runmeEval.configureResponsesDirect({
-      authMethod: 'api_key',
-      apiKey: 'test-key'
+      authMethod: ${JSON.stringify(options?.authMethod ?? "api_key")},
+      apiKey: ${JSON.stringify(options?.apiKey ?? "test-key")},
+      openaiOrganization: ${JSON.stringify(options?.openaiOrganization ?? "")},
+      openaiProject: ${JSON.stringify(options?.openaiProject ?? "")}
     }), true))`,
     15000,
   );
@@ -287,13 +335,24 @@ async function runCodexProxyHelloWorldEval(): Promise<EvalResultSummary> {
 
 async function runResponsesDirectHelloWorldEval(): Promise<EvalResultSummary> {
   await resetFakeAi();
-  configureResponsesDirect();
+  const apiKey = isLiveBackend() ? resolveOpenAIApiKey() : "test-key";
+  if (isLiveBackend() && !apiKey) {
+    throw new Error(
+      `RUNME_EVAL_BACKEND=live requires an API key. Set OPENAI_API_KEY or place it in ${OPENAI_API_KEY_FILE}.`,
+    );
+  }
+  configureResponsesDirect({
+    authMethod: "api_key",
+    apiKey,
+    openaiOrganization: OPENAI_ORGANIZATION,
+    openaiProject: OPENAI_PROJECT,
+  });
   const notebook = createNotebook("eval-responses-direct.runme.md");
   const result = runBrowserEval({
     harness: {
       adapter: "responses-direct",
       name: "responses-direct-eval",
-      baseUrl: FAKE_AI_BASE_URL,
+      baseUrl: isLiveBackend() ? OPENAI_RESPONSES_BASE_URL : FAKE_AI_BASE_URL,
     },
     notebookUri: notebook.uri,
     prompt: `Add a cell to print("hello world")`,
@@ -301,8 +360,12 @@ async function runResponsesDirectHelloWorldEval(): Promise<EvalResultSummary> {
   });
   const assertions = [
     assert(
-      result.assistantText.includes("Cell has been added."),
-      "assistant text confirms the cell was added",
+      isLiveBackend()
+        ? result.assistantText.trim().length > 0
+        : result.assistantText.includes("Cell has been added."),
+      isLiveBackend()
+        ? "assistant text was emitted"
+        : "assistant text confirms the cell was added",
     ),
     assert(
       Boolean(
@@ -314,7 +377,53 @@ async function runResponsesDirectHelloWorldEval(): Promise<EvalResultSummary> {
     assert(result.metrics.turnTimeMs > 0, "turn time was recorded"),
   ];
   return {
-    name: "responses-direct adds hello world cell",
+    name: `${isLiveBackend() ? "responses-direct live" : "responses-direct"} adds hello world cell`,
+    status: assertions.every((item) => item.ok) ? "PASS" : "FAIL",
+    assertions,
+  };
+}
+
+async function runCodexWasmHelloWorldEval(): Promise<EvalResultSummary> {
+  const apiKey = resolveOpenAIApiKey();
+  if (!apiKey) {
+    throw new Error(
+      `RUNME_EVAL_BACKEND=live requires an API key. Set OPENAI_API_KEY or place it in ${OPENAI_API_KEY_FILE}.`,
+    );
+  }
+  configureResponsesDirect({
+    authMethod: "api_key",
+    apiKey,
+    openaiOrganization: OPENAI_ORGANIZATION,
+    openaiProject: OPENAI_PROJECT,
+  });
+  const notebook = createNotebook("eval-codex-wasm.runme.md");
+  const result = runBrowserEval({
+    harness: {
+      adapter: "codex-wasm",
+      name: "codex-wasm-eval",
+    },
+    notebookUri: notebook.uri,
+    prompt: `Add a cell to print("hello world")`,
+    timeoutMs: 90000,
+    wasmApiKey: apiKey,
+  });
+  const assertions = [
+    assert(
+      result.assistantText.length > 0,
+      "assistant text was emitted",
+    ),
+    assert(
+      Boolean(
+        result.notebook?.cells.some((cell) => cell.value.includes(`hello world`)),
+      ),
+      "notebook snapshot contains the hello world cell",
+    ),
+    assert(result.metrics.ttfmMs !== null, "TTFM was recorded"),
+    assert(result.metrics.turnTimeMs > 0, "turn time was recorded"),
+    assert(result.wasmJournal.length > 0, "wasm journal captured activity"),
+  ];
+  return {
+    name: "codex-wasm live adds hello world cell",
     status: assertions.every((item) => item.ok) ? "PASS" : "FAIL",
     assertions,
   };
@@ -328,10 +437,15 @@ async function main(): Promise<void> {
     fakeAiHandle = await ensureFakeAi();
     await bootstrapEvalBridge();
 
-    const results = [
-      await runCodexProxyHelloWorldEval(),
-      await runResponsesDirectHelloWorldEval(),
-    ];
+    const results = isLiveBackend()
+      ? [
+          await runResponsesDirectHelloWorldEval(),
+          await runCodexWasmHelloWorldEval(),
+        ]
+      : [
+          await runCodexProxyHelloWorldEval(),
+          await runResponsesDirectHelloWorldEval(),
+        ];
 
     let failed = 0;
     for (const result of results) {
