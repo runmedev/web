@@ -7,6 +7,7 @@ import {
 import { RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS } from "./runmeChatkitPrompts";
 import {
   getCodexAppServerClient,
+  type CodexAppServerTransport,
   type CodexProxyJsonRpcNotification,
 } from "./codexAppServerClient";
 import { logCodexEvent } from "./codexLogging";
@@ -476,9 +477,10 @@ class CodexConversationController {
     this.historyError = null;
     this.notify();
     try {
-      const result = await proxy.sendRequest("thread/list", {
-        cwd: project.cwd,
-      });
+      const result = await proxy.sendRequest(
+        "thread/list",
+        this.buildThreadListParams(project, proxy.getTransport()),
+      );
       const record = asRecord(result);
       const entries = Array.isArray(record.threads)
         ? (record.threads as unknown[])
@@ -492,6 +494,7 @@ class CodexConversationController {
           const existing = this.threads.get(thread.id);
           this.threads.set(thread.id, {
             ...thread,
+            cwd: thread.cwd ?? existing?.cwd,
             items: existing?.items ?? [],
           });
         });
@@ -1124,9 +1127,9 @@ class CodexConversationController {
   }
 
   private buildProjectDefaults(project: CodexProject, modelOverride?: string): JsonRecord {
-    return {
+    const transport = this.getTransport();
+    const defaults: JsonRecord = {
       projectId: project.id,
-      cwd: project.cwd,
       model: asString(modelOverride) ?? project.model,
       approvalPolicy: project.approvalPolicy,
       sandboxPolicy: project.sandboxPolicy,
@@ -1134,6 +1137,31 @@ class CodexConversationController {
       developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
       writableRoots: project.writableRoots,
     };
+    if (transport !== "wasm") {
+      defaults.cwd = project.cwd;
+    }
+    return defaults;
+  }
+
+  private buildThreadListParams(
+    project: CodexProject,
+    transport: CodexAppServerTransport,
+  ): JsonRecord | undefined {
+    if (transport === "wasm") {
+      return undefined;
+    }
+    return {
+      cwd: project.cwd,
+    };
+  }
+
+  private getTransport(): CodexAppServerTransport {
+    const client = getCodexAppServerClient() as {
+      getTransport?: () => CodexAppServerTransport;
+    };
+    return typeof client.getTransport === "function"
+      ? client.getTransport()
+      : "proxy";
   }
 
   private listThreadsForProject(projectId: string): CodexConversationThread[] {
