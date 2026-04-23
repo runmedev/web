@@ -17,6 +17,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CODEX_REPO: openai/codex
+  CODEX_REF: dev/jlewi/wasm
+  CODEX_WASM_PKG_DIR: ${{ github.workspace }}/codex-src/codex-rs/wasm-harness/examples/pkg
+
 jobs:
   run-app-tests:
     runs-on: ubuntu-latest
@@ -96,6 +101,11 @@ jobs:
         with:
           go-version: "1.23.x"
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -117,12 +127,34 @@ jobs:
           corepack enable
           pnpm --version
 
+      - name: Install wasm-bindgen CLI
+        shell: bash
+        run: cargo install wasm-bindgen-cli --version 0.2.108
+
+      - name: Checkout Codex WASM source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CODEX_REPO }}
+          ref: ${{ env.CODEX_REF }}
+          path: codex-src
+          fetch-depth: 1
+
       - name: Install dependencies
         shell: bash
         run: |
           set -euo pipefail
           pnpm config set @buf:registry https://buf.build/gen/npm/v1
           pnpm install --frozen-lockfile
+
+      - name: Build and sync Codex WASM assets
+        shell: bash
+        working-directory: ${{ github.workspace }}/codex-src
+        env:
+          CODEX_WASM_PKG_DIR: ${{ env.CODEX_WASM_PKG_DIR }}
+        run: |
+          set -euo pipefail
+          ./codex-rs/wasm-harness/scripts/build-browser-demo.sh
+          pnpm -C "${GITHUB_WORKSPACE}/app" run sync:codex-wasm
 
       - name: Build app dependencies
         shell: bash
