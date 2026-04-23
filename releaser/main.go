@@ -225,6 +225,10 @@ func buildReleasePayload(ctx context.Context, webDir, codexDir string) error {
 		return fmt.Errorf("ensure wasm target: %w", err)
 	}
 
+	if err := ensureWasmBindgenCLI(ctx, codexRsDir); err != nil {
+		return fmt.Errorf("ensure wasm-bindgen-cli: %w", err)
+	}
+
 	wasmHarnessDir := filepath.Join(codexRsDir, "wasm-harness")
 	if err := runShell(ctx, wasmHarnessDir, nil, "./scripts/build-browser-demo.sh"); err != nil {
 		return fmt.Errorf("build codex wasm harness: %w", err)
@@ -254,6 +258,64 @@ func activeRustToolchain(ctx context.Context, dir string) (string, error) {
 		return "", errors.New("empty rustup active-toolchain output")
 	}
 	return fields[0], nil
+}
+
+func ensureWasmBindgenCLI(ctx context.Context, codexRsDir string) error {
+	requiredVersion, err := wasmBindgenVersionFromCargoLock(filepath.Join(codexRsDir, "Cargo.lock"))
+	if err != nil {
+		return err
+	}
+
+	currentVersion, err := installedWasmBindgenVersion(ctx)
+	if err == nil && currentVersion == requiredVersion {
+		return nil
+	}
+
+	return runCmd(ctx, "", nil, "cargo", "install", "wasm-bindgen-cli", "--version", requiredVersion, "--locked", "--force")
+}
+
+func installedWasmBindgenVersion(ctx context.Context) (string, error) {
+	out, err := runCmdOutput(ctx, "", nil, "wasm-bindgen", "--version")
+	if err != nil {
+		return "", err
+	}
+
+	fields := strings.Fields(string(out))
+	if len(fields) < 2 {
+		return "", fmt.Errorf("unexpected wasm-bindgen --version output: %q", strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(fields[len(fields)-1]), nil
+}
+
+func wasmBindgenVersionFromCargoLock(lockPath string) (string, error) {
+	content, err := os.ReadFile(lockPath)
+	if err != nil {
+		return "", err
+	}
+
+	lines := strings.Split(string(content), "\n")
+	for i := 0; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) != "name = \"wasm-bindgen\"" {
+			continue
+		}
+
+		for j := i + 1; j < len(lines); j++ {
+			line := strings.TrimSpace(lines[j])
+			if line == "[[package]]" {
+				break
+			}
+			if strings.HasPrefix(line, "version = ") {
+				version := strings.TrimPrefix(line, "version = ")
+				version = strings.Trim(version, "\"")
+				if version == "" {
+					break
+				}
+				return version, nil
+			}
+		}
+	}
+
+	return "", errors.New("wasm-bindgen version not found in Cargo.lock")
 }
 
 func collectPublishFiles(distDir string) ([]publishFile, error) {
