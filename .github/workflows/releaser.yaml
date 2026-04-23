@@ -6,16 +6,16 @@ on:
       - main
   workflow_dispatch:
     inputs:
-      runme_branch:
-        description: "runmedev/runme branch"
-        required: false
-        default: "main"
       web_branch:
-        description: "runmedev/web branch"
+        description: "web repo branch"
         required: false
         default: "main"
+      codex_branch:
+        description: "codex repo branch"
+        required: false
+        default: "dev/jlewi/wasm"
       dry_run:
-        description: "Run without pushing image"
+        description: "Run without publishing"
         type: boolean
         required: false
         default: false
@@ -27,8 +27,8 @@ on:
       - ".github/workflows/releaser.yaml"
 
 permissions:
+  id-token: write
   contents: read
-  packages: write
 
 concurrency:
   group: releaser-${{ github.workflow }}-${{ github.ref }}
@@ -37,9 +37,35 @@ concurrency:
 jobs:
   releaser:
     runs-on: ubuntu-latest
+    env:
+      GCP_PROJECT_ID: runme-lewi-dev
+      GCP_PROJECT_NUMBER: "690012737568"
+      GCP_WIF_POOL_ID: github-pool
+      GCP_WIF_PROVIDER_ID: github-provider
+      GCP_SERVICE_ACCOUNT_EMAIL: runme-gha@runme-lewi-dev.iam.gserviceaccount.com
+      RELEASER_BUCKET: gs://runme-hosted
+      RELEASER_WEB_REPO: runmedev/web
+      RELEASER_CODEX_REPO: openai/codex
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        if: github.event_name != 'pull_request'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/${{ env.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/${{ env.GCP_WIF_POOL_ID }}/providers/${{ env.GCP_WIF_PROVIDER_ID }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT_EMAIL }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/cloud-platform
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        if: github.event_name != 'pull_request'
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -57,38 +83,42 @@ jobs:
         with:
           run_install: false
 
-      - name: Install ko
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-bindgen
+        shell: bash
         run: |
-          go install github.com/google/ko@v0.17.1
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          cargo install wasm-bindgen-cli --locked
 
       - name: Build releaser
+        shell: bash
         run: |
+          set -euo pipefail
           cd releaser
           go build -o ../releaser-bin .
 
-      - name: Login to GitHub Container Registry
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Run releaser
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          RUNME_BRANCH="main"
+          set -euo pipefail
+
           WEB_BRANCH="main"
+          CODEX_BRANCH="dev/jlewi/wasm"
+          BUCKET="${RELEASER_BUCKET}"
           DRY_RUN="false"
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ -n "${{ github.event.inputs.runme_branch }}" ]; then
-              RUNME_BRANCH="${{ github.event.inputs.runme_branch }}"
-            fi
             if [ -n "${{ github.event.inputs.web_branch }}" ]; then
               WEB_BRANCH="${{ github.event.inputs.web_branch }}"
+            fi
+            if [ -n "${{ github.event.inputs.codex_branch }}" ]; then
+              CODEX_BRANCH="${{ github.event.inputs.codex_branch }}"
             fi
             if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
               DRY_RUN="true"
@@ -97,9 +127,13 @@ jobs:
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             DRY_RUN="true"
+            BUCKET="${RUNNER_TEMP}/releaser-pr-bucket"
           fi
 
           ./releaser-bin \
-            --runme="${RUNME_BRANCH}" \
             --web="${WEB_BRANCH}" \
+            --codex="${CODEX_BRANCH}" \
+            --web-repo="${RELEASER_WEB_REPO}" \
+            --codex-repo="${RELEASER_CODEX_REPO}" \
+            --bucket="${BUCKET}" \
             --dry-run="${DRY_RUN}"
