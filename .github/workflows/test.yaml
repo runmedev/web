@@ -71,6 +71,8 @@ jobs:
           CODEX_WASM_PKG_DIR: ${{ env.CODEX_WASM_PKG_DIR }}
         run: |
           set -euo pipefail
+          TOOLCHAIN="$(cd codex-rs && rustup show active-toolchain | awk '{print $1}')"
+          rustup target add --toolchain "${TOOLCHAIN}" wasm32-unknown-unknown
           ./codex-rs/wasm-harness/scripts/build-browser-demo.sh
           pnpm -C "${GITHUB_WORKSPACE}/app" run sync:codex-wasm
       - name: 📦 Bundle
