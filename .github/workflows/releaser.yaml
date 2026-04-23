@@ -110,6 +110,7 @@ jobs:
 
           WEB_BRANCH="main"
           CODEX_BRANCH="dev/jlewi/wasm"
+          BUCKET="${RELEASER_BUCKET}"
           DRY_RUN="false"
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -126,6 +127,7 @@ jobs:
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             DRY_RUN="true"
+            BUCKET="${RUNNER_TEMP}/releaser-pr-bucket"
           fi
 
           ./releaser-bin \
@@ -133,5 +135,5 @@ jobs:
             --codex="${CODEX_BRANCH}" \
             --web-repo="${RELEASER_WEB_REPO}" \
             --codex-repo="${RELEASER_CODEX_REPO}" \
-            --bucket="${RELEASER_BUCKET}" \
+            --bucket="${BUCKET}" \
             --dry-run="${DRY_RUN}"

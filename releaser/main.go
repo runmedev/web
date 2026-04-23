@@ -61,10 +61,12 @@ type releaseVersion struct {
 }
 
 type publishFile struct {
-	src          string
-	dst          string
-	cacheControl string
-	group        int
+	src                string
+	dst                string
+	cacheControl       string
+	contentType        string
+	contentDisposition string
+	group              int
 }
 
 func main() {
@@ -251,12 +253,14 @@ func collectPublishFiles(distDir string) ([]publishFile, error) {
 		}
 		rel = filepath.ToSlash(rel)
 
-		cacheControl, group := classifyFile(rel)
+		cacheControl, contentType, contentDisposition, group := classifyFile(rel)
 		files = append(files, publishFile{
-			src:          path,
-			dst:          rel,
-			cacheControl: cacheControl,
-			group:        group,
+			src:                path,
+			dst:                rel,
+			cacheControl:       cacheControl,
+			contentType:        contentType,
+			contentDisposition: contentDisposition,
+			group:              group,
 		})
 		return nil
 	})
@@ -274,33 +278,35 @@ func collectPublishFiles(distDir string) ([]publishFile, error) {
 	return files, nil
 }
 
-func classifyFile(rel string) (string, int) {
+func classifyFile(rel string) (string, string, string, int) {
 	name := filepath.Base(rel)
 	switch {
 	case rel == versionFileName:
-		return "no-cache, max-age=0, must-revalidate", 3
+		return "no-cache, max-age=0, must-revalidate", "text/plain; charset=utf-8", "inline", 3
 	case rel == "index.html":
-		return "no-cache, max-age=0, must-revalidate", 2
+		return "no-cache, max-age=0, must-revalidate", "", "", 2
 	case hashedAssetPattern.MatchString(name):
-		return "public, max-age=31536000, immutable", 0
+		return "public, max-age=31536000, immutable", "", "", 0
 	default:
-		return "no-cache, max-age=0, must-revalidate", 1
+		return "no-cache, max-age=0, must-revalidate", "", "", 1
 	}
 }
 
 func uploadFile(ctx context.Context, bucket string, file publishFile) error {
 	if strings.HasPrefix(bucket, "gs://") {
-		return runCmd(
-			ctx,
-			"",
-			nil,
-			"gcloud",
+		args := []string{
 			"storage",
 			"cp",
-			"--cache-control="+file.cacheControl,
-			file.src,
-			destinationURL(bucket, file.dst),
-		)
+			"--cache-control=" + file.cacheControl,
+		}
+		if file.contentType != "" {
+			args = append(args, "--content-type="+file.contentType)
+		}
+		if file.contentDisposition != "" {
+			args = append(args, "--content-disposition="+file.contentDisposition)
+		}
+		args = append(args, file.src, destinationURL(bucket, file.dst))
+		return runCmd(ctx, "", nil, "gcloud", args...)
 	}
 
 	target := destinationURL(bucket, file.dst)
@@ -314,7 +320,7 @@ func readVersion(ctx context.Context, bucket string) (releaseVersion, bool, erro
 	if strings.HasPrefix(bucket, "gs://") {
 		out, err := runCmdOutput(ctx, "", nil, "gcloud", "storage", "cat", destinationURL(bucket, versionFileName))
 		if err != nil {
-			if strings.Contains(err.Error(), "No URLs matched") || strings.Contains(err.Error(), "404") {
+			if isMissingVersionMarkerError(err) {
 				return releaseVersion{}, false, nil
 			}
 			return releaseVersion{}, false, err
@@ -331,6 +337,16 @@ func readVersion(ctx context.Context, bucket string) (releaseVersion, bool, erro
 		return releaseVersion{}, false, err
 	}
 	return parseVersionYAML(content)
+}
+
+func isMissingVersionMarkerError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no urls matched") ||
+		strings.Contains(message, "matched no objects or files") ||
+		strings.Contains(message, "404")
 }
 
 func parseVersionYAML(content []byte) (releaseVersion, bool, error) {
