@@ -57,8 +57,6 @@ export const RUNME_RESPONSES_DIRECT_INSTRUCTIONS = [
   RUNME_SHARED_RUNTIME_INSTRUCTIONS,
 ].join('\n')
 
-export const RUNME_CODEX_WASM_CWD = '/workspace'
-
 const RUNME_CODEX_WASM_OVERLAY = [
   'When you need to inspect or modify notebooks, use Codex code mode.',
   'Codex code mode executes JavaScript in the same Runme AppKernel runtime described above.',
@@ -71,7 +69,6 @@ export const RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS = [
 
 export function buildRunmeCodexWasmSessionOptions(): BrowserSessionOptions {
   return {
-    cwd: RUNME_CODEX_WASM_CWD,
     instructions: {
       developer: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
     },
