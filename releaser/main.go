@@ -215,11 +215,17 @@ func buildReleasePayload(ctx context.Context, webDir, codexDir string) error {
 		}
 	}
 
-	if err := runCmd(ctx, codexDir, nil, "rustup", "target", "add", "wasm32-unknown-unknown"); err != nil {
+	codexRsDir := filepath.Join(codexDir, "codex-rs")
+	toolchain, err := activeRustToolchain(ctx, codexRsDir)
+	if err != nil {
+		return fmt.Errorf("resolve codex rust toolchain: %w", err)
+	}
+
+	if err := runCmd(ctx, codexRsDir, nil, "rustup", "target", "add", "--toolchain", toolchain, "wasm32-unknown-unknown"); err != nil {
 		return fmt.Errorf("ensure wasm target: %w", err)
 	}
 
-	wasmHarnessDir := filepath.Join(codexDir, "codex-rs", "wasm-harness")
+	wasmHarnessDir := filepath.Join(codexRsDir, "wasm-harness")
 	if err := runShell(ctx, wasmHarnessDir, nil, "./scripts/build-browser-demo.sh"); err != nil {
 		return fmt.Errorf("build codex wasm harness: %w", err)
 	}
@@ -235,6 +241,19 @@ func buildReleasePayload(ctx context.Context, webDir, codexDir string) error {
 	}
 
 	return nil
+}
+
+func activeRustToolchain(ctx context.Context, dir string) (string, error) {
+	out, err := runCmdOutput(ctx, dir, nil, "rustup", "show", "active-toolchain")
+	if err != nil {
+		return "", err
+	}
+
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return "", errors.New("empty rustup active-toolchain output")
+	}
+	return fields[0], nil
 }
 
 func collectPublishFiles(distDir string) ([]publishFile, error) {
