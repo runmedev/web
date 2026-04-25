@@ -24,6 +24,7 @@ const defaultStreamUserMessage = async (
 
 const controller = {
   refreshHistory: vi.fn(),
+  startNewChat: vi.fn(),
   getSnapshot: vi.fn(() => ({
     threads: [{ id: "thread-1", title: "One", updatedAt: "2026-02-26T00:00:00Z" }],
   })),
@@ -139,6 +140,7 @@ describe("createCodexChatkitFetch", () => {
     appLoggerMock.info.mockClear();
     appLoggerMock.error.mockClear();
     controller.refreshHistory.mockClear();
+    controller.startNewChat.mockClear();
     controller.getSnapshot.mockClear();
     controller.getThread.mockClear();
     controller.handleListItems.mockClear();
@@ -198,6 +200,48 @@ describe("createCodexChatkitFetch", () => {
       expect.any(Object),
       "gpt-5.4",
     );
+  });
+
+  it("emits thread.created for new Codex threads", async () => {
+    controller.ensureActiveThread.mockResolvedValueOnce({
+      id: "thread-2",
+      title: "New Codex Thread",
+      items: [],
+    });
+    controller.streamUserMessage.mockImplementationOnce(
+      async (_input: string, sink: { emit: (payload: unknown) => void }) => {
+        sink.emit({ type: "response.created", response: { id: "turn-2" } });
+        sink.emit({
+          type: "response.output_text.delta",
+          response_id: "turn-2",
+          item_id: "msg-2",
+          delta: "hello",
+        });
+        sink.emit({ type: "response.completed", response: { id: "turn-2" } });
+        return { threadId: "thread-2", previousResponseId: "turn-2" };
+      },
+    );
+
+    const fetchFn = createCodexChatkitFetch();
+    const response = await fetchFn("http://localhost/codex/chatkit", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "threads.create",
+        params: {
+          input: {
+            content: [{ type: "input_text", text: "hello" }],
+          },
+        },
+      }),
+    });
+
+    const body = await response.text();
+
+    expect(controller.startNewChat).toHaveBeenCalled();
+    expect(controller.ensureActiveThread).toHaveBeenCalledTimes(1);
+    expect(controller.ensureActiveThread).toHaveBeenCalledWith(undefined);
+    expect(body).toContain('"type":"thread.created"');
+    expect(body).toContain('"title":"New Codex Thread"');
   });
 
   it("handles threads.get_by_id requests", async () => {
@@ -521,7 +565,7 @@ describe("createCodexChatkitFetch", () => {
           scope: "chatkit.codex_fetch",
           requestType: "message_stream",
           inputText: "hello",
-          threadId: "thread-1",
+          threadId: null,
           previousResponseId: null,
           streamId: expect.any(String),
           aborted: true,
@@ -535,7 +579,7 @@ describe("createCodexChatkitFetch", () => {
           scope: "chatkit.codex_fetch",
           requestType: "message_stream",
           inputText: "hello",
-          threadId: "thread-1",
+          threadId: null,
           previousResponseId: null,
           streamId: expect.any(String),
           aborted: true,
@@ -567,7 +611,7 @@ describe("createCodexChatkitFetch", () => {
           scope: "chatkit.codex_fetch",
           requestType: "message_stream",
           inputText: "hello",
-          threadId: "thread-1",
+          threadId: null,
           previousResponseId: null,
           streamId: expect.any(String),
           aborted: true,

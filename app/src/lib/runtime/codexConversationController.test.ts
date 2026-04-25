@@ -114,8 +114,59 @@ function normalizeChatKitEvents(
         (event) => event.type === "response.completed",
       )?.response as { id?: string } | undefined
     )?.id;
+  const rawResponseCreatedIds = new Set(
+    events
+      .filter((event) => event.type === "response.created")
+      .map((event) => (event.response as { id?: string } | undefined)?.id)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const rawOutputItemAddedIds = new Set(
+    events
+      .filter((event) => event.type === "response.output_item.added")
+      .map((event) => {
+        const item = event.item as { id?: string } | undefined;
+        return (typeof event.item_id === "string" ? event.item_id : item?.id) ?? null;
+      })
+      .filter((id): id is string => Boolean(id)),
+  );
+  const rawContentPartAddedIds = new Set(
+    events
+      .filter((event) => event.type === "response.content_part.added")
+      .map((event) => {
+        const partItemId =
+          typeof event.item_id === "string"
+            ? event.item_id
+            : ((event.item as { id?: string } | undefined)?.id ?? null);
+        return partItemId;
+      })
+      .filter((id): id is string => Boolean(id)),
+  );
+  const hasRawOutputTextDeltas = events.some(
+    (event) => event.type === "response.output_text.delta",
+  );
+  const rawOutputTextDoneIds = new Set(
+    events
+      .filter((event) => event.type === "response.output_text.done")
+      .map((event) => (typeof event.item_id === "string" ? event.item_id : null))
+      .filter((id): id is string => Boolean(id)),
+  );
+  const rawContentPartDoneIds = new Set(
+    events
+      .filter((event) => event.type === "response.content_part.done")
+      .map((event) => (typeof event.item_id === "string" ? event.item_id : null))
+      .filter((id): id is string => Boolean(id)),
+  );
+  const rawOutputItemDoneIds = new Set(
+    events
+      .filter((event) => event.type === "response.output_item.done")
+      .map((event) => {
+        const item = event.item as { id?: string } | undefined;
+        return (typeof event.item_id === "string" ? event.item_id : item?.id) ?? null;
+      })
+      .filter((id): id is string => Boolean(id)),
+  );
   let responseCreated = false;
-  return events.flatMap((event) => {
+  const normalized = events.flatMap((event) => {
     switch (event.type) {
       case "thread.item.added": {
         if ((event.item as { type?: string } | undefined)?.type !== "assistant_message") {
@@ -123,32 +174,43 @@ function normalizeChatKitEvents(
         }
         const itemId = (event.item as { id?: string } | undefined)?.id;
         const normalized: Array<Record<string, unknown>> = [];
-        if (defaultResponseId && !responseCreated) {
+        if (
+          defaultResponseId &&
+          !responseCreated &&
+          !rawResponseCreatedIds.has(defaultResponseId)
+        ) {
           responseCreated = true;
           normalized.push({
             type: "response.created",
             response_id: defaultResponseId,
           });
         }
-        normalized.push({
-          type: "response.output_item.added",
-          response_id: defaultResponseId,
-          item_id: itemId,
-        });
-        normalized.push({
-          type: "response.content_part.added",
-          response_id: defaultResponseId,
-          item_id: itemId,
-          text:
-            (
-              event.item as { content?: Array<{ text?: string }> } | undefined
-            )?.content?.[0]?.text ?? "",
-        });
+        if (defaultResponseId && itemId && !rawOutputItemAddedIds.has(itemId)) {
+          normalized.push({
+            type: "response.output_item.added",
+            response_id: defaultResponseId,
+            item_id: itemId,
+          });
+        }
+        if (defaultResponseId && itemId && !rawContentPartAddedIds.has(itemId)) {
+          normalized.push({
+            type: "response.content_part.added",
+            response_id: defaultResponseId,
+            item_id: itemId,
+            text:
+              (
+                event.item as { content?: Array<{ text?: string }> } | undefined
+              )?.content?.[0]?.text ?? "",
+          });
+        }
         return normalized;
       }
       case "thread.item.updated":
         switch ((event.update as { type?: string } | undefined)?.type) {
           case "assistant_message.content_part.text_delta":
+            if (hasRawOutputTextDeltas) {
+              return [];
+            }
             return [
               {
                 type: "response.output_text.delta",
@@ -159,7 +221,7 @@ function normalizeChatKitEvents(
             ];
           case "assistant_message.content_part.done":
             return [
-              {
+              !rawOutputTextDoneIds.has(String(event.item_id)) && {
                 type: "response.output_text.done",
                 response_id: defaultResponseId,
                 item_id: event.item_id,
@@ -170,7 +232,7 @@ function normalizeChatKitEvents(
                     } | undefined
                   )?.content?.text ?? "",
               },
-              {
+              !rawContentPartDoneIds.has(String(event.item_id)) && {
                 type: "response.content_part.done",
                 response_id: defaultResponseId,
                 item_id: event.item_id,
@@ -181,12 +243,15 @@ function normalizeChatKitEvents(
                     } | undefined
                   )?.content?.text ?? "",
               },
-            ];
+            ].filter(Boolean);
           default:
             return [];
         }
       case "thread.item.done":
         if ((event.item as { type?: string } | undefined)?.type !== "assistant_message") {
+          return [];
+        }
+        if (rawOutputItemDoneIds.has((event.item as { id?: string } | undefined)?.id ?? "")) {
           return [];
         }
         return [
@@ -274,6 +339,17 @@ function normalizeChatKitEvents(
         return [];
     }
   });
+  const deduped: Array<Record<string, unknown>> = [];
+  let previousKey: string | null = null;
+  normalized.forEach((event) => {
+    const key = JSON.stringify(event);
+    if (key === previousKey) {
+      return;
+    }
+    deduped.push(event);
+    previousKey = key;
+  });
+  return deduped;
 }
 
 function normalizeExpectedFixtureEvents(
@@ -1394,6 +1470,12 @@ describe("CodexConversationController", () => {
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          type: "response.created",
+          response: expect.objectContaining({
+            id: "turn-1",
+          }),
+        }),
+        expect.objectContaining({
           type: "thread.item.added",
           item: expect.objectContaining({
             type: "user_message",
@@ -1422,12 +1504,28 @@ describe("CodexConversationController", () => {
           }),
         }),
         expect.objectContaining({
+          type: "response.output_item.added",
+          response_id: "turn-1",
+          item: expect.objectContaining({
+            id: "msg-1",
+            type: "message",
+            role: "assistant",
+            status: "in_progress",
+          }),
+        }),
+        expect.objectContaining({
           type: "thread.item.added",
           item: expect.objectContaining({
             id: "msg-1",
             type: "assistant_message",
             status: "in_progress",
           }),
+        }),
+        expect.objectContaining({
+          type: "response.output_text.delta",
+          response_id: "turn-1",
+          item_id: "msg-1",
+          delta: 'print("Hello, world!")',
         }),
         expect.objectContaining({
           type: "thread.item.updated",
@@ -1447,6 +1545,16 @@ describe("CodexConversationController", () => {
           }),
         }),
         expect.objectContaining({
+          type: "response.output_item.done",
+          response_id: "turn-1",
+          item: expect.objectContaining({
+            id: "msg-1",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+          }),
+        }),
+        expect.objectContaining({
           type: "thread.item.done",
           item: expect.objectContaining({
             id: "msg-1",
@@ -1456,6 +1564,101 @@ describe("CodexConversationController", () => {
         }),
       ]),
     );
+  });
+
+  it("surfaces commentary-phase deltas before the final answer completes", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return { threadId: "thread-1", title: "Runme Repo" };
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "item/started",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  id: "msg-commentary-1",
+                  phase: "commentary",
+                  text: "",
+                  type: "agentMessage",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-commentary-1",
+                delta: "I’m searching the docs first.",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "msg-commentary-1",
+                  text: "I’m searching the docs first.",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "msg-final-1",
+                  text: "A runme runner executes notebook cells.",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: { id: "turn-1", status: "completed" },
+              },
+            });
+          });
+        });
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: any[] = [];
+    await controller.streamUserMessage("What is a runme runner", {
+      emit: (payload) => events.push(payload),
+    });
+
+    const commentaryDeltaIndex = events.findIndex(
+      (event) =>
+        event?.type === "response.output_text.delta" &&
+        event?.item_id === "msg-commentary-1" &&
+        event?.delta === "I’m searching the docs first.",
+    );
+    const finalItemDoneIndex = events.findIndex(
+      (event) =>
+        event?.type === "response.output_item.done" &&
+        event?.item?.id === "msg-final-1",
+    );
+
+    expect(commentaryDeltaIndex).toBeGreaterThanOrEqual(0);
+    expect(finalItemDoneIndex).toBeGreaterThan(commentaryDeltaIndex);
   });
 
   it("resets the completion timeout on inbound activity for the active turn", async () => {

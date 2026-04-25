@@ -121,6 +121,18 @@ export function createCodexChatKitAdapter(
       request: HarnessChatKitMessageRequest,
       sink: HarnessChatKitEventSink,
     ): Promise<void> {
+      if (request.createThread) {
+        controller.startNewChat();
+        const thread = await controller.ensureActiveThread(request.model);
+        sink.emit({
+          type: "thread.created",
+          thread: {
+            id: thread.id,
+            title: thread.title,
+            created_at: new Date().toISOString(),
+          },
+        });
+      }
       if (
         request.threadId &&
         controller.getSnapshot().currentThreadId !== request.threadId
@@ -167,13 +179,14 @@ export function buildCodexChatKitFetchOptions(): Parameters<
         if (request.type !== "threads.add_user_message") {
           return {};
         }
-        const activeThread = await getCodexConversationController().ensureActiveThread(
-          request.model,
-        );
+        const controller = getCodexConversationController();
+        const snapshot = controller.getSnapshot();
         return {
           requestType: request.requestTypeLabel,
           inputText: request.input,
-          threadId: request.threadId ?? activeThread.id,
+          threadId:
+            request.threadId ??
+            (!request.createThread ? snapshot.currentThreadId ?? null : null),
           previousResponseId: null,
         };
       },
