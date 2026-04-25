@@ -23,7 +23,10 @@ import {
 } from '../../lib/runtime/codexChatKitAdapter'
 import { createCodeModeExecutor } from '../../lib/runtime/codeModeExecutor'
 import { createChatKitFetchFromAdapter } from '../../lib/runtime/createChatKitFetchFromAdapter'
-import { useCodexConversationSnapshot } from '../../lib/runtime/codexConversationController'
+import {
+  getCodexConversationController,
+  useCodexConversationSnapshot,
+} from '../../lib/runtime/codexConversationController'
 import type {
   HarnessChatKitAdapter,
   HarnessRuntime,
@@ -675,11 +678,18 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       })
     },
     onThreadChange: ({ threadId }) => {
+      const liveCodexSnapshot =
+        defaultHarness.adapter === 'codex' ||
+        defaultHarness.adapter === 'codex-wasm'
+          ? getCodexConversationController().getSnapshot()
+          : null
+      const liveCodexCurrentThreadId = liveCodexSnapshot?.currentThreadId ?? null
+      const liveCodexCurrentTurnId = liveCodexSnapshot?.currentTurnId ?? null
       if (
         threadId == null &&
         (defaultHarness.adapter === 'codex' ||
           defaultHarness.adapter === 'codex-wasm') &&
-        codexConversation.currentThreadId
+        liveCodexCurrentThreadId
       ) {
         appLogger.info(
           'Ignoring null ChatKit thread change while Codex thread is active',
@@ -688,8 +698,8 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
               scope: 'chatkit.panel',
               adapter: defaultHarness.adapter,
               threadId: null,
-              codexCurrentThreadId: codexConversation.currentThreadId,
-              codexCurrentTurnId: codexConversation.currentTurnId,
+              codexCurrentThreadId: liveCodexCurrentThreadId,
+              codexCurrentTurnId: liveCodexCurrentTurnId,
             },
           }
         )
@@ -703,12 +713,12 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           codexCurrentThreadId:
             defaultHarness.adapter === 'codex' ||
             defaultHarness.adapter === 'codex-wasm'
-              ? codexConversation.currentThreadId
+              ? liveCodexCurrentThreadId
               : null,
           codexCurrentTurnId:
             defaultHarness.adapter === 'codex' ||
             defaultHarness.adapter === 'codex-wasm'
-              ? codexConversation.currentTurnId
+              ? liveCodexCurrentTurnId
               : null,
         },
       })

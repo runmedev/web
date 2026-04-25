@@ -814,4 +814,39 @@ describe("ChatKitPanel codex harness routing", () => {
       }),
     );
   });
+
+  it("ignores null chatkit thread changes when the controller thread advances before rerender", async () => {
+    harnessState.defaultHarness.adapter = "codex";
+    codexConversationState.currentThreadId = null;
+    codexConversationState.currentTurnId = null;
+
+    render(<ChatKitPanel />);
+    await waitFor(() => expect(proxyMock.connectProxy).toHaveBeenCalled());
+
+    const config = getLatestChatKitConfig();
+
+    codexConversationState = {
+      ...codexConversationState,
+      currentThreadId: "thread-race",
+      currentTurnId: "turn-race",
+    };
+
+    act(() => {
+      config.onThreadChange({ threadId: null });
+    });
+
+    expect(codexControllerMock.startNewChat).not.toHaveBeenCalled();
+    expect(appLoggerMock.info).toHaveBeenCalledWith(
+      "Ignoring null ChatKit thread change while Codex thread is active",
+      expect.objectContaining({
+        attrs: expect.objectContaining({
+          scope: "chatkit.panel",
+          adapter: "codex",
+          threadId: null,
+          codexCurrentThreadId: "thread-race",
+          codexCurrentTurnId: "turn-race",
+        }),
+      }),
+    );
+  });
 });
