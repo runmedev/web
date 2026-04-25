@@ -42,6 +42,7 @@ packages/react-console/gen
 /app/assets/generated
 /app/test/browser/.generated/
 /app/test/evals/.generated/
+/app/test/evals/eval-output/*
 /app/test/browser/test-output/*
 
 # Local checkout symlink

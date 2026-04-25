@@ -1,5 +1,10 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { createWriteStream, mkdirSync, readFileSync } from "node:fs";
+import {
+  createWriteStream,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,24 +13,51 @@ type EvalAssertion = {
   message: string;
 };
 
-type EvalResultSummary = {
-  name: string;
-  status: "PASS" | "FAIL";
-  assertions: EvalAssertion[];
+type EvalRequestLogEntry = {
+  method: string;
+  timestamp?: string;
+  params?: unknown;
 };
 
 type RunmeEvalResult = {
+  harness: {
+    name: string;
+    adapter: string;
+    baseUrl: string;
+  };
+  prompt: string;
+  threadId: string | null;
   assistantText: string;
-  requestLog: Array<{ method: string }>;
+  requestLog: EvalRequestLogEntry[];
+  notifications: unknown[];
   wasmJournal: unknown[];
-  notebook: {
-    uri: string;
-    cells: Array<{ value: string }>;
-  } | null;
+  notebook:
+    | {
+        uri: string;
+        name: string;
+        cells: Array<{
+          refId: string;
+          languageId: string;
+          value: string;
+        }>;
+      }
+    | null;
+  opfs: Array<{
+    path: string;
+    kind: "file" | "directory";
+    size?: number;
+  }>;
   metrics: {
     ttfmMs: number | null;
     turnTimeMs: number;
   };
+};
+
+type EvalResultSummary = {
+  name: string;
+  status: "PASS" | "FAIL";
+  assertions: EvalAssertion[];
+  result: RunmeEvalResult;
 };
 
 type ServiceHandle = {
@@ -34,17 +66,34 @@ type ServiceHandle = {
   logStream: ReturnType<typeof createWriteStream>;
 };
 
+type EvalArtifactManifestEntry = {
+  index: number;
+  name: string;
+  status: "PASS" | "FAIL";
+  file: string;
+  harness: string;
+  ttfmMs: number | null;
+  turnTimeMs: number;
+};
+
 const CURRENT_FILE = fileURLToPath(import.meta.url);
 const GENERATED_DIR = resolve(CURRENT_FILE, "..");
-const TEST_DIR = GENERATED_DIR.endsWith("/.generated") || GENERATED_DIR.endsWith("\\.generated")
-  ? resolve(GENERATED_DIR, "..")
-  : GENERATED_DIR;
+const TEST_DIR =
+  GENERATED_DIR.endsWith("/.generated") ||
+  GENERATED_DIR.endsWith("\\.generated")
+    ? resolve(GENERATED_DIR, "..")
+    : GENERATED_DIR;
 const APP_ROOT = resolve(TEST_DIR, "..", "..");
 const REPO_ROOT = resolve(APP_ROOT, "..");
-const OUTPUT_DIR = join(TEST_DIR, "eval-output");
-const FRONTEND_URL = process.env.RUNME_EVAL_FRONTEND_URL ?? "http://localhost:5174";
-const EVAL_BACKEND = (process.env.RUNME_EVAL_BACKEND ?? "fake").trim().toLowerCase();
-const FAKE_AI_BASE_URL = process.env.RUNME_EVAL_FAKE_AI_BASE_URL ?? "http://127.0.0.1:19989";
+const OUTPUT_ROOT =
+  process.env.RUNME_EVAL_OUTPUT_DIR ?? join(TEST_DIR, "eval-output");
+const FRONTEND_URL =
+  process.env.RUNME_EVAL_FRONTEND_URL ?? "http://localhost:5174";
+const EVAL_BACKEND = (process.env.RUNME_EVAL_BACKEND ?? "fake")
+  .trim()
+  .toLowerCase();
+const FAKE_AI_BASE_URL =
+  process.env.RUNME_EVAL_FAKE_AI_BASE_URL ?? "http://127.0.0.1:19989";
 const FAKE_AI_HEALTH_URL = `${FAKE_AI_BASE_URL}/healthz`;
 const FAKE_AI_RESET_URL = `${FAKE_AI_BASE_URL}/reset`;
 const FRONTEND_PORT = new URL(FRONTEND_URL).port || "5174";
@@ -70,19 +119,44 @@ const AGENT_BROWSER_PROFILE = process.env.AGENT_BROWSER_PROFILE?.trim() ?? "";
 const AGENT_BROWSER_HEADED = (process.env.AGENT_BROWSER_HEADED ?? "false")
   .trim()
   .toLowerCase() === "true";
+const RUN_ID =
+  process.env.RUNME_EVAL_RUN_ID?.trim() ||
+  new Date().toISOString().replace(/[:.]/g, "-");
+const RUN_OUTPUT_DIR = join(OUTPUT_ROOT, RUN_ID);
 
-mkdirSync(OUTPUT_DIR, { recursive: true });
+mkdirSync(RUN_OUTPUT_DIR, { recursive: true });
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
+function slugify(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "eval"
+  );
+}
+
+function writeJsonFile(path: string, data: unknown): void {
+  writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
+}
+
 function isLiveBackend(): boolean {
-  return EVAL_BACKEND === "live" || EVAL_BACKEND === "openai" || EVAL_BACKEND === "real";
+  return (
+    EVAL_BACKEND === "live" ||
+    EVAL_BACKEND === "openai" ||
+    EVAL_BACKEND === "real"
+  );
 }
 
 function resolveOpenAIApiKey(): string {
-  const direct = process.env.RUNME_EVAL_OPENAI_API_KEY?.trim() ?? process.env.OPENAI_API_KEY?.trim() ?? "";
+  const direct =
+    process.env.RUNME_EVAL_OPENAI_API_KEY?.trim() ??
+    process.env.OPENAI_API_KEY?.trim() ??
+    "";
   if (direct) {
     return direct;
   }
@@ -113,11 +187,10 @@ function withAgentBrowserOptions(command: string): string {
   return `${leadingWhitespace}${["agent-browser", ...args].join(" ")} ${subcommand}`;
 }
 
-function run(command: string, timeoutMs = 30000): {
-  status: number;
-  stdout: string;
-  stderr: string;
-} {
+function run(
+  command: string,
+  timeoutMs = 30000,
+): { status: number; stdout: string; stderr: string } {
   const effectiveCommand = withAgentBrowserOptions(command);
   const result = spawnSync(effectiveCommand, {
     shell: true,
@@ -156,19 +229,26 @@ function isHttpReady(url: string): boolean {
   return run(`curl -sf ${shellQuote(url)}`, 5000).status === 0;
 }
 
-async function waitForHttpReady(url: string, timeoutMs = 45000): Promise<void> {
+async function waitForHttpReady(
+  url: string,
+  timeoutMs = 45000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (isHttpReady(url)) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolveTimer) => setTimeout(resolveTimer, 500));
   }
   throw new Error(`Timed out waiting for ${url}`);
 }
 
-function startService(name: string, command: string, cwd: string): ServiceHandle {
-  const logPath = join(OUTPUT_DIR, `${name}.log`);
+function startService(
+  name: string,
+  command: string,
+  cwd: string,
+): ServiceHandle {
+  const logPath = join(RUN_OUTPUT_DIR, `${name}.log`);
   const logStream = createWriteStream(logPath, { flags: "a" });
   const child = spawn(command, {
     cwd,
@@ -284,7 +364,7 @@ function configureResponsesDirect(options?: {
   );
 }
 
-function runBrowserEval(options: object): RunmeEvalResult {
+function runBrowserEval(options: Record<string, unknown>): RunmeEvalResult {
   return evaluateJson<RunmeEvalResult>(
     `JSON.stringify(await window.__runmeEval.run(${JSON.stringify(options)}))`,
     90000,
@@ -293,6 +373,36 @@ function runBrowserEval(options: object): RunmeEvalResult {
 
 function assert(ok: boolean, message: string): EvalAssertion {
   return { ok, message };
+}
+
+function writeEvalArtifact(
+  index: number,
+  summary: EvalResultSummary,
+): EvalArtifactManifestEntry {
+  const filename = `${String(index + 1).padStart(2, "0")}-${slugify(summary.name)}.json`;
+  writeJsonFile(join(RUN_OUTPUT_DIR, filename), {
+    schemaVersion: 1,
+    runId: RUN_ID,
+    createdAt: new Date().toISOString(),
+    backend: EVAL_BACKEND,
+    frontendUrl: FRONTEND_URL,
+    eval: {
+      index,
+      name: summary.name,
+      status: summary.status,
+      assertions: summary.assertions,
+    },
+    result: summary.result,
+  });
+  return {
+    index,
+    name: summary.name,
+    status: summary.status,
+    file: filename,
+    harness: summary.result.harness.adapter,
+    ttfmMs: summary.result.metrics.ttfmMs,
+    turnTimeMs: summary.result.metrics.turnTimeMs,
+  };
 }
 
 async function runCodexProxyHelloWorldEval(): Promise<EvalResultSummary> {
@@ -319,7 +429,9 @@ async function runCodexProxyHelloWorldEval(): Promise<EvalResultSummary> {
     ),
     assert(
       Boolean(
-        result.notebook?.cells.some((cell) => cell.value.includes(`print("hello world")`)),
+        result.notebook?.cells.some((cell) =>
+          cell.value.includes(`print("hello world")`),
+        ),
       ),
       "notebook snapshot contains the hello world cell",
     ),
@@ -330,6 +442,7 @@ async function runCodexProxyHelloWorldEval(): Promise<EvalResultSummary> {
     name: "codex proxy adds hello world cell",
     status: assertions.every((item) => item.ok) ? "PASS" : "FAIL",
     assertions,
+    result,
   };
 }
 
@@ -369,7 +482,9 @@ async function runResponsesDirectHelloWorldEval(): Promise<EvalResultSummary> {
     ),
     assert(
       Boolean(
-        result.notebook?.cells.some((cell) => cell.value.includes(`print("hello world")`)),
+        result.notebook?.cells.some((cell) =>
+          cell.value.includes(`print("hello world")`),
+        ),
       ),
       "notebook snapshot contains the hello world cell",
     ),
@@ -380,6 +495,7 @@ async function runResponsesDirectHelloWorldEval(): Promise<EvalResultSummary> {
     name: `${isLiveBackend() ? "responses-direct live" : "responses-direct"} adds hello world cell`,
     status: assertions.every((item) => item.ok) ? "PASS" : "FAIL",
     assertions,
+    result,
   };
 }
 
@@ -408,10 +524,7 @@ async function runCodexWasmHelloWorldEval(): Promise<EvalResultSummary> {
     wasmApiKey: apiKey,
   });
   const assertions = [
-    assert(
-      result.assistantText.length > 0,
-      "assistant text was emitted",
-    ),
+    assert(result.assistantText.length > 0, "assistant text was emitted"),
     assert(
       Boolean(
         result.notebook?.cells.some((cell) => cell.value.includes(`hello world`)),
@@ -426,6 +539,7 @@ async function runCodexWasmHelloWorldEval(): Promise<EvalResultSummary> {
     name: "codex-wasm live adds hello world cell",
     status: assertions.every((item) => item.ok) ? "PASS" : "FAIL",
     assertions,
+    result,
   };
 }
 
@@ -448,15 +562,32 @@ async function main(): Promise<void> {
         ];
 
     let failed = 0;
+    const manifestEntries = results.map((result, index) =>
+      writeEvalArtifact(index, result),
+    );
+    writeJsonFile(join(RUN_OUTPUT_DIR, "summary.json"), {
+      schemaVersion: 1,
+      runId: RUN_ID,
+      createdAt: new Date().toISOString(),
+      backend: EVAL_BACKEND,
+      frontendUrl: FRONTEND_URL,
+      outputDir: RUN_OUTPUT_DIR,
+      evals: manifestEntries,
+    });
+
     for (const result of results) {
       console.log(`${result.status} ${result.name}`);
       for (const assertion of result.assertions) {
         console.log(`  ${assertion.ok ? "PASS" : "FAIL"} ${assertion.message}`);
       }
+      console.log(
+        `  metrics ttfmMs=${result.result.metrics.ttfmMs ?? "null"} turnTimeMs=${result.result.metrics.turnTimeMs}`,
+      );
       if (result.status === "FAIL") {
         failed += 1;
       }
     }
+    console.log(`Artifacts written to ${RUN_OUTPUT_DIR}`);
 
     if (failed > 0) {
       process.exitCode = 1;
