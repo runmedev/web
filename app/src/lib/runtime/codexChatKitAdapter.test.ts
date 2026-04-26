@@ -67,11 +67,6 @@ const controller = {
         content: [{ type: "output_text", text: "hello" }],
       },
     ]),
-  ensureActiveThread: vi.fn(async () => ({
-    id: "thread-1",
-    title: "One",
-    items: [],
-  })),
   streamUserMessage: vi.fn(defaultStreamUserMessage),
   interruptActiveTurn: vi.fn(),
 };
@@ -140,7 +135,6 @@ describe("createCodexChatkitFetch", () => {
     controller.getSnapshot.mockClear();
     controller.getThread.mockClear();
     controller.listItems.mockClear();
-    controller.ensureActiveThread.mockClear();
     controller.streamUserMessage = vi.fn(defaultStreamUserMessage);
     controller.interruptActiveTurn.mockClear();
   });

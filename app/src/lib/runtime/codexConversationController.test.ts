@@ -411,8 +411,8 @@ describe("CodexConversationController", () => {
     ]);
   });
 
-  it("ensures an active thread by creating one when no current thread exists", async () => {
-    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+  it("creates a thread lazily on first send when no current thread exists", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string, params?: unknown) => {
       if (method === "thread/start") {
         return {
           thread: {
@@ -422,11 +422,46 @@ describe("CodexConversationController", () => {
           },
         };
       }
+      if (method === "turn/start") {
+        expect(params).toEqual(
+          expect.objectContaining({
+            threadId: "thread-bootstrap",
+          }),
+        );
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-bootstrap",
+                turnId: "turn-bootstrap",
+              },
+            });
+          });
+        });
+        return { turnId: "turn-bootstrap" };
+      }
+      if (method === "thread/read") {
+        expect(params).toEqual({
+          threadId: "thread-bootstrap",
+          includeTurns: true,
+        });
+        return {
+          thread: {
+            id: "thread-bootstrap",
+            title: "Bootstrap Thread",
+            cwd: "/workspace",
+            items: [],
+          },
+        };
+      }
       throw new Error(`unexpected method ${method}`);
     });
 
     const controller = createCodexConversationControllerForTests();
-    const thread = await controller.ensureActiveThread();
+    const events: unknown[] = [];
+    await controller.streamUserMessage("hello", { emit: (payload) => events.push(payload) });
 
     expect(proxyClient.sendRequest).toHaveBeenCalledWith(
       "thread/start",
@@ -440,19 +475,23 @@ describe("CodexConversationController", () => {
         developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
       }),
     );
-    expect(thread).toEqual(
-      expect.objectContaining({
-        id: "thread-bootstrap",
-        title: "Bootstrap Thread",
-        cwd: "/workspace",
-      }),
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "thread.created",
+          thread: expect.objectContaining({
+            id: "thread-bootstrap",
+            title: "Bootstrap Thread",
+          }),
+        }),
+      ]),
     );
     expect(controller.getSnapshot().currentThreadId).toBe("thread-bootstrap");
   });
 
-  it("omits project cwd when creating a thread in wasm mode", async () => {
+  it("omits project cwd when lazily creating a thread in wasm mode", async () => {
     proxyClient.getTransport.mockReturnValue("wasm");
-    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+    proxyClient.sendRequest.mockImplementation(async (method: string, params?: unknown) => {
       if (method === "thread/start") {
         return {
           thread: {
@@ -461,11 +500,45 @@ describe("CodexConversationController", () => {
           },
         };
       }
+      if (method === "turn/start") {
+        expect(params).toEqual(
+          expect.objectContaining({
+            threadId: "thread-bootstrap",
+          }),
+        );
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-bootstrap",
+                turnId: "turn-bootstrap",
+              },
+            });
+          });
+        });
+        return { turnId: "turn-bootstrap" };
+      }
+      if (method === "thread/read") {
+        expect(params).toEqual({
+          threadId: "thread-bootstrap",
+          includeTurns: true,
+        });
+        return {
+          thread: {
+            id: "thread-bootstrap",
+            title: "Bootstrap Thread",
+            items: [],
+          },
+        };
+      }
       throw new Error(`unexpected method ${method}`);
     });
 
     const controller = createCodexConversationControllerForTests();
-    const thread = await controller.ensureActiveThread();
+    const events: unknown[] = [];
+    await controller.streamUserMessage("hello", { emit: (payload) => events.push(payload) });
 
     expect(proxyClient.sendRequest).toHaveBeenCalledWith(
       "thread/start",
@@ -484,12 +557,16 @@ describe("CodexConversationController", () => {
         developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
       }),
     );
-    expect(thread).toEqual(
-      expect.objectContaining({
-        id: "thread-bootstrap",
-        title: "Bootstrap Thread",
-        cwd: "/workspace",
-      }),
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "thread.created",
+          thread: expect.objectContaining({
+            id: "thread-bootstrap",
+            title: "Bootstrap Thread",
+          }),
+        }),
+      ]),
     );
   });
 
@@ -551,18 +628,8 @@ describe("CodexConversationController", () => {
     );
   });
 
-  it("does not treat previousResponseId as an active turn id when creating/selecting threads", async () => {
+  it("does not treat previousResponseId as an active turn id when selecting threads", async () => {
     proxyClient.sendRequest.mockImplementation(async (method: string, params?: unknown) => {
-      if (method === "thread/start") {
-        return {
-          thread: {
-            id: "thread-bootstrap",
-            title: "Bootstrap Thread",
-            cwd: "/workspace",
-            previous_response_id: "resp-old",
-          },
-        };
-      }
       if (method === "thread/read") {
         expect(params).toEqual({ threadId: "thread-1", includeTurns: true });
         return {
@@ -582,9 +649,6 @@ describe("CodexConversationController", () => {
     });
 
     const controller = createCodexConversationControllerForTests();
-    await controller.ensureActiveThread();
-    expect(controller.getSnapshot().currentTurnId).toBeNull();
-
     await controller.selectThread("thread-1");
     expect(controller.getSnapshot().currentTurnId).toBeNull();
 
@@ -807,6 +871,191 @@ describe("CodexConversationController", () => {
     ).toHaveLength(2);
     expect(controller.getSnapshot().currentThreadId).toBe("thread-1");
     expect(controller.getSnapshot().currentTurnId).toBeNull();
+  });
+
+  it("maps msg-wrapped turn output notifications into visible assistant text", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return { threadId: "thread-1", title: "Runme Repo" };
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "turn.message.started",
+              params: {
+                msg: {
+                  threadId: "thread-1",
+                  turnId: "turn-1",
+                  responseId: "resp-1",
+                  itemId: "msg-1",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn.output_text.delta",
+              params: {
+                msg: {
+                  threadId: "thread-1",
+                  turnId: "turn-1",
+                  responseId: "resp-1",
+                  itemId: "msg-1",
+                  delta: "hello ",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn.output_text.done",
+              params: {
+                msg: {
+                  threadId: "thread-1",
+                  turnId: "turn-1",
+                  responseId: "resp-1",
+                  itemId: "msg-1",
+                  text: "hello world",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                msg: {
+                  threadId: "thread-1",
+                  turnId: "turn-1",
+                },
+              },
+            });
+          });
+        });
+        return { turnId: "turn-1" };
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: any[] = [];
+    await controller.streamUserMessage("hello", {
+      emit: (payload) => events.push(payload),
+    });
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "thread.item.updated",
+          item_id: "msg-1",
+          update: expect.objectContaining({
+            type: "assistant_message.content_part.text_delta",
+            delta: "hello ",
+          }),
+        }),
+        expect.objectContaining({
+          type: "thread.item.done",
+          item: expect.objectContaining({
+            id: "msg-1",
+            type: "assistant_message",
+            content: [expect.objectContaining({ text: "hello world" })],
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("ignores rollout token-usage turn ids before assistant item notifications arrive", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return { threadId: "thread-1", title: "Runme Repo" };
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "thread/tokenUsage/updated",
+              params: {
+                threadId: "thread-1",
+                turnId: "rollout-1",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/started",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+                delta: "hello ",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "msg-1",
+                  text: "hello world",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+              },
+            });
+          });
+        });
+        return {};
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: any[] = [];
+    const nextState = await controller.streamUserMessage("hello", {
+      emit: (payload) => events.push(payload),
+    });
+
+    expect(nextState).toEqual({
+      threadId: "thread-1",
+      previousResponseId: "turn-1",
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "thread.item.updated",
+          item_id: "msg-1",
+          update: expect.objectContaining({
+            type: "assistant_message.content_part.text_delta",
+            delta: "hello ",
+          }),
+        }),
+        expect.objectContaining({
+          type: "thread.item.done",
+          item: expect.objectContaining({
+            id: "msg-1",
+            type: "assistant_message",
+            content: [expect.objectContaining({ text: "hello world" })],
+          }),
+        }),
+      ]),
+    );
   });
 
   it("ignores a stale ChatKit thread id when the controller already has a current thread", async () => {

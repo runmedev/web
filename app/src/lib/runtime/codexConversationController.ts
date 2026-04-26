@@ -62,25 +62,41 @@ type CodexStreamSink = {
 
 const CODEX_TURN_INACTIVITY_TIMEOUT_MS = 120_000;
 
+function summarizeCodexText(value: unknown): string {
+  return extractText(value).slice(0, 160);
+}
+
 function emitLoggedChatkitEvent(sink: CodexStreamSink, payload: ChatKitStreamEvent): void {
   const payloadRecord = asRecord(payload);
   const responseRecord = asRecord(payloadRecord.response);
   const itemRecord = asRecord(payloadRecord.item);
+  const payloadType = asString(payloadRecord.type) ?? null;
+  const responseId =
+    asString(payloadRecord.response_id) ??
+    asString(responseRecord.id) ??
+    null;
+  const itemId =
+    asString(payloadRecord.item_id) ??
+    asString(itemRecord.id) ??
+    null;
   logCodexEvent("Codex adapter emitted ChatKit event", {
     scope: "chatkit.codex_adapter",
     direction: "derived",
     transport: "chatkit_fetch",
     payload,
-    payloadType: asString(payloadRecord.type) ?? null,
-    responseId:
-      asString(payloadRecord.response_id) ??
-      asString(responseRecord.id) ??
-      null,
-    itemId:
-      asString(payloadRecord.item_id) ??
-      asString(itemRecord.id) ??
-      null,
+    payloadType,
+    responseId,
+    itemId,
   });
+  console.log(
+    "[chatkit] codex event",
+    JSON.stringify({
+      type: payloadType,
+      responseId,
+      itemId,
+      preview: summarizeCodexText(payload),
+    }),
+  );
   sink.emit(payload);
 }
 
@@ -475,6 +491,18 @@ type MappedAssistantEvent =
   | { kind: "done"; responseId: string; itemId: string; text?: string }
   | { kind: "completed" };
 
+function shouldAdoptNotificationTurnId(method: string): boolean {
+  return (
+    method === "turn/started" ||
+    method === "turn.message.started" ||
+    method === "turn.output_text.delta" ||
+    method === "turn.output_text.done" ||
+    method === "turn.completed" ||
+    method === "turn/completed" ||
+    method.startsWith("item/")
+  );
+}
+
 function isAssistantMessageType(value: unknown): boolean {
   return value === "agentMessage" || value === "AgentMessage";
 }
@@ -690,14 +718,23 @@ class CodexConversationController implements ConversationController {
     this.notify();
   }
 
-  async ensureActiveThread(modelOverride?: string): Promise<CodexConversationThread> {
+  private async ensureThreadForSend(modelOverride?: string): Promise<{
+    created: boolean;
+    thread: CodexConversationThread;
+  }> {
     const currentThreadId = this.currentThreadId;
     if (currentThreadId) {
       const existing = this.threads.get(currentThreadId);
       if (existing) {
-        return existing;
+        return {
+          created: false,
+          thread: existing,
+        };
       }
-      return this.getThread(currentThreadId);
+      return {
+        created: false,
+        thread: await this.getThread(currentThreadId),
+      };
     }
 
     const proxy = getCodexAppServerClient();
@@ -748,7 +785,10 @@ class CodexConversationController implements ConversationController {
     // No active turn exists until turn/start (or turn/started) provides a real turn id.
     this.currentTurnId = null;
     this.notify();
-    return this.threads.get(threadId)!;
+    return {
+      created: true,
+      thread: this.threads.get(threadId)!,
+    };
   }
 
   async interruptActiveTurn(): Promise<void> {
@@ -771,10 +811,23 @@ class CodexConversationController implements ConversationController {
     const proxy = getCodexAppServerClient();
     const project = this.getSnapshot().selectedProject;
     const effectiveModel = asString(modelOverride) ?? project.model;
-    const activeThread = await this.ensureActiveThread(effectiveModel);
+    const { created, thread: activeThread } = await this.ensureThreadForSend(
+      effectiveModel,
+    );
     let threadId = this.currentThreadId ?? activeThread.id;
     if (!threadId) {
       throw new Error("No active Codex thread available before turn/start");
+    }
+
+    if (created) {
+      emitLoggedChatkitEvent(sink, {
+        type: "thread.created",
+        thread: {
+          id: activeThread.id,
+          title: activeThread.title,
+          created_at: activeThread.updatedAt ?? new Date().toISOString(),
+        },
+      });
     }
 
     if (this.resumeRequired.has(threadId)) {
@@ -865,7 +918,11 @@ class CodexConversationController implements ConversationController {
           asString(payload.threadId) ?? asString(payload.thread_id);
         const notificationTurnId =
           asString(payload.turnId) ?? asString(payload.turn_id);
-        if (!turnIdForNotifications && notificationTurnId) {
+        if (
+          !turnIdForNotifications &&
+          notificationTurnId &&
+          shouldAdoptNotificationTurnId(notification.method)
+        ) {
           turnIdForNotifications = notificationTurnId;
           this.currentTurnId = notificationTurnId;
         }
@@ -884,6 +941,26 @@ class CodexConversationController implements ConversationController {
           jsonrpcMethod: notification.method,
           payload: notification,
         });
+        console.log(
+          "[chatkit] codex notification",
+          JSON.stringify({
+            method: notification.method,
+            threadId: notificationThreadId ?? null,
+            turnId: notificationTurnId ?? null,
+            responseId:
+              asString(payload.responseId) ??
+              asString(payload.response_id) ??
+              null,
+            itemId:
+              asString(payload.itemId) ??
+              asString(payload.item_id) ??
+              null,
+            payloadType: asString(payload.type) ?? null,
+            itemType: asString(asRecord(payload.item).type) ?? null,
+            itemTextPreview: summarizeCodexText(asRecord(payload.item)),
+            preview: summarizeCodexText(payload),
+          }),
+        );
         const mapped = this.mapNotificationToAssistantEvent(
           notification,
           threadId!,
@@ -1467,11 +1544,23 @@ class CodexConversationController implements ConversationController {
       case "turn.message.started":
         return { kind: "message_started", responseId, itemId };
       case "turn.output_text.delta": {
-        const delta = asString(params.delta) ?? extractText(params);
+        const fallbackDelta =
+          extractText(payload) || extractText(message) || extractText(params);
+        const delta =
+          asString(payload.delta) ??
+          asString(message.delta) ??
+          asString(params.delta) ??
+          fallbackDelta;
         return delta ? { kind: "delta", responseId, itemId, text: delta } : null;
       }
       case "turn.output_text.done": {
-        const text = asString(params.text) ?? extractText(params);
+        const fallbackText =
+          extractText(payload) || extractText(message) || extractText(params);
+        const text =
+          asString(payload.text) ??
+          asString(message.text) ??
+          asString(params.text) ??
+          fallbackText;
         return { kind: "done", responseId, itemId, text };
       }
       case "turn.completed":

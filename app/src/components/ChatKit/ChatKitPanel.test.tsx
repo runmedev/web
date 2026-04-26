@@ -73,16 +73,6 @@ const codexControllerMock = {
     codexConversationState.currentThreadId = null;
     codexConversationState.currentTurnId = null;
   }),
-  ensureActiveThread: vi.fn(async () => {
-    codexConversationState.currentThreadId = "thread-bootstrap";
-    codexConversationState.currentTurnId = null;
-    return {
-      id: "thread-bootstrap",
-      title: "Bootstrap Thread",
-      previousResponseId: "",
-      items: [],
-    };
-  }),
   setSelectedModel: vi.fn(),
   streamUserMessage: vi.fn(async (_input: string, sink: { emit: (payload: unknown) => void }) => {
     sink.emit({ type: "response.created", response: { id: "resp-1" } });
@@ -273,7 +263,6 @@ describe("ChatKitPanel codex harness routing", () => {
     codexControllerMock.setSelectedProject.mockClear();
     codexControllerMock.refreshHistory.mockClear();
     codexControllerMock.newChat.mockClear();
-    codexControllerMock.ensureActiveThread.mockClear();
     codexControllerMock.setSelectedModel.mockClear();
     codexControllerMock.getSnapshot.mockClear();
     codexControllerMock.getThread.mockClear();

@@ -3,6 +3,7 @@ import {
   type CodexConversationItem,
 } from "./codexConversationController";
 import { appLogger } from "../logging/runtime";
+import type { ConversationController } from "./conversationController";
 import type {
   ChatKitThreadDetail,
   ChatKitThreadSummary,
@@ -69,7 +70,7 @@ function createCodexStreamId(): string {
 }
 
 export function createCodexChatKitAdapter(
-  controller: ReturnType<typeof getCodexConversationController> = getCodexConversationController(),
+  controller: ConversationController = getCodexConversationController(),
 ): HarnessChatKitAdapter {
   return {
     async listThreads(): Promise<ChatKitThreadSummary[]> {
@@ -137,15 +138,6 @@ export function createCodexChatKitAdapter(
     ): Promise<void> {
       if (request.createThread) {
         controller.newChat();
-        const thread = await controller.ensureActiveThread(request.model);
-        sink.emit({
-          type: "thread.created",
-          thread: {
-            id: thread.id,
-            title: thread.title,
-            created_at: new Date().toISOString(),
-          },
-        });
       }
       if (
         request.threadId &&
