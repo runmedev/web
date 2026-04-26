@@ -9,7 +9,7 @@ Issues:
 
 Builds on:
 
-- `docs-dev/design/20260408a_refactor_notebooks.md`
+- `docs-dev/design/20260409_refactor_notebooks.md`
 - PR #168, which removed the old `NotebookStore` routing path, made
   `LocalNotebooks` the app-facing notebook store, and removed the unused
   contents-service storage path.
@@ -486,7 +486,7 @@ old blob revision forever.
 
 1. Land the Issue 165 defensive overwrite fix.
 2. Done: implement the Issue 157 local-mirror consolidation described in
-   `20260408a_refactor_notebooks.md`.
+   `20260409_refactor_notebooks.md`.
 3. Add optional `UpstreamVersion` metadata to local mirror records.
 4. Adapt Drive metadata into `UpstreamVersion`.
 5. Generalize structured appLogger events for uploads, downloads, conflicts,

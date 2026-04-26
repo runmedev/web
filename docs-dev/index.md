@@ -14,6 +14,6 @@ This directory organizes implementation-facing documentation.
 ## Current Docs
 
 - CUJ: `docs-dev/CUJs/copy-current-notebook-to-drive.md`
-- Drive design: `docs-dev/design/drive.md`
+- Drive design: `docs-dev/design/20260224_drive.md`
 - Configuration architecture: `docs-dev/architecture/configuration.md`
 - Drive testing strategy: `testing.md`

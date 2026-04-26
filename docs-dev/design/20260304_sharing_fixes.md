@@ -248,7 +248,7 @@ Those are commands, not inferred side effects.
 
 ## 3b) Coordinator should depend on the Drive library, not `gapi`
 
-To stay consistent with [docs-dev/design/drive.md](/Users/jlewi/git_runmeweb/docs-dev/design/drive.md),
+To stay consistent with [docs-dev/design/20260224_drive.md](/Users/jlewi/git_runmeweb/docs-dev/design/20260224_drive.md),
 the coordinator should not call Google-specific browser APIs directly.
 
 In particular, it should not:
@@ -281,7 +281,7 @@ The key constraint is:
 - the Drive library performs Drive operations
 
 This keeps the coordinator testable and aligned with the planned Drive client
-abstraction in `drive.md`.
+abstraction in `20260224_drive.md`.
 
 ## 4) Treat `?doc=` as one-shot share input, not current-doc state
 
@@ -595,7 +595,7 @@ navigation:
 - coordinator calls `openNotebook(localUri)` / `setCurrentDoc(localUri)`
 - `NotebookContext` and `Actions` react through their existing current-doc flow
 
-This is more consistent with `docs-dev/design/saveas.md`, which already prefers
+This is more consistent with `docs-dev/design/20260224_saveas.md`, which already prefers
 an explicit notebook-opening API over an evented implicit flow.
 
 ## Alternatives Considered
@@ -667,7 +667,7 @@ Rejected.
 Why:
 
 - it would bypass the storage/Drive abstraction direction already documented in
-  `drive.md`
+  `20260224_drive.md`
 - it would make E2E testing depend on live Google behavior
 - it would make fake-server injection much harder
 - it would duplicate logic already belonging in the Drive/storage layer
@@ -784,7 +784,7 @@ real Google Drive API.
 The E2E flow should use a fake Drive implementation behind the Drive client
 library. That matches the existing direction in:
 
-- [docs-dev/design/drive.md](/Users/jlewi/git_runmeweb/docs-dev/design/drive.md)
+- [docs-dev/design/20260224_drive.md](/Users/jlewi/git_runmeweb/docs-dev/design/20260224_drive.md)
 - [testing.md](/Users/jlewi/git_runmeweb/testing.md)
 
 Recommended test architecture:
