@@ -515,7 +515,7 @@ describe("ChatKitPanel codex harness routing", () => {
     const config = getLatestChatKitConfig();
 
     await act(async () => {
-      await config.api.fetch("http://127.0.0.1:31337/codex/chatkit", {
+      const response = await config.api.fetch("http://127.0.0.1:31337/codex/chatkit", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -655,7 +655,7 @@ describe("ChatKitPanel codex harness routing", () => {
     const config = getLatestChatKitConfig();
 
     await act(async () => {
-      await config.api.fetch("http://127.0.0.1:31337/codex/chatkit", {
+      const response = await config.api.fetch("http://127.0.0.1:31337/codex/chatkit", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -669,6 +669,7 @@ describe("ChatKitPanel codex harness routing", () => {
           },
         }),
       });
+      await response.text();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -685,6 +686,133 @@ describe("ChatKitPanel codex harness routing", () => {
           error: "Timed out waiting for codex turn completion",
         },
       },
+    );
+  });
+
+  it("logs codex timing milestones from submit through first streamed text", async () => {
+    harnessState.defaultHarness.adapter = "codex";
+    codexControllerMock.streamUserMessage.mockImplementationOnce(
+      async (_input: string, sink: { emit: (payload: unknown) => void }) => {
+        sink.emit({ type: "response.created", response: { id: "turn-timing-1" } });
+        sink.emit({
+          type: "response.output_text.delta",
+          response_id: "turn-timing-1",
+          item_id: "msg-timing-1",
+          delta: "I’m checking the codebase now.",
+        });
+        sink.emit({
+          type: "response.completed",
+          response: { id: "turn-timing-1" },
+        });
+        return {
+          threadId: "thread-bootstrap",
+          previousResponseId: "turn-timing-1",
+        };
+      },
+    );
+
+    render(<ChatKitPanel />);
+    await waitFor(() => expect(codexControllerMock.ensureActiveThread).toHaveBeenCalled());
+
+    const config = getLatestChatKitConfig();
+    act(() => {
+      config.onLog({
+        name: "composer.submit",
+        data: {
+          text: [
+            {
+              type: "input_text",
+              text: "Search the codebase and explain the Jupyter integration",
+            },
+          ],
+        },
+      });
+    });
+
+    await act(async () => {
+      const response = await config.api.fetch("http://127.0.0.1:31337/codex/chatkit", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "threads.create",
+          params: {
+            input: {
+              content: [
+                {
+                  type: "input_text",
+                  text: "Search the codebase and explain the Jupyter integration",
+                },
+              ],
+            },
+          },
+        }),
+      });
+      await response.text();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(appLoggerMock.info).toHaveBeenCalledWith(
+      "ChatKit timing",
+      expect.objectContaining({
+        attrs: expect.objectContaining({
+          scope: "chatkit.panel",
+          adapter: "codex",
+          phase: "submit",
+          promptChars: 55,
+        }),
+      }),
+    );
+    expect(appLoggerMock.info).toHaveBeenCalledWith(
+      "ChatKit timing",
+      expect.objectContaining({
+        attrs: expect.objectContaining({
+          scope: "chatkit.panel",
+          adapter: "codex",
+          phase: "response_created",
+          responseId: "turn-timing-1",
+        }),
+      }),
+    );
+    expect(appLoggerMock.info).toHaveBeenCalledWith(
+      "ChatKit timing",
+      expect.objectContaining({
+        attrs: expect.objectContaining({
+          scope: "chatkit.panel",
+          adapter: "codex",
+          phase: "first_visible_message",
+          responseId: "turn-timing-1",
+          eventType: "response.output_text.delta",
+          preview: "I’m checking the codebase now.",
+        }),
+      }),
+    );
+    expect(appLoggerMock.info).toHaveBeenCalledWith(
+      "ChatKit timing",
+      expect.objectContaining({
+        attrs: expect.objectContaining({
+          scope: "chatkit.panel",
+          adapter: "codex",
+          phase: "completed",
+          responseId: "turn-timing-1",
+          sawFirstVisibleMessage: true,
+        }),
+      }),
+    );
+    expect(appLoggerMock.info).toHaveBeenCalledWith(
+      "ChatKit visible stream event",
+      expect.objectContaining({
+        attrs: expect.objectContaining({
+          scope: "chatkit.panel",
+          adapter: "codex",
+          responseId: "turn-timing-1",
+          eventType: "response.output_text.delta",
+          textChars: 30,
+          preview: "I’m checking the codebase now.",
+        }),
+      }),
     );
   });
 

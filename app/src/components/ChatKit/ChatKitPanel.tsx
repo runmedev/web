@@ -84,6 +84,97 @@ const CHATKIT_STARTER_PROMPTS = [
 // "execute JavaScript" capability and route notebook mutations through the
 // sandbox NotebooksApi.
 type SSEInterceptor = (rawEvent: string) => void
+type ChatKitTurnTiming = {
+  submittedAtMs: number
+  submittedAtIso: string
+  prompt: string
+  responseId: string | null
+  firstVisibleMessageAtMs: number | null
+}
+
+function extractResponseIdFromSSEEvent(
+  payload: Record<string, unknown>
+): string | null {
+  const response = payload.response
+  if (
+    response &&
+    typeof response === 'object' &&
+    !Array.isArray(response) &&
+    typeof (response as { id?: unknown }).id === 'string'
+  ) {
+    return (response as { id: string }).id
+  }
+  return typeof payload.response_id === 'string' ? payload.response_id : null
+}
+
+function extractVisibleTextFromSSEEvent(
+  payload: Record<string, unknown>
+): string {
+  if (
+    typeof payload.delta === 'string' &&
+    payload.delta.trim().length > 0
+  ) {
+    return payload.delta
+  }
+  if (
+    typeof payload.text === 'string' &&
+    payload.text.trim().length > 0
+  ) {
+    return payload.text
+  }
+  const part = payload.part
+  if (
+    part &&
+    typeof part === 'object' &&
+    !Array.isArray(part) &&
+    typeof (part as { text?: unknown }).text === 'string'
+  ) {
+    const text = (part as { text: string }).text
+    if (text.trim().length > 0) {
+      return text
+    }
+  }
+  const item = payload.item
+  if (item && typeof item === 'object' && !Array.isArray(item)) {
+    const content = (item as { content?: unknown }).content
+    if (Array.isArray(content)) {
+      const text = content
+        .map((part) =>
+          part &&
+          typeof part === 'object' &&
+          !Array.isArray(part) &&
+          typeof (part as { text?: unknown }).text === 'string'
+            ? (part as { text: string }).text
+            : ''
+        )
+        .join('')
+      if (text.trim().length > 0) {
+        return text
+      }
+    }
+  }
+  return ''
+}
+
+function summarizePromptForTimingLog(data: unknown): string {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return ''
+  }
+  const textItems = Array.isArray((data as { text?: unknown }).text)
+    ? ((data as { text: Array<unknown> }).text ?? [])
+    : []
+  return textItems
+    .map((item) =>
+      item &&
+      typeof item === 'object' &&
+      !Array.isArray(item) &&
+      typeof (item as { text?: unknown }).text === 'string'
+        ? (item as { text: string }).text
+        : ''
+    )
+    .join('')
+}
+
 const useInterceptedFetch = (
   baseFetch?: typeof fetch,
   onSSEEvent?: SSEInterceptor
@@ -199,6 +290,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const chatkitDomainKey = getConfiguredChatKitDomainKey()
   const [showCodexDrawer, setShowCodexDrawer] = useState(false)
   const runtimeRef = useRef<HarnessRuntime | null>(null)
+  const activeTurnTimingRef = useRef<ChatKitTurnTiming | null>(null)
   const chatkitActionsRef = useRef<{
     setThreadId: (threadId: string | null, source?: string) => Promise<void>
     fetchUpdates: (source?: string) => Promise<void>
@@ -300,6 +392,20 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   )
   const handleSseEvent = useCallback(
     (rawEvent: string) => {
+      const logTiming = (
+        phase: string,
+        attrs: Record<string, unknown>
+      ) => {
+        console.log('[chatkit] timing', JSON.stringify({ phase, ...attrs }))
+        appLogger.info('ChatKit timing', {
+          attrs: {
+            scope: 'chatkit.panel',
+            adapter: defaultHarness.adapter,
+            phase,
+            ...attrs,
+          },
+        })
+      }
       const lines = rawEvent
         .split(/\r?\n/)
         .map((line) => line.trim())
@@ -315,12 +421,24 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         }
 
         try {
-          const parsed = JSON.parse(payload)
+          const parsed = JSON.parse(payload) as Record<string, unknown>
           if (parsed?.type === 'response.failed') {
             const message =
               typeof parsed?.error?.message === 'string'
                 ? parsed.error.message
                 : 'Codex request failed.'
+            const activeTurn = activeTurnTimingRef.current
+            if (activeTurn) {
+              logTiming('failed', {
+                responseId:
+                  extractResponseIdFromSSEEvent(parsed) ?? activeTurn.responseId,
+                elapsedMs: Math.round(performance.now() - activeTurn.submittedAtMs),
+                submittedAt: activeTurn.submittedAtIso,
+                promptChars: activeTurn.prompt.length,
+                error: message,
+              })
+              activeTurnTimingRef.current = null
+            }
             appLogger.error('ChatKit response stream failed', {
               attrs: {
                 scope: 'chatkit.panel',
@@ -337,6 +455,77 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
             parsed?.type === 'response.completed'
           ) {
             setCodexStreamError(null)
+          }
+          if (parsed?.type === 'response.created') {
+            const responseId = extractResponseIdFromSSEEvent(parsed)
+            const activeTurn = activeTurnTimingRef.current
+            if (activeTurn && responseId) {
+              activeTurn.responseId = responseId
+              logTiming('response_created', {
+                responseId,
+                elapsedMs: Math.round(
+                  performance.now() - activeTurn.submittedAtMs
+                ),
+                submittedAt: activeTurn.submittedAtIso,
+                promptChars: activeTurn.prompt.length,
+              })
+            }
+          }
+          if (
+            parsed?.type === 'response.output_text.delta' ||
+            parsed?.type === 'response.output_text.done' ||
+            parsed?.type === 'response.content_part.done' ||
+            parsed?.type === 'response.output_item.done'
+          ) {
+            const activeTurn = activeTurnTimingRef.current
+            const visibleText = extractVisibleTextFromSSEEvent(parsed)
+            if (visibleText) {
+              appLogger.info('ChatKit visible stream event', {
+                attrs: {
+                  scope: 'chatkit.panel',
+                  adapter: defaultHarness.adapter,
+                  responseId:
+                    extractResponseIdFromSSEEvent(parsed) ?? activeTurn?.responseId,
+                  eventType: parsed.type,
+                  textChars: visibleText.length,
+                  preview: visibleText.slice(0, 160),
+                },
+              })
+            }
+            if (
+              activeTurn &&
+              activeTurn.firstVisibleMessageAtMs == null &&
+              visibleText
+            ) {
+              activeTurn.firstVisibleMessageAtMs = performance.now()
+              logTiming('first_visible_message', {
+                responseId:
+                  extractResponseIdFromSSEEvent(parsed) ?? activeTurn.responseId,
+                eventType: parsed.type,
+                ttfmMs: Math.round(
+                  activeTurn.firstVisibleMessageAtMs - activeTurn.submittedAtMs
+                ),
+                submittedAt: activeTurn.submittedAtIso,
+                promptChars: activeTurn.prompt.length,
+                preview: visibleText.slice(0, 160),
+              })
+            }
+          }
+          if (parsed?.type === 'response.completed') {
+            const activeTurn = activeTurnTimingRef.current
+            if (activeTurn) {
+              logTiming('completed', {
+                responseId:
+                  extractResponseIdFromSSEEvent(parsed) ?? activeTurn.responseId,
+                totalTurnTimeMs: Math.round(
+                  performance.now() - activeTurn.submittedAtMs
+                ),
+                submittedAt: activeTurn.submittedAtIso,
+                promptChars: activeTurn.prompt.length,
+                sawFirstVisibleMessage: activeTurn.firstVisibleMessageAtMs != null,
+              })
+              activeTurnTimingRef.current = null
+            }
           }
         } catch (error) {
           console.error('Failed to parse SSE state event', error, payload)
@@ -667,6 +856,40 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       })
     },
     onLog: ({ name, data }) => {
+      if (
+        name === 'composer.submit' &&
+        (defaultHarness.adapter === 'codex' ||
+          defaultHarness.adapter === 'codex-wasm')
+      ) {
+        const prompt = summarizePromptForTimingLog(data)
+        const submittedAtIso = new Date().toISOString()
+        activeTurnTimingRef.current = {
+          submittedAtMs: performance.now(),
+          submittedAtIso,
+          prompt,
+          responseId: null,
+          firstVisibleMessageAtMs: null,
+        }
+        console.log(
+          '[chatkit] timing',
+          JSON.stringify({
+            phase: 'submit',
+            submittedAt: submittedAtIso,
+            promptChars: prompt.length,
+            preview: prompt.slice(0, 160),
+          })
+        )
+        appLogger.info('ChatKit timing', {
+          attrs: {
+            scope: 'chatkit.panel',
+            adapter: defaultHarness.adapter,
+            phase: 'submit',
+            submittedAt: submittedAtIso,
+            promptChars: prompt.length,
+            preview: prompt.slice(0, 160),
+          },
+        })
+      }
       console.log('[chatkit] log', JSON.stringify({ name, data }))
       appLogger.info('ChatKit diagnostic log', {
         attrs: {

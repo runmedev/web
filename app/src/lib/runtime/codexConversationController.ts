@@ -215,6 +215,19 @@ function extractText(value: unknown): string {
   return "";
 }
 
+function extractReasoningSummaryText(value: unknown): string {
+  const record = asRecord(value);
+  const summary = Array.isArray(record.summary) ? record.summary : [];
+  const text = summary
+    .map((part) => extractText(part))
+    .filter((part) => part.length > 0)
+    .join("\n\n");
+  if (text.length > 0) {
+    return text;
+  }
+  return extractText(value);
+}
+
 function getNotificationPayloadRecord(
   params: JsonRecord,
 ): { payload: JsonRecord; message: JsonRecord } {
@@ -441,6 +454,10 @@ type MappedAssistantEvent =
 
 function isAssistantMessageType(value: unknown): boolean {
   return value === "agentMessage" || value === "AgentMessage";
+}
+
+function isReasoningItemType(value: unknown): boolean {
+  return value === "reasoning" || value === "Reasoning";
 }
 
 function isSyntheticAssistantItemId(responseId: string, itemId: string): boolean {
@@ -1364,11 +1381,26 @@ class CodexConversationController {
       }
       case "item/completed": {
         const item = asRecord(payload.item);
+        if (isReasoningItemType(item.type)) {
+          const text = extractReasoningSummaryText(item);
+          return text
+            ? {
+                kind: "done",
+                responseId,
+                itemId: asString(item.id) ?? itemId,
+                text,
+              }
+            : null;
+        }
         if (!isAssistantMessageType(item.type)) {
           return null;
         }
         const text = asString(item.text) ?? extractText(item);
         return { kind: "done", responseId, itemId: asString(item.id) ?? itemId, text };
+      }
+      case "item/reasoning/summaryTextDelta": {
+        const delta = asString(payload.delta) ?? extractText(payload);
+        return delta ? { kind: "delta", responseId, itemId, text: delta } : null;
       }
       default: {
         const type = asString(payload.type);
@@ -1407,6 +1439,17 @@ class CodexConversationController {
                 responseId,
                 itemId,
                 text,
+              }
+            : null;
+        }
+        if (type === "reasoning_content_delta") {
+          const delta = asString(payload.delta) ?? extractText(payload);
+          return delta
+            ? {
+                kind: "delta",
+                responseId,
+                itemId: `${responseId}-reasoning`,
+                text: delta,
               }
             : null;
         }

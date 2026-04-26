@@ -1661,6 +1661,98 @@ describe("CodexConversationController", () => {
     expect(finalItemDoneIndex).toBeGreaterThan(commentaryDeltaIndex);
   });
 
+  it("surfaces reasoning summary deltas before assistant commentary arrives", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return { threadId: "thread-1", title: "Runme Repo" };
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "item/reasoning/summaryTextDelta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "reasoning-1",
+                delta: "I’m inspecting the Jupyter integration first.",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  id: "reasoning-1",
+                  type: "reasoning",
+                  summary: [
+                    {
+                      type: "summary_text",
+                      text: "I’m inspecting the Jupyter integration first.",
+                    },
+                  ],
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "msg-final-1",
+                  text: "Here is the final answer.",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: { id: "turn-1", status: "completed" },
+              },
+            });
+          });
+        });
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: any[] = [];
+    await controller.streamUserMessage("What is a runme runner", {
+      emit: (payload) => events.push(payload),
+    });
+
+    const reasoningDeltaIndex = events.findIndex(
+      (event) =>
+        event?.type === "response.output_text.delta" &&
+        event?.item_id === "reasoning-1" &&
+        event?.delta === "I’m inspecting the Jupyter integration first.",
+    );
+    const finalItemDoneIndex = events.findIndex(
+      (event) =>
+        event?.type === "response.output_item.done" &&
+        event?.item?.id === "msg-final-1",
+    );
+    const reasoningItemAddedIndex = events.findIndex(
+      (event) =>
+        event?.type === "response.output_item.added" &&
+        event?.item?.id === "reasoning-1",
+    );
+
+    expect(reasoningDeltaIndex).toBeGreaterThanOrEqual(0);
+    expect(reasoningItemAddedIndex).toBeGreaterThanOrEqual(0);
+    expect(finalItemDoneIndex).toBeGreaterThan(reasoningDeltaIndex);
+  });
+
   it("resets the completion timeout on inbound activity for the active turn", async () => {
     vi.useFakeTimers();
     proxyClient.sendRequest.mockImplementation(async (method: string) => {
