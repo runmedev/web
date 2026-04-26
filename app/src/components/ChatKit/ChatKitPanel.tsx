@@ -65,7 +65,7 @@ const CHATKIT_PLACEHOLDER =
   'Describe the production issue or question you are investigating'
 
 const CHAT_MODEL_STORAGE_KEY = 'runme/chat-shell-model-selection'
-const DEFAULT_CHAT_MODEL = 'gpt-5.2'
+const DEFAULT_CHAT_MODEL = 'gpt-5.4'
 const CHAT_MODEL_OPTIONS = [
   {
     id: 'gpt-4o-mini',
@@ -80,7 +80,7 @@ const CHAT_MODEL_OPTIONS = [
     label: 'GPT-5.4',
   },
   {
-    id: DEFAULT_CHAT_MODEL,
+    id: 'gpt-5.2',
     label: 'GPT-5.2',
   },
   {
