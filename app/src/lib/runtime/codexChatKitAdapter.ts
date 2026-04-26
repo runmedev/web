@@ -3,6 +3,7 @@ import {
   type CodexConversationItem,
 } from "./codexConversationController";
 import { appLogger } from "../logging/runtime";
+import type { ConversationController } from "./conversationController";
 import type {
   ChatKitThreadDetail,
   ChatKitThreadSummary,
@@ -69,25 +70,9 @@ function createCodexStreamId(): string {
 }
 
 export function createCodexChatKitAdapter(
-  controller: ReturnType<typeof getCodexConversationController> = getCodexConversationController(),
+  controller: ConversationController = getCodexConversationController(),
 ): HarnessChatKitAdapter {
   return {
-    get initialThreadId(): string | undefined {
-      return controller.getSnapshot().currentThreadId ?? undefined;
-    },
-    historyEnabled: false,
-    async onThreadSelected(threadId: string | null): Promise<void> {
-      if (!threadId) {
-        controller.startNewChat();
-        return;
-      }
-      await controller.selectThread(threadId);
-    },
-    async onNewConversation(): Promise<string | null> {
-      controller.startNewChat();
-      const thread = await controller.ensureActiveThread();
-      return thread.id;
-    },
     async listThreads(): Promise<ChatKitThreadSummary[]> {
       await controller.refreshHistory();
       return controller.getSnapshot().threads.map((thread) => ({
@@ -98,6 +83,14 @@ export function createCodexChatKitAdapter(
     },
     async getThread(threadId: string): Promise<ChatKitThreadDetail> {
       const thread = await controller.getThread(threadId);
+      appLogger.info("Codex ChatKit getThread loaded", {
+        attrs: {
+          scope: "chatkit.codex_adapter",
+          threadId,
+          title: thread.title,
+          itemCount: thread.items.length,
+        },
+      });
       const messageCollection = {
         data: toChatKitThreadItems(threadId, thread.items),
         has_more: false,
@@ -114,13 +107,23 @@ export function createCodexChatKitAdapter(
       };
     },
     async listItems(threadId: string): Promise<Record<string, unknown>[]> {
-      const payload = await controller.handleListItems(threadId);
-      return toChatKitThreadItems(threadId, payload.data);
+      const items = await controller.listItems(threadId);
+      appLogger.info("Codex ChatKit listItems loaded", {
+        attrs: {
+          scope: "chatkit.codex_adapter",
+          threadId,
+          itemCount: items.length,
+        },
+      });
+      return toChatKitThreadItems(threadId, items);
     },
     async streamUserMessage(
       request: HarnessChatKitMessageRequest,
       sink: HarnessChatKitEventSink,
     ): Promise<void> {
+      if (request.createThread) {
+        controller.newChat();
+      }
       if (
         request.threadId &&
         controller.getSnapshot().currentThreadId !== request.threadId
@@ -131,6 +134,7 @@ export function createCodexChatKitAdapter(
         request.input,
         sink,
         request.model,
+        request.signal ?? null,
       );
     },
   };
@@ -167,13 +171,14 @@ export function buildCodexChatKitFetchOptions(): Parameters<
         if (request.type !== "threads.add_user_message") {
           return {};
         }
-        const activeThread = await getCodexConversationController().ensureActiveThread(
-          request.model,
-        );
+        const controller = getCodexConversationController();
+        const snapshot = controller.getSnapshot();
         return {
           requestType: request.requestTypeLabel,
           inputText: request.input,
-          threadId: request.threadId ?? activeThread.id,
+          threadId:
+            request.threadId ??
+            (!request.createThread ? snapshot.currentThreadId ?? null : null),
           previousResponseId: null,
         };
       },

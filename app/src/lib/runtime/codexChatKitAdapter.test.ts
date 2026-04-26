@@ -19,11 +19,11 @@ const defaultStreamUserMessage = async (
   sink.emit({ type: "response.created", response: { id: "turn-1" } });
   sink.emit({ type: "response.output_text.delta", delta: "hello" });
   sink.emit({ type: "response.completed", response: { id: "turn-1" } });
-  return { threadId: "thread-1", previousResponseId: "turn-1" };
 };
 
 const controller = {
   refreshHistory: vi.fn(),
+  newChat: vi.fn(),
   getSnapshot: vi.fn(() => ({
     threads: [{ id: "thread-1", title: "One", updatedAt: "2026-02-26T00:00:00Z" }],
   })),
@@ -49,8 +49,7 @@ const controller = {
       },
     ],
   })),
-  handleListItems: vi.fn(async () => ({
-    data: [
+  listItems: vi.fn(async () => [
       {
         id: "msg-user-1",
         type: "message",
@@ -67,14 +66,7 @@ const controller = {
         createdAt: "2026-02-26T00:01:00Z",
         content: [{ type: "output_text", text: "hello" }],
       },
-    ],
-    has_more: false,
-  })),
-  ensureActiveThread: vi.fn(async () => ({
-    id: "thread-1",
-    title: "One",
-    items: [],
-  })),
+    ]),
   streamUserMessage: vi.fn(defaultStreamUserMessage),
   interruptActiveTurn: vi.fn(),
 };
@@ -139,10 +131,10 @@ describe("createCodexChatkitFetch", () => {
     appLoggerMock.info.mockClear();
     appLoggerMock.error.mockClear();
     controller.refreshHistory.mockClear();
+    controller.newChat.mockClear();
     controller.getSnapshot.mockClear();
     controller.getThread.mockClear();
-    controller.handleListItems.mockClear();
-    controller.ensureActiveThread.mockClear();
+    controller.listItems.mockClear();
     controller.streamUserMessage = vi.fn(defaultStreamUserMessage);
     controller.interruptActiveTurn.mockClear();
   });
@@ -197,7 +189,49 @@ describe("createCodexChatkitFetch", () => {
       "hello",
       expect.any(Object),
       "gpt-5.4",
+      null,
     );
+  });
+
+  it("emits thread.created for new Codex threads", async () => {
+    controller.streamUserMessage.mockImplementationOnce(
+      async (_input: string, sink: { emit: (payload: unknown) => void }) => {
+        sink.emit({
+          type: "thread.created",
+          thread: {
+            id: "thread-2",
+            title: "New Codex Thread",
+            created_at: "2026-02-26T00:00:00Z",
+          },
+        });
+        sink.emit({ type: "response.created", response: { id: "turn-2" } });
+        sink.emit({
+          type: "response.output_text.delta",
+          response_id: "turn-2",
+          item_id: "msg-2",
+          delta: "hello",
+        });
+        sink.emit({ type: "response.completed", response: { id: "turn-2" } });
+      },
+    );
+
+    const fetchFn = createCodexChatkitFetch();
+    const response = await fetchFn("http://localhost/codex/chatkit", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "threads.create",
+        params: {
+          input: {
+            content: [{ type: "input_text", text: "hello" }],
+          },
+        },
+      }),
+    });
+
+    const body = await response.text();
+
+    expect(body).toContain('"type":"thread.created"');
+    expect(body).toContain('"title":"New Codex Thread"');
   });
 
   it("handles threads.get_by_id requests", async () => {
@@ -343,7 +377,7 @@ describe("createCodexChatkitFetch", () => {
       }),
     });
 
-    expect(controller.handleListItems).toHaveBeenCalledWith("thread-1");
+    expect(controller.listItems).toHaveBeenCalledWith("thread-1");
     const payload = await response.json();
     expect(payload).toEqual({
       data: expect.any(Array),
@@ -365,7 +399,7 @@ describe("createCodexChatkitFetch", () => {
       }),
     });
 
-    expect(controller.handleListItems).toHaveBeenCalledWith("thread-1");
+    expect(controller.listItems).toHaveBeenCalledWith("thread-1");
     const payload = await response.json();
     expect(payload).toEqual({
       data: expect.any(Array),
@@ -387,7 +421,7 @@ describe("createCodexChatkitFetch", () => {
       }),
     });
 
-    expect(controller.handleListItems).toHaveBeenCalledWith("thread-1");
+    expect(controller.listItems).toHaveBeenCalledWith("thread-1");
     const payload = await response.json();
     expect(payload).toEqual({
       data: expect.any(Array),
@@ -438,6 +472,7 @@ describe("createCodexChatkitFetch", () => {
       "hello",
       expect.any(Object),
       undefined,
+      null,
     );
     expect(body).toContain('"type":"response.created"');
     expect(body).toContain('"delta":"hello"');
@@ -463,6 +498,7 @@ describe("createCodexChatkitFetch", () => {
       "hello from request",
       expect.any(Object),
       undefined,
+      null,
     );
     expect(body).toContain('"type":"response.created"');
   });
@@ -486,6 +522,7 @@ describe("createCodexChatkitFetch", () => {
       "hello from nested params",
       expect.any(Object),
       undefined,
+      null,
     );
     expect(body).toContain('"type":"response.created"');
   });
@@ -521,7 +558,7 @@ describe("createCodexChatkitFetch", () => {
           scope: "chatkit.codex_fetch",
           requestType: "message_stream",
           inputText: "hello",
-          threadId: "thread-1",
+          threadId: null,
           previousResponseId: null,
           streamId: expect.any(String),
           aborted: true,
@@ -535,7 +572,7 @@ describe("createCodexChatkitFetch", () => {
           scope: "chatkit.codex_fetch",
           requestType: "message_stream",
           inputText: "hello",
-          threadId: "thread-1",
+          threadId: null,
           previousResponseId: null,
           streamId: expect.any(String),
           aborted: true,
@@ -567,7 +604,7 @@ describe("createCodexChatkitFetch", () => {
           scope: "chatkit.codex_fetch",
           requestType: "message_stream",
           inputText: "hello",
-          threadId: "thread-1",
+          threadId: null,
           previousResponseId: null,
           streamId: expect.any(String),
           aborted: true,

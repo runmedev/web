@@ -3,6 +3,7 @@ import type {
   ChatKitThreadDetail,
   ChatKitThreadSummary,
 } from "./chatkitProtocol";
+import type { ConversationController } from "./conversationController";
 import type { HarnessProfile } from "./harnessManager";
 
 export type HarnessChatKitThreadRequest = {
@@ -24,10 +25,6 @@ export type HarnessChatKitEventSink = {
 };
 
 export interface HarnessChatKitAdapter {
-  initialThreadId?: string;
-  historyEnabled: boolean;
-  onThreadSelected?: (threadId: string | null) => Promise<void>;
-  onNewConversation?: () => Promise<string | null>;
   listThreads(
     request?: HarnessChatKitThreadRequest,
   ): Promise<ChatKitThreadSummary[]>;
@@ -49,5 +46,6 @@ export interface HarnessRuntime {
   readonly profile: HarnessProfile;
   start(): Promise<void>;
   stop(): void;
+  getConversationController(): ConversationController;
   createChatKitAdapter(): HarnessChatKitAdapter;
 }

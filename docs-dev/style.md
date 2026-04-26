@@ -37,6 +37,18 @@ For CUJ/browser scripts:
 - Provide clear PASS/FAIL output for assertions.
 - Keep commands deterministic and avoid hidden state where possible.
 
+## Runtime logging
+
+- In app/runtime code, prefer `appLogger` for diagnostics instead of raw
+  `console.log` / `console.info` / `console.warn` / `console.error`.
+- Emit one structured `appLogger` event per logical occurrence and let the
+  logging runtime decide whether that event should also be mirrored to the
+  browser console in development.
+- Include a stable `attrs.scope` value so logs can be filtered and mirrored
+  consistently.
+- Avoid duplicating the same event with both `console.*` and `appLogger.*`
+  unless there is a clear, documented reason.
+
 ## Runme docs notebook format
 
 - Default format for Runme documentation notebooks is JSON notebook files (for example `docs/<name>.json`), not markdown `.runme.md`.

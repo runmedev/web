@@ -349,6 +349,7 @@ export function createChatKitFetchFromAdapter(
   options?: {
     unsupportedRequestPrefix?: string;
     missingUserInputError?: string;
+    resolveModel?: () => string | undefined;
     onUnsupportedRequest?: (requestType: string | undefined, payload: JsonRecord) => void;
     onAbort?: () => Promise<void> | void;
     streamLog?: {
@@ -411,7 +412,7 @@ export function createChatKitFetchFromAdapter(
             {
               threadId: request.threadId,
               input: request.input,
-              model: request.model,
+              model: request.model ?? options?.resolveModel?.(),
               createThread: request.createThread,
               signal: init?.signal ?? null,
             },

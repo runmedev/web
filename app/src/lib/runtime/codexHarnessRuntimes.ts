@@ -2,6 +2,7 @@ import { getCodexAppServerClient } from "./codexAppServerClient";
 import { createCodexChatKitAdapter } from "./codexChatKitAdapter";
 import { getCodexConversationController } from "./codexConversationController";
 import type { CodeModeExecutor } from "./codeModeExecutor";
+import type { ConversationController } from "./conversationController";
 import type { HarnessChatKitAdapter, HarnessRuntime } from "./harnessChatKitAdapter";
 import {
   buildCodexAppServerWsUrl,
@@ -34,7 +35,6 @@ function applyCodexProjectSelection(projectId?: string): void {
 async function refreshCodexConversationState(): Promise<void> {
   const controller = getCodexConversationController();
   await controller.refreshHistory();
-  await controller.ensureActiveThread();
 }
 
 function clearCodexClient(): void {
@@ -75,6 +75,7 @@ function configureCodexBridge(options: {
 export class CodexProxyHarnessRuntime implements HarnessRuntime {
   readonly profile: HarnessProfile;
   private readonly options: CreateCodexHarnessRuntimeOptions;
+  private readonly controller: ConversationController;
   private readonly adapter: HarnessChatKitAdapter;
   private started = false;
   private bridgeSubscriptionCleanup: (() => void) | null = null;
@@ -82,6 +83,7 @@ export class CodexProxyHarnessRuntime implements HarnessRuntime {
   constructor(options: CreateCodexHarnessRuntimeOptions) {
     this.profile = options.profile;
     this.options = options;
+    this.controller = getCodexConversationController();
     this.adapter = createCodexChatKitAdapter();
   }
 
@@ -123,6 +125,10 @@ export class CodexProxyHarnessRuntime implements HarnessRuntime {
     this.started = false;
   }
 
+  getConversationController(): ConversationController {
+    return this.controller;
+  }
+
   createChatKitAdapter(): HarnessChatKitAdapter {
     return this.adapter;
   }
@@ -131,12 +137,14 @@ export class CodexProxyHarnessRuntime implements HarnessRuntime {
 export class CodexWasmHarnessRuntime implements HarnessRuntime {
   readonly profile: HarnessProfile;
   private readonly options: CreateCodexHarnessRuntimeOptions;
+  private readonly controller: ConversationController;
   private readonly adapter: HarnessChatKitAdapter;
   private started = false;
 
   constructor(options: CreateCodexHarnessRuntimeOptions) {
     this.profile = options.profile;
     this.options = options;
+    this.controller = getCodexConversationController();
     this.adapter = createCodexChatKitAdapter();
   }
 
@@ -175,6 +183,10 @@ export class CodexWasmHarnessRuntime implements HarnessRuntime {
     clearCodexBridge(null);
     clearCodexClient();
     this.started = false;
+  }
+
+  getConversationController(): ConversationController {
+    return this.controller;
   }
 
   createChatKitAdapter(): HarnessChatKitAdapter {

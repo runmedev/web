@@ -33,7 +33,12 @@ export default function MainPage() {
             <SidePanelContent />
           )}
         </div>
-        <div id="content-area" className="flex h-full flex-1 min-w-0 flex-col gap-2 p-2">
+        <div
+          id="content-area"
+          className={`flex h-full flex-1 min-w-0 flex-col gap-2 ${
+            sidePanelVisible ? "py-2 pr-2 pl-0" : "p-2"
+          }`}
+        >
           <div id="notebook-pane" className="flex-1 min-h-0 overflow-hidden rounded-nb-md border border-nb-border-strong bg-white">
             <Actions />
           </div>
