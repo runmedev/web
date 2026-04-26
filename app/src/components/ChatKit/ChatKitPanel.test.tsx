@@ -29,19 +29,27 @@ let currentDocUriState: string | null;
 let bridgeSnapshot: { state: "idle" | "connecting" | "open" | "closed" | "error"; url: string | null; lastError: string | null };
 let setThreadIdMock: ReturnType<typeof vi.fn>;
 let fetchUpdatesMock: ReturnType<typeof vi.fn>;
-const useChatKitMock = vi.fn();
 const harnessManagerMock = {
   setDefault: vi.fn(),
 };
 const codexProjectManagerMock = {
   setDefault: vi.fn(),
 };
-const { appLoggerMock } = vi.hoisted(() => ({
+const { appLoggerMock, useChatKitMock, chatKitReactModuleMock } = vi.hoisted(() => ({
   appLoggerMock: {
     info: vi.fn(),
     error: vi.fn(),
   },
+  useChatKitMock: vi.fn(),
+  chatKitReactModuleMock: {
+    ChatKit: ({ className }: { className?: string }) => (
+      <div data-testid="chatkit-root" className={className} />
+    ),
+    ChatKitIcon: {},
+    useChatKit: undefined as unknown,
+  },
 }));
+chatKitReactModuleMock.useChatKit = useChatKitMock;
 const bridgeMock = {
   connect: vi.fn(),
   disconnect: vi.fn(),
@@ -64,6 +72,16 @@ const codexControllerMock = {
   newChat: vi.fn(() => {
     codexConversationState.currentThreadId = null;
     codexConversationState.currentTurnId = null;
+  }),
+  ensureActiveThread: vi.fn(async () => {
+    codexConversationState.currentThreadId = "thread-bootstrap";
+    codexConversationState.currentTurnId = null;
+    return {
+      id: "thread-bootstrap",
+      title: "Bootstrap Thread",
+      previousResponseId: "",
+      items: [],
+    };
   }),
   setSelectedModel: vi.fn(),
   streamUserMessage: vi.fn(async (_input: string, sink: { emit: (payload: unknown) => void }) => {
@@ -105,13 +123,7 @@ async function waitForChatKitToRerender(): Promise<void> {
   });
 }
 
-vi.mock("@openai/chatkit-react", () => ({
-  ChatKit: ({ className }: { className?: string }) => (
-    <div data-testid="chatkit-root" className={className} />
-  ),
-  ChatKitIcon: {},
-  useChatKit: (...args: unknown[]) => useChatKitMock(...args),
-}));
+vi.mock("../../lib/runtime/chatkitReact", () => chatKitReactModuleMock);
 
 vi.mock("../../contexts/CellContext", () => ({
   parser_pb: {},
@@ -189,6 +201,7 @@ import ChatKitPanel from "./ChatKitPanel";
 
 describe("ChatKitPanel codex harness routing", () => {
   beforeEach(() => {
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({} as CanvasRenderingContext2D));
     harnessState = {
       harnesses: [
         {
@@ -260,6 +273,7 @@ describe("ChatKitPanel codex harness routing", () => {
     codexControllerMock.setSelectedProject.mockClear();
     codexControllerMock.refreshHistory.mockClear();
     codexControllerMock.newChat.mockClear();
+    codexControllerMock.ensureActiveThread.mockClear();
     codexControllerMock.setSelectedModel.mockClear();
     codexControllerMock.getSnapshot.mockClear();
     codexControllerMock.getThread.mockClear();

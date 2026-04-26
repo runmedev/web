@@ -230,6 +230,20 @@ function extractReasoningSummaryText(value: unknown): string {
   return extractText(value);
 }
 
+function flattenThreadTurnItems(value: unknown): unknown[] {
+  const record = asRecord(value);
+  const thread = asRecord(record.thread);
+  const turns = Array.isArray(thread.turns)
+    ? thread.turns
+    : Array.isArray(record.turns)
+      ? record.turns
+      : [];
+  return turns.flatMap((turn) => {
+    const turnRecord = asRecord(turn);
+    return Array.isArray(turnRecord.items) ? turnRecord.items : [];
+  });
+}
+
 function getNotificationPayloadRecord(
   params: JsonRecord,
 ): { payload: JsonRecord; message: JsonRecord } {
@@ -269,10 +283,13 @@ function getNotificationPayloadRecord(
 function toConversationItem(value: unknown): CodexConversationItem | null {
   const record = asRecord(value);
   const id = asString(record.id) ?? `item-${Math.random().toString(36).slice(2, 10)}`;
+  const itemType = asString(record.type);
   const role =
     record.role === "user" || record.role === "assistant"
       ? record.role
-      : "assistant";
+      : itemType === "userMessage" || itemType === "UserMessage"
+        ? "user"
+        : "assistant";
   const status = record.status === "in_progress" ? "in_progress" : "completed";
 
   let content = Array.isArray(record.content)
@@ -284,7 +301,11 @@ function toConversationItem(value: unknown): CodexConversationItem | null {
             return null;
           }
           const type =
-            partRecord.type === "input_text" ? "input_text" : "output_text";
+            partRecord.type === "input_text" || partRecord.type === "output_text"
+              ? partRecord.type
+              : role === "user"
+                ? "input_text"
+                : "output_text";
           return { type, text };
         })
         .filter(
@@ -395,7 +416,7 @@ function parseThreadDetail(value: unknown): CodexConversationThread | null {
           ? (record.items as unknown[])
           : Array.isArray(asRecord(record.items).data)
             ? (asRecord(record.items).data as unknown[])
-            : [];
+            : flattenThreadTurnItems(value);
 
   return {
     id,
@@ -572,7 +593,60 @@ class CodexConversationController implements ConversationController {
       return existing;
     }
     const proxy = getCodexAppServerClient();
-    const result = await proxy.sendRequest("thread/read", { threadId });
+    const result = await proxy.sendRequest("thread/read", {
+      threadId,
+      includeTurns: true,
+    });
+    const resultRecord = asRecord(result);
+    const resultThread = asRecord(resultRecord.thread);
+    console.log(
+      "[chatkit] codex thread/read payload",
+      JSON.stringify({
+        threadId,
+        resultKeys: Object.keys(resultRecord),
+        threadKeys: Object.keys(resultThread),
+        topLevelItemsCount: Array.isArray(resultRecord.items)
+          ? resultRecord.items.length
+          : Array.isArray(asRecord(resultRecord.items).data)
+            ? (asRecord(resultRecord.items).data as unknown[]).length
+            : 0,
+        threadItemsCount: Array.isArray(resultThread.items)
+          ? resultThread.items.length
+          : Array.isArray(asRecord(resultThread.items).data)
+            ? (asRecord(resultThread.items).data as unknown[]).length
+            : 0,
+        threadTurnsCount: Array.isArray(resultThread.turns)
+          ? resultThread.turns.length
+          : 0,
+        topLevelTurnsCount: Array.isArray(resultRecord.turns)
+          ? resultRecord.turns.length
+          : 0,
+      }),
+    );
+    appLogger.info("Codex thread/read payload received", {
+      attrs: {
+        scope: "chatkit.codex_controller",
+        threadId,
+        resultKeys: Object.keys(resultRecord),
+        threadKeys: Object.keys(resultThread),
+        topLevelItemsCount: Array.isArray(resultRecord.items)
+          ? resultRecord.items.length
+          : Array.isArray(asRecord(resultRecord.items).data)
+            ? (asRecord(resultRecord.items).data as unknown[]).length
+            : 0,
+        threadItemsCount: Array.isArray(resultThread.items)
+          ? resultThread.items.length
+          : Array.isArray(asRecord(resultThread.items).data)
+            ? (asRecord(resultThread.items).data as unknown[]).length
+            : 0,
+        threadTurnsCount: Array.isArray(resultThread.turns)
+          ? resultThread.turns.length
+          : 0,
+        topLevelTurnsCount: Array.isArray(resultRecord.turns)
+          ? resultRecord.turns.length
+          : 0,
+      },
+    });
     const detail = parseThreadDetail(result);
     if (!detail) {
       throw new Error(`Invalid thread/read response for ${threadId}`);

@@ -6,7 +6,7 @@ import {
   useState,
   type ChangeEvent,
 } from 'react'
-import { ChatKit, useChatKit } from '@openai/chatkit-react'
+import { ChatKit, useChatKit } from '../../lib/runtime/chatkitReact'
 import {
   parser_pb,
 } from '../../contexts/CellContext'
@@ -1100,10 +1100,14 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     setShowConversationDrawer(false)
   }, [activeController])
 
-  const handleOpenConversationDrawer = useCallback(async () => {
+  const handleToggleConversationDrawer = useCallback(async () => {
+    if (showConversationDrawer) {
+      setShowConversationDrawer(false)
+      return
+    }
     setShowConversationDrawer(true)
     await loadDrawerThreads()
-  }, [loadDrawerThreads])
+  }, [loadDrawerThreads, showConversationDrawer])
 
   const handleLogin = useCallback(() => {
     setShowLoginPrompt(false)
@@ -1129,7 +1133,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           data-testid="chat-shell-history-button"
           className="rounded border border-nb-cell-border px-3 py-1 text-sm text-nb-text hover:bg-nb-surface-2"
           onClick={() => {
-            void handleOpenConversationDrawer()
+            void handleToggleConversationDrawer()
           }}
         >
           History

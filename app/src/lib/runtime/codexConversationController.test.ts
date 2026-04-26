@@ -564,7 +564,7 @@ describe("CodexConversationController", () => {
         };
       }
       if (method === "thread/read") {
-        expect(params).toEqual({ threadId: "thread-1" });
+        expect(params).toEqual({ threadId: "thread-1", includeTurns: true });
         return {
           thread: {
             id: "thread-1",
@@ -620,6 +620,55 @@ describe("CodexConversationController", () => {
 
     expect(detail).toEqual(existing);
     expect(proxyClient.sendRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("hydrates existing thread history from turn-based thread/read payloads", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "thread/read") {
+        expect(params).toEqual({ threadId: "thread-1", includeTurns: true });
+        return {
+          thread: {
+            id: "thread-1",
+            title: "Existing Thread",
+            cwd: "/workspace",
+            turns: [
+              {
+                id: "turn-1",
+                items: [
+                  {
+                    id: "user-1",
+                    type: "userMessage",
+                    content: [{ type: "text", text: "How does this work?" }],
+                  },
+                  {
+                    id: "assistant-1",
+                    type: "agentMessage",
+                    text: "I can inspect the code path for you.",
+                  },
+                ],
+              },
+            ],
+          },
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const detail = await controller.getThread("thread-1");
+
+    expect(detail.items).toEqual([
+      expect.objectContaining({
+        id: "user-1",
+        role: "user",
+        content: [{ type: "input_text", text: "How does this work?" }],
+      }),
+      expect.objectContaining({
+        id: "assistant-1",
+        role: "assistant",
+        content: [{ type: "output_text", text: "I can inspect the code path for you." }],
+      }),
+    ]);
   });
 
   it("streams a new codex turn into ChatKit-compatible SSE events", async () => {
@@ -828,7 +877,7 @@ describe("CodexConversationController", () => {
   it("resumes threads with Runme developer instructions", async () => {
     proxyClient.sendRequest.mockImplementation(async (method: string, params?: unknown) => {
       if (method === "thread/read") {
-        expect(params).toEqual({ threadId: "thread-1" });
+        expect(params).toEqual({ threadId: "thread-1", includeTurns: true });
         return {
           thread: {
             id: "thread-1",
