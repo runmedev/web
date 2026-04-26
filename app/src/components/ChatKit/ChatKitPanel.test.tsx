@@ -599,6 +599,32 @@ describe("ChatKitPanel codex harness routing", () => {
     ).toContain("Investigate latency");
   });
 
+  it("closes the conversation drawer from its close button", async () => {
+    harnessState.defaultHarness.adapter = "codex";
+    codexConversationState.threads = [
+      {
+        id: "thread-1",
+        title: "Investigate latency",
+        updatedAt: "2026-02-26T00:00:00Z",
+        previousResponseId: "turn-1",
+      },
+    ];
+
+    render(<ChatKitPanel />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("chat-shell-history-button"));
+    });
+
+    expect(screen.getByTestId("conversation-drawer")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("conversation-drawer-close"));
+    });
+
+    expect(screen.queryByTestId("conversation-drawer")).toBeNull();
+  });
+
   it("selects a codex conversation from the drawer and refreshes ChatKit history", async () => {
     harnessState.defaultHarness.adapter = "codex";
     codexConversationState.threads = [

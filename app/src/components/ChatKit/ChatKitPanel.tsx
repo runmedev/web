@@ -1202,6 +1202,24 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           data-testid="conversation-drawer"
           className="absolute inset-y-0 left-0 z-40 flex w-[280px] flex-col border-r border-nb-cell-border bg-white/95 shadow-lg"
         >
+          <div className="flex items-center justify-between border-b border-nb-cell-border px-3 py-3">
+            <div className="text-xs font-semibold uppercase tracking-wide text-nb-text-muted">
+              {isCodexHarness(defaultHarness.adapter)
+                ? 'Project and Conversations'
+                : 'Conversations'}
+            </div>
+            <button
+              type="button"
+              data-testid="conversation-drawer-close"
+              aria-label="Close conversation drawer"
+              className="rounded border border-nb-cell-border px-2 py-1 text-xs font-medium text-nb-text hover:bg-nb-surface-2"
+              onClick={() => {
+                setShowConversationDrawer(false)
+              }}
+            >
+              Close
+            </button>
+          </div>
           {isCodexHarness(defaultHarness.adapter) ? (
             <div className="border-b border-nb-cell-border px-3 py-3">
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-nb-text-muted">
@@ -1224,9 +1242,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
             </div>
           ) : null}
           <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-nb-text-muted">
-              Conversations
-            </div>
             {drawerThreadsLoading ? (
               <div className="text-sm text-nb-text-muted">Loading...</div>
             ) : drawerThreadsError ? (
