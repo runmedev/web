@@ -249,6 +249,25 @@ That controller should own:
 Codex can keep its richer controller underneath. `responses-direct` should gain
 a lightweight controller so the app shell can treat all harnesses the same.
 
+Minimal shared contract:
+
+- `getSnapshot()`
+- `subscribe(listener)`
+- `refreshHistory()`
+- `selectThread(threadId)`
+- `newChat()`
+- `sendMessage(input, options?)`
+- `setSelectedModel(model)`
+- optional `setSelectedProject(projectId)` for harnesses that support projects
+
+The snapshot should include at least:
+
+- `currentThreadId: string | null`
+- `threads`
+- `loadingHistory`
+- `selectedModel`
+- optional selected project metadata
+
 ### 3. Stop treating ChatKit thread changes as controller commands
 
 For all harnesses:
@@ -279,6 +298,67 @@ The adapter should be responsible for:
 
 It should not be responsible for deciding when the app has entered "new chat"
 mode due to ChatKit UI transitions.
+
+Planned `HarnessChatKitAdapter` reduction:
+
+- remove `historyEnabled`
+- remove `onThreadSelected`
+- remove `onNewConversation`
+- remove any header/history ownership concerns
+
+Keep only the ChatKit bridge behavior:
+
+- `getThread(threadId)`
+- `listItems(threadId)`
+- `streamUserMessage(...)`
+- optionally `listThreads()` only if ChatKit still requests it internally even
+  when history UI is disabled
+
+`listThreads()` should remain an adapter concern, not a requirement of the
+shared conversation controller contract.
+
+### 6. Controller and adapter interaction model
+
+The interaction should be:
+
+1. app-owned React UI calls the shared `ConversationController`
+2. the controller owns active thread state, draft state, model selection, and
+   history refresh
+3. the app synchronizes ChatKit with `initialThread` on mount and
+   `setThreadId(...)` after mount
+4. ChatKit requests thread/items through the adapter
+5. the adapter fulfills those requests by reading controller state
+6. ChatKit submit flows through the adapter
+7. the adapter delegates send/stream work to the controller
+
+In other words:
+
+- UI control plane: app -> controller
+- ChatKit data plane: ChatKit -> adapter -> controller
+
+### 7. Fate of `ensureActiveThread()`
+
+The current `ensureActiveThread()` API should not survive as a public lifecycle
+primitive.
+
+It currently serves three roles:
+
+- eager bootstrap thread creation,
+- eager thread creation for `New chat`,
+- send-time "make sure a thread exists" logic.
+
+Under the new design:
+
+- bootstrap should not create a thread,
+- `New chat` should enter draft mode and should not create a thread,
+- only the first submit in draft mode should create the persisted thread.
+
+Recommendation:
+
+- remove `ensureActiveThread()` as a public controller method,
+- replace it with send-time internal logic such as
+  `createThreadForDraftIfNeeded(...)`,
+- keep thread creation behind the controller's send path.
 
 ## Design Questions To Resolve
 
@@ -321,6 +401,22 @@ Reason:
 - Runme projects and Codex thread filtering are app-specific,
 - consistent UI reduces harness-specific branching in `ChatKitPanel`.
 
+### 3a. Does ChatKit still require `listThreads()` when history is disabled?
+
+Recommendation:
+
+- do not make `listThreads()` part of the shared controller contract,
+- keep it on `HarnessChatKitAdapter` as an optional compatibility hook until
+  request logs prove ChatKit no longer calls it when history is disabled.
+
+Reason:
+
+- the official docs clearly support disabling history UI, but they do not
+  explicitly guarantee that no thread-list request path remains,
+- the adapter is the correct place to absorb ChatKit-specific compatibility
+  behavior,
+- the app-owned shell should not depend on ChatKit thread-list semantics.
+
 ### 4. Where should the model picker live?
 
 Recommendation:
@@ -358,6 +454,25 @@ This is equivalent to saying:
 - persisted thread creation is a result of message submission,
 - `New chat` should not create empty threads.
 
+### 7. Should `streamUserMessage()` stay on the adapter?
+
+Recommendation:
+
+- yes.
+
+Reason:
+
+- `streamUserMessage()` is the ChatKit-facing streaming bridge,
+- it naturally belongs on `HarnessChatKitAdapter`,
+- the adapter can translate ChatKit request semantics into controller send
+  semantics,
+- this keeps ChatKit-specific sink/event types out of the shared shell-facing
+  controller contract.
+
+The controller should still own the actual send lifecycle underneath. The
+adapter should not invent its own thread lifecycle; it should delegate to the
+controller for send/stream work.
+
 ## Migration Plan
 
 ### Phase 1: define a shared conversation-shell contract
@@ -365,6 +480,7 @@ This is equivalent to saying:
 - add an app-owned conversation controller interface used by `ChatKitPanel`,
 - implement that contract for `responses-direct`,
 - adapt the existing Codex controller to the same contract.
+- reduce `HarnessChatKitAdapter` to the smaller ChatKit bridge surface.
 
 ### Phase 2: clarify ownership without changing visual layout much
 
@@ -388,6 +504,7 @@ This is equivalent to saying:
 - remove eager thread creation on runtime startup,
 - load history only on startup/project switch,
 - create threads lazily from the first submit in draft mode.
+- remove `ensureActiveThread()` as a public lifecycle API.
 
 ### Phase 5: narrow the adapter
 

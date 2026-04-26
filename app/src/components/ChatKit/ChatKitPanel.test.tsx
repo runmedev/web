@@ -80,6 +80,7 @@ const codexControllerMock = {
     };
   }),
   getSnapshot: vi.fn(() => ({
+    threads: codexConversationState.threads,
     currentThreadId: codexConversationState.currentThreadId,
     currentTurnId: codexConversationState.currentTurnId,
   })),
@@ -386,18 +387,15 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(bridgeMock.connect).not.toHaveBeenCalled();
   });
 
-  it("includes gpt-5.4 in the ChatKit composer model list", () => {
+  it("renders an app-owned model picker with gpt-5.4", () => {
     render(<ChatKitPanel />);
 
-    const config = useChatKitMock.mock.calls.at(0)?.[0];
-    expect(config.composer.models).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "gpt-5.4",
-          label: "GPT-5.4",
-        }),
-      ]),
-    );
+    const modelSelect = screen.getByTestId(
+      "chat-shell-model-select",
+    ) as HTMLSelectElement;
+    expect(
+      [...modelSelect.options].map((option) => option.value),
+    ).toEqual(expect.arrayContaining(["gpt-5.4"]));
   });
 
   it("routes ChatKit to /codex/app-server/ws and connects codex bridge + proxy websocket", async () => {
@@ -425,7 +423,8 @@ describe("ChatKitPanel codex harness routing", () => {
     );
     expect(bridgeMock.setHandler).toHaveBeenCalled();
     expect(config.history.enabled).toBe(false);
-    expect(config.header.title.text).toBe("Runme Repo");
+    expect(config.header.enabled).toBe(false);
+    expect(screen.getByTestId("chat-shell-title").textContent).toBe("Runme Repo");
     expect(appLoggerMock.info).toHaveBeenCalledWith(
       "ChatKit host configured",
       expect.objectContaining({
@@ -534,7 +533,7 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(codexControllerMock.streamUserMessage).toHaveBeenCalledWith(
       "print('hello')",
       expect.any(Object),
-      undefined,
+      "gpt-5.2",
     );
   });
 
@@ -581,7 +580,7 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(proxyMock.disconnect).toHaveBeenCalled();
   });
 
-  it("renders the codex project drawer and conversation list", () => {
+  it("renders the codex project drawer and conversation list", async () => {
     harnessState.defaultHarness.adapter = "codex";
     codexConversationState.threads = [
       {
@@ -594,12 +593,11 @@ describe("ChatKitPanel codex harness routing", () => {
 
     render(<ChatKitPanel />);
 
-    const config = getLatestChatKitConfig();
-    act(() => {
-      config.header.leftAction.onClick();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("chat-shell-history-button"));
     });
 
-    expect(screen.getByTestId("codex-project-drawer")).toBeTruthy();
+    expect(screen.getByTestId("conversation-drawer")).toBeTruthy();
     expect(screen.getByTestId("codex-project-select")).toBeTruthy();
     expect(
       screen.getByTestId("codex-thread-thread-1").textContent ?? "",
@@ -620,9 +618,8 @@ describe("ChatKitPanel codex harness routing", () => {
     const { rerender } = render(<ChatKitPanel />);
     await waitFor(() => expect(proxyMock.connectProxy).toHaveBeenCalled());
 
-    const config = getLatestChatKitConfig();
-    act(() => {
-      config.header.leftAction.onClick();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("chat-shell-history-button"));
     });
 
     await act(async () => {
@@ -829,9 +826,8 @@ describe("ChatKitPanel codex harness routing", () => {
     const { rerender } = render(<ChatKitPanel />);
     await waitFor(() => expect(proxyMock.connectProxy).toHaveBeenCalled());
 
-    const config = getLatestChatKitConfig();
-    act(() => {
-      config.header.leftAction.onClick();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("chat-shell-history-button"));
     });
 
     await act(async () => {

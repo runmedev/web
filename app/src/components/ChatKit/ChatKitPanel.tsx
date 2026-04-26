@@ -60,6 +60,35 @@ const CHATKIT_GREETING = 'How can runme help you today?'
 const CHATKIT_PLACEHOLDER =
   'Describe the production issue or question you are investigating'
 
+const CHAT_MODEL_STORAGE_KEY = 'runme/chat-shell-model-selection'
+const DEFAULT_CHAT_MODEL = 'gpt-5.2'
+const CHAT_MODEL_OPTIONS = [
+  {
+    id: 'gpt-4o-mini',
+    label: 'GPT-4o Mini',
+  },
+  {
+    id: 'gpt-5',
+    label: 'GPT-5',
+  },
+  {
+    id: 'gpt-5.4',
+    label: 'GPT-5.4',
+  },
+  {
+    id: DEFAULT_CHAT_MODEL,
+    label: 'GPT-5.2',
+  },
+  {
+    id: 'gpt-5-mini',
+    label: 'GPT-5 Mini',
+  },
+  {
+    id: 'gpt-5-nano',
+    label: 'GPT-5 Nano',
+  },
+] as const
+
 const CHATKIT_STARTER_PROMPTS = [
   {
     label: 'Setup a local runner for runme to execute code',
@@ -90,6 +119,58 @@ type ChatKitTurnTiming = {
   prompt: string
   responseId: string | null
   firstVisibleMessageAtMs: number | null
+}
+
+type ConversationThreadSummary = {
+  id: string
+  title: string
+  updatedAt?: string
+}
+
+function isCodexHarness(adapter: HarnessProfile['adapter']): boolean {
+  return adapter === 'codex' || adapter === 'codex-wasm'
+}
+
+function readPersistedModelSelection(
+  adapter: HarnessProfile['adapter']
+): string | null {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return null
+  }
+  try {
+    const raw = window.localStorage.getItem(CHAT_MODEL_STORAGE_KEY)
+    if (!raw) {
+      return null
+    }
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const value = parsed[adapter]
+    return typeof value === 'string' && value.trim() ? value : null
+  } catch {
+    return null
+  }
+}
+
+function persistModelSelection(
+  adapter: HarnessProfile['adapter'],
+  model: string
+): void {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return
+  }
+  try {
+    const raw = window.localStorage.getItem(CHAT_MODEL_STORAGE_KEY)
+    const parsed =
+      raw && raw.trim()
+        ? (JSON.parse(raw) as Record<string, unknown>)
+        : {}
+    parsed[adapter] = model
+    window.localStorage.setItem(
+      CHAT_MODEL_STORAGE_KEY,
+      JSON.stringify(parsed)
+    )
+  } catch {
+    // Ignore persistence failures and continue with in-memory state.
+  }
 }
 
 function extractResponseIdFromSSEEvent(
@@ -288,7 +369,16 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     null
   )
   const chatkitDomainKey = getConfiguredChatKitDomainKey()
-  const [showCodexDrawer, setShowCodexDrawer] = useState(false)
+  const [showConversationDrawer, setShowConversationDrawer] = useState(false)
+  const [drawerThreads, setDrawerThreads] = useState<ConversationThreadSummary[]>([])
+  const [drawerThreadsLoading, setDrawerThreadsLoading] = useState(false)
+  const [drawerThreadsError, setDrawerThreadsError] = useState<string | null>(null)
+  const [chatkitThreadIdMirror, setChatkitThreadIdMirror] = useState<string | null>(
+    null
+  )
+  const [selectedModel, setSelectedModel] = useState<string>(() =>
+    readPersistedModelSelection(defaultHarness.adapter) ?? DEFAULT_CHAT_MODEL
+  )
   const runtimeRef = useRef<HarnessRuntime | null>(null)
   const activeTurnTimingRef = useRef<ChatKitTurnTiming | null>(null)
   const chatkitActionsRef = useRef<{
@@ -312,6 +402,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   openNotebookListRef.current = openNotebookList
   const currentDocUriRef = useRef(currentDocUri)
   currentDocUriRef.current = currentDocUri
+  const currentThreadId =
+    isCodexHarness(defaultHarness.adapter)
+      ? codexConversation.currentThreadId
+      : chatkitThreadIdMirror
 
   const resolveCodeModeNotebook = useCallback(
     (target?: unknown) => {
@@ -538,19 +632,20 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     if (!activeAdapter) {
       return undefined
     }
-    if (
-      defaultHarness.adapter === 'codex' ||
-      defaultHarness.adapter === 'codex-wasm'
-    ) {
+    if (isCodexHarness(defaultHarness.adapter)) {
       return createChatKitFetchFromAdapter(
         activeAdapter,
-        buildCodexChatKitFetchOptions()
+        {
+          ...buildCodexChatKitFetchOptions(),
+          resolveModel: () => selectedModel,
+        }
       )
     }
     return createChatKitFetchFromAdapter(activeAdapter, {
       unsupportedRequestPrefix: 'unsupported_responses_direct_request',
+      resolveModel: () => selectedModel,
     })
-  }, [activeAdapter, defaultHarness.adapter])
+  }, [activeAdapter, defaultHarness.adapter, selectedModel])
   const interceptedFetch = useInterceptedFetch(baseFetch, handleSseEvent)
 
   const chatkitApiUrl = useMemo(() => {
@@ -563,11 +658,9 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         adapter: defaultHarness.adapter,
         apiUrl: chatkitApiUrl,
         domainKeyConfigured: Boolean(chatkitDomainKey),
-        selectedProjectId:
-          defaultHarness.adapter === 'codex' ||
-          defaultHarness.adapter === 'codex-wasm'
-            ? codexConversation.selectedProject.id
-            : null,
+        selectedProjectId: isCodexHarness(defaultHarness.adapter)
+          ? codexConversation.selectedProject.id
+          : null,
       },
     })
   }, [
@@ -595,9 +688,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   }, [defaultHarness.adapter, defaultHarness.baseUrl])
 
   const selectedProjectId =
-    defaultHarness.adapter === 'codex' || defaultHarness.adapter === 'codex-wasm'
-      ? defaultProject.id
-      : undefined
+    isCodexHarness(defaultHarness.adapter) ? defaultProject.id : undefined
   const codexBridgeHandler =
     defaultHarness.adapter === 'codex' ? handleCodexBridgeToolCall : undefined
   const wasmApiKey =
@@ -608,6 +699,50 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     defaultHarness.adapter === 'responses-direct'
       ? defaultHarness.baseUrl
       : undefined
+
+  useEffect(() => {
+    setSelectedModel(
+      readPersistedModelSelection(defaultHarness.adapter) ?? DEFAULT_CHAT_MODEL
+    )
+    setDrawerThreads([])
+    setDrawerThreadsError(null)
+    setDrawerThreadsLoading(false)
+    setShowConversationDrawer(false)
+    setChatkitThreadIdMirror(null)
+  }, [defaultHarness.adapter])
+
+  useEffect(() => {
+    persistModelSelection(defaultHarness.adapter, selectedModel)
+  }, [defaultHarness.adapter, selectedModel])
+
+  const loadDrawerThreads = useCallback(async () => {
+    if (!activeAdapter) {
+      return
+    }
+    setDrawerThreadsLoading(true)
+    setDrawerThreadsError(null)
+    try {
+      const threads = await activeAdapter.listThreads()
+      setDrawerThreads(
+        threads.map((thread) => ({
+          id: thread.id,
+          title: thread.title,
+          updatedAt: thread.updated_at,
+        }))
+      )
+    } catch (error) {
+      setDrawerThreadsError(String(error))
+    } finally {
+      setDrawerThreadsLoading(false)
+    }
+  }, [activeAdapter])
+
+  useEffect(() => {
+    if (!showConversationDrawer) {
+      return
+    }
+    void loadDrawerThreads()
+  }, [loadDrawerThreads, showConversationDrawer, currentThreadId])
 
   useEffect(() => {
     const runtime = harnessRuntimeManager.getOrCreate({
@@ -678,8 +813,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
 
   useEffect(() => {
     if (
-      (defaultHarness.adapter !== 'codex' &&
-        defaultHarness.adapter !== 'codex-wasm') ||
+      !isCodexHarness(defaultHarness.adapter) ||
       !codexThreadBootstrapComplete ||
       !activeAdapter
     ) {
@@ -712,37 +846,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     // see: https://openai.github.io/chatkit-js/api/openai/chatkit/type-aliases/composeroption/#tools
     composer: {
       placeholder: CHATKIT_PLACEHOLDER,
-      models: [
-        {
-          id: 'gpt-4o-mini',
-          label: 'GPT-4o Mini',
-        },
-        {
-          id: 'gpt-5',
-          label: 'GPT-5',
-        },
-        {
-          id: 'gpt-5.4',
-          label: 'GPT-5.4',
-        },
-        // gpt-5.2 appears to be about 2x as slow as gpt-4.1-mini-2025-04-14
-        // but for a simple query that's 2s vs 1s so not a huge difference
-        // This is still 10x faster than gpt 5 which took about 10x and felt like
-        // molasses.
-        {
-          id: 'gpt-5.2',
-          label: 'GPT-5.2',
-          default: true,
-        },
-        {
-          id: 'gpt-5-mini',
-          label: 'GPT-5 Mini',
-        },
-        {
-          id: 'gpt-5-nano',
-          label: 'GPT-5 Nano',
-        },
-      ],
       // TODO(jlewi): We want to make the company knowledge tool optional but on by default.
       // Unfortunately if we make it a tool it is not on by default and there doesn't seem to be a way to
       // select it programmatically.
@@ -757,49 +860,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       // ],
     },
     header: {
-      enabled: true,
-      title:
-        defaultHarness.adapter === 'codex' ||
-        defaultHarness.adapter === 'codex-wasm'
-          ? {
-              enabled: true,
-              text: codexConversation.selectedProject.name,
-            }
-          : undefined,
-      leftAction:
-        defaultHarness.adapter === 'codex' ||
-        defaultHarness.adapter === 'codex-wasm'
-          ? {
-              icon: showCodexDrawer ? 'close' : 'menu',
-              onClick: () => setShowCodexDrawer((previous) => !previous),
-            }
-          : undefined,
-      rightAction:
-        defaultHarness.adapter === 'codex' ||
-        defaultHarness.adapter === 'codex-wasm'
-          ? {
-              icon: 'compose',
-              onClick: () => {
-                void (async () => {
-                  setCodexStreamError(null)
-                  const threadId =
-                    (await activeAdapter?.onNewConversation?.()) ?? null
-                  if (threadId) {
-                    await chatkitActionsRef.current?.setThreadId(
-                      threadId,
-                      'header_new_chat'
-                    )
-                    await chatkitActionsRef.current?.fetchUpdates(
-                      'header_new_chat'
-                    )
-                  }
-                })()
-              },
-            }
-          : undefined,
+      enabled: false,
     },
     history: {
-      enabled: activeAdapter?.historyEnabled ?? false,
+      enabled: false,
     },
     onError: ({ error }) => {
       const promptForLogin = () => setShowLoginPrompt(true)
@@ -858,8 +922,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     onLog: ({ name, data }) => {
       if (
         name === 'composer.submit' &&
-        (defaultHarness.adapter === 'codex' ||
-          defaultHarness.adapter === 'codex-wasm')
+        isCodexHarness(defaultHarness.adapter)
       ) {
         const prompt = summarizePromptForTimingLog(data)
         const submittedAtIso = new Date().toISOString()
@@ -902,16 +965,14 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     },
     onThreadChange: ({ threadId }) => {
       const liveCodexSnapshot =
-        defaultHarness.adapter === 'codex' ||
-        defaultHarness.adapter === 'codex-wasm'
+        isCodexHarness(defaultHarness.adapter)
           ? getCodexConversationController().getSnapshot()
           : null
       const liveCodexCurrentThreadId = liveCodexSnapshot?.currentThreadId ?? null
       const liveCodexCurrentTurnId = liveCodexSnapshot?.currentTurnId ?? null
       if (
         threadId == null &&
-        (defaultHarness.adapter === 'codex' ||
-          defaultHarness.adapter === 'codex-wasm') &&
+        isCodexHarness(defaultHarness.adapter) &&
         liveCodexCurrentThreadId
       ) {
         appLogger.info(
@@ -928,24 +989,20 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         )
         return
       }
+      setChatkitThreadIdMirror(threadId ?? null)
       appLogger.info('ChatKit thread changed', {
         attrs: {
           scope: 'chatkit.panel',
           adapter: defaultHarness.adapter,
           threadId: threadId ?? null,
-          codexCurrentThreadId:
-            defaultHarness.adapter === 'codex' ||
-            defaultHarness.adapter === 'codex-wasm'
-              ? liveCodexCurrentThreadId
-              : null,
-          codexCurrentTurnId:
-            defaultHarness.adapter === 'codex' ||
-            defaultHarness.adapter === 'codex-wasm'
-              ? liveCodexCurrentTurnId
-              : null,
+          codexCurrentThreadId: isCodexHarness(defaultHarness.adapter)
+            ? liveCodexCurrentThreadId
+            : null,
+          codexCurrentTurnId: isCodexHarness(defaultHarness.adapter)
+            ? liveCodexCurrentTurnId
+            : null,
         },
       })
-      void activeAdapter?.onThreadSelected?.(threadId ?? null)
     },
   })
   const setChatkitThreadId = useCallback(
@@ -1020,28 +1077,35 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     fetchUpdates: fetchChatkitUpdates,
   }
 
-  const handleCodexNewChat = useCallback(async () => {
+  const handleNewChat = useCallback(async () => {
     setCodexStreamError(null)
-    const threadId = (await activeAdapter?.onNewConversation?.()) ?? null
-    if (!threadId) {
-      return
+    if (isCodexHarness(defaultHarness.adapter)) {
+      getCodexConversationController().startNewChat()
     }
-    await chatkitActionsRef.current?.setThreadId(threadId, 'new_chat')
-    await chatkitActionsRef.current?.fetchUpdates('new_chat')
-  }, [activeAdapter])
+    setChatkitThreadIdMirror(null)
+    await chatkitActionsRef.current?.setThreadId(null, 'new_chat')
+    setShowConversationDrawer(false)
+  }, [defaultHarness.adapter])
 
-  const handleCodexSelectThread = useCallback(async (threadId: string) => {
-    await activeAdapter?.onThreadSelected?.(threadId)
+  const handleSelectThread = useCallback(async (threadId: string) => {
+    if (isCodexHarness(defaultHarness.adapter)) {
+      await getCodexConversationController().selectThread(threadId)
+    }
     await chatkitActionsRef.current?.setThreadId(threadId, 'select_thread')
     await chatkitActionsRef.current?.fetchUpdates('select_thread')
-    setShowCodexDrawer(false)
-  }, [activeAdapter])
+    setShowConversationDrawer(false)
+  }, [defaultHarness.adapter])
 
   const handleCodexProjectChange = useCallback(async (projectId: string) => {
     getCodexProjectManager().setDefault(projectId)
     setCodexStreamError(null)
-    setShowCodexDrawer(false)
+    setShowConversationDrawer(false)
   }, [])
+
+  const handleOpenConversationDrawer = useCallback(async () => {
+    setShowConversationDrawer(true)
+    await loadDrawerThreads()
+  }, [loadDrawerThreads])
 
   const handleLogin = useCallback(() => {
     setShowLoginPrompt(false)
@@ -1052,23 +1116,72 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     setShowLoginPrompt(false)
   }, [])
 
+  const headerTitle = isCodexHarness(defaultHarness.adapter)
+    ? codexConversation.selectedProject.name
+    : 'AI Chat'
+
   return (
-    <div className="relative h-full w-full">
-      {(defaultHarness.adapter !== 'codex' &&
-        defaultHarness.adapter !== 'codex-wasm') ||
-      codexThreadBootstrapComplete ? (
-        <ChatKit control={chatkit.control} className="block h-full w-full" />
-      ) : (
-        <div
-          data-testid="codex-chatkit-bootstrap"
-          className="flex h-full w-full items-center justify-center text-sm text-nb-text-muted"
+    <div className="relative flex h-full w-full flex-col bg-white">
+      <div
+        data-testid="chat-shell-header"
+        className="flex items-center gap-2 border-b border-nb-cell-border bg-white px-3 py-2"
+      >
+        <button
+          type="button"
+          data-testid="chat-shell-history-button"
+          className="rounded border border-nb-cell-border px-3 py-1 text-sm text-nb-text hover:bg-nb-surface-2"
+          onClick={() => {
+            void handleOpenConversationDrawer()
+          }}
         >
-          Initializing Codex thread...
+          History
+        </button>
+        <div
+          data-testid="chat-shell-title"
+          className="min-w-0 flex-1 truncate text-sm font-medium text-nb-text"
+        >
+          {headerTitle}
         </div>
-      )}
-      {(defaultHarness.adapter === 'codex' ||
-        defaultHarness.adapter === 'codex-wasm') &&
-      codexStreamError ? (
+        <label className="flex items-center gap-2 text-sm text-nb-text">
+          <span className="text-nb-text-muted">Model</span>
+          <select
+            data-testid="chat-shell-model-select"
+            className="rounded border border-nb-cell-border bg-white px-2 py-1 text-sm text-nb-text"
+            value={selectedModel}
+            onChange={(event) => setSelectedModel(event.target.value)}
+          >
+            {CHAT_MODEL_OPTIONS.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          data-testid="chat-shell-new-chat-button"
+          className="rounded border border-nb-cell-border px-3 py-1 text-sm text-nb-text hover:bg-nb-surface-2"
+          onClick={() => {
+            void handleNewChat()
+          }}
+        >
+          New chat
+        </button>
+      </div>
+      <div className="relative min-h-0 flex-1">
+        {!isCodexHarness(defaultHarness.adapter) ||
+        codexThreadBootstrapComplete ? (
+          <ChatKit control={chatkit.control} className="block h-full w-full" />
+        ) : (
+          <div
+            data-testid="codex-chatkit-bootstrap"
+            className="flex h-full w-full items-center justify-center text-sm text-nb-text-muted"
+          >
+            Initializing Codex thread...
+          </div>
+        )}
+      </div>
+      {isCodexHarness(defaultHarness.adapter) && codexStreamError ? (
         <div
           data-testid="codex-stream-error"
           className="absolute left-3 right-3 top-3 z-30 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 shadow-sm"
@@ -1076,65 +1189,58 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           {codexStreamError}
         </div>
       ) : null}
-      {(defaultHarness.adapter === 'codex' ||
-        defaultHarness.adapter === 'codex-wasm') &&
-      showCodexDrawer ? (
+      {showConversationDrawer ? (
         <div
-          data-testid="codex-project-drawer"
+          data-testid="conversation-drawer"
           className="absolute inset-y-0 left-0 z-40 flex w-[280px] flex-col border-r border-nb-cell-border bg-white/95 shadow-lg"
         >
-          <div className="border-b border-nb-cell-border px-3 py-3">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-nb-text-muted">
-              Codex Project
+          {isCodexHarness(defaultHarness.adapter) ? (
+            <div className="border-b border-nb-cell-border px-3 py-3">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-nb-text-muted">
+                Codex Project
+              </div>
+              <select
+                data-testid="codex-project-select"
+                className="w-full rounded border border-nb-cell-border bg-white px-2 py-1 text-sm text-nb-text"
+                value={codexConversation.selectedProject.id}
+                onChange={(event) => {
+                  void handleCodexProjectChange(event.target.value)
+                }}
+              >
+                {codexProjects.projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
             </div>
-            <select
-              data-testid="codex-project-select"
-              className="w-full rounded border border-nb-cell-border bg-white px-2 py-1 text-sm text-nb-text"
-              value={codexConversation.selectedProject.id}
-              onChange={(event) => {
-                void handleCodexProjectChange(event.target.value)
-              }}
-            >
-              {codexProjects.projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="mt-2 w-full rounded border border-nb-cell-border px-2 py-1 text-sm text-nb-text hover:bg-nb-surface-2"
-              onClick={() => {
-                void handleCodexNewChat()
-              }}
-            >
-              New chat
-            </button>
-          </div>
+          ) : null}
           <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-nb-text-muted">
               Conversations
             </div>
-            {codexConversation.loadingHistory ? (
+            {drawerThreadsLoading ? (
               <div className="text-sm text-nb-text-muted">Loading...</div>
-            ) : codexConversation.threads.length === 0 ? (
+            ) : drawerThreadsError ? (
+              <div className="text-sm text-red-700">{drawerThreadsError}</div>
+            ) : drawerThreads.length === 0 ? (
               <div className="text-sm text-nb-text-muted">
                 No conversations yet.
               </div>
             ) : (
               <div className="space-y-2">
-                {codexConversation.threads.map((thread) => (
+                {drawerThreads.map((thread) => (
                   <button
                     key={thread.id}
                     type="button"
                     data-testid={`codex-thread-${thread.id}`}
                     className={`w-full rounded border px-2 py-2 text-left text-sm ${
-                      codexConversation.currentThreadId === thread.id
+                      currentThreadId === thread.id
                         ? 'border-nb-accent bg-nb-surface-2'
                         : 'border-nb-cell-border bg-white'
                     }`}
                     onClick={() => {
-                      void handleCodexSelectThread(thread.id)
+                      void handleSelectThread(thread.id)
                     }}
                   >
                     <div className="font-medium text-nb-text">
