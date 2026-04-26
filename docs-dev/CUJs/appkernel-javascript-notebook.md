@@ -161,5 +161,5 @@ transport.
 
 ## Related Design Docs
 
-- `docs-dev/design/appkernel.md`
-- `docs-dev/design/drive.md`
+- `docs-dev/design/20260224_appkernel.md`
+- `docs-dev/design/20260224_drive.md`

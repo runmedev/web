@@ -119,7 +119,7 @@ The worker owns:
 We should run the embedded app-server in a dedicated Web Worker.
 
 This is a different decision from the older
-[codexapp.md](/Users/jlewi/code/runmecodex/web/docs-dev/design/codexapp.md)
+[20260310_codexapp.md](/Users/jlewi/code/runmecodex/web/docs-dev/design/20260310_codexapp.md)
 main-thread recommendation because the architecture has changed. We are no
 longer only translating websocket messages in the browser. We are now hosting a
 long-lived wasm runtime, JSON serialization, event fan-out, and server-request

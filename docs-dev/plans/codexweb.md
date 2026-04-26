@@ -2,7 +2,7 @@
 
 ## Summary
 
-`docs-dev/design/codexapp.md` has moved the codex frontend design in two important ways:
+`docs-dev/design/20260310_codexapp.md` has moved the codex frontend design in two important ways:
 
 1. Codex chat traffic no longer goes through a ChatKit-shaped `/chatkit-codex` HTTP/SSE adapter.
 2. The browser now owns a Runme-level `project -> thread history -> turns` model on top of the Codex websocket proxy.

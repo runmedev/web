@@ -4,7 +4,7 @@ Date: 2026-04-09
 
 Related:
 
-- `docs-dev/design/20260408a_refactor_notebooks.md`
+- `docs-dev/design/20260409_refactor_notebooks.md`
 - https://github.com/runmedev/web/issues/157
 
 ## Summary
