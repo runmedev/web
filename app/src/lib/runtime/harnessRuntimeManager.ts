@@ -1,12 +1,16 @@
 import type { HarnessProfile } from "./harnessManager";
 import type { CodeModeExecutor } from "./codeModeExecutor";
 import type { HarnessChatKitAdapter, HarnessRuntime } from "./harnessChatKitAdapter";
+import type { ConversationController } from "./conversationController";
 import {
   CodexProxyHarnessRuntime,
   CodexWasmHarnessRuntime,
 } from "./codexHarnessRuntimes";
 import type { CodexToolBridgeHandler } from "./codexToolBridge";
-import { createResponsesDirectChatKitAdapter } from "./responsesDirectChatKitAdapter";
+import {
+  createResponsesDirectChatKitAdapter,
+  createResponsesDirectConversationController,
+} from "./responsesDirectChatKitAdapter";
 
 export type CreateHarnessRuntimeOptions = {
   profile: HarnessProfile;
@@ -20,19 +24,25 @@ export type CreateHarnessRuntimeOptions = {
 
 class ResponsesDirectHarnessRuntime implements HarnessRuntime {
   readonly profile: HarnessProfile;
+  private readonly controller: ConversationController;
   private readonly adapter: HarnessChatKitAdapter;
 
   constructor(options: CreateHarnessRuntimeOptions) {
     this.profile = options.profile;
-    this.adapter = createResponsesDirectChatKitAdapter({
+    this.controller = createResponsesDirectConversationController({
       responsesApiBaseUrl: options.responsesApiBaseUrl ?? options.profile.baseUrl,
       codeModeExecutor: options.codeModeExecutor,
     });
+    this.adapter = createResponsesDirectChatKitAdapter(this.controller);
   }
 
   async start(): Promise<void> {}
 
   stop(): void {}
+
+  getConversationController(): ConversationController {
+    return this.controller;
+  }
 
   createChatKitAdapter(): HarnessChatKitAdapter {
     return this.adapter;

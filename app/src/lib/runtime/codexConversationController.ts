@@ -11,6 +11,7 @@ import {
   type CodexProxyJsonRpcNotification,
 } from "./codexAppServerClient";
 import { logCodexEvent } from "./codexLogging";
+import type { ConversationController } from "./conversationController";
 import type {
   ChatKitAssistantMessageItem,
   ChatKitEndOfTurnItem,
@@ -48,6 +49,7 @@ export type CodexConversationSnapshot = {
   currentTurnId: string | null;
   loadingHistory: boolean;
   historyError: string | null;
+  selectedModel: string;
 };
 
 type ControllerListener = () => void;
@@ -464,7 +466,7 @@ function isSyntheticAssistantItemId(responseId: string, itemId: string): boolean
   return itemId === `${responseId}-item`;
 }
 
-class CodexConversationController {
+class CodexConversationController implements ConversationController {
   private listeners = new Set<ControllerListener>();
   private threads = new Map<string, CodexConversationThread>();
   private selectedProjectId = getCodexProjectManager().getDefaultId();
@@ -486,6 +488,7 @@ class CodexConversationController {
       currentTurnId: this.currentTurnId,
       loadingHistory: this.loadingHistory,
       historyError: this.historyError,
+      selectedModel: selectedProject.model,
     };
   }
 
@@ -513,6 +516,10 @@ class CodexConversationController {
     this.currentThreadId = null;
     this.currentTurnId = null;
     this.notify();
+  }
+
+  newChat(): void {
+    this.startNewChat();
   }
 
   async refreshHistory(): Promise<void> {
@@ -587,6 +594,26 @@ class CodexConversationController {
     this.resumeRequired.add(threadId);
     this.notify();
     return thread;
+  }
+
+  async listItems(threadId: string): Promise<CodexConversationItem[]> {
+    const payload = await this.handleListItems(threadId);
+    return payload.data;
+  }
+
+  setSelectedModel(model: string): void {
+    const trimmed = model.trim();
+    if (!trimmed) {
+      return;
+    }
+    const snapshot = this.getSnapshot();
+    if (snapshot.selectedProject.model === trimmed) {
+      return;
+    }
+    getCodexProjectManager().update(snapshot.selectedProject.id, {
+      model: trimmed,
+    });
+    this.notify();
   }
 
   async ensureActiveThread(modelOverride?: string): Promise<CodexConversationThread> {
@@ -665,6 +692,7 @@ class CodexConversationController {
     input: string,
     sink: CodexStreamSink,
     modelOverride?: string,
+    _signal?: AbortSignal | null,
   ): Promise<{ threadId: string; previousResponseId: string }> {
     const proxy = getCodexAppServerClient();
     const project = this.getSnapshot().selectedProject;

@@ -19,12 +19,11 @@ const defaultStreamUserMessage = async (
   sink.emit({ type: "response.created", response: { id: "turn-1" } });
   sink.emit({ type: "response.output_text.delta", delta: "hello" });
   sink.emit({ type: "response.completed", response: { id: "turn-1" } });
-  return { threadId: "thread-1", previousResponseId: "turn-1" };
 };
 
 const controller = {
   refreshHistory: vi.fn(),
-  startNewChat: vi.fn(),
+  newChat: vi.fn(),
   getSnapshot: vi.fn(() => ({
     threads: [{ id: "thread-1", title: "One", updatedAt: "2026-02-26T00:00:00Z" }],
   })),
@@ -50,8 +49,7 @@ const controller = {
       },
     ],
   })),
-  handleListItems: vi.fn(async () => ({
-    data: [
+  listItems: vi.fn(async () => [
       {
         id: "msg-user-1",
         type: "message",
@@ -68,9 +66,7 @@ const controller = {
         createdAt: "2026-02-26T00:01:00Z",
         content: [{ type: "output_text", text: "hello" }],
       },
-    ],
-    has_more: false,
-  })),
+    ]),
   ensureActiveThread: vi.fn(async () => ({
     id: "thread-1",
     title: "One",
@@ -140,10 +136,10 @@ describe("createCodexChatkitFetch", () => {
     appLoggerMock.info.mockClear();
     appLoggerMock.error.mockClear();
     controller.refreshHistory.mockClear();
-    controller.startNewChat.mockClear();
+    controller.newChat.mockClear();
     controller.getSnapshot.mockClear();
     controller.getThread.mockClear();
-    controller.handleListItems.mockClear();
+    controller.listItems.mockClear();
     controller.ensureActiveThread.mockClear();
     controller.streamUserMessage = vi.fn(defaultStreamUserMessage);
     controller.interruptActiveTurn.mockClear();
@@ -199,17 +195,21 @@ describe("createCodexChatkitFetch", () => {
       "hello",
       expect.any(Object),
       "gpt-5.4",
+      null,
     );
   });
 
   it("emits thread.created for new Codex threads", async () => {
-    controller.ensureActiveThread.mockResolvedValueOnce({
-      id: "thread-2",
-      title: "New Codex Thread",
-      items: [],
-    });
     controller.streamUserMessage.mockImplementationOnce(
       async (_input: string, sink: { emit: (payload: unknown) => void }) => {
+        sink.emit({
+          type: "thread.created",
+          thread: {
+            id: "thread-2",
+            title: "New Codex Thread",
+            created_at: "2026-02-26T00:00:00Z",
+          },
+        });
         sink.emit({ type: "response.created", response: { id: "turn-2" } });
         sink.emit({
           type: "response.output_text.delta",
@@ -218,7 +218,6 @@ describe("createCodexChatkitFetch", () => {
           delta: "hello",
         });
         sink.emit({ type: "response.completed", response: { id: "turn-2" } });
-        return { threadId: "thread-2", previousResponseId: "turn-2" };
       },
     );
 
@@ -237,9 +236,6 @@ describe("createCodexChatkitFetch", () => {
 
     const body = await response.text();
 
-    expect(controller.startNewChat).toHaveBeenCalled();
-    expect(controller.ensureActiveThread).toHaveBeenCalledTimes(1);
-    expect(controller.ensureActiveThread).toHaveBeenCalledWith(undefined);
     expect(body).toContain('"type":"thread.created"');
     expect(body).toContain('"title":"New Codex Thread"');
   });
@@ -387,7 +383,7 @@ describe("createCodexChatkitFetch", () => {
       }),
     });
 
-    expect(controller.handleListItems).toHaveBeenCalledWith("thread-1");
+    expect(controller.listItems).toHaveBeenCalledWith("thread-1");
     const payload = await response.json();
     expect(payload).toEqual({
       data: expect.any(Array),
@@ -409,7 +405,7 @@ describe("createCodexChatkitFetch", () => {
       }),
     });
 
-    expect(controller.handleListItems).toHaveBeenCalledWith("thread-1");
+    expect(controller.listItems).toHaveBeenCalledWith("thread-1");
     const payload = await response.json();
     expect(payload).toEqual({
       data: expect.any(Array),
@@ -431,7 +427,7 @@ describe("createCodexChatkitFetch", () => {
       }),
     });
 
-    expect(controller.handleListItems).toHaveBeenCalledWith("thread-1");
+    expect(controller.listItems).toHaveBeenCalledWith("thread-1");
     const payload = await response.json();
     expect(payload).toEqual({
       data: expect.any(Array),
@@ -482,6 +478,7 @@ describe("createCodexChatkitFetch", () => {
       "hello",
       expect.any(Object),
       undefined,
+      null,
     );
     expect(body).toContain('"type":"response.created"');
     expect(body).toContain('"delta":"hello"');
@@ -507,6 +504,7 @@ describe("createCodexChatkitFetch", () => {
       "hello from request",
       expect.any(Object),
       undefined,
+      null,
     );
     expect(body).toContain('"type":"response.created"');
   });
@@ -530,6 +528,7 @@ describe("createCodexChatkitFetch", () => {
       "hello from nested params",
       expect.any(Object),
       undefined,
+      null,
     );
     expect(body).toContain('"type":"response.created"');
   });

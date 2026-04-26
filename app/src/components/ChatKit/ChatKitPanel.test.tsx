@@ -58,41 +58,33 @@ const proxyMock = {
   setAuthorizationResolver: vi.fn(),
 };
 const codexControllerMock = {
+  subscribe: vi.fn(() => () => {}),
   setSelectedProject: vi.fn(),
   refreshHistory: vi.fn(async () => {}),
-  startNewChat: vi.fn(),
-  ensureActiveThread: vi.fn(async () => {
-    codexConversationState.currentThreadId = "thread-bootstrap";
+  newChat: vi.fn(() => {
+    codexConversationState.currentThreadId = null;
     codexConversationState.currentTurnId = null;
-    return {
-      id: "thread-bootstrap",
-      title: "Bootstrap Thread",
-      previousResponseId: "",
-      items: [],
-    };
   }),
+  setSelectedModel: vi.fn(),
   streamUserMessage: vi.fn(async (_input: string, sink: { emit: (payload: unknown) => void }) => {
     sink.emit({ type: "response.created", response: { id: "resp-1" } });
     sink.emit({ type: "response.completed", response: { id: "resp-1" } });
-    return {
-      threadId: codexConversationState.currentThreadId ?? "thread-bootstrap",
-      previousResponseId: "resp-1",
-    };
   }),
   getSnapshot: vi.fn(() => ({
+    selectedProject: codexConversationState.selectedProject,
     threads: codexConversationState.threads,
     currentThreadId: codexConversationState.currentThreadId,
     currentTurnId: codexConversationState.currentTurnId,
+    loadingHistory: codexConversationState.loadingHistory,
+    historyError: codexConversationState.historyError,
+    selectedModel: "gpt-5.2",
   })),
   getThread: vi.fn(async (threadId: string) => ({
     id: threadId,
     title: "Investigate latency",
     items: [],
   })),
-  handleListItems: vi.fn(async () => ({
-    data: [],
-    has_more: false,
-  })),
+  listItems: vi.fn(async () => []),
   selectThread: vi.fn(async (threadId: string) => ({
     id: threadId,
     previousResponseId: "turn-1",
@@ -267,11 +259,11 @@ describe("ChatKitPanel codex harness routing", () => {
     proxyMock.setAuthorizationResolver.mockClear();
     codexControllerMock.setSelectedProject.mockClear();
     codexControllerMock.refreshHistory.mockClear();
-    codexControllerMock.startNewChat.mockClear();
-    codexControllerMock.ensureActiveThread.mockClear();
+    codexControllerMock.newChat.mockClear();
+    codexControllerMock.setSelectedModel.mockClear();
     codexControllerMock.getSnapshot.mockClear();
     codexControllerMock.getThread.mockClear();
-    codexControllerMock.handleListItems.mockClear();
+    codexControllerMock.listItems.mockClear();
     codexControllerMock.streamUserMessage.mockClear();
     codexControllerMock.interruptActiveTurn.mockClear();
     codexControllerMock.selectThread.mockClear();
@@ -493,12 +485,12 @@ describe("ChatKitPanel codex harness routing", () => {
     });
   });
 
-  it("bootstraps a codex thread on load and passes it to ChatKit as initialThread", async () => {
+  it("hydrates an existing codex thread on load and passes it to ChatKit as initialThread", async () => {
     harnessState.defaultHarness.adapter = "codex";
+    codexConversationState.currentThreadId = "thread-bootstrap";
 
     render(<ChatKitPanel />);
 
-    await waitFor(() => expect(codexControllerMock.ensureActiveThread).toHaveBeenCalled());
     expect(getLatestChatKitConfig().initialThread).toBe("thread-bootstrap");
     await waitFor(() =>
       expect(setThreadIdMock).toHaveBeenCalledWith("thread-bootstrap"),
@@ -510,7 +502,6 @@ describe("ChatKitPanel codex harness routing", () => {
 
     render(<ChatKitPanel />);
 
-    await waitFor(() => expect(codexControllerMock.ensureActiveThread).toHaveBeenCalled());
     const config = getLatestChatKitConfig();
 
     await act(async () => {
@@ -534,6 +525,7 @@ describe("ChatKitPanel codex harness routing", () => {
       "print('hello')",
       expect.any(Object),
       "gpt-5.2",
+      null,
     );
   });
 
@@ -639,15 +631,10 @@ describe("ChatKitPanel codex harness routing", () => {
           type: "response.failed",
           error: { message: "Timed out waiting for codex turn completion" },
         });
-        return {
-          threadId: "thread-bootstrap",
-          previousResponseId: "resp-1",
-        };
       },
     );
 
     render(<ChatKitPanel />);
-    await waitFor(() => expect(codexControllerMock.ensureActiveThread).toHaveBeenCalled());
 
     const config = getLatestChatKitConfig();
 
@@ -701,15 +688,10 @@ describe("ChatKitPanel codex harness routing", () => {
           type: "response.completed",
           response: { id: "turn-timing-1" },
         });
-        return {
-          threadId: "thread-bootstrap",
-          previousResponseId: "turn-timing-1",
-        };
       },
     );
 
     render(<ChatKitPanel />);
-    await waitFor(() => expect(codexControllerMock.ensureActiveThread).toHaveBeenCalled());
 
     const config = getLatestChatKitConfig();
     act(() => {
@@ -847,8 +829,7 @@ describe("ChatKitPanel codex harness routing", () => {
     await waitFor(() => expect(codexControllerMock.setSelectedProject).toHaveBeenCalledWith("project-2"));
 
     expect(codexControllerMock.refreshHistory).toHaveBeenCalled();
-    expect(codexControllerMock.ensureActiveThread).toHaveBeenCalled();
-    expect(setThreadIdMock).toHaveBeenCalledWith("thread-bootstrap");
+    expect(setThreadIdMock).not.toHaveBeenCalledWith("thread-bootstrap");
   });
 
   it("logs chatkit errors through appLogger", async () => {
@@ -897,7 +878,7 @@ describe("ChatKitPanel codex harness routing", () => {
           scope: "chatkit.panel",
           adapter: "codex",
           threadId: "thread-1",
-          codexCurrentThreadId: "thread-bootstrap",
+          codexCurrentThreadId: null,
           codexCurrentTurnId: null,
         }),
       }),
@@ -932,8 +913,8 @@ describe("ChatKitPanel codex harness routing", () => {
           scope: "chatkit.panel",
           adapter: "codex",
           threadId: null,
-          codexCurrentThreadId: "thread-bootstrap",
-          codexCurrentTurnId: null,
+          codexCurrentThreadId: "thread-1",
+          codexCurrentTurnId: "turn-1",
         }),
       }),
     );
@@ -959,7 +940,7 @@ describe("ChatKitPanel codex harness routing", () => {
       config.onThreadChange({ threadId: null });
     });
 
-    expect(codexControllerMock.startNewChat).not.toHaveBeenCalled();
+    expect(codexControllerMock.newChat).not.toHaveBeenCalled();
     expect(appLoggerMock.info).toHaveBeenCalledWith(
       "Ignoring null ChatKit thread change while Codex thread is active",
       expect.objectContaining({

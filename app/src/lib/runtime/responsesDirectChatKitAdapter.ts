@@ -3,6 +3,11 @@ import { appLogger } from '../logging/runtime'
 import type { CodeModeExecutor } from './codeModeExecutor'
 import { getCodeModeErrorOutput } from './codeModeExecutor'
 import type { ChatKitThreadDetail } from './chatkitProtocol'
+import type {
+  ConversationController,
+  ConversationControllerSnapshot,
+  ConversationStreamSink,
+} from './conversationController'
 import { createChatKitFetchFromAdapter } from './createChatKitFetchFromAdapter'
 import type {
   HarnessChatKitAdapter,
@@ -368,19 +373,163 @@ async function executeResponsesToolCall(args: {
   }
 }
 
-export function createResponsesDirectChatKitAdapter(options?: {
-  responsesApiBaseUrl?: string
-  codeModeExecutor?: CodeModeExecutor
-}): HarnessChatKitAdapter {
-  const responsesApiUrl = resolveResponsesApiUrl(
-    options?.responsesApiBaseUrl ?? ''
-  )
-  const threads = new Map<string, StoredThread>()
+class ResponsesDirectConversationController implements ConversationController {
+  private readonly responsesApiUrl: string
+  private readonly codeModeExecutor?: CodeModeExecutor
+  private readonly threads = new Map<string, StoredThread>()
+  private readonly listeners = new Set<() => void>()
+  private currentThreadId: string | null = null
+  private selectedModel = DEFAULT_MODEL
 
-  const ensureThread = (threadId?: string): StoredThread => {
+  constructor(options?: {
+    responsesApiBaseUrl?: string
+    codeModeExecutor?: CodeModeExecutor
+  }) {
+    this.responsesApiUrl = resolveResponsesApiUrl(
+      options?.responsesApiBaseUrl ?? ''
+    )
+    this.codeModeExecutor = options?.codeModeExecutor
+  }
+
+  getSnapshot(): ConversationControllerSnapshot {
+    return {
+      currentThreadId: this.currentThreadId,
+      threads: [...this.threads.values()].map((thread) => ({
+        id: thread.id,
+        title: thread.title,
+        updatedAt: thread.updatedAt,
+      })),
+      loadingHistory: false,
+      historyError: null,
+      selectedModel: this.selectedModel,
+    }
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
+
+  async refreshHistory(): Promise<void> {}
+
+  newChat(): void {
+    this.currentThreadId = null
+    this.notify()
+  }
+
+  async selectThread(threadId: string): Promise<StoredThread> {
+    const thread = this.getExistingThread(threadId)
+    this.currentThreadId = thread.id
+    this.notify()
+    return thread
+  }
+
+  async getThread(threadId: string): Promise<StoredThread> {
+    return this.getExistingThread(threadId)
+  }
+
+  async listItems(threadId: string): Promise<JsonRecord[]> {
+    return this.getExistingThread(threadId).items
+  }
+
+  setSelectedModel(model: string): void {
+    const trimmed = model.trim()
+    if (!trimmed || trimmed === this.selectedModel) {
+      return
+    }
+    this.selectedModel = trimmed
+    this.notify()
+  }
+
+  async streamUserMessage(
+    input: string,
+    sink: ConversationStreamSink,
+    modelOverride?: string,
+    signal?: AbortSignal | null
+  ): Promise<void> {
+    const hadActiveThread = Boolean(this.currentThreadId)
+    const thread = this.ensureThread(this.currentThreadId ?? undefined)
+    this.currentThreadId = thread.id
+    thread.model = modelOverride || this.selectedModel || thread.model || DEFAULT_MODEL
+    withUpdatedThreadTitle(thread, input)
+
+    if (!hadActiveThread) {
+      sink.emit({
+        type: 'thread.created',
+        thread: {
+          id: thread.id,
+          title: thread.title,
+          created_at: thread.createdAt,
+        },
+      } as never)
+    }
+
+    const userItem: JsonRecord = {
+      id: randomId('msg'),
+      type: 'user_message',
+      thread_id: thread.id,
+      created_at: new Date().toISOString(),
+      content: [
+        {
+          type: 'input_text',
+          text: input,
+        },
+      ],
+      attachments: [],
+      inference_options: {
+        model: thread.model || DEFAULT_MODEL,
+      },
+    }
+    thread.items.push(userItem)
+    thread.updatedAt = new Date().toISOString()
+    this.notify()
+
+    const vectorStores =
+      responsesDirectConfigManager.getSnapshot().vectorStores
+    const requestPayload = buildOpenAIResponsesRequestForInput({
+      text: input,
+      model: thread.model || DEFAULT_MODEL,
+      previousResponseId: thread.previousResponseId,
+      vectorStores,
+    })
+
+    sink.emit({
+      type: 'thread.item.added',
+      item: userItem,
+    } as never)
+    sink.emit({
+      type: 'thread.item.done',
+      item: userItem,
+    } as never)
+    await this.streamOpenAI({
+      thread,
+      requestPayload,
+      emit: sink.emit,
+      signal,
+    })
+    this.notify()
+  }
+
+  private notify(): void {
+    this.listeners.forEach((listener) => {
+      listener()
+    })
+  }
+
+  private getExistingThread(threadId: string): StoredThread {
+    const thread = threadId ? this.threads.get(threadId) : undefined
+    if (!thread) {
+      throw new Error('thread_not_found')
+    }
+    return thread
+  }
+
+  private ensureThread(threadId?: string): StoredThread {
     const normalized = threadId?.trim() ?? ''
-    if (normalized && threads.has(normalized)) {
-      return threads.get(normalized)!
+    if (normalized && this.threads.has(normalized)) {
+      return this.threads.get(normalized)!
     }
     const now = new Date().toISOString()
     const created: StoredThread = {
@@ -388,28 +537,26 @@ export function createResponsesDirectChatKitAdapter(options?: {
       title: 'New conversation',
       createdAt: now,
       updatedAt: now,
-      model: DEFAULT_MODEL,
+      model: this.selectedModel || DEFAULT_MODEL,
       items: [],
     }
-    threads.set(created.id, created)
+    this.threads.set(created.id, created)
     return created
   }
 
-  const streamOpenAI = async (options: {
+  private async streamOpenAI(options: {
     thread: StoredThread
-    responsesApiUrl: string
     requestPayload: JsonRecord
     emit: (payload: unknown) => void
     signal?: AbortSignal | null
-    codeModeExecutor?: CodeModeExecutor
-  }): Promise<void> => {
+  }): Promise<void> {
     let nextPayload: JsonRecord | null = options.requestPayload
     while (nextPayload) {
       const currentPayload = nextPayload
       nextPayload = null
 
       const headers = await resolveResponsesDirectHeaders()
-      const response = await fetch(options.responsesApiUrl, {
+      const response = await fetch(this.responsesApiUrl, {
         method: 'POST',
         headers,
         body: JSON.stringify(currentPayload),
@@ -572,7 +719,7 @@ export function createResponsesDirectChatKitAdapter(options?: {
                 EXECUTE_CODE_TOOL_NAME
               const argumentsRaw = asString(event.arguments) ?? '{}'
               pendingToolContinuationPromise = executeResponsesToolCall({
-                codeModeExecutor: options.codeModeExecutor,
+                codeModeExecutor: this.codeModeExecutor,
                 toolName: name,
                 callId,
                 previousResponseId: options.thread.previousResponseId,
@@ -616,89 +763,53 @@ export function createResponsesDirectChatKitAdapter(options?: {
       })
     }
   }
+}
 
+export function createResponsesDirectConversationController(options?: {
+  responsesApiBaseUrl?: string
+  codeModeExecutor?: CodeModeExecutor
+}): ConversationController {
+  return new ResponsesDirectConversationController(options)
+}
+
+export function createResponsesDirectChatKitAdapter(
+  controller: ConversationController
+): HarnessChatKitAdapter {
   return {
-    historyEnabled: true,
     async listThreads() {
-      return [...threads.values()].map((thread) => ({
+      await controller.refreshHistory()
+      return controller.getSnapshot().threads.map((thread) => ({
         id: thread.id,
         title: thread.title,
         updated_at: thread.updatedAt,
       }))
     },
     async getThread(threadId: string) {
-      const thread = threadId ? threads.get(threadId) : undefined
-      if (!thread) {
-        throw new Error('thread_not_found')
-      }
-      return buildThreadDetail(thread)
+      const thread = await controller.getThread(threadId)
+      return buildThreadDetail(thread as StoredThread)
     },
     async listItems(threadId: string) {
-      const thread = threadId ? threads.get(threadId) : undefined
-      return thread?.items ?? []
+      return controller.listItems(threadId)
     },
     async streamUserMessage(
       request: HarnessChatKitMessageRequest,
       sink: HarnessChatKitEventSink
     ): Promise<void> {
-      const thread = ensureThread(request.createThread ? undefined : request.threadId)
-      thread.model = request.model || thread.model || DEFAULT_MODEL
-      withUpdatedThreadTitle(thread, request.input)
-
-      const userItem: JsonRecord = {
-        id: randomId('msg'),
-        type: 'user_message',
-        thread_id: thread.id,
-        created_at: new Date().toISOString(),
-        content: [
-          {
-            type: 'input_text',
-            text: request.input,
-          },
-        ],
-        attachments: [],
-        inference_options: {
-          model: request.model || DEFAULT_MODEL,
-        },
-      }
-      thread.items.push(userItem)
-      thread.updatedAt = new Date().toISOString()
-
-      const vectorStores =
-        responsesDirectConfigManager.getSnapshot().vectorStores
-      const requestPayload = buildOpenAIResponsesRequestForInput({
-        text: request.input,
-        model: request.model || thread.model || DEFAULT_MODEL,
-        previousResponseId: thread.previousResponseId,
-        vectorStores,
-      })
-
       if (request.createThread) {
-        sink.emit({
-          type: 'thread.created',
-          thread: {
-            id: thread.id,
-            title: thread.title,
-            created_at: thread.createdAt,
-          },
-        } as never)
+        controller.newChat()
       }
-      sink.emit({
-        type: 'thread.item.added',
-        item: userItem,
-      } as never)
-      sink.emit({
-        type: 'thread.item.done',
-        item: userItem,
-      } as never)
-      await streamOpenAI({
-        thread,
-        responsesApiUrl,
-        requestPayload,
-        emit: sink.emit,
-        signal: request.signal ?? null,
-        codeModeExecutor: options?.codeModeExecutor,
-      })
+      if (
+        request.threadId &&
+        controller.getSnapshot().currentThreadId !== request.threadId
+      ) {
+        await controller.selectThread(request.threadId)
+      }
+      await controller.streamUserMessage(
+        request.input,
+        sink,
+        request.model,
+        request.signal ?? null
+      )
     },
   }
 }
@@ -707,8 +818,9 @@ export function createResponsesDirectChatkitFetch(options?: {
   responsesApiBaseUrl?: string
   codeModeExecutor?: CodeModeExecutor
 }): typeof fetch {
+  const controller = createResponsesDirectConversationController(options)
   return createChatKitFetchFromAdapter(
-    createResponsesDirectChatKitAdapter(options),
+    createResponsesDirectChatKitAdapter(controller),
     {
       unsupportedRequestPrefix: 'unsupported_responses_direct_request',
     }

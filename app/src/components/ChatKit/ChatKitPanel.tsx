@@ -27,6 +27,10 @@ import {
   getCodexConversationController,
   useCodexConversationSnapshot,
 } from '../../lib/runtime/codexConversationController'
+import {
+  useConversationControllerSnapshot,
+  type ConversationController,
+} from '../../lib/runtime/conversationController'
 import type {
   HarnessChatKitAdapter,
   HarnessRuntime,
@@ -119,12 +123,6 @@ type ChatKitTurnTiming = {
   prompt: string
   responseId: string | null
   firstVisibleMessageAtMs: number | null
-}
-
-type ConversationThreadSummary = {
-  id: string
-  title: string
-  updatedAt?: string
 }
 
 function isCodexHarness(adapter: HarnessProfile['adapter']): boolean {
@@ -368,17 +366,12 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const [activeAdapter, setActiveAdapter] = useState<HarnessChatKitAdapter | null>(
     null
   )
+  const [activeController, setActiveController] =
+    useState<ConversationController | null>(null)
   const chatkitDomainKey = getConfiguredChatKitDomainKey()
   const [showConversationDrawer, setShowConversationDrawer] = useState(false)
-  const [drawerThreads, setDrawerThreads] = useState<ConversationThreadSummary[]>([])
   const [drawerThreadsLoading, setDrawerThreadsLoading] = useState(false)
   const [drawerThreadsError, setDrawerThreadsError] = useState<string | null>(null)
-  const [chatkitThreadIdMirror, setChatkitThreadIdMirror] = useState<string | null>(
-    null
-  )
-  const [selectedModel, setSelectedModel] = useState<string>(() =>
-    readPersistedModelSelection(defaultHarness.adapter) ?? DEFAULT_CHAT_MODEL
-  )
   const runtimeRef = useRef<HarnessRuntime | null>(null)
   const activeTurnTimingRef = useRef<ChatKitTurnTiming | null>(null)
   const chatkitActionsRef = useRef<{
@@ -394,6 +387,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const codexProjects = useCodexProjects()
   const { defaultProject } = codexProjects
   const codexConversation = useCodexConversationSnapshot()
+  const conversationSnapshot = useConversationControllerSnapshot(activeController)
   const currentDocUri = getCurrentDoc()
   const openNotebookList = useNotebookList()
   const getNotebookDataRef = useRef(getNotebookData)
@@ -402,10 +396,12 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   openNotebookListRef.current = openNotebookList
   const currentDocUriRef = useRef(currentDocUri)
   currentDocUriRef.current = currentDocUri
-  const currentThreadId =
-    isCodexHarness(defaultHarness.adapter)
-      ? codexConversation.currentThreadId
-      : chatkitThreadIdMirror
+  const currentThreadId = conversationSnapshot?.currentThreadId ?? null
+  const selectedModel =
+    conversationSnapshot?.selectedModel ??
+    readPersistedModelSelection(defaultHarness.adapter) ??
+    DEFAULT_CHAT_MODEL
+  const drawerThreads = conversationSnapshot?.threads ?? []
 
   const resolveCodeModeNotebook = useCallback(
     (target?: unknown) => {
@@ -701,41 +697,38 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       : undefined
 
   useEffect(() => {
-    setSelectedModel(
-      readPersistedModelSelection(defaultHarness.adapter) ?? DEFAULT_CHAT_MODEL
-    )
-    setDrawerThreads([])
     setDrawerThreadsError(null)
     setDrawerThreadsLoading(false)
     setShowConversationDrawer(false)
-    setChatkitThreadIdMirror(null)
   }, [defaultHarness.adapter])
+
+  useEffect(() => {
+    if (!activeController) {
+      return
+    }
+    activeController.setSelectedModel(
+      readPersistedModelSelection(defaultHarness.adapter) ?? DEFAULT_CHAT_MODEL
+    )
+  }, [activeController, defaultHarness.adapter])
 
   useEffect(() => {
     persistModelSelection(defaultHarness.adapter, selectedModel)
   }, [defaultHarness.adapter, selectedModel])
 
   const loadDrawerThreads = useCallback(async () => {
-    if (!activeAdapter) {
+    if (!activeController) {
       return
     }
     setDrawerThreadsLoading(true)
     setDrawerThreadsError(null)
     try {
-      const threads = await activeAdapter.listThreads()
-      setDrawerThreads(
-        threads.map((thread) => ({
-          id: thread.id,
-          title: thread.title,
-          updatedAt: thread.updated_at,
-        }))
-      )
+      await activeController.refreshHistory()
     } catch (error) {
       setDrawerThreadsError(String(error))
     } finally {
       setDrawerThreadsLoading(false)
     }
-  }, [activeAdapter])
+  }, [activeController])
 
   useEffect(() => {
     if (!showConversationDrawer) {
@@ -759,6 +752,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     })
     runtimeRef.current = runtime
     lastAppliedThreadRef.current = null
+    setActiveController(runtime.getConversationController())
     setActiveAdapter(runtime.createChatKitAdapter())
     setCodexThreadBootstrapComplete(
       defaultHarness.adapter !== 'codex' &&
@@ -773,6 +767,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         if (canceled) {
           return
         }
+        setActiveController(runtime.getConversationController())
         setActiveAdapter(runtime.createChatKitAdapter())
         setCodexThreadBootstrapComplete(true)
       } catch (error) {
@@ -798,6 +793,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       if (runtimeRef.current === runtime) {
         runtimeRef.current = null
       }
+      setActiveController(null)
       setActiveAdapter(null)
     }
   }, [
@@ -815,18 +811,22 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     if (
       !isCodexHarness(defaultHarness.adapter) ||
       !codexThreadBootstrapComplete ||
-      !activeAdapter
+      !conversationSnapshot
     ) {
       lastAppliedThreadRef.current = null
       return
     }
-    const threadId = activeAdapter.initialThreadId ?? null
+    const threadId = conversationSnapshot.currentThreadId ?? null
     if (!threadId || lastAppliedThreadRef.current === threadId) {
       return
     }
     lastAppliedThreadRef.current = threadId
     void chatkitActionsRef.current?.setThreadId(threadId, 'bootstrap_sync')
-  }, [activeAdapter, codexThreadBootstrapComplete, defaultHarness.adapter])
+  }, [
+    codexThreadBootstrapComplete,
+    conversationSnapshot,
+    defaultHarness.adapter,
+  ])
 
   const chatkit = useChatKit({
     api: {
@@ -834,7 +834,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       domainKey: chatkitDomainKey,
       fetch: interceptedFetch,
     },
-    initialThread: activeAdapter?.initialThreadId,
+    initialThread: conversationSnapshot?.currentThreadId ?? undefined,
     theme: {
       colorScheme: 'light',
       radius: 'round',
@@ -989,7 +989,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         )
         return
       }
-      setChatkitThreadIdMirror(threadId ?? null)
       appLogger.info('ChatKit thread changed', {
         attrs: {
           scope: 'chatkit.panel',
@@ -1079,28 +1078,27 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
 
   const handleNewChat = useCallback(async () => {
     setCodexStreamError(null)
-    if (isCodexHarness(defaultHarness.adapter)) {
-      getCodexConversationController().startNewChat()
-    }
-    setChatkitThreadIdMirror(null)
+    await activeController?.newChat()
     await chatkitActionsRef.current?.setThreadId(null, 'new_chat')
     setShowConversationDrawer(false)
-  }, [defaultHarness.adapter])
+  }, [activeController])
 
   const handleSelectThread = useCallback(async (threadId: string) => {
-    if (isCodexHarness(defaultHarness.adapter)) {
-      await getCodexConversationController().selectThread(threadId)
-    }
+    await activeController?.selectThread(threadId)
     await chatkitActionsRef.current?.setThreadId(threadId, 'select_thread')
     await chatkitActionsRef.current?.fetchUpdates('select_thread')
     setShowConversationDrawer(false)
-  }, [defaultHarness.adapter])
+  }, [activeController])
 
   const handleCodexProjectChange = useCallback(async (projectId: string) => {
-    getCodexProjectManager().setDefault(projectId)
+    if (activeController?.setSelectedProject) {
+      await activeController.setSelectedProject(projectId)
+    } else {
+      getCodexProjectManager().setDefault(projectId)
+    }
     setCodexStreamError(null)
     setShowConversationDrawer(false)
-  }, [])
+  }, [activeController])
 
   const handleOpenConversationDrawer = useCallback(async () => {
     setShowConversationDrawer(true)
@@ -1148,7 +1146,9 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
             data-testid="chat-shell-model-select"
             className="rounded border border-nb-cell-border bg-white px-2 py-1 text-sm text-nb-text"
             value={selectedModel}
-            onChange={(event) => setSelectedModel(event.target.value)}
+            onChange={(event) => {
+              activeController?.setSelectedModel(event.target.value)
+            }}
           >
             {CHAT_MODEL_OPTIONS.map((model) => (
               <option key={model.id} value={model.id}>
