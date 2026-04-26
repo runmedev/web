@@ -88,15 +88,6 @@ function emitLoggedChatkitEvent(sink: CodexStreamSink, payload: ChatKitStreamEve
     responseId,
     itemId,
   });
-  console.log(
-    "[chatkit] codex event",
-    JSON.stringify({
-      type: payloadType,
-      responseId,
-      itemId,
-      preview: summarizeCodexText(payload),
-    }),
-  );
   sink.emit(payload);
 }
 
@@ -627,30 +618,6 @@ class CodexConversationController implements ConversationController {
     });
     const resultRecord = asRecord(result);
     const resultThread = asRecord(resultRecord.thread);
-    console.log(
-      "[chatkit] codex thread/read payload",
-      JSON.stringify({
-        threadId,
-        resultKeys: Object.keys(resultRecord),
-        threadKeys: Object.keys(resultThread),
-        topLevelItemsCount: Array.isArray(resultRecord.items)
-          ? resultRecord.items.length
-          : Array.isArray(asRecord(resultRecord.items).data)
-            ? (asRecord(resultRecord.items).data as unknown[]).length
-            : 0,
-        threadItemsCount: Array.isArray(resultThread.items)
-          ? resultThread.items.length
-          : Array.isArray(asRecord(resultThread.items).data)
-            ? (asRecord(resultThread.items).data as unknown[]).length
-            : 0,
-        threadTurnsCount: Array.isArray(resultThread.turns)
-          ? resultThread.turns.length
-          : 0,
-        topLevelTurnsCount: Array.isArray(resultRecord.turns)
-          ? resultRecord.turns.length
-          : 0,
-      }),
-    );
     appLogger.info("Codex thread/read payload received", {
       attrs: {
         scope: "chatkit.codex_controller",
@@ -941,26 +908,6 @@ class CodexConversationController implements ConversationController {
           jsonrpcMethod: notification.method,
           payload: notification,
         });
-        console.log(
-          "[chatkit] codex notification",
-          JSON.stringify({
-            method: notification.method,
-            threadId: notificationThreadId ?? null,
-            turnId: notificationTurnId ?? null,
-            responseId:
-              asString(payload.responseId) ??
-              asString(payload.response_id) ??
-              null,
-            itemId:
-              asString(payload.itemId) ??
-              asString(payload.item_id) ??
-              null,
-            payloadType: asString(payload.type) ?? null,
-            itemType: asString(asRecord(payload.item).type) ?? null,
-            itemTextPreview: summarizeCodexText(asRecord(payload.item)),
-            preview: summarizeCodexText(payload),
-          }),
-        );
         const mapped = this.mapNotificationToAssistantEvent(
           notification,
           threadId!,
@@ -986,6 +933,73 @@ class CodexConversationController implements ConversationController {
           canonicalAssistantItemIds.set(responseId, itemId);
           pendingSyntheticItems.delete(responseId);
         };
+        const finalizePendingResponseItem = (pendingItemId: string) => {
+          const pendingText = itemTexts.get(pendingItemId) ?? "";
+          const responseId = itemResponseIds.get(pendingItemId) ?? lastResponseId;
+          const outputIndex = (
+            responseItemIds.get(responseId) ?? []
+          ).indexOf(pendingItemId);
+          emitLoggedChatkitEvent(sink, {
+            type: "thread.item.updated",
+            item_id: pendingItemId,
+            update: {
+              type: "assistant_message.content_part.done",
+              content_index: 0,
+              content: {
+                type: "output_text",
+                text: pendingText,
+                annotations: [],
+              },
+            },
+          });
+          emitLoggedChatkitEvent(sink, {
+            type: "response.output_text.done",
+            response_id: responseId,
+            output_index: outputIndex >= 0 ? outputIndex : 0,
+            item_id: pendingItemId,
+            content_index: 0,
+            text: pendingText,
+          });
+          emitLoggedChatkitEvent(sink, {
+            type: "response.content_part.done",
+            response_id: responseId,
+            output_index: outputIndex >= 0 ? outputIndex : 0,
+            item_id: pendingItemId,
+            content_index: 0,
+            part: {
+              type: "output_text",
+              text: pendingText,
+              annotations: [],
+            },
+          });
+          this.updateAssistantItem(
+            threadId!,
+            pendingItemId,
+            pendingText,
+            "completed",
+          );
+          emitLoggedChatkitEvent(sink, {
+            type: "thread.item.done",
+            item: buildAssistantThreadItem(
+              threadId!,
+              pendingItemId,
+              pendingText,
+              "completed",
+              itemCreatedAts.get(pendingItemId) ?? new Date().toISOString(),
+            ),
+          });
+          emitLoggedChatkitEvent(sink, {
+            type: "response.output_item.done",
+            response_id: responseId,
+            output_index: outputIndex >= 0 ? outputIndex : 0,
+            item: buildAssistantResponseItem(
+              pendingItemId,
+              pendingText,
+              "completed",
+            ),
+          });
+          pendingThreadCompletionItems.delete(pendingItemId);
+        };
         const ensureMessageStarted = (responseId: string, itemId: string) => {
         const flushPendingThreadCompletions = (targetResponseId?: string) => {
           [...pendingThreadCompletionItems].forEach((pendingItemId) => {
@@ -997,37 +1011,7 @@ class CodexConversationController implements ConversationController {
             ) {
               return;
             }
-            const pendingText = itemTexts.get(pendingItemId) ?? "";
-            emitLoggedChatkitEvent(sink, {
-              type: "thread.item.updated",
-              item_id: pendingItemId,
-              update: {
-                type: "assistant_message.content_part.done",
-                content_index: 0,
-                content: {
-                  type: "output_text",
-                  text: pendingText,
-                  annotations: [],
-                },
-              },
-            });
-            this.updateAssistantItem(
-              threadId!,
-              pendingItemId,
-              pendingText,
-              "completed",
-            );
-            emitLoggedChatkitEvent(sink, {
-              type: "thread.item.done",
-              item: buildAssistantThreadItem(
-                threadId!,
-                pendingItemId,
-                pendingText,
-                "completed",
-                itemCreatedAts.get(pendingItemId) ?? new Date().toISOString(),
-              ),
-            });
-            pendingThreadCompletionItems.delete(pendingItemId);
+            finalizePendingResponseItem(pendingItemId);
           });
         };
         if (itemResponseIds.has(itemId)) {
@@ -1270,66 +1254,7 @@ class CodexConversationController implements ConversationController {
             });
           }
         [...pendingThreadCompletionItems].forEach((pendingItemId) => {
-          const pendingText = itemTexts.get(pendingItemId) ?? "";
-          emitLoggedChatkitEvent(sink, {
-            type: "thread.item.updated",
-            item_id: pendingItemId,
-            update: {
-              type: "assistant_message.content_part.done",
-              content_index: 0,
-              content: {
-                type: "output_text",
-                text: pendingText,
-                annotations: [],
-              },
-            },
-          });
-          const responseId = itemResponseIds.get(pendingItemId) ?? lastResponseId;
-          const outputIndex = (
-            responseItemIds.get(responseId) ?? []
-          ).indexOf(pendingItemId);
-          emitLoggedChatkitEvent(sink, {
-            type: "response.output_text.done",
-            response_id: responseId,
-            output_index: outputIndex >= 0 ? outputIndex : 0,
-            item_id: pendingItemId,
-            content_index: 0,
-            text: pendingText,
-          });
-          emitLoggedChatkitEvent(sink, {
-            type: "response.content_part.done",
-            response_id: responseId,
-            output_index: outputIndex >= 0 ? outputIndex : 0,
-            item_id: pendingItemId,
-            content_index: 0,
-            part: {
-              type: "output_text",
-              text: pendingText,
-              annotations: [],
-            },
-          });
-          this.updateAssistantItem(threadId!, pendingItemId, pendingText, "completed");
-          emitLoggedChatkitEvent(sink, {
-            type: "thread.item.done",
-            item: buildAssistantThreadItem(
-              threadId!,
-              pendingItemId,
-              pendingText,
-              "completed",
-              itemCreatedAts.get(pendingItemId) ?? new Date().toISOString(),
-            ),
-          });
-          emitLoggedChatkitEvent(sink, {
-            type: "response.output_item.done",
-            response_id: responseId,
-            output_index: outputIndex >= 0 ? outputIndex : 0,
-            item: buildAssistantResponseItem(
-              pendingItemId,
-              pendingText,
-              "completed",
-            ),
-          });
-          pendingThreadCompletionItems.delete(pendingItemId);
+          finalizePendingResponseItem(pendingItemId);
         });
         const responseIdsToComplete =
           responseItemIds.size > 0

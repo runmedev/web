@@ -1,5 +1,11 @@
 # Agents.md
 
+## Style guide
+
+- Consult `../docs-dev/style.md` before making changes in `app/`.
+- Follow the repository logging guidance there: for app/runtime diagnostics,
+  prefer `appLogger` over raw `console.*` calls.
+
 ## Documentation and comments
 
 - User-facing documentation belongs in the repo-root `docs/` directory (not `docs-dev/`).

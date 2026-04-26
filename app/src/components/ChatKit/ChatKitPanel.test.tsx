@@ -858,7 +858,7 @@ describe("ChatKitPanel codex harness routing", () => {
     await waitFor(() => expect(codexControllerMock.setSelectedProject).toHaveBeenCalledWith("project-2"));
 
     expect(codexControllerMock.refreshHistory).toHaveBeenCalled();
-    expect(setThreadIdMock).not.toHaveBeenCalledWith("thread-bootstrap");
+    expect(setThreadIdMock).toHaveBeenCalledWith(null);
   });
 
   it("logs chatkit errors through appLogger", async () => {

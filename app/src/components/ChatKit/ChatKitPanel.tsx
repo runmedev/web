@@ -486,7 +486,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         phase: string,
         attrs: Record<string, unknown>
       ) => {
-        console.log('[chatkit] timing', JSON.stringify({ phase, ...attrs }))
         appLogger.info('ChatKit timing', {
           attrs: {
             scope: 'chatkit.panel',
@@ -618,7 +617,14 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
             }
           }
         } catch (error) {
-          console.error('Failed to parse SSE state event', error, payload)
+          appLogger.warn('Failed to parse SSE state event', {
+            attrs: {
+              scope: 'chatkit.panel',
+              adapter: defaultHarness.adapter,
+              error: String(error),
+              payload,
+            },
+          })
         }
       }
     },
@@ -889,7 +895,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         }
       })()
 
-      console.error('ChatKit error', error)
       appLogger.error('ChatKit error', {
         attrs: {
           scope: 'chatkit.panel',
@@ -900,7 +905,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       })
     },
     onThreadLoadStart: ({ threadId }) => {
-      console.log('[chatkit] thread load start', JSON.stringify({ threadId }))
       appLogger.info('ChatKit thread load start', {
         attrs: {
           scope: 'chatkit.panel',
@@ -910,7 +914,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       })
     },
     onThreadLoadEnd: ({ threadId }) => {
-      console.log('[chatkit] thread load end', JSON.stringify({ threadId }))
       appLogger.info('ChatKit thread load end', {
         attrs: {
           scope: 'chatkit.panel',
@@ -933,15 +936,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           responseId: null,
           firstVisibleMessageAtMs: null,
         }
-        console.log(
-          '[chatkit] timing',
-          JSON.stringify({
-            phase: 'submit',
-            submittedAt: submittedAtIso,
-            promptChars: prompt.length,
-            preview: prompt.slice(0, 160),
-          })
-        )
         appLogger.info('ChatKit timing', {
           attrs: {
             scope: 'chatkit.panel',
@@ -953,7 +947,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           },
         })
       }
-      console.log('[chatkit] log', JSON.stringify({ name, data }))
       appLogger.info('ChatKit diagnostic log', {
         attrs: {
           scope: 'chatkit.panel',
@@ -1096,6 +1089,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     } else {
       getCodexProjectManager().setDefault(projectId)
     }
+    await chatkitActionsRef.current?.setThreadId(null, 'project_change')
     setCodexStreamError(null)
     setShowConversationDrawer(false)
   }, [activeController])

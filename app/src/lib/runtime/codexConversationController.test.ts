@@ -2257,6 +2257,111 @@ describe("CodexConversationController", () => {
     );
   });
 
+  it("emits response done events for completed items flushed before a later item starts", async () => {
+    proxyClient.sendRequest.mockImplementation(async (method: string) => {
+      if (method === "thread/start") {
+        return { threadId: "thread-1", title: "Runme Repo" };
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          notificationHandlers.forEach((handler) => {
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-1",
+                delta: "First item",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "msg-1",
+                  text: "First item",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "msg-2",
+                delta: "Second item",
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  type: "agentMessage",
+                  id: "msg-2",
+                  text: "Second item",
+                },
+              },
+            });
+            handler({
+              jsonrpc: "2.0",
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: { id: "turn-1", status: "completed" },
+              },
+            });
+          });
+        });
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+
+    const controller = createCodexConversationControllerForTests();
+    const events: Array<Record<string, unknown>> = [];
+    await controller.streamUserMessage("hello", {
+      emit: (payload) => events.push(payload as Record<string, unknown>),
+    });
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "response.output_text.done",
+          item_id: "msg-1",
+          text: "First item",
+        }),
+        expect.objectContaining({
+          type: "response.output_item.done",
+          item: expect.objectContaining({
+            id: "msg-1",
+            content: [expect.objectContaining({ text: "First item" })],
+          }),
+        }),
+        expect.objectContaining({
+          type: "response.output_text.done",
+          item_id: "msg-2",
+          text: "Second item",
+        }),
+        expect.objectContaining({
+          type: "response.output_item.done",
+          item: expect.objectContaining({
+            id: "msg-2",
+            content: [expect.objectContaining({ text: "Second item" })],
+          }),
+        }),
+      ]),
+    );
+  });
+
   it.each([
     {
       name: "deduplicates the real manual Codex transcript",

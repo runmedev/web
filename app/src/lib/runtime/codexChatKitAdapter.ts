@@ -83,14 +83,6 @@ export function createCodexChatKitAdapter(
     },
     async getThread(threadId: string): Promise<ChatKitThreadDetail> {
       const thread = await controller.getThread(threadId);
-      console.log(
-        "[chatkit] codex getThread",
-        JSON.stringify({
-          threadId,
-          title: thread.title,
-          itemCount: thread.items.length,
-        }),
-      );
       appLogger.info("Codex ChatKit getThread loaded", {
         attrs: {
           scope: "chatkit.codex_adapter",
@@ -116,13 +108,6 @@ export function createCodexChatKitAdapter(
     },
     async listItems(threadId: string): Promise<Record<string, unknown>[]> {
       const items = await controller.listItems(threadId);
-      console.log(
-        "[chatkit] codex listItems",
-        JSON.stringify({
-          threadId,
-          itemCount: items.length,
-        }),
-      );
       appLogger.info("Codex ChatKit listItems loaded", {
         attrs: {
           scope: "chatkit.codex_adapter",
