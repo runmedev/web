@@ -4,7 +4,7 @@ import { SidePanelContent, SidePanelToolbar } from "../SidePanel/SidePanel";
 import { useSidePanel } from "../../contexts/SidePanelContext";
 import { CurrentDocInitializer } from "../CurrentDocInitializer";
 
-const SIDE_PANEL_WIDTH = 420;
+const SIDE_PANEL_WIDTH = 360;
 const TOOLBAR_WIDTH = 48; // ~12 tailwind units (12 * 4px)
 
 export default function MainPage() {
