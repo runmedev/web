@@ -1126,51 +1126,55 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     <div className="relative flex h-full w-full flex-col bg-white">
       <div
         data-testid="chat-shell-header"
-        className="flex items-center gap-2 border-b border-nb-cell-border bg-white px-3 py-2"
+        className="border-b border-nb-cell-border bg-white px-3 py-2"
       >
-        <button
-          type="button"
-          data-testid="chat-shell-history-button"
-          className="rounded border border-nb-cell-border px-3 py-1 text-sm text-nb-text hover:bg-nb-surface-2"
-          onClick={() => {
-            void handleToggleConversationDrawer()
-          }}
-        >
-          History
-        </button>
-        <div
-          data-testid="chat-shell-title"
-          className="min-w-0 flex-1 truncate text-sm font-medium text-nb-text"
-        >
-          {headerTitle}
-        </div>
-        <label className="flex items-center gap-2 text-sm text-nb-text">
-          <span className="text-nb-text-muted">Model</span>
-          <select
-            data-testid="chat-shell-model-select"
-            className="rounded border border-nb-cell-border bg-white px-2 py-1 text-sm text-nb-text"
-            value={selectedModel}
-            onChange={(event) => {
-              activeController?.setSelectedModel(event.target.value)
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            data-testid="chat-shell-history-button"
+            className="shrink-0 rounded border border-nb-cell-border px-3 py-1 text-sm text-nb-text hover:bg-nb-surface-2"
+            onClick={() => {
+              void handleToggleConversationDrawer()
             }}
           >
-            {CHAT_MODEL_OPTIONS.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          data-testid="chat-shell-new-chat-button"
-          className="rounded border border-nb-cell-border px-3 py-1 text-sm text-nb-text hover:bg-nb-surface-2"
-          onClick={() => {
-            void handleNewChat()
-          }}
-        >
-          New chat
-        </button>
+            History
+          </button>
+          <div
+            data-testid="chat-shell-title"
+            className="min-w-0 flex-1 truncate text-sm font-medium text-nb-text"
+          >
+            {headerTitle}
+          </div>
+          <button
+            type="button"
+            data-testid="chat-shell-new-chat-button"
+            className="shrink-0 rounded border border-nb-cell-border px-3 py-1 text-sm text-nb-text hover:bg-nb-surface-2"
+            onClick={() => {
+              void handleNewChat()
+            }}
+          >
+            New chat
+          </button>
+        </div>
+        <div className="mt-2 flex justify-end">
+          <label className="flex items-center gap-2 text-sm text-nb-text">
+            <span className="text-nb-text-muted">Model</span>
+            <select
+              data-testid="chat-shell-model-select"
+              className="rounded border border-nb-cell-border bg-white px-2 py-1 text-sm text-nb-text"
+              value={selectedModel}
+              onChange={(event) => {
+                activeController?.setSelectedModel(event.target.value)
+              }}
+            >
+              {CHAT_MODEL_OPTIONS.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
       <div className="relative min-h-0 flex-1">
         {!isCodexHarness(defaultHarness.adapter) ||
