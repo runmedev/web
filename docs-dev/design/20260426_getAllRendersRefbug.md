@@ -34,6 +34,9 @@ suggests it is mostly legacy and only one renderer is still registered.
 This document proposes a global architecture fix, not a one-off `ExecuteCode`
 patch.
 
+The broader `Actions.tsx` and output-rendering cleanup is tracked separately in
+[#190](https://github.com/runmedev/web/issues/190).
+
 ## Motivation
 
 The user-visible bug is duplicate notebook cells after a failed-looking
@@ -218,13 +221,13 @@ We will not preserve separate mutation semantics for different callers.
 
 1. Remove renderer iteration from the page code-mode notebook wrapper.
 2. Make code-mode notebook mutations update notebook state only.
-3. If we still need terminal-output seeding, move that logic into an explicit
-   notebook mutation helper that does not depend on `OutputContext`.
+3. Do not seed terminal markers during notebook mutation.
 4. Remove renderer hooks from local editor mutation paths in the same design
    pass, even if the first shipped bug fix lands in code mode first.
-5. If any temporary UI-only hook remains during transition, it must be
+5. Make `Actions.updateCellLocal(...)` a model-only mutation path.
+6. If any temporary UI-only hook remains during transition, it must be
    best-effort and non-authoritative.
-6. Improve `ExecuteCode` error reporting so it does not hide partial success.
+7. Improve `ExecuteCode` error reporting so it does not hide partial success.
 
 ### Concrete code changes
 
@@ -241,41 +244,59 @@ We should change that wrapper to call `data.updateCell(cell)` directly.
 The code-mode executor is a notebook API bridge. It should not own UI
 initialization side effects.
 
-#### 2. Replace renderer-based terminal seeding with explicit logic
+#### 2. Stop terminal seeding in mutation paths
 
 The current renderer hook in `Actions.tsx` seeds a
 `MimeType.StatefulRunmeTerminal` output for code cells that have no outputs.
 
-If that behavior is still required, we should move it into a helper with an
-explicit name such as:
+We should stop seeding terminal markers during mutation.
 
-- `prepareDefaultOutputsForCell(cell)`
-- `seedTerminalOutputIfNeeded(cell)`
+For live execution, the view can already render `CellConsole` from active
+stream state. That is the cleanest model/view behavior because it does not
+require a mutation-time UI hint.
 
-That helper should be called intentionally by model-facing mutation code. It
-should not be hidden behind a renderer registry callback.
+Our default policy should be:
+
+- live terminal rendering comes from active stream state
+- notebook mutation does not inject synthetic terminal output markers
+- the view re-renders from model state after `NotebookData.emit()`
 
 The key distinction is:
 
-- acceptable: deterministic model normalization that is part of notebook state
+- acceptable: the view derives terminal presentation from model and execution
+  state
+- acceptable later, if required: a small explicit model-level signal that says
+  a completed cell should still render with terminal presentation
 - not acceptable: UI renderer hooks that mutate notebook state as a side effect
 
-If terminal-output seeding is required for notebook correctness, it belongs in
-`NotebookData` or a model-level mutation helper.
+If post-run or replay behavior later proves that we need a persistent signal,
+we should add a narrow model-level field or helper for that case. We should not
+reuse renderer registration or synthetic output MIME markers as the mutation
+mechanism.
 
-If terminal-output seeding is only a display convenience, it should happen in
-the view layer and should not mutate the notebook model at all.
+The larger cleanup of output policy and terminal rendering in `Actions.tsx` is
+tracked in [#190](https://github.com/runmedev/web/issues/190).
 
 #### 3. Remove renderer hooks from local mutation paths
 
 The local editor path should follow the same architecture as code mode.
 
 `Actions.updateCellLocal(...)` should not call renderer hooks before mutating
-the model. It should either:
+the model.
 
-- call a model-level normalization helper, then update the model, or
-- update the model directly and let the view derive terminal rendering from
-  model and stream state.
+The recommended behavior is:
+
+- `Actions.updateCellLocal(...)` computes the next cell value
+- `cellData.update(nextCell)` performs the mutation
+- `NotebookData.emit()` notifies subscribers
+- the view re-renders from model and stream state
+
+`Actions.updateCellLocal(...)` should not:
+
+- seed terminal outputs
+- inject synthetic MIME markers
+- call `renderer.onCellUpdate(...)`
+- make rendering-policy decisions as part of mutation
 
 If we need a temporary migration step, any remaining UI hook must be wrapped in
 `try/catch` and must not prevent model updates.
@@ -313,6 +334,7 @@ without corresponding product value.
 - fewer React closures crossing runtime boundaries
 - no renderer registry in code-mode execution
 - less hidden mutation logic
+- a clearer separation between notebook state and output presentation policy
 
 ### Costs
 
@@ -320,18 +342,52 @@ without corresponding product value.
 - requires deciding where terminal output initialization belongs
 - may touch UI rendering paths beyond Codex code mode
 
-## Recommendation
+## Implementation Plan
 
-Use a two-step plan.
+This document covers the immediate architecture and correctness fix. The
+broader `Actions.tsx` and output-rendering cleanup remains tracked separately
+in [#190](https://github.com/runmedev/web/issues/190).
 
-### Phase 1: Fix the user-facing bug and align all current mutation paths
+### Deliverables
 
-- remove renderer callbacks from the code-mode mutation path
-- remove renderer callbacks from local editor mutation paths
-- apply the same model-driven rule to any other current `NotebookDataLike`
-  wrapper
-- make mutation success independent from renderer success
-- move terminal seeding into explicit mutation logic if still needed
+This change is complete only when all four concrete code changes are complete:
+
+1. stop calling renderers from `pageCodeModeExecutor`
+2. stop terminal seeding in mutation paths
+3. remove renderer hooks from local mutation paths
+4. improve tool-level success reporting
+
+### Work Plan
+
+#### 1. Remove renderer callbacks from code-mode mutation
+
+- update `toNotebookDataLike(...).updateCell(...)` to call
+  `data.updateCell(cell)` directly
+- remove any dependency on `getRenderers()` during notebook mutation
+- keep code-mode notebook mutation focused on model updates only
+
+#### 2. Remove terminal seeding from mutation paths
+
+- remove mutation-time insertion of `MimeType.StatefulRunmeTerminal`
+- rely on active stream state for live `CellConsole` rendering
+- do not inject synthetic terminal MIME markers as part of notebook mutation
+
+#### 3. Make local editing a model-only mutation path
+
+- remove `renderer.onCellUpdate(...)` from `Actions.updateCellLocal(...)`
+- have `Actions.updateCellLocal(...)` compute the next cell and call
+  `cellData.update(nextCell)`
+- let `NotebookData.emit()` and React subscription flow drive re-rendering
+
+#### 4. Separate mutation success from later UI failures
+
+- return notebook mutation success independently from later renderer or UI
+  warnings
+- do not report a committed notebook mutation as a hard failure because a later
+  rendering step failed
+- make non-idempotent notebook mutation APIs safe against duplicate retries
+
+### Desired Runtime Flow
 
 The desired propagation path is:
 
@@ -345,25 +401,25 @@ The desired propagation path is:
 That keeps mutation semantics inside the model and rendering semantics inside
 the view.
 
-This should fix the duplicate-cell bug and remove the same architectural hazard
-from other notebook mutation paths without requiring a broad UI rewrite.
+### Completion Criteria
 
-### Phase 2: Remove renderer registry if no additional use cases remain
+The implementation is complete when all of the following are true:
 
-After Phase 1 lands, evaluate removing `OutputContext` renderer registration
-entirely and replacing it with direct handling for known output types.
+- code-mode notebook mutation no longer calls renderer hooks
+- local editor mutation no longer calls renderer hooks
+- notebook mutation paths no longer seed `StatefulRunmeTerminal`
+- live terminal rendering still works from stream state
+- a notebook mutation that succeeds is not reported as a hard failure because a
+  later UI step failed
+- the duplicate-cell retry failure mode is no longer possible from this class
+  of partial success
 
-If `MimeType.StatefulRunmeTerminal` is the only real renderer use case, the
-registry is likely unnecessary. The direct rendering path in `Actions.tsx`
-already suggests the terminal UI can be selected from notebook/stream state
-without a general renderer callback system.
+### Out Of Scope For This Change
 
-## Open Questions
+- removing the renderer registry entirely
+- broader `Actions.tsx` output-policy cleanup
+- redesigning completed terminal-output replay behavior beyond what is required
+  for correctness
 
-1. Do we still need automatic terminal-output seeding for newly inserted shell
-   cells, or can rendering infer terminal behavior directly from cell language
-   and run state?
-2. Is any non-terminal renderer still expected to register dynamically in the
-   web app?
-3. Should notebook mutations become transactional, or is it sufficient to make
-   them idempotent and separate them from renderer side effects?
+Those follow-on questions remain tracked in
+[#190](https://github.com/runmedev/web/issues/190).
