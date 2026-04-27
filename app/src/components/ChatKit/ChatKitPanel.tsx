@@ -428,12 +428,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
         getUri: () => data.getUri(),
         getName: () => data.getName(),
         getNotebook: () => data.getNotebook(),
-        updateCell: (cell: parser_pb.Cell) => {
-          for (const renderer of getAllRenderersRef.current().values()) {
-            renderer.onCellUpdate(cell)
-          }
-          data.updateCell(cell)
-        },
+        updateCell: (cell: parser_pb.Cell) => data.updateCell(cell),
         getCell: (refId: string) => data.getCell(refId),
         appendCodeCell: data.appendCodeCell?.bind(data),
         addCodeCellAfter: data.addCodeCellAfter?.bind(data),

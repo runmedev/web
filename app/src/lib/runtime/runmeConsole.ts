@@ -283,42 +283,61 @@ function insertCells(
   if (
     typeof notebook.appendCodeCell !== "function" ||
     typeof notebook.addCodeCellBefore !== "function" ||
-    typeof notebook.addCodeCellAfter !== "function"
+    typeof notebook.addCodeCellAfter !== "function" ||
+    typeof notebook.removeCell !== "function"
   ) {
     throw new Error("Notebook does not support insert operations.");
   }
 
   const location = resolveInsertIndex(notebook, at);
-  if (location.beforeRefId) {
-    for (let i = specs.length - 1; i >= 0; i -= 1) {
-      const inserted = notebook.addCodeCellBefore(
-        location.beforeRefId,
-        specs[i]?.languageId ?? "javascript",
-      );
-      if (!inserted) {
-        throw new Error(`Failed to insert before cell: ${location.beforeRefId}`);
-      }
-      applyInsertedCellSpec(notebook, inserted, specs[i]);
+  const insertedRefIds: string[] = [];
+  const rollbackInsertedCells = () => {
+    for (let i = insertedRefIds.length - 1; i >= 0; i -= 1) {
+      notebook.removeCell(insertedRefIds[i]);
     }
-    return;
-  }
+  };
 
-  if (location.afterRefId) {
-    let anchor = location.afterRefId;
+  try {
+    if (location.beforeRefId) {
+      for (let i = specs.length - 1; i >= 0; i -= 1) {
+        const inserted = notebook.addCodeCellBefore(
+          location.beforeRefId,
+          specs[i]?.languageId ?? "javascript",
+        );
+        if (!inserted) {
+          throw new Error(`Failed to insert before cell: ${location.beforeRefId}`);
+        }
+        insertedRefIds.push(inserted.refId);
+        applyInsertedCellSpec(notebook, inserted, specs[i]);
+      }
+      return;
+    }
+
+    if (location.afterRefId) {
+      let anchor = location.afterRefId;
+      for (const spec of specs) {
+        const inserted = notebook.addCodeCellAfter(
+          anchor,
+          spec.languageId ?? "javascript",
+        );
+        if (!inserted) {
+          throw new Error(`Failed to insert after cell: ${anchor}`);
+        }
+        insertedRefIds.push(inserted.refId);
+        applyInsertedCellSpec(notebook, inserted, spec);
+        anchor = inserted.refId;
+      }
+      return;
+    }
+
     for (const spec of specs) {
-      const inserted = notebook.addCodeCellAfter(anchor, spec.languageId ?? "javascript");
-      if (!inserted) {
-        throw new Error(`Failed to insert after cell: ${anchor}`);
-      }
+      const inserted = notebook.appendCodeCell(spec.languageId ?? "javascript");
+      insertedRefIds.push(inserted.refId);
       applyInsertedCellSpec(notebook, inserted, spec);
-      anchor = inserted.refId;
     }
-    return;
-  }
-
-  for (const spec of specs) {
-    const inserted = notebook.appendCodeCell(spec.languageId ?? "javascript");
-    applyInsertedCellSpec(notebook, inserted, spec);
+  } catch (error) {
+    rollbackInsertedCells();
+    throw error;
   }
 }
 

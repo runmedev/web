@@ -482,7 +482,6 @@ export function Action({
   docUri: string;
   isFirst: boolean;
 }) {
-  const { getAllRenderers } = useOutput();
   const { store } = useNotebookStore();
   const { listRunners, defaultRunnerName } = useRunners();
   const jupyterManager = useMemo(() => getJupyterManager(), []);
@@ -513,14 +512,9 @@ export function Action({
 
   const updateCellLocal = useCallback(
     (nextCell: parser_pb.Cell) => {
-      // Ensure any renderer-specific initialization (e.g., seeding terminal output) runs.
-      const renderers = getAllRenderers();
-      for (const renderer of renderers.values()) {
-        renderer.onCellUpdate(nextCell);
-      }
       cellData.update(nextCell);
     },
-    [cellData, getAllRenderers],
+    [cellData],
   );
 
   const [contextMenu, setContextMenu] = useState<{
@@ -1440,24 +1434,7 @@ export default function Actions() {
   // Register renderers for code cells
   useEffect(() => {
     registerRenderer(MimeType.StatefulRunmeTerminal, {
-      onCellUpdate: (cell: parser_pb.Cell) => {
-        if (cell.kind !== parser_pb.CellKind.CODE || cell.outputs.length > 0) {
-          return;
-        }
-
-        // it's basically shell, be prepared to render a terminal
-        cell.outputs = [
-          create(parser_pb.CellOutputSchema, {
-            items: [
-              create(parser_pb.CellOutputItemSchema, {
-                mime: MimeType.StatefulRunmeTerminal,
-                type: "Buffer",
-                data: new Uint8Array(), // todo(sebastian): pass terminal settings
-              }),
-            ],
-          }),
-        ];
-      },
+      onCellUpdate: () => {},
       component: ({
         cell,
         cellData,
