@@ -58,12 +58,18 @@ jobs:
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
+      - name: Install Runme CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/install_runme.sh latest "${HOME}/.local/bin"
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+          runme --version
       - name: Install dependencies
-        uses: stateful/runme-action@v2
-        with:
-          workflows: |
-            configure
-            setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNME_PROJECT="" runme run configure setup
       - name: Build and sync Codex WASM assets
         shell: bash
         working-directory: ${{ github.workspace }}/codex-src
@@ -76,10 +82,12 @@ jobs:
           ./codex-rs/wasm-harness/scripts/build-browser-demo.sh
           pnpm -C "${GITHUB_WORKSPACE}/app" run sync:codex-wasm
       - name: 📦 Bundle
-        uses: stateful/runme-action@v2
-        with:
-          workflows: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNME_PROJECT="" runme run build
       - name: 🧪 Test
-        uses: stateful/runme-action@v2
-        with:
-          workflows: test
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNME_PROJECT="" runme run test
