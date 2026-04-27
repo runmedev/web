@@ -502,6 +502,35 @@ describe("createNotebooksApi", () => {
     );
   });
 
+  it("rolls back inserted cells when applyInsertedCellSpec fails", async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell("cell-a", "echo a")],
+    });
+    const model = new FakeNotebookData("local://one", "One", notebook);
+    vi.spyOn(model, "updateCell").mockImplementation(() => {
+      throw new Error("update failed");
+    });
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    });
+
+    await expect(
+      api.update({
+        target: { uri: "local://one" },
+        operations: [
+          {
+            op: "insert",
+            at: { index: -1 },
+            cells: [{ kind: "code", languageId: "python", value: "print('hi')" }],
+          },
+        ],
+      }),
+    ).rejects.toThrow("update failed");
+
+    expect(notebook.cells.map((cell) => cell.refId)).toEqual(["cell-a"]);
+  });
+
   it("rejects non-array notebooks.update operations", async () => {
     const notebook = create(parser_pb.NotebookSchema, {
       cells: [codeCell("cell-a", "echo a")],
