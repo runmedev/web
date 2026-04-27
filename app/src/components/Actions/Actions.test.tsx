@@ -16,7 +16,9 @@ import { Action } from "./Actions";
 vi.mock("../../contexts/OutputContext", () => ({
   useOutput: () => ({
     getRenderer: () => undefined,
-    getAllRenderers: () => new Map(),
+    getAllRenderers: () => {
+      throw new Error("Action should not query renderers during local mutation");
+    },
     registerRenderer: () => {},
     unregisterRenderer: () => {},
   }),
