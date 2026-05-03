@@ -399,6 +399,27 @@ function waitForActiveSidePanel(
   return false
 }
 
+function ensureChatKitPanelOpen(timeoutMs = 5000): boolean {
+  if (readSidePanelPressedState().chatkitPressed === 'true') {
+    return true
+  }
+  const clickScript = `(() => {
+    const button = document.querySelector('button[aria-label="Toggle ChatKit panel"]');
+    if (!(button instanceof HTMLButtonElement)) {
+      return 'missing-chatkit-toggle';
+    }
+    button.click();
+    return 'clicked';
+  })()`
+  const clickResult = normalizeAgentBrowserString(
+    run(`agent-browser eval "${escapeDoubleQuotes(clickScript)}"`).stdout
+  )
+  if (clickResult === 'missing-chatkit-toggle') {
+    return false
+  }
+  return waitForActiveSidePanel('chatkit', timeoutMs)
+}
+
 function switchToSidePanelOrThrow({
   name,
   buttonPattern,
@@ -727,14 +748,13 @@ try {
   }
 
   if (chatRef) {
-    switchToSidePanelOrThrow({
-      name: 'ChatKit',
-      buttonPattern: /AI Chat|ChatKit panel|Toggle ChatKit panel/i,
-      activePanel: 'chatkit',
-    })
-    run('agent-browser wait 1000')
-    installChatkitEventProbe()
-    pass('Opened ChatKit panel')
+    if (ensureChatKitPanelOpen()) {
+      run('agent-browser wait 1000')
+      installChatkitEventProbe()
+      pass('Opened ChatKit panel')
+    } else {
+      fail('Failed to open ChatKit panel')
+    }
   }
 
   const message = 'hello from ai cuj'
