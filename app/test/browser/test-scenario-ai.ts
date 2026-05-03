@@ -287,70 +287,149 @@ function readFakeChatkitRequests(): string {
   return run(`curl -sf ${FAKE_CHATKIT_REQUESTS_URL}`).stdout.trim()
 }
 
-function waitForChatComposer(timeoutMs = 20000): boolean {
+function readComposerValue(): string {
+  const script = `(() => {
+    const collectRoots = () => {
+      const roots = [];
+      const seen = new Set();
+      const visit = (root) => {
+        if (!root || seen.has(root)) return;
+        seen.add(root);
+        roots.push(root);
+        if (typeof root.querySelectorAll !== 'function') return;
+        for (const el of Array.from(root.querySelectorAll('*'))) {
+          if (el && el.shadowRoot) visit(el.shadowRoot);
+        }
+      };
+      const chat = document.querySelector('openai-chatkit');
+      if (chat && chat.shadowRoot) {
+        visit(chat.shadowRoot);
+      }
+      for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+        try {
+          const doc = frame.contentDocument;
+          if (doc) visit(doc);
+        } catch {}
+      }
+      visit(document);
+      return roots;
+    };
+    for (const root of collectRoots()) {
+      const composer = root.querySelector('textarea') ||
+        root.querySelector('[contenteditable="true"][role="textbox"]') ||
+        root.querySelector('[contenteditable="true"]');
+      if (!composer) continue;
+      if (composer instanceof HTMLTextAreaElement) {
+        return composer.value || '';
+      }
+      return composer.textContent || '';
+    }
+    return '__missing_composer__';
+  })()`
+  return normalizeAgentBrowserString(
+    run(`agent-browser eval "${escapeDoubleQuotes(script)}"`).stdout
+  )
+}
+
+function waitForComposer(timeoutMs = 15000): boolean {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const state = normalizeAgentBrowserString(
-      run(
-        `agent-browser eval "${escapeDoubleQuotes(`(() => {
-          const collectRoots = () => {
-            const roots = [];
-            const seen = new Set();
-            const visit = (root) => {
-              if (!root || seen.has(root)) return;
-              seen.add(root);
-              roots.push(root);
-              if (typeof root.querySelectorAll !== 'function') return;
-              for (const el of Array.from(root.querySelectorAll('*'))) {
-                if (el && el.shadowRoot) visit(el.shadowRoot);
-              }
-            };
-            const chat = document.querySelector('openai-chatkit');
-            if (chat && chat.shadowRoot) {
-              visit(chat.shadowRoot);
-            }
-            for (const frame of Array.from(document.querySelectorAll('iframe'))) {
-              try {
-                const doc = frame.contentDocument;
-                if (doc) visit(doc);
-              } catch {
-                // Ignore cross-origin frames.
-              }
-            }
-            visit(document);
-            return roots;
-          };
-          for (const root of collectRoots()) {
-            const composer = Array.from(
-              root.querySelectorAll(
-                'textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]',
-              ),
-            ).find((element) => {
-              if (!(element instanceof HTMLElement)) {
-                return false;
-              }
-              if (element.getAttribute('aria-label') === 'App Console input') {
-                return false;
-              }
-              if (element.closest('[data-testid="app-console-cell"]')) {
-                return false;
-              }
-              return true;
-            });
-            if (composer) {
-              return 'composer-ready';
-            }
-          }
-          return window.__cujChatkitReady ? 'ready-event-only' : 'missing-composer';
-        })()`)}"`
-      ).stdout
-    )
-    if (state === 'composer-ready' || state === 'ready-event-only') {
+    const current = readComposerValue()
+    if (current !== '__missing_composer__') {
       return true
     }
-    run('agent-browser wait 500')
+    run('agent-browser wait 400')
   }
   return false
+}
+
+type SidePanelName = 'explorer' | 'chatkit'
+
+function readSidePanelPressedState(): {
+  explorerPressed: string | null
+  chatkitPressed: string | null
+} {
+  const script = `(() => JSON.stringify({
+    explorerPressed: document.querySelector('button[aria-label="Toggle Explorer panel"]')?.getAttribute('aria-pressed') ?? null,
+    chatkitPressed: document.querySelector('button[aria-label="Toggle ChatKit panel"]')?.getAttribute('aria-pressed') ?? null,
+  }))()`
+  const raw = normalizeAgentBrowserString(
+    run(`agent-browser eval "${escapeDoubleQuotes(script)}"`).stdout
+  )
+  try {
+    const parsed = JSON.parse(raw) as {
+      explorerPressed?: string | null
+      chatkitPressed?: string | null
+    }
+    return {
+      explorerPressed: parsed.explorerPressed ?? null,
+      chatkitPressed: parsed.chatkitPressed ?? null,
+    }
+  } catch {
+    return {
+      explorerPressed: null,
+      chatkitPressed: null,
+    }
+  }
+}
+
+function waitForActiveSidePanel(
+  panel: SidePanelName,
+  timeoutMs = 5000
+): boolean {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const state = readSidePanelPressedState()
+    if (
+      panel === 'explorer' &&
+      state.explorerPressed === 'true' &&
+      state.chatkitPressed === 'false'
+    ) {
+      return true
+    }
+    if (
+      panel === 'chatkit' &&
+      state.chatkitPressed === 'true' &&
+      state.explorerPressed === 'false'
+    ) {
+      return true
+    }
+    run('agent-browser wait 300')
+  }
+  return false
+}
+
+function switchToSidePanelOrThrow({
+  name,
+  buttonPattern,
+  activePanel,
+}: {
+  name: string
+  buttonPattern: RegExp
+  activePanel: SidePanelName
+}): void {
+  const deadline = Date.now() + 10000
+  let lastError = 'unknown error'
+  while (Date.now() < deadline) {
+    const snapshot = run('agent-browser snapshot').stdout
+    const ref = firstRef(snapshot, buttonPattern)
+    if (!ref) {
+      lastError = `missing ${name} button ref`
+      run('agent-browser wait 300')
+      continue
+    }
+    const clickResult = run(`agent-browser click ${ref}`)
+    if (clickResult.status !== 0) {
+      lastError = `click failed (${clickResult.status}): ${clickResult.stderr || clickResult.stdout || 'no output'}`
+      run('agent-browser wait 300')
+      continue
+    }
+    if (waitForActiveSidePanel(activePanel, 4000)) {
+      return
+    }
+    lastError = `side panel did not become active after click (${name})`
+  }
+  throw new Error(`Failed to switch to ${name}: ${lastError}`)
 }
 
 function tryTypeChatMessage(message: string): string {
@@ -645,25 +724,18 @@ try {
   }
 
   if (chatRef) {
-    run(
-      `agent-browser eval "${escapeDoubleQuotes(`(() => {
-        const button = document.querySelector('button[aria-label="Toggle ChatKit panel"]');
-        if (!(button instanceof HTMLButtonElement)) {
-          return 'missing-chatkit-toggle';
-        }
-        if (button.getAttribute('aria-pressed') !== 'true') {
-          button.click();
-        }
-        return button.getAttribute('aria-pressed') === 'true' ? 'open' : 'clicked';
-      })()`)}"`
-    )
-    run('agent-browser wait 1400')
+    switchToSidePanelOrThrow({
+      name: 'ChatKit',
+      buttonPattern: /AI Chat|ChatKit panel|Toggle ChatKit panel/i,
+      activePanel: 'chatkit',
+    })
+    run('agent-browser wait 1000')
     installChatkitEventProbe()
     pass('Opened ChatKit panel')
   }
 
   const message = 'hello from ai cuj'
-  const chatComposerReady = waitForChatComposer()
+  const chatComposerReady = waitForComposer()
   const sendOutput = chatComposerReady
     ? typeChatMessageWithRetry(message)
     : 'chatkit-not-ready'
