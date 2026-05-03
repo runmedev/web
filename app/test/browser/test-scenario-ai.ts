@@ -411,6 +411,9 @@ function switchToSidePanelOrThrow({
   const deadline = Date.now() + 10000
   let lastError = 'unknown error'
   while (Date.now() < deadline) {
+    if (waitForActiveSidePanel(activePanel, 200)) {
+      return
+    }
     const snapshot = run('agent-browser snapshot').stdout
     const ref = firstRef(snapshot, buttonPattern)
     if (!ref) {
