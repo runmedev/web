@@ -1210,15 +1210,72 @@ describe("NotebookData.runCodeCell", () => {
   });
 
   it("supports drive.saveAsCurrentNotebook in appkernel cells", async () => {
+    const notebooksByUri = new Map<string, InstanceType<typeof NotebookData>>();
+    const savedNotebooksByUri = new Map<string, parser_pb.Notebook>();
+    let activeUri = "local://file/original";
+
+    const resolveNotebook = (target?: unknown) => {
+      if (!target) {
+        return notebooksByUri.get(activeUri) ?? null;
+      }
+      if (typeof target === "string") {
+        return notebooksByUri.get(target) ?? null;
+      }
+      if (
+        typeof target === "object" &&
+        target &&
+        "uri" in target &&
+        typeof (target as { uri?: string }).uri === "string"
+      ) {
+        return notebooksByUri.get((target as { uri: string }).uri) ?? null;
+      }
+      if (
+        typeof target === "object" &&
+        target &&
+        "handle" in target &&
+        (target as { handle?: { uri?: string } }).handle?.uri
+      ) {
+        return (
+          notebooksByUri.get((target as { handle: { uri: string } }).handle.uri) ??
+          null
+        );
+      }
+      return null;
+    };
+
+    const listNotebooks = () => Array.from(notebooksByUri.values());
+
     const createRemote = vi.fn().mockResolvedValue({
       uri: "https://drive.google.com/file/d/saveas123/view",
     });
     const saveContent = vi.fn().mockResolvedValue(undefined);
     appState.setDriveNotebookStore({ create: createRemote, saveContent } as any);
     const addFile = vi.fn().mockResolvedValue("local://file/saveas-copy");
-    const saveLocal = vi.fn().mockResolvedValue(undefined);
+    const saveLocal = vi.fn().mockImplementation(
+      async (uri: string, notebook: parser_pb.Notebook) => {
+        savedNotebooksByUri.set(uri, create(parser_pb.NotebookSchema, notebook));
+      }
+    );
     appState.setLocalNotebooks({ addFile, save: saveLocal } as any);
-    const openNotebook = vi.fn().mockResolvedValue(undefined);
+    const openNotebook = vi.fn().mockImplementation(async (uri: string) => {
+      activeUri = uri;
+      setTimeout(() => {
+        const saved = savedNotebooksByUri.get(uri);
+        if (!saved) {
+          return;
+        }
+        const createdModel = new NotebookData({
+          notebook: create(parser_pb.NotebookSchema, saved),
+          uri,
+          name: "copy.json",
+          notebookStore: null,
+          loaded: true,
+          resolveNotebookForAppKernel: resolveNotebook,
+          listNotebooksForAppKernel: listNotebooks,
+        });
+        notebooksByUri.set(uri, createdModel);
+      }, 0);
+    });
     appState.setOpenNotebookHandler(openNotebook);
 
     const cell = create(parser_pb.CellSchema, {
@@ -1242,7 +1299,10 @@ describe("NotebookData.runCodeCell", () => {
       name: "saveas-source.json",
       notebookStore: null,
       loaded: true,
+      resolveNotebookForAppKernel: resolveNotebook,
+      listNotebooksForAppKernel: listNotebooks,
     });
+    notebooksByUri.set(model.getUri(), model);
 
     model.runCodeCell(cell);
     await waitForCondition(() => {
@@ -1269,6 +1329,7 @@ describe("NotebookData.runCodeCell", () => {
 
   it("supports notebook creation and append helpers in appkernel cells", async () => {
     const notebooksByUri = new Map<string, InstanceType<typeof NotebookData>>();
+    const savedNotebooksByUri = new Map<string, parser_pb.Notebook>();
     let activeUri = "nb://seed";
 
     const resolveNotebook = (target?: unknown) => {
@@ -1306,21 +1367,30 @@ describe("NotebookData.runCodeCell", () => {
       uri: "local://file/helloworld",
       name: "helloworld",
     });
-    const saveLocal = vi.fn().mockImplementation(async (uri: string, notebook: parser_pb.Notebook) => {
-      const createdModel = new NotebookData({
-        notebook,
-        uri,
-        name: "helloworld",
-        notebookStore: null,
-        loaded: true,
-        resolveNotebookForAppKernel: resolveNotebook,
-        listNotebooksForAppKernel: listNotebooks,
-      });
-      notebooksByUri.set(uri, createdModel);
-    });
+    const saveLocal = vi.fn().mockImplementation(
+      async (uri: string, notebook: parser_pb.Notebook) => {
+        savedNotebooksByUri.set(uri, create(parser_pb.NotebookSchema, notebook));
+      }
+    );
     appState.setLocalNotebooks({ create: createLocal, save: saveLocal } as any);
     const openNotebook = vi.fn().mockImplementation(async (uri: string) => {
       activeUri = uri;
+      setTimeout(() => {
+        const saved = savedNotebooksByUri.get(uri);
+        if (!saved) {
+          return;
+        }
+        const createdModel = new NotebookData({
+          notebook: create(parser_pb.NotebookSchema, saved),
+          uri,
+          name: "helloworld",
+          notebookStore: null,
+          loaded: true,
+          resolveNotebookForAppKernel: resolveNotebook,
+          listNotebooksForAppKernel: listNotebooks,
+        });
+        notebooksByUri.set(uri, createdModel);
+      }, 0);
     });
     appState.setOpenNotebookHandler(openNotebook);
 
