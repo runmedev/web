@@ -264,9 +264,20 @@ function tryTypeChatMessage(message: string): string {
     let activeDoc = null;
     let composer = null;
     for (const doc of docs) {
-      const candidate = doc.querySelector('textarea') ||
-        doc.querySelector('[contenteditable="true"][role="textbox"]') ||
-        doc.querySelector('[contenteditable="true"]');
+      const candidate = Array.from(
+        doc.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]'),
+      ).find((element) => {
+        if (!(element instanceof HTMLElement)) {
+          return false;
+        }
+        if (element.getAttribute('aria-label') === 'App Console input') {
+          return false;
+        }
+        if (element.closest('[data-testid="app-console-cell"]')) {
+          return false;
+        }
+        return true;
+      }) ?? null;
       if (candidate) {
         activeDoc = doc;
         composer = candidate;
