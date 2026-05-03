@@ -54,6 +54,26 @@ screenshot() {
     fi
 }
 
+read_console_output() {
+    agent-browser eval "(() => {
+      const completed = Array.from(document.querySelectorAll('[data-testid=\"app-console-cell\"]'))
+        .filter((cell) => cell.getAttribute('data-status') !== 'draft');
+      const last = completed[completed.length - 1];
+      return last ? (last.textContent || '') : '';
+    })()" 2>/dev/null || true
+}
+
+click_run_button() {
+    agent-browser eval "(() => {
+      const runButton = document.querySelector('[data-testid=\"app-console-cell\"][data-current=\"true\"] [data-testid=\"app-console-cell-run\"]');
+      if (!(runButton instanceof HTMLButtonElement)) {
+        return 'missing-run-button';
+      }
+      runButton.click();
+      return 'ok';
+    })()" 2>/dev/null || true
+}
+
 log "=== Pre-flight Checks ==="
 mkdir -p "$OUTPUT_DIR"
 rm -f "$OUTPUT_DIR"/console-*.png
@@ -86,7 +106,7 @@ screenshot "console-01-initial"
 snapshot_output=$(agent-browser snapshot -i 2>/dev/null || true)
 echo "$snapshot_output" > "$OUTPUT_DIR/console-01-snapshot.txt"
 
-console_input_ref=$(echo "$snapshot_output" | grep -i "Terminal input" | grep -oE '@[a-zA-Z0-9]+' | head -1 || true)
+console_input_ref=$(echo "$snapshot_output" | grep -i "App Console input" | grep -oE '@[a-zA-Z0-9]+' | head -1 || true)
 if [ -n "$console_input_ref" ]; then
     pass "Found App Console input"
 else
@@ -97,15 +117,14 @@ fi
 
 log ""
 log "=== Test 2: Run explorer.addFolder() ==="
-agent-browser click "$console_input_ref" 2>/dev/null || true
-agent-browser type "$console_input_ref" "explorer.addFolder()" 2>/dev/null || true
-agent-browser press Enter 2>/dev/null || true
+agent-browser fill 'textarea[aria-label="App Console input"]' "explorer.addFolder()" 2>/dev/null || true
+click_run_button >/dev/null
 agent-browser wait 1500 2>/dev/null || true
 screenshot "console-02-addfolder"
 
 log ""
 log "=== Test 3: Verify console output hook ==="
-console_output=$(agent-browser get text "#app-console-output" 2>/dev/null || true)
+console_output=$(read_console_output)
 if echo "$console_output" | grep -q "Added local folder"; then
     pass "Console output contains local folder confirmation"
 elif echo "$console_output" | grep -q "File System Access API is not supported"; then
@@ -120,13 +139,12 @@ fi
 
 log ""
 log "=== Test 4: Run explorer.listFolders() ==="
-agent-browser click "$console_input_ref" 2>/dev/null || true
-agent-browser type "$console_input_ref" "explorer.listFolders()" 2>/dev/null || true
-agent-browser press Enter 2>/dev/null || true
+agent-browser fill 'textarea[aria-label="App Console input"]' "explorer.listFolders()" 2>/dev/null || true
+click_run_button >/dev/null
 agent-browser wait 1500 2>/dev/null || true
 screenshot "console-03-listfolders"
 
-console_output=$(agent-browser get text "#app-console-output" 2>/dev/null || true)
+console_output=$(read_console_output)
 if echo "$console_output" | grep -q "fs://"; then
     pass "Console output lists fs:// entries"
 elif echo "$console_output" | grep -q "No folders in workspace"; then

@@ -153,21 +153,39 @@ function escapeDoubleQuotes(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-function runAppConsoleCommand(consoleRef: string, command: string): string {
-  run(`agent-browser click ${consoleRef}`);
-  run(`agent-browser type ${consoleRef} "${escapeDoubleQuotes(command)}"`);
-  run("agent-browser press Enter");
-  run("agent-browser wait 900");
+function readAppConsoleOutput(): string {
   return normalizeAgentBrowserString(
     run(
-      `agent-browser eval "${escapeDoubleQuotes(
-        `(() => {
-          const el = document.querySelector('#app-console-output');
-          return el ? (el.textContent || '') : '';
-        })()`,
-      )}"`,
+      `agent-browser eval "${escapeDoubleQuotes(`(() => {
+        const completed = Array.from(
+          document.querySelectorAll('[data-testid="app-console-cell"]'),
+        ).filter((cell) => cell.getAttribute('data-status') !== 'draft');
+        const last = completed[completed.length - 1];
+        return last ? (last.textContent || '') : '';
+      })()`)}"`,
     ).stdout,
   );
+}
+
+function runAppConsoleCommand(consoleRef: string, command: string): string {
+  void consoleRef;
+  run(
+    `agent-browser fill 'textarea[aria-label="App Console input"]' "${escapeDoubleQuotes(command)}"`,
+  );
+  run(
+    `agent-browser eval "${escapeDoubleQuotes(`(() => {
+      const runButton = document.querySelector(
+        '[data-testid="app-console-cell"][data-current="true"] [data-testid="app-console-cell-run"]',
+      );
+      if (!(runButton instanceof HTMLButtonElement)) {
+        return 'missing-run-button';
+      }
+      runButton.click();
+      return 'ok';
+    })()`)}"`,
+  );
+  run("agent-browser wait 900");
+  return readAppConsoleOutput();
 }
 
 function hasCommandError(output: string): boolean {
@@ -774,11 +792,11 @@ try {
   }
 
   let snapshot = run("agent-browser snapshot -i").stdout;
-  const consoleRef = firstRef(snapshot, /Terminal input/i);
+  const consoleRef = firstRef(snapshot, /App Console input/i);
   if (!consoleRef) {
-    fail("Did not find AppConsole terminal input");
+    fail("Did not find App Console input");
   } else {
-    pass("Found AppConsole terminal input");
+    pass("Found App Console input");
 
     const runnerName = "local";
     const runnerEndpoint = "ws://localhost:9977/ws";

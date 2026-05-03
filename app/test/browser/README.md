@@ -36,8 +36,9 @@ cd app/test/browser
 ./test-app-console-commands.sh
 ```
 
-The script relies on the hidden `#app-console-output` element added to
-`AppConsole.tsx` to read console output without scraping the xterm canvas.
+The script reads output from the public App Console cell DOM contract
+(`data-testid="app-console-cell"` plus per-cell status markers) instead of a
+hidden transcript mirror.
 `showDirectoryPicker()` commands still require a manual OS dialog interaction.
 If you skip the picker, the script expects `explorer.listFolders()` to report
 no mounted folders.

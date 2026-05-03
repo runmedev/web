@@ -132,12 +132,37 @@ function escapeDoubleQuotes(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
+function readAppConsoleOutput(): string {
+  return run(
+    `agent-browser eval "${escapeDoubleQuotes(`(() => {
+      const completed = Array.from(
+        document.querySelectorAll('[data-testid="app-console-cell"]'),
+      ).filter((cell) => cell.getAttribute('data-status') !== 'draft');
+      const last = completed[completed.length - 1];
+      return last ? (last.textContent || '') : '';
+    })()`)}"`,
+  ).stdout;
+}
+
 function runAppConsoleCommand(consoleRef: string, command: string): string {
-  run(`agent-browser click ${consoleRef}`);
-  run(`agent-browser type ${consoleRef} "${escapeDoubleQuotes(command)}"`);
-  run("agent-browser press Enter");
+  void consoleRef;
+  run(
+    `agent-browser fill 'textarea[aria-label="App Console input"]' "${escapeDoubleQuotes(command)}"`,
+  );
+  run(
+    `agent-browser eval "${escapeDoubleQuotes(`(() => {
+      const runButton = document.querySelector(
+        '[data-testid="app-console-cell"][data-current="true"] [data-testid="app-console-cell-run"]',
+      );
+      if (!(runButton instanceof HTMLButtonElement)) {
+        return 'missing-run-button';
+      }
+      runButton.click();
+      return 'ok';
+    })()`)}"`,
+  );
   run("agent-browser wait 900");
-  return run("agent-browser get text '#app-console-output'").stdout;
+  return readAppConsoleOutput();
 }
 
 function runWithRetry(command: string, attempts = 3, waitMs = 1200): void {
@@ -330,9 +355,9 @@ if (seedResult.includes("ok")) {
 let snapshot = run("agent-browser snapshot -i").stdout;
 writeArtifact("scenario-no-runner-logs-02-after-seed.txt", snapshot);
 
-const consoleRef = firstRef(snapshot, /Terminal input/i);
+const consoleRef = firstRef(snapshot, /App Console input/i);
 if (!consoleRef) {
-  fail("Did not find AppConsole terminal input");
+  fail("Did not find App Console input");
 } else {
   const firstDelete = runAppConsoleCommand(consoleRef, 'app.runners.delete("default")');
   const secondDelete = runAppConsoleCommand(consoleRef, 'app.runners.delete("local")');
