@@ -3,17 +3,21 @@ import { useEffect } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type PanelKey = "explorer" | "chatkit" | null;
+type PanelKey = "explorer" | "open-notebooks" | "chatkit" | null;
 
 let authData: {} | null = null;
 let isDriveSyncing = false;
 let activePanelState: PanelKey = "explorer";
+let currentDocUri: string | null = null;
+let openNotebooksState: { uri: string; name: string }[] = [];
 let chatKitMountCount = 0;
 let chatKitUnmountCount = 0;
 const ensureAccessTokenMock = vi.fn(async () => "token");
 const loginWithRedirectMock = vi.fn();
 const logoutMock = vi.fn();
 const togglePanelMock = vi.fn();
+const setCurrentDocMock = vi.fn();
+const removeNotebookMock = vi.fn();
 
 vi.mock("../../browserAdapter.client", () => ({
   useBrowserAuthData: () => authData,
@@ -27,6 +31,20 @@ vi.mock("../../contexts/SidePanelContext", () => ({
   useSidePanel: () => ({
     activePanel: activePanelState,
     togglePanel: togglePanelMock,
+  }),
+}));
+
+vi.mock("../../contexts/NotebookContext", () => ({
+  useNotebookContext: () => ({
+    useNotebookList: () => openNotebooksState,
+    removeNotebook: removeNotebookMock,
+  }),
+}));
+
+vi.mock("../../contexts/CurrentDocContext", () => ({
+  useCurrentDoc: () => ({
+    getCurrentDoc: () => currentDocUri,
+    setCurrentDoc: setCurrentDocMock,
   }),
 }));
 
@@ -60,12 +78,16 @@ describe("SidePanelToolbar drive status button", () => {
     authData = null;
     isDriveSyncing = false;
     activePanelState = "explorer";
+    currentDocUri = null;
+    openNotebooksState = [];
     chatKitMountCount = 0;
     chatKitUnmountCount = 0;
     ensureAccessTokenMock.mockClear();
     loginWithRedirectMock.mockClear();
     logoutMock.mockClear();
     togglePanelMock.mockClear();
+    setCurrentDocMock.mockClear();
+    removeNotebookMock.mockClear();
   });
 
   it("renders the Drive status button above Login and starts auth when not syncing", async () => {
@@ -99,13 +121,27 @@ describe("SidePanelToolbar drive status button", () => {
 
     expect(ensureAccessTokenMock).not.toHaveBeenCalled();
   });
+
+  it("exposes an Open Notebooks button in the toolbar", () => {
+    render(<SidePanelToolbar />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Toggle Open Notebooks panel" }),
+    );
+
+    expect(togglePanelMock).toHaveBeenCalledWith("open-notebooks");
+  });
 });
 
 describe("SidePanelContent ChatKit persistence", () => {
   beforeEach(() => {
     activePanelState = "explorer";
+    currentDocUri = null;
+    openNotebooksState = [];
     chatKitMountCount = 0;
     chatKitUnmountCount = 0;
+    setCurrentDocMock.mockClear();
+    removeNotebookMock.mockClear();
   });
 
   it("keeps ChatKit mounted when switching from ChatKit to Explorer and back", () => {
@@ -129,5 +165,26 @@ describe("SidePanelContent ChatKit persistence", () => {
     expect(screen.getByTestId("chatkit-panel-mock")).toBeTruthy();
     expect(chatKitMountCount).toBe(1);
     expect(chatKitUnmountCount).toBe(0);
+  });
+
+  it("renders the Open Notebooks panel and routes notebook actions through shared context state", () => {
+    activePanelState = "open-notebooks";
+    currentDocUri = "local://file/alpha.json";
+    openNotebooksState = [
+      { uri: "local://file/alpha.json", name: "alpha.json" },
+      { uri: "fs://workspace/beta.json", name: "beta.json" },
+    ];
+    removeNotebookMock.mockReturnValue("fs://workspace/beta.json");
+
+    render(<SidePanelContent />);
+
+    expect(screen.getByText("Open Notebooks")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("beta.json"));
+    expect(setCurrentDocMock).toHaveBeenCalledWith("fs://workspace/beta.json");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close alpha.json" }));
+    expect(removeNotebookMock).toHaveBeenCalledWith("local://file/alpha.json");
+    expect(setCurrentDocMock).toHaveBeenCalledWith("fs://workspace/beta.json");
   });
 });

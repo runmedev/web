@@ -3,7 +3,9 @@ import {
   type MouseEvent as ReactMouseEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -87,6 +89,10 @@ TabPanel.displayName = "TabPanel";
 // (preserving scroll/Monaco layout) while hiding inactive tabs without stacking
 // them. Inactive tabs are taken out of flow via absolute positioning and hidden
 // visibility so they don't visually overlap yet retain their state.
+
+function getNotebookDisplayName(uri: string, name?: string): string {
+  return name || uri.split("/").filter(Boolean).pop() || uri;
+}
 
 function syncIndicatorPresentation(state: NotebookSyncState | null): {
   label: string;
@@ -1367,6 +1373,7 @@ export default function Actions() {
     shareableUri: string;
     googleDriveUri: string | null;
   } | null>(null);
+  const tabTriggerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const { runName } = useParams<{ runName?: string }>();
   //const { data: run } = useRun(runName);
   const [cellsInitialized, setCellsInitialized] = useState(false);
@@ -1398,6 +1405,10 @@ export default function Actions() {
   // }, [cellsInitialized, currentDocUri, ensureNotebook, run, runName, setCurrentDoc]);
 
   const { registerRenderer, unregisterRenderer } = useOutput();
+  const resolvedSelectedTabUri =
+    selectedTabUri ??
+    currentDocUri ??
+    (statusTabVisible ? DRIVE_LINK_STATUS_TAB_URI : openNotebooks[0]?.uri ?? "");
 
   // Ensure the active tab is tracked as mounted on first render/whenever it changes.
   useEffect(() => {
@@ -1427,6 +1438,20 @@ export default function Actions() {
       setSelectedTabUri(currentDocUri ?? openNotebooks[0]?.uri ?? null);
     }
   }, [currentDocUri, openNotebooks, selectedTabUri, statusTabVisible]);
+
+  // Keep the active tab discoverable when the tab rail overflows horizontally.
+  // We track each rendered tab node and ask the browser to reveal the selected
+  // one so keyboard/mouse tab changes do not leave the active notebook clipped.
+  useLayoutEffect(() => {
+    if (!resolvedSelectedTabUri) {
+      return;
+    }
+    const node = tabTriggerRefs.current.get(resolvedSelectedTabUri);
+    node?.scrollIntoView({
+      block: "nearest",
+      inline: "nearest",
+    });
+  }, [resolvedSelectedTabUri]);
 
   // TODO(jlewi): Does it still make sense to have a registration pattern for renderers? What does that buy us over
   // just hardcoding an "if" statement when rendering the outputs. Is that a legacy of the vscode extension where
@@ -1467,7 +1492,6 @@ export default function Actions() {
     (uri: string) => {
       const next = removeNotebook(uri);
       if (uri === currentDocUri) {
-        console.log("handleCloseTab Switching current doc to", next);
         setCurrentDoc(next ?? null);
       }
     },
@@ -1703,13 +1727,7 @@ export default function Actions() {
         </ScrollArea>
       ) : (
         <Tabs.Root
-          value={
-            selectedTabUri ??
-            currentDocUri ??
-            (statusTabVisible
-              ? DRIVE_LINK_STATUS_TAB_URI
-              : openNotebooks[0]?.uri ?? "")
-          }
+          value={resolvedSelectedTabUri}
           onValueChange={(nextUri) => {
             setSelectedTabUri(nextUri);
             if (nextUri === DRIVE_LINK_STATUS_TAB_URI) {
@@ -1729,53 +1747,75 @@ export default function Actions() {
           }}
           className="flex flex-col flex-1 min-h-0 overflow-hidden bg-white"
         >
-          <Tabs.List className="flex items-center gap-0.5 border-b border-nb-border bg-nb-surface-2 px-2 py-1">
-          {statusTabVisible && (
-            <div
-              key={`tab-${DRIVE_LINK_STATUS_TAB_URI}`}
-              className="flex items-center gap-1"
+          <div
+            id="notebook-tabs-scroll"
+            className="notebook-tab-strip overflow-x-auto overflow-y-hidden border-b border-nb-border bg-nb-surface-2"
+          >
+            <Tabs.List
+              id="notebook-tabs-list"
+              className="flex min-w-max items-center gap-0.5 px-2 py-1"
             >
-              <Tabs.Trigger
-                value={DRIVE_LINK_STATUS_TAB_URI}
-                title="Drive Link Status"
-                className="group flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-nb-sm transition-all duration-150 text-nb-text-muted border border-transparent data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:border-nb-border data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
-              >
-                <span className="truncate max-w-[180px]">Drive Link Status</span>
-              </Tabs.Trigger>
-            </div>
-          )}
-          {openNotebooks.map((doc) => {
-            const displayName =
-              doc.name ||
-              doc.uri.split("/").filter(Boolean).pop() ||
-              "This is a bug; this should not happen";
-            return (
-              <div key={`tab-${doc.uri}`} className="flex items-center gap-1">
-                <Tabs.Trigger
-                  value={doc.uri}
-                  title={doc.name}
-                  onContextMenu={(event) => handleTabContextMenu(event, doc.uri)}
-                  className="group flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-nb-sm transition-all duration-150 text-nb-text-muted border border-transparent data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:border-nb-border data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
-                >
-                  <span className="truncate max-w-[140px]">{displayName}</span>
-                </Tabs.Trigger>
-                <NotebookSyncIndicator docUri={doc.uri} />
-                <button
-                  type="button"
-                  className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-nb-xs text-nb-text-faint transition-all duration-150 hover:text-nb-text hover:bg-nb-surface-2"
-                  aria-label={`Close ${displayName}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    handleCloseTab(doc.uri);
+              {statusTabVisible && (
+                <div
+                  key={`tab-${DRIVE_LINK_STATUS_TAB_URI}`}
+                  ref={(node) => {
+                    if (node) {
+                      tabTriggerRefs.current.set(DRIVE_LINK_STATUS_TAB_URI, node);
+                    } else {
+                      tabTriggerRefs.current.delete(DRIVE_LINK_STATUS_TAB_URI);
+                    }
                   }}
-                  onMouseDown={(event) => event.stopPropagation()}
+                  className="flex shrink-0 items-center gap-1"
                 >
-                  <XMarkIcon className="h-3 w-3" />
-                </button>
-              </div>
-              );
-            })}
-          </Tabs.List>
+                  <Tabs.Trigger
+                    value={DRIVE_LINK_STATUS_TAB_URI}
+                    title="Drive Link Status"
+                    className="group flex shrink-0 items-center gap-2 rounded-nb-sm border border-transparent px-3 py-1.5 text-sm font-medium text-nb-text-muted transition-all duration-150 data-[state=active]:border-nb-border data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
+                  >
+                    <span className="max-w-[180px] truncate">Drive Link Status</span>
+                  </Tabs.Trigger>
+                </div>
+              )}
+              {openNotebooks.map((doc) => {
+                const displayName = getNotebookDisplayName(doc.uri, doc.name);
+                return (
+                  <div
+                    key={`tab-${doc.uri}`}
+                    ref={(node) => {
+                      if (node) {
+                        tabTriggerRefs.current.set(doc.uri, node);
+                      } else {
+                        tabTriggerRefs.current.delete(doc.uri);
+                      }
+                    }}
+                    className="flex shrink-0 items-center gap-1"
+                  >
+                    <Tabs.Trigger
+                      value={doc.uri}
+                      title={doc.name}
+                      onContextMenu={(event) => handleTabContextMenu(event, doc.uri)}
+                      className="group flex shrink-0 items-center gap-2 rounded-nb-sm border border-transparent px-3 py-1.5 text-sm font-medium text-nb-text-muted transition-all duration-150 data-[state=active]:border-nb-border data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
+                    >
+                      <span className="max-w-[140px] truncate">{displayName}</span>
+                    </Tabs.Trigger>
+                    <NotebookSyncIndicator docUri={doc.uri} />
+                    <button
+                      type="button"
+                      className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-nb-xs text-nb-text-faint transition-all duration-150 hover:bg-nb-surface-2 hover:text-nb-text"
+                      aria-label={`Close ${displayName}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleCloseTab(doc.uri);
+                      }}
+                      onMouseDown={(event) => event.stopPropagation()}
+                    >
+                      <XMarkIcon className="h-3 w-3" />
+                    </button>
+                  </div>
+                );
+              })}
+            </Tabs.List>
+          </div>
           {adjustedTabContextMenu && (
             <div
               className="ctx-menu"

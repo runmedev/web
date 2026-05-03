@@ -211,6 +211,32 @@
            opacity-0 shadow-nb-md transition-opacity duration-150
            group-hover:opacity-100;
   }
+
+  /* Horizontal tab rail for notebook tabs. The explicit scrollbar styling
+     keeps overflow discoverable when many notebooks are open. */
+  .notebook-tab-strip {
+    scrollbar-width: thin;
+    scrollbar-color: var(--nb-border-strong) var(--nb-surface-2);
+    scrollbar-gutter: stable;
+  }
+
+  .notebook-tab-strip::-webkit-scrollbar {
+    height: 10px;
+  }
+
+  .notebook-tab-strip::-webkit-scrollbar-track {
+    background: var(--nb-surface-2);
+  }
+
+  .notebook-tab-strip::-webkit-scrollbar-thumb {
+    border: 2px solid var(--nb-surface-2);
+    border-radius: 999px;
+    background: var(--nb-border-strong);
+  }
+
+  .notebook-tab-strip::-webkit-scrollbar-thumb:hover {
+    background: var(--nb-text-faint);
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
