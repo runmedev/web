@@ -14,6 +14,17 @@ These notebooks are a first-class backend, not just a temporary cache.
 - imported markdown usually lands here first,
 - Drive-backed notebooks are often edited through a local mirror.
 
+## App Console creation path
+
+In App Console, the fastest way to create a local notebook is:
+
+```js
+await notebooks.createLocal("helloworld")
+```
+
+That creates a browser-local notebook, opens it in the UI, and returns the
+new notebook document.
+
 ## Sync states
 
 Drive-backed local notebooks can show sync states such as:

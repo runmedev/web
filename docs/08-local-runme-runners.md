@@ -8,8 +8,7 @@ server-backed notebook execution.
 ## Canonical setup
 
 ```js
-runmeRunners.update("default", "ws://localhost:9977/ws")
-runmeRunners.setDefault("default")
+runmeRunners.ensure("default", "ws://localhost:9977/ws", { setDefault: true })
 ```
 
 Adjust the endpoint to match the actual Runme agent port and host.
@@ -38,3 +37,5 @@ Adjust the endpoint to match the actual Runme agent port and host.
 - If a user says "run bash," start by checking the configured backend runner.
 - The current docs and older examples may mention `app.runners.*`; the current
   App Console namespace is `runmeRunners.*`.
+- Prefer `runmeRunners.ensure(...)` when the goal is "make sure this runner is
+  configured and default".
