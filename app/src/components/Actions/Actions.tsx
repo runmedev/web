@@ -430,7 +430,7 @@ function ActionOutputItemView({
   );
 }
 
-function ActionOutputItems({ outputs }: { outputs: parser_pb.CellOutput[] }) {
+export function ActionOutputItems({ outputs }: { outputs: parser_pb.CellOutput[] }) {
   const hasTerminalOutput = outputs.some((output) =>
     (output.items ?? []).some((item) => item?.mime === MimeType.StatefulRunmeTerminal),
   );

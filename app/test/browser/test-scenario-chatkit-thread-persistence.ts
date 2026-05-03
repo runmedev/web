@@ -157,12 +157,37 @@ function escapeDoubleQuotes(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
+function readAppConsoleOutput(): string {
+  return normalizeAgentBrowserString(
+    run(
+      `agent-browser eval "${escapeDoubleQuotes(`(() => {
+        const completed = Array.from(
+          document.querySelectorAll('[data-testid="app-console-cell"]'),
+        ).filter((cell) => cell.getAttribute('data-status') !== 'draft');
+        const last = completed[completed.length - 1];
+        return last ? (last.textContent || '') : '';
+      })()`)}"`,
+    ).stdout,
+  );
+}
+
 function runAppConsoleCommand(consoleRef: string, command: string): string {
   run(`agent-browser click ${consoleRef}`);
   run(`agent-browser type ${consoleRef} "${escapeDoubleQuotes(command)}"`);
-  run("agent-browser press Enter");
+  run(
+    `agent-browser eval "${escapeDoubleQuotes(`(() => {
+      const runButton = document.querySelector(
+        '[data-testid="app-console-cell"][data-current="true"] [data-testid="app-console-cell-run"]',
+      );
+      if (!(runButton instanceof HTMLButtonElement)) {
+        return 'missing-run-button';
+      }
+      runButton.click();
+      return 'ok';
+    })()`)}"`,
+  );
   run("agent-browser wait 900");
-  return normalizeAgentBrowserString(run("agent-browser get text '#app-console-output'").stdout);
+  return readAppConsoleOutput();
 }
 
 function readHarnessStorage(): string {
@@ -440,9 +465,9 @@ try {
   const initialSnapshot = run("agent-browser snapshot").stdout;
   writeArtifact("scenario-chatkit-thread-persistence-01-snapshot.txt", initialSnapshot);
 
-  const consoleRef = firstRef(initialSnapshot, /console-input|terminal input/i);
+  const consoleRef = firstRef(initialSnapshot, /app console input|console-input/i);
   if (!consoleRef) {
-    fail("Could not find AppConsole terminal input");
+    fail("Could not find App Console input");
   }
 
   if (consoleRef) {

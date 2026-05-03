@@ -14,16 +14,24 @@ const Editor = memo(
     language,
     fontSize = 12.6,
     fontFamily = "Fira Mono, monospace",
+    readOnly = false,
+    ariaLabel,
+    autoFocusWhenEmpty = true,
     onChange,
     onEnter,
+    onMount,
   }: {
     id: string;
     value: string;
     language: string;
     fontSize?: number;
     fontFamily?: string;
+    readOnly?: boolean;
+    ariaLabel?: string;
+    autoFocusWhenEmpty?: boolean;
     onChange: (value: string) => void;
     onEnter: () => void;
+    onMount?: (editor: any, monaco: any) => void;
   }) => {
     // Store the latest onEnter in a ref to ensure late binding
     const onEnterRef = useRef(onEnter);
@@ -130,7 +138,7 @@ const Editor = memo(
         }
       });
       // if the value is empty, focus the editor
-      if (value === "") {
+      if (!readOnly && autoFocusWhenEmpty && value === "") {
         editor.focus();
       }
 
@@ -138,6 +146,7 @@ const Editor = memo(
       contentSizeListener.current = editor.onDidContentSizeChange(() => {
         adjustHeight();
       });
+      onMount?.(editor, monaco);
     };
 
     useEffect(() => {
@@ -173,6 +182,8 @@ const Editor = memo(
             value={value}
             options={{
               automaticLayout: false,
+              ariaLabel,
+              readOnly,
               scrollbar: {
                 alwaysConsumeMouseWheel: false,
                 vertical: isClamped ? "auto" : "hidden",
@@ -190,11 +201,9 @@ const Editor = memo(
               padding: { top: 3, bottom: 3 },
             }}
             onChange={(v) => {
-              if (!v) {
-                return;
-              }
-              value = v;
-              onChange?.(v);
+              const nextValue = v ?? "";
+              value = nextValue;
+              onChange?.(nextValue);
             }}
             onMount={editorDidMount}
             className=""
@@ -205,7 +214,14 @@ const Editor = memo(
     );
   },
   (prevProps, nextProps) => {
-    return prevProps.value === nextProps.value;
+    return (
+      prevProps.id === nextProps.id &&
+      prevProps.value === nextProps.value &&
+      prevProps.language === nextProps.language &&
+      prevProps.readOnly === nextProps.readOnly &&
+      prevProps.ariaLabel === nextProps.ariaLabel &&
+      prevProps.autoFocusWhenEmpty === nextProps.autoFocusWhenEmpty
+    );
   },
 );
 

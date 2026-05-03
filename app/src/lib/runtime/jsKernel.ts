@@ -14,6 +14,11 @@ type RunOptions = {
   container?: HTMLElement | null;
 };
 
+export type JSKernelRunResult = {
+  exitCode: number;
+  result?: unknown;
+};
+
 type RunnersApi = {
   get: () => string;
   update: (name: string, endpoint: string) => string;
@@ -59,7 +64,7 @@ export class JSKernel {
     };
   }
 
-  async run(code: string, options: RunOptions = {}): Promise<void> {
+  async run(code: string, options: RunOptions = {}): Promise<JSKernelRunResult> {
     const runId = ++this.runCounter;
     this.activeRunId = runId;
 
@@ -130,13 +135,14 @@ export class JSKernel {
     const argValues = argNames.map((key) => mergedGlobals[key]);
 
     let exitCode = 0;
+    let result: unknown;
     try {
       // eslint-disable-next-line @typescript-eslint/no-implied-eval
       const runner = new Function(
         ...argNames,
         `"use strict"; return (async () => {\n${code}\n})();`,
       );
-      await runner(...argValues);
+      result = await runner(...argValues);
     } catch (err) {
       exitCode = 1;
       appLogger.error("JSKernel execution failed", {
@@ -154,6 +160,10 @@ export class JSKernel {
       }
       this.hooks.onExit(exitCode);
     }
+    return {
+      exitCode,
+      result,
+    };
   }
 
   // Proxy console that routes messages into the kernel's stdout/stderr hooks.
