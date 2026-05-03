@@ -246,10 +246,6 @@ export function SidePanelContent() {
     }
   }, [activePanel]);
 
-  if (!activePanel) {
-    return null;
-  }
-
   return (
     <div className="relative h-full min-h-0 w-full">
       <div

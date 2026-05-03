@@ -167,6 +167,18 @@ describe("SidePanelContent ChatKit persistence", () => {
     expect(chatKitUnmountCount).toBe(0);
   });
 
+  it("keeps the explorer subtree mounted when the side panel is collapsed", () => {
+    activePanelState = "explorer";
+    const { rerender } = render(<SidePanelContent />);
+
+    expect(screen.getByTestId("workspace-explorer-mock")).toBeTruthy();
+
+    activePanelState = null;
+    rerender(<SidePanelContent />);
+
+    expect(screen.getByTestId("workspace-explorer-mock")).toBeTruthy();
+  });
+
   it("renders the Open Notebooks panel and routes notebook actions through shared context state", () => {
     activePanelState = "open-notebooks";
     currentDocUri = "local://file/alpha.json";
