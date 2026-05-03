@@ -120,7 +120,6 @@ function createEmptyNotebook(): parser_pb.Notebook {
   return create(parser_pb.NotebookSchema, { cells: [], metadata: {} })
 }
 
-const NOTEBOOK_OPEN_RESOLVE_TIMEOUT_MS = 1500
 const NOTEBOOK_OPEN_RESOLVE_POLL_MS = 10
 
 function sleep(ms: number): Promise<void> {
@@ -182,8 +181,11 @@ export function createAppJsGlobals({
   }
   const resolveStore = () => resolveNotebookStore?.() ?? appState.localNotebooks
   const waitForOpenedNotebook = async (uri: string) => {
-    const startedAt = Date.now()
-    while (Date.now() - startedAt < NOTEBOOK_OPEN_RESOLVE_TIMEOUT_MS) {
+    // Notebook navigation only updates current-doc first. The concrete
+    // NotebookData model is created later by React effects, so callers that
+    // need to operate on the opened notebook must wait for eventual
+    // materialization instead of failing on a fixed timeout window.
+    while (true) {
       const candidates = [
         resolveNotebook?.(uri),
         resolveNotebook?.({ uri }),
@@ -195,7 +197,6 @@ export function createAppJsGlobals({
       }
       await sleep(NOTEBOOK_OPEN_RESOLVE_POLL_MS)
     }
-    throw new Error(`Timed out waiting for notebook ${uri} to load after opening.`)
   }
   const openNotebookForRuntime = async (uri: string) => {
     if (openNotebook) {
