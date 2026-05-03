@@ -29,9 +29,7 @@ export default function MainPage() {
             width: sidePanelVisible ? SIDE_PANEL_WIDTH : 0,
           }}
         >
-          {sidePanelVisible && (
-            <SidePanelContent />
-          )}
+          <SidePanelContent />
         </div>
         <div
           id="content-area"
