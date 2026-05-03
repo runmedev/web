@@ -8,6 +8,7 @@ import {
   APPKERNEL_SANDBOX_RUNNER_NAME,
 } from "./runtime/appKernel";
 import { appState } from "./runtime/AppState";
+import { LOCAL_FOLDER_URI } from "../storage/local";
 import {
   appendCodexWasmJournalEntry,
   resetCodexWasmJournalEntries,
@@ -1264,6 +1265,178 @@ describe("NotebookData.runCodeCell", () => {
       .join("");
     expect(stdoutText).toContain("saveas123");
     expect(stdoutText).toContain("local://file/saveas-copy");
+  });
+
+  it("supports notebook creation and append helpers in appkernel cells", async () => {
+    const notebooksByUri = new Map<string, InstanceType<typeof NotebookData>>();
+    let activeUri = "nb://seed";
+
+    const resolveNotebook = (target?: unknown) => {
+      if (!target) {
+        return notebooksByUri.get(activeUri) ?? null;
+      }
+      if (typeof target === "string") {
+        return notebooksByUri.get(target) ?? null;
+      }
+      if (
+        typeof target === "object" &&
+        target &&
+        "uri" in target &&
+        typeof (target as { uri?: string }).uri === "string"
+      ) {
+        return notebooksByUri.get((target as { uri: string }).uri) ?? null;
+      }
+      if (
+        typeof target === "object" &&
+        target &&
+        "handle" in target &&
+        (target as { handle?: { uri?: string } }).handle?.uri
+      ) {
+        return (
+          notebooksByUri.get((target as { handle: { uri: string } }).handle.uri) ??
+          null
+        );
+      }
+      return null;
+    };
+
+    const listNotebooks = () => Array.from(notebooksByUri.values());
+
+    const createLocal = vi.fn().mockResolvedValue({
+      uri: "local://file/helloworld",
+      name: "helloworld",
+    });
+    const saveLocal = vi.fn().mockImplementation(async (uri: string, notebook: parser_pb.Notebook) => {
+      const createdModel = new NotebookData({
+        notebook,
+        uri,
+        name: "helloworld",
+        notebookStore: null,
+        loaded: true,
+        resolveNotebookForAppKernel: resolveNotebook,
+        listNotebooksForAppKernel: listNotebooks,
+      });
+      notebooksByUri.set(uri, createdModel);
+    });
+    appState.setLocalNotebooks({ create: createLocal, save: saveLocal } as any);
+    const openNotebook = vi.fn().mockImplementation(async (uri: string) => {
+      activeUri = uri;
+    });
+    appState.setOpenNotebookHandler(openNotebook);
+
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-notebook-create-helpers",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        'const created = await notebooks.createLocal("helloworld");',
+        'console.log(created.summary.name);',
+        'const code = await notebooks.appendCodeCell({',
+        '  target: { handle: created.handle },',
+        '  languageId: "python",',
+        '  value: \'print("hello world")\',',
+        '  metadata: { name: "hello-python" },',
+        '});',
+        'console.log(code.cell.languageId);',
+        'console.log(code.cell.value);',
+        'console.log(code.cell.metadata?.name);',
+        'const markdown = await notebooks.appendMarkdownCell({',
+        '  target: { handle: code.handle },',
+        '  value: "# Notes",',
+        '});',
+        'console.log(markdown.cell.languageId);',
+        'console.log(markdown.cell.value);',
+        'const refreshed = await notebooks.get({ handle: markdown.handle });',
+        'console.log(refreshed.notebook.cells.length);',
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://seed",
+      name: "seed.runme.md",
+      notebookStore: null,
+      loaded: true,
+      resolveNotebookForAppKernel: resolveNotebook,
+      listNotebooksForAppKernel: listNotebooks,
+    });
+    notebooksByUri.set(model.getUri(), model);
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    expect(createLocal).toHaveBeenCalledWith(LOCAL_FOLDER_URI, "helloworld");
+    expect(saveLocal).toHaveBeenCalled();
+    expect(openNotebook).toHaveBeenCalledWith("local://file/helloworld");
+
+    const createdModel = notebooksByUri.get("local://file/helloworld");
+    expect(createdModel).toBeTruthy();
+    expect(createdModel?.getNotebook().cells).toHaveLength(2);
+    expect(createdModel?.getNotebook().cells[0]?.languageId).toBe("python");
+    expect(createdModel?.getNotebook().cells[0]?.value).toContain('print("hello world")');
+    expect(createdModel?.getNotebook().cells[1]?.languageId).toBe("markdown");
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("helloworld");
+    expect(stdoutText).toContain("python");
+    expect(stdoutText).toContain('print("hello world")');
+    expect(stdoutText).toContain("hello-python");
+    expect(stdoutText).toContain("# Notes");
+    expect(stdoutText).toContain("\n2\n");
+  });
+
+  it("supports runmeRunners.ensure in appkernel cells", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-runner-ensure-helper",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
+      },
+      value: [
+        'console.log(runmeRunners.ensure("openai-local", "ws://localhost:9988/ws", { setDefault: true }));',
+        'console.log(runmeRunners.getDefault());',
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "runner-ensure-helpers.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain("Runner openai-local set to ws://localhost:9988/ws");
+    expect(stdoutText).toContain("Default runner set to openai-local");
+    expect(stdoutText).toContain(
+      "Default runner: openai-local (ws://localhost:9988/ws)",
+    );
   });
 
   it("supports drive.listPendingSync and drive.requeuePendingSync in appkernel cells", async () => {

@@ -32,17 +32,33 @@ help()
 help()
 explorer.help()
 runme.help()
+notebooks.help()
+runmeRunners.help()
 drive.help()
 agent.help()
 ```
 
 ## Minimal setup examples
 
+Create a local notebook and append cells:
+
+```js
+const created = await notebooks.createLocal("helloworld")
+await notebooks.appendCodeCell({
+  target: { handle: created.handle },
+  languageId: "python",
+  value: 'print("hello world")',
+})
+await notebooks.appendMarkdownCell({
+  target: { handle: created.handle },
+  value: "# Notes",
+})
+```
+
 Runner setup:
 
 ```js
-runmeRunners.update("default", "ws://localhost:9977/ws")
-runmeRunners.setDefault("default")
+runmeRunners.ensure("default", "ws://localhost:9977/ws", { setDefault: true })
 ```
 
 OIDC + Drive setup:
@@ -73,3 +89,5 @@ app.harness.setDefault("browser-codex")
 - The App Console is a supported user surface, not just a developer escape hatch.
 - Current namespace names matter. Prefer exact names from code over stale README examples.
 - If a user wants an action that has no visible button, check the App Console before saying the feature is missing.
+- Prefer high-level notebook helpers before writing raw `notebooks.update(...)`
+  mutations by hand.

@@ -22,9 +22,9 @@ cell end-to-end.
 
 ## Machine-verifiable acceptance criteria
 
-- [ ] The App Console accepts `app.runners.update("local", "ws://localhost:9977/ws")`.
-- [ ] `app.runners.get()` reports `local: ws://localhost:9977/ws`.
-- [ ] `app.runners.getDefault()` reports runner `local` after `app.runners.setDefault("local")`.
+- [ ] The App Console accepts `runmeRunners.ensure("local", "ws://localhost:9977/ws", { setDefault: true })`.
+- [ ] `runmeRunners.get()` reports `local: ws://localhost:9977/ws`.
+- [ ] `runmeRunners.getDefault()` reports runner `local` after `runmeRunners.ensure(..., { setDefault: true })`.
 - [ ] The workspace tree shows notebook `scenario-hello-world.runme.md`.
 - [ ] Clicking the notebook opens a tab with the notebook name.
 - [ ] Running the first cell completes without a blocking runner error.

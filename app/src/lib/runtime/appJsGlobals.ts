@@ -1,3 +1,4 @@
+import { create } from '@bufbuild/protobuf'
 import { jwtDecode } from 'jwt-decode'
 
 import { OidcConfig, oidcConfigManager } from '../../auth/oidcConfig'
@@ -113,6 +114,10 @@ function createRunmeApi(
       return message
     },
   }
+}
+
+function createEmptyNotebook(): parser_pb.Notebook {
+  return create(parser_pb.NotebookSchema, { cells: [], metadata: {} })
 }
 
 function defaultEnsureFilesystemStore(): FilesystemNotebookStore | null {
@@ -424,9 +429,171 @@ export function createAppJsGlobals({
     }
   }
 
+  const createLocalNotebookAndOpen = async (
+    name: string,
+    folderUri: string = LOCAL_FOLDER_URI
+  ) => {
+    const trimmedName = name?.trim()
+    if (!trimmedName) {
+      throw new Error('Usage: notebooks.createLocal(name, options?)')
+    }
+    const store = resolveStore()
+    if (!store) {
+      throw new Error('Notebook store is not initialized yet.')
+    }
+
+    const created = await store.create(folderUri, trimmedName)
+    await store.save(created.uri, createEmptyNotebook())
+
+    if (!getWorkspaceItems().includes(folderUri)) {
+      addWorkspaceItem(folderUri)
+    }
+
+    await openNotebookForRuntime(created.uri)
+    return created.uri
+  }
+
+  const appendNotebookCell = async ({
+    target,
+    at,
+    reason,
+    execute,
+    cell,
+  }: {
+    target?: { uri: string } | { handle: { uri: string; revision: string } }
+    at?: { index: number } | { beforeRefId: string } | { afterRefId: string }
+    reason?: string
+    execute?: boolean
+    cell: {
+      kind: 'code' | 'markup'
+      languageId?: string
+      value?: string
+      metadata?: Record<string, string>
+    }
+  }) => {
+    const doc = await notebooksApi.get(target)
+    const beforeRefIds = new Set((doc.notebook.cells ?? []).map((item) => item.refId))
+    const updated = await notebooksApi.update({
+      target: { handle: doc.handle },
+      expectedRevision: doc.handle.revision,
+      reason:
+        reason ??
+        (cell.kind === 'code'
+          ? 'Append code cell from App Console helper'
+          : 'Append markdown cell from App Console helper'),
+      operations: [
+        {
+          op: 'insert',
+          at: at ?? { index: -1 },
+          cells: [cell],
+        },
+      ],
+    })
+
+    const inserted =
+      (updated.notebook.cells ?? []).find((item) => !beforeRefIds.has(item.refId)) ??
+      null
+    if (!inserted) {
+      throw new Error('Failed to identify inserted notebook cell.')
+    }
+
+    if (execute) {
+      const executed = await notebooksApi.execute({
+        target: { handle: updated.handle },
+        refIds: [inserted.refId],
+      })
+      const refreshed = await notebooksApi.get({ handle: executed.handle })
+      const executedCell =
+        (refreshed.notebook.cells ?? []).find((item) => item.refId === inserted.refId) ??
+        inserted
+      return {
+        handle: refreshed.handle,
+        cell: executedCell,
+      }
+    }
+
+    return {
+      handle: updated.handle,
+      cell: inserted,
+    }
+  }
+
+  const notebooksHelpers = {
+    ...notebooksApi,
+    help: async (topic?: string) => {
+      if (topic === 'createLocal') {
+        return 'notebooks.createLocal(name, options?: { folderUri?: string }): Promise<NotebookDocument>. Creates a new local notebook, opens it in the UI, and returns the notebook document.'
+      }
+      if (topic === 'appendCodeCell') {
+        return 'notebooks.appendCodeCell({ target?, at?, languageId?, value?, metadata?, execute?, reason? }): Promise<{ handle, cell }>. Inserts a code cell into the current or targeted notebook.'
+      }
+      if (topic === 'appendMarkdownCell') {
+        return 'notebooks.appendMarkdownCell({ target?, at?, value?, metadata?, reason? }): Promise<{ handle, cell }>. Inserts a markdown cell into the current or targeted notebook.'
+      }
+      const base = await notebooksApi.help(topic as any)
+      if (topic) {
+        return base
+      }
+      return [
+        base,
+        '- notebooks.createLocal(name, options?)',
+        '- notebooks.appendCodeCell({ target?, at?, languageId?, value?, metadata?, execute?, reason? })',
+        '- notebooks.appendMarkdownCell({ target?, at?, value?, metadata?, reason? })',
+      ].join('\n')
+    },
+    createLocal: async (
+      name: string,
+      options?: {
+        folderUri?: string
+      }
+    ) => {
+      const uri = await createLocalNotebookAndOpen(name, options?.folderUri)
+      return notebooksApi.get({ uri })
+    },
+    appendCodeCell: async (args: {
+      target?: { uri: string } | { handle: { uri: string; revision: string } }
+      at?: { index: number } | { beforeRefId: string } | { afterRefId: string }
+      languageId?: string
+      value?: string
+      metadata?: Record<string, string>
+      execute?: boolean
+      reason?: string
+    }) =>
+      await appendNotebookCell({
+        target: args?.target,
+        at: args?.at,
+        execute: args?.execute,
+        reason: args?.reason,
+        cell: {
+          kind: 'code',
+          languageId: args?.languageId ?? 'javascript',
+          value: args?.value ?? '',
+          metadata: args?.metadata ?? {},
+        },
+      }),
+    appendMarkdownCell: async (args: {
+      target?: { uri: string } | { handle: { uri: string; revision: string } }
+      at?: { index: number } | { beforeRefId: string } | { afterRefId: string }
+      value?: string
+      metadata?: Record<string, string>
+      reason?: string
+    }) =>
+      await appendNotebookCell({
+        target: args?.target,
+        at: args?.at,
+        reason: args?.reason,
+        cell: {
+          kind: 'markup',
+          languageId: 'markdown',
+          value: args?.value ?? '',
+          metadata: args?.metadata ?? {},
+        },
+      }),
+  }
+
   return {
     runme: runmeApi,
-    notebooks: notebooksApi,
+    notebooks: notebooksHelpers,
     codex: codexApi,
     opfs: {
       exists: (path: string) => {
@@ -584,6 +751,50 @@ export function createAppJsGlobals({
           appState.syncRunnerDefault(name)
         }
         return `Default runner set to ${name}`
+      },
+      help: () => {
+        return [
+          'runmeRunners.get()                                - List configured runners',
+          'runmeRunners.update(name, endpoint)               - Create or update a runner endpoint',
+          'runmeRunners.ensure(name, endpoint, { setDefault?: boolean }) - Update a runner and optionally set it as default',
+          'runmeRunners.delete(name)                         - Delete a runner',
+          'runmeRunners.getDefault()                         - Show the default runner',
+          'runmeRunners.setDefault(name)                     - Set the default runner',
+          'runmeRunners.help()                               - Show this help',
+        ].join('\n')
+      },
+      ensure: (
+        name: string,
+        endpoint: string,
+        options?: {
+          setDefault?: boolean
+        }
+      ) => {
+        const trimmedName = name?.trim()
+        const trimmedEndpoint = endpoint?.trim()
+        if (!trimmedName || !trimmedEndpoint) {
+          return 'Usage: runmeRunners.ensure(name, endpoint, { setDefault?: boolean })'
+        }
+        const updatedMessage = [
+          `Runner ${trimmedName} set to ${trimmedEndpoint}`,
+        ]
+        const mgr = getRunnersManager()
+        const updated = mgr.update(trimmedName, trimmedEndpoint)
+        if (runnerSync?.onUpdated) {
+          runnerSync.onUpdated(updated)
+        } else {
+          appState.syncRunnerUpdate(updated)
+        }
+        if (options?.setDefault) {
+          mgr.setDefault(trimmedName)
+          if (runnerSync?.onDefaultSet) {
+            runnerSync.onDefaultSet(trimmedName)
+          } else {
+            appState.syncRunnerDefault(trimmedName)
+          }
+          updatedMessage.push(`Default runner set to ${trimmedName}`)
+        }
+        return updatedMessage.join('\n')
       },
     },
     jupyter: {
@@ -977,6 +1188,7 @@ export function createAppJsGlobals({
       const message = [
         'Available namespaces:',
         '  runme           - Notebook helpers (run all, clear outputs)',
+        '  notebooks       - Notebook document API plus create/append helpers',
         '  opfs            - Origin-private browser file storage helpers',
         '  net             - Browser network helpers',
         '  codex           - Codex project and turn-journal helpers',
@@ -990,6 +1202,11 @@ export function createAppJsGlobals({
         '  googleClientManager - Google OAuth client settings',
         '  app             - App-level configuration helpers',
         '  credentials     - Shorthand for google/oidc/openai credential managers',
+        '',
+        'High-value commands:',
+        '  await notebooks.createLocal("hello")',
+        '  await notebooks.appendCodeCell({ value: "print(1)", languageId: "python" })',
+        '  runmeRunners.ensure("openai-local", "ws://localhost:9988/ws", { setDefault: true })',
         '',
         'Type <namespace>.help() for detailed commands, e.g. explorer.help()',
       ].join('\n')
