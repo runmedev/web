@@ -117,8 +117,7 @@ fi
 
 log ""
 log "=== Test 2: Run explorer.addFolder() ==="
-agent-browser click "$console_input_ref" 2>/dev/null || true
-agent-browser type "$console_input_ref" "explorer.addFolder()" 2>/dev/null || true
+agent-browser fill 'textarea[aria-label="App Console input"]' "explorer.addFolder()" 2>/dev/null || true
 click_run_button >/dev/null
 agent-browser wait 1500 2>/dev/null || true
 screenshot "console-02-addfolder"
@@ -140,8 +139,7 @@ fi
 
 log ""
 log "=== Test 4: Run explorer.listFolders() ==="
-agent-browser click "$console_input_ref" 2>/dev/null || true
-agent-browser type "$console_input_ref" "explorer.listFolders()" 2>/dev/null || true
+agent-browser fill 'textarea[aria-label="App Console input"]' "explorer.listFolders()" 2>/dev/null || true
 click_run_button >/dev/null
 agent-browser wait 1500 2>/dev/null || true
 screenshot "console-03-listfolders"

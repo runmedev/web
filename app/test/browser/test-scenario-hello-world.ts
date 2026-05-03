@@ -174,8 +174,10 @@ function escapeDoubleQuotes(value: string): string {
  * assertions remain stable and every command appears in the walkthrough video.
  */
 function runAppConsoleCommand(consoleRef: string, command: string): string {
-  run(`agent-browser click ${consoleRef}`);
-  run(`agent-browser type ${consoleRef} "${escapeDoubleQuotes(command)}"`);
+  void consoleRef;
+  run(
+    `agent-browser fill 'textarea[aria-label="App Console input"]' "${escapeDoubleQuotes(command)}"`,
+  );
   run(
     `agent-browser eval "${escapeDoubleQuotes(`(() => {
       const runButton = document.querySelector(
