@@ -31,10 +31,13 @@ describe("BottomPane", () => {
     expect(logsTab.className).toContain("data-[state=active]:shadow");
 
     const toggle = screen.getByRole("button", { name: "Collapse bottom pane" });
+    const pane = screen.getByRole("tablist").closest("#bottom-pane");
+
+    expect(pane?.className).toContain("h-[30vh]");
     fireEvent.click(toggle);
 
     expect(screen.getByRole("button", { name: "Expand bottom pane" })).toBeTruthy();
-    const pane = screen.getByRole("tablist").closest("#bottom-pane");
     expect(pane?.getAttribute("data-collapsed")).toBe("true");
+    expect(pane?.className).not.toContain("h-[30vh]");
   });
 });

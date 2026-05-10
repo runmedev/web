@@ -479,7 +479,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
   return (
     <div
       id="app-console"
-      className="flex flex-col overflow-hidden rounded-nb-md border border-nb-cell-border bg-[#0f1014] text-white shadow-nb-sm"
+      className="flex h-full min-h-0 flex-col overflow-hidden rounded-nb-md border border-nb-cell-border bg-[#0f1014] text-white shadow-nb-sm"
     >
       {showHeader && (
         <div
@@ -504,12 +504,12 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       )}
       <div
         id="app-console-body"
-        className={`${isBodyHidden ? "hidden" : "flex"} min-h-[220px] flex-1 flex-col bg-[#0f1014]`}
+        className={`${isBodyHidden ? "hidden" : "flex"} min-h-0 flex-1 flex-col bg-[#0f1014]`}
       >
         <div
           ref={bodyRef}
           data-testid="app-console-cells"
-          className="flex min-h-[220px] flex-1 flex-col gap-3 overflow-y-auto px-3 py-3"
+          className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3"
         >
           {loadError ? (
             <div className="rounded-nb-sm border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">

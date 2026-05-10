@@ -40,9 +40,15 @@ export default function BottomPane() {
     <div
       id="bottom-pane"
       data-collapsed={collapsed ? "true" : "false"}
-      className="overflow-hidden rounded-nb-md border border-nb-cell-border"
+      className={`overflow-hidden rounded-nb-md border border-nb-cell-border ${
+        collapsed ? "" : "h-[30vh] min-h-[220px]"
+      }`}
     >
-      <Tabs.Root id="bottom-pane-tabs" defaultValue="console" className="flex flex-col">
+      <Tabs.Root
+        id="bottom-pane-tabs"
+        defaultValue="console"
+        className="flex h-full min-h-0 flex-col"
+      >
         <div
           id="bottom-pane-header"
           className="flex items-center justify-between border-b border-nb-tray-border bg-[#161927] px-2 py-1"
@@ -77,7 +83,10 @@ export default function BottomPane() {
           </button>
         </div>
 
-        <div id="bottom-pane-body" className={collapsed ? "hidden" : ""}>
+        <div
+          id="bottom-pane-body"
+          className={collapsed ? "hidden" : "flex min-h-0 flex-1 flex-col"}
+        >
           {/*
             Keep both panes mounted so terminal/log state is preserved while
             switching tabs, similar to VS Code's bottom panel behavior.
@@ -86,7 +95,7 @@ export default function BottomPane() {
             id="bottom-pane-content-console"
             value="console"
             forceMount
-            className="min-h-[220px] data-[state=inactive]:hidden"
+            className="h-full min-h-0 flex-1 data-[state=inactive]:hidden"
           >
             <AppConsole showHeader={false} />
           </Tabs.Content>
@@ -94,7 +103,7 @@ export default function BottomPane() {
             id="bottom-pane-content-logs"
             value="logs"
             forceMount
-            className="min-h-[220px] data-[state=inactive]:hidden"
+            className="h-full min-h-0 flex-1 data-[state=inactive]:hidden"
           >
             <LogsPane />
           </Tabs.Content>
