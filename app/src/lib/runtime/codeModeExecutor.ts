@@ -26,6 +26,10 @@ const DEFAULT_MAX_CODE_BYTES = 64 * 1024
 const OUTPUT_TRUNCATED_SUFFIX = '\n[output truncated]\n'
 
 export type CodeModeExecutionError = Error & { output: string }
+export type CodeModeExecutionHooks = {
+  onStdout?: (chunk: string) => void
+  onStderr?: (chunk: string) => void
+}
 
 function withOutput(error: unknown, output: string): CodeModeExecutionError {
   const err = error instanceof Error ? error : new Error(String(error))
@@ -46,6 +50,7 @@ export type CodeModeExecutor = {
   execute(args: {
     code: string
     source: CodeModeSource
+    hooks?: CodeModeExecutionHooks
   }): Promise<{ output: string }>
 }
 
@@ -71,7 +76,7 @@ export function createCodeModeExecutor(options: {
     })
 
   return {
-    execute: async ({ code, source }) => {
+    execute: async ({ code, source, hooks }) => {
       const normalizedCode =
         typeof code === 'string' ? code : String(code ?? '')
       const codeBytes = new TextEncoder().encode(normalizedCode).length
@@ -135,7 +140,10 @@ export function createCodeModeExecutor(options: {
 
       const globals = createAppJsGlobals({
         runme: runmeApi,
-        sendOutput: appendOutput,
+        sendOutput: (data) => {
+          appendOutput(data)
+          hooks?.onStdout?.(data)
+        },
         resolveNotebook,
         listNotebooks,
         opfsApi,
@@ -147,8 +155,14 @@ export function createCodeModeExecutor(options: {
         mode === 'sandbox'
           ? new SandboxJSKernel({
               hooks: {
-                onStdout: appendOutput,
-                onStderr: appendOutput,
+                onStdout: (data) => {
+                  appendOutput(data)
+                  hooks?.onStdout?.(data)
+                },
+                onStderr: (data) => {
+                  appendOutput(data)
+                  hooks?.onStderr?.(data)
+                },
               },
               allowedMethods: CODE_MODE_SANDBOX_ALLOWED_METHODS,
               bridge: {
@@ -166,8 +180,14 @@ export function createCodeModeExecutor(options: {
           : new JSKernel({
               globals,
               hooks: {
-                onStdout: appendOutput,
-                onStderr: appendOutput,
+                onStdout: (data) => {
+                  appendOutput(data)
+                  hooks?.onStdout?.(data)
+                },
+                onStderr: (data) => {
+                  appendOutput(data)
+                  hooks?.onStderr?.(data)
+                },
               },
             }).run(normalizedCode)
 

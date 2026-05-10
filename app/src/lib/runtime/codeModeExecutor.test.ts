@@ -80,6 +80,31 @@ describe('codeModeExecutor', () => {
     expect(result.output).toContain('[output truncated]')
   })
 
+  it('forwards streaming chunks to execution hooks', async () => {
+    const notebook = createNotebook()
+    const onStdout = vi.fn()
+    const onStderr = vi.fn()
+    const executor = createCodeModeExecutor({
+      mode: 'browser',
+      resolveNotebook: () => notebook,
+      listNotebooks: () => [notebook],
+    })
+
+    const result = await executor.execute({
+      source: 'webmcp',
+      code: "console.log('one'); console.error('two');",
+      hooks: {
+        onStdout,
+        onStderr,
+      },
+    })
+
+    expect(result.output).toContain('one')
+    expect(result.output).toContain('two')
+    expect(onStdout).toHaveBeenCalled()
+    expect(onStderr).toHaveBeenCalled()
+  })
+
   it('returns partial output when execution times out', async () => {
     const notebook = createNotebook()
     const executor = createCodeModeExecutor({

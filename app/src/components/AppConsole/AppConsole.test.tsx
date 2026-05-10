@@ -218,6 +218,7 @@ vi.mock("../Actions/Editor", () => ({
 }));
 
 import AppConsole from "./AppConsole";
+import { __resetAppConsoleDataForTests } from "../../lib/appConsole/appConsoleController";
 
 function getCurrentCell(): HTMLElement {
   const current = document.querySelector(
@@ -245,6 +246,7 @@ async function flushPersistence() {
 
 describe("AppConsole", () => {
   beforeEach(() => {
+    __resetAppConsoleDataForTests();
     storedSessionId = "session-1";
     storedCells = [];
     touchedSessions.length = 0;

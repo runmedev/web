@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 
 import { appLogger } from "../../lib/logging/runtime";
+import { getAppConsoleData } from "../../lib/appConsole/appConsoleController";
 import {
   buildExecuteCodeInputSchema,
   EXECUTE_CODE_TOOL_DESCRIPTION,
@@ -45,6 +46,7 @@ function getModelContext(): ModelContextLike | null {
 
 export default function WebMcpToolRegistrationHost() {
   const codeModeExecutor = useCodeModeExecutor({ mode: "sandbox" });
+  const appConsoleData = getAppConsoleData();
 
   useEffect(() => {
     const modelContext = getModelContext();
@@ -73,11 +75,40 @@ export default function WebMcpToolRegistrationHost() {
           execute: async (input) => {
             const code =
               typeof input?.code === "string" ? input.code : String(input?.code ?? "");
-            const result = await codeModeExecutor.execute({
-              code,
-              source: "webmcp",
-            });
-            return result.output;
+            await appConsoleData.hydrate();
+
+            const execution = appConsoleData.startExternalExecution(code);
+
+            try {
+              const result = await codeModeExecutor.execute({
+                code,
+                source: "webmcp",
+                hooks: execution
+                  ? {
+                      onStdout: (chunk) => {
+                        appConsoleData.appendStdout(execution.cellId, chunk);
+                      },
+                      onStderr: (chunk) => {
+                        appConsoleData.appendStderr(execution.cellId, chunk);
+                      },
+                    }
+                  : undefined,
+              });
+
+              if (execution) {
+                appConsoleData.completeExecution(execution.cellId, {
+                  exitCode: 0,
+                });
+              }
+              return result.output;
+            } catch (error) {
+              if (execution) {
+                appConsoleData.failExecution(execution.cellId, {
+                  message: error instanceof Error ? error.message : String(error),
+                });
+              }
+              throw error;
+            }
           },
         },
         {
@@ -110,7 +141,7 @@ export default function WebMcpToolRegistrationHost() {
         },
       });
     };
-  }, [codeModeExecutor]);
+  }, [appConsoleData, codeModeExecutor]);
 
   return null;
 }
