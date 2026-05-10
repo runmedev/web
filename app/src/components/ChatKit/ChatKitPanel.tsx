@@ -8,11 +8,6 @@ import {
 } from 'react'
 import { ChatKit, useChatKit } from '../../lib/runtime/chatkitReact'
 import {
-  parser_pb,
-} from '../../contexts/CellContext'
-import { useNotebookContext } from '../../contexts/NotebookContext'
-import { useCurrentDoc } from '../../contexts/CurrentDocContext'
-import {
   useHarness,
   getHarnessManager,
   buildChatkitUrl,
@@ -21,7 +16,6 @@ import {
 import {
   buildCodexChatKitFetchOptions,
 } from '../../lib/runtime/codexChatKitAdapter'
-import { createCodeModeExecutor } from '../../lib/runtime/codeModeExecutor'
 import { createChatKitFetchFromAdapter } from '../../lib/runtime/createChatKitFetchFromAdapter'
 import {
   getCodexConversationController,
@@ -48,6 +42,7 @@ import {
   responsesDirectConfigManager,
   useResponsesDirectConfigSnapshot,
 } from '../../lib/runtime/responsesDirectConfigManager'
+import { useCodeModeExecutor } from '../../lib/runtime/useCodeModeExecutor'
 
 import { getAccessToken, getAuthData } from '../../token'
 import { getBrowserAdapter } from '../../browserAdapter.client'
@@ -380,22 +375,11 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   } | null>(null)
   const lastAppliedThreadRef = useRef<string | null>(null)
   const harnessRuntimeManager = useMemo(() => getHarnessRuntimeManager(), [])
-  const { getNotebookData, useNotebookList } =
-    useNotebookContext()
-  const { getCurrentDoc } = useCurrentDoc()
   const responsesDirectConfig = useResponsesDirectConfigSnapshot()
   const codexProjects = useCodexProjects()
   const { defaultProject } = codexProjects
   const codexConversation = useCodexConversationSnapshot()
   const conversationSnapshot = useConversationControllerSnapshot(activeController)
-  const currentDocUri = getCurrentDoc()
-  const openNotebookList = useNotebookList()
-  const getNotebookDataRef = useRef(getNotebookData)
-  getNotebookDataRef.current = getNotebookData
-  const openNotebookListRef = useRef(openNotebookList)
-  openNotebookListRef.current = openNotebookList
-  const currentDocUriRef = useRef(currentDocUri)
-  currentDocUriRef.current = currentDocUri
   const currentThreadId = conversationSnapshot?.currentThreadId ?? null
   const selectedModel =
     conversationSnapshot?.selectedModel ??
@@ -403,70 +387,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     DEFAULT_CHAT_MODEL
   const drawerThreads = conversationSnapshot?.threads ?? []
 
-  const resolveCodeModeNotebook = useCallback(
-    (target?: unknown) => {
-      const targetUri =
-        typeof target === 'string'
-          ? target
-          : typeof target === 'object' && target && 'uri' in target
-            ? (target as { uri?: string }).uri
-            : typeof target === 'object' &&
-                target &&
-                'handle' in target &&
-                (target as { handle?: { uri?: string } }).handle?.uri
-              ? (target as { handle?: { uri?: string } }).handle?.uri
-              : currentDocUriRef.current
-      if (!targetUri) {
-        return null
-      }
-      const data = getNotebookDataRef.current(targetUri)
-      if (!data) {
-        return null
-      }
-
-      return {
-        getUri: () => data.getUri(),
-        getName: () => data.getName(),
-        getNotebook: () => data.getNotebook(),
-        updateCell: (cell: parser_pb.Cell) => data.updateCell(cell),
-        getCell: (refId: string) => data.getCell(refId),
-        appendCodeCell: data.appendCodeCell?.bind(data),
-        addCodeCellAfter: data.addCodeCellAfter?.bind(data),
-        addCodeCellBefore: data.addCodeCellBefore?.bind(data),
-        removeCell: data.removeCell?.bind(data),
-      }
-    },
-    []
-  )
-
-  const codeModeExecutor = useMemo(
-    () =>
-      createCodeModeExecutor({
-        mode: 'sandbox',
-        resolveNotebook: resolveCodeModeNotebook,
-        listNotebooks: () => {
-          const uris = new Set<string>()
-          for (const notebook of openNotebookListRef.current) {
-            if (typeof notebook?.uri === 'string' && notebook.uri.trim()) {
-              uris.add(notebook.uri)
-            }
-          }
-          if (currentDocUriRef.current) {
-            uris.add(currentDocUriRef.current)
-          }
-          return Array.from(uris)
-            .map((uri) => resolveCodeModeNotebook(uri))
-            .filter(
-              (
-                notebook
-              ): notebook is NonNullable<
-                ReturnType<typeof resolveCodeModeNotebook>
-              > => Boolean(notebook)
-            )
-        },
-      }),
-    [resolveCodeModeNotebook]
-  )
+  const codeModeExecutor = useCodeModeExecutor({ mode: 'sandbox' })
 
   const handleCodexBridgeToolCall = useMemo(
     () =>
