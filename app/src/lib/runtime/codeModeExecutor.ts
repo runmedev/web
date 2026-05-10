@@ -17,7 +17,7 @@ import {
   SandboxJSKernel,
 } from './sandboxJsKernel'
 
-export type CodeModeSource = 'chatkit' | 'codex'
+export type CodeModeSource = 'chatkit' | 'codex' | 'webmcp'
 export type CodeModeRunnerMode = 'browser' | 'sandbox'
 
 const DEFAULT_TIMEOUT_MS = 15_000

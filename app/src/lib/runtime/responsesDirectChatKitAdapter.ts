@@ -9,6 +9,10 @@ import type {
   ConversationStreamSink,
 } from './conversationController'
 import { createChatKitFetchFromAdapter } from './createChatKitFetchFromAdapter'
+import {
+  buildResponsesExecuteCodeToolDefinition,
+  EXECUTE_CODE_TOOL_NAME,
+} from './executeCodeTool'
 import type {
   HarnessChatKitAdapter,
   HarnessChatKitEventSink,
@@ -32,30 +36,9 @@ type StoredThread = {
 
 const DEFAULT_OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses'
 const DEFAULT_MODEL = 'gpt-5.2'
-const EXECUTE_CODE_TOOL_NAME = 'ExecuteCode'
-
-function buildCodeModeToolDefinition(): JsonRecord {
-  return {
-    type: 'function',
-    name: EXECUTE_CODE_TOOL_NAME,
-    description:
-      'Execute JavaScript in AppKernel and return one merged stdout/stderr output string.',
-    strict: true,
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        code: {
-          type: 'string',
-        },
-      },
-      required: ['code'],
-    },
-  }
-}
 
 function buildResponsesTools(vectorStores: string[]): JsonRecord[] {
-  const tools: JsonRecord[] = [buildCodeModeToolDefinition()]
+  const tools: JsonRecord[] = [buildResponsesExecuteCodeToolDefinition()]
   if (vectorStores.length > 0) {
     tools.push({
       type: 'file_search',
