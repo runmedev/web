@@ -51,7 +51,7 @@ export type CodeModeExecutor = {
     code: string
     source: CodeModeSource
     hooks?: CodeModeExecutionHooks
-  }): Promise<{ output: string }>
+  }): Promise<{ output: string; exitCode: number }>
 }
 
 export function createCodeModeExecutor(options: {
@@ -151,6 +151,7 @@ export function createCodeModeExecutor(options: {
       })
 
       const abortController = new AbortController()
+      let finalExitCode = 0
       const kernelRun =
         mode === 'sandbox'
           ? new SandboxJSKernel({
@@ -162,6 +163,9 @@ export function createCodeModeExecutor(options: {
                 onStderr: (data) => {
                   appendOutput(data)
                   hooks?.onStderr?.(data)
+                },
+                onExit: (exitCode) => {
+                  finalExitCode = exitCode
                 },
               },
               allowedMethods: CODE_MODE_SANDBOX_ALLOWED_METHODS,
@@ -187,6 +191,9 @@ export function createCodeModeExecutor(options: {
                 onStderr: (data) => {
                   appendOutput(data)
                   hooks?.onStderr?.(data)
+                },
+                onExit: (exitCode) => {
+                  finalExitCode = exitCode
                 },
               },
             }).run(normalizedCode)
@@ -238,6 +245,7 @@ export function createCodeModeExecutor(options: {
 
       return {
         output,
+        exitCode: finalExitCode,
       }
     },
   }

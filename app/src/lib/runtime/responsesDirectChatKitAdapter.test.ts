@@ -242,7 +242,7 @@ describe("responsesDirectChatKitAdapter", () => {
 
   it("executes ExecuteCode internally and continues the Responses turn", async () => {
     const codeModeExecutor = {
-      execute: vi.fn(async () => ({ output: "tool output" })),
+      execute: vi.fn(async () => ({ output: "tool output", exitCode: 0 })),
     };
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
@@ -324,7 +324,7 @@ describe("responsesDirectChatKitAdapter", () => {
 
   it("falls back call_id to item_id only when item_id already looks like a call id", async () => {
     const codeModeExecutor = {
-      execute: vi.fn(async () => ({ output: "ok" })),
+      execute: vi.fn(async () => ({ output: "ok", exitCode: 0 })),
     };
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
@@ -377,7 +377,7 @@ describe("responsesDirectChatKitAdapter", () => {
 
   it("recovers call_id from function_call output item when arguments.done omits call_id", async () => {
     const codeModeExecutor = {
-      execute: vi.fn(async () => ({ output: "ok" })),
+      execute: vi.fn(async () => ({ output: "ok", exitCode: 0 })),
     };
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(

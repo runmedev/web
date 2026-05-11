@@ -97,7 +97,7 @@ export default function WebMcpToolRegistrationHost() {
 
               if (execution) {
                 appConsoleData.completeExecution(execution.cellId, {
-                  exitCode: 0,
+                  exitCode: result.exitCode,
                 });
               }
               return result.output;
