@@ -2,8 +2,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
-const { executeMock, appLoggerMock } = vi.hoisted(() => ({
+const { executeMock, appConsoleDataMock, appLoggerMock } = vi.hoisted(() => ({
   executeMock: vi.fn(),
+  appConsoleDataMock: {
+    hydrate: vi.fn(),
+    startExternalExecution: vi.fn(),
+    appendStdout: vi.fn(),
+    appendStderr: vi.fn(),
+    completeExecution: vi.fn(),
+    failExecution: vi.fn(),
+  },
   appLoggerMock: {
     debug: vi.fn(),
     info: vi.fn(),
@@ -17,6 +25,10 @@ vi.mock("../../lib/runtime/useCodeModeExecutor", () => ({
   }),
 }));
 
+vi.mock("../../lib/appConsole/appConsoleController", () => ({
+  getAppConsoleData: () => appConsoleDataMock,
+}));
+
 vi.mock("../../lib/logging/runtime", () => ({
   appLogger: appLoggerMock,
 }));
@@ -26,7 +38,18 @@ import WebMcpToolRegistrationHost from "./WebMcpToolRegistrationHost";
 describe("WebMcpToolRegistrationHost", () => {
   beforeEach(() => {
     executeMock.mockReset();
-    executeMock.mockResolvedValue({ output: "webmcp output" });
+    executeMock.mockResolvedValue({ output: "webmcp output", exitCode: 0 });
+    appConsoleDataMock.hydrate.mockReset();
+    appConsoleDataMock.hydrate.mockResolvedValue(undefined);
+    appConsoleDataMock.startExternalExecution.mockReset();
+    appConsoleDataMock.startExternalExecution.mockReturnValue({
+      cellId: "cell-1",
+      source: "console.log('hello')",
+    });
+    appConsoleDataMock.appendStdout.mockReset();
+    appConsoleDataMock.appendStderr.mockReset();
+    appConsoleDataMock.completeExecution.mockReset();
+    appConsoleDataMock.failExecution.mockReset();
     appLoggerMock.debug.mockReset();
     appLoggerMock.info.mockReset();
     appLoggerMock.error.mockReset();
@@ -104,13 +127,92 @@ describe("WebMcpToolRegistrationHost", () => {
         code: "console.log('hello')",
       }),
     ).resolves.toBe("webmcp output");
+    expect(appConsoleDataMock.hydrate).toHaveBeenCalledTimes(1);
+    expect(appConsoleDataMock.startExternalExecution).toHaveBeenCalledWith(
+      "console.log('hello')",
+    );
     expect(executeMock).toHaveBeenCalledWith({
       code: "console.log('hello')",
       source: "webmcp",
+      hooks: {
+        onStdout: expect.any(Function),
+        onStderr: expect.any(Function),
+      },
     });
+    const executeArgs = executeMock.mock.calls[0]?.[0];
+    executeArgs?.hooks?.onStdout?.("stdout chunk");
+    executeArgs?.hooks?.onStderr?.("stderr chunk");
+    expect(appConsoleDataMock.appendStdout).toHaveBeenCalledWith(
+      "cell-1",
+      "stdout chunk",
+    );
+    expect(appConsoleDataMock.appendStderr).toHaveBeenCalledWith(
+      "cell-1",
+      "stderr chunk",
+    );
+    expect(appConsoleDataMock.completeExecution).toHaveBeenCalledWith("cell-1", {
+      exitCode: 0,
+    });
+    expect(appConsoleDataMock.failExecution).not.toHaveBeenCalled();
 
     expect(registered?.signal?.aborted).toBe(false);
     rendered.unmount();
     expect(registered?.signal?.aborted).toBe(true);
+  });
+
+  it("marks the AppConsole cell failed when ExecuteCode rejects", async () => {
+    executeMock.mockRejectedValueOnce(new Error("boom"));
+    Object.defineProperty(navigator, "modelContext", {
+      configurable: true,
+      value: {
+        registerTool: vi.fn(),
+      },
+    });
+
+    render(<WebMcpToolRegistrationHost />);
+    const registerTool = (navigator as Navigator & {
+      modelContext?: { registerTool: ReturnType<typeof vi.fn> };
+    }).modelContext?.registerTool;
+    const registered = registerTool?.mock.calls[0]?.[0];
+
+    await expect(
+      registered?.execute({
+        code: "console.log('hello')",
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(appConsoleDataMock.failExecution).toHaveBeenCalledWith("cell-1", {
+      message: "boom",
+    });
+  });
+
+  it("uses the resolved ExecuteCode exit code when finalizing the AppConsole cell", async () => {
+    executeMock.mockResolvedValueOnce({
+      output: "runtime error output",
+      exitCode: 1,
+    });
+    Object.defineProperty(navigator, "modelContext", {
+      configurable: true,
+      value: {
+        registerTool: vi.fn(),
+      },
+    });
+
+    render(<WebMcpToolRegistrationHost />);
+    const registerTool = (navigator as Navigator & {
+      modelContext?: { registerTool: ReturnType<typeof vi.fn> };
+    }).modelContext?.registerTool;
+    const registered = registerTool?.mock.calls[0]?.[0];
+
+    await expect(
+      registered?.execute({
+        code: "throw new Error('boom')",
+      }),
+    ).resolves.toBe("runtime error output");
+
+    expect(appConsoleDataMock.completeExecution).toHaveBeenCalledWith("cell-1", {
+      exitCode: 1,
+    });
+    expect(appConsoleDataMock.failExecution).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,8 @@ import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useRunners } from "../../contexts/RunnersContext";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { appState } from "../../lib/runtime/AppState";
+import { getAppConsoleData } from "../../lib/appConsole/appConsoleController";
+import { useAppConsoleSnapshot } from "../../lib/appConsole/useAppConsoleSnapshot";
 import { createAppJsGlobals } from "../../lib/runtime/appJsGlobals";
 import { JSKernel } from "../../lib/runtime/jsKernel";
 import {
@@ -23,18 +25,10 @@ import {
 import { parser_pb } from "../../runme/client";
 import { ActionOutputItems } from "../Actions/Actions";
 import Editor from "../Actions/Editor";
-import {
-  coerceRestoredCells,
-  createDraftCell,
-  createResultOutput,
-  createStdTextOutputs,
-  type ConsoleCell,
-} from "./model";
-import { appConsoleStorage } from "./storage";
+import { type ConsoleCell, getHistorySources } from "./model";
 
 const STORAGE_KEY = "runme.appConsoleCollapsed";
 const LEGACY_STORAGE_KEY = "aisre.appConsoleCollapsed";
-const PERSIST_DEBOUNCE_MS = 150;
 const textDecoder = new TextDecoder();
 
 type OutputKind = "stdout" | "stderr" | "result";
@@ -137,6 +131,8 @@ function OutputGroups({ outputs }: { outputs: parser_pb.CellOutput[] }) {
 }
 
 export default function AppConsole({ showHeader = true }: { showHeader?: boolean }) {
+  const appConsoleData = getAppConsoleData();
+  const { cells, hydrated, loadError } = useAppConsoleSnapshot();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     if (typeof window === "undefined") {
       return false;
@@ -151,10 +147,6 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       return false;
     }
   });
-  const [cells, setCells] = useState<ConsoleCell[]>(() => [createDraftCell(1)]);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [hydrated, setHydrated] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
 
   const draftEditorRef = useRef<any>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -163,7 +155,6 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
     draftBuffer: "",
   });
   const pendingFocusCellIdRef = useRef<string | null>(null);
-  const persistenceEnabledRef = useRef(true);
 
   useEffect(() => {
     try {
@@ -257,113 +248,6 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
 
   const currentCell = cells[cells.length - 1] ?? null;
 
-  const persistCells = useCallback(
-    async (rows: ConsoleCell[]) => {
-      if (!sessionId || !persistenceEnabledRef.current) {
-        return;
-      }
-      const updatedAt = new Date().toISOString();
-      await appConsoleStorage.saveCells(
-        rows.map((row) => ({
-          ...row,
-          sessionId,
-          updatedAt,
-        })),
-      );
-      await appConsoleStorage.touchSession(sessionId, updatedAt);
-    },
-    [sessionId],
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-
-    void (async () => {
-      const now = new Date().toISOString();
-      try {
-        const restored = await appConsoleStorage.loadLatestSession();
-        if (cancelled) {
-          return;
-        }
-
-        if (!restored) {
-          const session = await appConsoleStorage.createSession(now);
-          if (cancelled) {
-            return;
-          }
-          const nextCells = [createDraftCell(1)];
-          await appConsoleStorage.saveCells(
-            nextCells.map((cell) => ({
-              ...cell,
-              sessionId: session.id,
-              updatedAt: now,
-            })),
-          );
-          setSessionId(session.id);
-          setCells(nextCells);
-          pendingFocusCellIdRef.current = nextCells[0].id;
-          setHydrated(true);
-          return;
-        }
-
-        const recovered = coerceRestoredCells(restored.cells, now);
-        if (recovered.mutated) {
-          await appConsoleStorage.saveCells(
-            recovered.cells.map((cell) => ({
-              ...cell,
-              sessionId: restored.session.id,
-              updatedAt: now,
-            })),
-          );
-          await appConsoleStorage.touchSession(restored.session.id, now);
-        }
-
-        if (cancelled) {
-          return;
-        }
-
-        setSessionId(restored.session.id);
-        setCells(recovered.cells);
-        pendingFocusCellIdRef.current =
-          recovered.cells[recovered.cells.length - 1]?.id ?? null;
-        setHydrated(true);
-      } catch (error) {
-        console.error("Failed to restore App Console session", error);
-        persistenceEnabledRef.current = false;
-        const fallbackSessionId =
-          globalThis.crypto?.randomUUID?.() ?? `app-console-fallback-${Date.now()}`;
-        const fallbackCells = [createDraftCell(1)];
-        if (!cancelled) {
-          setLoadError("Console history is unavailable for this session.");
-          setSessionId(fallbackSessionId);
-          setCells(fallbackCells);
-          pendingFocusCellIdRef.current = fallbackCells[0].id;
-          setHydrated(true);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!hydrated || !sessionId || !persistenceEnabledRef.current) {
-      return;
-    }
-
-    const timeout = window.setTimeout(() => {
-      void persistCells(cells).catch((error) => {
-        console.error("Failed to persist App Console state", error);
-      });
-    }, PERSIST_DEBOUNCE_MS);
-
-    return () => {
-      window.clearTimeout(timeout);
-    };
-  }, [cells, hydrated, persistCells, sessionId]);
-
   useEffect(() => {
     if (!currentCell || currentCell.status !== "draft") {
       return;
@@ -395,22 +279,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
 
   const setCurrentSource = useCallback(
     (source: string, clearHistoryBrowse = true) => {
-      setCells((prev) => {
-        if (prev.length === 0) {
-          return prev;
-        }
-        const lastIndex = prev.length - 1;
-        const target = prev[lastIndex];
-        if (target.source === source) {
-          return prev;
-        }
-        const next = [...prev];
-        next[lastIndex] = {
-          ...target,
-          source,
-        };
-        return next;
-      });
+      appConsoleData.setDraftSource(source);
 
       if (clearHistoryBrowse) {
         historyBrowseRef.current = {
@@ -419,91 +288,74 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
         };
       }
     },
-    [],
+    [appConsoleData],
   );
 
   const browseHistory = useCallback(
     (direction: "previous" | "next") => {
-      setCells((prev) => {
-        if (prev.length === 0) {
-          return prev;
-        }
-        const draft = prev[prev.length - 1];
-        if (draft.status !== "draft") {
-          return prev;
-        }
+      const draft = appConsoleData.getSnapshot().cells.at(-1);
+      if (!draft || draft.status !== "draft") {
+        return;
+      }
 
-        const history = prev
-          .filter((cell) => cell.status !== "draft")
-          .map((cell) => cell.source)
-          .filter((source) => source.trim() !== "");
+      const history = getHistorySources(appConsoleData.getSnapshot().cells);
 
-        if (history.length === 0) {
-          return prev;
-        }
+      if (history.length === 0) {
+        return;
+      }
 
-        const state = historyBrowseRef.current;
-        if (direction === "previous") {
-          const nextIndex =
-            state.index === null ? 0 : Math.min(state.index + 1, history.length - 1);
-          const draftBuffer = state.index === null ? draft.source : state.draftBuffer;
-          const nextSource = history[history.length - 1 - nextIndex] ?? draft.source;
-          historyBrowseRef.current = {
-            index: nextIndex,
-            draftBuffer,
-          };
-          if (nextSource === draft.source) {
-            return prev;
-          }
-          const next = [...prev];
-          next[next.length - 1] = {
-            ...draft,
-            source: nextSource,
-          };
-          return next;
-        }
-
-        if (state.index === null) {
-          return prev;
-        }
-
-        const nextIndex = state.index - 1;
-        const nextSource =
-          nextIndex >= 0
-            ? history[history.length - 1 - nextIndex] ?? draft.source
-            : state.draftBuffer;
-
-        historyBrowseRef.current =
-          nextIndex >= 0
-            ? {
-                index: nextIndex,
-                draftBuffer: state.draftBuffer,
-              }
-            : {
-                index: null,
-                draftBuffer: "",
-              };
-
-        if (nextSource === draft.source) {
-          return prev;
-        }
-
-        const next = [...prev];
-        next[next.length - 1] = {
-          ...draft,
-          source: nextSource,
+      const state = historyBrowseRef.current;
+      if (direction === "previous") {
+        const nextIndex =
+          state.index === null ? 0 : Math.min(state.index + 1, history.length - 1);
+        const draftBuffer = state.index === null ? draft.source : state.draftBuffer;
+        const nextSource = history[history.length - 1 - nextIndex] ?? draft.source;
+        historyBrowseRef.current = {
+          index: nextIndex,
+          draftBuffer,
         };
-        return next;
-      });
+        if (nextSource === draft.source) {
+          return;
+        }
+        appConsoleData.setDraftSource(nextSource);
+        return;
+      }
+
+      if (state.index === null) {
+        return;
+      }
+
+      const nextIndex = state.index - 1;
+      const nextSource =
+        nextIndex >= 0
+          ? history[history.length - 1 - nextIndex] ?? draft.source
+          : state.draftBuffer;
+
+      historyBrowseRef.current =
+        nextIndex >= 0
+          ? {
+              index: nextIndex,
+              draftBuffer: state.draftBuffer,
+            }
+          : {
+              index: null,
+              draftBuffer: "",
+            };
+
+      if (nextSource === draft.source) {
+        return;
+      }
+
+      appConsoleData.setDraftSource(nextSource);
     },
-    [],
+    [appConsoleData],
   );
 
   const executeCurrentCell = useCallback(async () => {
-    if (!currentCell || currentCell.status !== "draft") {
-      return;
-    }
-    if (currentCell.source.trim() === "") {
+    await appConsoleData.hydrate();
+
+    const execution = appConsoleData.startDraftExecution();
+    if (!execution) {
       return;
     }
 
@@ -512,48 +364,9 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       draftBuffer: "",
     };
 
-    const startedAt = new Date().toISOString();
-    const runningId = currentCell.id;
-    let stdout = "";
-    let stderr = "";
-
-    const updateStreamingOutputs = (kind: "stdout" | "stderr", chunk: string) => {
-      if (kind === "stdout") {
-        stdout += chunk;
-      } else {
-        stderr += chunk;
-      }
-
-      setCells((prev) =>
-        prev.map((cell) =>
-          cell.id === runningId
-            ? {
-                ...cell,
-                outputs: createStdTextOutputs(stdout, stderr),
-              }
-            : cell,
-        ),
-      );
-    };
-
-    setCells((prev) =>
-      prev.map((cell) =>
-        cell.id === runningId
-          ? {
-              ...cell,
-              status: "running",
-              startedAt,
-              completedAt: undefined,
-              exitCode: undefined,
-              outputs: [],
-            }
-          : cell,
-      ),
-    );
-
     const globals = createAppJsGlobals({
       runme,
-      sendOutput: (data) => updateStreamingOutputs("stdout", data),
+      sendOutput: (data) => appConsoleData.appendStdout(execution.cellId, data),
       resolveNotebookStore,
       ensureFilesystemStore,
       workspace: {
@@ -593,39 +406,31 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
     const kernel = new JSKernel({
       globals,
       hooks: {
-        onStdout: (data) => updateStreamingOutputs("stdout", data),
-        onStderr: (data) => updateStreamingOutputs("stderr", data),
+        onStdout: (data) => appConsoleData.appendStdout(execution.cellId, data),
+        onStderr: (data) => appConsoleData.appendStderr(execution.cellId, data),
       },
     });
 
-    const { exitCode, result } = await kernel.run(currentCell.source);
-    const completedAt = new Date().toISOString();
-    const nextDraft = createDraftCell(currentCell.index + 1);
-    const nextStatus: ConsoleCell["status"] = exitCode === 0 ? "success" : "error";
-
-    pendingFocusCellIdRef.current = nextDraft.id;
-    setCells((prev) => {
-      const next = prev.map((cell) => {
-        if (cell.id !== runningId) {
-          return cell;
-        }
-        return {
-          ...cell,
-          status: nextStatus,
-          completedAt,
-          exitCode,
-          outputs: [
-            ...createStdTextOutputs(stdout, stderr),
-            ...createResultOutput(result),
-          ],
-        };
+    try {
+      const { exitCode, result } = await kernel.run(execution.source);
+      appConsoleData.completeExecution(execution.cellId, {
+        exitCode,
+        result,
       });
-      next.push(nextDraft);
-      return next;
-    });
+      const nextDraft = appConsoleData.getSnapshot().cells.at(-1);
+      pendingFocusCellIdRef.current =
+        nextDraft?.status === "draft" ? nextDraft.id : null;
+    } catch (error) {
+      appConsoleData.failExecution(execution.cellId, {
+        message: String(error),
+      });
+      const nextDraft = appConsoleData.getSnapshot().cells.at(-1);
+      pendingFocusCellIdRef.current =
+        nextDraft?.status === "draft" ? nextDraft.id : null;
+    }
   }, [
     addItem,
-    currentCell,
+    appConsoleData,
     deleteRunner,
     ensureFilesystemStore,
     getItems,
@@ -674,7 +479,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
   return (
     <div
       id="app-console"
-      className="flex flex-col overflow-hidden rounded-nb-md border border-nb-cell-border bg-[#0f1014] text-white shadow-nb-sm"
+      className="flex h-full min-h-0 flex-col overflow-hidden rounded-nb-md border border-nb-cell-border bg-[#0f1014] text-white shadow-nb-sm"
     >
       {showHeader && (
         <div
@@ -699,12 +504,12 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       )}
       <div
         id="app-console-body"
-        className={`${isBodyHidden ? "hidden" : "flex"} min-h-[220px] flex-1 flex-col bg-[#0f1014]`}
+        className={`${isBodyHidden ? "hidden" : "flex"} min-h-0 flex-1 flex-col bg-[#0f1014]`}
       >
         <div
           ref={bodyRef}
           data-testid="app-console-cells"
-          className="flex min-h-[220px] flex-1 flex-col gap-3 overflow-y-auto px-3 py-3"
+          className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3"
         >
           {loadError ? (
             <div className="rounded-nb-sm border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
@@ -751,7 +556,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
                         disabled={currentCell?.status !== "draft"}
                         className="rounded border border-white/15 px-2 py-1 text-[11px] font-medium text-slate-200 transition hover:border-sky-300/50 hover:bg-sky-400/10 disabled:cursor-not-allowed disabled:opacity-40"
                         onClick={() => {
-                          setCurrentSource(cell.source);
+                          appConsoleData.copyCellSourceToDraft(cell.id);
                           draftEditorRef.current?.focus?.();
                         }}
                       >
