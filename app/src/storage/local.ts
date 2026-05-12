@@ -5,7 +5,7 @@ import md5 from "md5";
 import { Subject, debounceTime } from "rxjs";
 
 import { parser_pb } from "../runme/client";
-import { aisreClientManager as runmeClientManager } from "../lib/aisreClientManager";
+import { serializeNotebookToMarkdown } from "../lib/markdown/serializeNotebookToMarkdown";
 import { appState } from "../lib/runtime/AppState";
 import { appLogger } from "../lib/logging/runtime";
 import {
@@ -798,27 +798,14 @@ export class LocalNotebooks extends Dexie {
       await this.files.update(localUri, { markdownUri });
     }
 
-    // Serialize the notebook to Markdown via the parser service.
-    let markdownBytes: Uint8Array;
+    let markdownContent: string;
     try {
       const notebook = deserializeNotebook(record.doc ?? "");
-      const client = runmeClientManager.get();
-      markdownBytes = await client.serializeNotebook(
-        notebook,
-        create(parser_pb.SerializeRequestOptionsSchema, {
-          outputs: create(parser_pb.SerializeRequestOutputOptionsSchema, {
-            enabled: true,
-            // Summary controls information about execution. I don't think we need that.
-            summary: false,
-          }),
-        }),
-      );
+      markdownContent = serializeNotebookToMarkdown(notebook);
     } catch (error) {
       console.error("Failed to serialize notebook to markdown", error);
       return;
     }
-
-    const markdownContent = new TextDecoder().decode(markdownBytes);
 
     try {
       await driveStore.saveContent(markdownUri, markdownContent, "text/markdown");

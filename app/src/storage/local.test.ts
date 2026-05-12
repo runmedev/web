@@ -1,12 +1,18 @@
 /// <reference types="vitest" />
 // @vitest-environment node
+import { create, toJsonString } from "@bufbuild/protobuf";
 import { describe, expect, it, vi } from "vitest";
 
+import { MimeType, parser_pb } from "../runme/client";
 import LocalNotebooks, {
   type LocalFileRecord,
   type LocalFolderRecord,
 } from "./local";
 import { NotebookStoreItemType } from "./notebook";
+
+const NOTEBOOK_JSON_WRITE_OPTIONS = {
+  emitDefaultValues: true,
+} as unknown as Parameters<typeof toJsonString>[2];
 
 function createMockTable<T extends { id: string }>() {
   const store = new Map<string, T>();
@@ -270,5 +276,75 @@ describe("LocalNotebooks pending Drive create", () => {
     expect(record?.remoteId).toBe(remoteUri);
     expect(record?.parentRemoteIdWhenCreated).toBeUndefined();
     expect(driveStore.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("LocalNotebooks markdown sidecar sync", () => {
+  it("serializes notebooks to markdown locally before uploading the sidecar", async () => {
+    const markdownUri = "https://drive.google.com/file/d/sidecar123/view";
+    const remoteUri = "https://drive.google.com/file/d/notebook123/view";
+    const driveStore = {
+      saveContent: vi.fn(async () => undefined),
+    };
+    const store = createTestStore(driveStore);
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          kind: parser_pb.CellKind.MARKUP,
+          languageId: "markdown",
+          value: "# Searchable title",
+        }),
+        create(parser_pb.CellSchema, {
+          kind: parser_pb.CellKind.CODE,
+          languageId: "python",
+          value: 'print("hello")',
+          outputs: [
+            create(parser_pb.CellOutputSchema, {
+              items: [
+                create(parser_pb.CellOutputItemSchema, {
+                  mime: MimeType.VSCodeNotebookStdOut,
+                  type: "Buffer",
+                  data: new TextEncoder().encode("hello\n"),
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+
+    await store.files.put({
+      id: "local://file/notebook",
+      name: "notebook.json",
+      remoteId: remoteUri,
+      markdownUri,
+      lastRemoteChecksum: "",
+      lastSynced: "",
+      doc: toJsonString(
+        parser_pb.NotebookSchema,
+        notebook,
+        NOTEBOOK_JSON_WRITE_OPTIONS,
+      ),
+      md5Checksum: "",
+    });
+
+    await store.syncMarkdownFile("local://file/notebook");
+
+    expect(driveStore.saveContent).toHaveBeenCalledWith(
+      markdownUri,
+      [
+        "# Searchable title",
+        "",
+        "```python",
+        'print("hello")',
+        "```",
+        "",
+        "```stdout",
+        "hello",
+        "```",
+        "",
+      ].join("\n"),
+      "text/markdown",
+    );
   });
 });
