@@ -22,7 +22,6 @@ import {
 import {
   ParserService,
   type Notebook,
-  type SerializeRequestOptions,
   type DeserializeRequestOptions,
 } from "@buf/stateful_runme.bufbuild_es/runme/parser/v1/parser_pb.js";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
@@ -183,25 +182,6 @@ export class AisreClient {
       this.mergeCallOptions(requestOptions),
     );
     return response.notebook!;
-  }
-
-  /**
-   * Serializes a notebook via the parser service and returns the raw bytes
-   * produced by the backend (e.g. Markdown content for an index file).
-   */
-  async serializeNotebook(
-    notebook: Notebook,
-    serializeOptions?: SerializeRequestOptions,
-    requestOptions?: RequestOptions,
-  ): Promise<Uint8Array> {
-    const response = await this.parserClient.serialize(
-      {
-        notebook,
-        options: serializeOptions,
-      },
-      this.mergeCallOptions(requestOptions),
-    );
-    return response.result;
   }
 
   private mergeCallOptions(
