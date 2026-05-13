@@ -23,6 +23,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type FocusEvent,
@@ -167,6 +168,10 @@ interface MarkdownCellProps {
   onLanguageChange: (event: ChangeEvent<HTMLSelectElement>) => void;
   /** Incrementing signal to force editor mode after conversion to markdown */
   forceEditRequest?: number;
+  /** Incrementing signal to restore focus into this cell */
+  restoreFocusRequest?: number;
+  /** Which markdown surface should regain focus */
+  restoreFocusRole?: "editor" | "rendered";
 }
 
 /**
@@ -186,6 +191,8 @@ const MarkdownCell = memo(
     languageOptions,
     onLanguageChange,
     forceEditRequest = 0,
+    restoreFocusRequest = 0,
+    restoreFocusRole = "editor",
   }: MarkdownCellProps) => {
     // Subscribe to cell data changes using useSyncExternalStore for tearing-safe reads
     const cell = useSyncExternalStore(
@@ -203,9 +210,17 @@ const MarkdownCell = memo(
       const value = cell?.value ?? "";
       return value.trim().length > 0;
     });
+    const renderedRef = useRef<HTMLDivElement | null>(null);
+    const [editorFocusRequest, setEditorFocusRequest] = useState(0);
+    const [pendingRestoreTarget, setPendingRestoreTarget] = useState<
+      "editor" | "rendered" | null
+    >(null);
 
     // Get the current cell value
     const value = cell?.value ?? "";
+    const requestEditorFocus = useCallback(() => {
+      setEditorFocusRequest((request) => request + 1);
+    }, []);
 
     // Enforce invariant: empty cells must be in edit mode.
     // This handles external changes (undo/redo, sync) that clear the value.
@@ -218,15 +233,46 @@ const MarkdownCell = memo(
     useEffect(() => {
       if (forceEditRequest > 0) {
         setRendered(false);
+        requestEditorFocus();
       }
-    }, [forceEditRequest]);
+    }, [forceEditRequest, requestEditorFocus]);
+
+    useEffect(() => {
+      if (restoreFocusRequest <= 0) {
+        return;
+      }
+      if (restoreFocusRole === "editor" || !value.trim()) {
+        setRendered(false);
+        setPendingRestoreTarget("editor");
+        return;
+      }
+      setRendered(true);
+      setPendingRestoreTarget("rendered");
+    }, [restoreFocusRequest, restoreFocusRole, value]);
+
+    useEffect(() => {
+      if (pendingRestoreTarget !== "editor" || rendered) {
+        return;
+      }
+      requestEditorFocus();
+      setPendingRestoreTarget(null);
+    }, [pendingRestoreTarget, rendered, requestEditorFocus]);
+
+    useEffect(() => {
+      if (pendingRestoreTarget !== "rendered" || !rendered) {
+        return;
+      }
+      renderedRef.current?.focus();
+      setPendingRestoreTarget(null);
+    }, [pendingRestoreTarget, rendered]);
 
     /**
      * Handle switching to edit mode when user double-clicks rendered content.
      */
     const handleDoubleClick = useCallback(() => {
       setRendered(false);
-    }, []);
+      requestEditorFocus();
+    }, [requestEditorFocus]);
 
     /**
      * Handle keyboard activation on the rendered container for accessibility.
@@ -243,9 +289,10 @@ const MarkdownCell = memo(
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           setRendered(false);
+          requestEditorFocus();
         }
       },
-      []
+      [requestEditorFocus]
     );
 
     /**
@@ -348,10 +395,12 @@ const MarkdownCell = memo(
             className="cursor-text rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
             onDoubleClick={handleDoubleClick}
             onKeyDown={handleRenderedKeyDown}
+            ref={renderedRef}
             tabIndex={0}
             role="button"
             aria-label="Double-click or press Enter to edit markdown"
             data-testid="markdown-rendered"
+            data-cell-focus-role="rendered"
           >
             {renderedMarkdown}
           </div>
@@ -363,6 +412,7 @@ const MarkdownCell = memo(
             onBlur={handleBlur}
             onKeyDown={handleEditorKeyDown}
             data-testid="markdown-editor"
+            data-cell-focus-role="editor"
           >
             <Editor
               id={`md-editor-${cell.refId}`}
@@ -370,6 +420,7 @@ const MarkdownCell = memo(
               language="markdown"
               fontSize={fontSettings.fontSize}
               fontFamily={fontSettings.fontFamily}
+              focusRequest={editorFocusRequest}
               onChange={handleEditorChange}
               onEnter={handleRun}
             />
@@ -399,8 +450,14 @@ const MarkdownCell = memo(
     );
   },
   (prevProps, nextProps) => {
-    // Skip re-render if the cellData reference hasn't changed
-    return prevProps.cellData === nextProps.cellData;
+    return (
+      prevProps.cellData === nextProps.cellData &&
+      prevProps.selectedLanguage === nextProps.selectedLanguage &&
+      prevProps.languageSelectId === nextProps.languageSelectId &&
+      prevProps.forceEditRequest === nextProps.forceEditRequest &&
+      prevProps.restoreFocusRequest === nextProps.restoreFocusRequest &&
+      prevProps.restoreFocusRole === nextProps.restoreFocusRole
+    );
   }
 );
 

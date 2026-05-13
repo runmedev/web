@@ -17,6 +17,7 @@ const Editor = memo(
     readOnly = false,
     ariaLabel,
     autoFocusWhenEmpty = true,
+    focusRequest = 0,
     onChange,
     onEnter,
     onMount,
@@ -29,6 +30,7 @@ const Editor = memo(
     readOnly?: boolean;
     ariaLabel?: string;
     autoFocusWhenEmpty?: boolean;
+    focusRequest?: number;
     onChange: (value: string) => void;
     onEnter: () => void;
     onMount?: (editor: any, monaco: any) => void;
@@ -161,6 +163,13 @@ const Editor = memo(
     }, [width, height]);
 
     useEffect(() => {
+      if (!focusRequest || readOnly || !editorRef.current) {
+        return;
+      }
+      editorRef.current.focus?.();
+    }, [focusRequest, readOnly]);
+
+    useEffect(() => {
       return () => {
         contentSizeListener.current?.dispose?.();
         contentSizeListener.current = null;
@@ -220,7 +229,8 @@ const Editor = memo(
       prevProps.language === nextProps.language &&
       prevProps.readOnly === nextProps.readOnly &&
       prevProps.ariaLabel === nextProps.ariaLabel &&
-      prevProps.autoFocusWhenEmpty === nextProps.autoFocusWhenEmpty
+      prevProps.autoFocusWhenEmpty === nextProps.autoFocusWhenEmpty &&
+      prevProps.focusRequest === nextProps.focusRequest
     );
   },
 );
