@@ -157,7 +157,16 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
     index: null,
     draftBuffer: "",
   });
+  const historyBrowseStateRef = useRef(historyBrowseState);
   const pendingFocusCellIdRef = useRef<string | null>(null);
+
+  const updateHistoryBrowseState = useCallback(
+    (nextState: { index: number | null; draftBuffer: string }) => {
+      historyBrowseStateRef.current = nextState;
+      setHistoryBrowseState(nextState);
+    },
+    [],
+  );
 
   useEffect(() => {
     try {
@@ -292,13 +301,13 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       appConsoleData.setDraftSource(source);
 
       if (clearHistoryBrowse) {
-        setHistoryBrowseState({
+        updateHistoryBrowseState({
           index: null,
           draftBuffer: "",
         });
       }
     },
-    [appConsoleData],
+    [appConsoleData, updateHistoryBrowseState],
   );
 
   const browseHistory = useCallback(
@@ -314,13 +323,13 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
         return;
       }
 
-      const state = historyBrowseState;
+      const state = historyBrowseStateRef.current;
       if (direction === "previous") {
         const nextIndex =
           state.index === null ? 0 : Math.min(state.index + 1, history.length - 1);
         const draftBuffer = state.index === null ? draft.source : state.draftBuffer;
         const nextSource = history[history.length - 1 - nextIndex] ?? draft.source;
-        setHistoryBrowseState({
+        updateHistoryBrowseState({
           index: nextIndex,
           draftBuffer,
         });
@@ -341,7 +350,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
           ? history[history.length - 1 - nextIndex] ?? draft.source
           : state.draftBuffer;
 
-      setHistoryBrowseState(
+      updateHistoryBrowseState(
         nextIndex >= 0
           ? {
               index: nextIndex,
@@ -359,7 +368,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
 
       appConsoleData.setDraftSource(nextSource);
     },
-    [appConsoleData, historyBrowseState],
+    [appConsoleData, updateHistoryBrowseState],
   );
 
   const executeCurrentCell = useCallback(async () => {
@@ -370,7 +379,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       return;
     }
 
-    setHistoryBrowseState({
+    updateHistoryBrowseState({
       index: null,
       draftBuffer: "",
     });
@@ -453,7 +462,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
     runme,
     setCurrentDoc,
     setDefaultRunner,
-    setHistoryBrowseState,
+    updateHistoryBrowseState,
     updateRunner,
   ]);
 

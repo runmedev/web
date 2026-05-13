@@ -191,7 +191,10 @@ vi.mock("../Actions/Editor", () => ({
           KeyP: KEY_P,
         },
       });
-    }, [editorRef, onMount]);
+      // Monaco only invokes the consumer mount callback once per editor instance.
+      // Keep the mock aligned so closure-related regressions are exercised.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     return (
       <textarea
