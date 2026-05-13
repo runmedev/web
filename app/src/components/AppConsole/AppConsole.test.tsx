@@ -356,6 +356,30 @@ describe("AppConsole", () => {
     expect(currentInput().value).toBe("partial draft");
   });
 
+  it("updates history button state even when browsing does not change the draft text", async () => {
+    render(<AppConsole showHeader={false} />);
+
+    await screen.findByLabelText("App Console input");
+
+    fireEvent.change(currentInput(), { target: { value: "first()" } });
+    fireEvent.keyDown(currentInput(), { key: "Enter", shiftKey: true });
+    await waitFor(() => expect(screen.getAllByTestId("app-console-cell")).toHaveLength(2));
+
+    fireEvent.change(currentInput(), { target: { value: "first()" } });
+
+    const previousButton = screen.getByTestId("app-console-history-previous");
+    const nextButton = screen.getByTestId("app-console-history-next");
+
+    expect(previousButton.getAttribute("disabled")).toBeNull();
+    expect(nextButton.getAttribute("disabled")).not.toBeNull();
+
+    fireEvent.click(previousButton);
+
+    expect(currentInput().value).toBe("first()");
+    expect(previousButton.getAttribute("disabled")).not.toBeNull();
+    expect(nextButton.getAttribute("disabled")).toBeNull();
+  });
+
   it("copies a frozen cell back into the current draft", async () => {
     render(<AppConsole showHeader={false} />);
 

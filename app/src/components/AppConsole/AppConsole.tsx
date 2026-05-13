@@ -150,7 +150,10 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
 
   const draftEditorRef = useRef<any>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const historyBrowseRef = useRef<{ index: number | null; draftBuffer: string }>({
+  const [historyBrowseState, setHistoryBrowseState] = useState<{
+    index: number | null;
+    draftBuffer: string;
+  }>({
     index: null,
     draftBuffer: "",
   });
@@ -248,7 +251,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
 
   const currentCell = cells[cells.length - 1] ?? null;
   const historySources = useMemo(() => getHistorySources(cells), [cells]);
-  const historyIndex = historyBrowseRef.current.index;
+  const historyIndex = historyBrowseState.index;
   const canBrowsePrevious =
     currentCell?.status === "draft" &&
     historySources.length > 0 &&
@@ -289,10 +292,10 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       appConsoleData.setDraftSource(source);
 
       if (clearHistoryBrowse) {
-        historyBrowseRef.current = {
+        setHistoryBrowseState({
           index: null,
           draftBuffer: "",
-        };
+        });
       }
     },
     [appConsoleData],
@@ -311,16 +314,16 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
         return;
       }
 
-      const state = historyBrowseRef.current;
+      const state = historyBrowseState;
       if (direction === "previous") {
         const nextIndex =
           state.index === null ? 0 : Math.min(state.index + 1, history.length - 1);
         const draftBuffer = state.index === null ? draft.source : state.draftBuffer;
         const nextSource = history[history.length - 1 - nextIndex] ?? draft.source;
-        historyBrowseRef.current = {
+        setHistoryBrowseState({
           index: nextIndex,
           draftBuffer,
-        };
+        });
         if (nextSource === draft.source) {
           return;
         }
@@ -338,7 +341,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
           ? history[history.length - 1 - nextIndex] ?? draft.source
           : state.draftBuffer;
 
-      historyBrowseRef.current =
+      setHistoryBrowseState(
         nextIndex >= 0
           ? {
               index: nextIndex,
@@ -347,7 +350,8 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
           : {
               index: null,
               draftBuffer: "",
-            };
+            },
+      );
 
       if (nextSource === draft.source) {
         return;
@@ -355,7 +359,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
 
       appConsoleData.setDraftSource(nextSource);
     },
-    [appConsoleData],
+    [appConsoleData, historyBrowseState],
   );
 
   const executeCurrentCell = useCallback(async () => {
@@ -366,10 +370,10 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       return;
     }
 
-    historyBrowseRef.current = {
+    setHistoryBrowseState({
       index: null,
       draftBuffer: "",
-    };
+    });
 
     const globals = createAppJsGlobals({
       runme,
@@ -449,6 +453,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
     runme,
     setCurrentDoc,
     setDefaultRunner,
+    setHistoryBrowseState,
     updateRunner,
   ]);
 
