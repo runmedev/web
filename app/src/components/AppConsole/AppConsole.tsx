@@ -150,11 +150,23 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
 
   const draftEditorRef = useRef<any>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const historyBrowseRef = useRef<{ index: number | null; draftBuffer: string }>({
+  const [historyBrowseState, setHistoryBrowseState] = useState<{
+    index: number | null;
+    draftBuffer: string;
+  }>({
     index: null,
     draftBuffer: "",
   });
+  const historyBrowseStateRef = useRef(historyBrowseState);
   const pendingFocusCellIdRef = useRef<string | null>(null);
+
+  const updateHistoryBrowseState = useCallback(
+    (nextState: { index: number | null; draftBuffer: string }) => {
+      historyBrowseStateRef.current = nextState;
+      setHistoryBrowseState(nextState);
+    },
+    [],
+  );
 
   useEffect(() => {
     try {
@@ -247,6 +259,13 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
   );
 
   const currentCell = cells[cells.length - 1] ?? null;
+  const historySources = useMemo(() => getHistorySources(cells), [cells]);
+  const historyIndex = historyBrowseState.index;
+  const canBrowsePrevious =
+    currentCell?.status === "draft" &&
+    historySources.length > 0 &&
+    (historyIndex === null || historyIndex < historySources.length - 1);
+  const canBrowseNext = currentCell?.status === "draft" && historyIndex !== null;
 
   useEffect(() => {
     if (!currentCell || currentCell.status !== "draft") {
@@ -282,13 +301,13 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       appConsoleData.setDraftSource(source);
 
       if (clearHistoryBrowse) {
-        historyBrowseRef.current = {
+        updateHistoryBrowseState({
           index: null,
           draftBuffer: "",
-        };
+        });
       }
     },
-    [appConsoleData],
+    [appConsoleData, updateHistoryBrowseState],
   );
 
   const browseHistory = useCallback(
@@ -304,16 +323,16 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
         return;
       }
 
-      const state = historyBrowseRef.current;
+      const state = historyBrowseStateRef.current;
       if (direction === "previous") {
         const nextIndex =
           state.index === null ? 0 : Math.min(state.index + 1, history.length - 1);
         const draftBuffer = state.index === null ? draft.source : state.draftBuffer;
         const nextSource = history[history.length - 1 - nextIndex] ?? draft.source;
-        historyBrowseRef.current = {
+        updateHistoryBrowseState({
           index: nextIndex,
           draftBuffer,
-        };
+        });
         if (nextSource === draft.source) {
           return;
         }
@@ -331,7 +350,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
           ? history[history.length - 1 - nextIndex] ?? draft.source
           : state.draftBuffer;
 
-      historyBrowseRef.current =
+      updateHistoryBrowseState(
         nextIndex >= 0
           ? {
               index: nextIndex,
@@ -340,7 +359,8 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
           : {
               index: null,
               draftBuffer: "",
-            };
+            },
+      );
 
       if (nextSource === draft.source) {
         return;
@@ -348,7 +368,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
 
       appConsoleData.setDraftSource(nextSource);
     },
-    [appConsoleData],
+    [appConsoleData, updateHistoryBrowseState],
   );
 
   const executeCurrentCell = useCallback(async () => {
@@ -359,10 +379,10 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       return;
     }
 
-    historyBrowseRef.current = {
+    updateHistoryBrowseState({
       index: null,
       draftBuffer: "",
-    };
+    });
 
     const globals = createAppJsGlobals({
       runme,
@@ -442,6 +462,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
     runme,
     setCurrentDoc,
     setDefaultRunner,
+    updateHistoryBrowseState,
     updateRunner,
   ]);
 
@@ -459,13 +480,13 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
         },
       );
       editor.addCommand(
-        monaco.KeyMod.Shift | monaco.KeyCode.UpArrow,
+        monaco.KeyMod.Alt | monaco.KeyCode.KeyP,
         () => {
           browseHistory("previous");
         },
       );
       editor.addCommand(
-        monaco.KeyMod.Shift | monaco.KeyCode.DownArrow,
+        monaco.KeyMod.Alt | monaco.KeyCode.KeyN,
         () => {
           browseHistory("next");
         },
@@ -564,16 +585,46 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
                       </button>
                     ) : null}
                     {isEditable ? (
-                      <button
-                        type="button"
-                        data-testid="app-console-cell-run"
-                        className="rounded border border-sky-300/40 bg-sky-400/10 px-2 py-1 text-[11px] font-medium text-sky-100 transition hover:bg-sky-400/20"
-                        onClick={() => {
-                          void executeCurrentCell();
-                        }}
-                      >
-                        Run
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          data-testid="app-console-history-previous"
+                          aria-label="Previous history entry (Alt+P)"
+                          title="Previous history entry (Alt+P)"
+                          disabled={!canBrowsePrevious}
+                          className="rounded border border-white/15 px-2 py-1 text-[11px] font-medium text-slate-200 transition hover:border-sky-300/50 hover:bg-sky-400/10 disabled:cursor-not-allowed disabled:opacity-40"
+                          onClick={() => {
+                            browseHistory("previous");
+                            draftEditorRef.current?.focus?.();
+                          }}
+                        >
+                          Prev
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="app-console-history-next"
+                          aria-label="Next history entry (Alt+N)"
+                          title="Next history entry (Alt+N)"
+                          disabled={!canBrowseNext}
+                          className="rounded border border-white/15 px-2 py-1 text-[11px] font-medium text-slate-200 transition hover:border-sky-300/50 hover:bg-sky-400/10 disabled:cursor-not-allowed disabled:opacity-40"
+                          onClick={() => {
+                            browseHistory("next");
+                            draftEditorRef.current?.focus?.();
+                          }}
+                        >
+                          Next
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="app-console-cell-run"
+                          className="rounded border border-sky-300/40 bg-sky-400/10 px-2 py-1 text-[11px] font-medium text-sky-100 transition hover:bg-sky-400/20"
+                          onClick={() => {
+                            void executeCurrentCell();
+                          }}
+                        >
+                          Run
+                        </button>
+                      </>
                     ) : null}
                   </div>
                 </div>
@@ -620,7 +671,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
                 {isCurrent && cell.status === "draft" ? (
                   <div className="mt-3 text-[11px] text-slate-400">
                     <span className="font-semibold text-slate-300">Shortcuts:</span>{" "}
-                    <span>Shift+Enter to run, Shift+Up/Shift+Down to browse history.</span>
+                    <span>Shift+Enter to run. Alt+P/Alt+N browse history.</span>
                   </div>
                 ) : null}
               </article>
