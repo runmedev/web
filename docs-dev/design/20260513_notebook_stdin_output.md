@@ -20,6 +20,8 @@ This fixes the main failure reported in
   waits for input
 - notebook output can appear cut off because terminal rendering suppresses the
   normal stdout/stderr view and applies terminal scrollback limits
+- notebook cells can render the same transcript twice as both a `CellConsole`
+  and normal stdout/stderr output items
 
 [#191](https://github.com/runmedev/web/pull/191) removed renderer callbacks
 from notebook mutation paths. It did not change the notebook interaction model.
@@ -44,7 +46,7 @@ Today:
   newline or process exit
 - `CellConsole` sets terminal scrollback to `4000`
 
-That creates three concrete problems.
+That creates four concrete problems.
 
 ### 1. Waiting-for-input is invisible
 
@@ -79,7 +81,34 @@ The current terminal path can hide or drop visible output in several ways:
 That means a notebook cell can have a fuller persisted transcript than the user
 can actually see in the notebook UI.
 
-### 3. Character-at-a-time terminal input is the wrong notebook UX
+### 3. The same transcript can render twice
+
+The current rendering policy uses two different signals:
+
+- `CellConsole` renders when the cell has terminal output or an active stream
+- `ActionOutputItems` suppresses stdout/stderr only when the cell has a
+  `StatefulRunmeTerminal` output marker
+
+That split creates a duplication bug.
+
+If a cell has an active stream but no terminal marker, the UI renders:
+
+- a live `CellConsole`
+- the same stdout/stderr as normal output items
+
+This is likely the follow-on regression after #191. That change stopped seeding
+terminal markers during mutation, but the output rendering policy still assumes
+that terminal suppression is keyed off the marker.
+
+The result is exactly the duplicated UI we now see:
+
+- `Output 0 / Item 0 - mime=application/vnd.code.notebook.stdout`
+- a console showing the same transcript
+
+Notebook cells must choose one transcript presentation path per run. They
+should not render both.
+
+### 4. Character-at-a-time terminal input is the wrong notebook UX
 
 Notebook cells are structured documents. They already separate source from
 output. They should not behave like a remote PTY by default.
@@ -105,6 +134,7 @@ necessary.
 - Preserve complete notebook output without terminal scrollback loss.
 - Use the notebook model as the source of truth for rendered output.
 - Support ordinary line-oriented stdin for runner-backed notebook cells.
+- Ensure each notebook transcript is rendered exactly once.
 - Align notebook execution UX with the append-only, document-style direction
   already used elsewhere in the app.
 
@@ -124,6 +154,8 @@ We will not use raw terminal typing as the primary notebook input UX.
 
 We will render notebook stdout/stderr from notebook state, not from xterm
 paint state.
+
+We will ensure notebook output has a single presentation path per run.
 
 We will surface partial trailing stdout immediately instead of waiting for a
 newline.
@@ -197,6 +229,8 @@ state.
 
 Once the notebook transcript is rendered directly:
 
+- console and stdout/stderr duplication goes away because there is only one
+  transcript renderer
 - output is no longer capped by terminal scrollback
 - rerender after reload is exact
 - output testing no longer depends on terminal DOM internals
@@ -244,8 +278,11 @@ This aligns with the direction already described in #190.
 2. Route submitted input through `ExecuteRequest.inputData`.
 3. Render generic runner stdout/stderr directly from notebook outputs.
 4. Remove newline-delayed buffering from the generic runner stdout path.
-5. Stop depending on `console-view` scrollback for notebook output visibility.
-6. Keep Jupyter behavior unchanged.
+5. Remove the split policy where active-stream cells render `CellConsole` while
+   stdout/stderr suppression still depends on terminal markers.
+6. Stop depending on `console-view` scrollback for notebook output visibility.
+7. Ensure notebook cells choose one transcript renderer, not both.
+8. Keep Jupyter behavior unchanged.
 
 This phase should solve the practical user problem in #99.
 
