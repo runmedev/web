@@ -3,12 +3,15 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect, useMemo, useRef } from "react";
 
-import type { ConsoleCell, PersistedConsoleCellRow } from "./model";
+import type { PersistedConsoleCellRow } from "./model";
 
+const ALT = 1 << 9;
 const SHIFT = 1 << 10;
 const ENTER = 1;
 const UP = 2;
 const DOWN = 3;
+const KEY_N = 4;
+const KEY_P = 5;
 
 let storedSessionId = "session-1";
 let storedCells: PersistedConsoleCellRow[] = [];
@@ -166,6 +169,7 @@ vi.mock("../Actions/Editor", () => ({
     onMount?: (editor: any, monaco: any) => void;
   }) => {
     const commandsRef = useRef(new Map<number, () => void>());
+
     const editorRef = useMemo(
       () => ({
         addCommand: (key: number, handler: () => void) => {
@@ -178,11 +182,13 @@ vi.mock("../Actions/Editor", () => ({
 
     useEffect(() => {
       onMount?.(editorRef, {
-        KeyMod: { Shift: SHIFT },
+        KeyMod: { Alt: ALT, Shift: SHIFT },
         KeyCode: {
           Enter: ENTER,
           UpArrow: UP,
           DownArrow: DOWN,
+          KeyN: KEY_N,
+          KeyP: KEY_P,
         },
       });
     }, [editorRef, onMount]);
@@ -195,9 +201,6 @@ vi.mock("../Actions/Editor", () => ({
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
         onKeyDown={(event) => {
-          if (!event.shiftKey) {
-            return;
-          }
           const code =
             event.key === "Enter"
               ? ENTER
@@ -205,12 +208,19 @@ vi.mock("../Actions/Editor", () => ({
                 ? UP
                 : event.key === "ArrowDown"
                   ? DOWN
+                  : event.key.toLowerCase() === "n"
+                    ? KEY_N
+                    : event.key.toLowerCase() === "p"
+                      ? KEY_P
                   : null;
-          if (!code) {
+          const modifier = event.shiftKey ? SHIFT : event.altKey ? ALT : null;
+          const handler =
+            code && modifier !== null ? commandsRef.current.get(modifier | code) : undefined;
+          if (!handler) {
             return;
           }
           event.preventDefault();
-          commandsRef.current.get(SHIFT | code)?.();
+          handler();
         }}
       />
     );
@@ -293,16 +303,56 @@ describe("AppConsole", () => {
 
     fireEvent.change(currentInput(), { target: { value: "partial draft" } });
 
-    fireEvent.keyDown(currentInput(), { key: "ArrowUp", shiftKey: true });
+    fireEvent.click(screen.getByTestId("app-console-history-previous"));
     expect(currentInput().value).toBe("second()");
 
-    fireEvent.keyDown(currentInput(), { key: "ArrowUp", shiftKey: true });
+    fireEvent.click(screen.getByTestId("app-console-history-previous"));
     expect(currentInput().value).toBe("first()");
 
-    fireEvent.keyDown(currentInput(), { key: "ArrowDown", shiftKey: true });
+    fireEvent.click(screen.getByTestId("app-console-history-next"));
     expect(currentInput().value).toBe("second()");
 
-    fireEvent.keyDown(currentInput(), { key: "ArrowDown", shiftKey: true });
+    fireEvent.click(screen.getByTestId("app-console-history-next"));
+    expect(currentInput().value).toBe("partial draft");
+  });
+
+  it("renders history controls with tooltips", async () => {
+    render(<AppConsole showHeader={false} />);
+
+    await screen.findByLabelText("App Console input");
+    expect(screen.getByTestId("app-console-history-previous").getAttribute("title")).toBe(
+      "Previous history entry (Alt+P)",
+    );
+    expect(screen.getByTestId("app-console-history-next").getAttribute("title")).toBe(
+      "Next history entry (Alt+N)",
+    );
+  });
+
+  it("supports Alt+P and Alt+N history shortcuts", async () => {
+    render(<AppConsole showHeader={false} />);
+
+    await screen.findByLabelText("App Console input");
+
+    fireEvent.change(currentInput(), { target: { value: "first()" } });
+    fireEvent.keyDown(currentInput(), { key: "Enter", shiftKey: true });
+    await waitFor(() => expect(screen.getAllByTestId("app-console-cell")).toHaveLength(2));
+
+    fireEvent.change(currentInput(), { target: { value: "second()" } });
+    fireEvent.keyDown(currentInput(), { key: "Enter", shiftKey: true });
+    await waitFor(() => expect(screen.getAllByTestId("app-console-cell")).toHaveLength(3));
+
+    fireEvent.change(currentInput(), { target: { value: "partial draft" } });
+
+    fireEvent.keyDown(currentInput(), { key: "p", altKey: true });
+    expect(currentInput().value).toBe("second()");
+
+    fireEvent.keyDown(currentInput(), { key: "p", altKey: true });
+    expect(currentInput().value).toBe("first()");
+
+    fireEvent.keyDown(currentInput(), { key: "n", altKey: true });
+    expect(currentInput().value).toBe("second()");
+
+    fireEvent.keyDown(currentInput(), { key: "n", altKey: true });
     expect(currentInput().value).toBe("partial draft");
   });
 
