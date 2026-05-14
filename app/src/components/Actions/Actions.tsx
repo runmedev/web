@@ -5,7 +5,6 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
-  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -29,6 +28,14 @@ import Editor from "./Editor";
 import MarkdownCell from "./MarkdownCell";
 import { IOPUB_INCOMPLETE_METADATA_KEY } from "../../lib/ipykernel";
 import { appLogger } from "../../lib/logging/runtime";
+import {
+  createNotebookActiveCellState,
+  loadNotebookActiveCellMap,
+  persistNotebookActiveCellMap,
+  type CellFocusRole,
+  type NotebookActiveCellMap,
+  type NotebookActiveCellState,
+} from "../../lib/notebookActiveCellState";
 import { copyNotebookShareUrl } from "../../lib/shareLinks";
 import {
   PlayIcon,
@@ -287,13 +294,6 @@ type SupportedLanguage =
   | "markdown"
   | "python";
 
-type CellFocusRole = "editor" | "rendered";
-
-type NotebookActiveCell = {
-  refId: string;
-  focusRole: CellFocusRole;
-};
-
 const outputTextDecoder = new TextDecoder();
 const ALWAYS_SKIP_MIMES = new Set<string>([MimeType.StatefulRunmeTerminal]);
 
@@ -490,16 +490,18 @@ export function Action({
   cellData,
   docUri = "",
   isFirst,
-  restoreFocusRequest = 0,
-  restoreFocusRole = "editor",
+  isActiveCell = false,
+  activeFocusRole = "editor",
+  isWindowFocused = false,
   onFocusStateChange,
 }: {
   cellData: CellData;
   docUri?: string;
   isFirst: boolean;
-  restoreFocusRequest?: number;
-  restoreFocusRole?: CellFocusRole;
-  onFocusStateChange?: (state: NotebookActiveCell) => void;
+  isActiveCell?: boolean;
+  activeFocusRole?: CellFocusRole;
+  isWindowFocused?: boolean;
+  onFocusStateChange?: (state: NotebookActiveCellState) => void;
 }) {
   const { store } = useNotebookStore();
   const { listRunners, defaultRunnerName } = useRunners();
@@ -648,10 +650,11 @@ export function Action({
           .cellFocusRole === "rendered"
           ? "rendered"
           : "editor";
-      onFocusStateChange({
-        refId: cell.refId,
-        focusRole,
-      });
+      const nextState = createNotebookActiveCellState(cell.refId, focusRole);
+      if (!nextState) {
+        return;
+      }
+      onFocusStateChange(nextState);
     },
     [cell?.refId, onFocusStateChange],
   );
@@ -1031,8 +1034,9 @@ export function Action({
               languageOptions={LANGUAGE_OPTIONS}
               onLanguageChange={handleLanguageChange}
               forceEditRequest={markdownEditRequest}
-              restoreFocusRequest={restoreFocusRequest}
-              restoreFocusRole={restoreFocusRole}
+              isActiveCell={isActiveCell}
+              activeFocusRole={activeFocusRole}
+              isWindowFocused={isWindowFocused}
             />
             {/* Trash icon on the right, visible on hover */}
             <button
@@ -1132,7 +1136,7 @@ export function Action({
               language={editorLanguage}
               fontSize={fontSettings.fontSize}
               fontFamily={fontSettings.fontFamily}
-              focusRequest={restoreFocusRequest}
+              shouldFocus={isActiveCell && isWindowFocused}
               onChange={(v) => {
                 const updated = create(parser_pb.CellSchema, cell);
                 updated.value = v;
@@ -1318,13 +1322,13 @@ export function Action({
 function NotebookTabContent({
   docUri,
   activeCell,
-  restoreFocusRequest,
+  isWindowFocused,
   onCellFocus,
 }: {
   docUri: string;
-  activeCell: NotebookActiveCell | null;
-  restoreFocusRequest: number;
-  onCellFocus: (docUri: string, state: NotebookActiveCell) => void;
+  activeCell: NotebookActiveCellState | null;
+  isWindowFocused: boolean;
+  onCellFocus: (docUri: string, state: NotebookActiveCellState) => void;
 }) {
   const { getNotebookData, useNotebookSnapshot } = useNotebookContext();
   const notebookSnapshot = useNotebookSnapshot(docUri);
@@ -1384,10 +1388,9 @@ function NotebookTabContent({
                   cellData={cellData}
                   docUri={docUri}
                   isFirst={index === 0}
-                  restoreFocusRequest={
-                    activeCell?.refId === refId ? restoreFocusRequest : 0
-                  }
-                  restoreFocusRole={activeCell?.focusRole ?? "editor"}
+                  isActiveCell={activeCell?.refId === refId}
+                  activeFocusRole={activeCell?.focusRole ?? "editor"}
+                  isWindowFocused={isWindowFocused}
                   onFocusStateChange={(state) => onCellFocus(docUri, state)}
                 />
               );
@@ -1423,12 +1426,15 @@ export default function Actions() {
     Boolean(driveLinkSnapshot.lastErrorMessage);
   const [mountedTabs, setMountedTabs] = useState<Set<string>>(() => new Set());
   const [selectedTabUri, setSelectedTabUri] = useState<string | null>(null);
-  const [activeCellsByDoc, setActiveCellsByDoc] = useState<
-    Record<string, NotebookActiveCell>
-  >({});
-  const [restoreFocusRequestsByDoc, setRestoreFocusRequestsByDoc] = useState<
-    Record<string, number>
-  >({});
+  const [activeCellsByDoc, setActiveCellsByDoc] = useState<NotebookActiveCellMap>(
+    () => loadNotebookActiveCellMap(),
+  );
+  const [isWindowFocused, setIsWindowFocused] = useState(() => {
+    if (typeof document === "undefined") {
+      return false;
+    }
+    return document.visibilityState === "visible" && document.hasFocus();
+  });
   // Empty-state hint visibility is stored locally so the hint panel can be
   // revealed on demand without cluttering the default view.
   const [showConsoleHints, setShowConsoleHints] = useState(false);
@@ -1475,14 +1481,9 @@ export default function Actions() {
     selectedTabUri ??
     currentDocUri ??
     (statusTabVisible ? DRIVE_LINK_STATUS_TAB_URI : openNotebooks[0]?.uri ?? "");
-  const resolvedSelectedTabUriRef = useRef(resolvedSelectedTabUri);
-
-  useEffect(() => {
-    resolvedSelectedTabUriRef.current = resolvedSelectedTabUri;
-  }, [resolvedSelectedTabUri]);
 
   const handleCellFocus = useCallback(
-    (docUri: string, state: NotebookActiveCell) => {
+    (docUri: string, state: NotebookActiveCellState) => {
       setActiveCellsByDoc((prev) => {
         const current = prev[docUri];
         if (
@@ -1491,24 +1492,16 @@ export default function Actions() {
         ) {
           return prev;
         }
-        return {
+        const next = {
           ...prev,
           [docUri]: state,
         };
+        persistNotebookActiveCellMap(next);
+        return next;
       });
     },
     [],
   );
-
-  const requestFocusRestore = useCallback((docUri: string | null | undefined) => {
-    if (!docUri) {
-      return;
-    }
-    setRestoreFocusRequestsByDoc((prev) => ({
-      ...prev,
-      [docUri]: (prev[docUri] ?? 0) + 1,
-    }));
-  }, []);
 
   // Ensure the active tab is tracked as mounted on first render/whenever it changes.
   useEffect(() => {
@@ -1540,59 +1533,26 @@ export default function Actions() {
   }, [currentDocUri, openNotebooks, selectedTabUri, statusTabVisible]);
 
   useEffect(() => {
-    const openUris = new Set(openNotebooks.map((doc) => doc.uri));
-    setActiveCellsByDoc((prev) => {
-      let changed = false;
-      const next: Record<string, NotebookActiveCell> = {};
-      for (const [uri, state] of Object.entries(prev)) {
-        if (!openUris.has(uri)) {
-          changed = true;
-          continue;
-        }
-        next[uri] = state;
-      }
-      return changed ? next : prev;
-    });
-    setRestoreFocusRequestsByDoc((prev) => {
-      let changed = false;
-      const next: Record<string, number> = {};
-      for (const [uri, request] of Object.entries(prev)) {
-        if (!openUris.has(uri)) {
-          changed = true;
-          continue;
-        }
-        next[uri] = request;
-      }
-      return changed ? next : prev;
-    });
-  }, [openNotebooks]);
-
-  useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") {
       return;
     }
 
-    const restoreCurrentNotebookFocus = () => {
-      if (document.visibilityState !== "visible") {
-        return;
-      }
-      const visibleTabUri = resolvedSelectedTabUriRef.current;
-      if (!visibleTabUri || visibleTabUri === DRIVE_LINK_STATUS_TAB_URI) {
-        return;
-      }
-      requestFocusRestore(visibleTabUri);
-    };
-
-    window.addEventListener("focus", restoreCurrentNotebookFocus);
-    document.addEventListener("visibilitychange", restoreCurrentNotebookFocus);
-    return () => {
-      window.removeEventListener("focus", restoreCurrentNotebookFocus);
-      document.removeEventListener(
-        "visibilitychange",
-        restoreCurrentNotebookFocus,
+    const syncWindowFocus = () => {
+      setIsWindowFocused(
+        document.visibilityState === "visible" && document.hasFocus(),
       );
     };
-  }, [requestFocusRestore]);
+
+    syncWindowFocus();
+    window.addEventListener("focus", syncWindowFocus);
+    window.addEventListener("blur", syncWindowFocus);
+    document.addEventListener("visibilitychange", syncWindowFocus);
+    return () => {
+      window.removeEventListener("focus", syncWindowFocus);
+      window.removeEventListener("blur", syncWindowFocus);
+      document.removeEventListener("visibilitychange", syncWindowFocus);
+    };
+  }, []);
 
   // Keep the active tab discoverable when the tab rail overflows horizontally.
   // We track each rendered tab node and ask the browser to reveal the selected
@@ -2042,7 +2002,9 @@ export default function Actions() {
                 <NotebookTabContent
                   docUri={doc.uri}
                   activeCell={activeCellsByDoc[doc.uri] ?? null}
-                  restoreFocusRequest={restoreFocusRequestsByDoc[doc.uri] ?? 0}
+                  isWindowFocused={
+                    isWindowFocused && resolvedSelectedTabUri === doc.uri
+                  }
                   onCellFocus={handleCellFocus}
                 />
               </TabPanel>

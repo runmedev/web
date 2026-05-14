@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { clone, create } from "@bufbuild/protobuf";
 import React from "react";
 
@@ -13,21 +13,24 @@ vi.mock("./Editor", () => ({
     id,
     value,
     onChange,
-    focusRequest = 0,
+    shouldFocus = false,
   }: {
     id: string;
     value: string;
     onChange: (value: string) => void;
-    focusRequest?: number;
+    shouldFocus?: boolean;
   }) => {
     const ref = React.useRef<HTMLTextAreaElement | null>(null);
+    const previousShouldFocusRef = React.useRef(false);
 
     React.useEffect(() => {
-      if (!focusRequest) {
+      const wasFocused = previousShouldFocusRef.current;
+      previousShouldFocusRef.current = shouldFocus;
+      if (!shouldFocus || wasFocused) {
         return;
       }
       ref.current?.focus();
-    }, [focusRequest]);
+    }, [shouldFocus]);
 
     return (
       <textarea
@@ -60,8 +63,44 @@ class StubCellData {
   }
 }
 
+function renderMarkdownCell(
+  cellData: CellData,
+  props?: Partial<React.ComponentProps<typeof MarkdownCell>>,
+) {
+  return render(
+    <MarkdownCell
+      cellData={cellData}
+      selectedLanguage="markdown"
+      languageSelectId="lang-md-focus"
+      languageOptions={[{ label: "Markdown", value: "markdown" }]}
+      onLanguageChange={() => {}}
+      {...props}
+    />,
+  );
+}
+
 describe("MarkdownCell", () => {
-  it("restores focus into editor mode for markdown cells", async () => {
+  it("starts markdown cells in editor mode when persisted focus target is editor", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-active-editor",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "hello",
+    });
+    const stub = new StubCellData(cell);
+
+    renderMarkdownCell(stub as unknown as CellData, {
+      isActiveCell: true,
+      activeFocusRole: "editor",
+    });
+
+    expect(screen.getByTestId("markdown-editor")).toBeTruthy();
+    expect(screen.queryByTestId("markdown-rendered")).toBeNull();
+  });
+
+  it("focuses the editor when the window regains focus", async () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "md-focus-editor",
       kind: parser_pb.CellKind.MARKUP,
@@ -72,17 +111,11 @@ describe("MarkdownCell", () => {
     });
     const stub = new StubCellData(cell);
 
-    const { rerender } = render(
-      <MarkdownCell
-        cellData={stub as unknown as CellData}
-        selectedLanguage="markdown"
-        languageSelectId="lang-md-focus-editor"
-        languageOptions={[{ label: "Markdown", value: "markdown" }]}
-        onLanguageChange={() => {}}
-      />,
-    );
-
-    expect(screen.getByTestId("markdown-rendered")).toBeTruthy();
+    const { rerender } = renderMarkdownCell(stub as unknown as CellData, {
+      isActiveCell: true,
+      activeFocusRole: "editor",
+      isWindowFocused: false,
+    });
 
     await act(async () => {
       rerender(
@@ -92,18 +125,96 @@ describe("MarkdownCell", () => {
           languageSelectId="lang-md-focus-editor"
           languageOptions={[{ label: "Markdown", value: "markdown" }]}
           onLanguageChange={() => {}}
-          restoreFocusRequest={1}
-          restoreFocusRole="editor"
+          isActiveCell
+          activeFocusRole="editor"
+          isWindowFocused
         />,
       );
       await Promise.resolve();
     });
 
-    expect(screen.getByTestId("markdown-editor")).toBeTruthy();
     expect(screen.getByTestId("mock-markdown-editor-input")).toHaveFocus();
   });
 
-  it("restores focus onto rendered markdown when requested", async () => {
+  it("does not replay restore behavior on each editor change", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-typing",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "hello",
+    });
+    const stub = new StubCellData(cell);
+
+    renderMarkdownCell(stub as unknown as CellData, {
+      isActiveCell: true,
+      activeFocusRole: "editor",
+      isWindowFocused: true,
+    });
+
+    const input = screen.getByTestId("mock-markdown-editor-input");
+    fireEvent.change(input, { target: { value: "hello world" } });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("markdown-editor")).toBeTruthy();
+    expect(screen.queryByTestId("markdown-rendered")).toBeNull();
+  });
+
+  it("focuses the editor when rendered markdown is opened for editing", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-manual-edit",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "hello",
+    });
+    const stub = new StubCellData(cell);
+
+    renderMarkdownCell(stub as unknown as CellData);
+
+    fireEvent.doubleClick(screen.getByTestId("markdown-rendered"));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("mock-markdown-editor-input")).toHaveFocus();
+  });
+
+  it("focuses rendered markdown when leaving editor mode with escape", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-escape-rendered",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "hello",
+    });
+    const stub = new StubCellData(cell);
+
+    renderMarkdownCell(stub as unknown as CellData, {
+      isActiveCell: true,
+      activeFocusRole: "editor",
+      isWindowFocused: true,
+    });
+
+    fireEvent.keyDown(screen.getByTestId("markdown-editor"), {
+      key: "Escape",
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("markdown-rendered")).toHaveFocus();
+  });
+
+  it("focuses rendered markdown when the window regains focus", async () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "md-focus-rendered",
       kind: parser_pb.CellKind.MARKUP,
@@ -114,15 +225,11 @@ describe("MarkdownCell", () => {
     });
     const stub = new StubCellData(cell);
 
-    const { rerender } = render(
-      <MarkdownCell
-        cellData={stub as unknown as CellData}
-        selectedLanguage="markdown"
-        languageSelectId="lang-md-focus-rendered"
-        languageOptions={[{ label: "Markdown", value: "markdown" }]}
-        onLanguageChange={() => {}}
-      />,
-    );
+    const { rerender } = renderMarkdownCell(stub as unknown as CellData, {
+      isActiveCell: true,
+      activeFocusRole: "rendered",
+      isWindowFocused: false,
+    });
 
     await act(async () => {
       rerender(
@@ -132,8 +239,9 @@ describe("MarkdownCell", () => {
           languageSelectId="lang-md-focus-rendered"
           languageOptions={[{ label: "Markdown", value: "markdown" }]}
           onLanguageChange={() => {}}
-          restoreFocusRequest={1}
-          restoreFocusRole="rendered"
+          isActiveCell
+          activeFocusRole="rendered"
+          isWindowFocused
         />,
       );
       await Promise.resolve();

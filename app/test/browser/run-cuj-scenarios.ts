@@ -87,6 +87,7 @@ const SCENARIO_DRIVERS = [
   join(SCRIPT_DIR, "test-scenario-ai.ts"),
   join(SCRIPT_DIR, "test-scenario-ai-codex.ts"),
   join(SCRIPT_DIR, "test-scenario-chatkit-thread-persistence.ts"),
+  join(SCRIPT_DIR, "test-scenario-notebook-focus-persistence.ts"),
 ];
 
 type BackendCommandConfig = {
