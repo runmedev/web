@@ -1,14 +1,21 @@
 import { MimeType, parser_pb } from '../../runme/client'
+import { isHtmlLanguageId, isMarkdownLanguageId } from '../cellContent'
 
 const IOPUB_MIME_TYPE = 'application/vnd.jupyter.iopub+json'
 
 const outputTextDecoder = new TextDecoder()
 
-const MARKDOWN_LANGUAGES = new Set(['markdown', 'md'])
 const INTERNAL_SKIP_MIMES = new Set<string>([
   MimeType.StatefulRunmeOutputItems,
   MimeType.StatefulRunmeTerminal,
 ])
+
+function normalizeBinaryData(data?: Uint8Array | ArrayLike<number> | null): Uint8Array {
+  if (!data) {
+    return new Uint8Array()
+  }
+  return data instanceof Uint8Array ? data : Uint8Array.from(data)
+}
 
 export function serializeNotebookToMarkdown(
   notebook: parser_pb.Notebook
@@ -25,21 +32,23 @@ export function serializeNotebookToMarkdown(
 }
 
 function serializeCell(cell: parser_pb.Cell): string {
-  const body = isMarkupCell(cell)
-    ? normalizeMarkupCell(cell.value)
+  const body = isAuthoredContentCell(cell)
+    ? normalizeContentCell(cell.value)
     : renderFencedBlock(cell.value, normalizeCodeFenceLanguage(cell.languageId))
   const outputs = serializeCellOutputs(cell.outputs ?? [])
   return [body, outputs].filter(Boolean).join('\n\n')
 }
 
-function isMarkupCell(cell: parser_pb.Cell): boolean {
+function isAuthoredContentCell(cell: parser_pb.Cell): boolean {
   if (cell.kind === parser_pb.CellKind.MARKUP) {
     return true
   }
-  return MARKDOWN_LANGUAGES.has(cell.languageId.trim().toLowerCase())
+  return (
+    isMarkdownLanguageId(cell.languageId) || isHtmlLanguageId(cell.languageId)
+  )
 }
 
-function normalizeMarkupCell(value: string): string {
+function normalizeContentCell(value: string): string {
   return value.replace(/\s+$/u, '')
 }
 
@@ -144,12 +153,13 @@ function languageForOutputMime(mime: string): string {
   }
 }
 
-function decodeOutputText(data: Uint8Array): string {
-  if (!(data instanceof Uint8Array) || data.length === 0) {
+function decodeOutputText(data?: Uint8Array | ArrayLike<number> | null): string {
+  const normalized = normalizeBinaryData(data)
+  if (normalized.length === 0) {
     return ''
   }
   try {
-    return outputTextDecoder.decode(data).replace(/\s+$/u, '')
+    return outputTextDecoder.decode(normalized).replace(/\s+$/u, '')
   } catch {
     return ''
   }

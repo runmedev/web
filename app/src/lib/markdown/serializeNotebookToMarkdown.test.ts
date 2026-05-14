@@ -77,6 +77,22 @@ describe('serializeNotebookToMarkdown', () => {
     )
   })
 
+  it('serializes html cells as authored content instead of fenced code', () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          kind: parser_pb.CellKind.CODE,
+          languageId: 'html',
+          value: '<div><svg><text>Hello</text></svg></div>',
+        }),
+      ],
+    })
+
+    expect(serializeNotebookToMarkdown(notebook)).toBe(
+      '<div><svg><text>Hello</text></svg></div>\n'
+    )
+  })
+
   it('skips binary and internal output payloads', () => {
     const notebook = create(parser_pb.NotebookSchema, {
       cells: [

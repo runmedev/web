@@ -47,6 +47,7 @@ import {
   IOPUB_INCOMPLETE_METADATA_KEY,
   IOPUB_MIME_TYPE,
 } from "../lib/ipykernel.js";
+import { isHtmlLanguageId } from "../lib/cellContent.js";
 
 const POLL_INTERVAL_MS = 5e3;
 
@@ -771,7 +772,19 @@ function NotebookCellView({
         ) : null}
       </summary>
       <div className="mt-3 text-sm text-gray-900">
-        {cell.kind === CellKind.CODE ? (
+        {cell.kind === CellKind.CODE && isHtmlLanguageId(cell.languageId) ? (
+          <div className="overflow-hidden rounded-md border border-gray-200 bg-white">
+            <div className="border-b border-gray-200 bg-gray-100 px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-700">
+              HTML preview
+            </div>
+            <iframe
+              title={`cell-preview-${cell.refId || index}`}
+              sandbox="allow-scripts"
+              srcDoc={cell.value || ""}
+              className="h-[420px] w-full bg-white"
+            />
+          </div>
+        ) : cell.kind === CellKind.CODE ? (
           <pre className="max-h-120 overflow-auto whitespace-pre-wrap break-words rounded-md border border-gray-200 bg-gray-100 p-3 text-xs leading-relaxed">
             <code>{cell.value}</code>
           </pre>
