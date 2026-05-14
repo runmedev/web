@@ -8,6 +8,7 @@ const NOTEBOOK_NAME = "scenario-notebook-focus.json";
 const NOTEBOOK_URI = `local://file/${NOTEBOOK_NAME}`;
 const MARKDOWN_CELL_ID = "md_focus_cell";
 const STORAGE_KEY = "runme/notebook-active-cells";
+const LOCAL_DB_NAME = "runme-local-notebooks";
 
 const CURRENT_FILE_DIR = dirname(fileURLToPath(import.meta.url));
 const SCRIPT_DIR =
@@ -117,6 +118,19 @@ function escapeDoubleQuotes(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
+function decodeAgentBrowserEvalOutput(output: string): string {
+  const trimmed = output.trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    return typeof parsed === "string" ? parsed : JSON.stringify(parsed);
+  } catch {
+    return trimmed;
+  }
+}
+
 mkdirSync(OUTPUT_DIR, { recursive: true });
 rmSync(MOVIE_PATH, { force: true });
 for (const file of [
@@ -147,8 +161,31 @@ try {
   startedRecording = true;
   run("agent-browser wait 2200");
 
-  const seedResult = run(
+  const seedResult = decodeAgentBrowserEvalOutput(
+    run(
     `agent-browser eval "(async () => {
+      const openLocalDb = () => new Promise((resolve, reject) => {
+        const request = indexedDB.open('${LOCAL_DB_NAME}');
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          if (!db.objectStoreNames.contains('files')) {
+            db.createObjectStore('files', { keyPath: 'id' });
+          }
+          if (!db.objectStoreNames.contains('folders')) {
+            db.createObjectStore('folders', { keyPath: 'id' });
+          }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const runTransaction = (db, storeName, mode, callback) => new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, mode);
+        const store = tx.objectStore(storeName);
+        const request = callback(store);
+        tx.oncomplete = () => resolve(request?.result);
+        tx.onerror = () => reject(tx.error ?? request?.error);
+        tx.onabort = () => reject(tx.error ?? request?.error);
+      });
       const notebook = {
         metadata: {},
         cells: [
@@ -162,27 +199,34 @@ try {
           }
         ]
       };
-      const ln = window.app?.localNotebooks;
-      if (!ln) return JSON.stringify({ status: 'missing-local-notebooks' });
-      await ln.files.put({
-        id: '${NOTEBOOK_URI}',
-        uri: '${NOTEBOOK_URI}',
-        name: '${NOTEBOOK_NAME}',
-        doc: JSON.stringify(notebook),
-        updatedAt: new Date().toISOString(),
-        parent: 'local://folder/local',
-        lastSynced: '',
+      const notebookDoc = JSON.stringify(notebook);
+      const db = await openLocalDb();
+      await runTransaction(db, 'folders', 'readwrite', (store) => store.put({
+        id: 'local://folder/local',
+        name: 'Local Notebooks',
         remoteId: '',
-        lastRemoteChecksum: ''
-      });
+        children: ['${NOTEBOOK_URI}'],
+        lastSynced: ''
+      }));
+      await runTransaction(db, 'files', 'readwrite', (store) => store.put({
+        id: '${NOTEBOOK_URI}',
+        name: '${NOTEBOOK_NAME}',
+        remoteId: '${NOTEBOOK_URI}',
+        lastSynced: '',
+        lastRemoteChecksum: '',
+        doc: notebookDoc,
+        md5Checksum: ''
+      }));
+      db.close();
       localStorage.setItem('runme/openNotebooks', JSON.stringify([
-        { uri: '${NOTEBOOK_URI}', name: '${NOTEBOOK_NAME}', type: 'file', children: [] }
+        { uri: '${NOTEBOOK_URI}', name: '${NOTEBOOK_NAME}', type: 'file', children: [], parents: ['local://folder/local'] }
       ]));
       localStorage.setItem('runme/currentDoc', '${NOTEBOOK_URI}');
       localStorage.removeItem('${STORAGE_KEY}');
       return JSON.stringify({ status: 'ok' });
     })()"`,
-  ).stdout.trim();
+    ).stdout,
+  );
   writeArtifact("scenario-notebook-focus-persistence-01-seed.json", seedResult);
   if (seedResult.includes('"status":"ok"')) {
     pass("Seeded local markdown notebook");
@@ -210,12 +254,24 @@ try {
 
   run("agent-browser wait 600");
 
-  const storageAfterEdit = run(
+  run(
+    `agent-browser eval "(async () => {
+      const textarea = document.querySelector('#markdown-editor-${MARKDOWN_CELL_ID} textarea');
+      if (!(textarea instanceof HTMLElement)) return 'missing-editor-textarea';
+      textarea.focus();
+      return document.activeElement === textarea ? 'ok' : 'focus-missed';
+    })()"`,
+  );
+  run("agent-browser wait 400");
+
+  const storageAfterEdit = decodeAgentBrowserEvalOutput(
+    run(
     `agent-browser eval "${escapeDoubleQuotes(`(() => {
       const raw = localStorage.getItem('${STORAGE_KEY}');
       return raw || '';
     })()`)}"`,
-  ).stdout.trim();
+    ).stdout,
+  );
   writeArtifact(
     "scenario-notebook-focus-persistence-02-storage-after-edit.json",
     storageAfterEdit,
@@ -235,7 +291,8 @@ try {
     afterReloadSnapshot,
   );
 
-  const afterReloadState = run(
+  const afterReloadState = decodeAgentBrowserEvalOutput(
+    run(
     `agent-browser eval "${escapeDoubleQuotes(`(() => {
       const editor = document.querySelector('#markdown-editor-${MARKDOWN_CELL_ID}');
       const rendered = document.querySelector('#markdown-rendered-${MARKDOWN_CELL_ID}');
@@ -247,7 +304,8 @@ try {
         activeElementId: active?.id ?? '',
       });
     })()`)}"`,
-  ).stdout.trim();
+    ).stdout,
+  );
   writeArtifact(
     "scenario-notebook-focus-persistence-04-after-reload-state.json",
     afterReloadState,

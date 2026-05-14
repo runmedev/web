@@ -133,7 +133,9 @@ describe("MarkdownCell", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByTestId("mock-markdown-editor-input")).toHaveFocus();
+    expect(document.activeElement).toBe(
+      screen.getByTestId("mock-markdown-editor-input"),
+    );
   });
 
   it("does not replay restore behavior on each editor change", async () => {
@@ -183,7 +185,9 @@ describe("MarkdownCell", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByTestId("mock-markdown-editor-input")).toHaveFocus();
+    expect(document.activeElement).toBe(
+      screen.getByTestId("mock-markdown-editor-input"),
+    );
   });
 
   it("focuses rendered markdown when leaving editor mode with escape", async () => {
@@ -211,7 +215,9 @@ describe("MarkdownCell", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByTestId("markdown-rendered")).toHaveFocus();
+    expect(document.activeElement).toBe(
+      screen.getByTestId("markdown-rendered"),
+    );
   });
 
   it("focuses rendered markdown when the window regains focus", async () => {
@@ -247,6 +253,8 @@ describe("MarkdownCell", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByTestId("markdown-rendered")).toHaveFocus();
+    expect(document.activeElement).toBe(
+      screen.getByTestId("markdown-rendered"),
+    );
   });
 });
