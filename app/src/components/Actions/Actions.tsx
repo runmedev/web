@@ -1471,15 +1471,15 @@ export default function Actions() {
   // }, [cellsInitialized, currentDocUri, ensureNotebook, run, runName, setCurrentDoc]);
 
   const { registerRenderer, unregisterRenderer } = useOutput();
-  const currentDocUriRef = useRef(currentDocUri);
   const resolvedSelectedTabUri =
     selectedTabUri ??
     currentDocUri ??
     (statusTabVisible ? DRIVE_LINK_STATUS_TAB_URI : openNotebooks[0]?.uri ?? "");
+  const resolvedSelectedTabUriRef = useRef(resolvedSelectedTabUri);
 
   useEffect(() => {
-    currentDocUriRef.current = currentDocUri;
-  }, [currentDocUri]);
+    resolvedSelectedTabUriRef.current = resolvedSelectedTabUri;
+  }, [resolvedSelectedTabUri]);
 
   const handleCellFocus = useCallback(
     (docUri: string, state: NotebookActiveCell) => {
@@ -1576,7 +1576,11 @@ export default function Actions() {
       if (document.visibilityState !== "visible") {
         return;
       }
-      requestFocusRestore(currentDocUriRef.current);
+      const visibleTabUri = resolvedSelectedTabUriRef.current;
+      if (!visibleTabUri || visibleTabUri === DRIVE_LINK_STATUS_TAB_URI) {
+        return;
+      }
+      requestFocusRestore(visibleTabUri);
     };
 
     window.addEventListener("focus", restoreCurrentNotebookFocus);
