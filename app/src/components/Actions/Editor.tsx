@@ -18,6 +18,7 @@ const Editor = memo(
     ariaLabel,
     autoFocusWhenEmpty = true,
     shouldFocus = false,
+    onFocus,
     onChange,
     onEnter,
     onMount,
@@ -31,6 +32,7 @@ const Editor = memo(
     ariaLabel?: string;
     autoFocusWhenEmpty?: boolean;
     shouldFocus?: boolean;
+    onFocus?: () => void;
     onChange: (value: string) => void;
     onEnter: () => void;
     onMount?: (editor: any, monaco: any) => void;
@@ -48,6 +50,7 @@ const Editor = memo(
     // don't render an empty scroll track.
     const [isClamped, setIsClamped] = useState(false);
     const contentSizeListener = useRef<{ dispose: () => void } | null>(null);
+    const focusListener = useRef<{ dispose: () => void } | null>(null);
     const previousShouldFocusRef = useRef(false);
 
     // Keep the ref updated with the latest onEnter
@@ -149,6 +152,9 @@ const Editor = memo(
       contentSizeListener.current = editor.onDidContentSizeChange(() => {
         adjustHeight();
       });
+      focusListener.current = editor.onDidFocusEditorText(() => {
+        onFocus?.();
+      });
       onMount?.(editor, monaco);
     };
 
@@ -176,6 +182,8 @@ const Editor = memo(
       return () => {
         contentSizeListener.current?.dispose?.();
         contentSizeListener.current = null;
+        focusListener.current?.dispose?.();
+        focusListener.current = null;
       };
     }, []);
 

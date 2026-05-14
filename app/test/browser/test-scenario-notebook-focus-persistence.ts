@@ -242,8 +242,10 @@ try {
       const rendered = document.querySelector('#markdown-rendered-${MARKDOWN_CELL_ID}');
       if (!(rendered instanceof HTMLElement)) return 'missing-rendered-markdown';
       rendered.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-      rendered.focus();
-      return 'ok';
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      return document.querySelector('#markdown-editor-${MARKDOWN_CELL_ID}')
+        ? 'ok'
+        : 'missing-markdown-editor';
     })()"`,
   ).stdout.trim();
   if (openEditorResult.includes("ok")) {

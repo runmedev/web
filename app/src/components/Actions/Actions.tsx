@@ -5,6 +5,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -659,6 +660,20 @@ export function Action({
     [cell?.refId, onFocusStateChange],
   );
 
+  const handleMarkdownFocusRoleChange = useCallback(
+    (focusRole: CellFocusRole) => {
+      if (!cell?.refId || !onFocusStateChange) {
+        return;
+      }
+      const nextState = createNotebookActiveCellState(cell.refId, focusRole);
+      if (!nextState) {
+        return;
+      }
+      onFocusStateChange(nextState);
+    },
+    [cell?.refId, onFocusStateChange],
+  );
+
   const handleRemoveCell = useCallback(() => {
     cellData.remove();
     setContextMenu(null);
@@ -1037,6 +1052,7 @@ export function Action({
               isActiveCell={isActiveCell}
               activeFocusRole={activeFocusRole}
               isWindowFocused={isWindowFocused}
+              onFocusRoleChange={handleMarkdownFocusRoleChange}
             />
             {/* Trash icon on the right, visible on hover */}
             <button
