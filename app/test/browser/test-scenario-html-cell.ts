@@ -257,7 +257,7 @@ const convertAndPopulateRaw = run(
   `agent-browser eval "${escapeDoubleQuotes(`(() => {
     const editorContainer = document.getElementById('html-editor-cell_html_author');
     if (!(editorContainer instanceof HTMLElement)) {
-      return JSON.stringify({ status: 'missing-html-editor-container', srcdoc: '' });
+      return JSON.stringify({ status: 'missing-html-editor-container', srcdoc: '', sandbox: '' });
     }
     editorContainer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     const deadline = Date.now() + 5000;
@@ -269,6 +269,7 @@ const convertAndPopulateRaw = run(
           resolve(JSON.stringify({
             status: frame && rendered ? 'ok' : 'missing-preview',
             srcdoc: frame instanceof HTMLIFrameElement ? frame.getAttribute('srcdoc') || '' : '',
+            sandbox: frame instanceof HTMLIFrameElement ? frame.getAttribute('sandbox') || '' : '',
           }));
           return;
         }
@@ -282,12 +283,14 @@ const convertAndPopulateText = `${convertAndPopulateRaw.stdout}\n${convertAndPop
 writeArtifact("scenario-html-cell-02-opened.txt", convertAndPopulateText);
 
 let previewSrcdoc = "";
+let previewSandbox = "";
 try {
   const parsedOnce = JSON.parse(convertAndPopulateRaw.stdout.trim()) as unknown;
   const parsed = (typeof parsedOnce === "string"
     ? JSON.parse(parsedOnce)
-    : parsedOnce) as { status?: string; srcdoc?: string };
+    : parsedOnce) as { status?: string; srcdoc?: string; sandbox?: string };
   previewSrcdoc = parsed.srcdoc ?? "";
+  previewSandbox = parsed.sandbox ?? "";
   if (parsed.status === "ok") {
     pass("Converted markdown cell to HTML and populated inline SVG source");
   } else {
@@ -306,6 +309,12 @@ if (previewSrcdoc.includes("Hello SVG") && previewSrcdoc.includes("<svg")) {
   pass("Observed inline SVG markup in HTML preview srcdoc");
 } else {
   fail("HTML preview srcdoc did not contain expected SVG markup");
+}
+
+if (previewSandbox === "") {
+  pass("Rendered HTML preview without allow-scripts in the iframe sandbox");
+} else {
+  fail(`HTML preview iframe sandbox was not locked down as expected: ${previewSandbox}`);
 }
 
 try {

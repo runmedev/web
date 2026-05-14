@@ -779,7 +779,7 @@ function NotebookCellView({
             </div>
             <iframe
               title={`cell-preview-${cell.refId || index}`}
-              sandbox="allow-scripts"
+              sandbox=""
               srcDoc={cell.value || ""}
               className="h-[420px] w-full bg-white"
             />

@@ -320,6 +320,7 @@ describe("Action component", () => {
     expect(screen.getByTestId("html-rendered")).toBeTruthy();
     const frame = screen.getByTestId("html-preview-frame") as HTMLIFrameElement;
     expect(frame.getAttribute("srcdoc")).toBe("<div><strong>Hello HTML</strong></div>");
+    expect(frame.getAttribute("sandbox")).toBe("");
     expect(screen.queryByLabelText("Run code")).toBeNull();
   });
 

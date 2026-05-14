@@ -119,7 +119,7 @@ const HtmlCell = memo(
       () => (
         <iframe
           title={`html-preview-${cell?.refId ?? "cell"}`}
-          sandbox="allow-scripts"
+          sandbox=""
           srcDoc={value}
           className="h-[420px] w-full rounded-b-nb-md bg-white"
           data-testid="html-preview-frame"

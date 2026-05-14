@@ -21,7 +21,8 @@ We will represent HTML cells as existing `CODE` cells with
 We will not introduce a new protobuf `CellKind`.
 
 The rendered preview will use a sandboxed `iframe` with `srcDoc`, matching the
-existing trusted rendering path already used for `text/html` cell outputs.
+existing trusted rendering path already used for `text/html` cell outputs, but
+with stricter script handling for authored cell content.
 
 ## Motivation
 
@@ -94,6 +95,9 @@ We are choosing Option B:
 3. Render the preview through a sandboxed `iframe srcDoc`.
 4. Treat HTML cells as non-runnable content cells in the notebook UI.
 5. Serialize HTML cells into Markdown sidecars as raw HTML, not fenced code.
+6. In the first version, do not allow scripts in authored HTML previews.
+7. Gate execution on both `kind` and `languageId`, so `languageId=html` is
+   skipped by notebook execution APIs.
 
 ## Why Reuse `CODE` + `languageId=html`
 
@@ -156,21 +160,25 @@ for new notebooks.
 
 ## Rendering and Security
 
-HTML preview is trusted-but-contained content.
+HTML preview is contained content, but it should not be treated as trusted by
+default.
 
 We will render the preview with:
 
 - `iframe`
 - `srcDoc={cell.value}`
-- `sandbox="allow-scripts"`
+- `sandbox` with no `allow-scripts` token in the first version
 
-This matches the existing rendering path for `text/html` cell outputs.
+This is intentionally stricter than the current `text/html` output path.
 
 Rationale:
 
 - It isolates CSS and DOM from the notebook shell.
 - It lets inline SVG work naturally.
 - It avoids `dangerouslySetInnerHTML` in the main React tree.
+- It still supports the immediate HTML-cell use case of static HTML, CSS, and
+  inline SVG.
+- It avoids automatically executing JavaScript just by opening a notebook.
 
 This is intentionally different from markdown:
 
@@ -179,6 +187,39 @@ This is intentionally different from markdown:
 
 This proposal does not add `allow-same-origin` or message-passing from the
 preview back into the app.
+
+### Future trust model
+
+Longer term, we should add an explicit notebook trust model instead of treating
+all HTML cells the same.
+
+Recommended direction:
+
+- notebooks opened from local disk, Drive, or shared links start untrusted,
+- untrusted notebooks render HTML cells with scripts disabled,
+- users can explicitly mark a notebook trusted,
+- trusted notebooks may opt into richer preview capabilities, including script
+  execution, if product demand justifies it.
+
+The closest existing precedent is Jupyter's notebook trust model. JupyterLab's
+current user docs say that JavaScript and HTML from notebooks created on other
+machines are not trusted by default, that interactive outputs are blocked until
+the notebook is explicitly trusted, and that markdown cells are always
+sanitized. The classic Notebook security docs make the same distinction: for
+untrusted notebooks, HTML is sanitized, JavaScript is not executed, and users
+can explicitly trust a notebook later.
+
+Sources:
+
+- [JupyterLab user docs: Trust](https://jupyterlab.readthedocs.io/en/stable/user/notebook.html#trust)
+- [Jupyter Notebook security docs](https://jupyter-server.readthedocs.io/en/latest/operators/security.html)
+
+We do not need to build Jupyter's full signature-based trust model in the first
+HTML-cell iteration, but its policy shape is a useful reference:
+
+- safe default on open,
+- explicit upgrade to trusted,
+- no raw HTML/JS execution in markdown.
 
 ## Notebook Serialization
 
@@ -211,6 +252,43 @@ only a code block.
 
 That keeps shared/opened notebooks consistent with the main editor experience.
 
+For the first version, read-only views should use the same no-scripts preview
+policy as the editable notebook view. Opening a shared notebook should not
+execute authored JavaScript automatically.
+
+## Execution Semantics
+
+HTML cells are stored as `CellKind.CODE` for compatibility, but they are not
+semantically runnable code cells.
+
+Short-term recommendation:
+
+- keep `CellKind.CODE` plus `languageId=html`,
+- treat `languageId=html` as a non-runnable subtype everywhere execution is
+  dispatched,
+- gate execution on both cell kind and normalized language, not cell kind
+  alone.
+
+That means at minimum:
+
+- the per-cell editor should not show run affordances for HTML cells,
+- `runme.runAll()` should skip HTML cells,
+- `notebooks.execute({ target, refIds })` should skip or reject HTML cells
+  explicitly,
+- any future bulk execution helper should follow the same rule.
+
+Why this is the right short-term tradeoff:
+
+- it avoids a schema migration,
+- it keeps language-switching simple,
+- it preserves the existing storage model,
+- it prevents accidental execution of raw markup through shell, Jupyter, or
+  AppKernel paths.
+
+If we later find that `kind=CODE` creates too much branching or ambiguity, we
+can revisit a dedicated protobuf kind. That should be a follow-on cleanup, not a
+prerequisite for the initial feature.
+
 ## Testing
 
 Required coverage:
@@ -225,6 +303,10 @@ Required coverage:
    - exits edit mode,
    - verifies the preview renders expected text/SVG markers,
    - records a `.webm` walkthrough.
+5. Execution-path tests proving that HTML cells are skipped by `runAll` and
+   rejected or ignored by `notebooks.execute(...)`.
+6. Trust-boundary tests proving that authored scripts do not run in HTML cell
+   previews in the first version.
 
 ## Alternatives Considered
 

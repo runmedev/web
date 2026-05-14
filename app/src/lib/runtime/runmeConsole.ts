@@ -2,11 +2,19 @@ import { create } from "@bufbuild/protobuf";
 import md5 from "md5";
 
 import { RunmeMetadataKey, parser_pb } from "../../runme/client";
+import { isHtmlLanguageId } from "../cellContent";
 
 type CellRunnerLike = {
   run: () => void | Promise<void>;
   getRunID: () => string;
 };
+
+function isRunnableNotebookCodeCell(cell: parser_pb.Cell | null | undefined): boolean {
+  if (!cell || cell.kind !== parser_pb.CellKind.CODE) {
+    return false;
+  }
+  return !isHtmlLanguageId(cell.languageId);
+}
 
 export type NotebookDataLike = {
   getUri: () => string;
@@ -522,16 +530,29 @@ export function createNotebooksApi({
     execute: async (args) => {
       const notebook = resolveNotebookByRequiredTarget("execute", args.target);
       const executedCells: parser_pb.Cell[] = [];
+      const pendingRuns: Array<{ refId: string; runner: CellRunnerLike; cell: parser_pb.Cell }> = [];
       for (const refId of args.refIds ?? []) {
+        const cell = notebook.getNotebook().cells.find((candidate) => candidate.refId === refId);
+        if (!cell) {
+          throw new Error(`Cell not found: ${refId}`);
+        }
+        if (!isRunnableNotebookCodeCell(cell)) {
+          throw new Error(`HTML cells are not runnable: ${refId}`);
+        }
         const cellRunner = notebook.getCell(refId);
         if (!cellRunner) {
           throw new Error(`Cell not found: ${refId}`);
         }
-        const runResult = cellRunner.run();
+        pendingRuns.push({ refId, runner: cellRunner, cell });
+      }
+      for (const pending of pendingRuns) {
+        const runResult = pending.runner.run();
         if (isPromiseLike(runResult)) {
           await runResult;
         }
-        const cell = notebook.getNotebook().cells.find((candidate) => candidate.refId === refId);
+        const cell =
+          notebook.getNotebook().cells.find((candidate) => candidate.refId === pending.refId) ??
+          pending.cell;
         if (cell) {
           executedCells.push(cell);
         }
@@ -621,7 +642,7 @@ export function createRunmeConsoleApi({
     let failedToStart = 0;
 
     for (const cell of cells) {
-      if (!cell?.refId || cell.kind !== parser_pb.CellKind.CODE) {
+      if (!cell?.refId || !isRunnableNotebookCodeCell(cell)) {
         continue;
       }
       if ((cell.value ?? "").trim().length === 0) {
