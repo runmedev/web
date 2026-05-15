@@ -143,6 +143,7 @@ function codeCell(
   refId: string,
   value: string,
   opts: {
+    languageId?: string;
     outputs?: parser_pb.CellOutput[];
     metadata?: Record<string, string>;
   } = {},
@@ -150,7 +151,7 @@ function codeCell(
   return create(parser_pb.CellSchema, {
     refId,
     kind: parser_pb.CellKind.CODE,
-    languageId: "bash",
+    languageId: opts.languageId ?? "bash",
     value,
     outputs: opts.outputs ?? [],
     metadata: opts.metadata ?? {},
@@ -265,6 +266,25 @@ describe("createRunmeConsoleApi", () => {
     expect(clearMessage).toContain("Cleared 1 output item group(s) across 1 cell(s)");
     expect(runMessage).toContain("Started 1/1 code cell(s)");
     expect(model.getCell("cell-a")?.calls).toBe(1);
+  });
+
+  it("skips html content cells in runAll", () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        codeCell("cell-a", "echo a"),
+        codeCell("cell-html", "<div>Hello</div>", { languageId: "html" }),
+      ],
+    });
+    const model = new FakeNotebookData("local://one", "Notebook One", notebook);
+    const api = createRunmeConsoleApi({
+      resolveNotebook: () => model,
+    });
+
+    const message = api.runAll();
+
+    expect(message).toContain("Started 1/1 code cell(s)");
+    expect(model.getCell("cell-a")?.calls).toBe(1);
+    expect(model.getCell("cell-html")?.calls).toBe(0);
   });
 
   it("reruns notebook by clearing outputs before running cells", () => {
@@ -582,6 +602,30 @@ describe("createNotebooksApi", () => {
 
     expect(completed).toBe(true);
     expect(runner.calls).toBe(1);
+  });
+
+  it("rejects notebooks.execute for html cells before starting any runs", async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        codeCell("cell-a", "echo a"),
+        codeCell("cell-html", "<div>Hello</div>", { languageId: "html" }),
+      ],
+    });
+    const model = new FakeNotebookData("local://one", "One", notebook);
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    });
+
+    await expect(
+      api.execute({
+        target: { uri: "local://one" },
+        refIds: ["cell-a", "cell-html"],
+      }),
+    ).rejects.toThrow("HTML cells are not runnable: cell-html");
+
+    expect(model.getCell("cell-a")?.calls).toBe(0);
+    expect(model.getCell("cell-html")?.calls).toBe(0);
   });
 
   it("rejects notebooks.execute without an explicit target", async () => {

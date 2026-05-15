@@ -579,6 +579,28 @@ describe("NotebookData.runCodeCell", () => {
     expect(runID).toBe("");
   });
 
+  it("returns empty run id for html content cells", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-html",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "html",
+      outputs: [],
+      metadata: {},
+      value: "<div>Hello</div>",
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "test",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    const runID = model.runCodeCell(cell);
+    expect(runID).toBe("");
+  });
+
   it("executes javascript locally with appkernel and records stdout + exit code", async () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-appkernel",

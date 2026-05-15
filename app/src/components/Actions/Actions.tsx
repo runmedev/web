@@ -26,10 +26,12 @@ import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useOutput } from "../../contexts/OutputContext";
 import CellConsole, { fontSettings } from "./CellConsole";
 import Editor from "./Editor";
+import HtmlCell from "./HtmlCell";
 import MarkdownCell from "./MarkdownCell";
 import { IOPUB_INCOMPLETE_METADATA_KEY } from "../../lib/ipykernel";
 import { appLogger } from "../../lib/logging/runtime";
 import { copyNotebookShareUrl } from "../../lib/shareLinks";
+import { isHtmlLanguageId, isMarkdownLanguageId } from "../../lib/cellContent";
 import {
   PlayIcon,
   PlusIcon,
@@ -269,6 +271,7 @@ function RunActionButton({
 // Action is an editor and an optional Runme console
 const LANGUAGE_OPTIONS = [
   { label: "Markdown", value: "markdown" },
+  { label: "HTML", value: "html" },
   { label: "Bash", value: "bash" },
   { label: "Jupyter", value: "jupyter" },
   { label: "Python", value: "python" },
@@ -282,6 +285,7 @@ const JAVASCRIPT_RUNNER_OPTIONS = [
 
 type SupportedLanguage =
   | "bash"
+  | "html"
   | "jupyter"
   | "javascript"
   | "markdown"
@@ -289,6 +293,13 @@ type SupportedLanguage =
 
 const outputTextDecoder = new TextDecoder();
 const ALWAYS_SKIP_MIMES = new Set<string>([MimeType.StatefulRunmeTerminal]);
+
+function normalizeBinaryData(data?: Uint8Array | ArrayLike<number> | null): Uint8Array {
+  if (!data) {
+    return new Uint8Array();
+  }
+  return data instanceof Uint8Array ? data : Uint8Array.from(data);
+}
 
 function isGoogleDriveFileUri(uri: string | null | undefined): uri is string {
   if (!uri) {
@@ -317,8 +328,11 @@ function normalizeLanguageId(
   switch (kind) {
     case parser_pb.CellKind.CODE:
       const normalized = (languageId ?? "").toLowerCase();
-      if (normalized === "markdown") {
+      if (isMarkdownLanguageId(normalized)) {
         return "markdown";
+      }
+      if (isHtmlLanguageId(normalized)) {
+        return "html";
       }
       if (normalized === "python" || normalized === "py") {
         return "python";
@@ -344,26 +358,28 @@ function normalizeLanguageId(
   }
 }
 
-function decodeOutputText(data: Uint8Array): string {
-  if (!(data instanceof Uint8Array) || data.length === 0) {
+function decodeOutputText(data?: Uint8Array | ArrayLike<number> | null): string {
+  const normalized = normalizeBinaryData(data);
+  if (normalized.length === 0) {
     return "";
   }
   try {
-    return outputTextDecoder.decode(data);
+    return outputTextDecoder.decode(normalized);
   } catch {
     return "";
   }
 }
 
-function uint8ArrayToBase64(data: Uint8Array): string {
-  if (!(data instanceof Uint8Array) || data.length === 0) {
+function uint8ArrayToBase64(data?: Uint8Array | ArrayLike<number> | null): string {
+  const normalized = normalizeBinaryData(data);
+  if (normalized.length === 0) {
     return "";
   }
 
   let binary = "";
   const chunkSize = 0x8000;
-  for (let i = 0; i < data.length; i += chunkSize) {
-    const chunk = data.subarray(i, i + chunkSize);
+  for (let i = 0; i < normalized.length; i += chunkSize) {
+    const chunk = normalized.subarray(i, i + chunkSize);
     binary += String.fromCharCode(...chunk);
   }
 
@@ -457,7 +473,7 @@ export function ActionOutputItems({ outputs }: { outputs: parser_pb.CellOutput[]
         ) {
           return null;
         }
-        if (!(item.data instanceof Uint8Array)) {
+        if (normalizeBinaryData(item.data).length === 0) {
           return null;
         }
         return (
@@ -528,6 +544,7 @@ export function Action({
     y: number;
   } | null>(null);
   const [shareRemoteUri, setShareRemoteUri] = useState<string | null>(null);
+  const [htmlEditRequest, setHtmlEditRequest] = useState(0);
   const [markdownEditRequest, setMarkdownEditRequest] = useState(0);
   const [pid, setPid] = useState<number | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -668,6 +685,8 @@ export function Action({
 
   const editorLanguage = useMemo(() => {
     switch (selectedLanguage) {
+      case "html":
+        return "html";
       case "markdown":
         return "markdown";
       case "javascript":
@@ -765,6 +784,15 @@ export function Action({
       return;
     }
     if (selectedLanguage === "markdown") {
+      if (initialRunnerName !== DEFAULT_RUNNER_PLACEHOLDER) {
+        cellData.setRunner(DEFAULT_RUNNER_PLACEHOLDER);
+      }
+      if (hasJupyterSelection) {
+        cellData.clearJupyterKernel();
+      }
+      return;
+    }
+    if (selectedLanguage === "html") {
       if (initialRunnerName !== DEFAULT_RUNNER_PLACEHOLDER) {
         cellData.setRunner(DEFAULT_RUNNER_PLACEHOLDER);
       }
@@ -892,21 +920,26 @@ export function Action({
 
       const updatedCell = create(parser_pb.CellSchema, cell);
       updatedCell.metadata ??= {};
+      const clearRuntimeMetadata = () => {
+        delete updatedCell.metadata[RunmeMetadataKey.RunnerName];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName];
+      };
       if (nextValue === "markdown") {
         setMarkdownEditRequest((request) => request + 1);
         updatedCell.kind = parser_pb.CellKind.MARKUP;
         updatedCell.languageId = "markdown";
-        delete updatedCell.metadata[RunmeMetadataKey.RunnerName];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName];
+        clearRuntimeMetadata();
+      } else if (nextValue === "html") {
+        setHtmlEditRequest((request) => request + 1);
+        updatedCell.kind = parser_pb.CellKind.CODE;
+        updatedCell.languageId = "html";
+        clearRuntimeMetadata();
       } else if (nextValue === "jupyter") {
         updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "jupyter";
-        delete updatedCell.metadata[RunmeMetadataKey.RunnerName];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName];
+        clearRuntimeMetadata();
       } else if (nextValue === "javascript") {
         updatedCell.kind = parser_pb.CellKind.CODE;
         updatedCell.languageId = "javascript";
@@ -944,11 +977,12 @@ export function Action({
   // Determine if this cell is a markdown cell (either MARKUP kind or CODE with markdown language)
   const isMarkdownCell = useMemo(() => {
     if (!cell) return false;
-    // Check if cell kind is MARKUP
     if (cell.kind === parser_pb.CellKind.MARKUP) return true;
-    // Check if cell is CODE but with markdown language
-    const lang = (cell.languageId ?? "").toLowerCase();
-    return lang === "markdown" || lang === "md";
+    return isMarkdownLanguageId(cell.languageId);
+  }, [cell]);
+  const isHtmlCell = useMemo(() => {
+    if (!cell) return false;
+    return cell.kind === parser_pb.CellKind.CODE && isHtmlLanguageId(cell.languageId);
   }, [cell]);
 
   if (!cell) {
@@ -996,6 +1030,89 @@ export function Action({
               forceEditRequest={markdownEditRequest}
             />
             {/* Trash icon on the right, visible on hover */}
+            <button
+              type="button"
+              aria-label="Delete cell"
+              className="icon-btn absolute right-2 top-2 h-6 w-6 opacity-0 transition-opacity duration-150 group-hover/cell:opacity-100"
+              onClick={handleRemoveCell}
+            >
+              <TrashIcon />
+            </button>
+          </div>
+        </div>
+        {adjustedContextMenu && (
+          <div
+            className="ctx-menu"
+            style={{
+              top: adjustedContextMenu.y,
+              left: adjustedContextMenu.x,
+            }}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            {shareRemoteUri && (
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void handleCopyShareLink();
+                }}
+              >
+                Copy Share Link
+              </button>
+            )}
+            <button
+              type="button"
+              className="ctx-menu-item text-red-600"
+              onClick={(event) => {
+                event.stopPropagation();
+                handleRemoveCell();
+              }}
+            >
+              Remove Cell
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (isHtmlCell) {
+    return (
+      <div
+        id={`html-action-${cell.refId}`}
+        className="group/cell relative flex min-w-0"
+        onContextMenu={handleContextMenu}
+        data-testid="html-action"
+      >
+        <div id={`html-gutter-${cell.refId}`} className="flex w-7 shrink-0 flex-col items-center justify-between py-1">
+          <button
+            type="button"
+            aria-label="Add cell above"
+            className="cell-add-btn h-5 w-5"
+            onClick={handleAddCodeCellBefore}
+          >
+            <PlusIcon width={10} height={10} />
+          </button>
+          <button
+            type="button"
+            aria-label="Add cell below"
+            className="cell-add-btn h-5 w-5"
+            onClick={handleAddCodeCellAfter}
+          >
+            <PlusIcon width={10} height={10} />
+          </button>
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="relative w-full min-w-0 max-w-full overflow-hidden">
+            <HtmlCell
+              cellData={cellData}
+              selectedLanguage={selectedLanguage}
+              languageSelectId={languageSelectId}
+              languageOptions={LANGUAGE_OPTIONS}
+              onLanguageChange={handleLanguageChange}
+              forceEditRequest={htmlEditRequest}
+            />
             <button
               type="button"
               aria-label="Delete cell"

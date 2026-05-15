@@ -5,6 +5,7 @@ import {
   RunmeMetadataKey,
   MimeType,
 } from "../contexts/CellContext";
+import { isHtmlLanguageId } from "./cellContent";
 
 /**
  * Minimal store interface used by NotebookData for auto-saving.
@@ -676,6 +677,10 @@ export class NotebookData {
     }
 
     const normalizedLanguage = (cell.languageId ?? "").trim().toLowerCase();
+    if (isHtmlLanguageId(normalizedLanguage)) {
+      console.warn("Cannot run HTML content cell", cell.refId);
+      return "";
+    }
     const requestedRunnerName =
       (cell.metadata?.[RunmeMetadataKey.RunnerName] as string | undefined) ?? "";
     const appKernelMode = resolveAppKernelRunnerMode(requestedRunnerName);

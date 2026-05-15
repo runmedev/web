@@ -281,6 +281,49 @@ describe("Action component", () => {
     expect(updatedCell.languageId).toBe("markdown");
   });
 
+  it("converts markdown cells to html code cells", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-html-convert",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "",
+    });
+    const stub = new StubCellData(cell);
+
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
+
+    const selector = screen.getByRole("combobox");
+    fireEvent.change(selector, { target: { value: "html" } });
+
+    expect(stub.update).toHaveBeenCalledTimes(1);
+    const updatedCell = stub.update.mock.calls[0][0] as parser_pb.Cell;
+    expect(updatedCell.kind).toBe(parser_pb.CellKind.CODE);
+    expect(updatedCell.languageId).toBe("html");
+  });
+
+  it("renders html cells in-place without the code run toolbar", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-html-rendered",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "html",
+      outputs: [],
+      metadata: {},
+      value: "<div><strong>Hello HTML</strong></div>",
+    });
+    const stub = new StubCellData(cell);
+
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
+
+    expect(screen.getByTestId("html-action")).toBeTruthy();
+    expect(screen.getByTestId("html-rendered")).toBeTruthy();
+    const frame = screen.getByTestId("html-preview-frame") as HTMLIFrameElement;
+    expect(frame.getAttribute("srcdoc")).toBe("<div><strong>Hello HTML</strong></div>");
+    expect(frame.getAttribute("sandbox")).toBe("");
+    expect(screen.queryByLabelText("Run code")).toBeNull();
+  });
+
   it("shows browser/sandbox runner selector for javascript cells", () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-runner-select",

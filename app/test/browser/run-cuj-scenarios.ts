@@ -79,6 +79,7 @@ function fetchWithTimeout(
 }
 
 const SCENARIO_DRIVERS = [
+  join(SCRIPT_DIR, "test-scenario-html-cell.ts"),
   join(SCRIPT_DIR, "test-scenario-hello-world.ts"),
   join(SCRIPT_DIR, "test-scenario-open-shared-drive-link.ts"),
   join(SCRIPT_DIR, "test-scenario-appkernel-javascript.ts"),
