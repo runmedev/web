@@ -646,9 +646,14 @@ export function Action({
       if (!(target instanceof HTMLElement)) {
         return;
       }
+      const focusRoleElement = target.closest<HTMLElement>(
+        "[data-cell-focus-role]",
+      );
+      if (!focusRoleElement) {
+        return;
+      }
       const focusRole =
-        target.closest<HTMLElement>("[data-cell-focus-role]")?.dataset
-          .cellFocusRole === "rendered"
+        focusRoleElement.dataset.cellFocusRole === "rendered"
           ? "rendered"
           : "editor";
       const nextState = createNotebookActiveCellState(cell.refId, focusRole);
