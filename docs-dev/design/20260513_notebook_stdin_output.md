@@ -157,6 +157,10 @@ paint state.
 
 We will ensure notebook output has a single presentation path per run.
 
+In v1, we will show the stdin affordance for active stdin-capable runs. We will
+not wait for a precise backend "blocked on stdin" signal before making input
+available.
+
 We will surface partial trailing stdout immediately instead of waiting for a
 newline.
 
@@ -200,6 +204,8 @@ Recommended v1 behavior:
 
 - render a single-line text input
 - render a `Send` button
+- show the composer whenever the process is still running on the stdin-capable
+  runner path
 - pressing `Enter` submits the current value
 - submission sends one `ExecuteRequest.inputData` write containing the entered
   text plus `\n`
@@ -208,7 +214,9 @@ Recommended v1 behavior:
   that is part of its behavior
 
 The composer can remain visible for any active interactive run. We do not need
-perfect blocked-on-stdin detection in v1 to make the UX usable.
+perfect blocked-on-stdin detection in v1 to make the UX usable. The v1 state is
+"stdin available while the run is active", not "stdin is definitely blocked
+right now."
 
 ### 2. Render partial stdout immediately
 
@@ -275,14 +283,16 @@ This aligns with the direction already described in #190.
 ### Phase 1: Fix the UX without a backend protocol change
 
 1. Replace notebook-cell terminal input with a dedicated React stdin composer.
-2. Route submitted input through `ExecuteRequest.inputData`.
-3. Render generic runner stdout/stderr directly from notebook outputs.
-4. Remove newline-delayed buffering from the generic runner stdout path.
-5. Remove the split policy where active-stream cells render `CellConsole` while
+2. Show that composer for active stdin-capable runs, even without a precise
+   `stdinRequested` protocol event.
+3. Route submitted input through `ExecuteRequest.inputData`.
+4. Render generic runner stdout/stderr directly from notebook outputs.
+5. Remove newline-delayed buffering from the generic runner stdout path.
+6. Remove the split policy where active-stream cells render `CellConsole` while
    stdout/stderr suppression still depends on terminal markers.
-6. Stop depending on `console-view` scrollback for notebook output visibility.
-7. Ensure notebook cells choose one transcript renderer, not both.
-8. Keep Jupyter behavior unchanged.
+7. Stop depending on `console-view` scrollback for notebook output visibility.
+8. Ensure notebook cells choose one transcript renderer, not both.
+9. Keep Jupyter behavior unchanged.
 
 This phase should solve the practical user problem in #99.
 

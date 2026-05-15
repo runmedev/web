@@ -460,7 +460,13 @@ function ActionOutputItemView({
   );
 }
 
-export function ActionOutputItems({ outputs }: { outputs: parser_pb.CellOutput[] }) {
+export function ActionOutputItems({
+  outputs,
+  suppressStdText = false,
+}: {
+  outputs: parser_pb.CellOutput[];
+  suppressStdText?: boolean;
+}) {
   const hasTerminalOutput = outputs.some((output) =>
     (output.items ?? []).some((item) => item?.mime === MimeType.StatefulRunmeTerminal),
   );
@@ -476,7 +482,7 @@ export function ActionOutputItems({ outputs }: { outputs: parser_pb.CellOutput[]
           return null;
         }
         if (
-          hasTerminalOutput &&
+          (hasTerminalOutput || suppressStdText) &&
           (mime === MimeType.VSCodeNotebookStdOut || mime === MimeType.VSCodeNotebookStdErr)
         ) {
           return null;
@@ -962,8 +968,13 @@ export function Action({
     if (!cell?.outputs || cell.outputs.length === 0) {
       return null;
     }
-    return <ActionOutputItems outputs={cell.outputs} />;
-  }, [cell?.outputs]);
+    return (
+      <ActionOutputItems
+        outputs={cell.outputs}
+        suppressStdText={Boolean(cellData.getStreams())}
+      />
+    );
+  }, [cell?.outputs, cellData]);
 
   const handleLanguageChange = useCallback(
     (event: ChangeEvent<HTMLSelectElement>) => {

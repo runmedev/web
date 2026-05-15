@@ -231,6 +231,34 @@ describe("Action component", () => {
     expect(screen.queryByTestId("cell-console")).toBeNull();
   });
 
+  it("suppresses duplicate stdout output items while a live console stream is active", () => {
+    const stdoutOutput = create(parser_pb.CellOutputSchema, {
+      items: [
+        create(parser_pb.CellOutputItemSchema, {
+          mime: "application/vnd.code.notebook.stdout",
+          type: "Buffer",
+          data: new TextEncoder().encode("prompt"),
+        }),
+      ],
+    });
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-live-stdout",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "bash",
+      outputs: [stdoutOutput],
+      metadata: {
+        [RunmeMetadataKey.LastRunID]: "run-live-stdout",
+      },
+      value: "echo hi",
+    });
+    const stub = new StubCellData(cell) as unknown as CellData;
+
+    render(<Action cellData={stub} isFirst={false} />);
+
+    expect(screen.getByTestId("cell-console")).toBeTruthy();
+    expect(screen.queryByText(/mime=application\/vnd\.code\.notebook\.stdout/)).toBeNull();
+  });
+
   it("shows language selector in markdown edit mode and converts to code language", () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-md",
