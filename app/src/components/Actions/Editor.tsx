@@ -17,6 +17,8 @@ const Editor = memo(
     readOnly = false,
     ariaLabel,
     autoFocusWhenEmpty = true,
+    shouldFocus = false,
+    onFocus,
     onChange,
     onEnter,
     onMount,
@@ -29,6 +31,8 @@ const Editor = memo(
     readOnly?: boolean;
     ariaLabel?: string;
     autoFocusWhenEmpty?: boolean;
+    shouldFocus?: boolean;
+    onFocus?: () => void;
     onChange: (value: string) => void;
     onEnter: () => void;
     onMount?: (editor: any, monaco: any) => void;
@@ -46,6 +50,8 @@ const Editor = memo(
     // don't render an empty scroll track.
     const [isClamped, setIsClamped] = useState(false);
     const contentSizeListener = useRef<{ dispose: () => void } | null>(null);
+    const focusListener = useRef<{ dispose: () => void } | null>(null);
+    const previousShouldFocusRef = useRef(false);
 
     // Keep the ref updated with the latest onEnter
     useEffect(() => {
@@ -146,6 +152,9 @@ const Editor = memo(
       contentSizeListener.current = editor.onDidContentSizeChange(() => {
         adjustHeight();
       });
+      focusListener.current = editor.onDidFocusEditorText(() => {
+        onFocus?.();
+      });
       onMount?.(editor, monaco);
     };
 
@@ -161,9 +170,20 @@ const Editor = memo(
     }, [width, height]);
 
     useEffect(() => {
+      const wasFocused = previousShouldFocusRef.current;
+      previousShouldFocusRef.current = shouldFocus;
+      if (!shouldFocus || wasFocused || readOnly || !editorRef.current) {
+        return;
+      }
+      editorRef.current.focus?.();
+    }, [readOnly, shouldFocus]);
+
+    useEffect(() => {
       return () => {
         contentSizeListener.current?.dispose?.();
         contentSizeListener.current = null;
+        focusListener.current?.dispose?.();
+        focusListener.current = null;
       };
     }, []);
 
@@ -220,7 +240,8 @@ const Editor = memo(
       prevProps.language === nextProps.language &&
       prevProps.readOnly === nextProps.readOnly &&
       prevProps.ariaLabel === nextProps.ariaLabel &&
-      prevProps.autoFocusWhenEmpty === nextProps.autoFocusWhenEmpty
+      prevProps.autoFocusWhenEmpty === nextProps.autoFocusWhenEmpty &&
+      prevProps.shouldFocus === nextProps.shouldFocus
     );
   },
 );

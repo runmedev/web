@@ -23,6 +23,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type FocusEvent,
@@ -35,6 +36,7 @@ import remarkGfm from "remark-gfm";
 import { create } from "@bufbuild/protobuf";
 import { parser_pb } from "../../runme/client";
 import type { CellData } from "../../lib/notebookData";
+import type { CellFocusRole } from "../../lib/notebookActiveCellState";
 import Editor from "./Editor";
 import { fontSettings } from "./CellConsole";
 
@@ -167,6 +169,14 @@ interface MarkdownCellProps {
   onLanguageChange: (event: ChangeEvent<HTMLSelectElement>) => void;
   /** Incrementing signal to force editor mode after conversion to markdown */
   forceEditRequest?: number;
+  /** Whether this cell is the persisted active cell for the visible notebook */
+  isActiveCell?: boolean;
+  /** Which markdown surface was last active for this cell */
+  activeFocusRole?: CellFocusRole;
+  /** Whether the visible browser tab is currently focused */
+  isWindowFocused?: boolean;
+  /** Notify parent when markdown focus target changes explicitly */
+  onFocusRoleChange?: (focusRole: CellFocusRole) => void;
 }
 
 /**
@@ -186,6 +196,10 @@ const MarkdownCell = memo(
     languageOptions,
     onLanguageChange,
     forceEditRequest = 0,
+    isActiveCell = false,
+    activeFocusRole = "editor",
+    isWindowFocused = false,
+    onFocusRoleChange,
   }: MarkdownCellProps) => {
     // Subscribe to cell data changes using useSyncExternalStore for tearing-safe reads
     const cell = useSyncExternalStore(
@@ -201,11 +215,19 @@ const MarkdownCell = memo(
     // Start in rendered mode unless the cell is empty (new cell)
     const [rendered, setRendered] = useState(() => {
       const value = cell?.value ?? "";
+      if (value.trim() && isActiveCell && activeFocusRole === "editor") {
+        return false;
+      }
       return value.trim().length > 0;
     });
+    const renderedRef = useRef<HTMLDivElement | null>(null);
+    const previousShouldOwnFocusRef = useRef(false);
+    const [editorFocusIntent, setEditorFocusIntent] = useState(false);
+    const [renderedFocusIntent, setRenderedFocusIntent] = useState(false);
 
     // Get the current cell value
     const value = cell?.value ?? "";
+    const shouldOwnFocus = isActiveCell && isWindowFocused;
 
     // Enforce invariant: empty cells must be in edit mode.
     // This handles external changes (undo/redo, sync) that clear the value.
@@ -218,15 +240,54 @@ const MarkdownCell = memo(
     useEffect(() => {
       if (forceEditRequest > 0) {
         setRendered(false);
+        setEditorFocusIntent(true);
       }
     }, [forceEditRequest]);
+
+    useEffect(() => {
+      if (!editorFocusIntent || rendered) {
+        return;
+      }
+      setEditorFocusIntent(false);
+    }, [editorFocusIntent, rendered]);
+
+    useEffect(() => {
+      if (!renderedFocusIntent || !rendered) {
+        return;
+      }
+      renderedRef.current?.focus();
+      setRenderedFocusIntent(false);
+    }, [rendered, renderedFocusIntent]);
+
+    useEffect(() => {
+      const previouslyOwnedFocus = previousShouldOwnFocusRef.current;
+      previousShouldOwnFocusRef.current = shouldOwnFocus;
+      if (!shouldOwnFocus || previouslyOwnedFocus) {
+        return;
+      }
+      if (activeFocusRole === "editor" || !value.trim()) {
+        setRendered(false);
+        return;
+      }
+      setRendered(true);
+      renderedRef.current?.focus();
+    }, [activeFocusRole, shouldOwnFocus, value]);
+
+    useEffect(() => {
+      if (!shouldOwnFocus || activeFocusRole !== "rendered" || !rendered) {
+        return;
+      }
+      renderedRef.current?.focus();
+    }, [activeFocusRole, rendered, shouldOwnFocus]);
 
     /**
      * Handle switching to edit mode when user double-clicks rendered content.
      */
     const handleDoubleClick = useCallback(() => {
       setRendered(false);
-    }, []);
+      setEditorFocusIntent(true);
+      onFocusRoleChange?.("editor");
+    }, [onFocusRoleChange]);
 
     /**
      * Handle keyboard activation on the rendered container for accessibility.
@@ -243,9 +304,11 @@ const MarkdownCell = memo(
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           setRendered(false);
+          setEditorFocusIntent(true);
+          onFocusRoleChange?.("editor");
         }
       },
-      []
+      [onFocusRoleChange]
     );
 
     /**
@@ -264,8 +327,9 @@ const MarkdownCell = memo(
           return;
         }
         setRendered(true);
+        onFocusRoleChange?.("rendered");
       },
-      [value]
+      [onFocusRoleChange, value]
     );
 
     /**
@@ -278,10 +342,12 @@ const MarkdownCell = memo(
           // Only render if there's content; empty cells stay in edit mode
           if (value.trim()) {
             setRendered(true);
+            setRenderedFocusIntent(true);
+            onFocusRoleChange?.("rendered");
           }
         }
       },
-      [value]
+      [onFocusRoleChange, value]
     );
 
     /**
@@ -306,6 +372,7 @@ const MarkdownCell = memo(
     const handleRun = useCallback(() => {
       if (value.trim()) {
         setRendered(true);
+        setRenderedFocusIntent(true);
       }
     }, [value]);
 
@@ -348,10 +415,13 @@ const MarkdownCell = memo(
             className="cursor-text rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
             onDoubleClick={handleDoubleClick}
             onKeyDown={handleRenderedKeyDown}
+            ref={renderedRef}
             tabIndex={0}
             role="button"
             aria-label="Double-click or press Enter to edit markdown"
             data-testid="markdown-rendered"
+            data-cell-focus-role="rendered"
+            onFocus={() => onFocusRoleChange?.("rendered")}
           >
             {renderedMarkdown}
           </div>
@@ -363,6 +433,7 @@ const MarkdownCell = memo(
             onBlur={handleBlur}
             onKeyDown={handleEditorKeyDown}
             data-testid="markdown-editor"
+            data-cell-focus-role="editor"
           >
             <Editor
               id={`md-editor-${cell.refId}`}
@@ -370,6 +441,12 @@ const MarkdownCell = memo(
               language="markdown"
               fontSize={fontSettings.fontSize}
               fontFamily={fontSettings.fontFamily}
+              shouldFocus={
+                !rendered &&
+                ((shouldOwnFocus && activeFocusRole === "editor") ||
+                  editorFocusIntent)
+              }
+              onFocus={() => onFocusRoleChange?.("editor")}
               onChange={handleEditorChange}
               onEnter={handleRun}
             />
@@ -399,8 +476,16 @@ const MarkdownCell = memo(
     );
   },
   (prevProps, nextProps) => {
-    // Skip re-render if the cellData reference hasn't changed
-    return prevProps.cellData === nextProps.cellData;
+    return (
+      prevProps.cellData === nextProps.cellData &&
+      prevProps.selectedLanguage === nextProps.selectedLanguage &&
+      prevProps.languageSelectId === nextProps.languageSelectId &&
+      prevProps.forceEditRequest === nextProps.forceEditRequest &&
+      prevProps.isActiveCell === nextProps.isActiveCell &&
+      prevProps.activeFocusRole === nextProps.activeFocusRole &&
+      prevProps.isWindowFocused === nextProps.isWindowFocused &&
+      prevProps.onFocusRoleChange === nextProps.onFocusRoleChange
+    );
   }
 );
 

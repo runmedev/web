@@ -415,4 +415,29 @@ describe("Action component", () => {
     expect(runnerSelect).toBeNull();
     expect(kernelSelect).toBeTruthy();
   });
+
+  it("ignores focus on rendered markdown controls that are outside a focus-role surface", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-md-rendered-controls",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "hello",
+    });
+    const stub = new StubCellData(cell);
+    const onFocusStateChange = vi.fn();
+
+    render(
+      <Action
+        cellData={stub as unknown as CellData}
+        isFirst={false}
+        onFocusStateChange={onFocusStateChange}
+      />,
+    );
+
+    fireEvent.focus(screen.getByRole("button", { name: "Delete cell" }));
+
+    expect(onFocusStateChange).not.toHaveBeenCalled();
+  });
 });

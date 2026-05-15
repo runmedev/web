@@ -30,6 +30,14 @@ import HtmlCell from "./HtmlCell";
 import MarkdownCell from "./MarkdownCell";
 import { IOPUB_INCOMPLETE_METADATA_KEY } from "../../lib/ipykernel";
 import { appLogger } from "../../lib/logging/runtime";
+import {
+  createNotebookActiveCellState,
+  loadNotebookActiveCellMap,
+  persistNotebookActiveCellMap,
+  type CellFocusRole,
+  type NotebookActiveCellMap,
+  type NotebookActiveCellState,
+} from "../../lib/notebookActiveCellState";
 import { copyNotebookShareUrl } from "../../lib/shareLinks";
 import { isHtmlLanguageId, isMarkdownLanguageId } from "../../lib/cellContent";
 import {
@@ -497,12 +505,20 @@ export function ActionOutputItems({ outputs }: { outputs: parser_pb.CellOutput[]
 
 export function Action({
   cellData,
-  docUri,
+  docUri = "",
   isFirst,
+  isActiveCell = false,
+  activeFocusRole = "editor",
+  isWindowFocused = false,
+  onFocusStateChange,
 }: {
   cellData: CellData;
-  docUri: string;
+  docUri?: string;
   isFirst: boolean;
+  isActiveCell?: boolean;
+  activeFocusRole?: CellFocusRole;
+  isWindowFocused?: boolean;
+  onFocusStateChange?: (state: NotebookActiveCellState) => void;
 }) {
   const { store } = useNotebookStore();
   const { listRunners, defaultRunnerName } = useRunners();
@@ -636,6 +652,48 @@ export function Action({
       setContextMenu({ x: event.clientX, y: event.clientY });
     },
     [],
+  );
+
+  const handleFocusCapture = useCallback(
+    (event: React.FocusEvent<HTMLDivElement>) => {
+      if (!cell?.refId || !onFocusStateChange) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      const focusRoleElement = target.closest<HTMLElement>(
+        "[data-cell-focus-role]",
+      );
+      if (!focusRoleElement) {
+        return;
+      }
+      const focusRole =
+        focusRoleElement.dataset.cellFocusRole === "rendered"
+          ? "rendered"
+          : "editor";
+      const nextState = createNotebookActiveCellState(cell.refId, focusRole);
+      if (!nextState) {
+        return;
+      }
+      onFocusStateChange(nextState);
+    },
+    [cell?.refId, onFocusStateChange],
+  );
+
+  const handleMarkdownFocusRoleChange = useCallback(
+    (focusRole: CellFocusRole) => {
+      if (!cell?.refId || !onFocusStateChange) {
+        return;
+      }
+      const nextState = createNotebookActiveCellState(cell.refId, focusRole);
+      if (!nextState) {
+        return;
+      }
+      onFocusStateChange(nextState);
+    },
+    [cell?.refId, onFocusStateChange],
   );
 
   const handleRemoveCell = useCallback(() => {
@@ -997,7 +1055,9 @@ export function Action({
         id={`markdown-action-${cell.refId}`}
         className="group/cell relative flex min-w-0"
         onContextMenu={handleContextMenu}
+        onFocusCapture={handleFocusCapture}
         data-testid="markdown-action"
+        data-cell-ref-id={cell.refId}
       >
         {/* Left gutter: top + bottom add-cell buttons */}
         <div id={`markdown-gutter-${cell.refId}`} className="flex w-7 shrink-0 flex-col items-center justify-between py-1">
@@ -1028,6 +1088,10 @@ export function Action({
               languageOptions={LANGUAGE_OPTIONS}
               onLanguageChange={handleLanguageChange}
               forceEditRequest={markdownEditRequest}
+              isActiveCell={isActiveCell}
+              activeFocusRole={activeFocusRole}
+              isWindowFocused={isWindowFocused}
+              onFocusRoleChange={handleMarkdownFocusRoleChange}
             />
             {/* Trash icon on the right, visible on hover */}
             <button
@@ -1168,7 +1232,9 @@ export function Action({
       id={`code-action-${cell.refId}`}
       className="group/cell relative flex"
       onContextMenu={handleContextMenu}
+      onFocusCapture={handleFocusCapture}
       data-testid="code-action"
+      data-cell-ref-id={cell.refId}
     >
       {/* Left gutter: top + bottom add-cell buttons */}
       <div id={`code-gutter-${cell.refId}`} className="flex w-7 shrink-0 flex-col items-center justify-between py-1">
@@ -1197,7 +1263,10 @@ export function Action({
           className="cell-card"
         >
           {/* Code editor section — overflow-hidden keeps border-radius clipping on the editor */}
-          <div className="overflow-hidden rounded-t-nb-md">
+          <div
+            className="overflow-hidden rounded-t-nb-md"
+            data-cell-focus-role="editor"
+          >
             <Editor
               key={`editor-${cell.refId}-${selectedLanguage}`}
               id={cell.refId}
@@ -1205,6 +1274,7 @@ export function Action({
               language={editorLanguage}
               fontSize={fontSettings.fontSize}
               fontFamily={fontSettings.fontFamily}
+              shouldFocus={isActiveCell && isWindowFocused}
               onChange={(v) => {
                 const updated = create(parser_pb.CellSchema, cell);
                 updated.value = v;
@@ -1387,7 +1457,17 @@ export function Action({
   );
 }
 
-function NotebookTabContent({ docUri }: { docUri: string }) {
+function NotebookTabContent({
+  docUri,
+  activeCell,
+  isWindowFocused,
+  onCellFocus,
+}: {
+  docUri: string;
+  activeCell: NotebookActiveCellState | null;
+  isWindowFocused: boolean;
+  onCellFocus: (docUri: string, state: NotebookActiveCellState) => void;
+}) {
   const { getNotebookData, useNotebookSnapshot } = useNotebookContext();
   const notebookSnapshot = useNotebookSnapshot(docUri);
   const cellDatas = useMemo(() => {
@@ -1446,6 +1526,10 @@ function NotebookTabContent({ docUri }: { docUri: string }) {
                   cellData={cellData}
                   docUri={docUri}
                   isFirst={index === 0}
+                  isActiveCell={activeCell?.refId === refId}
+                  activeFocusRole={activeCell?.focusRole ?? "editor"}
+                  isWindowFocused={isWindowFocused}
+                  onFocusStateChange={(state) => onCellFocus(docUri, state)}
                 />
               );
             })}
@@ -1480,6 +1564,15 @@ export default function Actions() {
     Boolean(driveLinkSnapshot.lastErrorMessage);
   const [mountedTabs, setMountedTabs] = useState<Set<string>>(() => new Set());
   const [selectedTabUri, setSelectedTabUri] = useState<string | null>(null);
+  const [activeCellsByDoc, setActiveCellsByDoc] = useState<NotebookActiveCellMap>(
+    () => loadNotebookActiveCellMap(),
+  );
+  const [isWindowFocused, setIsWindowFocused] = useState(() => {
+    if (typeof document === "undefined") {
+      return false;
+    }
+    return document.visibilityState === "visible" && document.hasFocus();
+  });
   // Empty-state hint visibility is stored locally so the hint panel can be
   // revealed on demand without cluttering the default view.
   const [showConsoleHints, setShowConsoleHints] = useState(false);
@@ -1527,6 +1620,27 @@ export default function Actions() {
     currentDocUri ??
     (statusTabVisible ? DRIVE_LINK_STATUS_TAB_URI : openNotebooks[0]?.uri ?? "");
 
+  const handleCellFocus = useCallback(
+    (docUri: string, state: NotebookActiveCellState) => {
+      setActiveCellsByDoc((prev) => {
+        const current = prev[docUri];
+        if (
+          current?.refId === state.refId &&
+          current.focusRole === state.focusRole
+        ) {
+          return prev;
+        }
+        const next = {
+          ...prev,
+          [docUri]: state,
+        };
+        persistNotebookActiveCellMap(next);
+        return next;
+      });
+    },
+    [],
+  );
+
   // Ensure the active tab is tracked as mounted on first render/whenever it changes.
   useEffect(() => {
     if (!currentDocUri) {
@@ -1555,6 +1669,28 @@ export default function Actions() {
       setSelectedTabUri(currentDocUri ?? openNotebooks[0]?.uri ?? null);
     }
   }, [currentDocUri, openNotebooks, selectedTabUri, statusTabVisible]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      return;
+    }
+
+    const syncWindowFocus = () => {
+      setIsWindowFocused(
+        document.visibilityState === "visible" && document.hasFocus(),
+      );
+    };
+
+    syncWindowFocus();
+    window.addEventListener("focus", syncWindowFocus);
+    window.addEventListener("blur", syncWindowFocus);
+    document.addEventListener("visibilitychange", syncWindowFocus);
+    return () => {
+      window.removeEventListener("focus", syncWindowFocus);
+      window.removeEventListener("blur", syncWindowFocus);
+      document.removeEventListener("visibilitychange", syncWindowFocus);
+    };
+  }, []);
 
   // Keep the active tab discoverable when the tab rail overflows horizontally.
   // We track each rendered tab node and ask the browser to reveal the selected
@@ -2001,7 +2137,14 @@ export default function Actions() {
               asChild
             >
               <TabPanel className="flex-1 min-h-0" data-document-id={doc.uri}>
-                <NotebookTabContent docUri={doc.uri} />
+                <NotebookTabContent
+                  docUri={doc.uri}
+                  activeCell={activeCellsByDoc[doc.uri] ?? null}
+                  isWindowFocused={
+                    isWindowFocused && resolvedSelectedTabUri === doc.uri
+                  }
+                  onCellFocus={handleCellFocus}
+                />
               </TabPanel>
             </Tabs.Content>
           ))}
