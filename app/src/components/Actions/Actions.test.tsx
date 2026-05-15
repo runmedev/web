@@ -324,6 +324,25 @@ describe("Action component", () => {
     expect(screen.queryByLabelText("Run code")).toBeNull();
   });
 
+  it("switches rendered html cells back to edit mode on Escape", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-html-escape",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "html",
+      outputs: [],
+      metadata: {},
+      value: "<div><strong>Hello HTML</strong></div>",
+    });
+    const stub = new StubCellData(cell);
+
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
+
+    const rendered = screen.getByTestId("html-rendered");
+    fireEvent.keyDown(rendered, { key: "Escape" });
+
+    expect(screen.getByTestId("html-editor")).toBeTruthy();
+  });
+
   it("shows browser/sandbox runner selector for javascript cells", () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-runner-select",

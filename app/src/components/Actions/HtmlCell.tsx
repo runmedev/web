@@ -67,7 +67,7 @@ const HtmlCell = memo(
         if (event.target !== event.currentTarget) {
           return;
         }
-        if (event.key === "Enter" || event.key === " ") {
+        if (event.key === "Enter" || event.key === " " || event.key === "Escape") {
           event.preventDefault();
           setRendered(false);
         }
@@ -146,7 +146,7 @@ const HtmlCell = memo(
             onKeyDown={handleRenderedKeyDown}
             tabIndex={0}
             role="button"
-            aria-label="Press Enter to edit HTML"
+            aria-label="Press Enter, Space, or Escape to edit HTML"
             data-testid="html-rendered"
           >
             <div className="flex items-center justify-between border-b border-nb-border bg-nb-surface-2 px-3 py-2">
