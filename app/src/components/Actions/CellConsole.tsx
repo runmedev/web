@@ -23,6 +23,8 @@ export const fontSettings = {
 
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
+const stdinHelpText =
+  "Send one line of standard input to the running process. This control is available while the process is active, even if it is not currently waiting for input.";
 
 function decodeOutputs(outputs: parser_pb.CellOutput[]): string {
   const parts: string[] = [];
@@ -253,8 +255,16 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
           data-testid="cell-stdin-form"
           onSubmit={handleSubmit}
         >
-          <div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-[#8a5a2b]">
-            Waiting for input
+          <div className="mb-2 flex items-center gap-2 text-[10px] font-medium uppercase tracking-wide text-[#8a5a2b]">
+            <span>Provide input</span>
+            <button
+              type="button"
+              aria-label={stdinHelpText}
+              className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[#c9b08f] bg-white text-[10px] leading-none text-[#8a5a2b]"
+              title={stdinHelpText}
+            >
+              ?
+            </button>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <input

@@ -181,6 +181,10 @@ describe("CellConsole", () => {
 
     const input = screen.getByTestId("cell-stdin-input") as HTMLInputElement;
     const submit = screen.getByTestId("cell-stdin-submit") as HTMLButtonElement;
+    expect(screen.getByText("Provide input")).toBeTruthy();
+    expect(
+      screen.getByLabelText(/Send one line of standard input to the running process/),
+    ).toBeTruthy();
     expect(submit.disabled).toBe(true);
 
     await act(async () => {
