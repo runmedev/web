@@ -77,7 +77,7 @@ describe('serializeNotebookToMarkdown', () => {
     )
   })
 
-  it('serializes html cells as authored content instead of fenced code', () => {
+  it('serializes html cells as fenced code to preserve the language id', () => {
     const notebook = create(parser_pb.NotebookSchema, {
       cells: [
         create(parser_pb.CellSchema, {
@@ -89,7 +89,9 @@ describe('serializeNotebookToMarkdown', () => {
     })
 
     expect(serializeNotebookToMarkdown(notebook)).toBe(
-      '<div><svg><text>Hello</text></svg></div>\n'
+      ['```html', '<div><svg><text>Hello</text></svg></div>', '```', ''].join(
+        '\n'
+      )
     )
   })
 

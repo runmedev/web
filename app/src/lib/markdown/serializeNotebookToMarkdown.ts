@@ -1,5 +1,5 @@
 import { MimeType, parser_pb } from '../../runme/client'
-import { isHtmlLanguageId, isMarkdownLanguageId } from '../cellContent'
+import { isMarkdownLanguageId } from '../cellContent'
 
 const IOPUB_MIME_TYPE = 'application/vnd.jupyter.iopub+json'
 
@@ -43,9 +43,7 @@ function isAuthoredContentCell(cell: parser_pb.Cell): boolean {
   if (cell.kind === parser_pb.CellKind.MARKUP) {
     return true
   }
-  return (
-    isMarkdownLanguageId(cell.languageId) || isHtmlLanguageId(cell.languageId)
-  )
+  return isMarkdownLanguageId(cell.languageId)
 }
 
 function normalizeContentCell(value: string): string {

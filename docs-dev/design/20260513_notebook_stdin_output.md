@@ -2,16 +2,17 @@
 
 ## Status
 
-Draft proposal.
+Implemented on this branch. Ready to merge after review.
 
 ## Summary
 
-Notebook code cells should not use raw terminal emulation as the primary UX
-for interactive stdin.
+Notebook code cells should not use raw terminal typing as the primary UX for
+interactive stdin.
 
-We will switch notebook cells to a document-style transcript plus an explicit
-stdin composer. The user will type input into a dedicated field and submit it
-as one write instead of sending every keystroke into a terminal widget.
+This change keeps the live `CellConsole` transcript for active runner-backed
+runs, but replaces terminal-first stdin with an explicit submit-oriented input
+composer. The user types a response into a dedicated field and submits it as
+one write instead of streaming every keystroke into the terminal widget.
 
 This fixes the main failure reported in
 [#99](https://github.com/runmedev/web/issues/99):
@@ -34,7 +35,7 @@ output-rendering cleanup tracked in
 The current notebook cell experience mixes document rendering and terminal
 emulation in a way that is hard to reason about and easy to break.
 
-Today:
+Before this change:
 
 - `Actions.tsx` renders `CellConsole` when a cell has
   `StatefulRunmeTerminal` output or an active stream
@@ -152,8 +153,11 @@ We will use a submit-oriented stdin composer for notebook cells.
 
 We will not use raw terminal typing as the primary notebook input UX.
 
-We will render notebook stdout/stderr from notebook state, not from xterm
-paint state.
+We will keep `CellConsole` as the live transcript surface for active
+runner-backed runs.
+
+We will treat notebook outputs as the persisted source of truth after the run
+completes.
 
 We will ensure notebook output has a single presentation path per run.
 
@@ -192,9 +196,9 @@ That is the wrong abstraction boundary.
 
 ### 1. Replace notebook `CellConsole` input with an explicit stdin composer
 
-When a notebook cell has an active runner stream, the output area should render:
+When a notebook cell has an active runner stream, the output area renders:
 
-- the transcript
+- the live `CellConsole` transcript
 - run status
 - an input composer
 
@@ -220,7 +224,7 @@ right now."
 
 ### 2. Render partial stdout immediately
 
-Generic runner stdout should be appended to the notebook transcript as it
+Generic runner stdout should be written into the live console transcript as it
 arrives.
 
 We should not keep generic stdout in a hidden partial-line buffer waiting for a
@@ -232,19 +236,18 @@ This is the concrete fix for the missing `Password:` prompt.
 
 ### 3. Stop relying on terminal scrollback for notebook history
 
-Notebook transcript rendering should come from notebook outputs, not from xterm
-state.
+Notebook history should not depend on a stale terminal marker.
 
-Once the notebook transcript is rendered directly:
+The merged behavior is:
 
-- console and stdout/stderr duplication goes away because there is only one
-  transcript renderer
-- output is no longer capped by terminal scrollback
-- rerender after reload is exact
-- output testing no longer depends on terminal DOM internals
-- stdout/stderr fallback rendering is always available
+- active runs render exactly one live transcript path via `CellConsole`
+- normal stdout/stderr output items are suppressed only while that live stream
+  is active
+- after the run completes, the active stream is cleared and persisted output
+  items become the notebook-visible history again
 
-This is also the cleanest fix for the “output is cut off” class of bugs.
+This fixes the duplicate-rendering bug and avoids keeping the cell stuck in a
+false "still interactive" state after exit.
 
 ### 4. Keep Jupyter handling separate
 
@@ -263,42 +266,39 @@ stdout path.
 
 `StatefulRunmeTerminal` should not force notebook cells into xterm rendering.
 
-Short term:
+Merged behavior:
 
 - continue to read existing terminal markers so older notebooks still render in
   a compatible way
-- use the marker only as a hint that the cell may have interactive runner
-  behavior
-
-Long term:
-
-- stop using the marker as a model-level rendering switch
-- infer notebook output presentation from notebook output items and active run
-  state instead
+- use the marker only as a compatibility hint for legacy terminal-backed cells
+- do not rely on new runs seeding fresh terminal markers
+- determine live-vs-persisted rendering from active run state and normal output
+  items instead
 
 This aligns with the direction already described in #190.
 
 ## Implementation Plan
 
-### Phase 1: Fix the UX without a backend protocol change
+### Merged change
 
 1. Replace notebook-cell terminal input with a dedicated React stdin composer.
 2. Show that composer for active stdin-capable runs, even without a precise
    `stdinRequested` protocol event.
 3. Route submitted input through `ExecuteRequest.inputData`.
-4. Render generic runner stdout/stderr directly from notebook outputs.
+4. Keep the live transcript in `CellConsole` while the run is active.
 5. Remove newline-delayed buffering from the generic runner stdout path.
 6. Remove the split policy where active-stream cells render `CellConsole` while
    stdout/stderr suppression still depends on terminal markers.
-7. Stop depending on `console-view` scrollback for notebook output visibility.
+7. Clear the cached active stream on exit/error so the cell falls back to
+   persisted output items after completion.
 8. Ensure notebook cells choose one transcript renderer, not both.
 9. Keep Jupyter behavior unchanged.
 
-This phase should solve the practical user problem in #99.
+This is the change we intend to merge for #99.
 
-### Phase 2: Add optional explicit stdin request metadata
+### Future work to consider
 
-Phase 1 makes stdin usable. It does not make it precise.
+The merged change makes stdin usable. It does not make it precise.
 
 The remaining gap is prompt semantics. The UI still cannot know:
 
@@ -324,7 +324,7 @@ That would let the UI show:
 - a masked field when `echo === false`
 - better affordances for non-default submission behavior
 
-This is useful future work, but it should not block Phase 1.
+This is useful future work, but it is not required for the merged change.
 
 ## Affected Areas
 
@@ -336,8 +336,9 @@ The change will primarily affect:
 
 Expected structural changes:
 
-- move notebook stdin UI into a React component instead of `console-view`
-- limit generic runner stream handling to transcript updates
+- move notebook stdin UI into a React component adjacent to `CellConsole`
+- limit generic runner stream handling to live transcript updates plus normal
+  persisted outputs
 - keep any protocol-specific parsing scoped to the protocol that needs it
 
 ## Password Prompts
@@ -416,7 +417,7 @@ done
 
 Expected behavior:
 
-- the notebook view shows the full transcript after completion
+- the notebook view shows the full persisted transcript after completion
 - reload preserves the full transcript
 
 3. Interactive cell rerun:
@@ -439,6 +440,8 @@ Expected behavior:
   line-oriented in v1?
 - Should the composer stay visible for the full duration of an active run, or
   only after we have backend `stdinRequested` metadata?
+- Should we eventually stop rendering legacy `StatefulRunmeTerminal` output in
+  notebook cells once migration coverage is good enough?
 
 ## Recommendation
 
