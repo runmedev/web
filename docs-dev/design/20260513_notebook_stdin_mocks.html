@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Notebook stdin UX mocks</title>
+    <style>
+      :root {
+        --bg: #f3efe6;
+        --paper: #fffdf8;
+        --paper-2: #f8f4ec;
+        --ink: #1e1c18;
+        --muted: #6f685e;
+        --border: #d8cec0;
+        --border-strong: #b7ab98;
+        --accent: #9f4d2f;
+        --accent-soft: #f3d9cc;
+        --success: #2f6b4f;
+        --warning: #7c5b12;
+        --shadow: 0 14px 40px rgba(42, 31, 18, 0.08);
+        --mono: "SFMono-Regular", "Menlo", "Consolas", monospace;
+        --sans: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at top left, rgba(159, 77, 47, 0.12), transparent 32rem),
+          linear-gradient(180deg, #f6f1e8 0%, var(--bg) 100%);
+        color: var(--ink);
+        font-family: var(--sans);
+      }
+
+      .page {
+        width: min(1200px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 40px 0 72px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      .hero {
+        display: grid;
+        gap: 12px;
+        margin-bottom: 28px;
+      }
+
+      .eyebrow {
+        color: var(--accent);
+        font: 700 12px/1.2 var(--mono);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .hero h1 {
+        font-size: clamp(32px, 4vw, 52px);
+        line-height: 0.96;
+        letter-spacing: -0.03em;
+      }
+
+      .hero p {
+        max-width: 820px;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.5;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 18px;
+      }
+
+      .mock {
+        display: grid;
+        gap: 14px;
+        background: rgba(255, 255, 255, 0.58);
+        border: 1px solid rgba(183, 171, 152, 0.6);
+        border-radius: 24px;
+        padding: 18px;
+        backdrop-filter: blur(8px);
+        box-shadow: var(--shadow);
+      }
+
+      .mock header {
+        display: grid;
+        gap: 6px;
+      }
+
+      .mock h2 {
+        font-size: 22px;
+        line-height: 1.08;
+      }
+
+      .mock .subtitle {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.45;
+      }
+
+      .notebook {
+        background: var(--paper);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        overflow: hidden;
+      }
+
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 10px 14px;
+        background: linear-gradient(180deg, #fdfbf6 0%, #f6efe4 100%);
+        border-bottom: 1px solid var(--border);
+        color: var(--muted);
+        font: 600 12px/1.2 var(--mono);
+      }
+
+      .toolbar .pill {
+        padding: 4px 8px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.85);
+      }
+
+      .cell {
+        display: grid;
+        grid-template-columns: 64px minmax(0, 1fr);
+        align-items: start;
+      }
+
+      .prompt-col {
+        padding: 16px 10px 16px 16px;
+        color: #847968;
+        font: 700 12px/1.3 var(--mono);
+        text-align: right;
+      }
+
+      .cell-body {
+        min-width: 0;
+        padding: 14px 16px 18px 6px;
+      }
+
+      .code {
+        margin: 0;
+        padding: 12px 14px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: #fbf8f2;
+        color: #27231d;
+        font: 14px/1.55 var(--mono);
+        white-space: pre-wrap;
+      }
+
+      .output-block {
+        margin-top: 12px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--paper-2);
+        overflow: hidden;
+      }
+
+      .stream {
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(216, 206, 192, 0.75);
+        font: 14px/1.5 var(--mono);
+        white-space: pre-wrap;
+      }
+
+      .stream:last-child {
+        border-bottom: 0;
+      }
+
+      .stream.stderr {
+        color: #8a2f2f;
+      }
+
+      .stream.stdin {
+        background: #fff6ef;
+      }
+
+      .stdin-inline {
+        display: grid;
+        gap: 10px;
+        padding: 12px 14px;
+        background: linear-gradient(180deg, #fffaf4 0%, #fff4ea 100%);
+        border-top: 1px solid rgba(216, 206, 192, 0.8);
+      }
+
+      .stdin-prompt {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        color: #503f2d;
+        font: 14px/1.45 var(--mono);
+      }
+
+      .stdin-prompt .badge {
+        flex: 0 0 auto;
+        padding: 3px 6px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .stdin-row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .stdin-row input {
+        width: 100%;
+        min-width: 0;
+        height: 40px;
+        padding: 0 12px;
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        background: #fffefc;
+        color: var(--ink);
+        font: 14px/1 var(--mono);
+      }
+
+      .stdin-row input[type="password"] {
+        letter-spacing: 0.14em;
+      }
+
+      .stdin-row button,
+      .action-chip {
+        border: 0;
+        border-radius: 12px;
+        background: var(--accent);
+        color: #fff7f1;
+        padding: 10px 14px;
+        font: 700 12px/1 var(--mono);
+        letter-spacing: 0.02em;
+      }
+
+      .action-chip.secondary {
+        background: #ece3d6;
+        color: #604f3d;
+      }
+
+      .helper {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .banner {
+        margin-top: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 12px;
+        border: 1px solid #e7c991;
+        border-radius: 14px;
+        background: linear-gradient(180deg, #fff8e6 0%, #ffefc0 100%);
+        color: #6a4f13;
+        font: 700 12px/1.4 var(--mono);
+      }
+
+      .legend {
+        display: grid;
+        gap: 8px;
+        padding: 14px;
+        border: 1px dashed var(--border-strong);
+        border-radius: 16px;
+        background: rgba(255, 253, 248, 0.72);
+      }
+
+      .legend h3 {
+        font-size: 14px;
+        font-family: var(--mono);
+      }
+
+      .legend ul {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .footer-note {
+        margin-top: 24px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      @media (max-width: 720px) {
+        .cell {
+          grid-template-columns: 1fr;
+        }
+
+        .prompt-col {
+          padding: 14px 16px 0;
+          text-align: left;
+        }
+
+        .cell-body {
+          padding-left: 16px;
+        }
+
+        .stdin-row {
+          flex-direction: column;
+          align-items: stretch;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <div class="eyebrow">Mock Study</div>
+        <h1>Notebook stdin UX directions</h1>
+        <p>
+          These mocks compare what upstream Jupyter does today with a more explicit
+          notebook-native input flow for Runme. All three keep stdin inside the cell
+          output area. The difference is how obvious the waiting state is and whether
+          input feels like a terminal or a form submission.
+        </p>
+      </section>
+
+      <section class="grid">
+        <article class="mock">
+          <header>
+            <h2>Mock A: JupyterLab / Notebook 7 style</h2>
+            <p class="subtitle">
+              Inline stdin widget inside the output area. Prompt text and input live
+              together as part of cell output.
+            </p>
+          </header>
+          <div class="notebook">
+            <div class="toolbar">
+              <span class="pill">Notebook 7 / JupyterLab</span>
+              <span>kernel: Python 3</span>
+            </div>
+            <div class="cell">
+              <div class="prompt-col">In&nbsp;[12]:</div>
+              <div class="cell-body">
+                <pre class="code">name = input("Name: ")
+print(f"Hello {name}")</pre>
+                <div class="output-block">
+                  <div class="stdin-inline">
+                    <div class="stdin-prompt">
+                      <span>Name:&nbsp;</span>
+                    </div>
+                    <div class="stdin-row">
+                      <input value="Ada" aria-label="stdin input" />
+                    </div>
+                  </div>
+                  <div class="stream stdin">Name: Ada</div>
+                  <div class="stream">Hello Ada</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="legend">
+            <h3>Why teams copy this</h3>
+            <ul>
+              <li>It matches upstream behavior closely.</li>
+              <li>It keeps input in the transcript instead of in a separate terminal.</li>
+              <li>It works for ordinary `input()` prompts and debugger input.</li>
+            </ul>
+          </div>
+        </article>
+
+        <article class="mock">
+          <header>
+            <h2>Mock B: Runme proposed v1</h2>
+            <p class="subtitle">
+              More explicit waiting state. Prompt stays in the transcript, but the
+              editable input is a clearer submit box with a button.
+            </p>
+          </header>
+          <div class="notebook">
+            <div class="toolbar">
+              <span class="pill">Runme notebook</span>
+              <span>runner: bash</span>
+            </div>
+            <div class="cell">
+              <div class="prompt-col">In&nbsp;[7]:</div>
+              <div class="cell-body">
+                <pre class="code">printf "Continue? [y/N] "
+read -r answer
+printf "\nanswer=%s\n" "$answer"</pre>
+                <div class="output-block">
+                  <div class="stream">Continue? [y/N] </div>
+                  <div class="stdin-inline">
+                    <div class="stdin-prompt">
+                      <span class="badge">Waiting</span>
+                      <span>Process is blocked on stdin.</span>
+                    </div>
+                    <div class="stdin-row">
+                      <input placeholder="Type one response and press Enter" aria-label="stdin input" />
+                      <button>Send</button>
+                    </div>
+                    <div class="helper">
+                      One submit sends a single stdin write ending with a newline.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="legend">
+            <h3>Why this is stronger for Runme</h3>
+            <ul>
+              <li>The waiting state is explicit instead of implied by cursor focus.</li>
+              <li>It avoids terminal-style key-by-key UX inside notebook cells.</li>
+              <li>It scales better to browser tests and automation.</li>
+            </ul>
+          </div>
+        </article>
+
+        <article class="mock">
+          <header>
+            <h2>Mock C: Password-safe variant</h2>
+            <p class="subtitle">
+              Same inline model, but with a masked field when the runtime can say
+              the prompt should not echo.
+            </p>
+          </header>
+          <div class="notebook">
+            <div class="toolbar">
+              <span class="pill">Secret input</span>
+              <span>runner: shell</span>
+            </div>
+            <div class="cell">
+              <div class="prompt-col">In&nbsp;[19]:</div>
+              <div class="cell-body">
+                <pre class="code">sudo something-that-prompts</pre>
+                <div class="banner">
+                  <span>stdin requested</span>
+                  <span>echo disabled</span>
+                </div>
+                <div class="output-block">
+                  <div class="stream">Xcode Command Line Tools is already installed.
+Password: </div>
+                  <div class="stdin-inline">
+                    <div class="stdin-prompt">
+                      <span class="badge">Secure</span>
+                      <span>Password input is masked and not echoed into output.</span>
+                    </div>
+                    <div class="stdin-row">
+                      <input type="password" value="hunter2" aria-label="password stdin input" />
+                      <button>Send</button>
+                    </div>
+                    <div class="helper">
+                      This needs an explicit backend signal. The UI should not guess.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="legend">
+            <h3>Boundary</h3>
+            <ul>
+              <li>This is only viable if the runtime tells us `password=true` or `echo=false`.</li>
+              <li>Without that signal, notebook stdin should stay visible text only.</li>
+              <li>If we need raw TTY behavior, it belongs in a real terminal surface.</li>
+            </ul>
+          </div>
+        </article>
+      </section>
+
+      <p class="footer-note">
+        File path:
+        <code>/Users/jlewi/.codex/worktrees/5ff2/web/docs-dev/design/20260513_notebook_stdin_mocks.html</code>
+      </p>
+    </main>
+  </body>
+</html>

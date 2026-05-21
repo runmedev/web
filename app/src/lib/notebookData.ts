@@ -135,6 +135,7 @@ export type StreamBinder = (args: {
     cell: parser_pb.Cell,
     options?: { transient?: boolean },
   ) => void;
+  onClose?: (refId: string) => void;
 }) => { dispose(): void };
 
 /**
@@ -150,6 +151,7 @@ export const bindStreamsToCell: StreamBinder = ({
   streams,
   getCell,
   updateCell,
+  onClose,
 }) => {
   // Track the most recent error toast so we don't spam the user during
   // repeated reconnect attempts for the same cell run.
@@ -163,6 +165,7 @@ export const bindStreamsToCell: StreamBinder = ({
   let stdoutBuffer = "";
   const textDecoder = new TextDecoder();
   const textEncoder = new TextEncoder();
+  let finished = false;
 
   const appendBuffer = (mime: MimeType, chunk: Uint8Array) => {
     const updated = getCell(refId);
@@ -345,6 +348,16 @@ export const bindStreamsToCell: StreamBinder = ({
     }
   };
 
+  const finish = () => {
+    if (finished) {
+      return;
+    }
+    finished = true;
+    onClose?.(refId);
+    streams.close();
+    subs.forEach((s) => s.unsubscribe());
+  };
+
   const subs = [
     streams.stdout.subscribe((data) => appendStdoutChunk(data)),
     streams.stderr.subscribe((data) =>
@@ -364,8 +377,7 @@ export const bindStreamsToCell: StreamBinder = ({
       updateCell(updated);
       flushStdoutBuffer();
       finalizeIopubStream();
-      streams.close();
-      subs.forEach((s) => s.unsubscribe());
+      finish();
     }),
     streams.mimeType.subscribe(() => {
       // no-op for now
@@ -383,8 +395,7 @@ export const bindStreamsToCell: StreamBinder = ({
       }
       flushStdoutBuffer();
       finalizeIopubStream();
-      streams.close();
-      subs.forEach((s) => s.unsubscribe());
+      finish();
     }),
   ];
 
@@ -392,8 +403,7 @@ export const bindStreamsToCell: StreamBinder = ({
 
   return {
     dispose() {
-      subs.forEach((s) => s.unsubscribe());
-      streams.close();
+      finish();
     },
   };
 };
@@ -802,7 +812,16 @@ export class NotebookData {
 
   getActiveStream(refId: string): StreamsLike | undefined {
     const existing = this.activeStreams.get(refId);
+    const cell = this.getCellProto(refId);
+    const metadata = cell?.metadata ?? {};
+    const hasExitCode =
+      typeof metadata[RunmeMetadataKey.ExitCode] === "string" &&
+      metadata[RunmeMetadataKey.ExitCode].length > 0;
     if (existing) {
+      if (hasExitCode) {
+        this.activeStreams.delete(refId);
+        return undefined;
+      }
       return existing;
     }
 
@@ -810,14 +829,9 @@ export class NotebookData {
     // If there is a PID and lastRunID is set but no exit code we interpret that
     // as an active run.
 
-    const cell = this.getCellProto(refId);
-    const metadata = cell?.metadata ?? {};
     const hasPid =
       typeof metadata[RunmeMetadataKey.Pid] === "string" &&
       metadata[RunmeMetadataKey.Pid].length > 0;
-    const hasExitCode =
-      typeof metadata[RunmeMetadataKey.ExitCode] === "string" &&
-      metadata[RunmeMetadataKey.ExitCode].length > 0;
     const runID =
       typeof metadata[RunmeMetadataKey.LastRunID] === "string"
         ? metadata[RunmeMetadataKey.LastRunID]
@@ -1479,6 +1493,9 @@ export class NotebookData {
       streams,
       getCell: (ref) => this.getCellProto(ref),
       updateCell: (next, options) => this.updateCell(next, options),
+      onClose: (refId) => {
+        this.activeStreams.delete(refId);
+      },
     });
 
     return streams;

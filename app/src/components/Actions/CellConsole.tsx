@@ -1,6 +1,7 @@
 import {
   useEffect,
   useRef,
+  useState,
   useSyncExternalStore,
   type MutableRefObject,
 } from "react";
@@ -10,47 +11,20 @@ import {
   ExecuteRequestSchema,
   WinsizeSchema,
 } from "@buf/stateful_runme.bufbuild_es/runme/runner/v2/runner_pb";
-import { ClientMessages, setContext } from "@runmedev/renderers";
+import { ClientMessages } from "@runmedev/renderers";
 
 import { MimeType, RunmeMetadataKey, parser_pb } from "../../runme/client";
 import { CellData } from "../../lib/notebookData";
-import { maybeParseIPykernelMessage, type IPykernelMessage } from "../../lib/ipykernel";
 
 export const fontSettings = {
   fontSize: 12.6,
   fontFamily: "Fira Mono, monospace",
 };
 
-/**
- * Extract displayable text from an IPykernel message.
- * - "stream" messages contain print() output in content.text
- * - "error" messages contain exception info in content.ename/evalue/traceback
- * Returns the text to write to the terminal, or null if the message
- * is a control message that should be silently ignored.
- */
-function extractIopubText(msg: IPykernelMessage): string | null {
-  const msgType = msg.header?.msg_type ?? (msg as any).msg_type;
-
-  if (msgType === "stream") {
-    const text = typeof msg.content?.text === "string" ? msg.content.text : "";
-    return text || null;
-  }
-
-  if (msgType === "error") {
-    const ename = (msg.content as any)?.ename ?? "";
-    const evalue = (msg.content as any)?.evalue ?? "";
-    const traceback: string[] = Array.isArray((msg.content as any)?.traceback)
-      ? (msg.content as any).traceback
-      : [];
-    const text = [ename, evalue, ...traceback].filter(Boolean).join("\n");
-    return text ? text + "\n" : null;
-  }
-
-  return null;
-}
-
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
+const stdinHelpText =
+  "Send one line of standard input to the running process. This control is available while the process is active, even if it is not currently waiting for input.";
 
 function decodeOutputs(outputs: parser_pb.CellOutput[]): string {
   const parts: string[] = [];
@@ -127,7 +101,8 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
   const pendingWrites = useRef<Uint8Array[]>([]);
   const winsizeRef = useRef<{ cols: number; rows: number }>({ cols: 0, rows: 0 });
   const wroteInitialForRun = useRef<string | null>(null);
-  const stdoutBufferRef = useRef("");
+  const [stdinValue, setStdinValue] = useState("");
+  const [showStdinHelp, setShowStdinHelp] = useState(false);
 
   const cell =
     useSyncExternalStore(
@@ -136,6 +111,7 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
     ) || undefined;
 
   const runID = cellData.getRunID();
+  const stream = cellData.getStreams() as any;
 
   if (!cell || cell.kind !== parser_pb.CellKind.CODE) {
     return null;
@@ -185,7 +161,6 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
     // Write any recovered output into the terminal once it is ready.
     consoleEl.initialContent = "";
 
-    const stream = cellData.getStreams() as any;
     const disposers: Array<() => void> = [];
 
     const flushPending = () => {
@@ -224,42 +199,9 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
       }
     };
 
-    const flushStdoutBuffer = () => {
-      const pending = stdoutBufferRef.current;
-      if (!pending) {
-        return;
-      }
-      stdoutBufferRef.current = "";
-      const parsed = maybeParseIPykernelMessage(pending);
-      if (parsed) {
-        const text = extractIopubText(parsed);
-        if (text) {
-          writeToTerminal(textEncoder.encode(text));
-        }
-      } else {
-        writeToTerminal(textEncoder.encode(pending));
-      }
-    };
-
-    if (stream) { 
+    if (stream) {
       const stdoutSub = stream.stdout.subscribe((data: Uint8Array) => {
-        const chunkText = textDecoder.decode(data);
-        stdoutBufferRef.current += chunkText;
-
-        const lines = stdoutBufferRef.current.split("\n");
-        stdoutBufferRef.current = lines.pop() ?? "";
-
-        lines.forEach((line) => {
-          const parsed = maybeParseIPykernelMessage(line);
-          if (parsed) {
-            const text = extractIopubText(parsed);
-            if (text) {
-              writeToTerminal(textEncoder.encode(text));
-            }
-            return;
-          }
-          writeToTerminal(textEncoder.encode(`${line}\n`));
-        });
+        writeToTerminal(data);
       });
       disposers.push(() => stdoutSub.unsubscribe());
 
@@ -274,7 +216,6 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
       disposers.push(() => pidSub.unsubscribe());
 
       const exitSub = stream.exitCode.subscribe((code: number) => {
-        flushStdoutBuffer();
         onExitCode(code);
       });
       disposers.push(() => exitSub.unsubscribe());
@@ -285,15 +226,81 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
     };
     // Only recreate subscriptions/console when the run changes; callbacks are stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runID]);
+  }, [cellData, onExitCode, onPid, runID, stream]);
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const activeStream = cellData.getStreams() as any;
+    if (!activeStream) {
+      return;
+    }
+    const input = stdinValue.endsWith("\n") ? stdinValue : `${stdinValue}\n`;
+    const req = create(ExecuteRequestSchema, {
+      inputData: textEncoder.encode(input),
+    });
+    activeStream.sendExecuteRequest(req);
+    setStdinValue("");
+  };
 
   return (
-    <div
-      className="w-full"
-      data-runkey={`console-${cell.refId}-${runID ?? "idle"}`}
-      data-testid="cell-console"
-      ref={containerRef}
-    />
+    <div className="space-y-3">
+      <div
+        className="w-full"
+        data-runkey={`console-${cell.refId}-${runID ?? "idle"}`}
+        data-testid="cell-console"
+        ref={containerRef}
+      />
+      {stream ? (
+        <form
+          className="rounded-nb-sm border border-nb-border bg-[#fff8ef] p-3"
+          data-testid="cell-stdin-form"
+          onSubmit={handleSubmit}
+        >
+          <div className="relative mb-2 flex items-center gap-2 text-[10px] font-medium uppercase tracking-wide text-[#8a5a2b]">
+            <span>Provide input</span>
+            <button
+              type="button"
+              aria-controls={`stdin-help-${cell.refId}`}
+              aria-expanded={showStdinHelp}
+              aria-label="Explain standard input"
+              className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[#c9b08f] bg-white text-[10px] leading-none text-[#8a5a2b]"
+              onClick={() => setShowStdinHelp((visible) => !visible)}
+            >
+              ?
+            </button>
+            {showStdinHelp ? (
+              <div
+                className="absolute left-0 top-6 z-10 max-w-sm rounded-nb-xs border border-[#c9b08f] bg-white p-2 text-[11px] font-normal normal-case leading-relaxed tracking-normal text-nb-text shadow-nb-sm"
+                data-testid="cell-stdin-help"
+                id={`stdin-help-${cell.refId}`}
+                role="tooltip"
+              >
+                {stdinHelpText}
+              </div>
+            ) : null}
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              aria-label="Cell stdin input"
+              className="min-w-0 flex-1 rounded-nb-xs border border-[#c9b08f] bg-white px-3 py-2 font-mono text-xs text-nb-text focus:outline-none focus:ring-1 focus:ring-nb-accent"
+              data-testid="cell-stdin-input"
+              onChange={(event) => setStdinValue(event.currentTarget.value)}
+              placeholder="Type one response and press Enter"
+              type="text"
+              value={stdinValue}
+            />
+            <button
+              className="rounded-nb-xs bg-[#9f4d2f] px-3 py-2 font-mono text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+              data-testid="cell-stdin-submit"
+              disabled={stdinValue.length === 0}
+              type="submit"
+            >
+              Send
+            </button>
+          </div>
+        </form>
+      ) : null}
+    </div>
   );
 };
 

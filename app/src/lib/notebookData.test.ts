@@ -483,6 +483,36 @@ describe("NotebookData.getActiveStream", () => {
     expect(stream.sequence).toBe(7);
   });
 
+  it("clears recovered streams after the run exits", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-finished",
+      kind: parser_pb.CellKind.CODE,
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.Pid]: "1234",
+        [RunmeMetadataKey.LastRunID]: "existing-run",
+        [RunmeMetadataKey.Sequence]: "7",
+      },
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "test",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    const stream = model.getActiveStream(cell.refId) as {
+      exitCode: Subject<number>;
+    };
+    expect(stream).toBeTruthy();
+
+    stream.exitCode.next(0);
+
+    expect(model.getActiveStream(cell.refId)).toBeUndefined();
+  });
+
   it("does not recover when exit code metadata is present", () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-exit",
