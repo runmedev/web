@@ -102,6 +102,7 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
   const winsizeRef = useRef<{ cols: number; rows: number }>({ cols: 0, rows: 0 });
   const wroteInitialForRun = useRef<string | null>(null);
   const [stdinValue, setStdinValue] = useState("");
+  const [showStdinHelp, setShowStdinHelp] = useState(false);
 
   const cell =
     useSyncExternalStore(
@@ -255,16 +256,28 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
           data-testid="cell-stdin-form"
           onSubmit={handleSubmit}
         >
-          <div className="mb-2 flex items-center gap-2 text-[10px] font-medium uppercase tracking-wide text-[#8a5a2b]">
+          <div className="relative mb-2 flex items-center gap-2 text-[10px] font-medium uppercase tracking-wide text-[#8a5a2b]">
             <span>Provide input</span>
             <button
               type="button"
-              aria-label={stdinHelpText}
+              aria-controls={`stdin-help-${cell.refId}`}
+              aria-expanded={showStdinHelp}
+              aria-label="Explain standard input"
               className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[#c9b08f] bg-white text-[10px] leading-none text-[#8a5a2b]"
-              title={stdinHelpText}
+              onClick={() => setShowStdinHelp((visible) => !visible)}
             >
               ?
             </button>
+            {showStdinHelp ? (
+              <div
+                className="absolute left-0 top-6 z-10 max-w-sm rounded-nb-xs border border-[#c9b08f] bg-white p-2 text-[11px] font-normal normal-case leading-relaxed tracking-normal text-nb-text shadow-nb-sm"
+                data-testid="cell-stdin-help"
+                id={`stdin-help-${cell.refId}`}
+                role="tooltip"
+              >
+                {stdinHelpText}
+              </div>
+            ) : null}
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <input
