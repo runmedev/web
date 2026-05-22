@@ -375,7 +375,6 @@ interface NotebookLease {
 
 interface NotebookOwnershipManager {
   acquire(notebookUri: string): Promise<AcquireResult>;
-  takeOver(notebookUri: string): Promise<AcquireResult>;
   release(notebookUri: string): void;
   getOwner(notebookUri: string): Promise<NotebookOwnershipRecord | null>;
   subscribe(listener: () => void): () => void;
@@ -486,14 +485,6 @@ Notebook is already open in another browser tab
 <name>
 Owned by: Tab opened at 10:42 AM
 
-[Focus other tab] [Take over]
-```
-
-Do not include `Take over` in the initial implementation.
-
-The primary action should be guidance:
-
-```text
 Close this notebook in the other tab, then retry here.
 
 [Focus other tab] [Retry]
@@ -506,13 +497,7 @@ The UI must still work if focus cannot be moved.
 `Retry` calls `openNotebook(localUri)` again. If the other tab has closed the
 notebook or gone away, the Web Lock should now be acquirable.
 
-A later explicit takeover action could use cooperative close or Web Locks
-`steal: true`, but that should be a separate design. It requires stronger save
-and mutation guards because the old owner may still be alive briefly or may
-attempt a late write.
-
-Do not automatically steal locks, and do not close notebooks in another tab in
-the initial implementation.
+Do not close notebooks in another tab in the initial implementation.
 
 ### AppKernel and Runtime Mutations
 
