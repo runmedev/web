@@ -22,18 +22,57 @@ For rendering, codex suggested we should still produce snapshots of the data
 because REACT 18 and newer supports concurrent rendering which can lead to
 tearing if we don't have snapshots.
 
+### Notebook Session State
+
+`NotebookDataController` owns the notebook session state outside React.
+
+It is responsible for:
+
+* resolving requested notebook URIs to stable `local://file/...` URIs
+* tracking the open notebook list
+* owning loaded `NotebookData` instances
+* loading notebook content through `LocalNotebooks`
+* exposing snapshots and subscriptions for React adapters
+
+`NotebookContext` is a React adapter over `NotebookDataController`. It should
+not own the `NotebookData` registry itself.
+
+`CurrentDocContext` owns only the visible notebook selection. Setting the
+current doc should not load, mirror, or create notebook data. Callers that want
+to open a notebook should first call `openNotebook(uri)` and then select the
+returned local URI.
+
+The intended flow is:
+
+```text
+openNotebook(uri)
+  -> resolve or reserve stable local URI
+  -> create/load NotebookData when possible
+  -> return local URI plus load state
+setCurrentDoc(localUri)
+  -> update visible selection only
+```
+
 ## Global State and Singletons
 
 When should we rely on global singletons and storing state outside of React versus using React contexts?
 
 I think using global singletons makes more sense when
 * We want to access the data in library code that is independent of React
-* The UI isn't reactive to changes in the state
+* The UI reads the state through a subscription/snapshot adapter rather than
+  owning the state directly
+* The object coordinates business logic that should not be tied to React mount
+  order
 
 Example would be things like clients for talking to backend services (e.g. runme)
 * We can have a singleton ClientManager which provides methods for getting/setting the clients
 * Libraries that need a client can then get it via the ClientManager
 * When user changes a setting in the UI (E.g. backend URL) we can react and update the clients in the ClientManager
+
+`NotebookDataController` follows this pattern. It is a global singleton because
+runtime helpers, App Console, notebook views, and future multi-tab ownership
+logic all need one notebook session owner. React remains reactive by subscribing
+to the controller snapshot through `NotebookContext`.
 
 ## Unresolved Design Questions
 

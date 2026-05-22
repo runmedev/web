@@ -150,7 +150,6 @@ function App({ branding }: AppProps) {
               <FilesystemStoreProvider>
               <CurrentDocProvider>
                   <NotebookStoreInitializer />
-                  <DriveLinkCoordinatorHost />
                   <SettingsProvider
                     agentEndpoint={configuredAgentEndpoint}
                     webApp={
@@ -167,6 +166,7 @@ function App({ branding }: AppProps) {
                     >
                       <OutputProvider>
                         <NotebookProvider>
+                          <DriveLinkCoordinatorHost />
                           <WebMcpToolRegistrationHost />
                           <SidePanelProvider>
                             <GlobalToast />

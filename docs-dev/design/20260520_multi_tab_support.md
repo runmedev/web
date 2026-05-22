@@ -4,6 +4,10 @@ Date: 2026-05-20
 
 Issue: https://github.com/runmedev/web/issues/215
 
+Builds on:
+
+- `docs-dev/design/20260520_notebook_session_refactor.md`
+
 ## Summary
 
 Support multiple browser tabs by making notebook ownership explicit.
@@ -56,11 +60,23 @@ References:
 
 ## Current State
 
-The current app has two pieces of global browser state that conflict with real
-multi-tab behavior:
+The session refactor is the baseline for this design. It moves open/load
+business logic out of React component refs and into `NotebookDataController`.
+After that refactor:
+
+- `NotebookDataController` owns `openNotebooks`.
+- `NotebookDataController` owns loaded `NotebookData` handles keyed by stable
+  local URI.
+- `NotebookContext` is a React adapter over the controller.
+- `CurrentDocContext` is selection-only: it tracks the visible notebook URI and
+  must not load, mirror, sync, or create `NotebookData`.
+- Open flows call `openNotebook(uri)` first, then call
+  `setCurrentDoc(localUri)` when they want to show the notebook.
+
+The remaining multi-tab problem is shared browser restore state:
 
 - `CurrentDocContext` persists `runme/currentDoc` in `localStorage`.
-- `NotebookContext` persists `runme/openNotebooks` in `localStorage`.
+- `NotebookDataController` persists `runme/openNotebooks` in `localStorage`.
 
 Because `localStorage` is shared by same-origin tabs, all tabs converge on the
 same current document and same open notebook list. This is exactly what must
@@ -74,12 +90,9 @@ Relevant current files:
 - `app/src/components/SidePanel/SidePanel.tsx`
 - `app/src/components/Workspace/WorkspaceExplorer.tsx`
 - `app/src/components/AppConsole/AppConsole.tsx`
+- `app/src/lib/notebookDataController.ts`
 
-There is also an architectural coupling that should be fixed before adding tab
-ownership: the app does not cleanly separate "load a notebook into memory" from
-"show this notebook tab."
-
-Today notebook opening is mostly reactive:
+The session refactor fixes the old reactive open path:
 
 ```text
 setCurrentDoc(uri)
@@ -94,6 +107,18 @@ That makes `currentDoc` serve both as the visible selection and as the command
 channel for loading. Multi-tab ownership needs an imperative open path because
 ownership must be acquired before an editable notebook is considered open.
 
+The target post-refactor path is:
+
+```text
+openNotebook(uri)
+  -> resolve or reserve stable local URI
+  -> create or update OpenNotebookEntry
+  -> create/load NotebookData when possible
+  -> return local URI plus state
+setCurrentDoc(localUri)
+  -> show the selected notebook tab
+```
+
 Some of the stable-local-URI behavior already exists in `LocalNotebooks`:
 
 - `addFile(remoteUri, name)` creates or returns a stable `local://file/...`
@@ -101,13 +126,12 @@ Some of the stable-local-URI behavior already exists in `LocalNotebooks`:
 - `load(localUri)` attempts best-effort sync and returns an empty notebook if
   the local record has no `doc` yet.
 
-The missing piece is an explicit notebook session model that can represent:
+The missing multi-tab pieces are:
 
-- a notebook tab that is selected/visible
-- a local mirror URI that is known and stable
-- a `NotebookData` model that may be loaded, loading, blocked, or failed
-- auth/loading errors that should be shown in the tab instead of collapsing the
-  selection
+- tab-local restore for selected/open notebook state
+- exclusive ownership for each editable local notebook URI
+- blocked-state rendering when ownership is held by another tab
+- runtime/save guards so only the owner tab can mutate a notebook
 
 ## Proposed Model
 
@@ -149,12 +173,30 @@ The intended split is:
 
 - use `sessionStorage` as the per-tab restore store for the current tab's open
   notebook list and selected notebook
-- hydrate normal React state from `sessionStorage` on startup
+- hydrate `NotebookDataController.openNotebooks` and `CurrentDocContext`
+  selection from `sessionStorage` on startup
 - use Web Locks plus the IndexedDB ownership table for cross-tab coordination
 
 If a browser duplicates a tab and clones `sessionStorage`, that cloned open list
 is only a restore hint. Each notebook still has to reacquire its Web Lock before
 it can become editable in the duplicated tab.
+
+The multi-tab implementation should introduce a small persistence adapter rather
+than hard-coding `sessionStorage` throughout the controller or
+`CurrentDocContext`:
+
+```ts
+interface NotebookSessionPersistence {
+  loadOpenNotebooks(): OpenNotebookEntry[];
+  saveOpenNotebooks(entries: OpenNotebookEntry[]): void;
+  loadCurrentDoc(): string | null;
+  saveCurrentDoc(uri: string | null): void;
+}
+```
+
+The first multi-tab PR can swap the existing `localStorage` implementation for a
+`sessionStorage` implementation and keep a one-time legacy import from
+`runme/currentDoc` and `runme/openNotebooks`.
 
 ### Reload vs New Tab
 
@@ -181,20 +223,26 @@ If we need to keep using `localStorage` for compatibility, use it only as a
 legacy initial-open hint or as a shared ownership metadata store. Do not use
 shared `localStorage` as the source of truth for the tab's open editor list.
 
-### Notebook Session Model
+### NotebookDataController Extensions
 
-Move the business logic currently inside `NotebookProvider.ensureNotebook` and
-the `currentDoc` effects into a notebook session owner. This can start inside a
-refactored `NotebookProvider`, but it should have a controller-like API so it
-can later move out of React cleanly.
+Extend `NotebookDataController`; do not add a separate notebook session owner.
+The refactor already gives us the correct place for open/load state.
 
-The session model should own:
+The controller should continue to own:
 
 - `openNotebooks`
-- `currentNotebookUri`
-- loaded `NotebookData` instances keyed by local URI
-- pending/blocked/error state per open notebook
-- restore/persist for the tab-local open list
+- loaded `NotebookData` instances keyed by stable local URI
+- pending/loading/error state per open notebook
+
+Multi-tab support adds:
+
+- tab-local restore/persist for `openNotebooks`
+- ownership lease tracking per open notebook
+- blocked state when another tab owns the notebook
+- ownership checks before load/save/mutation paths
+
+`CurrentDocContext` remains the selected visible notebook. It is not moved into
+`NotebookDataController` in this design.
 
 Suggested snapshot:
 
@@ -215,20 +263,31 @@ interface OpenNotebookEntry {
   owner?: NotebookOwnershipRecord;
 }
 
-interface NotebookSessionSnapshot {
+interface NotebookDataControllerSnapshot {
   openNotebooks: OpenNotebookEntry[];
-  currentNotebookUri: string | null;
 }
 ```
 
 The key split is:
 
 - `openNotebook(uri)`: resolves/creates the local mirror URI, acquires ownership,
-  creates or loads `NotebookData`, adds an open entry, and selects it.
-- `selectNotebook(localUri)`: changes the visible tab only. It must not load,
-  mirror, or acquire ownership.
+  creates or loads `NotebookData`, adds or updates an open entry, and returns
+  the local URI plus state.
+- `setCurrentDoc(localUri)`: changes the visible tab only. It must not load,
+  mirror, acquire ownership, or create `NotebookData`.
 - `closeNotebook(localUri)`: removes the open entry, disposes the model, releases
-  ownership, and selects a same-tab fallback.
+  ownership, and returns a same-tab fallback for `CurrentDocContext`.
+
+Most user-facing open flows still do both operations explicitly:
+
+```ts
+const result = await openNotebook(uri);
+setCurrentDoc(result.localUri);
+```
+
+Background preload or restore code may call `openNotebook(uri)` without selecting
+the notebook. Tab strip and sidebar selection should call only
+`setCurrentDoc(localUri)`.
 
 Showing a notebook should be possible even before the notebook content is
 loaded. For example, a Drive URL with expired credentials should still become a
@@ -252,13 +311,14 @@ Rules:
   local URI without requiring fresh upstream credentials.
 - If the input is a Drive or filesystem URI and enough metadata is available,
   create a local placeholder record and return its new local URI.
-- If creating the placeholder needs credentials that are unavailable, keep a
-  `resolving` or `error` tab entry keyed by the original request until the user
-  can authenticate and retry.
+- If creating the placeholder needs credentials that are unavailable, do not
+  create an `OpenNotebookEntry` without a local URI. Use the existing Drive
+  status-tab flow until the app can authenticate and retry.
 
 `LocalNotebooks.addFile(remoteUri, name)` already implements the first part of
-this behavior for remote files. The session model should use that as the stable
-URI reservation primitive instead of waiting for full notebook content to load.
+this behavior for remote files. `NotebookDataController` should use that as the
+stable URI reservation primitive instead of waiting for full notebook content to
+load.
 
 ### Ownership Record
 
@@ -371,12 +431,17 @@ openNotebook(uri, options)
 The function should:
 
 1. Resolve or reserve a stable local mirror URI for the requested URI.
-2. Select or create an open tab entry for that URI.
+2. Create or update an open tab entry for that local URI.
 3. Acquire the ownership lock for the local URI once known.
 4. Create or retrieve the `NotebookData` model for the local URI.
 5. Load notebook content into `NotebookData` when storage/auth is available.
-6. If blocked or auth fails, keep the tab selected and render the blocked/error
-   state instead of dropping the current selection.
+6. If blocked, keep the open entry with `state: "blocked"` and return the local
+   URI so the caller can select it and render the blocked state.
+7. If auth or load fails after a local URI exists, keep the open entry with
+   `state: "error"` and return the local URI so the caller can select it and
+   render retry/login affordances.
+8. If a local URI cannot be produced, fail without creating an open entry. Use
+   the existing Drive status-tab flow for auth-dependent shared links.
 
 Callers that currently call `setCurrentDoc` directly should be moved onto this
 path:
@@ -387,8 +452,10 @@ path:
 - Runtime `appState.openNotebook(...)`
 - URL `?doc=` processing
 
-The tab strip and open-notebooks sidebar should call `selectNotebook` for
-notebooks already open in the same tab.
+Those callers should call `setCurrentDoc(result.localUri)` only after
+`openNotebook` returns a local URI. The tab strip and open-notebooks sidebar
+should call only `setCurrentDoc(localUri)` for notebooks already open in the
+same tab.
 
 ### Closing a Notebook
 
@@ -399,7 +466,8 @@ Closing an open notebook in this tab should:
 3. Release its Web Lock lease.
 4. Delete its ownership record if the epoch still matches.
 5. Broadcast `owner-released`.
-6. Select a same-tab fallback notebook, or clear `currentNotebookUri`.
+6. Return a same-tab fallback notebook URI, or `null`, so the caller can update
+   `CurrentDocContext`.
 
 Use `pagehide` and `beforeunload` for best-effort release, but do not depend on
 those events for correctness. The Web Lock release on context shutdown is the
@@ -453,46 +521,58 @@ manager whether the current tab still owns the notebook URI and epoch.
 
 ## Implementation Plan
 
-1. Refactor `NotebookProvider` around an explicit notebook session API:
-   `openNotebook`, `selectNotebook`, `closeNotebook`, `getNotebookData`, and a
-   subscription snapshot.
-2. Move `ensureNotebook`, `loadNotebookIntoLocalMirror`, and current-doc loading
-   effects behind that session API.
-3. Decouple selected tab state from loaded model state so auth/loading failures
-   can render in the selected tab.
-4. Convert `CurrentDocContext` and `NotebookContext` restore state from
-   shared `localStorage` to tab-local session restore.
-5. Update `WorkspaceExplorer`, `DriveLinkCoordinatorHost`, `AppConsole`, URL
-   handling, and `appState.openNotebook` to call `openNotebook`.
-6. Keep tab strip and open-notebooks sidebar selection on `selectNotebook`.
-7. Add `TabIdentityContext` and `NotebookOwnershipManager`.
-8. Add `runme-tab-coordination` Dexie schema and ownership record helpers.
-9. Add ownership acquisition/release to `openNotebook` and `closeNotebook`.
-10. Add blocked-notebook UI in `Actions` and sidebar indicators in
-   `SidePanel`.
-11. Guard AppKernel/runtime notebook mutation APIs with ownership checks.
-12. Add tests for ownership acquire/block/release/cooperative-takeover behavior.
-13. Add browser tests that open two same-origin pages and verify that the same
-   notebook cannot be edited in both.
+1. Start from the session refactor:
+   - `NotebookDataController.openNotebook`
+   - `NotebookDataController.closeNotebook`
+   - `NotebookDataController.getNotebookData`
+   - `NotebookContext` as React adapter
+   - `CurrentDocContext` as selection-only state
+2. Add a `NotebookSessionPersistence` adapter and switch current/open restore
+   state from shared `localStorage` to tab-local `sessionStorage`.
+3. Add a one-time legacy import path from `runme/currentDoc` and
+   `runme/openNotebooks` into the current tab's `sessionStorage`.
+4. Add tab identity as an in-memory module singleton or `TabIdentityContext`.
+5. Add `NotebookOwnershipManager`.
+6. Add the `runme-tab-coordination` Dexie schema and ownership record helpers.
+7. Extend `OpenNotebookEntry` with ownership/blocked metadata.
+8. Add ownership acquisition to `NotebookDataController.openNotebook` after
+   stable local URI resolution and before editable load.
+9. Add ownership release to `NotebookDataController.closeNotebook`.
+10. Keep all visible-tab selection on `CurrentDocContext.setCurrentDoc`.
+11. Add blocked-notebook UI in `Actions` and sidebar indicators in
+    `SidePanel`.
+12. Add cooperative takeover over `BroadcastChannel`.
+13. Guard AppKernel/runtime notebook mutation APIs with ownership checks.
+14. Guard `NotebookData` autosave/persistence with ownership checks.
+15. Add tests for ownership acquire/block/release/cooperative-takeover behavior.
+16. Add browser tests that open two same-origin pages and verify that the same
+    notebook cannot be edited in both.
 
 ## Test Plan
 
 Unit tests:
 
 - stable local URI resolution returns an existing mirror without loading content
-- opening a notebook can create a selected tab before `NotebookData` is loaded
-- selecting a notebook does not load, mirror, or acquire ownership
+- `openNotebook` can create an open entry before `NotebookData` is loaded
+- `setCurrentDoc` can select that open entry without loading, mirroring, or
+  acquiring ownership
+- `openNotebook` returns blocked state when another tab owns the local URI
+- blocked open entries are selectable and renderable
 - acquire succeeds when no other tab holds the lock
 - acquire returns blocked when another tab holds the lock
 - release deletes the ownership record only for the matching epoch
 - stale metadata does not block when the Web Lock is available
 - runtime mutation rejects when ownership is missing
+- `CurrentDocContext` restore uses per-tab `sessionStorage`
+- `NotebookDataController` open-list restore uses per-tab `sessionStorage`
 
 Component tests:
 
 - blocked notebook state renders owner metadata and takeover controls
 - tab-local open notebook lists do not mirror across simulated tabs
-- closing a notebook releases its lease and selects the expected fallback
+- closing a notebook releases its lease and returns the expected fallback URI
+- tab strip and sidebar selection call `setCurrentDoc` without reacquiring
+  ownership
 
 Browser tests:
 

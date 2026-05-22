@@ -8,13 +8,7 @@ import {
   useState,
 } from "react";
 
-import { appState } from "../lib/runtime/AppState";
-
 const CURRENT_DOC_STORAGE_KEY = "runme/currentDoc";
-
-function isFsUri(uri: string): boolean {
-  return uri.startsWith("fs://");
-}
 
 interface CurrentDocContextValue {
   getCurrentDoc: () => string | null;
@@ -34,9 +28,6 @@ export function useCurrentDoc() {
 }
 
 export function CurrentDocProvider({ children }: { children: ReactNode }) {
-  // Helper that reads the current doc value straight from the URL. We call this
-  // exactly once on initialisation and again on popstate events so the context
-  // stays aligned with browser navigation.
   const [currentDoc, setCurrentDocState] = useState<string | null>(null);
 
   const loadStoredCurrentDoc = useCallback((): string | null => {
@@ -51,41 +42,9 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const resolveFromLocation = useCallback(async () => {
-    const params = new URLSearchParams(window.location.search);
-    const doc = params.get("doc");
-
-    if (!doc) {
-      setCurrentDocState(loadStoredCurrentDoc());
-      return;
-    }
-
-    if (doc.startsWith("local://")) {
-      setCurrentDocState(doc);
-      return;
-    }
-
-    if (isFsUri(doc)) {
-      setCurrentDocState(doc);
-      return;
-    }
-
-    // Shared Drive links are consumed by the Drive link coordinator. They are
-    // not treated as steady-state current-doc values.
-    setCurrentDocState(null);
+  useEffect(() => {
+    setCurrentDocState(loadStoredCurrentDoc());
   }, [loadStoredCurrentDoc]);
-
-  useEffect(() => {
-    void resolveFromLocation();
-  }, [resolveFromLocation]);
-
-  useEffect(() => {
-    const handlePopState = () => {
-      void resolveFromLocation();
-    };
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
-  }, [resolveFromLocation]);
 
   const getCurrentDoc = useCallback(() => {
     return currentDoc;
@@ -136,15 +95,6 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
     }),
     [getCurrentDoc, setCurrentDoc],
   );
-
-  useEffect(() => {
-    appState.setOpenNotebookHandler((uri: string) => {
-      setCurrentDoc(uri);
-    });
-    return () => {
-      appState.setOpenNotebookHandler(null);
-    };
-  }, [setCurrentDoc]);
 
   return (
     <CurrentDocContext.Provider value={value}>

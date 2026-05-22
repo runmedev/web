@@ -4,6 +4,7 @@ import { useGoogleAuth } from "../contexts/GoogleAuthContext";
 import { useNotebookStore } from "../contexts/NotebookStoreContext";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 import { useCurrentDoc } from "../contexts/CurrentDocContext";
+import { useNotebookContext } from "../contexts/NotebookContext";
 import { driveLinkCoordinator } from "../lib/driveLinkCoordinator";
 
 export function DriveLinkCoordinatorHost() {
@@ -11,6 +12,7 @@ export function DriveLinkCoordinatorHost() {
   const { store } = useNotebookStore();
   const { addItem, getItems, removeItem } = useWorkspace();
   const { setCurrentDoc } = useCurrentDoc();
+  const { openNotebook } = useNotebookContext();
 
   useEffect(() => {
     if (!store) {
@@ -27,14 +29,23 @@ export function DriveLinkCoordinatorHost() {
       addWorkspaceItem: addItem,
       removeWorkspaceItem: removeItem,
       getWorkspaceItems: getItems,
-      openNotebook: (localUri: string) => {
-        setCurrentDoc(localUri);
+      openNotebook: async (localUri: string) => {
+        const result = await openNotebook(localUri);
+        setCurrentDoc(result.localUri);
       },
     });
 
     driveLinkCoordinator.consumeUrlIntentFromLocation();
     void driveLinkCoordinator.processPending();
-  }, [addItem, ensureAccessToken, getItems, removeItem, setCurrentDoc, store]);
+  }, [
+    addItem,
+    ensureAccessToken,
+    getItems,
+    openNotebook,
+    removeItem,
+    setCurrentDoc,
+    store,
+  ]);
 
   return null;
 }
