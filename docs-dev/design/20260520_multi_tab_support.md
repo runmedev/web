@@ -18,10 +18,11 @@ The product rule is intentionally narrow:
 2. Different browser tabs can show different notebooks.
 3. A closed tab must not keep a notebook blocked.
 4. If a notebook is already open elsewhere, the current tab should show a clear
-   blocked state and offer a cooperative takeover path.
+   blocked state and ask the user to close it in the other tab.
 
 This avoids cross-tab notebook synchronization. Each editable notebook has one
-writer, and other tabs must either open a different notebook or take ownership.
+writer, and other tabs must either open a different notebook or wait until the
+owner tab closes it.
 
 ## Browser Coordination Choice
 
@@ -34,7 +35,6 @@ blocks forever" failure mode.
 
 Use `BroadcastChannel` for live cross-tab messages:
 
-- "please close this notebook" requests
 - "ownership released" notifications
 - best-effort "focus your tab" requests
 
@@ -337,7 +337,8 @@ interface NotebookOwnershipRecord {
 ```
 
 The `epoch` is a random UUID generated each time ownership is acquired. It lets
-late messages from an old owner be ignored after takeover.
+late release/metadata messages from an old owner be ignored after a notebook is
+closed and reopened.
 
 The canonical ownership key should be the editable local notebook URI:
 
@@ -465,7 +466,8 @@ Closing an open notebook in this tab should:
 2. Dispose the `NotebookData` entry if it exists.
 3. Release its Web Lock lease.
 4. Delete its ownership record if the epoch still matches.
-5. Broadcast `owner-released`.
+5. Optionally broadcast `owner-released` so blocked tabs can retry or refresh
+   their displayed owner state.
 6. Return a same-tab fallback notebook URI, or `null`, so the caller can update
    `CurrentDocContext`.
 
@@ -487,22 +489,30 @@ Owned by: Tab opened at 10:42 AM
 [Focus other tab] [Take over]
 ```
 
-`Focus other tab` is best effort. It sends a BroadcastChannel message to the
-owner; the owner calls `window.focus()`. Browsers may ignore focus requests.
+Do not include `Take over` in the initial implementation.
 
-`Take over` is cooperative:
+The primary action should be guidance:
 
-1. Broadcast `close-notebook-request` with notebook URI and requester tab id.
-2. Owner closes the notebook, releases the lease, and sends
-   `close-notebook-ack`.
-3. Requester retries `acquire`.
+```text
+Close this notebook in the other tab, then retry here.
 
-If the owner does not respond, leave the notebook blocked for the initial
-implementation. A later explicit "Force take over" action could use Web Locks
-`steal: true`, but that should be a separate decision because it requires save
-and mutation paths to verify the ownership epoch before every write.
+[Focus other tab] [Retry]
+```
 
-Do not automatically steal locks.
+`Focus other tab` is best effort. It may send a BroadcastChannel message to the
+owner; the owner may call `window.focus()`. Browsers may ignore focus requests.
+The UI must still work if focus cannot be moved.
+
+`Retry` calls `openNotebook(localUri)` again. If the other tab has closed the
+notebook or gone away, the Web Lock should now be acquirable.
+
+A later explicit takeover action could use cooperative close or Web Locks
+`steal: true`, but that should be a separate design. It requires stronger save
+and mutation guards because the old owner may still be alive briefly or may
+attempt a late write.
+
+Do not automatically steal locks, and do not close notebooks in another tab in
+the initial implementation.
 
 ### AppKernel and Runtime Mutations
 
@@ -541,11 +551,13 @@ manager whether the current tab still owns the notebook URI and epoch.
 10. Keep all visible-tab selection on `CurrentDocContext.setCurrentDoc`.
 11. Add blocked-notebook UI in `Actions` and sidebar indicators in
     `SidePanel`.
-12. Add cooperative takeover over `BroadcastChannel`.
-13. Guard AppKernel/runtime notebook mutation APIs with ownership checks.
-14. Guard `NotebookData` autosave/persistence with ownership checks.
-15. Add tests for ownership acquire/block/release/cooperative-takeover behavior.
-16. Add browser tests that open two same-origin pages and verify that the same
+12. Add optional best-effort `Focus other tab` and `owner-released`
+    BroadcastChannel messages.
+13. Add a blocked-state `Retry` action that re-runs `openNotebook(localUri)`.
+14. Guard AppKernel/runtime notebook mutation APIs with ownership checks.
+15. Guard `NotebookData` autosave/persistence with ownership checks.
+16. Add tests for ownership acquire/block/release/retry behavior.
+17. Add browser tests that open two same-origin pages and verify that the same
     notebook cannot be edited in both.
 
 ## Test Plan
@@ -565,10 +577,13 @@ Unit tests:
 - runtime mutation rejects when ownership is missing
 - `CurrentDocContext` restore uses per-tab `sessionStorage`
 - `NotebookDataController` open-list restore uses per-tab `sessionStorage`
+- blocked-state retry acquires ownership after the original owner releases the
+  lock
 
 Component tests:
 
-- blocked notebook state renders owner metadata and takeover controls
+- blocked notebook state renders owner metadata, close-other-tab guidance, and
+  retry controls
 - tab-local open notebook lists do not mirror across simulated tabs
 - closing a notebook releases its lease and returns the expected fallback URI
 - tab strip and sidebar selection call `setCurrentDoc` without reacquiring
@@ -579,7 +594,7 @@ Browser tests:
 - open notebook A in tab 1, attempt notebook A in tab 2, verify blocked UI
 - open notebook B in tab 2 while notebook A remains open in tab 1
 - close tab 1, then open notebook A in tab 2 without manual cleanup
-- click takeover in tab 2 and verify tab 1 closes notebook A
+- click retry in tab 2 after tab 1 closes notebook A and verify tab 2 opens it
 - verify App Console mutation in a non-owner tab fails clearly
 
 ## Migration
@@ -600,16 +615,17 @@ writing the legacy keys after this change.
 - Web Locks requires a secure context. `localhost` is acceptable for local
   development, and production is HTTPS.
 - Browser focus requests may be ignored. The UX should describe focus as best
-  effort.
+  effort and rely on explicit user action plus retry.
 - `BroadcastChannel` messages are not durable. That is fine because ownership
   correctness comes from Web Locks and IndexedDB state.
-- Force takeover is intentionally out of scope for the initial implementation.
-  It is only safe if save and mutation paths verify ownership epoch before
-  writing.
+- Takeover is intentionally out of scope for the initial implementation. It is
+  only safe if save and mutation paths verify ownership epoch before writing,
+  and it needs a separate UX decision.
 
 ## Recommendation
 
-Use Web Locks for exclusive notebook ownership, BroadcastChannel for live tab
-coordination, and IndexedDB records for owner metadata. Refactor current/open
-notebook UI state to be tab-local, then route every notebook-open operation
-through ownership acquisition.
+Use Web Locks for exclusive notebook ownership and IndexedDB records for owner
+metadata. Use BroadcastChannel only for best-effort focus/release hints. Refactor
+current/open notebook UI state to be tab-local, then route every notebook-open
+operation through ownership acquisition. In the first implementation, blocked
+tabs ask the user to close the notebook in the other tab and retry.

@@ -138,13 +138,6 @@ function persistOpenNotebooks(list: OpenNotebookEntry[]): void {
   }
 }
 
-function isNotFoundError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return error.message.toLowerCase().includes("not found");
-}
-
 export class NotebookDataController {
   private static instance: NotebookDataController | null = null;
 
@@ -229,19 +222,11 @@ export class NotebookDataController {
           errorMessage: undefined,
         });
       } catch (error) {
-        if (isNotFoundError(error)) {
-          entry = this.upsertOpenEntry({
-            ...entry,
-            state: "error",
-            errorMessage: String(error),
-          });
-        } else {
-          entry = this.upsertOpenEntry({
-            ...entry,
-            state: "error",
-            errorMessage: String(error),
-          });
-        }
+        entry = this.upsertOpenEntry({
+          ...entry,
+          state: "error",
+          errorMessage: String(error),
+        });
       }
     }
 

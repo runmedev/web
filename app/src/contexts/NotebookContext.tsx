@@ -68,14 +68,13 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
 
   const useNotebookSnapshot = useCallback(
     (uri: string) => {
-      const data = uri ? controller.getNotebookData(uri) : undefined;
       const subscribe = useCallback(
-        (listener: () => void) => (data ? data.subscribe(listener) : () => {}),
-        [data],
+        (listener: () => void) => controller.subscribe(listener),
+        [controller],
       );
       const getSnapshot = useCallback(
-        () => (data ? data.getSnapshot() : null as NotebookSnapshot | null),
-        [data],
+        () => (uri ? controller.getNotebookSnapshot(uri) : null),
+        [controller, uri],
       );
       return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     },

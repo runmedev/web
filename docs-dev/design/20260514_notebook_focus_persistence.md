@@ -92,7 +92,9 @@ When focus moves within a notebook cell:
 
 When the browser tab becomes focused and visible:
 
-- look at the visible notebook tab, not `currentDoc`
+- look at the visible notebook tab. After the notebook-session refactor,
+  `CurrentDocContext` may be used for this because it is selection-only; do not
+  use it as an open/load command.
 - read that notebook's stored active-cell state
 - if the stored cell still exists, restore focus to it
 - if the stored focus role is `editor` for a markdown cell, reopen that cell in

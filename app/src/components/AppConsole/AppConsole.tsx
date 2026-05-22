@@ -400,7 +400,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       },
       resolveNotebook: resolveNotebookData,
       listNotebooks: () =>
-      openNotebooks
+        openNotebooks
           .reduce<NotebookDataLike[]>((items, notebook) => {
             const resolved = getNotebookData(notebook.uri);
             if (resolved) {
