@@ -33,6 +33,19 @@ exclusive access to shared resources. A lock is automatically released when the
 holding execution context goes away, which directly handles the "closed tab
 blocks forever" failure mode.
 
+If `navigator.locks` is unavailable, do not silently fall back to metadata,
+heartbeats, or `localStorage` as an ownership authority. The app should show a
+clear unsupported-browser state for notebook editing:
+
+```text
+This browser does not support safe multi-tab notebook ownership.
+
+Use a browser with Web Locks support, or close other Runme tabs before editing.
+```
+
+The app may still render non-editing surfaces, but it must not claim exclusive
+notebook ownership without Web Locks.
+
 Use `BroadcastChannel` for live cross-tab messages:
 
 - "ownership released" notifications
@@ -363,7 +376,8 @@ Suggested API:
 ```ts
 type AcquireResult =
   | { status: "acquired"; lease: NotebookLease }
-  | { status: "blocked"; owner: NotebookOwnershipRecord | null };
+  | { status: "blocked"; owner: NotebookOwnershipRecord | null }
+  | { status: "unsupported"; reason: "web_locks_unavailable" };
 
 interface NotebookLease {
   notebookUri: string;
@@ -396,6 +410,11 @@ The lock callback must return a promise that resolves only when the notebook is
 closed or ownership is otherwise released. That keeps the lock held for the
 whole edit session.
 
+If `navigator.locks` is missing, `acquire` should return `unsupported` rather
+than `blocked`. `openNotebook` should map `unsupported` to an
+`OpenNotebookEntry` error state with a user-facing message. Do not create
+editable `NotebookData` for that entry.
+
 ### Metadata, Not Heartbeats
 
 Do not add a heartbeat protocol for initial multi-tab correctness.
@@ -416,6 +435,8 @@ The rules are:
 - if the Web Lock is available, the current tab may acquire ownership and
   overwrite any stale metadata
 - metadata should never block opening by itself
+- if the Web Locks API itself is unavailable, ownership is unsupported and the
+  app must not use metadata as a fallback lock
 
 If later UX needs "last seen" or richer diagnostics, add a heartbeat as a
 separate enhancement. It should remain display-only.
@@ -440,7 +461,9 @@ The function should:
 7. If auth or load fails after a local URI exists, keep the open entry with
    `state: "error"` and return the local URI so the caller can select it and
    render retry/login affordances.
-8. If a local URI cannot be produced, fail without creating an open entry. Use
+8. If Web Locks are unavailable, keep the open entry with `state: "error"` and a
+   clear unsupported-browser message. Do not create editable `NotebookData`.
+9. If a local URI cannot be produced, fail without creating an open entry. Use
    the existing Drive status-tab flow for auth-dependent shared links.
 
 Callers that currently call `setCurrentDoc` directly should be moved onto this
@@ -560,6 +583,9 @@ Unit tests:
 - release deletes the ownership record only for the matching epoch
 - stale metadata does not block when the Web Lock is available
 - runtime mutation rejects when ownership is missing
+- acquire returns unsupported when `navigator.locks` is missing
+- unsupported ownership renders an error entry and does not create editable
+  `NotebookData`
 - `CurrentDocContext` restore uses per-tab `sessionStorage`
 - `NotebookDataController` open-list restore uses per-tab `sessionStorage`
 - blocked-state retry acquires ownership after the original owner releases the
@@ -598,7 +624,9 @@ writing the legacy keys after this change.
 ## Risks
 
 - Web Locks requires a secure context. `localhost` is acceptable for local
-  development, and production is HTTPS.
+  development, and production is HTTPS. Browsers without `navigator.locks`
+  should show an unsupported editing state rather than falling back to weaker
+  coordination.
 - Browser focus requests may be ignored. The UX should describe focus as best
   effort and rely on explicit user action plus retry.
 - `BroadcastChannel` messages are not durable. That is fine because ownership
