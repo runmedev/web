@@ -35,6 +35,7 @@ import {
 import { LOCAL_FOLDER_URI } from "../../storage/local";
 import { useGoogleAuth } from "../../contexts/GoogleAuthContext";
 import { useCurrentDoc } from "../../contexts/CurrentDocContext";
+import { useNotebookContext } from "../../contexts/NotebookContext";
 import { driveLinkCoordinator } from "../../lib/driveLinkCoordinator";
 
 interface ContextMenuState {
@@ -226,6 +227,7 @@ export function WorkspaceExplorer() {
   const { store } = useNotebookStore();
   const { fsStore } = useFilesystemStore();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
+  const { openNotebook } = useNotebookContext();
   const currentDoc = getCurrentDoc();
   const { ensureAccessToken } = useGoogleAuth();
   const handledDocRef = useRef<string | null>(null);
@@ -415,8 +417,11 @@ export function WorkspaceExplorer() {
             remoteUri: undefined,
           } as NotebookStoreItem);
 
-        setCurrentDoc(targetItem.uri);
-        handledDocRef.current = targetItem.uri;
+        const result = await openNotebook(targetItem.uri, {
+          name: targetItem.name,
+        });
+        setCurrentDoc(result.localUri);
+        handledDocRef.current = result.localUri;
       } catch (error) {
         console.error("Failed to load notebook from URL", error);
         setCurrentDoc(null);
@@ -427,6 +432,7 @@ export function WorkspaceExplorer() {
     addItem,
     currentDoc,
     ensureAccessToken,
+    openNotebook,
     setCurrentDoc,
     store,
     workspaceUris,
@@ -580,7 +586,8 @@ export function WorkspaceExplorer() {
           console.error("Notebook metadata missing for", uri);
           return;
         }
-        setCurrentDoc(item.uri);
+        const result = await openNotebook(item.uri, { name: item.name });
+        setCurrentDoc(result.localUri);
         setErrorMessage(null);
       } catch (error) {
         console.error("Failed to load notebook", error);
@@ -589,7 +596,7 @@ export function WorkspaceExplorer() {
         );
       }
     },
-    [fsStore, setCurrentDoc, store],
+    [fsStore, openNotebook, setCurrentDoc, store],
   );
 
   const handleCreateDocument = useCallback(

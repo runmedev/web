@@ -27,7 +27,9 @@ await app.openNotebook(copied.uri);
 ## Semantics
 
 - `app.getCurrentNotebook()` returns a stable notebook reference for the currently open notebook (at minimum, URI).
-- `app.openNotebook(uri)` opens a notebook and makes it current.
+- Publicly, `app.openNotebook(uri)` opens a notebook and makes it current.
+  Internally, it should call the notebook session open path and then select the
+  returned local URI.
 - `drive.resolvePath(path, options)` resolves a human-friendly Drive path to a concrete destination reference (ID-backed URI).
 - Path resolution is not the same as identity:
   - Drive names are not unique, so duplicates must be handled explicitly.

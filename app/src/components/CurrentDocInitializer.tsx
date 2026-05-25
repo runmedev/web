@@ -1,21 +1,64 @@
 import { useEffect } from "react";
 import { useCurrentDoc } from "../contexts/CurrentDocContext";
+import { useNotebookContext } from "../contexts/NotebookContext";
+import { useNotebookStore } from "../contexts/NotebookStoreContext";
 
-// Ensure we never start with a local:// document in the query param, since it
-// isn't shareable across sessions.
+function isNotebookDocParam(uri: string): boolean {
+  return uri.startsWith("local://file/") || uri.startsWith("fs://");
+}
+
+function clearDocParam(): void {
+  const nextUrl = new URL(window.location.href);
+  nextUrl.searchParams.delete("doc");
+  window.history.replaceState(
+    null,
+    "",
+    `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`,
+  );
+}
+
+function requiresNotebookStore(uri: string): boolean {
+  return !uri.startsWith("local://file/");
+}
+
 export function CurrentDocInitializer() {
   const { setCurrentDoc } = useCurrentDoc();
+  const { openNotebook } = useNotebookContext();
+  const { store } = useNotebookStore();
 
-  useEffect(() => { 
-    // At startup strip any local-only document references from the URL so
-    // downstream logic never tries to load them.
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const docParam = params.get("doc");
-    console.log("CurrentDocInitializer running", { docParam });
-    if (docParam && docParam.startsWith("local://")) {
-      setCurrentDoc(null);
+    if (!docParam || !isNotebookDocParam(docParam)) {
+      return;
     }
-  }, [setCurrentDoc]);
+    if (requiresNotebookStore(docParam) && !store) {
+      return;
+    }
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) {
+        return;
+      }
+      void (async () => {
+        try {
+          const result = await openNotebook(docParam);
+          if (cancelled) {
+            return;
+          }
+          setCurrentDoc(result.localUri);
+          clearDocParam();
+        } catch (error) {
+          console.error("Failed to open notebook from URL", error);
+        }
+      })();
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [openNotebook, setCurrentDoc, store]);
 
   return null;
 }

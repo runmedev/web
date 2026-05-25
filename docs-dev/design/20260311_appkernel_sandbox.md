@@ -449,27 +449,31 @@ Reuse plan:
 - keep it as an internal autosave seam for `NotebookData`.
 - do not expose as sandbox-facing capability API.
 
-### `NotebookContextValue` + `NotebookData` registry (UI layer)
+### `NotebookDataController` + `NotebookContextValue` (open notebook registry)
 
 Location:
 
+- `app/src/lib/notebookDataController.ts`
 - `app/src/contexts/NotebookContext.tsx`
 
 What it provides:
 
-- URI-keyed map of open `NotebookData` instances.
-- `getNotebookData(uri)`, `useNotebookList()`, `useNotebookSnapshot(uri)`.
+- URI-keyed map of open `NotebookData` instances owned by
+  `NotebookDataController`.
+- `NotebookContext` React hooks over that controller:
+  `getNotebookData(uri)`, `useNotebookList()`, `useNotebookSnapshot(uri)`.
 
 Why not sufficient as sandbox API:
 
 - React/context/hook-oriented API, not transport-safe.
-- coupled to client render lifecycle, not a durable RPC contract.
+- the React adapter is coupled to client render lifecycle, not a durable RPC
+  contract.
 - does not provide revisioned handles.
 
 Reuse plan:
 
-- use this registry (or an extracted non-React service) on the host side to
-  implement `HostNotebooksApi.list/get`.
+- use `NotebookDataController` on the host side to implement
+  `HostNotebooksApi.list/get`.
 
 ### `NotebookData` / `NotebookDataLike` / `RunmeConsoleApi` (runtime helpers)
 
@@ -567,17 +571,19 @@ Planned:
 - `NotebookData` stays the source of truth for live open docs; `NotebookDbCore`
   is persistence + revision gate.
 
-### 3) `NotebookContext` supplies open notebook registry
+### 3) `NotebookDataController` supplies the open notebook registry
 
 Current:
 
-- `NotebookProvider` tracks open notebook list and URI->`NotebookData` map.
+- `NotebookDataController` tracks the open notebook list and
+  URI->`NotebookData` map.
+- `NotebookProvider`/`NotebookContext` adapt that state for React.
 
 Planned:
 
-- `HostNotebooksApi.list/get` target resolution uses `NotebookContext` data (or an
-  extracted registry service). `get()` without a target returns the active UI
-  notebook; all write/execute methods require an explicit target handle or URI.
+- `HostNotebooksApi.list/get` target resolution uses `NotebookDataController`.
+  `get()` without a target returns the active UI notebook; all write/execute
+  methods require an explicit target handle or URI.
 - This directly addresses wrong-notebook writes from implicit "current tab"
   behavior.
 

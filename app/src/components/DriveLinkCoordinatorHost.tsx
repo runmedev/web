@@ -1,16 +1,20 @@
 import { useEffect } from "react";
+import { useLocation } from "react-router-dom";
 
 import { useGoogleAuth } from "../contexts/GoogleAuthContext";
 import { useNotebookStore } from "../contexts/NotebookStoreContext";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 import { useCurrentDoc } from "../contexts/CurrentDocContext";
+import { useNotebookContext } from "../contexts/NotebookContext";
 import { driveLinkCoordinator } from "../lib/driveLinkCoordinator";
 
 export function DriveLinkCoordinatorHost() {
+  const location = useLocation();
   const { ensureAccessToken } = useGoogleAuth();
   const { store } = useNotebookStore();
   const { addItem, getItems, removeItem } = useWorkspace();
   const { setCurrentDoc } = useCurrentDoc();
+  const { openNotebook } = useNotebookContext();
 
   useEffect(() => {
     if (!store) {
@@ -27,14 +31,40 @@ export function DriveLinkCoordinatorHost() {
       addWorkspaceItem: addItem,
       removeWorkspaceItem: removeItem,
       getWorkspaceItems: getItems,
-      openNotebook: (localUri: string) => {
-        setCurrentDoc(localUri);
+      openNotebook: async (localUri: string) => {
+        const result = await openNotebook(localUri);
+        setCurrentDoc(result.localUri);
       },
     });
 
-    driveLinkCoordinator.consumeUrlIntentFromLocation();
+    const consumeUrlIntent = () => {
+      if (driveLinkCoordinator.consumeUrlIntentFromLocation()) {
+        void driveLinkCoordinator.processPending();
+      }
+    };
+
+    consumeUrlIntent();
     void driveLinkCoordinator.processPending();
-  }, [addItem, ensureAccessToken, getItems, removeItem, setCurrentDoc, store]);
+    window.addEventListener("focus", consumeUrlIntent);
+    window.addEventListener("pageshow", consumeUrlIntent);
+    window.addEventListener("popstate", consumeUrlIntent);
+
+    return () => {
+      window.removeEventListener("focus", consumeUrlIntent);
+      window.removeEventListener("pageshow", consumeUrlIntent);
+      window.removeEventListener("popstate", consumeUrlIntent);
+    };
+  }, [
+    addItem,
+    ensureAccessToken,
+    getItems,
+    openNotebook,
+    removeItem,
+    setCurrentDoc,
+    store,
+    location.pathname,
+    location.search,
+  ]);
 
   return null;
 }

@@ -180,7 +180,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
   const { updateRunner, deleteRunner, setDefaultRunner } = useRunners();
   const { getItems, addItem, removeItem } = useWorkspace();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
-  const { getNotebookData, useNotebookList } = useNotebookContext();
+  const { getNotebookData, openNotebook, useNotebookList } = useNotebookContext();
   const openNotebooks = useNotebookList();
   const { fsStore, setFsStore } = useFilesystemStore();
   const { store: notebookStore } = useNotebookStore();
@@ -394,12 +394,13 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
         addItem,
         removeItem,
       },
-      openNotebook: (uri) => {
-        setCurrentDoc(uri);
+      openNotebook: async (uri) => {
+        const result = await openNotebook(uri);
+        setCurrentDoc(result.localUri);
       },
       resolveNotebook: resolveNotebookData,
       listNotebooks: () =>
-      openNotebooks
+        openNotebooks
           .reduce<NotebookDataLike[]>((items, notebook) => {
             const resolved = getNotebookData(notebook.uri);
             if (resolved) {
@@ -455,6 +456,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
     ensureFilesystemStore,
     getItems,
     getNotebookData,
+    openNotebook,
     openNotebooks,
     removeItem,
     resolveNotebookData,

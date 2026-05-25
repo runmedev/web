@@ -70,9 +70,10 @@ The web app already documents `NotebookData` as the in-memory notebook model.
 - React views subscribe via `subscribe(...)` and `getSnapshot()`
 - mutations call `emit()` so views re-render
 
-`NotebookContext` is the owner of `NotebookData` instances. It keeps a URI-keyed
-registry of notebook models and exposes `useNotebookSnapshot(...)` so React can
-re-render from model snapshots.
+`NotebookDataController` is the owner of `NotebookData` instances. It keeps a
+URI-keyed registry of notebook models. `NotebookContext` adapts that registry
+for React and exposes `useNotebookSnapshot(...)` so React can re-render from
+model snapshots.
 
 That means the intended architecture is:
 

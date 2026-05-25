@@ -73,6 +73,7 @@ function AppRouter() {
   const basename = getAppRouterBasename();
   return (
     <BrowserRouter basename={basename === "/" ? undefined : basename}>
+      <DriveLinkCoordinatorHost />
       <Routes>
         <Route path="/" element={<MainPage />} />
         <Route
@@ -150,7 +151,6 @@ function App({ branding }: AppProps) {
               <FilesystemStoreProvider>
               <CurrentDocProvider>
                   <NotebookStoreInitializer />
-                  <DriveLinkCoordinatorHost />
                   <SettingsProvider
                     agentEndpoint={configuredAgentEndpoint}
                     webApp={
