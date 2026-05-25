@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useLocation } from "react-router-dom";
 
 import { useGoogleAuth } from "../contexts/GoogleAuthContext";
 import { useNotebookStore } from "../contexts/NotebookStoreContext";
@@ -8,6 +9,7 @@ import { useNotebookContext } from "../contexts/NotebookContext";
 import { driveLinkCoordinator } from "../lib/driveLinkCoordinator";
 
 export function DriveLinkCoordinatorHost() {
+  const location = useLocation();
   const { ensureAccessToken } = useGoogleAuth();
   const { store } = useNotebookStore();
   const { addItem, getItems, removeItem } = useWorkspace();
@@ -35,8 +37,23 @@ export function DriveLinkCoordinatorHost() {
       },
     });
 
-    driveLinkCoordinator.consumeUrlIntentFromLocation();
+    const consumeUrlIntent = () => {
+      if (driveLinkCoordinator.consumeUrlIntentFromLocation()) {
+        void driveLinkCoordinator.processPending();
+      }
+    };
+
+    consumeUrlIntent();
     void driveLinkCoordinator.processPending();
+    window.addEventListener("focus", consumeUrlIntent);
+    window.addEventListener("pageshow", consumeUrlIntent);
+    window.addEventListener("popstate", consumeUrlIntent);
+
+    return () => {
+      window.removeEventListener("focus", consumeUrlIntent);
+      window.removeEventListener("pageshow", consumeUrlIntent);
+      window.removeEventListener("popstate", consumeUrlIntent);
+    };
   }, [
     addItem,
     ensureAccessToken,
@@ -45,6 +62,8 @@ export function DriveLinkCoordinatorHost() {
     removeItem,
     setCurrentDoc,
     store,
+    location.pathname,
+    location.search,
   ]);
 
   return null;

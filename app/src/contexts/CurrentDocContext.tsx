@@ -64,8 +64,6 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
       });
 
       const updateUrl = async () => {
-        const nextUrl = new URL(window.location.href);
-        nextUrl.searchParams.delete("doc");
         try {
           if (!localUri) {
             window.localStorage.removeItem(CURRENT_DOC_STORAGE_KEY);
@@ -75,12 +73,6 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
         } catch {
           // Ignore persistence failures for current-doc restore state.
         }
-
-        window.history.replaceState(
-          null,
-          "",
-          `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`,
-        );
       };
 
       void updateUrl();
