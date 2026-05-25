@@ -166,13 +166,18 @@ singleton.
 
 ### Per-Tab Open State
 
-Move current/open editor state from shared `localStorage` to per-tab state:
+Move current/open editor restore state from shared `localStorage` to per-tab
+`sessionStorage`. The live state remains in the existing in-memory owners:
 
-| State | Current storage | Proposed storage |
-| --- | --- | --- |
-| current document | `localStorage["runme/currentDoc"]` | `sessionStorage` plus React state |
-| open notebooks | `localStorage["runme/openNotebooks"]` | `sessionStorage` plus React state |
-| active cell | `localStorage["runme/notebook-active-cells"]` | keep shared; keyed by notebook URI and harmless |
+| State | Live owner | Current restore storage | Proposed restore storage |
+| --- | --- | --- | --- |
+| current document | `CurrentDocContext` | `localStorage["runme/currentDoc"]` | `sessionStorage` |
+| open notebooks | `NotebookDataController` | `localStorage["runme/openNotebooks"]` | `sessionStorage` |
+| active cell | active-cell state helper | `localStorage["runme/notebook-active-cells"]` | keep shared; keyed by notebook URI and harmless |
+
+`sessionStorage` is only the per-tab restore backend. It is not the live source
+of truth. Runtime changes should update the live owner first, then persist the
+new snapshot to `sessionStorage`.
 
 The URL `?doc=` should still be accepted as an initial open request, but after
 startup the selected document is tab-local.
@@ -306,6 +311,11 @@ Showing a notebook should be possible even before the notebook content is
 loaded. For example, a Drive URL with expired credentials should still become a
 visible tab with a stable local URI when possible, then render an auth/loading
 state in that tab until the load can complete.
+
+Blocked entries are different. If another tab owns the notebook, the current tab
+should create or update only the `OpenNotebookEntry` with `state: "blocked"`.
+It should not create an editable `NotebookData` for that URI. The blocked view
+renders from `OpenNotebookEntry` metadata, not from notebook content.
 
 ### Stable Local URI Resolution
 
@@ -457,7 +467,8 @@ The function should:
 4. Create or retrieve the `NotebookData` model for the local URI.
 5. Load notebook content into `NotebookData` when storage/auth is available.
 6. If blocked, keep the open entry with `state: "blocked"` and return the local
-   URI so the caller can select it and render the blocked state.
+   URI so the caller can select it and render the blocked state. Do not create
+   editable `NotebookData` for blocked entries.
 7. If auth or load fails after a local URI exists, keep the open entry with
    `state: "error"` and return the local URI so the caller can select it and
    render retry/login affordances.
@@ -578,6 +589,7 @@ Unit tests:
   acquiring ownership
 - `openNotebook` returns blocked state when another tab owns the local URI
 - blocked open entries are selectable and renderable
+- blocked open entries do not create editable `NotebookData`
 - acquire succeeds when no other tab holds the lock
 - acquire returns blocked when another tab holds the lock
 - release deletes the ownership record only for the matching epoch

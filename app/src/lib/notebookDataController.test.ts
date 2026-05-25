@@ -190,6 +190,36 @@ describe("NotebookDataController", () => {
     ]);
   });
 
+  it("returns null and leaves selection candidates unchanged when closing a stale URI", async () => {
+    const localStore = createFakeLocalNotebooks();
+    localStore.records.set("local://file/a", {
+      id: "local://file/a",
+      name: "a.json",
+      remoteId: "local://file/a",
+      notebook: createNotebook("a"),
+    });
+    localStore.records.set("local://file/b", {
+      id: "local://file/b",
+      name: "b.json",
+      remoteId: "local://file/b",
+      notebook: createNotebook("b"),
+    });
+    const controller = getNotebookDataController();
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    });
+    await controller.openNotebook("local://file/a");
+    await controller.openNotebook("local://file/b");
+
+    const fallback = controller.closeNotebook("local://file/missing");
+
+    expect(fallback).toBeNull();
+    expect(controller.getOpenNotebooks().map((item) => item.uri)).toEqual([
+      "local://file/a",
+      "local://file/b",
+    ]);
+  });
+
   it("restores legacy open-notebook storage without changing the storage shape", () => {
     window.localStorage.setItem(
       "runme/openNotebooks",

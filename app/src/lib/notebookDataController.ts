@@ -236,6 +236,9 @@ export class NotebookDataController {
   closeNotebook(localUri: string): string | null {
     this.ensureRestored();
     const index = this.openNotebooks.findIndex((item) => item.uri === localUri);
+    if (index === -1) {
+      return null;
+    }
     const fallback =
       index > 0
         ? this.openNotebooks[index - 1]?.uri ?? null
