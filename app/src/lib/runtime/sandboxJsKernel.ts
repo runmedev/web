@@ -41,6 +41,10 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'runme.help',
   'codex.turns.list',
   'codex.turns.getEvents',
+  'notebookDiff.listDriveRevisions',
+  'notebookDiff.diffDriveRevision',
+  'notebookDiff.openDiffTab',
+  'notebookDiff.help',
   ...SANDBOX_NOTEBOOKS_API_METHODS,
 ]
 
@@ -204,6 +208,12 @@ function buildSandboxSrcDoc(options: {
         });
 
         const notebooks = createSandboxNotebooksApiClient(hostCall);
+        const notebookDiff = {
+          listDriveRevisions: (target) => hostCall("notebookDiff.listDriveRevisions", [target]),
+          diffDriveRevision: (args) => hostCall("notebookDiff.diffDriveRevision", [args]),
+          openDiffTab: (diff) => hostCall("notebookDiff.openDiffTab", [diff]),
+          help: () => hostCall("notebookDiff.help", []),
+        };
         const codex = {
           turns: {
             list: () => hostCall("codex.turns.list", []),
@@ -239,6 +249,9 @@ function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebooks.get([target]) # omitted target = current UI notebook");
           consoleProxy.log("- notebooks.update({ target, expectedRevision?, operations })");
           consoleProxy.log("- notebooks.execute({ target, refIds })");
+          consoleProxy.log("- notebookDiff.listDriveRevisions([target])");
+          consoleProxy.log("- notebookDiff.diffDriveRevision({ target?, revisionId, includeOutputs?, includeMetadata? })");
+          consoleProxy.log("- notebookDiff.openDiffTab(diff)");
           consoleProxy.log("- codex.turns.list()");
           consoleProxy.log("- codex.turns.getEvents(turnId, { sessionId? })");
           consoleProxy.log("- const [latest] = await codex.turns.list(); consoleProxy.log(await codex.turns.getEvents(latest.turnId));");
@@ -254,11 +267,12 @@ function buildSandboxSrcDoc(options: {
               "opfs",
               "net",
               "notebooks",
+              "notebookDiff",
               "codex",
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, opfs, net, notebooks, codex, help);
+            await runner(consoleProxy, runme, opfs, net, notebooks, notebookDiff, codex, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });
@@ -534,7 +548,12 @@ export class SandboxJSKernel {
         resolve()
       }
       hostPort.addEventListener('message', onReady as EventListener)
-      iframe.contentWindow.postMessage({ type: SANDBOX_INIT_MESSAGE }, '*', [
+      const contentWindow = iframe.contentWindow
+      if (!contentWindow) {
+        reject(new Error('Sandbox iframe content window is unavailable.'))
+        return
+      }
+      contentWindow.postMessage({ type: SANDBOX_INIT_MESSAGE }, '*', [
         channel.port2,
       ])
     })

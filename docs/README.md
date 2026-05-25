@@ -30,6 +30,7 @@ Current numbered docs:
 - [13-app-console-reference.md](13-app-console-reference.md)
 - [14-authentication-and-app-configuration.md](14-authentication-and-app-configuration.md)
 - [15-logs-diagnostics-and-troubleshooting.md](15-logs-diagnostics-and-troubleshooting.md)
+- [16-notebook-diffs.md](16-notebook-diffs.md)
 
 Additional topical docs:
 

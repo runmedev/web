@@ -37,6 +37,7 @@ import {
   registerImportedMarkdownForUri,
   toImportedNotebookName,
 } from '../markdownImport'
+import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
 import type { Runner } from '../runner'
 import { appState } from './AppState'
 import type {
@@ -192,6 +193,11 @@ export function createAppJsGlobals({
   const notebooksApi = createNotebooksApi({
     resolveNotebook: resolveNotebook ?? (() => runme.getCurrentNotebook()),
     listNotebooks,
+  })
+  const notebookDiffApi = createNotebookDiffRuntimeApi({
+    notebooksApi,
+    resolveLocalNotebooks: () => appState.localNotebooks,
+    resolveDriveNotebookStore: () => appState.driveNotebookStore,
   })
   const jupyterManager = getJupyterManager()
   const harnessManager = getHarnessManager()
@@ -594,6 +600,7 @@ export function createAppJsGlobals({
   return {
     runme: runmeApi,
     notebooks: notebooksHelpers,
+    notebookDiff: notebookDiffApi,
     codex: codexApi,
     opfs: {
       exists: (path: string) => {
@@ -1189,6 +1196,7 @@ export function createAppJsGlobals({
         'Available namespaces:',
         '  runme           - Notebook helpers (run all, clear outputs)',
         '  notebooks       - Notebook document API plus create/append helpers',
+        '  notebookDiff    - Compare Drive-backed notebook revisions',
         '  opfs            - Origin-private browser file storage helpers',
         '  net             - Browser network helpers',
         '  codex           - Codex project and turn-journal helpers',
@@ -1206,6 +1214,7 @@ export function createAppJsGlobals({
         'High-value commands:',
         '  await notebooks.createLocal("hello")',
         '  await notebooks.appendCodeCell({ value: "print(1)", languageId: "python" })',
+        '  const diff = await notebookDiff.diffDriveRevision({ revisionId })',
         '  runmeRunners.ensure("openai-local", "ws://localhost:9988/ws", { setDefault: true })',
         '',
         'Type <namespace>.help() for detailed commands, e.g. explorer.help()',

@@ -5,6 +5,7 @@ import {
   createAppKernelOpfsApi,
 } from './appKernelLowLevelApis'
 import { getCodexTurnEvents, listCodexTurns } from './codexTurns'
+import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
 import { JSKernel } from './jsKernel'
 import {
   type NotebooksApiBridgeServer,
@@ -12,6 +13,7 @@ import {
   createNotebooksApiBridgeServer,
 } from './notebooksApiBridge'
 import { type NotebookDataLike, createRunmeConsoleApi } from './runmeConsole'
+import { appState } from './AppState'
 import {
   CODE_MODE_SANDBOX_ALLOWED_METHODS,
   SandboxJSKernel,
@@ -107,11 +109,17 @@ export function createCodeModeExecutor(options: {
       })
       const opfsApi = createAppKernelOpfsApi()
       const networkApi = createAppKernelNetworkApi()
+      const hostNotebooksApi = createHostNotebooksApi({
+        resolveNotebook,
+        listNotebooks,
+      })
       const notebooksApiBridgeServer = createNotebooksApiBridgeServer({
-        notebooksApi: createHostNotebooksApi({
-          resolveNotebook,
-          listNotebooks,
-        }),
+        notebooksApi: hostNotebooksApi,
+      })
+      const notebookDiffApi = createNotebookDiffRuntimeApi({
+        notebooksApi: hostNotebooksApi,
+        resolveLocalNotebooks: () => appState.localNotebooks,
+        resolveDriveNotebookStore: () => appState.driveNotebookStore,
       })
 
       const chunks: string[] = []
@@ -178,6 +186,7 @@ export function createCodeModeExecutor(options: {
                     opfsApi,
                     networkApi,
                     notebooksApiBridgeServer,
+                    notebookDiffApi,
                   }),
               },
             }).run(normalizedCode, { signal: abortController.signal })
@@ -258,6 +267,7 @@ async function handleSandboxAppKernelBridgeCall({
   opfsApi,
   networkApi,
   notebooksApiBridgeServer,
+  notebookDiffApi,
 }: {
   method: string
   args: unknown[]
@@ -265,6 +275,7 @@ async function handleSandboxAppKernelBridgeCall({
   opfsApi: ReturnType<typeof createAppKernelOpfsApi>
   networkApi: ReturnType<typeof createAppKernelNetworkApi>
   notebooksApiBridgeServer: NotebooksApiBridgeServer
+  notebookDiffApi: ReturnType<typeof createNotebookDiffRuntimeApi>
 }): Promise<unknown> {
   const target = args[0]
   switch (method) {
@@ -340,6 +351,14 @@ async function handleSandboxAppKernelBridgeCall({
         String(args[0] ?? ''),
         (args[1] as { sessionId?: string }) ?? undefined
       )
+    case 'notebookDiff.listDriveRevisions':
+      return notebookDiffApi.listDriveRevisions(args[0] as any)
+    case 'notebookDiff.diffDriveRevision':
+      return notebookDiffApi.diffDriveRevision(args[0] as any)
+    case 'notebookDiff.openDiffTab':
+      return notebookDiffApi.openDiffTab(args[0] as any)
+    case 'notebookDiff.help':
+      return notebookDiffApi.help()
     default:
       if (method.startsWith('notebooks.')) {
         return notebooksApiBridgeServer.handleMessage({
