@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 
-const CURRENT_DOC_STORAGE_KEY = "runme/currentDoc";
+import { getNotebookSessionPersistence } from "../lib/notebookSessionPersistence";
 
 interface CurrentDocContextValue {
   getCurrentDoc: () => string | null;
@@ -31,15 +31,7 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
   const [currentDoc, setCurrentDocState] = useState<string | null>(null);
 
   const loadStoredCurrentDoc = useCallback((): string | null => {
-    if (typeof window === "undefined" || !window.localStorage) {
-      return null;
-    }
-    try {
-      const stored = window.localStorage.getItem(CURRENT_DOC_STORAGE_KEY);
-      return stored?.trim() ? stored : null;
-    } catch {
-      return null;
-    }
+    return getNotebookSessionPersistence().loadCurrentDoc();
   }, []);
 
   useEffect(() => {
@@ -55,7 +47,7 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
       if (currentDoc === localUri) {
         return;
       }
-      // Avoid no-op updates that can trigger unnecessary renders/URL writes.
+      // Avoid no-op updates that can trigger unnecessary renders.
       setCurrentDocState((prev) => {
         if (prev === localUri) {
           return prev;
@@ -63,19 +55,7 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
         return localUri;
       });
 
-      const updateUrl = async () => {
-        try {
-          if (!localUri) {
-            window.localStorage.removeItem(CURRENT_DOC_STORAGE_KEY);
-          } else {
-            window.localStorage.setItem(CURRENT_DOC_STORAGE_KEY, localUri);
-          }
-        } catch {
-          // Ignore persistence failures for current-doc restore state.
-        }
-      };
-
-      void updateUrl();
+      getNotebookSessionPersistence().saveCurrentDoc(localUri);
     },
     [currentDoc],
   );

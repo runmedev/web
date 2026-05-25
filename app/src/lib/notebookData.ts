@@ -672,9 +672,6 @@ export class NotebookData {
   }
 
   setNotebookStore(notebookStore: NotebookSaveStore | null): void {
-    if (!notebookStore || this.notebookStore) {
-      return;
-    }
     this.notebookStore = notebookStore;
   }
 

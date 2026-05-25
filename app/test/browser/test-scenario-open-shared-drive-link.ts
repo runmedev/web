@@ -278,6 +278,7 @@ const seedRuntime = run(
     localStorage.setItem('${GOOGLE_CLIENT_STORAGE_KEY}', JSON.stringify({}));
     localStorage.removeItem('${GOOGLE_AUTH_STORAGE_KEY}');
     localStorage.removeItem('${CURRENT_DOC_STORAGE_KEY}');
+    sessionStorage.removeItem('${CURRENT_DOC_STORAGE_KEY}');
     localStorage.setItem('${WORKSPACE_STORAGE_KEY}', JSON.stringify({ items: [] }));
     return 'ok';
   })()"`,
@@ -341,7 +342,7 @@ writeArtifact("scenario-open-shared-drive-link-03-after-reload.txt", snapshot);
 
 const currentDocRaw = run(
   `agent-browser eval "(async () => {
-    return localStorage.getItem('${CURRENT_DOC_STORAGE_KEY}') || '';
+    return sessionStorage.getItem('${CURRENT_DOC_STORAGE_KEY}') || '';
   })()"`,
 ).stdout.trim();
 writeArtifact("scenario-open-shared-drive-link-05-current-doc.txt", currentDocRaw);
@@ -438,6 +439,7 @@ run(
   `agent-browser eval "(async () => {
     localStorage.removeItem('${GOOGLE_AUTH_STORAGE_KEY}');
     localStorage.removeItem('${CURRENT_DOC_STORAGE_KEY}');
+    sessionStorage.removeItem('${CURRENT_DOC_STORAGE_KEY}');
     localStorage.setItem('${WORKSPACE_STORAGE_KEY}', JSON.stringify({ items: [] }));
     return 'ok';
   })()"`,

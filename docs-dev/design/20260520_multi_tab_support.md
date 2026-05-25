@@ -49,7 +49,6 @@ notebook ownership without Web Locks.
 Use `BroadcastChannel` for live cross-tab messages:
 
 - "ownership released" notifications
-- best-effort "focus your tab" requests
 
 Use IndexedDB for best-effort ownership metadata that the UI can inspect. The
 lock is authoritative; metadata is descriptive and may be stale.
@@ -521,12 +520,12 @@ Owned by: Tab opened at 10:42 AM
 
 Close this notebook in the other tab, then retry here.
 
-[Focus other tab] [Retry]
+[Retry]
 ```
 
-`Focus other tab` is best effort. It may send a BroadcastChannel message to the
-owner; the owner may call `window.focus()`. Browsers may ignore focus requests.
-The UI must still work if focus cannot be moved.
+The initial implementation does not include a focus request or takeover action.
+The blocked tab relies on the user closing the notebook in the owner tab and
+then clicking `Retry`.
 
 `Retry` calls `openNotebook(localUri)` again. If the other tab has closed the
 notebook or gone away, the Web Lock should now be acquirable.
@@ -570,8 +569,7 @@ manager whether the current tab still owns the notebook URI and epoch.
 10. Keep all visible-tab selection on `CurrentDocContext.setCurrentDoc`.
 11. Add blocked-notebook UI in `Actions` and sidebar indicators in
     `SidePanel`.
-12. Add optional best-effort `Focus other tab` and `owner-released`
-    BroadcastChannel messages.
+12. Add best-effort `owner-released` BroadcastChannel messages.
 13. Add a blocked-state `Retry` action that re-runs `openNotebook(localUri)`.
 14. Guard AppKernel/runtime notebook mutation APIs with ownership checks.
 15. Guard `NotebookData` autosave/persistence with ownership checks.
@@ -639,8 +637,6 @@ writing the legacy keys after this change.
   development, and production is HTTPS. Browsers without `navigator.locks`
   should show an unsupported editing state rather than falling back to weaker
   coordination.
-- Browser focus requests may be ignored. The UX should describe focus as best
-  effort and rely on explicit user action plus retry.
 - `BroadcastChannel` messages are not durable. That is fine because ownership
   correctness comes from Web Locks and IndexedDB state.
 - Takeover is intentionally out of scope for the initial implementation. It is
@@ -650,7 +646,7 @@ writing the legacy keys after this change.
 ## Recommendation
 
 Use Web Locks for exclusive notebook ownership and IndexedDB records for owner
-metadata. Use BroadcastChannel only for best-effort focus/release hints. Refactor
+metadata. Use BroadcastChannel only for best-effort release hints. Refactor
 current/open notebook UI state to be tab-local, then route every notebook-open
 operation through ownership acquisition. In the first implementation, blocked
 tabs ask the user to close the notebook in the other tab and retry.

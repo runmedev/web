@@ -22,6 +22,7 @@ import {
 } from "../../runme/client";;
 import { CellData } from "../../lib/notebookData";
 import { useNotebookContext } from "../../contexts/NotebookContext";
+import type { OpenNotebookEntry } from "../../lib/notebookDataController";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useOutput } from "../../contexts/OutputContext";
 import CellConsole, { fontSettings } from "./CellConsole";
@@ -1470,16 +1471,18 @@ export function Action({
 
 function NotebookTabContent({
   docUri,
+  entry,
   activeCell,
   isWindowFocused,
   onCellFocus,
 }: {
   docUri: string;
+  entry: OpenNotebookEntry;
   activeCell: NotebookActiveCellState | null;
   isWindowFocused: boolean;
   onCellFocus: (docUri: string, state: NotebookActiveCellState) => void;
 }) {
-  const { getNotebookData, useNotebookSnapshot } = useNotebookContext();
+  const { getNotebookData, openNotebook, useNotebookSnapshot } = useNotebookContext();
   const notebookSnapshot = useNotebookSnapshot(docUri);
   const cellDatas = useMemo(() => {
     if (!notebookSnapshot) {
@@ -1493,6 +1496,57 @@ function NotebookTabContent({
       .map((c) => (c?.refId ? data.getCell(c.refId) : null))
       .filter((c): c is CellData => Boolean(c));
   }, [getNotebookData, notebookSnapshot]);
+
+  if (entry.state === "blocked") {
+    const ownerText = entry.owner?.ownerStartedAt
+      ? `Tab opened at ${new Date(entry.owner.ownerStartedAt).toLocaleTimeString()}`
+      : "Another browser tab";
+    return (
+      <div
+        className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center text-sm text-nb-text-muted"
+        data-testid="notebook-blocked-state"
+      >
+        <div className="space-y-2">
+          <Text size="4" weight="bold" as="p" className="text-nb-text">
+            Notebook is already open in another browser tab
+          </Text>
+          <Text size="2" as="p">
+            {entry.name}
+          </Text>
+          <Text size="2" as="p">
+            Owned by: {ownerText}
+          </Text>
+          <Text size="2" as="p">
+            Close this notebook in the other tab, then retry here.
+          </Text>
+        </div>
+        <Button
+          variant="soft"
+          onClick={() => {
+            void openNotebook(docUri, { name: entry.name });
+          }}
+        >
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
+  if (entry.state === "error") {
+    return (
+      <div
+        className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center text-sm text-nb-text-muted"
+        data-testid="notebook-error-state"
+      >
+        <Text size="4" weight="bold" as="p" className="text-nb-text">
+          Notebook could not be opened
+        </Text>
+        <Text size="2" as="p">
+          {entry.errorMessage ?? "An unknown error occurred."}
+        </Text>
+      </div>
+    );
+  }
 
   if (!notebookSnapshot || !notebookSnapshot.loaded) {
     return (
@@ -2150,6 +2204,7 @@ export default function Actions() {
               <TabPanel className="flex-1 min-h-0" data-document-id={doc.uri}>
                 <NotebookTabContent
                   docUri={doc.uri}
+                  entry={doc}
                   activeCell={activeCellsByDoc[doc.uri] ?? null}
                   isWindowFocused={
                     isWindowFocused && resolvedSelectedTabUri === doc.uri

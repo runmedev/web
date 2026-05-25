@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parser_pb } from "../contexts/CellContext";
 import type { LocalNotebooks } from "../storage/local";
+import type {
+  AcquireResult,
+  NotebookOwnershipManager,
+} from "./tabCoordination/notebookOwnership";
 import { NotebookStoreItemType } from "../storage/notebook";
 import {
   __resetNotebookDataControllerForTests,
@@ -87,10 +91,42 @@ function createFakeLocalNotebooks() {
   };
 }
 
+function createFakeOwnershipManager(
+  acquireResult?: AcquireResult,
+): NotebookOwnershipManager {
+  const fallbackLease = {
+    notebookUri: "local://file/demo",
+    tabId: "tab-test",
+    epoch: "epoch-test",
+    release: vi.fn(),
+    isCurrentOwner: vi.fn(async () => true),
+  };
+  return {
+    acquire: vi.fn(async (notebookUri: string) => {
+      if (acquireResult) {
+        return acquireResult;
+      }
+      return {
+        status: "acquired",
+        lease: {
+          ...fallbackLease,
+          notebookUri,
+        },
+      };
+    }),
+    release: vi.fn(),
+    getOwner: vi.fn(async () => null),
+    subscribe: vi.fn(() => () => {}),
+    isCurrentOwner: vi.fn(async () => true),
+    dispose: vi.fn(),
+  } as unknown as NotebookOwnershipManager;
+}
+
 describe("NotebookDataController", () => {
   beforeEach(() => {
     __resetNotebookDataControllerForTests();
     window.localStorage.clear();
+    window.sessionStorage.clear();
   });
 
   it("opens a local notebook and loads NotebookData", async () => {
@@ -103,6 +139,7 @@ describe("NotebookDataController", () => {
     });
 
     const controller = getNotebookDataController();
+    controller.configureOwnershipManager(createFakeOwnershipManager());
     controller.configureStores({
       localNotebooks: localStore as unknown as LocalNotebooks,
     });
@@ -136,6 +173,7 @@ describe("NotebookDataController", () => {
       notebook: createNotebook("console.log('existing')"),
     });
     const controller = getNotebookDataController();
+    controller.configureOwnershipManager(createFakeOwnershipManager());
     controller.configureStores({
       localNotebooks: localStore as unknown as LocalNotebooks,
     });
@@ -175,6 +213,7 @@ describe("NotebookDataController", () => {
       notebook: createNotebook("b"),
     });
     const controller = getNotebookDataController();
+    controller.configureOwnershipManager(createFakeOwnershipManager());
     controller.configureStores({
       localNotebooks: localStore as unknown as LocalNotebooks,
     });
@@ -235,6 +274,7 @@ describe("NotebookDataController", () => {
     );
 
     const controller = getNotebookDataController();
+    controller.configureOwnershipManager(createFakeOwnershipManager());
 
     expect(controller.getOpenNotebooks()).toEqual([
       expect.objectContaining({
@@ -244,13 +284,121 @@ describe("NotebookDataController", () => {
         state: "loading",
       }),
     ]);
-    expect(controller.getNotebookData("local://file/restored")).toBeDefined();
-    expect(JSON.parse(window.localStorage.getItem("runme/openNotebooks") ?? "[]")).toEqual([
+    expect(controller.getNotebookData("local://file/restored")).toBeUndefined();
+    controller.configureStores({
+      localNotebooks: createFakeLocalNotebooks() as unknown as LocalNotebooks,
+    });
+    expect(JSON.parse(window.sessionStorage.getItem("runme/openNotebooks") ?? "[]")).toEqual([
       expect.objectContaining({
         uri: "local://file/restored",
         name: "restored.json",
-        type: "file",
       }),
     ]);
+  });
+
+  it("keeps blocked entries metadata-only", async () => {
+    const localStore = createFakeLocalNotebooks();
+    localStore.records.set("local://file/blocked", {
+      id: "local://file/blocked",
+      name: "blocked.json",
+      remoteId: "local://file/blocked",
+      notebook: createNotebook("blocked"),
+    });
+    const owner = {
+      notebookUri: "local://file/blocked",
+      ownerTabId: "tab-other",
+      ownerLabel: "Other tab",
+      ownerUrl: "http://localhost/",
+      ownerStartedAt: "2026-05-22T12:00:00.000Z",
+      epoch: "epoch-other",
+    };
+    const controller = getNotebookDataController();
+    controller.configureOwnershipManager(
+      createFakeOwnershipManager({ status: "blocked", owner }),
+    );
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    });
+
+    const result = await controller.openNotebook("local://file/blocked");
+
+    expect(result.entry).toEqual(
+      expect.objectContaining({
+        uri: "local://file/blocked",
+        state: "blocked",
+        owner,
+      }),
+    );
+    expect(controller.getNotebookData("local://file/blocked")).toBeUndefined();
+  });
+
+  it("returns unsupported state without creating editable NotebookData", async () => {
+    const localStore = createFakeLocalNotebooks();
+    localStore.records.set("local://file/unsupported", {
+      id: "local://file/unsupported",
+      name: "unsupported.json",
+      remoteId: "local://file/unsupported",
+      notebook: createNotebook("unsupported"),
+    });
+    const controller = getNotebookDataController();
+    controller.configureOwnershipManager(
+      createFakeOwnershipManager({
+        status: "unsupported",
+        reason: "web_locks_unavailable",
+      }),
+    );
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    });
+
+    const result = await controller.openNotebook("local://file/unsupported");
+
+    expect(result.entry).toEqual(
+      expect.objectContaining({
+        uri: "local://file/unsupported",
+        state: "error",
+      }),
+    );
+    expect(result.entry.errorMessage).toContain("does not support");
+    expect(result.entry.errorMessage).toContain("Web Locks");
+    expect(controller.getNotebookData("local://file/unsupported")).toBeUndefined();
+  });
+
+  it("releases notebook ownership when loading the local notebook fails", async () => {
+    const localStore = createFakeLocalNotebooks();
+    localStore.records.set("local://file/load-error", {
+      id: "local://file/load-error",
+      name: "load-error.json",
+      remoteId: "local://file/load-error",
+      notebook: createNotebook("load error"),
+    });
+    localStore.load.mockRejectedValueOnce(new Error("load failed"));
+    const release = vi.fn();
+    const controller = getNotebookDataController();
+    controller.configureOwnershipManager(
+      createFakeOwnershipManager({
+        status: "acquired",
+        lease: {
+          notebookUri: "local://file/load-error",
+          tabId: "tab-test",
+          epoch: "epoch-test",
+          release,
+          isCurrentOwner: vi.fn(async () => true),
+        },
+      }),
+    );
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    });
+
+    const result = await controller.openNotebook("local://file/load-error");
+
+    expect(result.entry).toEqual(
+      expect.objectContaining({
+        uri: "local://file/load-error",
+        state: "error",
+      }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
   });
 });
