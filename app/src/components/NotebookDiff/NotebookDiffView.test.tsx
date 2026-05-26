@@ -76,4 +76,10 @@ describe("NotebookDiffView", () => {
 
     expect(screen.getByText("Diff no longer available")).toBeTruthy();
   });
+
+  it("does not double-decode encoded diff ids", () => {
+    renderRoute("/diff/%25");
+
+    expect(screen.getByText("Diff no longer available")).toBeTruthy();
+  });
 });

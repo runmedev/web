@@ -397,7 +397,7 @@ function summarizeOutputs(outputs: parser_pb.CellOutput[]): OutputItemSummary[] 
 function summarizeOutputItem(item: parser_pb.CellOutputItem): OutputItemSummary {
   const mime = (item.mime ?? "").trim();
   const bytes = normalizeBytes(item.data);
-  const checksum = md5(Array.from(bytes).join(","));
+  const checksum = md5(bytes);
   if (isTextLikeMime(mime)) {
     return {
       mime,

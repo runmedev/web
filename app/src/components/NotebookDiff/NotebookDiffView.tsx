@@ -268,7 +268,7 @@ function NotebookDiffContent({ document }: { document: NotebookDiffDocument }) {
 export default function NotebookDiffView() {
   const params = useParams<{ diffId: string }>();
   const document = params.diffId
-    ? getNotebookDiffDocument(decodeURIComponent(params.diffId))
+    ? getNotebookDiffDocument(params.diffId)
     : null;
 
   if (!document) {
