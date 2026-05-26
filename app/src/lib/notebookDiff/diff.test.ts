@@ -120,5 +120,25 @@ describe("computeNotebookDiff", () => {
     expect(diff.summary.outputChanges).toBe(1);
     expect(diff.cells[0].changedFields).toContain("outputs");
   });
-});
 
+  it("does not compute text output diffs for large outputs", () => {
+    const baseOutput = Array.from(
+      { length: 501 },
+      (_value, index) => `old ${index}`,
+    ).join("\n");
+    const compareOutput = Array.from(
+      { length: 501 },
+      (_value, index) => `new ${index}`,
+    ).join("\n");
+
+    const diff = computeNotebookDiff(
+      notebook([cell({ refId: "a", value: "print(value)", stdout: baseOutput })]),
+      notebook([
+        cell({ refId: "a", value: "print(value)", stdout: compareOutput }),
+      ]),
+    );
+
+    expect(diff.summary.outputChanges).toBe(1);
+    expect(diff.cells[0].outputDiff?.textDiff).toBeUndefined();
+  });
+});

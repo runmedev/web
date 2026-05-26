@@ -24,6 +24,8 @@ const INTERNAL_OUTPUT_MIMES = new Set<string>([
 ]);
 
 const TEXT_DECODER = new TextDecoder();
+const MAX_OUTPUT_TEXT_DIFF_BYTES = 100_000;
+const MAX_OUTPUT_TEXT_DIFF_LINES = 500;
 
 const TRANSIENT_METADATA_KEYS = new Set<string>([
   RunmeMetadataKey.Sequence,
@@ -349,8 +351,36 @@ function diffOutputs(baseCell: parser_pb.Cell, compareCell: parser_pb.Cell): Out
     changed,
     baseItems,
     compareItems,
-    textDiff: baseText || compareText ? diffText(baseText, compareText) : undefined,
+    textDiff: maybeDiffOutputText(baseText, compareText),
   };
+}
+
+function maybeDiffOutputText(
+  baseText: string,
+  compareText: string,
+): TextDiff | undefined {
+  if (!baseText && !compareText) {
+    return undefined;
+  }
+  if (baseText.length + compareText.length > MAX_OUTPUT_TEXT_DIFF_BYTES) {
+    return undefined;
+  }
+  const baseLineCount = countLines(baseText);
+  const compareLineCount = countLines(compareText);
+  if (
+    baseLineCount > MAX_OUTPUT_TEXT_DIFF_LINES ||
+    compareLineCount > MAX_OUTPUT_TEXT_DIFF_LINES
+  ) {
+    return undefined;
+  }
+  return diffText(baseText, compareText);
+}
+
+function countLines(text: string): number {
+  if (!text) {
+    return 0;
+  }
+  return text.replace(/\r\n/g, "\n").split("\n").length;
 }
 
 function summarizeOutputs(outputs: parser_pb.CellOutput[]): OutputItemSummary[] {
@@ -490,4 +520,3 @@ function summarize(rows: CellDiff[]): NotebookDiff["summary"] {
     },
   );
 }
-

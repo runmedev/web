@@ -1,9 +1,18 @@
 /// <reference types="vitest" />
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  clearGoogleDriveRuntime,
+  setGoogleDriveBaseUrl,
+} from "../lib/googleDriveRuntime";
 import { NotebookStoreItemType } from "./notebook";
-import { isDriveItemUri, parseDriveItem } from "./drive";
+import { DriveNotebookStore, isDriveItemUri, parseDriveItem } from "./drive";
+
+afterEach(() => {
+  clearGoogleDriveRuntime();
+  vi.restoreAllMocks();
+});
 
 describe("parseDriveItem", () => {
   it("extracts id from file share URL", () => {
@@ -71,5 +80,41 @@ describe("isDriveItemUri", () => {
     expect(isDriveItemUri("0BwwA4oUTeiV1UVNwOHItT0xfa2M")).toBe(false);
     expect(isDriveItemUri("https://example.com/not-drive")).toBe(false);
     expect(isDriveItemUri("https://drive.google.com/not-a-drive-item")).toBe(false);
+  });
+});
+
+describe("DriveNotebookStore", () => {
+  it("paginates Drive revisions", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) => {
+        const url = new URL(String(input));
+        const pageToken = url.searchParams.get("pageToken");
+        const body = pageToken
+          ? { revisions: [{ id: "revision-2", size: "20" }] }
+          : {
+              revisions: [{ id: "revision-1", size: "10" }],
+              nextPageToken: "next-page",
+            };
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const revisions = await store.listRevisions(
+      "https://drive.google.com/file/d/file123/view",
+    );
+
+    expect(revisions.map((revision) => revision.id)).toEqual([
+      "revision-1",
+      "revision-2",
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("pageToken"),
+    ).toBe("next-page");
   });
 });

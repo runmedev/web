@@ -67,10 +67,19 @@ function normalizeTarget(target?: NotebookDiffTarget): NotebookTarget | undefine
   if (!target) {
     return undefined;
   }
-  if (typeof target.getUri === "function") {
+  if (hasGetUri(target)) {
     return { uri: target.getUri() };
   }
   return target;
+}
+
+function hasGetUri(
+  target: NotebookDiffTarget,
+): target is { getUri: () => string } {
+  return (
+    !!target &&
+    typeof (target as { getUri?: unknown }).getUri === "function"
+  );
 }
 
 export function createNotebookDiffRuntimeApi({

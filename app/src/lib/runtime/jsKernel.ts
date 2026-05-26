@@ -205,7 +205,10 @@ export class JSKernel {
       return this.formatArgs([data]);
     }
 
-    const normalizedRows = data.map((row, index) => {
+    const normalizedRows: Array<{
+      index: number;
+      values: Record<string, unknown>;
+    }> = data.map((row, index) => {
       if (row && typeof row === "object" && !Array.isArray(row)) {
         return { index, values: row as Record<string, unknown> };
       }

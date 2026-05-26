@@ -19,9 +19,8 @@ inspect revisions, compute the diff, and open the rendered diff view.
 Run this in a JavaScript cell using the AppKernel browser runner:
 
 ```js
-const target = {
-  uri: "local://file/a2d06400-8b02-4965-b26c-5e977945267f",
-};
+const doc = await notebooks.get();
+const target = { handle: doc.handle };
 
 const revisions = await notebookDiff.listDriveRevisions(target);
 
@@ -33,6 +32,17 @@ const rows = revisions.map((revision) => ({
   user: revision.lastModifyingUser?.emailAddress ?? "",
 }));
 
+console.table(rows);
+```
+
+The returned revision ids are Google Drive `Revision` ids for the notebook file.
+The snippet above targets the current notebook tab. To target a specific local
+notebook, use `const target = { uri: "local://file/..." }` instead.
+
+If you are running against an older app session where `console.table` is not
+available, use this fallback formatter:
+
+```js
 const columns = ["id", "modifiedTime", "size", "md5Checksum", "user"];
 const widths = columns.map((column) =>
   Math.max(column.length, ...rows.map((row) => String(row[column] ?? "").length)),
@@ -54,16 +64,14 @@ console.log(
 );
 ```
 
-The returned revision ids are Google Drive `Revision` ids for the notebook file.
-Replace `target.uri` with the local URI for the notebook you want to inspect.
-Use `console.log` for the table because App Console runtimes do not all expose
-`console.table`.
-
 ## Compute and Open a Diff
 
 Choose one of the returned revision ids, then run:
 
 ```js
+const doc = await notebooks.get();
+const target = { handle: doc.handle };
+const revisions = await notebookDiff.listDriveRevisions(target);
 const revisionId = revisions.at(-2)?.id;
 
 if (!revisionId) {

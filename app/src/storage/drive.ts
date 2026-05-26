@@ -73,7 +73,9 @@ interface GapiGlobal {
 type DriveCreateResponse = { result?: DriveDoc };
 type DriveUpdateResponse = { result?: DriveDoc };
 type DriveListResponse = { result?: { files?: DriveDoc[] } };
-type DriveRevisionListResponse = { result?: { revisions?: DriveRevision[] } };
+type DriveRevisionListResponse = {
+  result?: { revisions?: DriveRevision[]; nextPageToken?: string };
+};
 
 interface DriveFilesClient {
   create(doc: DriveDoc): Promise<DriveDoc>;
@@ -942,13 +944,22 @@ export class DriveNotebookStore {
       throw new Error("DriveNotebookStore.listRevisions expects a file URI");
     }
     const client = await this.getFilesClient();
-    const response = await client.listRevisions({
-      fileId: id,
-      supportsAllDrives: true,
-      fields:
-        "revisions(id,mimeType,modifiedTime,md5Checksum,size,keepForever,lastModifyingUser(displayName,emailAddress))",
-    });
-    return (response.result?.revisions ?? []).map(normalizeDriveRevision);
+    const revisions: DriveRevision[] = [];
+    let pageToken: string | undefined;
+
+    do {
+      const response = await client.listRevisions({
+        fileId: id,
+        supportsAllDrives: true,
+        fields:
+          "nextPageToken,revisions(id,mimeType,modifiedTime,md5Checksum,size,keepForever,lastModifyingUser(displayName,emailAddress))",
+        ...(pageToken ? { pageToken } : {}),
+      });
+      revisions.push(...(response.result?.revisions ?? []));
+      pageToken = optionalString(response.result?.nextPageToken);
+    } while (pageToken);
+
+    return revisions.map(normalizeDriveRevision);
   }
 
   async loadRevision(
