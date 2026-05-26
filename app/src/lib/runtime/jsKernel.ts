@@ -115,7 +115,7 @@ export class JSKernel {
               "- d3: D3.js",
               "- app.clear(): clear the render container",
               "- app.render(fn): render into the container with a D3 selection",
-              "- console.log/info/warn/error: write to this console",
+              "- console.log/info/table/warn/error: write to this console",
               "- app.runners.get(): list configured runners",
               "- app.runners.update(name, endpoint): add/update a runner",
               "- app.runners.delete(name): remove a runner",
@@ -174,6 +174,8 @@ export class JSKernel {
     return {
       log: (...args: unknown[]) => stdout(this.formatArgs(args)),
       info: (...args: unknown[]) => stdout(this.formatArgs(args)),
+      table: (data: unknown, columns?: string[]) =>
+        stdout(this.formatTable(data, columns)),
       warn: (...args: unknown[]) => stderr(this.formatArgs(args)),
       error: (...args: unknown[]) => stderr(this.formatArgs(args)),
     };
@@ -196,6 +198,63 @@ export class JSKernel {
         })
         .join(" ") + "\n"
     );
+  }
+
+  private formatTable(data: unknown, columns?: string[]): string {
+    if (!Array.isArray(data)) {
+      return this.formatArgs([data]);
+    }
+
+    const normalizedRows: Array<{
+      index: number;
+      values: Record<string, unknown>;
+    }> = data.map((row, index) => {
+      if (row && typeof row === "object" && !Array.isArray(row)) {
+        return { index, values: row as Record<string, unknown> };
+      }
+      return { index, values: { value: row } };
+    });
+
+    const selectedColumns =
+      columns && columns.length > 0
+        ? columns
+        : Array.from(
+            normalizedRows.reduce((seen, row) => {
+              Object.keys(row.values).forEach((key) => seen.add(key));
+              return seen;
+            }, new Set<string>()),
+          );
+    const headers = ["(index)", ...selectedColumns];
+    const lines = [
+      headers.join("\t"),
+      ...normalizedRows.map((row) =>
+        [row.index, ...selectedColumns.map((key) => row.values[key])]
+          .map((value) =>
+            typeof value === "string" ? value : this.formatTableCell(value),
+          )
+          .join("\t"),
+      ),
+    ];
+    return `${lines.join("\n")}\n`;
+  }
+
+  private formatTableCell(value: unknown): string {
+    if (value === undefined) {
+      return "";
+    }
+    if (typeof value === "bigint") {
+      return value.toString();
+    }
+    if (value && typeof value === "object") {
+      try {
+        return JSON.stringify(value, (_key, item) =>
+          typeof item === "bigint" ? item.toString() : item,
+        );
+      } catch {
+        return String(value);
+      }
+    }
+    return String(value);
   }
 
   private createAppHelpers(

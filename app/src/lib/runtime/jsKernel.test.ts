@@ -76,6 +76,23 @@ describe("JSKernel", () => {
 
     expect(stdout).toHaveBeenCalledWith('{"count":"1","nested":{"id":"2"}}\n');
   });
+
+  it("supports console.table for arrays of objects", async () => {
+    const stdout = vi.fn();
+    const kernel = new JSKernel({
+      hooks: {
+        onStdout: stdout,
+      },
+    });
+
+    await kernel.run(
+      'console.table([{ id: "1", size: 10 }, { id: "2", modifiedTime: "today" }]);',
+    );
+
+    expect(stdout).toHaveBeenCalledWith(
+      "(index)\tid\tsize\tmodifiedTime\n0\t1\t10\t\n1\t2\t\ttoday\n",
+    );
+  });
 });
 
 describe("JSKernel app globals", () => {

@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import Callback from "./routes/callback";
 import RunRoute from "./routes/run";
 import RunsRoute from "./routes/runs";
+import NotebookDiffView from "./components/NotebookDiff/NotebookDiffView";
 import { Theme } from "@radix-ui/themes";
 import "@radix-ui/themes/styles.css";
 import AuthStatus from "./components/AuthStatus/AuthStatus";
@@ -83,6 +84,7 @@ function AppRouter() {
         <Route path="/runs" element={<RunsRoute />} />
         <Route path="/runs/:runName" element={<RunRoute />} />
         <Route path="/runs/:runName/edit" element={<MainPage />} />
+        <Route path="/diff/:diffId" element={<NotebookDiffView />} />
         <Route path="/auth/status" element={<BrowserAuthStatus />} />
         <Route path="/oidc/callback" element={<Callback />} />
         <Route
@@ -129,7 +131,7 @@ function App({ branding }: AppProps) {
     if (!hasLoggedStartup) {
       appLogger.info("Application startup complete", {
         attrs: {
-          routeCount: 8,
+          routeCount: 9,
         },
       });
       hasLoggedStartup = true;
@@ -289,6 +291,7 @@ const BrowserAuthStatus = () => {
       authData={authData}
       onLogin={() => browserAdapter.loginWithRedirect()}
       onLogout={() => browserAdapter.logout()}
+      description="Current browser authentication state for Runme Web."
     />
   );
 };

@@ -13,9 +13,12 @@ const GAPI_SCRIPT_SRC = "https://apis.google.com/js/api.js";
 // VERSION_FIELDS is the fields we want to return when fetching metadata to determine the file content version.
 // https://developers.google.com/workspace/drive/api/guides/fields-parameter
 const VERSION_FIELDS = "md5Checksum,headRevisionId";
+const NOTEBOOK_JSON_WRITE_OPTIONS = {
+  emitDefaultValues: true,
+} as unknown as Parameters<typeof toJsonString>[2];
 
 let gapiScriptPromise: Promise<void> | null = null;
-let clientPromise: Promise<GapiDriveFilesClient> | null = null;
+let clientPromise: Promise<DriveFilesClient> | null = null;
 
 // Minimal type definitions that describe just the specific pieces of the global
 // gapi client that this module relies on. This keeps the usage of window.gapi
@@ -40,6 +43,11 @@ type GapiDriveFileMethods = {
   list: (request: Record<string, unknown>) => Promise<unknown>;
 };
 
+type GapiDriveRevisionMethods = {
+  get: (request: Record<string, unknown>) => Promise<unknown>;
+  list: (request: Record<string, unknown>) => Promise<unknown>;
+};
+
 type GapiRequestArgs = {
   path: string;
   method?: string;
@@ -53,8 +61,10 @@ interface GapiGlobal {
   client: {
     load: (name: string, version: string) => Promise<void>;
     setToken: (token: { access_token: string }) => void;
+    getToken?: () => { access_token?: string } | null;
     drive: {
       files: GapiDriveFileMethods;
+      revisions: GapiDriveRevisionMethods;
     };
     request: (args: GapiRequestArgs) => Promise<unknown>;
   };
@@ -63,6 +73,9 @@ interface GapiGlobal {
 type DriveCreateResponse = { result?: DriveDoc };
 type DriveUpdateResponse = { result?: DriveDoc };
 type DriveListResponse = { result?: { files?: DriveDoc[] } };
+type DriveRevisionListResponse = {
+  result?: { revisions?: DriveRevision[]; nextPageToken?: string };
+};
 
 interface DriveFilesClient {
   create(doc: DriveDoc): Promise<DriveDoc>;
@@ -71,14 +84,20 @@ interface DriveFilesClient {
     request: Record<string, unknown>,
   ): Promise<{ body?: string; result?: unknown }>;
   list(request: Record<string, unknown>): Promise<DriveListResponse>;
+  listRevisions(request: Record<string, unknown>): Promise<DriveRevisionListResponse>;
+  getRevision(
+    request: Record<string, unknown>,
+  ): Promise<{ body?: string; result?: unknown }>;
   ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc>;
 }
 
 class GapiDriveFilesClient implements DriveFilesClient {
   private readonly files: GapiDriveFileMethods;
+  private readonly revisions: GapiDriveRevisionMethods;
 
   constructor(private readonly gapi: GapiGlobal) {
     this.files = this.gapi.client.drive.files;
+    this.revisions = this.gapi.client.drive.revisions;
   }
 
   // setContent uploads content to a Google Drive file using a media upload.
@@ -105,7 +124,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
         supportsAllDrives: "true",
       },
       headers: {
-        Authorization: `Bearer ${this.gapi.client["getToken"]()?.access_token}`,
+        Authorization: `Bearer ${this.gapi.client.getToken?.()?.access_token ?? ""}`,
         "Content-Type": mimeType ?? "application/octet-stream",
         "Content-Length": String(byteLength),
       },
@@ -183,6 +202,19 @@ class GapiDriveFilesClient implements DriveFilesClient {
 
   list(request: Record<string, unknown>): Promise<DriveListResponse> {
     return this.files.list(request as any) as Promise<DriveListResponse>;
+  }
+
+  listRevisions(request: Record<string, unknown>): Promise<DriveRevisionListResponse> {
+    return this.revisions.list(request as any) as Promise<DriveRevisionListResponse>;
+  }
+
+  getRevision(
+    request: Record<string, unknown>,
+  ): Promise<{ body?: string; result?: unknown }> {
+    return this.revisions.get(request as any) as Promise<{
+      body?: string;
+      result?: unknown;
+    }>;
   }
 
   async ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc> {
@@ -359,6 +391,30 @@ class FetchDriveFilesClient implements DriveFilesClient {
     }) as Promise<DriveListResponse>;
   }
 
+  listRevisions(request: Record<string, unknown>): Promise<DriveRevisionListResponse> {
+    const fileId = String(request.fileId ?? "");
+    return this.request(
+      "GET",
+      `/drive/v3/files/${encodeURIComponent(fileId)}/revisions`,
+      { params: request },
+    ) as Promise<DriveRevisionListResponse>;
+  }
+
+  getRevision(
+    request: Record<string, unknown>,
+  ): Promise<{ body?: string; result?: unknown }> {
+    const fileId = String(request.fileId ?? "");
+    const revisionId = String(request.revisionId ?? "");
+    return this.request(
+      "GET",
+      `/drive/v3/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revisionId)}`,
+      {
+        params: request,
+        expectText: request.alt === "media",
+      },
+    );
+  }
+
   async ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc> {
     if (!file.id || !parentId) {
       return file;
@@ -470,9 +526,12 @@ async function ensureDriveFilesClient(
   }
 
   const gapi = await ensureGapi();
+  if (!gapi) {
+    throw new Error("Google API client is unavailable");
+  }
 
   if (!clientPromise) {
-    clientPromise = new Promise((resolve, reject) => {
+    clientPromise = new Promise<DriveFilesClient>((resolve, reject) => {
       gapi.load("client", {
         callback: async () => {
           try {
@@ -490,7 +549,11 @@ async function ensureDriveFilesClient(
     });
   }
 
-  const client = await clientPromise;
+  const pendingClient = clientPromise;
+  if (!pendingClient) {
+    throw new Error("Google Drive client initialization failed");
+  }
+  const client = await pendingClient;
   gapi.client.setToken({ access_token: accessToken });
   return client;
 }
@@ -531,6 +594,46 @@ type DriveFileMetadata = {
 export interface DriveVersionMetadata {
   md5Checksum?: string;
   headRevisionId?: string;
+}
+
+export interface DriveRevision {
+  id?: string;
+  mimeType?: string;
+  modifiedTime?: string;
+  md5Checksum?: string;
+  size?: string;
+  keepForever?: boolean;
+  lastModifyingUser?: {
+    displayName?: string;
+    emailAddress?: string;
+  };
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function normalizeDriveRevision(revision: DriveRevision): DriveRevision {
+  const lastModifyingUser =
+    revision.lastModifyingUser && typeof revision.lastModifyingUser === "object"
+      ? {
+          displayName: optionalString(revision.lastModifyingUser.displayName),
+          emailAddress: optionalString(revision.lastModifyingUser.emailAddress),
+        }
+      : undefined;
+
+  return {
+    id: optionalString(revision.id),
+    mimeType: optionalString(revision.mimeType),
+    modifiedTime: optionalString(revision.modifiedTime),
+    md5Checksum: optionalString(revision.md5Checksum),
+    size: optionalString(revision.size),
+    keepForever:
+      typeof revision.keepForever === "boolean"
+        ? revision.keepForever
+        : undefined,
+    lastModifyingUser,
+  };
 }
 
 export function parseDriveItem(uri: string): DriveItem {
@@ -633,9 +736,7 @@ function createInitialNotebookJson(): string {
   const notebook = create(parser_pb.NotebookSchema, {
     cells: [],
   });
-  return toJsonString(parser_pb.NotebookSchema, notebook, {
-    emitDefaultValues: true,
-  });
+  return toJsonString(parser_pb.NotebookSchema, notebook, NOTEBOOK_JSON_WRITE_OPTIONS);
 }
 
 function extractBody(response: { body?: string; result?: unknown }): string {
@@ -657,7 +758,7 @@ export class DriveNotebookStore {
 
   private readonly lastReadVersion = new Map<string, string>();
 
-  private async getFilesClient(): Promise<GapiDriveFilesClient> {
+  private async getFilesClient(): Promise<DriveFilesClient> {
     const token = await this.ensureAccessToken();
     return ensureDriveFilesClient(token);
   }
@@ -678,16 +779,17 @@ export class DriveNotebookStore {
     if (!file.id) {
       throw new Error("Failed to create Google Drive notebook file");
     }
+    const fileId = file.id;
     file = await client.ensureParent(file, id);
     const isFolder = file.mimeType === "application/vnd.google-apps.folder";
     return {
-      uri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
+      uri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
       name: file.name ?? name,
       type: isFolder
         ? NotebookStoreItemType.Folder
         : NotebookStoreItemType.File,
       children: [],
-      remoteUri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
+      remoteUri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
       parents: [parentUri],
     };
   }
@@ -719,9 +821,11 @@ export class DriveNotebookStore {
       );
       return { conflicted: true };
     }
-    const json = toJsonString(parser_pb.NotebookSchema, notebook, {
-      emitDefaultValues: true,
-    });
+    const json = toJsonString(
+      parser_pb.NotebookSchema,
+      notebook,
+      NOTEBOOK_JSON_WRITE_OPTIONS,
+    );
 
     await client.update({
       id,
@@ -832,6 +936,54 @@ export class DriveNotebookStore {
     });
     const result = metadataResponse.result as DriveVersionMetadata | undefined;
     return result ?? null;
+  }
+
+  async listRevisions(uri: string): Promise<DriveRevision[]> {
+    const { id, type } = parseDriveItem(uri);
+    if (type !== NotebookStoreItemType.File) {
+      throw new Error("DriveNotebookStore.listRevisions expects a file URI");
+    }
+    const client = await this.getFilesClient();
+    const revisions: DriveRevision[] = [];
+    let pageToken: string | undefined;
+
+    do {
+      const response = await client.listRevisions({
+        fileId: id,
+        supportsAllDrives: true,
+        fields:
+          "nextPageToken,revisions(id,mimeType,modifiedTime,md5Checksum,size,keepForever,lastModifyingUser(displayName,emailAddress))",
+        ...(pageToken ? { pageToken } : {}),
+      });
+      revisions.push(...(response.result?.revisions ?? []));
+      pageToken = optionalString(response.result?.nextPageToken);
+    } while (pageToken);
+
+    return revisions.map(normalizeDriveRevision);
+  }
+
+  async loadRevision(
+    uri: string,
+    revisionId: string,
+  ): Promise<parser_pb.Notebook> {
+    const { id, type } = parseDriveItem(uri);
+    if (type !== NotebookStoreItemType.File) {
+      throw new Error("DriveNotebookStore.loadRevision expects a file URI");
+    }
+    if (!revisionId?.trim()) {
+      throw new Error("DriveNotebookStore.loadRevision requires a revision id");
+    }
+    const client = await this.getFilesClient();
+    const response = await client.getRevision({
+      fileId: id,
+      revisionId: revisionId.trim(),
+      supportsAllDrives: true,
+      alt: "media",
+    });
+    const body = extractBody(response);
+    return fromJsonString(parser_pb.NotebookSchema, body, {
+      ignoreUnknownFields: true,
+    });
   }
 
   async rename(uri: string, name: string): Promise<NotebookStoreItem> {

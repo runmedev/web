@@ -41,6 +41,10 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'runme.help',
   'codex.turns.list',
   'codex.turns.getEvents',
+  'notebookDiff.listDriveRevisions',
+  'notebookDiff.diffDriveRevision',
+  'notebookDiff.openDiffTab',
+  'notebookDiff.help',
   ...SANDBOX_NOTEBOOKS_API_METHODS,
 ]
 
@@ -155,6 +159,56 @@ function buildSandboxSrcDoc(options: {
             })
             .join(" ") + "\\n";
 
+        const formatTableCell = (value) => {
+          if (value === undefined) {
+            return "";
+          }
+          if (typeof value === "bigint") {
+            return value.toString();
+          }
+          if (value && typeof value === "object") {
+            try {
+              return JSON.stringify(
+                value,
+                (_key, item) => (typeof item === "bigint" ? item.toString() : item),
+              );
+            } catch {
+              return String(value);
+            }
+          }
+          return String(value);
+        };
+
+        const formatTable = (data, columns) => {
+          if (!Array.isArray(data)) {
+            return formatArgs([data]);
+          }
+          const normalizedRows = data.map((row, index) => {
+            if (row && typeof row === "object" && !Array.isArray(row)) {
+              return { index, values: row };
+            }
+            return { index, values: { value: row } };
+          });
+          const selectedColumns = Array.isArray(columns) && columns.length > 0
+            ? columns
+            : Array.from(
+                normalizedRows.reduce((seen, row) => {
+                  Object.keys(row.values).forEach((key) => seen.add(key));
+                  return seen;
+                }, new Set()),
+              );
+          const headers = ["(index)", ...selectedColumns];
+          const lines = [
+            headers.join("\\t"),
+            ...normalizedRows.map((row) =>
+              [row.index, ...selectedColumns.map((key) => row.values[key])]
+                .map(formatTableCell)
+                .join("\\t"),
+            ),
+          ];
+          return lines.join("\\n") + "\\n";
+        };
+
         const post = (payload) => {
           if (!port) {
             return;
@@ -177,6 +231,7 @@ function buildSandboxSrcDoc(options: {
         const consoleProxy = {
           log: (...args) => post({ type: "stdout", data: formatArgs(args) }),
           info: (...args) => post({ type: "stdout", data: formatArgs(args) }),
+          table: (data, columns) => post({ type: "stdout", data: formatTable(data, columns) }),
           warn: (...args) => post({ type: "stderr", data: formatArgs(args) }),
           error: (...args) => post({ type: "stderr", data: formatArgs(args) }),
         };
@@ -204,6 +259,12 @@ function buildSandboxSrcDoc(options: {
         });
 
         const notebooks = createSandboxNotebooksApiClient(hostCall);
+        const notebookDiff = {
+          listDriveRevisions: (target) => hostCall("notebookDiff.listDriveRevisions", [target]),
+          diffDriveRevision: (args) => hostCall("notebookDiff.diffDriveRevision", [args]),
+          openDiffTab: (diff) => hostCall("notebookDiff.openDiffTab", [diff]),
+          help: () => hostCall("notebookDiff.help", []),
+        };
         const codex = {
           turns: {
             list: () => hostCall("codex.turns.list", []),
@@ -239,6 +300,9 @@ function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebooks.get([target]) # omitted target = current UI notebook");
           consoleProxy.log("- notebooks.update({ target, expectedRevision?, operations })");
           consoleProxy.log("- notebooks.execute({ target, refIds })");
+          consoleProxy.log("- notebookDiff.listDriveRevisions([target])");
+          consoleProxy.log("- notebookDiff.diffDriveRevision({ target?, revisionId, includeOutputs?, includeMetadata? })");
+          consoleProxy.log("- notebookDiff.openDiffTab(diff)");
           consoleProxy.log("- codex.turns.list()");
           consoleProxy.log("- codex.turns.getEvents(turnId, { sessionId? })");
           consoleProxy.log("- const [latest] = await codex.turns.list(); consoleProxy.log(await codex.turns.getEvents(latest.turnId));");
@@ -254,11 +318,12 @@ function buildSandboxSrcDoc(options: {
               "opfs",
               "net",
               "notebooks",
+              "notebookDiff",
               "codex",
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, opfs, net, notebooks, codex, help);
+            await runner(consoleProxy, runme, opfs, net, notebooks, notebookDiff, codex, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });
@@ -534,7 +599,12 @@ export class SandboxJSKernel {
         resolve()
       }
       hostPort.addEventListener('message', onReady as EventListener)
-      iframe.contentWindow.postMessage({ type: SANDBOX_INIT_MESSAGE }, '*', [
+      const contentWindow = iframe.contentWindow
+      if (!contentWindow) {
+        reject(new Error('Sandbox iframe content window is unavailable.'))
+        return
+      }
+      contentWindow.postMessage({ type: SANDBOX_INIT_MESSAGE }, '*', [
         channel.port2,
       ])
     })
