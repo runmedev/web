@@ -8,7 +8,7 @@ import {
 import { NotebookStoreItemType } from "../storage/notebook";
 
 const STORAGE_KEY = "runme/drive-link-intents";
-const STATUS_TAB_URI = "system://drive-link-status";
+const STATUS_TAB_URI = "status://drive-link";
 
 export type DriveLinkIntentStatus =
   | "pending"

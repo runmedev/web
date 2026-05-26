@@ -6,6 +6,7 @@ import { useNotebookStore } from "../contexts/NotebookStoreContext";
 import { useWorkspace } from "../contexts/WorkspaceContext";
 import { useCurrentDoc } from "../contexts/CurrentDocContext";
 import { useNotebookContext } from "../contexts/NotebookContext";
+import { useWorkspaceDocumentContext } from "../contexts/WorkspaceDocumentContext";
 import { driveLinkCoordinator } from "../lib/driveLinkCoordinator";
 
 export function DriveLinkCoordinatorHost() {
@@ -15,6 +16,7 @@ export function DriveLinkCoordinatorHost() {
   const { addItem, getItems, removeItem } = useWorkspace();
   const { setCurrentDoc } = useCurrentDoc();
   const { openNotebook } = useNotebookContext();
+  const { showDocument } = useWorkspaceDocumentContext();
 
   useEffect(() => {
     if (!store) {
@@ -33,6 +35,9 @@ export function DriveLinkCoordinatorHost() {
       getWorkspaceItems: getItems,
       openNotebook: async (localUri: string) => {
         const result = await openNotebook(localUri);
+        showDocument(result.localUri, {
+          title: result.entry.name,
+        });
         setCurrentDoc(result.localUri);
       },
     });
@@ -61,6 +66,7 @@ export function DriveLinkCoordinatorHost() {
     openNotebook,
     removeItem,
     setCurrentDoc,
+    showDocument,
     store,
     location.pathname,
     location.search,

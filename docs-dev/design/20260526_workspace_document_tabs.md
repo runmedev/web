@@ -351,6 +351,11 @@ document URI
   -> data owner for that URI scheme
 ```
 
+This does not require adding route-level pages for each document kind. The
+existing workspace route remains the host for document tabs; commands and URL
+handlers show a document by creating/selecting its URI in the workspace
+document list.
+
 Concrete examples:
 
 | URI | Tab metadata | View component | Data owner |
@@ -362,7 +367,7 @@ Concrete examples:
 This keeps the system extensible. Adding a new document type means adding:
 
 1. a URI scheme or URI pattern for the document
-2. an opener method or command that creates/selects that URI
+2. an open command or existing URL handler that creates/selects that URI
 3. a rendering branch in `Actions.tsx`
 4. a document data owner if the view needs live data
 5. tests for selection, close behavior, and URI-type handling

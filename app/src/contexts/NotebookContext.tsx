@@ -17,6 +17,7 @@ import {
 } from "../lib/notebookDataController";
 import { appLogger } from "../lib/logging/runtime";
 import { appState } from "../lib/runtime/AppState";
+import { isNotebookDocumentUri } from "../lib/workspaceDocuments/workspaceDocumentTypes";
 import { useCurrentDoc } from "./CurrentDocContext";
 import { useNotebookStore } from "./NotebookStoreContext";
 
@@ -121,12 +122,10 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     }
     if (
       currentDoc &&
+      isNotebookDocumentUri(currentDoc) &&
       !restoredCurrentDocRef.current &&
       openNotebooks.length === 0
     ) {
-      if (!currentDoc.startsWith("local://file/") && !store) {
-        return;
-      }
       restoredCurrentDocRef.current = true;
       void controller.openNotebook(currentDoc).catch((error) => {
         appLogger.error("Failed to restore selected notebook", {

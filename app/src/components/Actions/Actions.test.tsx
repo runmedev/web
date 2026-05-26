@@ -2,7 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { clone, create } from "@bufbuild/protobuf";
-import React from "react";
 import {
   APPKERNEL_RUNNER_NAME,
   APPKERNEL_SANDBOX_RUNNER_NAME,
@@ -42,8 +41,14 @@ vi.mock("../../contexts/NotebookContext", () => ({
   useNotebookContext: () => ({
     getNotebookData: () => null,
     useNotebookSnapshot: () => null,
-    useNotebookList: () => [],
-    removeNotebook: () => {},
+  }),
+}));
+
+vi.mock("../../contexts/WorkspaceDocumentContext", () => ({
+  useWorkspaceDocumentContext: () => ({
+    useWorkspaceDocuments: () => [],
+    showDocument: () => {},
+    closeWorkspaceDocument: () => null,
   }),
 }));
 
@@ -133,7 +138,7 @@ class StubCellData {
     return this.subscribe(listener);
   }
 
-  subscribeToRunIDChange(listener: (id: string) => void) {
+  subscribeToRunIDChange(_listener: (id: string) => void) {
     return () => {};
   }
 
@@ -189,9 +194,9 @@ describe("Action component", () => {
       },
       value: "echo hi",
     });
-    const stub = new StubCellData(cell) as unknown as CellData;
+    const stub = new StubCellData(cell);
 
-    render(<Action cellData={stub} isFirst={false} />);
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
 
     const first = screen.getByTestId("cell-console") as HTMLElement;
     const firstKey = first.dataset.runkey;
@@ -218,9 +223,9 @@ describe("Action component", () => {
       },
       value: "echo hi",
     });
-    const stub = new StubCellData(cell) as unknown as CellData;
+    const stub = new StubCellData(cell);
 
-    render(<Action cellData={stub} isFirst={false} />);
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
     expect(screen.getByTestId("cell-console")).toBeTruthy();
 
     await act(async () => {
@@ -301,7 +306,7 @@ describe("Action component", () => {
       | HTMLSelectElement
       | null;
     expect(selector).toBeTruthy();
-    fireEvent.change(selector, { target: { value: "markdown" } });
+    fireEvent.change(selector as HTMLSelectElement, { target: { value: "markdown" } });
 
     expect(stub.update).toHaveBeenCalledTimes(1);
     const updatedCell = stub.update.mock.calls[0][0] as parser_pb.Cell;

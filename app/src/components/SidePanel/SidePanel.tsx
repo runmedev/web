@@ -13,8 +13,13 @@ import WorkspaceExplorer from "../Workspace/WorkspaceExplorer";
 import { getBrowserAdapter, useBrowserAuthData } from "../../browserAdapter.client";
 import { useGoogleAuth } from "../../contexts/GoogleAuthContext";
 import { useCurrentDoc } from "../../contexts/CurrentDocContext";
-import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useSidePanel } from "../../contexts/SidePanelContext";
+import { useWorkspaceDocumentContext } from "../../contexts/WorkspaceDocumentContext";
+import {
+  isDriveLinkStatusUri,
+  isNotebookDiffUri,
+  isNotebookDocumentUri,
+} from "../../lib/workspaceDocuments/workspaceDocumentTypes";
 
 const sideButtonBase = "group side-btn";
 
@@ -42,65 +47,70 @@ function getNotebookStatusLabel(state?: string): string | null {
 }
 
 /**
- * OpenNotebooksPanel renders a lightweight "open editors" style list driven by
- * NotebookContext. It shares the same open-notebook state as the tab strip so
+ * OpenDocumentsPanel renders a lightweight "open editors" style list driven by
+ * WorkspaceDocumentContext. It shares the same open-document state as the tab strip so
  * the sidebar remains a secondary view over the exact same source of truth.
  * Status labels come from OpenNotebookEntry metadata; blocked entries do not
  * have editable NotebookData models in this tab.
  */
-function OpenNotebooksPanel() {
-  const { useNotebookList, removeNotebook } = useNotebookContext();
+function OpenDocumentsPanel() {
+  const { useWorkspaceDocuments, closeWorkspaceDocument } =
+    useWorkspaceDocumentContext();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
-  const openNotebooks = useNotebookList();
+  const openDocuments = useWorkspaceDocuments();
   const currentDocUri = getCurrentDoc();
 
-  const handleCloseNotebook = useCallback(
+  const handleCloseDocument = useCallback(
     (uri: string) => {
-      const next = removeNotebook(uri);
-      if (uri === currentDocUri) {
-        setCurrentDoc(next ?? null);
-      }
+      closeWorkspaceDocument(uri);
     },
-    [currentDocUri, removeNotebook, setCurrentDoc],
+    [closeWorkspaceDocument],
   );
 
   return (
     <div
-      id="open-notebooks-panel"
+      id="open-documents-panel"
       className="flex h-full min-h-0 w-full flex-col bg-nb-surface"
     >
       <div
-        id="open-notebooks-panel-header"
+        id="open-documents-panel-header"
         className="border-b border-nb-border px-4 py-3"
       >
         <p className="text-xs font-semibold tracking-[0.18em] text-nb-text-faint uppercase">
-          Open Notebooks
+          Open Documents
         </p>
         <p className="mt-1 text-sm text-nb-text-muted">
-          {openNotebooks.length} {openNotebooks.length === 1 ? "notebook" : "notebooks"}
+          {openDocuments.length} {openDocuments.length === 1 ? "document" : "documents"}
         </p>
       </div>
       <div
-        id="open-notebooks-panel-list"
+        id="open-documents-panel-list"
         className="flex-1 min-h-0 overflow-y-auto px-2 py-2"
       >
-        {openNotebooks.length === 0 ? (
+        {openDocuments.length === 0 ? (
           <div
-            id="open-notebooks-panel-empty"
+            id="open-documents-panel-empty"
             className="rounded-nb-sm border border-dashed border-nb-border bg-white/60 px-3 py-4 text-sm text-nb-text-muted"
           >
-            No open notebooks yet.
+            No open documents yet.
           </div>
         ) : (
-          <ul id="open-notebooks-list" className="space-y-1">
-            {openNotebooks.map((doc) => {
-              const displayName = getNotebookDisplayName(doc.uri, doc.name);
+          <ul id="open-documents-list" className="space-y-1">
+            {openDocuments.map((doc) => {
+              const displayName = getNotebookDisplayName(doc.uri, doc.title);
               const isActive = doc.uri === currentDocUri;
               const statusLabel = getNotebookStatusLabel(doc.state);
+              const kind = isNotebookDocumentUri(doc.uri)
+                ? "Notebook"
+                : isNotebookDiffUri(doc.uri)
+                  ? "Diff"
+                  : isDriveLinkStatusUri(doc.uri)
+                    ? "Status"
+                    : "Document";
               return (
                 <li key={doc.uri}>
                   <div
-                    id={`open-notebook-row-${encodeURIComponent(doc.uri)}`}
+                    id={`open-document-row-${encodeURIComponent(doc.uri)}`}
                     className={`group flex items-center gap-2 rounded-nb-sm border px-2 py-2 transition-colors ${
                       isActive
                         ? "border-nb-accent bg-nb-accent-soft text-nb-text"
@@ -127,7 +137,7 @@ function OpenNotebooksPanel() {
                         ) : null}
                       </div>
                       <div className="truncate text-xs text-nb-text-faint">
-                        {doc.uri}
+                        {kind} · {doc.uri}
                       </div>
                     </button>
                     <button
@@ -136,7 +146,7 @@ function OpenNotebooksPanel() {
                       aria-label={`Close ${displayName}`}
                       onClick={(event) => {
                         event.stopPropagation();
-                        handleCloseNotebook(doc.uri);
+                        handleCloseDocument(doc.uri);
                       }}
                       onMouseDown={(event) => event.stopPropagation()}
                     >
@@ -195,14 +205,14 @@ export function SidePanelToolbar() {
         <button
           type="button"
           className={`${sideButtonBase} ${
-            activePanel === "open-notebooks" ? sideButtonActive : sideButtonInactive
+            activePanel === "open-documents" ? sideButtonActive : sideButtonInactive
           }`}
-          aria-pressed={activePanel === "open-notebooks"}
-          aria-label="Toggle Open Notebooks panel"
-          onClick={() => togglePanel("open-notebooks")}
+          aria-pressed={activePanel === "open-documents"}
+          aria-label="Toggle Open Documents panel"
+          onClick={() => togglePanel("open-documents")}
         >
           <QueueListIcon className="h-5 w-5" />
-          <span className={tooltipBase}>Open Notebooks</span>
+          <span className={tooltipBase}>Open Documents</span>
         </button>
         <button
           type="button"
@@ -282,10 +292,10 @@ export function SidePanelContent() {
         <WorkspaceExplorer />
       </div>
       <div
-        className={`h-full min-h-0 w-full ${activePanel === "open-notebooks" ? "flex" : "hidden"}`}
-        aria-hidden={activePanel !== "open-notebooks"}
+        className={`h-full min-h-0 w-full ${activePanel === "open-documents" ? "flex" : "hidden"}`}
+        aria-hidden={activePanel !== "open-documents"}
       >
-        <OpenNotebooksPanel />
+        <OpenDocumentsPanel />
       </div>
       {shouldRenderChatKit ? (
         <div

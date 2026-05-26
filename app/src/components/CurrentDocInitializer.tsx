@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useCurrentDoc } from "../contexts/CurrentDocContext";
 import { useNotebookContext } from "../contexts/NotebookContext";
 import { useNotebookStore } from "../contexts/NotebookStoreContext";
+import { useWorkspaceDocumentContext } from "../contexts/WorkspaceDocumentContext";
 
 function isNotebookDocParam(uri: string): boolean {
   return uri.startsWith("local://file/") || uri.startsWith("fs://");
@@ -25,6 +26,7 @@ export function CurrentDocInitializer() {
   const { setCurrentDoc } = useCurrentDoc();
   const { openNotebook } = useNotebookContext();
   const { store } = useNotebookStore();
+  const { showDocument } = useWorkspaceDocumentContext();
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -47,6 +49,9 @@ export function CurrentDocInitializer() {
           if (cancelled) {
             return;
           }
+          showDocument(result.localUri, {
+            title: result.entry.name,
+          });
           setCurrentDoc(result.localUri);
           clearDocParam();
         } catch (error) {
@@ -58,7 +63,7 @@ export function CurrentDocInitializer() {
     return () => {
       cancelled = true;
     };
-  }, [openNotebook, setCurrentDoc, store]);
+  }, [openNotebook, setCurrentDoc, showDocument, store]);
 
   return null;
 }

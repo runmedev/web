@@ -7,6 +7,7 @@ import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
 import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useRunners } from "../../contexts/RunnersContext";
+import { useWorkspaceDocumentContext } from "../../contexts/WorkspaceDocumentContext";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { appState } from "../../lib/runtime/AppState";
 import { getAppConsoleData } from "../../lib/appConsole/appConsoleController";
@@ -17,6 +18,7 @@ import {
   createRunmeConsoleApi,
   type NotebookDataLike,
 } from "../../lib/runtime/runmeConsole";
+import { isNotebookDocumentUri } from "../../lib/workspaceDocuments/workspaceDocumentTypes";
 import { Runner } from "../../lib/runner";
 import {
   FilesystemNotebookStore,
@@ -181,6 +183,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
   const { getItems, addItem, removeItem } = useWorkspace();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const { getNotebookData, openNotebook, useNotebookList } = useNotebookContext();
+  const { showDocument } = useWorkspaceDocumentContext();
   const openNotebooks = useNotebookList();
   const { fsStore, setFsStore } = useFilesystemStore();
   const { store: notebookStore } = useNotebookStore();
@@ -229,11 +232,15 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       }
 
       if (typeof target === "string" && target.trim() !== "") {
-        return getNotebookData(target) ?? null;
+        const targetUri = target.trim();
+        if (!isNotebookDocumentUri(targetUri)) {
+          return null;
+        }
+        return getNotebookData(targetUri) ?? null;
       }
 
       const currentUri = getCurrentDoc();
-      if (currentUri) {
+      if (isNotebookDocumentUri(currentUri)) {
         const currentNotebook = getNotebookData(currentUri);
         if (currentNotebook) {
           return currentNotebook;
@@ -242,7 +249,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
 
       const visibleUri = openNotebooks[0]?.uri;
       const activeUri = getVisibleNotebookUri() ?? visibleUri;
-      if (!activeUri) {
+      if (!isNotebookDocumentUri(activeUri)) {
         return null;
       }
       return getNotebookData(activeUri) ?? null;
@@ -396,6 +403,9 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       },
       openNotebook: async (uri) => {
         const result = await openNotebook(uri);
+        showDocument(result.localUri, {
+          title: result.entry.name,
+        });
         setCurrentDoc(result.localUri);
       },
       resolveNotebook: resolveNotebookData,
@@ -463,6 +473,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
     resolveNotebookStore,
     runme,
     setCurrentDoc,
+    showDocument,
     setDefaultRunner,
     updateHistoryBrowseState,
     updateRunner,

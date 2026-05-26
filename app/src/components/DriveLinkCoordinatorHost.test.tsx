@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   processPending: vi.fn(),
   removeItem: vi.fn(),
   setCurrentDoc: vi.fn(),
+  showDocument: vi.fn(),
   store: {
     addFile: vi.fn(),
     updateFolder: vi.fn(),
@@ -54,6 +55,12 @@ vi.mock("../contexts/NotebookContext", () => ({
   }),
 }));
 
+vi.mock("../contexts/WorkspaceDocumentContext", () => ({
+  useWorkspaceDocumentContext: () => ({
+    showDocument: mocks.showDocument,
+  }),
+}));
+
 vi.mock("../lib/driveLinkCoordinator", () => ({
   driveLinkCoordinator: {
     configure: mocks.configure,
@@ -85,6 +92,7 @@ describe("DriveLinkCoordinatorHost", () => {
     mocks.processPending.mockResolvedValue(undefined);
     mocks.removeItem.mockReset();
     mocks.setCurrentDoc.mockReset();
+    mocks.showDocument.mockReset();
     mocks.store.addFile.mockReset();
     mocks.store.updateFolder.mockReset();
   });

@@ -1,6 +1,6 @@
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 
-export type PanelKey = "explorer" | "open-notebooks" | "chatkit" | null;
+export type PanelKey = "explorer" | "open-documents" | "chatkit" | null;
 
 interface SidePanelContextValue {
   activePanel: PanelKey;
@@ -24,10 +24,11 @@ export function SidePanelProvider({ children }: { children: ReactNode }) {
         localStorage.getItem(LEGACY_STORAGE_KEY);
       if (
         stored === "explorer" ||
+        stored === "open-documents" ||
         stored === "open-notebooks" ||
         stored === "chatkit"
       ) {
-        return stored;
+        return stored === "open-notebooks" ? "open-documents" : stored;
       }
     } catch (error) {
       console.error("Failed to read side panel state", error);
