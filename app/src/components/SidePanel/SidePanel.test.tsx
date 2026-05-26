@@ -9,7 +9,7 @@ let authData: {} | null = null;
 let isDriveSyncing = false;
 let activePanelState: PanelKey = "explorer";
 let currentDocUri: string | null = null;
-let openNotebooksState: { uri: string; name: string }[] = [];
+let openNotebooksState: { uri: string; name: string; state?: string }[] = [];
 let chatKitMountCount = 0;
 let chatKitUnmountCount = 0;
 const ensureAccessTokenMock = vi.fn(async () => "token");
@@ -198,5 +198,24 @@ describe("SidePanelContent ChatKit persistence", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close alpha.json" }));
     expect(removeNotebookMock).toHaveBeenCalledWith("local://file/alpha.json");
     expect(setCurrentDocMock).toHaveBeenCalledWith("fs://workspace/beta.json");
+  });
+
+  it("shows blocked notebook status from open entry metadata", () => {
+    activePanelState = "open-notebooks";
+    currentDocUri = "local://file/blocked";
+    openNotebooksState = [
+      {
+        uri: "local://file/blocked",
+        name: "blocked.json",
+        state: "blocked",
+      },
+    ];
+
+    render(<SidePanelContent />);
+
+    expect(screen.getByText("blocked.json")).toBeTruthy();
+    expect(screen.getByTestId("open-notebook-status-blocked").textContent).toBe(
+      "Blocked",
+    );
   });
 });

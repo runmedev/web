@@ -28,10 +28,25 @@ function getNotebookDisplayName(uri: string, name?: string): string {
   return name || uri.split("/").filter(Boolean).pop() || uri;
 }
 
+function getNotebookStatusLabel(state?: string): string | null {
+  if (state === "blocked") {
+    return "Blocked";
+  }
+  if (state === "error") {
+    return "Error";
+  }
+  if (state === "loading" || state === "resolving") {
+    return "Loading";
+  }
+  return null;
+}
+
 /**
  * OpenNotebooksPanel renders a lightweight "open editors" style list driven by
  * NotebookContext. It shares the same open-notebook state as the tab strip so
  * the sidebar remains a secondary view over the exact same source of truth.
+ * Status labels come from OpenNotebookEntry metadata; blocked entries do not
+ * have editable NotebookData models in this tab.
  */
 function OpenNotebooksPanel() {
   const { useNotebookList, removeNotebook } = useNotebookContext();
@@ -81,6 +96,7 @@ function OpenNotebooksPanel() {
             {openNotebooks.map((doc) => {
               const displayName = getNotebookDisplayName(doc.uri, doc.name);
               const isActive = doc.uri === currentDocUri;
+              const statusLabel = getNotebookStatusLabel(doc.state);
               return (
                 <li key={doc.uri}>
                   <div
@@ -96,8 +112,19 @@ function OpenNotebooksPanel() {
                       className="min-w-0 flex-1 text-left"
                       onClick={() => setCurrentDoc(doc.uri)}
                     >
-                      <div className="truncate text-sm font-medium">
-                        {displayName}
+                      <div className="flex min-w-0 items-center gap-2">
+                        <div className="truncate text-sm font-medium">
+                          {displayName}
+                        </div>
+                        {statusLabel ? (
+                          <span
+                            id={`open-notebook-status-${encodeURIComponent(doc.uri)}`}
+                            data-testid={`open-notebook-status-${doc.state}`}
+                            className="shrink-0 rounded-nb-xs border border-nb-border bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-nb-text-muted"
+                          >
+                            {statusLabel}
+                          </span>
+                        ) : null}
                       </div>
                       <div className="truncate text-xs text-nb-text-faint">
                         {doc.uri}

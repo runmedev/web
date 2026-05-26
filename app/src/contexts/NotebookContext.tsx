@@ -15,6 +15,7 @@ import {
   type OpenNotebookEntry,
   type OpenNotebookResult,
 } from "../lib/notebookDataController";
+import { appLogger } from "../lib/logging/runtime";
 import { appState } from "../lib/runtime/AppState";
 import { useCurrentDoc } from "./CurrentDocContext";
 import { useNotebookStore } from "./NotebookStoreContext";
@@ -128,7 +129,9 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
       }
       restoredCurrentDocRef.current = true;
       void controller.openNotebook(currentDoc).catch((error) => {
-        console.error("Failed to restore selected notebook", error);
+        appLogger.error("Failed to restore selected notebook", {
+          attrs: { scope: "notebook-session", error },
+        });
       });
     }
   }, [controller, getCurrentDoc, setCurrentDoc, store]);
