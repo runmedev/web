@@ -10,11 +10,18 @@ import {
 import type { NotebookDiffDocument } from "./model";
 
 export type DriveNotebookRevision = DriveRevision & { id: string };
+type NotebookDiffTarget =
+  | NotebookTarget
+  | { getUri: () => string }
+  | null
+  | undefined;
 
 export type NotebookDiffRuntimeApi = {
-  listDriveRevisions: (target?: NotebookTarget) => Promise<DriveNotebookRevision[]>;
+  listDriveRevisions: (
+    target?: NotebookDiffTarget,
+  ) => Promise<DriveNotebookRevision[]>;
   diffDriveRevision: (args: {
-    target?: NotebookTarget;
+    target?: NotebookDiffTarget;
     revisionId: string;
     includeOutputs?: boolean;
     includeMetadata?: boolean;
@@ -22,6 +29,49 @@ export type NotebookDiffRuntimeApi = {
   openDiffTab: (diff: NotebookDiffDocument | { id: string }) => Promise<void>;
   help: () => string;
 };
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function toDriveNotebookRevision(
+  revision: DriveRevision,
+): DriveNotebookRevision | null {
+  const id = optionalString(revision.id);
+  if (!id) {
+    return null;
+  }
+  const lastModifyingUser =
+    revision.lastModifyingUser && typeof revision.lastModifyingUser === "object"
+      ? {
+          displayName: optionalString(revision.lastModifyingUser.displayName),
+          emailAddress: optionalString(revision.lastModifyingUser.emailAddress),
+        }
+      : undefined;
+
+  return {
+    id,
+    mimeType: optionalString(revision.mimeType),
+    modifiedTime: optionalString(revision.modifiedTime),
+    md5Checksum: optionalString(revision.md5Checksum),
+    size: optionalString(revision.size),
+    keepForever:
+      typeof revision.keepForever === "boolean"
+        ? revision.keepForever
+        : undefined,
+    lastModifyingUser,
+  };
+}
+
+function normalizeTarget(target?: NotebookDiffTarget): NotebookTarget | undefined {
+  if (!target) {
+    return undefined;
+  }
+  if (typeof target.getUri === "function") {
+    return { uri: target.getUri() };
+  }
+  return target;
+}
 
 export function createNotebookDiffRuntimeApi({
   notebooksApi,
@@ -32,8 +82,8 @@ export function createNotebookDiffRuntimeApi({
   resolveLocalNotebooks: () => LocalNotebooks | null;
   resolveDriveNotebookStore: () => DriveNotebookStore | null;
 }): NotebookDiffRuntimeApi {
-  const resolveDriveRemoteUri = async (target?: NotebookTarget) => {
-    const doc = await notebooksApi.get(target);
+  const resolveDriveRemoteUri = async (target?: NotebookDiffTarget) => {
+    const doc = await notebooksApi.get(normalizeTarget(target));
     const localStore = resolveLocalNotebooks();
     if (!localStore) {
       throw new Error("Local notebook mirror store is not initialized yet.");
@@ -57,12 +107,13 @@ export function createNotebookDiffRuntimeApi({
   };
 
   return {
-    listDriveRevisions: async (target?: NotebookTarget) => {
+    listDriveRevisions: async (target?: NotebookDiffTarget) => {
       const { remoteUri } = await resolveDriveRemoteUri(target);
       const revisions = await requireDriveStore().listRevisions(remoteUri);
-      return revisions.filter((revision): revision is DriveNotebookRevision =>
-        Boolean(revision.id),
-      );
+      return revisions.flatMap((revision) => {
+        const normalized = toDriveNotebookRevision(revision);
+        return normalized ? [normalized] : [];
+      });
     },
     diffDriveRevision: async (args) => {
       if (!args?.revisionId?.trim()) {
@@ -101,10 +152,10 @@ export function createNotebookDiffRuntimeApi({
         "notebookDiff.diffDriveRevision({ target?, revisionId, includeOutputs?, includeMetadata? })",
         "notebookDiff.openDiffTab(diffOrId)",
         "Example:",
-        "  const revisions = await notebookDiff.listDriveRevisions();",
-        "  const diff = await notebookDiff.diffDriveRevision({ revisionId: revisions.at(-2).id });",
+        "  const doc = await notebooks.get();",
+        "  const revisions = await notebookDiff.listDriveRevisions({ handle: doc.handle });",
+        "  const diff = await notebookDiff.diffDriveRevision({ target: { handle: doc.handle }, revisionId: revisions.at(-2).id });",
         "  await notebookDiff.openDiffTab(diff);",
       ].join("\n"),
   };
 }
-

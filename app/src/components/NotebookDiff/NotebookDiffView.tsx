@@ -191,10 +191,16 @@ function CellPanel({
 function DiffRow({ row }: { row: CellDiff }) {
   if (row.kind === "unchanged") {
     return (
-      <details className="rounded border border-nb-border bg-nb-surface-2 px-3 py-2 text-sm text-nb-text-muted">
-        <summary className="cursor-pointer">
+      <details className="rounded border border-nb-border bg-nb-surface-2 text-sm text-nb-text-muted">
+        <summary className="cursor-pointer px-3 py-2">
           Unchanged cell {row.baseCell?.refId || row.compareCell?.refId || ""}
         </summary>
+        <div className="border-t border-nb-border bg-nb-bg p-3">
+          <div className="grid min-w-[920px] grid-cols-2 gap-3">
+            <CellPanel row={row} side="base" />
+            <CellPanel row={row} side="compare" />
+          </div>
+        </div>
       </details>
     );
   }

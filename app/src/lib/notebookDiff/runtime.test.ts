@@ -23,6 +23,124 @@ function notebook(value: string) {
 }
 
 describe("createNotebookDiffRuntimeApi", () => {
+  it("lists plain Drive revisions for the current local notebook", async () => {
+    const notebooksApi = {
+      get: vi.fn().mockResolvedValue({
+        summary: {
+          uri: "local://file/one",
+          name: "Notebook",
+          isOpen: true,
+          source: "local",
+        },
+        handle: {
+          uri: "local://file/one",
+          revision: "local-revision",
+        },
+        notebook: notebook("print('local')"),
+      }),
+    } as unknown as NotebooksApi;
+    const localNotebooks = {
+      getMetadata: vi.fn().mockResolvedValue({
+        uri: "local://file/one",
+        name: "Notebook",
+        type: NotebookStoreItemType.File,
+        children: [],
+        remoteUri: "https://drive.google.com/file/d/drive-file/view",
+        parents: [],
+      }),
+    } as unknown as LocalNotebooks;
+    const driveStore = {
+      listRevisions: vi.fn().mockResolvedValue([
+        {
+          id: "revision-1",
+          modifiedTime: "2026-05-25T00:00:00.000Z",
+          size: "123",
+          keepForever: true,
+          lastModifyingUser: {
+            displayName: "User One",
+            emailAddress: "user@example.com",
+          },
+          ignoredField: "not returned",
+        },
+        {
+          modifiedTime: "missing id",
+        },
+      ]),
+    } as unknown as DriveNotebookStore;
+
+    const api = createNotebookDiffRuntimeApi({
+      notebooksApi,
+      resolveLocalNotebooks: () => localNotebooks,
+      resolveDriveNotebookStore: () => driveStore,
+    });
+
+    const revisions = await api.listDriveRevisions();
+
+    expect(revisions).toEqual([
+      {
+        id: "revision-1",
+        mimeType: undefined,
+        modifiedTime: "2026-05-25T00:00:00.000Z",
+        md5Checksum: undefined,
+        size: "123",
+        keepForever: true,
+        lastModifyingUser: {
+          displayName: "User One",
+          emailAddress: "user@example.com",
+        },
+      },
+    ]);
+  });
+
+  it("accepts the internal current notebook object as a revision target", async () => {
+    const notebooksApi = {
+      get: vi.fn().mockResolvedValue({
+        summary: {
+          uri: "local://file/one",
+          name: "Notebook",
+          isOpen: true,
+          source: "local",
+        },
+        handle: {
+          uri: "local://file/one",
+          revision: "local-revision",
+        },
+        notebook: notebook("print('local')"),
+      }),
+    } as unknown as NotebooksApi;
+    const localNotebooks = {
+      getMetadata: vi.fn().mockResolvedValue({
+        uri: "local://file/one",
+        name: "Notebook",
+        type: NotebookStoreItemType.File,
+        children: [],
+        remoteUri: "https://drive.google.com/file/d/drive-file/view",
+        parents: [],
+      }),
+    } as unknown as LocalNotebooks;
+    const driveStore = {
+      listRevisions: vi.fn().mockResolvedValue([
+        {
+          id: "revision-1",
+        },
+      ]),
+    } as unknown as DriveNotebookStore;
+
+    const api = createNotebookDiffRuntimeApi({
+      notebooksApi,
+      resolveLocalNotebooks: () => localNotebooks,
+      resolveDriveNotebookStore: () => driveStore,
+    });
+
+    await api.listDriveRevisions({
+      getUri: () => "local://file/one",
+    });
+
+    expect(notebooksApi.get).toHaveBeenCalledWith({
+      uri: "local://file/one",
+    });
+  });
+
   it("computes a diff against a Drive revision for the current local notebook", async () => {
     const notebooksApi = {
       get: vi.fn().mockResolvedValue({
@@ -72,4 +190,3 @@ describe("createNotebookDiffRuntimeApi", () => {
     expect(doc.diff.summary.sourceChanges).toBe(1);
   });
 });
-

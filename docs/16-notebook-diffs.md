@@ -19,20 +19,45 @@ inspect revisions, compute the diff, and open the rendered diff view.
 Run this in a JavaScript cell using the AppKernel browser runner:
 
 ```js
-const revisions = await notebookDiff.listDriveRevisions();
+const target = {
+  uri: "local://file/a2d06400-8b02-4965-b26c-5e977945267f",
+};
 
-console.table(
-  revisions.map((revision) => ({
-    id: revision.id,
-    modifiedTime: revision.modifiedTime,
-    md5Checksum: revision.md5Checksum,
-    size: revision.size,
-    lastModifyingUser: revision.lastModifyingUser?.emailAddress,
-  })),
+const revisions = await notebookDiff.listDriveRevisions(target);
+
+const rows = revisions.map((revision) => ({
+  id: revision.id,
+  modifiedTime: revision.modifiedTime ?? "",
+  size: revision.size ?? "",
+  md5Checksum: revision.md5Checksum ?? "",
+  user: revision.lastModifyingUser?.emailAddress ?? "",
+}));
+
+const columns = ["id", "modifiedTime", "size", "md5Checksum", "user"];
+const widths = columns.map((column) =>
+  Math.max(column.length, ...rows.map((row) => String(row[column] ?? "").length)),
+);
+
+const formatRow = (row) =>
+  columns
+    .map((column, index) => String(row[column] ?? "").padEnd(widths[index]))
+    .join("  ");
+
+const header = Object.fromEntries(columns.map((column) => [column, column]));
+const separator = Object.fromEntries(
+  columns.map((column, index) => [column, "-".repeat(widths[index])]),
+);
+
+console.log(
+  "Found " + rows.length + " revision(s)\n" +
+    [formatRow(header), formatRow(separator), ...rows.map(formatRow)].join("\n"),
 );
 ```
 
 The returned revision ids are Google Drive `Revision` ids for the notebook file.
+Replace `target.uri` with the local URI for the notebook you want to inspect.
+Use `console.log` for the table because App Console runtimes do not all expose
+`console.table`.
 
 ## Compute and Open a Diff
 
@@ -46,6 +71,7 @@ if (!revisionId) {
 }
 
 const diff = await notebookDiff.diffDriveRevision({
+  target,
   revisionId,
   includeOutputs: true,
   includeMetadata: true,
@@ -88,4 +114,3 @@ await notebookDiff.openDiffTab(diff);
 - Output-only changes count as real differences.
 - V0 does not merge outputs. Conflict-resolution flows should clear outputs for
   cells touched by resolution and let users rerun cells.
-

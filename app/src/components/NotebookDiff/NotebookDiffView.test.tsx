@@ -54,6 +54,23 @@ describe("NotebookDiffView", () => {
     expect(screen.getByText("print('compare')")).toBeTruthy();
   });
 
+  it("renders unchanged cell contents inside the expandable row", () => {
+    const diff = computeNotebookDiff(
+      notebook("print('same')"),
+      notebook("print('same')"),
+    );
+    const doc = registerNotebookDiffDocument({
+      base: { label: "Drive revision 1", revisionId: "1" },
+      compare: { label: "Local copy", revisionId: "local" },
+      diff,
+    });
+
+    renderRoute(`/diff/${encodeURIComponent(doc.id)}`);
+
+    expect(screen.getByText("Unchanged cell cell-1")).toBeTruthy();
+    expect(screen.getAllByText("print('same')")).toHaveLength(2);
+  });
+
   it("shows a recompute message for missing in-memory diff documents", () => {
     renderRoute("/diff/missing");
 

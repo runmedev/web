@@ -607,6 +607,33 @@ export interface DriveRevision {
   };
 }
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function normalizeDriveRevision(revision: DriveRevision): DriveRevision {
+  const lastModifyingUser =
+    revision.lastModifyingUser && typeof revision.lastModifyingUser === "object"
+      ? {
+          displayName: optionalString(revision.lastModifyingUser.displayName),
+          emailAddress: optionalString(revision.lastModifyingUser.emailAddress),
+        }
+      : undefined;
+
+  return {
+    id: optionalString(revision.id),
+    mimeType: optionalString(revision.mimeType),
+    modifiedTime: optionalString(revision.modifiedTime),
+    md5Checksum: optionalString(revision.md5Checksum),
+    size: optionalString(revision.size),
+    keepForever:
+      typeof revision.keepForever === "boolean"
+        ? revision.keepForever
+        : undefined,
+    lastModifyingUser,
+  };
+}
+
 export function parseDriveItem(uri: string): DriveItem {
   if (!uri) {
     throw new Error("Google Drive URI must be provided");
@@ -921,7 +948,7 @@ export class DriveNotebookStore {
       fields:
         "revisions(id,mimeType,modifiedTime,md5Checksum,size,keepForever,lastModifyingUser(displayName,emailAddress))",
     });
-    return response.result?.revisions ?? [];
+    return (response.result?.revisions ?? []).map(normalizeDriveRevision);
   }
 
   async loadRevision(

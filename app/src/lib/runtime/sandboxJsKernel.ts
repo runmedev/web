@@ -159,6 +159,56 @@ function buildSandboxSrcDoc(options: {
             })
             .join(" ") + "\\n";
 
+        const formatTableCell = (value) => {
+          if (value === undefined) {
+            return "";
+          }
+          if (typeof value === "bigint") {
+            return value.toString();
+          }
+          if (value && typeof value === "object") {
+            try {
+              return JSON.stringify(
+                value,
+                (_key, item) => (typeof item === "bigint" ? item.toString() : item),
+              );
+            } catch {
+              return String(value);
+            }
+          }
+          return String(value);
+        };
+
+        const formatTable = (data, columns) => {
+          if (!Array.isArray(data)) {
+            return formatArgs([data]);
+          }
+          const normalizedRows = data.map((row, index) => {
+            if (row && typeof row === "object" && !Array.isArray(row)) {
+              return { index, values: row };
+            }
+            return { index, values: { value: row } };
+          });
+          const selectedColumns = Array.isArray(columns) && columns.length > 0
+            ? columns
+            : Array.from(
+                normalizedRows.reduce((seen, row) => {
+                  Object.keys(row.values).forEach((key) => seen.add(key));
+                  return seen;
+                }, new Set()),
+              );
+          const headers = ["(index)", ...selectedColumns];
+          const lines = [
+            headers.join("\\t"),
+            ...normalizedRows.map((row) =>
+              [row.index, ...selectedColumns.map((key) => row.values[key])]
+                .map(formatTableCell)
+                .join("\\t"),
+            ),
+          ];
+          return lines.join("\\n") + "\\n";
+        };
+
         const post = (payload) => {
           if (!port) {
             return;
@@ -181,6 +231,7 @@ function buildSandboxSrcDoc(options: {
         const consoleProxy = {
           log: (...args) => post({ type: "stdout", data: formatArgs(args) }),
           info: (...args) => post({ type: "stdout", data: formatArgs(args) }),
+          table: (data, columns) => post({ type: "stdout", data: formatTable(data, columns) }),
           warn: (...args) => post({ type: "stderr", data: formatArgs(args) }),
           error: (...args) => post({ type: "stderr", data: formatArgs(args) }),
         };
