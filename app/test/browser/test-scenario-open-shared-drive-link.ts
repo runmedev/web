@@ -277,7 +277,6 @@ const seedRuntime = run(
     localStorage.setItem('${GOOGLE_DRIVE_RUNTIME_STORAGE_KEY}', JSON.stringify({ baseUrl: '${FAKE_DRIVE_URL}' }));
     localStorage.setItem('${GOOGLE_CLIENT_STORAGE_KEY}', JSON.stringify({}));
     localStorage.removeItem('${GOOGLE_AUTH_STORAGE_KEY}');
-    localStorage.removeItem('${CURRENT_DOC_STORAGE_KEY}');
     sessionStorage.removeItem('${CURRENT_DOC_STORAGE_KEY}');
     localStorage.setItem('${WORKSPACE_STORAGE_KEY}', JSON.stringify({ items: [] }));
     return 'ok';
@@ -438,7 +437,6 @@ if (/Share link copied/i.test(folderShareToast)) {
 run(
   `agent-browser eval "(async () => {
     localStorage.removeItem('${GOOGLE_AUTH_STORAGE_KEY}');
-    localStorage.removeItem('${CURRENT_DOC_STORAGE_KEY}');
     sessionStorage.removeItem('${CURRENT_DOC_STORAGE_KEY}');
     localStorage.setItem('${WORKSPACE_STORAGE_KEY}', JSON.stringify({ items: [] }));
     return 'ok';
