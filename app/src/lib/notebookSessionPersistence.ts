@@ -87,10 +87,15 @@ export class NotebookSessionPersistence {
     if (fromSession !== undefined && fromSession !== null) {
       return fromSession.trim() || null;
     }
-    const fromLegacy =
-      getLocalStorage()?.getItem(CURRENT_DOC_STORAGE_KEY)?.trim() || null;
+    const local = getLocalStorage();
+    const fromLegacy = local?.getItem(CURRENT_DOC_STORAGE_KEY)?.trim() || null;
     if (fromLegacy) {
       this.saveCurrentDoc(fromLegacy);
+      try {
+        local?.removeItem(CURRENT_DOC_STORAGE_KEY);
+      } catch {
+        // Ignore legacy cleanup failures. The migrated session value is usable.
+      }
     }
     return fromLegacy;
   }
@@ -126,6 +131,12 @@ export class NotebookSessionPersistence {
     );
     if (fromLegacy.length > 0) {
       this.saveOpenNotebooks(fromLegacy);
+      try {
+        local?.removeItem(OPEN_NOTEBOOKS_STORAGE_KEY);
+        local?.removeItem(LEGACY_OPEN_NOTEBOOKS_STORAGE_KEY);
+      } catch {
+        // Ignore legacy cleanup failures. The migrated session value is usable.
+      }
     }
     return fromLegacy;
   }

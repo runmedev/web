@@ -401,4 +401,47 @@ describe("NotebookDataController", () => {
     );
     expect(release).toHaveBeenCalledTimes(1);
   });
+
+  it("does not release an existing loaded notebook when a duplicate open cannot reload", async () => {
+    const localStore = createFakeLocalNotebooks();
+    localStore.records.set("local://file/demo", {
+      id: "local://file/demo",
+      name: "demo.json",
+      remoteId: "local://file/demo",
+      notebook: createNotebook("loaded"),
+    });
+    const release = vi.fn();
+    const controller = getNotebookDataController();
+    controller.configureOwnershipManager(
+      createFakeOwnershipManager({
+        status: "acquired",
+        lease: {
+          notebookUri: "local://file/demo",
+          tabId: "tab-test",
+          epoch: "epoch-test",
+          release,
+          isCurrentOwner: vi.fn(async () => true),
+        },
+      }),
+    );
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    });
+
+    await controller.openNotebook("local://file/demo");
+    localStore.load.mockRejectedValueOnce(new Error("load failed"));
+
+    const result = await controller.openNotebook("local://file/demo");
+
+    expect(result.entry).toEqual(
+      expect.objectContaining({
+        uri: "local://file/demo",
+        state: "loaded",
+      }),
+    );
+    expect(
+      controller.getNotebookData("local://file/demo")?.getSnapshot().loaded,
+    ).toBe(true);
+    expect(release).not.toHaveBeenCalled();
+  });
 });

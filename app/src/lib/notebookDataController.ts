@@ -170,6 +170,18 @@ export class NotebookDataController {
       loaded: false,
     });
 
+    if (handle.loaded) {
+      handle.data.setNotebookStore(this.createOwnedNotebookStore(localUri));
+      entry = this.upsertOpenEntry({
+        ...entry,
+        name: handle.data.getName(),
+        state: "loaded",
+        errorMessage: undefined,
+        owner: undefined,
+      });
+      return { localUri, entry };
+    }
+
     if (this.localNotebooks) {
       try {
         const notebook = await this.localNotebooks.load(localUri);
