@@ -1772,9 +1772,19 @@ export default function Actions() {
   // }, [cellsInitialized, currentDocUri, ensureNotebook, run, runName, setCurrentDoc]);
 
   const { registerRenderer, unregisterRenderer } = useOutput();
+  const workspaceDocumentUris = useMemo(
+    () => new Set(workspaceDocuments.map((document) => document.uri)),
+    [workspaceDocuments],
+  );
+  const selectedTabIsOpen = selectedTabUri
+    ? workspaceDocumentUris.has(selectedTabUri)
+    : false;
+  const currentDocIsOpen = currentDocUri
+    ? workspaceDocumentUris.has(currentDocUri)
+    : false;
   const resolvedSelectedTabUri =
-    selectedTabUri ??
-    currentDocUri ??
+    (selectedTabIsOpen ? selectedTabUri : null) ??
+    (currentDocIsOpen ? currentDocUri : null) ??
     workspaceDocuments[0]?.uri ??
     "";
 
@@ -1800,19 +1810,38 @@ export default function Actions() {
   );
 
   // Keep Radix tab selection in sync with the shared current document URI.
+  // CurrentDocContext may restore a non-restorable URI, such as a diff/status
+  // document. Fall back to the first restored workspace document in that case.
   useEffect(() => {
-    if (!currentDocUri) {
+    if (statusTabVisible) {
       return;
     }
-    setSelectedTabUri(currentDocUri);
-  }, [currentDocUri]);
+    if (currentDocUri && currentDocIsOpen) {
+      setSelectedTabUri(currentDocUri);
+      return;
+    }
+    if (selectedTabUri && !selectedTabIsOpen) {
+      setSelectedTabUri(null);
+    }
+    if (currentDocUri && !currentDocIsOpen) {
+      setCurrentDoc(workspaceDocuments[0]?.uri ?? null);
+    }
+  }, [
+    currentDocIsOpen,
+    currentDocUri,
+    selectedTabIsOpen,
+    selectedTabUri,
+    setCurrentDoc,
+    statusTabVisible,
+    workspaceDocuments,
+  ]);
 
   useEffect(() => {
     if (statusTabVisible) {
       showDocument(DRIVE_LINK_STATUS_TAB_URI, {
         title: "Drive Link Status",
       });
-      if (!currentDocUri) {
+      if (!currentDocUri || !currentDocIsOpen) {
         setCurrentDoc(DRIVE_LINK_STATUS_TAB_URI);
       }
       return;
@@ -1823,6 +1852,7 @@ export default function Actions() {
     }
   }, [
     closeWorkspaceDocument,
+    currentDocIsOpen,
     currentDocUri,
     setCurrentDoc,
     showDocument,

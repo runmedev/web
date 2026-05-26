@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
-import { render, screen, act, fireEvent } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { clone, create } from "@bufbuild/protobuf";
 import {
   APPKERNEL_RUNNER_NAME,
@@ -9,7 +9,15 @@ import {
 
 import { parser_pb, RunmeMetadataKey } from "../../runme/client";
 import type { CellData } from "../../lib/notebookData";
-import { Action } from "./Actions";
+import Actions, { Action } from "./Actions";
+
+const contextMocks = vi.hoisted(() => ({
+  workspaceDocuments: [] as Array<{ uri: string; title: string }>,
+  currentDoc: null as string | null,
+  setCurrentDoc: vi.fn(),
+  showDocument: vi.fn(),
+  closeWorkspaceDocument: vi.fn(),
+}));
 
 // Minimal mocks for contexts Action consumes
 vi.mock("../../contexts/OutputContext", () => ({
@@ -46,9 +54,9 @@ vi.mock("../../contexts/NotebookContext", () => ({
 
 vi.mock("../../contexts/WorkspaceDocumentContext", () => ({
   useWorkspaceDocumentContext: () => ({
-    useWorkspaceDocuments: () => [],
-    showDocument: () => {},
-    closeWorkspaceDocument: () => null,
+    useWorkspaceDocuments: () => contextMocks.workspaceDocuments,
+    showDocument: contextMocks.showDocument,
+    closeWorkspaceDocument: contextMocks.closeWorkspaceDocument,
   }),
 }));
 
@@ -67,8 +75,8 @@ vi.mock("../../contexts/FilesystemStoreContext", () => ({
 
 vi.mock("../../contexts/CurrentDocContext", () => ({
   useCurrentDoc: () => ({
-    getCurrentDoc: () => null,
-    setCurrentDoc: () => {},
+    getCurrentDoc: () => contextMocks.currentDoc,
+    setCurrentDoc: contextMocks.setCurrentDoc,
   }),
 }));
 
@@ -181,6 +189,35 @@ class StubCellData {
   remove() {}
   run() {}
 }
+
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+  contextMocks.workspaceDocuments = [];
+  contextMocks.currentDoc = null;
+  contextMocks.setCurrentDoc.mockReset();
+  contextMocks.setCurrentDoc.mockImplementation((uri: string | null) => {
+    contextMocks.currentDoc = uri;
+  });
+  contextMocks.showDocument.mockReset();
+  contextMocks.closeWorkspaceDocument.mockReset();
+});
+
+describe("Actions tabs", () => {
+  it("falls back from a stale current URI to an open workspace document", async () => {
+    contextMocks.currentDoc = "diff://notebook/not-restored";
+    contextMocks.workspaceDocuments = [
+      { uri: "local://file/restored", title: "restored.json" },
+    ];
+
+    render(<Actions />);
+
+    await waitFor(() => {
+      expect(contextMocks.setCurrentDoc).toHaveBeenCalledWith(
+        "local://file/restored",
+      );
+    });
+  });
+});
 
 describe("Action component", () => {
   it("updates CellConsole key when runID changes", async () => {
