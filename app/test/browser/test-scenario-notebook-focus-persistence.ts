@@ -218,10 +218,10 @@ try {
         md5Checksum: ''
       }));
       db.close();
-      localStorage.setItem('runme/openNotebooks', JSON.stringify([
+      sessionStorage.setItem('runme/openNotebooks', JSON.stringify([
         { uri: '${NOTEBOOK_URI}', name: '${NOTEBOOK_NAME}', type: 'file', children: [], parents: ['local://folder/local'] }
       ]));
-      localStorage.setItem('runme/currentDoc', '${NOTEBOOK_URI}');
+      sessionStorage.setItem('runme/currentDoc', '${NOTEBOOK_URI}');
       localStorage.removeItem('${STORAGE_KEY}');
       return JSON.stringify({ status: 'ok' });
     })()"`,

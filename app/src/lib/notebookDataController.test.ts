@@ -259,8 +259,8 @@ describe("NotebookDataController", () => {
     ]);
   });
 
-  it("restores legacy open-notebook storage without changing the storage shape", () => {
-    window.localStorage.setItem(
+  it("restores session open-notebook storage without changing the storage shape", () => {
+    window.sessionStorage.setItem(
       "runme/openNotebooks",
       JSON.stringify([
         {

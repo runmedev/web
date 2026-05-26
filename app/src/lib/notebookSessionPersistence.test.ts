@@ -10,23 +10,11 @@ describe("NotebookSessionPersistence", () => {
     window.sessionStorage.clear();
   });
 
-  it("uses sessionStorage for current doc before legacy localStorage", () => {
+  it("restores current doc from sessionStorage", () => {
     const persistence = new NotebookSessionPersistence();
-    window.localStorage.setItem("runme/currentDoc", "local://file/legacy");
     window.sessionStorage.setItem("runme/currentDoc", "local://file/session");
 
     expect(persistence.loadCurrentDoc()).toBe("local://file/session");
-  });
-
-  it("imports legacy current doc into sessionStorage", () => {
-    const persistence = new NotebookSessionPersistence();
-    window.localStorage.setItem("runme/currentDoc", "local://file/legacy");
-
-    expect(persistence.loadCurrentDoc()).toBe("local://file/legacy");
-    expect(window.sessionStorage.getItem("runme/currentDoc")).toBe(
-      "local://file/legacy",
-    );
-    expect(window.localStorage.getItem("runme/currentDoc")).toBeNull();
   });
 
   it("writes only sessionStorage for current doc changes", () => {
@@ -37,21 +25,19 @@ describe("NotebookSessionPersistence", () => {
     expect(window.sessionStorage.getItem("runme/currentDoc")).toBe(
       "local://file/current",
     );
-    expect(window.localStorage.getItem("runme/currentDoc")).toBeNull();
   });
 
-  it("does not fall back to legacy current doc after the session clears selection", () => {
+  it("restores empty current doc selections from sessionStorage", () => {
     const persistence = new NotebookSessionPersistence();
-    window.localStorage.setItem("runme/currentDoc", "local://file/legacy");
 
     persistence.saveCurrentDoc(null);
 
     expect(persistence.loadCurrentDoc()).toBeNull();
   });
 
-  it("imports legacy open notebooks as OpenNotebookEntry records", () => {
+  it("restores session open notebooks as OpenNotebookEntry records", () => {
     const persistence = new NotebookSessionPersistence();
-    window.localStorage.setItem(
+    window.sessionStorage.setItem(
       "runme/openNotebooks",
       JSON.stringify([
         {
@@ -82,49 +68,10 @@ describe("NotebookSessionPersistence", () => {
         name: "legacy.json",
       }),
     ]);
-    expect(window.localStorage.getItem("runme/openNotebooks")).toBeNull();
   });
 
-  it("clears older legacy open notebooks after importing them", () => {
+  it("restores empty open-notebook lists from sessionStorage", () => {
     const persistence = new NotebookSessionPersistence();
-    window.localStorage.setItem(
-      "aisre/openNotebooks",
-      JSON.stringify([
-        {
-          uri: "local://file/legacy",
-          name: "legacy.json",
-          type: NotebookStoreItemType.File,
-          children: [],
-          parents: [],
-        },
-      ]),
-    );
-
-    expect(persistence.loadOpenNotebooks()).toEqual([
-      expect.objectContaining({
-        uri: "local://file/legacy",
-        requestedUri: "local://file/legacy",
-        name: "legacy.json",
-      }),
-    ]);
-    expect(window.sessionStorage.getItem("runme/openNotebooks")).toBeTruthy();
-    expect(window.localStorage.getItem("aisre/openNotebooks")).toBeNull();
-  });
-
-  it("does not fall back to legacy open notebooks when session list is empty", () => {
-    const persistence = new NotebookSessionPersistence();
-    window.localStorage.setItem(
-      "runme/openNotebooks",
-      JSON.stringify([
-        {
-          uri: "local://file/legacy",
-          name: "legacy.json",
-          type: NotebookStoreItemType.File,
-          children: [],
-          parents: [],
-        },
-      ]),
-    );
     window.sessionStorage.setItem("runme/openNotebooks", "[]");
 
     expect(persistence.loadOpenNotebooks()).toEqual([]);

@@ -43,7 +43,6 @@ describe("CurrentDocProvider", () => {
   });
 
   it("restores current doc from per-tab sessionStorage", async () => {
-    window.localStorage.setItem("runme/currentDoc", "local://file/legacy");
     window.sessionStorage.setItem("runme/currentDoc", "local://file/session");
 
     render(
@@ -71,7 +70,6 @@ describe("CurrentDocProvider", () => {
     expect(window.sessionStorage.getItem("runme/currentDoc")).toBe(
       "local://file/selected",
     );
-    expect(window.localStorage.getItem("runme/currentDoc")).toBeNull();
     expect(window.location.search).toContain("doc=");
     await waitFor(() => {
       expect(screen.getByTestId("current-doc").textContent).toBe(

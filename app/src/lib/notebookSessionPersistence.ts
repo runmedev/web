@@ -6,7 +6,6 @@ import type { OpenNotebookEntry } from "./notebookDataController";
 
 const CURRENT_DOC_STORAGE_KEY = "runme/currentDoc";
 const OPEN_NOTEBOOKS_STORAGE_KEY = "runme/openNotebooks";
-const LEGACY_OPEN_NOTEBOOKS_STORAGE_KEY = "aisre/openNotebooks";
 
 function getSessionStorage(): Storage | null {
   if (typeof window === "undefined") {
@@ -14,17 +13,6 @@ function getSessionStorage(): Storage | null {
   }
   try {
     return window.sessionStorage;
-  } catch {
-    return null;
-  }
-}
-
-function getLocalStorage(): Storage | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  try {
-    return window.localStorage;
   } catch {
     return null;
   }
@@ -77,8 +65,8 @@ function parseOpenNotebooks(raw: string | null): OpenNotebookEntry[] {
  *
  * Runtime state still lives in `CurrentDocContext` and
  * `NotebookDataController`; this class only hydrates them on startup and saves
- * snapshots after changes. It reads legacy localStorage keys as an initial
- * import path but only writes sessionStorage so same-origin tabs can diverge.
+ * snapshots after changes. It only uses sessionStorage so same-origin tabs can
+ * diverge.
  */
 export class NotebookSessionPersistence {
   loadCurrentDoc(): string | null {
@@ -87,17 +75,7 @@ export class NotebookSessionPersistence {
     if (fromSession !== undefined && fromSession !== null) {
       return fromSession.trim() || null;
     }
-    const local = getLocalStorage();
-    const fromLegacy = local?.getItem(CURRENT_DOC_STORAGE_KEY)?.trim() || null;
-    if (fromLegacy) {
-      this.saveCurrentDoc(fromLegacy);
-      try {
-        local?.removeItem(CURRENT_DOC_STORAGE_KEY);
-      } catch {
-        // Ignore legacy cleanup failures. The migrated session value is usable.
-      }
-    }
-    return fromLegacy;
+    return null;
   }
 
   saveCurrentDoc(uri: string | null): void {
@@ -122,23 +100,7 @@ export class NotebookSessionPersistence {
     if (fromSession !== undefined && fromSession !== null) {
       return parseOpenNotebooks(fromSession);
     }
-
-    const local = getLocalStorage();
-    const fromLegacy = parseOpenNotebooks(
-      local?.getItem(OPEN_NOTEBOOKS_STORAGE_KEY) ??
-        local?.getItem(LEGACY_OPEN_NOTEBOOKS_STORAGE_KEY) ??
-        null,
-    );
-    if (fromLegacy.length > 0) {
-      this.saveOpenNotebooks(fromLegacy);
-      try {
-        local?.removeItem(OPEN_NOTEBOOKS_STORAGE_KEY);
-        local?.removeItem(LEGACY_OPEN_NOTEBOOKS_STORAGE_KEY);
-      } catch {
-        // Ignore legacy cleanup failures. The migrated session value is usable.
-      }
-    }
-    return fromLegacy;
+    return [];
   }
 
   saveOpenNotebooks(entries: OpenNotebookEntry[]): void {
@@ -148,7 +110,6 @@ export class NotebookSessionPersistence {
     }
     try {
       session.setItem(OPEN_NOTEBOOKS_STORAGE_KEY, JSON.stringify(entries));
-      session.removeItem(LEGACY_OPEN_NOTEBOOKS_STORAGE_KEY);
     } catch {
       // Ignore restore persistence failures. Live state has already changed.
     }

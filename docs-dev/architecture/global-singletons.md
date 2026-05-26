@@ -51,12 +51,10 @@ call only `setCurrentDoc(localUri)` for notebooks that are already open.
 
 ## Persistence
 
-The current notebook-session refactor keeps the existing shared `localStorage`
-keys:
+Notebook session restore state is stored in per-tab `sessionStorage` keys:
 
 - `runme/currentDoc`
 - `runme/openNotebooks`
 
-Future multi-tab work will move current/open restore state to tab-local storage.
-Keep persistence code isolated enough that this storage swap does not require
-changing notebook loading or selection semantics.
+Keep persistence code isolated so notebook loading and selection semantics do
+not depend on the storage backend.

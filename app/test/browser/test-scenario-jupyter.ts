@@ -1224,8 +1224,8 @@ const seedCommandResult = run(
       remoteId: '',
       lastRemoteChecksum: ''
     });
-    localStorage.setItem('runme/openNotebooks', JSON.stringify([{ uri: '${SCENARIO_NOTEBOOK_URI}', name: '${SCENARIO_NOTEBOOK_NAME}', type: 'file', children: [] }]));
-    localStorage.setItem('runme/currentDoc', '${SCENARIO_NOTEBOOK_URI}');
+    sessionStorage.setItem('runme/openNotebooks', JSON.stringify([{ uri: '${SCENARIO_NOTEBOOK_URI}', name: '${SCENARIO_NOTEBOOK_NAME}', type: 'file', children: [] }]));
+    sessionStorage.setItem('runme/currentDoc', '${SCENARIO_NOTEBOOK_URI}');
     return 'ok';
   })()"`),
 );

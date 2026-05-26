@@ -25,7 +25,7 @@
 - React views subscribe via `useNotebookSnapshot` (backed by `useSyncExternalStore`) and render from immutable snapshots to avoid tearing under concurrent rendering.
 - Snapshots are clones; do not mutate them directly. Use NotebookData/CellData methods for updates.
 - `loaded` distinguishes placeholder models (created before async load) from fully loaded notebooks; only `loadNotebook` flips it true.
-- NotebookContext seeds `storeRef` and `openNotebooks` once from localStorage so models exist early; async loads populate existing models and emit.
+- NotebookContext seeds `storeRef` and `openNotebooks` once from sessionStorage so models exist early; async loads populate existing models and emit.
 - Tabs keep content mounted with `Tabs.Content forceMount` and `TabPanel` hides inactive tabs via `visibility`/`position` to preserve scroll/Monaco layout.
 - Loading gates live inside `NotebookTabContent` and use snapshot.loaded to decide when to show content.
 
