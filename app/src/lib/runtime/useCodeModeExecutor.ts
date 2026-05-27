@@ -8,6 +8,34 @@ import {
   type CodeModeRunnerMode,
   createCodeModeExecutor,
 } from './codeModeExecutor'
+import type { NotebookDataLike } from './runmeConsole'
+
+type CodeModeNotebookAdapterSource = Pick<
+  NotebookDataLike,
+  'getUri' | 'getName' | 'getNotebook' | 'updateCell' | 'getCell'
+> &
+  Partial<
+    Pick<
+      NotebookDataLike,
+      'appendCell' | 'addCellAfter' | 'addCellBefore' | 'removeCell'
+    >
+  >
+
+export function createCodeModeNotebookAdapter(
+  data: CodeModeNotebookAdapterSource
+): NotebookDataLike {
+  return {
+    getUri: () => data.getUri(),
+    getName: () => data.getName(),
+    getNotebook: () => data.getNotebook(),
+    updateCell: (cell: parser_pb.Cell) => data.updateCell(cell),
+    getCell: (refId: string) => data.getCell(refId),
+    appendCell: data.appendCell?.bind(data),
+    addCellAfter: data.addCellAfter?.bind(data),
+    addCellBefore: data.addCellBefore?.bind(data),
+    removeCell: data.removeCell?.bind(data),
+  }
+}
 
 export function useCodeModeExecutor(options?: {
   mode?: CodeModeRunnerMode
@@ -44,17 +72,7 @@ export function useCodeModeExecutor(options?: {
       return null
     }
 
-    return {
-      getUri: () => data.getUri(),
-      getName: () => data.getName(),
-      getNotebook: () => data.getNotebook(),
-      updateCell: (cell: parser_pb.Cell) => data.updateCell(cell),
-      getCell: (refId: string) => data.getCell(refId),
-      appendCodeCell: data.appendCodeCell?.bind(data),
-      addCodeCellAfter: data.addCodeCellAfter?.bind(data),
-      addCodeCellBefore: data.addCodeCellBefore?.bind(data),
-      removeCell: data.removeCell?.bind(data),
-    }
+    return createCodeModeNotebookAdapter(data)
   }, [])
 
   return useMemo(

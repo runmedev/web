@@ -548,7 +548,7 @@ describe("NotebookData cell defaults", () => {
       loaded: true,
     });
 
-    const cell = model.appendCodeCell();
+    const cell = model.appendCell(parser_pb.CellKind.CODE);
 
     expect(cell.languageId).toBe("markdown");
     expect(cell.kind).toBe(parser_pb.CellKind.CODE);
@@ -568,7 +568,7 @@ describe("NotebookData persistence", () => {
     });
 
     model.setNotebookStore({ save });
-    model.appendCodeCell("javascript");
+    model.appendCell(parser_pb.CellKind.CODE, "javascript");
 
     await waitForCondition(() => save.mock.calls.length > 0, 1500);
 
@@ -1387,8 +1387,9 @@ describe("NotebookData.runCodeCell", () => {
       value: [
         'const created = await notebooks.createLocal("helloworld");',
         'console.log(created.summary.name);',
-        'const code = await notebooks.appendCodeCell({',
+        'const code = await notebooks.appendCell({',
         '  target: { handle: created.handle },',
+        '  kind: "code",',
         '  languageId: "python",',
         '  value: \'print("hello world")\',',
         '  metadata: { name: "hello-python" },',
@@ -1396,8 +1397,9 @@ describe("NotebookData.runCodeCell", () => {
         'console.log(code.cell.languageId);',
         'console.log(code.cell.value);',
         'console.log(code.cell.metadata?.name);',
-        'const markdown = await notebooks.appendMarkdownCell({',
+        'const markdown = await notebooks.appendCell({',
         '  target: { handle: code.handle },',
+        '  kind: "markup",',
         '  value: "# Notes",',
         '});',
         'console.log(markdown.cell.languageId);',

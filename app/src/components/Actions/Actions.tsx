@@ -547,12 +547,12 @@ export function Action({
   // immediately repaint output visibility without requiring a separate listener.
   const runID = cellData.getRunID();
 
-  const handleAddCodeCellBefore = useCallback(() => {
-    cellData.addBefore(cell?.languageId);
+  const handleAddCellBefore = useCallback(() => {
+    cellData.addBefore(parser_pb.CellKind.CODE, cell?.languageId);
   }, [cell?.languageId, cellData]);
 
-  const handleAddCodeCellAfter = useCallback(() => {
-    cellData.addAfter(cell?.languageId);
+  const handleAddCellAfter = useCallback(() => {
+    cellData.addAfter(parser_pb.CellKind.CODE, cell?.languageId);
   }, [cell?.languageId, cellData]);
 
   const updateCellLocal = useCallback(
@@ -1077,7 +1077,7 @@ export function Action({
             type="button"
             aria-label="Add cell above"
             className="cell-add-btn h-5 w-5"
-            onClick={handleAddCodeCellBefore}
+            onClick={handleAddCellBefore}
           >
             <PlusIcon width={10} height={10} />
           </button>
@@ -1085,7 +1085,7 @@ export function Action({
             type="button"
             aria-label="Add cell below"
             className="cell-add-btn h-5 w-5"
-            onClick={handleAddCodeCellAfter}
+            onClick={handleAddCellAfter}
           >
             <PlusIcon width={10} height={10} />
           </button>
@@ -1166,7 +1166,7 @@ export function Action({
             type="button"
             aria-label="Add cell above"
             className="cell-add-btn h-5 w-5"
-            onClick={handleAddCodeCellBefore}
+            onClick={handleAddCellBefore}
           >
             <PlusIcon width={10} height={10} />
           </button>
@@ -1174,7 +1174,7 @@ export function Action({
             type="button"
             aria-label="Add cell below"
             className="cell-add-btn h-5 w-5"
-            onClick={handleAddCodeCellAfter}
+            onClick={handleAddCellAfter}
           >
             <PlusIcon width={10} height={10} />
           </button>
@@ -1254,7 +1254,7 @@ export function Action({
           type="button"
           aria-label="Add cell above"
           className="cell-add-btn h-5 w-5"
-          onClick={handleAddCodeCellBefore}
+          onClick={handleAddCellBefore}
         >
           <PlusIcon width={10} height={10} />
         </button>
@@ -1262,7 +1262,7 @@ export function Action({
           type="button"
           aria-label="Add cell below"
           className="cell-add-btn h-5 w-5"
-          onClick={handleAddCodeCellAfter}
+          onClick={handleAddCellAfter}
         >
           <PlusIcon width={10} height={10} />
         </button>
@@ -1576,7 +1576,7 @@ function NotebookTabContent({
               type="button"
               className="cell-add-btn h-8 w-8"
               aria-label="Add first cell"
-              onClick={() => data?.appendMarkupCell()}
+              onClick={() => data?.appendCell(parser_pb.CellKind.MARKUP)}
             >
               <PlusIcon className="h-5 w-5" />
             </button>
@@ -1604,7 +1604,7 @@ function NotebookTabContent({
                 type="button"
                 className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted"
                 aria-label="Add cell at end"
-                onClick={() => data?.appendCodeCell()}
+                onClick={() => data?.appendCell(parser_pb.CellKind.CODE)}
               >
                 <PlusIcon width={10} height={10} />
                 <span>Add cell</span>

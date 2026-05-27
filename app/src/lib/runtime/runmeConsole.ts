@@ -22,13 +22,18 @@ export type NotebookDataLike = {
   getNotebook: () => parser_pb.Notebook;
   updateCell: (cell: parser_pb.Cell) => void;
   getCell: (refId: string) => CellRunnerLike | null;
-  appendCodeCell?: (languageId?: string | null) => parser_pb.Cell;
-  addCodeCellAfter?: (
+  appendCell?: (
+    kind?: parser_pb.CellKind,
+    languageId?: string | null,
+  ) => parser_pb.Cell;
+  addCellAfter?: (
     targetRefId: string,
+    kind?: parser_pb.CellKind,
     languageId?: string | null,
   ) => parser_pb.Cell | null;
-  addCodeCellBefore?: (
+  addCellBefore?: (
     targetRefId: string,
+    kind?: parser_pb.CellKind,
     languageId?: string | null,
   ) => parser_pb.Cell | null;
   removeCell?: (refId: string) => void;
@@ -280,6 +285,46 @@ function applyInsertedCellSpec(
   notebook.updateCell(updated);
 }
 
+function appendCellForSpec(
+  notebook: NotebookDataLike,
+  spec: InsertCellSpec,
+): parser_pb.Cell {
+  const kind =
+    spec.kind === "markup" ? parser_pb.CellKind.MARKUP : parser_pb.CellKind.CODE;
+  return notebook.appendCell!(
+    kind,
+    spec.languageId ?? (spec.kind === "code" ? "javascript" : undefined),
+  );
+}
+
+function addCellBeforeForSpec(
+  notebook: NotebookDataLike,
+  targetRefId: string,
+  spec: InsertCellSpec,
+): parser_pb.Cell | null {
+  const kind =
+    spec.kind === "markup" ? parser_pb.CellKind.MARKUP : parser_pb.CellKind.CODE;
+  return notebook.addCellBefore!(
+    targetRefId,
+    kind,
+    spec.languageId ?? (spec.kind === "code" ? "javascript" : undefined),
+  );
+}
+
+function addCellAfterForSpec(
+  notebook: NotebookDataLike,
+  targetRefId: string,
+  spec: InsertCellSpec,
+): parser_pb.Cell | null {
+  const kind =
+    spec.kind === "markup" ? parser_pb.CellKind.MARKUP : parser_pb.CellKind.CODE;
+  return notebook.addCellAfter!(
+    targetRefId,
+    kind,
+    spec.languageId ?? (spec.kind === "code" ? "javascript" : undefined),
+  );
+}
+
 function insertCells(
   notebook: NotebookDataLike,
   at: CellLocation,
@@ -289,9 +334,9 @@ function insertCells(
     return;
   }
   if (
-    typeof notebook.appendCodeCell !== "function" ||
-    typeof notebook.addCodeCellBefore !== "function" ||
-    typeof notebook.addCodeCellAfter !== "function" ||
+    typeof notebook.appendCell !== "function" ||
+    typeof notebook.addCellBefore !== "function" ||
+    typeof notebook.addCellAfter !== "function" ||
     typeof notebook.removeCell !== "function"
   ) {
     throw new Error("Notebook does not support insert operations.");
@@ -301,22 +346,20 @@ function insertCells(
   const insertedRefIds: string[] = [];
   const rollbackInsertedCells = () => {
     for (let i = insertedRefIds.length - 1; i >= 0; i -= 1) {
-      notebook.removeCell(insertedRefIds[i]);
+      notebook.removeCell!(insertedRefIds[i]!);
     }
   };
 
   try {
     if (location.beforeRefId) {
       for (let i = specs.length - 1; i >= 0; i -= 1) {
-        const inserted = notebook.addCodeCellBefore(
-          location.beforeRefId,
-          specs[i]?.languageId ?? "javascript",
-        );
+        const spec = specs[i]!;
+        const inserted = addCellBeforeForSpec(notebook, location.beforeRefId, spec);
         if (!inserted) {
           throw new Error(`Failed to insert before cell: ${location.beforeRefId}`);
         }
         insertedRefIds.push(inserted.refId);
-        applyInsertedCellSpec(notebook, inserted, specs[i]);
+        applyInsertedCellSpec(notebook, inserted, spec);
       }
       return;
     }
@@ -324,10 +367,7 @@ function insertCells(
     if (location.afterRefId) {
       let anchor = location.afterRefId;
       for (const spec of specs) {
-        const inserted = notebook.addCodeCellAfter(
-          anchor,
-          spec.languageId ?? "javascript",
-        );
+        const inserted = addCellAfterForSpec(notebook, anchor, spec);
         if (!inserted) {
           throw new Error(`Failed to insert after cell: ${anchor}`);
         }
@@ -339,7 +379,7 @@ function insertCells(
     }
 
     for (const spec of specs) {
-      const inserted = notebook.appendCodeCell(spec.languageId ?? "javascript");
+      const inserted = appendCellForSpec(notebook, spec);
       insertedRefIds.push(inserted.refId);
       applyInsertedCellSpec(notebook, inserted, spec);
     }

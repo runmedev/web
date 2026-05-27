@@ -484,9 +484,7 @@ export function createAppJsGlobals({
       expectedRevision: doc.handle.revision,
       reason:
         reason ??
-        (cell.kind === 'code'
-          ? 'Append code cell from App Console helper'
-          : 'Append markdown cell from App Console helper'),
+        `Append ${cell.kind === 'markup' ? 'markup' : 'code'} cell from App Console helper`,
       operations: [
         {
           op: 'insert',
@@ -530,11 +528,8 @@ export function createAppJsGlobals({
       if (topic === 'createLocal') {
         return 'notebooks.createLocal(name, options?: { folderUri?: string }): Promise<NotebookDocument>. Creates a new local notebook, opens it in the UI, and returns the notebook document.'
       }
-      if (topic === 'appendCodeCell') {
-        return 'notebooks.appendCodeCell({ target?, at?, languageId?, value?, metadata?, execute?, reason? }): Promise<{ handle, cell }>. Inserts a code cell into the current or targeted notebook.'
-      }
-      if (topic === 'appendMarkdownCell') {
-        return 'notebooks.appendMarkdownCell({ target?, at?, value?, metadata?, reason? }): Promise<{ handle, cell }>. Inserts a markdown cell into the current or targeted notebook.'
+      if (topic === 'appendCell') {
+        return 'notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? }): Promise<{ handle, cell }>. Inserts a cell into the current or targeted notebook. kind must be "code" or "markup".'
       }
       const base = await notebooksApi.help(topic as any)
       if (topic) {
@@ -543,8 +538,7 @@ export function createAppJsGlobals({
       return [
         base,
         '- notebooks.createLocal(name, options?)',
-        '- notebooks.appendCodeCell({ target?, at?, languageId?, value?, metadata?, execute?, reason? })',
-        '- notebooks.appendMarkdownCell({ target?, at?, value?, metadata?, reason? })',
+        '- notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? })',
       ].join('\n')
     },
     createLocal: async (
@@ -556,45 +550,35 @@ export function createAppJsGlobals({
       const uri = await createLocalNotebookAndOpen(name, options?.folderUri)
       return notebooksApi.get({ uri })
     },
-    appendCodeCell: async (args: {
+    appendCell: async (args: {
       target?: { uri: string } | { handle: { uri: string; revision: string } }
       at?: { index: number } | { beforeRefId: string } | { afterRefId: string }
+      kind?: 'code' | 'markup'
       languageId?: string
       value?: string
       metadata?: Record<string, string>
       execute?: boolean
       reason?: string
-    }) =>
-      await appendNotebookCell({
+    }) => {
+      if (args?.kind !== 'code' && args?.kind !== 'markup') {
+        throw new Error(
+          'Usage: notebooks.appendCell({ kind: "code" | "markup", target?, at?, languageId?, value?, metadata?, execute?, reason? })'
+        )
+      }
+      return await appendNotebookCell({
         target: args?.target,
         at: args?.at,
         execute: args?.execute,
         reason: args?.reason,
         cell: {
-          kind: 'code',
-          languageId: args?.languageId ?? 'javascript',
+          kind: args.kind,
+          languageId:
+            args.languageId ?? (args.kind === 'markup' ? 'markdown' : 'javascript'),
           value: args?.value ?? '',
           metadata: args?.metadata ?? {},
         },
-      }),
-    appendMarkdownCell: async (args: {
-      target?: { uri: string } | { handle: { uri: string; revision: string } }
-      at?: { index: number } | { beforeRefId: string } | { afterRefId: string }
-      value?: string
-      metadata?: Record<string, string>
-      reason?: string
-    }) =>
-      await appendNotebookCell({
-        target: args?.target,
-        at: args?.at,
-        reason: args?.reason,
-        cell: {
-          kind: 'markup',
-          languageId: 'markdown',
-          value: args?.value ?? '',
-          metadata: args?.metadata ?? {},
-        },
-      }),
+      })
+    },
   }
 
   return {
@@ -1213,7 +1197,7 @@ export function createAppJsGlobals({
         '',
         'High-value commands:',
         '  await notebooks.createLocal("hello")',
-        '  await notebooks.appendCodeCell({ value: "print(1)", languageId: "python" })',
+        '  await notebooks.appendCell({ kind: "code", value: "print(1)", languageId: "python" })',
         '  const diff = await notebookDiff.diffDriveRevision({ revisionId })',
         '  runmeRunners.ensure("openai-local", "ws://localhost:9988/ws", { setDefault: true })',
         '',
