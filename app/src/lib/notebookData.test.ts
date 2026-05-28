@@ -13,6 +13,7 @@ import {
   appendCodexWasmJournalEntry,
   resetCodexWasmJournalEntries,
 } from "./runtime/codexWasmEventJournal";
+import { __resetTabIdForTests, getClaimedSessionId } from "./tabIdentity";
 
 const mockRunner = {
   name: "mock-runner",
@@ -105,6 +106,10 @@ vi.mock("./runtime/sandboxJsKernel", () => ({
           ])) as { summary?: { name?: string }; notebook?: { cells?: unknown[] } };
           this.hooks.onStdout?.(`${doc?.summary?.name ?? ""}\n`);
           this.hooks.onStdout?.(`${doc?.notebook?.cells?.length ?? 0}\n`);
+        }
+        if (source.includes("app.getSessionID")) {
+          const sessionId = await this.bridge.call("app.getSessionID", []);
+          this.hooks.onStdout?.(`${String(sessionId)}\n`);
         }
       } catch (error) {
         exitCode = 1;
@@ -374,6 +379,8 @@ afterEach(async () => {
   defaultHarnessName = null;
   codexProjectStore.clear();
   defaultCodexProjectId = null;
+  __resetTabIdForTests();
+  window.history.replaceState(null, "", "/");
   await resetCodexWasmJournalEntries();
 });
 
@@ -858,6 +865,43 @@ describe("NotebookData.runCodeCell", () => {
       .join("");
     expect(stdoutText).toContain("sandbox-notebooks-get.runme.md");
     expect(stdoutText).toContain("1");
+  });
+
+  it("exposes the fresh Runme session id inside sandbox appkernel javascript cells", async () => {
+    window.history.replaceState(null, "", "/?session=notebook-session-id");
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-session-sandbox",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_SANDBOX_RUNNER_NAME,
+      },
+      value: "console.log(await app.getSessionID());",
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "sandbox-session.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    expect(stdoutText).toContain(await getClaimedSessionId());
+    expect(stdoutText).not.toContain("notebook-session-id");
   });
 
   it("exposes notebooks.list across open notebooks inside browser appkernel javascript cells", async () => {

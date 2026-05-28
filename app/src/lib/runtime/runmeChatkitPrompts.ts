@@ -12,7 +12,8 @@ const RUNME_SHARED_APP_INSTRUCTIONS = [
 
 const RUNME_SHARED_APPKERNEL_INSTRUCTIONS = [
   'Executed JavaScript runs inside the Runme AppKernel runtime.',
-  'Inside AppKernel, the runtime exposes helpers named runme, opfs, net, notebooks, and help.',
+  'Inside AppKernel, the runtime exposes helpers named runme, app, opfs, net, notebooks, and help.',
+  'Use await app.getSessionId() or await app.getSessionID() to identify the Runme browser session for the current tab.',
   'Use opfs as local browser storage and net.get(...) for HTTP GET requests.',
   'Use OPFS as a local repo cache under /code/${ORG}/${REPO}.',
   'For Runme source questions, prefer caching the public runmedev/web repository under /code/runmedev/web.',

@@ -35,6 +35,8 @@ Current numbered docs:
 Additional topical docs:
 
 - [using-codex.md](using-codex.md)
+- [codex-chat-panel.md](codex-chat-panel.md)
+- [codex-chrome-webmcp.md](codex-chrome-webmcp.md)
 
 These docs intentionally exclude implementation-only material such as deployment
 internals and design proposals. Internal notes remain under `docs-dev/` and

@@ -53,6 +53,7 @@ import {
 } from "@runmedev/renderers";
 import { buildExecuteRequest } from "./runme";
 import type { Runner } from "./runner";
+import { getClaimedSessionId } from "./tabIdentity";
 import { showToast } from "./toast";
 import { appLogger } from "./logging/runtime";
 import { getBrowserAdapter } from "../browserAdapter.client";
@@ -1038,6 +1039,10 @@ export class NotebookData {
           cellCount: notebook.getNotebook().cells.length,
         };
       }
+      case "app.getSessionId":
+        return getClaimedSessionId();
+      case "app.getSessionID":
+        return getClaimedSessionId();
       default:
         if (method.startsWith("notebooks.")) {
           return notebooksApiBridgeServer.handleMessage({

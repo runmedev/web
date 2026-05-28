@@ -39,6 +39,7 @@ import {
 } from '../markdownImport'
 import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
 import type { Runner } from '../runner'
+import { getClaimedSessionId } from '../tabIdentity'
 import { appState } from './AppState'
 import type {
   AppKernelNetworkApi,
@@ -1034,6 +1035,8 @@ export function createAppJsGlobals({
       },
     },
     app: {
+      getSessionId: () => getClaimedSessionId(),
+      getSessionID: () => getClaimedSessionId(),
       getDefaultConfigUrl: () => getDefaultAppConfigUrl(),
       isLocalConfigPreferredOnLoad: () => isLocalConfigPreferredOnLoad(),
       setLocalConfigPreferredOnLoad: (preferLocal: boolean) => {
@@ -1196,6 +1199,8 @@ export function createAppJsGlobals({
         '  credentials     - Shorthand for google/oidc/openai credential managers',
         '',
         'High-value commands:',
+        '  await app.getSessionId()',
+        '  await app.getSessionID()',
         '  await notebooks.createLocal("hello")',
         '  await notebooks.appendCell({ kind: "code", value: "print(1)", languageId: "python" })',
         '  const diff = await notebookDiff.diffDriveRevision({ revisionId })',

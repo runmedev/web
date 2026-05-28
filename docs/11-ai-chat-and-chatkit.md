@@ -31,6 +31,6 @@ Open the `AI Chat` panel from the left toolbar.
 - The AI panel is not a generic detached chatbot. It is coupled to notebook and
   runtime helpers.
 - "ChatKit" describes the UI protocol surface, but the actual backend can be
-  `responses-direct`, `codex`, or `codex-wasm`.
+  `responses-direct` or `codex`.
 - If AI appears broken, inspect harness selection and auth before debugging the
   notebook UI itself.

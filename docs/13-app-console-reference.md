@@ -82,8 +82,9 @@ app.setConfig(app.getDefaultConfigUrl())
 Harness setup:
 
 ```js
-app.harness.update("browser-codex", "", "codex-wasm")
-app.harness.setDefault("browser-codex")
+app.harness.get()
+app.harness.getDefault()
+app.harness.setDefault("configured-harness-name")
 ```
 
 ## High-value facts for Codex

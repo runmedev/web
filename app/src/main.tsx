@@ -22,6 +22,7 @@ import {
 import { appLogger } from "./lib/logging/runtime";
 import { normalizeAppIndexUrl } from "./lib/appBase";
 import { ensurePersistentStorage } from "./lib/persistentStorage";
+import { ensureSessionQueryParam } from "./lib/tabIdentity";
 
 type AppConfigApi = {
   getDefaultConfigUrl: () => string;
@@ -64,6 +65,7 @@ const noopBridge: RendererContext<void> = {
 setContext(noopBridge);
 
 normalizeAppIndexUrl();
+ensureSessionQueryParam();
 
 void ensurePersistentStorage().then((status) => {
   switch (status) {
