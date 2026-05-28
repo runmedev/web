@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
-import { render, screen, act, fireEvent } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { clone, create } from "@bufbuild/protobuf";
-import React from "react";
 import {
   APPKERNEL_RUNNER_NAME,
   APPKERNEL_SANDBOX_RUNNER_NAME,
@@ -10,7 +9,15 @@ import {
 
 import { parser_pb, RunmeMetadataKey } from "../../runme/client";
 import type { CellData } from "../../lib/notebookData";
-import { Action } from "./Actions";
+import Actions, { Action } from "./Actions";
+
+const contextMocks = vi.hoisted(() => ({
+  workspaceDocuments: [] as Array<{ uri: string; title: string }>,
+  currentDoc: null as string | null,
+  setCurrentDoc: vi.fn(),
+  showDocument: vi.fn(),
+  closeWorkspaceDocument: vi.fn(),
+}));
 
 // Minimal mocks for contexts Action consumes
 vi.mock("../../contexts/OutputContext", () => ({
@@ -42,8 +49,14 @@ vi.mock("../../contexts/NotebookContext", () => ({
   useNotebookContext: () => ({
     getNotebookData: () => null,
     useNotebookSnapshot: () => null,
-    useNotebookList: () => [],
-    removeNotebook: () => {},
+  }),
+}));
+
+vi.mock("../../contexts/WorkspaceDocumentContext", () => ({
+  useWorkspaceDocumentContext: () => ({
+    useWorkspaceDocuments: () => contextMocks.workspaceDocuments,
+    showDocument: contextMocks.showDocument,
+    closeWorkspaceDocument: contextMocks.closeWorkspaceDocument,
   }),
 }));
 
@@ -62,8 +75,8 @@ vi.mock("../../contexts/FilesystemStoreContext", () => ({
 
 vi.mock("../../contexts/CurrentDocContext", () => ({
   useCurrentDoc: () => ({
-    getCurrentDoc: () => null,
-    setCurrentDoc: () => {},
+    getCurrentDoc: () => contextMocks.currentDoc,
+    setCurrentDoc: contextMocks.setCurrentDoc,
   }),
 }));
 
@@ -133,7 +146,7 @@ class StubCellData {
     return this.subscribe(listener);
   }
 
-  subscribeToRunIDChange(listener: (id: string) => void) {
+  subscribeToRunIDChange(_listener: (id: string) => void) {
     return () => {};
   }
 
@@ -177,6 +190,35 @@ class StubCellData {
   run() {}
 }
 
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+  contextMocks.workspaceDocuments = [];
+  contextMocks.currentDoc = null;
+  contextMocks.setCurrentDoc.mockReset();
+  contextMocks.setCurrentDoc.mockImplementation((uri: string | null) => {
+    contextMocks.currentDoc = uri;
+  });
+  contextMocks.showDocument.mockReset();
+  contextMocks.closeWorkspaceDocument.mockReset();
+});
+
+describe("Actions tabs", () => {
+  it("falls back from a stale current URI to an open workspace document", async () => {
+    contextMocks.currentDoc = "diff://notebook/not-restored";
+    contextMocks.workspaceDocuments = [
+      { uri: "local://file/restored", title: "restored.json" },
+    ];
+
+    render(<Actions />);
+
+    await waitFor(() => {
+      expect(contextMocks.setCurrentDoc).toHaveBeenCalledWith(
+        "local://file/restored",
+      );
+    });
+  });
+});
+
 describe("Action component", () => {
   it("updates CellConsole key when runID changes", async () => {
     const cell =  create(parser_pb.CellSchema,{
@@ -189,9 +231,9 @@ describe("Action component", () => {
       },
       value: "echo hi",
     });
-    const stub = new StubCellData(cell) as unknown as CellData;
+    const stub = new StubCellData(cell);
 
-    render(<Action cellData={stub} isFirst={false} />);
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
 
     const first = screen.getByTestId("cell-console") as HTMLElement;
     const firstKey = first.dataset.runkey;
@@ -218,9 +260,9 @@ describe("Action component", () => {
       },
       value: "echo hi",
     });
-    const stub = new StubCellData(cell) as unknown as CellData;
+    const stub = new StubCellData(cell);
 
-    render(<Action cellData={stub} isFirst={false} />);
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />);
     expect(screen.getByTestId("cell-console")).toBeTruthy();
 
     await act(async () => {
@@ -301,7 +343,7 @@ describe("Action component", () => {
       | HTMLSelectElement
       | null;
     expect(selector).toBeTruthy();
-    fireEvent.change(selector, { target: { value: "markdown" } });
+    fireEvent.change(selector as HTMLSelectElement, { target: { value: "markdown" } });
 
     expect(stub.update).toHaveBeenCalledTimes(1);
     const updatedCell = stub.update.mock.calls[0][0] as parser_pb.Cell;

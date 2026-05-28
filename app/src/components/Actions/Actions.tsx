@@ -12,18 +12,18 @@ import {
 
 import { create } from "@bufbuild/protobuf";
 import { Button, ScrollArea, Tabs, Text } from "@radix-ui/themes";
-import { useParams } from "react-router-dom";
 
 import { XMarkIcon } from "@heroicons/react/20/solid";
 import {
   MimeType,
   RunmeMetadataKey,
   parser_pb,
-} from "../../runme/client";;
+} from "../../runme/client";
 import { CellData } from "../../lib/notebookData";
 import { useNotebookContext } from "../../contexts/NotebookContext";
 import type { OpenNotebookEntry } from "../../lib/notebookDataController";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
+import { useWorkspaceDocumentContext } from "../../contexts/WorkspaceDocumentContext";
 import { useOutput } from "../../contexts/OutputContext";
 import CellConsole, { fontSettings } from "./CellConsole";
 import Editor from "./Editor";
@@ -62,10 +62,18 @@ import {
   DRIVE_LINK_STATUS_TAB_URI,
   useDriveLinkCoordinatorSnapshot,
 } from "../../lib/driveLinkCoordinator";
+import {
+  isDriveLinkStatusUri,
+  isNotebookDiffUri,
+  isNotebookDocumentUri,
+  type WorkspaceDocument,
+} from "../../lib/workspaceDocuments/workspaceDocumentTypes";
+import { getNotebookDiffDocument } from "../../lib/notebookDiff/registry";
 import { parseDriveItem } from "../../storage/drive";
 import type { NotebookSyncState } from "../../storage/local";
 import { NotebookStoreItemType } from "../../storage/notebook";
 import DriveLinkStatusTab from "../DriveLinkStatusTab";
+import { NotebookDiffContent } from "../NotebookDiff/NotebookDiffView";
 import React from "react";
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
@@ -1617,17 +1625,103 @@ function NotebookTabContent({
   );
 }
 
+function NotebookDiffTabContent({ diffUri }: { diffUri: string }) {
+  const diffId = diffUri.slice("diff://notebook/".length);
+  const document = diffId ? getNotebookDiffDocument(decodeURIComponent(diffId)) : null;
+  if (document) {
+    return <NotebookDiffContent document={document} />;
+  }
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-nb-text-muted">
+      <Text size="3" weight="bold" as="p" className="text-nb-text">
+        Diff no longer available
+      </Text>
+      <Text size="2" as="p">
+        Recompute the notebook diff from a browser JavaScript cell, then call
+        notebookDiff.openDiffTab(diff) again.
+      </Text>
+    </div>
+  );
+}
+
+function UnknownDocumentTab({ uri }: { uri: string }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-nb-text-muted">
+      <Text size="3" weight="bold" as="p" className="text-nb-text">
+        Unsupported document
+      </Text>
+      <Text size="2" as="p">
+        {uri}
+      </Text>
+    </div>
+  );
+}
+
+function renderWorkspaceDocument({
+  document,
+  activeCell,
+  isWindowFocused,
+  onCellFocus,
+  onDriveLogin,
+  onDriveRetry,
+}: {
+  document: WorkspaceDocument;
+  activeCell: NotebookActiveCellState | null;
+  isWindowFocused: boolean;
+  onCellFocus: (docUri: string, state: NotebookActiveCellState) => void;
+  onDriveLogin: () => void;
+  onDriveRetry: () => void;
+}) {
+  if (isNotebookDocumentUri(document.uri)) {
+    const entry: OpenNotebookEntry = {
+      uri: document.uri,
+      requestedUri: document.requestedUri ?? document.uri,
+      name: document.title,
+      state: document.state ?? "loading",
+      errorMessage: document.errorMessage,
+      ...(document.owner !== undefined ? { owner: document.owner } : {}),
+    };
+    return (
+      <NotebookTabContent
+        docUri={document.uri}
+        entry={entry}
+        activeCell={activeCell}
+        isWindowFocused={isWindowFocused}
+        onCellFocus={onCellFocus}
+      />
+    );
+  }
+
+  if (isNotebookDiffUri(document.uri)) {
+    return <NotebookDiffTabContent diffUri={document.uri} />;
+  }
+
+  if (isDriveLinkStatusUri(document.uri)) {
+    return (
+      <DriveLinkStatusTab
+        onLogin={onDriveLogin}
+        onRetry={onDriveRetry}
+      />
+    );
+  }
+
+  return <UnknownDocumentTab uri={document.uri} />;
+}
+
 export default function Actions() {
-  const { useNotebookList, removeNotebook } = useNotebookContext();
+  const {
+    useWorkspaceDocuments,
+    showDocument,
+    closeWorkspaceDocument,
+  } = useWorkspaceDocumentContext();
   const { store } = useNotebookStore();
-  const openNotebooks = useNotebookList();
+  const workspaceDocuments = useWorkspaceDocuments();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const currentDocUri = getCurrentDoc();
   const driveLinkSnapshot = useDriveLinkCoordinatorSnapshot();
   const statusTabVisible =
     driveLinkSnapshot.intents.length > 0 ||
     Boolean(driveLinkSnapshot.lastErrorMessage);
-  const [mountedTabs, setMountedTabs] = useState<Set<string>>(() => new Set());
   const [selectedTabUri, setSelectedTabUri] = useState<string | null>(null);
   const [activeCellsByDoc, setActiveCellsByDoc] = useState<NotebookActiveCellMap>(
     () => loadNotebookActiveCellMap(),
@@ -1649,9 +1743,7 @@ export default function Actions() {
     googleDriveUri: string | null;
   } | null>(null);
   const tabTriggerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const { runName } = useParams<{ runName?: string }>();
   //const { data: run } = useRun(runName);
-  const [cellsInitialized, setCellsInitialized] = useState(false);
 
   // useEffect(() => {
   //   if (cellsInitialized) {
@@ -1680,10 +1772,21 @@ export default function Actions() {
   // }, [cellsInitialized, currentDocUri, ensureNotebook, run, runName, setCurrentDoc]);
 
   const { registerRenderer, unregisterRenderer } = useOutput();
+  const workspaceDocumentUris = useMemo(
+    () => new Set(workspaceDocuments.map((document) => document.uri)),
+    [workspaceDocuments],
+  );
+  const selectedTabIsOpen = selectedTabUri
+    ? workspaceDocumentUris.has(selectedTabUri)
+    : false;
+  const currentDocIsOpen = currentDocUri
+    ? workspaceDocumentUris.has(currentDocUri)
+    : false;
   const resolvedSelectedTabUri =
-    selectedTabUri ??
-    currentDocUri ??
-    (statusTabVisible ? DRIVE_LINK_STATUS_TAB_URI : openNotebooks[0]?.uri ?? "");
+    (selectedTabIsOpen ? selectedTabUri : null) ??
+    (currentDocIsOpen ? currentDocUri : null) ??
+    workspaceDocuments[0]?.uri ??
+    "";
 
   const handleCellFocus = useCallback(
     (docUri: string, state: NotebookActiveCellState) => {
@@ -1706,34 +1809,56 @@ export default function Actions() {
     [],
   );
 
-  // Ensure the active tab is tracked as mounted on first render/whenever it changes.
+  // Keep Radix tab selection in sync with the shared current document URI.
+  // CurrentDocContext may restore a non-restorable URI, such as a diff/status
+  // document. Fall back to the first restored workspace document in that case.
   useEffect(() => {
-    if (!currentDocUri) {
+    if (statusTabVisible) {
       return;
     }
-    setMountedTabs((prev) => {
-      if (prev.has(currentDocUri)) {
-        return prev;
+    if (currentDocUri && currentDocIsOpen) {
+      setSelectedTabUri(currentDocUri);
+      return;
+    }
+    if (selectedTabUri && !selectedTabIsOpen) {
+      setSelectedTabUri(null);
+    }
+    if (currentDocUri && !currentDocIsOpen) {
+      setCurrentDoc(workspaceDocuments[0]?.uri ?? null);
+    }
+  }, [
+    currentDocIsOpen,
+    currentDocUri,
+    selectedTabIsOpen,
+    selectedTabUri,
+    setCurrentDoc,
+    statusTabVisible,
+    workspaceDocuments,
+  ]);
+
+  useEffect(() => {
+    if (statusTabVisible) {
+      showDocument(DRIVE_LINK_STATUS_TAB_URI, {
+        title: "Drive Link Status",
+      });
+      if (!currentDocUri || !currentDocIsOpen) {
+        setCurrentDoc(DRIVE_LINK_STATUS_TAB_URI);
       }
-      const next = new Set(prev);
-      next.add(currentDocUri);
-      return next;
-    });
-    setSelectedTabUri((prev) =>
-      prev === DRIVE_LINK_STATUS_TAB_URI ? prev : currentDocUri,
-    );
-  }, [currentDocUri]);
-
-  useEffect(() => {
-    if (statusTabVisible && !currentDocUri) {
-      setSelectedTabUri((prev) => prev ?? DRIVE_LINK_STATUS_TAB_URI);
       return;
     }
 
-    if (!statusTabVisible && selectedTabUri === DRIVE_LINK_STATUS_TAB_URI) {
-      setSelectedTabUri(currentDocUri ?? openNotebooks[0]?.uri ?? null);
+    if (workspaceDocuments.some((doc) => doc.uri === DRIVE_LINK_STATUS_TAB_URI)) {
+      closeWorkspaceDocument(DRIVE_LINK_STATUS_TAB_URI);
     }
-  }, [currentDocUri, openNotebooks, selectedTabUri, statusTabVisible]);
+  }, [
+    closeWorkspaceDocument,
+    currentDocIsOpen,
+    currentDocUri,
+    setCurrentDoc,
+    showDocument,
+    statusTabVisible,
+    workspaceDocuments,
+  ]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") {
@@ -1808,12 +1933,9 @@ export default function Actions() {
 
   const handleCloseTab = useCallback(
     (uri: string) => {
-      const next = removeNotebook(uri);
-      if (uri === currentDocUri) {
-        setCurrentDoc(next ?? null);
-      }
+      closeWorkspaceDocument(uri);
     },
-    [currentDocUri, removeNotebook, setCurrentDoc],
+    [closeWorkspaceDocument],
   );
 
   useEffect(() => {
@@ -1971,7 +2093,7 @@ export default function Actions() {
 
   return (
     <div id="documents" className="flex flex-col h-full">
-      {openNotebooks.length === 0 && !statusTabVisible ? (
+      {workspaceDocuments.length === 0 ? (
         <ScrollArea
           type="auto"
           scrollbars="vertical"
@@ -2048,18 +2170,7 @@ export default function Actions() {
           value={resolvedSelectedTabUri}
           onValueChange={(nextUri) => {
             setSelectedTabUri(nextUri);
-            if (nextUri === DRIVE_LINK_STATUS_TAB_URI) {
-              return;
-            }
             if (nextUri !== currentDocUri) {
-              setMountedTabs((prev) => {
-                if (prev.has(nextUri)) {
-                  return prev;
-                }
-                const next = new Set(prev);
-                next.add(nextUri);
-                return next;
-              });
               setCurrentDoc(nextUri);
             }
           }}
@@ -2073,29 +2184,9 @@ export default function Actions() {
               id="notebook-tabs-list"
               className="flex min-w-max items-center gap-0.5 px-2 py-1"
             >
-              {statusTabVisible && (
-                <div
-                  key={`tab-${DRIVE_LINK_STATUS_TAB_URI}`}
-                  ref={(node) => {
-                    if (node) {
-                      tabTriggerRefs.current.set(DRIVE_LINK_STATUS_TAB_URI, node);
-                    } else {
-                      tabTriggerRefs.current.delete(DRIVE_LINK_STATUS_TAB_URI);
-                    }
-                  }}
-                  className="flex shrink-0 items-center gap-1"
-                >
-                  <Tabs.Trigger
-                    value={DRIVE_LINK_STATUS_TAB_URI}
-                    title="Drive Link Status"
-                    className="group flex shrink-0 items-center gap-2 rounded-nb-sm border border-transparent px-3 py-1.5 text-sm font-medium text-nb-text-muted transition-all duration-150 data-[state=active]:border-nb-border data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
-                  >
-                    <span className="max-w-[180px] truncate">Drive Link Status</span>
-                  </Tabs.Trigger>
-                </div>
-              )}
-              {openNotebooks.map((doc) => {
-                const displayName = getNotebookDisplayName(doc.uri, doc.name);
+              {workspaceDocuments.map((doc) => {
+                const displayName = getNotebookDisplayName(doc.uri, doc.title);
+                const isNotebook = isNotebookDocumentUri(doc.uri);
                 return (
                   <div
                     key={`tab-${doc.uri}`}
@@ -2110,13 +2201,17 @@ export default function Actions() {
                   >
                     <Tabs.Trigger
                       value={doc.uri}
-                      title={doc.name}
-                      onContextMenu={(event) => handleTabContextMenu(event, doc.uri)}
+                      title={doc.title}
+                      onContextMenu={
+                        isNotebook
+                          ? (event) => handleTabContextMenu(event, doc.uri)
+                          : undefined
+                      }
                       className="group flex shrink-0 items-center gap-2 rounded-nb-sm border border-transparent px-3 py-1.5 text-sm font-medium text-nb-text-muted transition-all duration-150 data-[state=active]:border-nb-border data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
                     >
                       <span className="max-w-[140px] truncate">{displayName}</span>
                     </Tabs.Trigger>
-                    <NotebookSyncIndicator docUri={doc.uri} />
+                    {isNotebook && <NotebookSyncIndicator docUri={doc.uri} />}
                     <button
                       type="button"
                       className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-nb-xs text-nb-text-faint transition-all duration-150 hover:bg-nb-surface-2 hover:text-nb-text"
@@ -2179,22 +2274,7 @@ export default function Actions() {
             </div>
           )}
           <div className="relative flex-1 min-h-0 overflow-hidden">
-          {statusTabVisible && (
-            <Tabs.Content
-              key={`content-${DRIVE_LINK_STATUS_TAB_URI}`}
-              value={DRIVE_LINK_STATUS_TAB_URI}
-              forceMount
-              asChild
-            >
-              <TabPanel className="flex-1 min-h-0">
-                <DriveLinkStatusTab
-                  onLogin={() => driveLinkCoordinator.loginToDriveAndProcess()}
-                  onRetry={() => driveLinkCoordinator.retryAuthAndProcess()}
-                />
-              </TabPanel>
-            </Tabs.Content>
-          )}
-          {openNotebooks.map((doc) => (
+          {workspaceDocuments.map((doc) => (
             <Tabs.Content
               key={`content-${doc.uri}`}
               value={doc.uri}
@@ -2202,15 +2282,15 @@ export default function Actions() {
               asChild
             >
               <TabPanel className="flex-1 min-h-0" data-document-id={doc.uri}>
-                <NotebookTabContent
-                  docUri={doc.uri}
-                  entry={doc}
-                  activeCell={activeCellsByDoc[doc.uri] ?? null}
-                  isWindowFocused={
-                    isWindowFocused && resolvedSelectedTabUri === doc.uri
-                  }
-                  onCellFocus={handleCellFocus}
-                />
+                {renderWorkspaceDocument({
+                  document: doc,
+                  activeCell: activeCellsByDoc[doc.uri] ?? null,
+                  isWindowFocused:
+                    isWindowFocused && resolvedSelectedTabUri === doc.uri,
+                  onCellFocus: handleCellFocus,
+                  onDriveLogin: () => driveLinkCoordinator.loginToDriveAndProcess(),
+                  onDriveRetry: () => driveLinkCoordinator.retryAuthAndProcess(),
+                })}
               </TabPanel>
             </Tabs.Content>
           ))}

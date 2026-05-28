@@ -3,6 +3,7 @@ import { useCallback, useMemo, useRef } from 'react'
 import { parser_pb } from '../../contexts/CellContext'
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import { useNotebookContext } from '../../contexts/NotebookContext'
+import { isNotebookDocumentUri } from '../workspaceDocuments/workspaceDocumentTypes'
 import {
   type CodeModeExecutor,
   type CodeModeRunnerMode,
@@ -65,6 +66,9 @@ export function useCodeModeExecutor(options?: {
             ? (target as { handle?: { uri?: string } }).handle?.uri
             : currentDocUriRef.current
     if (!targetUri) {
+      return null
+    }
+    if (!isNotebookDocumentUri(targetUri)) {
       return null
     }
     const data = getNotebookDataRef.current(targetUri)

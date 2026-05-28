@@ -3,12 +3,12 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useState,
 } from "react";
 
 import { getNotebookSessionPersistence } from "../lib/notebookSessionPersistence";
+import { isRestorableWorkspaceDocument } from "../lib/workspaceDocuments/workspaceDocumentTypes";
 
 interface CurrentDocContextValue {
   getCurrentDoc: () => string | null;
@@ -19,6 +19,11 @@ const CurrentDocContext = createContext<CurrentDocContextValue | undefined>(
   undefined,
 );
 
+function loadRestorableStoredCurrentDoc(): string | null {
+  const uri = getNotebookSessionPersistence().loadCurrentDoc();
+  return uri && isRestorableWorkspaceDocument(uri) ? uri : null;
+}
+
 export function useCurrentDoc() {
   const ctx = useContext(CurrentDocContext);
   if (!ctx) {
@@ -28,15 +33,9 @@ export function useCurrentDoc() {
 }
 
 export function CurrentDocProvider({ children }: { children: ReactNode }) {
-  const [currentDoc, setCurrentDocState] = useState<string | null>(null);
-
-  const loadStoredCurrentDoc = useCallback((): string | null => {
-    return getNotebookSessionPersistence().loadCurrentDoc();
-  }, []);
-
-  useEffect(() => {
-    setCurrentDocState(loadStoredCurrentDoc());
-  }, [loadStoredCurrentDoc]);
+  const [currentDoc, setCurrentDocState] = useState<string | null>(
+    loadRestorableStoredCurrentDoc,
+  );
 
   const getCurrentDoc = useCallback(() => {
     return currentDoc;
@@ -55,7 +54,9 @@ export function CurrentDocProvider({ children }: { children: ReactNode }) {
         return localUri;
       });
 
-      getNotebookSessionPersistence().saveCurrentDoc(localUri);
+      getNotebookSessionPersistence().saveCurrentDoc(
+        localUri && isRestorableWorkspaceDocument(localUri) ? localUri : null,
+      );
     },
     [currentDoc],
   );

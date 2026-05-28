@@ -36,6 +36,7 @@ import { LOCAL_FOLDER_URI } from "../../storage/local";
 import { useGoogleAuth } from "../../contexts/GoogleAuthContext";
 import { useCurrentDoc } from "../../contexts/CurrentDocContext";
 import { useNotebookContext } from "../../contexts/NotebookContext";
+import { useWorkspaceDocumentContext } from "../../contexts/WorkspaceDocumentContext";
 import { driveLinkCoordinator } from "../../lib/driveLinkCoordinator";
 
 interface ContextMenuState {
@@ -228,6 +229,7 @@ export function WorkspaceExplorer() {
   const { fsStore } = useFilesystemStore();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
   const { openNotebook } = useNotebookContext();
+  const { showDocument } = useWorkspaceDocumentContext();
   const currentDoc = getCurrentDoc();
   const { ensureAccessToken } = useGoogleAuth();
   const handledDocRef = useRef<string | null>(null);
@@ -420,6 +422,9 @@ export function WorkspaceExplorer() {
         const result = await openNotebook(targetItem.uri, {
           name: targetItem.name,
         });
+        showDocument(result.localUri, {
+          title: result.entry.name,
+        });
         setCurrentDoc(result.localUri);
         handledDocRef.current = result.localUri;
       } catch (error) {
@@ -434,6 +439,7 @@ export function WorkspaceExplorer() {
     ensureAccessToken,
     openNotebook,
     setCurrentDoc,
+    showDocument,
     store,
     workspaceUris,
   ]);

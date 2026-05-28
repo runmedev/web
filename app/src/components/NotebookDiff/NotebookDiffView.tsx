@@ -220,10 +220,10 @@ function DiffRow({ row }: { row: CellDiff }) {
   );
 }
 
-function NotebookDiffContent({ document }: { document: NotebookDiffDocument }) {
+export function NotebookDiffContent({ document }: { document: NotebookDiffDocument }) {
   const { diff } = document;
   return (
-    <div className="flex h-screen w-screen flex-col bg-nb-surface">
+    <div className="flex h-full w-full flex-col bg-nb-surface">
       <header className="border-b border-nb-border bg-white px-5 py-4">
         <div className="flex items-center justify-between gap-4">
           <div>

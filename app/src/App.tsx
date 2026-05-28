@@ -32,6 +32,7 @@ import { FilesystemNotebookStore } from "./storage/fs";
 import { isFileSystemAccessSupported } from "./storage/fs";
 import LocalNotebooks from "./storage/local";
 import { CurrentDocProvider } from "./contexts/CurrentDocContext";
+import { WorkspaceDocumentProvider } from "./contexts/WorkspaceDocumentContext";
 import {
   FilesystemStoreProvider,
   useFilesystemStore,
@@ -169,11 +170,13 @@ function App({ branding }: AppProps) {
                     >
                       <OutputProvider>
                         <NotebookProvider>
-                          <WebMcpToolRegistrationHost />
-                          <SidePanelProvider>
-                            <GlobalToast />
-                            <AppRouter />
-                          </SidePanelProvider>
+                          <WorkspaceDocumentProvider>
+                            <WebMcpToolRegistrationHost />
+                            <SidePanelProvider>
+                              <GlobalToast />
+                              <AppRouter />
+                            </SidePanelProvider>
+                          </WorkspaceDocumentProvider>
                         </NotebookProvider>
                       </OutputProvider>
                     </RunnersProvider>

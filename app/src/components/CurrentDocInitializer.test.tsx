@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   getStore: vi.fn(() => null as unknown),
   openNotebook: vi.fn(),
   setCurrentDoc: vi.fn(),
+  showDocument: vi.fn(),
 }));
 
 vi.mock("../contexts/CurrentDocContext", () => ({
@@ -19,6 +20,12 @@ vi.mock("../contexts/CurrentDocContext", () => ({
 vi.mock("../contexts/NotebookContext", () => ({
   useNotebookContext: () => ({
     openNotebook: mocks.openNotebook,
+  }),
+}));
+
+vi.mock("../contexts/WorkspaceDocumentContext", () => ({
+  useWorkspaceDocumentContext: () => ({
+    showDocument: mocks.showDocument,
   }),
 }));
 
@@ -41,6 +48,7 @@ describe("CurrentDocInitializer", () => {
     mocks.getStore.mockReturnValue(null);
     mocks.openNotebook.mockReset();
     mocks.setCurrentDoc.mockReset();
+    mocks.showDocument.mockReset();
     window.history.replaceState(null, "", "/");
   });
 
@@ -90,6 +98,9 @@ describe("CurrentDocInitializer", () => {
 
     await waitFor(() => {
       expect(mocks.setCurrentDoc).toHaveBeenCalledWith("local://file/example");
+    });
+    expect(mocks.showDocument).toHaveBeenCalledWith("local://file/example", {
+      title: "example.json",
     });
     expect(window.location.search).toBe("?existing=1");
     expect(window.location.hash).toBe("#section");

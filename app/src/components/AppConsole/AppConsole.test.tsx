@@ -53,7 +53,14 @@ vi.mock("../../contexts/CurrentDocContext", () => ({
 vi.mock("../../contexts/NotebookContext", () => ({
   useNotebookContext: () => ({
     getNotebookData: () => null,
+    openNotebook: vi.fn(),
     useNotebookList: () => [],
+  }),
+}));
+
+vi.mock("../../contexts/WorkspaceDocumentContext", () => ({
+  useWorkspaceDocumentContext: () => ({
+    showDocument: vi.fn(),
   }),
 }));
 
