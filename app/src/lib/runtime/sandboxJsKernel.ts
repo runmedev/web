@@ -45,6 +45,8 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'notebookDiff.diffDriveRevision',
   'notebookDiff.openDiffTab',
   'notebookDiff.help',
+  'app.getSessionId',
+  'app.getSessionID',
   ...SANDBOX_NOTEBOOKS_API_METHODS,
 ]
 
@@ -284,6 +286,10 @@ function buildSandboxSrcDoc(options: {
             consoleProxy.log("codex.turns.help()");
           },
         };
+        const app = {
+          getSessionId: () => hostCall("app.getSessionId", []),
+          getSessionID: () => hostCall("app.getSessionID", []),
+        };
 
         const help = () => {
           consoleProxy.log("Sandbox JS helpers:");
@@ -306,6 +312,8 @@ function buildSandboxSrcDoc(options: {
           consoleProxy.log("- codex.turns.list()");
           consoleProxy.log("- codex.turns.getEvents(turnId, { sessionId? })");
           consoleProxy.log("- const [latest] = await codex.turns.list(); consoleProxy.log(await codex.turns.getEvents(latest.turnId));");
+          consoleProxy.log("- await app.getSessionId()");
+          consoleProxy.log("- await app.getSessionID()");
           consoleProxy.log("- help()");
         };
 
@@ -320,10 +328,11 @@ function buildSandboxSrcDoc(options: {
               "notebooks",
               "notebookDiff",
               "codex",
+              "app",
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, opfs, net, notebooks, notebookDiff, codex, help);
+            await runner(consoleProxy, runme, opfs, net, notebooks, notebookDiff, codex, app, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });

@@ -6,7 +6,13 @@ import {
   SandboxJSKernel,
 } from './sandboxJsKernel'
 
-type Scenario = 'success' | 'disallowed' | 'hang' | 'lowLevel' | 'codex'
+type Scenario =
+  | 'success'
+  | 'disallowed'
+  | 'hang'
+  | 'lowLevel'
+  | 'codex'
+  | 'app'
 
 class MockSandboxPort {
   onmessage: ((event: MessageEvent<any>) => void) | null = null
@@ -59,6 +65,13 @@ class MockSandboxPort {
           method: 'codex.turns.getEvents',
           args: ['turn-latest', undefined],
         })
+      } else if (this.scenario === 'app') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'app.getSessionID',
+          args: [],
+        })
       } else if (this.scenario === 'hang') {
         this.emit({ type: 'stdout', data: 'started\n' })
       } else {
@@ -75,6 +88,15 @@ class MockSandboxPort {
     if (type === 'host-result') {
       const callId = Number(message.callId ?? 0)
       this.hostResults.set(callId, message.result)
+      if (this.scenario === 'app' && this.hostResults.has(1)) {
+        this.emit({
+          type: 'stdout',
+          data: `${String(this.hostResults.get(1) ?? '')}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+
       if (this.hostResults.has(1) && this.hostResults.has(2)) {
         if (this.scenario === 'success') {
           const notebookInfo = this.hostResults.get(1) as
@@ -376,6 +398,40 @@ describe('SandboxJSKernel', () => {
     ])
     expect(stdout).toContain('turn-latest')
     expect(stdout).toContain('\n3\n')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports AppKernel session helpers through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'app.getSessionID') {
+        return 'session-test'
+      }
+      return null
+    })
+
+    const kernel = new TestableSandboxJSKernel(new MockSandboxPort('app'), {
+      bridge: { call: bridgeCall },
+      hooks: {
+        onStdout: (data) => {
+          stdout += data
+        },
+        onStderr: (data) => {
+          stderr += data
+        },
+        onExit: (code) => {
+          exitCode = code
+        },
+      },
+    })
+
+    await kernel.run("console.log(app.getSessionID());")
+
+    expect(bridgeCall).toHaveBeenCalledWith('app.getSessionID', [])
+    expect(stdout).toContain('session-test')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
   })

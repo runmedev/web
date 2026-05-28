@@ -2,28 +2,58 @@
 
 ## Purpose
 
-This page explains how Codex fits into Runme Web and clarifies a few terms that
-show up in the UI and App Console.
+This page explains the two supported ways Codex fits into Runme Web.
 
-## What Codex means in Runme Web
+The important distinction is where the interaction starts:
 
-Runme Web can route AI interactions through Codex-backed harnesses.
+- inside Runme Web, through the `AI Chat` panel,
+- outside Runme Web, from the Codex desktop app controlling a Chrome tab
+  through WebMCP.
 
-Today that usually means one of:
+## In-app chat panel mode
 
-- `codex`: a remote Codex app-server
-- `codex-wasm`: a browser-hosted Codex runtime
+Use this mode when the user is working in Runme Web and opens the `AI Chat`
+panel.
 
-In both cases, Runme uses Codex as the agent runtime and layers Runme-specific
-notebook and browser capabilities on top.
+In this mode:
 
-## What Is A Project
+- Runme owns the chat UI,
+- Runme sends chat turns through its configured harness,
+- Codex may be the selected agent runtime,
+- Runme provides notebook and app context to the harness.
+
+The chat panel does not require Chrome tab claiming or session matching.
+
+Read [codex-chat-panel.md](codex-chat-panel.md).
+
+## Chrome and WebMCP mode
+
+Use this mode when the user is chatting with Codex in the Codex desktop app and
+that conversation needs to operate Runme in the user's Chrome browser.
+
+In this mode:
+
+- Codex inspects Chrome tabs,
+- Codex claims one Runme tab,
+- Runme exposes WebMCP tools from that tab,
+- Codex verifies the tab session before reading or mutating notebooks.
+
+Runme exposes the tab session in the URL as `?session=<session-id>` and inside
+AppKernel as:
+
+```js
+await app.getSessionID()
+```
+
+Read [codex-chrome-webmcp.md](codex-chrome-webmcp.md).
+
+## Codex projects
 
 In Runme Web, a `project` is a Runme concept, not a first-class Codex
 app-server concept.
 
 A project is a named bundle of defaults that Runme uses when it creates or
-resumes Codex threads.
+resumes Codex-backed work.
 
 Typical project fields include:
 
@@ -34,52 +64,13 @@ Typical project fields include:
 - `personality`
 - optional writable roots or workspace metadata
 
-You can think of a project as:
-
-- "the default Codex environment for this workspace or notebook context"
-
-not as:
-
-- "an object stored by Codex app-server"
-
-## Why Runme Has Projects
-
-Codex threads need runtime configuration such as current working directory,
-model, and approval behavior.
-
-Runme groups those settings into a project so the UI can:
-
-- switch between workspaces more easily,
-- keep consistent defaults for a notebook or repo,
-- create new threads with the right `cwd` and policies.
-
-When you select a project in Runme, you are selecting the configuration bundle
-that will be used for future thread startup or resume operations.
-
-## Relationship Between Project And Thread
-
 The simplest mental model is:
 
-- project = default settings
-- thread = a Codex conversation
+- project = default settings,
+- thread = a Codex conversation.
 
-Runme applies the selected project's defaults when it starts or resumes a
-thread. After that, the thread is the active conversation unit.
-
-So a project is not the conversation itself. It is the configuration context
-for conversations.
-
-## Practical Consequence
-
-If you change projects, new or resumed Codex threads may use a different:
-
-- working directory,
-- model,
-- approval behavior,
-- sandbox behavior.
-
-That is why project selection matters even though the Codex app-server API is
-primarily thread- and turn-oriented.
+Project selection matters because new or resumed Codex threads may use a
+different working directory, model, approval behavior, or sandbox behavior.
 
 ## App Console Commands
 

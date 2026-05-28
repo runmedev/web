@@ -6,6 +6,7 @@ import {
 } from './appKernelLowLevelApis'
 import { getCodexTurnEvents, listCodexTurns } from './codexTurns'
 import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
+import { getClaimedSessionId } from '../tabIdentity'
 import { JSKernel } from './jsKernel'
 import {
   type NotebooksApiBridgeServer,
@@ -351,6 +352,10 @@ async function handleSandboxAppKernelBridgeCall({
         String(args[0] ?? ''),
         (args[1] as { sessionId?: string }) ?? undefined
       )
+    case 'app.getSessionId':
+      return getClaimedSessionId()
+    case 'app.getSessionID':
+      return getClaimedSessionId()
     case 'notebookDiff.listDriveRevisions':
       return notebookDiffApi.listDriveRevisions(args[0] as any)
     case 'notebookDiff.diffDriveRevision':

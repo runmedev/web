@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../../runme/client'
 import { appLogger } from '../logging/runtime'
+import { __resetTabIdForTests, getClaimedSessionId } from '../tabIdentity'
 import {
   createCodeModeExecutor,
   getCodeModeErrorOutput,
@@ -25,6 +26,8 @@ const createNotebook = () => {
 describe('codeModeExecutor', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+    __resetTabIdForTests()
+    window.history.replaceState(null, '', '/')
   })
 
   it('merges stdout and stderr into one ordered output string', async () => {
@@ -103,6 +106,24 @@ describe('codeModeExecutor', () => {
     expect(result.output).toContain('two')
     expect(onStdout).toHaveBeenCalled()
     expect(onStderr).toHaveBeenCalled()
+  })
+
+  it('exposes the fresh Runme session id in browser AppKernel globals', async () => {
+    window.history.replaceState(null, '', '/?session=code-mode-session')
+    const notebook = createNotebook()
+    const executor = createCodeModeExecutor({
+      mode: 'browser',
+      resolveNotebook: () => notebook,
+      listNotebooks: () => [notebook],
+    })
+
+    const result = await executor.execute({
+      source: 'codex',
+      code: 'console.log(await app.getSessionID());',
+    })
+
+    expect(result.output).toContain(await getClaimedSessionId())
+    expect(result.output).not.toContain('code-mode-session')
   })
 
   it('returns partial output when execution times out', async () => {
