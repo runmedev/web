@@ -78,6 +78,36 @@ describe("CurrentDocProvider", () => {
     });
   });
 
+  it("keeps non-restorable documents selected without persisting them for restore", async () => {
+    render(
+      <CurrentDocProvider>
+        <SetCurrentDocOnMount uri="diff://notebook/runtime-only" />
+        <CurrentDocProbe />
+      </CurrentDocProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("current-doc").textContent).toBe(
+        "diff://notebook/runtime-only",
+      );
+    });
+    expect(window.sessionStorage.getItem("runme/currentDoc")).toBe("");
+  });
+
+  it("ignores non-restorable current doc restore values", async () => {
+    window.sessionStorage.setItem("runme/currentDoc", "diff://notebook/stale");
+
+    render(
+      <CurrentDocProvider>
+        <CurrentDocProbe />
+      </CurrentDocProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("current-doc").textContent).toBe("none");
+    });
+  });
+
   it("does not clear pending URL doc intents when selecting a current doc on mount", async () => {
     render(
       <CurrentDocProvider>

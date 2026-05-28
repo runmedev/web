@@ -173,7 +173,9 @@ export class WorkspaceDocumentController {
       return;
     }
     this.restored = true;
-    this.documents = this.persistence.loadDocuments();
+    this.documents = this.persistence
+      .loadDocuments()
+      .filter((item) => isRestorableWorkspaceDocument(item.uri));
     this.rebuildSnapshot();
   }
 

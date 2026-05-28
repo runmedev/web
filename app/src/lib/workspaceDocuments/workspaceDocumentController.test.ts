@@ -57,4 +57,18 @@ describe("WorkspaceDocumentController", () => {
       { uri: "local://file/a", title: "a.json" },
     ]);
   });
+
+  it("restores only restorable notebook documents", () => {
+    const controller = new WorkspaceDocumentController(
+      createMemoryPersistence([
+        { uri: "diff://notebook/1", title: "Diff" },
+        { uri: "local://file/a", title: "a.json" },
+        { uri: "status://drive-link", title: "Drive Link Status" },
+      ]),
+    );
+
+    expect(controller.getSnapshot().documents).toEqual([
+      { uri: "local://file/a", title: "a.json" },
+    ]);
+  });
 });
