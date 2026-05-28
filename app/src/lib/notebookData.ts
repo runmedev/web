@@ -595,9 +595,12 @@ export class NotebookData {
     }
   }
 
-  /** Append a new code cell to the end of the notebook. */
-  appendCodeCell(languageId?: string | null): parser_pb.Cell {
-    const cell = this.createCodeCell(languageId);
+  /** Append a new cell to the end of the notebook. */
+  appendCell(
+    kind: parser_pb.CellKind = parser_pb.CellKind.CODE,
+    languageId?: string | null,
+  ): parser_pb.Cell {
+    const cell = this.createCell(kind, languageId);
     this.notebook.cells.push(cell);
     this.rebuildIndex();
     this.snapshotCache = this.buildSnapshot();
@@ -606,23 +609,16 @@ export class NotebookData {
     return cell;
   }
 
-  /** Append a new markup (markdown) cell to the end of the notebook. */
-  appendMarkupCell(): parser_pb.Cell {
-    const cell = this.createMarkupCell();
-    this.notebook.cells.push(cell);
-    this.rebuildIndex();
-    this.snapshotCache = this.buildSnapshot();
-    this.emit();
-    this.schedulePersist();
-    return cell;
-  }
-
-  addCodeCellAfter(targetRefId: string, languageId?: string | null): parser_pb.Cell | null {
+  addCellAfter(
+    targetRefId: string,
+    kind: parser_pb.CellKind = parser_pb.CellKind.CODE,
+    languageId?: string | null,
+  ): parser_pb.Cell | null {
     const idx = this.refToIndex.get(targetRefId);
     if (idx === undefined) {
       return null;
     }
-    const cell = this.createCodeCell(languageId);
+    const cell = this.createCell(kind, languageId);
     this.notebook.cells.splice(idx + 1, 0, cell);
     this.rebuildIndex();
     this.snapshotCache = this.buildSnapshot();
@@ -631,12 +627,16 @@ export class NotebookData {
     return cell;
   }
 
-  addCodeCellBefore(targetRefId: string, languageId?: string | null): parser_pb.Cell | null {
+  addCellBefore(
+    targetRefId: string,
+    kind: parser_pb.CellKind = parser_pb.CellKind.CODE,
+    languageId?: string | null,
+  ): parser_pb.Cell | null {
     const idx = this.refToIndex.get(targetRefId);
     if (idx === undefined) {
       return null;
     }
-    const cell = this.createCodeCell(languageId);
+    const cell = this.createCell(kind, languageId);
     this.notebook.cells.splice(idx, 0, cell);
     this.rebuildIndex();
     this.snapshotCache = this.buildSnapshot();
@@ -854,31 +854,24 @@ export class NotebookData {
     return this.createAndBindStreams({ cell, runID, sequence, runner });
   }
 
-  private createCodeCell(languageId?: string | null): parser_pb.Cell {
-    const refID = `code_${crypto.randomUUID().replace(/-/g, "")}`;
+  private createCell(
+    kind: parser_pb.CellKind,
+    languageId?: string | null,
+  ): parser_pb.Cell {
+    const isMarkup = kind === parser_pb.CellKind.MARKUP;
     const normalizedLanguage = languageId?.trim().toLowerCase();
     const resolvedLanguage =
       normalizedLanguage && normalizedLanguage.length > 0
         ? normalizedLanguage
         : "markdown";
+    const refPrefix = isMarkup ? "markup" : "code";
+    const refID = `${refPrefix}_${crypto.randomUUID().replace(/-/g, "")}`;
     return create(parser_pb.CellSchema, {
       metadata: {},
       refId: refID,
       languageId: resolvedLanguage,
       role: parser_pb.CellRole.USER,
-      kind: parser_pb.CellKind.CODE,
-      value: "",
-    });
-  }
-
-  private createMarkupCell(): parser_pb.Cell {
-    const refID = `markup_${crypto.randomUUID().replace(/-/g, "")}`;
-    return create(parser_pb.CellSchema, {
-      metadata: {},
-      refId: refID,
-      languageId: "markdown",
-      role: parser_pb.CellRole.USER,
-      kind: parser_pb.CellKind.MARKUP,
+      kind: isMarkup ? parser_pb.CellKind.MARKUP : parser_pb.CellKind.CODE,
       value: "",
     });
   }
@@ -1642,12 +1635,26 @@ export class CellData {
     this.notebook.updateCell(cell);
   }
 
-  addBefore(languageId?: string | null): parser_pb.Cell | null {
-    return this.notebook.addCodeCellBefore(this.refId, languageId);
+  addBefore(
+    kind: parser_pb.CellKind = parser_pb.CellKind.CODE,
+    languageId?: string | null,
+  ): parser_pb.Cell | null {
+    return this.notebook.addCellBefore(
+      this.refId,
+      kind,
+      languageId,
+    );
   }
 
-  addAfter(languageId?: string | null): parser_pb.Cell | null {
-    return this.notebook.addCodeCellAfter(this.refId, languageId);
+  addAfter(
+    kind: parser_pb.CellKind = parser_pb.CellKind.CODE,
+    languageId?: string | null,
+  ): parser_pb.Cell | null {
+    return this.notebook.addCellAfter(
+      this.refId,
+      kind,
+      languageId,
+    );
   }
 
   remove(): void {

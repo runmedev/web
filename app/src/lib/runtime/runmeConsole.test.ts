@@ -73,21 +73,34 @@ class FakeNotebookData implements NotebookDataLike {
     return this.runners.get(refId) ?? null;
   }
 
-  appendCodeCell(languageId?: string | null): parser_pb.Cell {
-    const cell = create(parser_pb.CellSchema, {
-      refId: `cell-${Math.random().toString(36).slice(2, 8)}`,
-      kind: parser_pb.CellKind.CODE,
-      languageId: languageId ?? "javascript",
+  private createCell(
+    kind: parser_pb.CellKind = parser_pb.CellKind.CODE,
+    languageId?: string | null,
+  ): parser_pb.Cell {
+    const refPrefix = kind === parser_pb.CellKind.MARKUP ? "markup" : "cell";
+    return create(parser_pb.CellSchema, {
+      refId: `${refPrefix}-${Math.random().toString(36).slice(2, 8)}`,
+      kind,
+      languageId:
+        kind === parser_pb.CellKind.MARKUP ? "markdown" : languageId ?? "javascript",
       value: "",
       outputs: [],
       metadata: {},
     });
+  }
+
+  appendCell(
+    kind: parser_pb.CellKind = parser_pb.CellKind.CODE,
+    languageId?: string | null,
+  ): parser_pb.Cell {
+    const cell = this.createCell(kind, languageId);
     this.notebook.cells = [...(this.notebook.cells ?? []), cell];
     return cell;
   }
 
-  addCodeCellAfter(
+  addCellAfter(
     targetRefId: string,
+    kind: parser_pb.CellKind = parser_pb.CellKind.CODE,
     languageId?: string | null,
   ): parser_pb.Cell | null {
     const cells = this.notebook.cells ?? [];
@@ -95,22 +108,16 @@ class FakeNotebookData implements NotebookDataLike {
     if (index < 0) {
       return null;
     }
-    const cell = create(parser_pb.CellSchema, {
-      refId: `cell-${Math.random().toString(36).slice(2, 8)}`,
-      kind: parser_pb.CellKind.CODE,
-      languageId: languageId ?? "javascript",
-      value: "",
-      outputs: [],
-      metadata: {},
-    });
+    const cell = this.createCell(kind, languageId);
     const next = [...cells];
     next.splice(index + 1, 0, cell);
     this.notebook.cells = next;
     return cell;
   }
 
-  addCodeCellBefore(
+  addCellBefore(
     targetRefId: string,
+    kind: parser_pb.CellKind = parser_pb.CellKind.CODE,
     languageId?: string | null,
   ): parser_pb.Cell | null {
     const cells = this.notebook.cells ?? [];
@@ -118,14 +125,7 @@ class FakeNotebookData implements NotebookDataLike {
     if (index < 0) {
       return null;
     }
-    const cell = create(parser_pb.CellSchema, {
-      refId: `cell-${Math.random().toString(36).slice(2, 8)}`,
-      kind: parser_pb.CellKind.CODE,
-      languageId: languageId ?? "javascript",
-      value: "",
-      outputs: [],
-      metadata: {},
-    });
+    const cell = this.createCell(kind, languageId);
     const next = [...cells];
     next.splice(index, 0, cell);
     this.notebook.cells = next;
@@ -466,6 +466,65 @@ describe("createNotebooksApi", () => {
       operations: [{ op: "remove", refIds: [insertedRefId] }],
     });
     expect(afterRemove.notebook.cells.find((cell) => cell.refId === insertedRefId)).toBeUndefined();
+  });
+
+  it("creates inserted markup cells as markup before applying their spec", async () => {
+    const notebook = create(parser_pb.NotebookSchema, { cells: [] });
+    const model = new FakeNotebookData("local://one", "One", notebook);
+    const appendCell = vi.spyOn(model, "appendCell");
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    });
+
+    const updated = await api.update({
+      target: { uri: "local://one" },
+      operations: [
+        {
+          op: "insert",
+          at: { index: -1 },
+          cells: [
+            {
+              kind: "markup",
+              languageId: "markdown",
+              value: "# Terminal-Bench against Responses API",
+            },
+            {
+              kind: "code",
+              languageId: "bash",
+              value: "set -euo pipefail",
+            },
+            {
+              kind: "markup",
+              languageId: "markdown",
+              value: "## Notes",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(appendCell).toHaveBeenCalledTimes(3);
+    expect(appendCell.mock.calls.map((call) => call[0])).toEqual([
+      parser_pb.CellKind.MARKUP,
+      parser_pb.CellKind.CODE,
+      parser_pb.CellKind.MARKUP,
+    ]);
+    expect(updated.notebook.cells.map((cell) => cell.kind)).toEqual([
+      parser_pb.CellKind.MARKUP,
+      parser_pb.CellKind.CODE,
+      parser_pb.CellKind.MARKUP,
+    ]);
+    expect(updated.notebook.cells.map((cell) => cell.languageId)).toEqual([
+      "markdown",
+      "bash",
+      "markdown",
+    ]);
+    expect(model.updates.map((cell) => cell.kind)).toEqual([
+      parser_pb.CellKind.MARKUP,
+      parser_pb.CellKind.CODE,
+      parser_pb.CellKind.MARKUP,
+    ]);
   });
 
   it("rejects notebooks.update without an explicit target", async () => {

@@ -44,13 +44,15 @@ Create a local notebook and append cells:
 
 ```js
 const created = await notebooks.createLocal("helloworld")
-await notebooks.appendCodeCell({
+await notebooks.appendCell({
   target: { handle: created.handle },
+  kind: "code",
   languageId: "python",
   value: 'print("hello world")',
 })
-await notebooks.appendMarkdownCell({
+await notebooks.appendCell({
   target: { handle: created.handle },
+  kind: "markup",
   value: "# Notes",
 })
 ```
@@ -89,5 +91,5 @@ app.harness.setDefault("browser-codex")
 - The App Console is a supported user surface, not just a developer escape hatch.
 - Current namespace names matter. Prefer exact names from code over stale README examples.
 - If a user wants an action that has no visible button, check the App Console before saying the feature is missing.
-- Prefer high-level notebook helpers before writing raw `notebooks.update(...)`
-  mutations by hand.
+- Prefer `notebooks.appendCell({ kind, ... })` for simple inserts before writing
+  raw `notebooks.update(...)` mutations by hand.
