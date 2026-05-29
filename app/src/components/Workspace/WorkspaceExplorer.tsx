@@ -168,6 +168,63 @@ function updateNodeMetadata(
   return changed ? next : nodes;
 }
 
+const CONTEXT_MENU_VIEWPORT_PADDING = 8;
+const CONTEXT_MENU_WIDTH = 220;
+const CONTEXT_MENU_VERTICAL_PADDING = 8;
+const CONTEXT_MENU_ITEM_HEIGHT = 38;
+
+function getContextMenuItemCount(menu: ContextMenuState): number {
+  if (menu.type === NotebookStoreItemType.File) {
+    return (
+      (menu.uri.startsWith("fs://") ? 0 : 1) +
+      2 +
+      (menu.remoteUri ? 2 : 0)
+    );
+  }
+
+  if (menu.type === NotebookStoreItemType.Folder) {
+    return (
+      (menu.uri.startsWith("fs://") ? 0 : 1) +
+      1 +
+      (menu.remoteUri ? 2 : 0) +
+      (menu.uri === LOCAL_FOLDER_URI ? 0 : 1)
+    );
+  }
+
+  return 0;
+}
+
+function adjustContextMenuPosition(
+  menu: ContextMenuState | null,
+): ContextMenuState | null {
+  if (!menu || typeof window === "undefined") {
+    return menu;
+  }
+
+  const menuHeight =
+    CONTEXT_MENU_VERTICAL_PADDING +
+    getContextMenuItemCount(menu) * CONTEXT_MENU_ITEM_HEIGHT;
+  const left = Math.max(
+    CONTEXT_MENU_VIEWPORT_PADDING,
+    Math.min(
+      menu.position.x,
+      window.innerWidth - CONTEXT_MENU_WIDTH - CONTEXT_MENU_VIEWPORT_PADDING,
+    ),
+  );
+  const top = Math.max(
+    CONTEXT_MENU_VIEWPORT_PADDING,
+    Math.min(
+      menu.position.y,
+      window.innerHeight - menuHeight - CONTEXT_MENU_VIEWPORT_PADDING,
+    ),
+  );
+
+  return {
+    ...menu,
+    position: { x: left, y: top },
+  };
+}
+
 function EditableTreeNode({
   node,
   style,
@@ -247,6 +304,10 @@ export function WorkspaceExplorer() {
   const [pendingEditId, setPendingEditId] = useState<string | null>(null);
 
   const workspaceUris = useMemo(() => getItems(), [getItems]);
+  const adjustedContextMenu = useMemo(
+    () => adjustContextMenuPosition(contextMenu),
+    [contextMenu],
+  );
 
   useEffect(() => {
     if (!workspaceUris.includes(LOCAL_FOLDER_URI)) {
@@ -961,18 +1022,19 @@ function formatShortTimestamp(date: Date): string {
           />
         </div>
       )}
-      {contextMenu && (
+      {adjustedContextMenu && (
         <div
           className="ctx-menu"
           style={{
-            top: contextMenu.position.y,
-            left: contextMenu.position.x,
+            top: adjustedContextMenu.position.y,
+            left: adjustedContextMenu.position.x,
+            width: CONTEXT_MENU_WIDTH,
           }}
           onClick={(event) => event.stopPropagation()}
         >
-          {contextMenu.type === NotebookStoreItemType.File ? (
+          {adjustedContextMenu.type === NotebookStoreItemType.File ? (
             <>
-              {!contextMenu.uri.startsWith("fs://") && (
+              {!adjustedContextMenu.uri.startsWith("fs://") && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -982,7 +1044,7 @@ function formatShortTimestamp(date: Date): string {
                     setContextMenu(null);
                     void (async () => {
                       try {
-                        await store?.sync(contextMenu.uri);
+                        await store?.sync(adjustedContextMenu.uri);
                       } catch (error) {
                         console.error("Failed to sync file", error);
                       }
@@ -998,7 +1060,7 @@ function formatShortTimestamp(date: Date): string {
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
-                  handleStartRename(contextMenu.uri);
+                  handleStartRename(adjustedContextMenu.uri);
                 }}
               >
                 Rename
@@ -1010,19 +1072,19 @@ function formatShortTimestamp(date: Date): string {
                 onClick={(event) => {
                   event.stopPropagation();
                   setContextMenu(null);
-                  if (contextMenu.parentUri) {
-                    void handleCreateDocument(contextMenu.parentUri);
+                  if (adjustedContextMenu.parentUri) {
+                    void handleCreateDocument(adjustedContextMenu.parentUri);
                   } else {
                     console.warn(
                       "Cannot create document: no parent folder for",
-                      contextMenu.uri,
+                      adjustedContextMenu.uri,
                     );
                   }
                 }}
               >
                 New Document
               </button>
-              {contextMenu.remoteUri && (
+              {adjustedContextMenu.remoteUri && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -1030,16 +1092,16 @@ function formatShortTimestamp(date: Date): string {
                   onClick={(event) => {
                     event.stopPropagation();
                     setContextMenu(null);
-                    void handleCopyShareLink(contextMenu.remoteUri);
+                    void handleCopyShareLink(adjustedContextMenu.remoteUri);
                   }}
                 >
                   Copy Share Link
                 </button>
               )}
-              {contextMenu.remoteUri && (
+              {adjustedContextMenu.remoteUri && (
                 <a
                   className="ctx-menu-item"
-                  href={contextMenu.remoteUri}
+                  href={adjustedContextMenu.remoteUri}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(event) => {
@@ -1051,9 +1113,9 @@ function formatShortTimestamp(date: Date): string {
                 </a>
               )}
             </>
-          ) : contextMenu.type === NotebookStoreItemType.Folder ? (
+          ) : adjustedContextMenu.type === NotebookStoreItemType.Folder ? (
             <>
-              {!contextMenu.uri.startsWith("fs://") && (
+              {!adjustedContextMenu.uri.startsWith("fs://") && (
               <button
                 type="button"
                 className="ctx-menu-item"
@@ -1065,12 +1127,12 @@ function formatShortTimestamp(date: Date): string {
                   void (async () => {
                     try {
                       if (store) {
-                        await store.sync(contextMenu.uri);
+                        await store.sync(adjustedContextMenu.uri);
                       }
                     } catch (error) {
                       console.error("Failed to sync folder", error);
                     } finally {
-                      await fetchChildren(contextMenu.uri);
+                      await fetchChildren(adjustedContextMenu.uri);
                     }
                   })();
                 }}
@@ -1085,12 +1147,12 @@ function formatShortTimestamp(date: Date): string {
                 onClick={(event) => {
                   event.stopPropagation();
                   setContextMenu(null);
-                  void handleCreateDocument(contextMenu.uri);
+                  void handleCreateDocument(adjustedContextMenu.uri);
                 }}
               >
                 New Document
               </button>
-              {contextMenu.remoteUri && (
+              {adjustedContextMenu.remoteUri && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -1098,30 +1160,30 @@ function formatShortTimestamp(date: Date): string {
                   onClick={(event) => {
                     event.stopPropagation();
                     setContextMenu(null);
-                    void handleCopyShareLink(contextMenu.remoteUri);
+                    void handleCopyShareLink(adjustedContextMenu.remoteUri);
                   }}
                 >
                   Copy Share Link
                 </button>
               )}
-          {contextMenu.uri !== LOCAL_FOLDER_URI && (
+          {adjustedContextMenu.uri !== LOCAL_FOLDER_URI && (
                 <button
                   type="button"
                   className="ctx-menu-item text-red-600"
                   onMouseDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    removeItem(contextMenu.uri);
+                    removeItem(adjustedContextMenu.uri);
                     setContextMenu(null);
                   }}
                 >
-                  Remove "{contextMenu.name}"
+                  Remove "{adjustedContextMenu.name}"
                 </button>
               )}
-              {contextMenu.remoteUri && (
+              {adjustedContextMenu.remoteUri && (
                 <a
                   className="ctx-menu-item"
-                  href={contextMenu.remoteUri}
+                  href={adjustedContextMenu.remoteUri}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(event) => {
