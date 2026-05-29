@@ -1574,7 +1574,7 @@ if (stopServerTriggeredByClick) {
     stopServerStarted = true;
     pass("Triggered server stop bash cell (detected run start despite missing click ack)");
   } else {
-    pass("Server stop bash cell cleanup did not start (best-effort)");
+    fail("Failed to trigger server stop bash cell");
   }
 }
 
@@ -1590,7 +1590,7 @@ writeArtifact("scenario-jupyter-cuj-09-stop-output.txt", stopServerProbe?.decode
 if (probe.status === "ok" && stopServerProbe?.exitCode === "0") {
   pass("Server stop bash cell exited successfully");
 } else {
-  pass("Server stop bash cell cleanup did not report a clean exit (best-effort)");
+  fail("Server stop bash cell failed");
 }
 
 writeArtifact("scenario-jupyter-cuj-10-probe.json", JSON.stringify(probeNotebook(), null, 2));
