@@ -13,6 +13,10 @@ import { CloudArrowUpIcon, DocumentTextIcon, FolderIcon, FolderPlusIcon } from "
 import useResizeObserver from "use-resize-observer";
 
 import { GoogleDrivePickerButton } from "./GoogleDrivePickerButton";
+import {
+  filterNestedWorkspaceFolders,
+  type WorkspaceFolderCandidate,
+} from "./workspaceTree";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
@@ -260,7 +264,7 @@ export function WorkspaceExplorer() {
 
     let cancelled = false;
     (async () => {
-      const folderNodes: TreeNode[] = [];
+      const folderCandidates: WorkspaceFolderCandidate[] = [];
       for (const uri of workspaceUris) {
         if (cancelled) {
           return;
@@ -278,7 +282,11 @@ export function WorkspaceExplorer() {
             if (type !== NotebookStoreItemType.Folder) {
               continue;
             }
-            folderNodes.push(createFolderNode(uri, name));
+            folderCandidates.push({
+              uri,
+              name,
+              parentUris: metadata?.parents ?? [],
+            });
           } catch (error) {
             console.error("Failed to load fs workspace metadata", uri, error);
           }
@@ -309,12 +317,35 @@ export function WorkspaceExplorer() {
         if (type !== NotebookStoreItemType.Folder) {
           continue;
         }
-        folderNodes.push(
-          createFolderNode(localUri, name, {
-            remoteUri: metadata?.remoteUri,
-          }),
-        );
+        folderCandidates.push({
+          uri: localUri,
+          name,
+          remoteUri: metadata?.remoteUri,
+          parentUris: metadata?.parents ?? [],
+        });
       }
+
+      const visibleFolders = await filterNestedWorkspaceFolders(
+        folderCandidates,
+        async (parentUri) => {
+          const targetStore = storeForUri(parentUri, store, fsStore);
+          if (!targetStore) {
+            return [];
+          }
+          try {
+            const metadata = await targetStore.getMetadata(parentUri);
+            return metadata?.parents ?? [];
+          } catch {
+            return [];
+          }
+        },
+      );
+
+      const folderNodes = visibleFolders.map((folder) =>
+        createFolderNode(folder.uri, folder.name, {
+          remoteUri: folder.remoteUri,
+        }),
+      );
 
       if (!folderNodes.some((node) => node.uri === LOCAL_FOLDER_URI)) {
         folderNodes.push(
