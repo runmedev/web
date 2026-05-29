@@ -17,6 +17,13 @@ const contextMocks = vi.hoisted(() => ({
   setCurrentDoc: vi.fn(),
   showDocument: vi.fn(),
   closeWorkspaceDocument: vi.fn(),
+  getNotebookData: vi.fn(),
+  notebookStore: null as null | {
+    getMetadata: ReturnType<typeof vi.fn>;
+    getSyncState: ReturnType<typeof vi.fn>;
+    rename: ReturnType<typeof vi.fn>;
+    subscribeSync: ReturnType<typeof vi.fn>;
+  },
 }));
 
 // Minimal mocks for contexts Action consumes
@@ -47,7 +54,7 @@ vi.mock("../../contexts/SettingsContext", () => ({
 
 vi.mock("../../contexts/NotebookContext", () => ({
   useNotebookContext: () => ({
-    getNotebookData: () => null,
+    getNotebookData: contextMocks.getNotebookData,
     useNotebookSnapshot: () => null,
   }),
 }));
@@ -62,7 +69,7 @@ vi.mock("../../contexts/WorkspaceDocumentContext", () => ({
 
 vi.mock("../../contexts/NotebookStoreContext", () => ({
   useNotebookStore: () => ({
-    store: null,
+    store: contextMocks.notebookStore,
   }),
 }));
 
@@ -200,6 +207,9 @@ beforeEach(() => {
   });
   contextMocks.showDocument.mockReset();
   contextMocks.closeWorkspaceDocument.mockReset();
+  contextMocks.getNotebookData.mockReset();
+  contextMocks.getNotebookData.mockReturnValue(null);
+  contextMocks.notebookStore = null;
 });
 
 describe("Actions tabs", () => {
@@ -216,6 +226,58 @@ describe("Actions tabs", () => {
         "local://file/restored",
       );
     });
+  });
+
+  it("renames the notebook from the tab context menu", async () => {
+    const rename = vi.fn(async () => ({
+      uri: "local://file/restored",
+      name: "renamed.json",
+      type: "file",
+      children: [],
+      remoteUri: "https://drive.google.com/file/d/file123/view",
+      parents: [],
+    }));
+    const setName = vi.fn();
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: "local://file/restored",
+        name: "restored.json",
+        type: "file",
+        children: [],
+        remoteUri: "https://drive.google.com/file/d/file123/view",
+        parents: [],
+      })),
+      getSyncState: vi.fn(async () => ({
+        status: "synced",
+        localUri: "local://file/restored",
+        remoteId: "https://drive.google.com/file/d/file123/view",
+      })),
+      rename,
+      subscribeSync: vi.fn(() => () => {}),
+    };
+    contextMocks.getNotebookData.mockReturnValue({ setName });
+    contextMocks.currentDoc = "local://file/restored";
+    contextMocks.workspaceDocuments = [
+      { uri: "local://file/restored", title: "restored.json" },
+    ];
+    vi.spyOn(window, "prompt").mockReturnValue("renamed.json");
+
+    render(<Actions />);
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: "restored.json" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Rename" }));
+
+    await waitFor(() => {
+      expect(rename).toHaveBeenCalledWith(
+        "local://file/restored",
+        "renamed.json",
+      );
+    });
+    expect(setName).toHaveBeenCalledWith("renamed.json");
+    expect(contextMocks.showDocument).toHaveBeenCalledWith(
+      "local://file/restored",
+      { title: "renamed.json" },
+    );
   });
 });
 
