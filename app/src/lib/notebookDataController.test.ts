@@ -198,6 +198,40 @@ describe("NotebookDataController", () => {
     );
   });
 
+  it("updates the open notebook entry when the loaded notebook name changes", async () => {
+    const localStore = createFakeLocalNotebooks();
+    localStore.records.set("local://file/demo", {
+      id: "local://file/demo",
+      name: "demo.json",
+      remoteId: "local://file/demo",
+      notebook: createNotebook("console.log('demo')"),
+    });
+    const controller = getNotebookDataController();
+    controller.configureOwnershipManager(createFakeOwnershipManager());
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    });
+    await controller.openNotebook("local://file/demo");
+
+    controller.getNotebookData("local://file/demo")?.setName("renamed.json");
+
+    expect(controller.getOpenNotebooks()[0]).toEqual(
+      expect.objectContaining({
+        uri: "local://file/demo",
+        name: "renamed.json",
+        state: "loaded",
+      }),
+    );
+    expect(
+      JSON.parse(window.sessionStorage.getItem("runme/openNotebooks") ?? "[]"),
+    ).toEqual([
+      expect.objectContaining({
+        uri: "local://file/demo",
+        name: "renamed.json",
+      }),
+    ]);
+  });
+
   it("closes a notebook, disposes its model, and returns a fallback URI", async () => {
     const localStore = createFakeLocalNotebooks();
     localStore.records.set("local://file/a", {
