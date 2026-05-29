@@ -386,7 +386,7 @@ const MarkdownCell = memo(
         );
       }
       return (
-        <div className="prose prose-sm max-w-none">
+        <div className="prose prose-sm min-w-0 max-w-none">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={markdownComponents}
@@ -412,7 +412,7 @@ const MarkdownCell = memo(
           // Rendered markdown view - double-click or keyboard to edit
           <div
             id={`markdown-rendered-${cell.refId}`}
-            className="cursor-text rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
+            className="min-w-0 max-w-full cursor-text overflow-x-auto rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
             onDoubleClick={handleDoubleClick}
             onKeyDown={handleRenderedKeyDown}
             ref={renderedRef}
