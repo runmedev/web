@@ -13,6 +13,7 @@ const BACKEND_URL = process.env.CUJ_BACKEND_URL ?? "http://localhost:9977";
 const SCENARIO_NOTEBOOK_NAME = "scenario-jupyter-cuj.runme.md";
 const SCENARIO_NOTEBOOK_URI = `local://file/${SCENARIO_NOTEBOOK_NAME}`;
 const JUPYTER_PORT = Number(process.env.CUJ_JUPYTER_PORT ?? "18888");
+const STOP_SERVER_CELL_TIMEOUT_MS = 6 * 60 * 1000;
 const CUJ_ID_TOKEN = process.env.CUJ_ID_TOKEN?.trim() ?? "";
 const CUJ_ACCESS_TOKEN = process.env.CUJ_ACCESS_TOKEN?.trim() ?? CUJ_ID_TOKEN;
 const tokenExpiresAtEnv = Number(process.env.CUJ_TOKEN_EXPIRES_AT ?? "");
@@ -1618,7 +1619,7 @@ probe = stopServerStarted
   ? waitForNotebookProbe((p) => {
     const c = p.cells?.find((cell) => cell.refId === "cell_stop_server");
     return p.status === "ok" && !!c && c.exitCode === "0";
-  }, 15000)
+  }, STOP_SERVER_CELL_TIMEOUT_MS)
   : probeNotebook();
 scrollToBottomOfNotebookView();
 const stopServerProbe = probe.cells?.find((cell) => cell.refId === "cell_stop_server");
