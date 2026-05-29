@@ -84,6 +84,46 @@ describe("isDriveItemUri", () => {
 });
 
 describe("DriveNotebookStore", () => {
+  it("renames Drive files through the metadata update API", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/drive/v3/files/file123");
+        expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+        expect(init?.method).toBe("PATCH");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          name: "renamed.json",
+        });
+        return new Response(
+          JSON.stringify({
+            id: "file123",
+            name: "renamed.json",
+            mimeType: "application/json",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const result = await store.rename(
+      "https://drive.google.com/file/d/file123/view",
+      "renamed.json",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      uri: "https://drive.google.com/file/d/file123/view",
+      name: "renamed.json",
+      type: NotebookStoreItemType.File,
+      remoteUri: "https://drive.google.com/file/d/file123/view",
+    });
+  });
+
   it("paginates Drive revisions", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     const fetchMock = vi

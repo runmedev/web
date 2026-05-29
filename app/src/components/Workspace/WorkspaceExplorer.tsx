@@ -658,6 +658,11 @@ export function WorkspaceExplorer() {
     [fetchChildren, fsStore, store],
   );
 
+  const handleStartRename = useCallback((uri: string) => {
+    setContextMenu(null);
+    setPendingEditId(uri);
+  }, []);
+
 function formatShortTimestamp(date: Date): string {
   const pad = (value: number) => value.toString().padStart(2, "0");
   const year = date.getFullYear();
@@ -987,6 +992,17 @@ function formatShortTimestamp(date: Date): string {
                   Sync
                 </button>
               )}
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleStartRename(contextMenu.uri);
+                }}
+              >
+                Rename
+              </button>
               <button
                 type="button"
                 className="ctx-menu-item"
