@@ -188,6 +188,7 @@ function resolveOidcAuthConfig(): OidcAuthConfig {
     CUJ_OIDC_CLIENT_ID: clientId,
     CUJ_OIDC_EMAIL: principalEmail,
     CUJ_OIDC_TOKEN_FILE: tokenFile,
+    CUJ_OIDC_TOKEN_TTL_SECONDS: process.env.CUJ_OIDC_TOKEN_TTL_SECONDS ?? "900",
   };
 
   return {
