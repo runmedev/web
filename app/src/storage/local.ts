@@ -715,35 +715,37 @@ export class LocalNotebooks extends Dexie {
       throw new Error(`Local notebook record not found for ${uri}`);
     }
 
-    await this.files.update(uri, { name });
+    let nextName = name;
+    let nextRemoteId = record.remoteId;
+
+    if (isDriveUri(record.remoteId)) {
+      const remoteItem = await this.driveStore.rename(record.remoteId, name);
+      nextName = remoteItem.name || name;
+      nextRemoteId = remoteItem.remoteUri ?? remoteItem.uri ?? record.remoteId;
+    }
+
+    await this.files.update(uri, { name: nextName, remoteId: nextRemoteId });
 
     const parentFolder = await this.findParentFolder(uri);
 
     if (canDispatchWindowEvents()) {
       window.dispatchEvent(
         new CustomEvent("local-notebook-updated", {
-          detail: { uri, name, remoteUri: publicRemoteUri(record) },
+          detail: {
+            uri,
+            name: nextName,
+            remoteUri: publicRemoteUri({ ...record, remoteId: nextRemoteId }),
+          },
         }),
       );
     }
 
-    void (async () => {
-      if (!isDriveUri(record.remoteId)) {
-        return;
-      }
-      try {
-        await this.driveStore.rename(record.remoteId, name);
-      } catch (error) {
-        console.error("Failed to rename remote Drive notebook", error);
-      }
-    })();
-
     return {
       uri,
-      name,
+      name: nextName,
       type: NotebookStoreItemType.File,
       children: [],
-      remoteUri: publicRemoteUri(record),
+      remoteUri: publicRemoteUri({ ...record, remoteId: nextRemoteId }),
       parents: parentFolder ? [parentFolder.id] : [],
     };
   }

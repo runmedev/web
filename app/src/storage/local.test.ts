@@ -279,6 +279,79 @@ describe("LocalNotebooks pending Drive create", () => {
   });
 });
 
+describe("LocalNotebooks rename", () => {
+  it("renames Drive-backed files upstream before updating the local mirror", async () => {
+    const remoteUri = "https://drive.google.com/file/d/file123/view";
+    const driveStore = {
+      rename: vi.fn(async () => ({
+        uri: remoteUri,
+        name: "renamed.json",
+        type: NotebookStoreItemType.File,
+        children: [],
+        remoteUri,
+        parents: [],
+      })),
+    };
+    const store = createTestStore(driveStore);
+    await store.files.put({
+      id: "local://file/drive",
+      name: "original.json",
+      remoteId: remoteUri,
+      lastRemoteChecksum: "",
+      lastSynced: "",
+      doc: "",
+      md5Checksum: "",
+    });
+    await store.folders.put({
+      id: "local://folder/drive",
+      name: "Drive",
+      remoteId: "https://drive.google.com/drive/folders/folder123",
+      children: ["local://file/drive"],
+      lastSynced: "",
+    });
+
+    const result = await store.rename("local://file/drive", "renamed.json");
+
+    expect(driveStore.rename).toHaveBeenCalledWith(remoteUri, "renamed.json");
+    expect(result).toMatchObject({
+      uri: "local://file/drive",
+      name: "renamed.json",
+      remoteUri,
+      parents: ["local://folder/drive"],
+    });
+    expect((await store.files.get("local://file/drive"))?.name).toBe(
+      "renamed.json",
+    );
+  });
+
+  it("does not update Drive-backed local metadata when the upstream rename fails", async () => {
+    const remoteUri = "https://drive.google.com/file/d/file123/view";
+    const driveStore = {
+      rename: vi.fn(async () => {
+        throw new Error("permission denied");
+      }),
+    };
+    const store = createTestStore(driveStore);
+    await store.files.put({
+      id: "local://file/drive",
+      name: "original.json",
+      remoteId: remoteUri,
+      lastRemoteChecksum: "",
+      lastSynced: "",
+      doc: "",
+      md5Checksum: "",
+    });
+
+    await expect(
+      store.rename("local://file/drive", "renamed.json"),
+    ).rejects.toThrow("permission denied");
+
+    expect((await store.files.get("local://file/drive"))?.name).toBe(
+      "original.json",
+    );
+  });
+});
+
 describe("LocalNotebooks markdown sidecar sync", () => {
   it("serializes notebooks to markdown locally before uploading the sidecar", async () => {
     const markdownUri = "https://drive.google.com/file/d/sidecar123/view";

@@ -1714,6 +1714,7 @@ export default function Actions() {
     showDocument,
     closeWorkspaceDocument,
   } = useWorkspaceDocumentContext();
+  const { getNotebookData } = useNotebookContext();
   const { store } = useNotebookStore();
   const workspaceDocuments = useWorkspaceDocuments();
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
@@ -1739,6 +1740,7 @@ export default function Actions() {
     x: number;
     y: number;
     docUri: string;
+    title: string;
     shareableUri: string;
     googleDriveUri: string | null;
   } | null>(null);
@@ -1963,7 +1965,7 @@ export default function Actions() {
     if (typeof window === "undefined") {
       return tabContextMenu;
     }
-    const itemCount = tabContextMenu.googleDriveUri ? 3 : 2;
+    const itemCount = tabContextMenu.googleDriveUri ? 4 : 3;
     const menuWidth = 220;
     const menuHeight = itemCount * 36 + 8;
     return {
@@ -1980,10 +1982,15 @@ export default function Actions() {
     (event: ReactMouseEvent<HTMLElement>, docUri: string) => {
       event.preventDefault();
       event.stopPropagation();
+      const document = workspaceDocuments.find((doc) => doc.uri === docUri);
+      const title =
+        document?.title?.trim() ||
+        getNotebookDisplayName(docUri, document?.title ?? docUri);
       setTabContextMenu({
         x: event.clientX,
         y: event.clientY,
         docUri,
+        title,
         shareableUri: docUri,
         googleDriveUri: isGoogleDriveFileUri(docUri) ? docUri : null,
       });
@@ -2018,8 +2025,48 @@ export default function Actions() {
         }
       })();
     },
-    [store],
+    [store, workspaceDocuments],
   );
+
+  const handleRenameTab = useCallback(async () => {
+    if (!tabContextMenu) {
+      return;
+    }
+    if (!store) {
+      setTabContextMenu(null);
+      return;
+    }
+
+    const nextName = window.prompt("Rename notebook", tabContextMenu.title);
+    if (nextName === null) {
+      setTabContextMenu(null);
+      return;
+    }
+
+    const trimmed = nextName.trim();
+    const renamedName = trimmed === "" ? "untitled.json" : trimmed;
+    try {
+      const renamed = await store.rename(tabContextMenu.docUri, renamedName);
+      const title = renamed.name || renamedName;
+      getNotebookData(tabContextMenu.docUri)?.setName(title);
+      showDocument(tabContextMenu.docUri, { title });
+      setTabContextMenu(null);
+    } catch (error) {
+      appLogger.error("Failed to rename notebook from tab context menu", {
+        attrs: {
+          scope: "storage.rename",
+          code: "TAB_RENAME_FAILED",
+          uri: tabContextMenu.docUri,
+          error: String(error),
+        },
+      });
+      showToast({
+        message: "Unable to rename document. Please try again.",
+        tone: "error",
+      });
+      setTabContextMenu(null);
+    }
+  }, [getNotebookData, showDocument, store, tabContextMenu]);
 
   const handleCopyTabShareableLink = useCallback(async () => {
     if (!tabContextMenu) {
@@ -2239,6 +2286,16 @@ export default function Actions() {
               onClick={(event) => event.stopPropagation()}
               onContextMenu={(event) => event.preventDefault()}
             >
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void handleRenameTab();
+                }}
+              >
+                Rename
+              </button>
               <button
                 type="button"
                 className="ctx-menu-item"

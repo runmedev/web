@@ -294,7 +294,10 @@ export class NotebookDataController {
       },
       listNotebooksForAppKernel: () => this.listNotebookDataLike(uri),
     });
-    const unsubscribe = data.subscribe(() => this.emit());
+    const unsubscribe = data.subscribe(() => {
+      this.updateOpenEntryName(data.getUri(), data.getName());
+      this.emit();
+    });
     const handle = { data, unsubscribe, loaded };
     this.notebooks.set(uri, handle);
     this.emit();
@@ -347,6 +350,23 @@ export class NotebookDataController {
       return null;
     }
     return this.notebooks.get(uri)?.data ?? null;
+  }
+
+  private updateOpenEntryName(uri: string, name: string): void {
+    let changed = false;
+    this.openNotebooks = this.openNotebooks.map((item) => {
+      if (item.uri !== uri || item.name === name) {
+        return item;
+      }
+      changed = true;
+      return {
+        ...item,
+        name,
+      };
+    });
+    if (changed) {
+      this.persist();
+    }
   }
 
   private upsertOpenEntry(entry: OpenNotebookEntry): OpenNotebookEntry {
