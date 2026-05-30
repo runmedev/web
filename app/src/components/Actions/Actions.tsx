@@ -1745,6 +1745,7 @@ export default function Actions() {
     googleDriveUri: string | null;
   } | null>(null);
   const tabTriggerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const pendingSelectedTabUriRef = useRef<string | null>(null);
   //const { data: run } = useRun(runName);
 
   // useEffect(() => {
@@ -1818,6 +1819,19 @@ export default function Actions() {
     if (statusTabVisible) {
       return;
     }
+    const pendingSelectedTabUri = pendingSelectedTabUriRef.current;
+    if (pendingSelectedTabUri) {
+      if (pendingSelectedTabUri === currentDocUri) {
+        pendingSelectedTabUriRef.current = null;
+      } else if (workspaceDocumentUris.has(pendingSelectedTabUri)) {
+        if (selectedTabUri !== pendingSelectedTabUri) {
+          setSelectedTabUri(pendingSelectedTabUri);
+        }
+        return;
+      } else {
+        pendingSelectedTabUriRef.current = null;
+      }
+    }
     if (currentDocUri && currentDocIsOpen) {
       setSelectedTabUri(currentDocUri);
       return;
@@ -1835,6 +1849,7 @@ export default function Actions() {
     selectedTabUri,
     setCurrentDoc,
     statusTabVisible,
+    workspaceDocumentUris,
     workspaceDocuments,
   ]);
 
@@ -2216,6 +2231,7 @@ export default function Actions() {
         <Tabs.Root
           value={resolvedSelectedTabUri}
           onValueChange={(nextUri) => {
+            pendingSelectedTabUriRef.current = nextUri;
             setSelectedTabUri(nextUri);
             if (nextUri !== currentDocUri) {
               setCurrentDoc(nextUri);
