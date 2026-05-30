@@ -591,6 +591,59 @@ describe('LocalNotebooks Drive conflict resolution', () => {
       'application/json'
     )
   })
+
+  it('refreshes conflict metadata with the latest Drive head', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const upstreamHeadDoc = notebookJson("print('upstream head')")
+    const driveStore = {
+      load: vi.fn(async () =>
+        create(parser_pb.NotebookSchema, {
+          cells: [
+            create(parser_pb.CellSchema, {
+              kind: parser_pb.CellKind.CODE,
+              languageId: 'python',
+              value: "print('upstream head')",
+            }),
+          ],
+        })
+      ),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: md5(upstreamHeadDoc),
+        headRevisionId: 'head-revision',
+      })),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: 'local://file/conflict',
+      name: 'notebook.json',
+      remoteId: remoteUri,
+      lastRemoteChecksum: 'base-checksum',
+      lastSynced: '',
+      doc: notebookJson("print('local')"),
+      md5Checksum: '',
+      conflict: {
+        detectedAt: '2026-05-30T00:00:00.000Z',
+        upstreamChecksum: 'old-upstream-checksum',
+        upstreamDoc: notebookJson("print('old upstream')"),
+        localChecksumAtDetection: 'old-local-checksum',
+      },
+    })
+
+    const conflict = await store.refreshConflictWithLatestUpstream(
+      'local://file/conflict'
+    )
+
+    const record = await store.files.get('local://file/conflict')
+    expect(driveStore.load).toHaveBeenCalledWith(remoteUri)
+    expect(conflict.upstreamChecksum).toBe(md5(upstreamHeadDoc))
+    expect(conflict.upstreamVersion).toEqual({
+      checksum: md5(upstreamHeadDoc),
+      revisionId: 'head-revision',
+    })
+    expect(conflict.upstreamDoc).toBe(upstreamHeadDoc)
+    expect(conflict.localChecksumAtDetection).toBe(md5(record?.doc ?? ''))
+    expect(record?.conflict).toEqual(conflict)
+  })
 })
 
 describe('LocalNotebooks markdown sidecar sync', () => {

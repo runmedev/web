@@ -1,7 +1,11 @@
 import { fromJsonString } from '@bufbuild/protobuf'
 
 import { parser_pb } from '../../runme/client'
-import type { LocalNotebooks } from '../../storage/local'
+import type {
+  LocalFileRecord,
+  LocalNotebooks,
+  NotebookConflictState,
+} from '../../storage/local'
 import { computeNotebookDiff } from './diff'
 import {
   openNotebookDiffDocument,
@@ -23,28 +27,18 @@ function parseNotebookJson(
   }
 }
 
-export async function openNotebookConflictDiff(
-  store: LocalNotebooks,
-  localUri: string
-): Promise<void> {
-  const record = await store.files.get(localUri)
-  if (!record) {
-    throw new Error(`Local notebook record not found for ${localUri}`)
-  }
-  if (!record.conflict) {
-    throw new Error(`Local notebook ${localUri} does not have a conflict`)
-  }
-
-  const upstreamNotebook = parseNotebookJson(
-    record.conflict.upstreamDoc,
-    'upstream'
-  )
+function registerConflictDiffDocument(
+  localUri: string,
+  record: LocalFileRecord,
+  conflict: NotebookConflictState
+) {
+  const upstreamNotebook = parseNotebookJson(conflict.upstreamDoc, 'upstream')
   const localNotebook = parseNotebookJson(record.doc ?? '', 'local')
-  const document = registerNotebookDiffDocument({
+  return registerNotebookDiffDocument({
     id: `conflict-${encodeURIComponent(localUri)}`,
     base: {
       label: 'Upstream version',
-      revisionId: record.conflict.upstreamVersion?.revisionId,
+      revisionId: conflict.upstreamVersion?.revisionId,
     },
     compare: {
       label: 'Local version',
@@ -58,5 +52,37 @@ export async function openNotebookConflictDiff(
       localUri,
     },
   })
+}
+
+export async function openNotebookConflictDiff(
+  store: LocalNotebooks,
+  localUri: string
+): Promise<void> {
+  const record = await store.files.get(localUri)
+  if (!record) {
+    throw new Error(`Local notebook record not found for ${localUri}`)
+  }
+  if (!record.conflict) {
+    throw new Error(`Local notebook ${localUri} does not have a conflict`)
+  }
+
+  const document = registerConflictDiffDocument(
+    localUri,
+    record,
+    record.conflict
+  )
   openNotebookDiffDocument(document)
+}
+
+export async function refreshNotebookConflictDiff(
+  store: LocalNotebooks,
+  localUri: string
+): Promise<void> {
+  const conflict = await store.refreshConflictWithLatestUpstream(localUri)
+  const record = await store.files.get(localUri)
+  if (!record) {
+    throw new Error(`Local notebook record not found for ${localUri}`)
+  }
+
+  registerConflictDiffDocument(localUri, record, conflict)
 }

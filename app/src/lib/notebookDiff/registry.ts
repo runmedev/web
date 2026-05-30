@@ -5,12 +5,20 @@ import type { NotebookDiffDocument } from './model'
 
 const documents = new Map<string, NotebookDiffDocument>()
 
+export const NOTEBOOK_DIFF_DOCUMENT_CHANGED =
+  'runme:notebook-diff-document-changed'
+
+export interface NotebookDiffDocumentChangedDetail {
+  id: string
+}
+
 export function registerNotebookDiffDocument(
   document: Omit<NotebookDiffDocument, 'id'> & { id?: string }
 ): NotebookDiffDocument {
   const id = document.id?.trim() || `notebook-diff-${uuidv4()}`
   const stored = { ...document, id }
   documents.set(id, stored)
+  emitNotebookDiffDocumentChanged(id)
   return stored
 }
 
@@ -44,4 +52,18 @@ export function openNotebookDiffDocument(
   showWorkspaceDocument(getNotebookDiffDocumentUri(id), {
     title: getNotebookDiffDocumentTitle(storedDocument),
   })
+}
+
+function emitNotebookDiffDocumentChanged(id: string): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  window.dispatchEvent(
+    new CustomEvent<NotebookDiffDocumentChangedDetail>(
+      NOTEBOOK_DIFF_DOCUMENT_CHANGED,
+      {
+        detail: { id },
+      }
+    )
+  )
 }

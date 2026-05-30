@@ -28,6 +28,7 @@ const contextMocks = vi.hoisted(() => ({
     getMetadata: ReturnType<typeof vi.fn>
     getSyncState: ReturnType<typeof vi.fn>
     rename: ReturnType<typeof vi.fn>
+    refreshConflictWithLatestUpstream?: ReturnType<typeof vi.fn>
     resolveConflictWithLocal?: ReturnType<typeof vi.fn>
     sync?: ReturnType<typeof vi.fn>
     subscribeSync: ReturnType<typeof vi.fn>
@@ -36,6 +37,7 @@ const contextMocks = vi.hoisted(() => ({
 
 const conflictMocks = vi.hoisted(() => ({
   openNotebookConflictDiff: vi.fn(async () => undefined),
+  refreshNotebookConflictDiff: vi.fn(async () => undefined),
 }))
 
 // Minimal mocks for contexts Action consumes
@@ -101,6 +103,7 @@ vi.mock('../../contexts/CurrentDocContext', () => ({
 
 vi.mock('../../lib/notebookDiff/conflict', () => ({
   openNotebookConflictDiff: conflictMocks.openNotebookConflictDiff,
+  refreshNotebookConflictDiff: conflictMocks.refreshNotebookConflictDiff,
 }))
 
 vi.mock('../../lib/runtime/jupyterManager', () => ({
@@ -229,6 +232,8 @@ beforeEach(() => {
   contextMocks.notebookStore = null
   conflictMocks.openNotebookConflictDiff.mockReset()
   conflictMocks.openNotebookConflictDiff.mockResolvedValue(undefined)
+  conflictMocks.refreshNotebookConflictDiff.mockReset()
+  conflictMocks.refreshNotebookConflictDiff.mockResolvedValue(undefined)
 })
 
 describe('Actions tabs', () => {
@@ -449,6 +454,75 @@ describe('Actions tabs', () => {
       expect(resolveConflictWithLocal).toHaveBeenCalledWith(
         'local://file/conflict',
         { force: false }
+      )
+    })
+  })
+
+  it('refreshes a conflict diff tab against latest upstream and local versions', async () => {
+    const refreshConflictWithLatestUpstream = vi.fn(async () => ({
+      detectedAt: '2026-05-30T00:00:00.000Z',
+      upstreamChecksum: 'upstream-head-checksum',
+      upstreamVersion: {
+        checksum: 'upstream-head-checksum',
+        revisionId: 'upstream-head',
+      },
+      upstreamDoc: '',
+      localChecksumAtDetection: 'local-checksum',
+    }))
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(),
+      getSyncState: vi.fn(),
+      rename: vi.fn(),
+      refreshConflictWithLatestUpstream,
+      subscribeSync: vi.fn(() => () => {}),
+    }
+    const doc = registerNotebookDiffDocument({
+      id: 'conflict-refresh-diff',
+      base: { label: 'Upstream version', revisionId: 'upstream' },
+      compare: { label: 'Local version' },
+      diff: computeNotebookDiff(
+        create(parser_pb.NotebookSchema, {
+          cells: [
+            create(parser_pb.CellSchema, {
+              refId: 'cell-1',
+              kind: parser_pb.CellKind.CODE,
+              languageId: 'python',
+              value: "print('upstream')",
+            }),
+          ],
+          metadata: {},
+        }),
+        create(parser_pb.NotebookSchema, {
+          cells: [
+            create(parser_pb.CellSchema, {
+              refId: 'cell-1',
+              kind: parser_pb.CellKind.CODE,
+              languageId: 'python',
+              value: "print('local')",
+            }),
+          ],
+          metadata: {},
+        })
+      ),
+      resolution: {
+        kind: 'notebook-sync-conflict',
+        localUri: 'local://file/conflict',
+      },
+    })
+    const diffUri = getNotebookDiffDocumentUri(doc.id)
+    contextMocks.currentDoc = diffUri
+    contextMocks.workspaceDocuments = [
+      { uri: diffUri, title: 'Upstream version vs Local version' },
+    ]
+
+    render(<Actions />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh diff' }))
+
+    await waitFor(() => {
+      expect(conflictMocks.refreshNotebookConflictDiff).toHaveBeenCalledWith(
+        contextMocks.notebookStore,
+        'local://file/conflict'
       )
     })
   })

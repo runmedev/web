@@ -59,7 +59,10 @@ import {
   isNotebookDocumentUri,
   type WorkspaceDocument,
 } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
-import { getNotebookDiffDocument } from '../../lib/notebookDiff/registry'
+import {
+  getNotebookDiffDocument,
+  NOTEBOOK_DIFF_DOCUMENT_CHANGED,
+} from '../../lib/notebookDiff/registry'
 import { openNotebookConflictDiff } from '../../lib/notebookDiff/conflict'
 import { parseDriveItem } from '../../storage/drive'
 import type { NotebookSyncState } from '../../storage/local'
@@ -1701,9 +1704,31 @@ function NotebookTabContent({
 
 function NotebookDiffTabContent({ diffUri }: { diffUri: string }) {
   const diffId = diffUri.slice('diff://notebook/'.length)
-  const document = diffId
-    ? getNotebookDiffDocument(decodeURIComponent(diffId))
-    : null
+  const decodedDiffId = diffId ? decodeURIComponent(diffId) : ''
+  const [, setDiffDocumentVersion] = useState(0)
+  useEffect(() => {
+    if (!decodedDiffId || typeof window === 'undefined') {
+      return
+    }
+    const onDiffDocumentChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: string }>).detail
+      if (detail?.id === decodedDiffId) {
+        setDiffDocumentVersion((version) => version + 1)
+      }
+    }
+    window.addEventListener(
+      NOTEBOOK_DIFF_DOCUMENT_CHANGED,
+      onDiffDocumentChanged
+    )
+    return () => {
+      window.removeEventListener(
+        NOTEBOOK_DIFF_DOCUMENT_CHANGED,
+        onDiffDocumentChanged
+      )
+    }
+  }, [decodedDiffId])
+
+  const document = decodedDiffId ? getNotebookDiffDocument(decodedDiffId) : null
   if (document) {
     return <NotebookDiffContent document={document} />
   }

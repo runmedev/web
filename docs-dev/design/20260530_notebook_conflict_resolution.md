@@ -177,10 +177,12 @@ Labels:
 - left: `Upstream version`
 - right: `Local version`
 
-The diff should compare the upstream snapshot captured when the conflict was
-detected against the current local notebook. If the user edits the local
-notebook while the diff tab is open, V0 can require reopening the diff to see a
-fresh comparison.
+The diff should initially compare the upstream snapshot captured when the
+conflict was detected against the current local notebook. The diff tab should
+also provide **Refresh diff** so the user can compare the latest local notebook
+against the current upstream head. Refreshing updates the reviewed upstream
+snapshot used by **Save local version**, so the overwrite warning only appears
+if upstream changes again after the refresh.
 
 ### 5. User Resolves Manually
 
@@ -357,6 +359,7 @@ local notebook if needed, then save the local version to replace upstream.
 
 The button text should be explicit:
 
+- Review: `Refresh diff`
 - Primary: `Save local version`
 - Secondary follow-up, not V0: `Keep upstream version`
 - Secondary follow-up, not V0: `Save local as copy`

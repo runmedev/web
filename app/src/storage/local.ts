@@ -694,6 +694,55 @@ export class LocalNotebooks extends Dexie {
     this.notifySync(localUri)
   }
 
+  async refreshConflictWithLatestUpstream(
+    localUri: string
+  ): Promise<NotebookConflictState> {
+    if (!localUri.startsWith('local://file/')) {
+      throw new Error(
+        'refreshConflictWithLatestUpstream expects a local://file/ URI'
+      )
+    }
+
+    const record = await this.files.get(localUri)
+    if (!record) {
+      throw new Error(`Local notebook record not found for ${localUri}`)
+    }
+    if (!record.conflict) {
+      throw new Error(`Local notebook ${localUri} does not have a conflict`)
+    }
+    if (!isDriveUri(record.remoteId)) {
+      throw new Error(
+        `Conflict refresh is only supported for Drive-backed notebooks; got ${record.remoteId}`
+      )
+    }
+
+    const upstreamNotebook = await this.driveStore.load(record.remoteId)
+    const upstreamDoc = serializeNotebook(upstreamNotebook)
+    const upstreamVersion = driveMetadataToUpstreamVersion(
+      await this.driveStore.getVersionMetadata(record.remoteId)
+    )
+    const upstreamChecksum =
+      upstreamVersion.checksum ?? checksumForSerializedNotebook(upstreamDoc)
+    const localChecksum = await this.getOrBackfillLocalChecksum(
+      localUri,
+      record
+    )
+    const conflict: NotebookConflictState = {
+      detectedAt: nowIsoString(),
+      upstreamChecksum,
+      upstreamVersion,
+      upstreamDoc,
+      localChecksumAtDetection: localChecksum,
+    }
+
+    await this.files.update(localUri, {
+      conflict,
+      lastSyncError: undefined,
+    })
+    this.notifySync(localUri)
+    return conflict
+  }
+
   private async persistNotebook(
     uri: string,
     notebook: parser_pb.Notebook

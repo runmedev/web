@@ -11,6 +11,7 @@ import type {
   TextDiff,
   TextDiffLine,
 } from '../../lib/notebookDiff/model'
+import { refreshNotebookConflictDiff } from '../../lib/notebookDiff/conflict'
 import { NotebookConflictChangedError } from '../../storage/local'
 import { showToast } from '../../lib/toast'
 
@@ -234,6 +235,7 @@ function DiffRow({ row }: { row: CellDiff }) {
 function ConflictResolutionActions({ localUri }: { localUri: string }) {
   const { store } = useNotebookStore()
   const [isResolving, setIsResolving] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   const saveLocalVersion = async (force = false) => {
     if (!store) {
@@ -270,17 +272,51 @@ function ConflictResolutionActions({ localUri }: { localUri: string }) {
     }
   }
 
+  const refreshDiff = async () => {
+    if (!store) {
+      return
+    }
+    setIsRefreshing(true)
+    try {
+      await refreshNotebookConflictDiff(store, localUri)
+      showToast({
+        message: 'Refreshed diff against latest upstream version.',
+        tone: 'success',
+      })
+    } catch {
+      showToast({
+        message: 'Unable to refresh conflict diff. Please try again.',
+        tone: 'error',
+      })
+    } finally {
+      setIsRefreshing(false)
+    }
+  }
+
   return (
-    <Button
-      type="button"
-      color="amber"
-      disabled={!store || isResolving}
-      onClick={() => {
-        void saveLocalVersion()
-      }}
-    >
-      {isResolving ? 'Saving...' : 'Save local version'}
-    </Button>
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      <Button
+        type="button"
+        color="gray"
+        variant="soft"
+        disabled={!store || isRefreshing || isResolving}
+        onClick={() => {
+          void refreshDiff()
+        }}
+      >
+        {isRefreshing ? 'Refreshing...' : 'Refresh diff'}
+      </Button>
+      <Button
+        type="button"
+        color="amber"
+        disabled={!store || isResolving || isRefreshing}
+        onClick={() => {
+          void saveLocalVersion()
+        }}
+      >
+        {isResolving ? 'Saving...' : 'Save local version'}
+      </Button>
+    </div>
   )
 }
 
