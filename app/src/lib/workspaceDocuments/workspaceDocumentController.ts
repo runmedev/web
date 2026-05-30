@@ -1,66 +1,97 @@
 import {
+  type WorkspaceDocument,
   deriveWorkspaceDocumentTitle,
   isRestorableWorkspaceDocument,
-  type WorkspaceDocument,
-} from "./workspaceDocumentTypes";
+} from './workspaceDocumentTypes'
 
-const WORKSPACE_DOCUMENTS_STORAGE_KEY = "runme/workspaceDocuments";
+const WORKSPACE_DOCUMENTS_STORAGE_KEY = 'runme/workspaceDocuments'
 
 export interface WorkspaceDocumentSnapshot {
-  documents: WorkspaceDocument[];
+  documents: WorkspaceDocument[]
 }
 
 export interface WorkspaceDocumentPersistence {
-  loadDocuments(): WorkspaceDocument[];
-  saveDocuments(documents: WorkspaceDocument[]): void;
+  loadDocuments(): WorkspaceDocument[]
+  saveDocuments(documents: WorkspaceDocument[]): void
 }
 
-export type ShowWorkspaceDocumentOptions = Omit<Partial<WorkspaceDocument>, "uri">;
+export type ShowWorkspaceDocumentOptions = Omit<
+  Partial<WorkspaceDocument>,
+  'uri'
+>
+
+export const WORKSPACE_DOCUMENT_FOCUS_EVENT = 'runme:workspace-document-focus'
+
+export interface WorkspaceDocumentFocusEventDetail {
+  uri: string
+}
+
+export function focusWorkspaceDocument(uri: string): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  window.dispatchEvent(
+    new CustomEvent<WorkspaceDocumentFocusEventDetail>(
+      WORKSPACE_DOCUMENT_FOCUS_EVENT,
+      {
+        detail: { uri },
+      }
+    )
+  )
+}
+
+export function showWorkspaceDocument(
+  uri: string,
+  options?: ShowWorkspaceDocumentOptions
+): void {
+  getWorkspaceDocumentController().showDocument(uri, options)
+  focusWorkspaceDocument(uri)
+}
 
 class SessionStorageWorkspaceDocumentPersistence
   implements WorkspaceDocumentPersistence
 {
   loadDocuments(): WorkspaceDocument[] {
-    if (typeof window === "undefined" || !window.sessionStorage) {
-      return [];
+    if (typeof window === 'undefined' || !window.sessionStorage) {
+      return []
     }
     try {
-      const raw = window.sessionStorage.getItem(WORKSPACE_DOCUMENTS_STORAGE_KEY);
+      const raw = window.sessionStorage.getItem(WORKSPACE_DOCUMENTS_STORAGE_KEY)
       if (!raw) {
-        return [];
+        return []
       }
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(raw)
       if (!Array.isArray(parsed)) {
-        return [];
+        return []
       }
       return parsed
         .map(normalizeWorkspaceDocument)
-        .filter((item): item is WorkspaceDocument => Boolean(item));
+        .filter((item): item is WorkspaceDocument => Boolean(item))
     } catch {
-      return [];
+      return []
     }
   }
 
   saveDocuments(documents: WorkspaceDocument[]): void {
-    if (typeof window === "undefined" || !window.sessionStorage) {
-      return;
+    if (typeof window === 'undefined' || !window.sessionStorage) {
+      return
     }
     try {
       const restorable = documents.filter((item) =>
-        isRestorableWorkspaceDocument(item.uri),
-      );
+        isRestorableWorkspaceDocument(item.uri)
+      )
       if (restorable.length === 0) {
-        window.sessionStorage.removeItem(WORKSPACE_DOCUMENTS_STORAGE_KEY);
-        return;
+        window.sessionStorage.removeItem(WORKSPACE_DOCUMENTS_STORAGE_KEY)
+        return
       }
       const persisted = restorable.map((item) => ({
         uri: item.uri,
         title: item.title,
-      }));
+      }))
       window.sessionStorage.setItem(
         WORKSPACE_DOCUMENTS_STORAGE_KEY,
-        JSON.stringify(persisted),
-      );
+        JSON.stringify(persisted)
+      )
     } catch {
       // Ignore restore-state persistence failures.
     }
@@ -68,51 +99,51 @@ class SessionStorageWorkspaceDocumentPersistence
 }
 
 function normalizeWorkspaceDocument(item: unknown): WorkspaceDocument | null {
-  if (!item || typeof item !== "object") {
-    return null;
+  if (!item || typeof item !== 'object') {
+    return null
   }
-  const candidate = item as Partial<WorkspaceDocument>;
-  const uri = candidate.uri?.trim();
+  const candidate = item as Partial<WorkspaceDocument>
+  const uri = candidate.uri?.trim()
   if (!uri) {
-    return null;
+    return null
   }
   return {
     uri,
     title: candidate.title?.trim() || deriveWorkspaceDocumentTitle(uri),
-  };
+  }
 }
 
 export class WorkspaceDocumentController {
-  private documents: WorkspaceDocument[] = [];
-  private snapshot: WorkspaceDocumentSnapshot = { documents: [] };
-  private readonly listeners = new Set<() => void>();
-  private restored = false;
+  private documents: WorkspaceDocument[] = []
+  private snapshot: WorkspaceDocumentSnapshot = { documents: [] }
+  private readonly listeners = new Set<() => void>()
+  private restored = false
 
   constructor(
-    private persistence: WorkspaceDocumentPersistence =
-      new SessionStorageWorkspaceDocumentPersistence(),
+    private persistence: WorkspaceDocumentPersistence = new SessionStorageWorkspaceDocumentPersistence()
   ) {}
 
   getSnapshot(): WorkspaceDocumentSnapshot {
-    this.ensureRestored();
-    return this.snapshot;
+    this.ensureRestored()
+    return this.snapshot
   }
 
   subscribe(listener: () => void): () => void {
-    this.ensureRestored();
-    this.listeners.add(listener);
+    this.ensureRestored()
+    this.listeners.add(listener)
     return () => {
-      this.listeners.delete(listener);
-    };
+      this.listeners.delete(listener)
+    }
   }
 
   showDocument(uri: string, options?: ShowWorkspaceDocumentOptions): void {
-    this.ensureRestored();
-    const normalizedUri = uri.trim();
+    this.ensureRestored()
+    const normalizedUri = uri.trim()
     if (!normalizedUri) {
-      throw new Error("showDocument requires a non-empty URI");
+      throw new Error('showDocument requires a non-empty URI')
     }
-    const title = options?.title?.trim() || deriveWorkspaceDocumentTitle(normalizedUri);
+    const title =
+      options?.title?.trim() || deriveWorkspaceDocumentTitle(normalizedUri)
     const nextDocument: WorkspaceDocument = {
       uri: normalizedUri,
       title,
@@ -120,12 +151,12 @@ export class WorkspaceDocumentController {
       state: options?.state,
       errorMessage: options?.errorMessage,
       owner: options?.owner,
-    };
+    }
     const existingIndex = this.documents.findIndex(
-      (item) => item.uri === normalizedUri,
-    );
+      (item) => item.uri === normalizedUri
+    )
     if (existingIndex >= 0) {
-      const existing = this.documents[existingIndex];
+      const existing = this.documents[existingIndex]
       if (
         existing?.title === nextDocument.title &&
         existing?.requestedUri === nextDocument.requestedUri &&
@@ -133,84 +164,84 @@ export class WorkspaceDocumentController {
         existing?.errorMessage === nextDocument.errorMessage &&
         existing?.owner === nextDocument.owner
       ) {
-        return;
+        return
       }
       this.documents = this.documents.map((item, index) =>
-        index === existingIndex ? nextDocument : item,
-      );
+        index === existingIndex ? nextDocument : item
+      )
     } else {
-      this.documents = [...this.documents, nextDocument];
+      this.documents = [...this.documents, nextDocument]
     }
-    this.emit();
-    this.persist();
+    this.emit()
+    this.persist()
   }
 
   closeDocument(uri: string): string | null {
-    this.ensureRestored();
-    const index = this.documents.findIndex((item) => item.uri === uri);
+    this.ensureRestored()
+    const index = this.documents.findIndex((item) => item.uri === uri)
     if (index === -1) {
-      return null;
+      return null
     }
     const fallback =
       index > 0
-        ? this.documents[index - 1]?.uri ?? null
-        : this.documents[index + 1]?.uri ?? null;
-    this.documents = this.documents.filter((item) => item.uri !== uri);
-    this.emit();
-    this.persist();
-    return fallback;
+        ? (this.documents[index - 1]?.uri ?? null)
+        : (this.documents[index + 1]?.uri ?? null)
+    this.documents = this.documents.filter((item) => item.uri !== uri)
+    this.emit()
+    this.persist()
+    return fallback
   }
 
   resetForTests(): void {
-    this.documents = [];
-    this.snapshot = { documents: [] };
-    this.listeners.clear();
-    this.restored = false;
+    this.documents = []
+    this.snapshot = { documents: [] }
+    this.listeners.clear()
+    this.restored = false
   }
 
   private ensureRestored(): void {
     if (this.restored) {
-      return;
+      return
     }
-    this.restored = true;
+    this.restored = true
     this.documents = this.persistence
       .loadDocuments()
-      .filter((item) => isRestorableWorkspaceDocument(item.uri));
-    this.rebuildSnapshot();
+      .filter((item) => isRestorableWorkspaceDocument(item.uri))
+    this.rebuildSnapshot()
   }
 
   private emit(): void {
-    this.rebuildSnapshot();
+    this.rebuildSnapshot()
     for (const listener of this.listeners) {
       try {
-        listener();
+        listener()
       } catch (error) {
-        console.error("WorkspaceDocumentController listener failed", error);
+        console.error('WorkspaceDocumentController listener failed', error)
       }
     }
   }
 
   private persist(): void {
-    this.persistence.saveDocuments(this.documents);
+    this.persistence.saveDocuments(this.documents)
   }
 
   private rebuildSnapshot(): void {
     this.snapshot = {
       documents: this.documents.map((item) => ({ ...item })),
-    };
+    }
   }
 }
 
-let controller: WorkspaceDocumentController | null = null;
+let controller: WorkspaceDocumentController | null = null
 
 export function getWorkspaceDocumentController(): WorkspaceDocumentController {
   if (!controller) {
-    controller = new WorkspaceDocumentController();
+    controller = new WorkspaceDocumentController()
   }
-  return controller;
+  return controller
 }
 
 export function __resetWorkspaceDocumentControllerForTests(): void {
-  controller?.resetForTests();
-  controller = null;
+  controller?.resetForTests()
+  controller = null
 }

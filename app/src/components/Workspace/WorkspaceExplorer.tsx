@@ -450,6 +450,11 @@ export function WorkspaceExplorer() {
       return;
     }
 
+    if (!isDriveItemUri(currentDoc)) {
+      handledDocRef.current = currentDoc;
+      return;
+    }
+
     let parsed = null;
     try {
       parsed = parseDriveItem(currentDoc);

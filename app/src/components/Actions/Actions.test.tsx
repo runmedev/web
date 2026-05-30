@@ -9,6 +9,11 @@ import {
 
 import { parser_pb, RunmeMetadataKey } from "../../runme/client";
 import type { CellData } from "../../lib/notebookData";
+import { computeNotebookDiff } from "../../lib/notebookDiff/diff";
+import {
+  getNotebookDiffDocumentUri,
+  registerNotebookDiffDocument,
+} from "../../lib/notebookDiff/registry";
 import Actions, { Action } from "./Actions";
 
 const contextMocks = vi.hoisted(() => ({
@@ -278,6 +283,110 @@ describe("Actions tabs", () => {
       "local://file/restored",
       { title: "renamed.json" },
     );
+  });
+
+  it("renders a selected notebook diff workspace document as a tab", () => {
+    const baseNotebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: "cell-1",
+          kind: parser_pb.CellKind.CODE,
+          languageId: "python",
+          value: "print('base')",
+        }),
+      ],
+      metadata: {},
+    });
+    const compareNotebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: "cell-1",
+          kind: parser_pb.CellKind.CODE,
+          languageId: "python",
+          value: "print('compare')",
+        }),
+      ],
+      metadata: {},
+    });
+    const doc = registerNotebookDiffDocument({
+      id: "diff-1",
+      base: { label: "Drive revision 1", revisionId: "1" },
+      compare: { label: "Local copy", revisionId: "local" },
+      diff: computeNotebookDiff(baseNotebook, compareNotebook),
+    });
+    const diffUri = getNotebookDiffDocumentUri(doc.id);
+    contextMocks.currentDoc = diffUri;
+    contextMocks.workspaceDocuments = [
+      { uri: diffUri, title: "Drive revision 1 vs Local copy" },
+    ];
+
+    render(<Actions />);
+
+    expect(
+      screen.getByRole("tab", { name: "Drive revision 1 vs Local copy" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Notebook Diff")).toBeTruthy();
+    expect(
+      screen.getByText(/Drive revision 1 compared with Local copy/),
+    ).toBeTruthy();
+    expect(screen.getByText("print('base')")).toBeTruthy();
+    expect(screen.getByText("print('compare')")).toBeTruthy();
+    expect(screen.queryByText("Back to notebooks")).toBeNull();
+  });
+
+  it("keeps a clicked diff tab selected while current doc state catches up", async () => {
+    const diff = computeNotebookDiff(
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: "cell-1",
+            kind: parser_pb.CellKind.CODE,
+            languageId: "python",
+            value: "print('base')",
+          }),
+        ],
+        metadata: {},
+      }),
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: "cell-1",
+            kind: parser_pb.CellKind.CODE,
+            languageId: "python",
+            value: "print('compare')",
+          }),
+        ],
+        metadata: {},
+      }),
+    );
+    const doc = registerNotebookDiffDocument({
+      id: "diff-click",
+      base: { label: "Drive revision 1", revisionId: "1" },
+      compare: { label: "Local copy", revisionId: "local" },
+      diff,
+    });
+    const diffUri = getNotebookDiffDocumentUri(doc.id);
+    contextMocks.currentDoc = "local://file/first";
+    contextMocks.workspaceDocuments = [
+      { uri: "local://file/first", title: "first.json" },
+      { uri: diffUri, title: "Drive revision 1 vs Local copy" },
+    ];
+
+    render(<Actions />);
+
+    const firstTab = screen.getByRole("tab", { name: "first.json" });
+    const diffTab = screen.getByRole("tab", {
+      name: "Drive revision 1 vs Local copy",
+    });
+    expect(firstTab.getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.mouseDown(diffTab, { button: 0, ctrlKey: false });
+
+    expect(contextMocks.setCurrentDoc).toHaveBeenCalledWith(diffUri);
+    await waitFor(() => {
+      expect(diffTab.getAttribute("aria-selected")).toBe("true");
+      expect(firstTab.getAttribute("aria-selected")).toBe("false");
+    });
   });
 });
 
