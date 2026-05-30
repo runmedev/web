@@ -8,29 +8,25 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-} from "react";
+} from 'react'
 
-import { create } from "@bufbuild/protobuf";
-import { Button, ScrollArea, Tabs, Text } from "@radix-ui/themes";
+import { create } from '@bufbuild/protobuf'
+import { Button, ScrollArea, Tabs, Text } from '@radix-ui/themes'
 
-import { XMarkIcon } from "@heroicons/react/20/solid";
-import {
-  MimeType,
-  RunmeMetadataKey,
-  parser_pb,
-} from "../../runme/client";
-import { CellData } from "../../lib/notebookData";
-import { useNotebookContext } from "../../contexts/NotebookContext";
-import type { OpenNotebookEntry } from "../../lib/notebookDataController";
-import { useNotebookStore } from "../../contexts/NotebookStoreContext";
-import { useWorkspaceDocumentContext } from "../../contexts/WorkspaceDocumentContext";
-import { useOutput } from "../../contexts/OutputContext";
-import CellConsole, { fontSettings } from "./CellConsole";
-import Editor from "./Editor";
-import HtmlCell from "./HtmlCell";
-import MarkdownCell from "./MarkdownCell";
-import { IOPUB_INCOMPLETE_METADATA_KEY } from "../../lib/ipykernel";
-import { appLogger } from "../../lib/logging/runtime";
+import { XMarkIcon } from '@heroicons/react/20/solid'
+import { MimeType, RunmeMetadataKey, parser_pb } from '../../runme/client'
+import { CellData } from '../../lib/notebookData'
+import { useNotebookContext } from '../../contexts/NotebookContext'
+import type { OpenNotebookEntry } from '../../lib/notebookDataController'
+import { useNotebookStore } from '../../contexts/NotebookStoreContext'
+import { useWorkspaceDocumentContext } from '../../contexts/WorkspaceDocumentContext'
+import { useOutput } from '../../contexts/OutputContext'
+import CellConsole, { fontSettings } from './CellConsole'
+import Editor from './Editor'
+import HtmlCell from './HtmlCell'
+import MarkdownCell from './MarkdownCell'
+import { IOPUB_INCOMPLETE_METADATA_KEY } from '../../lib/ipykernel'
+import { appLogger } from '../../lib/logging/runtime'
 import {
   createNotebookActiveCellState,
   loadNotebookActiveCellMap,
@@ -38,206 +34,230 @@ import {
   type CellFocusRole,
   type NotebookActiveCellMap,
   type NotebookActiveCellState,
-} from "../../lib/notebookActiveCellState";
-import { copyNotebookShareUrl } from "../../lib/shareLinks";
-import { isHtmlLanguageId, isMarkdownLanguageId } from "../../lib/cellContent";
-import {
-  PlayIcon,
-  PlusIcon,
-  SpinnerIcon,
-  TrashIcon,
-} from "./icons";
+} from '../../lib/notebookActiveCellState'
+import { copyNotebookShareUrl } from '../../lib/shareLinks'
+import { isHtmlLanguageId, isMarkdownLanguageId } from '../../lib/cellContent'
+import { PlayIcon, PlusIcon, SpinnerIcon, TrashIcon } from './icons'
 //import { useRun } from "../../lib/useRun.js";
-import { useCurrentDoc } from "../../contexts/CurrentDocContext";
-import { useRunners } from "../../contexts/RunnersContext";
-import { DEFAULT_RUNNER_PLACEHOLDER } from "../../lib/runtime/runnersManager";
+import { useCurrentDoc } from '../../contexts/CurrentDocContext'
+import { useRunners } from '../../contexts/RunnersContext'
+import { DEFAULT_RUNNER_PLACEHOLDER } from '../../lib/runtime/runnersManager'
 import {
   APPKERNEL_RUNNER_NAME,
   APPKERNEL_SANDBOX_RUNNER_NAME,
   isAppKernelRunnerName,
-} from "../../lib/runtime/appKernel";
-import { getJupyterManager } from "../../lib/runtime/jupyterManager";
+} from '../../lib/runtime/appKernel'
+import { getJupyterManager } from '../../lib/runtime/jupyterManager'
 import {
   driveLinkCoordinator,
   DRIVE_LINK_STATUS_TAB_URI,
   useDriveLinkCoordinatorSnapshot,
-} from "../../lib/driveLinkCoordinator";
+} from '../../lib/driveLinkCoordinator'
 import {
   isDriveLinkStatusUri,
   isNotebookDiffUri,
   isNotebookDocumentUri,
   type WorkspaceDocument,
-} from "../../lib/workspaceDocuments/workspaceDocumentTypes";
-import { getNotebookDiffDocument } from "../../lib/notebookDiff/registry";
-import { parseDriveItem } from "../../storage/drive";
-import type { NotebookSyncState } from "../../storage/local";
-import { NotebookStoreItemType } from "../../storage/notebook";
-import DriveLinkStatusTab from "../DriveLinkStatusTab";
-import { NotebookDiffContent } from "../NotebookDiff/NotebookDiffView";
-import React from "react";
+} from '../../lib/workspaceDocuments/workspaceDocumentTypes'
+import {
+  getNotebookDiffDocument,
+  NOTEBOOK_DIFF_DOCUMENT_CHANGED,
+} from '../../lib/notebookDiff/registry'
+import { openNotebookConflictDiff } from '../../lib/notebookDiff/conflict'
+import { parseDriveItem } from '../../storage/drive'
+import type { NotebookSyncState } from '../../storage/local'
+import { NotebookStoreItemType } from '../../storage/notebook'
+import { showToast } from '../../lib/toast'
+import DriveLinkStatusTab from '../DriveLinkStatusTab'
+import { NotebookDiffContent } from '../NotebookDiff/NotebookDiffView'
+import React from 'react'
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
-  "data-state"?: "active" | "inactive";
-  hidden?: boolean;
-};
+  'data-state'?: 'active' | 'inactive'
+  hidden?: boolean
+}
 
 const TabPanel = React.forwardRef<HTMLDivElement, TabPanelProps>(
-  ({ hidden: _hiddenProp, "data-state": state, style, ...rest }, ref) => {
-    const inactive = state !== "active";
+  ({ hidden: _hiddenProp, 'data-state': state, style, ...rest }, ref) => {
+    const inactive = state !== 'active'
     return (
       <div
         ref={ref}
         data-state={state}
         style={{
           ...style,
-          visibility: inactive ? "hidden" : "visible",
-          position: inactive ? "absolute" : "relative",
+          visibility: inactive ? 'hidden' : 'visible',
+          position: inactive ? 'absolute' : 'relative',
           inset: inactive ? 0 : undefined,
-          height: "100%",
-          pointerEvents: inactive ? "none" : "auto",
+          height: '100%',
+          pointerEvents: inactive ? 'none' : 'auto',
           zIndex: inactive ? 0 : 1,
-          transition: "none",
+          transition: 'none',
         }}
         {...rest}
       />
-    );
-  },
-);
-TabPanel.displayName = "TabPanel";
+    )
+  }
+)
+TabPanel.displayName = 'TabPanel'
 // TabPanel is used with Tabs.Content + forceMount to keep every tab's DOM alive
 // (preserving scroll/Monaco layout) while hiding inactive tabs without stacking
 // them. Inactive tabs are taken out of flow via absolute positioning and hidden
 // visibility so they don't visually overlap yet retain their state.
 
 function getNotebookDisplayName(uri: string, name?: string): string {
-  return name || uri.split("/").filter(Boolean).pop() || uri;
+  return name || uri.split('/').filter(Boolean).pop() || uri
 }
 
 function syncIndicatorPresentation(state: NotebookSyncState | null): {
-  label: string;
-  className: string;
-  clickable: boolean;
+  label: string
+  className: string
+  clickable: boolean
 } {
   switch (state?.status) {
-    case "synced":
+    case 'synced':
       return {
-        label: "Notebook is synced",
-        className: "bg-emerald-500",
+        label: 'Notebook is synced',
+        className: 'bg-emerald-500',
         clickable: false,
-      };
-    case "pending":
+      }
+    case 'pending':
       return {
-        label: "Notebook has local changes pending upstream sync. Click to sync now.",
-        className: "bg-red-500",
+        label:
+          'Notebook has local changes pending upstream sync. Click to sync now.',
+        className: 'bg-red-500',
         clickable: true,
-      };
-    case "pending-upstream-create":
+      }
+    case 'pending-upstream-create':
       return {
-        label: "Notebook is waiting for its upstream file to be created. Click to sync now.",
-        className: "bg-amber-500",
+        label:
+          'Notebook is waiting for its upstream file to be created. Click to sync now.',
+        className: 'bg-amber-500',
         clickable: true,
-      };
-    case "syncing":
+      }
+    case 'syncing':
       return {
-        label: "Notebook is syncing",
-        className: "bg-sky-500 animate-pulse",
+        label: 'Notebook is syncing',
+        className: 'bg-sky-500 animate-pulse',
         clickable: false,
-      };
-    case "error":
+      }
+    case 'conflicted':
+      return {
+        label: 'Notebook has a sync conflict. Click to review differences.',
+        className: 'bg-amber-600',
+        clickable: true,
+      }
+    case 'error':
       return {
         label: state.lastError
           ? `Notebook sync failed: ${state.lastError}. Click to retry.`
-          : "Notebook sync failed. Click to retry.",
-        className: "bg-red-700",
+          : 'Notebook sync failed. Click to retry.',
+        className: 'bg-red-700',
         clickable: true,
-      };
-    case "local-only":
+      }
+    case 'local-only':
       return {
-        label: "Notebook is stored only in this browser",
-        className: "border border-nb-text-faint bg-transparent",
+        label: 'Notebook is stored only in this browser',
+        className: 'border border-nb-text-faint bg-transparent',
         clickable: false,
-      };
+      }
     default:
       return {
-        label: "Notebook sync state is loading",
-        className: "border border-nb-text-faint bg-transparent",
+        label: 'Notebook sync state is loading',
+        className: 'border border-nb-text-faint bg-transparent',
         clickable: false,
-      };
+      }
   }
 }
 
 function NotebookSyncIndicator({ docUri }: { docUri: string }) {
-  const { store } = useNotebookStore();
-  const [syncState, setSyncState] = useState<NotebookSyncState | null>(null);
+  const { store } = useNotebookStore()
+  const [syncState, setSyncState] = useState<NotebookSyncState | null>(null)
 
   useEffect(() => {
-    if (!store || !docUri.startsWith("local://file/")) {
-      setSyncState(null);
-      return;
+    if (!store || !docUri.startsWith('local://file/')) {
+      setSyncState(null)
+      return
     }
 
-    let cancelled = false;
+    let cancelled = false
     const refresh = () => {
       void (async () => {
         try {
-          const next = await store.getSyncState(docUri);
+          const next = await store.getSyncState(docUri)
           if (!cancelled) {
-            setSyncState(next);
+            setSyncState(next)
           }
         } catch (error) {
           if (!cancelled) {
             setSyncState({
-              status: "error",
+              status: 'error',
               localUri: docUri,
-              remoteId: "",
+              remoteId: '',
               lastError: String(error),
-            });
+            })
           }
         }
-      })();
-    };
+      })()
+    }
 
-    refresh();
-    const unsubscribe = store.subscribeSync(docUri, refresh);
+    refresh()
+    const unsubscribe = store.subscribeSync(docUri, refresh)
     const onSyncUpdated = (event: Event) => {
-      const detail = (event as CustomEvent<{ uri?: string }>).detail;
+      const detail = (event as CustomEvent<{ uri?: string }>).detail
       if (detail?.uri === docUri) {
-        refresh();
+        refresh()
       }
-    };
-    window.addEventListener("local-notebook-sync-updated", onSyncUpdated);
-    window.addEventListener("local-notebook-updated", onSyncUpdated);
+    }
+    window.addEventListener('local-notebook-sync-updated', onSyncUpdated)
+    window.addEventListener('local-notebook-updated', onSyncUpdated)
     return () => {
-      cancelled = true;
-      unsubscribe();
-      window.removeEventListener("local-notebook-sync-updated", onSyncUpdated);
-      window.removeEventListener("local-notebook-updated", onSyncUpdated);
-    };
-  }, [docUri, store]);
+      cancelled = true
+      unsubscribe()
+      window.removeEventListener('local-notebook-sync-updated', onSyncUpdated)
+      window.removeEventListener('local-notebook-updated', onSyncUpdated)
+    }
+  }, [docUri, store])
 
-  const presentation = syncIndicatorPresentation(syncState);
+  const presentation = syncIndicatorPresentation(syncState)
   const handleClick = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
+      event.preventDefault()
+      event.stopPropagation()
       if (!store || !presentation.clickable) {
-        return;
+        return
+      }
+      if (syncState?.status === 'conflicted') {
+        void openNotebookConflictDiff(store, docUri).catch((error) => {
+          appLogger.warn('Notebook conflict diff failed to open', {
+            attrs: {
+              scope: 'storage.local.sync',
+              localUri: docUri,
+              error: String(error),
+            },
+          })
+          showToast({
+            message: 'Unable to open conflict diff. Please try again.',
+            tone: 'error',
+          })
+        })
+        return
       }
       void store.sync(docUri).catch((error) => {
-        appLogger.warn("Notebook tab immediate sync failed", {
+        appLogger.warn('Notebook tab immediate sync failed', {
           attrs: {
-            scope: "storage.local.sync",
+            scope: 'storage.local.sync',
             localUri: docUri,
             error: String(error),
           },
-        });
-      });
+        })
+      })
     },
-    [docUri, presentation.clickable, store],
-  );
+    [docUri, presentation.clickable, store, syncState?.status]
+  )
 
-  if (!store || !docUri.startsWith("local://file/")) {
-    return null;
+  if (!store || !docUri.startsWith('local://file/')) {
+    return null
   }
 
   return (
@@ -253,7 +273,7 @@ function NotebookSyncIndicator({ docUri }: { docUri: string }) {
         className={`block h-2.5 w-2.5 rounded-full ${presentation.className}`}
       />
     </button>
-  );
+  )
 }
 
 /** Compact icon-only run button that sits in the cell toolbar.
@@ -262,16 +282,16 @@ function RunActionButton({
   pid,
   onClick,
 }: {
-  pid: number | null;
-  onClick: () => void;
+  pid: number | null
+  onClick: () => void
 }) {
-  const isRunning = pid !== null;
+  const isRunning = pid !== null
 
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={isRunning ? "Running..." : "Run code"}
+      aria-label={isRunning ? 'Running...' : 'Run code'}
       className="icon-btn h-7 w-7"
     >
       {isRunning ? (
@@ -282,128 +302,134 @@ function RunActionButton({
         <PlayIcon />
       )}
     </button>
-  );
+  )
 }
 
 // Action is an editor and an optional Runme console
 const LANGUAGE_OPTIONS = [
-  { label: "Markdown", value: "markdown" },
-  { label: "HTML", value: "html" },
-  { label: "Bash", value: "bash" },
-  { label: "Jupyter", value: "jupyter" },
-  { label: "Python", value: "python" },
-  { label: "JS", value: "javascript" },
-] as const;
+  { label: 'Markdown', value: 'markdown' },
+  { label: 'HTML', value: 'html' },
+  { label: 'Bash', value: 'bash' },
+  { label: 'Jupyter', value: 'jupyter' },
+  { label: 'Python', value: 'python' },
+  { label: 'JS', value: 'javascript' },
+] as const
 
 const JAVASCRIPT_RUNNER_OPTIONS = [
-  { label: "browser", value: APPKERNEL_RUNNER_NAME },
-  { label: "sandbox", value: APPKERNEL_SANDBOX_RUNNER_NAME },
-] as const;
+  { label: 'browser', value: APPKERNEL_RUNNER_NAME },
+  { label: 'sandbox', value: APPKERNEL_SANDBOX_RUNNER_NAME },
+] as const
 
 type SupportedLanguage =
-  | "bash"
-  | "html"
-  | "jupyter"
-  | "javascript"
-  | "markdown"
-  | "python";
+  | 'bash'
+  | 'html'
+  | 'jupyter'
+  | 'javascript'
+  | 'markdown'
+  | 'python'
 
-const outputTextDecoder = new TextDecoder();
-const ALWAYS_SKIP_MIMES = new Set<string>([MimeType.StatefulRunmeTerminal]);
+const outputTextDecoder = new TextDecoder()
+const ALWAYS_SKIP_MIMES = new Set<string>([MimeType.StatefulRunmeTerminal])
 
-function normalizeBinaryData(data?: Uint8Array | ArrayLike<number> | null): Uint8Array {
+function normalizeBinaryData(
+  data?: Uint8Array | ArrayLike<number> | null
+): Uint8Array {
   if (!data) {
-    return new Uint8Array();
+    return new Uint8Array()
   }
-  return data instanceof Uint8Array ? data : Uint8Array.from(data);
+  return data instanceof Uint8Array ? data : Uint8Array.from(data)
 }
 
 function isGoogleDriveFileUri(uri: string | null | undefined): uri is string {
   if (!uri) {
-    return false;
+    return false
   }
-  let url: URL;
+  let url: URL
   try {
-    url = new URL(uri);
+    url = new URL(uri)
   } catch {
-    return false;
+    return false
   }
   if (!/(^|\.)drive\.google\.com$/i.test(url.hostname)) {
-    return false;
+    return false
   }
   try {
-    return parseDriveItem(uri).type === NotebookStoreItemType.File;
+    return parseDriveItem(uri).type === NotebookStoreItemType.File
   } catch {
-    return false;
+    return false
   }
 }
 
 function normalizeLanguageId(
   kind: parser_pb.CellKind,
-  languageId?: string | null,
+  languageId?: string | null
 ): SupportedLanguage {
   switch (kind) {
     case parser_pb.CellKind.CODE:
-      const normalized = (languageId ?? "").toLowerCase();
+      const normalized = (languageId ?? '').toLowerCase()
       if (isMarkdownLanguageId(normalized)) {
-        return "markdown";
+        return 'markdown'
       }
       if (isHtmlLanguageId(normalized)) {
-        return "html";
+        return 'html'
       }
-      if (normalized === "python" || normalized === "py") {
-        return "python";
+      if (normalized === 'python' || normalized === 'py') {
+        return 'python'
       }
-      if (normalized === "jupyter" || normalized === "ipython") {
-        return "jupyter";
+      if (normalized === 'jupyter' || normalized === 'ipython') {
+        return 'jupyter'
       }
       if (
-        normalized === "javascript" ||
-        normalized === "typescript" ||
-        normalized === "js" ||
-        normalized === "ts" ||
-        normalized === "observable" ||
-        normalized === "d3"
+        normalized === 'javascript' ||
+        normalized === 'typescript' ||
+        normalized === 'js' ||
+        normalized === 'ts' ||
+        normalized === 'observable' ||
+        normalized === 'd3'
       ) {
-        return "javascript";
+        return 'javascript'
       }
-      return "bash";
+      return 'bash'
     case parser_pb.CellKind.MARKUP:
-      return "markdown";
+      return 'markdown'
     default:
-      return "bash";
+      return 'bash'
   }
 }
 
-function decodeOutputText(data?: Uint8Array | ArrayLike<number> | null): string {
-  const normalized = normalizeBinaryData(data);
+function decodeOutputText(
+  data?: Uint8Array | ArrayLike<number> | null
+): string {
+  const normalized = normalizeBinaryData(data)
   if (normalized.length === 0) {
-    return "";
+    return ''
   }
   try {
-    return outputTextDecoder.decode(normalized);
+    return outputTextDecoder.decode(normalized)
   } catch {
-    return "";
+    return ''
   }
 }
 
-function uint8ArrayToBase64(data?: Uint8Array | ArrayLike<number> | null): string {
-  const normalized = normalizeBinaryData(data);
+function uint8ArrayToBase64(
+  data?: Uint8Array | ArrayLike<number> | null
+): string {
+  const normalized = normalizeBinaryData(data)
   if (normalized.length === 0) {
-    return "";
+    return ''
   }
 
-  let binary = "";
-  const chunkSize = 0x8000;
+  let binary = ''
+  const chunkSize = 0x8000
   for (let i = 0; i < normalized.length; i += chunkSize) {
-    const chunk = normalized.subarray(i, i + chunkSize);
-    binary += String.fromCharCode(...chunk);
+    const chunk = normalized.subarray(i, i + chunkSize)
+    binary += String.fromCharCode(...chunk)
   }
 
-  if (typeof globalThis.btoa === "function") {
-    return globalThis.btoa(binary);
+  if (typeof globalThis.btoa === 'function') {
+    return globalThis.btoa(binary)
   }
-  return "";
+  return ''
 }
 
 function ActionOutputItemView({
@@ -411,20 +437,20 @@ function ActionOutputItemView({
   outputIndex,
   itemIndex,
 }: {
-  item: parser_pb.CellOutputItem;
-  outputIndex: number;
-  itemIndex: number;
+  item: parser_pb.CellOutputItem
+  outputIndex: number
+  itemIndex: number
 }) {
-  const mime = item.mime || "";
-  const text = decodeOutputText(item.data ?? new Uint8Array());
-  const isStreaming = item.metadata?.[IOPUB_INCOMPLETE_METADATA_KEY] === "true";
+  const mime = item.mime || ''
+  const text = decodeOutputText(item.data ?? new Uint8Array())
+  const isStreaming = item.metadata?.[IOPUB_INCOMPLETE_METADATA_KEY] === 'true'
   const hasIopubMetadata =
-    item.metadata?.[IOPUB_INCOMPLETE_METADATA_KEY] === "true" ||
-    item.metadata?.[IOPUB_INCOMPLETE_METADATA_KEY] === "false";
+    item.metadata?.[IOPUB_INCOMPLETE_METADATA_KEY] === 'true' ||
+    item.metadata?.[IOPUB_INCOMPLETE_METADATA_KEY] === 'false'
 
-  let content: React.ReactNode = null;
+  let content: React.ReactNode = null
 
-  if (mime === "text/html") {
+  if (mime === 'text/html') {
     content = (
       <iframe
         title={`cell-output-${outputIndex}-${itemIndex}`}
@@ -432,27 +458,27 @@ function ActionOutputItemView({
         srcDoc={text}
         className="h-[420px] w-full rounded-md border border-nb-cell-border bg-white"
       />
-    );
+    )
   } else if (
-    mime === "image/png" ||
-    mime === "image/jpeg" ||
-    mime === "image/svg+xml"
+    mime === 'image/png' ||
+    mime === 'image/jpeg' ||
+    mime === 'image/svg+xml'
   ) {
-    const base64 = uint8ArrayToBase64(item.data ?? new Uint8Array());
-    const src = `data:${mime};base64,${base64}`;
+    const base64 = uint8ArrayToBase64(item.data ?? new Uint8Array())
+    const src = `data:${mime};base64,${base64}`
     content = (
       <img
         alt={`Cell output ${outputIndex}-${itemIndex}`}
         src={src}
         className="max-h-[480px] w-full rounded-md border border-nb-cell-border bg-white object-contain"
       />
-    );
+    )
   } else {
     content = (
       <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-nb-text">
         {text}
       </pre>
-    );
+    )
   }
 
   return (
@@ -462,42 +488,45 @@ function ActionOutputItemView({
     >
       <div className="text-[10px] font-medium uppercase tracking-wide text-nb-text-faint">
         Output {outputIndex} / Item {itemIndex} - mime={mime}
-        {hasIopubMetadata ? (isStreaming ? " (streaming)" : " (complete)") : ""}
+        {hasIopubMetadata ? (isStreaming ? ' (streaming)' : ' (complete)') : ''}
       </div>
       <div className="mt-2">{content}</div>
     </div>
-  );
+  )
 }
 
 export function ActionOutputItems({
   outputs,
   suppressStdText = false,
 }: {
-  outputs: parser_pb.CellOutput[];
-  suppressStdText?: boolean;
+  outputs: parser_pb.CellOutput[]
+  suppressStdText?: boolean
 }) {
   const hasTerminalOutput = outputs.some((output) =>
-    (output.items ?? []).some((item) => item?.mime === MimeType.StatefulRunmeTerminal),
-  );
+    (output.items ?? []).some(
+      (item) => item?.mime === MimeType.StatefulRunmeTerminal
+    )
+  )
 
   const displayableItems = outputs.flatMap((output, outputIndex) =>
     (output.items ?? [])
       .map((item, itemIndex) => {
         if (!item) {
-          return null;
+          return null
         }
-        const mime = item.mime || "";
+        const mime = item.mime || ''
         if (ALWAYS_SKIP_MIMES.has(mime)) {
-          return null;
+          return null
         }
         if (
           (hasTerminalOutput || suppressStdText) &&
-          (mime === MimeType.VSCodeNotebookStdOut || mime === MimeType.VSCodeNotebookStdErr)
+          (mime === MimeType.VSCodeNotebookStdOut ||
+            mime === MimeType.VSCodeNotebookStdErr)
         ) {
-          return null;
+          return null
         }
         if (normalizeBinaryData(item.data).length === 0) {
-          return null;
+          return null
         }
         return (
           <ActionOutputItemView
@@ -506,565 +535,601 @@ export function ActionOutputItems({
             outputIndex={outputIndex}
             itemIndex={itemIndex}
           />
-        );
+        )
       })
-      .filter(Boolean),
-  );
+      .filter(Boolean)
+  )
 
   if (displayableItems.length === 0) {
-    return null;
+    return null
   }
 
-  return <div className="mt-2 space-y-2">{displayableItems}</div>;
+  return <div className="mt-2 space-y-2">{displayableItems}</div>
 }
 
 export function Action({
   cellData,
-  docUri = "",
+  docUri = '',
   isFirst,
   isActiveCell = false,
-  activeFocusRole = "editor",
+  activeFocusRole = 'editor',
   isWindowFocused = false,
   onFocusStateChange,
 }: {
-  cellData: CellData;
-  docUri?: string;
-  isFirst: boolean;
-  isActiveCell?: boolean;
-  activeFocusRole?: CellFocusRole;
-  isWindowFocused?: boolean;
-  onFocusStateChange?: (state: NotebookActiveCellState) => void;
+  cellData: CellData
+  docUri?: string
+  isFirst: boolean
+  isActiveCell?: boolean
+  activeFocusRole?: CellFocusRole
+  isWindowFocused?: boolean
+  onFocusStateChange?: (state: NotebookActiveCellState) => void
 }) {
-  const { store } = useNotebookStore();
-  const { listRunners, defaultRunnerName } = useRunners();
-  const jupyterManager = useMemo(() => getJupyterManager(), []);
+  const { store } = useNotebookStore()
+  const { listRunners, defaultRunnerName } = useRunners()
+  const jupyterManager = useMemo(() => getJupyterManager(), [])
   const jupyterVersion = useSyncExternalStore(
-    useCallback((listener) => jupyterManager.subscribe(listener), [jupyterManager]),
+    useCallback(
+      (listener) => jupyterManager.subscribe(listener),
+      [jupyterManager]
+    ),
     useCallback(() => jupyterManager.getVersion(), [jupyterManager]),
-    useCallback(() => jupyterManager.getVersion(), [jupyterManager]),
-  );
+    useCallback(() => jupyterManager.getVersion(), [jupyterManager])
+  )
   const cell = useSyncExternalStore(
     useCallback(
       (listener) => cellData.subscribeToContentChange(listener),
-      [cellData],
+      [cellData]
     ),
     useCallback(() => cellData.snapshot, [cellData]),
-    useCallback(() => cellData.snapshot, [cellData]),
-  );
+    useCallback(() => cellData.snapshot, [cellData])
+  )
   // Derive runID from the current cell snapshot so clear/reset operations
   // immediately repaint output visibility without requiring a separate listener.
-  const runID = cellData.getRunID();
+  const runID = cellData.getRunID()
 
   const handleAddCellBefore = useCallback(() => {
-    cellData.addBefore(parser_pb.CellKind.CODE, cell?.languageId);
-  }, [cell?.languageId, cellData]);
+    cellData.addBefore(parser_pb.CellKind.CODE, cell?.languageId)
+  }, [cell?.languageId, cellData])
 
   const handleAddCellAfter = useCallback(() => {
-    cellData.addAfter(parser_pb.CellKind.CODE, cell?.languageId);
-  }, [cell?.languageId, cellData]);
+    cellData.addAfter(parser_pb.CellKind.CODE, cell?.languageId)
+  }, [cell?.languageId, cellData])
 
   const updateCellLocal = useCallback(
     (nextCell: parser_pb.Cell) => {
-      cellData.update(nextCell);
+      cellData.update(nextCell)
     },
-    [cellData],
-  );
+    [cellData]
+  )
 
   const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-  } | null>(null);
-  const [shareRemoteUri, setShareRemoteUri] = useState<string | null>(null);
-  const [htmlEditRequest, setHtmlEditRequest] = useState(0);
-  const [markdownEditRequest, setMarkdownEditRequest] = useState(0);
-  const [pid, setPid] = useState<number | null>(null);
-  const [exitCode, setExitCode] = useState<number | null>(null);
+    x: number
+    y: number
+  } | null>(null)
+  const [shareRemoteUri, setShareRemoteUri] = useState<string | null>(null)
+  const [htmlEditRequest, setHtmlEditRequest] = useState(0)
+  const [markdownEditRequest, setMarkdownEditRequest] = useState(0)
+  const [pid, setPid] = useState<number | null>(null)
+  const [exitCode, setExitCode] = useState<number | null>(null)
 
   useEffect(() => {
-    if (!store || !docUri.startsWith("local://")) {
-      setShareRemoteUri(null);
-      return;
+    if (!store || !docUri.startsWith('local://')) {
+      setShareRemoteUri(null)
+      return
     }
 
-    let cancelled = false;
+    let cancelled = false
     void (async () => {
       try {
-        const metadata = await store.getMetadata(docUri);
+        const metadata = await store.getMetadata(docUri)
         if (!cancelled) {
-          setShareRemoteUri(metadata?.remoteUri ?? null);
+          setShareRemoteUri(metadata?.remoteUri ?? null)
         }
       } catch {
         if (!cancelled) {
-          setShareRemoteUri(null);
+          setShareRemoteUri(null)
         }
       }
-    })();
+    })()
 
     return () => {
-      cancelled = true;
-    };
-  }, [docUri, store]);
+      cancelled = true
+    }
+  }, [docUri, store])
 
   // When an exit code arrives, clear the pid so the spinner stops.
   const handleExitCode = useCallback((code: number | null) => {
-    setExitCode(code);
+    setExitCode(code)
     if (code !== null) {
-      setPid(null);
+      setPid(null)
     }
-  }, []);
+  }, [])
 
   useEffect(() => {
     if (!contextMenu) {
-      return;
+      return
     }
 
-    const handleClick = () => setContextMenu(null);
+    const handleClick = () => setContextMenu(null)
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setContextMenu(null);
+      if (event.key === 'Escape') {
+        setContextMenu(null)
       }
-    };
+    }
 
-    window.addEventListener("click", handleClick);
-    window.addEventListener("keydown", handleKey);
+    window.addEventListener('click', handleClick)
+    window.addEventListener('keydown', handleKey)
 
     return () => {
-      window.removeEventListener("click", handleClick);
-      window.removeEventListener("keydown", handleKey);
-    };
-  }, [contextMenu]);
+      window.removeEventListener('click', handleClick)
+      window.removeEventListener('keydown', handleKey)
+    }
+  }, [contextMenu])
 
   const adjustedContextMenu = useMemo(() => {
     if (!contextMenu) {
-      return null;
+      return null
     }
 
-    if (typeof window === "undefined") {
-      return contextMenu;
+    if (typeof window === 'undefined') {
+      return contextMenu
     }
 
-    const menuWidth = 200;
-    const menuHeight = shareRemoteUri ? 88 : 48;
+    const menuWidth = 200
+    const menuHeight = shareRemoteUri ? 88 : 48
     const left = Math.max(
       0,
-      Math.min(contextMenu.x, window.innerWidth - menuWidth),
-    );
+      Math.min(contextMenu.x, window.innerWidth - menuWidth)
+    )
     const top = Math.max(
       0,
-      Math.min(contextMenu.y, window.innerHeight - menuHeight),
-    );
-    return { x: left, y: top };
-  }, [contextMenu, shareRemoteUri]);
+      Math.min(contextMenu.y, window.innerHeight - menuHeight)
+    )
+    return { x: left, y: top }
+  }, [contextMenu, shareRemoteUri])
 
   const runCode = useCallback(() => {
-    cellData.run();
-  }, [cellData]);
+    cellData.run()
+  }, [cellData])
 
   const handleContextMenu = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
-      setContextMenu({ x: event.clientX, y: event.clientY });
+      event.preventDefault()
+      event.stopPropagation()
+      setContextMenu({ x: event.clientX, y: event.clientY })
     },
-    [],
-  );
+    []
+  )
 
   const handleFocusCapture = useCallback(
     (event: React.FocusEvent<HTMLDivElement>) => {
       if (!cell?.refId || !onFocusStateChange) {
-        return;
+        return
       }
-      const target = event.target;
+      const target = event.target
       if (!(target instanceof HTMLElement)) {
-        return;
+        return
       }
       const focusRoleElement = target.closest<HTMLElement>(
-        "[data-cell-focus-role]",
-      );
+        '[data-cell-focus-role]'
+      )
       if (!focusRoleElement) {
-        return;
+        return
       }
       const focusRole =
-        focusRoleElement.dataset.cellFocusRole === "rendered"
-          ? "rendered"
-          : "editor";
-      const nextState = createNotebookActiveCellState(cell.refId, focusRole);
+        focusRoleElement.dataset.cellFocusRole === 'rendered'
+          ? 'rendered'
+          : 'editor'
+      const nextState = createNotebookActiveCellState(cell.refId, focusRole)
       if (!nextState) {
-        return;
+        return
       }
-      onFocusStateChange(nextState);
+      onFocusStateChange(nextState)
     },
-    [cell?.refId, onFocusStateChange],
-  );
+    [cell?.refId, onFocusStateChange]
+  )
 
   const handleMarkdownFocusRoleChange = useCallback(
     (focusRole: CellFocusRole) => {
       if (!cell?.refId || !onFocusStateChange) {
-        return;
+        return
       }
-      const nextState = createNotebookActiveCellState(cell.refId, focusRole);
+      const nextState = createNotebookActiveCellState(cell.refId, focusRole)
       if (!nextState) {
-        return;
+        return
       }
-      onFocusStateChange(nextState);
+      onFocusStateChange(nextState)
     },
-    [cell?.refId, onFocusStateChange],
-  );
+    [cell?.refId, onFocusStateChange]
+  )
 
   const handleRemoveCell = useCallback(() => {
-    cellData.remove();
-    setContextMenu(null);
-  }, [cellData]);
+    cellData.remove()
+    setContextMenu(null)
+  }, [cellData])
 
   const handleCopyShareLink = useCallback(async () => {
     if (!shareRemoteUri) {
-      setContextMenu(null);
-      return;
+      setContextMenu(null)
+      return
     }
 
     try {
-      await copyNotebookShareUrl(shareRemoteUri);
+      await copyNotebookShareUrl(shareRemoteUri)
     } catch (error) {
-      appLogger.error("Failed to copy notebook share link from document menu", {
+      appLogger.error('Failed to copy notebook share link from document menu', {
         attrs: {
-          scope: "storage.drive.share",
-          code: "DRIVE_SHARE_LINK_COPY_FAILED",
+          scope: 'storage.drive.share',
+          code: 'DRIVE_SHARE_LINK_COPY_FAILED',
           remoteUri: shareRemoteUri,
           error: String(error),
         },
-      });
+      })
     } finally {
-      setContextMenu(null);
+      setContextMenu(null)
     }
-  }, [shareRemoteUri]);
+  }, [shareRemoteUri])
 
   const sequenceLabel = useMemo(() => {
     if (!cell) {
-      return " ";
+      return ' '
     }
-    const seq = Number(cell.metadata[RunmeMetadataKey.Sequence]);
+    const seq = Number(cell.metadata[RunmeMetadataKey.Sequence])
     if (!seq) {
-      return " ";
+      return ' '
     }
-    return seq.toString();
-  }, [cell, pid, exitCode]);
+    return seq.toString()
+  }, [cell, pid, exitCode])
 
   const selectedLanguage = useMemo(() => {
     if (!cell) {
-      return "bash";
+      return 'bash'
     }
-    return normalizeLanguageId(cell.kind, cell.languageId);
-  }, [cell]);
+    return normalizeLanguageId(cell.kind, cell.languageId)
+  }, [cell])
 
   const editorLanguage = useMemo(() => {
     switch (selectedLanguage) {
-      case "html":
-        return "html";
-      case "markdown":
-        return "markdown";
-      case "javascript":
-        return "javascript";
-      case "jupyter":
-        return "python";
-      case "python":
-        return "python";
+      case 'html':
+        return 'html'
+      case 'markdown':
+        return 'markdown'
+      case 'javascript':
+        return 'javascript'
+      case 'jupyter':
+        return 'python'
+      case 'python':
+        return 'python'
       default:
-        return "shellscript";
+        return 'shellscript'
     }
-  }, [selectedLanguage]);
+  }, [selectedLanguage])
 
   const languageSelectId = useMemo(
-    () => `language-select-${cell?.refId ?? "unknown"}`,
-    [cell?.refId],
-  );
+    () => `language-select-${cell?.refId ?? 'unknown'}`,
+    [cell?.refId]
+  )
   const runnerSelectId = useMemo(
-    () => `runner-select-${cell?.refId ?? "unknown"}`,
-    [cell?.refId],
-  );
+    () => `runner-select-${cell?.refId ?? 'unknown'}`,
+    [cell?.refId]
+  )
   const kernelSelectId = useMemo(
-    () => `kernel-select-${cell?.refId ?? "unknown"}`,
-    [cell?.refId],
-  );
+    () => `kernel-select-${cell?.refId ?? 'unknown'}`,
+    [cell?.refId]
+  )
 
-  var initialRunnerName = cellData.getRunnerName();
+  var initialRunnerName = cellData.getRunnerName()
   if (!initialRunnerName) {
-    initialRunnerName = DEFAULT_RUNNER_PLACEHOLDER;
+    initialRunnerName = DEFAULT_RUNNER_PLACEHOLDER
   }
-  const isJavascriptLanguage = selectedLanguage === "javascript";
+  const isJavascriptLanguage = selectedLanguage === 'javascript'
   const runnerSelectionName =
-    selectedLanguage === "jupyter" && isAppKernelRunnerName(initialRunnerName)
+    selectedLanguage === 'jupyter' && isAppKernelRunnerName(initialRunnerName)
       ? DEFAULT_RUNNER_PLACEHOLDER
-      : initialRunnerName;
+      : initialRunnerName
   const resolvedRunnerName =
     runnerSelectionName === DEFAULT_RUNNER_PLACEHOLDER
-      ? (defaultRunnerName ?? "")
-      : runnerSelectionName;
+      ? (defaultRunnerName ?? '')
+      : runnerSelectionName
   const showRunnerSelector =
-    selectedLanguage === "bash" ||
-    selectedLanguage === "python" ||
-    isJavascriptLanguage;
-  const showKernelSelector = selectedLanguage === "jupyter";
-  const runnerSelectValue =
+    selectedLanguage === 'bash' ||
+    selectedLanguage === 'python' ||
     isJavascriptLanguage
-      ? initialRunnerName === APPKERNEL_SANDBOX_RUNNER_NAME
-        ? APPKERNEL_SANDBOX_RUNNER_NAME
-        : APPKERNEL_RUNNER_NAME
-      : isAppKernelRunnerName(initialRunnerName)
-        ? DEFAULT_RUNNER_PLACEHOLDER
-        : initialRunnerName;
+  const showKernelSelector = selectedLanguage === 'jupyter'
+  const runnerSelectValue = isJavascriptLanguage
+    ? initialRunnerName === APPKERNEL_SANDBOX_RUNNER_NAME
+      ? APPKERNEL_SANDBOX_RUNNER_NAME
+      : APPKERNEL_RUNNER_NAME
+    : isAppKernelRunnerName(initialRunnerName)
+      ? DEFAULT_RUNNER_PLACEHOLDER
+      : initialRunnerName
   const hasJupyterSelection =
     Boolean(cell?.metadata?.[RunmeMetadataKey.JupyterServerName]) ||
     Boolean(cell?.metadata?.[RunmeMetadataKey.JupyterKernelID]) ||
-    Boolean(cell?.metadata?.[RunmeMetadataKey.JupyterKernelName]);
+    Boolean(cell?.metadata?.[RunmeMetadataKey.JupyterKernelName])
   const availableRunnerNames = useMemo(
-    () => listRunners().map((runner) => runner.name).filter((name) => !isAppKernelRunnerName(name)),
-    [listRunners],
-  );
+    () =>
+      listRunners()
+        .map((runner) => runner.name)
+        .filter((name) => !isAppKernelRunnerName(name)),
+    [listRunners]
+  )
   const jupyterRunnerNames = useMemo(() => {
-    const names = new Set<string>();
+    const names = new Set<string>()
     if (resolvedRunnerName) {
-      names.add(resolvedRunnerName);
+      names.add(resolvedRunnerName)
     }
-    availableRunnerNames.forEach((name) => names.add(name));
-    return [...names];
-  }, [availableRunnerNames, resolvedRunnerName]);
+    availableRunnerNames.forEach((name) => names.add(name))
+    return [...names]
+  }, [availableRunnerNames, resolvedRunnerName])
 
   useEffect(() => {
-    if (selectedLanguage !== "jupyter") {
-      return;
+    if (selectedLanguage !== 'jupyter') {
+      return
     }
     if (jupyterRunnerNames.length === 0) {
-      return;
+      return
     }
     void Promise.all(
       jupyterRunnerNames.map((runnerName) =>
         jupyterManager.ensureRunnerData(runnerName).catch((error) => {
-          console.error("Failed to load Jupyter kernels for runner", {
+          console.error('Failed to load Jupyter kernels for runner', {
             runner: runnerName,
             error,
-          });
-        }),
-      ),
-    );
-  }, [jupyterManager, jupyterRunnerNames, resolvedRunnerName, selectedLanguage]);
+          })
+        })
+      )
+    )
+  }, [jupyterManager, jupyterRunnerNames, resolvedRunnerName, selectedLanguage])
 
   useEffect(() => {
-    if (selectedLanguage === "javascript" && !isAppKernelRunnerName(initialRunnerName)) {
-      cellData.setRunner(APPKERNEL_RUNNER_NAME);
+    if (
+      selectedLanguage === 'javascript' &&
+      !isAppKernelRunnerName(initialRunnerName)
+    ) {
+      cellData.setRunner(APPKERNEL_RUNNER_NAME)
       if (hasJupyterSelection) {
-        cellData.clearJupyterKernel();
+        cellData.clearJupyterKernel()
       }
-      return;
+      return
     }
-    if (selectedLanguage === "markdown") {
+    if (selectedLanguage === 'markdown') {
       if (initialRunnerName !== DEFAULT_RUNNER_PLACEHOLDER) {
-        cellData.setRunner(DEFAULT_RUNNER_PLACEHOLDER);
+        cellData.setRunner(DEFAULT_RUNNER_PLACEHOLDER)
       }
       if (hasJupyterSelection) {
-        cellData.clearJupyterKernel();
+        cellData.clearJupyterKernel()
       }
-      return;
+      return
     }
-    if (selectedLanguage === "html") {
+    if (selectedLanguage === 'html') {
       if (initialRunnerName !== DEFAULT_RUNNER_PLACEHOLDER) {
-        cellData.setRunner(DEFAULT_RUNNER_PLACEHOLDER);
+        cellData.setRunner(DEFAULT_RUNNER_PLACEHOLDER)
       }
       if (hasJupyterSelection) {
-        cellData.clearJupyterKernel();
+        cellData.clearJupyterKernel()
       }
-      return;
+      return
     }
-    if (selectedLanguage === "jupyter" && isAppKernelRunnerName(initialRunnerName)) {
-      cellData.setRunner(DEFAULT_RUNNER_PLACEHOLDER);
+    if (
+      selectedLanguage === 'jupyter' &&
+      isAppKernelRunnerName(initialRunnerName)
+    ) {
+      cellData.setRunner(DEFAULT_RUNNER_PLACEHOLDER)
       if (hasJupyterSelection) {
-        cellData.clearJupyterKernel();
+        cellData.clearJupyterKernel()
       }
     }
-  }, [cellData, hasJupyterSelection, initialRunnerName, selectedLanguage]);
+  }, [cellData, hasJupyterSelection, initialRunnerName, selectedLanguage])
 
   const kernelOptions = useMemo(() => {
     if (!showKernelSelector || jupyterRunnerNames.length === 0) {
-      return [];
+      return []
     }
-    const deduped = new Map<string, ReturnType<typeof jupyterManager.getKernelOptionsForRunner>[number]>();
+    const deduped = new Map<
+      string,
+      ReturnType<typeof jupyterManager.getKernelOptionsForRunner>[number]
+    >()
     jupyterRunnerNames.forEach((runnerName) => {
       try {
-        const options = jupyterManager.getKernelOptionsForRunner(runnerName);
+        const options = jupyterManager.getKernelOptionsForRunner(runnerName)
         options.forEach((option) => {
-          deduped.set(option.key, option);
-        });
+          deduped.set(option.key, option)
+        })
       } catch (error) {
-        console.error("Failed to build Jupyter kernel options for runner", {
+        console.error('Failed to build Jupyter kernel options for runner', {
           runner: runnerName,
           error,
-        });
+        })
       }
-    });
+    })
     return [...deduped.values()].sort(
       (a, b) =>
         a.label.localeCompare(b.label) ||
-        a.runnerName.localeCompare(b.runnerName),
-    );
-  }, [jupyterManager, jupyterRunnerNames, jupyterVersion, showKernelSelector]);
+        a.runnerName.localeCompare(b.runnerName)
+    )
+  }, [jupyterManager, jupyterRunnerNames, jupyterVersion, showKernelSelector])
   const selectedKernelKey = useMemo(() => {
     const serverName =
-      (cell?.metadata?.[RunmeMetadataKey.JupyterServerName] as string | undefined) ?? "";
+      (cell?.metadata?.[RunmeMetadataKey.JupyterServerName] as
+        | string
+        | undefined) ?? ''
     const kernelID =
-      (cell?.metadata?.[RunmeMetadataKey.JupyterKernelID] as string | undefined) ?? "";
+      (cell?.metadata?.[RunmeMetadataKey.JupyterKernelID] as
+        | string
+        | undefined) ?? ''
     if (!serverName || !kernelID) {
-      return "";
+      return ''
     }
     const runnerName =
-      (cell?.metadata?.[RunmeMetadataKey.RunnerName] as string | undefined) ?? "";
+      (cell?.metadata?.[RunmeMetadataKey.RunnerName] as string | undefined) ??
+      ''
     if (runnerName && !isAppKernelRunnerName(runnerName)) {
-      return jupyterManager.getKernelOptionKey(serverName, kernelID, runnerName);
+      return jupyterManager.getKernelOptionKey(serverName, kernelID, runnerName)
     }
     if (resolvedRunnerName) {
-      return jupyterManager.getKernelOptionKey(serverName, kernelID, resolvedRunnerName);
+      return jupyterManager.getKernelOptionKey(
+        serverName,
+        kernelID,
+        resolvedRunnerName
+      )
     }
-    return jupyterManager.getKernelOptionKey(serverName, kernelID);
-  }, [cell, jupyterManager, resolvedRunnerName]);
+    return jupyterManager.getKernelOptionKey(serverName, kernelID)
+  }, [cell, jupyterManager, resolvedRunnerName])
 
   useEffect(() => {
-    if (selectedLanguage !== "jupyter") {
-      return;
+    if (selectedLanguage !== 'jupyter') {
+      return
     }
     if (selectedKernelKey) {
-      return;
+      return
     }
     if (kernelOptions.length !== 1) {
-      return;
+      return
     }
-    const option = kernelOptions[0];
-    const parsed = jupyterManager.parseKernelOptionKey(option.key);
+    const option = kernelOptions[0]
+    const parsed = jupyterManager.parseKernelOptionKey(option.key)
     if (!parsed) {
-      return;
+      return
     }
     cellData.setJupyterKernel({
       runnerName: option.runnerName,
       serverName: parsed.serverName,
       kernelId: parsed.kernelId,
       kernelName: option.label,
-    });
+    })
   }, [
     cellData,
     jupyterManager,
     kernelOptions,
     selectedKernelKey,
     selectedLanguage,
-  ]);
+  ])
 
   const renderedOutputs = useMemo(() => {
     const hasTerminalOutput = (cell?.outputs ?? []).some((output) =>
-      (output.items ?? []).some((item) => item.mime === MimeType.StatefulRunmeTerminal),
-    );
-    const hasActiveStream = Boolean(cellData.getStreams());
+      (output.items ?? []).some(
+        (item) => item.mime === MimeType.StatefulRunmeTerminal
+      )
+    )
+    const hasActiveStream = Boolean(cellData.getStreams())
     if (!hasTerminalOutput && !hasActiveStream) {
-      return null;
+      return null
     }
 
     return (
       <CellConsole
-        key={`console-${cell?.refId ?? "cell"}-${runID}`}
+        key={`console-${cell?.refId ?? 'cell'}-${runID}`}
         cellData={cellData}
         onPid={setPid}
         onExitCode={handleExitCode}
       />
-    );
-  }, [cell, cellData, handleExitCode, runID]);
+    )
+  }, [cell, cellData, handleExitCode, runID])
 
   const renderedOutputItems = useMemo(() => {
     if (!cell?.outputs || cell.outputs.length === 0) {
-      return null;
+      return null
     }
     return (
       <ActionOutputItems
         outputs={cell.outputs}
         suppressStdText={Boolean(cellData.getStreams())}
       />
-    );
-  }, [cell?.outputs, cellData]);
+    )
+  }, [cell?.outputs, cellData])
 
   const handleLanguageChange = useCallback(
     (event: ChangeEvent<HTMLSelectElement>) => {
       if (!cell) {
-        return;
+        return
       }
       const nextValue = event.target
-        .value as (typeof LANGUAGE_OPTIONS)[number]["value"];
+        .value as (typeof LANGUAGE_OPTIONS)[number]['value']
       if (nextValue === selectedLanguage) {
-        return;
+        return
       }
 
-      const updatedCell = create(parser_pb.CellSchema, cell);
-      updatedCell.metadata ??= {};
+      const updatedCell = create(parser_pb.CellSchema, cell)
+      updatedCell.metadata ??= {}
       const clearRuntimeMetadata = () => {
-        delete updatedCell.metadata[RunmeMetadataKey.RunnerName];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName];
-      };
-      if (nextValue === "markdown") {
-        setMarkdownEditRequest((request) => request + 1);
-        updatedCell.kind = parser_pb.CellKind.MARKUP;
-        updatedCell.languageId = "markdown";
-        clearRuntimeMetadata();
-      } else if (nextValue === "html") {
-        setHtmlEditRequest((request) => request + 1);
-        updatedCell.kind = parser_pb.CellKind.CODE;
-        updatedCell.languageId = "html";
-        clearRuntimeMetadata();
-      } else if (nextValue === "jupyter") {
-        updatedCell.kind = parser_pb.CellKind.CODE;
-        updatedCell.languageId = "jupyter";
-        clearRuntimeMetadata();
-      } else if (nextValue === "javascript") {
-        updatedCell.kind = parser_pb.CellKind.CODE;
-        updatedCell.languageId = "javascript";
-        updatedCell.metadata[RunmeMetadataKey.RunnerName] = APPKERNEL_RUNNER_NAME;
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName];
-      } else if (nextValue === "python") {
-        updatedCell.kind = parser_pb.CellKind.CODE;
-        updatedCell.languageId = "python";
-        if (isAppKernelRunnerName(updatedCell.metadata[RunmeMetadataKey.RunnerName])) {
-          delete updatedCell.metadata[RunmeMetadataKey.RunnerName];
+        delete updatedCell.metadata[RunmeMetadataKey.RunnerName]
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName]
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID]
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName]
+      }
+      if (nextValue === 'markdown') {
+        setMarkdownEditRequest((request) => request + 1)
+        updatedCell.kind = parser_pb.CellKind.MARKUP
+        updatedCell.languageId = 'markdown'
+        clearRuntimeMetadata()
+      } else if (nextValue === 'html') {
+        setHtmlEditRequest((request) => request + 1)
+        updatedCell.kind = parser_pb.CellKind.CODE
+        updatedCell.languageId = 'html'
+        clearRuntimeMetadata()
+      } else if (nextValue === 'jupyter') {
+        updatedCell.kind = parser_pb.CellKind.CODE
+        updatedCell.languageId = 'jupyter'
+        clearRuntimeMetadata()
+      } else if (nextValue === 'javascript') {
+        updatedCell.kind = parser_pb.CellKind.CODE
+        updatedCell.languageId = 'javascript'
+        updatedCell.metadata[RunmeMetadataKey.RunnerName] =
+          APPKERNEL_RUNNER_NAME
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName]
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID]
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName]
+      } else if (nextValue === 'python') {
+        updatedCell.kind = parser_pb.CellKind.CODE
+        updatedCell.languageId = 'python'
+        if (
+          isAppKernelRunnerName(
+            updatedCell.metadata[RunmeMetadataKey.RunnerName]
+          )
+        ) {
+          delete updatedCell.metadata[RunmeMetadataKey.RunnerName]
         }
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName]
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID]
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName]
       } else {
-        updatedCell.kind = parser_pb.CellKind.CODE;
-        updatedCell.languageId = "bash";
-        if (isAppKernelRunnerName(updatedCell.metadata[RunmeMetadataKey.RunnerName])) {
-          delete updatedCell.metadata[RunmeMetadataKey.RunnerName];
+        updatedCell.kind = parser_pb.CellKind.CODE
+        updatedCell.languageId = 'bash'
+        if (
+          isAppKernelRunnerName(
+            updatedCell.metadata[RunmeMetadataKey.RunnerName]
+          )
+        ) {
+          delete updatedCell.metadata[RunmeMetadataKey.RunnerName]
         }
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID];
-        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName];
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterServerName]
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelID]
+        delete updatedCell.metadata[RunmeMetadataKey.JupyterKernelName]
       }
 
-      updateCellLocal(updatedCell);
-      setPid(null);
-      setExitCode(null);
+      updateCellLocal(updatedCell)
+      setPid(null)
+      setExitCode(null)
     },
-    [cell, selectedLanguage, updateCellLocal],
-  );
+    [cell, selectedLanguage, updateCellLocal]
+  )
 
   // Determine if this cell is a markdown cell (either MARKUP kind or CODE with markdown language)
   const isMarkdownCell = useMemo(() => {
-    if (!cell) return false;
-    if (cell.kind === parser_pb.CellKind.MARKUP) return true;
-    return isMarkdownLanguageId(cell.languageId);
-  }, [cell]);
+    if (!cell) return false
+    if (cell.kind === parser_pb.CellKind.MARKUP) return true
+    return isMarkdownLanguageId(cell.languageId)
+  }, [cell])
   const isHtmlCell = useMemo(() => {
-    if (!cell) return false;
-    return cell.kind === parser_pb.CellKind.CODE && isHtmlLanguageId(cell.languageId);
-  }, [cell]);
+    if (!cell) return false
+    return (
+      cell.kind === parser_pb.CellKind.CODE && isHtmlLanguageId(cell.languageId)
+    )
+  }, [cell])
 
   if (!cell) {
-    return null;
+    return null
   }
 
   // Render markdown cells with in-place rendering (Jupyter-style)
@@ -1080,7 +1145,10 @@ export function Action({
         data-cell-ref-id={cell.refId}
       >
         {/* Left gutter: top + bottom add-cell buttons */}
-        <div id={`markdown-gutter-${cell.refId}`} className="flex w-7 shrink-0 flex-col items-center justify-between py-1">
+        <div
+          id={`markdown-gutter-${cell.refId}`}
+          className="flex w-7 shrink-0 flex-col items-center justify-between py-1"
+        >
           <button
             type="button"
             aria-label="Add cell above"
@@ -1138,8 +1206,8 @@ export function Action({
                 type="button"
                 className="ctx-menu-item"
                 onClick={(event) => {
-                  event.stopPropagation();
-                  void handleCopyShareLink();
+                  event.stopPropagation()
+                  void handleCopyShareLink()
                 }}
               >
                 Copy Share Link
@@ -1149,8 +1217,8 @@ export function Action({
               type="button"
               className="ctx-menu-item text-red-600"
               onClick={(event) => {
-                event.stopPropagation();
-                handleRemoveCell();
+                event.stopPropagation()
+                handleRemoveCell()
               }}
             >
               Remove Cell
@@ -1158,7 +1226,7 @@ export function Action({
           </div>
         )}
       </div>
-    );
+    )
   }
 
   if (isHtmlCell) {
@@ -1169,7 +1237,10 @@ export function Action({
         onContextMenu={handleContextMenu}
         data-testid="html-action"
       >
-        <div id={`html-gutter-${cell.refId}`} className="flex w-7 shrink-0 flex-col items-center justify-between py-1">
+        <div
+          id={`html-gutter-${cell.refId}`}
+          className="flex w-7 shrink-0 flex-col items-center justify-between py-1"
+        >
           <button
             type="button"
             aria-label="Add cell above"
@@ -1221,8 +1292,8 @@ export function Action({
                 type="button"
                 className="ctx-menu-item"
                 onClick={(event) => {
-                  event.stopPropagation();
-                  void handleCopyShareLink();
+                  event.stopPropagation()
+                  void handleCopyShareLink()
                 }}
               >
                 Copy Share Link
@@ -1232,8 +1303,8 @@ export function Action({
               type="button"
               className="ctx-menu-item text-red-600"
               onClick={(event) => {
-                event.stopPropagation();
-                handleRemoveCell();
+                event.stopPropagation()
+                handleRemoveCell()
               }}
             >
               Remove Cell
@@ -1241,7 +1312,7 @@ export function Action({
           </div>
         )}
       </div>
-    );
+    )
   }
 
   // Render code cells as a unified Marimo-style card: editor + toolbar + output
@@ -1257,7 +1328,10 @@ export function Action({
       data-cell-ref-id={cell.refId}
     >
       {/* Left gutter: top + bottom add-cell buttons */}
-      <div id={`code-gutter-${cell.refId}`} className="flex w-7 shrink-0 flex-col items-center justify-between py-1">
+      <div
+        id={`code-gutter-${cell.refId}`}
+        className="flex w-7 shrink-0 flex-col items-center justify-between py-1"
+      >
         <button
           type="button"
           aria-label="Add cell above"
@@ -1278,10 +1352,7 @@ export function Action({
 
       {/* Cell card: editor + toolbar + output */}
       <div className="min-w-0 flex-1">
-        <div
-          id={`cell-card-${cell.refId}`}
-          className="cell-card"
-        >
+        <div id={`cell-card-${cell.refId}`} className="cell-card">
           {/* Code editor section — overflow-hidden keeps border-radius clipping on the editor */}
           <div
             className="overflow-hidden rounded-t-nb-md"
@@ -1296,19 +1367,16 @@ export function Action({
               fontFamily={fontSettings.fontFamily}
               shouldFocus={isActiveCell && isWindowFocused}
               onChange={(v) => {
-                const updated = create(parser_pb.CellSchema, cell);
-                updated.value = v;
-                updateCellLocal(updated);
+                const updated = create(parser_pb.CellSchema, cell)
+                updated.value = v
+                updateCellLocal(updated)
               }}
               onEnter={runCode}
             />
           </div>
 
           {/* Minimal toolbar: language + runner selectors + run/trash buttons */}
-          <div
-            id={`cell-toolbar-${cell.refId}`}
-            className="cell-toolbar"
-          >
+          <div id={`cell-toolbar-${cell.refId}`} className="cell-toolbar">
             <div className="flex items-center gap-3">
               <select
                 id={languageSelectId}
@@ -1327,25 +1395,25 @@ export function Action({
                   id={runnerSelectId}
                   value={runnerSelectValue}
                   onChange={(event) => {
-                    const nextName = event.target.value;
+                    const nextName = event.target.value
                     if (isJavascriptLanguage) {
                       const validJsRunner = JAVASCRIPT_RUNNER_OPTIONS.some(
-                        (option) => option.value === nextName,
-                      );
+                        (option) => option.value === nextName
+                      )
                       if (!validJsRunner) {
-                        return;
+                        return
                       }
-                      cellData.setRunner(nextName);
-                      return;
+                      cellData.setRunner(nextName)
+                      return
                     }
-                    const names = new Set(listRunners().map((r) => r.name));
+                    const names = new Set(listRunners().map((r) => r.name))
                     if (
                       !names.has(nextName) &&
                       nextName !== DEFAULT_RUNNER_PLACEHOLDER
                     ) {
-                      return;
+                      return
                     }
-                    cellData.setRunner(nextName);
+                    cellData.setRunner(nextName)
                   }}
                   className="toolbar-select"
                 >
@@ -1358,7 +1426,7 @@ export function Action({
                   ) : (
                     <>
                       <option value={DEFAULT_RUNNER_PLACEHOLDER}>
-                        {defaultRunnerName ? `${defaultRunnerName}` : "default"}
+                        {defaultRunnerName ? `${defaultRunnerName}` : 'default'}
                       </option>
                       {listRunners()
                         .filter((runner) => !isAppKernelRunnerName(runner.name))
@@ -1376,25 +1444,27 @@ export function Action({
                   id={kernelSelectId}
                   value={selectedKernelKey}
                   onChange={(event) => {
-                    const nextKey = event.target.value;
+                    const nextKey = event.target.value
                     if (!nextKey) {
-                      cellData.clearJupyterKernel();
-                      return;
+                      cellData.clearJupyterKernel()
+                      return
                     }
-                    const parsed = jupyterManager.parseKernelOptionKey(nextKey);
+                    const parsed = jupyterManager.parseKernelOptionKey(nextKey)
                     if (!parsed) {
-                      return;
+                      return
                     }
-                    const option = kernelOptions.find((item) => item.key === nextKey);
+                    const option = kernelOptions.find(
+                      (item) => item.key === nextKey
+                    )
                     if (!option) {
-                      return;
+                      return
                     }
                     cellData.setJupyterKernel({
                       runnerName: option.runnerName,
                       serverName: parsed.serverName,
                       kernelId: parsed.kernelId,
                       kernelName: option.label,
-                    });
+                    })
                   }}
                   className="toolbar-select"
                 >
@@ -1430,7 +1500,10 @@ export function Action({
           {(renderedOutputs || renderedOutputItems) && (
             <div id={`cell-output-${cell.refId}`}>
               <div className="border-t border-nb-tray-border" />
-              <div className="overflow-auto p-[14.4px]" style={{ maxHeight: 'var(--nb-cell-output-max-h)' }}>
+              <div
+                className="overflow-auto p-[14.4px]"
+                style={{ maxHeight: 'var(--nb-cell-output-max-h)' }}
+              >
                 {renderedOutputs}
                 {renderedOutputItems}
               </div>
@@ -1454,8 +1527,8 @@ export function Action({
               type="button"
               className="ctx-menu-item"
               onClick={(event) => {
-                event.stopPropagation();
-                void handleCopyShareLink();
+                event.stopPropagation()
+                void handleCopyShareLink()
               }}
             >
               Copy Share Link
@@ -1465,8 +1538,8 @@ export function Action({
             type="button"
             className="ctx-menu-item text-red-600"
             onClick={(event) => {
-              event.stopPropagation();
-              handleRemoveCell();
+              event.stopPropagation()
+              handleRemoveCell()
             }}
           >
             Remove Cell
@@ -1474,7 +1547,7 @@ export function Action({
         </div>
       )}
     </div>
-  );
+  )
 }
 
 function NotebookTabContent({
@@ -1484,31 +1557,32 @@ function NotebookTabContent({
   isWindowFocused,
   onCellFocus,
 }: {
-  docUri: string;
-  entry: OpenNotebookEntry;
-  activeCell: NotebookActiveCellState | null;
-  isWindowFocused: boolean;
-  onCellFocus: (docUri: string, state: NotebookActiveCellState) => void;
+  docUri: string
+  entry: OpenNotebookEntry
+  activeCell: NotebookActiveCellState | null
+  isWindowFocused: boolean
+  onCellFocus: (docUri: string, state: NotebookActiveCellState) => void
 }) {
-  const { getNotebookData, openNotebook, useNotebookSnapshot } = useNotebookContext();
-  const notebookSnapshot = useNotebookSnapshot(docUri);
+  const { getNotebookData, openNotebook, useNotebookSnapshot } =
+    useNotebookContext()
+  const notebookSnapshot = useNotebookSnapshot(docUri)
   const cellDatas = useMemo(() => {
     if (!notebookSnapshot) {
-      return [];
+      return []
     }
-    const data = getNotebookData(notebookSnapshot.uri);
+    const data = getNotebookData(notebookSnapshot.uri)
     if (!data) {
-      return [];
+      return []
     }
     return (notebookSnapshot.notebook.cells ?? [])
       .map((c) => (c?.refId ? data.getCell(c.refId) : null))
-      .filter((c): c is CellData => Boolean(c));
-  }, [getNotebookData, notebookSnapshot]);
+      .filter((c): c is CellData => Boolean(c))
+  }, [getNotebookData, notebookSnapshot])
 
-  if (entry.state === "blocked") {
+  if (entry.state === 'blocked') {
     const ownerText = entry.owner?.ownerStartedAt
       ? `Tab opened at ${new Date(entry.owner.ownerStartedAt).toLocaleTimeString()}`
-      : "Another browser tab";
+      : 'Another browser tab'
     return (
       <div
         className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center text-sm text-nb-text-muted"
@@ -1531,16 +1605,16 @@ function NotebookTabContent({
         <Button
           variant="soft"
           onClick={() => {
-            void openNotebook(docUri, { name: entry.name });
+            void openNotebook(docUri, { name: entry.name })
           }}
         >
           Retry
         </Button>
       </div>
-    );
+    )
   }
 
-  if (entry.state === "error") {
+  if (entry.state === 'error') {
     return (
       <div
         className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center text-sm text-nb-text-muted"
@@ -1550,10 +1624,10 @@ function NotebookTabContent({
           Notebook could not be opened
         </Text>
         <Text size="2" as="p">
-          {entry.errorMessage ?? "An unknown error occurred."}
+          {entry.errorMessage ?? 'An unknown error occurred.'}
         </Text>
       </div>
-    );
+    )
   }
 
   if (!notebookSnapshot || !notebookSnapshot.loaded) {
@@ -1561,10 +1635,10 @@ function NotebookTabContent({
       <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-nb-text-muted">
         <span>Loading…</span>
       </div>
-    );
+    )
   }
 
-  const data = getNotebookData(notebookSnapshot.uri);
+  const data = getNotebookData(notebookSnapshot.uri)
 
   return (
     <ScrollArea
@@ -1578,7 +1652,10 @@ function NotebookTabContent({
           Cells expand to fill the available width of the tab content area. */}
       <div id="notebook-column" className="w-full py-2 px-8">
         {cellDatas.length === 0 ? (
-          <div id="empty-notebook-prompt" className="flex flex-col items-center justify-center gap-3 py-16 text-sm text-nb-text-muted">
+          <div
+            id="empty-notebook-prompt"
+            className="flex flex-col items-center justify-center gap-3 py-16 text-sm text-nb-text-muted"
+          >
             <p>This notebook has no cells yet.</p>
             <button
               type="button"
@@ -1592,7 +1669,7 @@ function NotebookTabContent({
         ) : (
           <div className="space-y-3">
             {cellDatas.map((cellData, index) => {
-              const refId = cellData.snapshot?.refId ?? `cell-${index}`;
+              const refId = cellData.snapshot?.refId ?? `cell-${index}`
               return (
                 <Action
                   key={`action-${refId}`}
@@ -1600,11 +1677,11 @@ function NotebookTabContent({
                   docUri={docUri}
                   isFirst={index === 0}
                   isActiveCell={activeCell?.refId === refId}
-                  activeFocusRole={activeCell?.focusRole ?? "editor"}
+                  activeFocusRole={activeCell?.focusRole ?? 'editor'}
                   isWindowFocused={isWindowFocused}
                   onFocusStateChange={(state) => onCellFocus(docUri, state)}
                 />
-              );
+              )
             })}
             {/* Add cell button at the bottom of the notebook */}
             <div className="flex justify-center py-3">
@@ -1622,14 +1699,38 @@ function NotebookTabContent({
         )}
       </div>
     </ScrollArea>
-  );
+  )
 }
 
 function NotebookDiffTabContent({ diffUri }: { diffUri: string }) {
-  const diffId = diffUri.slice("diff://notebook/".length);
-  const document = diffId ? getNotebookDiffDocument(decodeURIComponent(diffId)) : null;
+  const diffId = diffUri.slice('diff://notebook/'.length)
+  const decodedDiffId = diffId ? decodeURIComponent(diffId) : ''
+  const [, setDiffDocumentVersion] = useState(0)
+  useEffect(() => {
+    if (!decodedDiffId || typeof window === 'undefined') {
+      return
+    }
+    const onDiffDocumentChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: string }>).detail
+      if (detail?.id === decodedDiffId) {
+        setDiffDocumentVersion((version) => version + 1)
+      }
+    }
+    window.addEventListener(
+      NOTEBOOK_DIFF_DOCUMENT_CHANGED,
+      onDiffDocumentChanged
+    )
+    return () => {
+      window.removeEventListener(
+        NOTEBOOK_DIFF_DOCUMENT_CHANGED,
+        onDiffDocumentChanged
+      )
+    }
+  }, [decodedDiffId])
+
+  const document = decodedDiffId ? getNotebookDiffDocument(decodedDiffId) : null
   if (document) {
-    return <NotebookDiffContent document={document} />;
+    return <NotebookDiffContent document={document} />
   }
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-nb-text-muted">
@@ -1641,7 +1742,7 @@ function NotebookDiffTabContent({ diffUri }: { diffUri: string }) {
         notebookDiff.openDiffTab(diff) again.
       </Text>
     </div>
-  );
+  )
 }
 
 function UnknownDocumentTab({ uri }: { uri: string }) {
@@ -1654,7 +1755,7 @@ function UnknownDocumentTab({ uri }: { uri: string }) {
         {uri}
       </Text>
     </div>
-  );
+  )
 }
 
 function renderWorkspaceDocument({
@@ -1665,22 +1766,22 @@ function renderWorkspaceDocument({
   onDriveLogin,
   onDriveRetry,
 }: {
-  document: WorkspaceDocument;
-  activeCell: NotebookActiveCellState | null;
-  isWindowFocused: boolean;
-  onCellFocus: (docUri: string, state: NotebookActiveCellState) => void;
-  onDriveLogin: () => void;
-  onDriveRetry: () => void;
+  document: WorkspaceDocument
+  activeCell: NotebookActiveCellState | null
+  isWindowFocused: boolean
+  onCellFocus: (docUri: string, state: NotebookActiveCellState) => void
+  onDriveLogin: () => void
+  onDriveRetry: () => void
 }) {
   if (isNotebookDocumentUri(document.uri)) {
     const entry: OpenNotebookEntry = {
       uri: document.uri,
       requestedUri: document.requestedUri ?? document.uri,
       name: document.title,
-      state: document.state ?? "loading",
+      state: document.state ?? 'loading',
       errorMessage: document.errorMessage,
       ...(document.owner !== undefined ? { owner: document.owner } : {}),
-    };
+    }
     return (
       <NotebookTabContent
         docUri={document.uri}
@@ -1689,63 +1790,54 @@ function renderWorkspaceDocument({
         isWindowFocused={isWindowFocused}
         onCellFocus={onCellFocus}
       />
-    );
+    )
   }
 
   if (isNotebookDiffUri(document.uri)) {
-    return <NotebookDiffTabContent diffUri={document.uri} />;
+    return <NotebookDiffTabContent diffUri={document.uri} />
   }
 
   if (isDriveLinkStatusUri(document.uri)) {
-    return (
-      <DriveLinkStatusTab
-        onLogin={onDriveLogin}
-        onRetry={onDriveRetry}
-      />
-    );
+    return <DriveLinkStatusTab onLogin={onDriveLogin} onRetry={onDriveRetry} />
   }
 
-  return <UnknownDocumentTab uri={document.uri} />;
+  return <UnknownDocumentTab uri={document.uri} />
 }
 
 export default function Actions() {
-  const {
-    useWorkspaceDocuments,
-    showDocument,
-    closeWorkspaceDocument,
-  } = useWorkspaceDocumentContext();
-  const { getNotebookData } = useNotebookContext();
-  const { store } = useNotebookStore();
-  const workspaceDocuments = useWorkspaceDocuments();
-  const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
-  const currentDocUri = getCurrentDoc();
-  const driveLinkSnapshot = useDriveLinkCoordinatorSnapshot();
+  const { useWorkspaceDocuments, showDocument, closeWorkspaceDocument } =
+    useWorkspaceDocumentContext()
+  const { getNotebookData } = useNotebookContext()
+  const { store } = useNotebookStore()
+  const workspaceDocuments = useWorkspaceDocuments()
+  const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
+  const currentDocUri = getCurrentDoc()
+  const driveLinkSnapshot = useDriveLinkCoordinatorSnapshot()
   const statusTabVisible =
     driveLinkSnapshot.intents.length > 0 ||
-    Boolean(driveLinkSnapshot.lastErrorMessage);
-  const [selectedTabUri, setSelectedTabUri] = useState<string | null>(null);
-  const [activeCellsByDoc, setActiveCellsByDoc] = useState<NotebookActiveCellMap>(
-    () => loadNotebookActiveCellMap(),
-  );
+    Boolean(driveLinkSnapshot.lastErrorMessage)
+  const [selectedTabUri, setSelectedTabUri] = useState<string | null>(null)
+  const [activeCellsByDoc, setActiveCellsByDoc] =
+    useState<NotebookActiveCellMap>(() => loadNotebookActiveCellMap())
   const [isWindowFocused, setIsWindowFocused] = useState(() => {
-    if (typeof document === "undefined") {
-      return false;
+    if (typeof document === 'undefined') {
+      return false
     }
-    return document.visibilityState === "visible" && document.hasFocus();
-  });
+    return document.visibilityState === 'visible' && document.hasFocus()
+  })
   // Empty-state hint visibility is stored locally so the hint panel can be
   // revealed on demand without cluttering the default view.
-  const [showConsoleHints, setShowConsoleHints] = useState(false);
+  const [showConsoleHints, setShowConsoleHints] = useState(false)
   const [tabContextMenu, setTabContextMenu] = useState<{
-    x: number;
-    y: number;
-    docUri: string;
-    title: string;
-    shareableUri: string;
-    googleDriveUri: string | null;
-  } | null>(null);
-  const tabTriggerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const pendingSelectedTabUriRef = useRef<string | null>(null);
+    x: number
+    y: number
+    docUri: string
+    title: string
+    shareableUri: string
+    googleDriveUri: string | null
+  } | null>(null)
+  const tabTriggerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const pendingSelectedTabUriRef = useRef<string | null>(null)
   //const { data: run } = useRun(runName);
 
   // useEffect(() => {
@@ -1774,73 +1866,73 @@ export default function Actions() {
   //   }
   // }, [cellsInitialized, currentDocUri, ensureNotebook, run, runName, setCurrentDoc]);
 
-  const { registerRenderer, unregisterRenderer } = useOutput();
+  const { registerRenderer, unregisterRenderer } = useOutput()
   const workspaceDocumentUris = useMemo(
     () => new Set(workspaceDocuments.map((document) => document.uri)),
-    [workspaceDocuments],
-  );
+    [workspaceDocuments]
+  )
   const selectedTabIsOpen = selectedTabUri
     ? workspaceDocumentUris.has(selectedTabUri)
-    : false;
+    : false
   const currentDocIsOpen = currentDocUri
     ? workspaceDocumentUris.has(currentDocUri)
-    : false;
+    : false
   const resolvedSelectedTabUri =
     (selectedTabIsOpen ? selectedTabUri : null) ??
     (currentDocIsOpen ? currentDocUri : null) ??
     workspaceDocuments[0]?.uri ??
-    "";
+    ''
 
   const handleCellFocus = useCallback(
     (docUri: string, state: NotebookActiveCellState) => {
       setActiveCellsByDoc((prev) => {
-        const current = prev[docUri];
+        const current = prev[docUri]
         if (
           current?.refId === state.refId &&
           current.focusRole === state.focusRole
         ) {
-          return prev;
+          return prev
         }
         const next = {
           ...prev,
           [docUri]: state,
-        };
-        persistNotebookActiveCellMap(next);
-        return next;
-      });
+        }
+        persistNotebookActiveCellMap(next)
+        return next
+      })
     },
-    [],
-  );
+    []
+  )
 
   // Keep Radix tab selection in sync with the shared current document URI.
   // CurrentDocContext may restore a non-restorable URI, such as a diff/status
   // document. Fall back to the first restored workspace document in that case.
   useEffect(() => {
     if (statusTabVisible) {
-      return;
+      return
     }
-    const pendingSelectedTabUri = pendingSelectedTabUriRef.current;
+    const pendingSelectedTabUri = pendingSelectedTabUriRef.current
     if (pendingSelectedTabUri) {
       if (pendingSelectedTabUri === currentDocUri) {
-        pendingSelectedTabUriRef.current = null;
+        pendingSelectedTabUriRef.current = null
       } else if (workspaceDocumentUris.has(pendingSelectedTabUri)) {
         if (selectedTabUri !== pendingSelectedTabUri) {
-          setSelectedTabUri(pendingSelectedTabUri);
+          setSelectedTabUri(pendingSelectedTabUri)
         }
-        return;
+        return
       } else {
-        pendingSelectedTabUriRef.current = null;
+        pendingSelectedTabUriRef.current = null
       }
     }
     if (currentDocUri && currentDocIsOpen) {
-      setSelectedTabUri(currentDocUri);
-      return;
+      setSelectedTabUri(currentDocUri)
+      return
     }
     if (selectedTabUri && !selectedTabIsOpen) {
-      setSelectedTabUri(null);
+      setSelectedTabUri(null)
     }
     if (currentDocUri && !currentDocIsOpen) {
-      setCurrentDoc(workspaceDocuments[0]?.uri ?? null);
+      setCurrentDoc(workspaceDocuments[0]?.uri ?? null)
     }
   }, [
     currentDocIsOpen,
@@ -1851,21 +1943,23 @@ export default function Actions() {
     statusTabVisible,
     workspaceDocumentUris,
     workspaceDocuments,
-  ]);
+  ])
 
   useEffect(() => {
     if (statusTabVisible) {
       showDocument(DRIVE_LINK_STATUS_TAB_URI, {
-        title: "Drive Link Status",
-      });
+        title: 'Drive Link Status',
+      })
       if (!currentDocUri || !currentDocIsOpen) {
-        setCurrentDoc(DRIVE_LINK_STATUS_TAB_URI);
+        setCurrentDoc(DRIVE_LINK_STATUS_TAB_URI)
       }
-      return;
+      return
     }
 
-    if (workspaceDocuments.some((doc) => doc.uri === DRIVE_LINK_STATUS_TAB_URI)) {
-      closeWorkspaceDocument(DRIVE_LINK_STATUS_TAB_URI);
+    if (
+      workspaceDocuments.some((doc) => doc.uri === DRIVE_LINK_STATUS_TAB_URI)
+    ) {
+      closeWorkspaceDocument(DRIVE_LINK_STATUS_TAB_URI)
     }
   }, [
     closeWorkspaceDocument,
@@ -1875,43 +1969,43 @@ export default function Actions() {
     showDocument,
     statusTabVisible,
     workspaceDocuments,
-  ]);
+  ])
 
   useEffect(() => {
-    if (typeof window === "undefined" || typeof document === "undefined") {
-      return;
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      return
     }
 
     const syncWindowFocus = () => {
       setIsWindowFocused(
-        document.visibilityState === "visible" && document.hasFocus(),
-      );
-    };
+        document.visibilityState === 'visible' && document.hasFocus()
+      )
+    }
 
-    syncWindowFocus();
-    window.addEventListener("focus", syncWindowFocus);
-    window.addEventListener("blur", syncWindowFocus);
-    document.addEventListener("visibilitychange", syncWindowFocus);
+    syncWindowFocus()
+    window.addEventListener('focus', syncWindowFocus)
+    window.addEventListener('blur', syncWindowFocus)
+    document.addEventListener('visibilitychange', syncWindowFocus)
     return () => {
-      window.removeEventListener("focus", syncWindowFocus);
-      window.removeEventListener("blur", syncWindowFocus);
-      document.removeEventListener("visibilitychange", syncWindowFocus);
-    };
-  }, []);
+      window.removeEventListener('focus', syncWindowFocus)
+      window.removeEventListener('blur', syncWindowFocus)
+      document.removeEventListener('visibilitychange', syncWindowFocus)
+    }
+  }, [])
 
   // Keep the active tab discoverable when the tab rail overflows horizontally.
   // We track each rendered tab node and ask the browser to reveal the selected
   // one so keyboard/mouse tab changes do not leave the active notebook clipped.
   useLayoutEffect(() => {
     if (!resolvedSelectedTabUri) {
-      return;
+      return
     }
-    const node = tabTriggerRefs.current.get(resolvedSelectedTabUri);
+    const node = tabTriggerRefs.current.get(resolvedSelectedTabUri)
     node?.scrollIntoView({
-      block: "nearest",
-      inline: "nearest",
-    });
-  }, [resolvedSelectedTabUri]);
+      block: 'nearest',
+      inline: 'nearest',
+    })
+  }, [resolvedSelectedTabUri])
 
   // TODO(jlewi): Does it still make sense to have a registration pattern for renderers? What does that buy us over
   // just hardcoding an "if" statement when rendering the outputs. Is that a legacy of the vscode extension where
@@ -1926,10 +2020,10 @@ export default function Actions() {
         onPid,
         onExitCode,
       }: {
-        cell: parser_pb.Cell;
-        cellData: CellData;
-        onPid: (pid: number | null) => void;
-        onExitCode: (exitCode: number | null) => void;
+        cell: parser_pb.Cell
+        cellData: CellData
+        onPid: (pid: number | null) => void
+        onExitCode: (exitCode: number | null) => void
       }) => {
         return (
           // TODO(jlewi): Why do we pass cell which is parser_pb.Cell? Rather than CellData?
@@ -1939,68 +2033,68 @@ export default function Actions() {
             onPid={onPid}
             onExitCode={onExitCode}
           />
-        );
+        )
       },
-    });
+    })
 
     return () => {
-      unregisterRenderer(MimeType.StatefulRunmeTerminal);
-    };
-  }, [registerRenderer, unregisterRenderer]);
+      unregisterRenderer(MimeType.StatefulRunmeTerminal)
+    }
+  }, [registerRenderer, unregisterRenderer])
 
   const handleCloseTab = useCallback(
     (uri: string) => {
-      closeWorkspaceDocument(uri);
+      closeWorkspaceDocument(uri)
     },
-    [closeWorkspaceDocument],
-  );
+    [closeWorkspaceDocument]
+  )
 
   useEffect(() => {
     if (!tabContextMenu) {
-      return;
+      return
     }
-    const handleClick = () => setTabContextMenu(null);
+    const handleClick = () => setTabContextMenu(null)
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setTabContextMenu(null);
+      if (event.key === 'Escape') {
+        setTabContextMenu(null)
       }
-    };
-    window.addEventListener("click", handleClick);
-    window.addEventListener("keydown", handleKey);
+    }
+    window.addEventListener('click', handleClick)
+    window.addEventListener('keydown', handleKey)
     return () => {
-      window.removeEventListener("click", handleClick);
-      window.removeEventListener("keydown", handleKey);
-    };
-  }, [tabContextMenu]);
+      window.removeEventListener('click', handleClick)
+      window.removeEventListener('keydown', handleKey)
+    }
+  }, [tabContextMenu])
 
   const adjustedTabContextMenu = useMemo(() => {
     if (!tabContextMenu) {
-      return null;
+      return null
     }
-    if (typeof window === "undefined") {
-      return tabContextMenu;
+    if (typeof window === 'undefined') {
+      return tabContextMenu
     }
-    const itemCount = tabContextMenu.googleDriveUri ? 4 : 3;
-    const menuWidth = 220;
-    const menuHeight = itemCount * 36 + 8;
+    const itemCount = tabContextMenu.googleDriveUri ? 4 : 3
+    const menuWidth = 220
+    const menuHeight = itemCount * 36 + 8
     return {
       ...tabContextMenu,
       x: Math.max(0, Math.min(tabContextMenu.x, window.innerWidth - menuWidth)),
       y: Math.max(
         0,
-        Math.min(tabContextMenu.y, window.innerHeight - menuHeight),
+        Math.min(tabContextMenu.y, window.innerHeight - menuHeight)
       ),
-    };
-  }, [tabContextMenu]);
+    }
+  }, [tabContextMenu])
 
   const handleTabContextMenu = useCallback(
     (event: ReactMouseEvent<HTMLElement>, docUri: string) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const document = workspaceDocuments.find((doc) => doc.uri === docUri);
+      event.preventDefault()
+      event.stopPropagation()
+      const document = workspaceDocuments.find((doc) => doc.uri === docUri)
       const title =
         document?.title?.trim() ||
-        getNotebookDisplayName(docUri, document?.title ?? docUri);
+        getNotebookDisplayName(docUri, document?.title ?? docUri)
       setTabContextMenu({
         x: event.clientX,
         y: event.clientY,
@@ -2008,147 +2102,158 @@ export default function Actions() {
         title,
         shareableUri: docUri,
         googleDriveUri: isGoogleDriveFileUri(docUri) ? docUri : null,
-      });
+      })
 
-      if (!store || !docUri.startsWith("local://")) {
-        return;
+      if (!store || !docUri.startsWith('local://')) {
+        return
       }
 
       void (async () => {
         try {
-          const metadata = await store.getMetadata(docUri);
-          const remoteUri = metadata?.remoteUri?.trim() || null;
+          const metadata = await store.getMetadata(docUri)
+          const remoteUri = metadata?.remoteUri?.trim() || null
           setTabContextMenu((current) => {
             if (!current || current.docUri !== docUri) {
-              return current;
+              return current
             }
             return {
               ...current,
               shareableUri: remoteUri ?? docUri,
-              googleDriveUri: isGoogleDriveFileUri(remoteUri) ? remoteUri : current.googleDriveUri,
-            };
-          });
+              googleDriveUri: isGoogleDriveFileUri(remoteUri)
+                ? remoteUri
+                : current.googleDriveUri,
+            }
+          })
         } catch (error) {
-          appLogger.error("Failed to resolve tab metadata for context menu", {
+          appLogger.error('Failed to resolve tab metadata for context menu', {
             attrs: {
-              scope: "storage.metadata",
-              code: "TAB_CONTEXT_METADATA_LOOKUP_FAILED",
+              scope: 'storage.metadata',
+              code: 'TAB_CONTEXT_METADATA_LOOKUP_FAILED',
               docUri,
               error: String(error),
             },
-          });
+          })
         }
-      })();
+      })()
     },
-    [store, workspaceDocuments],
-  );
+    [store, workspaceDocuments]
+  )
 
   const handleRenameTab = useCallback(async () => {
     if (!tabContextMenu) {
-      return;
+      return
     }
     if (!store) {
-      setTabContextMenu(null);
-      return;
+      setTabContextMenu(null)
+      return
     }
 
-    const nextName = window.prompt("Rename notebook", tabContextMenu.title);
+    const nextName = window.prompt('Rename notebook', tabContextMenu.title)
     if (nextName === null) {
-      setTabContextMenu(null);
-      return;
+      setTabContextMenu(null)
+      return
     }
 
-    const trimmed = nextName.trim();
-    const renamedName = trimmed === "" ? "untitled.json" : trimmed;
+    const trimmed = nextName.trim()
+    const renamedName = trimmed === '' ? 'untitled.json' : trimmed
     try {
-      const renamed = await store.rename(tabContextMenu.docUri, renamedName);
-      const title = renamed.name || renamedName;
-      getNotebookData(tabContextMenu.docUri)?.setName(title);
-      showDocument(tabContextMenu.docUri, { title });
-      setTabContextMenu(null);
+      const renamed = await store.rename(tabContextMenu.docUri, renamedName)
+      const title = renamed.name || renamedName
+      getNotebookData(tabContextMenu.docUri)?.setName(title)
+      showDocument(tabContextMenu.docUri, { title })
+      setTabContextMenu(null)
     } catch (error) {
-      appLogger.error("Failed to rename notebook from tab context menu", {
+      appLogger.error('Failed to rename notebook from tab context menu', {
         attrs: {
-          scope: "storage.rename",
-          code: "TAB_RENAME_FAILED",
+          scope: 'storage.rename',
+          code: 'TAB_RENAME_FAILED',
           uri: tabContextMenu.docUri,
           error: String(error),
         },
-      });
+      })
       showToast({
-        message: "Unable to rename document. Please try again.",
-        tone: "error",
-      });
-      setTabContextMenu(null);
+        message: 'Unable to rename document. Please try again.',
+        tone: 'error',
+      })
+      setTabContextMenu(null)
     }
-  }, [getNotebookData, showDocument, store, tabContextMenu]);
+  }, [getNotebookData, showDocument, store, tabContextMenu])
 
   const handleCopyTabShareableLink = useCallback(async () => {
     if (!tabContextMenu) {
-      return;
+      return
     }
     try {
-      await copyNotebookShareUrl(tabContextMenu.shareableUri);
+      await copyNotebookShareUrl(tabContextMenu.shareableUri)
     } catch (error) {
-      appLogger.error("Failed to copy shareable link from tab context menu", {
+      appLogger.error('Failed to copy shareable link from tab context menu', {
         attrs: {
-          scope: "storage.share",
-          code: "TAB_COPY_SHAREABLE_LINK_FAILED",
+          scope: 'storage.share',
+          code: 'TAB_COPY_SHAREABLE_LINK_FAILED',
           uri: tabContextMenu.shareableUri,
           error: String(error),
         },
-      });
+      })
     } finally {
-      setTabContextMenu(null);
+      setTabContextMenu(null)
     }
-  }, [tabContextMenu]);
+  }, [tabContextMenu])
 
   const handleCopyTabLocalUri = useCallback(async () => {
     if (!tabContextMenu) {
-      return;
+      return
     }
     try {
-      if (typeof window === "undefined" || !window.navigator?.clipboard?.writeText) {
-        throw new Error("Clipboard access is unavailable in this browser");
+      if (
+        typeof window === 'undefined' ||
+        !window.navigator?.clipboard?.writeText
+      ) {
+        throw new Error('Clipboard access is unavailable in this browser')
       }
-      await window.navigator.clipboard.writeText(tabContextMenu.docUri);
+      await window.navigator.clipboard.writeText(tabContextMenu.docUri)
     } catch (error) {
-      appLogger.error("Failed to copy local URI from tab context menu", {
+      appLogger.error('Failed to copy local URI from tab context menu', {
         attrs: {
-          scope: "storage.local",
-          code: "TAB_COPY_LOCAL_URI_FAILED",
+          scope: 'storage.local',
+          code: 'TAB_COPY_LOCAL_URI_FAILED',
           uri: tabContextMenu.docUri,
           error: String(error),
         },
-      });
+      })
     } finally {
-      setTabContextMenu(null);
+      setTabContextMenu(null)
     }
-  }, [tabContextMenu]);
+  }, [tabContextMenu])
 
   const handleCopyTabGoogleDriveLink = useCallback(async () => {
     if (!tabContextMenu?.googleDriveUri) {
-      setTabContextMenu(null);
-      return;
+      setTabContextMenu(null)
+      return
     }
     try {
-      if (typeof window === "undefined" || !window.navigator?.clipboard?.writeText) {
-        throw new Error("Clipboard access is unavailable in this browser");
+      if (
+        typeof window === 'undefined' ||
+        !window.navigator?.clipboard?.writeText
+      ) {
+        throw new Error('Clipboard access is unavailable in this browser')
       }
-      await window.navigator.clipboard.writeText(tabContextMenu.googleDriveUri);
+      await window.navigator.clipboard.writeText(tabContextMenu.googleDriveUri)
     } catch (error) {
-      appLogger.error("Failed to copy Google Drive link from tab context menu", {
-        attrs: {
-          scope: "storage.drive",
-          code: "TAB_COPY_GOOGLE_DRIVE_LINK_FAILED",
-          uri: tabContextMenu.googleDriveUri,
-          error: String(error),
-        },
-      });
+      appLogger.error(
+        'Failed to copy Google Drive link from tab context menu',
+        {
+          attrs: {
+            scope: 'storage.drive',
+            code: 'TAB_COPY_GOOGLE_DRIVE_LINK_FAILED',
+            uri: tabContextMenu.googleDriveUri,
+            error: String(error),
+          },
+        }
+      )
     } finally {
-      setTabContextMenu(null);
+      setTabContextMenu(null)
     }
-  }, [tabContextMenu]);
+  }, [tabContextMenu])
 
   // Each document gets its own scroll container keyed by URI so the browser
   // does not reuse the previous document's scroll position.
@@ -2176,15 +2281,18 @@ export default function Actions() {
               </Text>
             </div>
 
-            <div id="actions-empty-hints" className="flex flex-col items-center">
+            <div
+              id="actions-empty-hints"
+              className="flex flex-col items-center"
+            >
               <Button
                 id="actions-empty-hints-toggle"
                 variant="soft"
                 onClick={() => setShowConsoleHints((prev) => !prev)}
               >
                 {showConsoleHints
-                  ? "Hide Console Commands"
-                  : "Show Console Commands"}
+                  ? 'Hide Console Commands'
+                  : 'Show Console Commands'}
               </Button>
             </div>
 
@@ -2206,22 +2314,24 @@ export default function Actions() {
                   id="actions-empty-quickstart-code"
                   className="quickstart-console-code mt-3 whitespace-pre-wrap rounded-md bg-gray-900 p-3 text-xs text-gray-100 select-text cursor-text"
                   style={{
-                    userSelect: "text",
-                    WebkitUserSelect: "text",
+                    userSelect: 'text',
+                    WebkitUserSelect: 'text',
                   }}
                 >
-                  explorer.addFolder(){"\n"}
-                  explorer.mountDrive(driveUrl){"\n"}
-                  explorer.openPicker(){"\n"}
-                  explorer.listFolders(){"\n"}
-                  runme.getCurrentNotebook(){"\n"}
-                  runme.clear(){"\n"}
-                  runme.runAll(){"\n"}
-                  runme.rerun(){"\n"}
-                  help(){"\n\n"}
-                  To attach test notebooks: use the Explorer + button to pick the fixtures folder
-                  {"\n"}
-                  To mount a local file: use the Explorer + button or explorer.openPicker()
+                  explorer.addFolder(){'\n'}
+                  explorer.mountDrive(driveUrl){'\n'}
+                  explorer.openPicker(){'\n'}
+                  explorer.listFolders(){'\n'}
+                  runme.getCurrentNotebook(){'\n'}
+                  runme.clear(){'\n'}
+                  runme.runAll(){'\n'}
+                  runme.rerun(){'\n'}
+                  help(){'\n\n'}
+                  To attach test notebooks: use the Explorer + button to pick
+                  the fixtures folder
+                  {'\n'}
+                  To mount a local file: use the Explorer + button or
+                  explorer.openPicker()
                 </pre>
               </div>
             )}
@@ -2231,10 +2341,10 @@ export default function Actions() {
         <Tabs.Root
           value={resolvedSelectedTabUri}
           onValueChange={(nextUri) => {
-            pendingSelectedTabUriRef.current = nextUri;
-            setSelectedTabUri(nextUri);
+            pendingSelectedTabUriRef.current = nextUri
+            setSelectedTabUri(nextUri)
             if (nextUri !== currentDocUri) {
-              setCurrentDoc(nextUri);
+              setCurrentDoc(nextUri)
             }
           }}
           className="flex flex-col flex-1 min-h-0 overflow-hidden bg-white"
@@ -2248,16 +2358,16 @@ export default function Actions() {
               className="flex min-w-max items-center gap-0.5 px-2 py-1"
             >
               {workspaceDocuments.map((doc) => {
-                const displayName = getNotebookDisplayName(doc.uri, doc.title);
-                const isNotebook = isNotebookDocumentUri(doc.uri);
+                const displayName = getNotebookDisplayName(doc.uri, doc.title)
+                const isNotebook = isNotebookDocumentUri(doc.uri)
                 return (
                   <div
                     key={`tab-${doc.uri}`}
                     ref={(node) => {
                       if (node) {
-                        tabTriggerRefs.current.set(doc.uri, node);
+                        tabTriggerRefs.current.set(doc.uri, node)
                       } else {
-                        tabTriggerRefs.current.delete(doc.uri);
+                        tabTriggerRefs.current.delete(doc.uri)
                       }
                     }}
                     className="flex shrink-0 items-center gap-1"
@@ -2272,7 +2382,9 @@ export default function Actions() {
                       }
                       className="group flex shrink-0 items-center gap-2 rounded-nb-sm border border-transparent px-3 py-1.5 text-sm font-medium text-nb-text-muted transition-all duration-150 data-[state=active]:border-nb-border data-[state=active]:bg-nb-surface data-[state=active]:text-nb-text data-[state=active]:shadow-nb-xs data-[state=inactive]:hover:bg-nb-surface/60 data-[state=inactive]:hover:text-nb-text focus:outline-none"
                     >
-                      <span className="max-w-[140px] truncate">{displayName}</span>
+                      <span className="max-w-[140px] truncate">
+                        {displayName}
+                      </span>
                     </Tabs.Trigger>
                     {isNotebook && <NotebookSyncIndicator docUri={doc.uri} />}
                     <button
@@ -2280,15 +2392,15 @@ export default function Actions() {
                       className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-nb-xs text-nb-text-faint transition-all duration-150 hover:bg-nb-surface-2 hover:text-nb-text"
                       aria-label={`Close ${displayName}`}
                       onClick={(event) => {
-                        event.stopPropagation();
-                        handleCloseTab(doc.uri);
+                        event.stopPropagation()
+                        handleCloseTab(doc.uri)
                       }}
                       onMouseDown={(event) => event.stopPropagation()}
                     >
                       <XMarkIcon className="h-3 w-3" />
                     </button>
                   </div>
-                );
+                )
               })}
             </Tabs.List>
           </div>
@@ -2306,8 +2418,8 @@ export default function Actions() {
                 type="button"
                 className="ctx-menu-item"
                 onClick={(event) => {
-                  event.stopPropagation();
-                  void handleRenameTab();
+                  event.stopPropagation()
+                  void handleRenameTab()
                 }}
               >
                 Rename
@@ -2316,8 +2428,8 @@ export default function Actions() {
                 type="button"
                 className="ctx-menu-item"
                 onClick={(event) => {
-                  event.stopPropagation();
-                  void handleCopyTabShareableLink();
+                  event.stopPropagation()
+                  void handleCopyTabShareableLink()
                 }}
               >
                 Copy Shareable Link
@@ -2326,8 +2438,8 @@ export default function Actions() {
                 type="button"
                 className="ctx-menu-item"
                 onClick={(event) => {
-                  event.stopPropagation();
-                  void handleCopyTabLocalUri();
+                  event.stopPropagation()
+                  void handleCopyTabLocalUri()
                 }}
               >
                 Copy local URI
@@ -2337,8 +2449,8 @@ export default function Actions() {
                   type="button"
                   className="ctx-menu-item"
                   onClick={(event) => {
-                    event.stopPropagation();
-                    void handleCopyTabGoogleDriveLink();
+                    event.stopPropagation()
+                    void handleCopyTabGoogleDriveLink()
                   }}
                 >
                   Copy Google Drive Link
@@ -2347,29 +2459,31 @@ export default function Actions() {
             </div>
           )}
           <div className="relative flex-1 min-h-0 overflow-hidden">
-          {workspaceDocuments.map((doc) => (
-            <Tabs.Content
-              key={`content-${doc.uri}`}
-              value={doc.uri}
-              forceMount
-              asChild
-            >
-              <TabPanel className="flex-1 min-h-0" data-document-id={doc.uri}>
-                {renderWorkspaceDocument({
-                  document: doc,
-                  activeCell: activeCellsByDoc[doc.uri] ?? null,
-                  isWindowFocused:
-                    isWindowFocused && resolvedSelectedTabUri === doc.uri,
-                  onCellFocus: handleCellFocus,
-                  onDriveLogin: () => driveLinkCoordinator.loginToDriveAndProcess(),
-                  onDriveRetry: () => driveLinkCoordinator.retryAuthAndProcess(),
-                })}
-              </TabPanel>
-            </Tabs.Content>
-          ))}
+            {workspaceDocuments.map((doc) => (
+              <Tabs.Content
+                key={`content-${doc.uri}`}
+                value={doc.uri}
+                forceMount
+                asChild
+              >
+                <TabPanel className="flex-1 min-h-0" data-document-id={doc.uri}>
+                  {renderWorkspaceDocument({
+                    document: doc,
+                    activeCell: activeCellsByDoc[doc.uri] ?? null,
+                    isWindowFocused:
+                      isWindowFocused && resolvedSelectedTabUri === doc.uri,
+                    onCellFocus: handleCellFocus,
+                    onDriveLogin: () =>
+                      driveLinkCoordinator.loginToDriveAndProcess(),
+                    onDriveRetry: () =>
+                      driveLinkCoordinator.retryAuthAndProcess(),
+                  })}
+                </TabPanel>
+              </Tabs.Content>
+            ))}
           </div>
         </Tabs.Root>
       )}
     </div>
-  );
+  )
 }

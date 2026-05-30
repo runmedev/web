@@ -1,6 +1,9 @@
-import { Badge, ScrollArea, Text } from '@radix-ui/themes'
+import { useState } from 'react'
+
+import { Badge, Button, ScrollArea, Text } from '@radix-ui/themes'
 
 import { parser_pb } from '../../runme/client'
+import { useNotebookStore } from '../../contexts/NotebookStoreContext'
 import type {
   CellDiff,
   NotebookDiffDocument,
@@ -8,6 +11,9 @@ import type {
   TextDiff,
   TextDiffLine,
 } from '../../lib/notebookDiff/model'
+import { refreshNotebookConflictDiff } from '../../lib/notebookDiff/conflict'
+import { NotebookConflictChangedError } from '../../storage/local'
+import { showToast } from '../../lib/toast'
 
 function cellKindLabel(cell?: parser_pb.Cell): string {
   if (!cell) {
@@ -226,22 +232,131 @@ function DiffRow({ row }: { row: CellDiff }) {
   )
 }
 
+function ConflictResolutionActions({ localUri }: { localUri: string }) {
+  const { store } = useNotebookStore()
+  const [isResolving, setIsResolving] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+
+  const saveLocalVersion = async (force = false) => {
+    if (!store) {
+      return
+    }
+    setIsResolving(true)
+    try {
+      await store.resolveConflictWithLocal(localUri, {
+        force,
+      })
+      showToast({
+        message: 'Saved local notebook version to upstream.',
+        tone: 'success',
+      })
+    } catch (error) {
+      if (error instanceof NotebookConflictChangedError && !force) {
+        const shouldOverwrite =
+          typeof window !== 'undefined' &&
+          window.confirm(
+            'The upstream file changed again since this conflict was detected. ' +
+              'Saving local version will replace the latest upstream version.'
+          )
+        if (shouldOverwrite) {
+          await saveLocalVersion(true)
+        }
+        return
+      }
+      showToast({
+        message: 'Unable to save local version. Please try again.',
+        tone: 'error',
+      })
+    } finally {
+      setIsResolving(false)
+    }
+  }
+
+  const refreshDiff = async () => {
+    if (!store) {
+      return
+    }
+    setIsRefreshing(true)
+    try {
+      await refreshNotebookConflictDiff(store, localUri)
+      showToast({
+        message: 'Refreshed diff against latest upstream version.',
+        tone: 'success',
+      })
+    } catch {
+      showToast({
+        message: 'Unable to refresh conflict diff. Please try again.',
+        tone: 'error',
+      })
+    } finally {
+      setIsRefreshing(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      <Button
+        type="button"
+        color="gray"
+        variant="soft"
+        disabled={!store || isRefreshing || isResolving}
+        onClick={() => {
+          void refreshDiff()
+        }}
+      >
+        {isRefreshing ? 'Refreshing...' : 'Refresh diff'}
+      </Button>
+      <Button
+        type="button"
+        color="amber"
+        disabled={!store || isResolving || isRefreshing}
+        onClick={() => {
+          void saveLocalVersion()
+        }}
+      >
+        {isResolving ? 'Saving...' : 'Save local version'}
+      </Button>
+    </div>
+  )
+}
+
 export function NotebookDiffContent({
   document,
 }: {
   document: NotebookDiffDocument
 }) {
   const { diff } = document
+  const conflictResolution =
+    document.resolution?.kind === 'notebook-sync-conflict'
+      ? document.resolution
+      : null
+
   return (
     <div className="flex h-full w-full flex-col bg-nb-surface">
       <header className="border-b border-nb-border bg-white px-5 py-4">
-        <div>
-          <Text as="p" size="5" weight="bold" className="text-nb-text">
-            Notebook Diff
-          </Text>
-          <Text as="p" size="2" className="text-nb-text-muted">
-            {document.base.label} compared with {document.compare.label}
-          </Text>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <Text as="p" size="5" weight="bold" className="text-nb-text">
+              Notebook Diff
+            </Text>
+            <Text as="p" size="2" className="text-nb-text-muted">
+              {document.base.label} compared with {document.compare.label}
+            </Text>
+            {conflictResolution && (
+              <Text
+                as="p"
+                size="2"
+                className="mt-2 max-w-3xl text-nb-text-muted"
+              >
+                This notebook has local changes and upstream changes. Review the
+                diff, edit the local notebook if needed, then save the local
+                version to replace upstream.
+              </Text>
+            )}
+          </div>
+          {conflictResolution && (
+            <ConflictResolutionActions localUri={conflictResolution.localUri} />
+          )}
         </div>
         <div className="mt-3 flex flex-wrap gap-2 text-sm text-nb-text-muted">
           <Badge color="green">{diff.summary.insertedCells} inserted</Badge>
