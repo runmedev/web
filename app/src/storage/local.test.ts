@@ -1,40 +1,42 @@
 /// <reference types="vitest" />
 // @vitest-environment node
-import { create, toJsonString } from "@bufbuild/protobuf";
-import { describe, expect, it, vi } from "vitest";
+import { create, toJsonString } from '@bufbuild/protobuf'
+import md5 from 'md5'
+import { describe, expect, it, vi } from 'vitest'
 
-import { MimeType, parser_pb } from "../runme/client";
+import { MimeType, parser_pb } from '../runme/client'
 import LocalNotebooks, {
   type LocalFileRecord,
   type LocalFolderRecord,
-} from "./local";
-import { NotebookStoreItemType } from "./notebook";
+  NotebookConflictChangedError,
+} from './local'
+import { NotebookStoreItemType } from './notebook'
 
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
-} as unknown as Parameters<typeof toJsonString>[2];
+} as unknown as Parameters<typeof toJsonString>[2]
 
 function createMockTable<T extends { id: string }>() {
-  const store = new Map<string, T>();
+  const store = new Map<string, T>()
   return {
     _store: store,
     get: vi.fn(async (id: string) => store.get(id) ?? undefined),
     put: vi.fn(async (record: T) => {
-      store.set(record.id, record);
-      return record.id;
+      store.set(record.id, record)
+      return record.id
     }),
     update: vi.fn(async (id: string, changes: Partial<T>) => {
-      const existing = store.get(id);
+      const existing = store.get(id)
       if (!existing) {
-        return 0;
+        return 0
       }
-      store.set(id, { ...existing, ...changes });
-      return 1;
+      store.set(id, { ...existing, ...changes })
+      return 1
     }),
     where: vi.fn((field: keyof T) => ({
       equals: vi.fn((value: unknown) => ({
         first: vi.fn(async () =>
-          [...store.values()].find((record) => record[field] === value),
+          [...store.values()].find((record) => record[field] === value)
         ),
       })),
     })),
@@ -42,382 +44,621 @@ function createMockTable<T extends { id: string }>() {
       toArray: vi.fn(async () => [...store.values()].filter(predicate)),
       first: vi.fn(async () => [...store.values()].find(predicate)),
     })),
-  };
+  }
 }
 
 function createTestStore(driveStore: unknown) {
-  const localStore = Object.create(LocalNotebooks.prototype) as any;
-  localStore.files = createMockTable<LocalFileRecord>();
-  localStore.folders = createMockTable<LocalFolderRecord>();
-  localStore.driveStore = driveStore;
-  localStore.filesystemStore = null;
-  localStore.inFlightSyncs = new Map();
-  localStore.syncListeners = new Map();
-  localStore.syncSubjects = new Map();
-  localStore.markdownSyncSubjects = new Map();
-  return localStore as LocalNotebooks;
+  const localStore = Object.create(LocalNotebooks.prototype) as any
+  localStore.files = createMockTable<LocalFileRecord>()
+  localStore.folders = createMockTable<LocalFolderRecord>()
+  localStore.driveStore = driveStore
+  localStore.filesystemStore = null
+  localStore.inFlightSyncs = new Map()
+  localStore.syncListeners = new Map()
+  localStore.syncSubjects = new Map()
+  localStore.markdownSyncSubjects = new Map()
+  return localStore as LocalNotebooks
 }
 
-describe("LocalNotebooks pending Drive create", () => {
-  it("persists pending upstream parent when Drive create fails", async () => {
-    const parentRemoteUri = "https://drive.google.com/drive/folders/folder123";
+function notebookJson(value: string): string {
+  return toJsonString(
+    parser_pb.NotebookSchema,
+    create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          kind: parser_pb.CellKind.CODE,
+          languageId: 'python',
+          value,
+        }),
+      ],
+    }),
+    NOTEBOOK_JSON_WRITE_OPTIONS
+  )
+}
+
+describe('LocalNotebooks pending Drive create', () => {
+  it('persists pending upstream parent when Drive create fails', async () => {
+    const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
     const driveStore = {
       create: vi.fn(async () => {
-        throw new Error("Google Drive authorization is required.");
+        throw new Error('Google Drive authorization is required.')
       }),
-    };
-    const store = createTestStore(driveStore);
+    }
+    const store = createTestStore(driveStore)
     await store.folders.put({
-      id: "local://folder/drive",
-      name: "Drive",
+      id: 'local://folder/drive',
+      name: 'Drive',
       remoteId: parentRemoteUri,
       children: [],
-      lastSynced: "",
-    });
+      lastSynced: '',
+    })
 
-    const item = await store.create("local://folder/drive", "draft.json");
+    const item = await store.create('local://folder/drive', 'draft.json')
 
-    expect(item.type).toBe(NotebookStoreItemType.File);
-    const record = await store.files.get(item.uri);
-    expect(record?.remoteId).toBe("");
-    expect(record?.parentRemoteIdWhenCreated).toBe(parentRemoteUri);
+    expect(item.type).toBe(NotebookStoreItemType.File)
+    const record = await store.files.get(item.uri)
+    expect(record?.remoteId).toBe('')
+    expect(record?.parentRemoteIdWhenCreated).toBe(parentRemoteUri)
     expect(
-      (await store.folders.get("local://folder/drive"))?.children,
-    ).toContain(item.uri);
-  });
+      (await store.folders.get('local://folder/drive'))?.children
+    ).toContain(item.uri)
+  })
 
-  it("reports pending upstream creation in sync state", async () => {
-    const parentRemoteUri = "https://drive.google.com/drive/folders/folder123";
-    const store = createTestStore({});
+  it('reports pending upstream creation in sync state', async () => {
+    const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const store = createTestStore({})
     await store.files.put({
-      id: "local://file/pending",
-      name: "draft.json",
-      remoteId: "",
+      id: 'local://file/pending',
+      name: 'draft.json',
+      remoteId: '',
       parentRemoteIdWhenCreated: parentRemoteUri,
-      lastRemoteChecksum: "",
-      lastSynced: "",
-      doc: "",
-      md5Checksum: "",
-    });
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
 
     await expect(
-      store.getSyncState("local://file/pending"),
+      store.getSyncState('local://file/pending')
     ).resolves.toMatchObject({
-      status: "pending-upstream-create",
+      status: 'pending-upstream-create',
       parentRemoteIdWhenCreated: parentRemoteUri,
-    });
-  });
+    })
+  })
 
-  it("creates the Drive file on sync and clears pending parent", async () => {
-    const parentRemoteUri = "https://drive.google.com/drive/folders/folder123";
-    const remoteUri = "https://drive.google.com/file/d/file123/view";
+  it('creates the Drive file on sync and clears pending parent', async () => {
+    const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
     const driveStore = {
       create: vi.fn(async () => ({
         uri: remoteUri,
-        name: "draft.json",
+        name: 'draft.json',
         type: NotebookStoreItemType.File,
         children: [],
         parents: [parentRemoteUri],
       })),
       getVersionMetadata: vi.fn(async () => ({
-        md5Checksum: "checksum-1",
-        headRevisionId: "revision-1",
+        md5Checksum: 'checksum-1',
+        headRevisionId: 'revision-1',
       })),
       getMetadata: vi.fn(async () => ({
         uri: remoteUri,
-        name: "draft.json",
+        name: 'draft.json',
         type: NotebookStoreItemType.File,
         children: [],
         parents: [parentRemoteUri],
       })),
       save: vi.fn(async () => ({ conflicted: false })),
-    };
-    const store = createTestStore(driveStore);
+    }
+    const store = createTestStore(driveStore)
     await store.files.put({
-      id: "local://file/pending",
-      name: "draft.json",
-      remoteId: "",
+      id: 'local://file/pending',
+      name: 'draft.json',
+      remoteId: '',
       parentRemoteIdWhenCreated: parentRemoteUri,
-      lastRemoteChecksum: "",
-      lastSynced: "",
-      doc: "",
-      md5Checksum: "",
-    });
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
 
-    await store.sync("local://file/pending");
+    await store.sync('local://file/pending')
 
-    const record = await store.files.get("local://file/pending");
-    expect(record?.remoteId).toBe(remoteUri);
-    expect(record?.parentRemoteIdWhenCreated).toBeUndefined();
-    expect(record?.lastRemoteChecksum).toBe("checksum-1");
+    const record = await store.files.get('local://file/pending')
+    expect(record?.remoteId).toBe(remoteUri)
+    expect(record?.parentRemoteIdWhenCreated).toBeUndefined()
+    expect(record?.lastRemoteChecksum).toBe('checksum-1')
     expect(record?.lastUpstreamVersion).toEqual({
-      checksum: "checksum-1",
-      revisionId: "revision-1",
-    });
+      checksum: 'checksum-1',
+      revisionId: 'revision-1',
+    })
     expect(driveStore.create).toHaveBeenCalledWith(
       parentRemoteUri,
-      "draft.json",
-    );
-  });
+      'draft.json'
+    )
+  })
 
-  it("does not duplicate a pending Drive file if initial metadata recording fails", async () => {
-    const parentRemoteUri = "https://drive.google.com/drive/folders/folder123";
-    const remoteUri = "https://drive.google.com/file/d/file123/view";
+  it('does not duplicate a pending Drive file if initial metadata recording fails', async () => {
+    const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
     const driveStore = {
       create: vi.fn(async () => ({
         uri: remoteUri,
-        name: "draft.json",
+        name: 'draft.json',
         type: NotebookStoreItemType.File,
         children: [],
         parents: [parentRemoteUri],
       })),
       getVersionMetadata: vi
         .fn()
-        .mockRejectedValueOnce(new Error("metadata unavailable"))
+        .mockRejectedValueOnce(new Error('metadata unavailable'))
         .mockResolvedValueOnce({
-          md5Checksum: "remote-created",
-          headRevisionId: "revision-2",
+          md5Checksum: 'remote-created',
+          headRevisionId: 'revision-2',
         })
         .mockResolvedValueOnce({
-          md5Checksum: "local-saved",
-          headRevisionId: "revision-3",
+          md5Checksum: 'local-saved',
+          headRevisionId: 'revision-3',
         }),
       getMetadata: vi.fn(async () => ({
         uri: remoteUri,
-        name: "draft.json",
+        name: 'draft.json',
         type: NotebookStoreItemType.File,
         children: [],
         parents: [parentRemoteUri],
       })),
       save: vi.fn(async () => ({ conflicted: false })),
       saveContent: vi.fn(async () => undefined),
-    };
-    const store = createTestStore(driveStore);
+    }
+    const store = createTestStore(driveStore)
     await store.files.put({
-      id: "local://file/pending",
-      name: "draft.json",
-      remoteId: "",
+      id: 'local://file/pending',
+      name: 'draft.json',
+      remoteId: '',
       parentRemoteIdWhenCreated: parentRemoteUri,
-      lastRemoteChecksum: "",
-      lastSynced: "",
-      doc: "{malformed-json",
-      md5Checksum: "local-checksum",
-    });
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '{malformed-json',
+      md5Checksum: 'local-checksum',
+    })
 
-    await store.sync("local://file/pending");
+    await store.sync('local://file/pending')
 
-    const record = await store.files.get("local://file/pending");
-    expect(record?.remoteId).toBe(remoteUri);
-    expect(record?.parentRemoteIdWhenCreated).toBeUndefined();
-    expect(record?.lastRemoteChecksum).toBe("local-saved");
-    expect(driveStore.create).toHaveBeenCalledTimes(1);
+    const record = await store.files.get('local://file/pending')
+    expect(record?.remoteId).toBe(remoteUri)
+    expect(record?.parentRemoteIdWhenCreated).toBeUndefined()
+    expect(record?.lastRemoteChecksum).toBe('local-saved')
+    expect(driveStore.create).toHaveBeenCalledTimes(1)
     expect(driveStore.saveContent).toHaveBeenCalledWith(
       remoteUri,
-      "{malformed-json",
-      "application/json",
-    );
-  });
+      '{malformed-json',
+      'application/json'
+    )
+  })
 
-  it("serializes overlapping sync calls for the same pending Drive file", async () => {
-    const parentRemoteUri = "https://drive.google.com/drive/folders/folder123";
-    const remoteUri = "https://drive.google.com/file/d/file123/view";
-    let releaseCreate!: () => void;
-    let createStarted!: () => void;
+  it('serializes overlapping sync calls for the same pending Drive file', async () => {
+    const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    let releaseCreate!: () => void
+    let createStarted!: () => void
     const createStartedPromise = new Promise<void>((resolve) => {
-      createStarted = resolve;
-    });
+      createStarted = resolve
+    })
     const releaseCreatePromise = new Promise<void>((resolve) => {
-      releaseCreate = resolve;
-    });
+      releaseCreate = resolve
+    })
     const driveStore = {
       create: vi.fn(async () => {
-        createStarted();
-        await releaseCreatePromise;
+        createStarted()
+        await releaseCreatePromise
         return {
           uri: remoteUri,
-          name: "draft.json",
+          name: 'draft.json',
           type: NotebookStoreItemType.File,
           children: [],
           parents: [parentRemoteUri],
-        };
+        }
       }),
       getVersionMetadata: vi.fn(async () => ({
-        md5Checksum: "checksum-1",
-        headRevisionId: "revision-1",
+        md5Checksum: 'checksum-1',
+        headRevisionId: 'revision-1',
       })),
       getMetadata: vi.fn(async () => ({
         uri: remoteUri,
-        name: "draft.json",
+        name: 'draft.json',
         type: NotebookStoreItemType.File,
         children: [],
         parents: [parentRemoteUri],
       })),
       save: vi.fn(async () => ({ conflicted: false })),
-    };
-    const store = createTestStore(driveStore);
+    }
+    const store = createTestStore(driveStore)
     await store.files.put({
-      id: "local://file/pending",
-      name: "draft.json",
-      remoteId: "",
+      id: 'local://file/pending',
+      name: 'draft.json',
+      remoteId: '',
       parentRemoteIdWhenCreated: parentRemoteUri,
-      lastRemoteChecksum: "",
-      lastSynced: "",
-      doc: "",
-      md5Checksum: "",
-    });
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
 
-    const firstSync = store.sync("local://file/pending");
-    await createStartedPromise;
-    const secondSync = store.sync("local://file/pending");
-    releaseCreate();
-    await Promise.all([firstSync, secondSync]);
+    const firstSync = store.sync('local://file/pending')
+    await createStartedPromise
+    const secondSync = store.sync('local://file/pending')
+    releaseCreate()
+    await Promise.all([firstSync, secondSync])
 
-    const record = await store.files.get("local://file/pending");
-    expect(record?.remoteId).toBe(remoteUri);
-    expect(record?.parentRemoteIdWhenCreated).toBeUndefined();
-    expect(driveStore.create).toHaveBeenCalledTimes(1);
-  });
-});
+    const record = await store.files.get('local://file/pending')
+    expect(record?.remoteId).toBe(remoteUri)
+    expect(record?.parentRemoteIdWhenCreated).toBeUndefined()
+    expect(driveStore.create).toHaveBeenCalledTimes(1)
+  })
+})
 
-describe("LocalNotebooks rename", () => {
-  it("renames Drive-backed files upstream before updating the local mirror", async () => {
-    const remoteUri = "https://drive.google.com/file/d/file123/view";
+describe('LocalNotebooks rename', () => {
+  it('renames Drive-backed files upstream before updating the local mirror', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
     const driveStore = {
       rename: vi.fn(async () => ({
         uri: remoteUri,
-        name: "renamed.json",
+        name: 'renamed.json',
         type: NotebookStoreItemType.File,
         children: [],
         remoteUri,
         parents: [],
       })),
-    };
-    const store = createTestStore(driveStore);
+    }
+    const store = createTestStore(driveStore)
     await store.files.put({
-      id: "local://file/drive",
-      name: "original.json",
+      id: 'local://file/drive',
+      name: 'original.json',
       remoteId: remoteUri,
-      lastRemoteChecksum: "",
-      lastSynced: "",
-      doc: "",
-      md5Checksum: "",
-    });
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
     await store.folders.put({
-      id: "local://folder/drive",
-      name: "Drive",
-      remoteId: "https://drive.google.com/drive/folders/folder123",
-      children: ["local://file/drive"],
-      lastSynced: "",
-    });
+      id: 'local://folder/drive',
+      name: 'Drive',
+      remoteId: 'https://drive.google.com/drive/folders/folder123',
+      children: ['local://file/drive'],
+      lastSynced: '',
+    })
 
-    const result = await store.rename("local://file/drive", "renamed.json");
+    const result = await store.rename('local://file/drive', 'renamed.json')
 
-    expect(driveStore.rename).toHaveBeenCalledWith(remoteUri, "renamed.json");
+    expect(driveStore.rename).toHaveBeenCalledWith(remoteUri, 'renamed.json')
     expect(result).toMatchObject({
-      uri: "local://file/drive",
-      name: "renamed.json",
+      uri: 'local://file/drive',
+      name: 'renamed.json',
       remoteUri,
-      parents: ["local://folder/drive"],
-    });
-    expect((await store.files.get("local://file/drive"))?.name).toBe(
-      "renamed.json",
-    );
-  });
+      parents: ['local://folder/drive'],
+    })
+    expect((await store.files.get('local://file/drive'))?.name).toBe(
+      'renamed.json'
+    )
+  })
 
-  it("does not update Drive-backed local metadata when the upstream rename fails", async () => {
-    const remoteUri = "https://drive.google.com/file/d/file123/view";
+  it('does not update Drive-backed local metadata when the upstream rename fails', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
     const driveStore = {
       rename: vi.fn(async () => {
-        throw new Error("permission denied");
+        throw new Error('permission denied')
       }),
-    };
-    const store = createTestStore(driveStore);
+    }
+    const store = createTestStore(driveStore)
     await store.files.put({
-      id: "local://file/drive",
-      name: "original.json",
+      id: 'local://file/drive',
+      name: 'original.json',
       remoteId: remoteUri,
-      lastRemoteChecksum: "",
-      lastSynced: "",
-      doc: "",
-      md5Checksum: "",
-    });
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
 
     await expect(
-      store.rename("local://file/drive", "renamed.json"),
-    ).rejects.toThrow("permission denied");
+      store.rename('local://file/drive', 'renamed.json')
+    ).rejects.toThrow('permission denied')
 
-    expect((await store.files.get("local://file/drive"))?.name).toBe(
-      "original.json",
-    );
-  });
-});
+    expect((await store.files.get('local://file/drive'))?.name).toBe(
+      'original.json'
+    )
+  })
+})
 
-describe("LocalNotebooks markdown sidecar sync", () => {
-  it("serializes notebooks to markdown locally before uploading the sidecar", async () => {
-    const markdownUri = "https://drive.google.com/file/d/sidecar123/view";
-    const remoteUri = "https://drive.google.com/file/d/notebook123/view";
+describe('LocalNotebooks Drive conflict resolution', () => {
+  it('records a conflict instead of creating a timestamped Drive copy', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const localDoc = notebookJson("print('local')")
+    const upstreamNotebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          kind: parser_pb.CellKind.CODE,
+          languageId: 'python',
+          value: "print('upstream')",
+        }),
+      ],
+    })
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: remoteUri,
+        name: 'notebook.json',
+        type: NotebookStoreItemType.File,
+        children: [],
+        parents: ['https://drive.google.com/drive/folders/folder123'],
+      })),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: 'upstream-checksum',
+        headRevisionId: 'upstream-revision',
+      })),
+      load: vi.fn(async () => upstreamNotebook),
+      create: vi.fn(),
+      save: vi.fn(),
+      saveContent: vi.fn(),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: 'local://file/conflict',
+      name: 'notebook.json',
+      remoteId: remoteUri,
+      lastRemoteChecksum: 'base-checksum',
+      lastUpstreamVersion: {
+        checksum: 'base-checksum',
+        revisionId: 'base-revision',
+      },
+      lastSynced: '2026-05-01T00:00:00.000Z',
+      doc: localDoc,
+      md5Checksum: 'local-checksum',
+    })
+
+    await store.sync('local://file/conflict')
+
+    const record = await store.files.get('local://file/conflict')
+    expect(record?.remoteId).toBe(remoteUri)
+    expect(record?.name).toBe('notebook.json')
+    expect(record?.lastRemoteChecksum).toBe('base-checksum')
+    expect(record?.conflict).toMatchObject({
+      upstreamChecksum: 'upstream-checksum',
+      upstreamVersion: {
+        checksum: 'upstream-checksum',
+        revisionId: 'upstream-revision',
+      },
+      localChecksumAtDetection: 'local-checksum',
+    })
+    expect(record?.conflict?.upstreamDoc).toBe(
+      toJsonString(
+        parser_pb.NotebookSchema,
+        upstreamNotebook,
+        NOTEBOOK_JSON_WRITE_OPTIONS
+      )
+    )
+    await expect(
+      store.getSyncState('local://file/conflict')
+    ).resolves.toMatchObject({
+      status: 'conflicted',
+      remoteId: remoteUri,
+    })
+    await expect(store.listDriveBackedFilesNeedingSync()).resolves.toEqual([])
+    expect(driveStore.create).not.toHaveBeenCalled()
+    expect(driveStore.save).not.toHaveBeenCalled()
+    expect(driveStore.saveContent).not.toHaveBeenCalled()
+  })
+
+  it('keeps local edits local while a Drive conflict is active', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const store = createTestStore({})
+    const nextNotebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          kind: parser_pb.CellKind.CODE,
+          languageId: 'python',
+          value: "print('resolved locally')",
+        }),
+      ],
+    })
+    await store.files.put({
+      id: 'local://file/conflict',
+      name: 'notebook.json',
+      remoteId: remoteUri,
+      lastRemoteChecksum: 'base-checksum',
+      lastSynced: '',
+      doc: notebookJson("print('local')"),
+      md5Checksum: 'local-checksum',
+      conflict: {
+        detectedAt: '2026-05-30T00:00:00.000Z',
+        upstreamChecksum: 'upstream-checksum',
+        upstreamDoc: notebookJson("print('upstream')"),
+        localChecksumAtDetection: 'local-checksum',
+      },
+    })
+
+    await store.save('local://file/conflict', nextNotebook)
+
+    const record = await store.files.get('local://file/conflict')
+    expect(record?.doc).toBe(
+      toJsonString(
+        parser_pb.NotebookSchema,
+        nextNotebook,
+        NOTEBOOK_JSON_WRITE_OPTIONS
+      )
+    )
+    expect(record?.conflict).toBeTruthy()
+    expect((store as any).syncSubjects.size).toBe(0)
+    expect((store as any).markdownSyncSubjects.size).toBe(0)
+  })
+
+  it('saves the local version to the original Drive URI and clears conflict', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const localDoc = notebookJson("print('local wins')")
+    const savedChecksum = md5(localDoc)
+    const driveStore = {
+      getVersionMetadata: vi
+        .fn()
+        .mockResolvedValueOnce({
+          md5Checksum: 'upstream-checksum',
+          headRevisionId: 'upstream-revision',
+        })
+        .mockResolvedValueOnce({
+          md5Checksum: savedChecksum,
+          headRevisionId: 'saved-revision',
+        }),
+      saveContent: vi.fn(async () => undefined),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: 'local://file/conflict',
+      name: 'notebook.json',
+      remoteId: remoteUri,
+      lastRemoteChecksum: 'base-checksum',
+      lastSynced: '',
+      doc: localDoc,
+      md5Checksum: 'local-checksum',
+      conflict: {
+        detectedAt: '2026-05-30T00:00:00.000Z',
+        upstreamChecksum: 'upstream-checksum',
+        upstreamVersion: {
+          checksum: 'upstream-checksum',
+          revisionId: 'upstream-revision',
+        },
+        upstreamDoc: notebookJson("print('upstream')"),
+        localChecksumAtDetection: 'local-checksum',
+      },
+    })
+
+    await store.resolveConflictWithLocal('local://file/conflict')
+
+    const record = await store.files.get('local://file/conflict')
+    expect(driveStore.saveContent).toHaveBeenCalledWith(
+      remoteUri,
+      localDoc,
+      'application/json'
+    )
+    expect(record?.remoteId).toBe(remoteUri)
+    expect(record?.conflict).toBeUndefined()
+    expect(record?.lastRemoteChecksum).toBe(savedChecksum)
+    expect(record?.lastUpstreamVersion).toEqual({
+      checksum: savedChecksum,
+      revisionId: 'saved-revision',
+    })
+    await expect(
+      store.getSyncState('local://file/conflict')
+    ).resolves.toMatchObject({
+      status: 'synced',
+    })
+  })
+
+  it('requires force when upstream changed again before saving local version', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const driveStore = {
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: 'newer-upstream-checksum',
+        headRevisionId: 'newer-upstream-revision',
+      })),
+      saveContent: vi.fn(async () => undefined),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: 'local://file/conflict',
+      name: 'notebook.json',
+      remoteId: remoteUri,
+      lastRemoteChecksum: 'base-checksum',
+      lastSynced: '',
+      doc: notebookJson("print('local')"),
+      md5Checksum: 'local-checksum',
+      conflict: {
+        detectedAt: '2026-05-30T00:00:00.000Z',
+        upstreamChecksum: 'upstream-checksum',
+        upstreamDoc: notebookJson("print('upstream')"),
+        localChecksumAtDetection: 'local-checksum',
+      },
+    })
+
+    await expect(
+      store.resolveConflictWithLocal('local://file/conflict')
+    ).rejects.toBeInstanceOf(NotebookConflictChangedError)
+    expect(driveStore.saveContent).not.toHaveBeenCalled()
+
+    await store.resolveConflictWithLocal('local://file/conflict', {
+      force: true,
+    })
+    expect(driveStore.saveContent).toHaveBeenCalledWith(
+      remoteUri,
+      expect.any(String),
+      'application/json'
+    )
+  })
+})
+
+describe('LocalNotebooks markdown sidecar sync', () => {
+  it('serializes notebooks to markdown locally before uploading the sidecar', async () => {
+    const markdownUri = 'https://drive.google.com/file/d/sidecar123/view'
+    const remoteUri = 'https://drive.google.com/file/d/notebook123/view'
     const driveStore = {
       saveContent: vi.fn(async () => undefined),
-    };
-    const store = createTestStore(driveStore);
+    }
+    const store = createTestStore(driveStore)
     const notebook = create(parser_pb.NotebookSchema, {
       cells: [
         create(parser_pb.CellSchema, {
           kind: parser_pb.CellKind.MARKUP,
-          languageId: "markdown",
-          value: "# Searchable title",
+          languageId: 'markdown',
+          value: '# Searchable title',
         }),
         create(parser_pb.CellSchema, {
           kind: parser_pb.CellKind.CODE,
-          languageId: "python",
+          languageId: 'python',
           value: 'print("hello")',
           outputs: [
             create(parser_pb.CellOutputSchema, {
               items: [
                 create(parser_pb.CellOutputItemSchema, {
                   mime: MimeType.VSCodeNotebookStdOut,
-                  type: "Buffer",
-                  data: new TextEncoder().encode("hello\n"),
+                  type: 'Buffer',
+                  data: new TextEncoder().encode('hello\n'),
                 }),
               ],
             }),
           ],
         }),
       ],
-    });
+    })
 
     await store.files.put({
-      id: "local://file/notebook",
-      name: "notebook.json",
+      id: 'local://file/notebook',
+      name: 'notebook.json',
       remoteId: remoteUri,
       markdownUri,
-      lastRemoteChecksum: "",
-      lastSynced: "",
+      lastRemoteChecksum: '',
+      lastSynced: '',
       doc: toJsonString(
         parser_pb.NotebookSchema,
         notebook,
-        NOTEBOOK_JSON_WRITE_OPTIONS,
+        NOTEBOOK_JSON_WRITE_OPTIONS
       ),
-      md5Checksum: "",
-    });
+      md5Checksum: '',
+    })
 
-    await store.syncMarkdownFile("local://file/notebook");
+    await store.syncMarkdownFile('local://file/notebook')
 
     expect(driveStore.saveContent).toHaveBeenCalledWith(
       markdownUri,
       [
-        "# Searchable title",
-        "",
-        "```python",
+        '# Searchable title',
+        '',
+        '```python',
         'print("hello")',
-        "```",
-        "",
-        "```stdout",
-        "hello",
-        "```",
-        "",
-      ].join("\n"),
-      "text/markdown",
-    );
-  });
-});
+        '```',
+        '',
+        '```stdout',
+        'hello',
+        '```',
+        '',
+      ].join('\n'),
+      'text/markdown'
+    )
+  })
+})
