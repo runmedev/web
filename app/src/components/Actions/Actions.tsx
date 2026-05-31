@@ -47,6 +47,7 @@ import {
   APPKERNEL_SANDBOX_RUNNER_NAME,
   isAppKernelRunnerName,
 } from '../../lib/runtime/appKernel'
+import { stripAnsiControlSequences } from '../../lib/ansi'
 import { getJupyterManager } from '../../lib/runtime/jupyterManager'
 import {
   driveLinkCoordinator,
@@ -330,6 +331,11 @@ type SupportedLanguage =
 
 const outputTextDecoder = new TextDecoder()
 const ALWAYS_SKIP_MIMES = new Set<string>([MimeType.StatefulRunmeTerminal])
+const ANSI_STRIPPED_TEXT_MIMES = new Set<string>([
+  MimeType.VSCodeNotebookStdOut,
+  MimeType.VSCodeNotebookStdErr,
+  'text/plain',
+])
 
 function normalizeBinaryData(
   data?: Uint8Array | ArrayLike<number> | null
@@ -411,6 +417,12 @@ function decodeOutputText(
   }
 }
 
+function formatOutputTextForDisplay(text: string, mime: string): string {
+  return ANSI_STRIPPED_TEXT_MIMES.has(mime)
+    ? stripAnsiControlSequences(text)
+    : text
+}
+
 function uint8ArrayToBase64(
   data?: Uint8Array | ArrayLike<number> | null
 ): string {
@@ -442,7 +454,10 @@ function ActionOutputItemView({
   itemIndex: number
 }) {
   const mime = item.mime || ''
-  const text = decodeOutputText(item.data ?? new Uint8Array())
+  const text = formatOutputTextForDisplay(
+    decodeOutputText(item.data ?? new Uint8Array()),
+    mime
+  )
   const isStreaming = item.metadata?.[IOPUB_INCOMPLETE_METADATA_KEY] === 'true'
   const hasIopubMetadata =
     item.metadata?.[IOPUB_INCOMPLETE_METADATA_KEY] === 'true' ||
