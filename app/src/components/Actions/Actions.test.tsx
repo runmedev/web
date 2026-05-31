@@ -14,7 +14,7 @@ import {
   getNotebookDiffDocumentUri,
   registerNotebookDiffDocument,
 } from '../../lib/notebookDiff/registry'
-import Actions, { Action } from './Actions'
+import Actions, { Action, ActionOutputItems } from './Actions'
 
 const contextMocks = vi.hoisted(() => ({
   workspaceDocuments: [] as Array<{ uri: string; title: string }>,
@@ -665,6 +665,24 @@ describe('Action component', () => {
     expect(
       screen.queryByText(/mime=application\/vnd\.code\.notebook\.stdout/)
     ).toBeNull()
+  })
+
+  it('does not show ANSI control sequences in stdout output items', () => {
+    const stdoutOutput = create(parser_pb.CellOutputSchema, {
+      items: [
+        create(parser_pb.CellOutputItemSchema, {
+          mime: 'application/vnd.code.notebook.stdout',
+          type: 'Buffer',
+          data: new TextEncoder().encode('\x1b[2m\x1b[33m|\x1b[0m\x1b[m ok\n'),
+        }),
+      ],
+    })
+
+    render(<ActionOutputItems outputs={[stdoutOutput]} />)
+
+    const item = screen.getByTestId('cell-output-item')
+    expect(item.textContent).toContain('| ok')
+    expect(item.textContent).not.toContain('\x1b[')
   })
 
   it('shows language selector in markdown edit mode and converts to code language', () => {
