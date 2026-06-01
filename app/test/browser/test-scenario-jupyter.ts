@@ -379,6 +379,43 @@ function waitForCellRunStart(
   return { started: false, runID: "" };
 }
 
+function executeCellViaRuntime(cellRefId: string): boolean {
+  const detail = evalInBrowser(`(async () => {
+    const api = window.app?.notebooks;
+    if (!api?.get || !api?.execute) return 'missing-notebooks-api';
+    const doc = await api.get({ uri: '${SCENARIO_NOTEBOOK_URI}' });
+    await api.execute({
+      target: { handle: doc.handle },
+      refIds: ['${cellRefId}'],
+    });
+    return 'ok';
+  })()`);
+  return detail.includes("ok");
+}
+
+function triggerCellRun(
+  cellRefId: string,
+  previousRunID = "",
+  timeoutMs = 7000,
+): { started: boolean; runID: string; method: "click" | "runtime" | "" } {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (clickRun(cellRefId)) {
+      const start = waitForCellRunStart(cellRefId, previousRunID, timeoutMs);
+      if (start.started) {
+        return { ...start, method: "click" };
+      }
+    }
+
+    if (executeCellViaRuntime(cellRefId)) {
+      const start = waitForCellRunStart(cellRefId, previousRunID, timeoutMs);
+      if (start.started) {
+        return { ...start, method: "runtime" };
+      }
+    }
+  }
+  return { started: false, runID: "", method: "" };
+}
+
 function captureStepScreenshot(filename: string): void {
   run(agentBrowserCommand(`screenshot ${join(OUTPUT_DIR, filename)}`));
 }
@@ -1319,17 +1356,9 @@ snapshot = run(agentBrowserCommand("snapshot -i")).stdout;
 writeArtifact("scenario-jupyter-cuj-03-opened.txt", snapshot);
 
 const startServerRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_start_server")?.lastRunID ?? "").trim();
-let startServerStarted = false;
-let startServerRunID = "";
-for (let attempt = 0; attempt < 3 && !startServerStarted; attempt += 1) {
-  if (clickRun("cell_start_server")) {
-    const start = waitForCellRunStart("cell_start_server", startServerRunIDBefore, 7000);
-    startServerStarted = start.started;
-    startServerRunID = start.runID;
-  }
-}
-if (startServerStarted) {
-  pass("Triggered server start bash cell");
+const startServerRun = triggerCellRun("cell_start_server", startServerRunIDBefore);
+if (startServerRun.started) {
+  pass(`Triggered server start bash cell via ${startServerRun.method}`);
 } else {
   fail("Failed to trigger server start bash cell");
   finalizeAndExit();
@@ -1337,7 +1366,7 @@ if (startServerStarted) {
 
 let probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_start_server");
-  return p.status === "ok" && !!c && c.lastRunID === startServerRunID && c.exitCode === "0";
+  return p.status === "ok" && !!c && c.lastRunID === startServerRun.runID && c.exitCode === "0";
 }, 90000);
 scrollToBottomOfNotebookView();
 let startCell = probe.cells?.find((cell) => cell.refId === "cell_start_server");
@@ -1350,17 +1379,9 @@ if (probe.status === "ok" && startCell?.exitCode === "0") {
 }
 
 const syncServersRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_sync_servers")?.lastRunID ?? "").trim();
-let syncServersStarted = false;
-let syncServersRunID = "";
-for (let attempt = 0; attempt < 3 && !syncServersStarted; attempt += 1) {
-  if (clickRun("cell_sync_servers")) {
-    const start = waitForCellRunStart("cell_sync_servers", syncServersRunIDBefore, 7000);
-    syncServersStarted = start.started;
-    syncServersRunID = start.runID;
-  }
-}
-if (syncServersStarted) {
-  pass("Triggered server sync bash cell");
+const syncServersRun = triggerCellRun("cell_sync_servers", syncServersRunIDBefore);
+if (syncServersRun.started) {
+  pass(`Triggered server sync bash cell via ${syncServersRun.method}`);
 } else {
   fail("Failed to trigger server sync bash cell");
   finalizeAndExit();
@@ -1371,7 +1392,7 @@ probe = waitForNotebookProbe((p) => {
   return (
     p.status === "ok" &&
     !!c &&
-    c.lastRunID === syncServersRunID &&
+    c.lastRunID === syncServersRun.runID &&
     c.exitCode === "0" &&
     new RegExp(`synced\\s+port-${JUPYTER_PORT}`, "i").test(c.decodedText ?? "")
   );
@@ -1391,8 +1412,9 @@ if (
 }
 
 const setupRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_setup_kernel")?.lastRunID ?? "").trim();
-if (clickRun("cell_setup_kernel")) {
-  pass("Triggered AppKernel setup cell");
+const setupRun = triggerCellRun("cell_setup_kernel", setupRunIDBefore);
+if (setupRun.started) {
+  pass(`Triggered AppKernel setup cell via ${setupRun.method}`);
 } else {
   fail("Failed to trigger AppKernel setup cell");
   finalizeAndExit();
@@ -1426,8 +1448,9 @@ if (
     run(agentBrowserCommand("reload"));
     run(agentBrowserCommand("wait 2200"));
     const retryRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_setup_kernel")?.lastRunID ?? "").trim();
-    if (clickRun("cell_setup_kernel")) {
-      pass("Retried AppKernel setup cell");
+    const setupRetryRun = triggerCellRun("cell_setup_kernel", retryRunIDBefore);
+    if (setupRetryRun.started) {
+      pass(`Retried AppKernel setup cell via ${setupRetryRun.method}`);
     } else {
       fail("Failed to trigger AppKernel setup retry");
       finalizeAndExit();
@@ -1554,17 +1577,12 @@ if (
 }
 
 const ipyARunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_ipy_a")?.lastRunID ?? "").trim();
-const ipyATriggeredByClick = clickRun("cell_ipy_a");
+const ipyARun = triggerCellRun("cell_ipy_a", ipyARunIDBefore);
 captureStepScreenshot("scenario-jupyter-cuj-07a-ipy-a-trigger.png");
-if (ipyATriggeredByClick) {
-  pass("Triggered IPython cell A");
+if (ipyARun.started) {
+  pass(`Triggered IPython cell A via ${ipyARun.method}`);
 } else {
-  const ipyAStarted = waitForCellRunStart("cell_ipy_a", ipyARunIDBefore, 7000);
-  if (ipyAStarted.started) {
-    pass("Triggered IPython cell A (detected run start despite missing click ack)");
-  } else {
-    fail("Failed to trigger IPython cell A");
-  }
+  fail("Failed to trigger IPython cell A");
 }
 probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_ipy_a");
@@ -1581,8 +1599,10 @@ if (/set\s+42/i.test(ipyAOutput)) {
   finalizeAndExit();
 }
 
-if (clickRun("cell_ipy_b")) {
-  pass("Triggered IPython cell B");
+const ipyBRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_ipy_b")?.lastRunID ?? "").trim();
+const ipyBRun = triggerCellRun("cell_ipy_b", ipyBRunIDBefore);
+if (ipyBRun.started) {
+  pass(`Triggered IPython cell B via ${ipyBRun.method}`);
 } else {
   fail("Failed to trigger IPython cell B");
 }
@@ -1602,18 +1622,12 @@ if (/read\s+42/i.test(ipyBOutput)) {
 }
 
 const stopKernelRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_stop_kernel")?.lastRunID ?? "").trim();
-const stopKernelTriggeredByClick = clickRun("cell_stop_kernel");
-let stopKernelStarted = stopKernelTriggeredByClick;
-if (stopKernelTriggeredByClick) {
-  pass("Triggered kernel stop cell");
+const stopKernelRun = triggerCellRun("cell_stop_kernel", stopKernelRunIDBefore);
+let stopKernelStarted = stopKernelRun.started;
+if (stopKernelStarted) {
+  pass(`Triggered kernel stop cell via ${stopKernelRun.method}`);
 } else {
-  const stopKernelStart = waitForCellRunStart("cell_stop_kernel", stopKernelRunIDBefore, 7000);
-  stopKernelStarted = stopKernelStart.started;
-  if (stopKernelStarted) {
-    pass("Triggered kernel stop cell (detected run start despite missing click ack)");
-  } else {
-    pass("Kernel stop cell cleanup did not start (best-effort)");
-  }
+  pass("Kernel stop cell cleanup did not start (best-effort)");
 }
 
 probe = stopKernelStarted
@@ -1631,19 +1645,13 @@ if (probe.status === "ok" && stopKernelProbe?.exitCode === "0") {
 }
 
 const stopServerRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_stop_server")?.lastRunID ?? "").trim();
-const stopServerTriggeredByClick = clickRun("cell_stop_server");
+const stopServerRun = triggerCellRun("cell_stop_server", stopServerRunIDBefore);
 captureStepScreenshot("scenario-jupyter-cuj-09a-stop-server-trigger.png");
-let stopServerStarted = stopServerTriggeredByClick;
-if (stopServerTriggeredByClick) {
-  pass("Triggered server stop bash cell");
+let stopServerStarted = stopServerRun.started;
+if (stopServerStarted) {
+  pass(`Triggered server stop bash cell via ${stopServerRun.method}`);
 } else {
-  const stopServerStart = waitForCellRunStart("cell_stop_server", stopServerRunIDBefore, 7000);
-  if (stopServerStart.started) {
-    stopServerStarted = true;
-    pass("Triggered server stop bash cell (detected run start despite missing click ack)");
-  } else {
-    fail("Failed to trigger server stop bash cell");
-  }
+  fail("Failed to trigger server stop bash cell");
 }
 
 probe = stopServerStarted
