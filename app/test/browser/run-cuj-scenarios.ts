@@ -438,7 +438,7 @@ function runNodeScript(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): CommandResult {
-  const timeoutMs = Number(process.env.CUJ_SCENARIO_TIMEOUT_MS ?? "240000");
+  const timeoutMs = Number(env.CUJ_SCENARIO_TIMEOUT_MS ?? process.env.CUJ_SCENARIO_TIMEOUT_MS ?? "240000");
   const result = spawnSync(process.execPath, [scriptPath], {
     cwd,
     encoding: "utf-8",
