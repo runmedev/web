@@ -439,7 +439,7 @@ function runNodeScript(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): CommandResult {
-  const timeoutMs = Number(process.env.CUJ_SCENARIO_TIMEOUT_MS ?? "240000");
+  const timeoutMs = Number(env.CUJ_SCENARIO_TIMEOUT_MS ?? process.env.CUJ_SCENARIO_TIMEOUT_MS ?? "240000");
   const result = spawnSync(process.execPath, [scriptPath], {
     cwd,
     encoding: "utf-8",
@@ -1114,6 +1114,9 @@ async function main(): Promise<void> {
 
       const compiled = join(GENERATED_DIR, `${basename.replace(/\.ts$/, "")}.js`);
       const scenarioRunEnv: NodeJS.ProcessEnv = buildScenarioBrowserEnv(scenarioEnv, scenarioName);
+      if (scenarioName === "jupyter" && !scenarioRunEnv.CUJ_SCENARIO_TIMEOUT_MS) {
+        scenarioRunEnv.CUJ_SCENARIO_TIMEOUT_MS = "480000";
+      }
       let runResult = runNodeScript(compiled, APP_ROOT, scenarioRunEnv);
       printOutput(runResult.stdout, runResult.stderr);
 
