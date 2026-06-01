@@ -80,14 +80,25 @@ const BACKEND_WS = toWsUrl(BACKEND_URL);
 // TODO(jlewi): This should really be shared tooling for all the scenarios.
 function run(command: string): { status: number; stdout: string; stderr: string } {
   const effectiveCommand = withAgentBrowserOptions(command);
-  console.log(`Running command: ${effectiveCommand}`);
+  const clipForLog = (value: string, maxChars = 500): string => {
+    if (value.length <= maxChars) {
+      return value;
+    }
+    return `${value.slice(0, maxChars)}...[truncated ${value.length - maxChars} chars]`;
+  };
+  console.log(`Running command: ${clipForLog(effectiveCommand)}`);
   const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "30000");
   const maxLogChars = Number(process.env.CUJ_SCENARIO_CMD_LOG_CHARS ?? "4000");
+  const rawMaxBuffer = Number(process.env.CUJ_CHILD_PROCESS_MAX_BUFFER_BYTES ?? "");
+  const maxBuffer = Number.isFinite(rawMaxBuffer) && rawMaxBuffer > 0
+    ? Math.floor(rawMaxBuffer)
+    : 64 * 1024 * 1024;
   const result = spawnSync(effectiveCommand, {
     shell: true,
     encoding: "utf-8",
     timeout: timeoutMs,
     killSignal: "SIGKILL",
+    maxBuffer,
   });
   const errorCode =
     typeof result.error === "object" && result.error !== null && "code" in result.error
@@ -97,16 +108,24 @@ function run(command: string): { status: number; stdout: string; stderr: string 
   const timeoutHint = timedOut
     ? `\n[scenario-timeout] command timed out after ${timeoutMs}ms: ${effectiveCommand}\n`
     : "";
+  const errorMessage =
+    typeof result.error === "object" && result.error !== null && "message" in result.error
+      ? String((result.error as { message?: string }).message ?? "")
+      : "";
+  const errorHint =
+    !timedOut && (errorCode || errorMessage)
+      ? `\n[scenario-error] command failed: ${[errorCode, errorMessage].filter(Boolean).join(": ")}\n`
+      : "";
   const status = result.status ?? (timedOut ? 124 : 1);
   const stdout = result.stdout ?? "";
-  const stderr = `${result.stderr ?? ""}${timeoutHint}`;
+  const stderr = `${result.stderr ?? ""}${timeoutHint}${errorHint}`;
   const clip = (value: string): string => {
     if (!Number.isFinite(maxLogChars) || maxLogChars <= 0 || value.length <= maxLogChars) {
       return value;
     }
     return `${value.slice(0, maxLogChars)}\n...[truncated ${value.length - maxLogChars} chars]...`;
   };
-  console.log(`[run-result] status=${status} command=${effectiveCommand}`);
+  console.log(`[run-result] status=${status} command=${clipForLog(effectiveCommand)}`);
   if (stdout.trim()) {
     console.log(`[run-stdout]\n${clip(stdout)}`);
   }
@@ -1316,15 +1335,26 @@ if (waitForRunButton("cell_start_server")) {
 snapshot = run(agentBrowserCommand("snapshot -i")).stdout;
 writeArtifact("scenario-jupyter-cuj-03-opened.txt", snapshot);
 
-if (clickRun("cell_start_server")) {
+const startServerRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_start_server")?.lastRunID ?? "").trim();
+let startServerStarted = false;
+let startServerRunID = "";
+for (let attempt = 0; attempt < 3 && !startServerStarted; attempt += 1) {
+  if (clickRun("cell_start_server")) {
+    const start = waitForCellRunStart("cell_start_server", startServerRunIDBefore, 7000);
+    startServerStarted = start.started;
+    startServerRunID = start.runID;
+  }
+}
+if (startServerStarted) {
   pass("Triggered server start bash cell");
 } else {
   fail("Failed to trigger server start bash cell");
+  finalizeAndExit();
 }
 
 let probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_start_server");
-  return p.status === "ok" && !!c && c.exitCode === "0";
+  return p.status === "ok" && !!c && c.lastRunID === startServerRunID && c.exitCode === "0";
 }, 90000);
 scrollToBottomOfNotebookView();
 let startCell = probe.cells?.find((cell) => cell.refId === "cell_start_server");
