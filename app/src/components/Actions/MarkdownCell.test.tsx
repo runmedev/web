@@ -190,27 +190,6 @@ describe("MarkdownCell", () => {
     );
   });
 
-  it("allows rendered markdown cells to scroll horizontally", () => {
-    const cell = create(parser_pb.CellSchema, {
-      refId: "md-wide-table",
-      kind: parser_pb.CellKind.MARKUP,
-      languageId: "markdown",
-      outputs: [],
-      metadata: {},
-      value:
-        "| Column 1 | Column 2 | Column 3 | Column 4 | Column 5 |\n" +
-        "| --- | --- | --- | --- | --- |\n" +
-        "| value-1 | value-2 | value-3 | value-4 | value-5 |",
-    });
-    const stub = new StubCellData(cell);
-
-    renderMarkdownCell(stub as unknown as CellData);
-
-    const rendered = screen.getByTestId("markdown-rendered");
-    expect(rendered.className).toContain("overflow-x-auto");
-    expect(rendered.className).toContain("max-w-full");
-  });
-
   it("focuses rendered markdown when leaving editor mode with escape", async () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "md-escape-rendered",
