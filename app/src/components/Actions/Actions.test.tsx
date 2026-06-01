@@ -17,12 +17,20 @@ import {
 import Actions, { Action, ActionOutputItems } from './Actions'
 
 const contextMocks = vi.hoisted(() => ({
-  workspaceDocuments: [] as Array<{ uri: string; title: string }>,
+  workspaceDocuments: [] as Array<{
+    uri: string
+    title: string
+    state?: 'loading' | 'loaded' | 'blocked' | 'error'
+  }>,
   currentDoc: null as string | null,
   setCurrentDoc: vi.fn(),
   showDocument: vi.fn(),
   closeWorkspaceDocument: vi.fn(),
   getNotebookData: vi.fn(),
+  notebookSnapshots: new Map<
+    string,
+    { uri: string; loaded: boolean; notebook: parser_pb.Notebook }
+  >(),
   notebookStore: null as null | {
     files?: { get: ReturnType<typeof vi.fn> }
     getMetadata: ReturnType<typeof vi.fn>
@@ -69,7 +77,8 @@ vi.mock('../../contexts/SettingsContext', () => ({
 vi.mock('../../contexts/NotebookContext', () => ({
   useNotebookContext: () => ({
     getNotebookData: contextMocks.getNotebookData,
-    useNotebookSnapshot: () => null,
+    useNotebookSnapshot: (uri: string) =>
+      contextMocks.notebookSnapshots.get(uri) ?? null,
   }),
 }))
 
@@ -229,6 +238,7 @@ beforeEach(() => {
   contextMocks.closeWorkspaceDocument.mockReset()
   contextMocks.getNotebookData.mockReset()
   contextMocks.getNotebookData.mockReturnValue(null)
+  contextMocks.notebookSnapshots.clear()
   contextMocks.notebookStore = null
   conflictMocks.openNotebookConflictDiff.mockReset()
   conflictMocks.openNotebookConflictDiff.mockResolvedValue(undefined)
@@ -237,6 +247,40 @@ beforeEach(() => {
 })
 
 describe('Actions tabs', () => {
+  it('enables horizontal scrolling for wide notebook content', () => {
+    const uri = 'local://file/wide-table.runme.md'
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'wide-table.runme.md', state: 'loaded' },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, {
+        metadata: {},
+        cells: [],
+      }),
+    })
+
+    render(<Actions />)
+
+    const scrollViewport = Array.from(
+      document.querySelectorAll('[data-document-id]')
+    ).find(
+      (element) =>
+        element.getAttribute('data-document-id') === uri &&
+        String(element.className).includes('rt-ScrollAreaViewport')
+    )
+    const scrollRoot = scrollViewport?.parentElement
+
+    expect(scrollViewport).toBeTruthy()
+    expect(scrollRoot).toBeTruthy()
+    expect(scrollRoot?.className).not.toContain('overflow-x-hidden')
+    expect((scrollViewport as HTMLElement | undefined)?.style.overflowX).toBe(
+      'scroll'
+    )
+  })
+
   it('falls back from a stale current URI to an open workspace document', async () => {
     contextMocks.currentDoc = 'diff://notebook/not-restored'
     contextMocks.workspaceDocuments = [

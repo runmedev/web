@@ -1659,8 +1659,8 @@ function NotebookTabContent({
     <ScrollArea
       key={`scroll-${docUri}`}
       type="auto"
-      scrollbars="vertical"
-      className="flex-1 h-full min-w-0 max-w-full overflow-x-hidden"
+      scrollbars="both"
+      className="flex-1 h-full min-w-0 max-w-full"
       data-document-id={docUri}
     >
       {/* Full-width notebook column with horizontal padding for breathing room.
