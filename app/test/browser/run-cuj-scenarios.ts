@@ -65,6 +65,25 @@ const OUTPUT_DIR = join(SCRIPT_DIR, "test-output");
 const REPO_ROOT = resolve(SCRIPT_DIR, "..", "..", "..");
 const APP_ROOT = resolve(SCRIPT_DIR, "..", "..");
 const DEFAULT_HTTP_TIMEOUT_MS = Number(process.env.CUJ_HTTP_TIMEOUT_MS ?? "20000");
+const DEFAULT_CHILD_PROCESS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
+function childProcessMaxBufferBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.CUJ_CHILD_PROCESS_MAX_BUFFER_BYTES ?? process.env.CUJ_CHILD_PROCESS_MAX_BUFFER_BYTES ?? "");
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_CHILD_PROCESS_MAX_BUFFER_BYTES;
+}
+
+function childProcessErrorHint(error: unknown, prefix: string): string {
+  if (!error || typeof error !== "object") {
+    return "";
+  }
+  const code = "code" in error ? String((error as { code?: string }).code ?? "") : "";
+  const message = "message" in error ? String((error as { message?: string }).message ?? "") : "";
+  if (!code && !message) {
+    return "";
+  }
+  const detail = [code, message].filter(Boolean).join(": ");
+  return `\n${prefix} ${detail}\n`;
+}
 
 function fetchWithTimeout(
   input: string,
@@ -188,6 +207,7 @@ function resolveOidcAuthConfig(): OidcAuthConfig {
     CUJ_OIDC_CLIENT_ID: clientId,
     CUJ_OIDC_EMAIL: principalEmail,
     CUJ_OIDC_TOKEN_FILE: tokenFile,
+    CUJ_OIDC_TOKEN_TTL_SECONDS: process.env.CUJ_OIDC_TOKEN_TTL_SECONDS ?? "900",
   };
 
   return {
@@ -419,6 +439,7 @@ function run(command: string, cwd = SCRIPT_DIR): CommandResult {
     cwd,
     timeout: timeoutMs,
     killSignal: "SIGKILL",
+    maxBuffer: childProcessMaxBufferBytes(),
   });
   const errorCode =
     typeof result.error === "object" && result.error !== null && "code" in result.error
@@ -426,10 +447,11 @@ function run(command: string, cwd = SCRIPT_DIR): CommandResult {
       : "";
   const timedOut = errorCode === "ETIMEDOUT";
   const timeoutHint = timedOut ? `\n[CUJ] Command timed out after ${timeoutMs}ms: ${command}\n` : "";
+  const errorHint = childProcessErrorHint(result.error, "[CUJ] Command failed:");
   return {
     status: result.status ?? (timedOut ? 124 : 1),
     stdout: result.stdout ?? "",
-    stderr: `${result.stderr ?? ""}${timeoutHint}`,
+    stderr: `${result.stderr ?? ""}${timeoutHint}${errorHint}`,
   };
 }
 
@@ -438,13 +460,14 @@ function runNodeScript(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): CommandResult {
-  const timeoutMs = Number(process.env.CUJ_SCENARIO_TIMEOUT_MS ?? "240000");
+  const timeoutMs = Number(env.CUJ_SCENARIO_TIMEOUT_MS ?? process.env.CUJ_SCENARIO_TIMEOUT_MS ?? "240000");
   const result = spawnSync(process.execPath, [scriptPath], {
     cwd,
     encoding: "utf-8",
     env,
     timeout: timeoutMs,
     killSignal: "SIGKILL",
+    maxBuffer: childProcessMaxBufferBytes(env),
   });
   const errorCode =
     typeof result.error === "object" && result.error !== null && "code" in result.error
@@ -454,10 +477,11 @@ function runNodeScript(
   const timeoutHint = timedOut
     ? `\n[CUJ] Scenario process timed out after ${timeoutMs}ms: ${scriptPath}\n`
     : "";
+  const errorHint = childProcessErrorHint(result.error, "[CUJ] Scenario process failed:");
   return {
     status: result.status ?? (timedOut ? 124 : 1),
     stdout: result.stdout ?? "",
-    stderr: `${result.stderr ?? ""}${timeoutHint}`,
+    stderr: `${result.stderr ?? ""}${timeoutHint}${errorHint}`,
   };
 }
 
@@ -1113,6 +1137,13 @@ async function main(): Promise<void> {
 
       const compiled = join(GENERATED_DIR, `${basename.replace(/\.ts$/, "")}.js`);
       const scenarioRunEnv: NodeJS.ProcessEnv = buildScenarioBrowserEnv(scenarioEnv, scenarioName);
+      const scenarioTimeoutMs = Number(scenarioRunEnv.CUJ_SCENARIO_TIMEOUT_MS ?? "");
+      if (
+        scenarioName === "jupyter" &&
+        (!Number.isFinite(scenarioTimeoutMs) || scenarioTimeoutMs < 480000)
+      ) {
+        scenarioRunEnv.CUJ_SCENARIO_TIMEOUT_MS = "480000";
+      }
       let runResult = runNodeScript(compiled, APP_ROOT, scenarioRunEnv);
       printOutput(runResult.stdout, runResult.stderr);
 

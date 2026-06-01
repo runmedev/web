@@ -237,6 +237,12 @@
   .notebook-tab-strip::-webkit-scrollbar-thumb:hover {
     background: var(--nb-text-faint);
   }
+
+  .notebook-scroll-area .rt-ScrollAreaViewport > div {
+    min-width: 0 !important;
+    width: 100%;
+    max-width: 100%;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════

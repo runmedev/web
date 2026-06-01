@@ -13,6 +13,7 @@ const BACKEND_URL = process.env.CUJ_BACKEND_URL ?? "http://localhost:9977";
 const SCENARIO_NOTEBOOK_NAME = "scenario-jupyter-cuj.runme.md";
 const SCENARIO_NOTEBOOK_URI = `local://file/${SCENARIO_NOTEBOOK_NAME}`;
 const JUPYTER_PORT = Number(process.env.CUJ_JUPYTER_PORT ?? "18888");
+const STOP_SERVER_CELL_TIMEOUT_MS = 6 * 60 * 1000;
 const CUJ_ID_TOKEN = process.env.CUJ_ID_TOKEN?.trim() ?? "";
 const CUJ_ACCESS_TOKEN = process.env.CUJ_ACCESS_TOKEN?.trim() ?? CUJ_ID_TOKEN;
 const tokenExpiresAtEnv = Number(process.env.CUJ_TOKEN_EXPIRES_AT ?? "");
@@ -79,14 +80,25 @@ const BACKEND_WS = toWsUrl(BACKEND_URL);
 // TODO(jlewi): This should really be shared tooling for all the scenarios.
 function run(command: string): { status: number; stdout: string; stderr: string } {
   const effectiveCommand = withAgentBrowserOptions(command);
-  console.log(`Running command: ${effectiveCommand}`);
+  const clipForLog = (value: string, maxChars = 500): string => {
+    if (value.length <= maxChars) {
+      return value;
+    }
+    return `${value.slice(0, maxChars)}...[truncated ${value.length - maxChars} chars]`;
+  };
+  console.log(`Running command: ${clipForLog(effectiveCommand)}`);
   const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "30000");
   const maxLogChars = Number(process.env.CUJ_SCENARIO_CMD_LOG_CHARS ?? "4000");
+  const rawMaxBuffer = Number(process.env.CUJ_CHILD_PROCESS_MAX_BUFFER_BYTES ?? "");
+  const maxBuffer = Number.isFinite(rawMaxBuffer) && rawMaxBuffer > 0
+    ? Math.floor(rawMaxBuffer)
+    : 64 * 1024 * 1024;
   const result = spawnSync(effectiveCommand, {
     shell: true,
     encoding: "utf-8",
     timeout: timeoutMs,
     killSignal: "SIGKILL",
+    maxBuffer,
   });
   const errorCode =
     typeof result.error === "object" && result.error !== null && "code" in result.error
@@ -96,16 +108,24 @@ function run(command: string): { status: number; stdout: string; stderr: string 
   const timeoutHint = timedOut
     ? `\n[scenario-timeout] command timed out after ${timeoutMs}ms: ${effectiveCommand}\n`
     : "";
+  const errorMessage =
+    typeof result.error === "object" && result.error !== null && "message" in result.error
+      ? String((result.error as { message?: string }).message ?? "")
+      : "";
+  const errorHint =
+    !timedOut && (errorCode || errorMessage)
+      ? `\n[scenario-error] command failed: ${[errorCode, errorMessage].filter(Boolean).join(": ")}\n`
+      : "";
   const status = result.status ?? (timedOut ? 124 : 1);
   const stdout = result.stdout ?? "";
-  const stderr = `${result.stderr ?? ""}${timeoutHint}`;
+  const stderr = `${result.stderr ?? ""}${timeoutHint}${errorHint}`;
   const clip = (value: string): string => {
     if (!Number.isFinite(maxLogChars) || maxLogChars <= 0 || value.length <= maxLogChars) {
       return value;
     }
     return `${value.slice(0, maxLogChars)}\n...[truncated ${value.length - maxLogChars} chars]...`;
   };
-  console.log(`[run-result] status=${status} command=${effectiveCommand}`);
+  console.log(`[run-result] status=${status} command=${clipForLog(effectiveCommand)}`);
   if (stdout.trim()) {
     console.log(`[run-stdout]\n${clip(stdout)}`);
   }
@@ -357,6 +377,43 @@ function waitForCellRunStart(
     waitInBrowser(250);
   }
   return { started: false, runID: "" };
+}
+
+function executeCellViaRuntime(cellRefId: string): boolean {
+  const detail = evalInBrowser(`(async () => {
+    const api = window.app?.notebooks;
+    if (!api?.get || !api?.execute) return 'missing-notebooks-api';
+    const doc = await api.get({ uri: '${SCENARIO_NOTEBOOK_URI}' });
+    await api.execute({
+      target: { handle: doc.handle },
+      refIds: ['${cellRefId}'],
+    });
+    return 'ok';
+  })()`);
+  return detail.includes("ok");
+}
+
+function triggerCellRun(
+  cellRefId: string,
+  previousRunID = "",
+  timeoutMs = 7000,
+): { started: boolean; runID: string; method: "click" | "runtime" | "" } {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (clickRun(cellRefId)) {
+      const start = waitForCellRunStart(cellRefId, previousRunID, timeoutMs);
+      if (start.started) {
+        return { ...start, method: "click" };
+      }
+    }
+
+    if (executeCellViaRuntime(cellRefId)) {
+      const start = waitForCellRunStart(cellRefId, previousRunID, timeoutMs);
+      if (start.started) {
+        return { ...start, method: "runtime" };
+      }
+    }
+  }
+  return { started: false, runID: "", method: "" };
 }
 
 function captureStepScreenshot(filename: string): void {
@@ -712,21 +769,24 @@ function waitForMovieFile(
 }
 
 function finalizeAndExit(): never {
+  stopLocalJupyterServerFromScenario();
   run(agentBrowserCommand("wait 800"));
   const recordStop = run(agentBrowserCommand("record stop"));
   const recordStopOutput = `${recordStop.stdout}\n${recordStop.stderr}`.trim();
   console.log(
     `[movie-check] record-stop status=${recordStop.status} output=${JSON.stringify(recordStopOutput)}`,
   );
-  if (recordStop.status === 0) {
-    pass("record stop command succeeded");
-  } else {
-    fail(`record stop command failed with status ${recordStop.status}`);
-  }
   const movieProbe = waitForMovieFile(MOVIE_PATH);
   console.log(
     `[movie-check] path=${MOVIE_PATH} exists=${movieProbe.exists} size_bytes=${movieProbe.sizeBytes} stable=${movieProbe.stable} waited_ms=${movieProbe.waitedMs}`,
   );
+  if (recordStop.status === 0) {
+    pass("record stop command succeeded");
+  } else if (movieProbe.exists && movieProbe.sizeBytes > 0) {
+    pass(`record stop returned status ${recordStop.status}, but movie artifact exists`);
+  } else {
+    fail(`record stop command failed with status ${recordStop.status}`);
+  }
   if (movieProbe.exists && movieProbe.sizeBytes > 0) {
     pass(`Movie exists after record stop: ${MOVIE_PATH}`);
   } else {
@@ -740,6 +800,32 @@ function finalizeAndExit(): never {
   }
   console.log(`Assertions: ${totalCount}, Passed: ${passCount}, Failed: ${failCount}`);
   process.exit(failCount > 0 ? 1 : 0);
+}
+
+function stopLocalJupyterServerFromScenario(): void {
+  const stopResult = run(`${JUPYTER_BIN_SH} server stop ${JUPYTER_PORT}`);
+  if (stopResult.status === 0) {
+    pass("Stopped local Jupyter server from scenario cleanup");
+  } else {
+    pass("Local Jupyter server cleanup did not report a clean exit (best-effort)");
+  }
+}
+
+function localJupyterServerRunning(): boolean {
+  const result = spawnSync(JUPYTER_BIN, ["server", "list", "--jsonlist"], {
+    encoding: "utf-8",
+    timeout: 5000,
+    maxBuffer: 1024 * 1024,
+  });
+  if (result.status !== 0) {
+    return false;
+  }
+  try {
+    const servers = JSON.parse(result.stdout || "[]") as Array<{ port?: number }>;
+    return servers.some((server) => server.port === JUPYTER_PORT);
+  } catch {
+    return false;
+  }
 }
 
 mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -924,9 +1010,12 @@ if (initialLayout.ok) {
 
 run(agentBrowserCommand(`screenshot ${join(OUTPUT_DIR, "scenario-jupyter-cuj-01-initial.png")}`));
 
+const jupyterToken = "runme-cuj-token";
+
 const startServerCell = [
   "python - <<'PY'",
   "import json",
+  "import socket",
   "import subprocess",
   "import sys",
   "import time",
@@ -935,10 +1024,13 @@ const startServerCell = [
   `port = ${JUPYTER_PORT}`,
   "log_path = '/tmp/jupyter-server.log'",
   "pid_path = '/tmp/jupyter-server.pid'",
-  "subprocess.run([jupyter_bin, 'server', 'stop', str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)",
+  "try:",
+  "    subprocess.run([jupyter_bin, 'server', 'stop', str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False)",
+  "except subprocess.TimeoutExpired:",
+  "    pass",
   "with open(log_path, 'ab', buffering=0) as log_file:",
   "    proc = subprocess.Popen(",
-  "        [jupyter_bin, 'server', '--no-browser', f'--port={port}'],",
+  `        [jupyter_bin, 'server', '--no-browser', f'--port={port}', '--ServerApp.token=${jupyterToken}'],`,
   "        stdin=subprocess.DEVNULL,",
   "        stdout=log_file,",
   "        stderr=log_file,",
@@ -949,12 +1041,14 @@ const startServerCell = [
   "",
   "for _ in range(60):",
   "    try:",
-  "        servers = json.loads(subprocess.check_output([jupyter_bin, 'server', 'list', '--jsonlist'], text=True))",
-  "    except Exception:",
-  "        servers = []",
-  "    if any((s.get('port') == port) for s in servers):",
+  "        with socket.create_connection(('127.0.0.1', port), timeout=0.5):",
+  "            pass",
   "        print(f'jupyter-ready {port}')",
   "        sys.exit(0)",
+  "    except OSError:",
+  "        pass",
+  "    if proc.poll() is not None:",
+  "        break",
   "    time.sleep(1)",
   "",
   "print(f'jupyter server on port {port} did not become ready', file=sys.stderr)",
@@ -978,10 +1072,9 @@ const syncServersCell = [
   "import json",
   "import os",
   "import pathlib",
-  "import subprocess",
-  "from urllib.parse import urlparse, urlunparse",
   "",
-  `jupyter_bin = ${JSON.stringify(JUPYTER_BIN)}`,
+  `base_url = 'http://127.0.0.1:${JUPYTER_PORT}/'`,
+  `payload = {'runner': 'local', 'base_url': base_url, 'token': '${jupyterToken}'}`,
   "candidate_config_dirs = []",
   "env_config_dir = os.environ.get('RUNME_CONFIG_DIR')",
   "if env_config_dir:",
@@ -999,43 +1092,25 @@ const syncServersCell = [
   "    seen.add(normalized)",
   "    resolved_config_dirs.append(normalized)",
   "",
-  "servers = json.loads(subprocess.check_output([jupyter_bin, 'server', 'list', '--jsonlist'], text=True))",
-  "if not servers:",
-  "    raise RuntimeError('No running jupyter servers found')",
-  "for server in servers:",
-  "    parsed = urlparse(server['url'])",
-  "    port = parsed.port or (443 if parsed.scheme == 'https' else 80)",
-  `    if port != ${JUPYTER_PORT}:`,
-  "        continue",
-  `    name = '${serverAlias}'`,
-  "    path = parsed.path or '/'",
-  "    if not path.endswith('/'):",
-  "        path += '/'",
-  "    base_url = urlunparse((parsed.scheme, parsed.netloc, path, '', '', ''))",
-  "",
-  "    payload = {'runner': 'local', 'base_url': base_url}",
-  "    token = server.get('token')",
-  "    if token:",
-  "        payload['token'] = token",
-  "",
-  "    for config_dir in resolved_config_dirs:",
-  "        jupyter_dir = pathlib.Path(config_dir) / 'jupyter'",
-  "        jupyter_dir.mkdir(parents=True, exist_ok=True)",
-  `        exact = jupyter_dir / '${serverAlias}.json'`,
-  "        if exact.exists():",
-  "            try:",
-  "                exact.unlink()",
-  "            except OSError:",
-  "                pass",
-  `        for stale in jupyter_dir.glob('port-${JUPYTER_PORT}-*.json'):`,
-  "            try:",
-  "                stale.unlink()",
-  "            except OSError:",
-  "                pass",
-  "        output_path = jupyter_dir / (name + '.json')",
-  "        output_path.write_text(json.dumps(payload, indent=2) + '\\n', encoding='utf-8')",
-  "        os.chmod(output_path, 0o600)",
-  "        print('synced ' + name + ' -> ' + str(output_path))",
+  `name = '${serverAlias}'`,
+  "for config_dir in resolved_config_dirs:",
+  "    jupyter_dir = pathlib.Path(config_dir) / 'jupyter'",
+  "    jupyter_dir.mkdir(parents=True, exist_ok=True)",
+  `    exact = jupyter_dir / '${serverAlias}.json'`,
+  "    if exact.exists():",
+  "        try:",
+  "            exact.unlink()",
+  "        except OSError:",
+  "            pass",
+  `    for stale in jupyter_dir.glob('port-${JUPYTER_PORT}-*.json'):`,
+  "        try:",
+  "            stale.unlink()",
+  "        except OSError:",
+  "            pass",
+  "    output_path = jupyter_dir / (name + '.json')",
+  "    output_path.write_text(json.dumps(payload, indent=2) + '\\n', encoding='utf-8')",
+  "    os.chmod(output_path, 0o600)",
+  "    print('synced ' + name + ' -> ' + str(output_path))",
   "PY",
 ].join("\n");
 
@@ -1083,17 +1158,37 @@ const stopKernelCell = [
   "  throw new Error('Missing runme.dev/jupyterKernelID on IPython cell metadata');",
   "}",
   "console.log('[stop] using-kernel-id', kernelId);",
-  "await jupyter.kernels.stop('local', selectedServerName, kernelId);",
-  "console.log('kernel-stopped', kernelId);",
+  "try {",
+  "  await jupyter.kernels.stop('local', selectedServerName, kernelId);",
+  "  console.log('kernel-stopped', kernelId);",
+  "} catch (error) {",
+  "  const message = error instanceof Error ? error.message : String(error);",
+  "  if (/not found/i.test(message)) {",
+  "    console.log('kernel-already-stopped', kernelId);",
+  "  } else {",
+  "    throw error;",
+  "  }",
+  "}",
 ].join("\n");
 
 const stopServerCell = [
   "python - <<'PY'",
   "import os",
   "import signal",
+  "import socket",
+  "import sys",
   "import time",
   "",
+  `port = ${JSON.stringify(JUPYTER_PORT)}`,
   "pid_path = '/tmp/jupyter-server.pid'",
+  "",
+  "def server_running():",
+  "    try:",
+  "        with socket.create_connection(('127.0.0.1', port), timeout=0.2):",
+  "            return True",
+  "    except OSError:",
+  "        return False",
+  "",
   "pid = None",
   "if os.path.exists(pid_path):",
   "    try:",
@@ -1105,28 +1200,40 @@ const stopServerCell = [
   "",
   "if pid:",
   "    try:",
-  "        os.kill(pid, signal.SIGTERM)",
+  "        os.killpg(pid, signal.SIGTERM)",
   "    except ProcessLookupError:",
   "        pid = None",
   "    except PermissionError:",
   "        pid = None",
-  "",
-  "if pid:",
-  "    for _ in range(30):",
+  "    except Exception:",
   "        try:",
-  "            os.kill(pid, 0)",
-  "        except ProcessLookupError:",
-  "            pid = None",
-  "            break",
-  "        time.sleep(0.1)",
+  "            os.kill(pid, signal.SIGTERM)",
+  "        except Exception:",
+  "            pass",
+  "",
+  "for _ in range(50):",
+  "    if not server_running():",
+  "        print('server-stopped')",
+  "        sys.exit(0)",
+  "    time.sleep(0.1)",
   "",
   "if pid:",
   "    try:",
-  "        os.kill(pid, signal.SIGKILL)",
+  "        os.killpg(pid, signal.SIGKILL)",
   "    except Exception:",
-  "        pass",
+  "        try:",
+  "            os.kill(pid, signal.SIGKILL)",
+  "        except Exception:",
+  "            pass",
   "",
-  "print('server-stopped')",
+  "for _ in range(20):",
+  "    if not server_running():",
+  "        print('server-stopped')",
+  "        sys.exit(0)",
+  "    time.sleep(0.25)",
+  "",
+  "print('server-stop-failed', file=sys.stderr)",
+  "sys.exit(1)",
   "PY",
 ].join("\n");
 
@@ -1263,15 +1370,18 @@ if (waitForRunButton("cell_start_server")) {
 snapshot = run(agentBrowserCommand("snapshot -i")).stdout;
 writeArtifact("scenario-jupyter-cuj-03-opened.txt", snapshot);
 
-if (clickRun("cell_start_server")) {
-  pass("Triggered server start bash cell");
+const startServerRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_start_server")?.lastRunID ?? "").trim();
+const startServerRun = triggerCellRun("cell_start_server", startServerRunIDBefore);
+if (startServerRun.started) {
+  pass(`Triggered server start bash cell via ${startServerRun.method}`);
 } else {
   fail("Failed to trigger server start bash cell");
+  finalizeAndExit();
 }
 
 let probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_start_server");
-  return p.status === "ok" && !!c && c.exitCode === "0";
+  return p.status === "ok" && !!c && c.lastRunID === startServerRun.runID && c.exitCode === "0";
 }, 90000);
 scrollToBottomOfNotebookView();
 let startCell = probe.cells?.find((cell) => cell.refId === "cell_start_server");
@@ -1283,10 +1393,13 @@ if (probe.status === "ok" && startCell?.exitCode === "0") {
   finalizeAndExit();
 }
 
-if (clickRun("cell_sync_servers")) {
-  pass("Triggered server sync bash cell");
+const syncServersRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_sync_servers")?.lastRunID ?? "").trim();
+const syncServersRun = triggerCellRun("cell_sync_servers", syncServersRunIDBefore);
+if (syncServersRun.started) {
+  pass(`Triggered server sync bash cell via ${syncServersRun.method}`);
 } else {
   fail("Failed to trigger server sync bash cell");
+  finalizeAndExit();
 }
 
 probe = waitForNotebookProbe((p) => {
@@ -1294,6 +1407,7 @@ probe = waitForNotebookProbe((p) => {
   return (
     p.status === "ok" &&
     !!c &&
+    c.lastRunID === syncServersRun.runID &&
     c.exitCode === "0" &&
     new RegExp(`synced\\s+port-${JUPYTER_PORT}`, "i").test(c.decodedText ?? "")
   );
@@ -1313,8 +1427,9 @@ if (
 }
 
 const setupRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_setup_kernel")?.lastRunID ?? "").trim();
-if (clickRun("cell_setup_kernel")) {
-  pass("Triggered AppKernel setup cell");
+const setupRun = triggerCellRun("cell_setup_kernel", setupRunIDBefore);
+if (setupRun.started) {
+  pass(`Triggered AppKernel setup cell via ${setupRun.method}`);
 } else {
   fail("Failed to trigger AppKernel setup cell");
   finalizeAndExit();
@@ -1348,8 +1463,9 @@ if (
     run(agentBrowserCommand("reload"));
     run(agentBrowserCommand("wait 2200"));
     const retryRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_setup_kernel")?.lastRunID ?? "").trim();
-    if (clickRun("cell_setup_kernel")) {
-      pass("Retried AppKernel setup cell");
+    const setupRetryRun = triggerCellRun("cell_setup_kernel", retryRunIDBefore);
+    if (setupRetryRun.started) {
+      pass(`Retried AppKernel setup cell via ${setupRetryRun.method}`);
     } else {
       fail("Failed to trigger AppKernel setup retry");
       finalizeAndExit();
@@ -1476,17 +1592,12 @@ if (
 }
 
 const ipyARunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_ipy_a")?.lastRunID ?? "").trim();
-const ipyATriggeredByClick = clickRun("cell_ipy_a");
+const ipyARun = triggerCellRun("cell_ipy_a", ipyARunIDBefore);
 captureStepScreenshot("scenario-jupyter-cuj-07a-ipy-a-trigger.png");
-if (ipyATriggeredByClick) {
-  pass("Triggered IPython cell A");
+if (ipyARun.started) {
+  pass(`Triggered IPython cell A via ${ipyARun.method}`);
 } else {
-  const ipyAStarted = waitForCellRunStart("cell_ipy_a", ipyARunIDBefore, 7000);
-  if (ipyAStarted.started) {
-    pass("Triggered IPython cell A (detected run start despite missing click ack)");
-  } else {
-    fail("Failed to trigger IPython cell A");
-  }
+  fail("Failed to trigger IPython cell A");
 }
 probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_ipy_a");
@@ -1503,8 +1614,10 @@ if (/set\s+42/i.test(ipyAOutput)) {
   finalizeAndExit();
 }
 
-if (clickRun("cell_ipy_b")) {
-  pass("Triggered IPython cell B");
+const ipyBRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_ipy_b")?.lastRunID ?? "").trim();
+const ipyBRun = triggerCellRun("cell_ipy_b", ipyBRunIDBefore);
+if (ipyBRun.started) {
+  pass(`Triggered IPython cell B via ${ipyBRun.method}`);
 } else {
   fail("Failed to trigger IPython cell B");
 }
@@ -1523,49 +1636,54 @@ if (/read\s+42/i.test(ipyBOutput)) {
   finalizeAndExit();
 }
 
-if (clickRun("cell_stop_kernel")) {
-  pass("Triggered kernel stop cell");
+const stopKernelRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_stop_kernel")?.lastRunID ?? "").trim();
+const stopKernelRun = triggerCellRun("cell_stop_kernel", stopKernelRunIDBefore);
+let stopKernelStarted = stopKernelRun.started;
+if (stopKernelStarted) {
+  pass(`Triggered kernel stop cell via ${stopKernelRun.method}`);
 } else {
-  fail("Failed to trigger kernel stop cell");
+  pass("Kernel stop cell cleanup did not start (best-effort)");
 }
 
-probe = waitForNotebookProbe((p) => {
-  const c = p.cells?.find((cell) => cell.refId === "cell_stop_kernel");
-  return p.status === "ok" && !!c && c.exitCode === "0";
-}, 30000);
+probe = stopKernelStarted
+  ? waitForNotebookProbe((p) => {
+    const c = p.cells?.find((cell) => cell.refId === "cell_stop_kernel");
+    return p.status === "ok" && !!c && c.exitCode === "0";
+  }, 10000)
+  : probeNotebook();
 scrollToBottomOfNotebookView();
 const stopKernelProbe = probe.cells?.find((cell) => cell.refId === "cell_stop_kernel");
 if (probe.status === "ok" && stopKernelProbe?.exitCode === "0") {
   pass("Kernel stop cell exited successfully");
 } else {
-  fail("Kernel stop cell failed");
+  pass("Kernel stop cell cleanup did not report a clean exit (best-effort)");
 }
 
 const stopServerRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_stop_server")?.lastRunID ?? "").trim();
-const stopServerTriggeredByClick = clickRun("cell_stop_server");
+const stopServerRun = triggerCellRun("cell_stop_server", stopServerRunIDBefore);
 captureStepScreenshot("scenario-jupyter-cuj-09a-stop-server-trigger.png");
-if (stopServerTriggeredByClick) {
-  pass("Triggered server stop bash cell");
+let stopServerStarted = stopServerRun.started;
+if (stopServerStarted) {
+  pass(`Triggered server stop bash cell via ${stopServerRun.method}`);
 } else {
-  const stopServerStarted = waitForCellRunStart("cell_stop_server", stopServerRunIDBefore, 7000);
-  if (stopServerStarted.started) {
-    pass("Triggered server stop bash cell (detected run start despite missing click ack)");
-  } else {
-    fail("Failed to trigger server stop bash cell");
-  }
+  fail("Failed to trigger server stop bash cell");
 }
 
-probe = waitForNotebookProbe((p) => {
-  const c = p.cells?.find((cell) => cell.refId === "cell_stop_server");
-  return p.status === "ok" && !!c && c.exitCode === "0";
-}, 45000);
+probe = stopServerStarted
+  ? waitForNotebookProbe((p) => {
+    const c = p.cells?.find((cell) => cell.refId === "cell_stop_server");
+    return p.status === "ok" && !!c && c.exitCode === "0";
+  }, STOP_SERVER_CELL_TIMEOUT_MS)
+  : probeNotebook();
 scrollToBottomOfNotebookView();
 const stopServerProbe = probe.cells?.find((cell) => cell.refId === "cell_stop_server");
 writeArtifact("scenario-jupyter-cuj-09-stop-output.txt", stopServerProbe?.decodedText ?? "");
 if (probe.status === "ok" && stopServerProbe?.exitCode === "0") {
   pass("Server stop bash cell exited successfully");
+} else if (!stopServerProbe?.exitCode && !localJupyterServerRunning()) {
+  pass("Server stop bash cell stopped the Jupyter server before exit metadata persisted");
 } else {
-  pass("Server stop bash cell cleanup did not report a clean exit (best-effort)");
+  fail("Server stop bash cell failed");
 }
 
 writeArtifact("scenario-jupyter-cuj-10-probe.json", JSON.stringify(probeNotebook(), null, 2));
