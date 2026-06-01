@@ -1349,10 +1349,21 @@ if (probe.status === "ok" && startCell?.exitCode === "0") {
   finalizeAndExit();
 }
 
-if (clickRun("cell_sync_servers")) {
+const syncServersRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_sync_servers")?.lastRunID ?? "").trim();
+let syncServersStarted = false;
+let syncServersRunID = "";
+for (let attempt = 0; attempt < 3 && !syncServersStarted; attempt += 1) {
+  if (clickRun("cell_sync_servers")) {
+    const start = waitForCellRunStart("cell_sync_servers", syncServersRunIDBefore, 7000);
+    syncServersStarted = start.started;
+    syncServersRunID = start.runID;
+  }
+}
+if (syncServersStarted) {
   pass("Triggered server sync bash cell");
 } else {
   fail("Failed to trigger server sync bash cell");
+  finalizeAndExit();
 }
 
 probe = waitForNotebookProbe((p) => {
@@ -1360,6 +1371,7 @@ probe = waitForNotebookProbe((p) => {
   return (
     p.status === "ok" &&
     !!c &&
+    c.lastRunID === syncServersRunID &&
     c.exitCode === "0" &&
     new RegExp(`synced\\s+port-${JUPYTER_PORT}`, "i").test(c.decodedText ?? "")
   );
