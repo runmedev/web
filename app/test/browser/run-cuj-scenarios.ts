@@ -1114,7 +1114,11 @@ async function main(): Promise<void> {
 
       const compiled = join(GENERATED_DIR, `${basename.replace(/\.ts$/, "")}.js`);
       const scenarioRunEnv: NodeJS.ProcessEnv = buildScenarioBrowserEnv(scenarioEnv, scenarioName);
-      if (scenarioName === "jupyter" && !scenarioRunEnv.CUJ_SCENARIO_TIMEOUT_MS) {
+      const scenarioTimeoutMs = Number(scenarioRunEnv.CUJ_SCENARIO_TIMEOUT_MS ?? "");
+      if (
+        scenarioName === "jupyter" &&
+        (!Number.isFinite(scenarioTimeoutMs) || scenarioTimeoutMs < 480000)
+      ) {
         scenarioRunEnv.CUJ_SCENARIO_TIMEOUT_MS = "480000";
       }
       let runResult = runNodeScript(compiled, APP_ROOT, scenarioRunEnv);
