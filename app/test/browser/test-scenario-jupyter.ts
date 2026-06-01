@@ -811,6 +811,23 @@ function stopLocalJupyterServerFromScenario(): void {
   }
 }
 
+function localJupyterServerRunning(): boolean {
+  const result = spawnSync(JUPYTER_BIN, ["server", "list", "--jsonlist"], {
+    encoding: "utf-8",
+    timeout: 5000,
+    maxBuffer: 1024 * 1024,
+  });
+  if (result.status !== 0) {
+    return false;
+  }
+  try {
+    const servers = JSON.parse(result.stdout || "[]") as Array<{ port?: number }>;
+    return servers.some((server) => server.port === JUPYTER_PORT);
+  } catch {
+    return false;
+  }
+}
+
 mkdirSync(OUTPUT_DIR, { recursive: true });
 for (const file of [
   "scenario-jupyter-cuj-auth-existing.txt",
@@ -1663,6 +1680,8 @@ const stopServerProbe = probe.cells?.find((cell) => cell.refId === "cell_stop_se
 writeArtifact("scenario-jupyter-cuj-09-stop-output.txt", stopServerProbe?.decodedText ?? "");
 if (probe.status === "ok" && stopServerProbe?.exitCode === "0") {
   pass("Server stop bash cell exited successfully");
+} else if (!stopServerProbe?.exitCode && !localJupyterServerRunning()) {
+  pass("Server stop bash cell stopped the Jupyter server before exit metadata persisted");
 } else {
   fail("Server stop bash cell failed");
 }
