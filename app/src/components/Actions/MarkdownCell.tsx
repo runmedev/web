@@ -5,7 +5,7 @@
  * - When `rendered=true`: Shows rendered markdown HTML
  * - When `rendered=false`: Shows the Monaco editor for editing
  * - Double-click on rendered content switches to edit mode
- * - Blur (clicking away) or pressing Escape switches back to render mode
+ * - Pressing Escape or running the cell switches back to render mode
  *
  * State Management:
  * - `rendered` boolean controls which view is shown
@@ -26,7 +26,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type FocusEvent,
   type KeyboardEvent,
 } from "react";
 import ReactMarkdown from "react-markdown";
@@ -184,8 +183,8 @@ interface MarkdownCellProps {
  *
  * Interaction patterns (Jupyter-style):
  * - Double-click rendered content → enter edit mode
- * - Click away (blur) from editor → render markdown (if not empty)
  * - Press Escape while editing → render markdown (if not empty)
+ * - Focusing another notebook cell → render markdown (if not empty)
  * - Empty cells start in edit mode and stay in edit mode
  */
 const MarkdownCell = memo(
@@ -228,6 +227,7 @@ const MarkdownCell = memo(
     // Get the current cell value
     const value = cell?.value ?? "";
     const shouldOwnFocus = isActiveCell && isWindowFocused;
+    const tracksActiveCell = Boolean(onFocusRoleChange);
 
     // Enforce invariant: empty cells must be in edit mode.
     // This handles external changes (undo/redo, sync) that clear the value.
@@ -280,6 +280,13 @@ const MarkdownCell = memo(
       renderedRef.current?.focus();
     }, [activeFocusRole, rendered, shouldOwnFocus]);
 
+    useEffect(() => {
+      if (!tracksActiveCell || isActiveCell || rendered || !value.trim()) {
+        return;
+      }
+      setRendered(true);
+    }, [isActiveCell, rendered, tracksActiveCell, value]);
+
     /**
      * Handle switching to edit mode when user double-clicks rendered content.
      */
@@ -309,27 +316,6 @@ const MarkdownCell = memo(
         }
       },
       [onFocusRoleChange]
-    );
-
-    /**
-     * Handle blur event - switch back to rendered mode when clicking away.
-     * Uses relatedTarget to check if focus moved outside the editor container.
-     * Empty cells stay in edit mode.
-     */
-    const handleBlur = useCallback(
-      (event: FocusEvent<HTMLDivElement>) => {
-        // If focus moved to an element still inside the editor container, don't render
-        if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          return;
-        }
-        // If content is empty, stay in edit mode
-        if (!value.trim()) {
-          return;
-        }
-        setRendered(true);
-        onFocusRoleChange?.("rendered");
-      },
-      [onFocusRoleChange, value]
     );
 
     /**
@@ -426,11 +412,10 @@ const MarkdownCell = memo(
             {renderedMarkdown}
           </div>
         ) : (
-          // Editor view - blur or Escape to render
+          // Editor view - Escape, run, or focusing another cell renders it
           <div
             id={`markdown-editor-${cell.refId}`}
             className="rounded-nb-md border border-nb-accent shadow-nb-sm overflow-hidden w-full min-w-0 max-w-full transition-shadow duration-200"
-            onBlur={handleBlur}
             onKeyDown={handleEditorKeyDown}
             data-testid="markdown-editor"
             data-cell-focus-role="editor"
@@ -467,7 +452,7 @@ const MarkdownCell = memo(
               </div>
               <div className="text-xs text-nb-text-muted">
                 Press <kbd className="px-1 py-0.5 bg-nb-surface-3 rounded">Esc</kbd>{" "}
-                or click away to render
+                or run the cell to render
               </div>
             </div>
           </div>
