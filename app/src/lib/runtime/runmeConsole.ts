@@ -157,9 +157,49 @@ function inferNotebookSource(uri: string): NotebookSummary["source"] {
   return "local";
 }
 
+export function makeJsonSafe<T>(value: T, seen = new WeakMap<object, unknown>()): T {
+  if (typeof value === "bigint") {
+    return value.toString() as T;
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (
+    value instanceof Date ||
+    value instanceof ArrayBuffer ||
+    ArrayBuffer.isView(value)
+  ) {
+    return value;
+  }
+  const existing = seen.get(value);
+  if (existing) {
+    return existing as T;
+  }
+  if (Array.isArray(value)) {
+    const result: unknown[] = [];
+    seen.set(value, result);
+    for (const item of value) {
+      result.push(makeJsonSafe(item, seen));
+    }
+    return result as T;
+  }
+  const result: Record<string, unknown> = {};
+  seen.set(value, result);
+  for (const [key, item] of Object.entries(value)) {
+    result[key] = makeJsonSafe(item, seen);
+  }
+  return result as T;
+}
+
+function stringifyJsonSafe(value: unknown): string {
+  return JSON.stringify(value, (_key, item) =>
+    typeof item === "bigint" ? item.toString() : item,
+  );
+}
+
 function createRevision(notebook: parser_pb.Notebook): string {
   // Deterministic content hash used for optimistic checks in runtime helpers.
-  return md5(JSON.stringify(notebook));
+  return md5(stringifyJsonSafe(notebook));
 }
 
 function makeHandle(notebook: NotebookDataLike): NotebookHandle {
@@ -179,7 +219,7 @@ function makeDocument(notebook: NotebookDataLike): NotebookDocument {
       source: inferNotebookSource(notebook.getUri()),
     },
     handle,
-    notebook: notebook.getNotebook(),
+    notebook: makeJsonSafe(notebook.getNotebook()),
   };
 }
 

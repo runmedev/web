@@ -158,6 +158,18 @@ function codeCell(
   });
 }
 
+function codeCellWithBigIntTiming(refId: string, value: string): parser_pb.Cell {
+  const cell = codeCell(refId, value);
+  (cell as any).executionSummary = {
+    success: true,
+    timing: {
+      startTime: 1700000000000n,
+      endTime: 1700000001000n,
+    },
+  };
+  return cell;
+}
+
 describe("createRunmeConsoleApi", () => {
   it("returns the current notebook handle", () => {
     const notebook = create(parser_pb.NotebookSchema, { cells: [] });
@@ -379,6 +391,24 @@ describe("createNotebooksApi", () => {
     expect(document.notebook.cells[0]?.refId).toBe("cell-a");
   });
 
+  it("returns JSON-safe notebook documents with protobuf BigInt timing fields", async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCellWithBigIntTiming("cell-a", "echo a")],
+    });
+    const model = new FakeNotebookData("local://one", "One", notebook);
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    });
+
+    const document = await api.get({ uri: "local://one" });
+
+    expect(JSON.stringify(document)).toContain('"startTime":"1700000000000"');
+    expect(
+      (document.notebook.cells[0] as any).executionSummary.timing.startTime,
+    ).toBe("1700000000000");
+  });
+
   it("uses the current notebook when notebooks.get omits target", async () => {
     const notebook = create(parser_pb.NotebookSchema, {
       cells: [codeCell("cell-a", "echo a")],
@@ -544,6 +574,31 @@ describe("createNotebooksApi", () => {
     ).rejects.toThrow(
       "notebooks.update requires an explicit target notebook.",
     );
+  });
+
+  it("returns JSON-safe updated documents with protobuf BigInt timing fields", async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCellWithBigIntTiming("cell-a", "echo a")],
+    });
+    const model = new FakeNotebookData("local://one", "One", notebook);
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    });
+
+    const updated = await api.update({
+      target: { uri: "local://one" },
+      operations: [
+        {
+          op: "insert",
+          at: { index: -1 },
+          cells: [{ kind: "markup", languageId: "markdown", value: "test" }],
+        },
+      ],
+    });
+
+    expect(updated.notebook.cells).toHaveLength(2);
+    expect(JSON.stringify(updated)).toContain('"endTime":"1700000001000"');
   });
 
   it("rejects string notebook targets with an actionable error", async () => {
