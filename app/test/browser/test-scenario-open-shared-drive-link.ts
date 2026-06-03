@@ -7,6 +7,7 @@ const FRONTEND_URL = "http://localhost:5173";
 const FAKE_DRIVE_URL = process.env.CUJ_FAKE_DRIVE_URL?.trim() ?? "http://127.0.0.1:9090";
 const SHARED_FILE_URL = "https://drive.google.com/file/d/shared-file-123/view";
 const SHARED_FOLDER_URL = "https://drive.google.com/drive/folders/shared-folder-123";
+const SHARED_FILE_MARKDOWN = `[shared-drive-notebook](${FRONTEND_URL}/?doc=${encodeURIComponent(SHARED_FILE_URL)})`;
 const GOOGLE_CLIENT_STORAGE_KEY = "googleClientConfig";
 const GOOGLE_AUTH_STORAGE_KEY = "runme/google-auth/token";
 const GOOGLE_DRIVE_RUNTIME_STORAGE_KEY = "runme/google-drive/runtime";
@@ -32,8 +33,9 @@ const STATUS_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-01-s
 const FILE_LOADED_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-02-file-loaded.png");
 const DOCUMENT_SHARE_MENU_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-03-document-share-menu.png");
 const FILE_SHARE_MENU_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-04-file-share-menu.png");
-const FOLDER_SHARE_MENU_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-05-folder-share-menu.png");
-const FOLDER_LOADED_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-06-folder-loaded.png");
+const TAB_SHARE_MENU_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-05-tab-share-menu.png");
+const FOLDER_SHARE_MENU_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-06-folder-share-menu.png");
+const FOLDER_LOADED_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-07-folder-loaded.png");
 
 let passCount = 0;
 let failCount = 0;
@@ -142,6 +144,7 @@ function openContextMenuForLabel(label: string): void {
   runOrThrow(
     `agent-browser eval "(async () => {
       const label = \\"${escapeDoubleQuotes(label)}\\";
+      window.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       const explorer = document.querySelector('#workspace-explorer-box');
       if (!explorer) {
         throw new Error('Workspace explorer is not rendered');
@@ -220,6 +223,60 @@ function openNotebookDocumentContextMenu(): void {
   run("agent-browser wait 500");
 }
 
+function openNotebookTabContextMenu(label: string): void {
+  runOrThrow(
+    `agent-browser eval "(async () => {
+      const label = \\"${escapeDoubleQuotes(label)}\\";
+      window.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      const tab = [...document.querySelectorAll('[role=tab]')].find((node) =>
+        (node.textContent || '').includes(label),
+      );
+      if (!tab) {
+        throw new Error('Unable to find notebook tab for ' + label);
+      }
+      const rect = tab.getBoundingClientRect();
+      tab.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        clientX: rect.left + Math.min(32, rect.width / 2),
+        clientY: rect.top + Math.min(16, rect.height / 2),
+      }));
+      return 'ok';
+    })()"`,
+  );
+  run("agent-browser wait 500");
+}
+
+function installClipboardCapture(): void {
+  runOrThrow(
+    `agent-browser eval "(async () => {
+      window.__lastClipboardText = '';
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (text) => {
+            window.__lastClipboardText = String(text);
+          },
+        },
+      });
+      return 'ok';
+    })()"`,
+  );
+}
+
+function readCapturedClipboard(): string {
+  const raw = runOrThrow(
+    `agent-browser eval "window.__lastClipboardText || ''"`,
+  ).trim();
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "string" ? parsed : raw;
+  } catch {
+    return raw;
+  }
+}
+
 function waitForToastMessage(timeoutMs = 4_000): string {
   const pollIntervalMs = 200;
   const maxAttempts = Math.max(1, Math.ceil(timeoutMs / pollIntervalMs));
@@ -251,6 +308,7 @@ for (const image of [
   FILE_LOADED_SCREENSHOT,
   DOCUMENT_SHARE_MENU_SCREENSHOT,
   FILE_SHARE_MENU_SCREENSHOT,
+  TAB_SHARE_MENU_SCREENSHOT,
   FOLDER_SHARE_MENU_SCREENSHOT,
   FOLDER_LOADED_SCREENSHOT,
 ]) {
@@ -395,9 +453,30 @@ if (/Copy Share Link/i.test(snapshot)) {
 } else {
   fail("File explorer context menu did not offer a share link action");
 }
+if (/Copy Markdown Link/i.test(snapshot)) {
+  pass("File explorer context menu offers a markdown link action");
+} else {
+  fail("File explorer context menu did not offer a markdown link action");
+}
 takeScreenshot(FILE_SHARE_MENU_SCREENSHOT);
 
-let copyShareRef = firstRef(snapshot, /button "Copy Share Link"/i);
+installClipboardCapture();
+let copyShareRef = firstRef(snapshot, /button "Copy Markdown Link"/i);
+if (copyShareRef) {
+  run(`agent-browser click ${copyShareRef}`);
+  run("agent-browser wait 250");
+}
+const fileMarkdownClipboard = readCapturedClipboard();
+if (fileMarkdownClipboard === SHARED_FILE_MARKDOWN) {
+  pass("Copied the shared notebook markdown link from the file context menu");
+} else {
+  fail(`File markdown link copy wrote unexpected text: ${fileMarkdownClipboard}`);
+}
+
+expandFolderInExplorer("Shared Drive Folder");
+openContextMenuForLabel("shared-drive-notebook.json");
+snapshot = run("agent-browser snapshot -i").stdout;
+copyShareRef = firstRef(snapshot, /button "Copy Share Link"/i);
 if (copyShareRef) {
   run(`agent-browser click ${copyShareRef}`);
   run("agent-browser wait 250");
@@ -409,6 +488,33 @@ if (/Share link copied/i.test(fileShareToast)) {
   pass("Reported clipboard permission issue when copying file share link");
 } else {
   fail("File share link copy did not show any expected toast");
+}
+
+openNotebookTabContextMenu("shared-drive-notebook.json");
+snapshot = run("agent-browser snapshot -i").stdout;
+if (/Copy Markdown Link/i.test(snapshot)) {
+  pass("Notebook tab context menu offers a markdown link action");
+} else {
+  fail("Notebook tab context menu did not offer a markdown link action");
+}
+if (/Copy Google Drive Link/i.test(snapshot)) {
+  pass("Notebook tab context menu resolved the Drive-backed share target");
+} else {
+  fail("Notebook tab context menu did not resolve the Drive-backed share target");
+}
+takeScreenshot(TAB_SHARE_MENU_SCREENSHOT);
+
+installClipboardCapture();
+const copyMarkdownTabRef = firstRef(snapshot, /button "Copy Markdown Link"/i);
+if (copyMarkdownTabRef) {
+  run(`agent-browser click ${copyMarkdownTabRef}`);
+  run("agent-browser wait 250");
+}
+const tabMarkdownClipboard = readCapturedClipboard();
+if (tabMarkdownClipboard === SHARED_FILE_MARKDOWN) {
+  pass("Copied the shared notebook markdown link from the tab context menu");
+} else {
+  fail(`Tab markdown link copy wrote unexpected text: ${tabMarkdownClipboard}`);
 }
 
 openContextMenuForLabel("Shared Drive Folder");
