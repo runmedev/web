@@ -21,6 +21,7 @@ const contextMocks = vi.hoisted(() => ({
     uri: string
     title: string
     state?: 'loading' | 'loaded' | 'blocked' | 'error'
+    readOnly?: boolean
   }>,
   currentDoc: null as string | null,
   setCurrentDoc: vi.fn(),
@@ -220,10 +221,10 @@ class StubCellData {
       connect: () => ({ subscribe: () => ({ unsubscribe: () => {} }) }),
     } as any
   }
-  addBefore() {}
-  addAfter() {}
-  remove() {}
-  run() {}
+  addBefore = vi.fn()
+  addAfter = vi.fn()
+  remove = vi.fn()
+  run = vi.fn()
 }
 
 beforeEach(() => {
@@ -279,6 +280,38 @@ describe('Actions tabs', () => {
     expect((scrollViewport as HTMLElement | undefined)?.style.overflowX).toBe(
       'scroll'
     )
+  })
+
+  it('marks read-only notebook tabs and content clearly', () => {
+    const uri = 'local://file/reference.runme.md'
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      {
+        uri,
+        title: 'reference.runme.md',
+        state: 'loaded',
+        readOnly: true,
+      },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      readOnly: true,
+      notebook: create(parser_pb.NotebookSchema, {
+        metadata: {},
+        cells: [],
+      }),
+    })
+
+    render(<Actions />)
+
+    expect(
+      screen.getAllByLabelText('Read-only notebook').length
+    ).toBeGreaterThan(0)
+    expect(
+      screen.getByTestId('notebook-readonly-banner').textContent
+    ).toContain('Read-only')
+    expect(screen.queryByLabelText('Add first cell')).toBeNull()
   })
 
   it('falls back from a stale current URI to an open workspace document', async () => {
@@ -677,6 +710,43 @@ describe('Actions tabs', () => {
 })
 
 describe('Action component', () => {
+  it('disables code-cell mutations in read-only mode', () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'cell-readonly',
+      kind: parser_pb.CellKind.CODE,
+      languageId: 'bash',
+      outputs: [],
+      metadata: {},
+      value: 'echo hi',
+    })
+    const stub = new StubCellData(cell)
+
+    render(
+      <Action cellData={stub as unknown as CellData} isFirst={false} readOnly />
+    )
+
+    const runButton = screen.getByLabelText('Run code') as HTMLButtonElement
+    const languageSelect = document.querySelector(
+      '.toolbar-select'
+    ) as HTMLSelectElement | null
+
+    expect(runButton.disabled).toBe(true)
+    expect(screen.getByLabelText('Add cell above')).toHaveProperty(
+      'disabled',
+      true
+    )
+    expect(screen.getByLabelText('Add cell below')).toHaveProperty(
+      'disabled',
+      true
+    )
+    fireEvent.click(runButton)
+    expect(stub.run).not.toHaveBeenCalled()
+    expect(stub.update).not.toHaveBeenCalled()
+    expect(stub.addBefore).not.toHaveBeenCalled()
+    expect(stub.addAfter).not.toHaveBeenCalled()
+    expect(languageSelect?.disabled ?? true).toBe(true)
+  })
+
   it('updates CellConsole key when runID changes', async () => {
     const cell = create(parser_pb.CellSchema, {
       refId: 'cell-1',
