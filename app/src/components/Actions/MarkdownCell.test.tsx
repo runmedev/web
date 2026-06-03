@@ -166,6 +166,84 @@ describe("MarkdownCell", () => {
     expect(screen.queryByTestId("markdown-rendered")).toBeNull();
   });
 
+  it("keeps editor mode when focus leaves the markdown cell", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-copy-paste",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "hello",
+    });
+    const stub = new StubCellData(cell);
+    const onFocusRoleChange = vi.fn();
+    const outsideButton = document.createElement("button");
+    document.body.appendChild(outsideButton);
+
+    renderMarkdownCell(stub as unknown as CellData, {
+      isActiveCell: true,
+      activeFocusRole: "editor",
+      isWindowFocused: true,
+      onFocusRoleChange,
+    });
+
+    fireEvent.blur(screen.getByTestId("markdown-editor"), {
+      relatedTarget: outsideButton,
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("markdown-editor")).toBeTruthy();
+    expect(screen.queryByTestId("markdown-rendered")).toBeNull();
+    expect(onFocusRoleChange).not.toHaveBeenCalledWith("rendered");
+
+    outsideButton.remove();
+  });
+
+  it("renders an edited markdown cell when another notebook cell becomes active", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-loses-active-cell",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "hello",
+    });
+    const stub = new StubCellData(cell);
+    const onFocusRoleChange = vi.fn();
+
+    const { rerender } = renderMarkdownCell(stub as unknown as CellData, {
+      isActiveCell: true,
+      activeFocusRole: "editor",
+      isWindowFocused: true,
+      onFocusRoleChange,
+    });
+
+    expect(screen.getByTestId("markdown-editor")).toBeTruthy();
+
+    await act(async () => {
+      rerender(
+        <MarkdownCell
+          cellData={stub as unknown as CellData}
+          selectedLanguage="markdown"
+          languageSelectId="lang-md-loses-active-cell"
+          languageOptions={[{ label: "Markdown", value: "markdown" }]}
+          onLanguageChange={() => {}}
+          isActiveCell={false}
+          activeFocusRole="editor"
+          isWindowFocused
+          onFocusRoleChange={onFocusRoleChange}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("markdown-rendered")).toBeTruthy();
+    expect(screen.queryByTestId("markdown-editor")).toBeNull();
+  });
+
   it("focuses the editor when rendered markdown is opened for editing", async () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "md-manual-edit",
