@@ -4,6 +4,7 @@ import {
   type NotebookTarget,
   type NotebooksApi,
   createNotebooksApi,
+  makeJsonSafe,
 } from './runmeConsole'
 
 export type NotebooksApiBridgeRequest = {
@@ -42,28 +43,49 @@ export function createNotebooksApiBridgeServer({
 }: {
   notebooksApi: NotebooksApi
 }): NotebooksApiBridgeServer {
+  const callJsonSafe = async (callback: () => Promise<unknown>) =>
+    makeJsonSafe(await callback())
+
   return {
     handleMessage: async ({ method, args = [] }) => {
       switch (method) {
         case 'notebooks.help':
-          return notebooksApi.help(args[0] as any)
+          return callJsonSafe(() => notebooksApi.help(args[0] as any))
         case 'notebooks.list':
-          return notebooksApi.list((args[0] as NotebookQuery | undefined) ?? undefined)
+          return callJsonSafe(() =>
+            notebooksApi.list(
+              (args[0] as NotebookQuery | undefined) ?? undefined
+            )
+          )
         case 'notebooks.get':
-          return notebooksApi.get((args[0] as NotebookTarget | undefined) ?? undefined)
+          return callJsonSafe(() =>
+            notebooksApi.get(
+              (args[0] as NotebookTarget | undefined) ?? undefined
+            )
+          )
         case 'notebooks.update':
-          return notebooksApi.update(
-            (args[0] as Parameters<NotebooksApi['update']>[0] | undefined) ?? {
-              operations: [],
-            }
+          return callJsonSafe(() =>
+            notebooksApi.update(
+              (args[0] as
+                | Parameters<NotebooksApi['update']>[0]
+                | undefined) ?? {
+                operations: [],
+              }
+            )
           )
         case 'notebooks.delete':
-          return notebooksApi.delete(args[0] as NotebookTarget)
+          return callJsonSafe(() =>
+            notebooksApi.delete(args[0] as NotebookTarget)
+          )
         case 'notebooks.execute':
-          return notebooksApi.execute(
-            (args[0] as Parameters<NotebooksApi['execute']>[0] | undefined) ?? {
-              refIds: [],
-            }
+          return callJsonSafe(() =>
+            notebooksApi.execute(
+              (args[0] as
+                | Parameters<NotebooksApi['execute']>[0]
+                | undefined) ?? {
+                refIds: [],
+              }
+            )
           )
         default:
           throw new Error(`Unsupported sandbox NotebooksApi method: ${method}`)
