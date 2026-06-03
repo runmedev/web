@@ -348,6 +348,55 @@ describe('Actions tabs', () => {
     )
   })
 
+  it('copies a markdown link from the tab context menu', async () => {
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    window.history.replaceState(null, '', '/')
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: 'local://file/restored',
+        name: '202602a_tb_aws_codex_136.json',
+        type: 'file',
+        children: [],
+        remoteUri:
+          'https://drive.google.com/file/d/1cDDvmvjrBKQDkZi6nojVC_CSAfTSj7EV/view',
+        parents: [],
+      })),
+      getSyncState: vi.fn(async () => ({
+        status: 'synced',
+        localUri: 'local://file/restored',
+        remoteId:
+          'https://drive.google.com/file/d/1cDDvmvjrBKQDkZi6nojVC_CSAfTSj7EV/view',
+      })),
+      rename: vi.fn(),
+      subscribeSync: vi.fn(() => () => {}),
+    }
+    contextMocks.currentDoc = 'local://file/restored'
+    contextMocks.workspaceDocuments = [
+      {
+        uri: 'local://file/restored',
+        title: '202602a_tb_aws_codex_136.json',
+      },
+    ]
+
+    render(<Actions />)
+
+    fireEvent.contextMenu(
+      screen.getByRole('tab', { name: '202602a_tb_aws_codex_136.json' })
+    )
+    await screen.findByRole('button', { name: 'Copy Google Drive Link' })
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Markdown Link' }))
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        '[202602a_tb_aws_codex_136](http://localhost:3000/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2F1cDDvmvjrBKQDkZi6nojVC_CSAfTSj7EV%2Fview)'
+      )
+    })
+  })
+
   it('opens a conflict diff from the notebook sync indicator', async () => {
     const store = {
       getMetadata: vi.fn(async () => ({
