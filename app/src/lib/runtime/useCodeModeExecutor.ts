@@ -18,11 +18,7 @@ type CodeModeNotebookAdapterSource = Pick<
   Partial<
     Pick<
       NotebookDataLike,
-      | 'appendCell'
-      | 'addCellAfter'
-      | 'addCellBefore'
-      | 'removeCell'
-      | 'isReadOnly'
+      'appendCell' | 'addCellAfter' | 'addCellBefore' | 'removeCell'
     >
   >
 
@@ -33,7 +29,6 @@ export function createCodeModeNotebookAdapter(
     getUri: () => data.getUri(),
     getName: () => data.getName(),
     getNotebook: () => data.getNotebook(),
-    isReadOnly: data.isReadOnly?.bind(data),
     updateCell: (cell: parser_pb.Cell) => data.updateCell(cell),
     getCell: (refId: string) => data.getCell(refId),
     appendCell: data.appendCell?.bind(data),
