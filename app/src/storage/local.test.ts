@@ -5,6 +5,7 @@ import md5 from 'md5'
 import { describe, expect, it, vi } from 'vitest'
 
 import { MimeType, parser_pb } from '../runme/client'
+import { MemoryConflictDocStorage } from './conflictDocs'
 import LocalNotebooks, {
   type LocalFileRecord,
   type LocalFolderRecord,
@@ -57,6 +58,7 @@ function createTestStore(driveStore: unknown) {
   localStore.syncListeners = new Map()
   localStore.syncSubjects = new Map()
   localStore.markdownSyncSubjects = new Map()
+  localStore.conflictDocStorage = new MemoryConflictDocStorage()
   return localStore as LocalNotebooks
 }
 
@@ -429,7 +431,15 @@ describe('LocalNotebooks Drive conflict resolution', () => {
       },
       localChecksumAtDetection: 'local-checksum',
     })
-    expect(record?.conflict?.upstreamDoc).toBe(
+    expect(record?.conflict?.upstreamDoc).toBeUndefined()
+    expect(record?.conflict?.upstreamDocRef).toMatchObject({
+      storage: 'opfs',
+      sizeBytes: expect.any(Number),
+      checksum: expect.any(String),
+    })
+    await expect(
+      store.getConflictUpstreamDoc('local://file/conflict')
+    ).resolves.toBe(
       toJsonString(
         parser_pb.NotebookSchema,
         upstreamNotebook,
@@ -441,6 +451,9 @@ describe('LocalNotebooks Drive conflict resolution', () => {
     ).resolves.toMatchObject({
       status: 'conflicted',
       remoteId: remoteUri,
+      conflict: {
+        upstreamDocSizeBytes: expect.any(Number),
+      },
     })
     await expect(store.listDriveBackedFilesNeedingSync()).resolves.toEqual([])
     expect(driveStore.create).not.toHaveBeenCalled()
@@ -489,6 +502,66 @@ describe('LocalNotebooks Drive conflict resolution', () => {
     expect(record?.conflict).toBeTruthy()
     expect((store as any).syncSubjects.size).toBe(0)
     expect((store as any).markdownSyncSubjects.size).toBe(0)
+  })
+
+  it('does not expose legacy inline upstreamDoc in passive sync state', async () => {
+    const hugeUpstreamDoc = 'x'.repeat(1024 * 1024)
+    const store = createTestStore({})
+    await store.files.put({
+      id: 'local://file/conflict',
+      name: 'notebook.json',
+      remoteId: 'https://drive.google.com/file/d/file123/view',
+      lastRemoteChecksum: 'base-checksum',
+      lastSynced: '',
+      doc: notebookJson("print('local')"),
+      md5Checksum: 'local-checksum',
+      conflict: {
+        detectedAt: '2026-05-30T00:00:00.000Z',
+        upstreamChecksum: 'upstream-checksum',
+        upstreamDoc: hugeUpstreamDoc,
+        localChecksumAtDetection: 'local-checksum',
+      },
+    })
+
+    const syncState = await store.getSyncState('local://file/conflict')
+
+    expect(syncState.status).toBe('conflicted')
+    expect(syncState.conflict).toMatchObject({
+      upstreamChecksum: 'upstream-checksum',
+      upstreamDocSizeBytes: hugeUpstreamDoc.length,
+    })
+    expect(JSON.stringify(syncState)).not.toContain(hugeUpstreamDoc)
+  })
+
+  it('migrates a legacy inline upstreamDoc into conflict document storage on demand', async () => {
+    const legacyUpstreamDoc = notebookJson("print('legacy upstream')")
+    const store = createTestStore({})
+    await store.files.put({
+      id: 'local://file/conflict',
+      name: 'notebook.json',
+      remoteId: 'https://drive.google.com/file/d/file123/view',
+      lastRemoteChecksum: 'base-checksum',
+      lastSynced: '',
+      doc: notebookJson("print('local')"),
+      md5Checksum: 'local-checksum',
+      conflict: {
+        detectedAt: '2026-05-30T00:00:00.000Z',
+        upstreamChecksum: 'upstream-checksum',
+        upstreamDoc: legacyUpstreamDoc,
+        localChecksumAtDetection: 'local-checksum',
+      },
+    })
+
+    await expect(
+      store.getConflictUpstreamDoc('local://file/conflict')
+    ).resolves.toBe(legacyUpstreamDoc)
+
+    const record = await store.files.get('local://file/conflict')
+    expect(record?.conflict?.upstreamDoc).toBeUndefined()
+    expect(record?.conflict?.upstreamDocRef).toMatchObject({
+      storage: 'opfs',
+      checksum: md5(legacyUpstreamDoc),
+    })
   })
 
   it('saves the local version to the original Drive URI and clears conflict', async () => {
@@ -640,7 +713,15 @@ describe('LocalNotebooks Drive conflict resolution', () => {
       checksum: md5(upstreamHeadDoc),
       revisionId: 'head-revision',
     })
-    expect(conflict.upstreamDoc).toBe(upstreamHeadDoc)
+    expect(conflict.upstreamDoc).toBeUndefined()
+    expect(conflict.upstreamDocRef).toMatchObject({
+      storage: 'opfs',
+      sizeBytes: expect.any(Number),
+      checksum: md5(upstreamHeadDoc),
+    })
+    await expect(
+      store.getConflictUpstreamDoc('local://file/conflict')
+    ).resolves.toBe(upstreamHeadDoc)
     expect(conflict.localChecksumAtDetection).toBe(md5(record?.doc ?? ''))
     expect(record?.conflict).toEqual(conflict)
   })
