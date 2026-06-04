@@ -22,7 +22,6 @@ import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
 import { appLogger } from "../../lib/logging/runtime";
 import {
-  copyNotebookMarkdownLink,
   copyNotebookShareUrl,
 } from "../../lib/shareLinks";
 import { showToast } from "../../lib/toast";
@@ -179,7 +178,7 @@ function getContextMenuItemCount(menu: ContextMenuState): number {
     return (
       (menu.uri.startsWith("fs://") ? 0 : 1) +
       2 +
-      (menu.remoteUri ? 3 : 0)
+      (menu.remoteUri ? 2 : 0)
     );
   }
 
@@ -949,30 +948,6 @@ function formatShortTimestamp(date: Date): string {
     }
   }, []);
 
-  const handleCopyMarkdownLink = useCallback(
-    async (name: string, remoteUri: string) => {
-      try {
-        await copyNotebookMarkdownLink(name, remoteUri);
-        setErrorMessage(null);
-        showToast({ message: "Markdown link copied", tone: "success" });
-      } catch (error) {
-        appLogger.error("Failed to copy notebook markdown link", {
-          attrs: {
-            scope: "storage.drive.share",
-            code: "DRIVE_MARKDOWN_LINK_COPY_FAILED",
-            remoteUri,
-            error: String(error),
-          },
-        });
-        showToast({
-          message: "Could not copy markdown link. Please check clipboard permissions.",
-          tone: "error",
-        });
-      }
-    },
-    [],
-  );
-
   if (!store) {
     return (
       <div className="flex h-full min-h-0 flex-col gap-3">
@@ -1126,23 +1101,6 @@ function formatShortTimestamp(date: Date): string {
                   }}
                 >
                   Copy Share Link
-                </button>
-              )}
-              {adjustedContextMenu.remoteUri && (
-                <button
-                  type="button"
-                  className="ctx-menu-item"
-                  onMouseDown={(event) => event.stopPropagation()}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setContextMenu(null);
-                    void handleCopyMarkdownLink(
-                      adjustedContextMenu.name,
-                      adjustedContextMenu.remoteUri,
-                    );
-                  }}
-                >
-                  Copy Markdown Link
                 </button>
               )}
               {adjustedContextMenu.remoteUri && (

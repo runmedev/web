@@ -35,10 +35,7 @@ import {
   type NotebookActiveCellMap,
   type NotebookActiveCellState,
 } from '../../lib/notebookActiveCellState'
-import {
-  copyNotebookMarkdownLink,
-  copyNotebookShareUrl,
-} from '../../lib/shareLinks'
+import { copyNotebookShareUrl } from '../../lib/shareLinks'
 import { isHtmlLanguageId, isMarkdownLanguageId } from '../../lib/cellContent'
 import { PlayIcon, PlusIcon, SpinnerIcon, TrashIcon } from './icons'
 //import { useRun } from "../../lib/useRun.js";
@@ -2092,7 +2089,7 @@ export default function Actions() {
     if (typeof window === 'undefined') {
       return tabContextMenu
     }
-    const itemCount = tabContextMenu.googleDriveUri ? 5 : 4
+    const itemCount = tabContextMenu.googleDriveUri ? 4 : 3
     const menuWidth = 220
     const menuHeight = itemCount * 36 + 8
     return {
@@ -2208,29 +2205,6 @@ export default function Actions() {
         attrs: {
           scope: 'storage.share',
           code: 'TAB_COPY_SHAREABLE_LINK_FAILED',
-          uri: tabContextMenu.shareableUri,
-          error: String(error),
-        },
-      })
-    } finally {
-      setTabContextMenu(null)
-    }
-  }, [tabContextMenu])
-
-  const handleCopyTabMarkdownLink = useCallback(async () => {
-    if (!tabContextMenu) {
-      return
-    }
-    try {
-      await copyNotebookMarkdownLink(
-        tabContextMenu.title,
-        tabContextMenu.shareableUri
-      )
-    } catch (error) {
-      appLogger.error('Failed to copy markdown link from tab context menu', {
-        attrs: {
-          scope: 'storage.share',
-          code: 'TAB_COPY_MARKDOWN_LINK_FAILED',
           uri: tabContextMenu.shareableUri,
           error: String(error),
         },
@@ -2474,16 +2448,6 @@ export default function Actions() {
                 }}
               >
                 Copy Shareable Link
-              </button>
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  void handleCopyTabMarkdownLink()
-                }}
-              >
-                Copy Markdown Link
               </button>
               <button
                 type="button"
