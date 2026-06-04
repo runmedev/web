@@ -12,6 +12,7 @@ import {
 import { type NotebookData, type NotebookSnapshot } from "../lib/notebookData";
 import {
   getNotebookDataController,
+  type OpenNotebookOptions,
   type OpenNotebookEntry,
   type OpenNotebookResult,
 } from "../lib/notebookDataController";
@@ -25,7 +26,7 @@ type NotebookContextValue = {
   getNotebookData: (uri: string) => NotebookData | undefined;
   openNotebook: (
     uri: string,
-    options?: { name?: string },
+    options?: OpenNotebookOptions,
   ) => Promise<OpenNotebookResult>;
   useNotebookSnapshot: (uri: string) => NotebookSnapshot | null;
   useNotebookList: () => OpenNotebookEntry[];
@@ -58,7 +59,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
   );
 
   const openNotebook = useCallback(
-    (uri: string, options?: { name?: string }) =>
+    (uri: string, options?: OpenNotebookOptions) =>
       controller.openNotebook(uri, options),
     [controller],
   );
@@ -96,7 +97,7 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
   }, [controller]);
 
   const openAndSelectNotebook = useCallback(
-    async (uri: string, options?: { name?: string }) => {
+    async (uri: string, options?: OpenNotebookOptions) => {
       const result = await controller.openNotebook(uri, options);
       setCurrentDoc(result.localUri);
       return result;

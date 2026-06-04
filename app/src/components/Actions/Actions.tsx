@@ -13,7 +13,7 @@ import {
 import { create } from '@bufbuild/protobuf'
 import { Button, ScrollArea, Tabs, Text } from '@radix-ui/themes'
 
-import { XMarkIcon } from '@heroicons/react/20/solid'
+import { LockClosedIcon, XMarkIcon } from '@heroicons/react/20/solid'
 import { MimeType, RunmeMetadataKey, parser_pb } from '../../runme/client'
 import { CellData } from '../../lib/notebookData'
 import { useNotebookContext } from '../../contexts/NotebookContext'
@@ -280,14 +280,34 @@ function NotebookSyncIndicator({ docUri }: { docUri: string }) {
   )
 }
 
+function ReadOnlyTabIndicator() {
+  return (
+    <span
+      className="relative inline-flex h-4 w-4 items-center justify-center text-nb-text-muted"
+      role="img"
+      aria-label="Read-only notebook"
+    >
+      <LockClosedIcon className="h-3.5 w-3.5" aria-hidden="true" />
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-1/2 top-6 z-20 hidden w-max max-w-[220px] -translate-x-1/2 rounded-nb-sm border border-nb-border bg-white px-2 py-1 text-xs font-normal text-nb-text shadow-nb-sm group-hover:inline-block group-focus:inline-block"
+      >
+        Read-only. This notebook is open for editing in another browser tab.
+      </span>
+    </span>
+  )
+}
+
 /** Compact icon-only run button that sits in the cell toolbar.
  *  Shows a spinner while running, otherwise always shows the play icon. */
 function RunActionButton({
   pid,
   onClick,
+  disabled = false,
 }: {
   pid: number | null
   onClick: () => void
+  disabled?: boolean
 }) {
   const isRunning = pid !== null
 
@@ -295,6 +315,7 @@ function RunActionButton({
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-label={isRunning ? 'Running...' : 'Run code'}
       className="icon-btn h-7 w-7"
     >
@@ -573,6 +594,7 @@ export function Action({
   activeFocusRole = 'editor',
   isWindowFocused = false,
   onFocusStateChange,
+  readOnly = false,
 }: {
   cellData: CellData
   docUri?: string
@@ -581,6 +603,7 @@ export function Action({
   activeFocusRole?: CellFocusRole
   isWindowFocused?: boolean
   onFocusStateChange?: (state: NotebookActiveCellState) => void
+  readOnly?: boolean
 }) {
   const { store } = useNotebookStore()
   const { listRunners, defaultRunnerName } = useRunners()
@@ -606,18 +629,27 @@ export function Action({
   const runID = cellData.getRunID()
 
   const handleAddCellBefore = useCallback(() => {
+    if (readOnly) {
+      return
+    }
     cellData.addBefore(parser_pb.CellKind.CODE, cell?.languageId)
-  }, [cell?.languageId, cellData])
+  }, [cell?.languageId, cellData, readOnly])
 
   const handleAddCellAfter = useCallback(() => {
+    if (readOnly) {
+      return
+    }
     cellData.addAfter(parser_pb.CellKind.CODE, cell?.languageId)
-  }, [cell?.languageId, cellData])
+  }, [cell?.languageId, cellData, readOnly])
 
   const updateCellLocal = useCallback(
     (nextCell: parser_pb.Cell) => {
+      if (readOnly) {
+        return
+      }
       cellData.update(nextCell)
     },
-    [cellData]
+    [cellData, readOnly]
   )
 
   const [contextMenu, setContextMenu] = useState<{
@@ -707,8 +739,11 @@ export function Action({
   }, [contextMenu, shareRemoteUri])
 
   const runCode = useCallback(() => {
+    if (readOnly) {
+      return
+    }
     cellData.run()
-  }, [cellData])
+  }, [cellData, readOnly])
 
   const handleContextMenu = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -762,9 +797,13 @@ export function Action({
   )
 
   const handleRemoveCell = useCallback(() => {
+    if (readOnly) {
+      setContextMenu(null)
+      return
+    }
     cellData.remove()
     setContextMenu(null)
-  }, [cellData])
+  }, [cellData, readOnly])
 
   const handleCopyShareLink = useCallback(async () => {
     if (!shareRemoteUri) {
@@ -901,6 +940,9 @@ export function Action({
   }, [jupyterManager, jupyterRunnerNames, resolvedRunnerName, selectedLanguage])
 
   useEffect(() => {
+    if (readOnly) {
+      return
+    }
     if (
       selectedLanguage === 'javascript' &&
       !isAppKernelRunnerName(initialRunnerName)
@@ -938,7 +980,13 @@ export function Action({
         cellData.clearJupyterKernel()
       }
     }
-  }, [cellData, hasJupyterSelection, initialRunnerName, selectedLanguage])
+  }, [
+    cellData,
+    hasJupyterSelection,
+    initialRunnerName,
+    readOnly,
+    selectedLanguage,
+  ])
 
   const kernelOptions = useMemo(() => {
     if (!showKernelSelector || jupyterRunnerNames.length === 0) {
@@ -996,6 +1044,9 @@ export function Action({
   }, [cell, jupyterManager, resolvedRunnerName])
 
   useEffect(() => {
+    if (readOnly) {
+      return
+    }
     if (selectedLanguage !== 'jupyter') {
       return
     }
@@ -1020,6 +1071,7 @@ export function Action({
     cellData,
     jupyterManager,
     kernelOptions,
+    readOnly,
     selectedKernelKey,
     selectedLanguage,
   ])
@@ -1060,6 +1112,9 @@ export function Action({
   const handleLanguageChange = useCallback(
     (event: ChangeEvent<HTMLSelectElement>) => {
       if (!cell) {
+        return
+      }
+      if (readOnly) {
         return
       }
       const nextValue = event.target
@@ -1130,7 +1185,7 @@ export function Action({
       setPid(null)
       setExitCode(null)
     },
-    [cell, selectedLanguage, updateCellLocal]
+    [cell, readOnly, selectedLanguage, updateCellLocal]
   )
 
   // Determine if this cell is a markdown cell (either MARKUP kind or CODE with markdown language)
@@ -1171,6 +1226,7 @@ export function Action({
             type="button"
             aria-label="Add cell above"
             className="cell-add-btn h-5 w-5"
+            disabled={readOnly}
             onClick={handleAddCellBefore}
           >
             <PlusIcon width={10} height={10} />
@@ -1179,6 +1235,7 @@ export function Action({
             type="button"
             aria-label="Add cell below"
             className="cell-add-btn h-5 w-5"
+            disabled={readOnly}
             onClick={handleAddCellAfter}
           >
             <PlusIcon width={10} height={10} />
@@ -1194,6 +1251,7 @@ export function Action({
               languageOptions={LANGUAGE_OPTIONS}
               onLanguageChange={handleLanguageChange}
               forceEditRequest={markdownEditRequest}
+              readOnly={readOnly}
               isActiveCell={isActiveCell}
               activeFocusRole={activeFocusRole}
               isWindowFocused={isWindowFocused}
@@ -1204,6 +1262,7 @@ export function Action({
               type="button"
               aria-label="Delete cell"
               className="icon-btn absolute right-2 top-2 h-6 w-6 opacity-0 transition-opacity duration-150 group-hover/cell:opacity-100"
+              disabled={readOnly}
               onClick={handleRemoveCell}
             >
               <TrashIcon />
@@ -1234,6 +1293,7 @@ export function Action({
             <button
               type="button"
               className="ctx-menu-item text-red-600"
+              disabled={readOnly}
               onClick={(event) => {
                 event.stopPropagation()
                 handleRemoveCell()
@@ -1263,6 +1323,7 @@ export function Action({
             type="button"
             aria-label="Add cell above"
             className="cell-add-btn h-5 w-5"
+            disabled={readOnly}
             onClick={handleAddCellBefore}
           >
             <PlusIcon width={10} height={10} />
@@ -1271,6 +1332,7 @@ export function Action({
             type="button"
             aria-label="Add cell below"
             className="cell-add-btn h-5 w-5"
+            disabled={readOnly}
             onClick={handleAddCellAfter}
           >
             <PlusIcon width={10} height={10} />
@@ -1285,11 +1347,13 @@ export function Action({
               languageOptions={LANGUAGE_OPTIONS}
               onLanguageChange={handleLanguageChange}
               forceEditRequest={htmlEditRequest}
+              readOnly={readOnly}
             />
             <button
               type="button"
               aria-label="Delete cell"
               className="icon-btn absolute right-2 top-2 h-6 w-6 opacity-0 transition-opacity duration-150 group-hover/cell:opacity-100"
+              disabled={readOnly}
               onClick={handleRemoveCell}
             >
               <TrashIcon />
@@ -1320,6 +1384,7 @@ export function Action({
             <button
               type="button"
               className="ctx-menu-item text-red-600"
+              disabled={readOnly}
               onClick={(event) => {
                 event.stopPropagation()
                 handleRemoveCell()
@@ -1354,6 +1419,7 @@ export function Action({
           type="button"
           aria-label="Add cell above"
           className="cell-add-btn h-5 w-5"
+          disabled={readOnly}
           onClick={handleAddCellBefore}
         >
           <PlusIcon width={10} height={10} />
@@ -1362,6 +1428,7 @@ export function Action({
           type="button"
           aria-label="Add cell below"
           className="cell-add-btn h-5 w-5"
+          disabled={readOnly}
           onClick={handleAddCellAfter}
         >
           <PlusIcon width={10} height={10} />
@@ -1384,6 +1451,7 @@ export function Action({
               fontSize={fontSettings.fontSize}
               fontFamily={fontSettings.fontFamily}
               shouldFocus={isActiveCell && isWindowFocused}
+              readOnly={readOnly}
               onChange={(v) => {
                 const updated = create(parser_pb.CellSchema, cell)
                 updated.value = v
@@ -1400,6 +1468,7 @@ export function Action({
                 id={languageSelectId}
                 value={selectedLanguage}
                 onChange={handleLanguageChange}
+                disabled={readOnly}
                 className="toolbar-select"
               >
                 {LANGUAGE_OPTIONS.map((option) => (
@@ -1413,6 +1482,9 @@ export function Action({
                   id={runnerSelectId}
                   value={runnerSelectValue}
                   onChange={(event) => {
+                    if (readOnly) {
+                      return
+                    }
                     const nextName = event.target.value
                     if (isJavascriptLanguage) {
                       const validJsRunner = JAVASCRIPT_RUNNER_OPTIONS.some(
@@ -1433,6 +1505,7 @@ export function Action({
                     }
                     cellData.setRunner(nextName)
                   }}
+                  disabled={readOnly}
                   className="toolbar-select"
                 >
                   {isJavascriptLanguage ? (
@@ -1462,6 +1535,9 @@ export function Action({
                   id={kernelSelectId}
                   value={selectedKernelKey}
                   onChange={(event) => {
+                    if (readOnly) {
+                      return
+                    }
                     const nextKey = event.target.value
                     if (!nextKey) {
                       cellData.clearJupyterKernel()
@@ -1484,6 +1560,7 @@ export function Action({
                       kernelName: option.label,
                     })
                   }}
+                  disabled={readOnly}
                   className="toolbar-select"
                 >
                   <option value="">Select kernel</option>
@@ -1501,11 +1578,16 @@ export function Action({
               )}
             </div>
             <div className="flex items-center gap-1">
-              <RunActionButton pid={pid} onClick={runCode} />
+              <RunActionButton
+                pid={pid}
+                onClick={runCode}
+                disabled={readOnly}
+              />
               <button
                 type="button"
                 aria-label="Delete cell"
                 className="icon-btn h-7 w-7 opacity-0 transition-opacity duration-150 group-hover/cell:opacity-100"
+                disabled={readOnly}
                 onClick={handleRemoveCell}
               >
                 <TrashIcon />
@@ -1555,6 +1637,7 @@ export function Action({
           <button
             type="button"
             className="ctx-menu-item text-red-600"
+            disabled={readOnly}
             onClick={(event) => {
               event.stopPropagation()
               handleRemoveCell()
@@ -1572,19 +1655,26 @@ function NotebookTabContent({
   docUri,
   entry,
   activeCell,
+  isSelected,
   isWindowFocused,
   onCellFocus,
 }: {
   docUri: string
   entry: OpenNotebookEntry
   activeCell: NotebookActiveCellState | null
+  isSelected: boolean
   isWindowFocused: boolean
   onCellFocus: (docUri: string, state: NotebookActiveCellState) => void
 }) {
   const { getNotebookData, openNotebook, useNotebookSnapshot } =
     useNotebookContext()
   const notebookSnapshot = useNotebookSnapshot(docUri)
+  const readOnly = Boolean(entry.readOnly || notebookSnapshot?.readOnly)
+  const shouldRenderCells = !readOnly || isSelected
   const cellDatas = useMemo(() => {
+    if (!shouldRenderCells) {
+      return []
+    }
     if (!notebookSnapshot) {
       return []
     }
@@ -1595,7 +1685,19 @@ function NotebookTabContent({
     return (notebookSnapshot.notebook.cells ?? [])
       .map((c) => (c?.refId ? data.getCell(c.refId) : null))
       .filter((c): c is CellData => Boolean(c))
-  }, [getNotebookData, notebookSnapshot])
+  }, [getNotebookData, notebookSnapshot, shouldRenderCells])
+
+  if (readOnly && !isSelected) {
+    return (
+      <div
+        className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center text-sm text-nb-text-muted"
+        data-testid="notebook-readonly-inactive-state"
+      >
+        <LockClosedIcon className="h-4 w-4 text-nb-text-muted" />
+        <span>Read-only notebook content will load when selected.</span>
+      </div>
+    )
+  }
 
   if (entry.state === 'blocked') {
     const ownerText = entry.owner?.ownerStartedAt
@@ -1669,20 +1771,38 @@ function NotebookTabContent({
       {/* Full-width notebook column with horizontal padding for breathing room.
           Cells expand to fill the available width of the tab content area. */}
       <div id="notebook-column" className="w-full py-2 px-8">
+        {readOnly && (
+          <div
+            className="mb-3 flex items-center gap-2 rounded-nb-sm border border-nb-border bg-nb-surface-2 px-3 py-2 text-xs text-nb-text-muted"
+            data-testid="notebook-readonly-banner"
+          >
+            <LockClosedIcon className="h-4 w-4 text-nb-text-muted" />
+            <span>
+              Read-only. This notebook is open for editing in another browser
+              tab.
+            </span>
+          </div>
+        )}
         {cellDatas.length === 0 ? (
           <div
             id="empty-notebook-prompt"
             className="flex flex-col items-center justify-center gap-3 py-16 text-sm text-nb-text-muted"
           >
-            <p>This notebook has no cells yet.</p>
-            <button
-              type="button"
-              className="cell-add-btn h-8 w-8"
-              aria-label="Add first cell"
-              onClick={() => data?.appendCell(parser_pb.CellKind.MARKUP)}
-            >
-              <PlusIcon className="h-5 w-5" />
-            </button>
+            <p>
+              {readOnly
+                ? 'This read-only notebook has no cells.'
+                : 'This notebook has no cells yet.'}
+            </p>
+            {!readOnly && (
+              <button
+                type="button"
+                className="cell-add-btn h-8 w-8"
+                aria-label="Add first cell"
+                onClick={() => data?.appendCell(parser_pb.CellKind.MARKUP)}
+              >
+                <PlusIcon className="h-5 w-5" />
+              </button>
+            )}
           </div>
         ) : (
           <div className="space-y-3">
@@ -1698,21 +1818,23 @@ function NotebookTabContent({
                   activeFocusRole={activeCell?.focusRole ?? 'editor'}
                   isWindowFocused={isWindowFocused}
                   onFocusStateChange={(state) => onCellFocus(docUri, state)}
+                  readOnly={readOnly}
                 />
               )
             })}
-            {/* Add cell button at the bottom of the notebook */}
-            <div className="flex justify-center py-3">
-              <button
-                type="button"
-                className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted"
-                aria-label="Add cell at end"
-                onClick={() => data?.appendCell(parser_pb.CellKind.CODE)}
-              >
-                <PlusIcon width={10} height={10} />
-                <span>Add cell</span>
-              </button>
-            </div>
+            {!readOnly && (
+              <div className="flex justify-center py-3">
+                <button
+                  type="button"
+                  className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted"
+                  aria-label="Add cell at end"
+                  onClick={() => data?.appendCell(parser_pb.CellKind.CODE)}
+                >
+                  <PlusIcon width={10} height={10} />
+                  <span>Add cell</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1779,6 +1901,7 @@ function UnknownDocumentTab({ uri }: { uri: string }) {
 function renderWorkspaceDocument({
   document,
   activeCell,
+  isSelected,
   isWindowFocused,
   onCellFocus,
   onDriveLogin,
@@ -1786,6 +1909,7 @@ function renderWorkspaceDocument({
 }: {
   document: WorkspaceDocument
   activeCell: NotebookActiveCellState | null
+  isSelected: boolean
   isWindowFocused: boolean
   onCellFocus: (docUri: string, state: NotebookActiveCellState) => void
   onDriveLogin: () => void
@@ -1797,6 +1921,7 @@ function renderWorkspaceDocument({
       requestedUri: document.requestedUri ?? document.uri,
       name: document.title,
       state: document.state ?? 'loading',
+      readOnly: document.readOnly,
       errorMessage: document.errorMessage,
       ...(document.owner !== undefined ? { owner: document.owner } : {}),
     }
@@ -1805,6 +1930,7 @@ function renderWorkspaceDocument({
         docUri={document.uri}
         entry={entry}
         activeCell={activeCell}
+        isSelected={isSelected}
         isWindowFocused={isWindowFocused}
         onCellFocus={onCellFocus}
       />
@@ -1853,6 +1979,7 @@ export default function Actions() {
     title: string
     shareableUri: string
     googleDriveUri: string | null
+    readOnly?: boolean
   } | null>(null)
   const tabTriggerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const pendingSelectedTabUriRef = useRef<string | null>(null)
@@ -2120,6 +2247,7 @@ export default function Actions() {
         title,
         shareableUri: docUri,
         googleDriveUri: isGoogleDriveFileUri(docUri) ? docUri : null,
+        readOnly: document?.readOnly,
       })
 
       if (!store || !docUri.startsWith('local://')) {
@@ -2159,6 +2287,10 @@ export default function Actions() {
 
   const handleRenameTab = useCallback(async () => {
     if (!tabContextMenu) {
+      return
+    }
+    if (tabContextMenu.readOnly) {
+      setTabContextMenu(null)
       return
     }
     if (!store) {
@@ -2426,6 +2558,7 @@ export default function Actions() {
                       <span className="max-w-[140px] truncate">
                         {displayName}
                       </span>
+                      {doc.readOnly && <ReadOnlyTabIndicator />}
                     </Tabs.Trigger>
                     {isNotebook && <NotebookSyncIndicator docUri={doc.uri} />}
                     <button
@@ -2458,6 +2591,7 @@ export default function Actions() {
               <button
                 type="button"
                 className="ctx-menu-item"
+                disabled={adjustedTabContextMenu.readOnly}
                 onClick={(event) => {
                   event.stopPropagation()
                   void handleRenameTab()
@@ -2521,6 +2655,7 @@ export default function Actions() {
                   {renderWorkspaceDocument({
                     document: doc,
                     activeCell: activeCellsByDoc[doc.uri] ?? null,
+                    isSelected: resolvedSelectedTabUri === doc.uri,
                     isWindowFocused:
                       isWindowFocused && resolvedSelectedTabUri === doc.uri,
                     onCellFocus: handleCellFocus,
