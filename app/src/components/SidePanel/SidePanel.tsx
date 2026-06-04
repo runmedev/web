@@ -3,6 +3,7 @@ import {
   ChatBubbleLeftRightIcon,
   InformationCircleIcon,
   QueueListIcon,
+  ServerStackIcon,
   UserCircleIcon,
 } from '@heroicons/react/24/outline'
 import { XMarkIcon } from '@heroicons/react/20/solid'
@@ -17,6 +18,7 @@ import {
 } from '../../browserAdapter.client'
 import { useGoogleAuth } from '../../contexts/GoogleAuthContext'
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
+import { useRunners } from '../../contexts/RunnersContext'
 import { useSidePanel } from '../../contexts/SidePanelContext'
 import { useWorkspaceDocumentContext } from '../../contexts/WorkspaceDocumentContext'
 import {
@@ -25,6 +27,8 @@ import {
   isNotebookDocumentUri,
   isVersionInfoUri,
   VERSION_INFO_DOCUMENT_URI,
+  isRunnerStatusUri,
+  RUNNER_STATUS_DOCUMENT_URI,
 } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 
 const sideButtonBase = 'group side-btn'
@@ -124,7 +128,9 @@ function OpenDocumentsPanel() {
                     ? 'Status'
                     : isVersionInfoUri(doc.uri)
                       ? 'Version'
-                      : 'Document'
+                      : isRunnerStatusUri(doc.uri)
+                        ? 'Runner Status'
+                        : 'Document'
               return (
                 <li key={doc.uri}>
                   <div
@@ -187,15 +193,20 @@ function OpenDocumentsPanel() {
 
 export function SidePanelToolbar() {
   const { activePanel, togglePanel } = useSidePanel()
+  const { showDocument } = useWorkspaceDocumentContext()
+  const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const authData = useBrowserAuthData()
   const browserAdapter = getBrowserAdapter()
   const { ensureAccessToken, isDriveSyncing } = useGoogleAuth()
-  const { showDocument } = useWorkspaceDocumentContext()
-  const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
+  const { listRunners } = useRunners()
   const [isDriveAuthPending, setIsDriveAuthPending] = useState(false)
 
   const driveStatus = isDriveSyncing ? 'Syncing' : 'Not syncing'
   const versionInfoSelected = getCurrentDoc() === VERSION_INFO_DOCUMENT_URI
+  const hasAvailableRunner = listRunners().some((runner) =>
+    Boolean(runner.endpoint.trim())
+  )
+  const runnerStatus = hasAvailableRunner ? 'Available' : 'Unavailable'
   const handleDriveStatusClick = useCallback(async () => {
     if (isDriveSyncing || isDriveAuthPending) {
       return
@@ -217,6 +228,13 @@ export function SidePanelToolbar() {
       title: 'Version Information',
     })
     setCurrentDoc(VERSION_INFO_DOCUMENT_URI)
+  }, [setCurrentDoc, showDocument])
+
+  const handleRunnerStatusClick = useCallback(() => {
+    showDocument(RUNNER_STATUS_DOCUMENT_URI, {
+      title: 'Notebook Runner Status',
+    })
+    setCurrentDoc(RUNNER_STATUS_DOCUMENT_URI)
   }, [setCurrentDoc, showDocument])
 
   return (
@@ -262,6 +280,28 @@ export function SidePanelToolbar() {
         </button>
       </div>
       <div className="flex flex-col items-center gap-2 pb-2">
+        <button
+          type="button"
+          className={`${sideButtonBase} ${
+            getCurrentDoc() === RUNNER_STATUS_DOCUMENT_URI
+              ? sideButtonActive
+              : sideButtonInactive
+          }`}
+          aria-label={`Runner status: ${runnerStatus}`}
+          onClick={handleRunnerStatusClick}
+        >
+          <span className="relative inline-flex h-5 w-5 items-center justify-center">
+            <ServerStackIcon
+              className={`h-5 w-5 ${
+                hasAvailableRunner ? 'text-emerald-500' : 'text-red-500'
+              }`}
+            />
+            {!hasAvailableRunner && (
+              <span className="pointer-events-none absolute h-0.5 w-6 -rotate-45 rounded bg-red-600" />
+            )}
+          </span>
+          <span className={tooltipBase}>{`Runner: ${runnerStatus}`}</span>
+        </button>
         <button
           type="button"
           className={`${sideButtonBase} ${

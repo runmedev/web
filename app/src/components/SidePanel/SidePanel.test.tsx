@@ -15,6 +15,7 @@ let openDocumentsState: {
   state?: string
   readOnly?: boolean
 }[] = []
+let runnersState: { name: string; endpoint: string; reconnect: boolean }[] = []
 let chatKitMountCount = 0
 let chatKitUnmountCount = 0
 const ensureAccessTokenMock = vi.fn(async () => 'token')
@@ -62,6 +63,13 @@ vi.mock('../../contexts/GoogleAuthContext', () => ({
   }),
 }))
 
+vi.mock('../../contexts/RunnersContext', () => ({
+  useRunners: () => ({
+    defaultRunnerName: runnersState[0]?.name ?? null,
+    listRunners: () => runnersState,
+  }),
+}))
+
 vi.mock('../ChatKit/ChatKitPanel', () => ({
   default: () => {
     useEffect(() => {
@@ -87,6 +95,7 @@ describe('SidePanelToolbar drive status button', () => {
     activePanelState = 'explorer'
     currentDocUri = null
     openDocumentsState = []
+    runnersState = []
     chatKitMountCount = 0
     chatKitUnmountCount = 0
     ensureAccessTokenMock.mockClear()
@@ -152,6 +161,35 @@ describe('SidePanelToolbar drive status button', () => {
     })
     expect(setCurrentDocMock).toHaveBeenCalledWith('app://version')
   })
+
+  it('opens the runner status document from the toolbar', () => {
+    runnersState = [
+      {
+        name: 'default',
+        endpoint: 'ws://localhost:8080/ws',
+        reconnect: true,
+      },
+    ]
+    render(<SidePanelToolbar />)
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Runner status: Available' })
+    )
+
+    expect(showDocumentMock).toHaveBeenCalledWith('status://runners', {
+      title: 'Notebook Runner Status',
+    })
+    expect(setCurrentDocMock).toHaveBeenCalledWith('status://runners')
+  })
+
+  it('marks the runner status button unavailable when no runner endpoint exists', () => {
+    runnersState = [{ name: 'default', endpoint: '', reconnect: true }]
+    render(<SidePanelToolbar />)
+
+    expect(
+      screen.getByRole('button', { name: 'Runner status: Unavailable' })
+    ).toBeTruthy()
+  })
 })
 
 describe('SidePanelContent ChatKit persistence', () => {
@@ -159,6 +197,7 @@ describe('SidePanelContent ChatKit persistence', () => {
     activePanelState = 'explorer'
     currentDocUri = null
     openDocumentsState = []
+    runnersState = []
     chatKitMountCount = 0
     chatKitUnmountCount = 0
     setCurrentDocMock.mockClear()
@@ -208,6 +247,7 @@ describe('SidePanelContent ChatKit persistence', () => {
       { uri: 'local://file/alpha.json', title: 'alpha.json' },
       { uri: 'diff://notebook/beta', title: 'beta diff' },
       { uri: 'app://version', title: 'Version Information' },
+      { uri: 'status://runners', title: 'Notebook Runner Status' },
     ]
     closeWorkspaceDocumentMock.mockReturnValue('diff://notebook/beta')
 
@@ -218,6 +258,7 @@ describe('SidePanelContent ChatKit persistence', () => {
     fireEvent.click(screen.getByText('beta diff'))
     expect(setCurrentDocMock).toHaveBeenCalledWith('diff://notebook/beta')
     expect(screen.getByText('Version · app://version')).toBeTruthy()
+    expect(screen.getByText('Runner Status · status://runners')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Close alpha.json' }))
     expect(closeWorkspaceDocumentMock).toHaveBeenCalledWith(

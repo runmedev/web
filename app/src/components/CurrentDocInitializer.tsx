@@ -3,6 +3,10 @@ import { useCurrentDoc } from "../contexts/CurrentDocContext";
 import { useNotebookContext } from "../contexts/NotebookContext";
 import { useNotebookStore } from "../contexts/NotebookStoreContext";
 import { useWorkspaceDocumentContext } from "../contexts/WorkspaceDocumentContext";
+import {
+  deriveWorkspaceDocumentTitle,
+  isRunnerStatusUri,
+} from "../lib/workspaceDocuments/workspaceDocumentTypes";
 
 function isNotebookDocParam(uri: string): boolean {
   return uri.startsWith("local://file/") || uri.startsWith("fs://");
@@ -31,7 +35,18 @@ export function CurrentDocInitializer() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const docParam = params.get("doc");
-    if (!docParam || !isNotebookDocParam(docParam)) {
+    if (!docParam) {
+      return;
+    }
+    if (isRunnerStatusUri(docParam)) {
+      showDocument(docParam, {
+        title: deriveWorkspaceDocumentTitle(docParam),
+      });
+      setCurrentDoc(docParam);
+      clearDocParam();
+      return;
+    }
+    if (!isNotebookDocParam(docParam)) {
       return;
     }
     if (requiresNotebookStore(docParam) && !store) {
