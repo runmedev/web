@@ -108,6 +108,9 @@ const JUPYTER_LIMITS = {
   totalBytesPerExecution: 32 * 1024 * 1024,
 } as const
 
+const RUNNER_BACKEND_UNAVAILABLE_MESSAGE =
+  'Runme backend server is not running. Please start it and try again.'
+
 function decodeBase64ToBytes(value: string): Uint8Array {
   try {
     const binary = globalThis.atob(value)
@@ -373,6 +376,13 @@ export const bindStreamsToCell: StreamBinder = ({
     }),
     streams.errors.subscribe((err) => {
       console.error('Stream error', err)
+      appLogger.error(RUNNER_BACKEND_UNAVAILABLE_MESSAGE, {
+        attrs: {
+          scope: 'runner.backend',
+          cellRefId: refId,
+          error: String(err),
+        },
+      })
       flushStdoutBuffer()
       finalizeIopubStream()
       finish()
@@ -704,6 +714,13 @@ export class NotebookData {
     const runner = useAppKernel ? undefined : this.getRunner(cell)
     if (!useAppKernel && (!runner || !runner.endpoint)) {
       console.error('No runner available for cell', cell.refId)
+      appLogger.error(RUNNER_BACKEND_UNAVAILABLE_MESSAGE, {
+        attrs: {
+          scope: 'runner.backend',
+          cellRefId: cell.refId,
+          runnerName: requestedRunnerName || DEFAULT_RUNNER_PLACEHOLDER,
+        },
+      })
       return ''
     }
 

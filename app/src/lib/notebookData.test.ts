@@ -14,6 +14,7 @@ import {
   resetCodexWasmJournalEntries,
 } from "./runtime/codexWasmEventJournal";
 import { __resetTabIdForTests, getClaimedSessionId } from "./tabIdentity";
+import { appLogger } from "./logging/runtime";
 
 const mockRunner = {
   name: "mock-runner",
@@ -595,6 +596,7 @@ describe("NotebookData persistence", () => {
 describe("NotebookData.runCodeCell", () => {
   it("returns empty run id when no runner is available", () => {
     getWithFallback.mockReturnValueOnce(undefined);
+    const logError = vi.spyOn(appLogger, "error");
 
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-no-runner",
@@ -614,6 +616,17 @@ describe("NotebookData.runCodeCell", () => {
 
     const runID = model.runCodeCell(cell);
     expect(runID).toBe("");
+    expect(logError).toHaveBeenCalledWith(
+      "Runme backend server is not running. Please start it and try again.",
+      {
+        attrs: {
+          scope: "runner.backend",
+          cellRefId: "cell-no-runner",
+          runnerName: "<default>",
+        },
+      },
+    );
+    logError.mockRestore();
   });
 
   it("returns empty run id for html content cells", () => {
