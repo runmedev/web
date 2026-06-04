@@ -14,6 +14,7 @@ import {
   getNotebookDiffDocumentUri,
   registerNotebookDiffDocument,
 } from '../../lib/notebookDiff/registry'
+import { VERSION_INFO_DOCUMENT_URI } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 import Actions, { Action, ActionOutputItems } from './Actions'
 
 const contextMocks = vi.hoisted(() => ({
@@ -760,6 +761,21 @@ describe('Actions tabs', () => {
       expect(diffTab.getAttribute('aria-selected')).toBe('true')
       expect(firstTab.getAttribute('aria-selected')).toBe('false')
     })
+  })
+
+  it('renders the version information workspace document as a tab', () => {
+    contextMocks.currentDoc = VERSION_INFO_DOCUMENT_URI
+    contextMocks.workspaceDocuments = [
+      { uri: VERSION_INFO_DOCUMENT_URI, title: 'Version Information' },
+    ]
+
+    render(<Actions />)
+
+    expect(
+      screen.getByRole('tab', { name: 'Version Information' })
+    ).toBeTruthy()
+    expect(screen.getByText('Release')).toBeTruthy()
+    expect(screen.getByText('version.yaml')).toBeTruthy()
   })
 })
 

@@ -160,7 +160,7 @@ func run(ctx context.Context, cfg config) error {
 		return fmt.Errorf("clone codex repository: %w", err)
 	}
 
-	if err := buildReleasePayload(ctx, webDir, codexDir); err != nil {
+	if err := buildReleasePayload(ctx, webDir, codexDir, version); err != nil {
 		return err
 	}
 
@@ -205,7 +205,7 @@ func run(ctx context.Context, cfg config) error {
 	return nil
 }
 
-func buildReleasePayload(ctx context.Context, webDir, codexDir string) error {
+func buildReleasePayload(ctx context.Context, webDir, codexDir string, version releaseVersion) error {
 	for _, cmdline := range []string{
 		"pnpm install --frozen-lockfile",
 		"pnpm run build:renderers",
@@ -240,11 +240,25 @@ func buildReleasePayload(ctx context.Context, webDir, codexDir string) error {
 		return fmt.Errorf("sync codex wasm assets: %w", err)
 	}
 
-	if err := runShell(ctx, webDir, nil, "pnpm build:app"); err != nil {
+	buildEnv := append(os.Environ(), versionBuildEnv(version)...)
+	if err := runShell(ctx, webDir, buildEnv, "pnpm build:app"); err != nil {
 		return fmt.Errorf("build web app: %w", err)
 	}
 
 	return nil
+}
+
+func versionBuildEnv(version releaseVersion) []string {
+	return []string{
+		"VITE_RUNME_VERSION_BUILD_DATE=" + version.BuildDate,
+		"VITE_RUNME_VERSION_WEB_REPO=" + version.WebRepo,
+		"VITE_RUNME_VERSION_WEB_BRANCH=" + version.WebBranch,
+		"VITE_RUNME_VERSION_WEB_COMMIT=" + version.WebCommit,
+		"VITE_RUNME_VERSION_CODEX_REPO=" + version.CodexRepo,
+		"VITE_RUNME_VERSION_CODEX_BRANCH=" + version.CodexBranch,
+		"VITE_RUNME_VERSION_CODEX_COMMIT=" + version.CodexCommit,
+		"VITE_RUNME_VERSION_BUCKET=" + version.Bucket,
+	}
 }
 
 func activeRustToolchain(ctx context.Context, dir string) (string, error) {

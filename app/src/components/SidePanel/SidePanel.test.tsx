@@ -22,6 +22,7 @@ const loginWithRedirectMock = vi.fn()
 const logoutMock = vi.fn()
 const togglePanelMock = vi.fn()
 const setCurrentDocMock = vi.fn()
+const showDocumentMock = vi.fn()
 const closeWorkspaceDocumentMock = vi.fn()
 
 vi.mock('../../browserAdapter.client', () => ({
@@ -42,6 +43,7 @@ vi.mock('../../contexts/SidePanelContext', () => ({
 vi.mock('../../contexts/WorkspaceDocumentContext', () => ({
   useWorkspaceDocumentContext: () => ({
     useWorkspaceDocuments: () => openDocumentsState,
+    showDocument: showDocumentMock,
     closeWorkspaceDocument: closeWorkspaceDocumentMock,
   }),
 }))
@@ -92,6 +94,7 @@ describe('SidePanelToolbar drive status button', () => {
     logoutMock.mockClear()
     togglePanelMock.mockClear()
     setCurrentDocMock.mockClear()
+    showDocumentMock.mockClear()
     closeWorkspaceDocumentMock.mockClear()
   })
 
@@ -136,6 +139,19 @@ describe('SidePanelToolbar drive status button', () => {
 
     expect(togglePanelMock).toHaveBeenCalledWith('open-documents')
   })
+
+  it('opens the Version Information document from the toolbar', () => {
+    render(<SidePanelToolbar />)
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open Version Information' })
+    )
+
+    expect(showDocumentMock).toHaveBeenCalledWith('app://version', {
+      title: 'Version Information',
+    })
+    expect(setCurrentDocMock).toHaveBeenCalledWith('app://version')
+  })
 })
 
 describe('SidePanelContent ChatKit persistence', () => {
@@ -146,6 +162,7 @@ describe('SidePanelContent ChatKit persistence', () => {
     chatKitMountCount = 0
     chatKitUnmountCount = 0
     setCurrentDocMock.mockClear()
+    showDocumentMock.mockClear()
     closeWorkspaceDocumentMock.mockClear()
   })
 
@@ -190,6 +207,7 @@ describe('SidePanelContent ChatKit persistence', () => {
     openDocumentsState = [
       { uri: 'local://file/alpha.json', title: 'alpha.json' },
       { uri: 'diff://notebook/beta', title: 'beta diff' },
+      { uri: 'app://version', title: 'Version Information' },
     ]
     closeWorkspaceDocumentMock.mockReturnValue('diff://notebook/beta')
 
@@ -199,6 +217,7 @@ describe('SidePanelContent ChatKit persistence', () => {
 
     fireEvent.click(screen.getByText('beta diff'))
     expect(setCurrentDocMock).toHaveBeenCalledWith('diff://notebook/beta')
+    expect(screen.getByText('Version · app://version')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Close alpha.json' }))
     expect(closeWorkspaceDocumentMock).toHaveBeenCalledWith(
