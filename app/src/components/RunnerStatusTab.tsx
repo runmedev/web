@@ -53,14 +53,24 @@ export function RunnerStatusTab() {
             </Text>
           ) : (
             <div className="mt-4 overflow-x-auto">
-              <table className="w-full min-w-[680px] border-collapse text-left text-sm">
+              <table className="w-full table-fixed border-collapse text-left text-sm">
                 <thead>
                   <tr className="border-b border-nb-border bg-nb-surface-2 text-xs font-semibold uppercase tracking-wide text-nb-text-muted">
-                    <th className="px-3 py-2">Name</th>
-                    <th className="px-3 py-2">Status</th>
-                    <th className="px-3 py-2">Endpoint</th>
-                    <th className="px-3 py-2">Default</th>
-                    <th className="px-3 py-2">Reconnect</th>
+                    <th className="w-[17%] whitespace-nowrap px-3 py-2">
+                      Name
+                    </th>
+                    <th className="w-[17%] whitespace-nowrap px-3 py-2">
+                      Status
+                    </th>
+                    <th className="w-[32%] whitespace-nowrap px-3 py-2">
+                      Endpoint
+                    </th>
+                    <th className="w-[14%] whitespace-nowrap px-3 py-2">
+                      Default
+                    </th>
+                    <th className="w-[20%] whitespace-nowrap px-3 py-2">
+                      Reconnect
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
