@@ -1,308 +1,265 @@
-import { create } from '@bufbuild/protobuf'
+import { create } from "@bufbuild/protobuf";
 
-import { parser_pb } from '../contexts/CellContext'
-import type { LocalNotebooks } from '../storage/local'
-import { appLogger } from './logging/runtime'
-import { NotebookData, type NotebookSnapshot } from './notebookData'
-import { getNotebookSessionPersistence } from './notebookSessionPersistence'
-import type { NotebookDataLike } from './runtime/runmeConsole'
+import { parser_pb } from "../contexts/CellContext";
+import { NotebookData, type NotebookSnapshot } from "./notebookData";
+import { appLogger } from "./logging/runtime";
+import type { NotebookDataLike } from "./runtime/runmeConsole";
+import type { LocalNotebooks } from "../storage/local";
+import { getNotebookSessionPersistence } from "./notebookSessionPersistence";
 import {
+  getNotebookOwnershipManager,
   type NotebookLease,
   type NotebookOwnershipManager,
   type NotebookOwnershipRecord,
-  getNotebookOwnershipManager,
-} from './tabCoordination/notebookOwnership'
+} from "./tabCoordination/notebookOwnership";
 
 export type NotebookTabState =
-  | 'resolving'
-  | 'loading'
-  | 'loaded'
-  | 'blocked'
-  | 'error'
+  | "resolving"
+  | "loading"
+  | "loaded"
+  | "blocked"
+  | "error";
 
 export interface OpenNotebookEntry {
-  uri: string
-  requestedUri: string
-  name: string
-  state: NotebookTabState
-  readOnly?: boolean
-  errorMessage?: string
-  owner?: NotebookOwnershipRecord | null
+  uri: string;
+  requestedUri: string;
+  name: string;
+  state: NotebookTabState;
+  errorMessage?: string;
+  owner?: NotebookOwnershipRecord | null;
 }
 
 export interface OpenNotebookResult {
-  localUri: string
-  entry: OpenNotebookEntry
+  localUri: string;
+  entry: OpenNotebookEntry;
 }
 
 export interface NotebookDataControllerSnapshot {
-  openNotebooks: OpenNotebookEntry[]
+  openNotebooks: OpenNotebookEntry[];
 }
 
 type NotebookDataHandle = {
-  data: NotebookData
-  unsubscribe: () => void
-  loaded: boolean
-}
+  data: NotebookData;
+  unsubscribe: () => void;
+  loaded: boolean;
+};
 
 function createEmptyNotebook(): parser_pb.Notebook {
   return create(parser_pb.NotebookSchema, {
     cells: [],
     metadata: {},
-  })
+  });
 }
 
 function isLocalFileUri(uri: string): boolean {
-  return uri.startsWith('local://file/')
+  return uri.startsWith("local://file/");
 }
 
 function deriveDisplayName(uri: string): string {
   try {
-    const url = new URL(uri)
-    const tail = url.pathname.split('/').filter(Boolean).pop()
+    const url = new URL(uri);
+    const tail = url.pathname.split("/").filter(Boolean).pop();
     if (tail) {
-      return decodeURIComponent(tail)
+      return decodeURIComponent(tail);
     }
   } catch {
     // Fall through to the URI segment heuristic.
   }
-  return uri.split('/').filter(Boolean).pop() ?? uri
+  return uri.split("/").filter(Boolean).pop() ?? uri;
 }
 
 export class NotebookDataController {
-  private static instance: NotebookDataController | null = null
+  private static instance: NotebookDataController | null = null;
 
   static getInstance(): NotebookDataController {
     if (!NotebookDataController.instance) {
-      NotebookDataController.instance = new NotebookDataController()
+      NotebookDataController.instance = new NotebookDataController();
     }
-    return NotebookDataController.instance
+    return NotebookDataController.instance;
   }
 
   static resetForTests(): void {
-    NotebookDataController.instance?.dispose()
-    NotebookDataController.instance = null
+    NotebookDataController.instance?.dispose();
+    NotebookDataController.instance = null;
   }
 
-  private localNotebooks: LocalNotebooks | null = null
-  private ownershipManager: NotebookOwnershipManager =
-    getNotebookOwnershipManager()
-  private readonly notebooks = new Map<string, NotebookDataHandle>()
-  private readonly leases = new Map<string, NotebookLease>()
-  private openNotebooks: OpenNotebookEntry[] = []
-  private readonly listeners = new Set<() => void>()
-  private snapshot: NotebookDataControllerSnapshot = { openNotebooks: [] }
-  private restored = false
+  private localNotebooks: LocalNotebooks | null = null;
+  private ownershipManager: NotebookOwnershipManager = getNotebookOwnershipManager();
+  private readonly notebooks = new Map<string, NotebookDataHandle>();
+  private readonly leases = new Map<string, NotebookLease>();
+  private openNotebooks: OpenNotebookEntry[] = [];
+  private readonly listeners = new Set<() => void>();
+  private snapshot: NotebookDataControllerSnapshot = { openNotebooks: [] };
+  private restored = false;
 
   getSnapshot(): NotebookDataControllerSnapshot {
-    this.ensureRestored()
-    return this.snapshot
+    this.ensureRestored();
+    return this.snapshot;
   }
 
   subscribe(listener: () => void): () => void {
-    this.ensureRestored()
-    this.listeners.add(listener)
+    this.ensureRestored();
+    this.listeners.add(listener);
     return () => {
-      this.listeners.delete(listener)
-    }
+      this.listeners.delete(listener);
+    };
   }
 
   configureStores(options: { localNotebooks: LocalNotebooks | null }): void {
-    this.ensureRestored()
-    this.localNotebooks = options.localNotebooks
+    this.ensureRestored();
+    this.localNotebooks = options.localNotebooks;
     for (const handle of this.notebooks.values()) {
       handle.data.setNotebookStore(
-        this.createOwnedNotebookStore(handle.data.getUri())
-      )
+        this.createOwnedNotebookStore(handle.data.getUri()),
+      );
     }
     if (this.localNotebooks) {
-      void this.loadOpenNotebooks()
+      void this.loadOpenNotebooks();
     }
   }
 
   configureOwnershipManager(manager: NotebookOwnershipManager): void {
-    this.ownershipManager = manager
+    this.ownershipManager = manager;
   }
 
   async openNotebook(
     uri: string,
-    options?: { name?: string }
+    options?: { name?: string },
   ): Promise<OpenNotebookResult> {
-    this.ensureRestored()
-    const requestedUri = uri.trim()
+    this.ensureRestored();
+    const requestedUri = uri.trim();
     if (!requestedUri) {
-      throw new Error('openNotebook requires a non-empty URI')
+      throw new Error("openNotebook requires a non-empty URI");
     }
 
-    const localUri = await this.resolveLocalUri(requestedUri, options?.name)
-    const name = await this.resolveNotebookName(localUri, options?.name)
+    const localUri = await this.resolveLocalUri(requestedUri, options?.name);
+    const name = await this.resolveNotebookName(localUri, options?.name);
     let entry = this.upsertOpenEntry({
       uri: localUri,
       requestedUri,
       name,
-      state: 'loading',
-      readOnly: false,
+      state: "loading",
       errorMessage: undefined,
       owner: undefined,
-    })
+    });
 
-    const acquireResult = await this.ownershipManager.acquire(localUri)
-    if (acquireResult.status === 'unsupported') {
+    const acquireResult = await this.ownershipManager.acquire(localUri);
+    if (acquireResult.status === "unsupported") {
       entry = this.upsertOpenEntry({
         ...entry,
-        state: 'error',
+        state: "error",
         errorMessage:
-          'This browser does not support safe multi-tab notebook ownership. Use a browser with Web Locks support, or close other Runme tabs before editing.',
-      })
-      return { localUri, entry }
+          "This browser does not support safe multi-tab notebook ownership. Use a browser with Web Locks support, or close other Runme tabs before editing.",
+      });
+      return { localUri, entry };
     }
-    if (acquireResult.status === 'blocked') {
-      const handle = this.ensureNotebookData({
-        uri: localUri,
-        name,
-        loaded: false,
-        readOnly: true,
-      })
+    if (acquireResult.status === "blocked") {
       entry = this.upsertOpenEntry({
         ...entry,
-        state: 'loading',
-        readOnly: true,
+        state: "blocked",
         owner: acquireResult.owner,
         errorMessage: undefined,
-      })
-      if (this.localNotebooks) {
-        try {
-          const notebook = await this.localNotebooks.load(localUri)
-          handle.data.setNotebookStore(null)
-          handle.data.setReadOnly(true)
-          handle.data.loadNotebook(notebook, { persist: false })
-          handle.loaded = true
-          entry = this.upsertOpenEntry({
-            ...entry,
-            name: await this.resolveNotebookName(localUri, name),
-            state: 'loaded',
-            readOnly: true,
-            owner: acquireResult.owner,
-            errorMessage: undefined,
-          })
-        } catch (error) {
-          entry = this.upsertOpenEntry({
-            ...entry,
-            state: 'error',
-            readOnly: true,
-            owner: acquireResult.owner,
-            errorMessage: `Notebook could not be opened read-only: ${String(error)}`,
-          })
-        }
-      }
-      return { localUri, entry }
+      });
+      return { localUri, entry };
     }
-    this.leases.set(localUri, acquireResult.lease)
+    this.leases.set(localUri, acquireResult.lease);
 
     const handle = this.ensureNotebookData({
       uri: localUri,
       name,
       loaded: false,
-      readOnly: false,
-    })
+    });
 
     if (handle.loaded) {
-      handle.data.setNotebookStore(this.createOwnedNotebookStore(localUri))
-      handle.data.setReadOnly(false)
+      handle.data.setNotebookStore(this.createOwnedNotebookStore(localUri));
       entry = this.upsertOpenEntry({
         ...entry,
         name: handle.data.getName(),
-        state: 'loaded',
-        readOnly: false,
+        state: "loaded",
         errorMessage: undefined,
         owner: undefined,
-      })
-      return { localUri, entry }
+      });
+      return { localUri, entry };
     }
 
     if (this.localNotebooks) {
       try {
-        const notebook = await this.localNotebooks.load(localUri)
-        handle.data.setNotebookStore(this.createOwnedNotebookStore(localUri))
-        handle.data.setReadOnly(false)
-        handle.data.loadNotebook(notebook, { persist: false })
-        handle.loaded = true
+        const notebook = await this.localNotebooks.load(localUri);
+        handle.data.setNotebookStore(this.createOwnedNotebookStore(localUri));
+        handle.data.loadNotebook(notebook, { persist: false });
+        handle.loaded = true;
         entry = this.upsertOpenEntry({
           ...entry,
           name: await this.resolveNotebookName(localUri, name),
-          state: 'loaded',
-          readOnly: false,
+          state: "loaded",
           errorMessage: undefined,
           owner: undefined,
-        })
+        });
       } catch (error) {
-        this.releaseLease(localUri)
+        this.releaseLease(localUri);
         entry = this.upsertOpenEntry({
           ...entry,
-          state: 'error',
+          state: "error",
           errorMessage: String(error),
-        })
+        });
       }
     }
 
-    return { localUri, entry }
+    return { localUri, entry };
   }
 
   closeNotebook(localUri: string): string | null {
-    this.ensureRestored()
-    const index = this.openNotebooks.findIndex((item) => item.uri === localUri)
+    this.ensureRestored();
+    const index = this.openNotebooks.findIndex((item) => item.uri === localUri);
     if (index === -1) {
-      return null
+      return null;
     }
     const fallback =
       index > 0
-        ? (this.openNotebooks[index - 1]?.uri ?? null)
-        : (this.openNotebooks[index + 1]?.uri ?? null)
-    this.removeNotebook(localUri)
-    return fallback
+        ? this.openNotebooks[index - 1]?.uri ?? null
+        : this.openNotebooks[index + 1]?.uri ?? null;
+    this.removeNotebook(localUri);
+    return fallback;
   }
 
   getNotebookData(localUri: string): NotebookData | undefined {
-    return this.notebooks.get(localUri)?.data
+    return this.notebooks.get(localUri)?.data;
   }
 
   getOpenNotebooks(): OpenNotebookEntry[] {
-    this.ensureRestored()
-    return this.openNotebooks
+    this.ensureRestored();
+    return this.openNotebooks;
   }
 
   getNotebookSnapshot(localUri: string): NotebookSnapshot | null {
-    return this.getNotebookData(localUri)?.getSnapshot() ?? null
+    return this.getNotebookData(localUri)?.getSnapshot() ?? null;
   }
 
   private async resolveLocalUri(uri: string, name?: string): Promise<string> {
     if (isLocalFileUri(uri)) {
-      return uri
+      return uri;
     }
     if (!this.localNotebooks) {
-      throw new Error('Notebook store is not ready')
+      throw new Error("Notebook store is not ready");
     }
-    return this.localNotebooks.addFile(uri, name)
+    return this.localNotebooks.addFile(uri, name);
   }
 
-  private async resolveNotebookName(
-    uri: string,
-    fallbackName?: string
-  ): Promise<string> {
+  private async resolveNotebookName(uri: string, fallbackName?: string): Promise<string> {
     if (fallbackName?.trim()) {
-      return fallbackName
+      return fallbackName;
     }
-    if (this.localNotebooks && uri.startsWith('local://')) {
+    if (this.localNotebooks && uri.startsWith("local://")) {
       try {
-        const metadata = await this.localNotebooks.getMetadata(uri)
+        const metadata = await this.localNotebooks.getMetadata(uri);
         if (metadata?.name) {
-          return metadata.name
+          return metadata.name;
         }
       } catch {
         // Fall back to URI-derived name.
       }
     }
-    return deriveDisplayName(uri)
+    return deriveDisplayName(uri);
   }
 
   private ensureNotebookData({
@@ -310,230 +267,223 @@ export class NotebookDataController {
     name,
     notebook,
     loaded = false,
-    readOnly = false,
   }: {
-    uri: string
-    name: string
-    notebook?: parser_pb.Notebook
-    loaded?: boolean
-    readOnly?: boolean
+    uri: string;
+    name: string;
+    notebook?: parser_pb.Notebook;
+    loaded?: boolean;
   }): NotebookDataHandle {
-    const existing = this.notebooks.get(uri)
+    const existing = this.notebooks.get(uri);
     if (existing) {
-      existing.data.setNotebookStore(
-        readOnly ? null : this.createOwnedNotebookStore(uri)
-      )
-      existing.data.setReadOnly(readOnly)
-      return existing
+      existing.data.setNotebookStore(this.createOwnedNotebookStore(uri));
+      return existing;
     }
 
     const data = new NotebookData({
       uri,
       name,
       notebook: notebook ?? createEmptyNotebook(),
-      notebookStore: readOnly ? null : this.createOwnedNotebookStore(uri),
+      notebookStore: this.createOwnedNotebookStore(uri),
       loaded,
-      readOnly,
       resolveNotebookForAppKernel: (target?: unknown) => {
-        const targetUri = this.resolveTargetUri(target)
+        const targetUri = this.resolveTargetUri(target);
         if (!targetUri) {
-          return this.getReadableNotebookData(uri)
+          return this.getOwnedNotebookData(uri);
         }
-        return this.getReadableNotebookData(targetUri)
+        return this.getOwnedNotebookData(targetUri);
       },
       listNotebooksForAppKernel: () => this.listNotebookDataLike(uri),
-    })
+    });
     const unsubscribe = data.subscribe(() => {
-      this.updateOpenEntryName(data.getUri(), data.getName())
-      this.emit()
-    })
-    const handle = { data, unsubscribe, loaded }
-    this.notebooks.set(uri, handle)
-    this.emit()
-    return handle
+      this.updateOpenEntryName(data.getUri(), data.getName());
+      this.emit();
+    });
+    const handle = { data, unsubscribe, loaded };
+    this.notebooks.set(uri, handle);
+    this.emit();
+    return handle;
   }
 
   private resolveTargetUri(target?: unknown): string | null {
-    if (typeof target === 'string' && target.trim() !== '') {
-      return target.trim()
+    if (typeof target === "string" && target.trim() !== "") {
+      return target.trim();
     }
     if (
-      typeof target === 'object' &&
+      typeof target === "object" &&
       target &&
-      'uri' in target &&
-      typeof (target as { uri?: unknown }).uri === 'string' &&
-      (target as { uri: string }).uri.trim() !== ''
+      "uri" in target &&
+      typeof (target as { uri?: unknown }).uri === "string" &&
+      (target as { uri: string }).uri.trim() !== ""
     ) {
-      return (target as { uri: string }).uri.trim()
+      return (target as { uri: string }).uri.trim();
     }
     if (
-      typeof target === 'object' &&
+      typeof target === "object" &&
       target &&
-      'handle' in target &&
+      "handle" in target &&
       typeof (target as { handle?: { uri?: unknown } }).handle?.uri ===
-        'string' &&
-      (target as { handle: { uri: string } }).handle.uri.trim() !== ''
+        "string" &&
+      (target as { handle: { uri: string } }).handle.uri.trim() !== ""
     ) {
-      return (target as { handle: { uri: string } }).handle.uri.trim()
+      return (target as { handle: { uri: string } }).handle.uri.trim();
     }
-    return null
+    return null;
   }
 
   private listNotebookDataLike(currentUri: string): NotebookDataLike[] {
-    const notebooksByUri = new Map<string, NotebookDataLike>()
+    const notebooksByUri = new Map<string, NotebookDataLike>();
     for (const handle of this.notebooks.values()) {
-      notebooksByUri.set(handle.data.getUri(), handle.data)
+      if (!this.leases.has(handle.data.getUri())) {
+        continue;
+      }
+      notebooksByUri.set(handle.data.getUri(), handle.data);
     }
-    const current = this.getReadableNotebookData(currentUri)
+    const current = this.getOwnedNotebookData(currentUri);
     if (current && !notebooksByUri.has(current.getUri())) {
-      notebooksByUri.set(current.getUri(), current)
+      notebooksByUri.set(current.getUri(), current);
     }
-    return Array.from(notebooksByUri.values())
+    return Array.from(notebooksByUri.values());
   }
 
   private getOwnedNotebookData(uri: string): NotebookData | null {
     if (!this.leases.has(uri)) {
-      return null
+      return null;
     }
-    return this.notebooks.get(uri)?.data ?? null
-  }
-
-  private getReadableNotebookData(uri: string): NotebookData | null {
-    return this.notebooks.get(uri)?.data ?? null
+    return this.notebooks.get(uri)?.data ?? null;
   }
 
   private updateOpenEntryName(uri: string, name: string): void {
-    let changed = false
+    let changed = false;
     this.openNotebooks = this.openNotebooks.map((item) => {
       if (item.uri !== uri || item.name === name) {
-        return item
+        return item;
       }
-      changed = true
+      changed = true;
       return {
         ...item,
         name,
-      }
-    })
+      };
+    });
     if (changed) {
-      this.persist()
+      this.persist();
     }
   }
 
   private upsertOpenEntry(entry: OpenNotebookEntry): OpenNotebookEntry {
-    let changed = false
+    let changed = false;
     const next = this.openNotebooks.map((item) => {
       if (item.uri !== entry.uri) {
-        return item
+        return item;
       }
-      changed = true
-      return entry
-    })
-    this.openNotebooks = changed ? next : [...this.openNotebooks, entry]
-    this.emit()
-    this.persist()
-    return entry
+      changed = true;
+      return entry;
+    });
+    this.openNotebooks = changed ? next : [...this.openNotebooks, entry];
+    this.emit();
+    this.persist();
+    return entry;
   }
 
   private removeNotebook(uri: string): void {
-    this.releaseLease(uri)
-    const handle = this.notebooks.get(uri)
+    this.releaseLease(uri);
+    const handle = this.notebooks.get(uri);
     if (handle) {
-      handle.unsubscribe()
+      handle.unsubscribe();
     }
-    this.notebooks.delete(uri)
-    this.openNotebooks = this.openNotebooks.filter((item) => item.uri !== uri)
-    this.emit()
-    this.persist()
+    this.notebooks.delete(uri);
+    this.openNotebooks = this.openNotebooks.filter((item) => item.uri !== uri);
+    this.emit();
+    this.persist();
   }
 
   private releaseLease(uri: string): void {
-    this.leases.get(uri)?.release()
-    this.leases.delete(uri)
+    this.leases.get(uri)?.release();
+    this.leases.delete(uri);
   }
 
   private async loadOpenNotebooks(): Promise<void> {
     if (!this.localNotebooks) {
-      return
+      return;
     }
-    const restored = [...this.openNotebooks]
+    const restored = [...this.openNotebooks];
     for (const item of restored) {
       if (this.notebooks.get(item.uri)?.loaded) {
-        continue
+        continue;
       }
       void this.openNotebook(item.requestedUri || item.uri, {
         name: item.name,
-      })
+      });
     }
   }
 
   private ensureRestored(): void {
     if (this.restored) {
-      return
+      return;
     }
-    this.restored = true
-    this.openNotebooks = getNotebookSessionPersistence().loadOpenNotebooks()
-    this.rebuildSnapshot()
+    this.restored = true;
+    this.openNotebooks = getNotebookSessionPersistence().loadOpenNotebooks();
+    this.rebuildSnapshot();
   }
 
   private emit(): void {
-    this.rebuildSnapshot()
+    this.rebuildSnapshot();
     for (const listener of this.listeners) {
       try {
-        listener()
+        listener();
       } catch (error) {
-        appLogger.error('NotebookDataController listener failed', {
-          attrs: { scope: 'notebook-session', error },
-        })
+        appLogger.error("NotebookDataController listener failed", {
+          attrs: { scope: "notebook-session", error },
+        });
       }
     }
   }
 
   private persist(): void {
-    getNotebookSessionPersistence().saveOpenNotebooks(this.openNotebooks)
+    getNotebookSessionPersistence().saveOpenNotebooks(this.openNotebooks);
   }
 
   private rebuildSnapshot(): void {
     this.snapshot = {
       openNotebooks: this.openNotebooks.map((item) => ({ ...item })),
-    }
+    };
   }
 
   private dispose(): void {
     for (const lease of this.leases.values()) {
-      lease.release()
+      lease.release();
     }
-    this.leases.clear()
+    this.leases.clear();
     for (const handle of this.notebooks.values()) {
-      handle.unsubscribe()
+      handle.unsubscribe();
     }
-    this.notebooks.clear()
-    this.openNotebooks = []
-    this.listeners.clear()
-    this.snapshot = { openNotebooks: [] }
-    this.restored = false
-    this.localNotebooks = null
+    this.notebooks.clear();
+    this.openNotebooks = [];
+    this.listeners.clear();
+    this.snapshot = { openNotebooks: [] };
+    this.restored = false;
+    this.localNotebooks = null;
   }
 
   private createOwnedNotebookStore(uri: string) {
     if (!this.localNotebooks) {
-      return null
+      return null;
     }
     return {
       save: async (saveUri: string, notebook: parser_pb.Notebook) => {
-        const lease = this.leases.get(uri)
+        const lease = this.leases.get(uri);
         if (!lease || !(await lease.isCurrentOwner())) {
-          throw new Error(`Notebook ${uri} is not owned by this browser tab.`)
+          throw new Error(`Notebook ${uri} is not owned by this browser tab.`);
         }
-        return this.localNotebooks?.save(saveUri, notebook)
+        return this.localNotebooks?.save(saveUri, notebook);
       },
-    }
+    };
   }
 }
 
 export function getNotebookDataController(): NotebookDataController {
-  return NotebookDataController.getInstance()
+  return NotebookDataController.getInstance();
 }
 
 export function __resetNotebookDataControllerForTests(): void {
-  NotebookDataController.resetForTests()
+  NotebookDataController.resetForTests();
 }

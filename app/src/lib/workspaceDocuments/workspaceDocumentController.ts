@@ -149,7 +149,6 @@ export class WorkspaceDocumentController {
       title,
       requestedUri: options?.requestedUri,
       state: options?.state,
-      readOnly: options?.readOnly,
       errorMessage: options?.errorMessage,
       owner: options?.owner,
     }
@@ -162,7 +161,6 @@ export class WorkspaceDocumentController {
         existing?.title === nextDocument.title &&
         existing?.requestedUri === nextDocument.requestedUri &&
         existing?.state === nextDocument.state &&
-        existing?.readOnly === nextDocument.readOnly &&
         existing?.errorMessage === nextDocument.errorMessage &&
         existing?.owner === nextDocument.owner
       ) {

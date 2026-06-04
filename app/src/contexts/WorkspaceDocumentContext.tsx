@@ -57,7 +57,6 @@ export function WorkspaceDocumentProvider({
         title: notebook.name,
         requestedUri: notebook.requestedUri,
         state: notebook.state,
-        readOnly: notebook.readOnly,
         errorMessage: notebook.errorMessage,
         owner: notebook.owner,
       })
