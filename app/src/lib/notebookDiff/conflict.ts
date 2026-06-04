@@ -27,12 +27,14 @@ function parseNotebookJson(
   }
 }
 
-function registerConflictDiffDocument(
+async function registerConflictDiffDocument(
+  store: LocalNotebooks,
   localUri: string,
   record: LocalFileRecord,
   conflict: NotebookConflictState
 ) {
-  const upstreamNotebook = parseNotebookJson(conflict.upstreamDoc, 'upstream')
+  const upstreamDoc = await store.getConflictUpstreamDoc(localUri)
+  const upstreamNotebook = parseNotebookJson(upstreamDoc, 'upstream')
   const localNotebook = parseNotebookJson(record.doc ?? '', 'local')
   return registerNotebookDiffDocument({
     id: `conflict-${encodeURIComponent(localUri)}`,
@@ -66,7 +68,8 @@ export async function openNotebookConflictDiff(
     throw new Error(`Local notebook ${localUri} does not have a conflict`)
   }
 
-  const document = registerConflictDiffDocument(
+  const document = await registerConflictDiffDocument(
+    store,
     localUri,
     record,
     record.conflict
@@ -84,5 +87,5 @@ export async function refreshNotebookConflictDiff(
     throw new Error(`Local notebook record not found for ${localUri}`)
   }
 
-  registerConflictDiffDocument(localUri, record, conflict)
+  await registerConflictDiffDocument(store, localUri, record, conflict)
 }

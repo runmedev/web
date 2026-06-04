@@ -9,6 +9,11 @@ import { serializeNotebookToMarkdown } from '../lib/markdown/serializeNotebookTo
 import { appState } from '../lib/runtime/AppState'
 import { parser_pb } from '../runme/client'
 import {
+  type ConflictDocStorage,
+  type ConflictDocumentRef,
+  createDefaultConflictDocStorage,
+} from './conflictDocs'
+import {
   DriveNotebookStore,
   type DriveVersionMetadata,
   isDriveItemUri,
@@ -77,7 +82,18 @@ export interface NotebookConflictState {
   detectedAt: string
   upstreamChecksum: string
   upstreamVersion?: UpstreamVersion
-  upstreamDoc: string
+  upstreamDocRef?: ConflictDocumentRef
+  /** @deprecated Legacy inline conflict payload. New records store this in OPFS. */
+  upstreamDoc?: string
+  localChecksumAtDetection: string
+}
+
+export interface NotebookConflictSummary {
+  detectedAt: string
+  upstreamChecksum: string
+  upstreamVersion?: UpstreamVersion
+  upstreamDocRef?: ConflictDocumentRef
+  upstreamDocSizeBytes?: number
   localChecksumAtDetection: string
 }
 
@@ -97,7 +113,7 @@ export interface NotebookSyncState {
   parentRemoteIdWhenCreated?: string
   lastSynced?: string
   lastUpstreamVersion?: UpstreamVersion
-  conflict?: NotebookConflictState
+  conflict?: NotebookConflictSummary
   lastError?: string
 }
 
@@ -159,6 +175,7 @@ export class LocalNotebooks extends Dexie {
 
   private readonly driveStore: DriveNotebookStore
   private filesystemStore: FilesystemNotebookStore | null = null
+  private readonly conflictDocStorage: ConflictDocStorage
 
   private readonly syncSubjects = new Map<string, Subject<void>>()
   private readonly markdownSyncSubjects = new Map<string, Subject<void>>()
@@ -167,7 +184,8 @@ export class LocalNotebooks extends Dexie {
 
   constructor(
     driveStore: DriveNotebookStore,
-    databaseName: string = 'runme-local-notebooks'
+    databaseName: string = 'runme-local-notebooks',
+    conflictDocStorage: ConflictDocStorage = createDefaultConflictDocStorage()
   ) {
     super(databaseName)
 
@@ -256,6 +274,7 @@ export class LocalNotebooks extends Dexie {
     this.folders = this.table('folders')
 
     this.driveStore = driveStore
+    this.conflictDocStorage = conflictDocStorage
 
     void this.ensureFolderRecord(LOCAL_FOLDER_URI, 'Local Notebooks')
   }
@@ -347,13 +366,13 @@ export class LocalNotebooks extends Dexie {
         )
         const changes: Partial<LocalFileRecord> = { name }
         if (checksum !== existingBaseline) {
-          changes.conflict = {
-            detectedAt: nowIsoString(),
+          changes.conflict = await this.createConflictState({
+            localUri: existing.id,
+            upstreamDoc: serialized,
             upstreamChecksum: checksum,
             upstreamVersion: { checksum },
-            upstreamDoc: serialized,
             localChecksumAtDetection: existingChecksum,
-          }
+          })
           changes.lastSyncError = undefined
         }
         await this.files.update(existing.id, changes)
@@ -691,6 +710,7 @@ export class LocalNotebooks extends Dexie {
       lastSynced: nowIsoString(),
       lastSyncError: undefined,
     })
+    await this.deleteConflictDoc(record.conflict)
     this.notifySync(localUri)
   }
 
@@ -727,13 +747,13 @@ export class LocalNotebooks extends Dexie {
       localUri,
       record
     )
-    const conflict: NotebookConflictState = {
-      detectedAt: nowIsoString(),
+    const conflict = await this.createConflictState({
+      localUri,
+      upstreamDoc,
       upstreamChecksum,
       upstreamVersion,
-      upstreamDoc,
       localChecksumAtDetection: localChecksum,
-    }
+    })
 
     await this.files.update(localUri, {
       conflict,
@@ -741,6 +761,39 @@ export class LocalNotebooks extends Dexie {
     })
     this.notifySync(localUri)
     return conflict
+  }
+
+  async getConflictUpstreamDoc(localUri: string): Promise<string> {
+    const record = await this.files.get(localUri)
+    if (!record) {
+      throw new Error(`Local notebook record not found for ${localUri}`)
+    }
+    const conflict = record.conflict
+    if (!conflict) {
+      throw new Error(`Local notebook ${localUri} does not have a conflict`)
+    }
+
+    if (conflict.upstreamDocRef) {
+      return this.getConflictDocStorage().read(conflict.upstreamDocRef)
+    }
+
+    if (typeof conflict.upstreamDoc === 'string') {
+      const legacyDoc = conflict.upstreamDoc
+      const migrated = await this.createConflictState({
+        localUri,
+        upstreamDoc: legacyDoc,
+        upstreamChecksum: conflict.upstreamChecksum,
+        upstreamVersion: conflict.upstreamVersion,
+        localChecksumAtDetection: conflict.localChecksumAtDetection,
+        detectedAt: conflict.detectedAt,
+      })
+      await this.files.update(localUri, { conflict: migrated })
+      return legacyDoc
+    }
+
+    throw new Error(
+      `Conflict upstream document is missing for local notebook ${localUri}`
+    )
   }
 
   private async persistNotebook(
@@ -1722,15 +1775,16 @@ export class LocalNotebooks extends Dexie {
     const upstreamDoc = serializeNotebook(upstreamNotebook)
     const upstreamChecksum =
       upstreamVersion.checksum || checksumForSerializedNotebook(upstreamDoc)
+    const conflict = await this.createConflictState({
+      localUri,
+      upstreamDoc,
+      upstreamChecksum,
+      upstreamVersion,
+      localChecksumAtDetection: localChecksum,
+    })
 
     await this.files.update(localUri, {
-      conflict: {
-        detectedAt: nowIsoString(),
-        upstreamChecksum,
-        upstreamVersion,
-        upstreamDoc,
-        localChecksumAtDetection: localChecksum,
-      },
+      conflict,
       lastSyncError: undefined,
     })
 
@@ -1747,6 +1801,61 @@ export class LocalNotebooks extends Dexie {
       },
     })
     this.notifySync(localUri)
+  }
+
+  private async createConflictState({
+    localUri,
+    upstreamDoc,
+    upstreamChecksum,
+    upstreamVersion,
+    localChecksumAtDetection,
+    detectedAt = nowIsoString(),
+  }: {
+    localUri: string
+    upstreamDoc: string
+    upstreamChecksum: string
+    upstreamVersion?: UpstreamVersion
+    localChecksumAtDetection: string
+    detectedAt?: string
+  }): Promise<NotebookConflictState> {
+    const upstreamDocRef = await this.getConflictDocStorage().write(
+      localUri,
+      upstreamDoc
+    )
+    return {
+      detectedAt,
+      upstreamChecksum,
+      upstreamVersion,
+      upstreamDocRef,
+      localChecksumAtDetection,
+    }
+  }
+
+  private getConflictDocStorage(): ConflictDocStorage {
+    return (
+      (this as unknown as { conflictDocStorage?: ConflictDocStorage })
+        .conflictDocStorage ?? createDefaultConflictDocStorage()
+    )
+  }
+
+  private async deleteConflictDoc(
+    conflict: NotebookConflictState | undefined
+  ): Promise<void> {
+    if (!conflict?.upstreamDocRef) {
+      return
+    }
+    try {
+      await this.getConflictDocStorage().delete(conflict.upstreamDocRef)
+    } catch (error) {
+      appLogger.warn('Failed to delete conflict document from OPFS', {
+        attrs: {
+          scope: 'storage.drive.sync',
+          code: 'DRIVE_NOTEBOOK_CONFLICT_DOC_DELETE_FAILED',
+          path: conflict.upstreamDocRef.path,
+          error: String(error),
+        },
+      })
+    }
   }
 
   private async findParentFolder(
@@ -1879,8 +1988,28 @@ function syncStateForRecord(
     parentRemoteIdWhenCreated: record.parentRemoteIdWhenCreated,
     lastSynced: record.lastSynced || undefined,
     lastUpstreamVersion: record.lastUpstreamVersion,
-    conflict: record.conflict,
+    conflict: summarizeConflictForSync(record.conflict),
     lastError: record.lastSyncError || fallbackError,
+  }
+}
+
+function summarizeConflictForSync(
+  conflict: NotebookConflictState | undefined
+): NotebookConflictSummary | undefined {
+  if (!conflict) {
+    return undefined
+  }
+  return {
+    detectedAt: conflict.detectedAt,
+    upstreamChecksum: conflict.upstreamChecksum,
+    upstreamVersion: conflict.upstreamVersion,
+    upstreamDocRef: conflict.upstreamDocRef,
+    upstreamDocSizeBytes:
+      conflict.upstreamDocRef?.sizeBytes ??
+      (typeof conflict.upstreamDoc === 'string'
+        ? new TextEncoder().encode(conflict.upstreamDoc).byteLength
+        : undefined),
+    localChecksumAtDetection: conflict.localChecksumAtDetection,
   }
 }
 

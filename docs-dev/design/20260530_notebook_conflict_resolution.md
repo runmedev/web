@@ -127,6 +127,16 @@ type NotebookSyncStatus =
 
 Add a first-class conflict state instead of overloading `error`.
 
+### 2026-06-04 Storage Amendment
+
+The original V0 data model below stored `conflict.upstreamDoc` inline on
+`LocalFileRecord`. That decision has been superseded by
+`docs-dev/design/20260604_conflict_snapshots_opfs.md`.
+
+Keep the conflict status and lightweight metadata in IndexedDB, but store the
+large upstream snapshot in OPFS and reference it from the record. Passive reads
+such as `getSyncState(...)` must not return the full upstream document.
+
 ## Proposed User Flow
 
 ### 1. Conflict Detection
@@ -248,10 +258,12 @@ export interface LocalFileRecord {
 }
 ```
 
-Persist `upstreamDoc` in IndexedDB so the conflict diff is stable even if Drive
-changes again or auth is temporarily unavailable. This duplicates one notebook
-payload only while a conflict is unresolved. Clear it after the user resolves
-or intentionally discards the conflict.
+Deprecated: the initial design persisted `upstreamDoc` inline in IndexedDB so
+the conflict diff was stable even if Drive changed again or auth was
+temporarily unavailable. That shape caused large conflicted notebooks to make
+the hot `files` record unsafe to load passively. New conflict records should
+store an OPFS document ref instead; see
+`docs-dev/design/20260604_conflict_snapshots_opfs.md`.
 
 Use the existing `lastUpstreamVersion` as the base version where possible. It
 is diagnostic metadata, not the merge base content.
