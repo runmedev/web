@@ -27,17 +27,17 @@ import {
   useState,
   useSyncExternalStore,
   type KeyboardEvent,
-} from "react";
-import ReactMarkdown from "react-markdown";
-import type { Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+} from 'react'
+import ReactMarkdown from 'react-markdown'
+import type { Components } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
-import { create } from "@bufbuild/protobuf";
-import { parser_pb } from "../../runme/client";
-import type { CellData } from "../../lib/notebookData";
-import type { CellFocusRole } from "../../lib/notebookActiveCellState";
-import Editor from "./Editor";
-import { fontSettings } from "./CellConsole";
+import { create } from '@bufbuild/protobuf'
+import { parser_pb } from '../../runme/client'
+import type { CellData } from '../../lib/notebookData'
+import type { CellFocusRole } from '../../lib/notebookActiveCellState'
+import Editor from './Editor'
+import { fontSettings } from './CellConsole'
 
 /**
  * Custom markdown components for consistent styling.
@@ -80,7 +80,7 @@ const markdownComponents: Components = {
     </li>
   ),
   code: ({ children, className, ...props }) => {
-    const isInline = !className;
+    const isInline = !className
     if (isInline) {
       return (
         <code
@@ -89,7 +89,7 @@ const markdownComponents: Components = {
         >
           {children}
         </code>
-      );
+      )
     }
     return (
       <code
@@ -98,10 +98,13 @@ const markdownComponents: Components = {
       >
         {children}
       </code>
-    );
+    )
   },
   pre: ({ children, ...props }) => (
-    <pre className="bg-nb-surface-2 p-3 rounded-md overflow-x-auto mb-3" {...props}>
+    <pre
+      className="bg-nb-surface-2 p-3 rounded-md overflow-x-auto mb-3"
+      {...props}
+    >
       {children}
     </pre>
   ),
@@ -148,34 +151,36 @@ const markdownComponents: Components = {
   img: ({ src, alt, ...props }) => (
     <img
       src={src}
-      alt={alt || ""}
+      alt={alt || ''}
       className="max-w-full h-auto rounded-md my-2"
       {...props}
     />
   ),
-};
+}
 
 interface MarkdownCellProps {
   /** The CellData object containing the markdown content and state */
-  cellData: CellData;
+  cellData: CellData
   /** Selected language shown in the footer selector */
-  selectedLanguage: string;
+  selectedLanguage: string
   /** ID for the language selector element */
-  languageSelectId: string;
+  languageSelectId: string
   /** Supported language options for converting markdown/code cells */
-  languageOptions: readonly { label: string; value: string }[];
+  languageOptions: readonly { label: string; value: string }[]
   /** Shared language change handler from parent Action component */
-  onLanguageChange: (event: ChangeEvent<HTMLSelectElement>) => void;
+  onLanguageChange: (event: ChangeEvent<HTMLSelectElement>) => void
   /** Incrementing signal to force editor mode after conversion to markdown */
-  forceEditRequest?: number;
+  forceEditRequest?: number
   /** Whether this cell is the persisted active cell for the visible notebook */
-  isActiveCell?: boolean;
+  isActiveCell?: boolean
   /** Which markdown surface was last active for this cell */
-  activeFocusRole?: CellFocusRole;
+  activeFocusRole?: CellFocusRole
   /** Whether the visible browser tab is currently focused */
-  isWindowFocused?: boolean;
+  isWindowFocused?: boolean
   /** Notify parent when markdown focus target changes explicitly */
-  onFocusRoleChange?: (focusRole: CellFocusRole) => void;
+  onFocusRoleChange?: (focusRole: CellFocusRole) => void
+  /** Render and inspect only; editing controls are disabled. */
+  readOnly?: boolean
 }
 
 /**
@@ -196,9 +201,10 @@ const MarkdownCell = memo(
     onLanguageChange,
     forceEditRequest = 0,
     isActiveCell = false,
-    activeFocusRole = "editor",
+    activeFocusRole = 'editor',
     isWindowFocused = false,
     onFocusRoleChange,
+    readOnly = false,
   }: MarkdownCellProps) => {
     // Subscribe to cell data changes using useSyncExternalStore for tearing-safe reads
     const cell = useSyncExternalStore(
@@ -208,93 +214,99 @@ const MarkdownCell = memo(
       ),
       useCallback(() => cellData.snapshot, [cellData]),
       useCallback(() => cellData.snapshot, [cellData])
-    );
+    )
 
     // `rendered` state controls whether we show rendered markdown or the editor
     // Start in rendered mode unless the cell is empty (new cell)
     const [rendered, setRendered] = useState(() => {
-      const value = cell?.value ?? "";
-      if (value.trim() && isActiveCell && activeFocusRole === "editor") {
-        return false;
+      const value = cell?.value ?? ''
+      if (readOnly) {
+        return true
       }
-      return value.trim().length > 0;
-    });
-    const renderedRef = useRef<HTMLDivElement | null>(null);
-    const previousShouldOwnFocusRef = useRef(false);
-    const [editorFocusIntent, setEditorFocusIntent] = useState(false);
-    const [renderedFocusIntent, setRenderedFocusIntent] = useState(false);
+      if (value.trim() && isActiveCell && activeFocusRole === 'editor') {
+        return false
+      }
+      return value.trim().length > 0
+    })
+    const renderedRef = useRef<HTMLDivElement | null>(null)
+    const previousShouldOwnFocusRef = useRef(false)
+    const [editorFocusIntent, setEditorFocusIntent] = useState(false)
+    const [renderedFocusIntent, setRenderedFocusIntent] = useState(false)
 
     // Get the current cell value
-    const value = cell?.value ?? "";
-    const shouldOwnFocus = isActiveCell && isWindowFocused;
-    const tracksActiveCell = Boolean(onFocusRoleChange);
+    const value = cell?.value ?? ''
+    const shouldOwnFocus = isActiveCell && isWindowFocused
+    const tracksActiveCell = Boolean(onFocusRoleChange)
 
     // Enforce invariant: empty cells must be in edit mode.
     // This handles external changes (undo/redo, sync) that clear the value.
     useEffect(() => {
-      if (!value.trim() && rendered) {
-        setRendered(false);
+      if (!readOnly && !value.trim() && rendered) {
+        setRendered(false)
       }
-    }, [value, rendered]);
+    }, [readOnly, value, rendered])
 
     useEffect(() => {
-      if (forceEditRequest > 0) {
-        setRendered(false);
-        setEditorFocusIntent(true);
+      if (!readOnly && forceEditRequest > 0) {
+        setRendered(false)
+        setEditorFocusIntent(true)
       }
-    }, [forceEditRequest]);
+    }, [forceEditRequest, readOnly])
 
     useEffect(() => {
       if (!editorFocusIntent || rendered) {
-        return;
+        return
       }
-      setEditorFocusIntent(false);
-    }, [editorFocusIntent, rendered]);
+      setEditorFocusIntent(false)
+    }, [editorFocusIntent, rendered])
 
     useEffect(() => {
       if (!renderedFocusIntent || !rendered) {
-        return;
+        return
       }
-      renderedRef.current?.focus();
-      setRenderedFocusIntent(false);
-    }, [rendered, renderedFocusIntent]);
+      renderedRef.current?.focus()
+      setRenderedFocusIntent(false)
+    }, [rendered, renderedFocusIntent])
 
     useEffect(() => {
-      const previouslyOwnedFocus = previousShouldOwnFocusRef.current;
-      previousShouldOwnFocusRef.current = shouldOwnFocus;
+      const previouslyOwnedFocus = previousShouldOwnFocusRef.current
+      previousShouldOwnFocusRef.current = shouldOwnFocus
       if (!shouldOwnFocus || previouslyOwnedFocus) {
-        return;
+        return
       }
-      if (activeFocusRole === "editor" || !value.trim()) {
-        setRendered(false);
-        return;
+      if (!readOnly && (activeFocusRole === 'editor' || !value.trim())) {
+        setRendered(false)
+        return
       }
-      setRendered(true);
-      renderedRef.current?.focus();
-    }, [activeFocusRole, shouldOwnFocus, value]);
+      setRendered(true)
+      renderedRef.current?.focus()
+    }, [activeFocusRole, readOnly, shouldOwnFocus, value])
 
     useEffect(() => {
-      if (!shouldOwnFocus || activeFocusRole !== "rendered" || !rendered) {
-        return;
+      if (!shouldOwnFocus || activeFocusRole !== 'rendered' || !rendered) {
+        return
       }
-      renderedRef.current?.focus();
-    }, [activeFocusRole, rendered, shouldOwnFocus]);
+      renderedRef.current?.focus()
+    }, [activeFocusRole, rendered, shouldOwnFocus])
 
     useEffect(() => {
       if (!tracksActiveCell || isActiveCell || rendered || !value.trim()) {
-        return;
+        return
       }
-      setRendered(true);
-    }, [isActiveCell, rendered, tracksActiveCell, value]);
+      setRendered(true)
+    }, [isActiveCell, rendered, tracksActiveCell, value])
 
     /**
      * Handle switching to edit mode when user double-clicks rendered content.
      */
     const handleDoubleClick = useCallback(() => {
-      setRendered(false);
-      setEditorFocusIntent(true);
-      onFocusRoleChange?.("editor");
-    }, [onFocusRoleChange]);
+      if (readOnly) {
+        return
+      }
+      setRendered(false)
+      setEditorFocusIntent(true)
+      onFocusRoleChange?.('editor')
+    }, [onFocusRoleChange, readOnly])
 
     /**
      * Handle keyboard activation on the rendered container for accessibility.
@@ -306,17 +318,20 @@ const MarkdownCell = memo(
       (event: KeyboardEvent<HTMLDivElement>) => {
         // Only handle if the container itself is focused, not nested elements
         if (event.target !== event.currentTarget) {
-          return;
+          return
         }
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          setRendered(false);
-          setEditorFocusIntent(true);
-          onFocusRoleChange?.("editor");
+        if (event.key === 'Enter' || event.key === ' ') {
+          if (readOnly) {
+            return
+          }
+          event.preventDefault()
+          setRendered(false)
+          setEditorFocusIntent(true)
+          onFocusRoleChange?.('editor')
         }
       },
-      [onFocusRoleChange]
-    );
+      [onFocusRoleChange, readOnly]
+    )
 
     /**
      * Handle keyboard events on the editor container.
@@ -324,17 +339,17 @@ const MarkdownCell = memo(
      */
     const handleEditorKeyDown = useCallback(
       (event: KeyboardEvent<HTMLDivElement>) => {
-        if (event.key === "Escape") {
+        if (event.key === 'Escape') {
           // Only render if there's content; empty cells stay in edit mode
           if (value.trim()) {
-            setRendered(true);
-            setRenderedFocusIntent(true);
-            onFocusRoleChange?.("rendered");
+            setRendered(true)
+            setRenderedFocusIntent(true)
+            onFocusRoleChange?.('rendered')
           }
         }
       },
       [onFocusRoleChange, value]
-    );
+    )
 
     /**
      * Handle content changes from the editor.
@@ -342,13 +357,14 @@ const MarkdownCell = memo(
      */
     const handleEditorChange = useCallback(
       (newValue: string) => {
-        if (!cell) return;
-        const updated = create(parser_pb.CellSchema, cell);
-        updated.value = newValue;
-        cellData.update(updated);
+        if (!cell) return
+        if (readOnly) return
+        const updated = create(parser_pb.CellSchema, cell)
+        updated.value = newValue
+        cellData.update(updated)
       },
-      [cell, cellData]
-    );
+      [cell, cellData, readOnly]
+    )
 
     /**
      * Handle "run" action for markdown cells - just renders the markdown.
@@ -356,20 +372,22 @@ const MarkdownCell = memo(
      * renders it and moves to the next cell.
      */
     const handleRun = useCallback(() => {
-      if (value.trim()) {
-        setRendered(true);
-        setRenderedFocusIntent(true);
+      if (!readOnly && value.trim()) {
+        setRendered(true)
+        setRenderedFocusIntent(true)
       }
-    }, [value]);
+    }, [readOnly, value])
 
     // Memoize the rendered markdown to avoid unnecessary re-renders
     const renderedMarkdown = useMemo(() => {
       if (!value.trim()) {
         return (
           <div className="text-nb-text-faint italic py-2">
-            Double-click to edit markdown...
+            {readOnly
+              ? 'This read-only markdown cell is empty.'
+              : 'Double-click to edit markdown...'}
           </div>
-        );
+        )
       }
       return (
         <div className="prose prose-sm max-w-none">
@@ -380,11 +398,11 @@ const MarkdownCell = memo(
             {value}
           </ReactMarkdown>
         </div>
-      );
-    }, [value]);
+      )
+    }, [readOnly, value])
 
     if (!cell) {
-      return null;
+      return null
     }
 
     return (
@@ -403,11 +421,15 @@ const MarkdownCell = memo(
             onKeyDown={handleRenderedKeyDown}
             ref={renderedRef}
             tabIndex={0}
-            role="button"
-            aria-label="Double-click or press Enter to edit markdown"
+            role={readOnly ? undefined : 'button'}
+            aria-label={
+              readOnly
+                ? 'Read-only markdown'
+                : 'Double-click or press Enter to edit markdown'
+            }
             data-testid="markdown-rendered"
             data-cell-focus-role="rendered"
-            onFocus={() => onFocusRoleChange?.("rendered")}
+            onFocus={() => onFocusRoleChange?.('rendered')}
           >
             {renderedMarkdown}
           </div>
@@ -427,11 +449,13 @@ const MarkdownCell = memo(
               fontSize={fontSettings.fontSize}
               fontFamily={fontSettings.fontFamily}
               shouldFocus={
+                !readOnly &&
                 !rendered &&
-                ((shouldOwnFocus && activeFocusRole === "editor") ||
+                ((shouldOwnFocus && activeFocusRole === 'editor') ||
                   editorFocusIntent)
               }
-              onFocus={() => onFocusRoleChange?.("editor")}
+              onFocus={() => onFocusRoleChange?.('editor')}
+              readOnly={readOnly}
               onChange={handleEditorChange}
               onEnter={handleRun}
             />
@@ -441,6 +465,7 @@ const MarkdownCell = memo(
                   id={languageSelectId}
                   value={selectedLanguage}
                   onChange={onLanguageChange}
+                  disabled={readOnly}
                   className="toolbar-select"
                 >
                   {languageOptions.map((option) => (
@@ -451,14 +476,15 @@ const MarkdownCell = memo(
                 </select>
               </div>
               <div className="text-xs text-nb-text-muted">
-                Press <kbd className="px-1 py-0.5 bg-nb-surface-3 rounded">Esc</kbd>{" "}
+                Press{' '}
+                <kbd className="px-1 py-0.5 bg-nb-surface-3 rounded">Esc</kbd>{' '}
                 or run the cell to render
               </div>
             </div>
           </div>
         )}
       </div>
-    );
+    )
   },
   (prevProps, nextProps) => {
     return (
@@ -469,11 +495,12 @@ const MarkdownCell = memo(
       prevProps.isActiveCell === nextProps.isActiveCell &&
       prevProps.activeFocusRole === nextProps.activeFocusRole &&
       prevProps.isWindowFocused === nextProps.isWindowFocused &&
-      prevProps.onFocusRoleChange === nextProps.onFocusRoleChange
-    );
+      prevProps.onFocusRoleChange === nextProps.onFocusRoleChange &&
+      prevProps.readOnly === nextProps.readOnly
+    )
   }
-);
+)
 
-MarkdownCell.displayName = "MarkdownCell";
+MarkdownCell.displayName = 'MarkdownCell'
 
-export default MarkdownCell;
+export default MarkdownCell
