@@ -62,6 +62,7 @@ import {
   isNotebookDiffUri,
   isNotebookDocumentUri,
   isVersionInfoUri,
+  isRunnerStatusUri,
   type WorkspaceDocument,
 } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 import {
@@ -74,6 +75,7 @@ import type { NotebookSyncState } from '../../storage/local'
 import { NotebookStoreItemType } from '../../storage/notebook'
 import { showToast } from '../../lib/toast'
 import DriveLinkStatusTab from '../DriveLinkStatusTab'
+import RunnerStatusTab from '../RunnerStatusTab'
 import { NotebookDiffContent } from '../NotebookDiff/NotebookDiffView'
 import VersionInfoTab from '../VersionInfoTab'
 import React from 'react'
@@ -1949,6 +1951,10 @@ function renderWorkspaceDocument({
 
   if (isVersionInfoUri(document.uri)) {
     return <VersionInfoTab />
+  }
+
+  if (isRunnerStatusUri(document.uri)) {
+    return <RunnerStatusTab />
   }
 
   return <UnknownDocumentTab uri={document.uri} />

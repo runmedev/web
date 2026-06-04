@@ -105,4 +105,20 @@ describe("CurrentDocInitializer", () => {
     expect(window.location.search).toBe("?existing=1");
     expect(window.location.hash).toBe("#section");
   });
+
+  it("opens the runner status document from a doc param", async () => {
+    setDocUrl("status://runners");
+
+    render(<CurrentDocInitializer />);
+
+    await waitFor(() => {
+      expect(mocks.setCurrentDoc).toHaveBeenCalledWith("status://runners");
+    });
+    expect(mocks.openNotebook).not.toHaveBeenCalled();
+    expect(mocks.showDocument).toHaveBeenCalledWith("status://runners", {
+      title: "Notebook Runner Status",
+    });
+    expect(window.location.search).toBe("?existing=1");
+    expect(window.location.hash).toBe("#section");
+  });
 });
