@@ -37,9 +37,7 @@ function normalizeStoredOpenNotebook(item: unknown): OpenNotebookEntry | null {
     uri: candidate.uri,
     requestedUri: candidate.requestedUri ?? candidate.uri,
     name: candidate.name ?? candidate.uri,
-    state: candidate.state ?? "loading",
-    errorMessage: candidate.errorMessage,
-    owner: candidate.owner,
+    state: "loading",
   };
 }
 

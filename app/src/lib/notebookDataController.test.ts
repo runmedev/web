@@ -295,13 +295,25 @@ describe('NotebookDataController', () => {
     ])
   })
 
-  it('restores session open-notebook storage without changing the storage shape', () => {
+  it('restores session open-notebook storage as load intents only', () => {
     window.sessionStorage.setItem(
       'runme/openNotebooks',
       JSON.stringify([
         {
           uri: 'local://file/restored',
+          requestedUri: 'local://file/restored',
           name: 'restored.json',
+          state: 'loaded',
+          readOnly: true,
+          errorMessage: 'stale error',
+          owner: {
+            notebookUri: 'local://file/restored',
+            ownerTabId: 'tab-other',
+            ownerLabel: 'Other tab',
+            ownerUrl: 'http://localhost/',
+            ownerStartedAt: '2026-05-22T12:00:00.000Z',
+            epoch: 'epoch-other',
+          },
           type: 'file',
           children: [],
           parents: [],
@@ -312,7 +324,8 @@ describe('NotebookDataController', () => {
     const controller = getNotebookDataController()
     controller.configureOwnershipManager(createFakeOwnershipManager())
 
-    expect(controller.getOpenNotebooks()).toEqual([
+    const restored = controller.getOpenNotebooks()
+    expect(restored).toEqual([
       expect.objectContaining({
         uri: 'local://file/restored',
         requestedUri: 'local://file/restored',
@@ -320,6 +333,9 @@ describe('NotebookDataController', () => {
         state: 'loading',
       }),
     ])
+    expect(restored[0]).not.toHaveProperty('readOnly')
+    expect(restored[0]).not.toHaveProperty('errorMessage')
+    expect(restored[0]).not.toHaveProperty('owner')
     expect(controller.getNotebookData('local://file/restored')).toBeUndefined()
     controller.configureStores({
       localNotebooks: createFakeLocalNotebooks() as unknown as LocalNotebooks,
