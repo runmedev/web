@@ -3,47 +3,56 @@ import {
   ChatBubbleLeftRightIcon,
   QueueListIcon,
   UserCircleIcon,
-} from "@heroicons/react/24/outline";
-import { XMarkIcon } from "@heroicons/react/20/solid";
-import { CloudIcon as CloudSolidIcon } from "@heroicons/react/24/solid";
-import { useCallback, useEffect, useState } from "react";
+} from '@heroicons/react/24/outline'
+import { XMarkIcon } from '@heroicons/react/20/solid'
+import { CloudIcon as CloudSolidIcon } from '@heroicons/react/24/solid'
+import { useCallback, useEffect, useState } from 'react'
 
-import ChatKitPanel from "../ChatKit/ChatKitPanel";
-import WorkspaceExplorer from "../Workspace/WorkspaceExplorer";
-import { getBrowserAdapter, useBrowserAuthData } from "../../browserAdapter.client";
-import { useGoogleAuth } from "../../contexts/GoogleAuthContext";
-import { useCurrentDoc } from "../../contexts/CurrentDocContext";
-import { useSidePanel } from "../../contexts/SidePanelContext";
-import { useWorkspaceDocumentContext } from "../../contexts/WorkspaceDocumentContext";
+import ChatKitPanel from '../ChatKit/ChatKitPanel'
+import WorkspaceExplorer from '../Workspace/WorkspaceExplorer'
+import {
+  getBrowserAdapter,
+  useBrowserAuthData,
+} from '../../browserAdapter.client'
+import { useGoogleAuth } from '../../contexts/GoogleAuthContext'
+import { useCurrentDoc } from '../../contexts/CurrentDocContext'
+import { useSidePanel } from '../../contexts/SidePanelContext'
+import { useWorkspaceDocumentContext } from '../../contexts/WorkspaceDocumentContext'
 import {
   isDriveLinkStatusUri,
   isNotebookDiffUri,
   isNotebookDocumentUri,
-} from "../../lib/workspaceDocuments/workspaceDocumentTypes";
+} from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 
-const sideButtonBase = "group side-btn";
+const sideButtonBase = 'group side-btn'
 
-const sideButtonInactive = "side-btn-inactive";
+const sideButtonInactive = 'side-btn-inactive'
 
-const sideButtonActive = "side-btn-active";
+const sideButtonActive = 'side-btn-active'
 
-const tooltipBase = "side-tooltip";
+const tooltipBase = 'side-tooltip'
 
 function getNotebookDisplayName(uri: string, name?: string): string {
-  return name || uri.split("/").filter(Boolean).pop() || uri;
+  return name || uri.split('/').filter(Boolean).pop() || uri
 }
 
-function getNotebookStatusLabel(state?: string): string | null {
-  if (state === "blocked") {
-    return "Blocked";
+function getNotebookStatusLabel(
+  state?: string,
+  readOnly?: boolean
+): string | null {
+  if (readOnly) {
+    return 'Read-only'
   }
-  if (state === "error") {
-    return "Error";
+  if (state === 'blocked') {
+    return 'Blocked'
   }
-  if (state === "loading" || state === "resolving") {
-    return "Loading";
+  if (state === 'error') {
+    return 'Error'
   }
-  return null;
+  if (state === 'loading' || state === 'resolving') {
+    return 'Loading'
+  }
+  return null
 }
 
 /**
@@ -55,17 +64,17 @@ function getNotebookStatusLabel(state?: string): string | null {
  */
 function OpenDocumentsPanel() {
   const { useWorkspaceDocuments, closeWorkspaceDocument } =
-    useWorkspaceDocumentContext();
-  const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
-  const openDocuments = useWorkspaceDocuments();
-  const currentDocUri = getCurrentDoc();
+    useWorkspaceDocumentContext()
+  const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
+  const openDocuments = useWorkspaceDocuments()
+  const currentDocUri = getCurrentDoc()
 
   const handleCloseDocument = useCallback(
     (uri: string) => {
-      closeWorkspaceDocument(uri);
+      closeWorkspaceDocument(uri)
     },
-    [closeWorkspaceDocument],
-  );
+    [closeWorkspaceDocument]
+  )
 
   return (
     <div
@@ -80,7 +89,8 @@ function OpenDocumentsPanel() {
           Open Documents
         </p>
         <p className="mt-1 text-sm text-nb-text-muted">
-          {openDocuments.length} {openDocuments.length === 1 ? "document" : "documents"}
+          {openDocuments.length}{' '}
+          {openDocuments.length === 1 ? 'document' : 'documents'}
         </p>
       </div>
       <div
@@ -97,24 +107,27 @@ function OpenDocumentsPanel() {
         ) : (
           <ul id="open-documents-list" className="space-y-1">
             {openDocuments.map((doc) => {
-              const displayName = getNotebookDisplayName(doc.uri, doc.title);
-              const isActive = doc.uri === currentDocUri;
-              const statusLabel = getNotebookStatusLabel(doc.state);
+              const displayName = getNotebookDisplayName(doc.uri, doc.title)
+              const isActive = doc.uri === currentDocUri
+              const statusLabel = getNotebookStatusLabel(
+                doc.state,
+                doc.readOnly
+              )
               const kind = isNotebookDocumentUri(doc.uri)
-                ? "Notebook"
+                ? 'Notebook'
                 : isNotebookDiffUri(doc.uri)
-                  ? "Diff"
+                  ? 'Diff'
                   : isDriveLinkStatusUri(doc.uri)
-                    ? "Status"
-                    : "Document";
+                    ? 'Status'
+                    : 'Document'
               return (
                 <li key={doc.uri}>
                   <div
                     id={`open-document-row-${encodeURIComponent(doc.uri)}`}
                     className={`group flex items-center gap-2 rounded-nb-sm border px-2 py-2 transition-colors ${
                       isActive
-                        ? "border-nb-accent bg-nb-accent-soft text-nb-text"
-                        : "border-transparent bg-transparent text-nb-text-muted hover:border-nb-border hover:bg-white/80 hover:text-nb-text"
+                        ? 'border-nb-accent bg-nb-accent-soft text-nb-text'
+                        : 'border-transparent bg-transparent text-nb-text-muted hover:border-nb-border hover:bg-white/80 hover:text-nb-text'
                     }`}
                   >
                     <button
@@ -129,7 +142,11 @@ function OpenDocumentsPanel() {
                         {statusLabel ? (
                           <span
                             id={`open-notebook-status-${encodeURIComponent(doc.uri)}`}
-                            data-testid={`open-notebook-status-${doc.state}`}
+                            data-testid={
+                              doc.readOnly
+                                ? 'open-notebook-status-readonly'
+                                : `open-notebook-status-${doc.state}`
+                            }
                             className="shrink-0 rounded-nb-xs border border-nb-border bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-nb-text-muted"
                           >
                             {statusLabel}
@@ -145,8 +162,8 @@ function OpenDocumentsPanel() {
                       className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-nb-xs text-nb-text-faint transition-colors hover:bg-black/5 hover:text-nb-text"
                       aria-label={`Close ${displayName}`}
                       onClick={(event) => {
-                        event.stopPropagation();
-                        handleCloseDocument(doc.uri);
+                        event.stopPropagation()
+                        handleCloseDocument(doc.uri)
                       }}
                       onMouseDown={(event) => event.stopPropagation()}
                     >
@@ -154,38 +171,38 @@ function OpenDocumentsPanel() {
                     </button>
                   </div>
                 </li>
-              );
+              )
             })}
           </ul>
         )}
       </div>
     </div>
-  );
+  )
 }
 
 export function SidePanelToolbar() {
-  const { activePanel, togglePanel } = useSidePanel();
-  const authData = useBrowserAuthData();
-  const browserAdapter = getBrowserAdapter();
-  const { ensureAccessToken, isDriveSyncing } = useGoogleAuth();
-  const [isDriveAuthPending, setIsDriveAuthPending] = useState(false);
+  const { activePanel, togglePanel } = useSidePanel()
+  const authData = useBrowserAuthData()
+  const browserAdapter = getBrowserAdapter()
+  const { ensureAccessToken, isDriveSyncing } = useGoogleAuth()
+  const [isDriveAuthPending, setIsDriveAuthPending] = useState(false)
 
-  const driveStatus = isDriveSyncing ? "Syncing" : "Not syncing";
+  const driveStatus = isDriveSyncing ? 'Syncing' : 'Not syncing'
   const handleDriveStatusClick = useCallback(async () => {
     if (isDriveSyncing || isDriveAuthPending) {
-      return;
+      return
     }
-    setIsDriveAuthPending(true);
+    setIsDriveAuthPending(true)
     try {
-      await ensureAccessToken({ interactive: true });
+      await ensureAccessToken({ interactive: true })
     } catch (error) {
-      if (!String(error).includes("Redirecting to Google OAuth")) {
-        console.error("Failed to start Google Drive auth flow", error);
+      if (!String(error).includes('Redirecting to Google OAuth')) {
+        console.error('Failed to start Google Drive auth flow', error)
       }
     } finally {
-      setIsDriveAuthPending(false);
+      setIsDriveAuthPending(false)
     }
-  }, [ensureAccessToken, isDriveAuthPending, isDriveSyncing]);
+  }, [ensureAccessToken, isDriveAuthPending, isDriveSyncing])
 
   return (
     <div className="flex h-full w-12 flex-col items-center justify-between">
@@ -193,11 +210,11 @@ export function SidePanelToolbar() {
         <button
           type="button"
           className={`${sideButtonBase} ${
-            activePanel === "explorer" ? sideButtonActive : sideButtonInactive
+            activePanel === 'explorer' ? sideButtonActive : sideButtonInactive
           }`}
-          aria-pressed={activePanel === "explorer"}
+          aria-pressed={activePanel === 'explorer'}
           aria-label="Toggle Explorer panel"
-          onClick={() => togglePanel("explorer")}
+          onClick={() => togglePanel('explorer')}
         >
           <FolderIcon className="h-5 w-5" />
           <span className={tooltipBase}>File Explorer</span>
@@ -205,11 +222,13 @@ export function SidePanelToolbar() {
         <button
           type="button"
           className={`${sideButtonBase} ${
-            activePanel === "open-documents" ? sideButtonActive : sideButtonInactive
+            activePanel === 'open-documents'
+              ? sideButtonActive
+              : sideButtonInactive
           }`}
-          aria-pressed={activePanel === "open-documents"}
+          aria-pressed={activePanel === 'open-documents'}
           aria-label="Toggle Open Documents panel"
-          onClick={() => togglePanel("open-documents")}
+          onClick={() => togglePanel('open-documents')}
         >
           <QueueListIcon className="h-5 w-5" />
           <span className={tooltipBase}>Open Documents</span>
@@ -217,11 +236,11 @@ export function SidePanelToolbar() {
         <button
           type="button"
           className={`${sideButtonBase} ${
-            activePanel === "chatkit" ? sideButtonActive : sideButtonInactive
+            activePanel === 'chatkit' ? sideButtonActive : sideButtonInactive
           }`}
-          aria-pressed={activePanel === "chatkit"}
+          aria-pressed={activePanel === 'chatkit'}
           aria-label="Toggle ChatKit panel"
-          onClick={() => togglePanel("chatkit")}
+          onClick={() => togglePanel('chatkit')}
         >
           <ChatBubbleLeftRightIcon className="h-5 w-5" />
           <span className={tooltipBase}>AI Chat</span>
@@ -237,13 +256,13 @@ export function SidePanelToolbar() {
           }`}
           aria-label={`Google Drive status: ${driveStatus}`}
           onClick={() => {
-            void handleDriveStatusClick();
+            void handleDriveStatusClick()
           }}
         >
           <span className="relative inline-flex h-5 w-5 items-center justify-center">
             <CloudSolidIcon
               className={`h-5 w-5 ${
-                isDriveSyncing ? "text-emerald-500" : "text-red-500"
+                isDriveSyncing ? 'text-emerald-500' : 'text-red-500'
               }`}
             />
             {!isDriveSyncing && (
@@ -255,7 +274,7 @@ export function SidePanelToolbar() {
         <button
           type="button"
           className={`${sideButtonBase} ${sideButtonInactive}`}
-          aria-label={authData ? "Logout" : "Login"}
+          aria-label={authData ? 'Logout' : 'Login'}
           onClick={() =>
             authData
               ? browserAdapter.logout()
@@ -263,48 +282,48 @@ export function SidePanelToolbar() {
           }
         >
           <UserCircleIcon className="h-5 w-5" />
-          <span className={tooltipBase}>{authData ? "Logout" : "Login"}</span>
+          <span className={tooltipBase}>{authData ? 'Logout' : 'Login'}</span>
         </button>
       </div>
     </div>
-  );
+  )
 }
 
 export function SidePanelContent() {
-  const { activePanel } = useSidePanel();
+  const { activePanel } = useSidePanel()
   const [hasActivatedChatKit, setHasActivatedChatKit] = useState(
-    activePanel === "chatkit",
-  );
-  const shouldRenderChatKit = hasActivatedChatKit || activePanel === "chatkit";
+    activePanel === 'chatkit'
+  )
+  const shouldRenderChatKit = hasActivatedChatKit || activePanel === 'chatkit'
 
   useEffect(() => {
-    if (activePanel === "chatkit") {
-      setHasActivatedChatKit(true);
+    if (activePanel === 'chatkit') {
+      setHasActivatedChatKit(true)
     }
-  }, [activePanel]);
+  }, [activePanel])
 
   return (
     <div className="relative h-full min-h-0 w-full">
       <div
-        className={`h-full min-h-0 w-full ${activePanel === "explorer" ? "flex" : "hidden"}`}
-        aria-hidden={activePanel !== "explorer"}
+        className={`h-full min-h-0 w-full ${activePanel === 'explorer' ? 'flex' : 'hidden'}`}
+        aria-hidden={activePanel !== 'explorer'}
       >
         <WorkspaceExplorer />
       </div>
       <div
-        className={`h-full min-h-0 w-full ${activePanel === "open-documents" ? "flex" : "hidden"}`}
-        aria-hidden={activePanel !== "open-documents"}
+        className={`h-full min-h-0 w-full ${activePanel === 'open-documents' ? 'flex' : 'hidden'}`}
+        aria-hidden={activePanel !== 'open-documents'}
       >
         <OpenDocumentsPanel />
       </div>
       {shouldRenderChatKit ? (
         <div
-          className={`h-full min-h-0 w-full overflow-hidden ${activePanel === "chatkit" ? "flex" : "hidden"}`}
-          aria-hidden={activePanel !== "chatkit"}
+          className={`h-full min-h-0 w-full overflow-hidden ${activePanel === 'chatkit' ? 'flex' : 'hidden'}`}
+          aria-hidden={activePanel !== 'chatkit'}
         >
           <ChatKitPanel />
         </div>
       ) : null}
     </div>
-  );
+  )
 }
