@@ -1,6 +1,7 @@
 import {
   FolderIcon,
   ChatBubbleLeftRightIcon,
+  InformationCircleIcon,
   QueueListIcon,
   UserCircleIcon,
 } from '@heroicons/react/24/outline'
@@ -22,6 +23,8 @@ import {
   isDriveLinkStatusUri,
   isNotebookDiffUri,
   isNotebookDocumentUri,
+  isVersionInfoUri,
+  VERSION_INFO_DOCUMENT_URI,
 } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 
 const sideButtonBase = 'group side-btn'
@@ -119,7 +122,9 @@ function OpenDocumentsPanel() {
                   ? 'Diff'
                   : isDriveLinkStatusUri(doc.uri)
                     ? 'Status'
-                    : 'Document'
+                    : isVersionInfoUri(doc.uri)
+                      ? 'Version'
+                      : 'Document'
               return (
                 <li key={doc.uri}>
                   <div
@@ -185,9 +190,12 @@ export function SidePanelToolbar() {
   const authData = useBrowserAuthData()
   const browserAdapter = getBrowserAdapter()
   const { ensureAccessToken, isDriveSyncing } = useGoogleAuth()
+  const { showDocument } = useWorkspaceDocumentContext()
+  const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const [isDriveAuthPending, setIsDriveAuthPending] = useState(false)
 
   const driveStatus = isDriveSyncing ? 'Syncing' : 'Not syncing'
+  const versionInfoSelected = getCurrentDoc() === VERSION_INFO_DOCUMENT_URI
   const handleDriveStatusClick = useCallback(async () => {
     if (isDriveSyncing || isDriveAuthPending) {
       return
@@ -203,6 +211,13 @@ export function SidePanelToolbar() {
       setIsDriveAuthPending(false)
     }
   }, [ensureAccessToken, isDriveAuthPending, isDriveSyncing])
+
+  const handleVersionInfoClick = useCallback(() => {
+    showDocument(VERSION_INFO_DOCUMENT_URI, {
+      title: 'Version Information',
+    })
+    setCurrentDoc(VERSION_INFO_DOCUMENT_URI)
+  }, [setCurrentDoc, showDocument])
 
   return (
     <div className="flex h-full w-12 flex-col items-center justify-between">
@@ -283,6 +298,18 @@ export function SidePanelToolbar() {
         >
           <UserCircleIcon className="h-5 w-5" />
           <span className={tooltipBase}>{authData ? 'Logout' : 'Login'}</span>
+        </button>
+        <button
+          type="button"
+          className={`${sideButtonBase} ${
+            versionInfoSelected ? sideButtonActive : sideButtonInactive
+          }`}
+          aria-pressed={versionInfoSelected}
+          aria-label="Open Version Information"
+          onClick={handleVersionInfoClick}
+        >
+          <InformationCircleIcon className="h-5 w-5" />
+          <span className={tooltipBase}>Version Information</span>
         </button>
       </div>
     </div>

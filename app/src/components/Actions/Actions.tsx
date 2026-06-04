@@ -61,6 +61,7 @@ import {
   isDriveLinkStatusUri,
   isNotebookDiffUri,
   isNotebookDocumentUri,
+  isVersionInfoUri,
   type WorkspaceDocument,
 } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 import {
@@ -74,6 +75,7 @@ import { NotebookStoreItemType } from '../../storage/notebook'
 import { showToast } from '../../lib/toast'
 import DriveLinkStatusTab from '../DriveLinkStatusTab'
 import { NotebookDiffContent } from '../NotebookDiff/NotebookDiffView'
+import VersionInfoTab from '../VersionInfoTab'
 import React from 'react'
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
@@ -1943,6 +1945,10 @@ function renderWorkspaceDocument({
 
   if (isDriveLinkStatusUri(document.uri)) {
     return <DriveLinkStatusTab onLogin={onDriveLogin} onRetry={onDriveRetry} />
+  }
+
+  if (isVersionInfoUri(document.uri)) {
+    return <VersionInfoTab />
   }
 
   return <UnknownDocumentTab uri={document.uri} />

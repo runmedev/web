@@ -2,6 +2,7 @@ import type { NotebookTabState } from '../notebookDataController'
 import type { NotebookOwnershipRecord } from '../tabCoordination/notebookOwnership'
 
 export const DRIVE_LINK_STATUS_DOCUMENT_URI = 'status://drive-link'
+export const VERSION_INFO_DOCUMENT_URI = 'app://version'
 
 export interface WorkspaceDocument {
   uri: string
@@ -32,6 +33,10 @@ export function isDriveLinkStatusUri(uri: string | null | undefined): boolean {
   return uri === DRIVE_LINK_STATUS_DOCUMENT_URI
 }
 
+export function isVersionInfoUri(uri: string | null | undefined): boolean {
+  return uri === VERSION_INFO_DOCUMENT_URI
+}
+
 export function isRestorableWorkspaceDocument(uri: string): boolean {
   return isNotebookDocumentUri(uri)
 }
@@ -40,6 +45,9 @@ export function deriveWorkspaceDocumentTitle(uri: string): string {
   const documentUri = uri
   if (isDriveLinkStatusUri(documentUri)) {
     return 'Drive Link Status'
+  }
+  if (isVersionInfoUri(documentUri)) {
+    return 'Version Information'
   }
   if (isNotebookDiffUri(documentUri)) {
     return 'Notebook diff'

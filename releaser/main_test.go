@@ -49,6 +49,41 @@ func TestIsMissingVersionMarkerError(t *testing.T) {
 	}
 }
 
+func TestVersionBuildEnv(t *testing.T) {
+	t.Parallel()
+
+	version := releaseVersion{
+		BuildDate:   "2026-06-03T12:00:00Z",
+		WebRepo:     "runmedev/web",
+		WebBranch:   "main",
+		WebCommit:   "web-sha",
+		CodexRepo:   "openai/codex",
+		CodexBranch: "dev/jlewi/wasm",
+		CodexCommit: "codex-sha",
+		Bucket:      "gs://runme-hosted",
+	}
+
+	got := versionBuildEnv(version)
+	want := []string{
+		"VITE_RUNME_VERSION_BUILD_DATE=2026-06-03T12:00:00Z",
+		"VITE_RUNME_VERSION_WEB_REPO=runmedev/web",
+		"VITE_RUNME_VERSION_WEB_BRANCH=main",
+		"VITE_RUNME_VERSION_WEB_COMMIT=web-sha",
+		"VITE_RUNME_VERSION_CODEX_REPO=openai/codex",
+		"VITE_RUNME_VERSION_CODEX_BRANCH=dev/jlewi/wasm",
+		"VITE_RUNME_VERSION_CODEX_COMMIT=codex-sha",
+		"VITE_RUNME_VERSION_BUCKET=gs://runme-hosted",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("versionBuildEnv() returned %d entries, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("versionBuildEnv()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 type errString string
 
 func (e errString) Error() string {
