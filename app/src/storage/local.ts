@@ -936,6 +936,73 @@ export class LocalNotebooks extends Dexie {
     }
   }
 
+  async createFolder(
+    parentUri: string,
+    name: string
+  ): Promise<NotebookStoreItem> {
+    if (!parentUri.startsWith('local://folder/')) {
+      throw new Error('LocalNotebooks.createFolder expects a folder parent URI')
+    }
+
+    const parent = await this.folders.get(parentUri)
+    if (!parent) {
+      throw new Error(`Parent folder not found for ${parentUri}`)
+    }
+    if (!isDriveUri(parent.remoteId)) {
+      throw new Error(
+        'LocalNotebooks.createFolder expects a Drive-backed parent'
+      )
+    }
+
+    const trimmedName = name.trim() || 'New Folder'
+    const remoteFolder = await this.driveStore.createFolder(
+      parent.remoteId,
+      trimmedName
+    )
+    const remoteUri = remoteFolder.remoteUri ?? remoteFolder.uri
+    const existingFolder = await this.folders
+      .where('remoteId')
+      .equals(remoteUri)
+      .first()
+    const folderUri = existingFolder?.id ?? this.generateLocalUri('folder')
+    const folderRecord: LocalFolderRecord = {
+      id: folderUri,
+      name: remoteFolder.name || trimmedName,
+      remoteId: remoteUri,
+      children: existingFolder?.children ?? [],
+      lastSynced: nowIsoString(),
+    }
+
+    await this.folders.put(folderRecord)
+    if (!parent.children.includes(folderUri)) {
+      await this.folders.update(parentUri, {
+        children: [...parent.children, folderUri],
+        lastSynced: nowIsoString(),
+      })
+    }
+
+    if (canDispatchWindowEvents()) {
+      window.dispatchEvent(
+        new CustomEvent('local-notebook-updated', {
+          detail: {
+            uri: folderUri,
+            name: folderRecord.name,
+            remoteUri,
+          },
+        })
+      )
+    }
+
+    return {
+      uri: folderUri,
+      name: folderRecord.name,
+      type: NotebookStoreItemType.Folder,
+      children: [],
+      remoteUri,
+      parents: [parentUri],
+    }
+  }
+
   async rename(uri: string, name: string): Promise<NotebookStoreItem> {
     if (!uri.startsWith('local://file/')) {
       throw new Error('LocalNotebooks.rename expects a file URI')

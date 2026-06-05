@@ -173,6 +173,7 @@ const CONTEXT_MENU_VIEWPORT_PADDING = 8;
 const CONTEXT_MENU_WIDTH = 220;
 const CONTEXT_MENU_VERTICAL_PADDING = 8;
 const CONTEXT_MENU_ITEM_HEIGHT = 38;
+const DEFAULT_DRIVE_FOLDER_NAME = "New Folder";
 
 function getContextMenuItemCount(menu: ContextMenuState): number {
   if (menu.type === NotebookStoreItemType.File) {
@@ -187,6 +188,7 @@ function getContextMenuItemCount(menu: ContextMenuState): number {
     return (
       (menu.uri.startsWith("fs://") ? 0 : 1) +
       1 +
+      (menu.remoteUri ? 1 : 0) +
       (menu.remoteUri ? 2 : 0) +
       (menu.uri === LOCAL_FOLDER_URI ? 0 : 1)
     );
@@ -725,6 +727,43 @@ export function WorkspaceExplorer() {
     [fetchChildren, fsStore, store],
   );
 
+  const handleCreateDriveFolder = useCallback(
+    async (folderUri: string) => {
+      if (!store) {
+        return;
+      }
+
+      const name =
+        typeof window === "undefined"
+          ? DEFAULT_DRIVE_FOLDER_NAME
+          : window.prompt("Folder name", DEFAULT_DRIVE_FOLDER_NAME);
+      if (name === null) {
+        return;
+      }
+
+      const trimmedName = name.trim();
+      if (!trimmedName) {
+        return;
+      }
+
+      try {
+        treeRef.current?.open(folderUri);
+        await store.createFolder(folderUri, trimmedName);
+        await fetchChildren(folderUri);
+        setErrorMessage(null);
+        showToast({ message: "Google Drive folder created", tone: "success" });
+      } catch (error) {
+        console.error("Failed to create Google Drive folder", error);
+        setErrorMessage("Unable to create Google Drive folder. Please try again.");
+        showToast({
+          message: "Could not create Google Drive folder",
+          tone: "error",
+        });
+      }
+    },
+    [fetchChildren, store],
+  );
+
   const handleStartRename = useCallback((uri: string) => {
     setContextMenu(null);
     setPendingEditId(uri);
@@ -1199,6 +1238,20 @@ function formatShortTimestamp(date: Date): string {
               >
                 New Document
               </button>
+              {adjustedContextMenu.remoteUri && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setContextMenu(null);
+                    void handleCreateDriveFolder(adjustedContextMenu.uri);
+                  }}
+                >
+                  New Google Drive Folder
+                </button>
+              )}
               {adjustedContextMenu.remoteUri && (
                 <button
                   type="button"

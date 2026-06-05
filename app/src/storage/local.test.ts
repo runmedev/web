@@ -79,6 +79,47 @@ function notebookJson(value: string): string {
 }
 
 describe('LocalNotebooks pending Drive create', () => {
+  it('creates a Drive-backed folder and attaches it locally', async () => {
+    const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const childRemoteUri = 'https://drive.google.com/drive/folders/child123'
+    const driveStore = {
+      createFolder: vi.fn(async () => ({
+        uri: childRemoteUri,
+        name: 'Reports',
+        type: NotebookStoreItemType.Folder,
+        children: [],
+        remoteUri: childRemoteUri,
+        parents: [parentRemoteUri],
+      })),
+    }
+    const store = createTestStore(driveStore)
+    await store.folders.put({
+      id: 'local://folder/drive',
+      name: 'Drive',
+      remoteId: parentRemoteUri,
+      children: [],
+      lastSynced: '',
+    })
+
+    const item = await store.createFolder('local://folder/drive', 'Reports')
+
+    expect(driveStore.createFolder).toHaveBeenCalledWith(
+      parentRemoteUri,
+      'Reports'
+    )
+    expect(item.type).toBe(NotebookStoreItemType.Folder)
+    expect(item.remoteUri).toBe(childRemoteUri)
+    const record = await store.folders.get(item.uri)
+    expect(record).toMatchObject({
+      name: 'Reports',
+      remoteId: childRemoteUri,
+      children: [],
+    })
+    expect(
+      (await store.folders.get('local://folder/drive'))?.children
+    ).toContain(item.uri)
+  })
+
   it('persists pending upstream parent when Drive create fails', async () => {
     const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
     const driveStore = {
