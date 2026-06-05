@@ -258,6 +258,11 @@ function buildSandboxSrcDoc(options: {
           update: (args) => callHost("notebooks.update", [args]),
           delete: (target) => callHost("notebooks.delete", [target]),
           execute: (args) => callHost("notebooks.execute", [args]),
+          resolve: (reference) => callHost("notebooks.resolve", [reference]),
+          show: (reference) => callHost("notebooks.show", [reference]),
+          shareUrl: (reference) => callHost("notebooks.shareUrl", [reference]),
+          markdownLink: (reference) => callHost("notebooks.markdownLink", [reference]),
+          link: (reference) => callHost("notebooks.link", [reference]),
         });
 
         const notebooks = createSandboxNotebooksApiClient(hostCall);
@@ -306,6 +311,10 @@ function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebooks.get([target]) # omitted target = current UI notebook");
           consoleProxy.log("- notebooks.update({ target, expectedRevision?, operations })");
           consoleProxy.log("- notebooks.execute({ target, refIds })");
+          consoleProxy.log("- notebooks.resolve([reference])");
+          consoleProxy.log("- notebooks.show([reference])");
+          consoleProxy.log("- notebooks.shareUrl([reference])");
+          consoleProxy.log("- notebooks.markdownLink([reference])");
           consoleProxy.log("- notebookDiff.listDriveRevisions([target])");
           consoleProxy.log("- notebookDiff.diffDriveRevision({ target?, revisionId, includeOutputs?, includeMetadata? })");
           consoleProxy.log("- notebookDiff.openDiffTab(diff)");

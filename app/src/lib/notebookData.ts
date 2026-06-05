@@ -915,11 +915,17 @@ export class NotebookData {
     const runmeApi = createRunmeConsoleApi({
       resolveNotebook: () => this,
     })
+    const hostNotebooksApi = createHostNotebooksApi({
+      resolveNotebook: this.resolveNotebookForAppKernel,
+      listNotebooks: this.listNotebooksForAppKernel,
+    })
+    const appGlobals = createAppJsGlobals({
+      runme: runmeApi,
+      resolveNotebook: this.resolveNotebookForAppKernel,
+      listNotebooks: this.listNotebooksForAppKernel,
+    })
     const notebooksApiBridgeServer = createNotebooksApiBridgeServer({
-      notebooksApi: createHostNotebooksApi({
-        resolveNotebook: this.resolveNotebookForAppKernel,
-        listNotebooks: this.listNotebooksForAppKernel,
-      }),
+      notebooksApi: appGlobals.notebooks as typeof hostNotebooksApi,
     })
 
     let stdout = ''
@@ -964,11 +970,7 @@ export class NotebookData {
               hooks,
             }).run(source)
           : new JSKernel({
-              globals: createAppJsGlobals({
-                runme: runmeApi,
-                resolveNotebook: this.resolveNotebookForAppKernel,
-                listNotebooks: this.listNotebooksForAppKernel,
-              }),
+              globals: appGlobals,
               hooks,
             }).run(source)
         : Promise.resolve().then(() => {

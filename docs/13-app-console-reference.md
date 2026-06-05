@@ -43,24 +43,39 @@ agent.help()
 Create a local notebook and append cells:
 
 ```js
-const created = await notebooks.createLocal("helloworld")
+const created = await notebooks.createLocal('helloworld')
 await notebooks.appendCell({
   target: { handle: created.handle },
-  kind: "code",
-  languageId: "python",
+  kind: 'code',
+  languageId: 'python',
   value: 'print("hello world")',
 })
 await notebooks.appendCell({
   target: { handle: created.handle },
-  kind: "markup",
-  value: "# Notes",
+  kind: 'markup',
+  value: '# Notes',
 })
+```
+
+Resolve and open notebook references:
+
+```js
+await notebooks.resolve('local://file/cb1c8a9f-6dad-4e1a-9cbc-467ddebc3018')
+await notebooks.markdownLink(
+  'local://file/cb1c8a9f-6dad-4e1a-9cbc-467ddebc3018'
+)
+await notebooks.show(
+  'https://runme.gateway.unified-0.internal.api.openai.org/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2F149JKKTgljRiwszwb06Ms74GOYhCOPMNg%2Fview'
+)
+await notebooks.show(
+  '[Notebook](https://drive.google.com/file/d/149JKKTgljRiwszwb06Ms74GOYhCOPMNg/view)'
+)
 ```
 
 Runner setup:
 
 ```js
-runmeRunners.ensure("default", "ws://localhost:9977/ws", { setDefault: true })
+runmeRunners.ensure('default', 'ws://localhost:9977/ws', { setDefault: true })
 ```
 
 OIDC + Drive setup:
@@ -68,8 +83,8 @@ OIDC + Drive setup:
 ```js
 oidc.setGoogleDefaults()
 oidc.setClientToDrive()
-credentials.google.setClientId("...")
-credentials.google.setClientSecret("...")
+credentials.google.setClientId('...')
+credentials.google.setClientSecret('...')
 ```
 
 App config:
@@ -84,7 +99,7 @@ Harness setup:
 ```js
 app.harness.get()
 app.harness.getDefault()
-app.harness.setDefault("configured-harness-name")
+app.harness.setDefault('configured-harness-name')
 ```
 
 ## High-value facts for Codex
@@ -94,3 +109,8 @@ app.harness.setDefault("configured-harness-name")
 - If a user wants an action that has no visible button, check the App Console before saying the feature is missing.
 - Prefer `notebooks.appendCell({ kind, ... })` for simple inserts before writing
   raw `notebooks.update(...)` mutations by hand.
+- Use `notebooks.resolve(reference)` to turn local URIs, Runme share URLs,
+  Drive URLs, and Markdown links into a title, `localUri`, `remoteUri`,
+  `shareUrl`, and replacement-ready `markdownLink`.
+- Use `notebooks.show(reference)` when Codex needs one command that opens a
+  local notebook tab or hands a Drive reference to shared-link coordination.

@@ -4,10 +4,17 @@ import { jwtDecode } from 'jwt-decode'
 import { OidcConfig, oidcConfigManager } from '../../auth/oidcConfig'
 import { parser_pb } from '../../runme/client'
 import {
+  driveFileUrl,
+  driveFolderUrl,
+  isDriveItemUri,
+  parseDriveItem,
+} from '../../storage/drive'
+import {
   FilesystemNotebookStore,
   isFileSystemAccessSupported,
 } from '../../storage/fs'
 import { LOCAL_FOLDER_URI } from '../../storage/local'
+import { NotebookStoreItemType } from '../../storage/notebook'
 import { getAuthData } from '../../token'
 import { agentEndpointManager } from '../agentEndpointManager'
 import { aisreClientManager } from '../aisreClientManager'
@@ -20,6 +27,7 @@ import {
   setAppConfigFromYaml,
   setLocalConfigPreferredOnLoad,
 } from '../appConfig'
+import { driveLinkCoordinator } from '../driveLinkCoordinator'
 import {
   copyDriveNotebookFile,
   createDriveFile,
@@ -39,6 +47,12 @@ import {
 } from '../markdownImport'
 import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
 import type { Runner } from '../runner'
+import {
+  buildNotebookMarkdownLink,
+  buildNotebookShareUrl,
+  getNotebookShareTarget,
+  normalizeNotebookReferenceUri,
+} from '../shareLinks'
 import { getClaimedSessionId } from '../tabIdentity'
 import { appState } from './AppState'
 import type {
@@ -72,6 +86,20 @@ type WorkspaceApi = {
   getItems?: () => string[]
   addItem?: (uri: string) => void
   removeItem?: (uri: string) => void
+}
+
+type NotebookReferenceInfo = {
+  input?: string
+  uri: string
+  localUri?: string
+  remoteUri?: string
+  googleDriveUrl?: string
+  shareTarget: string
+  shareUrl: string
+  markdownLink: string
+  title: string
+  name: string
+  source: 'local' | 'fs' | 'drive' | 'unknown'
 }
 
 type RunnerSync = {
@@ -132,6 +160,32 @@ function defaultEnsureFilesystemStore(): FilesystemNotebookStore | null {
   const store = new FilesystemNotebookStore()
   appState.setFilesystemStore(store)
   return store
+}
+
+function canonicalizeDriveUri(uri: string): string | null {
+  if (!isDriveItemUri(uri)) {
+    return null
+  }
+  const item = parseDriveItem(uri)
+  return item.type === NotebookStoreItemType.Folder
+    ? driveFolderUrl(item.id)
+    : driveFileUrl(item.id)
+}
+
+function deriveTitleFromUri(uri: string): string {
+  try {
+    const parsed = new URL(uri)
+    const segments = parsed.pathname.split('/').filter(Boolean)
+    const tail = segments[segments.length - 1]
+    if (tail) {
+      return decodeURIComponent(tail)
+    }
+  } catch {
+    // Fall through to the URI segment heuristic.
+  }
+
+  const segments = uri.split('/').filter(Boolean)
+  return segments[segments.length - 1] || 'Untitled'
 }
 
 export function createAppJsGlobals({
@@ -479,7 +533,9 @@ export function createAppJsGlobals({
     }
   }) => {
     const doc = await notebooksApi.get(target)
-    const beforeRefIds = new Set((doc.notebook.cells ?? []).map((item) => item.refId))
+    const beforeRefIds = new Set(
+      (doc.notebook.cells ?? []).map((item) => item.refId)
+    )
     const updated = await notebooksApi.update({
       target: { handle: doc.handle },
       expectedRevision: doc.handle.revision,
@@ -496,8 +552,9 @@ export function createAppJsGlobals({
     })
 
     const inserted =
-      (updated.notebook.cells ?? []).find((item) => !beforeRefIds.has(item.refId)) ??
-      null
+      (updated.notebook.cells ?? []).find(
+        (item) => !beforeRefIds.has(item.refId)
+      ) ?? null
     if (!inserted) {
       throw new Error('Failed to identify inserted notebook cell.')
     }
@@ -509,8 +566,9 @@ export function createAppJsGlobals({
       })
       const refreshed = await notebooksApi.get({ handle: executed.handle })
       const executedCell =
-        (refreshed.notebook.cells ?? []).find((item) => item.refId === inserted.refId) ??
-        inserted
+        (refreshed.notebook.cells ?? []).find(
+          (item) => item.refId === inserted.refId
+        ) ?? inserted
       return {
         handle: refreshed.handle,
         cell: executedCell,
@@ -523,6 +581,156 @@ export function createAppJsGlobals({
     }
   }
 
+  const resolveReferenceInput = (reference?: unknown): string => {
+    if (reference === undefined || reference === null) {
+      const current = runme.getCurrentNotebook()
+      if (!current) {
+        throw new Error(
+          'Usage: notebooks.resolve(reference). No current notebook is available.'
+        )
+      }
+      return current.getUri()
+    }
+    if (typeof reference === 'string') {
+      return normalizeNotebookReferenceUri(reference)
+    }
+    if (
+      typeof reference === 'object' &&
+      'uri' in reference &&
+      typeof reference.uri === 'string' &&
+      reference.uri.trim()
+    ) {
+      return normalizeNotebookReferenceUri(reference.uri)
+    }
+    if (
+      typeof reference === 'object' &&
+      'handle' in reference &&
+      reference.handle &&
+      typeof (reference.handle as { uri?: unknown }).uri === 'string' &&
+      (reference.handle as { uri: string }).uri.trim()
+    ) {
+      return normalizeNotebookReferenceUri(
+        (reference.handle as { uri: string }).uri
+      )
+    }
+    throw new Error(
+      'Usage: notebooks.resolve(reference). Reference must be a local URI, Drive URL, Runme share URL, Markdown link, or notebook target.'
+    )
+  }
+
+  const findOpenNotebook = (uri: string): NotebookDataLike | null => {
+    const current = runme.getCurrentNotebook()
+    if (current?.getUri() === uri) {
+      return current
+    }
+    return (
+      listNotebooks?.().find((notebook) => notebook.getUri() === uri) ?? null
+    )
+  }
+
+  const findLocalRecordForRemote = async (remoteUri: string) => {
+    const localStore = appState.localNotebooks
+    if (!localStore) {
+      return null
+    }
+    const canonicalRemoteUri = canonicalizeDriveUri(remoteUri) ?? remoteUri
+    return (
+      (await localStore.files
+        .where('remoteId')
+        .equals(canonicalRemoteUri)
+        .first()) ??
+      (canonicalRemoteUri === remoteUri
+        ? null
+        : await localStore.files.where('remoteId').equals(remoteUri).first())
+    )
+  }
+
+  const resolveNotebookReference = async (
+    reference?: unknown
+  ): Promise<NotebookReferenceInfo> => {
+    const input = typeof reference === 'string' ? reference : undefined
+    const parsedUri = resolveReferenceInput(reference)
+    const driveUri = canonicalizeDriveUri(parsedUri)
+    const uri = driveUri ?? parsedUri
+    const localStore = appState.localNotebooks
+    const openNotebook = findOpenNotebook(uri)
+    let localUri: string | undefined =
+      uri.startsWith('local://') || uri.startsWith('fs://') ? uri : undefined
+    let remoteUri: string | undefined = driveUri ?? undefined
+    let title = openNotebook?.getName() ?? ''
+
+    if (localStore && uri.startsWith('local://')) {
+      const metadata = await localStore.getMetadata(uri)
+      if (metadata) {
+        title = metadata.name || title
+        localUri = metadata.uri
+        remoteUri = metadata.remoteUri?.trim() || remoteUri
+      }
+    } else if (driveUri) {
+      const record = await findLocalRecordForRemote(driveUri)
+      if (record) {
+        title = record.name || title
+        localUri = record.id
+        remoteUri = driveUri
+      } else if (appState.driveNotebookStore) {
+        try {
+          const metadata =
+            await appState.driveNotebookStore.getMetadata(driveUri)
+          title = metadata?.name || title
+        } catch {
+          // Metadata lookup may require auth; the reference is still useful.
+        }
+      }
+    }
+
+    const shareTarget = getNotebookShareTarget(localUri ?? uri, remoteUri)
+    const resolvedTitle =
+      title || deriveTitleFromUri(remoteUri ?? localUri ?? uri)
+    return {
+      input,
+      uri,
+      localUri,
+      remoteUri,
+      googleDriveUrl:
+        remoteUri && isDriveItemUri(remoteUri) ? remoteUri : undefined,
+      shareTarget,
+      shareUrl: buildNotebookShareUrl(shareTarget),
+      markdownLink: buildNotebookMarkdownLink(resolvedTitle, shareTarget),
+      title: resolvedTitle,
+      name: resolvedTitle,
+      source:
+        remoteUri && isDriveItemUri(remoteUri)
+          ? 'drive'
+          : localUri?.startsWith('fs://')
+            ? 'fs'
+            : localUri?.startsWith('local://')
+              ? 'local'
+              : 'unknown',
+    }
+  }
+
+  const showNotebookReference = async (reference?: unknown) => {
+    const info = await resolveNotebookReference(reference)
+    if (info.localUri?.startsWith('local://file/')) {
+      await openNotebookForRuntime(info.localUri)
+      return {
+        ...info,
+        opened: info.localUri,
+      }
+    }
+    if (info.remoteUri && isDriveItemUri(info.remoteUri)) {
+      await driveLinkCoordinator.enqueue(info.remoteUri, 'manual')
+      return {
+        ...info,
+        opened: info.remoteUri,
+        status: 'queued_drive_link_coordination',
+      }
+    }
+    throw new Error(
+      `Unable to show notebook reference ${info.uri}. Expected a local file URI or Drive file URL.`
+    )
+  }
+
   const notebooksHelpers = {
     ...notebooksApi,
     help: async (topic?: string) => {
@@ -532,6 +740,18 @@ export function createAppJsGlobals({
       if (topic === 'appendCell') {
         return 'notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? }): Promise<{ handle, cell }>. Inserts a cell into the current or targeted notebook. kind must be "code" or "markup".'
       }
+      if (topic === 'resolve') {
+        return 'notebooks.resolve(reference?): Promise<NotebookReferenceInfo>. Accepts a local URI, Drive URL, Runme share URL, Markdown link, or notebook target and returns title, localUri, remoteUri, shareUrl, and markdownLink.'
+      }
+      if (topic === 'show') {
+        return 'notebooks.show(reference?): Promise<NotebookReferenceInfo & { opened | status }>. Opens local notebook references directly and queues Drive references through shared-link coordination.'
+      }
+      if (topic === 'shareUrl') {
+        return 'notebooks.shareUrl(reference?): Promise<string>. Returns the Runme share URL for a local, Drive, share, or Markdown notebook reference.'
+      }
+      if (topic === 'markdownLink' || topic === 'link') {
+        return 'notebooks.markdownLink(reference?): Promise<string>. Returns [title](shareUrl) Markdown for a local, Drive, share, or Markdown notebook reference.'
+      }
       const base = await notebooksApi.help(topic as any)
       if (topic) {
         return base
@@ -540,6 +760,10 @@ export function createAppJsGlobals({
         base,
         '- notebooks.createLocal(name, options?)',
         '- notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? })',
+        '- notebooks.resolve(reference?)',
+        '- notebooks.show(reference?)',
+        '- notebooks.shareUrl(reference?)',
+        '- notebooks.markdownLink(reference?)',
       ].join('\n')
     },
     createLocal: async (
@@ -574,11 +798,26 @@ export function createAppJsGlobals({
         cell: {
           kind: args.kind,
           languageId:
-            args.languageId ?? (args.kind === 'markup' ? 'markdown' : 'javascript'),
+            args.languageId ??
+            (args.kind === 'markup' ? 'markdown' : 'javascript'),
           value: args?.value ?? '',
           metadata: args?.metadata ?? {},
         },
       })
+    },
+    resolve: resolveNotebookReference,
+    show: showNotebookReference,
+    shareUrl: async (reference?: unknown) => {
+      const info = await resolveNotebookReference(reference)
+      return info.shareUrl
+    },
+    markdownLink: async (reference?: unknown) => {
+      const info = await resolveNotebookReference(reference)
+      return info.markdownLink
+    },
+    link: async (reference?: unknown) => {
+      const info = await resolveNotebookReference(reference)
+      return info.markdownLink
     },
   }
 
