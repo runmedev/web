@@ -84,6 +84,52 @@ describe("isDriveItemUri", () => {
 });
 
 describe("DriveNotebookStore", () => {
+  it("creates Drive folders with the folder MIME type", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/drive/v3/files");
+        expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+        expect(url.searchParams.get("fields")).toBe("id,name,mimeType,parents");
+        expect(init?.method).toBe("POST");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          name: "Reports",
+          mimeType: "application/vnd.google-apps.folder",
+          parents: ["parent123"],
+        });
+        return new Response(
+          JSON.stringify({
+            id: "folder123",
+            name: "Reports",
+            mimeType: "application/vnd.google-apps.folder",
+            parents: ["parent123"],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const result = await store.createFolder(
+      "https://drive.google.com/drive/folders/parent123",
+      "Reports",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      uri: "https://drive.google.com/drive/folders/folder123",
+      name: "Reports",
+      type: NotebookStoreItemType.Folder,
+      children: [],
+      remoteUri: "https://drive.google.com/drive/folders/folder123",
+      parents: ["https://drive.google.com/drive/folders/parent123"],
+    });
+  });
+
   it("renames Drive files through the metadata update API", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     const fetchMock = vi

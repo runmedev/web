@@ -16,6 +16,7 @@ const VERSION_FIELDS = 'md5Checksum,headRevisionId'
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
 } as unknown as Parameters<typeof toJsonString>[2]
+const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder'
 
 let gapiScriptPromise: Promise<void> | null = null
 let clientPromise: Promise<DriveFilesClient> | null = null
@@ -793,7 +794,7 @@ export class DriveNotebookStore {
     }
     const fileId = file.id
     file = await client.ensureParent(file, id)
-    const isFolder = file.mimeType === 'application/vnd.google-apps.folder'
+    const isFolder = file.mimeType === DRIVE_FOLDER_MIME_TYPE
     return {
       uri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
       name: file.name ?? name,
@@ -802,6 +803,37 @@ export class DriveNotebookStore {
         : NotebookStoreItemType.File,
       children: [],
       remoteUri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
+      parents: [parentUri],
+    }
+  }
+
+  async createFolder(
+    parentUri: string,
+    name: string
+  ): Promise<NotebookStoreItem> {
+    const { id, type } = parseDriveItem(parentUri)
+    if (type !== NotebookStoreItemType.Folder) {
+      throw new Error('DriveNotebookStore.createFolder expects a folder URI')
+    }
+    const client = await this.getFilesClient()
+    let folder = await client.create({
+      name,
+      mimeType: DRIVE_FOLDER_MIME_TYPE,
+      parents: [id],
+    })
+
+    if (!folder.id) {
+      throw new Error('Failed to create Google Drive folder')
+    }
+    const folderId = folder.id
+    folder = await client.ensureParent(folder, id)
+    const folderUri = driveFolderUrl(folderId)
+    return {
+      uri: folderUri,
+      name: folder.name ?? name,
+      type: NotebookStoreItemType.Folder,
+      children: [],
+      remoteUri: folderUri,
       parents: [parentUri],
     }
   }
@@ -916,7 +948,7 @@ export class DriveNotebookStore {
     )
 
     return files.map((file) => {
-      const isFolder = file.mimeType === 'application/vnd.google-apps.folder'
+      const isFolder = file.mimeType === DRIVE_FOLDER_MIME_TYPE
       return {
         uri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
         name: file.name ?? 'Untitled item',
@@ -1021,7 +1053,7 @@ export class DriveNotebookStore {
 
     const fileId = file.id ?? id
     const mimeType = file.mimeType
-    const isFolder = mimeType === 'application/vnd.google-apps.folder'
+    const isFolder = mimeType === DRIVE_FOLDER_MIME_TYPE
     return {
       uri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
       name: file.name ?? name,
@@ -1074,7 +1106,7 @@ export class DriveNotebookStore {
       mimeType?: string
       parents?: string[]
     }
-    const isFolder = result?.mimeType === 'application/vnd.google-apps.folder'
+    const isFolder = result?.mimeType === DRIVE_FOLDER_MIME_TYPE
     const resolvedType = isFolder
       ? NotebookStoreItemType.Folder
       : NotebookStoreItemType.File
@@ -1132,7 +1164,7 @@ export async function fetchDriveItemWithParents(
       parentId === 'root' ? parentId : driveFolderUrl(parentId)
     )
 
-  const isFolder = meta.mimeType === 'application/vnd.google-apps.folder'
+  const isFolder = meta.mimeType === DRIVE_FOLDER_MIME_TYPE
   const item: NotebookStoreItem = {
     uri: isFolder ? driveFolderUrl(meta.id) : driveFileUrl(meta.id),
     name: meta.name ?? 'Untitled item',
@@ -1154,8 +1186,7 @@ export async function fetchDriveItemWithParents(
       if (!parentMeta.id) {
         continue
       }
-      const parentIsFolder =
-        parentMeta.mimeType === 'application/vnd.google-apps.folder'
+      const parentIsFolder = parentMeta.mimeType === DRIVE_FOLDER_MIME_TYPE
       parents.push({
         uri: parentIsFolder
           ? driveFolderUrl(parentMeta.id)

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { NotebookStoreItemType } from '../../storage/notebook'
@@ -13,10 +13,36 @@ const mocks = vi.hoisted(() => ({
   isDriveItemUri: vi.fn(),
   openNotebook: vi.fn(),
   showDocument: vi.fn(),
+  addItem: vi.fn(),
+  removeItem: vi.fn(),
+  store: {
+    getMetadata: vi.fn(),
+    createFolder: vi.fn(),
+    sync: vi.fn(),
+  },
+  workspaceItems: [] as string[],
 }))
 
 vi.mock('react-arborist', () => ({
-  Tree: () => <div data-testid="tree" />,
+  Tree: ({ data, children }: any) => (
+    <div data-testid="tree">
+      {(data ?? []).map((item: any) => (
+        <div key={item.id}>
+          {children({
+            node: {
+              data: item,
+              isEditing: false,
+              isOpen: false,
+              handleClick: vi.fn(),
+              toggle: vi.fn(),
+              parent: null,
+            },
+            style: {},
+          })}
+        </div>
+      ))}
+    </div>
+  ),
 }))
 
 vi.mock('./GoogleDrivePickerButton', () => ({
@@ -25,15 +51,15 @@ vi.mock('./GoogleDrivePickerButton', () => ({
 
 vi.mock('../../contexts/WorkspaceContext', () => ({
   useWorkspace: () => ({
-    getItems: () => [],
-    addItem: vi.fn(),
-    removeItem: vi.fn(),
+    getItems: () => mocks.workspaceItems,
+    addItem: mocks.addItem,
+    removeItem: mocks.removeItem,
   }),
 }))
 
 vi.mock('../../contexts/NotebookStoreContext', () => ({
   useNotebookStore: () => ({
-    store: {},
+    store: mocks.store,
   }),
 }))
 
@@ -74,6 +100,10 @@ vi.mock('../../storage/drive', () => ({
   parseDriveItem: mocks.parseDriveItem,
 }))
 
+vi.mock('../../lib/toast', () => ({
+  showToast: vi.fn(),
+}))
+
 describe('WorkspaceExplorer current document handling', () => {
   beforeEach(() => {
     mocks.currentDoc = 'diff://notebook/diff-1'
@@ -91,6 +121,28 @@ describe('WorkspaceExplorer current document handling', () => {
     mocks.isDriveItemUri.mockReturnValue(false)
     mocks.openNotebook.mockReset()
     mocks.showDocument.mockReset()
+    mocks.addItem.mockReset()
+    mocks.removeItem.mockReset()
+    mocks.workspaceItems = []
+    mocks.store.getMetadata.mockReset()
+    mocks.store.getMetadata.mockResolvedValue({
+      uri: 'local://folder/local',
+      name: 'Local Notebooks',
+      type: NotebookStoreItemType.Folder,
+      children: [],
+      parents: [],
+    })
+    mocks.store.createFolder.mockReset()
+    mocks.store.createFolder.mockResolvedValue({
+      uri: 'local://folder/new',
+      name: 'Reports',
+      type: NotebookStoreItemType.Folder,
+      children: [],
+      remoteUri: 'https://drive.google.com/drive/folders/new',
+      parents: ['local://folder/drive'],
+    })
+    mocks.store.sync.mockReset()
+    vi.spyOn(window, 'prompt').mockReturnValue('Reports')
   })
 
   it('does not treat notebook diff URIs as Google Drive documents', async () => {
@@ -104,5 +156,39 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(mocks.parseDriveItem).not.toHaveBeenCalled()
     expect(mocks.fetchDriveItemWithParents).not.toHaveBeenCalled()
     expect(mocks.setCurrentDoc).not.toHaveBeenCalledWith(null)
+  })
+
+  it('creates a Google Drive folder from a Drive-backed folder context menu', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: [],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    const driveRoot = await screen.findByText('Drive Root')
+    fireEvent.contextMenu(driveRoot)
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'New Google Drive Folder',
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.store.createFolder).toHaveBeenCalledWith(
+        'local://folder/drive',
+        'Reports'
+      )
+    })
   })
 })
