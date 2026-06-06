@@ -179,6 +179,9 @@ describe('DriveSyncStatusTab', () => {
         screen.getByRole('button', { name: 'Sort by Last Synced' })
       )
     })
+    expect(
+      screen.getByRole('button', { name: 'Sort by Last Synced' }).textContent
+    ).toContain('↑')
 
     const body = screen.getByRole('table').querySelector('tbody')
     expect(body).toBeTruthy()
@@ -190,6 +193,9 @@ describe('DriveSyncStatusTab', () => {
         screen.getByRole('button', { name: 'Sort by Last Synced' })
       )
     })
+    expect(
+      screen.getByRole('button', { name: 'Sort by Last Synced' }).textContent
+    ).toContain('↓')
     renderedRows = within(body as HTMLElement).getAllByRole('row')
     expect(within(renderedRows[0]).getByText('Beta Notebook')).toBeTruthy()
   })

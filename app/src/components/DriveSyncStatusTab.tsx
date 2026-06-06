@@ -205,6 +205,7 @@ function SortButton({
   onSort: (column: SortKey) => void
 }) {
   const active = sortKey === column
+  const indicator = active ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'
   return (
     <button
       type="button"
@@ -213,8 +214,8 @@ function SortButton({
       aria-label={`Sort by ${label}`}
     >
       {label}
-      <span className="text-[10px] text-nb-text-faint">
-        {active ? sortDirection : 'sort'}
+      <span className="text-xs text-nb-text-faint" aria-hidden="true">
+        {indicator}
       </span>
     </button>
   )
