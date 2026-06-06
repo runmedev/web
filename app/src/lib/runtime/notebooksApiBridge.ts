@@ -23,7 +23,34 @@ export const SANDBOX_NOTEBOOKS_API_METHODS = [
   'notebooks.update',
   'notebooks.delete',
   'notebooks.execute',
+  'notebooks.resolve',
+  'notebooks.show',
+  'notebooks.shareUrl',
+  'notebooks.markdownLink',
+  'notebooks.link',
 ] as const
+
+type NotebookReferenceApi = {
+  resolve?: (reference?: unknown) => Promise<unknown>
+  show?: (reference?: unknown) => Promise<unknown>
+  shareUrl?: (reference?: unknown) => Promise<string>
+  markdownLink?: (reference?: unknown) => Promise<string>
+  link?: (reference?: unknown) => Promise<string>
+}
+
+function requireReferenceMethod<T extends keyof Required<NotebookReferenceApi>>(
+  notebooksApi: NotebooksApi,
+  method: T
+): Required<NotebookReferenceApi>[T] {
+  const referenceApi = notebooksApi as NotebooksApi & NotebookReferenceApi
+  const callback = referenceApi[method]
+  if (typeof callback !== 'function') {
+    throw new Error(
+      `Unsupported sandbox NotebooksApi method: notebooks.${method}`
+    )
+  }
+  return callback as Required<NotebookReferenceApi>[T]
+}
 
 export function createHostNotebooksApi({
   resolveNotebook,
@@ -86,6 +113,26 @@ export function createNotebooksApiBridgeServer({
                 refIds: [],
               }
             )
+          )
+        case 'notebooks.resolve':
+          return callJsonSafe(() =>
+            requireReferenceMethod(notebooksApi, 'resolve')(args[0])
+          )
+        case 'notebooks.show':
+          return callJsonSafe(() =>
+            requireReferenceMethod(notebooksApi, 'show')(args[0])
+          )
+        case 'notebooks.shareUrl':
+          return callJsonSafe(() =>
+            requireReferenceMethod(notebooksApi, 'shareUrl')(args[0])
+          )
+        case 'notebooks.markdownLink':
+          return callJsonSafe(() =>
+            requireReferenceMethod(notebooksApi, 'markdownLink')(args[0])
+          )
+        case 'notebooks.link':
+          return callJsonSafe(() =>
+            requireReferenceMethod(notebooksApi, 'link')(args[0])
           )
         default:
           throw new Error(`Unsupported sandbox NotebooksApi method: ${method}`)

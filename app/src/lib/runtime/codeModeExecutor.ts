@@ -1,12 +1,13 @@
 import { appLogger } from '../logging/runtime'
+import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
+import { getClaimedSessionId } from '../tabIdentity'
+import { appState } from './AppState'
 import { createAppJsGlobals } from './appJsGlobals'
 import {
   createAppKernelNetworkApi,
   createAppKernelOpfsApi,
 } from './appKernelLowLevelApis'
 import { getCodexTurnEvents, listCodexTurns } from './codexTurns'
-import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
-import { getClaimedSessionId } from '../tabIdentity'
 import { JSKernel } from './jsKernel'
 import {
   type NotebooksApiBridgeServer,
@@ -14,7 +15,6 @@ import {
   createNotebooksApiBridgeServer,
 } from './notebooksApiBridge'
 import { type NotebookDataLike, createRunmeConsoleApi } from './runmeConsole'
-import { appState } from './AppState'
 import {
   CODE_MODE_SANDBOX_ALLOWED_METHODS,
   SandboxJSKernel,
@@ -114,9 +114,6 @@ export function createCodeModeExecutor(options: {
         resolveNotebook,
         listNotebooks,
       })
-      const notebooksApiBridgeServer = createNotebooksApiBridgeServer({
-        notebooksApi: hostNotebooksApi,
-      })
       const notebookDiffApi = createNotebookDiffRuntimeApi({
         notebooksApi: hostNotebooksApi,
         resolveLocalNotebooks: () => appState.localNotebooks,
@@ -157,6 +154,9 @@ export function createCodeModeExecutor(options: {
         listNotebooks,
         opfsApi,
         networkApi,
+      })
+      const notebooksApiBridgeServer = createNotebooksApiBridgeServer({
+        notebooksApi: globals.notebooks as typeof hostNotebooksApi,
       })
 
       const abortController = new AbortController()

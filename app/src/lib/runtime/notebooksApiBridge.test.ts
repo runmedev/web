@@ -190,6 +190,27 @@ describe('createNotebooksApiBridgeServer', () => {
     )
   })
 
+  it('delegates notebook reference helper RPCs when provided', async () => {
+    const resolve = vi.fn(async () => ({
+      uri: 'local://file/demo',
+      title: 'demo',
+    }))
+    const bridgeServer = createBridgeServer({
+      resolve,
+    } as Partial<NotebooksApi>)
+
+    await expect(
+      bridgeServer.handleMessage({
+        method: 'notebooks.resolve',
+        args: ['local://file/demo'],
+      })
+    ).resolves.toEqual({
+      uri: 'local://file/demo',
+      title: 'demo',
+    })
+    expect(resolve).toHaveBeenCalledWith('local://file/demo')
+  })
+
   it('returns JSON-safe get and update results for notebooks with BigInt timing fields', async () => {
     const notebook = create(parser_pb.NotebookSchema, {
       cells: [codeCellWithBigIntTiming()],
