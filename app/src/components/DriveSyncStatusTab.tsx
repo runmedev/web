@@ -1,5 +1,5 @@
 import { Button, Text } from '@radix-ui/themes'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useCurrentDoc } from '../contexts/CurrentDocContext'
 import { useGoogleAuth } from '../contexts/GoogleAuthContext'
@@ -258,14 +258,47 @@ function SyncStatusFilter({
   onClear: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement | null>(null)
   const selected = new Set(selectedStatuses)
   const summary =
     selectedStatuses.length === 0
       ? 'All statuses'
       : `${selectedStatuses.length} selected`
 
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    const handleOutsidePress = (event: Event) => {
+      const target = event.target
+      if (target instanceof Node && containerRef.current?.contains(target)) {
+        return
+      }
+      setOpen(false)
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false)
+      }
+    }
+
+    document.addEventListener('pointerdown', handleOutsidePress)
+    document.addEventListener('mousedown', handleOutsidePress)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handleOutsidePress)
+      document.removeEventListener('mousedown', handleOutsidePress)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [open])
+
   return (
-    <div className="relative mt-2 text-xs font-normal normal-case tracking-normal text-nb-text">
+    <div
+      ref={containerRef}
+      className="relative mt-2 text-xs font-normal normal-case tracking-normal text-nb-text"
+    >
       <button
         type="button"
         className="flex w-full cursor-pointer list-none items-center justify-between rounded-nb-sm border border-nb-border bg-white px-2 py-1 outline-none hover:border-nb-accent focus:border-nb-accent"
