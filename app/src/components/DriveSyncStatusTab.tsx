@@ -257,7 +257,7 @@ export function DriveSyncStatusTab() {
       className="flex-1 p-4"
       data-testid="drive-sync-status-scroll"
     >
-      <div className="mx-auto flex h-full max-w-7xl flex-col gap-5 text-sm">
+      <div className="mx-auto flex h-full min-h-0 max-w-7xl flex-col gap-5 text-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-2">
             <Text size="5" weight="bold" as="p" className="text-nb-text">
@@ -315,10 +315,10 @@ export function DriveSyncStatusTab() {
             </Text>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-nb-border bg-white">
-            <table className="w-full border-collapse text-left text-sm">
+          <div className="min-h-[240px] flex-1 overflow-auto rounded-lg border border-nb-border bg-white">
+            <table className="w-max min-w-full border-collapse text-left text-sm">
               <thead>
-                <tr className="border-b border-nb-border bg-nb-surface-2 text-xs uppercase tracking-wide">
+                <tr className="sticky top-0 z-10 border-b border-nb-border bg-nb-surface-2 text-xs uppercase tracking-wide">
                   {stringColumns.slice(0, 5).map((column) => (
                     <th
                       key={column.key}
