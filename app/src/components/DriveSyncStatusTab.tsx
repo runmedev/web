@@ -1,8 +1,11 @@
 import { Button, ScrollArea, Text } from '@radix-ui/themes'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
+import { useCurrentDoc } from '../contexts/CurrentDocContext'
 import { useGoogleAuth } from '../contexts/GoogleAuthContext'
+import { useNotebookContext } from '../contexts/NotebookContext'
 import { useNotebookStore } from '../contexts/NotebookStoreContext'
+import { useWorkspaceDocumentContext } from '../contexts/WorkspaceDocumentContext'
 import type {
   NotebookSyncStatus,
   NotebookSyncStatusRow,
@@ -239,6 +242,9 @@ function ColumnHeader({
 export function DriveSyncStatusTab() {
   const { store } = useNotebookStore()
   const { ensureAccessToken, isDriveSyncing } = useGoogleAuth()
+  const { setCurrentDoc } = useCurrentDoc()
+  const { openNotebook } = useNotebookContext()
+  const { showDocument } = useWorkspaceDocumentContext()
   const [rows, setRows] = useState<NotebookSyncStatusRow[]>([])
   const [loading, setLoading] = useState(false)
   const [syncingAll, setSyncingAll] = useState(false)
@@ -344,6 +350,22 @@ export function DriveSyncStatusTab() {
       setSyncingAll(false)
     }
   }, [ensureAccessToken, refresh, rowsRequiringSync, store])
+
+  const handleOpenLocalUri = useCallback(
+    async (localUri: string) => {
+      setError(null)
+      try {
+        const result = await openNotebook(localUri)
+        showDocument(result.localUri, {
+          title: result.entry.name,
+        })
+        setCurrentDoc(result.localUri)
+      } catch (openError) {
+        setError(String(openError))
+      }
+    },
+    [openNotebook, setCurrentDoc, showDocument]
+  )
 
   return (
     <ScrollArea
@@ -491,7 +513,16 @@ export function DriveSyncStatusTab() {
                       className="border-b border-nb-border last:border-0"
                     >
                       <td className="max-w-[280px] break-all px-3 py-3 font-mono text-xs text-nb-text-muted">
-                        {row.localUri}
+                        <a
+                          className="text-nb-accent hover:underline"
+                          href={row.localUri}
+                          onClick={(event) => {
+                            event.preventDefault()
+                            void handleOpenLocalUri(row.localUri)
+                          }}
+                        >
+                          {row.localUri}
+                        </a>
                       </td>
                       <td className="max-w-[240px] px-3 py-3 font-medium text-nb-text">
                         {row.title}

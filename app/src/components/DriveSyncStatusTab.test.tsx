@@ -16,6 +16,12 @@ let isDriveSyncing = false
 const ensureAccessTokenMock = vi.fn(async () => 'token')
 const listFileSyncStatusesMock = vi.fn<() => Promise<NotebookSyncStatusRow[]>>()
 const syncMock = vi.fn(async (_uri: string) => undefined)
+const openNotebookMock = vi.fn(async (uri: string) => ({
+  localUri: uri,
+  entry: { name: 'Opened Notebook' },
+}))
+const setCurrentDocMock = vi.fn()
+const showDocumentMock = vi.fn()
 const storeMock = {
   listFileSyncStatuses: listFileSyncStatusesMock,
   sync: syncMock,
@@ -48,9 +54,27 @@ vi.mock('../contexts/GoogleAuthContext', () => ({
   }),
 }))
 
+vi.mock('../contexts/CurrentDocContext', () => ({
+  useCurrentDoc: () => ({
+    setCurrentDoc: setCurrentDocMock,
+  }),
+}))
+
+vi.mock('../contexts/NotebookContext', () => ({
+  useNotebookContext: () => ({
+    openNotebook: openNotebookMock,
+  }),
+}))
+
 vi.mock('../contexts/NotebookStoreContext', () => ({
   useNotebookStore: () => ({
     store: storeMock,
+  }),
+}))
+
+vi.mock('../contexts/WorkspaceDocumentContext', () => ({
+  useWorkspaceDocumentContext: () => ({
+    showDocument: showDocumentMock,
   }),
 }))
 
@@ -94,6 +118,9 @@ describe('DriveSyncStatusTab', () => {
     listFileSyncStatusesMock.mockReset()
     listFileSyncStatusesMock.mockResolvedValue(rows)
     syncMock.mockClear()
+    openNotebookMock.mockClear()
+    setCurrentDocMock.mockClear()
+    showDocumentMock.mockClear()
   })
 
   it('filters string columns by prefix', async () => {
@@ -163,6 +190,23 @@ describe('DriveSyncStatusTab', () => {
     expect(screen.getByRole('tooltip').textContent).toContain(
       'Google Drive headRevisionId'
     )
+  })
+
+  it('opens local URI links in the workspace', async () => {
+    render(<DriveSyncStatusTab />)
+
+    await waitForStatusLoad()
+    act(() => {
+      fireEvent.click(screen.getByRole('link', { name: 'local://file/beta' }))
+    })
+
+    await waitFor(() => {
+      expect(openNotebookMock).toHaveBeenCalledWith('local://file/beta')
+      expect(showDocumentMock).toHaveBeenCalledWith('local://file/beta', {
+        title: 'Opened Notebook',
+      })
+      expect(setCurrentDocMock).toHaveBeenCalledWith('local://file/beta')
+    })
   })
 
   it('syncs files that require it', async () => {
