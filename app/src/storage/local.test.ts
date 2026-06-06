@@ -45,6 +45,7 @@ function createMockTable<T extends { id: string }>() {
       toArray: vi.fn(async () => [...store.values()].filter(predicate)),
       first: vi.fn(async () => [...store.values()].find(predicate)),
     })),
+    toArray: vi.fn(async () => [...store.values()]),
   }
 }
 
@@ -126,6 +127,39 @@ describe('LocalNotebooks pending Drive create', () => {
       status: 'pending-upstream-create',
       parentRemoteIdWhenCreated: parentRemoteUri,
     })
+  })
+
+  it('lists file sync status rows with local and upstream revisions', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const doc = notebookJson("print('local')")
+    const checksum = md5(doc)
+    const store = createTestStore({})
+    await store.files.put({
+      id: 'local://file/synced',
+      name: 'synced.json',
+      remoteId: remoteUri,
+      lastRemoteChecksum: checksum,
+      lastSynced: '2026-05-30T00:00:00.000Z',
+      lastUpstreamVersion: {
+        checksum,
+        revisionId: 'revision-1',
+      },
+      doc,
+      md5Checksum: checksum,
+    })
+
+    await expect(store.listFileSyncStatuses()).resolves.toEqual([
+      {
+        localUri: 'local://file/synced',
+        title: 'synced.json',
+        googleDriveUrl: remoteUri,
+        revision: checksum,
+        upstreamRevision: 'revision-1',
+        lastSynced: '2026-05-30T00:00:00.000Z',
+        syncStatus: 'synced',
+        lastError: undefined,
+      },
+    ])
   })
 
   it('creates the Drive file on sync and clears pending parent', async () => {

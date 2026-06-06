@@ -59,6 +59,7 @@ import {
 } from '../../lib/driveLinkCoordinator'
 import {
   isDriveLinkStatusUri,
+  isDriveSyncStatusUri,
   isNotebookDiffUri,
   isNotebookDocumentUri,
   isVersionInfoUri,
@@ -75,6 +76,7 @@ import type { NotebookSyncState } from '../../storage/local'
 import { NotebookStoreItemType } from '../../storage/notebook'
 import { showToast } from '../../lib/toast'
 import DriveLinkStatusTab from '../DriveLinkStatusTab'
+import DriveSyncStatusTab from '../DriveSyncStatusTab'
 import RunnerStatusTab from '../RunnerStatusTab'
 import { NotebookDiffContent } from '../NotebookDiff/NotebookDiffView'
 import VersionInfoTab from '../VersionInfoTab'
@@ -1947,6 +1949,10 @@ function renderWorkspaceDocument({
 
   if (isDriveLinkStatusUri(document.uri)) {
     return <DriveLinkStatusTab onLogin={onDriveLogin} onRetry={onDriveRetry} />
+  }
+
+  if (isDriveSyncStatusUri(document.uri)) {
+    return <DriveSyncStatusTab />
   }
 
   if (isVersionInfoUri(document.uri)) {
