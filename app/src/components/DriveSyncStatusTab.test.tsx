@@ -283,4 +283,49 @@ describe('DriveSyncStatusTab', () => {
     })
     expect(syncMock).not.toHaveBeenCalledWith('local://file/alpha')
   })
+
+  it('syncs non-Drive files without waiting for Google auth', async () => {
+    listFileSyncStatusesMock.mockResolvedValue([
+      {
+        localUri: 'local://file/local-pending',
+        title: 'Local Pending Notebook',
+        googleDriveUrl: '',
+        revision: 'local',
+        upstreamRevision: 'local-upstream',
+        lastSynced: '2026-05-31T10:00:00.000Z',
+        syncStatus: 'pending',
+      },
+      {
+        localUri: 'local://file/drive-pending',
+        title: 'Drive Pending Notebook',
+        googleDriveUrl: 'https://drive.google.com/file/d/drive/view',
+        revision: 'drive',
+        upstreamRevision: 'drive-upstream',
+        lastSynced: '2026-05-31T10:00:00.000Z',
+        syncStatus: 'pending',
+      },
+    ])
+    ensureAccessTokenMock.mockRejectedValueOnce(new Error('auth unavailable'))
+
+    render(<DriveSyncStatusTab />)
+
+    await screen.findByText('Local Pending Notebook')
+    await waitFor(() => {
+      expect(
+        (screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement)
+          .disabled
+      ).toBe(false)
+    })
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Sync Required (2)' }))
+    })
+
+    await waitFor(() => {
+      expect(syncMock).toHaveBeenCalledWith('local://file/local-pending')
+      expect(ensureAccessTokenMock).toHaveBeenCalledWith({
+        interactive: true,
+      })
+    })
+    expect(syncMock).not.toHaveBeenCalledWith('local://file/drive-pending')
+  })
 })

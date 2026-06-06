@@ -456,9 +456,20 @@ export function DriveSyncStatusTab() {
     setSyncingAll(true)
     setError(null)
     try {
-      await ensureAccessToken({ interactive: true })
+      const rowsNotRequiringDriveAuth = rowsRequiringSync.filter(
+        (row) => !row.googleDriveUrl
+      )
+      const rowsRequiringDriveAuth = rowsRequiringSync.filter(
+        (row) => row.googleDriveUrl
+      )
       await Promise.all(
-        rowsRequiringSync.map((row) => store.sync(row.localUri))
+        rowsNotRequiringDriveAuth.map((row) => store.sync(row.localUri))
+      )
+      if (rowsRequiringDriveAuth.length > 0) {
+        await ensureAccessToken({ interactive: true })
+      }
+      await Promise.all(
+        rowsRequiringDriveAuth.map((row) => store.sync(row.localUri))
       )
       refresh()
     } catch (syncError) {
