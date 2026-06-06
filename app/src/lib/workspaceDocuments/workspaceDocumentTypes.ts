@@ -2,6 +2,7 @@ import type { NotebookTabState } from '../notebookDataController'
 import type { NotebookOwnershipRecord } from '../tabCoordination/notebookOwnership'
 
 export const DRIVE_LINK_STATUS_DOCUMENT_URI = 'status://drive-link'
+export const DRIVE_SYNC_STATUS_DOCUMENT_URI = 'status://drive-sync'
 export const VERSION_INFO_DOCUMENT_URI = 'app://version'
 export const RUNNER_STATUS_DOCUMENT_URI = 'status://runners'
 
@@ -34,6 +35,10 @@ export function isDriveLinkStatusUri(uri: string | null | undefined): boolean {
   return uri === DRIVE_LINK_STATUS_DOCUMENT_URI
 }
 
+export function isDriveSyncStatusUri(uri: string | null | undefined): boolean {
+  return uri === DRIVE_SYNC_STATUS_DOCUMENT_URI
+}
+
 export function isVersionInfoUri(uri: string | null | undefined): boolean {
   return uri === VERSION_INFO_DOCUMENT_URI
 }
@@ -50,6 +55,9 @@ export function deriveWorkspaceDocumentTitle(uri: string): string {
   const documentUri = uri
   if (isDriveLinkStatusUri(documentUri)) {
     return 'Drive Link Status'
+  }
+  if (isDriveSyncStatusUri(documentUri)) {
+    return 'Google Drive Sync Status'
   }
   if (isVersionInfoUri(documentUri)) {
     return 'Version Information'

@@ -117,6 +117,17 @@ export interface NotebookSyncState {
   lastError?: string
 }
 
+export interface NotebookSyncStatusRow {
+  localUri: string
+  title: string
+  googleDriveUrl: string
+  revision: string
+  upstreamRevision: string
+  lastSynced?: string
+  syncStatus: NotebookSyncStatus
+  lastError?: string
+}
+
 export class NotebookConflictChangedError extends Error {
   constructor(
     readonly localUri: string,
@@ -576,6 +587,36 @@ export class LocalNotebooks extends Dexie {
       { ...record, md5Checksum: localChecksum },
       localChecksum === upstreamChecksum ? 'synced' : 'pending'
     )
+  }
+
+  async listFileSyncStatuses(): Promise<NotebookSyncStatusRow[]> {
+    const records = await this.files.toArray()
+    const rows: NotebookSyncStatusRow[] = []
+
+    for (const record of records) {
+      const state = await this.getSyncState(record.id)
+      const localRevision = await this.getOrBackfillLocalChecksum(
+        record.id,
+        record
+      )
+      const upstreamVersion = state.lastUpstreamVersion
+      rows.push({
+        localUri: record.id,
+        title: record.name,
+        googleDriveUrl: isDriveUri(state.remoteId) ? state.remoteId : '',
+        revision: localRevision,
+        upstreamRevision:
+          upstreamVersion?.revisionId ??
+          upstreamVersion?.checksum ??
+          record.lastRemoteChecksum ??
+          '',
+        lastSynced: state.lastSynced,
+        syncStatus: state.status,
+        lastError: state.lastError,
+      })
+    }
+
+    return rows
   }
 
   async getMetadata(uri: string): Promise<NotebookStoreItem | null> {

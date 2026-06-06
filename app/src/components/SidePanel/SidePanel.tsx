@@ -23,6 +23,8 @@ import { useSidePanel } from '../../contexts/SidePanelContext'
 import { useWorkspaceDocumentContext } from '../../contexts/WorkspaceDocumentContext'
 import {
   isDriveLinkStatusUri,
+  isDriveSyncStatusUri,
+  DRIVE_SYNC_STATUS_DOCUMENT_URI,
   isNotebookDiffUri,
   isNotebookDocumentUri,
   isVersionInfoUri,
@@ -126,11 +128,13 @@ function OpenDocumentsPanel() {
                   ? 'Diff'
                   : isDriveLinkStatusUri(doc.uri)
                     ? 'Status'
-                    : isVersionInfoUri(doc.uri)
-                      ? 'Version'
-                      : isRunnerStatusUri(doc.uri)
-                        ? 'Runner Status'
-                        : 'Document'
+                    : isDriveSyncStatusUri(doc.uri)
+                      ? 'Drive Sync'
+                      : isVersionInfoUri(doc.uri)
+                        ? 'Version'
+                        : isRunnerStatusUri(doc.uri)
+                          ? 'Runner Status'
+                          : 'Document'
               return (
                 <li key={doc.uri}>
                   <div
@@ -197,31 +201,23 @@ export function SidePanelToolbar() {
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const authData = useBrowserAuthData()
   const browserAdapter = getBrowserAdapter()
-  const { ensureAccessToken, isDriveSyncing } = useGoogleAuth()
+  const { isDriveSyncing } = useGoogleAuth()
   const { listRunners } = useRunners()
-  const [isDriveAuthPending, setIsDriveAuthPending] = useState(false)
 
   const driveStatus = isDriveSyncing ? 'Syncing' : 'Not syncing'
   const versionInfoSelected = getCurrentDoc() === VERSION_INFO_DOCUMENT_URI
+  const driveSyncStatusSelected =
+    getCurrentDoc() === DRIVE_SYNC_STATUS_DOCUMENT_URI
   const hasAvailableRunner = listRunners().some((runner) =>
     Boolean(runner.endpoint.trim())
   )
   const runnerStatus = hasAvailableRunner ? 'Available' : 'Unavailable'
-  const handleDriveStatusClick = useCallback(async () => {
-    if (isDriveSyncing || isDriveAuthPending) {
-      return
-    }
-    setIsDriveAuthPending(true)
-    try {
-      await ensureAccessToken({ interactive: true })
-    } catch (error) {
-      if (!String(error).includes('Redirecting to Google OAuth')) {
-        console.error('Failed to start Google Drive auth flow', error)
-      }
-    } finally {
-      setIsDriveAuthPending(false)
-    }
-  }, [ensureAccessToken, isDriveAuthPending, isDriveSyncing])
+  const handleDriveStatusClick = useCallback(() => {
+    showDocument(DRIVE_SYNC_STATUS_DOCUMENT_URI, {
+      title: 'Google Drive Sync Status',
+    })
+    setCurrentDoc(DRIVE_SYNC_STATUS_DOCUMENT_URI)
+  }, [setCurrentDoc, showDocument])
 
   const handleVersionInfoClick = useCallback(() => {
     showDocument(VERSION_INFO_DOCUMENT_URI, {
@@ -305,9 +301,7 @@ export function SidePanelToolbar() {
         <button
           type="button"
           className={`${sideButtonBase} ${
-            isDriveSyncing || isDriveAuthPending
-              ? sideButtonActive
-              : sideButtonInactive
+            driveSyncStatusSelected ? sideButtonActive : sideButtonInactive
           }`}
           aria-label={`Google Drive status: ${driveStatus}`}
           onClick={() => {

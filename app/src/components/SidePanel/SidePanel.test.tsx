@@ -107,7 +107,7 @@ describe('SidePanelToolbar drive status button', () => {
     closeWorkspaceDocumentMock.mockClear()
   })
 
-  it('renders the Drive status button above Login and starts auth when not syncing', async () => {
+  it('renders the Drive status button above Login and opens sync status', async () => {
     render(<SidePanelToolbar />)
 
     const driveStatusButton = screen.getByRole('button', {
@@ -124,10 +124,14 @@ describe('SidePanelToolbar drive status button', () => {
       fireEvent.click(driveStatusButton)
       await Promise.resolve()
     })
-    expect(ensureAccessTokenMock).toHaveBeenCalledWith({ interactive: true })
+    expect(showDocumentMock).toHaveBeenCalledWith('status://drive-sync', {
+      title: 'Google Drive Sync Status',
+    })
+    expect(setCurrentDocMock).toHaveBeenCalledWith('status://drive-sync')
+    expect(ensureAccessTokenMock).not.toHaveBeenCalled()
   })
 
-  it('does not start auth when Drive is already syncing', () => {
+  it('opens sync status when Drive is already syncing', () => {
     isDriveSyncing = true
     render(<SidePanelToolbar />)
 
@@ -136,7 +140,9 @@ describe('SidePanelToolbar drive status button', () => {
     })
     fireEvent.click(driveStatusButton)
 
-    expect(ensureAccessTokenMock).not.toHaveBeenCalled()
+    expect(showDocumentMock).toHaveBeenCalledWith('status://drive-sync', {
+      title: 'Google Drive Sync Status',
+    })
   })
 
   it('exposes an Open Documents button in the toolbar', () => {
@@ -248,6 +254,7 @@ describe('SidePanelContent ChatKit persistence', () => {
       { uri: 'diff://notebook/beta', title: 'beta diff' },
       { uri: 'app://version', title: 'Version Information' },
       { uri: 'status://runners', title: 'Notebook Runner Status' },
+      { uri: 'status://drive-sync', title: 'Google Drive Sync Status' },
     ]
     closeWorkspaceDocumentMock.mockReturnValue('diff://notebook/beta')
 
@@ -259,6 +266,7 @@ describe('SidePanelContent ChatKit persistence', () => {
     expect(setCurrentDocMock).toHaveBeenCalledWith('diff://notebook/beta')
     expect(screen.getByText('Version · app://version')).toBeTruthy()
     expect(screen.getByText('Runner Status · status://runners')).toBeTruthy()
+    expect(screen.getByText('Drive Sync · status://drive-sync')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Close alpha.json' }))
     expect(closeWorkspaceDocumentMock).toHaveBeenCalledWith(
