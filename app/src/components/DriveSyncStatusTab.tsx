@@ -24,7 +24,7 @@ type SortKey = keyof Pick<
   | 'syncStatus'
 >
 
-type FilterKey = Exclude<SortKey, 'lastSynced'>
+type FilterKey = Exclude<SortKey, 'lastSynced' | 'syncStatus'>
 
 type Filters = Record<FilterKey, string>
 
@@ -34,7 +34,6 @@ const emptyFilters: Filters = {
   googleDriveUrl: '',
   revision: '',
   upstreamRevision: '',
-  syncStatus: '',
 }
 
 const stringColumns: Array<{
@@ -55,7 +54,16 @@ const stringColumns: Array<{
     label: 'Upstream Revision',
     className: 'min-w-[170px]',
   },
-  { key: 'syncStatus', label: 'Sync Status', className: 'min-w-[150px]' },
+]
+
+const syncStatusOptions: NotebookSyncStatus[] = [
+  'local-only',
+  'synced',
+  'pending',
+  'pending-upstream-create',
+  'syncing',
+  'conflicted',
+  'error',
 ]
 
 const columnDescriptions: Record<SortKey, string> = {
@@ -239,6 +247,71 @@ function ColumnHeader({
   )
 }
 
+function SyncStatusFilter({
+  selectedStatuses,
+  onToggleStatus,
+  onClear,
+}: {
+  selectedStatuses: NotebookSyncStatus[]
+  onToggleStatus: (status: NotebookSyncStatus) => void
+  onClear: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const selected = new Set(selectedStatuses)
+  const summary =
+    selectedStatuses.length === 0
+      ? 'All statuses'
+      : `${selectedStatuses.length} selected`
+
+  return (
+    <div className="relative mt-2 text-xs font-normal normal-case tracking-normal text-nb-text">
+      <button
+        type="button"
+        className="flex w-full cursor-pointer list-none items-center justify-between rounded-nb-sm border border-nb-border bg-white px-2 py-1 outline-none hover:border-nb-accent focus:border-nb-accent"
+        aria-label={`Filter Sync Status: ${summary}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span>Filter Sync Status: {summary}</span>
+        <span className="text-[10px] text-nb-text-faint">v</span>
+      </button>
+      {open ? (
+        <div
+          className="absolute right-0 top-8 z-30 w-56 rounded-nb-sm border border-nb-border bg-white p-2 text-left shadow-nb-md"
+          role="menu"
+        >
+          <div className="flex flex-col gap-1">
+            {syncStatusOptions.map((status) => (
+              <label
+                key={status}
+                className="flex cursor-pointer items-center gap-2 rounded-nb-sm px-2 py-1 hover:bg-nb-surface-2"
+              >
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5"
+                  checked={selected.has(status)}
+                  onChange={() => onToggleStatus(status)}
+                  aria-label={`Filter Sync Status: ${status}`}
+                />
+                <span>{status}</span>
+              </label>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="mt-2 w-full rounded-nb-sm border border-nb-border px-2 py-1 text-xs text-nb-text-muted hover:border-nb-accent hover:text-nb-text disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={onClear}
+            disabled={selectedStatuses.length === 0}
+          >
+            Clear status filters
+          </button>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export function DriveSyncStatusTab() {
   const { store } = useNotebookStore()
   const { ensureAccessToken, isDriveSyncing } = useGoogleAuth()
@@ -250,6 +323,9 @@ export function DriveSyncStatusTab() {
   const [syncingAll, setSyncingAll] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [filters, setFilters] = useState<Filters>(emptyFilters)
+  const [selectedSyncStatuses, setSelectedSyncStatuses] = useState<
+    NotebookSyncStatus[]
+  >([])
   const [sortKey, setSortKey] = useState<SortKey>('title')
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
@@ -307,8 +383,15 @@ export function DriveSyncStatusTab() {
 
   const filteredRows = useMemo(() => {
     return rows
-      .filter((row) =>
-        (Object.keys(filters) as FilterKey[]).every((key) => {
+      .filter((row) => {
+        if (
+          selectedSyncStatuses.length > 0 &&
+          !selectedSyncStatuses.includes(row.syncStatus)
+        ) {
+          return false
+        }
+
+        return (Object.keys(filters) as FilterKey[]).every((key) => {
           const filter = filters[key].trim().toLocaleLowerCase()
           if (!filter) {
             return true
@@ -316,9 +399,9 @@ export function DriveSyncStatusTab() {
           const value = String(row[key] ?? '').toLocaleLowerCase()
           return value.startsWith(filter)
         })
-      )
+      })
       .sort((left, right) => compareRows(left, right, sortKey, sortDirection))
-  }, [filters, rows, sortDirection, sortKey])
+  }, [filters, rows, selectedSyncStatuses, sortDirection, sortKey])
 
   const handleSort = useCallback(
     (column: SortKey) => {
@@ -350,6 +433,17 @@ export function DriveSyncStatusTab() {
       setSyncingAll(false)
     }
   }, [ensureAccessToken, refresh, rowsRequiringSync, store])
+
+  const handleToggleSyncStatusFilter = useCallback(
+    (status: NotebookSyncStatus) => {
+      setSelectedSyncStatuses((current) =>
+        current.includes(status)
+          ? current.filter((item) => item !== status)
+          : [...current, status]
+      )
+    },
+    []
+  )
 
   const handleOpenLocalUri = useCallback(
     async (localUri: string) => {
@@ -436,7 +530,7 @@ export function DriveSyncStatusTab() {
             <table className="w-max min-w-full border-collapse text-left text-sm">
               <thead>
                 <tr className="sticky top-0 z-10 border-b border-nb-border bg-nb-surface-2 text-xs uppercase tracking-wide">
-                  {stringColumns.slice(0, 5).map((column) => (
+                  {stringColumns.map((column) => (
                     <th
                       key={column.key}
                       className={`${column.className} px-3 py-2 align-top`}
@@ -480,18 +574,10 @@ export function DriveSyncStatusTab() {
                       sortDirection={sortDirection}
                       onSort={handleSort}
                     />
-                    <input
-                      type="search"
-                      className="mt-2 w-full rounded-nb-sm border border-nb-border bg-white px-2 py-1 text-xs font-normal normal-case tracking-normal text-nb-text outline-none focus:border-nb-accent"
-                      placeholder="Filter Sync Status"
-                      value={filters.syncStatus}
-                      onChange={(event) =>
-                        setFilters((current) => ({
-                          ...current,
-                          syncStatus: event.target.value,
-                        }))
-                      }
-                      aria-label="Filter Sync Status"
+                    <SyncStatusFilter
+                      selectedStatuses={selectedSyncStatuses}
+                      onToggleStatus={handleToggleSyncStatusFilter}
+                      onClear={() => setSelectedSyncStatuses([])}
                     />
                   </th>
                 </tr>

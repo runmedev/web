@@ -137,6 +137,39 @@ describe('DriveSyncStatusTab', () => {
     expect(screen.queryByText('Alpha Notebook')).toBeNull()
   })
 
+  it('filters sync status by selected values', async () => {
+    render(<DriveSyncStatusTab />)
+
+    await waitForStatusLoad()
+    act(() => {
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Filter Sync Status: All statuses',
+        })
+      )
+    })
+    act(() => {
+      fireEvent.click(screen.getByLabelText('Filter Sync Status: pending'))
+    })
+
+    expect(screen.getByText('Beta Notebook')).toBeTruthy()
+    expect(screen.queryByText('Alpha Notebook')).toBeNull()
+
+    act(() => {
+      fireEvent.click(screen.getByLabelText('Filter Sync Status: synced'))
+    })
+    expect(screen.getByText('Beta Notebook')).toBeTruthy()
+    expect(screen.getByText('Alpha Notebook')).toBeTruthy()
+
+    act(() => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Clear status filters' })
+      )
+    })
+    expect(screen.getByText('Beta Notebook')).toBeTruthy()
+    expect(screen.getByText('Alpha Notebook')).toBeTruthy()
+  })
+
   it('sorts date columns ascending and descending', async () => {
     render(<DriveSyncStatusTab />)
 
