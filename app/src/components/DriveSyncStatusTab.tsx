@@ -257,7 +257,7 @@ export function DriveSyncStatusTab() {
       className="flex-1 p-4"
       data-testid="drive-sync-status-scroll"
     >
-      <div className="mx-auto flex h-full min-h-0 max-w-7xl flex-col gap-5 text-sm">
+      <div className="flex h-full min-h-0 w-full flex-col gap-5 text-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-2">
             <Text size="5" weight="bold" as="p" className="text-nb-text">
