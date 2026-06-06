@@ -55,6 +55,21 @@ const stringColumns: Array<{
   { key: 'syncStatus', label: 'Sync Status', className: 'min-w-[150px]' },
 ]
 
+const columnDescriptions: Record<SortKey, string> = {
+  localUri: 'Stable browser-local identifier for the cached notebook record.',
+  title: 'Notebook title stored in the local mirror.',
+  googleDriveUrl:
+    'Upstream Google Drive file URL, when this local record is backed by Drive.',
+  revision:
+    'Local content checksum used to detect unsynced local edits. This is usually an MD5 hash, not a Google Drive revision ID.',
+  upstreamRevision:
+    'Latest upstream version observed during sync. For Drive files this is the Google Drive headRevisionId when available; otherwise it falls back to the upstream checksum.',
+  lastSynced:
+    'Time of the last successful local-to-upstream or upstream-to-local sync.',
+  syncStatus:
+    'Computed local sync state, such as synced, pending, syncing, conflicted, error, or local-only.',
+}
+
 function isAutoSyncable(status: NotebookSyncStatus): boolean {
   return (
     status === 'pending' ||
@@ -112,6 +127,59 @@ function compareRows(
   return leftValue.localeCompare(rightValue) * multiplier
 }
 
+function ColumnHelp({
+  label,
+  description,
+}: {
+  label: string
+  description: string
+}) {
+  const [hovered, setHovered] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const [pinned, setPinned] = useState(false)
+  const open = hovered || focused || pinned
+  const tooltipId = `drive-sync-column-help-${label
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')}`
+
+  return (
+    <span
+      className="relative inline-flex items-center normal-case tracking-normal"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        type="button"
+        className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-nb-border bg-white text-[10px] font-bold leading-none text-nb-text-muted hover:border-nb-accent hover:text-nb-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nb-accent"
+        aria-label={`About ${label}`}
+        aria-describedby={open ? tooltipId : undefined}
+        aria-expanded={open}
+        onClick={(event) => {
+          event.stopPropagation()
+          setPinned((current) => !current)
+        }}
+        onMouseDown={(event) => event.stopPropagation()}
+        onFocus={() => setFocused(true)}
+        onBlur={() => {
+          setFocused(false)
+          setPinned(false)
+        }}
+      >
+        ?
+      </button>
+      {open ? (
+        <span
+          id={tooltipId}
+          role="tooltip"
+          className="absolute left-1/2 top-6 z-30 w-64 -translate-x-1/2 whitespace-normal rounded-nb-sm border border-nb-border bg-white px-3 py-2 text-left text-xs font-normal normal-case leading-relaxed tracking-normal text-nb-text shadow-nb-md"
+        >
+          {description}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
 function SortButton({
   label,
   column,
@@ -138,6 +206,33 @@ function SortButton({
         {active ? sortDirection : 'sort'}
       </span>
     </button>
+  )
+}
+
+function ColumnHeader({
+  label,
+  column,
+  sortKey,
+  sortDirection,
+  onSort,
+}: {
+  label: string
+  column: SortKey
+  sortKey: SortKey
+  sortDirection: SortDirection
+  onSort: (column: SortKey) => void
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <SortButton
+        label={label}
+        column={column}
+        sortKey={sortKey}
+        sortDirection={sortDirection}
+        onSort={onSort}
+      />
+      <ColumnHelp label={label} description={columnDescriptions[column]} />
+    </div>
   )
 }
 
@@ -324,7 +419,7 @@ export function DriveSyncStatusTab() {
                       key={column.key}
                       className={`${column.className} px-3 py-2 align-top`}
                     >
-                      <SortButton
+                      <ColumnHeader
                         label={column.label}
                         column={column.key}
                         sortKey={sortKey}
@@ -347,7 +442,7 @@ export function DriveSyncStatusTab() {
                     </th>
                   ))}
                   <th className="min-w-[170px] px-3 py-2 align-top">
-                    <SortButton
+                    <ColumnHeader
                       label="Last Synced"
                       column="lastSynced"
                       sortKey={sortKey}
@@ -356,7 +451,7 @@ export function DriveSyncStatusTab() {
                     />
                   </th>
                   <th className="min-w-[150px] px-3 py-2 align-top">
-                    <SortButton
+                    <ColumnHeader
                       label="Sync Status"
                       column="syncStatus"
                       sortKey={sortKey}

@@ -134,6 +134,37 @@ describe('DriveSyncStatusTab', () => {
     expect(within(renderedRows[0]).getByText('Beta Notebook')).toBeTruthy()
   })
 
+  it('shows column descriptions from help icons', async () => {
+    render(<DriveSyncStatusTab />)
+
+    await waitForStatusLoad()
+    const revisionHelp = screen.getByRole('button', {
+      name: 'About Revision',
+    })
+    expect(screen.queryByRole('tooltip')).toBeNull()
+
+    act(() => {
+      fireEvent.mouseEnter(revisionHelp)
+    })
+    expect(screen.getByRole('tooltip').textContent).toContain(
+      'Local content checksum'
+    )
+
+    act(() => {
+      fireEvent.mouseLeave(revisionHelp)
+    })
+    expect(screen.queryByRole('tooltip')).toBeNull()
+
+    act(() => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'About Upstream Revision' })
+      )
+    })
+    expect(screen.getByRole('tooltip').textContent).toContain(
+      'Google Drive headRevisionId'
+    )
+  })
+
   it('syncs files that require it', async () => {
     render(<DriveSyncStatusTab />)
 
