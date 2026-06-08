@@ -107,7 +107,7 @@ describe('SidePanelToolbar drive status button', () => {
     closeWorkspaceDocumentMock.mockClear()
   })
 
-  it('renders the Drive status button above Login and opens sync status', async () => {
+  it('renders the Drive status button above Login and refreshes credentials', async () => {
     render(<SidePanelToolbar />)
 
     const driveStatusButton = screen.getByRole('button', {
@@ -124,6 +124,24 @@ describe('SidePanelToolbar drive status button', () => {
       fireEvent.click(driveStatusButton)
       await Promise.resolve()
     })
+    expect(ensureAccessTokenMock).toHaveBeenCalledWith({
+      interactive: true,
+    })
+    expect(showDocumentMock).not.toHaveBeenCalled()
+    expect(setCurrentDocMock).not.toHaveBeenCalled()
+  })
+
+  it('opens sync status from the Drive status context menu', () => {
+    isDriveSyncing = true
+    render(<SidePanelToolbar />)
+
+    const driveStatusButton = screen.getByRole('button', {
+      name: 'Google Drive status: Syncing',
+    })
+    fireEvent.contextMenu(driveStatusButton, { clientX: 20, clientY: 40 })
+
+    expect(screen.getByRole('menu')).toBeTruthy()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Status' }))
     expect(showDocumentMock).toHaveBeenCalledWith('status://drive-sync', {
       title: 'Google Drive Sync Status',
     })
@@ -131,18 +149,17 @@ describe('SidePanelToolbar drive status button', () => {
     expect(ensureAccessTokenMock).not.toHaveBeenCalled()
   })
 
-  it('opens sync status when Drive is already syncing', () => {
-    isDriveSyncing = true
+  it('dismisses the Drive status context menu when clicking away', () => {
     render(<SidePanelToolbar />)
 
-    const driveStatusButton = screen.getByRole('button', {
-      name: 'Google Drive status: Syncing',
-    })
-    fireEvent.click(driveStatusButton)
+    fireEvent.contextMenu(
+      screen.getByRole('button', { name: 'Google Drive status: Not syncing' }),
+      { clientX: 20, clientY: 40 }
+    )
 
-    expect(showDocumentMock).toHaveBeenCalledWith('status://drive-sync', {
-      title: 'Google Drive Sync Status',
-    })
+    expect(screen.getByRole('menu')).toBeTruthy()
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByRole('menu')).toBeNull()
   })
 
   it('exposes an Open Documents button in the toolbar', () => {

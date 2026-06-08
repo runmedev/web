@@ -8,7 +8,7 @@ import {
 } from '@heroicons/react/24/outline'
 import { XMarkIcon } from '@heroicons/react/20/solid'
 import { CloudIcon as CloudSolidIcon } from '@heroicons/react/24/solid'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type MouseEvent } from 'react'
 
 import ChatKitPanel from '../ChatKit/ChatKitPanel'
 import WorkspaceExplorer from '../Workspace/WorkspaceExplorer'
@@ -201,8 +201,12 @@ export function SidePanelToolbar() {
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const authData = useBrowserAuthData()
   const browserAdapter = getBrowserAdapter()
-  const { isDriveSyncing } = useGoogleAuth()
+  const { ensureAccessToken, isDriveSyncing } = useGoogleAuth()
   const { listRunners } = useRunners()
+  const [driveContextMenu, setDriveContextMenu] = useState<{
+    x: number
+    y: number
+  } | null>(null)
 
   const driveStatus = isDriveSyncing ? 'Syncing' : 'Not syncing'
   const versionInfoSelected = getCurrentDoc() === VERSION_INFO_DOCUMENT_URI
@@ -212,12 +216,60 @@ export function SidePanelToolbar() {
     Boolean(runner.endpoint.trim())
   )
   const runnerStatus = hasAvailableRunner ? 'Available' : 'Unavailable'
-  const handleDriveStatusClick = useCallback(() => {
+  useEffect(() => {
+    if (!driveContextMenu) {
+      return
+    }
+    const handlePointerDown = () => setDriveContextMenu(null)
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setDriveContextMenu(null)
+      }
+    }
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [driveContextMenu])
+
+  const handleOpenDriveSyncStatus = useCallback(() => {
     showDocument(DRIVE_SYNC_STATUS_DOCUMENT_URI, {
       title: 'Google Drive Sync Status',
     })
     setCurrentDoc(DRIVE_SYNC_STATUS_DOCUMENT_URI)
   }, [setCurrentDoc, showDocument])
+
+  const handleDriveStatusClick = useCallback(async () => {
+    setDriveContextMenu(null)
+    try {
+      await ensureAccessToken({ interactive: true })
+    } catch {
+      // Users can cancel the interactive credential refresh.
+    }
+  }, [ensureAccessToken])
+
+  const handleDriveStatusContextMenu = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault()
+      const menuWidth = 140
+      const menuHeight = 40
+      const maxX =
+        typeof window === 'undefined'
+          ? event.clientX
+          : window.innerWidth - menuWidth
+      const maxY =
+        typeof window === 'undefined'
+          ? event.clientY
+          : window.innerHeight - menuHeight
+      setDriveContextMenu({
+        x: Math.max(0, Math.min(event.clientX, maxX)),
+        y: Math.max(0, Math.min(event.clientY, maxY)),
+      })
+    },
+    []
+  )
 
   const handleVersionInfoClick = useCallback(() => {
     showDocument(VERSION_INFO_DOCUMENT_URI, {
@@ -307,6 +359,7 @@ export function SidePanelToolbar() {
           onClick={() => {
             void handleDriveStatusClick()
           }}
+          onContextMenu={handleDriveStatusContextMenu}
         >
           <span className="relative inline-flex h-5 w-5 items-center justify-center">
             <CloudSolidIcon
@@ -320,6 +373,30 @@ export function SidePanelToolbar() {
           </span>
           <span className={tooltipBase}>{`Google Drive: ${driveStatus}`}</span>
         </button>
+        {driveContextMenu ? (
+          <div
+            role="menu"
+            className="fixed z-50 min-w-32 rounded-nb-sm border border-nb-border bg-white py-1 text-sm shadow-nb-md"
+            style={{
+              top: driveContextMenu.y,
+              left: driveContextMenu.x,
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              className="block w-full px-3 py-1.5 text-left text-nb-text hover:bg-nb-surface-2"
+              onClick={() => {
+                setDriveContextMenu(null)
+                handleOpenDriveSyncStatus()
+              }}
+            >
+              Status
+            </button>
+          </div>
+        ) : null}
         <button
           type="button"
           className={`${sideButtonBase} ${sideButtonInactive}`}

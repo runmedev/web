@@ -137,6 +137,21 @@ describe('DriveSyncStatusTab', () => {
     expect(screen.queryByText('Alpha Notebook')).toBeNull()
   })
 
+  it('explains the status refresh action on hover', async () => {
+    render(<DriveSyncStatusTab />)
+
+    await waitForStatusLoad()
+    const description =
+      'Reloads the status table from local notebook sync metadata. It does not sync files.'
+
+    expect(
+      screen.getByRole('button', { name: 'Refresh' }).getAttribute('title')
+    ).toBe(description)
+
+    fireEvent.mouseEnter(screen.getByRole('button', { name: 'About Refresh' }))
+    expect(screen.getByRole('tooltip').textContent).toBe(description)
+  })
+
   it('filters sync status by selected values', async () => {
     render(<DriveSyncStatusTab />)
 
