@@ -81,6 +81,9 @@ const columnDescriptions: Record<SortKey, string> = {
     'Computed local sync state, such as synced, pending, syncing, conflicted, error, or local-only.',
 }
 
+const refreshDescription =
+  'Reloads the status table from local notebook sync metadata. It does not sync files.'
+
 function isAutoSyncable(status: NotebookSyncStatus): boolean {
   return (
     status === 'pending' ||
@@ -533,14 +536,18 @@ export function DriveSyncStatusTab() {
             >
               Drive {isDriveSyncing ? 'connected' : 'not connected'}
             </span>
-            <Button
-              type="button"
-              variant="soft"
-              onClick={() => refresh()}
-              disabled={loading || syncingAll || !store}
-            >
-              Refresh
-            </Button>
+            <span className="inline-flex items-center gap-1.5">
+              <Button
+                type="button"
+                variant="soft"
+                onClick={() => refresh()}
+                disabled={loading || syncingAll || !store}
+                title={refreshDescription}
+              >
+                Refresh
+              </Button>
+              <ColumnHelp label="Refresh" description={refreshDescription} />
+            </span>
             <Button
               type="button"
               onClick={() => void handleSyncAll()}
