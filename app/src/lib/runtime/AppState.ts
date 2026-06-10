@@ -1,3 +1,7 @@
+import type {
+  StartGoogleDriveOAuthOptions,
+  StartGoogleDriveOAuthResult,
+} from "../../contexts/GoogleAuthContext";
 import { DriveNotebookStore } from "../../storage/drive";
 import { FilesystemNotebookStore } from "../../storage/fs";
 import LocalNotebooks from "../../storage/local";
@@ -27,6 +31,11 @@ export class AppState {
   localNotebooks: LocalNotebooks | null = null;
   private openNotebookHandler: ((uri: string) => void | Promise<void>) | null =
     null;
+  private googleDriveOAuthHandler:
+    | ((
+        options?: StartGoogleDriveOAuthOptions,
+      ) => Promise<StartGoogleDriveOAuthResult>)
+    | null = null;
   private workspaceHandlers: WorkspaceHandlers | null = null;
   private runnerHandlers: RunnerHandlers | null = null;
 
@@ -55,6 +64,16 @@ export class AppState {
     handler: ((uri: string) => void | Promise<void>) | null,
   ): void {
     this.openNotebookHandler = handler;
+  }
+
+  setGoogleDriveOAuthHandler(
+    handler:
+      | ((
+          options?: StartGoogleDriveOAuthOptions,
+        ) => Promise<StartGoogleDriveOAuthResult>)
+      | null,
+  ): void {
+    this.googleDriveOAuthHandler = handler;
   }
 
   setWorkspaceHandlers(handlers: WorkspaceHandlers | null): void {
@@ -94,6 +113,15 @@ export class AppState {
       throw new Error("Notebook navigation is not initialized");
     }
     await this.openNotebookHandler(uri);
+  }
+
+  async startGoogleDriveOAuth(
+    options?: StartGoogleDriveOAuthOptions,
+  ): Promise<StartGoogleDriveOAuthResult> {
+    if (!this.googleDriveOAuthHandler) {
+      throw new Error("Google Drive OAuth is not initialized");
+    }
+    return this.googleDriveOAuthHandler(options);
   }
 }
 

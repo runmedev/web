@@ -66,6 +66,8 @@ Recommended defaults:
 
 ```js
 drive.help()
+await drive.authorize()
+await drive.refreshAuth()
 drive.list(folderIdOrUri)
 drive.create(folderIdOrUri, "name.json")
 drive.saveAsCurrentNotebook(folderIdOrUri, "name.json")
@@ -73,6 +75,27 @@ drive.copyNotebook(sourceIdOrUri, targetFolderIdOrUri, "name.json")
 drive.listPendingSync()
 drive.requeuePendingSync()
 ```
+
+`drive.authorize()` starts a fresh Google Drive OAuth flow. It first clears any
+locally stored Drive OAuth handoff state from a previous redirect or new-tab
+attempt, then starts the flow configured by `googleDrive.authFlow` and
+`googleDrive.authUxMode`.
+
+Use this when the Drive status button appears stuck, when an agent needs to
+explicitly refresh Drive auth from App Console, or before asking a user to clear
+browser storage manually. `drive.refreshAuth()` is an alias for the same
+operation.
+
+Optional arguments:
+
+```js
+await drive.authorize({ mode: "new_tab" })
+await drive.authorize({ mode: "redirect" })
+await drive.authorize({ mode: "popup", prompt: "consent" })
+```
+
+`mode` can be `"new_tab"`, `"redirect"`, or `"popup"`. `prompt` can be
+`"none"` or `"consent"`.
 
 ## High-value facts for Codex
 

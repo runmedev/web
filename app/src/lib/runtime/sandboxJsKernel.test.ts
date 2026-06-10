@@ -13,6 +13,7 @@ type Scenario =
   | 'lowLevel'
   | 'codex'
   | 'app'
+  | 'drive'
 
 class MockSandboxPort {
   onmessage: ((event: MessageEvent<any>) => void) | null = null
@@ -72,6 +73,13 @@ class MockSandboxPort {
           method: 'app.getSessionID',
           args: [],
         })
+      } else if (this.scenario === 'drive') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'drive.authorize',
+          args: [{ mode: 'new_tab' }],
+        })
       } else if (this.scenario === 'hang') {
         this.emit({ type: 'stdout', data: 'started\n' })
       } else {
@@ -92,6 +100,14 @@ class MockSandboxPort {
         this.emit({
           type: 'stdout',
           data: `${String(this.hostResults.get(1) ?? '')}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+      if (this.scenario === 'drive' && this.hostResults.has(1)) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
         })
         this.emit({ type: 'exit', exitCode: 0 })
         return
@@ -428,10 +444,51 @@ describe('SandboxJSKernel', () => {
       },
     })
 
-    await kernel.run("console.log(app.getSessionID());")
+    await kernel.run('console.log(app.getSessionID());')
 
     expect(bridgeCall).toHaveBeenCalledWith('app.getSessionID', [])
     expect(stdout).toContain('session-test')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports Google Drive auth helpers through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'drive.authorize') {
+        return {
+          status: 'started',
+          authFlow: 'implicit',
+          mode: 'new_tab',
+        }
+      }
+      return null
+    })
+
+    const kernel = new TestableSandboxJSKernel(new MockSandboxPort('drive'), {
+      bridge: { call: bridgeCall },
+      hooks: {
+        onStdout: (data) => {
+          stdout += data
+        },
+        onStderr: (data) => {
+          stderr += data
+        },
+        onExit: (code) => {
+          exitCode = code
+        },
+      },
+    })
+
+    await kernel.run("console.log(await drive.authorize({ mode: 'new_tab' }));")
+
+    expect(bridgeCall).toHaveBeenCalledWith('drive.authorize', [
+      { mode: 'new_tab' },
+    ])
+    expect(stdout).toContain('"status":"started"')
+    expect(stdout).toContain('"mode":"new_tab"')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
   })

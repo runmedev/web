@@ -47,6 +47,9 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'notebookDiff.help',
   'app.getSessionId',
   'app.getSessionID',
+  'app.startGoogleDriveOAuth',
+  'drive.authorize',
+  'drive.refreshAuth',
   ...SANDBOX_NOTEBOOKS_API_METHODS,
 ]
 
@@ -294,6 +297,15 @@ function buildSandboxSrcDoc(options: {
         const app = {
           getSessionId: () => hostCall("app.getSessionId", []),
           getSessionID: () => hostCall("app.getSessionID", []),
+          startGoogleDriveOAuth: (options) => hostCall("app.startGoogleDriveOAuth", [options]),
+        };
+        const drive = {
+          authorize: (options) => hostCall("drive.authorize", [options]),
+          refreshAuth: (options) => hostCall("drive.refreshAuth", [options]),
+          help: () => {
+            consoleProxy.log("drive.authorize({ mode?, prompt? })");
+            consoleProxy.log("drive.refreshAuth({ mode?, prompt? })");
+          },
         };
 
         const help = () => {
@@ -323,6 +335,8 @@ function buildSandboxSrcDoc(options: {
           consoleProxy.log("- const [latest] = await codex.turns.list(); consoleProxy.log(await codex.turns.getEvents(latest.turnId));");
           consoleProxy.log("- await app.getSessionId()");
           consoleProxy.log("- await app.getSessionID()");
+          consoleProxy.log("- await app.startGoogleDriveOAuth({ mode?, prompt? })");
+          consoleProxy.log("- await drive.authorize({ mode?, prompt? })");
           consoleProxy.log("- help()");
         };
 
@@ -338,10 +352,11 @@ function buildSandboxSrcDoc(options: {
               "notebookDiff",
               "codex",
               "app",
+              "drive",
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, opfs, net, notebooks, notebookDiff, codex, app, help);
+            await runner(consoleProxy, runme, opfs, net, notebooks, notebookDiff, codex, app, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });

@@ -47,6 +47,7 @@ describe('createAppJsGlobals notebook reference helpers', () => {
   afterEach(() => {
     appState.setLocalNotebooks(null)
     appState.setOpenNotebookHandler(null)
+    appState.setGoogleDriveOAuthHandler(null)
     window.history.replaceState(null, '', '/')
   })
 
@@ -114,5 +115,37 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     await expect(globals.notebooks.shareUrl()).resolves.toBe(
       'http://localhost:3000/?doc=local%3A%2F%2Ffile%2Fcurrent'
     )
+  })
+
+  it('starts Google Drive OAuth from runtime globals without returning raw tokens', async () => {
+    const startOAuth = vi.fn(async () => ({
+      status: 'authorized' as const,
+      authFlow: 'implicit' as const,
+      mode: 'popup' as const,
+      accessToken: 'secret-token',
+    }))
+    const output: string[] = []
+    appState.setGoogleDriveOAuthHandler(startOAuth)
+    const globals = createAppJsGlobals({
+      runme: createRunme(),
+      sendOutput: (data) => output.push(data),
+    })
+
+    const result = await globals.drive.authorize({
+      mode: 'popup',
+      prompt: 'consent',
+    })
+
+    expect(startOAuth).toHaveBeenCalledWith({
+      mode: 'popup',
+      prompt: 'consent',
+    })
+    expect(result).toEqual({
+      status: 'authorized',
+      authFlow: 'implicit',
+      mode: 'popup',
+      accessToken: '<redacted>',
+    })
+    expect(output.join('')).toContain('Google Drive OAuth authorized.')
   })
 })

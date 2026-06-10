@@ -356,6 +356,24 @@ async function handleSandboxAppKernelBridgeCall({
       return getClaimedSessionId()
     case 'app.getSessionID':
       return getClaimedSessionId()
+    case 'app.startGoogleDriveOAuth':
+    case 'drive.authorize':
+    case 'drive.refreshAuth': {
+      const result = await appState.startGoogleDriveOAuth(
+        args[0] as
+          | {
+              mode?: 'popup' | 'redirect' | 'new_tab'
+              prompt?: 'none' | 'consent'
+            }
+          | undefined
+      )
+      return {
+        status: result.status,
+        authFlow: result.authFlow,
+        mode: result.mode,
+        ...(result.accessToken ? { accessToken: '<redacted>' } : {}),
+      }
+    }
     case 'notebookDiff.listDriveRevisions':
       return notebookDiffApi.listDriveRevisions(args[0] as any)
     case 'notebookDiff.diffDriveRevision':

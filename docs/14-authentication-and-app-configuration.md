@@ -30,7 +30,19 @@ credentials.google.setClientId("...")
 credentials.google.setClientSecret("...")
 credentials.google.setAuthFlow("implicit") // or "pkce"
 credentials.google.setAuthUxMode("redirect") // or "popup"
+await drive.authorize()
+await drive.refreshAuth()
+await app.startGoogleDriveOAuth()
 ```
+
+`drive.authorize()` and `app.startGoogleDriveOAuth()` both start a new Google
+Drive OAuth flow from App Console. Before starting the flow, they clear local
+OAuth handoff state such as redirect/new-tab state, PKCE verifier state, return
+URL, implicit prompt mode, and stored callback errors. This is the supported
+recovery path when stale OAuth state prevents the Drive auth button from
+launching a new flow.
+
+`drive.refreshAuth()` is an alias for `drive.authorize()`.
 
 ## App config helpers
 

@@ -8,6 +8,7 @@ import { GoogleAuthProvider, useGoogleAuth } from './GoogleAuthContext'
 const PKCE_STATE_KEY = 'runme/google-auth/pkce-state'
 const PKCE_CODE_VERIFIER_KEY = 'runme/google-auth/pkce-code-verifier'
 const PKCE_RETURN_TO_KEY = 'runme/google-auth/pkce-return-to'
+const PKCE_ERROR_KEY = 'runme/google-auth/pkce-error'
 const IMPLICIT_PROMPT_MODE_KEY = 'runme/google-auth/implicit-prompt-mode'
 const AUTH_HANDOFF_MODE_KEY = 'runme/google-auth/handoff-mode'
 const STORAGE_KEY = 'runme/google-auth/token'
@@ -89,6 +90,39 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     expect(window.localStorage.getItem(PKCE_RETURN_TO_KEY)).toBe('/')
     expect(window.localStorage.getItem(IMPLICIT_PROMPT_MODE_KEY)).toBe('none')
     expect(window.localStorage.getItem(PKCE_CODE_VERIFIER_KEY)).toBeNull()
+  })
+
+  it('starts a fresh implicit auth flow and replaces stale handoff state', async () => {
+    googleClientManager.setOAuthClient({
+      authFlow: 'implicit',
+      authUxMode: 'new_tab',
+    })
+    window.localStorage.setItem(PKCE_STATE_KEY, 'stale-state')
+    window.localStorage.setItem(PKCE_CODE_VERIFIER_KEY, 'stale-verifier')
+    window.localStorage.setItem(PKCE_RETURN_TO_KEY, '/stale')
+    window.localStorage.setItem(IMPLICIT_PROMPT_MODE_KEY, 'consent')
+    window.localStorage.setItem(AUTH_HANDOFF_MODE_KEY, 'new_tab')
+    window.sessionStorage.setItem(PKCE_ERROR_KEY, 'stale-error')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const openSpy = vi
+      .spyOn(window, 'open')
+      .mockReturnValue(window as unknown as Window)
+    const auth = await renderWithGoogleAuthProvider()
+
+    await expect(auth.startGoogleDriveOAuth()).resolves.toMatchObject({
+      status: 'started',
+      authFlow: 'implicit',
+      mode: 'new_tab',
+    })
+
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    expect(window.localStorage.getItem(PKCE_STATE_KEY)).toBeTruthy()
+    expect(window.localStorage.getItem(PKCE_STATE_KEY)).not.toBe('stale-state')
+    expect(window.localStorage.getItem(PKCE_CODE_VERIFIER_KEY)).toBeNull()
+    expect(window.localStorage.getItem(PKCE_RETURN_TO_KEY)).toBe('/')
+    expect(window.localStorage.getItem(IMPLICIT_PROMPT_MODE_KEY)).toBe('none')
+    expect(window.localStorage.getItem(AUTH_HANDOFF_MODE_KEY)).toBe('new_tab')
+    expect(window.sessionStorage.getItem(PKCE_ERROR_KEY)).toBeNull()
   })
 
   it('does not relaunch new-tab auth while a handoff is already in progress', async () => {
