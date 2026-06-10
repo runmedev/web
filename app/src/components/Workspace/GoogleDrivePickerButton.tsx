@@ -69,6 +69,9 @@ export function GoogleDrivePickerButton({
         console.error("Failed to authorize Google Drive picker", error);
         return;
       }
+      if (!accessToken) {
+        return;
+      }
 
       openPicker({
         token: accessToken,
@@ -107,7 +110,9 @@ export function GoogleDrivePickerButton({
             }
 
             if (!store) {
-              console.error("Notebook store is not available; cannot mirror folder.");
+              console.error(
+                "Notebook store is not available; cannot mirror folder.",
+              );
               return;
             }
 
@@ -128,7 +133,14 @@ export function GoogleDrivePickerButton({
         },
       });
     })();
-  }, [addItem, ensureAccessToken, getItems, getPickerConfig, openPicker, store]);
+  }, [
+    addItem,
+    ensureAccessToken,
+    getItems,
+    getPickerConfig,
+    openPicker,
+    store,
+  ]);
 
   return (
     <button

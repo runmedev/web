@@ -243,6 +243,25 @@ export function createAppJsGlobals({
     }
     return appState.localNotebooks
   }
+  const startGoogleDriveOAuthForRuntime = async (options?: {
+    mode?: 'popup' | 'redirect' | 'new_tab'
+    prompt?: 'none' | 'consent'
+  }) => {
+    const result = await appState.startGoogleDriveOAuth(options)
+    const safeResult = {
+      status: result.status,
+      authFlow: result.authFlow,
+      mode: result.mode,
+      ...(result.accessToken ? { accessToken: '<redacted>' } : {}),
+    }
+    emitLine(
+      sendOutput,
+      result.status === 'authorized'
+        ? 'Google Drive OAuth authorized.'
+        : `Google Drive OAuth flow started (${result.mode}).`
+    )
+    return safeResult
+  }
 
   const runmeApi = createRunmeApi(runme, sendOutput)
   const notebooksApi = createNotebooksApi({
@@ -1302,6 +1321,7 @@ export function createAppJsGlobals({
         emitLine(sendOutput, `Opened notebook ${uri}`)
         return uri
       },
+      startGoogleDriveOAuth: startGoogleDriveOAuthForRuntime,
       setConfig: async (url?: string) => {
         emitLine(sendOutput, 'Fetching app config...')
         try {
@@ -1443,6 +1463,7 @@ export function createAppJsGlobals({
         '  await notebooks.createLocal("hello")',
         '  await notebooks.appendCell({ kind: "code", value: "print(1)", languageId: "python" })',
         '  const diff = await notebookDiff.diffDriveRevision({ revisionId })',
+        '  await drive.authorize()',
         '  runmeRunners.ensure("openai-local", "ws://localhost:9988/ws", { setDefault: true })',
         '',
         'Type <namespace>.help() for detailed commands, e.g. explorer.help()',
@@ -1560,6 +1581,8 @@ export function createAppJsGlobals({
       },
     },
     drive: {
+      authorize: startGoogleDriveOAuthForRuntime,
+      refreshAuth: startGoogleDriveOAuthForRuntime,
       list: async (folder: string) => {
         const items = await listDriveFolderItems(folder)
         emitLine(sendOutput, `Listed ${items.length} Drive item(s)`)
@@ -1643,6 +1666,8 @@ export function createAppJsGlobals({
       help: () => {
         return [
           'drive.list(folder)            - List Drive items in a folder',
+          'drive.authorize(options?)      - Start a fresh Google Drive OAuth flow; options: { mode?, prompt? }',
+          'drive.refreshAuth(options?)    - Alias for drive.authorize(options?)',
           'drive.create(folder, name)     - Create a Drive file in folder; returns file id',
           'drive.update(id, bytes)        - Write UTF-8 bytes to a Drive file id/URI',
           'drive.saveAsCurrentNotebook(folder, fileName) - Save current notebook to Drive and switch current doc',

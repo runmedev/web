@@ -208,7 +208,7 @@ export function SidePanelToolbar() {
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const authData = useBrowserAuthData()
   const browserAdapter = getBrowserAdapter()
-  const { ensureAccessToken, isDriveSyncing } = useGoogleAuth()
+  const { isDriveSyncing, startGoogleDriveOAuth } = useGoogleAuth()
   const { listRunners } = useRunners()
   const [driveContextMenu, setDriveContextMenu] = useState<{
     x: number
@@ -253,11 +253,11 @@ export function SidePanelToolbar() {
   const handleDriveStatusClick = useCallback(async () => {
     setDriveContextMenu(null)
     try {
-      await ensureAccessToken({ interactive: true })
+      await startGoogleDriveOAuth()
     } catch {
       // Users can cancel the interactive credential refresh.
     }
-  }, [ensureAccessToken])
+  }, [startGoogleDriveOAuth])
 
   const openDriveContextMenu = useCallback((x: number, y: number) => {
     const menuWidth = 140

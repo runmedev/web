@@ -15,8 +15,12 @@ import {
   getAppPath,
   getGoogleDriveOAuthCallbackUrl,
 } from '../lib/appBase'
-import type { GoogleDriveAuthUxMode } from '../lib/googleClientManager'
+import type {
+  GoogleDriveAuthFlow,
+  GoogleDriveAuthUxMode,
+} from '../lib/googleClientManager'
 import { appLogger } from '../lib/logging/runtime'
+import { appState } from '../lib/runtime/AppState'
 
 // N.B. I couldn't make sharing work with the more restrictive "https://www.googleapis.com/auth/drive.file"
 // scope. In particular, I couldn't quite figure out how to share a link with a user and then have that
@@ -46,8 +50,23 @@ interface EnsureAccessTokenOptions {
   interactive?: boolean
 }
 
+export interface StartGoogleDriveOAuthOptions {
+  mode?: GoogleDriveAuthUxMode
+  prompt?: 'none' | 'consent'
+}
+
+export interface StartGoogleDriveOAuthResult {
+  status: 'started' | 'authorized'
+  authFlow: GoogleDriveAuthFlow
+  mode: GoogleDriveAuthUxMode
+  accessToken?: string
+}
+
 interface GoogleAuthContextType {
   ensureAccessToken: (options?: EnsureAccessTokenOptions) => Promise<string>
+  startGoogleDriveOAuth: (
+    options?: StartGoogleDriveOAuthOptions
+  ) => Promise<StartGoogleDriveOAuthResult>
   setAccessToken: (token: string, expiresIn?: number) => void
   isDriveSyncing: boolean
 }
@@ -738,6 +757,92 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     return client
   }, [ensureScriptLoaded, setAccessToken])
 
+  const startGoogleDriveOAuth = useCallback(
+    async (
+      options?: StartGoogleDriveOAuthOptions
+    ): Promise<StartGoogleDriveOAuthResult> => {
+      const oauthClient = googleClientManager.getOAuthClient()
+      const requestedMode = options?.mode ?? oauthClient.authUxMode
+      const promptMode = options?.prompt ?? 'none'
+
+      handlersRef.current?.reject(
+        new Error('Google Drive OAuth flow restarted.')
+      )
+      handlersRef.current = null
+      pendingPromiseRef.current = null
+      clearPkceState()
+
+      if (oauthClient.authFlow === 'pkce') {
+        const mode: GoogleRedirectUxMode =
+          requestedMode === 'redirect' ? 'redirect' : 'new_tab'
+        await startPkceRedirect(mode)
+        return {
+          status: 'started',
+          authFlow: oauthClient.authFlow,
+          mode,
+        }
+      }
+
+      if (requestedMode === 'redirect' || requestedMode === 'new_tab') {
+        startImplicitRedirect(promptMode, requestedMode)
+        return {
+          status: 'started',
+          authFlow: oauthClient.authFlow,
+          mode: requestedMode,
+        }
+      }
+
+      const client = await ensureTokenClient()
+      const accessToken = await new Promise<string>((resolve, reject) => {
+        handlersRef.current = { resolve, reject }
+        client.callback = (response: AccessTokenResponse) => {
+          if (!handlersRef.current) {
+            return
+          }
+          const { resolve: pendingResolve, reject: pendingReject } =
+            handlersRef.current
+          handlersRef.current = null
+
+          if (response.error || !response.access_token) {
+            pendingReject(
+              response.error ?? new Error('Failed to obtain access token')
+            )
+            return
+          }
+          setAccessToken(response.access_token, response.expires_in ?? 3600)
+          pendingResolve(response.access_token)
+        }
+        try {
+          client.requestAccessToken({ prompt: promptMode })
+        } catch (error) {
+          handlersRef.current = null
+          reject(error)
+        }
+      })
+
+      return {
+        status: 'authorized',
+        authFlow: oauthClient.authFlow,
+        mode: 'popup',
+        accessToken,
+      }
+    },
+    [
+      clearPkceState,
+      ensureTokenClient,
+      setAccessToken,
+      startImplicitRedirect,
+      startPkceRedirect,
+    ]
+  )
+
+  useEffect(() => {
+    appState.setGoogleDriveOAuthHandler(startGoogleDriveOAuth)
+    return () => {
+      appState.setGoogleDriveOAuthHandler(null)
+    }
+  }, [startGoogleDriveOAuth])
+
   // Public entry point: fetch (or reuse) an access token. The callback contains
   // all of the state orchestration so Callers can simply `await`.
   const ensureAccessToken = useCallback(
@@ -897,9 +1002,10 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     () => ({
       ensureAccessToken,
       isDriveSyncing,
+      startGoogleDriveOAuth,
       setAccessToken,
     }),
-    [ensureAccessToken, isDriveSyncing, setAccessToken]
+    [ensureAccessToken, isDriveSyncing, startGoogleDriveOAuth, setAccessToken]
   )
 
   return (

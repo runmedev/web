@@ -87,6 +87,19 @@ credentials.google.setClientId('...')
 credentials.google.setClientSecret('...')
 ```
 
+Start or refresh Google Drive OAuth:
+
+```js
+await drive.authorize()
+await drive.refreshAuth()
+await app.startGoogleDriveOAuth()
+```
+
+These commands clear stale Drive OAuth handoff state before starting a new
+Google OAuth flow. They are useful when the Drive status button does not appear
+to launch auth, or when a human or agent needs an explicit auth refresh from App
+Console.
+
 App config:
 
 ```js
