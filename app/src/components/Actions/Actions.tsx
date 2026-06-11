@@ -71,7 +71,7 @@ import {
   NOTEBOOK_DIFF_DOCUMENT_CHANGED,
 } from '../../lib/notebookDiff/registry'
 import { openNotebookConflictDiff } from '../../lib/notebookDiff/conflict'
-import { parseDriveItem } from '../../storage/drive'
+import { isDriveItemUri, parseDriveItem } from '../../storage/drive'
 import type { NotebookSyncState } from '../../storage/local'
 import { NotebookStoreItemType } from '../../storage/notebook'
 import { showToast } from '../../lib/toast'
@@ -180,7 +180,7 @@ function syncIndicatorPresentation(state: NotebookSyncState | null): {
   }
 }
 
-function NotebookSyncIndicator({ docUri }: { docUri: string }) {
+function useNotebookSyncState(docUri: string): NotebookSyncState | null {
   const { store } = useNotebookStore()
   const [syncState, setSyncState] = useState<NotebookSyncState | null>(null)
 
@@ -228,6 +228,13 @@ function NotebookSyncIndicator({ docUri }: { docUri: string }) {
       window.removeEventListener('local-notebook-updated', onSyncUpdated)
     }
   }, [docUri, store])
+
+  return syncState
+}
+
+function NotebookSyncIndicator({ docUri }: { docUri: string }) {
+  const { store } = useNotebookStore()
+  const syncState = useNotebookSyncState(docUri)
 
   const presentation = syncIndicatorPresentation(syncState)
   const handleClick = useCallback(
@@ -283,6 +290,31 @@ function NotebookSyncIndicator({ docUri }: { docUri: string }) {
         className={`block h-2.5 w-2.5 rounded-full ${presentation.className}`}
       />
     </button>
+  )
+}
+
+function NotebookDriveLoadingState() {
+  return (
+    <div
+      className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center text-sm text-nb-text-muted"
+      data-testid="notebook-drive-loading-state"
+    >
+      <Text size="3" weight="bold" as="p" className="text-nb-text">
+        Loading notebook from Google Drive
+      </Text>
+      <Text size="2" as="p">
+        Syncing the latest Drive copy before showing cells.
+      </Text>
+    </div>
+  )
+}
+
+function isDriveBackedNotebook(
+  entry: OpenNotebookEntry,
+  syncState: NotebookSyncState | null
+): boolean {
+  return (
+    isDriveItemUri(entry.requestedUri) || isDriveItemUri(syncState?.remoteId)
   )
 }
 
@@ -1675,7 +1707,9 @@ function NotebookTabContent({
   const { getNotebookData, openNotebook, useNotebookSnapshot } =
     useNotebookContext()
   const notebookSnapshot = useNotebookSnapshot(docUri)
+  const syncState = useNotebookSyncState(docUri)
   const readOnly = Boolean(entry.readOnly || notebookSnapshot?.readOnly)
+  const isDriveBacked = isDriveBackedNotebook(entry, syncState)
   const shouldRenderCells = !readOnly || isSelected
   const cellDatas = useMemo(() => {
     if (!shouldRenderCells) {
@@ -1757,6 +1791,9 @@ function NotebookTabContent({
   }
 
   if (!notebookSnapshot || !notebookSnapshot.loaded) {
+    if (isDriveBacked) {
+      return <NotebookDriveLoadingState />
+    }
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-nb-text-muted">
         <span>Loading…</span>
@@ -1765,6 +1802,14 @@ function NotebookTabContent({
   }
 
   const data = getNotebookData(notebookSnapshot.uri)
+
+  if (
+    cellDatas.length === 0 &&
+    isDriveBacked &&
+    syncState?.status === 'syncing'
+  ) {
+    return <NotebookDriveLoadingState />
+  }
 
   return (
     <ScrollArea

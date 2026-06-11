@@ -21,6 +21,7 @@ const contextMocks = vi.hoisted(() => ({
   workspaceDocuments: [] as Array<{
     uri: string
     title: string
+    requestedUri?: string
     state?: 'loading' | 'loaded' | 'blocked' | 'error'
     readOnly?: boolean
   }>,
@@ -31,7 +32,12 @@ const contextMocks = vi.hoisted(() => ({
   getNotebookData: vi.fn(),
   notebookSnapshots: new Map<
     string,
-    { uri: string; loaded: boolean; notebook: parser_pb.Notebook }
+    {
+      uri: string
+      loaded: boolean
+      readOnly?: boolean
+      notebook: parser_pb.Notebook
+    }
   >(),
   notebookStore: null as null | {
     files?: { get: ReturnType<typeof vi.fn> }
@@ -312,6 +318,47 @@ describe('Actions tabs', () => {
     expect(
       screen.getByTestId('notebook-readonly-banner').textContent
     ).toContain('Read-only')
+    expect(screen.queryByLabelText('Add first cell')).toBeNull()
+  })
+
+  it('shows Drive syncing state instead of empty notebook prompt', async () => {
+    const uri = 'local://file/drive-syncing.runme.md'
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      {
+        uri,
+        title: 'drive-syncing.runme.md',
+        requestedUri: 'https://drive.google.com/file/d/file123/view',
+        state: 'loaded',
+      },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, {
+        metadata: {},
+        cells: [],
+      }),
+    })
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(),
+      getSyncState: vi.fn(async () => ({
+        status: 'syncing',
+        localUri: uri,
+        remoteId: 'https://drive.google.com/file/d/file123/view',
+      })),
+      rename: vi.fn(),
+      sync: vi.fn(),
+      subscribeSync: vi.fn(() => () => {}),
+    }
+
+    render(<Actions />)
+
+    expect(
+      await screen.findByTestId('notebook-drive-loading-state')
+    ).toBeTruthy()
+    expect(screen.getByText('Loading notebook from Google Drive')).toBeTruthy()
+    expect(screen.queryByText('This notebook has no cells yet.')).toBeNull()
     expect(screen.queryByLabelText('Add first cell')).toBeNull()
   })
 
