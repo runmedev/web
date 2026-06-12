@@ -3,6 +3,8 @@ import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
 import { parser_pb } from '../../runme/client'
+import type LocalNotebooks from '../../storage/local'
+import { NotebookStoreProvider } from '../../contexts/NotebookStoreContext'
 import { computeNotebookDiff } from '../../lib/notebookDiff/diff'
 import { NotebookDiffContent } from './NotebookDiffView'
 
@@ -61,5 +63,47 @@ describe('NotebookDiffContent', () => {
 
     expect(screen.getByText('Unchanged cell cell-1')).toBeTruthy()
     expect(screen.getAllByText("print('same')")).toHaveLength(2)
+  })
+
+  it('shows an insert affordance for upstream cells deleted locally', () => {
+    const diff = computeNotebookDiff(
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'remote-only',
+            kind: parser_pb.CellKind.CODE,
+            languageId: 'python',
+            value: "print('restore me')",
+          }),
+        ],
+        metadata: {},
+      }),
+      create(parser_pb.NotebookSchema, {
+        cells: [],
+        metadata: {},
+      })
+    )
+    const doc = {
+      id: 'conflict-diff',
+      base: { label: 'Upstream version', revisionId: 'upstream' },
+      compare: { label: 'Local version' },
+      diff,
+      resolution: {
+        kind: 'notebook-sync-conflict' as const,
+        localUri: 'local://file/conflict',
+      },
+    }
+
+    render(
+      <NotebookStoreProvider initialStore={{} as unknown as LocalNotebooks}>
+        <NotebookDiffContent document={doc} />
+      </NotebookStoreProvider>
+    )
+
+    expect(
+      screen.getByRole('button', {
+        name: 'Insert upstream cell into local notebook',
+      })
+    ).toBeTruthy()
   })
 })
