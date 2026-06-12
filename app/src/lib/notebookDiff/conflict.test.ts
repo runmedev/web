@@ -99,4 +99,65 @@ describe('restoreDeletedConflictCell', () => {
     expect(saved?.cells[1]?.metadata?.[RunmeMetadataKey.CreatedAt]).toBeTruthy()
     expect(saved?.cells[1]?.metadata?.[RunmeMetadataKey.UpdatedAt]).toBeTruthy()
   })
+
+  it('merges restored cells into the live notebook snapshot when provided', async () => {
+    const upstreamNotebook = notebook([
+      cell({ refId: 'a', value: 'a' }),
+      cell({ refId: 'b', value: 'b' }),
+      cell({ refId: 'c', value: 'c' }),
+    ])
+    const staleLocalNotebook = notebook([
+      cell({ refId: 'a', value: 'stale a' }),
+      cell({ refId: 'c', value: 'local c' }),
+    ])
+    const liveLocalNotebook = notebook([
+      cell({ refId: 'a', value: 'unsaved a edit' }),
+      cell({ refId: 'c', value: 'local c' }),
+    ])
+    const diff = computeNotebookDiff(upstreamNotebook, staleLocalNotebook)
+    const deletedRow = diff.cells.find((row) => row.baseCell?.refId === 'b')
+    let record = {
+      id: 'local://file/conflict',
+      name: 'conflict.json',
+      remoteId: 'https://drive.google.com/file/d/file123/view',
+      lastRemoteChecksum: 'base',
+      lastSynced: '',
+      doc: serialize(staleLocalNotebook),
+      md5Checksum: 'local',
+      conflict: {
+        detectedAt: '2026-06-01T00:00:00.000Z',
+        upstreamChecksum: 'upstream',
+        localChecksumAtDetection: 'local',
+      },
+    }
+    const store = {
+      files: {
+        get: vi.fn(async () => record),
+      },
+      getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
+      save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
+        record = {
+          ...record,
+          doc: serialize(saved),
+        }
+      }),
+    } as unknown as LocalNotebooks
+
+    await restoreDeletedConflictCell(
+      store,
+      'local://file/conflict',
+      deletedRow!,
+      { localNotebook: liveLocalNotebook }
+    )
+
+    const saved = (store.save as ReturnType<typeof vi.fn>).mock.calls[0][1] as
+      | parser_pb.Notebook
+      | undefined
+    expect(saved?.cells.map((savedCell) => savedCell.refId)).toEqual([
+      'a',
+      'b',
+      'c',
+    ])
+    expect(saved?.cells[0]?.value).toBe('unsaved a edit')
+  })
 })

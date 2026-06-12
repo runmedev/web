@@ -18,6 +18,10 @@ export interface RestoredConflictCellResult {
   localNotebook: parser_pb.Notebook
 }
 
+export interface RestoreDeletedConflictCellOptions {
+  localNotebook?: parser_pb.Notebook
+}
+
 function parseNotebookJson(
   serialized: string,
   label: string
@@ -110,7 +114,8 @@ function findRestoredCellIndex(
 export async function restoreDeletedConflictCell(
   store: LocalNotebooks,
   localUri: string,
-  row: CellDiff
+  row: CellDiff,
+  options: RestoreDeletedConflictCellOptions = {}
 ): Promise<RestoredConflictCellResult> {
   if (row.kind !== 'deleted' || !row.baseCell) {
     throw new Error('Only deleted upstream cells can be restored.')
@@ -126,10 +131,28 @@ export async function restoreDeletedConflictCell(
 
   const upstreamDoc = await store.getConflictUpstreamDoc(localUri)
   const upstreamNotebook = parseNotebookJson(upstreamDoc, 'upstream')
-  const localNotebook = parseNotebookJson(record.doc ?? '', 'local')
+  const localNotebook = options.localNotebook
+    ? clone(parser_pb.NotebookSchema, options.localNotebook)
+    : parseNotebookJson(record.doc ?? '', 'local')
   const localCells = localNotebook.cells ?? []
   const refId = row.baseCell.refId
   if (refId && localCells.some((cell) => cell.refId === refId)) {
+    if (options.localNotebook) {
+      await store.save(localUri, localNotebook)
+      const updatedRecord = await store.files.get(localUri)
+      if (!updatedRecord) {
+        throw new Error(`Local notebook record not found for ${localUri}`)
+      }
+      return {
+        document: await registerConflictDiffDocument(
+          store,
+          localUri,
+          updatedRecord,
+          record.conflict
+        ),
+        localNotebook,
+      }
+    }
     return {
       document: await registerConflictDiffDocument(
         store,

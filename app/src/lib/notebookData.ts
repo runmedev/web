@@ -517,6 +517,15 @@ export class NotebookData {
     return this.snapshotCache
   }
 
+  async flushPendingPersist(): Promise<void> {
+    if (!this.persistTimer) {
+      return
+    }
+    clearTimeout(this.persistTimer)
+    this.persistTimer = null
+    await this.persist()
+  }
+
   /**
    * Validate notebook cells and log warnings for suspicious data.
    * Called during loadNotebook to surface format issues early.

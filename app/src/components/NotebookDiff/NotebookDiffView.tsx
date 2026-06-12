@@ -218,10 +218,12 @@ function RestoreDeletedCellButton({
     }
     setIsRestoring(true)
     try {
-      const result = await restoreDeletedConflictCell(store, localUri, row)
-      getNotebookDataController()
-        .getNotebookData(localUri)
-        ?.loadNotebook(result.localNotebook, { persist: false })
+      const notebookData = getNotebookDataController().getNotebookData(localUri)
+      await notebookData?.flushPendingPersist()
+      const result = await restoreDeletedConflictCell(store, localUri, row, {
+        localNotebook: notebookData?.getSnapshot().notebook,
+      })
+      notebookData?.loadNotebook(result.localNotebook, { persist: false })
       showToast({
         message: 'Inserted upstream cell into the local notebook.',
         tone: 'success',
