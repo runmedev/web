@@ -1,8 +1,11 @@
+import type { GoogleServiceAccountCredentials } from '../auth/googleServiceAccount'
+
 export type GoogleOAuthClientConfig = {
   clientId: string
   clientSecret?: string
   authFlow: GoogleDriveAuthFlow
   authUxMode: GoogleDriveAuthUxMode
+  serviceAccount?: GoogleServiceAccountCredentials
 }
 
 export type GoogleDrivePickerConfig = {
@@ -14,7 +17,7 @@ export type GoogleDrivePickerConfig = {
 export const GOOGLE_CLIENT_STORAGE_KEY = 'googleClientConfig'
 const STORAGE_KEY = GOOGLE_CLIENT_STORAGE_KEY
 
-export type GoogleDriveAuthFlow = 'implicit' | 'pkce'
+export type GoogleDriveAuthFlow = 'implicit' | 'pkce' | 'service_account'
 export type GoogleDriveAuthUxMode = 'popup' | 'redirect' | 'new_tab'
 
 const DEFAULT_AUTH_FLOW: GoogleDriveAuthFlow = 'implicit'
@@ -24,10 +27,11 @@ const DEFAULT_AUTH_UX_MODE_FOR_FLOW: Record<
 > = {
   implicit: 'new_tab',
   pkce: 'new_tab',
+  service_account: 'new_tab',
 }
 
 function isGoogleDriveAuthFlow(value: unknown): value is GoogleDriveAuthFlow {
-  return value === 'implicit' || value === 'pkce'
+  return value === 'implicit' || value === 'pkce' || value === 'service_account'
 }
 
 function isGoogleDriveAuthUxMode(
@@ -45,6 +49,49 @@ function resolveDefaultUxModeForFlow(
 type GoogleClientConfig = {
   oauth: GoogleOAuthClientConfig
   drivePicker: GoogleDrivePickerConfig
+}
+
+type ServiceAccountJson = {
+  client_email?: string
+  clientEmail?: string
+  private_key?: string
+  privateKey?: string
+  private_key_id?: string
+  privateKeyId?: string
+  token_uri?: string
+  tokenUri?: string
+  subject?: string
+  scopes?: unknown
+}
+
+function parseStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined
+  }
+  const values = value.filter(
+    (scope): scope is string =>
+      typeof scope === 'string' && scope.trim().length > 0
+  )
+  return values.length > 0 ? values : undefined
+}
+
+function parseServiceAccountCredentials(
+  value: ServiceAccountJson | null | undefined
+): GoogleServiceAccountCredentials | undefined {
+  const clientEmail = (value?.client_email ?? value?.clientEmail ?? '').trim()
+  const privateKey = (value?.private_key ?? value?.privateKey ?? '').trim()
+  if (!clientEmail && !privateKey) {
+    return undefined
+  }
+  return {
+    clientEmail,
+    privateKey,
+    privateKeyId:
+      (value?.private_key_id ?? value?.privateKeyId ?? '').trim() || undefined,
+    tokenUri: (value?.token_uri ?? value?.tokenUri ?? '').trim() || undefined,
+    subject: value?.subject?.trim() || undefined,
+    scopes: parseStringArray(value?.scopes),
+  }
 }
 
 export class GoogleClientManager {
@@ -115,12 +162,23 @@ export class GoogleClientManager {
         ? resolveDefaultUxModeForFlow(nextAuthFlow)
         : this.config.oauth.authUxMode)
 
-    this.config.oauth = {
+    const serviceAccount =
+      nextAuthFlow === 'service_account'
+        ? config.serviceAccount ?? this.config.oauth.serviceAccount
+        : undefined
+
+    const nextOAuthClient: GoogleOAuthClientConfig = {
       ...this.config.oauth,
       ...config,
       authFlow: nextAuthFlow,
       authUxMode: nextAuthUxMode,
     }
+    if (serviceAccount) {
+      nextOAuthClient.serviceAccount = serviceAccount
+    } else {
+      delete nextOAuthClient.serviceAccount
+    }
+    this.config.oauth = nextOAuthClient
     if (config.clientId !== undefined) {
       this.config.drivePicker = {
         ...this.config.drivePicker,
@@ -156,6 +214,18 @@ export class GoogleClientManager {
       authUxMode?: string
       oauthUxMode?: string
       uxMode?: string
+      service_account?: ServiceAccountJson
+      serviceAccount?: ServiceAccountJson
+      client_email?: string
+      clientEmail?: string
+      private_key?: string
+      privateKey?: string
+      private_key_id?: string
+      privateKeyId?: string
+      token_uri?: string
+      tokenUri?: string
+      subject?: string
+      scopes?: unknown
     } | null = null
     try {
       parsed = JSON.parse(raw) as {
@@ -170,13 +240,28 @@ export class GoogleClientManager {
         authUxMode?: string
         oauthUxMode?: string
         uxMode?: string
+        service_account?: ServiceAccountJson
+        serviceAccount?: ServiceAccountJson
+        client_email?: string
+        clientEmail?: string
+        private_key?: string
+        privateKey?: string
+        private_key_id?: string
+        privateKeyId?: string
+        token_uri?: string
+        tokenUri?: string
+        subject?: string
+        scopes?: unknown
       }
     } catch {
       throw new Error('Invalid JSON: unable to parse OAuth client config')
     }
 
     const clientId = (parsed?.client_id ?? parsed?.clientId ?? '').trim()
-    if (!clientId) {
+    const serviceAccount = parseServiceAccountCredentials(
+      parsed?.service_account ?? parsed?.serviceAccount ?? parsed
+    )
+    if (!clientId && !serviceAccount) {
       throw new Error('OAuth client config is missing client_id')
     }
     const clientSecret = parsed?.client_secret?.trim() ?? ''
@@ -201,12 +286,16 @@ export class GoogleClientManager {
         `Unsupported auth_ux_mode value: ${String(rawAuthUxMode)}`
       )
     }
+    const resolvedAuthFlow =
+      (rawAuthFlow?.trim() as GoogleDriveAuthFlow | undefined) ??
+      (serviceAccount ? 'service_account' : undefined)
 
     return this.setOAuthClient({
       clientId,
       clientSecret: clientSecret.length > 0 ? clientSecret : undefined,
-      authFlow: rawAuthFlow?.trim() as GoogleDriveAuthFlow | undefined,
+      authFlow: resolvedAuthFlow,
       authUxMode: rawAuthUxMode?.trim() as GoogleDriveAuthUxMode | undefined,
+      serviceAccount,
     })
   }
 
@@ -271,7 +360,13 @@ export class GoogleClientManager {
       }
       const parsed = JSON.parse(raw) as { oauthAuthFlow?: string } | null
       const authFlow = parsed?.oauthAuthFlow?.trim()
-      return authFlow && isGoogleDriveAuthFlow(authFlow) ? authFlow : null
+      if (!authFlow || !isGoogleDriveAuthFlow(authFlow)) {
+        return null
+      }
+      // Service account private keys are intentionally not restored from
+      // localStorage. Persisting only the auth flow would leave the app in
+      // service-account mode without credentials after reload.
+      return authFlow === 'service_account' ? null : authFlow
     } catch (error) {
       console.warn('Failed to read Google OAuth auth flow', error)
       return null
@@ -303,13 +398,17 @@ export class GoogleClientManager {
       return
     }
     try {
+      const persistableAuthFlow =
+        config.authFlow === 'service_account' ? undefined : config.authFlow
+      const persistableAuthUxMode =
+        config.authFlow === 'service_account' ? undefined : config.authUxMode
       window.localStorage.setItem(
         STORAGE_KEY,
         JSON.stringify({
           oauthClientId: config.clientId,
           oauthClientSecret: config.clientSecret,
-          oauthAuthFlow: config.authFlow,
-          oauthAuthUxMode: config.authUxMode,
+          oauthAuthFlow: persistableAuthFlow,
+          oauthAuthUxMode: persistableAuthUxMode,
         })
       )
     } catch (error) {

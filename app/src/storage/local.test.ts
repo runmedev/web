@@ -80,6 +80,39 @@ function notebookJson(value: string): string {
 }
 
 describe('LocalNotebooks pending Drive create', () => {
+  it('upgrades a legacy Drive placeholder folder to the remote folder name', async () => {
+    const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: parentRemoteUri,
+        name: 'runme testing',
+        type: NotebookStoreItemType.Folder,
+        children: [],
+        remoteUri: parentRemoteUri,
+        parents: [],
+      })),
+      list: vi.fn(async () => []),
+    }
+    const store = createTestStore(driveStore)
+    await store.folders.put({
+      id: 'local://folder/drive',
+      name: 'Drive',
+      remoteId: parentRemoteUri,
+      children: [],
+      lastSynced: '',
+    })
+
+    await store.updateFolder(parentRemoteUri)
+
+    expect(driveStore.getMetadata).toHaveBeenCalledWith(parentRemoteUri)
+    await expect(store.folders.get('local://folder/drive')).resolves.toMatchObject(
+      {
+        name: 'runme testing',
+        remoteId: parentRemoteUri,
+      }
+    )
+  })
+
   it('creates a Drive-backed folder and attaches it locally', async () => {
     const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
     const childRemoteUri = 'https://drive.google.com/drive/folders/child123'

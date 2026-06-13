@@ -340,6 +340,43 @@ describe('appConfig OIDC Google shorthand', () => {
     })
   })
 
+  it('applies Google Drive service account auth without an OAuth client ID', async () => {
+    const { applyAppConfig } = await loadModules()
+    const { googleClientManager } = await import('./googleClientManager')
+
+    const result = applyAppConfig(
+      {
+        agent: {
+          endpoint: 'http://localhost:9977',
+        },
+        googleDrive: {
+          authFlow: 'service_account',
+          serviceAccount: {
+            client_email: 'runme-drive-test@example.iam.gserviceaccount.com',
+            private_key: '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
+            private_key_id: 'key-id',
+            scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+          },
+        },
+      },
+      'http://localhost/configs/app-configs.yaml'
+    )
+
+    expect(result.warnings).toEqual([])
+    expect(googleClientManager.getOAuthClient()).toMatchObject({
+      clientId: '',
+      authFlow: 'service_account',
+      authUxMode: 'new_tab',
+      serviceAccount: {
+        clientEmail: 'runme-drive-test@example.iam.gserviceaccount.com',
+        privateKey:
+          '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
+        privateKeyId: 'key-id',
+        scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+      },
+    })
+  })
+
   it('toggles app-config local precedence on load', async () => {
     const {
       disableAppConfigOverridesOnLoad,

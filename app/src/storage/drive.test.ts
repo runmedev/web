@@ -84,6 +84,60 @@ describe("isDriveItemUri", () => {
 });
 
 describe("DriveNotebookStore", () => {
+  it("uses shared drive name for shared drive root folder metadata", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/drive/v3/files/drive123") {
+          expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+          expect(url.searchParams.get("fields")).toBe(
+            "id,name,mimeType,parents,driveId",
+          );
+          return new Response(
+            JSON.stringify({
+              id: "drive123",
+              name: "Drive",
+              mimeType: "application/vnd.google-apps.folder",
+              driveId: "drive123",
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        if (url.pathname === "/drive/v3/drives/drive123") {
+          expect(url.searchParams.get("fields")).toBe("id,name");
+          return new Response(
+            JSON.stringify({
+              id: "drive123",
+              name: "runme-testing",
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        throw new Error(`Unexpected Drive request: ${url.toString()}`);
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const result = await store.getMetadata(
+      "https://drive.google.com/drive/folders/drive123",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      uri: "https://drive.google.com/drive/folders/drive123",
+      name: "runme-testing",
+      type: NotebookStoreItemType.Folder,
+      remoteUri: "https://drive.google.com/drive/folders/drive123",
+    });
+  });
+
   it("creates Drive folders with the folder MIME type", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     const fetchMock = vi

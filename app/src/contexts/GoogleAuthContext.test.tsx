@@ -41,6 +41,38 @@ async function renderWithGoogleAuthProvider() {
   return captured!
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte)
+  }
+  return globalThis.btoa(binary)
+}
+
+async function generatePrivateKeyPem(): Promise<string> {
+  const keyPair = await globalThis.crypto.subtle.generateKey(
+    {
+      name: 'RSASSA-PKCS1-v1_5',
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: 'SHA-256',
+    },
+    true,
+    ['sign', 'verify']
+  )
+  const pkcs8 = await globalThis.crypto.subtle.exportKey(
+    'pkcs8',
+    keyPair.privateKey
+  )
+  const base64 = bytesToBase64(new Uint8Array(pkcs8))
+  const lines = base64.match(/.{1,64}/g) ?? []
+  return [
+    '-----BEGIN PRIVATE KEY-----',
+    ...lines,
+    '-----END PRIVATE KEY-----',
+  ].join('\n')
+}
+
 describe('GoogleAuthProvider implicit redirect flow', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
@@ -168,5 +200,42 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     await expect(auth.ensureAccessToken({ interactive: false })).resolves.toBe(
       'test-access-token'
     )
+  })
+
+  it('mints a service account access token without interactive OAuth', async () => {
+    googleClientManager.setOAuthClient({
+      clientId: '',
+      authFlow: 'service_account',
+      authUxMode: 'new_tab',
+      serviceAccount: {
+        clientEmail: 'runme-drive-test@example.iam.gserviceaccount.com',
+        privateKey: await generatePrivateKeyPem(),
+      },
+    })
+    const fetchMock = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          access_token: 'service-account-token',
+          expires_in: 3600,
+          token_type: 'Bearer',
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const openSpy = vi.spyOn(window, 'open')
+    const auth = await renderWithGoogleAuthProvider()
+
+    let token = ''
+    await act(async () => {
+      token = await auth.ensureAccessToken({ interactive: false })
+    })
+
+    expect(token).toBe('service-account-token')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(openSpy).not.toHaveBeenCalled()
   })
 })
