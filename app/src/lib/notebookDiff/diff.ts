@@ -29,6 +29,8 @@ const MAX_OUTPUT_TEXT_DIFF_LINES = 500;
 
 const TRANSIENT_METADATA_KEYS = new Set<string>([
   RunmeMetadataKey.Sequence,
+  RunmeMetadataKey.CreatedAt,
+  RunmeMetadataKey.UpdatedAt,
   RunmeMetadataKey.LastRunID,
   RunmeMetadataKey.Pid,
   RunmeMetadataKey.ExitCode,

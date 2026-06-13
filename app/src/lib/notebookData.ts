@@ -517,6 +517,15 @@ export class NotebookData {
     return this.snapshotCache
   }
 
+  async flushPendingPersist(): Promise<void> {
+    if (!this.persistTimer) {
+      return
+    }
+    clearTimeout(this.persistTimer)
+    this.persistTimer = null
+    await this.persist()
+  }
+
   /**
    * Validate notebook cells and log warnings for suspicious data.
    * Called during loadNotebook to surface format issues early.
@@ -568,6 +577,10 @@ export class NotebookData {
     this.assertWritable()
     const idx = this.refToIndex.get(cell.refId)
     const cloned = clone(parser_pb.CellSchema, cell)
+    const now = new Date().toISOString()
+    cloned.metadata ??= {}
+    cloned.metadata[RunmeMetadataKey.CreatedAt] ??= now
+    cloned.metadata[RunmeMetadataKey.UpdatedAt] = now
     if (idx === undefined) {
       this.notebook.cells.push(cloned)
       this.refToIndex.set(cloned.refId, this.notebook.cells.length - 1)
@@ -886,8 +899,12 @@ export class NotebookData {
         : 'markdown'
     const refPrefix = isMarkup ? 'markup' : 'code'
     const refID = `${refPrefix}_${crypto.randomUUID().replace(/-/g, '')}`
+    const now = new Date().toISOString()
     return create(parser_pb.CellSchema, {
-      metadata: {},
+      metadata: {
+        [RunmeMetadataKey.CreatedAt]: now,
+        [RunmeMetadataKey.UpdatedAt]: now,
+      },
       refId: refID,
       languageId: resolvedLanguage,
       role: parser_pb.CellRole.USER,

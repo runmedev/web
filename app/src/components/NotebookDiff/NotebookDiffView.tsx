@@ -11,8 +11,12 @@ import type {
   TextDiff,
   TextDiffLine,
 } from '../../lib/notebookDiff/model'
-import { refreshNotebookConflictDiff } from '../../lib/notebookDiff/conflict'
+import {
+  refreshNotebookConflictDiff,
+  restoreDeletedConflictCell,
+} from '../../lib/notebookDiff/conflict'
 import { NotebookConflictChangedError } from '../../storage/local'
+import { getNotebookDataController } from '../../lib/notebookDataController'
 import { showToast } from '../../lib/toast'
 
 function cellKindLabel(cell?: parser_pb.Cell): string {
@@ -198,7 +202,67 @@ function CellPanel({ row, side }: { row: CellDiff; side: 'base' | 'compare' }) {
   )
 }
 
-function DiffRow({ row }: { row: CellDiff }) {
+function RestoreDeletedCellButton({
+  localUri,
+  row,
+}: {
+  localUri: string
+  row: CellDiff
+}) {
+  const { store } = useNotebookStore()
+  const [isRestoring, setIsRestoring] = useState(false)
+
+  const restoreCell = async () => {
+    if (!store) {
+      return
+    }
+    setIsRestoring(true)
+    try {
+      const notebookData = getNotebookDataController().getNotebookData(localUri)
+      await notebookData?.flushPendingPersist()
+      const result = await restoreDeletedConflictCell(store, localUri, row, {
+        localNotebook: notebookData?.getSnapshot().notebook,
+      })
+      notebookData?.loadNotebook(result.localNotebook, { persist: false })
+      showToast({
+        message: 'Inserted upstream cell into the local notebook.',
+        tone: 'success',
+      })
+    } catch {
+      showToast({
+        message: 'Unable to insert upstream cell. Please try again.',
+        tone: 'error',
+      })
+    } finally {
+      setIsRestoring(false)
+    }
+  }
+
+  return (
+    <Button
+      type="button"
+      size="1"
+      color="red"
+      variant="soft"
+      disabled={!store || isRestoring}
+      aria-label="Insert upstream cell into local notebook"
+      title="Insert upstream cell into local notebook"
+      onClick={() => {
+        void restoreCell()
+      }}
+    >
+      {isRestoring ? 'Inserting...' : 'Insert ->'}
+    </Button>
+  )
+}
+
+function DiffRow({
+  row,
+  conflictLocalUri,
+}: {
+  row: CellDiff
+  conflictLocalUri?: string
+}) {
   if (row.kind === 'unchanged') {
     return (
       <details className="rounded border border-nb-border bg-nb-surface-2 text-sm text-nb-text-muted">
@@ -217,11 +281,18 @@ function DiffRow({ row }: { row: CellDiff }) {
 
   return (
     <section className="rounded-lg border border-nb-border bg-nb-bg p-3 shadow-sm">
-      <div className="mb-3 flex items-center gap-2">
-        <Badge color={changeBadgeColor(row.kind)}>{statusText(row)}</Badge>
-        {row.outputDiff?.changed && <Badge color="blue">outputs changed</Badge>}
-        {row.metadataDiff?.changed && (
-          <Badge color="purple">metadata changed</Badge>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge color={changeBadgeColor(row.kind)}>{statusText(row)}</Badge>
+          {row.outputDiff?.changed && (
+            <Badge color="blue">outputs changed</Badge>
+          )}
+          {row.metadataDiff?.changed && (
+            <Badge color="purple">metadata changed</Badge>
+          )}
+        </div>
+        {conflictLocalUri && row.kind === 'deleted' && (
+          <RestoreDeletedCellButton localUri={conflictLocalUri} row={row} />
         )}
       </div>
       <div className="grid min-w-[920px] grid-cols-2 gap-3">
@@ -379,7 +450,11 @@ export function NotebookDiffContent({
       <ScrollArea type="auto" scrollbars="both" className="min-h-0 flex-1">
         <div className="space-y-3 p-5">
           {diff.cells.map((row) => (
-            <DiffRow key={row.id} row={row} />
+            <DiffRow
+              key={row.id}
+              row={row}
+              conflictLocalUri={conflictResolution?.localUri}
+            />
           ))}
         </div>
       </ScrollArea>

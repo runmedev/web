@@ -54,6 +54,7 @@ const contextMocks = vi.hoisted(() => ({
 const conflictMocks = vi.hoisted(() => ({
   openNotebookConflictDiff: vi.fn(async () => undefined),
   refreshNotebookConflictDiff: vi.fn(async () => undefined),
+  restoreDeletedConflictCell: vi.fn(async () => undefined),
 }))
 
 // Minimal mocks for contexts Action consumes
@@ -121,6 +122,7 @@ vi.mock('../../contexts/CurrentDocContext', () => ({
 vi.mock('../../lib/notebookDiff/conflict', () => ({
   openNotebookConflictDiff: conflictMocks.openNotebookConflictDiff,
   refreshNotebookConflictDiff: conflictMocks.refreshNotebookConflictDiff,
+  restoreDeletedConflictCell: conflictMocks.restoreDeletedConflictCell,
 }))
 
 vi.mock('../../lib/runtime/jupyterManager', () => ({

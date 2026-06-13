@@ -20,6 +20,8 @@ export enum RunmeMetadataKey {
   ID = "id",
   RunmeID = "runme.dev/id",
   Sequence = "runme.dev/sequence",
+  CreatedAt = "runme.dev/createdAt",
+  UpdatedAt = "runme.dev/updatedAt",
   LastRunID = "runme.dev/lastRunID",
   Pid = "runme.dev/pid",
   ExitCode = "runme.dev/exitCode",
