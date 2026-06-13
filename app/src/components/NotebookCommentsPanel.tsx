@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import type { CellCommentThread } from '../lib/notebookComments'
 
 type CommentsStatus = 'loading' | 'available' | 'unavailable' | 'error'
+type CommentsFilter = 'open' | 'resolved' | 'all'
 
 export function NotebookCommentsPanel({
   status,
@@ -35,42 +36,79 @@ export function NotebookCommentsPanel({
   onRefresh: () => void
   onSelectCell: (cellId: string) => void
 }) {
+  const [filter, setFilter] = useState<CommentsFilter>('open')
   const [draft, setDraft] = useState('')
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({})
 
-  const sortedThreads = [...threads].sort((a, b) => {
-    const aResolved = a.comment.resolved ? 1 : 0
-    const bResolved = b.comment.resolved ? 1 : 0
-    if (aResolved !== bResolved) {
-      return aResolved - bResolved
+  const sortedThreads = useMemo(
+    () => sortCommentThreads(threads, cellLabels, filter),
+    [cellLabels, filter, threads]
+  )
+  const counts = useMemo(
+    () => ({
+      open: threads.filter((thread) => !thread.comment.resolved).length,
+      resolved: threads.filter((thread) => thread.comment.resolved).length,
+      all: threads.length,
+    }),
+    [threads]
+  )
+
+  const submitDraft = () => {
+    if (!draftCellId) {
+      return
     }
-    return (
-      b.comment.modifiedTime ??
-      b.comment.createdTime ??
-      ''
-    ).localeCompare(a.comment.modifiedTime ?? a.comment.createdTime ?? '')
-  })
+    const content = draft.trim()
+    if (!content) {
+      return
+    }
+    void onCreateComment(draftCellId, content).then(() => {
+      setDraft('')
+    })
+  }
 
   return (
     <aside
       className="hidden h-full w-[340px] shrink-0 border-l border-nb-border bg-nb-surface-1 lg:flex lg:flex-col"
       aria-label="Notebook comments"
     >
-      <div className="flex items-center justify-between border-b border-nb-border px-4 py-3">
-        <div>
-          <h2 className="text-sm font-semibold text-nb-text">Comments</h2>
-          <p className="text-xs text-nb-text-muted">
-            Google Drive comment threads
-          </p>
+      <div className="border-b border-nb-border px-4 py-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-nb-text">Comments</h2>
+            <p className="text-xs text-nb-text-muted">
+              Google Drive comment threads
+            </p>
+          </div>
+          <button
+            type="button"
+            className="rounded-nb-sm border border-nb-border px-2 py-1 text-xs text-nb-text-muted hover:border-nb-accent hover:text-nb-accent"
+            onClick={onRefresh}
+            disabled={busy || status !== 'available'}
+          >
+            Refresh
+          </button>
         </div>
-        <button
-          type="button"
-          className="rounded-nb-sm border border-nb-border px-2 py-1 text-xs text-nb-text-muted hover:border-nb-accent hover:text-nb-accent"
-          onClick={onRefresh}
-          disabled={busy || status !== 'available'}
-        >
-          Refresh
-        </button>
+        {status === 'available' && (
+          <div
+            className="mt-3 grid grid-cols-3 rounded-nb-sm border border-nb-border bg-white p-0.5"
+            aria-label="Comment filter"
+          >
+            {(['open', 'resolved', 'all'] as CommentsFilter[]).map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={`rounded-[5px] px-2 py-1 text-xs capitalize ${
+                  filter === item
+                    ? 'bg-nb-accent text-white'
+                    : 'text-nb-text-muted hover:bg-nb-surface-2 hover:text-nb-text'
+                }`}
+                onClick={() => setFilter(item)}
+              >
+                {item} {counts[item]}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
@@ -79,7 +117,11 @@ export function NotebookCommentsPanel({
         )}
         {status === 'unavailable' && (
           <div className="rounded-nb-sm border border-dashed border-nb-border bg-white p-3 text-sm text-nb-text-muted">
-            Comments are available for notebooks saved in Google Drive.
+            <p>Comments are available for notebooks saved in Google Drive.</p>
+            <p className="mt-2 text-xs">
+              Save this notebook to Drive, then reopen the Drive-backed copy to
+              enable cell comments.
+            </p>
           </div>
         )}
         {status === 'error' && (
@@ -92,13 +134,7 @@ export function NotebookCommentsPanel({
             className="mb-3 rounded-nb-sm border border-nb-border bg-white p-3"
             onSubmit={(event) => {
               event.preventDefault()
-              const content = draft.trim()
-              if (!content) {
-                return
-              }
-              void onCreateComment(draftCellId, content).then(() => {
-                setDraft('')
-              })
+              submitDraft()
             }}
           >
             <label className="block text-xs font-medium text-nb-text-muted">
@@ -109,6 +145,12 @@ export function NotebookCommentsPanel({
               value={draft}
               disabled={busy}
               onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                  event.preventDefault()
+                  submitDraft()
+                }
+              }}
               autoFocus
             />
             <div className="mt-2 flex justify-end gap-2">
@@ -137,12 +179,14 @@ export function NotebookCommentsPanel({
           sortedThreads.length === 0 &&
           !draftCellId && (
             <div className="rounded-nb-sm border border-dashed border-nb-border bg-white p-3 text-sm text-nb-text-muted">
-              No comments yet. Use a cell comment button to start a thread.
+              {threads.length === 0
+                ? 'No comments yet. Use a cell comment button to start a thread.'
+                : `No ${filter} comments.`}
             </div>
           )}
         {status === 'available' && sortedThreads.length > 0 && (
           <div className="space-y-3">
-            {sortedThreads.map(({ comment, cellId }) => {
+            {sortedThreads.map(({ comment, cellId, orphaned }) => {
               const commentId = comment.id ?? ''
               const replyDraft = replyDrafts[commentId] ?? ''
               return (
@@ -165,7 +209,7 @@ export function NotebookCommentsPanel({
                       {comment.resolved ? 'Resolved' : 'Open'}
                     </span>
                   </div>
-                  {cellId ? (
+                  {cellId && !orphaned ? (
                     <button
                       type="button"
                       className="mb-2 text-left text-xs font-medium text-nb-accent hover:underline"
@@ -173,9 +217,13 @@ export function NotebookCommentsPanel({
                     >
                       {cellLabels.get(cellId) ?? 'Cell'}
                     </button>
+                  ) : cellId && orphaned ? (
+                    <div className="mb-2 text-xs font-medium text-nb-text-faint">
+                      Deleted cell
+                    </div>
                   ) : (
                     <div className="mb-2 text-xs text-nb-text-faint">
-                      Unanchored comment
+                      Document-level comment
                     </div>
                   )}
                   <p className="whitespace-pre-wrap text-sm text-nb-text">
@@ -221,6 +269,23 @@ export function NotebookCommentsPanel({
                                 [commentId]: event.target.value,
                               }))
                             }
+                            onKeyDown={(event) => {
+                              if (
+                                (event.metaKey || event.ctrlKey) &&
+                                event.key === 'Enter'
+                              ) {
+                                event.preventDefault()
+                                const content = replyDraft.trim()
+                                if (content) {
+                                  void onReply(commentId, content).then(() => {
+                                    setReplyDrafts((current) => ({
+                                      ...current,
+                                      [commentId]: '',
+                                    }))
+                                  })
+                                }
+                              }
+                            }}
                           />
                           <div className="flex justify-end gap-2">
                             <button
@@ -302,6 +367,62 @@ export function NotebookCommentsPanel({
       </div>
     </aside>
   )
+}
+
+function sortCommentThreads(
+  threads: CellCommentThread[],
+  cellLabels: Map<string, string>,
+  filter: CommentsFilter
+): CellCommentThread[] {
+  return threads
+    .filter((thread) => {
+      if (filter === 'all') {
+        return true
+      }
+      return filter === 'resolved'
+        ? Boolean(thread.comment.resolved)
+        : !thread.comment.resolved
+    })
+    .sort((a, b) => {
+      const aGroup = threadGroup(a)
+      const bGroup = threadGroup(b)
+      if (aGroup !== bGroup) {
+        return aGroup - bGroup
+      }
+
+      const aIndex = a.cellId ? cellIndex(cellLabels, a.cellId) : Infinity
+      const bIndex = b.cellId ? cellIndex(cellLabels, b.cellId) : Infinity
+      if (aIndex !== bIndex) {
+        return aIndex - bIndex
+      }
+
+      return (
+        b.comment.modifiedTime ??
+        b.comment.createdTime ??
+        ''
+      ).localeCompare(a.comment.modifiedTime ?? a.comment.createdTime ?? '')
+    })
+}
+
+function threadGroup(thread: CellCommentThread): number {
+  if (thread.cellId && !thread.orphaned) {
+    return 0
+  }
+  if (thread.orphaned) {
+    return 1
+  }
+  return 2
+}
+
+function cellIndex(cellLabels: Map<string, string>, cellId: string): number {
+  let index = 0
+  for (const [knownCellId] of cellLabels) {
+    if (knownCellId === cellId) {
+      return index
+    }
+    index += 1
+  }
+  return Infinity
 }
 
 function formatDriveTime(value?: string): string {

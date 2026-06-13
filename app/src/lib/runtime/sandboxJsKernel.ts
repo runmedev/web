@@ -52,9 +52,16 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'app.getSessionId',
   'app.getSessionID',
   'app.startGoogleDriveOAuth',
+  'credentials.google.setServiceAccountFromFilePath',
   'drive.authorize',
   'drive.refreshAuth',
+  'drive.list',
+  'drive.create',
+  'drive.update',
+  'drive.saveAsCurrentNotebook',
   ...SANDBOX_NOTEBOOKS_API_METHODS,
+  'notebooks.createLocal',
+  'notebooks.appendCell',
 ]
 
 const LOW_LEVEL_SANDBOX_ALLOWED_METHODS = [
@@ -265,6 +272,8 @@ function buildSandboxSrcDoc(options: {
           update: (args) => callHost("notebooks.update", [args]),
           delete: (target) => callHost("notebooks.delete", [target]),
           execute: (args) => callHost("notebooks.execute", [args]),
+          createLocal: (name, options) => callHost("notebooks.createLocal", [name, options]),
+          appendCell: (args) => callHost("notebooks.appendCell", [args]),
           resolve: (reference) => callHost("notebooks.resolve", [reference]),
           show: (reference) => callHost("notebooks.show", [reference]),
           shareUrl: (reference) => callHost("notebooks.shareUrl", [reference]),
@@ -307,12 +316,27 @@ function buildSandboxSrcDoc(options: {
           getSessionID: () => hostCall("app.getSessionID", []),
           startGoogleDriveOAuth: (options) => hostCall("app.startGoogleDriveOAuth", [options]),
         };
+        const credentials = {
+          google: {
+            setServiceAccountFromFilePath: (path) =>
+              hostCall("credentials.google.setServiceAccountFromFilePath", [path]),
+          },
+        };
         const drive = {
           authorize: (options) => hostCall("drive.authorize", [options]),
           refreshAuth: (options) => hostCall("drive.refreshAuth", [options]),
+          list: (folder) => hostCall("drive.list", [folder]),
+          create: (folder, name) => hostCall("drive.create", [folder, name]),
+          update: (idOrUri, bytes) => hostCall("drive.update", [idOrUri, bytes]),
+          saveAsCurrentNotebook: (folder, name) =>
+            hostCall("drive.saveAsCurrentNotebook", [folder, name]),
           help: () => {
             consoleProxy.log("drive.authorize({ mode?, prompt? })");
             consoleProxy.log("drive.refreshAuth({ mode?, prompt? })");
+            consoleProxy.log("drive.list(folderIdOrUri)");
+            consoleProxy.log("drive.create(folderIdOrUri, name)");
+            consoleProxy.log("drive.update(fileIdOrUri, bytes)");
+            consoleProxy.log("drive.saveAsCurrentNotebook(folderIdOrUri, name)");
           },
         };
 
@@ -331,6 +355,8 @@ function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebooks.get([target]) # omitted target = current UI notebook");
           consoleProxy.log("- notebooks.update({ target, expectedRevision?, operations })");
           consoleProxy.log("- notebooks.execute({ target, refIds })");
+          consoleProxy.log("- notebooks.createLocal(name, options?)");
+          consoleProxy.log("- notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? })");
           consoleProxy.log("- notebooks.resolve([reference])");
           consoleProxy.log("- notebooks.show([reference])");
           consoleProxy.log("- notebooks.shareUrl([reference])");
@@ -348,7 +374,9 @@ function buildSandboxSrcDoc(options: {
           consoleProxy.log("- await app.getSessionId()");
           consoleProxy.log("- await app.getSessionID()");
           consoleProxy.log("- await app.startGoogleDriveOAuth({ mode?, prompt? })");
+          consoleProxy.log("- await credentials.google.setServiceAccountFromFilePath(path)");
           consoleProxy.log("- await drive.authorize({ mode?, prompt? })");
+          consoleProxy.log("- await drive.saveAsCurrentNotebook(folderIdOrUri, fileName)");
           consoleProxy.log("- help()");
         };
 
@@ -364,11 +392,12 @@ function buildSandboxSrcDoc(options: {
               "notebookDiff",
               "codex",
               "app",
+              "credentials",
               "drive",
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, opfs, net, notebooks, notebookDiff, codex, app, drive, help);
+            await runner(consoleProxy, runme, opfs, net, notebooks, notebookDiff, codex, app, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });

@@ -1855,8 +1855,8 @@ function NotebookTabContent({
     [comments]
   )
   const commentThreads = useMemo(
-    () => toCellCommentThreads(comments),
-    [comments]
+    () => toCellCommentThreads(comments, new Set(cellLabels.keys())),
+    [cellLabels, comments]
   )
 
   const selectCommentCell = useCallback((cellId: string) => {
@@ -1914,6 +1914,7 @@ function NotebookTabContent({
       if (isDriveItemUri(docUri)) {
         if (!cancelled) {
           setCommentsRemoteUri(docUri)
+          setCommentsStatus('loading')
         }
         return
       }
@@ -1921,6 +1922,8 @@ function NotebookTabContent({
       if (!store || !docUri.startsWith('local://')) {
         if (!cancelled) {
           setCommentsRemoteUri(null)
+          setComments([])
+          setCommentsStatus('unavailable')
         }
         return
       }
@@ -1929,13 +1932,20 @@ function NotebookTabContent({
         const metadata = await store.getMetadata(docUri)
         const remoteUri = metadata?.remoteUri
         if (!cancelled) {
-          setCommentsRemoteUri(
-            remoteUri && isDriveItemUri(remoteUri) ? remoteUri : null
-          )
+          if (remoteUri && isDriveItemUri(remoteUri)) {
+            setCommentsRemoteUri(remoteUri)
+            setCommentsStatus('loading')
+          } else {
+            setCommentsRemoteUri(null)
+            setComments([])
+            setCommentsStatus('unavailable')
+          }
         }
       } catch {
         if (!cancelled) {
           setCommentsRemoteUri(null)
+          setComments([])
+          setCommentsStatus('unavailable')
         }
       }
     })()

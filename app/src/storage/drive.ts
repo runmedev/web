@@ -170,7 +170,7 @@ type DriveCommentListResponse = {
 }
 
 const DRIVE_COMMENT_FIELDS =
-  'id,createdTime,modifiedTime,resolved,anchor,author(displayName,photoLink,me),deleted,htmlContent,content,mentionedEmailAddresses,assigneeEmailAddress,replies(id,createdTime,modifiedTime,action,author(displayName,photoLink,me),deleted,htmlContent,content)'
+  'id,createdTime,modifiedTime,resolved,anchor,author(displayName,photoLink,me),deleted,htmlContent,content,replies(id,createdTime,modifiedTime,action,author(displayName,photoLink,me),deleted,htmlContent,content)'
 const DRIVE_COMMENT_LIST_FIELDS = `nextPageToken,comments(${DRIVE_COMMENT_FIELDS})`
 
 class GapiDriveFilesClient implements DriveFilesClient {
@@ -182,6 +182,62 @@ class GapiDriveFilesClient implements DriveFilesClient {
     this.files = this.gapi.client.drive.files
     this.drives = this.gapi.client.drive.drives
     this.revisions = this.gapi.client.drive.revisions
+  }
+
+  private buildUrl(path: string, params?: Record<string, unknown>): string {
+    const url = new URL(path.replace(/^\//, ''), 'https://www.googleapis.com/')
+    for (const [key, value] of Object.entries(params ?? {})) {
+      if (value === undefined || value === null || value === '') {
+        continue
+      }
+      url.searchParams.set(key, String(value))
+    }
+    return url.toString()
+  }
+
+  private async request(
+    method: string,
+    path: string,
+    options: {
+      params?: Record<string, unknown>
+      body?: string
+      contentType?: string
+      expectText?: boolean
+    } = {}
+  ): Promise<{ body?: string; result?: unknown }> {
+    const token = this.gapi.client.getToken?.()?.access_token ?? ''
+    if (!token) {
+      throw new Error('Google Drive request requires an access token')
+    }
+    const response = await fetch(this.buildUrl(path, options.params), {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(options.body !== undefined
+          ? {
+              'Content-Type': options.contentType ?? 'application/json',
+            }
+          : {}),
+      },
+      body: options.body,
+    })
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => '')
+      throw new Error(
+        `Drive request failed (${response.status} ${response.statusText}): ${errorBody}`
+      )
+    }
+
+    if (options.expectText) {
+      return { body: await response.text() }
+    }
+
+    const text = await response.text()
+    if (!text) {
+      return { result: undefined }
+    }
+    return { result: JSON.parse(text) }
   }
 
   // setContent uploads content to a Google Drive file using a media upload.
@@ -197,23 +253,29 @@ class GapiDriveFilesClient implements DriveFilesClient {
     content: string,
     mimeType?: string
   ): Promise<void> {
-    const encoder = new TextEncoder()
-    const byteLength = encoder.encode(content).byteLength
-    await this.gapi.client.request({
-      path: `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
+    const token = this.gapi.client.getToken?.()?.access_token ?? ''
+    if (!token) {
+      throw new Error('Google Drive upload requires an access token')
+    }
+    const url = new URL(
+      `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}`
+    )
+    url.searchParams.set('uploadType', 'media')
+    url.searchParams.set('supportsAllDrives', 'true')
+    const response = await fetch(url.toString(), {
       method: 'PATCH',
-      params: {
-        uploadType: 'media',
-        // If we don't set this we get a 404 because the file isn't in "My Drive."
-        supportsAllDrives: 'true',
-      },
       headers: {
-        Authorization: `Bearer ${this.gapi.client.getToken?.()?.access_token ?? ''}`,
+        Authorization: `Bearer ${token}`,
         'Content-Type': mimeType ?? 'application/octet-stream',
-        'Content-Length': String(byteLength),
       },
       body: content,
     })
+    if (!response.ok) {
+      const message = await response.text().catch(() => '')
+      throw new Error(
+        `Google Drive media upload failed (${response.status}): ${message}`
+      )
+    }
   }
 
   private buildResource(doc: DriveDoc): Record<string, unknown> {
@@ -316,15 +378,13 @@ class GapiDriveFilesClient implements DriveFilesClient {
     request: Record<string, unknown>
   ): Promise<DriveCommentListResponse> {
     const fileId = String(request.fileId ?? '')
-    return this.gapi.client.request({
-      path: `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/comments`,
-      method: 'GET',
-      params: Object.fromEntries(
-        Object.entries(request)
-          .filter(([key]) => key !== 'fileId')
-          .map(([key, value]) => [key, String(value)])
-      ),
-    }) as Promise<DriveCommentListResponse>
+    const params = { ...request }
+    delete params.fileId
+    return this.request(
+      'GET',
+      `/drive/v3/files/${encodeURIComponent(fileId)}/comments`,
+      { params }
+    ) as Promise<DriveCommentListResponse>
   }
 
   createComment(request: {
@@ -332,18 +392,17 @@ class GapiDriveFilesClient implements DriveFilesClient {
     resource: Record<string, unknown>
     fields?: string
   }): Promise<{ result?: unknown }> {
-    return this.gapi.client.request({
-      path: `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(request.fileId)}/comments`,
-      method: 'POST',
-      params: {
-        fields: request.fields ?? DRIVE_COMMENT_FIELDS,
-        supportsAllDrives: 'true',
-      },
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(request.resource),
-    })
+    return this.request(
+      'POST',
+      `/drive/v3/files/${encodeURIComponent(request.fileId)}/comments`,
+      {
+        params: {
+          fields: request.fields ?? DRIVE_COMMENT_FIELDS,
+          supportsAllDrives: 'true',
+        },
+        body: JSON.stringify(request.resource),
+      }
+    )
   }
 
   updateComment(request: {
@@ -352,18 +411,17 @@ class GapiDriveFilesClient implements DriveFilesClient {
     resource: Record<string, unknown>
     fields?: string
   }): Promise<{ result?: unknown }> {
-    return this.gapi.client.request({
-      path: `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(request.fileId)}/comments/${encodeURIComponent(request.commentId)}`,
-      method: 'PATCH',
-      params: {
-        fields: request.fields ?? DRIVE_COMMENT_FIELDS,
-        supportsAllDrives: 'true',
-      },
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(request.resource),
-    })
+    return this.request(
+      'PATCH',
+      `/drive/v3/files/${encodeURIComponent(request.fileId)}/comments/${encodeURIComponent(request.commentId)}`,
+      {
+        params: {
+          fields: request.fields ?? DRIVE_COMMENT_FIELDS,
+          supportsAllDrives: 'true',
+        },
+        body: JSON.stringify(request.resource),
+      }
+    )
   }
 
   createReply(request: {
@@ -372,20 +430,19 @@ class GapiDriveFilesClient implements DriveFilesClient {
     resource: Record<string, unknown>
     fields?: string
   }): Promise<{ result?: unknown }> {
-    return this.gapi.client.request({
-      path: `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(request.fileId)}/comments/${encodeURIComponent(request.commentId)}/replies`,
-      method: 'POST',
-      params: {
-        fields:
-          request.fields ??
-          `id,action,createdTime,modifiedTime,author(displayName,photoLink,me),deleted,htmlContent,content`,
-        supportsAllDrives: 'true',
-      },
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(request.resource),
-    })
+    return this.request(
+      'POST',
+      `/drive/v3/files/${encodeURIComponent(request.fileId)}/comments/${encodeURIComponent(request.commentId)}/replies`,
+      {
+        params: {
+          fields:
+            request.fields ??
+            `id,action,createdTime,modifiedTime,author(displayName,photoLink,me),deleted,htmlContent,content`,
+          supportsAllDrives: 'true',
+        },
+        body: JSON.stringify(request.resource),
+      }
+    )
   }
 
   async ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc> {

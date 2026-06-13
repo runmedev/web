@@ -1,6 +1,13 @@
+import { googleClientManager } from '../googleClientManager'
 import { appLogger } from '../logging/runtime'
 import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
 import { getClaimedSessionId } from '../tabIdentity'
+import {
+  createDriveFile,
+  listDriveFolderItems,
+  saveNotebookAsDriveCopy,
+  updateDriveFileBytes,
+} from '../driveTransfer'
 import { appState } from './AppState'
 import { createAppJsGlobals } from './appJsGlobals'
 import {
@@ -27,6 +34,7 @@ const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024
 const DEFAULT_MAX_CODE_BYTES = 64 * 1024
 const OUTPUT_TRUNCATED_SUFFIX = '\n[output truncated]\n'
+const LOCAL_SERVICE_ACCOUNT_KEY_ENDPOINT = '/__runme-dev/service-account-key'
 
 export type CodeModeExecutionError = Error & { output: string }
 export type CodeModeExecutionHooks = {
@@ -47,6 +55,40 @@ export function getCodeModeErrorOutput(error: unknown): string {
   }
   const output = (error as { output?: unknown }).output
   return typeof output === 'string' ? output : ''
+}
+
+async function readServiceAccountJsonFromLocalPath(
+  keyPath: string
+): Promise<{ name: string; text: string }> {
+  const trimmedPath = keyPath.trim()
+  if (!trimmedPath) {
+    throw new Error('Google service account key path is required.')
+  }
+  const url = new URL(
+    LOCAL_SERVICE_ACCOUNT_KEY_ENDPOINT,
+    window.location.origin
+  )
+  url.searchParams.set('path', trimmedPath)
+  const response = await fetch(url.toString(), { cache: 'no-store' })
+  const responseText = await response.text()
+  if (!response.ok) {
+    throw new Error(
+      `Failed to read service account key from local dev server (${response.status}): ${responseText}`
+    )
+  }
+  const parsed = JSON.parse(responseText) as {
+    name?: string
+    text?: string
+  }
+  if (!parsed.text) {
+    throw new Error(
+      'Local dev server did not return service account JSON text.'
+    )
+  }
+  return {
+    name: parsed.name || trimmedPath.split('/').pop() || 'service-account.json',
+    text: parsed.text,
+  }
 }
 
 export type CodeModeExecutor = {
@@ -187,6 +229,7 @@ export function createCodeModeExecutor(options: {
                     runmeApi,
                     opfsApi,
                     networkApi,
+                    globals,
                     notebooksApiBridgeServer,
                     notebookDiffApi,
                   }),
@@ -268,6 +311,7 @@ async function handleSandboxAppKernelBridgeCall({
   runmeApi,
   opfsApi,
   networkApi,
+  globals,
   notebooksApiBridgeServer,
   notebookDiffApi,
 }: {
@@ -276,6 +320,7 @@ async function handleSandboxAppKernelBridgeCall({
   runmeApi: ReturnType<typeof createRunmeConsoleApi>
   opfsApi: ReturnType<typeof createAppKernelOpfsApi>
   networkApi: ReturnType<typeof createAppKernelNetworkApi>
+  globals: ReturnType<typeof createAppJsGlobals>
   notebooksApiBridgeServer: NotebooksApiBridgeServer
   notebookDiffApi: ReturnType<typeof createNotebookDiffRuntimeApi>
 }): Promise<unknown> {
@@ -375,6 +420,58 @@ async function handleSandboxAppKernelBridgeCall({
         ...(result.accessToken ? { accessToken: '<redacted>' } : {}),
       }
     }
+    case 'credentials.google.setServiceAccountFromFilePath': {
+      const selection = await readServiceAccountJsonFromLocalPath(
+        String(args[0] ?? '')
+      )
+      const config = googleClientManager.setOAuthClientFromJson(selection.text)
+      if (config.authFlow !== 'service_account') {
+        throw new Error(
+          `Selected JSON file (${selection.name}) did not contain Google service account credentials.`
+        )
+      }
+      return {
+        authFlow: config.authFlow,
+        authUxMode: config.authUxMode,
+        clientId: config.clientId,
+        serviceAccount: config.serviceAccount
+          ? {
+              clientEmail: config.serviceAccount.clientEmail,
+              privateKeyId: config.serviceAccount.privateKeyId,
+              tokenUri: config.serviceAccount.tokenUri,
+              subject: config.serviceAccount.subject,
+              scopes: config.serviceAccount.scopes,
+            }
+          : undefined,
+      }
+    }
+    case 'drive.list':
+      return listDriveFolderItems(String(args[0] ?? ''))
+    case 'drive.create':
+      return createDriveFile(String(args[0] ?? ''), String(args[1] ?? ''))
+    case 'drive.update': {
+      const bytesArg = args[1]
+      const bytes =
+        bytesArg instanceof Uint8Array
+          ? bytesArg
+          : Array.isArray(bytesArg)
+            ? new Uint8Array(bytesArg)
+            : bytesArg instanceof ArrayBuffer
+              ? new Uint8Array(bytesArg)
+              : new Uint8Array()
+      return updateDriveFileBytes(String(args[0] ?? ''), bytes)
+    }
+    case 'drive.saveAsCurrentNotebook': {
+      const notebook = runmeApi.getCurrentNotebook()
+      if (!notebook) {
+        throw new Error('No active notebook handle available.')
+      }
+      return saveNotebookAsDriveCopy(
+        notebook.getNotebook(),
+        String(args[0] ?? ''),
+        String(args[1] ?? '')
+      )
+    }
     case 'notebookDiff.listDriveRevisions':
       return notebookDiffApi.listDriveRevisions(args[0] as any)
     case 'notebookDiff.diffDriveRevision':
@@ -392,6 +489,12 @@ async function handleSandboxAppKernelBridgeCall({
     case 'notebookDiff.help':
       return notebookDiffApi.help()
     default:
+      if (method === 'notebooks.createLocal') {
+        return (globals.notebooks as any).createLocal(args[0], args[1])
+      }
+      if (method === 'notebooks.appendCell') {
+        return (globals.notebooks as any).appendCell(args[0])
+      }
       if (method.startsWith('notebooks.')) {
         return notebooksApiBridgeServer.handleMessage({
           method,
