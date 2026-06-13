@@ -118,6 +118,7 @@ export function createCodeModeExecutor(options: {
         notebooksApi: hostNotebooksApi,
         resolveLocalNotebooks: () => appState.localNotebooks,
         resolveDriveNotebookStore: () => appState.driveNotebookStore,
+        resolveNotebook,
       })
 
       const chunks: string[] = []
@@ -380,6 +381,14 @@ async function handleSandboxAppKernelBridgeCall({
       return notebookDiffApi.diffDriveRevision(args[0] as any)
     case 'notebookDiff.openDiffTab':
       return notebookDiffApi.openDiffTab(args[0] as any)
+    case 'notebookDiff.openConflictDiff':
+      return notebookDiffApi.openConflictDiff(args[0] as any)
+    case 'notebookDiff.listConflictCells':
+      return notebookDiffApi.listConflictCells(args[0] as any)
+    case 'notebookDiff.restoreDeletedCell':
+      return notebookDiffApi.restoreDeletedCell(args[0] as any)
+    case 'notebookDiff.restoreAllDeletedCells':
+      return notebookDiffApi.restoreAllDeletedCells(args[0] as any)
     case 'notebookDiff.help':
       return notebookDiffApi.help()
     default:

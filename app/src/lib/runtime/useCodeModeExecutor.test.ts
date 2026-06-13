@@ -46,6 +46,8 @@ describe('createCodeModeNotebookAdapter', () => {
           (cell) => cell.refId !== refId
         )
       }),
+      flushPendingPersist: vi.fn(async () => undefined),
+      loadNotebook: vi.fn(),
     }
     const adapter = createCodeModeNotebookAdapter(source)
     const notebooks = createHostNotebooksApi({
@@ -79,5 +81,14 @@ describe('createCodeModeNotebookAdapter', () => {
     expect(updated.notebook.cells).toHaveLength(1)
     expect(updated.notebook.cells[0]?.kind).toBe(parser_pb.CellKind.MARKUP)
     expect(updated.notebook.cells[0]?.refId).toBe('markup-a')
+
+    const restoredNotebook = create(parser_pb.NotebookSchema, { cells: [] })
+    await adapter.flushPendingPersist?.()
+    adapter.loadNotebook?.(restoredNotebook, { persist: false })
+
+    expect(source.flushPendingPersist).toHaveBeenCalledTimes(1)
+    expect(source.loadNotebook).toHaveBeenCalledWith(restoredNotebook, {
+      persist: false,
+    })
   })
 })

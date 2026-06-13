@@ -238,4 +238,47 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(openSpy).not.toHaveBeenCalled()
   })
+
+  it('authorizes service account Drive sessions without opening OAuth UI', async () => {
+    googleClientManager.setOAuthClient({
+      clientId: '',
+      authFlow: 'service_account',
+      authUxMode: 'new_tab',
+      serviceAccount: {
+        clientEmail: 'runme-drive-test@example.iam.gserviceaccount.com',
+        privateKey: await generatePrivateKeyPem(),
+      },
+    })
+    const fetchMock = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          access_token: 'service-account-token',
+          expires_in: 3600,
+          token_type: 'Bearer',
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const openSpy = vi.spyOn(window, 'open')
+    const auth = await renderWithGoogleAuthProvider()
+
+    let result: Awaited<ReturnType<typeof auth.startGoogleDriveOAuth>> | null =
+      null
+    await act(async () => {
+      result = await auth.startGoogleDriveOAuth()
+    })
+
+    expect(result).toMatchObject({
+      status: 'authorized',
+      authFlow: 'service_account',
+      mode: 'new_tab',
+      accessToken: 'service-account-token',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(openSpy).not.toHaveBeenCalled()
+  })
 })

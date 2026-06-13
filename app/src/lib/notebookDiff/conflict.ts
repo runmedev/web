@@ -66,6 +66,21 @@ async function registerConflictDiffDocument(
   })
 }
 
+export async function loadNotebookConflictDiffDocument(
+  store: LocalNotebooks,
+  localUri: string
+): Promise<NotebookDiffDocument> {
+  const record = await store.files.get(localUri)
+  if (!record) {
+    throw new Error(`Local notebook record not found for ${localUri}`)
+  }
+  if (!record.conflict) {
+    throw new Error(`Local notebook ${localUri} does not have a conflict`)
+  }
+
+  return registerConflictDiffDocument(store, localUri, record, record.conflict)
+}
+
 function findRestoredCellIndex(
   upstreamNotebook: parser_pb.Notebook,
   localNotebook: parser_pb.Notebook,
@@ -199,20 +214,7 @@ export async function openNotebookConflictDiff(
   store: LocalNotebooks,
   localUri: string
 ): Promise<void> {
-  const record = await store.files.get(localUri)
-  if (!record) {
-    throw new Error(`Local notebook record not found for ${localUri}`)
-  }
-  if (!record.conflict) {
-    throw new Error(`Local notebook ${localUri} does not have a conflict`)
-  }
-
-  const document = await registerConflictDiffDocument(
-    store,
-    localUri,
-    record,
-    record.conflict
-  )
+  const document = await loadNotebookConflictDiffDocument(store, localUri)
   openNotebookDiffDocument(document)
 }
 

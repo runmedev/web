@@ -23,6 +23,11 @@ export type NotebookDataLike = {
   getName: () => string
   getNotebook: () => parser_pb.Notebook
   isReadOnly?: () => boolean
+  flushPendingPersist?: () => Promise<void>
+  loadNotebook?: (
+    notebook: parser_pb.Notebook,
+    options?: { persist?: boolean }
+  ) => void
   updateCell: (cell: parser_pb.Cell) => void
   getCell: (refId: string) => CellRunnerLike | null
   appendCell?: (

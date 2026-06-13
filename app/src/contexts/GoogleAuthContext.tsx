@@ -794,6 +794,21 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       pendingPromiseRef.current = null
       clearPkceState()
 
+      if (oauthClient.authFlow === 'service_account') {
+        const accessToken = await mintServiceAccountAccessToken()
+        if (!accessToken) {
+          throw new Error(
+            'Google Drive service account credentials are missing.'
+          )
+        }
+        return {
+          status: 'authorized',
+          authFlow: oauthClient.authFlow,
+          mode: oauthClient.authUxMode,
+          accessToken,
+        }
+      }
+
       if (oauthClient.authFlow === 'pkce') {
         const mode: GoogleRedirectUxMode =
           requestedMode === 'redirect' ? 'redirect' : 'new_tab'
@@ -852,6 +867,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     [
       clearPkceState,
       ensureTokenClient,
+      mintServiceAccountAccessToken,
       setAccessToken,
       startImplicitRedirect,
       startPkceRedirect,

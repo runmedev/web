@@ -108,7 +108,9 @@ type RunnerSync = {
   onDefaultSet?: (name: string) => void
 }
 
-type EnsureAccessToken = (options?: { interactive?: boolean }) => Promise<string>
+type EnsureAccessToken = (options?: {
+  interactive?: boolean
+}) => Promise<string>
 
 type LocalTextSelection = {
   name: string
@@ -121,8 +123,7 @@ type LocalServiceAccountKeyResponse = {
   text?: string
 }
 
-const LOCAL_SERVICE_ACCOUNT_KEY_ENDPOINT =
-  '/__runme-dev/service-account-key'
+const LOCAL_SERVICE_ACCOUNT_KEY_ENDPOINT = '/__runme-dev/service-account-key'
 
 function emitLine(sendOutput: SendOutput | undefined, message: string): void {
   sendOutput?.(`${message}\r\n`)
@@ -214,7 +215,10 @@ async function readServiceAccountJsonFromLocalPath(
     throw new Error('Service account key path is required.')
   }
 
-  const url = new URL(LOCAL_SERVICE_ACCOUNT_KEY_ENDPOINT, window.location.origin)
+  const url = new URL(
+    LOCAL_SERVICE_ACCOUNT_KEY_ENDPOINT,
+    window.location.origin
+  )
   url.searchParams.set('path', trimmedPath)
   const response = await fetch(url.toString())
   const responseText = await response.text()
@@ -226,7 +230,9 @@ async function readServiceAccountJsonFromLocalPath(
 
   const parsed = JSON.parse(responseText) as LocalServiceAccountKeyResponse
   if (!parsed.text) {
-    throw new Error('Local dev server did not return service account JSON text.')
+    throw new Error(
+      'Local dev server did not return service account JSON text.'
+    )
   }
   return {
     name: parsed.name || trimmedPath.split('/').pop() || 'service-account.json',
@@ -396,6 +402,7 @@ export function createAppJsGlobals({
     notebooksApi,
     resolveLocalNotebooks: () => appState.localNotebooks,
     resolveDriveNotebookStore: () => appState.driveNotebookStore,
+    resolveNotebook: resolveNotebook ?? (() => runme.getCurrentNotebook()),
   })
   const jupyterManager = getJupyterManager()
   const harnessManager = getHarnessManager()
@@ -989,7 +996,8 @@ export function createAppJsGlobals({
       googleClientManager.setAuthFlow(authFlow),
     setAuthUxMode: (authUxMode: 'popup' | 'redirect' | 'new_tab') =>
       googleClientManager.setAuthUxMode(authUxMode),
-    setFromJson: (raw: string) => googleClientManager.setOAuthClientFromJson(raw),
+    setFromJson: (raw: string) =>
+      googleClientManager.setOAuthClientFromJson(raw),
     setOAuthClientFromJson: (raw: string) =>
       googleClientManager.setOAuthClientFromJson(raw),
     setServiceAccountFromFile: async () => {
@@ -1025,7 +1033,9 @@ export function createAppJsGlobals({
     },
     getDrivePickerConfig: () => googleClientManager.getDrivePickerConfig(),
     setDrivePickerConfig: (
-      config: Partial<ReturnType<typeof googleClientManager.getDrivePickerConfig>>
+      config: Partial<
+        ReturnType<typeof googleClientManager.getDrivePickerConfig>
+      >
     ) => googleClientManager.setDrivePickerConfig(config),
     help: () => {
       const message = [
@@ -1627,7 +1637,7 @@ export function createAppJsGlobals({
         'Available namespaces:',
         '  runme           - Notebook helpers (run all, clear outputs)',
         '  notebooks       - Notebook document API plus create/append helpers',
-        '  notebookDiff    - Compare Drive-backed notebook revisions',
+        '  notebookDiff    - Compare revisions and resolve notebook sync conflicts',
         '  opfs            - Origin-private browser file storage helpers',
         '  net             - Browser network helpers',
         '  codex           - Codex project and turn-journal helpers',
