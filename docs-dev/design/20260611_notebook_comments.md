@@ -10,40 +10,48 @@ Builds on:
 
 ## Summary
 
-Add cell-level comment threads to notebooks.
+Add cell-level comment threads to Google Drive-backed notebooks.
 
-V0 should store comments inside the notebook document, under notebook metadata,
-not in an auxiliary file and not as a new cell field. Each thread should anchor
-to a stable cell id. Replies, resolution state, author metadata, and agent
-dispatch state should live with the thread.
+V0 should use the Google Drive Comments API as the canonical comment store.
+Comments should be enabled only when the current notebook has a Google Drive
+upstream file. Local-only and filesystem-backed notebooks should show comments
+as unavailable until they are saved to Drive.
 
-This gives Runme a Google Docs/Colab-like review surface while preserving
-Jupyter `.ipynb` compatibility. Jupyter's notebook format does not define a
-standard comments or annotations model. It does define stable cell ids and
-allows arbitrary JSON metadata at the notebook, cell, and output levels. Those
-two facts are the compatibility path.
+Each Drive comment should anchor to a Runme cell id using an app-defined Drive
+comment anchor. Replies, resolution state, author identity, and edit/delete
+permissions should come from Drive. Runme should keep only transient UI state
+and optional local caches, not full comment threads inside the notebook file.
+
+This trades portable `.ipynb` comments for Google-native collaboration. That is
+the right V0 tradeoff because sharing and commenting are primarily Drive
+workflows in Runme. The Google Workspace Events API also gives us a path to
+comment/reply notifications, external automation, and agent triggers without
+polling notebook files.
 
 ## Goals
 
-- Let users add comments to notebook cells.
-- Show open and resolved comment threads in a notebook sidebar.
+- Let users add comments to cells in Google Drive-backed notebooks.
+- Show open and resolved Drive comment threads in a notebook sidebar.
 - Show per-cell comment affordances in the notebook body.
-- Support replies and resolve/reopen actions.
-- Persist comments with local, Drive-backed, and filesystem-backed notebooks.
-- Preserve comments when a Drive-backed notebook is shared or copied.
-- Preserve `.ipynb` compatibility for native notebook support.
+- Support replies and resolve/reopen actions through Drive.
+- Use Google identity, permissions, authorship, and timestamps for comments.
+- Disable comment creation for non-Drive notebooks with a clear save-to-Drive
+  path.
+- Subscribe to Drive comment and reply events for agent and notification
+  workflows when backend infrastructure is available.
 - Emit structured events when a comment mentions an agent, such as
   `@codex run this cell`.
 
 ## Non-Goals
 
+- Comments on local-only or filesystem-backed notebooks in V0.
 - Text-range comments inside a cell in V0.
+- Portable `.ipynb` comments in V0.
 - Multiplayer live cursors or live collaborative editing.
-- Google Drive Comments API parity in V0.
-- A separate permissions model for comments.
+- A separate Runme permissions model for comments.
 - Suggested edits.
 - Emoji reactions.
-- Email notifications.
+- Offline comment creation.
 
 ## Prior Art
 
@@ -69,8 +77,7 @@ Design implications:
 - Resolved comments should remain available.
 - Mentions should be parsed from comment text and treated as actionable
   structured data, not only display text.
-- V0 can skip assignment and notifications while keeping room in the model for
-  them.
+- V0 should use Google identity rather than inventing a parallel author model.
 
 ### Google Drive Comments API
 
@@ -80,10 +87,10 @@ JSON strings. Replies are attached to a comment. A comment is resolved by
 posting a reply with an action, and the comment resource then exposes
 `resolved: true`.
 
-Drive's anchor model is useful, but it is not a drop-in storage backend for
-Runme V0. Google Workspace editor apps treat custom anchored comments as
-unanchored, and Drive warns that anchors are immutable and their position across
-document revisions is not guaranteed.
+The API returns author, timestamps, deleted/resolved state, plain text content,
+HTML content for display, quoted file content, mentioned email addresses, and
+assignee email address. Some fields, including mentioned email addresses and
+assignee email address, are output-only.
 
 Sources:
 
@@ -92,11 +99,37 @@ Sources:
 
 Design implications:
 
-- Model comments as threads with replies and resolved state.
-- Keep anchors immutable after thread creation.
-- Use cell ids rather than line offsets for V0 anchors.
-- Consider Drive comments later for Drive-backed sharing, but do not make them
-  the canonical V0 store.
+- Use Drive comments as the V0 source of truth for Drive-backed notebooks.
+- Store the Runme cell anchor in the Drive `anchor` JSON string.
+- Treat Drive's author, timestamp, reply, resolved, deleted, and permission
+  behavior as canonical.
+- Test whether API-created `@email` comments trigger Google-native mention
+  notifications before relying on them for product-critical alerts.
+- Do not depend on Google Workspace editors to render Runme anchors. Google
+  documents that Workspace editor apps treat custom anchored comments as
+  unanchored.
+
+### Google Workspace Events API
+
+Google Workspace Events supports Drive comment and reply events. Apps can
+subscribe to Drive files or shared drives and receive events through Cloud
+Pub/Sub. Supported Drive event types include comment created, edited, resolved,
+reopened, deleted, and reply created, edited, and deleted.
+
+Sources:
+
+- <https://developers.google.com/workspace/events/guides/events-drive>
+- <https://developers.google.com/workspace/drive/api/guides/events-overview>
+
+Design implications:
+
+- Drive comments unlock server-side notification and automation workflows.
+- Agent triggers should use Workspace Events when a backend subscription is
+  available.
+- Browser-only V0 can still dispatch local events for comments created in the
+  current tab, but cross-user triggers require Workspace Events or polling.
+- Subscription lifecycle, Pub/Sub setup, OAuth scopes, and renewal handling are
+  backend work, not React component work.
 
 ### Google Colab
 
@@ -111,10 +144,10 @@ Sources:
 
 Design implications:
 
-- Colab is strong product prior art for comments as notebook content.
+- Colab is strong product prior art for Drive-first notebook comments.
 - Colab is not public implementation prior art for a reusable comments schema.
-- The most compatible interpretation is that notebook comments can live inside
-  `.ipynb` metadata while remaining associated with notebook cells.
+- Runme can make the same product choice: comments are part of the Drive
+  collaboration surface, not necessarily portable notebook content.
 
 ### Jupyter `.ipynb`
 
@@ -140,11 +173,11 @@ Sources:
 
 Design implications:
 
-- Do not add a new top-level field or a new cell field for comments in
-  `.ipynb`.
-- Use notebook metadata with a Runme namespace for compatibility.
-- Use `.ipynb` cell `id` as the anchor when present.
-- Map Runme `refId` to `.ipynb` cell `id` when importing/exporting.
+- `.ipynb` does not force a comments storage decision.
+- Use stable cell ids for Drive comment anchors.
+- Do not add a new top-level `.ipynb` field or new cell field for V0 comments.
+- If portable comments become a requirement later, use namespaced metadata as an
+  export/cache format.
 
 ## Current Runme Context
 
@@ -157,99 +190,126 @@ NotebookData / editor tabs
   -> optional upstream from LocalFileRecord.remoteId
 ```
 
-`NotebookData` owns one in-memory `parser_pb.Notebook`. React views render
-immutable snapshots. Mutations should go through `NotebookData` and `CellData`,
-then autosave through the local mirror.
+Drive-backed editor tabs still use a local mirror. The local record points to
+the upstream Drive file through `remoteId` / `remoteUri`.
 
-Cells already have stable `refId` values and `metadata`. The AppKernel
-notebook API exposes notebook handles, revisions, cells, metadata, and cell
-execution helpers. Codex tools already use explicit cell ids when reading,
-updating, and executing cells.
+`NotebookData` owns one in-memory `parser_pb.Notebook`. React views render
+immutable snapshots. Cells already have stable `refId` values and `metadata`.
+The AppKernel notebook API exposes notebook handles, revisions, cells,
+metadata, and cell execution helpers. Codex tools already use explicit cell ids
+when reading, updating, and executing cells.
 
 ## Storage Decision
 
-Store V0 comments inside the notebook document under top-level notebook
-metadata:
+Use Google Drive Comments API as the canonical V0 comment store.
+
+Comments are available only when:
+
+- the open notebook resolves to a local mirror,
+- that local mirror has a Google Drive upstream file id,
+- the current user has Drive permission to comment on the file.
+
+For non-Drive notebooks:
+
+- hide or disable add-comment controls,
+- show an explanatory disabled state,
+- offer "Save to Google Drive to enable comments" when the notebook can be
+  copied to Drive.
+
+Do not store full comment threads inside notebook metadata for V0.
+
+Do not store comments in an auxiliary Runme sidecar file for V0.
+
+Do not add a new field to cells for V0.
+
+### Why Drive Comments
+
+Drive comments match the product surface we care about first:
+
+- shared Drive notebooks,
+- Google identity,
+- Google permissions,
+- Google-authored timestamps and edit/delete ownership,
+- native replies and resolved state,
+- possible Google-native mention notifications,
+- Workspace Events for comment/reply automation,
+- no extra Runme sync format for comments.
+
+The tradeoff is that comments are not portable notebook content. A user who
+downloads an `.ipynb` or copies a notebook into a non-Drive backend will not get
+the Drive comment threads. That is acceptable for V0 because the commenting
+workflow assumes a shared Drive document.
+
+### Why Not Notebook Metadata
+
+Notebook metadata is still the right portable fallback, but it is the wrong V0
+source of truth for Drive-first collaboration.
+
+Metadata comments would require Runme to implement authorship, permissions,
+notifications, cross-user updates, conflict handling, and deletion semantics.
+Drive already owns those concepts for the primary storage backend.
+
+### Why Not A Sidecar File
+
+A sidecar file gives us portability across storage backends, but it creates a
+new sharing, permissions, discovery, and sync problem. It also does not give us
+Google-native comment notifications or Workspace Events.
+
+Sidecars can be revisited if comments need to work on non-Drive backends.
+
+## Drive Comment Anchor
+
+V0 anchors are cell anchors only.
+
+Store a Runme-specific JSON payload in the Drive comment `anchor` field:
 
 ```json
 {
-  "metadata": {
-    "runme.dev/comments": {
-      "version": 1,
-      "threads": []
-    }
+  "runme": {
+    "version": 1,
+    "type": "cell",
+    "cellId": "code_85a39e07",
+    "cellIdKind": "runme-ref-id"
   }
 }
 ```
 
-Do not store comments in an auxiliary file for V0.
+For imported `.ipynb`, preserve the Jupyter cell `id` and map it to Runme's
+stable cell identity. When a Drive comment anchors to an imported notebook cell,
+the anchor should use the same stable id Runme uses to render that cell.
 
-Do not add a new field to cells for V0.
+If a cell is deleted, keep the Drive comment. The UI should render it as an
+orphaned thread if the anchor no longer resolves.
 
-Do not store full threads independently in each cell's metadata.
+If a cell is moved, the thread follows the cell id.
 
-### Why Inside The Notebook
+If a cell is duplicated, new cells must get new ids. Comments stay attached to
+the original cell only.
 
-Inside-the-notebook storage has the right V0 behavior:
-
-- comments survive local autosave,
-- Drive copies include comments,
-- filesystem-backed notebooks remain self-contained,
-- offline editing works without another sync channel,
-- imported/exported `.ipynb` files can preserve comments,
-- the notebook revision hash reflects comment changes.
-
-The tradeoff is that comments become notebook content. A comment-only change can
-trigger notebook sync conflicts and version churn. That is acceptable for V0
-because the current product does not have live multi-writer collaboration.
-
-### Why Notebook Metadata
-
-Notebook metadata is the safest compatibility point.
-
-Adding a new cell field would make strict `.ipynb` validation fail. Cell
-metadata is valid, but storing full threads in each cell makes global comment
-search, orphan handling, and agent dispatch harder. Notebook-level metadata
-keeps comments in one place while anchors still point to cells.
-
-Cell metadata may later carry denormalized UI hints such as
-`runme.dev/commentCount`, but the source of truth should stay in notebook
-metadata.
-
-### When To Revisit Auxiliary Storage
-
-Move comments to auxiliary storage only when one of these becomes a product
-requirement:
-
-- independent comment permissions,
-- comments on read-only shared notebooks without modifying the notebook file,
-- high-volume comment activity that should not churn notebook revisions,
-- live multi-user comments before notebook save,
-- server-side notifications,
-- Drive-native comment interoperability.
-
-If that happens, the embedded metadata model can become an export/cache format
-while a per-document comments service becomes canonical.
+Google warns that custom anchors are immutable and that their position relative
+to document content is not guaranteed across revisions. Runme should therefore
+treat the Drive anchor as an immutable cell-id pointer and resolve it against
+the current notebook model at render time.
 
 ## Proposed Data Model
 
-Use one document-level metadata object:
+Use a Runme view model over Drive comments:
 
 ```ts
-type NotebookCommentsMetadata = {
-  version: 1
-  threads: CommentThread[]
-}
-
-type CommentThread = {
-  id: string
+type NotebookCommentThread = {
+  driveFileId: string
+  driveCommentId: string
   anchor: CommentAnchor
   status: 'open' | 'resolved'
   createdAt: string
   updatedAt: string
-  resolvedAt?: string
-  author: CommentAuthor
-  comments: CommentMessage[]
+  author: DriveCommentAuthor
+  htmlContent: string
+  content: string
+  mentionedEmailAddresses: string[]
+  assigneeEmailAddress?: string
+  replies: NotebookCommentReply[]
+  orphaned: boolean
   agentDispatch?: AgentDispatchState
 }
 
@@ -257,118 +317,44 @@ type CommentAnchor = {
   type: 'cell'
   cellId: string
   cellIdKind: 'runme-ref-id' | 'ipynb-cell-id'
-  revision?: string
-  preview?: {
-    cellKind?: 'code' | 'markup'
-    languageId?: string
-    firstLine?: string
-  }
 }
 
-type CommentMessage = {
-  id: string
-  body: string
-  htmlBody?: string
-  author: CommentAuthor
+type NotebookCommentReply = {
+  driveReplyId: string
   createdAt: string
   updatedAt: string
-  mentions?: CommentMention[]
+  author: DriveCommentAuthor
+  htmlContent: string
+  content: string
+  deleted: boolean
 }
 
-type CommentAuthor = {
-  id?: string
+type DriveCommentAuthor = {
   displayName: string
-  email?: string
-  avatarUrl?: string
-}
-
-type CommentMention = {
-  raw: string
-  kind: 'agent' | 'user'
-  target: string
+  photoLink?: string
+  me?: boolean
 }
 
 type AgentDispatchState = {
   status: 'pending' | 'sent' | 'acked' | 'failed'
   targetAgent: string
+  source: 'local-tab' | 'workspace-events'
   messageId?: string
   lastError?: string
   updatedAt: string
 }
 ```
 
-Example:
+The view model should be derived from:
 
-```json
-{
-  "version": 1,
-  "threads": [
-    {
-      "id": "thread_01jz9a0tq6x6tnmvz8z64k3dse",
-      "anchor": {
-        "type": "cell",
-        "cellId": "code_85a39e07",
-        "cellIdKind": "runme-ref-id",
-        "preview": {
-          "cellKind": "code",
-          "languageId": "python",
-          "firstLine": "df.groupby('country').revenue.sum()"
-        }
-      },
-      "status": "open",
-      "createdAt": "2026-06-11T18:00:00Z",
-      "updatedAt": "2026-06-11T18:00:00Z",
-      "author": {
-        "displayName": "Jane Doe",
-        "email": "jane@example.com"
-      },
-      "comments": [
-        {
-          "id": "comment_01jz9a10vdt7kz2zh7wqp8m3xq",
-          "body": "@codex run this cell and explain the output",
-          "author": {
-            "displayName": "Jane Doe",
-            "email": "jane@example.com"
-          },
-          "createdAt": "2026-06-11T18:00:00Z",
-          "updatedAt": "2026-06-11T18:00:00Z",
-          "mentions": [
-            {
-              "raw": "@codex",
-              "kind": "agent",
-              "target": "codex"
-            }
-          ]
-        }
-      ],
-      "agentDispatch": {
-        "status": "pending",
-        "targetAgent": "codex",
-        "updatedAt": "2026-06-11T18:00:00Z"
-      }
-    }
-  ]
-}
-```
+- `comments.list` / `comments.get`,
+- Drive comment `anchor`,
+- Drive comment `resolved` and `deleted`,
+- Drive reply lists,
+- the current notebook cell index.
 
-## Comment Anchors
-
-V0 anchors are cell anchors only.
-
-When editing Runme-native notebooks, use `cell.refId`. When importing `.ipynb`,
-preserve the Jupyter cell `id` and map it to `refId` if the native model needs
-one canonical cell identifier. When exporting `.ipynb`, write the anchor cell
-id to the same value as the exported cell `id`.
-
-If a cell is deleted, keep its comment thread in notebook metadata and mark it
-as orphaned in the UI by resolving the anchor at render time. Do not delete
-comments automatically. The preview gives the user enough context to resolve,
-delete, or leave the thread.
-
-If a cell is moved, the thread follows the cell id.
-
-If a cell is duplicated, new cells must get new ids. Comments stay attached to
-the original cell only.
+Runme may cache this model in memory or IndexedDB for responsiveness. The cache
+is not the source of truth.
 
 ## UI Proposal
 
@@ -377,7 +363,9 @@ comments panel.
 
 Notebook body:
 
-- Show a comment icon in each cell toolbar or right gutter.
+- Show a comment icon in each cell toolbar or right gutter for Drive-backed
+  notebooks.
+- Show a disabled icon or omit the affordance for non-Drive notebooks.
 - Show an active/open count on the icon.
 - Click the icon to open the thread composer for that cell.
 - Highlight the active cell when a comment thread is selected.
@@ -386,16 +374,21 @@ Notebook body:
 Comments panel:
 
 - Dock the panel on the right side of the notebook.
-- List open threads first, grouped by notebook order.
+- Load Drive comments for the current Drive file.
+- List Runme-anchored threads first, grouped by notebook order.
 - Provide filters for open, resolved, and all.
 - Select a thread to scroll the notebook to the anchored cell.
-- Support reply, resolve, reopen, edit own comment, and delete own comment.
-- Show orphaned threads in a separate section.
+- Support reply, resolve, reopen, edit own comment, and delete own comment
+  through Drive API calls.
+- Show orphaned Runme-anchored threads in a separate section.
+- Optionally show unanchored Drive comments in a document-level section.
 
 Composer:
 
-- Plain Markdown text input for V0.
-- Detect `@codex` mentions.
+- Plain text input for V0, matching Drive's `content` field.
+- Detect `@codex` mentions locally.
+- Preserve email mentions in the text so Drive can detect Google user mentions
+  if supported for API-created comments.
 - Submit with `Cmd/Ctrl+Enter`.
 - Preserve draft text while the user switches cells.
 
@@ -408,28 +401,49 @@ Accessibility:
 
 ## Agent Hook
 
-Comments should emit a structured event after the notebook model accepts the
-mutation and before/after autosave completes. Autosave should not block agent
-dispatch, but the event must include enough context for the agent to reload the
-notebook if needed.
+Drive comments should trigger agents through two paths.
 
-Proposed event:
+The local path handles comments created in the current browser tab:
+
+```text
+user submits comment in Runme
+  -> Runme creates Drive comment with Runme cell anchor
+  -> Drive returns comment id and normalized resource
+  -> Runme emits NotebookDriveCommentCreatedEvent
+  -> Mention router sees @codex
+  -> router sends Drive file id, comment id, cell id, and cell context
+     to the Codex conversation bridge
+```
+
+The server path handles comments created by other users or in other tabs:
+
+```text
+Workspace Events subscription receives drive.comment.v3.created
+  -> event handler fetches the Drive comment if needed
+  -> handler parses the Runme cell anchor
+  -> handler checks mentions and dispatch state
+  -> handler sends Drive file id, comment id, cell id, and notebook context
+     to the agent service
+```
+
+Proposed local event:
 
 ```ts
-type NotebookCommentCreatedEvent = {
-  type: 'notebook.comment.created'
+type NotebookDriveCommentCreatedEvent = {
+  type: 'notebook.driveComment.created'
   notebook: {
     uri: string
     name: string
+    driveFileId: string
     revision: string
-    remoteUri?: string
   }
-  thread: {
+  driveComment: {
     id: string
-    status: 'open' | 'resolved'
     anchor: CommentAnchor
+    content: string
+    htmlContent: string
+    mentionedEmailAddresses: string[]
   }
-  comment: CommentMessage
   context: {
     cell?: {
       refId: string
@@ -441,125 +455,141 @@ type NotebookCommentCreatedEvent = {
   }
   mentions: CommentMention[]
 }
-```
 
-Dispatch flow:
-
-```text
-user submits comment
-  -> NotebookData.addComment(...)
-  -> comment metadata mutation is committed
-  -> NotebookCommentCreatedEvent is emitted
-  -> Mention router sees @codex
-  -> router sends notebook uri, revision, cell id, comment id, and cell context
-     to the Codex conversation bridge
-  -> agent response is added as a reply or linked from the thread
-```
-
-The mention router should be independent from React. It should subscribe to
-notebook model events or a small comment event bus. That keeps AppKernel,
-external Codex, and future server-side dispatch from depending on component
-lifecycles.
-
-Agent dispatch must be idempotent. Use `(notebookUri, threadId, commentId,
-targetAgent)` as the de-duplication key and persist dispatch status in
-`agentDispatch`.
-
-## API Surface
-
-Add comment methods to `NotebookData` first:
-
-```ts
-class NotebookData {
-  listCommentThreads(): CommentThread[]
-  addCommentThread(args: {
-    cellId: string
-    body: string
-    author: CommentAuthor
-  }): CommentThread
-  replyToCommentThread(args: {
-    threadId: string
-    body: string
-    author: CommentAuthor
-  }): CommentThread
-  resolveCommentThread(threadId: string): CommentThread
-  reopenCommentThread(threadId: string): CommentThread
+type CommentMention = {
+  raw: string
+  kind: 'agent' | 'user'
+  target: string
 }
 ```
 
-Then expose an AppKernel API after the model is stable:
+Agent dispatch must be idempotent. Use `(driveFileId, driveCommentId,
+targetAgent)` as the de-duplication key. For server-side event handling, store
+dispatch state outside the notebook file, for example in the agent service or a
+Runme backend table.
+
+## API Surface
+
+Add a Drive-backed comments service rather than comment methods directly on
+`NotebookData`:
 
 ```ts
-type NotebookCommentMutation =
-  | { op: 'createThread'; cellId: string; body: string }
-  | { op: 'reply'; threadId: string; body: string }
-  | { op: 'resolve'; threadId: string }
-  | { op: 'reopen'; threadId: string }
+type NotebookCommentsAvailability =
+  | { enabled: true; driveFileId: string }
+  | { enabled: false; reason: 'not-drive-backed' | 'missing-permission' }
 
+type NotebookCommentsService = {
+  getAvailability(target?: NotebookTarget): Promise<NotebookCommentsAvailability>
+  listThreads(args: {
+    target?: NotebookTarget
+    status?: 'open' | 'resolved' | 'all'
+  }): Promise<NotebookCommentThread[]>
+  createThread(args: {
+    target?: NotebookTarget
+    cellId: string
+    content: string
+  }): Promise<NotebookCommentThread>
+  reply(args: {
+    target?: NotebookTarget
+    driveCommentId: string
+    content: string
+  }): Promise<NotebookCommentThread>
+  resolve(args: {
+    target?: NotebookTarget
+    driveCommentId: string
+    content?: string
+  }): Promise<NotebookCommentThread>
+  reopen(args: {
+    target?: NotebookTarget
+    driveCommentId: string
+  }): Promise<NotebookCommentThread>
+}
+```
+
+Expose an AppKernel API after the internal service is stable:
+
+```ts
 type NotebooksCommentsApi = {
-  list(args?: { target?: NotebookTarget; status?: 'open' | 'resolved' | 'all' }): Promise<CommentThread[]>
-  update(args: { target?: NotebookTarget; operations: NotebookCommentMutation[] }): Promise<CommentThread[]>
+  availability(target?: NotebookTarget): Promise<NotebookCommentsAvailability>
+  list(args?: { target?: NotebookTarget; status?: 'open' | 'resolved' | 'all' }): Promise<NotebookCommentThread[]>
+  create(args: { target?: NotebookTarget; cellId: string; content: string }): Promise<NotebookCommentThread>
+  reply(args: { target?: NotebookTarget; driveCommentId: string; content: string }): Promise<NotebookCommentThread>
+  resolve(args: { target?: NotebookTarget; driveCommentId: string; content?: string }): Promise<NotebookCommentThread>
+  reopen(args: { target?: NotebookTarget; driveCommentId: string }): Promise<NotebookCommentThread>
 }
 ```
 
 ## Sync And Conflict Behavior
 
-Comments are normal notebook content in V0.
+Drive comments are separate from notebook content.
 
-Local autosave should persist comment mutations like cell mutations. Drive sync
-should upload the changed notebook JSON. Existing conflict handling should show
-comment metadata changes in notebook diffs once diff support includes metadata.
+Comment-only changes should not dirty the notebook or change the notebook JSON.
+They should update the comments panel and any local comment cache. Notebook
+content sync and comment sync are separate channels:
 
-Conflict policy:
+```text
+Notebook content:
+  NotebookData -> LocalNotebooks -> Drive file content
 
-- If two edits add different threads, merge should be possible because thread
-  ids are unique.
-- If two edits append replies to the same thread, merge should order by
-  `createdAt` and preserve both replies.
-- If one edit resolves a thread while another adds a reply, reopen or keep open
-  unless the resolving reply is later than the new reply.
-- If the anchor cell is deleted on one side, preserve the thread as orphaned.
+Notebook comments:
+  Comments panel -> Drive Comments API -> Workspace Events / local refresh
+```
 
-This merge policy is future work. V0 can rely on existing notebook conflict
-resolution and document the limitations.
+If the notebook content changes and cell ids remain stable, comments continue
+to resolve. If a cell id disappears, the comment becomes orphaned in Runme but
+remains a valid Drive comment.
+
+Notebook diff views do not need to show comment changes in V0 because comments
+are not notebook file content.
 
 ## Security And Privacy
 
-Comments are notebook content. Sharing a notebook shares comments. This matches
-the Colab behavior but needs UI copy when sharing or exporting.
+Comments are Drive file collaboration data. A user who can access comments on
+the Drive file can see them according to Drive permissions. A user who exports
+or downloads the notebook file does not automatically export comments.
 
 Agent mentions need explicit product behavior:
 
 - `@codex` should not execute code silently unless the command and current
   product mode allow it.
-- The agent payload should include only the anchored cell and document
-  identifiers by default.
-- Broader notebook context should be requested through existing notebook APIs,
-  not stuffed into the event payload.
+- The agent payload should include the Drive file id, comment id, anchor cell
+  id, and minimal cell context by default.
+- Broader notebook context should be requested through existing notebook APIs.
 - Comments may contain secrets; agent dispatch should follow the same data-use
   rules as the AI chat panel.
+- Workspace Events subscriptions must verify Drive permissions and ignore
+  comments whose anchors are not Runme anchors.
 
 ## Implementation Plan
 
-1. Add parser/serializer helpers for `metadata["runme.dev/comments"]`.
-2. Add `NotebookData` comment mutation methods and events.
-3. Add unit tests for create, reply, resolve, reopen, orphaned anchors, and
-   `.ipynb` metadata preservation.
-4. Add a lightweight comments panel and per-cell comment icon.
-5. Add mention parsing for `@codex`.
-6. Add an agent mention router that receives comment-created events and sends
-   structured context to the existing Codex bridge.
-7. Add AppKernel comments API once internal model and UI behavior settle.
-8. Extend notebook diff handling to summarize comment metadata changes.
+1. Add Drive comment read/write helpers for `comments.list`, `comments.create`,
+   `comments.update`, `replies.create`, and resolve/reopen behavior.
+2. Add Runme anchor parsing and serialization for Drive comment anchors.
+3. Add comments availability detection from the current notebook's Drive
+   upstream file id and user permissions.
+4. Add a lightweight comments panel and per-cell comment icon for Drive-backed
+   notebooks.
+5. Disable comment controls for non-Drive notebooks and add a save-to-Drive
+   entry point.
+6. Add mention parsing for `@codex`.
+7. Emit local comment-created events for comments created in the current tab.
+8. Add AppKernel comments API once the internal Drive comments service settles.
+9. Spike Workspace Events subscriptions for Drive comment and reply events,
+   including Pub/Sub setup, OAuth scopes, renewal behavior, and event payloads.
+10. Decide whether Workspace Events-backed agent dispatch is part of V0 or the
+    first follow-up milestone.
+11. Test whether Drive API-created comments with `@email` trigger Google-native
+    email/web notifications.
 
 ## Open Questions
 
+- Should Workspace Events-backed agent dispatch be required for V0, or can V0
+  ship with only local-tab dispatch and manual refresh?
+- Do API-created comments with `@email` reliably trigger Google-native mention
+  notifications?
+- Should Runme show unanchored Drive comments, or only Runme-anchored comments?
 - Should `@codex run this cell` execute immediately, or should it open a
   confirmation affordance in the thread?
-- Which identity source should populate `CommentAuthor` for local-only users?
-- Should resolved threads remain in exported Markdown representations?
-- Should Drive-backed notebooks eventually mirror Runme comments to the Drive
-  Comments API for external visibility?
-- Should comment-only changes produce the same dirty/sync indicator as cell
-  content changes?
-- Do we want a document-level unanchored comment type after V0?
+- How should comments behave when a local notebook is later saved to Drive?
+- Which OAuth scopes are acceptable for comment read/write and Workspace Events
+  subscriptions?
