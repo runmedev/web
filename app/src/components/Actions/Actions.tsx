@@ -18,6 +18,7 @@ import { MimeType, RunmeMetadataKey, parser_pb } from '../../runme/client'
 import { CellData } from '../../lib/notebookData'
 import { useNotebookContext } from '../../contexts/NotebookContext'
 import type { OpenNotebookEntry } from '../../lib/notebookDataController'
+import type { NotebookOwnershipRecord } from '../../lib/tabCoordination/notebookOwnership'
 import { useNotebookStore } from '../../contexts/NotebookStoreContext'
 import { useWorkspaceDocumentContext } from '../../contexts/WorkspaceDocumentContext'
 import { useOutput } from '../../contexts/OutputContext'
@@ -117,6 +118,26 @@ TabPanel.displayName = 'TabPanel'
 
 function getNotebookDisplayName(uri: string, name?: string): string {
   return name || uri.split('/').filter(Boolean).pop() || uri
+}
+
+// Ownership records created before ownerSessionId existed can still be active
+// in IndexedDB, so UI reads the explicit field first and falls back to the URL.
+function getNotebookOwnerSessionId(
+  owner: NotebookOwnershipRecord | null | undefined
+): string | null {
+  const explicitSession = owner?.ownerSessionId?.trim()
+  if (explicitSession) {
+    return explicitSession
+  }
+  const ownerUrl = owner?.ownerUrl?.trim()
+  if (!ownerUrl) {
+    return null
+  }
+  try {
+    return new URL(ownerUrl).searchParams.get('session')?.trim() || null
+  } catch {
+    return null
+  }
 }
 
 function syncIndicatorPresentation(state: NotebookSyncState | null): {
@@ -1740,6 +1761,7 @@ function NotebookTabContent({
   }
 
   if (entry.state === 'blocked') {
+    const ownerSessionId = getNotebookOwnerSessionId(entry.owner)
     const ownerText = entry.owner?.ownerStartedAt
       ? `Tab opened at ${new Date(entry.owner.ownerStartedAt).toLocaleTimeString()}`
       : 'Another browser tab'
@@ -1758,6 +1780,11 @@ function NotebookTabContent({
           <Text size="2" as="p">
             Owned by: {ownerText}
           </Text>
+          {ownerSessionId && (
+            <Text size="2" as="p">
+              Open in session: {ownerSessionId}
+            </Text>
+          )}
           <Text size="2" as="p">
             Close this notebook in the other tab, then retry here.
           </Text>
@@ -1802,6 +1829,7 @@ function NotebookTabContent({
   }
 
   const data = getNotebookData(notebookSnapshot.uri)
+  const ownerSessionId = getNotebookOwnerSessionId(entry.owner)
 
   if (
     cellDatas.length === 0 &&
@@ -1829,8 +1857,9 @@ function NotebookTabContent({
           >
             <LockClosedIcon className="h-4 w-4 text-nb-text-muted" />
             <span>
-              Read-only. This notebook is open for editing in another browser
-              tab.
+              {ownerSessionId
+                ? `Read-only. This notebook is open for editing in session ${ownerSessionId}.`
+                : 'Read-only. This notebook is open for editing in another browser tab.'}
             </span>
           </div>
         )}
@@ -2042,6 +2071,7 @@ export default function Actions() {
     title: string
     shareableUri: string
     googleDriveUri: string | null
+    ownerSessionId: string | null
     readOnly?: boolean
   } | null>(null)
   const tabTriggerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -2282,7 +2312,10 @@ export default function Actions() {
     if (typeof window === 'undefined') {
       return tabContextMenu
     }
-    const itemCount = tabContextMenu.googleDriveUri ? 5 : 4
+    const itemCount =
+      4 +
+      (tabContextMenu.googleDriveUri ? 1 : 0) +
+      (tabContextMenu.ownerSessionId ? 1 : 0)
     const menuWidth = 220
     const menuHeight = itemCount * 36 + 8
     return {
@@ -2310,6 +2343,7 @@ export default function Actions() {
         title,
         shareableUri: docUri,
         googleDriveUri: isGoogleDriveFileUri(docUri) ? docUri : null,
+        ownerSessionId: getNotebookOwnerSessionId(document?.owner),
         readOnly: document?.readOnly,
       })
 
@@ -2453,6 +2487,34 @@ export default function Actions() {
           scope: 'storage.local',
           code: 'TAB_COPY_LOCAL_URI_FAILED',
           uri: tabContextMenu.docUri,
+          error: String(error),
+        },
+      })
+    } finally {
+      setTabContextMenu(null)
+    }
+  }, [tabContextMenu])
+
+  const handleCopyTabOwnerSessionId = useCallback(async () => {
+    if (!tabContextMenu?.ownerSessionId) {
+      setTabContextMenu(null)
+      return
+    }
+    try {
+      if (
+        typeof window === 'undefined' ||
+        !window.navigator?.clipboard?.writeText
+      ) {
+        throw new Error('Clipboard access is unavailable in this browser')
+      }
+      await window.navigator.clipboard.writeText(tabContextMenu.ownerSessionId)
+    } catch (error) {
+      appLogger.error('Failed to copy owner session ID from tab context menu', {
+        attrs: {
+          scope: 'tab.owner-session',
+          code: 'TAB_COPY_OWNER_SESSION_ID_FAILED',
+          uri: tabContextMenu.docUri,
+          ownerSessionId: tabContextMenu.ownerSessionId,
           error: String(error),
         },
       })
@@ -2692,6 +2754,18 @@ export default function Actions() {
               >
                 Copy local URI
               </button>
+              {adjustedTabContextMenu.ownerSessionId && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void handleCopyTabOwnerSessionId()
+                  }}
+                >
+                  Copy Owner Session ID
+                </button>
+              )}
               {adjustedTabContextMenu.googleDriveUri && (
                 <button
                   type="button"

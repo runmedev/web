@@ -77,6 +77,12 @@ vi.mock("../../contexts/NotebookStoreContext", () => ({
   }),
 }));
 
+vi.mock("../../contexts/GoogleAuthContext", () => ({
+  useGoogleAuth: () => ({
+    ensureAccessToken: vi.fn(async () => "token"),
+  }),
+}));
+
 vi.mock("../../lib/runtime/AppState", () => ({
   appState: {
     localNotebooks: null,

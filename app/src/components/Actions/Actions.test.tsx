@@ -9,6 +9,7 @@ import {
 
 import { parser_pb, RunmeMetadataKey } from '../../runme/client'
 import type { CellData } from '../../lib/notebookData'
+import type { NotebookOwnershipRecord } from '../../lib/tabCoordination/notebookOwnership'
 import { computeNotebookDiff } from '../../lib/notebookDiff/diff'
 import {
   getNotebookDiffDocumentUri,
@@ -24,6 +25,7 @@ const contextMocks = vi.hoisted(() => ({
     requestedUri?: string
     state?: 'loading' | 'loaded' | 'blocked' | 'error'
     readOnly?: boolean
+    owner?: NotebookOwnershipRecord | null
   }>,
   currentDoc: null as string | null,
   setCurrentDoc: vi.fn(),
@@ -293,6 +295,15 @@ describe('Actions tabs', () => {
 
   it('marks read-only notebook tabs and content clearly', () => {
     const uri = 'local://file/reference.runme.md'
+    const owner: NotebookOwnershipRecord = {
+      notebookUri: uri,
+      ownerTabId: 'tab-other',
+      ownerSessionId: 'calm-harbor',
+      ownerLabel: 'Other tab',
+      ownerUrl: 'http://localhost/?session=calm-harbor',
+      ownerStartedAt: '2026-05-22T12:00:00.000Z',
+      epoch: 'epoch-other',
+    }
     contextMocks.currentDoc = uri
     contextMocks.workspaceDocuments = [
       {
@@ -300,6 +311,7 @@ describe('Actions tabs', () => {
         title: 'reference.runme.md',
         state: 'loaded',
         readOnly: true,
+        owner,
       },
     ]
     contextMocks.notebookSnapshots.set(uri, {
@@ -319,8 +331,35 @@ describe('Actions tabs', () => {
     ).toBeGreaterThan(0)
     expect(
       screen.getByTestId('notebook-readonly-banner').textContent
-    ).toContain('Read-only')
+    ).toContain('session calm-harbor')
     expect(screen.queryByLabelText('Add first cell')).toBeNull()
+  })
+
+  it('shows the owner session when a notebook is blocked by another tab', () => {
+    const uri = 'local://file/blocked.runme.md'
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      {
+        uri,
+        title: 'blocked.runme.md',
+        state: 'blocked',
+        owner: {
+          notebookUri: uri,
+          ownerTabId: 'tab-other',
+          ownerSessionId: 'quiet-signal',
+          ownerLabel: 'Other tab',
+          ownerUrl: 'http://localhost/?session=quiet-signal',
+          ownerStartedAt: '2026-05-22T12:00:00.000Z',
+          epoch: 'epoch-other',
+        },
+      },
+    ]
+
+    render(<Actions />)
+
+    expect(screen.getByTestId('notebook-blocked-state').textContent).toContain(
+      'Open in session: quiet-signal'
+    )
   })
 
   it('shows Drive syncing state instead of empty notebook prompt', async () => {
@@ -469,7 +508,7 @@ describe('Actions tabs', () => {
 
     render(<Actions />)
 
-    fireEvent.contextMenu(screen.getByRole('tab', { name: 'restored.json' }))
+    fireEvent.contextMenu(screen.getByRole('tab', { name: /restored\.json/ }))
     fireEvent.click(await screen.findByRole('button', { name: 'Rename' }))
 
     await waitFor(() => {
@@ -532,6 +571,46 @@ describe('Actions tabs', () => {
         '[202602a_tb_aws_codex_136](http://localhost:3000/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2F1cDDvmvjrBKQDkZi6nojVC_CSAfTSj7EV%2Fview)'
       )
     })
+  })
+
+  it('copies the owner session id from a read-only tab context menu', async () => {
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    const uri = 'local://file/restored'
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      {
+        uri,
+        title: 'restored.json',
+        readOnly: true,
+        owner: {
+          notebookUri: uri,
+          ownerTabId: 'tab-other',
+          ownerSessionId: 'silver-river',
+          ownerLabel: 'Other tab',
+          ownerUrl: 'http://localhost/?session=silver-river',
+          ownerStartedAt: '2026-05-22T12:00:00.000Z',
+          epoch: 'epoch-other',
+        },
+      },
+    ]
+
+    render(<Actions />)
+
+    await act(async () => {
+      fireEvent.contextMenu(screen.getByRole('tab', { name: /restored\.json/ }))
+    })
+    const copyOwnerSessionButton = await screen.findByRole('button', {
+      name: 'Copy Owner Session ID',
+    })
+    await act(async () => {
+      fireEvent.click(copyOwnerSessionButton)
+    })
+
+    expect(writeText).toHaveBeenCalledWith('silver-river')
   })
 
   it('opens a conflict diff from the notebook sync indicator', async () => {
