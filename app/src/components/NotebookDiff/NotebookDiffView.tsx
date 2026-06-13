@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { Badge, Button, ScrollArea, Text } from '@radix-ui/themes'
 
@@ -205,9 +205,11 @@ function CellPanel({ row, side }: { row: CellDiff; side: 'base' | 'compare' }) {
 function RestoreDeletedCellButton({
   localUri,
   row,
+  onRestored,
 }: {
   localUri: string
   row: CellDiff
+  onRestored: (document: NotebookDiffDocument) => void
 }) {
   const { store } = useNotebookStore()
   const [isRestoring, setIsRestoring] = useState(false)
@@ -224,6 +226,7 @@ function RestoreDeletedCellButton({
         localNotebook: notebookData?.getSnapshot().notebook,
       })
       notebookData?.loadNotebook(result.localNotebook, { persist: false })
+      onRestored(result.document)
       showToast({
         message: 'Inserted upstream cell into the local notebook.',
         tone: 'success',
@@ -259,9 +262,11 @@ function RestoreDeletedCellButton({
 function DiffRow({
   row,
   conflictLocalUri,
+  onConflictDocumentChanged,
 }: {
   row: CellDiff
   conflictLocalUri?: string
+  onConflictDocumentChanged: (document: NotebookDiffDocument) => void
 }) {
   if (row.kind === 'unchanged') {
     return (
@@ -292,7 +297,11 @@ function DiffRow({
           )}
         </div>
         {conflictLocalUri && row.kind === 'deleted' && (
-          <RestoreDeletedCellButton localUri={conflictLocalUri} row={row} />
+          <RestoreDeletedCellButton
+            localUri={conflictLocalUri}
+            row={row}
+            onRestored={onConflictDocumentChanged}
+          />
         )}
       </div>
       <div className="grid min-w-[920px] grid-cols-2 gap-3">
@@ -396,10 +405,16 @@ export function NotebookDiffContent({
 }: {
   document: NotebookDiffDocument
 }) {
-  const { diff } = document
+  const [currentDocument, setCurrentDocument] = useState(document)
+
+  useEffect(() => {
+    setCurrentDocument(document)
+  }, [document])
+
+  const { diff } = currentDocument
   const conflictResolution =
-    document.resolution?.kind === 'notebook-sync-conflict'
-      ? document.resolution
+    currentDocument.resolution?.kind === 'notebook-sync-conflict'
+      ? currentDocument.resolution
       : null
 
   return (
@@ -411,7 +426,8 @@ export function NotebookDiffContent({
               Notebook Diff
             </Text>
             <Text as="p" size="2" className="text-nb-text-muted">
-              {document.base.label} compared with {document.compare.label}
+              {currentDocument.base.label} compared with{' '}
+              {currentDocument.compare.label}
             </Text>
             {conflictResolution && (
               <Text
@@ -440,10 +456,10 @@ export function NotebookDiffContent({
         </div>
         <div className="mt-4 grid min-w-[920px] grid-cols-2 gap-3 overflow-x-auto text-xs font-medium uppercase tracking-wide text-nb-text-muted">
           <div className="rounded border border-nb-border bg-nb-surface-2 px-3 py-2">
-            Base: {document.base.label}
+            Base: {currentDocument.base.label}
           </div>
           <div className="rounded border border-nb-border bg-nb-surface-2 px-3 py-2">
-            Compare: {document.compare.label}
+            Compare: {currentDocument.compare.label}
           </div>
         </div>
       </header>
@@ -454,6 +470,7 @@ export function NotebookDiffContent({
               key={row.id}
               row={row}
               conflictLocalUri={conflictResolution?.localUri}
+              onConflictDocumentChanged={setCurrentDocument}
             />
           ))}
         </div>

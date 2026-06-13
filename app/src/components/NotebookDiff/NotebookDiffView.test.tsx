@@ -1,6 +1,6 @@
-import { create } from '@bufbuild/protobuf'
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../../runme/client'
 import type LocalNotebooks from '../../storage/local'
@@ -20,6 +20,12 @@ function notebook(value: string) {
     ],
     metadata: {},
   })
+}
+
+function serialize(notebookValue: parser_pb.Notebook): string {
+  return toJsonString(parser_pb.NotebookSchema, notebookValue, {
+    emitDefaultValues: true,
+  } as unknown as Parameters<typeof toJsonString>[2])
 }
 
 describe('NotebookDiffContent', () => {
@@ -105,5 +111,86 @@ describe('NotebookDiffContent', () => {
         name: 'Insert upstream cell into local notebook',
       })
     ).toBeTruthy()
+  })
+
+  it('inserts a deleted upstream cell into the local notebook and refreshes the diff', async () => {
+    const upstreamNotebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'remote-only',
+          kind: parser_pb.CellKind.CODE,
+          languageId: 'python',
+          value: "print('restore me')",
+        }),
+      ],
+      metadata: {},
+    })
+    const localNotebook = create(parser_pb.NotebookSchema, {
+      cells: [],
+      metadata: {},
+    })
+    let record = {
+      id: 'local://file/conflict',
+      name: 'conflict.json',
+      doc: serialize(localNotebook),
+      conflict: {
+        detectedAt: '2026-06-01T00:00:00.000Z',
+        upstreamChecksum: 'upstream',
+        localChecksumAtDetection: 'local',
+      },
+    }
+    const localStore = {
+      files: {
+        get: vi.fn(async () => record),
+      },
+      getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
+      save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
+        record = {
+          ...record,
+          doc: serialize(saved),
+        }
+      }),
+    } as unknown as LocalNotebooks
+    const doc = {
+      id: 'conflict-diff',
+      base: { label: 'Upstream version', revisionId: 'upstream' },
+      compare: { label: 'Local version' },
+      diff: computeNotebookDiff(upstreamNotebook, localNotebook, {
+        includeMetadata: true,
+        includeOutputs: true,
+      }),
+      resolution: {
+        kind: 'notebook-sync-conflict' as const,
+        localUri: 'local://file/conflict',
+      },
+    }
+
+    render(
+      <NotebookStoreProvider initialStore={localStore}>
+        <NotebookDiffContent document={doc} />
+      </NotebookStoreProvider>
+    )
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Insert upstream cell into local notebook',
+      })
+    )
+
+    await waitFor(() => {
+      expect(localStore.save).toHaveBeenCalledTimes(1)
+      expect(
+        screen.queryByRole('button', {
+          name: 'Insert upstream cell into local notebook',
+        })
+      ).toBeNull()
+    })
+    const savedNotebook = fromJsonString(parser_pb.NotebookSchema, record.doc, {
+      ignoreUnknownFields: true,
+    })
+    expect(savedNotebook.cells.map((cell) => cell.refId)).toEqual([
+      'remote-only',
+    ])
+    expect(screen.getByText('0 deleted')).toBeTruthy()
   })
 })
