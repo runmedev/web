@@ -19,6 +19,11 @@ let runnersState: { name: string; endpoint: string; reconnect: boolean }[] = []
 let chatKitMountCount = 0
 let chatKitUnmountCount = 0
 const ensureAccessTokenMock = vi.fn(async () => 'token')
+const startGoogleDriveOAuthMock = vi.fn(async () => ({
+  status: 'started',
+  authFlow: 'popup',
+  mode: 'popup',
+}))
 const loginWithRedirectMock = vi.fn()
 const logoutMock = vi.fn()
 const togglePanelMock = vi.fn()
@@ -59,6 +64,7 @@ vi.mock('../../contexts/CurrentDocContext', () => ({
 vi.mock('../../contexts/GoogleAuthContext', () => ({
   useGoogleAuth: () => ({
     ensureAccessToken: ensureAccessTokenMock,
+    startGoogleDriveOAuth: startGoogleDriveOAuthMock,
     isDriveSyncing,
   }),
 }))
@@ -99,6 +105,7 @@ describe('SidePanelToolbar drive status button', () => {
     chatKitMountCount = 0
     chatKitUnmountCount = 0
     ensureAccessTokenMock.mockClear()
+    startGoogleDriveOAuthMock.mockClear()
     loginWithRedirectMock.mockClear()
     logoutMock.mockClear()
     togglePanelMock.mockClear()
@@ -124,9 +131,8 @@ describe('SidePanelToolbar drive status button', () => {
       fireEvent.click(driveStatusButton)
       await Promise.resolve()
     })
-    expect(ensureAccessTokenMock).toHaveBeenCalledWith({
-      interactive: true,
-    })
+    expect(startGoogleDriveOAuthMock).toHaveBeenCalledWith()
+    expect(ensureAccessTokenMock).not.toHaveBeenCalled()
     expect(showDocumentMock).not.toHaveBeenCalled()
     expect(setCurrentDocMock).not.toHaveBeenCalled()
   })
@@ -151,6 +157,7 @@ describe('SidePanelToolbar drive status button', () => {
     })
     expect(setCurrentDocMock).toHaveBeenCalledWith('status://drive-sync')
     expect(ensureAccessTokenMock).not.toHaveBeenCalled()
+    expect(startGoogleDriveOAuthMock).not.toHaveBeenCalled()
   })
 
   it('opens sync status from the Drive status keyboard menu', () => {
@@ -170,6 +177,7 @@ describe('SidePanelToolbar drive status button', () => {
     })
     expect(setCurrentDocMock).toHaveBeenCalledWith('status://drive-sync')
     expect(ensureAccessTokenMock).not.toHaveBeenCalled()
+    expect(startGoogleDriveOAuthMock).not.toHaveBeenCalled()
   })
 
   it('dismisses the Drive status context menu when clicking away', () => {
