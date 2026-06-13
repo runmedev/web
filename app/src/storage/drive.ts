@@ -36,6 +36,7 @@ export type DriveDoc = {
   parents?: string[]
   driveId?: string
   content?: string
+  trashed?: boolean
 }
 
 type Drive = {
@@ -160,6 +161,9 @@ class GapiDriveFilesClient implements DriveFilesClient {
     }
     if (Array.isArray(doc.parents)) {
       resource.parents = doc.parents
+    }
+    if (typeof doc.trashed === 'boolean') {
+      resource.trashed = doc.trashed
     }
     return resource
   }
@@ -332,6 +336,9 @@ class FetchDriveFilesClient implements DriveFilesClient {
     }
     if (Array.isArray(doc.parents)) {
       resource.parents = doc.parents
+    }
+    if (typeof doc.trashed === 'boolean') {
+      resource.trashed = doc.trashed
     }
     return resource
   }
@@ -1090,6 +1097,28 @@ export class DriveNotebookStore {
         : NotebookStoreItemType.File,
       children: [],
       remoteUri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
+      parents: [],
+    }
+  }
+
+  async moveToTrash(uri: string): Promise<NotebookStoreItem> {
+    const { id, type } = parseDriveItem(uri)
+    if (type !== NotebookStoreItemType.File) {
+      throw new Error('DriveNotebookStore.moveToTrash expects a file URI')
+    }
+    const client = await this.getFilesClient()
+    const file = await client.update({
+      id,
+      trashed: true,
+    })
+
+    const fileId = file.id ?? id
+    return {
+      uri: driveFileUrl(fileId),
+      name: file.name ?? uri,
+      type: NotebookStoreItemType.File,
+      children: [],
+      remoteUri: driveFileUrl(fileId),
       parents: [],
     }
   }

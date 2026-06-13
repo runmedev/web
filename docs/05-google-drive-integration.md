@@ -90,6 +90,7 @@ await drive.authorize()
 await drive.refreshAuth()
 drive.list(folderIdOrUri)
 drive.create(folderIdOrUri, "name.json")
+drive.trash(fileIdOrUri)
 drive.saveAsCurrentNotebook(folderIdOrUri, "name.json")
 drive.copyNotebook(sourceIdOrUri, targetFolderIdOrUri, "name.json")
 drive.listPendingSync()
@@ -105,6 +106,22 @@ Use this when the Drive status button appears stuck, when an agent needs to
 explicitly refresh Drive auth from App Console, or before asking a user to clear
 browser storage manually. `drive.refreshAuth()` is an alias for the same
 operation.
+
+`drive.trash(fileIdOrUri)` moves a Google Drive file to Drive trash. It is
+available in browser AppKernel JavaScript, including App Console and browser JS
+notebook cells, and is intentionally not exposed in the AppKernel sandbox. For
+bulk cleanup, have Codex insert a browser JS notebook cell that lists candidate
+files first, then review and run the trash command manually:
+
+```js
+const files = await drive.list(folderIdOrUri)
+const targets = files.filter(
+  (item) => item.type === "file" && item.name.toLowerCase().startsWith("untitled"),
+)
+console.table(targets)
+// After review:
+// for (const item of targets) await drive.trash(item.uri)
+```
 
 Optional arguments:
 

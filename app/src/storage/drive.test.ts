@@ -224,6 +224,45 @@ describe("DriveNotebookStore", () => {
     });
   });
 
+  it("moves Drive files to trash through the metadata update API", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/drive/v3/files/file123");
+        expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+        expect(init?.method).toBe("PATCH");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          trashed: true,
+        });
+        return new Response(
+          JSON.stringify({
+            id: "file123",
+            name: "untitled.json",
+            mimeType: "application/json",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const result = await store.moveToTrash(
+      "https://drive.google.com/file/d/file123/view",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      uri: "https://drive.google.com/file/d/file123/view",
+      name: "untitled.json",
+      type: NotebookStoreItemType.File,
+      remoteUri: "https://drive.google.com/file/d/file123/view",
+    });
+  });
+
   it("paginates Drive revisions", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     const fetchMock = vi

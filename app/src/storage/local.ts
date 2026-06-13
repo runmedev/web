@@ -1094,6 +1094,34 @@ export class LocalNotebooks extends Dexie {
     }
   }
 
+  async moveToTrash(uri: string): Promise<void> {
+    if (!uri.startsWith('local://file/')) {
+      throw new Error('LocalNotebooks.moveToTrash expects a file URI')
+    }
+
+    const record = await this.files.get(uri)
+    if (!record) {
+      throw new Error(`Local notebook record not found for ${uri}`)
+    }
+    if (!isDriveUri(record.remoteId)) {
+      throw new Error(
+        'LocalNotebooks.moveToTrash expects a Drive-backed file'
+      )
+    }
+
+    await this.driveStore.moveToTrash(record.remoteId)
+
+    const parentFolder = await this.findParentFolder(uri)
+    if (parentFolder) {
+      await this.folders.update(parentFolder.id, {
+        children: parentFolder.children.filter((childUri) => childUri !== uri),
+        lastSynced: nowIsoString(),
+      })
+    }
+    await this.deleteConflictDoc(record.conflict)
+    await this.files.delete(uri)
+  }
+
   /**
    * Ensure a Markdown sidecar file exists and is synced to Drive for the given file.
    * The purpose of the sidecar file is to make the content available to company knowledge for

@@ -165,6 +165,46 @@ export async function updateDriveFileBytes(
   }
 }
 
+export async function moveDriveFileToTrash(idOrUri: string) {
+  if (!idOrUri?.trim()) {
+    throw new Error("drive.trash requires a Drive file id or URI");
+  }
+
+  const uri = idOrUri.includes("://") ? idOrUri : driveFileUrl(idOrUri.trim());
+  const item = parseDriveItem(uri);
+  if (item.type !== NotebookStoreItemType.File) {
+    throw new Error("drive.trash target must be a Drive file");
+  }
+
+  appLogger.info("Moving Google Drive file to trash", {
+    attrs: {
+      scope: "drive.transfer",
+      uri,
+      fileId: item.id,
+    },
+  });
+  try {
+    const trashed = await ensureDriveStore().moveToTrash(uri);
+    appLogger.info("Moved Google Drive file to trash", {
+      attrs: {
+        scope: "drive.transfer",
+        fileId: item.id,
+      },
+    });
+    return trashed;
+  } catch (error) {
+    appLogger.error("Failed to move Google Drive file to trash", {
+      attrs: {
+        scope: "drive.transfer",
+        uri,
+        fileId: item.id,
+        error: String(error),
+      },
+    });
+    throw error;
+  }
+}
+
 export async function saveNotebookAsDriveCopy(
   notebook: parser_pb.Notebook,
   folder: string,

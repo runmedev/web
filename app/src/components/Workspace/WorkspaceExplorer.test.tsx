@@ -18,32 +18,53 @@ const mocks = vi.hoisted(() => ({
   store: {
     getMetadata: vi.fn(),
     createFolder: vi.fn(),
+    moveToTrash: vi.fn(),
     sync: vi.fn(),
   },
   workspaceItems: [] as string[],
 }))
 
-vi.mock('react-arborist', () => ({
-  Tree: ({ data, children }: any) => (
-    <div data-testid="tree">
-      {(data ?? []).map((item: any) => (
-        <div key={item.id}>
-          {children({
-            node: {
-              data: item,
-              isEditing: false,
-              isOpen: false,
-              handleClick: vi.fn(),
-              toggle: vi.fn(),
-              parent: null,
-            },
-            style: {},
-          })}
-        </div>
-      ))}
-    </div>
-  ),
-}))
+vi.mock('react-arborist', async () => {
+  const React = await vi.importActual<typeof import('react')>('react')
+  const Tree = React.forwardRef(({ data, children, onToggle }: any, ref) => {
+    React.useImperativeHandle(ref, () => ({
+      get: (id: string) => ({
+        data: { uri: id, type: 'folder' },
+        isOpen: true,
+        openParents: vi.fn(),
+        parent: { open: vi.fn() },
+      }),
+      open: vi.fn(),
+      edit: vi.fn(async () => undefined),
+    }))
+
+    const renderItems = (items: any[], parent: any = null): React.ReactNode =>
+      (items ?? []).map((item: any) => {
+        const node = {
+          data: item,
+          isEditing: false,
+          isOpen: true,
+          handleClick: vi.fn(),
+          toggle: vi.fn(() => onToggle?.(item.id)),
+          parent,
+          reset: vi.fn(),
+        }
+        return (
+          <div key={item.id}>
+            {children({
+              node,
+              style: {},
+            })}
+            {item.children?.length ? renderItems(item.children, node) : null}
+          </div>
+        )
+      })
+
+    return <div data-testid="tree">{renderItems(data ?? [])}</div>
+  })
+  Tree.displayName = 'MockTree'
+  return { Tree }
+})
 
 vi.mock('./GoogleDrivePickerButton', () => ({
   GoogleDrivePickerButton: () => <button type="button">Pick Drive</button>,
@@ -141,8 +162,11 @@ describe('WorkspaceExplorer current document handling', () => {
       remoteUri: 'https://drive.google.com/drive/folders/new',
       parents: ['local://folder/drive'],
     })
+    mocks.store.moveToTrash.mockReset()
+    mocks.store.moveToTrash.mockResolvedValue(undefined)
     mocks.store.sync.mockReset()
     vi.spyOn(window, 'prompt').mockReturnValue('Reports')
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
 
   it('does not treat notebook diff URIs as Google Drive documents', async () => {
@@ -188,6 +212,57 @@ describe('WorkspaceExplorer current document handling', () => {
       expect(mocks.store.createFolder).toHaveBeenCalledWith(
         'local://folder/drive',
         'Reports'
+      )
+    })
+  })
+
+  it('moves a Drive-backed file to Google Drive trash from the context menu after confirmation', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/untitled'],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/untitled') {
+        return {
+          uri,
+          name: 'untitled.json',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/file123/view',
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    await waitFor(() => {
+      expect(screen.getByText('untitled.json')).toBeTruthy()
+    })
+
+    fireEvent.contextMenu(screen.getByText('untitled.json'))
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Move to Google Drive Trash',
+      })
+    )
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      'Move "untitled.json" to Google Drive trash? You can restore it from Google Drive trash.'
+    )
+    await waitFor(() => {
+      expect(mocks.store.moveToTrash).toHaveBeenCalledWith(
+        'local://file/untitled'
       )
     })
   })

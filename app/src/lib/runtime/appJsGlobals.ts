@@ -32,6 +32,7 @@ import {
   copyDriveNotebookFile,
   createDriveFile,
   listDriveFolderItems,
+  moveDriveFileToTrash,
   saveNotebookAsDriveCopy,
   updateDriveFileBytes,
 } from '../driveTransfer'
@@ -1783,6 +1784,16 @@ export function createAppJsGlobals({
         emitLine(sendOutput, `Updated Drive file ${id}`)
         return id
       },
+      trash: async (idOrUri: string) => {
+        const item = await moveDriveFileToTrash(idOrUri)
+        emitLine(sendOutput, `Moved Drive file to trash: ${item.name}`)
+        return item
+      },
+      moveToTrash: async (idOrUri: string) => {
+        const item = await moveDriveFileToTrash(idOrUri)
+        emitLine(sendOutput, `Moved Drive file to trash: ${item.name}`)
+        return item
+      },
       saveAsCurrentNotebook: async (folder: string, name: string) => {
         if (!folder?.trim() || !name?.trim()) {
           throw new Error(
@@ -1855,6 +1866,8 @@ export function createAppJsGlobals({
           'drive.refreshAuth(options?)    - Alias for drive.authorize(options?)',
           'drive.create(folder, name)     - Create a Drive file in folder; returns file id',
           'drive.update(id, bytes)        - Write UTF-8 bytes to a Drive file id/URI',
+          'drive.trash(idOrUri)           - Move a Drive file to Google Drive trash',
+          'drive.moveToTrash(idOrUri)     - Alias for drive.trash(idOrUri)',
           'drive.saveAsCurrentNotebook(folder, fileName) - Save current notebook to Drive and switch current doc',
           'drive.copyNotebook(source, targetFolder, fileName?) - Copy a notebook file to another Drive folder',
           'drive.listPendingSync()        - List Drive-backed local notebooks that currently need sync',
