@@ -47,6 +47,7 @@ function createRunme(current: NotebookDataLike | null = null): RunmeConsoleApi {
 describe('createAppJsGlobals notebook reference helpers', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    appState.setDriveNotebookStore(null)
     appState.setLocalNotebooks(null)
     appState.setOpenNotebookHandler(null)
     appState.setGoogleDriveOAuthHandler(null)
@@ -156,6 +157,38 @@ describe('createAppJsGlobals notebook reference helpers', () => {
       accessToken: '<redacted>',
     })
     expect(output.join('')).toContain('Google Drive OAuth authorized.')
+  })
+
+  it('moves Google Drive files to trash from browser AppKernel drive globals', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const moveToTrash = vi.fn(async () => ({
+      uri: remoteUri,
+      name: 'untitled.json',
+      type: 'file',
+      children: [],
+      remoteUri,
+      parents: [],
+    }))
+    const output: string[] = []
+    appState.setDriveNotebookStore({
+      moveToTrash,
+    } as any)
+    const globals = createAppJsGlobals({
+      runme: createRunme(),
+      sendOutput: (data) => output.push(data),
+    })
+
+    const result = await globals.drive.trash(remoteUri)
+
+    expect(moveToTrash).toHaveBeenCalledWith(remoteUri)
+    expect(result).toMatchObject({
+      uri: remoteUri,
+      name: 'untitled.json',
+      remoteUri,
+    })
+    expect(output.join('')).toContain(
+      'Moved Drive file to trash: untitled.json'
+    )
   })
 
   it('loads Google service account credentials from a picked local JSON file', async () => {

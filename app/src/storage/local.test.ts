@@ -34,6 +34,9 @@ function createMockTable<T extends { id: string }>() {
       store.set(id, { ...existing, ...changes })
       return 1
     }),
+    delete: vi.fn(async (id: string) => {
+      store.delete(id)
+    }),
     where: vi.fn((field: keyof T) => ({
       equals: vi.fn((value: unknown) => ({
         first: vi.fn(async () =>
@@ -477,6 +480,47 @@ describe('LocalNotebooks rename', () => {
     expect((await store.files.get('local://file/drive'))?.name).toBe(
       'original.json'
     )
+  })
+})
+
+describe('LocalNotebooks moveToTrash', () => {
+  it('trashes Drive-backed files upstream and removes the local mirror from its parent', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const driveStore = {
+      moveToTrash: vi.fn(async () => ({
+        uri: remoteUri,
+        name: 'untitled.json',
+        type: NotebookStoreItemType.File,
+        children: [],
+        remoteUri,
+        parents: [],
+      })),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: 'local://file/drive',
+      name: 'untitled.json',
+      remoteId: remoteUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+    await store.folders.put({
+      id: 'local://folder/drive',
+      name: 'Drive',
+      remoteId: 'https://drive.google.com/drive/folders/folder123',
+      children: ['local://file/drive'],
+      lastSynced: '',
+    })
+
+    await store.moveToTrash('local://file/drive')
+
+    expect(driveStore.moveToTrash).toHaveBeenCalledWith(remoteUri)
+    await expect(store.files.get('local://file/drive')).resolves.toBeUndefined()
+    expect(
+      (await store.folders.get('local://folder/drive'))?.children
+    ).not.toContain('local://file/drive')
   })
 })
 

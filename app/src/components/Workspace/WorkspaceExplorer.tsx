@@ -180,7 +180,7 @@ function getContextMenuItemCount(menu: ContextMenuState): number {
     return (
       (menu.uri.startsWith("fs://") ? 0 : 1) +
       2 +
-      (menu.remoteUri ? 3 : 0)
+      (menu.remoteUri ? 4 : 0)
     );
   }
 
@@ -1020,6 +1020,57 @@ function formatShortTimestamp(date: Date): string {
     [],
   );
 
+  const handleMoveDriveFileToTrash = useCallback(
+    async (menu: ContextMenuState) => {
+      if (!menu.remoteUri || !store) {
+        return;
+      }
+
+      const confirmed =
+        typeof window === "undefined"
+          ? true
+          : window.confirm(
+              `Move "${menu.name}" to Google Drive trash? You can restore it from Google Drive trash.`,
+            );
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        await store.moveToTrash(menu.uri);
+        if (currentDoc === menu.uri) {
+          setCurrentDoc(null);
+        }
+        if (menu.parentUri) {
+          await fetchChildren(menu.parentUri);
+        } else {
+          removeItem(menu.uri);
+        }
+        setErrorMessage(null);
+        showToast({
+          message: `Moved "${menu.name}" to Google Drive trash`,
+          tone: "success",
+        });
+      } catch (error) {
+        appLogger.error("Failed to move Drive file to trash", {
+          attrs: {
+            scope: "storage.drive.trash",
+            code: "DRIVE_FILE_TRASH_FAILED",
+            uri: menu.uri,
+            remoteUri: menu.remoteUri,
+            error: String(error),
+          },
+        });
+        setErrorMessage("Unable to move file to Google Drive trash.");
+        showToast({
+          message: "Could not move file to Google Drive trash",
+          tone: "error",
+        });
+      }
+    },
+    [currentDoc, fetchChildren, removeItem, setCurrentDoc, store],
+  );
+
   if (!store) {
     return (
       <div className="flex h-full min-h-0 flex-col gap-3">
@@ -1190,6 +1241,21 @@ function formatShortTimestamp(date: Date): string {
                   }}
                 >
                   Copy Markdown Link
+                </button>
+              )}
+              {adjustedContextMenu.remoteUri && (
+                <button
+                  type="button"
+                  className="ctx-menu-item text-red-600"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    const menu = adjustedContextMenu;
+                    setContextMenu(null);
+                    void handleMoveDriveFileToTrash(menu);
+                  }}
+                >
+                  Move to Google Drive Trash
                 </button>
               )}
               {adjustedContextMenu.remoteUri && (
