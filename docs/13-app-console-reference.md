@@ -85,6 +85,8 @@ oidc.setGoogleDefaults()
 oidc.setClientToDrive()
 credentials.google.setClientId('...')
 credentials.google.setClientSecret('...')
+await credentials.google.setServiceAccountFromFile()
+await credentials.google.setServiceAccountFromFilePath('/Users/jlewi/secrets/aisre-gdrive-oai-test-8ba1a40f228e.json')
 ```
 
 Start or refresh Google Drive OAuth:

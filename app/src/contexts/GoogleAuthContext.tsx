@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react'
 import pkceChallenge from 'pkce-challenge'
+import { mintGoogleServiceAccountAccessToken } from '../auth/googleServiceAccount'
 import { googleClientManager } from '../lib/googleClientManager'
 import {
   APP_ROUTE_PATHS,
@@ -615,6 +616,27 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     return token.access_token
   }, [setAccessToken])
 
+  const mintServiceAccountAccessToken = useCallback(async (): Promise<
+    string | null
+  > => {
+    const oauthClient = googleClientManager.getOAuthClient()
+    if (oauthClient.authFlow !== 'service_account') {
+      return null
+    }
+    if (!oauthClient.serviceAccount) {
+      throw new Error('Google Drive service account credentials are missing.')
+    }
+
+    const token = await mintGoogleServiceAccountAccessToken(
+      oauthClient.serviceAccount,
+      DRIVE_SCOPES
+    )
+    setAccessToken(token.access_token, token.expires_in ?? 3600, {
+      refreshToken: null,
+    })
+    return token.access_token
+  }, [setAccessToken])
+
   useEffect(() => {
     tokenInfoRef.current = tokenInfo
   }, [tokenInfo])
@@ -891,6 +913,11 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
           return refreshedInfo.token
         }
 
+        const serviceAccountToken = await mintServiceAccountAccessToken()
+        if (serviceAccountToken) {
+          return serviceAccountToken
+        }
+
         try {
           const refreshedToken = await refreshAccessToken()
           if (refreshedToken) {
@@ -988,6 +1015,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     [
       ensureTokenClient,
       hasRedirectAuthHandoffInProgress,
+      mintServiceAccountAccessToken,
       refreshAccessToken,
       setAccessToken,
       startImplicitRedirect,

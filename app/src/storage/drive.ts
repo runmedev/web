@@ -34,7 +34,13 @@ export type DriveDoc = {
   name?: string
   mimeType?: string
   parents?: string[]
+  driveId?: string
   content?: string
+}
+
+type Drive = {
+  id?: string
+  name?: string
 }
 
 type GapiDriveFileMethods = {
@@ -42,6 +48,10 @@ type GapiDriveFileMethods = {
   update: (request: Record<string, unknown>) => Promise<unknown>
   get: (request: Record<string, unknown>) => Promise<unknown>
   list: (request: Record<string, unknown>) => Promise<unknown>
+}
+
+type GapiDriveMethods = {
+  get: (request: Record<string, unknown>) => Promise<unknown>
 }
 
 type GapiDriveRevisionMethods = {
@@ -65,6 +75,7 @@ interface GapiGlobal {
     getToken?: () => { access_token?: string } | null
     drive: {
       files: GapiDriveFileMethods
+      drives: GapiDriveMethods
       revisions: GapiDriveRevisionMethods
     }
     request: (args: GapiRequestArgs) => Promise<unknown>
@@ -73,6 +84,7 @@ interface GapiGlobal {
 
 type DriveCreateResponse = { result?: DriveDoc }
 type DriveUpdateResponse = { result?: DriveDoc }
+type DriveGetResponse = { result?: Drive }
 type DriveListResponse = { result?: { files?: DriveDoc[] } }
 type DriveRevisionListResponse = {
   result?: { revisions?: DriveRevision[]; nextPageToken?: string }
@@ -84,6 +96,7 @@ interface DriveFilesClient {
   get(
     request: Record<string, unknown>
   ): Promise<{ body?: string; result?: unknown }>
+  getDrive(request: Record<string, unknown>): Promise<DriveGetResponse>
   list(request: Record<string, unknown>): Promise<DriveListResponse>
   listRevisions(
     request: Record<string, unknown>
@@ -96,10 +109,12 @@ interface DriveFilesClient {
 
 class GapiDriveFilesClient implements DriveFilesClient {
   private readonly files: GapiDriveFileMethods
+  private readonly drives: GapiDriveMethods
   private readonly revisions: GapiDriveRevisionMethods
 
   constructor(private readonly gapi: GapiGlobal) {
     this.files = this.gapi.client.drive.files
+    this.drives = this.gapi.client.drive.drives
     this.revisions = this.gapi.client.drive.revisions
   }
 
@@ -205,6 +220,10 @@ class GapiDriveFilesClient implements DriveFilesClient {
 
   list(request: Record<string, unknown>): Promise<DriveListResponse> {
     return this.files.list(request as any) as Promise<DriveListResponse>
+  }
+
+  getDrive(request: Record<string, unknown>): Promise<DriveGetResponse> {
+    return this.drives.get(request as any) as Promise<DriveGetResponse>
   }
 
   listRevisions(
@@ -397,6 +416,15 @@ class FetchDriveFilesClient implements DriveFilesClient {
     return this.request('GET', '/drive/v3/files', {
       params: request,
     }) as Promise<DriveListResponse>
+  }
+
+  getDrive(request: Record<string, unknown>): Promise<DriveGetResponse> {
+    const driveId = String(request.driveId ?? '')
+    return this.request(
+      'GET',
+      `/drive/v3/drives/${encodeURIComponent(driveId)}`,
+      { params: request }
+    ) as Promise<DriveGetResponse>
   }
 
   listRevisions(
@@ -1099,14 +1127,27 @@ export class DriveNotebookStore {
     const response = await client.get({
       fileId: id,
       supportsAllDrives: true,
-      fields: 'id,name,mimeType,parents',
+      fields: 'id,name,mimeType,parents,driveId',
     })
     const result = response.result as {
       name?: string
       mimeType?: string
       parents?: string[]
+      driveId?: string
     }
     const isFolder = result?.mimeType === DRIVE_FOLDER_MIME_TYPE
+    let displayName = result?.name
+    if (isFolder && result?.driveId === id && result.name === 'Drive') {
+      try {
+        const driveResponse = await client.getDrive({
+          driveId: id,
+          fields: 'id,name',
+        })
+        displayName = driveResponse.result?.name ?? displayName
+      } catch (error) {
+        console.error('Failed to resolve shared Drive name', error)
+      }
+    }
     const resolvedType = isFolder
       ? NotebookStoreItemType.Folder
       : NotebookStoreItemType.File
@@ -1123,7 +1164,7 @@ export class DriveNotebookStore {
     })
     return {
       uri,
-      name: result?.name ?? uri,
+      name: displayName ?? uri,
       type: resolvedType,
       children: [],
       remoteUri: uri,

@@ -1,5 +1,7 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { defineConfig } from "vite";
 import svgr from "vite-plugin-svgr";
 
@@ -7,6 +9,59 @@ const backendProxyTarget =
   process.env.VITE_BACKEND_PROXY_TARGET ??
   process.env.CUJ_BACKEND_URL ??
   "http://127.0.0.1:9977";
+const LOCAL_SERVICE_ACCOUNT_KEY_ENDPOINT =
+  "/__runme-dev/service-account-key";
+const MAX_LOCAL_KEY_BYTES = 1024 * 1024;
+
+function localServiceAccountKeyPlugin() {
+  return {
+    name: "runme-local-service-account-key",
+    configureServer(server) {
+      server.middlewares.use(
+        LOCAL_SERVICE_ACCOUNT_KEY_ENDPOINT,
+        async (req, res) => {
+          try {
+            const requestUrl = new URL(
+              req.url ?? "",
+              "http://localhost",
+            );
+            const rawPath = requestUrl.searchParams.get("path") ?? "";
+            if (!rawPath || !path.isAbsolute(rawPath)) {
+              res.statusCode = 400;
+              res.end("Expected absolute service account JSON path.");
+              return;
+            }
+            if (path.extname(rawPath).toLowerCase() !== ".json") {
+              res.statusCode = 400;
+              res.end("Service account key path must end in .json.");
+              return;
+            }
+
+            const text = await readFile(rawPath, "utf8");
+            if (Buffer.byteLength(text, "utf8") > MAX_LOCAL_KEY_BYTES) {
+              res.statusCode = 413;
+              res.end("Service account key file is too large.");
+              return;
+            }
+            JSON.parse(text);
+
+            res.setHeader("Content-Type", "application/json");
+            res.end(
+              JSON.stringify({
+                name: path.basename(rawPath),
+                path: rawPath,
+                text,
+              }),
+            );
+          } catch (error) {
+            res.statusCode = 500;
+            res.end(`Failed to read service account key: ${String(error)}`);
+          }
+        },
+      );
+    },
+  };
+}
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -20,6 +75,7 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    localServiceAccountKeyPlugin(),
     svgr({
       // Copied options from UIKit
       svgrOptions: {

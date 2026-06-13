@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentDoc } from "../../contexts/CurrentDocContext";
 import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
+import { useGoogleAuth } from "../../contexts/GoogleAuthContext";
 import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useRunners } from "../../contexts/RunnersContext";
@@ -135,6 +136,7 @@ function OutputGroups({ outputs }: { outputs: parser_pb.CellOutput[] }) {
 export default function AppConsole({ showHeader = true }: { showHeader?: boolean }) {
   const appConsoleData = getAppConsoleData();
   const { cells, hydrated, loadError } = useAppConsoleSnapshot();
+  const { ensureAccessToken } = useGoogleAuth();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     if (typeof window === "undefined") {
       return false;
@@ -418,6 +420,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
             }
             return items;
           }, []),
+      ensureAccessToken,
       runnerSync: {
         onUpdated: (runner) => {
           updateRunner(

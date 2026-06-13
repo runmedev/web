@@ -108,8 +108,130 @@ type RunnerSync = {
   onDefaultSet?: (name: string) => void
 }
 
+type EnsureAccessToken = (options?: { interactive?: boolean }) => Promise<string>
+
+type LocalTextSelection = {
+  name: string
+  text: string
+}
+
+type LocalServiceAccountKeyResponse = {
+  name?: string
+  path?: string
+  text?: string
+}
+
+const LOCAL_SERVICE_ACCOUNT_KEY_ENDPOINT =
+  '/__runme-dev/service-account-key'
+
 function emitLine(sendOutput: SendOutput | undefined, message: string): void {
   sendOutput?.(`${message}\r\n`)
+}
+
+async function readTextFile(file: File): Promise<LocalTextSelection> {
+  if (typeof file.text === 'function') {
+    return {
+      name: file.name || 'selected.json',
+      text: await file.text(),
+    }
+  }
+  if (typeof file.arrayBuffer === 'function') {
+    const buffer = await file.arrayBuffer()
+    return {
+      name: file.name || 'selected.json',
+      text: new TextDecoder().decode(new Uint8Array(buffer)),
+    }
+  }
+  throw new Error('Selected file does not support text or arrayBuffer reads')
+}
+
+async function pickJsonFromLocalFilesystem(): Promise<LocalTextSelection | null> {
+  if (
+    typeof window !== 'undefined' &&
+    typeof window.showOpenFilePicker === 'function'
+  ) {
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        multiple: false,
+        excludeAcceptAllOption: false,
+        types: [
+          {
+            description: 'JSON files',
+            accept: {
+              'application/json': ['.json'],
+              'text/plain': ['.json'],
+            },
+          },
+        ],
+      })
+      if (!handle) {
+        return null
+      }
+      return readTextFile(await handle.getFile())
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return null
+      }
+      throw error
+    }
+  }
+
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json,application/json'
+    input.style.display = 'none'
+
+    input.onchange = async () => {
+      const file = input.files?.[0] ?? null
+      input.remove()
+      if (!file) {
+        resolve(null)
+        return
+      }
+      try {
+        resolve(await readTextFile(file))
+      } catch (error) {
+        reject(error)
+      }
+    }
+
+    input.oncancel = () => {
+      input.remove()
+      resolve(null)
+    }
+
+    document.body.appendChild(input)
+    input.click()
+  })
+}
+
+async function readServiceAccountJsonFromLocalPath(
+  keyPath: string
+): Promise<LocalTextSelection> {
+  const trimmedPath = keyPath.trim()
+  if (!trimmedPath) {
+    throw new Error('Service account key path is required.')
+  }
+
+  const url = new URL(LOCAL_SERVICE_ACCOUNT_KEY_ENDPOINT, window.location.origin)
+  url.searchParams.set('path', trimmedPath)
+  const response = await fetch(url.toString())
+  const responseText = await response.text()
+  if (!response.ok) {
+    throw new Error(
+      `Failed to read service account key from local dev server (${response.status}): ${responseText}`
+    )
+  }
+
+  const parsed = JSON.parse(responseText) as LocalServiceAccountKeyResponse
+  if (!parsed.text) {
+    throw new Error('Local dev server did not return service account JSON text.')
+  }
+  return {
+    name: parsed.name || trimmedPath.split('/').pop() || 'service-account.json',
+    text: parsed.text,
+  }
 }
 
 function createRunmeApi(
@@ -198,6 +320,7 @@ export function createAppJsGlobals({
   runnerSync,
   resolveNotebook,
   listNotebooks,
+  ensureAccessToken,
   opfsApi,
   networkApi,
 }: {
@@ -210,6 +333,7 @@ export function createAppJsGlobals({
   runnerSync?: RunnerSync
   resolveNotebook?: (target?: unknown) => NotebookDataLike | null
   listNotebooks?: () => NotebookDataLike[]
+  ensureAccessToken?: EnsureAccessToken
   opfsApi?: AppKernelOpfsApi
   networkApi?: AppKernelNetworkApi
 }) {
@@ -840,6 +964,85 @@ export function createAppJsGlobals({
     },
   }
 
+  const googleClientRuntimeApi = {
+    get: () => googleClientManager.getOAuthClient(),
+    getOAuthClient: () => googleClientManager.getOAuthClient(),
+    setOAuthClient: (config: {
+      clientId?: string
+      clientSecret?: string
+      authFlow?: 'implicit' | 'pkce' | 'service_account'
+      authUxMode?: 'popup' | 'redirect' | 'new_tab'
+      serviceAccount?: {
+        clientEmail: string
+        privateKey: string
+        privateKeyId?: string
+        tokenUri?: string
+        subject?: string
+        scopes?: string[]
+      }
+    }) => googleClientManager.setOAuthClient(config),
+    setClientId: (clientId: string) =>
+      googleClientManager.setOAuthClient({ clientId }),
+    setClientSecret: (clientSecret: string) =>
+      googleClientManager.setClientSecret(clientSecret),
+    setAuthFlow: (authFlow: 'implicit' | 'pkce' | 'service_account') =>
+      googleClientManager.setAuthFlow(authFlow),
+    setAuthUxMode: (authUxMode: 'popup' | 'redirect' | 'new_tab') =>
+      googleClientManager.setAuthUxMode(authUxMode),
+    setFromJson: (raw: string) => googleClientManager.setOAuthClientFromJson(raw),
+    setOAuthClientFromJson: (raw: string) =>
+      googleClientManager.setOAuthClientFromJson(raw),
+    setServiceAccountFromFile: async () => {
+      const selection = await pickJsonFromLocalFilesystem()
+      if (!selection) {
+        const message = 'Google service account credential selection cancelled.'
+        emitLine(sendOutput, message)
+        return null
+      }
+      const config = googleClientManager.setOAuthClientFromJson(selection.text)
+      if (config.authFlow !== 'service_account') {
+        throw new Error(
+          `Selected JSON file (${selection.name}) did not contain Google service account credentials.`
+        )
+      }
+      await ensureAccessToken?.({ interactive: false })
+      const message = `Loaded Google Drive service account credentials from ${selection.name}.`
+      emitLine(sendOutput, message)
+      return config
+    },
+    setServiceAccountFromFilePath: async (keyPath: string) => {
+      const selection = await readServiceAccountJsonFromLocalPath(keyPath)
+      const config = googleClientManager.setOAuthClientFromJson(selection.text)
+      if (config.authFlow !== 'service_account') {
+        throw new Error(
+          `Selected JSON file (${selection.name}) did not contain Google service account credentials.`
+        )
+      }
+      await ensureAccessToken?.({ interactive: false })
+      const message = `Loaded Google Drive service account credentials from ${keyPath}.`
+      emitLine(sendOutput, message)
+      return config
+    },
+    getDrivePickerConfig: () => googleClientManager.getDrivePickerConfig(),
+    setDrivePickerConfig: (
+      config: Partial<ReturnType<typeof googleClientManager.getDrivePickerConfig>>
+    ) => googleClientManager.setDrivePickerConfig(config),
+    help: () => {
+      const message = [
+        'googleClientManager.get()                         - Show Google Drive auth config',
+        'googleClientManager.setClientId(clientId)         - Set Google OAuth client ID',
+        'googleClientManager.setClientSecret(secret)       - Set Google OAuth client secret',
+        'googleClientManager.setAuthFlow(flow)             - Set implicit, pkce, or service_account',
+        'googleClientManager.setAuthUxMode(mode)           - Set popup, redirect, or new_tab',
+        'googleClientManager.setFromJson(jsonText)         - Load OAuth or service account JSON text',
+        'await googleClientManager.setServiceAccountFromFile() - Pick a local service account JSON key file',
+        'await googleClientManager.setServiceAccountFromFilePath(path) - Load a service account JSON key path from the dev server',
+      ].join('\n')
+      emitLine(sendOutput, message)
+      return message
+    },
+  }
+
   return {
     runme: runmeApi,
     notebooks: notebooksHelpers,
@@ -1194,25 +1397,7 @@ export function createAppJsGlobals({
         return message
       },
     },
-    googleClientManager: {
-      get: () => googleClientManager.getOAuthClient(),
-      setOAuthClient: (config: {
-        clientId?: string
-        clientSecret?: string
-        authFlow?: 'implicit' | 'pkce'
-        authUxMode?: 'popup' | 'redirect' | 'new_tab'
-      }) => googleClientManager.setOAuthClient(config),
-      setClientId: (clientId: string) =>
-        googleClientManager.setOAuthClient({ clientId }),
-      setClientSecret: (clientSecret: string) =>
-        googleClientManager.setClientSecret(clientSecret),
-      setAuthFlow: (authFlow: 'implicit' | 'pkce') =>
-        googleClientManager.setAuthFlow(authFlow),
-      setAuthUxMode: (authUxMode: 'popup' | 'redirect' | 'new_tab') =>
-        googleClientManager.setAuthUxMode(authUxMode),
-      setFromJson: (raw: string) =>
-        googleClientManager.setOAuthClientFromJson(raw),
-    },
+    googleClientManager: googleClientRuntimeApi,
     oidc: {
       get: () => oidcConfigManager.getConfig(),
       getRedirectURI: () => oidcConfigManager.getRedirectURI(),
@@ -1266,7 +1451,7 @@ export function createAppJsGlobals({
       },
     },
     credentials: {
-      google: googleClientManager,
+      google: googleClientRuntimeApi,
       oidc: oidcConfigManager,
       openai: {
         get: () => responsesDirect.getSnapshot(),

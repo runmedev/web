@@ -1,6 +1,7 @@
 import YAML from 'yaml'
 
 import type { OidcConfig } from '../auth/oidcConfig'
+import type { GoogleServiceAccountCredentials } from '../auth/googleServiceAccount'
 import { OIDC_STORAGE_KEY, oidcConfigManager } from '../auth/oidcConfig'
 import { agentEndpointManager } from './agentEndpointManager'
 import { getOidcCallbackUrl, resolveAppUrl } from './appBase'
@@ -66,6 +67,7 @@ export interface GoogleDriveRuntimeConfig {
   baseUrl: string
   authFlow: GoogleDriveAuthFlow
   authUxMode: GoogleDriveAuthUxMode
+  serviceAccount?: GoogleServiceAccountCredentials
 }
 
 export interface ChatkitRuntimeConfig {
@@ -147,8 +149,15 @@ function asGoogleDriveAuthFlow(
     return undefined
   }
   const normalized = value.trim().toLowerCase()
-  if (normalized === 'implicit' || normalized === 'pkce') {
+  if (
+    normalized === 'implicit' ||
+    normalized === 'pkce' ||
+    normalized === 'service_account'
+  ) {
     return normalized
+  }
+  if (normalized === 'service-account' || normalized === 'serviceaccount') {
+    return 'service_account'
   }
   return undefined
 }
@@ -181,6 +190,29 @@ function asStringArray(value: unknown): string[] {
     .map((item) => asNonEmptyString(item))
     .filter((item): item is string => Boolean(item))
   return values
+}
+
+function parseGoogleDriveServiceAccount(
+  value: unknown
+): GoogleServiceAccountCredentials | undefined {
+  const record = asRecord(value)
+  if (!record) {
+    return undefined
+  }
+  const clientEmail = pickString(record, ['clientEmail', 'client_email'])
+  const privateKey = pickString(record, ['privateKey', 'private_key'])
+  if (!clientEmail && !privateKey) {
+    return undefined
+  }
+  return {
+    clientEmail,
+    privateKey,
+    privateKeyId:
+      pickString(record, ['privateKeyId', 'private_key_id']) || undefined,
+    tokenUri: pickString(record, ['tokenUri', 'token_uri']) || undefined,
+    subject: pickString(record, ['subject']) || undefined,
+    scopes: asStringArray(record.scopes),
+  }
 }
 
 function readSettingsFromStorage(storage: Storage): Record<string, unknown> {
@@ -406,6 +438,7 @@ function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
       baseUrl: '',
       authFlow: 'implicit',
       authUxMode: 'new_tab',
+      serviceAccount: undefined,
     },
     chatkit: {
       domainKey: '',
@@ -511,6 +544,9 @@ export class RuntimeAppConfigSchema {
             drive.oauthUxMode ??
             drive.uxMode
         ) ?? 'new_tab'
+      const serviceAccount = parseGoogleDriveServiceAccount(
+        drive.serviceAccount ?? drive.service_account
+      )
       parsed.googleDrive = {
         clientId: pickString(drive, ['clientId', 'clientID']),
         clientSecret: hasClientMaterial
@@ -519,6 +555,7 @@ export class RuntimeAppConfigSchema {
         baseUrl: asNonEmptyString(drive.baseUrl),
         authFlow,
         authUxMode,
+        serviceAccount,
       }
     }
 
@@ -652,21 +689,31 @@ export function applyAppConfig(
   const googleClientSecret = normalizeString(parsed.googleDrive.clientSecret)
   const googleAuthFlow = parsed.googleDrive.authFlow
   const googleAuthUxMode = parsed.googleDrive.authUxMode
+  const googleServiceAccount = parsed.googleDrive.serviceAccount
   const skipGoogleDriveFromConfig =
     preserveLocalConfiguration && hasLocalDriveConfig
   if (skipGoogleDriveFromConfig) {
     googleOAuth = googleClientManager.getOAuthClient()
   } else {
-    if (googleClientId) {
+    if (googleClientId || googleAuthFlow === 'service_account') {
       try {
         googleOAuth = googleClientManager.setOAuthClient({
-          clientId: googleClientId,
+          clientId: googleClientId ?? '',
           clientSecret: googleClientSecret,
           authFlow: googleAuthFlow,
           authUxMode: googleAuthUxMode,
+          serviceAccount: googleServiceAccount,
         })
       } catch (error) {
         warnings.push(`Google OAuth config not applied: ${String(error)}`)
+      }
+      if (
+        googleAuthFlow === 'service_account' &&
+        (!googleServiceAccount?.clientEmail || !googleServiceAccount.privateKey)
+      ) {
+        warnings.push(
+          'Google Drive service account config missing client_email/private_key'
+        )
       }
     } else if (hasGoogleDriveBlock) {
       warnings.push('Google Drive config missing clientID/clientId')

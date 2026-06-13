@@ -52,6 +52,10 @@ Meaning:
 
 - `authFlow: "implicit"` asks Google for an access token directly in the browser.
 - `authFlow: "pkce"` uses the authorization-code flow and exchanges the code after the callback.
+- `authFlow: "service_account"` mints short-lived OAuth access tokens from a
+  Google Cloud service account private key. Use this only for local or automated
+  testing with tightly scoped Drive folders; do not ship browser deployments
+  that expose production private keys.
 - `authUxMode: "popup"` uses the Google Identity Services popup flow.
 - `authUxMode: "redirect"` redirects the current tab to Google and back.
 - `authUxMode: "new_tab"` opens the Drive auth flow in a separate tab and is the default.
@@ -60,7 +64,23 @@ Recommended defaults:
 
 - Use `implicit` + `new_tab` for the least disruptive browser UX.
 - Use `pkce` + `new_tab` when you want authorization-code flow semantics but still want to avoid taking over the current tab.
+- Use `service_account` for automated tests that need Drive access without human
+  consent. Share the target test Drive folder with the service account email.
 - Use `redirect` only when you explicitly want the current tab to navigate through the OAuth flow.
+
+Service account example:
+
+```yaml
+googleDrive:
+  authFlow: "service_account"
+  serviceAccount:
+    client_email: "<service-account>@<project>.iam.gserviceaccount.com"
+    private_key_id: "<key-id>"
+    private_key: |
+      -----BEGIN PRIVATE KEY-----
+      ...
+      -----END PRIVATE KEY-----
+```
 
 ## Useful App Console commands
 

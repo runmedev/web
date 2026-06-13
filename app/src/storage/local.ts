@@ -441,7 +441,12 @@ export class LocalNotebooks extends Dexie {
     // When callers don't provide a name, resolve the remote folder metadata so
     // new mounts use the human-readable Drive name instead of an id-derived
     // fallback. If an existing record still has that fallback name, upgrade it.
-    if (!name && (!existingFolder || existingFolder.name === fallbackName)) {
+    if (
+      !name &&
+      (!existingFolder ||
+        existingFolder.name === fallbackName ||
+        existingFolder.name === 'Drive')
+    ) {
       try {
         const metadata = await this.driveStore.getMetadata(remoteUri)
         const remoteName = metadata?.name?.trim()

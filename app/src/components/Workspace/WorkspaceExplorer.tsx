@@ -375,7 +375,15 @@ export function WorkspaceExplorer() {
           continue;
         }
 
-        const metadata = await store.getMetadata(localUri);
+        let metadata = await store.getMetadata(localUri);
+        if (metadata?.remoteUri && metadata.name === "Drive") {
+          try {
+            await store.updateFolder(metadata.remoteUri);
+            metadata = await store.getMetadata(localUri);
+          } catch (error) {
+            console.error("Failed to refresh Drive folder name", error);
+          }
+        }
         const name = metadata?.name ?? localUri;
         const type = metadata?.type ?? NotebookStoreItemType.Folder;
         if (type !== NotebookStoreItemType.Folder) {

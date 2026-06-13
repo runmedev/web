@@ -33,6 +33,8 @@ credentials.google.setAuthUxMode("redirect") // or "popup"
 await drive.authorize()
 await drive.refreshAuth()
 await app.startGoogleDriveOAuth()
+await credentials.google.setServiceAccountFromFile()
+await credentials.google.setServiceAccountFromFilePath("/Users/jlewi/secrets/aisre-gdrive-oai-test-8ba1a40f228e.json")
 ```
 
 `drive.authorize()` and `app.startGoogleDriveOAuth()` both start a new Google
@@ -43,6 +45,33 @@ recovery path when stale OAuth state prevents the Drive auth button from
 launching a new flow.
 
 `drive.refreshAuth()` is an alias for `drive.authorize()`.
+
+## Google Drive service-account auth
+
+For automated tests, app config can select service-account Drive auth:
+
+```yaml
+googleDrive:
+  authFlow: "service_account"
+  serviceAccount:
+    client_email: "<service-account>@<project>.iam.gserviceaccount.com"
+    private_key: |
+      -----BEGIN PRIVATE KEY-----
+      ...
+      -----END PRIVATE KEY-----
+```
+
+This is intended for local/CI testing with a service account shared only into
+test Drive folders. Do not expose production service-account keys to browser
+deployments.
+
+`setServiceAccountFromFile()` opens a browser file picker and reads a local
+service-account JSON key file. Browser JavaScript cannot read arbitrary local
+filesystem paths directly.
+
+`setServiceAccountFromFilePath(path)` is available when the app is served by the
+local Vite dev server. It asks the dev server to read an absolute `.json` path,
+so it is intended for local automation only.
 
 ## App config helpers
 
