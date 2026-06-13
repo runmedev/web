@@ -44,6 +44,10 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'notebookDiff.listDriveRevisions',
   'notebookDiff.diffDriveRevision',
   'notebookDiff.openDiffTab',
+  'notebookDiff.openConflictDiff',
+  'notebookDiff.listConflictCells',
+  'notebookDiff.restoreDeletedCell',
+  'notebookDiff.restoreAllDeletedCells',
   'notebookDiff.help',
   'app.getSessionId',
   'app.getSessionID',
@@ -273,6 +277,10 @@ function buildSandboxSrcDoc(options: {
           listDriveRevisions: (target) => hostCall("notebookDiff.listDriveRevisions", [target]),
           diffDriveRevision: (args) => hostCall("notebookDiff.diffDriveRevision", [args]),
           openDiffTab: (diff) => hostCall("notebookDiff.openDiffTab", [diff]),
+          openConflictDiff: (args) => hostCall("notebookDiff.openConflictDiff", [args]),
+          listConflictCells: (args) => hostCall("notebookDiff.listConflictCells", [args]),
+          restoreDeletedCell: (args) => hostCall("notebookDiff.restoreDeletedCell", [args]),
+          restoreAllDeletedCells: (args) => hostCall("notebookDiff.restoreAllDeletedCells", [args]),
           help: () => hostCall("notebookDiff.help", []),
         };
         const codex = {
@@ -330,6 +338,10 @@ function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebookDiff.listDriveRevisions([target])");
           consoleProxy.log("- notebookDiff.diffDriveRevision({ target?, revisionId, includeOutputs?, includeMetadata? })");
           consoleProxy.log("- notebookDiff.openDiffTab(diff)");
+          consoleProxy.log("- notebookDiff.openConflictDiff({ target?, localUri? })");
+          consoleProxy.log("- notebookDiff.listConflictCells({ target?, localUri? })");
+          consoleProxy.log("- notebookDiff.restoreDeletedCell({ target?, localUri?, refId?, rowId? })");
+          consoleProxy.log("- notebookDiff.restoreAllDeletedCells({ target?, localUri? })");
           consoleProxy.log("- codex.turns.list()");
           consoleProxy.log("- codex.turns.getEvents(turnId, { sessionId? })");
           consoleProxy.log("- const [latest] = await codex.turns.list(); consoleProxy.log(await codex.turns.getEvents(latest.turnId));");

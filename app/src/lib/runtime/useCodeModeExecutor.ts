@@ -23,6 +23,8 @@ type CodeModeNotebookAdapterSource = Pick<
       | 'addCellBefore'
       | 'removeCell'
       | 'isReadOnly'
+      | 'flushPendingPersist'
+      | 'loadNotebook'
     >
   >
 
@@ -40,6 +42,8 @@ export function createCodeModeNotebookAdapter(
     addCellAfter: data.addCellAfter?.bind(data),
     addCellBefore: data.addCellBefore?.bind(data),
     removeCell: data.removeCell?.bind(data),
+    flushPendingPersist: data.flushPendingPersist?.bind(data),
+    loadNotebook: data.loadNotebook?.bind(data),
   }
 }
 
