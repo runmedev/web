@@ -217,11 +217,32 @@ function runWithRetry(command: string, attempts = 3, waitMs = 1200): void {
   throw new Error(`Command failed after ${attempts} attempts: ${command}\n${lastError}`);
 }
 
+function openAppConsoleDocument(): boolean {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const output = run(
+      `agent-browser eval "${escapeDoubleQuotes(`(() => {
+        const button = document.querySelector('button[aria-label="Open App Console"]');
+        if (!(button instanceof HTMLButtonElement)) return 'missing';
+        button.click();
+        return document.querySelector('textarea[aria-label="App Console input"]')
+          ? 'visible'
+          : 'clicked';
+      })()`)}"`,
+    ).stdout;
+    if (output.includes("visible")) {
+      return true;
+    }
+    run("agent-browser wait 350");
+  }
+  return false;
+}
+
 mkdirSync(OUTPUT_DIR, { recursive: true });
 rmSync(join(OUTPUT_DIR, "scenario-hello-world-01-initial.png"), { force: true });
 rmSync(MOVIE_PATH, { force: true });
 for (const file of [
   "scenario-hello-world-02-after-seed.txt",
+  "scenario-hello-world-02b-app-console-open.txt",
   "scenario-hello-world-03-console-output.txt",
   "scenario-hello-world-03b-runner-setup.txt",
   "scenario-hello-world-04-before-open.txt",
@@ -330,6 +351,16 @@ if (seedResult.includes("ok")) {
 
 let snapshot = run("agent-browser snapshot -i").stdout;
 writeArtifact("scenario-hello-world-02-after-seed.txt", snapshot);
+
+if (openAppConsoleDocument()) {
+  run("agent-browser wait 600");
+  pass("Opened App Console document tab");
+} else {
+  fail("Could not open App Console document tab");
+}
+
+snapshot = run("agent-browser snapshot -i").stdout;
+writeArtifact("scenario-hello-world-02b-app-console-open.txt", snapshot);
 
 const consoleRef = firstRef(snapshot, /App Console input/i);
 if (!consoleRef) {

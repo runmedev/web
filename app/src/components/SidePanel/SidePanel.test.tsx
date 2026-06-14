@@ -8,7 +8,6 @@ type PanelKey = 'explorer' | 'open-documents' | 'chatkit' | null
 let authData: {} | null = null
 let isDriveSyncing = false
 let activePanelState: PanelKey = 'explorer'
-let commandsPanelOpen = false
 let commentsPanelOpen = false
 let currentDocUri: string | null = null
 let openDocumentsState: {
@@ -29,7 +28,6 @@ const startGoogleDriveOAuthMock = vi.fn(async () => ({
 const loginWithRedirectMock = vi.fn()
 const logoutMock = vi.fn()
 const togglePanelMock = vi.fn()
-const toggleCommandsPanelMock = vi.fn()
 const toggleCommentsPanelMock = vi.fn()
 const setCurrentDocMock = vi.fn()
 const showDocumentMock = vi.fn()
@@ -47,13 +45,6 @@ vi.mock('../../contexts/SidePanelContext', () => ({
   useSidePanel: () => ({
     activePanel: activePanelState,
     togglePanel: togglePanelMock,
-  }),
-}))
-
-vi.mock('../../contexts/BottomPaneContext', () => ({
-  useBottomPane: () => ({
-    commandsPanelOpen,
-    toggleCommandsPanel: toggleCommandsPanelMock,
   }),
 }))
 
@@ -117,7 +108,6 @@ describe('SidePanelToolbar drive status button', () => {
     authData = null
     isDriveSyncing = false
     activePanelState = 'explorer'
-    commandsPanelOpen = false
     commentsPanelOpen = false
     currentDocUri = null
     openDocumentsState = []
@@ -129,7 +119,6 @@ describe('SidePanelToolbar drive status button', () => {
     loginWithRedirectMock.mockClear()
     logoutMock.mockClear()
     togglePanelMock.mockClear()
-    toggleCommandsPanelMock.mockClear()
     toggleCommentsPanelMock.mockClear()
     setCurrentDocMock.mockClear()
     showDocumentMock.mockClear()
@@ -225,28 +214,31 @@ describe('SidePanelToolbar drive status button', () => {
     expect(togglePanelMock).toHaveBeenCalledWith('open-documents')
   })
 
-  it('exposes a Commands button in the toolbar', () => {
+  it('exposes an App Console button in the toolbar', () => {
     render(<SidePanelToolbar />)
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Toggle Commands panel' })
+      screen.getByRole('button', { name: 'Open App Console' })
     )
 
-    expect(toggleCommandsPanelMock).toHaveBeenCalled()
+    expect(showDocumentMock).toHaveBeenCalledWith('app://console', {
+      title: 'App Console',
+    })
+    expect(setCurrentDocMock).toHaveBeenCalledWith('app://console')
   })
 
-  it('exposes a Comments button above Commands in the toolbar', () => {
+  it('exposes a Comments button above App Console in the toolbar', () => {
     render(<SidePanelToolbar />)
 
     const commentsButton = screen.getByRole('button', {
       name: 'Toggle Comments panel',
     })
-    const commandsButton = screen.getByRole('button', {
-      name: 'Toggle Commands panel',
+    const appConsoleButton = screen.getByRole('button', {
+      name: 'Open App Console',
     })
 
     expect(
-      commentsButton.compareDocumentPosition(commandsButton) &
+      commentsButton.compareDocumentPosition(appConsoleButton) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
 
@@ -285,6 +277,22 @@ describe('SidePanelToolbar drive status button', () => {
       title: 'Notebook Runner Status',
     })
     expect(setCurrentDocMock).toHaveBeenCalledWith('status://runners')
+  })
+
+  it('opens the App Console and Logs documents from the toolbar', () => {
+    render(<SidePanelToolbar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open App Console' }))
+    expect(showDocumentMock).toHaveBeenCalledWith('app://console', {
+      title: 'App Console',
+    })
+    expect(setCurrentDocMock).toHaveBeenCalledWith('app://console')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Logs' }))
+    expect(showDocumentMock).toHaveBeenCalledWith('app://logs', {
+      title: 'Logs',
+    })
+    expect(setCurrentDocMock).toHaveBeenCalledWith('app://logs')
   })
 
   it('marks the runner status button unavailable when no runner endpoint exists', () => {
@@ -354,6 +362,8 @@ describe('SidePanelContent ChatKit persistence', () => {
       { uri: 'app://version', title: 'Version Information' },
       { uri: 'status://runners', title: 'Notebook Runner Status' },
       { uri: 'status://drive-sync', title: 'Google Drive Sync Status' },
+      { uri: 'app://console', title: 'App Console' },
+      { uri: 'app://logs', title: 'Logs' },
     ]
     closeWorkspaceDocumentMock.mockReturnValue('diff://notebook/beta')
 
@@ -366,6 +376,8 @@ describe('SidePanelContent ChatKit persistence', () => {
     expect(screen.getByText('Version · app://version')).toBeTruthy()
     expect(screen.getByText('Runner Status · status://runners')).toBeTruthy()
     expect(screen.getByText('Drive Sync · status://drive-sync')).toBeTruthy()
+    expect(screen.getByText('App Console · app://console')).toBeTruthy()
+    expect(screen.getByText('Logs · app://logs')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Close alpha.json' }))
     expect(closeWorkspaceDocumentMock).toHaveBeenCalledWith(

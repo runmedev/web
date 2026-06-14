@@ -3,6 +3,7 @@ import {
   CommandLineIcon,
   FolderIcon,
   ChatBubbleLeftRightIcon,
+  DocumentTextIcon,
   InformationCircleIcon,
   QueueListIcon,
   ServerStackIcon,
@@ -29,7 +30,6 @@ import { useGoogleAuth } from '../../contexts/GoogleAuthContext'
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import { useRunners } from '../../contexts/RunnersContext'
 import { useSidePanel } from '../../contexts/SidePanelContext'
-import { useBottomPane } from '../../contexts/BottomPaneContext'
 import { useCommentsPanel } from '../../contexts/CommentsPanelContext'
 import { useWorkspaceDocumentContext } from '../../contexts/WorkspaceDocumentContext'
 import {
@@ -42,6 +42,10 @@ import {
   VERSION_INFO_DOCUMENT_URI,
   isRunnerStatusUri,
   RUNNER_STATUS_DOCUMENT_URI,
+  isAppConsoleUri,
+  APP_CONSOLE_DOCUMENT_URI,
+  isLogsUri,
+  LOGS_DOCUMENT_URI,
 } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 
 const sideButtonBase = 'group side-btn'
@@ -145,7 +149,11 @@ function OpenDocumentsPanel() {
                         ? 'Version'
                         : isRunnerStatusUri(doc.uri)
                           ? 'Runner Status'
-                          : 'Document'
+                          : isAppConsoleUri(doc.uri)
+                            ? 'App Console'
+                            : isLogsUri(doc.uri)
+                              ? 'Logs'
+                              : 'Document'
               return (
                 <li key={doc.uri}>
                   <div
@@ -208,7 +216,6 @@ function OpenDocumentsPanel() {
 
 export function SidePanelToolbar() {
   const { activePanel, togglePanel } = useSidePanel()
-  const { commandsPanelOpen, toggleCommandsPanel } = useBottomPane()
   const { commentsPanelOpen, toggleCommentsPanel } = useCommentsPanel()
   const { showDocument } = useWorkspaceDocumentContext()
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
@@ -224,6 +231,8 @@ export function SidePanelToolbar() {
 
   const driveStatus = isDriveSyncing ? 'Syncing' : 'Not syncing'
   const versionInfoSelected = getCurrentDoc() === VERSION_INFO_DOCUMENT_URI
+  const appConsoleSelected = getCurrentDoc() === APP_CONSOLE_DOCUMENT_URI
+  const logsSelected = getCurrentDoc() === LOGS_DOCUMENT_URI
   const driveSyncStatusSelected =
     getCurrentDoc() === DRIVE_SYNC_STATUS_DOCUMENT_URI
   const hasAvailableRunner = listRunners().some((runner) =>
@@ -317,6 +326,20 @@ export function SidePanelToolbar() {
     setCurrentDoc(RUNNER_STATUS_DOCUMENT_URI)
   }, [setCurrentDoc, showDocument])
 
+  const handleAppConsoleClick = useCallback(() => {
+    showDocument(APP_CONSOLE_DOCUMENT_URI, {
+      title: 'App Console',
+    })
+    setCurrentDoc(APP_CONSOLE_DOCUMENT_URI)
+  }, [setCurrentDoc, showDocument])
+
+  const handleLogsClick = useCallback(() => {
+    showDocument(LOGS_DOCUMENT_URI, {
+      title: 'Logs',
+    })
+    setCurrentDoc(LOGS_DOCUMENT_URI)
+  }, [setCurrentDoc, showDocument])
+
   return (
     <div className="flex h-full w-12 flex-col items-center justify-between">
       <div className="flex flex-col items-center gap-2 pt-2">
@@ -373,14 +396,26 @@ export function SidePanelToolbar() {
         <button
           type="button"
           className={`${sideButtonBase} ${
-            commandsPanelOpen ? sideButtonActive : sideButtonInactive
+            appConsoleSelected ? sideButtonActive : sideButtonInactive
           }`}
-          aria-pressed={commandsPanelOpen}
-          aria-label="Toggle Commands panel"
-          onClick={toggleCommandsPanel}
+          aria-pressed={appConsoleSelected}
+          aria-label="Open App Console"
+          onClick={handleAppConsoleClick}
         >
           <CommandLineIcon className="h-5 w-5" />
-          <span className={tooltipBase}>Commands</span>
+          <span className={tooltipBase}>App Console</span>
+        </button>
+        <button
+          type="button"
+          className={`${sideButtonBase} ${
+            logsSelected ? sideButtonActive : sideButtonInactive
+          }`}
+          aria-pressed={logsSelected}
+          aria-label="Open Logs"
+          onClick={handleLogsClick}
+        >
+          <DocumentTextIcon className="h-5 w-5" />
+          <span className={tooltipBase}>Logs</span>
         </button>
       </div>
       <div className="flex flex-col items-center gap-2 pb-2">

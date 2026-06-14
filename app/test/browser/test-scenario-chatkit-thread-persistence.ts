@@ -192,6 +192,26 @@ function runAppConsoleCommand(consoleRef: string, command: string): string {
   return readAppConsoleOutput();
 }
 
+function openAppConsoleDocument(): boolean {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const output = run(
+      `agent-browser eval "${escapeDoubleQuotes(`(() => {
+        const button = document.querySelector('button[aria-label="Open App Console"]');
+        if (!(button instanceof HTMLButtonElement)) return 'missing';
+        button.click();
+        return document.querySelector('textarea[aria-label="App Console input"]')
+          ? 'visible'
+          : 'clicked';
+      })()`)}"`,
+    ).stdout;
+    if (output.includes("visible")) {
+      return true;
+    }
+    run("agent-browser wait 350");
+  }
+  return false;
+}
+
 function readHarnessStorage(): string {
   const script = "localStorage.getItem('runme/harness') || '{}'";
   return normalizeAgentBrowserString(
@@ -400,6 +420,7 @@ mkdirSync(OUTPUT_DIR, { recursive: true });
 rmSync(MOVIE_PATH, { force: true });
 for (const file of [
   "scenario-chatkit-thread-persistence-01-snapshot.txt",
+  "scenario-chatkit-thread-persistence-01b-app-console-open.txt",
   "scenario-chatkit-thread-persistence-02-harness.txt",
   "scenario-chatkit-thread-persistence-03-before-switch.png",
   "scenario-chatkit-thread-persistence-04-explorer.png",
@@ -467,7 +488,20 @@ try {
   const initialSnapshot = run("agent-browser snapshot").stdout;
   writeArtifact("scenario-chatkit-thread-persistence-01-snapshot.txt", initialSnapshot);
 
-  const consoleRef = firstRef(initialSnapshot, /app console input|console-input/i);
+  if (openAppConsoleDocument()) {
+    run("agent-browser wait 600");
+    pass("Opened App Console document tab");
+  } else {
+    fail("Could not open App Console document tab");
+  }
+
+  const consoleSnapshot = run("agent-browser snapshot").stdout;
+  writeArtifact(
+    "scenario-chatkit-thread-persistence-01b-app-console-open.txt",
+    consoleSnapshot,
+  );
+
+  const consoleRef = firstRef(consoleSnapshot, /app console input|console-input/i);
   if (!consoleRef) {
     fail("Could not find App Console input");
   }

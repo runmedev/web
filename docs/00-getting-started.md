@@ -18,7 +18,7 @@ Get the web app to a state where a user can:
 ## Fastest successful path
 
 1. Open the app.
-2. Open the bottom pane and switch to `App Console`.
+2. Open `App Console` from the left navigation bar.
 3. Configure a runner if needed:
 
 ```js
@@ -52,5 +52,4 @@ explorer.importMarkdown()
 - The default page is the notebook workspace at `/`.
 - The app persists runner, harness, and config state in browser storage.
 - Local notebooks are first-class. A user does not need Google Drive to start.
-- The bottom pane is operationally important. It exposes both `App Console` and
-  `Logs`.
+- `App Console` and `Logs` open as document tabs from the left navigation bar.

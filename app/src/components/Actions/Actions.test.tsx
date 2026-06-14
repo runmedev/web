@@ -15,8 +15,13 @@ import {
   getNotebookDiffDocumentUri,
   registerNotebookDiffDocument,
 } from '../../lib/notebookDiff/registry'
-import { VERSION_INFO_DOCUMENT_URI } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
-import Actions, { Action, ActionOutputItems } from './Actions'
+import {
+  APP_CONSOLE_DOCUMENT_URI,
+  LOGS_DOCUMENT_URI,
+  VERSION_INFO_DOCUMENT_URI,
+} from '../../lib/workspaceDocuments/workspaceDocumentTypes'
+import { ActionOutputItems } from './ActionOutputItems'
+import Actions, { Action } from './Actions'
 
 const contextMocks = vi.hoisted(() => ({
   workspaceDocuments: [] as Array<{
@@ -152,6 +157,21 @@ vi.mock('../../lib/runtime/jupyterManager', () => ({
       return { serverName, kernelId }
     },
   }),
+}))
+
+vi.mock('../AppConsole/AppConsole', () => ({
+  default: ({ showHeader }: { showHeader?: boolean }) => (
+    <div
+      data-show-header={showHeader ? 'true' : 'false'}
+      data-testid="app-console-mock"
+    >
+      App console mock
+    </div>
+  ),
+}))
+
+vi.mock('../Logs/LogsPane', () => ({
+  default: () => <div data-testid="logs-pane-mock">Logs pane mock</div>,
 }))
 
 // Mock runmedev/renderers to avoid registering the real web component,
@@ -961,6 +981,24 @@ describe('Actions tabs', () => {
     ).toBeTruthy()
     expect(screen.getByText('Release')).toBeTruthy()
     expect(screen.getByText('version.yaml')).toBeTruthy()
+  })
+
+  it('renders App Console and Logs workspace documents as tabs', () => {
+    contextMocks.currentDoc = APP_CONSOLE_DOCUMENT_URI
+    contextMocks.workspaceDocuments = [
+      { uri: APP_CONSOLE_DOCUMENT_URI, title: 'App Console' },
+      { uri: LOGS_DOCUMENT_URI, title: 'Logs' },
+    ]
+
+    render(<Actions />)
+
+    expect(screen.getByRole('tab', { name: 'App Console' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Logs' })).toBeTruthy()
+    expect(screen.getByTestId('app-console-mock')).toBeTruthy()
+    expect(
+      screen.getByTestId('app-console-mock').getAttribute('data-show-header')
+    ).toBe('false')
+    expect(screen.getByTestId('logs-pane-mock')).toBeTruthy()
   })
 })
 

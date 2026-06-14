@@ -5,6 +5,8 @@ export const DRIVE_LINK_STATUS_DOCUMENT_URI = 'status://drive-link'
 export const DRIVE_SYNC_STATUS_DOCUMENT_URI = 'status://drive-sync'
 export const VERSION_INFO_DOCUMENT_URI = 'app://version'
 export const RUNNER_STATUS_DOCUMENT_URI = 'status://runners'
+export const APP_CONSOLE_DOCUMENT_URI = 'app://console'
+export const LOGS_DOCUMENT_URI = 'app://logs'
 
 export interface WorkspaceDocument {
   uri: string
@@ -47,6 +49,14 @@ export function isRunnerStatusUri(uri: string | null | undefined): boolean {
   return uri === RUNNER_STATUS_DOCUMENT_URI
 }
 
+export function isAppConsoleUri(uri: string | null | undefined): boolean {
+  return uri === APP_CONSOLE_DOCUMENT_URI
+}
+
+export function isLogsUri(uri: string | null | undefined): boolean {
+  return uri === LOGS_DOCUMENT_URI
+}
+
 export function isRestorableWorkspaceDocument(uri: string): boolean {
   return isNotebookDocumentUri(uri)
 }
@@ -64,6 +74,12 @@ export function deriveWorkspaceDocumentTitle(uri: string): string {
   }
   if (isRunnerStatusUri(documentUri)) {
     return 'Notebook Runner Status'
+  }
+  if (isAppConsoleUri(documentUri)) {
+    return 'App Console'
+  }
+  if (isLogsUri(documentUri)) {
+    return 'Logs'
   }
   if (isNotebookDiffUri(documentUri)) {
     return 'Notebook diff'
