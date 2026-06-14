@@ -1,4 +1,6 @@
 import {
+  ChatBubbleLeftIcon,
+  CommandLineIcon,
   FolderIcon,
   ChatBubbleLeftRightIcon,
   InformationCircleIcon,
@@ -27,6 +29,8 @@ import { useGoogleAuth } from '../../contexts/GoogleAuthContext'
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import { useRunners } from '../../contexts/RunnersContext'
 import { useSidePanel } from '../../contexts/SidePanelContext'
+import { useBottomPane } from '../../contexts/BottomPaneContext'
+import { useCommentsPanel } from '../../contexts/CommentsPanelContext'
 import { useWorkspaceDocumentContext } from '../../contexts/WorkspaceDocumentContext'
 import {
   isDriveLinkStatusUri,
@@ -204,6 +208,8 @@ function OpenDocumentsPanel() {
 
 export function SidePanelToolbar() {
   const { activePanel, togglePanel } = useSidePanel()
+  const { commandsPanelOpen, toggleCommandsPanel } = useBottomPane()
+  const { commentsPanelOpen, toggleCommentsPanel } = useCommentsPanel()
   const { showDocument } = useWorkspaceDocumentContext()
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const authData = useBrowserAuthData()
@@ -351,6 +357,30 @@ export function SidePanelToolbar() {
         >
           <ChatBubbleLeftRightIcon className="h-5 w-5" />
           <span className={tooltipBase}>AI Chat</span>
+        </button>
+        <button
+          type="button"
+          className={`${sideButtonBase} ${
+            commentsPanelOpen ? sideButtonActive : sideButtonInactive
+          }`}
+          aria-pressed={commentsPanelOpen}
+          aria-label="Toggle Comments panel"
+          onClick={toggleCommentsPanel}
+        >
+          <ChatBubbleLeftIcon className="h-5 w-5" />
+          <span className={tooltipBase}>Comments</span>
+        </button>
+        <button
+          type="button"
+          className={`${sideButtonBase} ${
+            commandsPanelOpen ? sideButtonActive : sideButtonInactive
+          }`}
+          aria-pressed={commandsPanelOpen}
+          aria-label="Toggle Commands panel"
+          onClick={toggleCommandsPanel}
+        >
+          <CommandLineIcon className="h-5 w-5" />
+          <span className={tooltipBase}>Commands</span>
         </button>
       </div>
       <div className="flex flex-col items-center gap-2 pb-2">

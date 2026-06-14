@@ -49,6 +49,7 @@ import { PlayIcon, PlusIcon, SpinnerIcon, TrashIcon } from './icons'
 //import { useRun } from "../../lib/useRun.js";
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import { useRunners } from '../../contexts/RunnersContext'
+import { useCommentsPanel } from '../../contexts/CommentsPanelContext'
 import { DEFAULT_RUNNER_PLACEHOLDER } from '../../lib/runtime/runnersManager'
 import {
   APPKERNEL_RUNNER_NAME,
@@ -415,17 +416,24 @@ function CellCommentButton({
   onClick: () => void
   className?: string
 }) {
-  if (!available && count === 0) {
-    return null
-  }
+  const label =
+    count > 0
+      ? `${count} open comments`
+      : available
+        ? 'Add comment'
+        : 'Comments unavailable'
+  const stateClass = available
+    ? 'text-nb-accent hover:bg-nb-accent-muted hover:text-nb-accent focus-visible:bg-nb-accent-muted focus-visible:text-nb-accent'
+    : 'text-nb-text-faint'
+
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={!available}
-      aria-label={count > 0 ? `${count} open comments` : 'Add comment'}
-      title={count > 0 ? `${count} open comments` : 'Add comment'}
-      className={`icon-btn relative ${className}`}
+      aria-label={label}
+      title={label}
+      className={`icon-btn disabled:cursor-not-allowed disabled:opacity-100 ${stateClass} ${className}`}
     >
       <ChatBubbleLeftIcon className="h-4 w-4" />
       {count > 0 && (
@@ -839,7 +847,7 @@ export function Action({
     }
 
     const menuWidth = 200
-    const menuHeight = shareRemoteUri ? 88 : 48
+    const menuHeight = shareRemoteUri ? 128 : 88
     const left = Math.max(
       0,
       Math.min(contextMenu.x, window.innerWidth - menuWidth)
@@ -942,9 +950,11 @@ export function Action({
 
   const handleStartComment = useCallback(() => {
     if (!cell?.refId || !onStartComment) {
+      setContextMenu(null)
       return
     }
     onStartComment(cell.refId)
+    setContextMenu(null)
   }, [cell?.refId, onStartComment])
 
   const sequenceLabel = useMemo(() => {
@@ -1325,6 +1335,11 @@ export function Action({
     return null
   }
 
+  const cellCommentVisibilityClass =
+    commentCount > 0 || (isActiveCell && isWindowFocused)
+      ? 'opacity-100'
+      : 'pointer-events-none opacity-0 transition-opacity duration-150 group-hover/cell:pointer-events-auto group-hover/cell:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100'
+
   // Render markdown cells with in-place rendering (Jupyter-style)
   // No run button, no output area - just the markdown rendered in-place
   if (isMarkdownCell) {
@@ -1381,7 +1396,7 @@ export function Action({
               count={commentCount}
               available={commentsAvailable}
               onClick={handleStartComment}
-              className="absolute right-10 top-2 h-6 w-6 opacity-0 transition-opacity duration-150 group-hover/cell:opacity-100"
+              className={`absolute right-10 top-2 h-6 w-6 ${cellCommentVisibilityClass}`}
             />
             {/* Trash icon on the right, visible on hover */}
             <button
@@ -1416,6 +1431,17 @@ export function Action({
                 Copy Share Link
               </button>
             )}
+            <button
+              type="button"
+              className="ctx-menu-item"
+              disabled={!commentsAvailable}
+              onClick={(event) => {
+                event.stopPropagation()
+                handleStartComment()
+              }}
+            >
+              Add Comment
+            </button>
             <button
               type="button"
               className="ctx-menu-item text-red-600"
@@ -1480,7 +1506,7 @@ export function Action({
               count={commentCount}
               available={commentsAvailable}
               onClick={handleStartComment}
-              className="absolute right-10 top-2 h-6 w-6 opacity-0 transition-opacity duration-150 group-hover/cell:opacity-100"
+              className={`absolute right-10 top-2 h-6 w-6 ${cellCommentVisibilityClass}`}
             />
             <button
               type="button"
@@ -1514,6 +1540,17 @@ export function Action({
                 Copy Share Link
               </button>
             )}
+            <button
+              type="button"
+              className="ctx-menu-item"
+              disabled={!commentsAvailable}
+              onClick={(event) => {
+                event.stopPropagation()
+                handleStartComment()
+              }}
+            >
+              Add Comment
+            </button>
             <button
               type="button"
               className="ctx-menu-item text-red-600"
@@ -1715,7 +1752,7 @@ export function Action({
                 count={commentCount}
                 available={commentsAvailable}
                 onClick={handleStartComment}
-                className="h-7 w-7"
+                className={`relative h-7 w-7 ${cellCommentVisibilityClass}`}
               />
               <RunActionButton
                 pid={pid}
@@ -1775,6 +1812,17 @@ export function Action({
           )}
           <button
             type="button"
+            className="ctx-menu-item"
+            disabled={!commentsAvailable}
+            onClick={(event) => {
+              event.stopPropagation()
+              handleStartComment()
+            }}
+          >
+            Add Comment
+          </button>
+          <button
+            type="button"
             className="ctx-menu-item text-red-600"
             disabled={readOnly}
             onClick={(event) => {
@@ -1812,6 +1860,8 @@ function NotebookTabContent({
   const syncState = useNotebookSyncState(docUri)
   const readOnly = Boolean(entry.readOnly || notebookSnapshot?.readOnly)
   const isDriveBacked = isDriveBackedNotebook(entry, syncState)
+  const { commentsPanelOpen, openCommentsPanel, setCommentsPanelOpen } =
+    useCommentsPanel()
   const shouldRenderCells = !readOnly || isSelected
   const cellDatas = useMemo(() => {
     if (!shouldRenderCells) {
@@ -1864,15 +1914,23 @@ function NotebookTabContent({
       document.getElementById(`code-action-${cellId}`) ??
       document.getElementById(`markdown-action-${cellId}`) ??
       document.getElementById(`html-action-${cellId}`)
+    const focusRole = element?.id.startsWith('markdown-action-')
+      ? 'rendered'
+      : 'editor'
+    const nextState = createNotebookActiveCellState(cellId, focusRole)
+    if (nextState) {
+      onCellFocus(docUri, nextState)
+    }
     element?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [])
+  }, [docUri, onCellFocus])
 
   const startCommentDraft = useCallback(
     (cellId: string) => {
+      openCommentsPanel()
       setDraftCellId(cellId)
       selectCommentCell(cellId)
     },
-    [selectCommentCell]
+    [openCommentsPanel, selectCommentCell]
   )
 
   const refreshComments = useCallback(async () => {
@@ -2231,22 +2289,25 @@ function NotebookTabContent({
           )}
         </div>
       </ScrollArea>
-      <NotebookCommentsPanel
-        status={commentsStatus}
-        errorMessage={commentsErrorMessage}
-        threads={commentThreads}
-        cellLabels={cellLabels}
-        draftCellId={draftCellId}
-        busy={commentsBusy}
-        onStartDraft={startCommentDraft}
-        onCancelDraft={() => setDraftCellId(null)}
-        onCreateComment={handleCreateComment}
-        onReply={handleReplyToComment}
-        onResolve={handleResolveComment}
-        onReopen={handleReopenComment}
-        onRefresh={refreshComments}
-        onSelectCell={selectCommentCell}
-      />
+      {commentsPanelOpen && (
+        <NotebookCommentsPanel
+          status={commentsStatus}
+          errorMessage={commentsErrorMessage}
+          threads={commentThreads}
+          cellLabels={cellLabels}
+          activeCellId={activeCell?.refId ?? null}
+          draftCellId={draftCellId}
+          busy={commentsBusy}
+          onCancelDraft={() => setDraftCellId(null)}
+          onCreateComment={handleCreateComment}
+          onReply={handleReplyToComment}
+          onResolve={handleResolveComment}
+          onReopen={handleReopenComment}
+          onRefresh={refreshComments}
+          onHide={() => setCommentsPanelOpen(false)}
+          onSelectCell={selectCommentCell}
+        />
+      )}
     </div>
   )
 }

@@ -2,6 +2,8 @@ import Actions from "../Actions/Actions";
 import BottomPane from "../BottomPane/BottomPane";
 import { SidePanelContent, SidePanelToolbar } from "../SidePanel/SidePanel";
 import { useSidePanel } from "../../contexts/SidePanelContext";
+import { BottomPaneProvider } from "../../contexts/BottomPaneContext";
+import { CommentsPanelProvider } from "../../contexts/CommentsPanelContext";
 import { CurrentDocInitializer } from "../CurrentDocInitializer";
 
 const SIDE_PANEL_WIDTH = 360;
@@ -12,39 +14,48 @@ export default function MainPage() {
   const sidePanelVisible = Boolean(activePanel);
 
   return (
-    <div id="main-page" className="flex h-screen w-screen bg-nb-bg">
-      <CurrentDocInitializer />
-      <div className="flex h-full min-h-0 w-full">
-        <div
-          id="toolbar-column"
-          className="flex h-full flex-col bg-nb-surface border-r border-nb-border"
-          style={{ width: TOOLBAR_WIDTH }}
-        >
-          <SidePanelToolbar />
-        </div>
-        <div
-          id="sidepanel-column"
-          className={`h-full transition-[width] duration-200 ease-in-out overflow-hidden bg-nb-surface ${sidePanelVisible ? 'border-r border-nb-border' : ''}`}
-          style={{
-            width: sidePanelVisible ? SIDE_PANEL_WIDTH : 0,
-          }}
-        >
-          <SidePanelContent />
-        </div>
-        <div
-          id="content-area"
-          className={`flex h-full flex-1 min-w-0 flex-col gap-2 ${
-            sidePanelVisible ? "py-2 pr-2 pl-0" : "p-2"
-          }`}
-        >
-          <div id="notebook-pane" className="flex-1 min-h-0 overflow-hidden rounded-nb-md border border-nb-border-strong bg-white">
-            <Actions />
+    <BottomPaneProvider>
+      <CommentsPanelProvider>
+        <div id="main-page" className="flex h-screen w-screen bg-nb-bg">
+          <CurrentDocInitializer />
+          <div className="flex h-full min-h-0 w-full">
+            <div
+              id="toolbar-column"
+              className="flex h-full flex-col bg-nb-surface border-r border-nb-border"
+              style={{ width: TOOLBAR_WIDTH }}
+            >
+              <SidePanelToolbar />
+            </div>
+            <div
+              id="sidepanel-column"
+              className={`h-full transition-[width] duration-200 ease-in-out overflow-hidden bg-nb-surface ${
+                sidePanelVisible ? "border-r border-nb-border" : ""
+              }`}
+              style={{
+                width: sidePanelVisible ? SIDE_PANEL_WIDTH : 0,
+              }}
+            >
+              <SidePanelContent />
+            </div>
+            <div
+              id="content-area"
+              className={`flex h-full flex-1 min-w-0 flex-col gap-2 ${
+                sidePanelVisible ? "py-2 pr-2 pl-0" : "p-2"
+              }`}
+            >
+              <div
+                id="notebook-pane"
+                className="flex-1 min-h-0 overflow-hidden rounded-nb-md border border-nb-border-strong bg-white"
+              >
+                <Actions />
+              </div>
+              <div id="bottom-pane-container">
+                <BottomPane />
+              </div>
+            </div>
           </div>
-          <div id="bottom-pane-container">
-            <BottomPane />
-          </div>
         </div>
-      </div>
-    </div>
+      </CommentsPanelProvider>
+    </BottomPaneProvider>
   );
 }
