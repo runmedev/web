@@ -8,6 +8,8 @@ type PanelKey = 'explorer' | 'open-documents' | 'chatkit' | null
 let authData: {} | null = null
 let isDriveSyncing = false
 let activePanelState: PanelKey = 'explorer'
+let commandsPanelOpen = false
+let commentsPanelOpen = false
 let currentDocUri: string | null = null
 let openDocumentsState: {
   uri: string
@@ -27,6 +29,8 @@ const startGoogleDriveOAuthMock = vi.fn(async () => ({
 const loginWithRedirectMock = vi.fn()
 const logoutMock = vi.fn()
 const togglePanelMock = vi.fn()
+const toggleCommandsPanelMock = vi.fn()
+const toggleCommentsPanelMock = vi.fn()
 const setCurrentDocMock = vi.fn()
 const showDocumentMock = vi.fn()
 const closeWorkspaceDocumentMock = vi.fn()
@@ -43,6 +47,20 @@ vi.mock('../../contexts/SidePanelContext', () => ({
   useSidePanel: () => ({
     activePanel: activePanelState,
     togglePanel: togglePanelMock,
+  }),
+}))
+
+vi.mock('../../contexts/BottomPaneContext', () => ({
+  useBottomPane: () => ({
+    commandsPanelOpen,
+    toggleCommandsPanel: toggleCommandsPanelMock,
+  }),
+}))
+
+vi.mock('../../contexts/CommentsPanelContext', () => ({
+  useCommentsPanel: () => ({
+    commentsPanelOpen,
+    toggleCommentsPanel: toggleCommentsPanelMock,
   }),
 }))
 
@@ -99,6 +117,8 @@ describe('SidePanelToolbar drive status button', () => {
     authData = null
     isDriveSyncing = false
     activePanelState = 'explorer'
+    commandsPanelOpen = false
+    commentsPanelOpen = false
     currentDocUri = null
     openDocumentsState = []
     runnersState = []
@@ -109,6 +129,8 @@ describe('SidePanelToolbar drive status button', () => {
     loginWithRedirectMock.mockClear()
     logoutMock.mockClear()
     togglePanelMock.mockClear()
+    toggleCommandsPanelMock.mockClear()
+    toggleCommentsPanelMock.mockClear()
     setCurrentDocMock.mockClear()
     showDocumentMock.mockClear()
     closeWorkspaceDocumentMock.mockClear()
@@ -201,6 +223,35 @@ describe('SidePanelToolbar drive status button', () => {
     )
 
     expect(togglePanelMock).toHaveBeenCalledWith('open-documents')
+  })
+
+  it('exposes a Commands button in the toolbar', () => {
+    render(<SidePanelToolbar />)
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Toggle Commands panel' })
+    )
+
+    expect(toggleCommandsPanelMock).toHaveBeenCalled()
+  })
+
+  it('exposes a Comments button above Commands in the toolbar', () => {
+    render(<SidePanelToolbar />)
+
+    const commentsButton = screen.getByRole('button', {
+      name: 'Toggle Comments panel',
+    })
+    const commandsButton = screen.getByRole('button', {
+      name: 'Toggle Commands panel',
+    })
+
+    expect(
+      commentsButton.compareDocumentPosition(commandsButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    fireEvent.click(commentsButton)
+    expect(toggleCommentsPanelMock).toHaveBeenCalled()
   })
 
   it('opens the Version Information document from the toolbar', () => {

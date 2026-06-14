@@ -13,7 +13,11 @@ import {
 import { create } from '@bufbuild/protobuf'
 import { Button, ScrollArea, Tabs, Text } from '@radix-ui/themes'
 
-import { LockClosedIcon, XMarkIcon } from '@heroicons/react/20/solid'
+import {
+  ChatBubbleLeftIcon,
+  LockClosedIcon,
+  XMarkIcon,
+} from '@heroicons/react/20/solid'
 import { MimeType, RunmeMetadataKey, parser_pb } from '../../runme/client'
 import { CellData } from '../../lib/notebookData'
 import { useNotebookContext } from '../../contexts/NotebookContext'
@@ -45,6 +49,7 @@ import { PlayIcon, PlusIcon, SpinnerIcon, TrashIcon } from './icons'
 //import { useRun } from "../../lib/useRun.js";
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import { useRunners } from '../../contexts/RunnersContext'
+import { useCommentsPanel } from '../../contexts/CommentsPanelContext'
 import { DEFAULT_RUNNER_PLACEHOLDER } from '../../lib/runtime/runnersManager'
 import {
   APPKERNEL_RUNNER_NAME,
@@ -72,15 +77,26 @@ import {
   NOTEBOOK_DIFF_DOCUMENT_CHANGED,
 } from '../../lib/notebookDiff/registry'
 import { openNotebookConflictDiff } from '../../lib/notebookDiff/conflict'
-import { isDriveItemUri, parseDriveItem } from '../../storage/drive'
+import {
+  isDriveItemUri,
+  parseDriveItem,
+  type DriveComment,
+} from '../../storage/drive'
 import type { NotebookSyncState } from '../../storage/local'
 import { NotebookStoreItemType } from '../../storage/notebook'
 import { showToast } from '../../lib/toast'
+import { appState } from '../../lib/runtime/AppState'
+import {
+  createCellCommentAnchor,
+  groupCommentsByCell,
+  toCellCommentThreads,
+} from '../../lib/notebookComments'
 import DriveLinkStatusTab from '../DriveLinkStatusTab'
 import DriveSyncStatusTab from '../DriveSyncStatusTab'
 import RunnerStatusTab from '../RunnerStatusTab'
 import { NotebookDiffContent } from '../NotebookDiff/NotebookDiffView'
 import VersionInfoTab from '../VersionInfoTab'
+import { NotebookCommentsPanel } from '../NotebookCommentsPanel'
 import React from 'react'
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
@@ -389,6 +405,46 @@ function RunActionButton({
   )
 }
 
+function CellCommentButton({
+  count,
+  available,
+  onClick,
+  className = '',
+}: {
+  count: number
+  available: boolean
+  onClick: () => void
+  className?: string
+}) {
+  const label =
+    count > 0
+      ? `${count} open comments`
+      : available
+        ? 'Add comment'
+        : 'Comments unavailable'
+  const stateClass = available
+    ? 'text-nb-accent hover:bg-nb-accent-muted hover:text-nb-accent focus-visible:bg-nb-accent-muted focus-visible:text-nb-accent'
+    : 'text-nb-text-faint'
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!available}
+      aria-label={label}
+      title={label}
+      className={`icon-btn disabled:cursor-not-allowed disabled:opacity-100 ${stateClass} ${className}`}
+    >
+      <ChatBubbleLeftIcon className="h-4 w-4" />
+      {count > 0 && (
+        <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-nb-accent px-1 text-[10px] font-semibold leading-4 text-white">
+          {count}
+        </span>
+      )}
+    </button>
+  )
+}
+
 // Action is an editor and an optional Runme console
 const LANGUAGE_OPTIONS = [
   { label: 'Markdown', value: 'markdown' },
@@ -654,6 +710,9 @@ export function Action({
   isWindowFocused = false,
   onFocusStateChange,
   readOnly = false,
+  commentsAvailable = false,
+  commentCount = 0,
+  onStartComment,
 }: {
   cellData: CellData
   docUri?: string
@@ -663,6 +722,9 @@ export function Action({
   isWindowFocused?: boolean
   onFocusStateChange?: (state: NotebookActiveCellState) => void
   readOnly?: boolean
+  commentsAvailable?: boolean
+  commentCount?: number
+  onStartComment?: (cellId: string) => void
 }) {
   const { store } = useNotebookStore()
   const { listRunners, defaultRunnerName } = useRunners()
@@ -785,7 +847,7 @@ export function Action({
     }
 
     const menuWidth = 200
-    const menuHeight = shareRemoteUri ? 88 : 48
+    const menuHeight = shareRemoteUri ? 128 : 88
     const left = Math.max(
       0,
       Math.min(contextMenu.x, window.innerWidth - menuWidth)
@@ -885,6 +947,15 @@ export function Action({
       setContextMenu(null)
     }
   }, [shareRemoteUri])
+
+  const handleStartComment = useCallback(() => {
+    if (!cell?.refId || !onStartComment) {
+      setContextMenu(null)
+      return
+    }
+    onStartComment(cell.refId)
+    setContextMenu(null)
+  }, [cell?.refId, onStartComment])
 
   const sequenceLabel = useMemo(() => {
     if (!cell) {
@@ -1264,6 +1335,11 @@ export function Action({
     return null
   }
 
+  const cellCommentVisibilityClass =
+    commentCount > 0 || (isActiveCell && isWindowFocused)
+      ? 'opacity-100'
+      : 'pointer-events-none opacity-0 transition-opacity duration-150 group-hover/cell:pointer-events-auto group-hover/cell:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100'
+
   // Render markdown cells with in-place rendering (Jupyter-style)
   // No run button, no output area - just the markdown rendered in-place
   if (isMarkdownCell) {
@@ -1316,6 +1392,12 @@ export function Action({
               isWindowFocused={isWindowFocused}
               onFocusRoleChange={handleMarkdownFocusRoleChange}
             />
+            <CellCommentButton
+              count={commentCount}
+              available={commentsAvailable}
+              onClick={handleStartComment}
+              className={`absolute right-10 top-2 h-6 w-6 ${cellCommentVisibilityClass}`}
+            />
             {/* Trash icon on the right, visible on hover */}
             <button
               type="button"
@@ -1351,6 +1433,17 @@ export function Action({
             )}
             <button
               type="button"
+              className="ctx-menu-item"
+              disabled={!commentsAvailable}
+              onClick={(event) => {
+                event.stopPropagation()
+                handleStartComment()
+              }}
+            >
+              Add Comment
+            </button>
+            <button
+              type="button"
               className="ctx-menu-item text-red-600"
               disabled={readOnly}
               onClick={(event) => {
@@ -1373,6 +1466,7 @@ export function Action({
         className="group/cell relative flex min-w-0"
         onContextMenu={handleContextMenu}
         data-testid="html-action"
+        data-cell-ref-id={cell.refId}
       >
         <div
           id={`html-gutter-${cell.refId}`}
@@ -1408,6 +1502,12 @@ export function Action({
               forceEditRequest={htmlEditRequest}
               readOnly={readOnly}
             />
+            <CellCommentButton
+              count={commentCount}
+              available={commentsAvailable}
+              onClick={handleStartComment}
+              className={`absolute right-10 top-2 h-6 w-6 ${cellCommentVisibilityClass}`}
+            />
             <button
               type="button"
               aria-label="Delete cell"
@@ -1440,6 +1540,17 @@ export function Action({
                 Copy Share Link
               </button>
             )}
+            <button
+              type="button"
+              className="ctx-menu-item"
+              disabled={!commentsAvailable}
+              onClick={(event) => {
+                event.stopPropagation()
+                handleStartComment()
+              }}
+            >
+              Add Comment
+            </button>
             <button
               type="button"
               className="ctx-menu-item text-red-600"
@@ -1637,6 +1748,12 @@ export function Action({
               )}
             </div>
             <div className="flex items-center gap-1">
+              <CellCommentButton
+                count={commentCount}
+                available={commentsAvailable}
+                onClick={handleStartComment}
+                className={`relative h-7 w-7 ${cellCommentVisibilityClass}`}
+              />
               <RunActionButton
                 pid={pid}
                 onClick={runCode}
@@ -1695,6 +1812,17 @@ export function Action({
           )}
           <button
             type="button"
+            className="ctx-menu-item"
+            disabled={!commentsAvailable}
+            onClick={(event) => {
+              event.stopPropagation()
+              handleStartComment()
+            }}
+          >
+            Add Comment
+          </button>
+          <button
+            type="button"
             className="ctx-menu-item text-red-600"
             disabled={readOnly}
             onClick={(event) => {
@@ -1727,10 +1855,13 @@ function NotebookTabContent({
 }) {
   const { getNotebookData, openNotebook, useNotebookSnapshot } =
     useNotebookContext()
+  const { store } = useNotebookStore()
   const notebookSnapshot = useNotebookSnapshot(docUri)
   const syncState = useNotebookSyncState(docUri)
   const readOnly = Boolean(entry.readOnly || notebookSnapshot?.readOnly)
   const isDriveBacked = isDriveBackedNotebook(entry, syncState)
+  const { commentsPanelOpen, openCommentsPanel, setCommentsPanelOpen } =
+    useCommentsPanel()
   const shouldRenderCells = !readOnly || isSelected
   const cellDatas = useMemo(() => {
     if (!shouldRenderCells) {
@@ -1747,6 +1878,241 @@ function NotebookTabContent({
       .map((c) => (c?.refId ? data.getCell(c.refId) : null))
       .filter((c): c is CellData => Boolean(c))
   }, [getNotebookData, notebookSnapshot, shouldRenderCells])
+  const [commentsRemoteUri, setCommentsRemoteUri] = useState<string | null>(
+    null
+  )
+  const [commentsStatus, setCommentsStatus] = useState<
+    'loading' | 'available' | 'unavailable' | 'error'
+  >('loading')
+  const [commentsErrorMessage, setCommentsErrorMessage] = useState<
+    string | undefined
+  >()
+  const [comments, setComments] = useState<DriveComment[]>([])
+  const [commentsBusy, setCommentsBusy] = useState(false)
+  const [draftCellId, setDraftCellId] = useState<string | null>(null)
+  const cellLabels = useMemo(() => {
+    const labels = new Map<string, string>()
+    cellDatas.forEach((cellData, index) => {
+      const refId = cellData.snapshot?.refId
+      if (refId) {
+        labels.set(refId, `Cell ${index + 1}`)
+      }
+    })
+    return labels
+  }, [cellDatas])
+  const commentsByCell = useMemo(
+    () => groupCommentsByCell(comments),
+    [comments]
+  )
+  const commentThreads = useMemo(
+    () => toCellCommentThreads(comments, new Set(cellLabels.keys())),
+    [cellLabels, comments]
+  )
+
+  const selectCommentCell = useCallback((cellId: string) => {
+    const element =
+      document.getElementById(`code-action-${cellId}`) ??
+      document.getElementById(`markdown-action-${cellId}`) ??
+      document.getElementById(`html-action-${cellId}`)
+    const focusRole = element?.id.startsWith('markdown-action-')
+      ? 'rendered'
+      : 'editor'
+    const nextState = createNotebookActiveCellState(cellId, focusRole)
+    if (nextState) {
+      onCellFocus(docUri, nextState)
+    }
+    element?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [docUri, onCellFocus])
+
+  const startCommentDraft = useCallback(
+    (cellId: string) => {
+      openCommentsPanel()
+      setDraftCellId(cellId)
+      selectCommentCell(cellId)
+    },
+    [openCommentsPanel, selectCommentCell]
+  )
+
+  const refreshComments = useCallback(async () => {
+    const driveStore = appState.driveNotebookStore
+    if (!commentsRemoteUri || !driveStore) {
+      setComments([])
+      setCommentsStatus('unavailable')
+      setCommentsErrorMessage(undefined)
+      return
+    }
+
+    setCommentsStatus('loading')
+    setCommentsErrorMessage(undefined)
+    try {
+      const nextComments = await driveStore.listComments(commentsRemoteUri)
+      setComments(nextComments)
+      setCommentsStatus('available')
+    } catch (error) {
+      setComments([])
+      setCommentsStatus('error')
+      setCommentsErrorMessage(String(error))
+    }
+  }, [commentsRemoteUri])
+
+  useEffect(() => {
+    let cancelled = false
+    setDraftCellId(null)
+    setCommentsErrorMessage(undefined)
+
+    void (async () => {
+      if (!notebookSnapshot?.loaded) {
+        if (!cancelled) {
+          setCommentsRemoteUri(null)
+          setCommentsStatus('loading')
+        }
+        return
+      }
+
+      if (isDriveItemUri(docUri)) {
+        if (!cancelled) {
+          setCommentsRemoteUri(docUri)
+          setCommentsStatus('loading')
+        }
+        return
+      }
+
+      if (!store || !docUri.startsWith('local://')) {
+        if (!cancelled) {
+          setCommentsRemoteUri(null)
+          setComments([])
+          setCommentsStatus('unavailable')
+        }
+        return
+      }
+
+      try {
+        const metadata = await store.getMetadata(docUri)
+        const remoteUri = metadata?.remoteUri
+        if (!cancelled) {
+          if (remoteUri && isDriveItemUri(remoteUri)) {
+            setCommentsRemoteUri(remoteUri)
+            setCommentsStatus('loading')
+          } else {
+            setCommentsRemoteUri(null)
+            setComments([])
+            setCommentsStatus('unavailable')
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          setCommentsRemoteUri(null)
+          setComments([])
+          setCommentsStatus('unavailable')
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [docUri, notebookSnapshot?.loaded, store])
+
+  useEffect(() => {
+    void refreshComments()
+  }, [refreshComments])
+
+  const handleCreateComment = useCallback(
+    async (cellId: string, content: string) => {
+      const driveStore = appState.driveNotebookStore
+      if (!commentsRemoteUri || !driveStore) {
+        showToast({
+          tone: 'error',
+          message: 'Comments are only available for Google Drive notebooks.',
+        })
+        return
+      }
+      setCommentsBusy(true)
+      try {
+        await driveStore.createComment(
+          commentsRemoteUri,
+          content,
+          createCellCommentAnchor(cellId)
+        )
+        setDraftCellId(null)
+        await refreshComments()
+      } catch (error) {
+        showToast({
+          tone: 'error',
+          message: `Failed to create comment: ${String(error)}`,
+        })
+      } finally {
+        setCommentsBusy(false)
+      }
+    },
+    [commentsRemoteUri, refreshComments]
+  )
+
+  const handleReplyToComment = useCallback(
+    async (commentId: string, content: string) => {
+      const driveStore = appState.driveNotebookStore
+      if (!commentsRemoteUri || !driveStore) {
+        return
+      }
+      setCommentsBusy(true)
+      try {
+        await driveStore.replyToComment(commentsRemoteUri, commentId, content)
+        await refreshComments()
+      } catch (error) {
+        showToast({
+          tone: 'error',
+          message: `Failed to reply to comment: ${String(error)}`,
+        })
+      } finally {
+        setCommentsBusy(false)
+      }
+    },
+    [commentsRemoteUri, refreshComments]
+  )
+
+  const handleResolveComment = useCallback(
+    async (commentId: string) => {
+      const driveStore = appState.driveNotebookStore
+      if (!commentsRemoteUri || !driveStore) {
+        return
+      }
+      setCommentsBusy(true)
+      try {
+        await driveStore.resolveComment(commentsRemoteUri, commentId)
+        await refreshComments()
+      } catch (error) {
+        showToast({
+          tone: 'error',
+          message: `Failed to resolve comment: ${String(error)}`,
+        })
+      } finally {
+        setCommentsBusy(false)
+      }
+    },
+    [commentsRemoteUri, refreshComments]
+  )
+
+  const handleReopenComment = useCallback(
+    async (commentId: string) => {
+      const driveStore = appState.driveNotebookStore
+      if (!commentsRemoteUri || !driveStore) {
+        return
+      }
+      setCommentsBusy(true)
+      try {
+        await driveStore.reopenComment(commentsRemoteUri, commentId)
+        await refreshComments()
+      } catch (error) {
+        showToast({
+          tone: 'error',
+          message: `Failed to reopen comment: ${String(error)}`,
+        })
+      } finally {
+        setCommentsBusy(false)
+      }
+    },
+    [commentsRemoteUri, refreshComments]
+  )
 
   if (readOnly && !isSelected) {
     return (
@@ -1840,85 +2206,109 @@ function NotebookTabContent({
   }
 
   return (
-    <ScrollArea
-      key={`scroll-${docUri}`}
-      type="auto"
-      scrollbars="both"
-      className="flex-1 h-full min-w-0 max-w-full"
-      data-document-id={docUri}
-    >
-      {/* Full-width notebook column with horizontal padding for breathing room.
-          Cells expand to fill the available width of the tab content area. */}
-      <div id="notebook-column" className="w-full py-2 px-8">
-        {readOnly && (
-          <div
-            className="mb-3 flex items-center gap-2 rounded-nb-sm border border-nb-border bg-nb-surface-2 px-3 py-2 text-xs text-nb-text-muted"
-            data-testid="notebook-readonly-banner"
-          >
-            <LockClosedIcon className="h-4 w-4 text-nb-text-muted" />
-            <span>
-              {ownerSessionId
-                ? `Read-only. This notebook is open for editing in session ${ownerSessionId}.`
-                : 'Read-only. This notebook is open for editing in another browser tab.'}
-            </span>
-          </div>
-        )}
-        {cellDatas.length === 0 ? (
-          <div
-            id="empty-notebook-prompt"
-            className="flex flex-col items-center justify-center gap-3 py-16 text-sm text-nb-text-muted"
-          >
-            <p>
-              {readOnly
-                ? 'This read-only notebook has no cells.'
-                : 'This notebook has no cells yet.'}
-            </p>
-            {!readOnly && (
-              <button
-                type="button"
-                className="cell-add-btn h-8 w-8"
-                aria-label="Add first cell"
-                onClick={() => data?.appendCell(parser_pb.CellKind.MARKUP)}
-              >
-                <PlusIcon className="h-5 w-5" />
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {cellDatas.map((cellData, index) => {
-              const refId = cellData.snapshot?.refId ?? `cell-${index}`
-              return (
-                <Action
-                  key={`action-${refId}`}
-                  cellData={cellData}
-                  docUri={docUri}
-                  isFirst={index === 0}
-                  isActiveCell={activeCell?.refId === refId}
-                  activeFocusRole={activeCell?.focusRole ?? 'editor'}
-                  isWindowFocused={isWindowFocused}
-                  onFocusStateChange={(state) => onCellFocus(docUri, state)}
-                  readOnly={readOnly}
-                />
-              )
-            })}
-            {!readOnly && (
-              <div className="flex justify-center py-3">
+    <div className="flex h-full min-w-0">
+      <ScrollArea
+        key={`scroll-${docUri}`}
+        type="auto"
+        scrollbars="both"
+        className="h-full min-w-0 max-w-full flex-1"
+        data-document-id={docUri}
+      >
+        {/* Full-width notebook column with horizontal padding for breathing room.
+            Cells expand to fill the available width of the tab content area. */}
+        <div id="notebook-column" className="w-full py-2 px-8">
+          {readOnly && (
+            <div
+              className="mb-3 flex items-center gap-2 rounded-nb-sm border border-nb-border bg-nb-surface-2 px-3 py-2 text-xs text-nb-text-muted"
+              data-testid="notebook-readonly-banner"
+            >
+              <LockClosedIcon className="h-4 w-4 text-nb-text-muted" />
+              <span>
+                {ownerSessionId
+                  ? `Read-only. This notebook is open for editing in session ${ownerSessionId}.`
+                  : 'Read-only. This notebook is open for editing in another browser tab.'}
+              </span>
+            </div>
+          )}
+          {cellDatas.length === 0 ? (
+            <div
+              id="empty-notebook-prompt"
+              className="flex flex-col items-center justify-center gap-3 py-16 text-sm text-nb-text-muted"
+            >
+              <p>
+                {readOnly
+                  ? 'This read-only notebook has no cells.'
+                  : 'This notebook has no cells yet.'}
+              </p>
+              {!readOnly && (
                 <button
                   type="button"
-                  className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted"
-                  aria-label="Add cell at end"
-                  onClick={() => data?.appendCell(parser_pb.CellKind.CODE)}
+                  className="cell-add-btn h-8 w-8"
+                  aria-label="Add first cell"
+                  onClick={() => data?.appendCell(parser_pb.CellKind.MARKUP)}
                 >
-                  <PlusIcon width={10} height={10} />
-                  <span>Add cell</span>
+                  <PlusIcon className="h-5 w-5" />
                 </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </ScrollArea>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {cellDatas.map((cellData, index) => {
+                const refId = cellData.snapshot?.refId ?? `cell-${index}`
+                return (
+                  <Action
+                    key={`action-${refId}`}
+                    cellData={cellData}
+                    docUri={docUri}
+                    isFirst={index === 0}
+                    isActiveCell={activeCell?.refId === refId}
+                    activeFocusRole={activeCell?.focusRole ?? 'editor'}
+                    isWindowFocused={isWindowFocused}
+                    onFocusStateChange={(state) => onCellFocus(docUri, state)}
+                    readOnly={readOnly}
+                    commentsAvailable={commentsStatus === 'available'}
+                    commentCount={commentsByCell.get(refId)?.length ?? 0}
+                    onStartComment={startCommentDraft}
+                  />
+                )
+              })}
+              {!readOnly && (
+                <div className="flex justify-center py-3">
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted"
+                    aria-label="Add cell at end"
+                    onClick={() => data?.appendCell(parser_pb.CellKind.CODE)}
+                  >
+                    <PlusIcon width={10} height={10} />
+                    <span>Add cell</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </ScrollArea>
+      {commentsPanelOpen && (
+        <NotebookCommentsPanel
+          status={commentsStatus}
+          errorMessage={commentsErrorMessage}
+          threads={commentThreads}
+          cellLabels={cellLabels}
+          activeCellId={activeCell?.refId ?? null}
+          draftCellId={draftCellId}
+          busy={commentsBusy}
+          onCancelDraft={() => setDraftCellId(null)}
+          onCreateComment={handleCreateComment}
+          onReply={handleReplyToComment}
+          onResolve={handleResolveComment}
+          onReopen={handleReopenComment}
+          onRefresh={refreshComments}
+          onHide={() => setCommentsPanelOpen(false)}
+          onSelectCell={selectCommentCell}
+        />
+      )}
+    </div>
   )
 }
 

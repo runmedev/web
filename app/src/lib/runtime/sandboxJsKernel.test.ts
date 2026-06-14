@@ -13,7 +13,10 @@ type Scenario =
   | 'lowLevel'
   | 'codex'
   | 'app'
+  | 'credentials'
   | 'drive'
+  | 'driveSave'
+  | 'notebooksCreate'
 
 class MockSandboxPort {
   onmessage: ((event: MessageEvent<any>) => void) | null = null
@@ -73,12 +76,45 @@ class MockSandboxPort {
           method: 'app.getSessionID',
           args: [],
         })
+      } else if (this.scenario === 'credentials') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'credentials.google.setServiceAccountFromFilePath',
+          args: ['/tmp/service-account.json'],
+        })
       } else if (this.scenario === 'drive') {
         this.emit({
           type: 'host-call',
           callId: 1,
           method: 'drive.authorize',
           args: [{ mode: 'new_tab' }],
+        })
+      } else if (this.scenario === 'driveSave') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'drive.saveAsCurrentNotebook',
+          args: ['root', 'Comments demo.ipynb'],
+        })
+      } else if (this.scenario === 'notebooksCreate') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'notebooks.createLocal',
+          args: ['Comments demo.ipynb', undefined],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 2,
+          method: 'notebooks.appendCell',
+          args: [
+            {
+              target: { handle: { uri: 'local://file/comments-demo', revision: '1' } },
+              kind: 'markup',
+              value: '# Comments demo',
+            },
+          ],
         })
       } else if (this.scenario === 'hang') {
         this.emit({ type: 'stdout', data: 'started\n' })
@@ -105,6 +141,34 @@ class MockSandboxPort {
         return
       }
       if (this.scenario === 'drive' && this.hostResults.has(1)) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+      if (this.scenario === 'driveSave' && this.hostResults.has(1)) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+      if (
+        this.scenario === 'notebooksCreate' &&
+        this.hostResults.has(1) &&
+        this.hostResults.has(2)
+      ) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(2) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+      if (this.scenario === 'credentials' && this.hostResults.has(1)) {
         this.emit({
           type: 'stdout',
           data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
@@ -489,6 +553,156 @@ describe('SandboxJSKernel', () => {
     ])
     expect(stdout).toContain('"status":"started"')
     expect(stdout).toContain('"mode":"new_tab"')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports Google service account helper through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'credentials.google.setServiceAccountFromFilePath') {
+        return {
+          authFlow: 'service_account',
+          serviceAccount: {
+            clientEmail: 'runme-drive-test@example.iam.gserviceaccount.com',
+          },
+        }
+      }
+      return null
+    })
+
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('credentials'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run(
+      "console.log(await credentials.google.setServiceAccountFromFilePath('/tmp/service-account.json'));"
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith(
+      'credentials.google.setServiceAccountFromFilePath',
+      ['/tmp/service-account.json']
+    )
+    expect(stdout).toContain('"authFlow":"service_account"')
+    expect(stdout).toContain('runme-drive-test@example.iam.gserviceaccount.com')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports saving the current notebook to Drive through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'drive.saveAsCurrentNotebook') {
+        return {
+          fileId: 'drive-file-1',
+          fileName: 'Comments demo.ipynb',
+          remoteUri: 'https://drive.google.com/file/d/drive-file-1/view',
+          localUri: 'local://drive-file-1',
+        }
+      }
+      return null
+    })
+
+    const kernel = new TestableSandboxJSKernel(new MockSandboxPort('driveSave'), {
+      bridge: { call: bridgeCall },
+      hooks: {
+        onStdout: (data) => {
+          stdout += data
+        },
+        onStderr: (data) => {
+          stderr += data
+        },
+        onExit: (code) => {
+          exitCode = code
+        },
+      },
+    })
+
+    await kernel.run(
+      "console.log(await drive.saveAsCurrentNotebook('root', 'Comments demo.ipynb'));"
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith('drive.saveAsCurrentNotebook', [
+      'root',
+      'Comments demo.ipynb',
+    ])
+    expect(stdout).toContain('"fileId":"drive-file-1"')
+    expect(stdout).toContain('Comments demo.ipynb')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports local notebook creation helpers through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'notebooks.createLocal') {
+        return {
+          handle: { uri: 'local://file/comments-demo', revision: '1' },
+        }
+      }
+      if (method === 'notebooks.appendCell') {
+        return {
+          handle: { uri: 'local://file/comments-demo', revision: '2' },
+          cell: { refId: 'cell-comments-demo', value: '# Comments demo' },
+        }
+      }
+      return null
+    })
+
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('notebooksCreate'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run(
+      "const created = await notebooks.createLocal('Comments demo.ipynb'); console.log(await notebooks.appendCell({ target: { handle: created.handle }, kind: 'markup', value: '# Comments demo' }));"
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith('notebooks.createLocal', [
+      'Comments demo.ipynb',
+      undefined,
+    ])
+    expect(bridgeCall).toHaveBeenCalledWith('notebooks.appendCell', [
+      {
+        target: { handle: { uri: 'local://file/comments-demo', revision: '1' } },
+        kind: 'markup',
+        value: '# Comments demo',
+      },
+    ])
+    expect(stdout).toContain('cell-comments-demo')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
   })

@@ -105,8 +105,73 @@ interface DriveFilesClient {
   getRevision(
     request: Record<string, unknown>
   ): Promise<{ body?: string; result?: unknown }>
+  listComments(
+    request: Record<string, unknown>
+  ): Promise<DriveCommentListResponse>
+  createComment(request: {
+    fileId: string
+    resource: Record<string, unknown>
+    fields?: string
+  }): Promise<{ result?: unknown }>
+  updateComment(request: {
+    fileId: string
+    commentId: string
+    resource: Record<string, unknown>
+    fields?: string
+  }): Promise<{ result?: unknown }>
+  createReply(request: {
+    fileId: string
+    commentId: string
+    resource: Record<string, unknown>
+    fields?: string
+  }): Promise<{ result?: unknown }>
   ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc>
 }
+
+export type DriveUser = {
+  displayName?: string
+  photoLink?: string
+  me?: boolean
+}
+
+export type DriveReply = {
+  id?: string
+  kind?: string
+  createdTime?: string
+  modifiedTime?: string
+  action?: string
+  author?: DriveUser
+  deleted?: boolean
+  htmlContent?: string
+  content?: string
+}
+
+export type DriveComment = {
+  id?: string
+  kind?: string
+  createdTime?: string
+  modifiedTime?: string
+  resolved?: boolean
+  anchor?: string
+  author?: DriveUser
+  deleted?: boolean
+  htmlContent?: string
+  content?: string
+  mentionedEmailAddresses?: string[]
+  assigneeEmailAddress?: string
+  replies?: DriveReply[]
+}
+
+type DriveCommentListResponse = {
+  result?: {
+    comments?: DriveComment[]
+    nextPageToken?: string
+  }
+}
+
+const DRIVE_COMMENT_FIELDS =
+  'id,createdTime,modifiedTime,resolved,anchor,author(displayName,photoLink,me),deleted,htmlContent,content,replies(id,createdTime,modifiedTime,action,author(displayName,photoLink,me),deleted,htmlContent,content)'
+const DRIVE_COMMENT_LIST_FIELDS = `nextPageToken,comments(${DRIVE_COMMENT_FIELDS})`
 
 class GapiDriveFilesClient implements DriveFilesClient {
   private readonly files: GapiDriveFileMethods
@@ -117,6 +182,62 @@ class GapiDriveFilesClient implements DriveFilesClient {
     this.files = this.gapi.client.drive.files
     this.drives = this.gapi.client.drive.drives
     this.revisions = this.gapi.client.drive.revisions
+  }
+
+  private buildUrl(path: string, params?: Record<string, unknown>): string {
+    const url = new URL(path.replace(/^\//, ''), 'https://www.googleapis.com/')
+    for (const [key, value] of Object.entries(params ?? {})) {
+      if (value === undefined || value === null || value === '') {
+        continue
+      }
+      url.searchParams.set(key, String(value))
+    }
+    return url.toString()
+  }
+
+  private async request(
+    method: string,
+    path: string,
+    options: {
+      params?: Record<string, unknown>
+      body?: string
+      contentType?: string
+      expectText?: boolean
+    } = {}
+  ): Promise<{ body?: string; result?: unknown }> {
+    const token = this.gapi.client.getToken?.()?.access_token ?? ''
+    if (!token) {
+      throw new Error('Google Drive request requires an access token')
+    }
+    const response = await fetch(this.buildUrl(path, options.params), {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(options.body !== undefined
+          ? {
+              'Content-Type': options.contentType ?? 'application/json',
+            }
+          : {}),
+      },
+      body: options.body,
+    })
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => '')
+      throw new Error(
+        `Drive request failed (${response.status} ${response.statusText}): ${errorBody}`
+      )
+    }
+
+    if (options.expectText) {
+      return { body: await response.text() }
+    }
+
+    const text = await response.text()
+    if (!text) {
+      return { result: undefined }
+    }
+    return { result: JSON.parse(text) }
   }
 
   // setContent uploads content to a Google Drive file using a media upload.
@@ -132,23 +253,29 @@ class GapiDriveFilesClient implements DriveFilesClient {
     content: string,
     mimeType?: string
   ): Promise<void> {
-    const encoder = new TextEncoder()
-    const byteLength = encoder.encode(content).byteLength
-    await this.gapi.client.request({
-      path: `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
+    const token = this.gapi.client.getToken?.()?.access_token ?? ''
+    if (!token) {
+      throw new Error('Google Drive upload requires an access token')
+    }
+    const url = new URL(
+      `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}`
+    )
+    url.searchParams.set('uploadType', 'media')
+    url.searchParams.set('supportsAllDrives', 'true')
+    const response = await fetch(url.toString(), {
       method: 'PATCH',
-      params: {
-        uploadType: 'media',
-        // If we don't set this we get a 404 because the file isn't in "My Drive."
-        supportsAllDrives: 'true',
-      },
       headers: {
-        Authorization: `Bearer ${this.gapi.client.getToken?.()?.access_token ?? ''}`,
+        Authorization: `Bearer ${token}`,
         'Content-Type': mimeType ?? 'application/octet-stream',
-        'Content-Length': String(byteLength),
       },
       body: content,
     })
+    if (!response.ok) {
+      const message = await response.text().catch(() => '')
+      throw new Error(
+        `Google Drive media upload failed (${response.status}): ${message}`
+      )
+    }
   }
 
   private buildResource(doc: DriveDoc): Record<string, unknown> {
@@ -245,6 +372,77 @@ class GapiDriveFilesClient implements DriveFilesClient {
       body?: string
       result?: unknown
     }>
+  }
+
+  listComments(
+    request: Record<string, unknown>
+  ): Promise<DriveCommentListResponse> {
+    const fileId = String(request.fileId ?? '')
+    const params = { ...request }
+    delete params.fileId
+    return this.request(
+      'GET',
+      `/drive/v3/files/${encodeURIComponent(fileId)}/comments`,
+      { params }
+    ) as Promise<DriveCommentListResponse>
+  }
+
+  createComment(request: {
+    fileId: string
+    resource: Record<string, unknown>
+    fields?: string
+  }): Promise<{ result?: unknown }> {
+    return this.request(
+      'POST',
+      `/drive/v3/files/${encodeURIComponent(request.fileId)}/comments`,
+      {
+        params: {
+          fields: request.fields ?? DRIVE_COMMENT_FIELDS,
+          supportsAllDrives: 'true',
+        },
+        body: JSON.stringify(request.resource),
+      }
+    )
+  }
+
+  updateComment(request: {
+    fileId: string
+    commentId: string
+    resource: Record<string, unknown>
+    fields?: string
+  }): Promise<{ result?: unknown }> {
+    return this.request(
+      'PATCH',
+      `/drive/v3/files/${encodeURIComponent(request.fileId)}/comments/${encodeURIComponent(request.commentId)}`,
+      {
+        params: {
+          fields: request.fields ?? DRIVE_COMMENT_FIELDS,
+          supportsAllDrives: 'true',
+        },
+        body: JSON.stringify(request.resource),
+      }
+    )
+  }
+
+  createReply(request: {
+    fileId: string
+    commentId: string
+    resource: Record<string, unknown>
+    fields?: string
+  }): Promise<{ result?: unknown }> {
+    return this.request(
+      'POST',
+      `/drive/v3/files/${encodeURIComponent(request.fileId)}/comments/${encodeURIComponent(request.commentId)}/replies`,
+      {
+        params: {
+          fields:
+            request.fields ??
+            `id,action,createdTime,modifiedTime,author(displayName,photoLink,me),deleted,htmlContent,content`,
+          supportsAllDrives: 'true',
+        },
+        body: JSON.stringify(request.resource),
+      }
+    )
   }
 
   async ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc> {
@@ -456,6 +654,77 @@ class FetchDriveFilesClient implements DriveFilesClient {
       {
         params: request,
         expectText: request.alt === 'media',
+      }
+    )
+  }
+
+  listComments(
+    request: Record<string, unknown>
+  ): Promise<DriveCommentListResponse> {
+    const fileId = String(request.fileId ?? '')
+    const params = { ...request }
+    delete params.fileId
+    return this.request(
+      'GET',
+      `/drive/v3/files/${encodeURIComponent(fileId)}/comments`,
+      { params }
+    ) as Promise<DriveCommentListResponse>
+  }
+
+  createComment(request: {
+    fileId: string
+    resource: Record<string, unknown>
+    fields?: string
+  }): Promise<{ result?: unknown }> {
+    return this.request(
+      'POST',
+      `/drive/v3/files/${encodeURIComponent(request.fileId)}/comments`,
+      {
+        params: {
+          fields: request.fields ?? DRIVE_COMMENT_FIELDS,
+          supportsAllDrives: 'true',
+        },
+        body: JSON.stringify(request.resource),
+      }
+    )
+  }
+
+  updateComment(request: {
+    fileId: string
+    commentId: string
+    resource: Record<string, unknown>
+    fields?: string
+  }): Promise<{ result?: unknown }> {
+    return this.request(
+      'PATCH',
+      `/drive/v3/files/${encodeURIComponent(request.fileId)}/comments/${encodeURIComponent(request.commentId)}`,
+      {
+        params: {
+          fields: request.fields ?? DRIVE_COMMENT_FIELDS,
+          supportsAllDrives: 'true',
+        },
+        body: JSON.stringify(request.resource),
+      }
+    )
+  }
+
+  createReply(request: {
+    fileId: string
+    commentId: string
+    resource: Record<string, unknown>
+    fields?: string
+  }): Promise<{ result?: unknown }> {
+    return this.request(
+      'POST',
+      `/drive/v3/files/${encodeURIComponent(request.fileId)}/comments/${encodeURIComponent(request.commentId)}/replies`,
+      {
+        params: {
+          fields:
+            request.fields ??
+            'id,action,createdTime,modifiedTime,author(displayName,photoLink,me),deleted,htmlContent,content',
+          supportsAllDrives: 'true',
+        },
+        body: JSON.stringify(request.resource),
       }
     )
   }
@@ -995,6 +1264,120 @@ export class DriveNotebookStore {
         parents: [],
       }
     })
+  }
+
+  async listComments(uri: string): Promise<DriveComment[]> {
+    const { id, type } = parseDriveItem(uri)
+    if (type !== NotebookStoreItemType.File) {
+      throw new Error('DriveNotebookStore.listComments expects a file URI')
+    }
+    const client = await this.getFilesClient()
+    const comments: DriveComment[] = []
+    let pageToken: string | undefined
+
+    do {
+      const response = await client.listComments({
+        fileId: id,
+        supportsAllDrives: true,
+        includeDeleted: false,
+        fields: DRIVE_COMMENT_LIST_FIELDS,
+        ...(pageToken ? { pageToken } : {}),
+      })
+      comments.push(...(response.result?.comments ?? []))
+      pageToken = optionalString(response.result?.nextPageToken)
+    } while (pageToken)
+
+    return comments
+  }
+
+  async createComment(
+    uri: string,
+    content: string,
+    anchor?: string
+  ): Promise<DriveComment> {
+    const { id, type } = parseDriveItem(uri)
+    if (type !== NotebookStoreItemType.File) {
+      throw new Error('DriveNotebookStore.createComment expects a file URI')
+    }
+    const trimmedContent = content.trim()
+    if (!trimmedContent) {
+      throw new Error('DriveNotebookStore.createComment requires content')
+    }
+    const client = await this.getFilesClient()
+    const response = await client.createComment({
+      fileId: id,
+      resource: {
+        content: trimmedContent,
+        ...(anchor ? { anchor } : {}),
+      },
+      fields: DRIVE_COMMENT_FIELDS,
+    })
+    return (response.result ?? {}) as DriveComment
+  }
+
+  async replyToComment(
+    uri: string,
+    commentId: string,
+    content: string
+  ): Promise<DriveReply> {
+    const { id, type } = parseDriveItem(uri)
+    if (type !== NotebookStoreItemType.File) {
+      throw new Error('DriveNotebookStore.replyToComment expects a file URI')
+    }
+    const trimmedContent = content.trim()
+    if (!commentId.trim()) {
+      throw new Error('DriveNotebookStore.replyToComment requires a comment id')
+    }
+    if (!trimmedContent) {
+      throw new Error('DriveNotebookStore.replyToComment requires content')
+    }
+    const client = await this.getFilesClient()
+    const response = await client.createReply({
+      fileId: id,
+      commentId: commentId.trim(),
+      resource: {
+        content: trimmedContent,
+      },
+    })
+    return (response.result ?? {}) as DriveReply
+  }
+
+  async resolveComment(uri: string, commentId: string): Promise<DriveReply> {
+    const { id, type } = parseDriveItem(uri)
+    if (type !== NotebookStoreItemType.File) {
+      throw new Error('DriveNotebookStore.resolveComment expects a file URI')
+    }
+    if (!commentId.trim()) {
+      throw new Error('DriveNotebookStore.resolveComment requires a comment id')
+    }
+    const client = await this.getFilesClient()
+    const response = await client.createReply({
+      fileId: id,
+      commentId: commentId.trim(),
+      resource: {
+        action: 'resolve',
+      },
+    })
+    return (response.result ?? {}) as DriveReply
+  }
+
+  async reopenComment(uri: string, commentId: string): Promise<DriveReply> {
+    const { id, type } = parseDriveItem(uri)
+    if (type !== NotebookStoreItemType.File) {
+      throw new Error('DriveNotebookStore.reopenComment expects a file URI')
+    }
+    if (!commentId.trim()) {
+      throw new Error('DriveNotebookStore.reopenComment requires a comment id')
+    }
+    const client = await this.getFilesClient()
+    const response = await client.createReply({
+      fileId: id,
+      commentId: commentId.trim(),
+      resource: {
+        action: 'reopen',
+      },
+    })
+    return (response.result ?? {}) as DriveReply
   }
 
   async getType(uri: string): Promise<NotebookStoreItemType> {

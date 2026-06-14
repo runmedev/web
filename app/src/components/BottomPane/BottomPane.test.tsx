@@ -15,10 +15,19 @@ vi.mock("../Logs/LogsPane", () => ({
 }));
 
 import BottomPane from "./BottomPane";
+import { BottomPaneProvider } from "../../contexts/BottomPaneContext";
+
+function renderBottomPane() {
+  return render(
+    <BottomPaneProvider>
+      <BottomPane />
+    </BottomPaneProvider>
+  );
+}
 
 describe("BottomPane", () => {
   it("uses a single tab bar and highlights the selected tab", () => {
-    render(<BottomPane />);
+    renderBottomPane();
 
     const consoleTab = screen.getByRole("tab", { name: "App Console" });
     const logsTab = screen.getByRole("tab", { name: "Logs" });

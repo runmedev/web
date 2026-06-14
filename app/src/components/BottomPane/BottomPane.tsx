@@ -1,40 +1,17 @@
-import { useEffect, useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/20/solid";
 
 import AppConsole from "../AppConsole/AppConsole";
 import LogsPane from "../Logs/LogsPane";
-
-const STORAGE_KEY = "runme.bottomPaneCollapsed";
-const LEGACY_STORAGE_KEY = "aisre.bottomPaneCollapsed";
+import { useBottomPane } from "../../contexts/BottomPaneContext";
 
 /**
  * BottomPane groups debugging surfaces into tabs so the App Console and the
  * new Logs panel share the same page area (similar to VS Code output panels).
  */
 export default function BottomPane() {
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    try {
-      const stored =
-        localStorage.getItem(STORAGE_KEY) ??
-        localStorage.getItem(LEGACY_STORAGE_KEY);
-      return stored === "true";
-    } catch {
-      return false;
-    }
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, collapsed ? "true" : "false");
-      localStorage.removeItem(LEGACY_STORAGE_KEY);
-    } catch {
-      // Non-critical preference persistence.
-    }
-  }, [collapsed]);
+  const { activeTab, collapsed, setActiveTab, toggleCollapsed } =
+    useBottomPane();
 
   return (
     <div
@@ -46,7 +23,10 @@ export default function BottomPane() {
     >
       <Tabs.Root
         id="bottom-pane-tabs"
-        defaultValue="console"
+        value={activeTab}
+        onValueChange={(value) =>
+          setActiveTab(value === "logs" ? "logs" : "console")
+        }
         className="flex h-full min-h-0 flex-col"
       >
         <div
@@ -75,11 +55,17 @@ export default function BottomPane() {
           <button
             id="bottom-pane-collapse-toggle"
             type="button"
-            aria-label={collapsed ? "Expand bottom pane" : "Collapse bottom pane"}
+            aria-label={
+              collapsed ? "Expand bottom pane" : "Collapse bottom pane"
+            }
             className="inline-flex h-8 w-8 items-center justify-center rounded bg-black/0 text-[12.6px] font-mono font-medium text-white hover:bg-black/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black/80"
-            onClick={() => setCollapsed((prev) => !prev)}
+            onClick={toggleCollapsed}
           >
-            {collapsed ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />}
+            {collapsed ? (
+              <ChevronUpIcon className="h-4 w-4" />
+            ) : (
+              <ChevronDownIcon className="h-4 w-4" />
+            )}
           </button>
         </div>
 

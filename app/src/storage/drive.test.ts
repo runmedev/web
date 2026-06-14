@@ -296,4 +296,107 @@ describe("DriveNotebookStore", () => {
       new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("pageToken"),
     ).toBe("next-page");
   });
+
+  it("paginates Drive comments", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/drive/v3/files/file123/comments");
+        expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+        expect(url.searchParams.get("includeDeleted")).toBe("false");
+        const pageToken = url.searchParams.get("pageToken");
+        const body = pageToken
+          ? { comments: [{ id: "comment-2", content: "second" }] }
+          : {
+              comments: [{ id: "comment-1", content: "first" }],
+              nextPageToken: "next-page",
+            };
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const comments = await store.listComments(
+      "https://drive.google.com/file/d/file123/view",
+    );
+
+    expect(comments.map((comment) => comment.id)).toEqual([
+      "comment-1",
+      "comment-2",
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("pageToken"),
+    ).toBe("next-page");
+  });
+
+  it("creates anchored Drive comments", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/drive/v3/files/file123/comments");
+        expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+        expect(init?.method).toBe("POST");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          content: "Please check this",
+          anchor: "{\"runme\":{\"kind\":\"cell\",\"cellId\":\"cell-1\"}}",
+        });
+        return new Response(
+          JSON.stringify({
+            id: "comment-1",
+            content: "Please check this",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const comment = await store.createComment(
+      "https://drive.google.com/file/d/file123/view",
+      " Please check this ",
+      "{\"runme\":{\"kind\":\"cell\",\"cellId\":\"cell-1\"}}",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(comment.id).toBe("comment-1");
+  });
+
+  it("resolves Drive comments through replies", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe(
+          "/drive/v3/files/file123/comments/comment-1/replies",
+        );
+        expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+        expect(init?.method).toBe("POST");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          action: "resolve",
+        });
+        return new Response(JSON.stringify({ id: "reply-1", action: "resolve" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const reply = await store.resolveComment(
+      "https://drive.google.com/file/d/file123/view",
+      "comment-1",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(reply.action).toBe("resolve");
+  });
 });

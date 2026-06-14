@@ -121,6 +121,14 @@ vi.mock('../../contexts/CurrentDocContext', () => ({
   }),
 }))
 
+vi.mock('../../contexts/CommentsPanelContext', () => ({
+  useCommentsPanel: () => ({
+    commentsPanelOpen: false,
+    setCommentsPanelOpen: vi.fn(),
+    openCommentsPanel: vi.fn(),
+  }),
+}))
+
 vi.mock('../../lib/notebookDiff/conflict', () => ({
   openNotebookConflictDiff: conflictMocks.openNotebookConflictDiff,
   refreshNotebookConflictDiff: conflictMocks.refreshNotebookConflictDiff,
@@ -1289,5 +1297,153 @@ describe('Action component', () => {
     fireEvent.focus(screen.getByRole('button', { name: 'Delete cell' }))
 
     expect(onFocusStateChange).not.toHaveBeenCalled()
+  })
+
+  it('hides the markdown comment button until hover when the cell has no comments', () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'cell-md-no-comments',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      outputs: [],
+      metadata: {},
+      value: 'hello',
+    })
+    const stub = new StubCellData(cell)
+
+    render(
+      <Action
+        cellData={stub as unknown as CellData}
+        isFirst={false}
+        commentsAvailable
+        commentCount={0}
+      />
+    )
+
+    const commentButton = screen.getByRole('button', { name: 'Add comment' })
+    expect(commentButton.className).toContain('text-nb-accent')
+    expect(commentButton.className).toContain('hover:text-nb-accent')
+    expect(commentButton.className).toContain('opacity-0')
+    expect(commentButton.className).toContain('pointer-events-none')
+    expect(commentButton.className).toContain(
+      'group-hover/cell:pointer-events-auto'
+    )
+    expect(commentButton.className).toContain('group-hover/cell:opacity-100')
+  })
+
+  it('keeps the markdown comment button visible for the focused cell', () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'cell-md-focused',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      outputs: [],
+      metadata: {},
+      value: 'hello',
+    })
+    const stub = new StubCellData(cell)
+
+    render(
+      <Action
+        cellData={stub as unknown as CellData}
+        isFirst={false}
+        isActiveCell
+        isWindowFocused
+        commentsAvailable
+        commentCount={0}
+      />
+    )
+
+    const commentButton = screen.getByRole('button', { name: 'Add comment' })
+    expect(commentButton.className).toContain('opacity-100')
+    expect(commentButton.className).not.toContain('pointer-events-none')
+    expect(commentButton.className).not.toContain('opacity-0')
+  })
+
+  it('keeps a disabled markdown comment button visible for the focused cell when comments are unavailable', () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'cell-md-focused-comments-unavailable',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      outputs: [],
+      metadata: {},
+      value: 'hello',
+    })
+    const stub = new StubCellData(cell)
+
+    render(
+      <Action
+        cellData={stub as unknown as CellData}
+        isFirst={false}
+        isActiveCell
+        isWindowFocused
+        commentCount={0}
+      />
+    )
+
+    const commentButton = screen.getByRole('button', {
+      name: 'Comments unavailable',
+    })
+    expect(commentButton).toHaveProperty('disabled', true)
+    expect(commentButton.className).toContain('text-nb-text-faint')
+    expect(commentButton.className).not.toContain('text-nb-accent')
+    expect(commentButton.className).toContain('opacity-100')
+    expect(commentButton.className).not.toContain('pointer-events-none')
+    expect(commentButton.className).not.toContain('opacity-0')
+  })
+
+  it('keeps the markdown comment button visible when the cell has comments', () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'cell-md-with-comments',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      outputs: [],
+      metadata: {},
+      value: 'hello',
+    })
+    const stub = new StubCellData(cell)
+
+    render(
+      <Action
+        cellData={stub as unknown as CellData}
+        isFirst={false}
+        commentsAvailable
+        commentCount={2}
+      />
+    )
+
+    const commentButton = screen.getByRole('button', {
+      name: '2 open comments',
+    })
+    expect(commentButton.className).toContain('text-nb-accent')
+    expect(commentButton.className).toContain('hover:text-nb-accent')
+    expect(commentButton.className).toContain('opacity-100')
+    expect(commentButton.className).not.toContain('opacity-0')
+  })
+
+  it('starts a comment from the markdown cell context menu', () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'cell-md-context-comment',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      outputs: [],
+      metadata: {},
+      value: 'hello',
+    })
+    const stub = new StubCellData(cell)
+    const onStartComment = vi.fn()
+
+    render(
+      <Action
+        cellData={stub as unknown as CellData}
+        isFirst={false}
+        commentsAvailable
+        onStartComment={onStartComment}
+      />
+    )
+
+    fireEvent.contextMenu(screen.getByTestId('markdown-action'))
+    fireEvent.click(screen.getByRole('button', { name: 'Add Comment' }))
+
+    expect(onStartComment).toHaveBeenCalledWith('cell-md-context-comment')
+    expect(screen.queryByRole('button', { name: 'Add Comment' })).toBeNull()
   })
 })
