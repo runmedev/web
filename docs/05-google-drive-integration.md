@@ -82,6 +82,12 @@ googleDrive:
       -----END PRIVATE KEY-----
 ```
 
+Service-account credentials loaded from App Console are saved in
+`localStorage.googleClientConfig` so automated local sessions continue working
+after a reload. This is convenient for tests but means the private key is stored
+in browser-accessible storage. Keep these keys tightly scoped to disposable test
+Drive folders and prefer a server-side token broker for production.
+
 ## Useful App Console commands
 
 ```js

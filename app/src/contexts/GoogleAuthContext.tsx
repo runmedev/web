@@ -44,6 +44,7 @@ const AUTH_HANDOFF_MODE_KEY = 'runme/google-auth/handoff-mode'
 interface AccessTokenInfo {
   token: string
   expiresAt: number
+  authFlow?: GoogleDriveAuthFlow
   refreshToken?: string
 }
 
@@ -166,6 +167,12 @@ function loadStoredToken(): AccessTokenInfo | null {
     return {
       token: parsed.token,
       expiresAt: parsed.expiresAt,
+      authFlow:
+        parsed.authFlow === 'implicit' ||
+        parsed.authFlow === 'pkce' ||
+        parsed.authFlow === 'service_account'
+          ? parsed.authFlow
+          : undefined,
       refreshToken,
     }
   } catch (error) {
@@ -229,6 +236,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       const info: AccessTokenInfo = {
         token,
         expiresAt,
+        authFlow: googleClientManager.getOAuthClient().authFlow,
         ...(refreshToken ? { refreshToken } : {}),
       }
       setTokenInfo(info)
@@ -654,6 +662,17 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     tokenInfo?.token && tokenInfo.expiresAt > nowMs
   )
 
+  const canUseCachedToken = useCallback((info: AccessTokenInfo | null) => {
+    if (!info?.token || info.expiresAt <= Date.now() + REFRESH_MARGIN_MS) {
+      return false
+    }
+    const authFlow = googleClientManager.getOAuthClient().authFlow
+    if (authFlow === 'service_account') {
+      return info.authFlow === 'service_account'
+    }
+    return info.authFlow !== 'service_account'
+  }, [])
+
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
       if (
@@ -887,10 +906,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     (options?: EnsureAccessTokenOptions) => {
       const interactive = options?.interactive ?? true
       const currentInfo = tokenInfoRef.current
-      if (
-        currentInfo?.token &&
-        currentInfo.expiresAt > Date.now() + REFRESH_MARGIN_MS
-      ) {
+      if (canUseCachedToken(currentInfo)) {
         return Promise.resolve(currentInfo.token)
       }
 
@@ -922,10 +938,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
         }
 
         const refreshedInfo = tokenInfoRef.current
-        if (
-          refreshedInfo?.token &&
-          refreshedInfo.expiresAt > Date.now() + REFRESH_MARGIN_MS
-        ) {
+        if (canUseCachedToken(refreshedInfo)) {
           return refreshedInfo.token
         }
 
@@ -1029,6 +1042,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       return pendingPromiseRef.current
     },
     [
+      canUseCachedToken,
       ensureTokenClient,
       hasRedirectAuthHandoffInProgress,
       mintServiceAccountAccessToken,

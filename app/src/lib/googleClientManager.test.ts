@@ -90,7 +90,8 @@ describe('GoogleClientManager', () => {
       JSON.stringify({
         type: 'service_account',
         client_email: 'runme-drive-test@example.iam.gserviceaccount.com',
-        private_key: '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
+        private_key:
+          '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
         private_key_id: 'key-id',
         token_uri: 'https://oauth2.googleapis.com/token',
       })
@@ -110,14 +111,15 @@ describe('GoogleClientManager', () => {
     })
   })
 
-  it('does not restore service account mode without credentials from local storage', () => {
+  it('persists and restores service account credentials from local storage', () => {
     const manager = createManager()
 
     manager.setOAuthClientFromJson(
       JSON.stringify({
         type: 'service_account',
         client_email: 'runme-drive-test@example.iam.gserviceaccount.com',
-        private_key: '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
+        private_key:
+          '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
         private_key_id: 'key-id',
         token_uri: 'https://oauth2.googleapis.com/token',
       })
@@ -125,9 +127,52 @@ describe('GoogleClientManager', () => {
 
     const stored = JSON.parse(
       window.localStorage.getItem(GOOGLE_CLIENT_STORAGE_KEY) ?? '{}'
-    ) as Record<string, string | undefined>
-    expect(JSON.stringify(stored)).not.toContain('PRIVATE KEY')
-    expect(stored.oauthAuthFlow).toBeUndefined()
+    ) as {
+      oauthAuthFlow?: string
+      oauthAuthUxMode?: string
+      oauthServiceAccount?: {
+        clientEmail?: string
+        privateKey?: string
+        privateKeyId?: string
+        tokenUri?: string
+      }
+    }
+    expect(stored.oauthAuthFlow).toBe('service_account')
+    expect(stored.oauthAuthUxMode).toBe('new_tab')
+    expect(stored.oauthServiceAccount).toMatchObject({
+      clientEmail: 'runme-drive-test@example.iam.gserviceaccount.com',
+      privateKey:
+        '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
+      privateKeyId: 'key-id',
+      tokenUri: 'https://oauth2.googleapis.com/token',
+    })
+
+    const reloadedManager = createManager()
+    expect(reloadedManager.getOAuthClient()).toMatchObject({
+      clientId: '',
+      authFlow: 'service_account',
+      authUxMode: 'new_tab',
+      serviceAccount: {
+        clientEmail: 'runme-drive-test@example.iam.gserviceaccount.com',
+        privateKey:
+          '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
+        privateKeyId: 'key-id',
+        tokenUri: 'https://oauth2.googleapis.com/token',
+      },
+    })
+  })
+
+  it('does not restore service account mode from incomplete local storage credentials', () => {
+    window.localStorage.setItem(
+      GOOGLE_CLIENT_STORAGE_KEY,
+      JSON.stringify({
+        oauthAuthFlow: 'service_account',
+        oauthAuthUxMode: 'new_tab',
+        oauthServiceAccount: {
+          clientEmail: 'runme-drive-test@example.iam.gserviceaccount.com',
+        },
+      })
+    )
 
     const reloadedManager = createManager()
     expect(reloadedManager.getOAuthClient()).toMatchObject({
@@ -146,7 +191,8 @@ describe('GoogleClientManager', () => {
       JSON.stringify({
         type: 'service_account',
         client_email: 'runme-drive-test@example.iam.gserviceaccount.com',
-        private_key: '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
+        private_key:
+          '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
       })
     )
     manager.setAuthFlow('implicit')

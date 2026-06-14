@@ -76,12 +76,29 @@ app config.
 dev server. It asks the dev server to read an absolute `.json` path because
 browser JavaScript cannot read arbitrary local paths by itself.
 
+Service-account credentials loaded through App Console are persisted in the
+existing `googleClientConfig` localStorage record so local automation survives a
+page reload. The app restores `service_account` auth only when the stored
+credentials include both `clientEmail` and `privateKey`; otherwise it falls back
+to the default OAuth flow rather than entering service-account mode without a
+usable key.
+
 This is not a production browser-auth recommendation. Supplying a private key to
 browser JavaScript exposes that key to anyone who can read the page, local
 storage, config response, devtools, or test logs. The supported use case is
 local/CI test automation with a tightly scoped service account and disposable
 test Drive resources. A production deployment should mint the access token on a
 trusted server and send only the short-lived token to the browser.
+
+IndexedDB is the main browser-native alternative to localStorage for structured
+persistent app data and would avoid synchronous storage APIs, but it is not a
+meaningful security boundary against JavaScript running on the page. Web Crypto
+can import the private key as non-extractable for signing, but the app still
+needs the raw key again after reload unless a separate wrapping key or
+passphrase is introduced. Credential Management and WebAuthn are not a portable
+fit for storing and later exporting arbitrary service-account private keys. For
+this local testing feature, localStorage is the simplest persistence mechanism;
+for production, use a server-side token broker instead of browser key storage.
 
 ## Token Flow
 

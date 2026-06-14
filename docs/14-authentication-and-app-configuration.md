@@ -73,6 +73,14 @@ filesystem paths directly.
 local Vite dev server. It asks the dev server to read an absolute `.json` path,
 so it is intended for local automation only.
 
+Both service-account helpers persist the loaded credentials in
+`localStorage.googleClientConfig` so reloads keep using the same test service
+account. Browser storage is not a production secret boundary: IndexedDB is a
+better structured persistent store than localStorage, but page JavaScript can
+still read data it is authorized to use. Use browser-persisted private keys only
+for tightly scoped local/CI testing, and use a trusted token broker for
+production.
+
 ## App config helpers
 
 ```js

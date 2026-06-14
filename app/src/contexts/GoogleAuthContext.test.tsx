@@ -202,6 +202,55 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     )
   })
 
+  it('does not reuse a cached OAuth token for service account auth', async () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        token: 'prior-oauth-token',
+        expiresAt: Date.now() + 30 * 60 * 1000,
+        authFlow: 'implicit',
+      })
+    )
+    googleClientManager.setOAuthClient({
+      clientId: '',
+      authFlow: 'service_account',
+      authUxMode: 'new_tab',
+      serviceAccount: {
+        clientEmail: 'runme-drive-test@example.iam.gserviceaccount.com',
+        privateKey: await generatePrivateKeyPem(),
+      },
+    })
+    const fetchMock = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          access_token: 'service-account-token',
+          expires_in: 3600,
+          token_type: 'Bearer',
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const auth = await renderWithGoogleAuthProvider()
+
+    let token = ''
+    await act(async () => {
+      token = await auth.ensureAccessToken({ interactive: false })
+    })
+
+    expect(token).toBe('service-account-token')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(
+      JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? '{}')
+    ).toMatchObject({
+      token: 'service-account-token',
+      authFlow: 'service_account',
+    })
+  })
+
   it('mints a service account access token without interactive OAuth', async () => {
     googleClientManager.setOAuthClient({
       clientId: '',
