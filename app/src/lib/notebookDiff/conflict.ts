@@ -5,6 +5,7 @@ import type {
   LocalFileRecord,
   LocalNotebooks,
   NotebookConflictState,
+  UpstreamVersion,
 } from '../../storage/local'
 import { computeNotebookDiff } from './diff'
 import type { CellDiff, NotebookDiffDocument } from './model'
@@ -20,6 +21,21 @@ export interface RestoredConflictCellResult {
 
 export interface RestoreDeletedConflictCellOptions {
   localNotebook?: parser_pb.Notebook
+}
+
+type DriveDiffResolutionKind = NonNullable<
+  NotebookDiffDocument['resolution']
+>['kind']
+
+function diffDocumentIdForResolution(
+  localUri: string,
+  resolutionKind: DriveDiffResolutionKind
+): string {
+  const prefix =
+    resolutionKind === 'notebook-sync-conflict'
+      ? 'conflict'
+      : resolutionKind
+  return `${prefix}-${encodeURIComponent(localUri)}`
 }
 
 function parseNotebookJson(
@@ -47,7 +63,7 @@ async function registerConflictDiffDocument(
   const upstreamNotebook = parseNotebookJson(upstreamDoc, 'upstream')
   const localNotebook = parseNotebookJson(record.doc ?? '', 'local')
   return registerNotebookDiffDocument({
-    id: `conflict-${encodeURIComponent(localUri)}`,
+    id: diffDocumentIdForResolution(localUri, 'notebook-sync-conflict'),
     base: {
       label: 'Upstream version',
       revisionId: conflict.upstreamVersion?.revisionId,
@@ -79,6 +95,97 @@ export async function loadNotebookConflictDiffDocument(
   }
 
   return registerConflictDiffDocument(store, localUri, record, record.conflict)
+}
+
+async function registerUpstreamDiffDocument(
+  localUri: string,
+  record: LocalFileRecord,
+  upstreamDoc: string,
+  upstreamVersion: UpstreamVersion | undefined,
+  resolutionKind: DriveDiffResolutionKind = 'drive-upstream-diff'
+): Promise<NotebookDiffDocument> {
+  const upstreamNotebook = parseNotebookJson(upstreamDoc, 'upstream')
+  const localNotebook = parseNotebookJson(record.doc ?? '', 'local')
+  return registerNotebookDiffDocument({
+    id: diffDocumentIdForResolution(localUri, resolutionKind),
+    base: {
+      label: 'Upstream version',
+      revisionId: upstreamVersion?.revisionId,
+    },
+    compare: {
+      label: 'Local version',
+    },
+    diff: computeNotebookDiff(upstreamNotebook, localNotebook, {
+      includeOutputs: true,
+      includeMetadata: true,
+    }),
+    resolution: {
+      kind: resolutionKind,
+      localUri,
+    },
+  })
+}
+
+async function registerDriveRevisionDiffDocument(
+  store: LocalNotebooks,
+  localUri: string,
+  revisionId: string,
+  resolutionKind: DriveDiffResolutionKind = 'notebook-sync-conflict'
+): Promise<NotebookDiffDocument> {
+  const normalizedRevisionId = revisionId.trim()
+  if (!normalizedRevisionId) {
+    throw new Error('Drive revision diff requires a revision id')
+  }
+
+  const record = await store.files.get(localUri)
+  if (!record) {
+    throw new Error(`Local notebook record not found for ${localUri}`)
+  }
+
+  if (resolutionKind === 'drive-upstream-diff') {
+    const upstream = await store.getDriveUpstreamDoc(localUri)
+    if (upstream.version?.revisionId === normalizedRevisionId) {
+      return registerUpstreamDiffDocument(
+        localUri,
+        record,
+        upstream.doc,
+        upstream.version,
+        resolutionKind
+      )
+    }
+  }
+
+  if (record.conflict?.upstreamVersion?.revisionId === normalizedRevisionId) {
+    return registerConflictDiffDocument(store, localUri, record, record.conflict)
+  }
+
+  const revisionDoc = await store.getDriveRevisionDoc(
+    localUri,
+    normalizedRevisionId
+  )
+  const revisionNotebook = parseNotebookJson(
+    revisionDoc,
+    `Drive revision ${normalizedRevisionId}`
+  )
+  const localNotebook = parseNotebookJson(record.doc ?? '', 'local')
+  return registerNotebookDiffDocument({
+    id: diffDocumentIdForResolution(localUri, resolutionKind),
+    base: {
+      label: `Drive revision ${normalizedRevisionId}`,
+      revisionId: normalizedRevisionId,
+    },
+    compare: {
+      label: 'Local version',
+    },
+    diff: computeNotebookDiff(revisionNotebook, localNotebook, {
+      includeOutputs: true,
+      includeMetadata: true,
+    }),
+    resolution: {
+      kind: resolutionKind,
+      localUri,
+    },
+  })
 }
 
 function findRestoredCellIndex(
@@ -215,6 +322,52 @@ export async function openNotebookConflictDiff(
   localUri: string
 ): Promise<void> {
   const document = await loadNotebookConflictDiffDocument(store, localUri)
+  openNotebookDiffDocument(document)
+}
+
+export async function openNotebookUpstreamDiff(
+  store: LocalNotebooks,
+  localUri: string
+): Promise<void> {
+  const record = await store.files.get(localUri)
+  if (!record) {
+    throw new Error(`Local notebook record not found for ${localUri}`)
+  }
+
+  if (record.conflict) {
+    const document = await registerConflictDiffDocument(
+      store,
+      localUri,
+      record,
+      record.conflict
+    )
+    openNotebookDiffDocument(document)
+    return
+  }
+
+  const upstream = await store.getDriveUpstreamDoc(localUri)
+  const document = await registerUpstreamDiffDocument(
+    localUri,
+    record,
+    upstream.doc,
+    upstream.version,
+    'drive-upstream-diff'
+  )
+  openNotebookDiffDocument(document)
+}
+
+export async function openNotebookDriveRevisionDiff(
+  store: LocalNotebooks,
+  localUri: string,
+  revisionId: string,
+  options: { resolutionKind?: DriveDiffResolutionKind } = {}
+): Promise<void> {
+  const document = await registerDriveRevisionDiffDocument(
+    store,
+    localUri,
+    revisionId,
+    options.resolutionKind ?? 'notebook-sync-conflict'
+  )
   openNotebookDiffDocument(document)
 }
 

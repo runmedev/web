@@ -55,6 +55,7 @@ const contextMocks = vi.hoisted(() => ({
 
 const conflictMocks = vi.hoisted(() => ({
   openNotebookConflictDiff: vi.fn(async () => undefined),
+  openNotebookUpstreamDiff: vi.fn(async () => undefined),
   refreshNotebookConflictDiff: vi.fn(async () => undefined),
   restoreDeletedConflictCell: vi.fn(async () => undefined),
 }))
@@ -131,6 +132,7 @@ vi.mock('../../contexts/CommentsPanelContext', () => ({
 
 vi.mock('../../lib/notebookDiff/conflict', () => ({
   openNotebookConflictDiff: conflictMocks.openNotebookConflictDiff,
+  openNotebookUpstreamDiff: conflictMocks.openNotebookUpstreamDiff,
   refreshNotebookConflictDiff: conflictMocks.refreshNotebookConflictDiff,
   restoreDeletedConflictCell: conflictMocks.restoreDeletedConflictCell,
 }))
@@ -262,6 +264,8 @@ beforeEach(() => {
   contextMocks.notebookStore = null
   conflictMocks.openNotebookConflictDiff.mockReset()
   conflictMocks.openNotebookConflictDiff.mockResolvedValue(undefined)
+  conflictMocks.openNotebookUpstreamDiff.mockReset()
+  conflictMocks.openNotebookUpstreamDiff.mockResolvedValue(undefined)
   conflictMocks.refreshNotebookConflictDiff.mockReset()
   conflictMocks.refreshNotebookConflictDiff.mockResolvedValue(undefined)
 })
@@ -577,6 +581,51 @@ describe('Actions tabs', () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(
         '[202602a_tb_aws_codex_136](http://localhost:3000/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2F1cDDvmvjrBKQDkZi6nojVC_CSAfTSj7EV%2Fview)'
+      )
+    })
+  })
+
+  it('opens an upstream diff from the Drive-backed tab context menu', async () => {
+    const uri = 'local://file/restored'
+    const remoteUri =
+      'https://drive.google.com/file/d/1cDDvmvjrBKQDkZi6nojVC_CSAfTSj7EV/view'
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(async () => ({
+        uri,
+        name: 'restored.json',
+        type: 'file',
+        children: [],
+        remoteUri,
+        parents: [],
+      })),
+      getSyncState: vi.fn(async () => ({
+        status: 'synced',
+        localUri: uri,
+        remoteId: remoteUri,
+      })),
+      rename: vi.fn(),
+      subscribeSync: vi.fn(() => () => {}),
+    }
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      {
+        uri,
+        title: 'restored.json',
+      },
+    ]
+
+    render(<Actions />)
+
+    fireEvent.contextMenu(screen.getByRole('tab', { name: /restored\.json/ }))
+    const compareButton = await screen.findByRole('button', {
+      name: 'Compare with upstream',
+    })
+    fireEvent.click(compareButton)
+
+    await waitFor(() => {
+      expect(conflictMocks.openNotebookUpstreamDiff).toHaveBeenCalledWith(
+        contextMocks.notebookStore,
+        uri
       )
     })
   })

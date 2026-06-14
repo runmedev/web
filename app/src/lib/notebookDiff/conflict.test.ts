@@ -3,8 +3,13 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { RunmeMetadataKey, parser_pb } from '../../runme/client'
 import type LocalNotebooks from '../../storage/local'
-import { restoreDeletedConflictCell } from './conflict'
+import {
+  openNotebookDriveRevisionDiff,
+  openNotebookUpstreamDiff,
+  restoreDeletedConflictCell,
+} from './conflict'
 import { computeNotebookDiff } from './diff'
+import { getNotebookDiffDocument } from './registry'
 
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
@@ -159,5 +164,122 @@ describe('restoreDeletedConflictCell', () => {
       'c',
     ])
     expect(saved?.cells[0]?.value).toBe('unsaved a edit')
+  })
+})
+
+describe('Drive upstream diff documents', () => {
+  it('opens a generic upstream diff for Drive-backed notebooks without a conflict', async () => {
+    const localUri = 'local://file/drive'
+    const record = {
+      id: localUri,
+      name: 'drive.json',
+      remoteId: 'https://drive.google.com/file/d/file123/view',
+      lastRemoteChecksum: 'base',
+      lastSynced: '',
+      doc: serialize(notebook([cell({ refId: 'a', value: 'local' })])),
+      md5Checksum: 'local',
+    }
+    const store = {
+      files: {
+        get: vi.fn(async () => record),
+      },
+      getDriveUpstreamDoc: vi.fn(async () => ({
+        doc: serialize(notebook([cell({ refId: 'a', value: 'upstream' })])),
+        version: { revisionId: 'revision-5' },
+      })),
+    } as unknown as LocalNotebooks
+
+    await openNotebookUpstreamDiff(store, localUri)
+
+    const document = getNotebookDiffDocument(
+      `drive-upstream-diff-${encodeURIComponent(localUri)}`
+    )
+    expect(document?.base).toEqual({
+      label: 'Upstream version',
+      revisionId: 'revision-5',
+    })
+    expect(document?.resolution).toEqual({
+      kind: 'drive-upstream-diff',
+      localUri,
+    })
+  })
+
+  it('reuses the upstream document when selecting the current upstream revision', async () => {
+    const localUri = 'local://file/drive'
+    const record = {
+      id: localUri,
+      name: 'drive.json',
+      remoteId: 'https://drive.google.com/file/d/file123/view',
+      lastRemoteChecksum: 'base',
+      lastSynced: '',
+      doc: serialize(notebook([cell({ refId: 'a', value: 'local' })])),
+      md5Checksum: 'local',
+    }
+    const store = {
+      files: {
+        get: vi.fn(async () => record),
+      },
+      getDriveUpstreamDoc: vi.fn(async () => ({
+        doc: serialize(notebook([cell({ refId: 'a', value: 'upstream' })])),
+        version: { revisionId: 'revision-5' },
+      })),
+      getDriveRevisionDoc: vi.fn(),
+    } as unknown as LocalNotebooks
+
+    await openNotebookDriveRevisionDiff(store, localUri, 'revision-5', {
+      resolutionKind: 'drive-upstream-diff',
+    })
+
+    expect(store.getDriveRevisionDoc).not.toHaveBeenCalled()
+    expect(
+      getNotebookDiffDocument(
+        `drive-upstream-diff-${encodeURIComponent(localUri)}`
+      )?.base.label
+    ).toBe('Upstream version')
+  })
+
+  it('keeps conflict revision selections in the existing conflict diff document', async () => {
+    const localUri = 'local://file/conflict'
+    const record = {
+      id: localUri,
+      name: 'conflict.json',
+      remoteId: 'https://drive.google.com/file/d/file123/view',
+      lastRemoteChecksum: 'base',
+      lastSynced: '',
+      doc: serialize(notebook([cell({ refId: 'a', value: 'local' })])),
+      md5Checksum: 'local',
+      conflict: {
+        detectedAt: '2026-06-01T00:00:00.000Z',
+        upstreamChecksum: 'upstream',
+        upstreamVersion: { revisionId: 'revision-5' },
+        localChecksumAtDetection: 'local',
+      },
+    }
+    const store = {
+      files: {
+        get: vi.fn(async () => record),
+      },
+      getConflictUpstreamDoc: vi.fn(async () =>
+        serialize(notebook([cell({ refId: 'a', value: 'upstream' })]))
+      ),
+      getDriveRevisionDoc: vi.fn(async () =>
+        serialize(notebook([cell({ refId: 'a', value: 'older' })]))
+      ),
+    } as unknown as LocalNotebooks
+
+    await openNotebookDriveRevisionDiff(store, localUri, 'revision-1')
+
+    const document = getNotebookDiffDocument(
+      `conflict-${encodeURIComponent(localUri)}`
+    )
+    expect(store.getDriveRevisionDoc).toHaveBeenCalledWith(
+      localUri,
+      'revision-1'
+    )
+    expect(document?.base).toEqual({
+      label: 'Drive revision revision-1',
+      revisionId: 'revision-1',
+    })
+    expect(document?.resolution?.kind).toBe('notebook-sync-conflict')
   })
 })

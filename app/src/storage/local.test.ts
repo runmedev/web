@@ -12,6 +12,7 @@ import LocalNotebooks, {
   NotebookConflictChangedError,
 } from './local'
 import { NotebookStoreItemType } from './notebook'
+import { MemoryRevisionDocStorage } from './revisionDocs'
 
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
@@ -63,6 +64,7 @@ function createTestStore(driveStore: unknown) {
   localStore.syncSubjects = new Map()
   localStore.markdownSyncSubjects = new Map()
   localStore.conflictDocStorage = new MemoryConflictDocStorage()
+  localStore.revisionDocStorage = new MemoryRevisionDocStorage()
   return localStore as LocalNotebooks
 }
 
@@ -525,6 +527,96 @@ describe('LocalNotebooks moveToTrash', () => {
 })
 
 describe('LocalNotebooks Drive conflict resolution', () => {
+  it('loads the current Drive upstream document without creating a conflict', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const upstreamNotebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          kind: parser_pb.CellKind.CODE,
+          languageId: 'python',
+          value: "print('upstream')",
+        }),
+      ],
+    })
+    const driveStore = {
+      load: vi.fn(async () => upstreamNotebook),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: 'upstream-checksum',
+        headRevisionId: 'upstream-revision',
+      })),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: 'local://file/drive',
+      name: 'notebook.json',
+      remoteId: remoteUri,
+      lastRemoteChecksum: 'base-checksum',
+      lastSynced: '2026-05-01T00:00:00.000Z',
+      doc: notebookJson("print('local')"),
+      md5Checksum: 'local-checksum',
+    })
+
+    await expect(store.getDriveUpstreamDoc('local://file/drive')).resolves.toEqual({
+      doc: toJsonString(
+        parser_pb.NotebookSchema,
+        upstreamNotebook,
+        NOTEBOOK_JSON_WRITE_OPTIONS
+      ),
+      version: {
+        checksum: 'upstream-checksum',
+        revisionId: 'upstream-revision',
+      },
+    })
+    const record = await store.files.get('local://file/drive')
+    expect(record?.conflict).toBeUndefined()
+    expect(driveStore.load).toHaveBeenCalledWith(remoteUri)
+    expect(driveStore.getVersionMetadata).toHaveBeenCalledWith(remoteUri)
+  })
+
+  it('stores selected Drive revisions in revision document storage', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const revisionNotebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          kind: parser_pb.CellKind.CODE,
+          languageId: 'python',
+          value: "print('revision')",
+        }),
+      ],
+    })
+    const driveStore = {
+      loadRevision: vi.fn(async () => revisionNotebook),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: 'local://file/drive',
+      name: 'notebook.json',
+      remoteId: remoteUri,
+      lastRemoteChecksum: 'base-checksum',
+      lastSynced: '2026-05-01T00:00:00.000Z',
+      doc: notebookJson("print('local')"),
+      md5Checksum: 'local-checksum',
+    })
+
+    await expect(
+      store.getDriveRevisionDoc('local://file/drive', 'revision-1')
+    ).resolves.toBe(
+      toJsonString(
+        parser_pb.NotebookSchema,
+        revisionNotebook,
+        NOTEBOOK_JSON_WRITE_OPTIONS
+      )
+    )
+    await expect(
+      store.getDriveRevisionDoc('local://file/drive', 'revision-1')
+    ).resolves.toContain("print('revision')")
+    expect(driveStore.loadRevision).toHaveBeenCalledTimes(1)
+    expect(driveStore.loadRevision).toHaveBeenCalledWith(
+      remoteUri,
+      'revision-1'
+    )
+  })
+
   it('records a conflict instead of creating a timestamped Drive copy', async () => {
     const remoteUri = 'https://drive.google.com/file/d/file123/view'
     const localDoc = notebookJson("print('local')")
