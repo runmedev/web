@@ -5,7 +5,9 @@ import { useNotebookStore } from '../contexts/NotebookStoreContext'
 import { useWorkspaceDocumentContext } from '../contexts/WorkspaceDocumentContext'
 import {
   deriveWorkspaceDocumentTitle,
+  isAppConsoleUri,
   isDriveSyncStatusUri,
+  isLogsUri,
   isRunnerStatusUri,
 } from '../lib/workspaceDocuments/workspaceDocumentTypes'
 
@@ -39,7 +41,12 @@ export function CurrentDocInitializer() {
     if (!docParam) {
       return
     }
-    if (isRunnerStatusUri(docParam) || isDriveSyncStatusUri(docParam)) {
+    if (
+      isRunnerStatusUri(docParam) ||
+      isDriveSyncStatusUri(docParam) ||
+      isAppConsoleUri(docParam) ||
+      isLogsUri(docParam)
+    ) {
       showDocument(docParam, {
         title: deriveWorkspaceDocumentTitle(docParam),
       })

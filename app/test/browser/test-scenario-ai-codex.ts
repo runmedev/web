@@ -188,6 +188,26 @@ function runAppConsoleCommand(consoleRef: string, command: string): string {
   return readAppConsoleOutput();
 }
 
+function openAppConsoleDocument(): boolean {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const output = run(
+      `agent-browser eval "${escapeDoubleQuotes(`(() => {
+        const button = document.querySelector('button[aria-label="Open App Console"]');
+        if (!(button instanceof HTMLButtonElement)) return 'missing';
+        button.click();
+        return document.querySelector('textarea[aria-label="App Console input"]')
+          ? 'visible'
+          : 'clicked';
+      })()`)}"`,
+    ).stdout;
+    if (output.includes("visible")) {
+      return true;
+    }
+    run("agent-browser wait 350");
+  }
+  return false;
+}
+
 function hasCommandError(output: string): boolean {
   return /TypeError:|ReferenceError:|SyntaxError:|Command finished \(exit code [1-9]\d*\)/.test(
     output,
@@ -665,6 +685,7 @@ mkdirSync(OUTPUT_DIR, { recursive: true });
 rmSync(MOVIE_PATH, { force: true });
 for (const file of [
   "scenario-ai-codex-01-initial.png",
+  "scenario-ai-codex-01b-app-console-open.txt",
   "scenario-ai-codex-02-console.txt",
   "scenario-ai-codex-02-harness-storage.json",
   "scenario-ai-codex-03-opened-notebook.txt",
@@ -791,7 +812,15 @@ try {
     fail("Failed to create local notebook fixture for codex scenario");
   }
 
+  if (openAppConsoleDocument()) {
+    run("agent-browser wait 600");
+    pass("Opened App Console document tab");
+  } else {
+    fail("Could not open App Console document tab");
+  }
+
   let snapshot = run("agent-browser snapshot -i").stdout;
+  writeArtifact("scenario-ai-codex-01b-app-console-open.txt", snapshot);
   const consoleRef = firstRef(snapshot, /App Console input/i);
   if (!consoleRef) {
     fail("Did not find App Console input");

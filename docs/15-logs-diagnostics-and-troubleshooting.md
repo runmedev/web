@@ -2,8 +2,8 @@
 
 ## First place to look
 
-If notebook execution, AI, Drive, or auth appears broken, open the bottom pane
-and inspect:
+If notebook execution, AI, Drive, or auth appears broken, open the document tabs
+from the left navigation bar and inspect:
 
 - `App Console` for current config and manual probes,
 - `Logs` for runtime failures and warnings.

@@ -1,73 +1,73 @@
-import { create } from "@bufbuild/protobuf";
-import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/20/solid";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { create } from '@bufbuild/protobuf'
+import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/20/solid'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { useCurrentDoc } from "../../contexts/CurrentDocContext";
-import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
-import { useGoogleAuth } from "../../contexts/GoogleAuthContext";
-import { useNotebookContext } from "../../contexts/NotebookContext";
-import { useNotebookStore } from "../../contexts/NotebookStoreContext";
-import { useRunners } from "../../contexts/RunnersContext";
-import { useWorkspaceDocumentContext } from "../../contexts/WorkspaceDocumentContext";
-import { useWorkspace } from "../../contexts/WorkspaceContext";
-import { appState } from "../../lib/runtime/AppState";
-import { getAppConsoleData } from "../../lib/appConsole/appConsoleController";
-import { useAppConsoleSnapshot } from "../../lib/appConsole/useAppConsoleSnapshot";
-import { createAppJsGlobals } from "../../lib/runtime/appJsGlobals";
-import { JSKernel } from "../../lib/runtime/jsKernel";
+import { useCurrentDoc } from '../../contexts/CurrentDocContext'
+import { useFilesystemStore } from '../../contexts/FilesystemStoreContext'
+import { useGoogleAuth } from '../../contexts/GoogleAuthContext'
+import { useNotebookContext } from '../../contexts/NotebookContext'
+import { useNotebookStore } from '../../contexts/NotebookStoreContext'
+import { useRunners } from '../../contexts/RunnersContext'
+import { useWorkspaceDocumentContext } from '../../contexts/WorkspaceDocumentContext'
+import { useWorkspace } from '../../contexts/WorkspaceContext'
+import { appState } from '../../lib/runtime/AppState'
+import { getAppConsoleData } from '../../lib/appConsole/appConsoleController'
+import { useAppConsoleSnapshot } from '../../lib/appConsole/useAppConsoleSnapshot'
+import { createAppJsGlobals } from '../../lib/runtime/appJsGlobals'
+import { JSKernel } from '../../lib/runtime/jsKernel'
 import {
   createRunmeConsoleApi,
   type NotebookDataLike,
-} from "../../lib/runtime/runmeConsole";
-import { isNotebookDocumentUri } from "../../lib/workspaceDocuments/workspaceDocumentTypes";
-import { Runner } from "../../lib/runner";
+} from '../../lib/runtime/runmeConsole'
+import { isNotebookDocumentUri } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
+import { Runner } from '../../lib/runner'
 import {
   FilesystemNotebookStore,
   isFileSystemAccessSupported,
-} from "../../storage/fs";
-import { parser_pb } from "../../runme/client";
-import { ActionOutputItems } from "../Actions/Actions";
-import Editor from "../Actions/Editor";
-import { type ConsoleCell, getHistorySources } from "./model";
+} from '../../storage/fs'
+import { parser_pb } from '../../runme/client'
+import { ActionOutputItems } from '../Actions/ActionOutputItems'
+import Editor from '../Actions/Editor'
+import { type ConsoleCell, getHistorySources } from './model'
 
-const STORAGE_KEY = "runme.appConsoleCollapsed";
-const LEGACY_STORAGE_KEY = "aisre.appConsoleCollapsed";
-const textDecoder = new TextDecoder();
+const STORAGE_KEY = 'runme.appConsoleCollapsed'
+const LEGACY_STORAGE_KEY = 'aisre.appConsoleCollapsed'
+const textDecoder = new TextDecoder()
 
-type OutputKind = "stdout" | "stderr" | "result";
+type OutputKind = 'stdout' | 'stderr' | 'result'
 
 function buildOutputGroups(outputs: parser_pb.CellOutput[]): Array<{
-  key: string;
-  kind: OutputKind;
-  outputs: parser_pb.CellOutput[];
+  key: string
+  kind: OutputKind
+  outputs: parser_pb.CellOutput[]
 }> {
   const groups: Array<{
-    key: string;
-    kind: OutputKind;
-    outputs: parser_pb.CellOutput[];
-  }> = [];
+    key: string
+    kind: OutputKind
+    outputs: parser_pb.CellOutput[]
+  }> = []
 
   outputs.forEach((output, outputIndex) => {
-    (output.items ?? []).forEach((item, itemIndex) => {
+    ;(output.items ?? []).forEach((item, itemIndex) => {
       if (!item) {
-        return;
+        return
       }
 
-      const mime = item.mime || "";
-      const decoded = textDecoder.decode(item.data ?? new Uint8Array());
+      const mime = item.mime || ''
+      const decoded = textDecoder.decode(item.data ?? new Uint8Array())
       if (
-        (mime === "application/vnd.code.notebook.stdout" ||
-          mime === "application/vnd.code.notebook.stderr") &&
+        (mime === 'application/vnd.code.notebook.stdout' ||
+          mime === 'application/vnd.code.notebook.stderr') &&
         decoded.length === 0
       ) {
-        return;
+        return
       }
 
-      let kind: OutputKind = "result";
-      if (mime === "application/vnd.code.notebook.stdout") {
-        kind = "stdout";
-      } else if (mime === "application/vnd.code.notebook.stderr") {
-        kind = "stderr";
+      let kind: OutputKind = 'result'
+      if (mime === 'application/vnd.code.notebook.stdout') {
+        kind = 'stdout'
+      } else if (mime === 'application/vnd.code.notebook.stderr') {
+        kind = 'stderr'
       }
 
       groups.push({
@@ -78,22 +78,22 @@ function buildOutputGroups(outputs: parser_pb.CellOutput[]): Array<{
             items: [item],
           }),
         ],
-      });
-    });
-  });
+      })
+    })
+  })
 
-  return groups;
+  return groups
 }
 
-function StatusPill({ status }: { status: ConsoleCell["status"] }) {
+function StatusPill({ status }: { status: ConsoleCell['status'] }) {
   const className =
-    status === "success"
-      ? "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-400/30"
-      : status === "error"
-        ? "bg-rose-500/15 text-rose-200 ring-1 ring-rose-400/30"
-        : status === "running"
-          ? "bg-amber-500/15 text-amber-100 ring-1 ring-amber-300/30"
-          : "bg-sky-500/15 text-sky-100 ring-1 ring-sky-300/30";
+    status === 'success'
+      ? 'bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-400/30'
+      : status === 'error'
+        ? 'bg-rose-500/15 text-rose-200 ring-1 ring-rose-400/30'
+        : status === 'running'
+          ? 'bg-amber-500/15 text-amber-100 ring-1 ring-amber-300/30'
+          : 'bg-sky-500/15 text-sky-100 ring-1 ring-sky-300/30'
 
   return (
     <span
@@ -102,20 +102,17 @@ function StatusPill({ status }: { status: ConsoleCell["status"] }) {
     >
       {status}
     </span>
-  );
+  )
 }
 
 function OutputGroups({ outputs }: { outputs: parser_pb.CellOutput[] }) {
-  const groups = useMemo(() => buildOutputGroups(outputs), [outputs]);
+  const groups = useMemo(() => buildOutputGroups(outputs), [outputs])
   if (groups.length === 0) {
-    return null;
+    return null
   }
 
   return (
-    <div
-      data-testid="app-console-cell-outputs"
-      className="space-y-2"
-    >
+    <div data-testid="app-console-cell-outputs" className="space-y-2">
       {groups.map((group) => (
         <div
           key={group.key}
@@ -130,234 +127,258 @@ function OutputGroups({ outputs }: { outputs: parser_pb.CellOutput[] }) {
         </div>
       ))}
     </div>
-  );
+  )
 }
 
-export default function AppConsole({ showHeader = true }: { showHeader?: boolean }) {
-  const appConsoleData = getAppConsoleData();
-  const { cells, hydrated, loadError } = useAppConsoleSnapshot();
-  const { ensureAccessToken } = useGoogleAuth();
+export default function AppConsole({
+  showHeader = true,
+}: {
+  showHeader?: boolean
+}) {
+  const appConsoleData = getAppConsoleData()
+  const { cells, hydrated, loadError } = useAppConsoleSnapshot()
+  const { ensureAccessToken } = useGoogleAuth()
   const [collapsed, setCollapsed] = useState<boolean>(() => {
-    if (typeof window === "undefined") {
-      return false;
+    if (typeof window === 'undefined') {
+      return false
     }
     try {
       const stored =
         localStorage.getItem(STORAGE_KEY) ??
-        localStorage.getItem(LEGACY_STORAGE_KEY);
-      return stored === "true";
+        localStorage.getItem(LEGACY_STORAGE_KEY)
+      return stored === 'true'
     } catch (error) {
-      console.error("Failed to read console collapse state", error);
-      return false;
+      console.error('Failed to read console collapse state', error)
+      return false
     }
-  });
+  })
 
-  const draftEditorRef = useRef<any>(null);
-  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const draftEditorRef = useRef<any>(null)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
   const [historyBrowseState, setHistoryBrowseState] = useState<{
-    index: number | null;
-    draftBuffer: string;
+    index: number | null
+    draftBuffer: string
   }>({
     index: null,
-    draftBuffer: "",
-  });
-  const historyBrowseStateRef = useRef(historyBrowseState);
-  const pendingFocusCellIdRef = useRef<string | null>(null);
+    draftBuffer: '',
+  })
+  const historyBrowseStateRef = useRef(historyBrowseState)
+  const pendingFocusCellIdRef = useRef<string | null>(null)
 
   const updateHistoryBrowseState = useCallback(
     (nextState: { index: number | null; draftBuffer: string }) => {
-      historyBrowseStateRef.current = nextState;
-      setHistoryBrowseState(nextState);
+      historyBrowseStateRef.current = nextState
+      setHistoryBrowseState(nextState)
     },
-    [],
-  );
+    []
+  )
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, collapsed ? "true" : "false");
-      localStorage.removeItem(LEGACY_STORAGE_KEY);
+      localStorage.setItem(STORAGE_KEY, collapsed ? 'true' : 'false')
+      localStorage.removeItem(LEGACY_STORAGE_KEY)
     } catch (error) {
-      console.error("Failed to persist console collapse state", error);
+      console.error('Failed to persist console collapse state', error)
     }
-  }, [collapsed]);
+  }, [collapsed])
 
-  const { updateRunner, deleteRunner, setDefaultRunner } = useRunners();
-  const { getItems, addItem, removeItem } = useWorkspace();
-  const { getCurrentDoc, setCurrentDoc } = useCurrentDoc();
-  const { getNotebookData, openNotebook, useNotebookList } = useNotebookContext();
-  const { showDocument } = useWorkspaceDocumentContext();
-  const openNotebooks = useNotebookList();
-  const { fsStore, setFsStore } = useFilesystemStore();
-  const { store: notebookStore } = useNotebookStore();
+  const { updateRunner, deleteRunner, setDefaultRunner } = useRunners()
+  const { getItems, addItem, removeItem } = useWorkspace()
+  const { getCurrentDoc, getLastNotebookDoc, setCurrentDoc } = useCurrentDoc()
+  const { getNotebookData, openNotebook, useNotebookList } =
+    useNotebookContext()
+  const { showDocument } = useWorkspaceDocumentContext()
+  const openNotebooks = useNotebookList()
+  const { fsStore, setFsStore } = useFilesystemStore()
+  const { store: notebookStore } = useNotebookStore()
 
   const resolveNotebookStore = useCallback(() => {
-    return notebookStore ?? appState.localNotebooks;
-  }, [notebookStore]);
+    return notebookStore ?? appState.localNotebooks
+  }, [notebookStore])
 
   const ensureFilesystemStore = useCallback(() => {
     if (fsStore) {
-      return fsStore;
+      return fsStore
     }
     if (!isFileSystemAccessSupported()) {
-      return null;
+      return null
     }
-    const store = new FilesystemNotebookStore();
-    appState.setFilesystemStore(store);
-    setFsStore(store);
-    return store;
-  }, [fsStore, setFsStore]);
+    const store = new FilesystemNotebookStore()
+    appState.setFilesystemStore(store)
+    setFsStore(store)
+    return store
+  }, [fsStore, setFsStore])
 
   const getVisibleNotebookUri = useCallback((): string | null => {
     const activePanel = document.querySelector<HTMLElement>(
-      '[data-document-id][data-state="active"]',
-    );
-    const uri = activePanel?.dataset.documentId;
-    if (!uri || uri.trim() === "") {
-      return null;
+      '[data-document-id][data-state="active"]'
+    )
+    const uri = activePanel?.dataset.documentId
+    if (!uri || uri.trim() === '') {
+      return null
     }
-    return uri;
-  }, []);
+    return uri
+  }, [])
 
   const resolveNotebookData = useCallback(
     (target?: unknown): NotebookDataLike | null => {
-      if (target && typeof target === "object") {
-        const candidate = target as Partial<NotebookDataLike>;
+      if (target && typeof target === 'object') {
+        const candidate = target as Partial<NotebookDataLike>
         if (
-          typeof candidate.getUri === "function" &&
-          typeof candidate.getName === "function" &&
-          typeof candidate.getNotebook === "function" &&
-          typeof candidate.updateCell === "function" &&
-          typeof candidate.getCell === "function"
+          typeof candidate.getUri === 'function' &&
+          typeof candidate.getName === 'function' &&
+          typeof candidate.getNotebook === 'function' &&
+          typeof candidate.updateCell === 'function' &&
+          typeof candidate.getCell === 'function'
         ) {
-          return candidate as NotebookDataLike;
+          return candidate as NotebookDataLike
         }
       }
 
-      if (typeof target === "string" && target.trim() !== "") {
-        const targetUri = target.trim();
+      if (typeof target === 'string' && target.trim() !== '') {
+        const targetUri = target.trim()
         if (!isNotebookDocumentUri(targetUri)) {
-          return null;
+          return null
         }
-        return getNotebookData(targetUri) ?? null;
+        return getNotebookData(targetUri) ?? null
       }
 
-      const currentUri = getCurrentDoc();
+      const currentUri = getCurrentDoc()
       if (isNotebookDocumentUri(currentUri)) {
-        const currentNotebook = getNotebookData(currentUri);
+        const currentNotebook = getNotebookData(currentUri)
         if (currentNotebook) {
-          return currentNotebook;
+          return currentNotebook
         }
       }
 
-      const visibleUri = openNotebooks[0]?.uri;
-      const activeUri = getVisibleNotebookUri() ?? visibleUri;
-      if (!isNotebookDocumentUri(activeUri)) {
-        return null;
+      const fallbackUris = [
+        getVisibleNotebookUri(),
+        getLastNotebookDoc(),
+        openNotebooks[0]?.uri,
+      ]
+      for (const fallbackUri of fallbackUris) {
+        if (!isNotebookDocumentUri(fallbackUri)) {
+          continue
+        }
+        const notebook = getNotebookData(fallbackUri)
+        if (notebook) {
+          return notebook
+        }
       }
-      return getNotebookData(activeUri) ?? null;
+      return null
     },
-    [getCurrentDoc, getNotebookData, getVisibleNotebookUri, openNotebooks],
-  );
+    [
+      getCurrentDoc,
+      getLastNotebookDoc,
+      getNotebookData,
+      getVisibleNotebookUri,
+      openNotebooks,
+    ]
+  )
 
   const runme = useMemo(
     () =>
       createRunmeConsoleApi({
         resolveNotebook: resolveNotebookData,
       }),
-    [resolveNotebookData],
-  );
+    [resolveNotebookData]
+  )
 
-  const currentCell = cells[cells.length - 1] ?? null;
-  const historySources = useMemo(() => getHistorySources(cells), [cells]);
-  const historyIndex = historyBrowseState.index;
+  const currentCell = cells[cells.length - 1] ?? null
+  const historySources = useMemo(() => getHistorySources(cells), [cells])
+  const historyIndex = historyBrowseState.index
   const canBrowsePrevious =
-    currentCell?.status === "draft" &&
+    currentCell?.status === 'draft' &&
     historySources.length > 0 &&
-    (historyIndex === null || historyIndex < historySources.length - 1);
-  const canBrowseNext = currentCell?.status === "draft" && historyIndex !== null;
+    (historyIndex === null || historyIndex < historySources.length - 1)
+  const canBrowseNext = currentCell?.status === 'draft' && historyIndex !== null
 
   useEffect(() => {
-    if (!currentCell || currentCell.status !== "draft") {
-      return;
+    if (!currentCell || currentCell.status !== 'draft') {
+      return
     }
     if (pendingFocusCellIdRef.current !== currentCell.id) {
-      return;
+      return
     }
 
     const frame = window.requestAnimationFrame(() => {
-      draftEditorRef.current?.focus?.();
-      pendingFocusCellIdRef.current = null;
-    });
+      draftEditorRef.current?.focus?.()
+      pendingFocusCellIdRef.current = null
+    })
 
     return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [currentCell]);
+      window.cancelAnimationFrame(frame)
+    }
+  }, [currentCell])
 
   useEffect(() => {
-    const body = bodyRef.current;
-    if (!body || typeof body.scrollTo !== "function") {
-      return;
+    const body = bodyRef.current
+    if (!body || typeof body.scrollTo !== 'function') {
+      return
     }
     body.scrollTo({
       top: body.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [cells]);
+      behavior: 'smooth',
+    })
+  }, [cells])
 
   const setCurrentSource = useCallback(
     (source: string, clearHistoryBrowse = true) => {
-      appConsoleData.setDraftSource(source);
+      appConsoleData.setDraftSource(source)
 
       if (clearHistoryBrowse) {
         updateHistoryBrowseState({
           index: null,
-          draftBuffer: "",
-        });
+          draftBuffer: '',
+        })
       }
     },
-    [appConsoleData, updateHistoryBrowseState],
-  );
+    [appConsoleData, updateHistoryBrowseState]
+  )
 
   const browseHistory = useCallback(
-    (direction: "previous" | "next") => {
-      const draft = appConsoleData.getSnapshot().cells.at(-1);
-      if (!draft || draft.status !== "draft") {
-        return;
+    (direction: 'previous' | 'next') => {
+      const draft = appConsoleData.getSnapshot().cells.at(-1)
+      if (!draft || draft.status !== 'draft') {
+        return
       }
 
-      const history = getHistorySources(appConsoleData.getSnapshot().cells);
+      const history = getHistorySources(appConsoleData.getSnapshot().cells)
 
       if (history.length === 0) {
-        return;
+        return
       }
 
-      const state = historyBrowseStateRef.current;
-      if (direction === "previous") {
+      const state = historyBrowseStateRef.current
+      if (direction === 'previous') {
         const nextIndex =
-          state.index === null ? 0 : Math.min(state.index + 1, history.length - 1);
-        const draftBuffer = state.index === null ? draft.source : state.draftBuffer;
-        const nextSource = history[history.length - 1 - nextIndex] ?? draft.source;
+          state.index === null
+            ? 0
+            : Math.min(state.index + 1, history.length - 1)
+        const draftBuffer =
+          state.index === null ? draft.source : state.draftBuffer
+        const nextSource =
+          history[history.length - 1 - nextIndex] ?? draft.source
         updateHistoryBrowseState({
           index: nextIndex,
           draftBuffer,
-        });
+        })
         if (nextSource === draft.source) {
-          return;
+          return
         }
-        appConsoleData.setDraftSource(nextSource);
-        return;
+        appConsoleData.setDraftSource(nextSource)
+        return
       }
 
       if (state.index === null) {
-        return;
+        return
       }
 
-      const nextIndex = state.index - 1;
+      const nextIndex = state.index - 1
       const nextSource =
         nextIndex >= 0
-          ? history[history.length - 1 - nextIndex] ?? draft.source
-          : state.draftBuffer;
+          ? (history[history.length - 1 - nextIndex] ?? draft.source)
+          : state.draftBuffer
 
       updateHistoryBrowseState(
         nextIndex >= 0
@@ -367,31 +388,31 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
             }
           : {
               index: null,
-              draftBuffer: "",
-            },
-      );
+              draftBuffer: '',
+            }
+      )
 
       if (nextSource === draft.source) {
-        return;
+        return
       }
 
-      appConsoleData.setDraftSource(nextSource);
+      appConsoleData.setDraftSource(nextSource)
     },
-    [appConsoleData, updateHistoryBrowseState],
-  );
+    [appConsoleData, updateHistoryBrowseState]
+  )
 
   const executeCurrentCell = useCallback(async () => {
-    await appConsoleData.hydrate();
+    await appConsoleData.hydrate()
 
-    const execution = appConsoleData.startDraftExecution();
+    const execution = appConsoleData.startDraftExecution()
     if (!execution) {
-      return;
+      return
     }
 
     updateHistoryBrowseState({
       index: null,
-      draftBuffer: "",
-    });
+      draftBuffer: '',
+    })
 
     const globals = createAppJsGlobals({
       runme,
@@ -404,22 +425,21 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
         removeItem,
       },
       openNotebook: async (uri) => {
-        const result = await openNotebook(uri);
+        const result = await openNotebook(uri)
         showDocument(result.localUri, {
           title: result.entry.name,
-        });
-        setCurrentDoc(result.localUri);
+        })
+        setCurrentDoc(result.localUri)
       },
       resolveNotebook: resolveNotebookData,
       listNotebooks: () =>
-        openNotebooks
-          .reduce<NotebookDataLike[]>((items, notebook) => {
-            const resolved = getNotebookData(notebook.uri);
-            if (resolved) {
-              items.push(resolved);
-            }
-            return items;
-          }, []),
+        openNotebooks.reduce<NotebookDataLike[]>((items, notebook) => {
+          const resolved = getNotebookData(notebook.uri)
+          if (resolved) {
+            items.push(resolved)
+          }
+          return items
+        }, []),
       ensureAccessToken,
       runnerSync: {
         onUpdated: (runner) => {
@@ -429,13 +449,13 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
               endpoint: runner.endpoint,
               reconnect: runner.reconnect,
               interceptors: [],
-            }),
-          );
+            })
+          )
         },
         onDeleted: deleteRunner,
         onDefaultSet: setDefaultRunner,
       },
-    });
+    })
 
     const kernel = new JSKernel({
       globals,
@@ -443,24 +463,24 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
         onStdout: (data) => appConsoleData.appendStdout(execution.cellId, data),
         onStderr: (data) => appConsoleData.appendStderr(execution.cellId, data),
       },
-    });
+    })
 
     try {
-      const { exitCode, result } = await kernel.run(execution.source);
+      const { exitCode, result } = await kernel.run(execution.source)
       appConsoleData.completeExecution(execution.cellId, {
         exitCode,
         result,
-      });
-      const nextDraft = appConsoleData.getSnapshot().cells.at(-1);
+      })
+      const nextDraft = appConsoleData.getSnapshot().cells.at(-1)
       pendingFocusCellIdRef.current =
-        nextDraft?.status === "draft" ? nextDraft.id : null;
+        nextDraft?.status === 'draft' ? nextDraft.id : null
     } catch (error) {
       appConsoleData.failExecution(execution.cellId, {
         message: String(error),
-      });
-      const nextDraft = appConsoleData.getSnapshot().cells.at(-1);
+      })
+      const nextDraft = appConsoleData.getSnapshot().cells.at(-1)
       pendingFocusCellIdRef.current =
-        nextDraft?.status === "draft" ? nextDraft.id : null;
+        nextDraft?.status === 'draft' ? nextDraft.id : null
     }
   }, [
     addItem,
@@ -480,38 +500,29 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
     setDefaultRunner,
     updateHistoryBrowseState,
     updateRunner,
-  ]);
+  ])
 
   const registerDraftEditor = useCallback(
     (editor: any, monaco: any) => {
-      draftEditorRef.current = editor;
+      draftEditorRef.current = editor
       if (!monaco?.KeyMod || !monaco?.KeyCode) {
-        return;
+        return
       }
 
-      editor.addCommand(
-        monaco.KeyMod.Shift | monaco.KeyCode.Enter,
-        () => {
-          void executeCurrentCell();
-        },
-      );
-      editor.addCommand(
-        monaco.KeyMod.Alt | monaco.KeyCode.KeyP,
-        () => {
-          browseHistory("previous");
-        },
-      );
-      editor.addCommand(
-        monaco.KeyMod.Alt | monaco.KeyCode.KeyN,
-        () => {
-          browseHistory("next");
-        },
-      );
+      editor.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
+        void executeCurrentCell()
+      })
+      editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyP, () => {
+        browseHistory('previous')
+      })
+      editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyN, () => {
+        browseHistory('next')
+      })
     },
-    [browseHistory, executeCurrentCell],
-  );
+    [browseHistory, executeCurrentCell]
+  )
 
-  const isBodyHidden = showHeader && collapsed;
+  const isBodyHidden = showHeader && collapsed
 
   return (
     <div
@@ -523,12 +534,16 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
           id="app-console-header"
           className="flex items-center justify-between border-b border-nb-tray-border bg-[#1a1a2e] px-3"
         >
-          <span className="text-[12.6px] font-mono font-medium">App Console</span>
+          <span className="text-[12.6px] font-mono font-medium">
+            App Console
+          </span>
           <button
             type="button"
-            aria-label={collapsed ? "Expand app console" : "Collapse app console"}
+            aria-label={
+              collapsed ? 'Expand app console' : 'Collapse app console'
+            }
             className="inline-flex h-8 w-8 items-center justify-center rounded bg-black/0 text-[12.6px] font-mono font-medium text-white hover:bg-black/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black/80"
-            style={{ backgroundColor: "transparent" }}
+            style={{ backgroundColor: 'transparent' }}
             onClick={() => setCollapsed((prev) => !prev)}
           >
             {collapsed ? (
@@ -541,7 +556,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
       )}
       <div
         id="app-console-body"
-        className={`${isBodyHidden ? "hidden" : "flex"} min-h-0 flex-1 flex-col bg-[#0f1014]`}
+        className={`${isBodyHidden ? 'hidden' : 'flex'} min-h-0 flex-1 flex-col bg-[#0f1014]`}
       >
         <div
           ref={bodyRef}
@@ -554,9 +569,10 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
             </div>
           ) : null}
           {cells.map((cell) => {
-            const isCurrent = currentCell?.id === cell.id;
-            const isEditable = isCurrent && cell.status === "draft";
-            const isFrozen = cell.status === "success" || cell.status === "error";
+            const isCurrent = currentCell?.id === cell.id
+            const isEditable = isCurrent && cell.status === 'draft'
+            const isFrozen =
+              cell.status === 'success' || cell.status === 'error'
 
             return (
               <article
@@ -565,11 +581,11 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
                 data-console-cell-id={cell.id}
                 data-console-cell-index={`${cell.index}`}
                 data-status={cell.status}
-                data-current={isCurrent ? "true" : "false"}
+                data-current={isCurrent ? 'true' : 'false'}
                 className={`rounded-nb-md border p-3 shadow-sm ${
                   isCurrent
-                    ? "border-sky-400/40 bg-[#151a27]"
-                    : "border-white/10 bg-[#12151e]"
+                    ? 'border-sky-400/40 bg-[#151a27]'
+                    : 'border-white/10 bg-[#12151e]'
                 }`}
               >
                 <div
@@ -590,11 +606,11 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
                       <button
                         type="button"
                         data-testid="app-console-cell-copy-to-draft"
-                        disabled={currentCell?.status !== "draft"}
+                        disabled={currentCell?.status !== 'draft'}
                         className="rounded border border-white/15 px-2 py-1 text-[11px] font-medium text-slate-200 transition hover:border-sky-300/50 hover:bg-sky-400/10 disabled:cursor-not-allowed disabled:opacity-40"
                         onClick={() => {
-                          appConsoleData.copyCellSourceToDraft(cell.id);
-                          draftEditorRef.current?.focus?.();
+                          appConsoleData.copyCellSourceToDraft(cell.id)
+                          draftEditorRef.current?.focus?.()
                         }}
                       >
                         Copy to draft
@@ -610,8 +626,8 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
                           disabled={!canBrowsePrevious}
                           className="rounded border border-white/15 px-2 py-1 text-[11px] font-medium text-slate-200 transition hover:border-sky-300/50 hover:bg-sky-400/10 disabled:cursor-not-allowed disabled:opacity-40"
                           onClick={() => {
-                            browseHistory("previous");
-                            draftEditorRef.current?.focus?.();
+                            browseHistory('previous')
+                            draftEditorRef.current?.focus?.()
                           }}
                         >
                           Prev
@@ -624,8 +640,8 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
                           disabled={!canBrowseNext}
                           className="rounded border border-white/15 px-2 py-1 text-[11px] font-medium text-slate-200 transition hover:border-sky-300/50 hover:bg-sky-400/10 disabled:cursor-not-allowed disabled:opacity-40"
                           onClick={() => {
-                            browseHistory("next");
-                            draftEditorRef.current?.focus?.();
+                            browseHistory('next')
+                            draftEditorRef.current?.focus?.()
                           }}
                         >
                           Next
@@ -635,7 +651,7 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
                           data-testid="app-console-cell-run"
                           className="rounded border border-sky-300/40 bg-sky-400/10 px-2 py-1 text-[11px] font-medium text-sky-100 transition hover:bg-sky-400/20"
                           onClick={() => {
-                            void executeCurrentCell();
+                            void executeCurrentCell()
                           }}
                         >
                           Run
@@ -649,26 +665,26 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
                   data-testid="app-console-cell-input"
                   className="rounded-nb-sm border border-white/10 bg-[#0e1320] p-2"
                 >
-                  {isEditable || cell.status === "running" ? (
+                  {isEditable || cell.status === 'running' ? (
                     <Editor
                       id={`app-console-cell-${cell.id}`}
                       value={cell.source}
                       language="javascript"
                       ariaLabel={
                         isEditable
-                          ? "App Console input"
+                          ? 'App Console input'
                           : `App Console cell ${cell.index} source`
                       }
                       autoFocusWhenEmpty={isEditable}
                       readOnly={!isEditable}
                       onChange={(value) => {
                         if (!isEditable) {
-                          return;
+                          return
                         }
-                        setCurrentSource(value);
+                        setCurrentSource(value)
                       }}
                       onEnter={() => {
-                        void executeCurrentCell();
+                        void executeCurrentCell()
                       }}
                       onMount={isEditable ? registerDraftEditor : undefined}
                     />
@@ -684,20 +700,24 @@ export default function AppConsole({ showHeader = true }: { showHeader?: boolean
 
                 <OutputGroups outputs={cell.outputs} />
 
-                {isCurrent && cell.status === "draft" ? (
+                {isCurrent && cell.status === 'draft' ? (
                   <div className="mt-3 text-[11px] text-slate-400">
-                    <span className="font-semibold text-slate-300">Shortcuts:</span>{" "}
+                    <span className="font-semibold text-slate-300">
+                      Shortcuts:
+                    </span>{' '}
                     <span>Shift+Enter to run. Alt+P/Alt+N browse history.</span>
                   </div>
                 ) : null}
               </article>
-            );
+            )
           })}
           {!hydrated ? (
-            <div className="text-xs text-slate-400">Loading console history…</div>
+            <div className="text-xs text-slate-400">
+              Loading console history…
+            </div>
           ) : null}
         </div>
       </div>
     </div>
-  );
+  )
 }

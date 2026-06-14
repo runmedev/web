@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkspaceDocumentController } from "./workspaceDocumentController";
+import { deriveWorkspaceDocumentTitle } from "./workspaceDocumentTypes";
 
 function createMemoryPersistence(initial: Array<{ uri: string; title: string }> = []) {
   let documents = initial;
@@ -70,5 +71,10 @@ describe("WorkspaceDocumentController", () => {
     expect(controller.getSnapshot().documents).toEqual([
       { uri: "local://file/a", title: "a.json" },
     ]);
+  });
+
+  it("derives titles for App Console and Logs documents", () => {
+    expect(deriveWorkspaceDocumentTitle("app://console")).toBe("App Console");
+    expect(deriveWorkspaceDocumentTitle("app://logs")).toBe("Logs");
   });
 });

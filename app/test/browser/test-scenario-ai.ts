@@ -201,6 +201,26 @@ function runAppConsoleCommand(consoleRef: string, command: string): string {
   return readAppConsoleOutput()
 }
 
+function openAppConsoleDocument(): boolean {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const output = run(
+      `agent-browser eval "${escapeDoubleQuotes(`(() => {
+        const button = document.querySelector('button[aria-label="Open App Console"]');
+        if (!(button instanceof HTMLButtonElement)) return 'missing';
+        button.click();
+        return document.querySelector('textarea[aria-label="App Console input"]')
+          ? 'visible'
+          : 'clicked';
+      })()`)}"`
+    ).stdout
+    if (output.includes('visible')) {
+      return true
+    }
+    run('agent-browser wait 350')
+  }
+  return false
+}
+
 function parseJsonMaybeString(raw: string): unknown {
   const parsed = JSON.parse(raw) as unknown
   if (typeof parsed === 'string') {
@@ -644,6 +664,7 @@ mkdirSync(OUTPUT_DIR, { recursive: true })
 rmSync(MOVIE_PATH, { force: true })
 for (const file of [
   'scenario-ai-01-snapshot.txt',
+  'scenario-ai-01b-app-console-open.txt',
   'scenario-ai-02-console.txt',
   'scenario-ai-03-send.txt',
   'scenario-ai-04-panel-text.txt',
@@ -717,7 +738,17 @@ try {
     fail('Could not find AI Chat button in side panel')
   }
 
-  const consoleRef = firstRef(snapshot, /app console input|console-input/i)
+  if (openAppConsoleDocument()) {
+    run('agent-browser wait 600')
+    pass('Opened App Console document tab')
+  } else {
+    fail('Could not open App Console document tab')
+  }
+
+  const consoleSnapshot = run('agent-browser snapshot').stdout
+  writeArtifact('scenario-ai-01b-app-console-open.txt', consoleSnapshot)
+
+  const consoleRef = firstRef(consoleSnapshot, /app console input|console-input/i)
   if (!consoleRef) {
     fail('Could not find App Console input')
   } else {

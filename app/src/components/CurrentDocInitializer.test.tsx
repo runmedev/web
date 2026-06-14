@@ -143,4 +143,36 @@ describe('CurrentDocInitializer', () => {
     expect(window.location.search).toBe('?existing=1')
     expect(window.location.hash).toBe('#section')
   })
+
+  it('opens the App Console document from a doc param', async () => {
+    setDocUrl('app://console')
+
+    render(<CurrentDocInitializer />)
+
+    await waitFor(() => {
+      expect(mocks.setCurrentDoc).toHaveBeenCalledWith('app://console')
+    })
+    expect(mocks.openNotebook).not.toHaveBeenCalled()
+    expect(mocks.showDocument).toHaveBeenCalledWith('app://console', {
+      title: 'App Console',
+    })
+    expect(window.location.search).toBe('?existing=1')
+    expect(window.location.hash).toBe('#section')
+  })
+
+  it('opens the Logs document from a doc param', async () => {
+    setDocUrl('app://logs')
+
+    render(<CurrentDocInitializer />)
+
+    await waitFor(() => {
+      expect(mocks.setCurrentDoc).toHaveBeenCalledWith('app://logs')
+    })
+    expect(mocks.openNotebook).not.toHaveBeenCalled()
+    expect(mocks.showDocument).toHaveBeenCalledWith('app://logs', {
+      title: 'Logs',
+    })
+    expect(window.location.search).toBe('?existing=1')
+    expect(window.location.hash).toBe('#section')
+  })
 })
