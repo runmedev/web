@@ -283,10 +283,12 @@ function DriveRevisionSelector({
   localUri,
   selectedRevisionId,
   resolutionKind,
+  currentUpstreamRevisionId,
 }: {
   localUri: string
   selectedRevisionId?: string
   resolutionKind: NonNullable<NotebookDiffDocument['resolution']>['kind']
+  currentUpstreamRevisionId?: string
 }) {
   const { store } = useNotebookStore()
   const [revisions, setRevisions] = useState<DriveRevision[]>([])
@@ -336,6 +338,7 @@ function DriveRevisionSelector({
     try {
       await openNotebookDriveRevisionDiff(store, localUri, revisionId, {
         resolutionKind,
+        currentUpstreamRevisionId,
       })
     } catch {
       setError('Unable to load selected Drive revision.')
@@ -546,6 +549,10 @@ export function NotebookDiffContent({
     currentDocument.resolution?.kind === 'notebook-sync-conflict'
       ? currentDocument.resolution
       : null
+  const activeConflictResolution =
+    conflictResolution && currentDocument.base.label === 'Upstream version'
+      ? conflictResolution
+      : null
   const driveRevisionResolution =
     currentDocument.resolution?.kind === 'notebook-sync-conflict' ||
     currentDocument.resolution?.kind === 'drive-upstream-diff'
@@ -564,7 +571,7 @@ export function NotebookDiffContent({
               {currentDocument.base.label} compared with{' '}
               {currentDocument.compare.label}
             </Text>
-            {conflictResolution && (
+            {activeConflictResolution && (
               <Text
                 as="p"
                 size="2"
@@ -576,8 +583,10 @@ export function NotebookDiffContent({
               </Text>
             )}
           </div>
-          {conflictResolution && (
-            <ConflictResolutionActions localUri={conflictResolution.localUri} />
+          {activeConflictResolution && (
+            <ConflictResolutionActions
+              localUri={activeConflictResolution.localUri}
+            />
           )}
         </div>
         <div className="mt-3 flex flex-wrap gap-2 text-sm text-nb-text-muted">
@@ -598,6 +607,12 @@ export function NotebookDiffContent({
                   localUri={driveRevisionResolution.localUri}
                   selectedRevisionId={currentDocument.base.revisionId}
                   resolutionKind={driveRevisionResolution.kind}
+                  currentUpstreamRevisionId={
+                    driveRevisionResolution.upstreamRevisionId ??
+                    (currentDocument.base.label === 'Upstream version'
+                      ? currentDocument.base.revisionId
+                      : undefined)
+                  }
                 />
               </div>
             )}
@@ -613,7 +628,7 @@ export function NotebookDiffContent({
             <DiffRow
               key={row.id}
               row={row}
-              conflictLocalUri={conflictResolution?.localUri}
+              conflictLocalUri={activeConflictResolution?.localUri}
               onConflictDocumentChanged={setCurrentDocument}
             />
           ))}

@@ -122,6 +122,10 @@ async function registerUpstreamDiffDocument(
     resolution: {
       kind: resolutionKind,
       localUri,
+      upstreamRevisionId:
+        resolutionKind === 'drive-upstream-diff'
+          ? upstreamVersion?.revisionId
+          : undefined,
     },
   })
 }
@@ -130,7 +134,8 @@ async function registerDriveRevisionDiffDocument(
   store: LocalNotebooks,
   localUri: string,
   revisionId: string,
-  resolutionKind: DriveDiffResolutionKind = 'notebook-sync-conflict'
+  resolutionKind: DriveDiffResolutionKind = 'notebook-sync-conflict',
+  currentUpstreamRevisionId?: string
 ): Promise<NotebookDiffDocument> {
   const normalizedRevisionId = revisionId.trim()
   if (!normalizedRevisionId) {
@@ -142,7 +147,10 @@ async function registerDriveRevisionDiffDocument(
     throw new Error(`Local notebook record not found for ${localUri}`)
   }
 
-  if (resolutionKind === 'drive-upstream-diff') {
+  if (
+    resolutionKind === 'drive-upstream-diff' &&
+    currentUpstreamRevisionId === normalizedRevisionId
+  ) {
     const upstream = await store.getDriveUpstreamDoc(localUri)
     if (upstream.version?.revisionId === normalizedRevisionId) {
       return registerUpstreamDiffDocument(
@@ -184,6 +192,10 @@ async function registerDriveRevisionDiffDocument(
     resolution: {
       kind: resolutionKind,
       localUri,
+      upstreamRevisionId:
+        resolutionKind === 'drive-upstream-diff'
+          ? currentUpstreamRevisionId
+          : undefined,
     },
   })
 }
@@ -360,13 +372,17 @@ export async function openNotebookDriveRevisionDiff(
   store: LocalNotebooks,
   localUri: string,
   revisionId: string,
-  options: { resolutionKind?: DriveDiffResolutionKind } = {}
+  options: {
+    resolutionKind?: DriveDiffResolutionKind
+    currentUpstreamRevisionId?: string
+  } = {}
 ): Promise<void> {
   const document = await registerDriveRevisionDiffDocument(
     store,
     localUri,
     revisionId,
-    options.resolutionKind ?? 'notebook-sync-conflict'
+    options.resolutionKind ?? 'notebook-sync-conflict',
+    options.currentUpstreamRevisionId
   )
   openNotebookDiffDocument(document)
 }
