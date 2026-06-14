@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
     moveToTrash: vi.fn(),
     sync: vi.fn(),
   },
+  openNotebookUpstreamDiff: vi.fn(),
   workspaceItems: [] as string[],
 }))
 
@@ -125,6 +126,10 @@ vi.mock('../../lib/toast', () => ({
   showToast: vi.fn(),
 }))
 
+vi.mock('../../lib/notebookDiff/conflict', () => ({
+  openNotebookUpstreamDiff: mocks.openNotebookUpstreamDiff,
+}))
+
 describe('WorkspaceExplorer current document handling', () => {
   beforeEach(() => {
     mocks.currentDoc = 'diff://notebook/diff-1'
@@ -165,6 +170,8 @@ describe('WorkspaceExplorer current document handling', () => {
     mocks.store.moveToTrash.mockReset()
     mocks.store.moveToTrash.mockResolvedValue(undefined)
     mocks.store.sync.mockReset()
+    mocks.openNotebookUpstreamDiff.mockReset()
+    mocks.openNotebookUpstreamDiff.mockResolvedValue(undefined)
     vi.spyOn(window, 'prompt').mockReturnValue('Reports')
     vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
@@ -262,6 +269,55 @@ describe('WorkspaceExplorer current document handling', () => {
     )
     await waitFor(() => {
       expect(mocks.store.moveToTrash).toHaveBeenCalledWith(
+        'local://file/untitled'
+      )
+    })
+  })
+
+  it('opens an upstream diff from a Drive-backed file context menu', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/untitled'],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/untitled') {
+        return {
+          uri,
+          name: 'untitled.json',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/file123/view',
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    await waitFor(() => {
+      expect(screen.getByText('untitled.json')).toBeTruthy()
+    })
+
+    fireEvent.contextMenu(screen.getByText('untitled.json'))
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Compare with upstream',
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.openNotebookUpstreamDiff).toHaveBeenCalledWith(
+        mocks.store,
         'local://file/untitled'
       )
     })

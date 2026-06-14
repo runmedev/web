@@ -88,7 +88,7 @@ export interface NotebookDiffDocument {
   }
   diff: NotebookDiff
   resolution?: {
-    kind: 'notebook-sync-conflict'
+    kind: 'notebook-sync-conflict' | 'drive-upstream-diff'
     localUri: string
   }
 }

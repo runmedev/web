@@ -76,7 +76,10 @@ import {
   getNotebookDiffDocument,
   NOTEBOOK_DIFF_DOCUMENT_CHANGED,
 } from '../../lib/notebookDiff/registry'
-import { openNotebookConflictDiff } from '../../lib/notebookDiff/conflict'
+import {
+  openNotebookConflictDiff,
+  openNotebookUpstreamDiff,
+} from '../../lib/notebookDiff/conflict'
 import {
   isDriveItemUri,
   parseDriveItem,
@@ -2462,6 +2465,7 @@ export default function Actions() {
     shareableUri: string
     googleDriveUri: string | null
     ownerSessionId: string | null
+    canOpenUpstreamDiff: boolean
     readOnly?: boolean
   } | null>(null)
   const tabTriggerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -2705,7 +2709,8 @@ export default function Actions() {
     const itemCount =
       4 +
       (tabContextMenu.googleDriveUri ? 1 : 0) +
-      (tabContextMenu.ownerSessionId ? 1 : 0)
+      (tabContextMenu.ownerSessionId ? 1 : 0) +
+      (tabContextMenu.canOpenUpstreamDiff ? 1 : 0)
     const menuWidth = 220
     const menuHeight = itemCount * 36 + 8
     return {
@@ -2723,6 +2728,10 @@ export default function Actions() {
       event.preventDefault()
       event.stopPropagation()
       const document = workspaceDocuments.find((doc) => doc.uri === docUri)
+      const requestedUri = document?.requestedUri
+      const requestedDriveUri = isGoogleDriveFileUri(requestedUri)
+        ? requestedUri
+        : null
       const title =
         document?.title?.trim() ||
         getNotebookDisplayName(docUri, document?.title ?? docUri)
@@ -2732,8 +2741,12 @@ export default function Actions() {
         docUri,
         title,
         shareableUri: docUri,
-        googleDriveUri: isGoogleDriveFileUri(docUri) ? docUri : null,
+        googleDriveUri: isGoogleDriveFileUri(docUri)
+          ? docUri
+          : requestedDriveUri,
         ownerSessionId: getNotebookOwnerSessionId(document?.owner),
+        canOpenUpstreamDiff:
+          docUri.startsWith('local://') && Boolean(requestedDriveUri),
         readOnly: document?.readOnly,
       })
 
@@ -2755,6 +2768,8 @@ export default function Actions() {
               googleDriveUri: isGoogleDriveFileUri(remoteUri)
                 ? remoteUri
                 : current.googleDriveUri,
+              canOpenUpstreamDiff:
+                docUri.startsWith('local://') && isGoogleDriveFileUri(remoteUri),
             }
           })
         } catch (error) {
@@ -2942,6 +2957,35 @@ export default function Actions() {
       setTabContextMenu(null)
     }
   }, [tabContextMenu])
+
+  const handleOpenTabUpstreamDiff = useCallback(async () => {
+    if (!tabContextMenu?.canOpenUpstreamDiff) {
+      setTabContextMenu(null)
+      return
+    }
+    if (!store) {
+      setTabContextMenu(null)
+      return
+    }
+    try {
+      await openNotebookUpstreamDiff(store, tabContextMenu.docUri)
+    } catch (error) {
+      appLogger.error('Failed to open upstream diff from tab context menu', {
+        attrs: {
+          scope: 'notebook.diff',
+          code: 'TAB_OPEN_UPSTREAM_DIFF_FAILED',
+          uri: tabContextMenu.docUri,
+          error: String(error),
+        },
+      })
+      showToast({
+        message: 'Unable to open upstream diff. Please try again.',
+        tone: 'error',
+      })
+    } finally {
+      setTabContextMenu(null)
+    }
+  }, [store, tabContextMenu])
 
   // Each document gets its own scroll container keyed by URI so the browser
   // does not reuse the previous document's scroll position.
@@ -3166,6 +3210,18 @@ export default function Actions() {
                   }}
                 >
                   Copy Google Drive Link
+                </button>
+              )}
+              {adjustedTabContextMenu.canOpenUpstreamDiff && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void handleOpenTabUpstreamDiff()
+                  }}
+                >
+                  Compare with upstream
                 </button>
               )}
             </div>

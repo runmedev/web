@@ -43,6 +43,7 @@ import { useCurrentDoc } from "../../contexts/CurrentDocContext";
 import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useWorkspaceDocumentContext } from "../../contexts/WorkspaceDocumentContext";
 import { driveLinkCoordinator } from "../../lib/driveLinkCoordinator";
+import { openNotebookUpstreamDiff } from "../../lib/notebookDiff/conflict";
 
 interface ContextMenuState {
   uri: string;
@@ -180,7 +181,7 @@ function getContextMenuItemCount(menu: ContextMenuState): number {
     return (
       (menu.uri.startsWith("fs://") ? 0 : 1) +
       2 +
-      (menu.remoteUri ? 4 : 0)
+      (menu.remoteUri ? 5 : 0)
     );
   }
 
@@ -1020,6 +1021,33 @@ function formatShortTimestamp(date: Date): string {
     [],
   );
 
+  const handleOpenUpstreamDiff = useCallback(
+    async (localUri: string) => {
+      if (!store) {
+        return;
+      }
+
+      try {
+        await openNotebookUpstreamDiff(store, localUri);
+        setErrorMessage(null);
+      } catch (error) {
+        appLogger.error("Failed to open upstream diff from explorer menu", {
+          attrs: {
+            scope: "notebook.diff",
+            code: "EXPLORER_OPEN_UPSTREAM_DIFF_FAILED",
+            uri: localUri,
+            error: String(error),
+          },
+        });
+        showToast({
+          message: "Unable to open upstream diff. Please try again.",
+          tone: "error",
+        });
+      }
+    },
+    [store],
+  );
+
   const handleMoveDriveFileToTrash = useCallback(
     async (menu: ContextMenuState) => {
       if (!menu.remoteUri || !store) {
@@ -1212,6 +1240,20 @@ function formatShortTimestamp(date: Date): string {
               >
                 New Document
               </button>
+              {adjustedContextMenu.remoteUri && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setContextMenu(null);
+                    void handleOpenUpstreamDiff(adjustedContextMenu.uri);
+                  }}
+                >
+                  Compare with upstream
+                </button>
+              )}
               {adjustedContextMenu.remoteUri && (
                 <button
                   type="button"

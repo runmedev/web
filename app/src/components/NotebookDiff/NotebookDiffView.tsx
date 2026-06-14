@@ -12,9 +12,11 @@ import type {
   TextDiffLine,
 } from '../../lib/notebookDiff/model'
 import {
+  openNotebookDriveRevisionDiff,
   refreshNotebookConflictDiff,
   restoreDeletedConflictCell,
 } from '../../lib/notebookDiff/conflict'
+import type { DriveRevision } from '../../storage/drive'
 import { NotebookConflictChangedError } from '../../storage/local'
 import { getNotebookDataController } from '../../lib/notebookDataController'
 import { showToast } from '../../lib/toast'
@@ -259,6 +261,134 @@ function RestoreDeletedCellButton({
   )
 }
 
+function revisionLabel(revision: DriveRevision): string {
+  const modified = revision.modifiedTime
+    ? new Date(revision.modifiedTime).toLocaleString()
+    : 'Unknown time'
+  const author =
+    revision.lastModifyingUser?.displayName ||
+    revision.lastModifyingUser?.emailAddress
+  return author ? `${modified} by ${author}` : modified
+}
+
+function sortDriveRevisions(revisions: DriveRevision[]): DriveRevision[] {
+  return [...revisions].sort((a, b) => {
+    const aTime = a.modifiedTime ? Date.parse(a.modifiedTime) : 0
+    const bTime = b.modifiedTime ? Date.parse(b.modifiedTime) : 0
+    return bTime - aTime
+  })
+}
+
+function DriveRevisionSelector({
+  localUri,
+  selectedRevisionId,
+  resolutionKind,
+}: {
+  localUri: string
+  selectedRevisionId?: string
+  resolutionKind: NonNullable<NotebookDiffDocument['resolution']>['kind']
+}) {
+  const { store } = useNotebookStore()
+  const [revisions, setRevisions] = useState<DriveRevision[]>([])
+  const [loading, setLoading] = useState(false)
+  const [applying, setApplying] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!store) {
+      setRevisions([])
+      return
+    }
+
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    void (async () => {
+      try {
+        const nextRevisions = await store.listDriveRevisions(localUri)
+        if (!cancelled) {
+          setRevisions(sortDriveRevisions(nextRevisions))
+        }
+      } catch {
+        if (!cancelled) {
+          setError('Unable to load Drive revisions.')
+          setRevisions([])
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [localUri, store])
+
+  const selectRevision = async (revisionId: string) => {
+    if (!store || !revisionId || revisionId === selectedRevisionId) {
+      return
+    }
+
+    setApplying(true)
+    setError(null)
+    try {
+      await openNotebookDriveRevisionDiff(store, localUri, revisionId, {
+        resolutionKind,
+      })
+    } catch {
+      setError('Unable to load selected Drive revision.')
+      showToast({
+        message: 'Unable to load selected Drive revision. Please try again.',
+        tone: 'error',
+      })
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1 normal-case tracking-normal">
+      <label
+        htmlFor="drive-revision-select"
+        className="text-[11px] font-medium uppercase tracking-wide text-nb-text-muted"
+      >
+        Compare against
+      </label>
+      <select
+        id="drive-revision-select"
+        className="max-w-full rounded border border-nb-border bg-white px-2 py-1 text-sm font-normal normal-case text-nb-text"
+        disabled={!store || loading || applying}
+        value={selectedRevisionId ?? ''}
+        onChange={(event) => {
+          void selectRevision(event.target.value)
+        }}
+      >
+        {!selectedRevisionId && <option value="">Select a revision</option>}
+        {selectedRevisionId &&
+          !revisions.some((revision) => revision.id === selectedRevisionId) && (
+            <option value={selectedRevisionId}>
+              {currentRevisionLabel(selectedRevisionId)}
+            </option>
+          )}
+        {revisions.map((revision) =>
+          revision.id ? (
+            <option key={revision.id} value={revision.id}>
+              {revisionLabel(revision)}
+            </option>
+          ) : null
+        )}
+      </select>
+      {error && <span className="text-xs text-red-700">{error}</span>}
+    </div>
+  )
+}
+
+function currentRevisionLabel(revisionId: string): string {
+  return `Current revision ${revisionId}`
+}
+
 function DiffRow({
   row,
   conflictLocalUri,
@@ -416,6 +546,11 @@ export function NotebookDiffContent({
     currentDocument.resolution?.kind === 'notebook-sync-conflict'
       ? currentDocument.resolution
       : null
+  const driveRevisionResolution =
+    currentDocument.resolution?.kind === 'notebook-sync-conflict' ||
+    currentDocument.resolution?.kind === 'drive-upstream-diff'
+      ? currentDocument.resolution
+      : null
 
   return (
     <div className="flex h-full w-full flex-col bg-nb-surface">
@@ -456,7 +591,16 @@ export function NotebookDiffContent({
         </div>
         <div className="mt-4 grid min-w-[920px] grid-cols-2 gap-3 overflow-x-auto text-xs font-medium uppercase tracking-wide text-nb-text-muted">
           <div className="rounded border border-nb-border bg-nb-surface-2 px-3 py-2">
-            Base: {currentDocument.base.label}
+            <div>Base: {currentDocument.base.label}</div>
+            {driveRevisionResolution && (
+              <div className="mt-2">
+                <DriveRevisionSelector
+                  localUri={driveRevisionResolution.localUri}
+                  selectedRevisionId={currentDocument.base.revisionId}
+                  resolutionKind={driveRevisionResolution.kind}
+                />
+              </div>
+            )}
           </div>
           <div className="rounded border border-nb-border bg-nb-surface-2 px-3 py-2">
             Compare: {currentDocument.compare.label}

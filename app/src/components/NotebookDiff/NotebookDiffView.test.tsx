@@ -113,6 +113,70 @@ describe('NotebookDiffContent', () => {
     ).toBeTruthy()
   })
 
+  it('loads an older Drive revision from the Base revision selector', async () => {
+    const upstreamNotebook = notebook("print('upstream')")
+    const olderNotebook = notebook("print('older')")
+    const localNotebook = notebook("print('local')")
+    const localUri = 'local://file/conflict'
+    const record = {
+      id: localUri,
+      name: 'conflict.json',
+      doc: serialize(localNotebook),
+      conflict: {
+        detectedAt: '2026-06-01T00:00:00.000Z',
+        upstreamChecksum: 'upstream',
+        upstreamVersion: { revisionId: 'revision-2' },
+        localChecksumAtDetection: 'local',
+      },
+    }
+    const localStore = {
+      files: {
+        get: vi.fn(async () => record),
+      },
+      getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
+      getDriveRevisionDoc: vi.fn(async () => serialize(olderNotebook)),
+      listDriveRevisions: vi.fn(async () => [
+        {
+          id: 'revision-2',
+          modifiedTime: '2026-06-14T20:00:00.000Z',
+        },
+        {
+          id: 'revision-1',
+          modifiedTime: '2026-06-14T19:00:00.000Z',
+        },
+      ]),
+    } as unknown as LocalNotebooks
+    const doc = {
+      id: 'conflict-diff',
+      base: { label: 'Upstream version', revisionId: 'revision-2' },
+      compare: { label: 'Local version' },
+      diff: computeNotebookDiff(upstreamNotebook, localNotebook, {
+        includeMetadata: true,
+        includeOutputs: true,
+      }),
+      resolution: {
+        kind: 'notebook-sync-conflict' as const,
+        localUri,
+      },
+    }
+
+    render(
+      <NotebookStoreProvider initialStore={localStore}>
+        <NotebookDiffContent document={doc} />
+      </NotebookStoreProvider>
+    )
+
+    const selector = await screen.findByLabelText('Compare against')
+    fireEvent.change(selector, { target: { value: 'revision-1' } })
+
+    await waitFor(() => {
+      expect(localStore.getDriveRevisionDoc).toHaveBeenCalledWith(
+        localUri,
+        'revision-1'
+      )
+    })
+  })
+
   it('inserts a deleted upstream cell into the local notebook and refreshes the diff', async () => {
     const upstreamNotebook = create(parser_pb.NotebookSchema, {
       cells: [

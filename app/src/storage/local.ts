@@ -15,11 +15,16 @@ import {
 } from './conflictDocs'
 import {
   DriveNotebookStore,
+  type DriveRevision,
   type DriveVersionMetadata,
   isDriveItemUri,
 } from './drive'
 import type { FilesystemNotebookStore } from './fs'
 import { NotebookStoreItem, NotebookStoreItemType } from './notebook'
+import {
+  type RevisionDocStorage,
+  createDefaultRevisionDocStorage,
+} from './revisionDocs'
 
 // Local folder URI is a special folder that contains all notebooks which are local (i.e. not synced to Drive)
 export const LOCAL_FOLDER_URI = 'local://folder/local'
@@ -187,6 +192,7 @@ export class LocalNotebooks extends Dexie {
   private readonly driveStore: DriveNotebookStore
   private filesystemStore: FilesystemNotebookStore | null = null
   private readonly conflictDocStorage: ConflictDocStorage
+  private readonly revisionDocStorage: RevisionDocStorage
 
   private readonly syncSubjects = new Map<string, Subject<void>>()
   private readonly markdownSyncSubjects = new Map<string, Subject<void>>()
@@ -196,7 +202,8 @@ export class LocalNotebooks extends Dexie {
   constructor(
     driveStore: DriveNotebookStore,
     databaseName: string = 'runme-local-notebooks',
-    conflictDocStorage: ConflictDocStorage = createDefaultConflictDocStorage()
+    conflictDocStorage: ConflictDocStorage = createDefaultConflictDocStorage(),
+    revisionDocStorage: RevisionDocStorage = createDefaultRevisionDocStorage()
   ) {
     super(databaseName)
 
@@ -286,6 +293,7 @@ export class LocalNotebooks extends Dexie {
 
     this.driveStore = driveStore
     this.conflictDocStorage = conflictDocStorage
+    this.revisionDocStorage = revisionDocStorage
 
     void this.ensureFolderRecord(LOCAL_FOLDER_URI, 'Local Notebooks')
   }
@@ -840,6 +848,90 @@ export class LocalNotebooks extends Dexie {
     throw new Error(
       `Conflict upstream document is missing for local notebook ${localUri}`
     )
+  }
+
+  async getDriveUpstreamDoc(
+    localUri: string
+  ): Promise<{ doc: string; version?: UpstreamVersion }> {
+    const record = await this.files.get(localUri)
+    if (!record) {
+      throw new Error(`Local notebook record not found for ${localUri}`)
+    }
+    if (!isDriveUri(record.remoteId)) {
+      throw new Error(
+        `Drive upstream loading is only supported for Drive-backed notebooks; got ${record.remoteId}`
+      )
+    }
+    if (record.conflict) {
+      return {
+        doc: await this.getConflictUpstreamDoc(localUri),
+        version: record.conflict.upstreamVersion,
+      }
+    }
+
+    const upstreamNotebook = await this.driveStore.load(record.remoteId)
+    const upstreamDoc = serializeNotebook(upstreamNotebook)
+    const upstreamVersion = driveMetadataToUpstreamVersion(
+      await this.driveStore.getVersionMetadata(record.remoteId)
+    )
+    return {
+      doc: upstreamDoc,
+      version: upstreamVersion,
+    }
+  }
+
+  async listDriveRevisions(localUri: string): Promise<DriveRevision[]> {
+    const record = await this.files.get(localUri)
+    if (!record) {
+      throw new Error(`Local notebook record not found for ${localUri}`)
+    }
+    if (!isDriveUri(record.remoteId)) {
+      throw new Error(
+        `Drive revisions are only supported for Drive-backed notebooks; got ${record.remoteId}`
+      )
+    }
+    return this.driveStore.listRevisions(record.remoteId)
+  }
+
+  async getDriveRevisionDoc(
+    localUri: string,
+    revisionId: string
+  ): Promise<string> {
+    const normalizedRevisionId = revisionId.trim()
+    if (!normalizedRevisionId) {
+      throw new Error('getDriveRevisionDoc requires a revision id')
+    }
+    const record = await this.files.get(localUri)
+    if (!record) {
+      throw new Error(`Local notebook record not found for ${localUri}`)
+    }
+    if (!isDriveUri(record.remoteId)) {
+      throw new Error(
+        `Drive revision loading is only supported for Drive-backed notebooks; got ${record.remoteId}`
+      )
+    }
+
+    try {
+      return await this.getRevisionDocStorage().read(
+        localUri,
+        normalizedRevisionId
+      )
+    } catch {
+      // Revisions are immutable, so a cache miss can be repaired by fetching
+      // the exact Drive revision and storing it in OPFS for future diffs.
+    }
+
+    const revisionNotebook = await this.driveStore.loadRevision(
+      record.remoteId,
+      normalizedRevisionId
+    )
+    const revisionDoc = serializeNotebook(revisionNotebook)
+    await this.getRevisionDocStorage().write(
+      localUri,
+      normalizedRevisionId,
+      revisionDoc
+    )
+    return this.getRevisionDocStorage().read(localUri, normalizedRevisionId)
   }
 
   private async persistNotebook(
@@ -1973,10 +2065,11 @@ export class LocalNotebooks extends Dexie {
   }
 
   private getConflictDocStorage(): ConflictDocStorage {
-    return (
-      (this as unknown as { conflictDocStorage?: ConflictDocStorage })
-        .conflictDocStorage ?? createDefaultConflictDocStorage()
-    )
+    return this.conflictDocStorage ?? createDefaultConflictDocStorage()
+  }
+
+  private getRevisionDocStorage(): RevisionDocStorage {
+    return this.revisionDocStorage ?? createDefaultRevisionDocStorage()
   }
 
   private async deleteConflictDoc(
