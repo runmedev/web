@@ -94,6 +94,25 @@ function parseServiceAccountCredentials(
   }
 }
 
+function isCompleteServiceAccountCredentials(
+  value: GoogleServiceAccountCredentials | undefined
+): value is GoogleServiceAccountCredentials {
+  return Boolean(value?.clientEmail.trim() && value.privateKey.trim())
+}
+
+function serializeServiceAccountCredentials(
+  value: GoogleServiceAccountCredentials
+): ServiceAccountJson {
+  return {
+    clientEmail: value.clientEmail,
+    privateKey: value.privateKey,
+    privateKeyId: value.privateKeyId,
+    tokenUri: value.tokenUri,
+    subject: value.subject,
+    scopes: value.scopes,
+  }
+}
+
 export class GoogleClientManager {
   private static singleton: GoogleClientManager | null = null
   private config: GoogleClientConfig
@@ -104,18 +123,29 @@ export class GoogleClientManager {
     const storedClientSecret = this.readOAuthClientSecretFromStorage()
     const storedAuthFlow = this.readOAuthAuthFlowFromStorage()
     const storedAuthUxMode = this.readOAuthAuthUxModeFromStorage()
+    const storedServiceAccount = this.readOAuthServiceAccountFromStorage()
     const resolvedClientId = storedClientId ?? defaultClientId
     const resolvedClientSecret = storedClientSecret ?? undefined
-    const resolvedAuthFlow = storedAuthFlow ?? DEFAULT_AUTH_FLOW
+    const resolvedAuthFlow =
+      storedAuthFlow === 'service_account' && storedServiceAccount
+        ? 'service_account'
+        : storedAuthFlow === 'service_account'
+          ? DEFAULT_AUTH_FLOW
+          : (storedAuthFlow ??
+            (storedServiceAccount ? 'service_account' : DEFAULT_AUTH_FLOW))
     const resolvedAuthUxMode =
       storedAuthUxMode ?? resolveDefaultUxModeForFlow(resolvedAuthFlow)
+    const oauth: GoogleOAuthClientConfig = {
+      clientId: resolvedClientId,
+      clientSecret: resolvedClientSecret,
+      authFlow: resolvedAuthFlow,
+      authUxMode: resolvedAuthUxMode,
+    }
+    if (resolvedAuthFlow === 'service_account' && storedServiceAccount) {
+      oauth.serviceAccount = storedServiceAccount
+    }
     this.config = {
-      oauth: {
-        clientId: resolvedClientId,
-        clientSecret: resolvedClientSecret,
-        authFlow: resolvedAuthFlow,
-        authUxMode: resolvedAuthUxMode,
-      },
+      oauth,
       drivePicker: {
         clientId: resolvedClientId,
         developerKey: '',
@@ -164,7 +194,7 @@ export class GoogleClientManager {
 
     const serviceAccount =
       nextAuthFlow === 'service_account'
-        ? config.serviceAccount ?? this.config.oauth.serviceAccount
+        ? (config.serviceAccount ?? this.config.oauth.serviceAccount)
         : undefined
 
     const nextOAuthClient: GoogleOAuthClientConfig = {
@@ -363,10 +393,7 @@ export class GoogleClientManager {
       if (!authFlow || !isGoogleDriveAuthFlow(authFlow)) {
         return null
       }
-      // Service account private keys are intentionally not restored from
-      // localStorage. Persisting only the auth flow would leave the app in
-      // service-account mode without credentials after reload.
-      return authFlow === 'service_account' ? null : authFlow
+      return authFlow
     } catch (error) {
       console.warn('Failed to read Google OAuth auth flow', error)
       return null
@@ -393,22 +420,48 @@ export class GoogleClientManager {
     }
   }
 
+  private readOAuthServiceAccountFromStorage(): GoogleServiceAccountCredentials | null {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return null
+    }
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY)
+      if (!raw) {
+        return null
+      }
+      const parsed = JSON.parse(raw) as {
+        oauthServiceAccount?: ServiceAccountJson
+        serviceAccount?: ServiceAccountJson
+      } | null
+      const serviceAccount = parseServiceAccountCredentials(
+        parsed?.oauthServiceAccount ?? parsed?.serviceAccount
+      )
+      return isCompleteServiceAccountCredentials(serviceAccount)
+        ? serviceAccount
+        : null
+    } catch (error) {
+      console.warn('Failed to read Google service account config', error)
+      return null
+    }
+  }
+
   private persistOAuthClient(config: GoogleOAuthClientConfig): void {
     if (typeof window === 'undefined' || !window.localStorage) {
       return
     }
     try {
-      const persistableAuthFlow =
-        config.authFlow === 'service_account' ? undefined : config.authFlow
-      const persistableAuthUxMode =
-        config.authFlow === 'service_account' ? undefined : config.authUxMode
+      const serviceAccount =
+        config.authFlow === 'service_account' && config.serviceAccount
+          ? serializeServiceAccountCredentials(config.serviceAccount)
+          : undefined
       window.localStorage.setItem(
         STORAGE_KEY,
         JSON.stringify({
           oauthClientId: config.clientId,
           oauthClientSecret: config.clientSecret,
-          oauthAuthFlow: persistableAuthFlow,
-          oauthAuthUxMode: persistableAuthUxMode,
+          oauthAuthFlow: config.authFlow,
+          oauthAuthUxMode: config.authUxMode,
+          oauthServiceAccount: serviceAccount,
         })
       )
     } catch (error) {
