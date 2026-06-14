@@ -177,6 +177,52 @@ describe('NotebookDiffContent', () => {
     })
   })
 
+  it('hides conflict resolution controls when a conflict diff shows an older Drive revision', () => {
+    const olderNotebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'older-only',
+          kind: parser_pb.CellKind.CODE,
+          languageId: 'python',
+          value: "print('old upstream cell')",
+        }),
+      ],
+      metadata: {},
+    })
+    const localNotebook = create(parser_pb.NotebookSchema, {
+      cells: [],
+      metadata: {},
+    })
+    const doc = {
+      id: 'conflict-diff',
+      base: { label: 'Drive revision revision-1', revisionId: 'revision-1' },
+      compare: { label: 'Local version' },
+      diff: computeNotebookDiff(olderNotebook, localNotebook, {
+        includeMetadata: true,
+        includeOutputs: true,
+      }),
+      resolution: {
+        kind: 'notebook-sync-conflict' as const,
+        localUri: 'local://file/conflict',
+      },
+    }
+
+    render(
+      <NotebookStoreProvider initialStore={{} as unknown as LocalNotebooks}>
+        <NotebookDiffContent document={doc} />
+      </NotebookStoreProvider>
+    )
+
+    expect(screen.queryByText('Save local version')).toBeNull()
+    expect(screen.queryByText('Refresh diff')).toBeNull()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Insert upstream cell into local notebook',
+      })
+    ).toBeNull()
+    expect(screen.getByLabelText('Compare against')).toBeTruthy()
+  })
+
   it('inserts a deleted upstream cell into the local notebook and refreshes the diff', async () => {
     const upstreamNotebook = create(parser_pb.NotebookSchema, {
       cells: [

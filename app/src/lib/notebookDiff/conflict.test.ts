@@ -176,6 +176,7 @@ describe('Drive upstream diff documents', () => {
       remoteId: 'https://drive.google.com/file/d/file123/view',
       lastRemoteChecksum: 'base',
       lastSynced: '',
+      lastUpstreamVersion: { revisionId: 'revision-5' },
       doc: serialize(notebook([cell({ refId: 'a', value: 'local' })])),
       md5Checksum: 'local',
     }
@@ -201,6 +202,7 @@ describe('Drive upstream diff documents', () => {
     expect(document?.resolution).toEqual({
       kind: 'drive-upstream-diff',
       localUri,
+      upstreamRevisionId: 'revision-5',
     })
   })
 
@@ -212,6 +214,7 @@ describe('Drive upstream diff documents', () => {
       remoteId: 'https://drive.google.com/file/d/file123/view',
       lastRemoteChecksum: 'base',
       lastSynced: '',
+      lastUpstreamVersion: { revisionId: 'revision-5' },
       doc: serialize(notebook([cell({ refId: 'a', value: 'local' })])),
       md5Checksum: 'local',
     }
@@ -228,6 +231,7 @@ describe('Drive upstream diff documents', () => {
 
     await openNotebookDriveRevisionDiff(store, localUri, 'revision-5', {
       resolutionKind: 'drive-upstream-diff',
+      currentUpstreamRevisionId: 'revision-5',
     })
 
     expect(store.getDriveRevisionDoc).not.toHaveBeenCalled()
@@ -236,6 +240,97 @@ describe('Drive upstream diff documents', () => {
         `drive-upstream-diff-${encodeURIComponent(localUri)}`
       )?.base.label
     ).toBe('Upstream version')
+  })
+
+  it('does not fetch the current upstream document before loading an older generic revision', async () => {
+    const localUri = 'local://file/drive'
+    const record = {
+      id: localUri,
+      name: 'drive.json',
+      remoteId: 'https://drive.google.com/file/d/file123/view',
+      lastRemoteChecksum: 'base',
+      lastSynced: '',
+      lastUpstreamVersion: { revisionId: 'revision-5' },
+      doc: serialize(notebook([cell({ refId: 'a', value: 'local' })])),
+      md5Checksum: 'local',
+    }
+    const store = {
+      files: {
+        get: vi.fn(async () => record),
+      },
+      getDriveUpstreamDoc: vi.fn(async () => {
+        throw new Error('current upstream should not be fetched')
+      }),
+      getDriveRevisionDoc: vi.fn(async () =>
+        serialize(notebook([cell({ refId: 'a', value: 'older' })]))
+      ),
+    } as unknown as LocalNotebooks
+
+    await openNotebookDriveRevisionDiff(store, localUri, 'revision-1', {
+      resolutionKind: 'drive-upstream-diff',
+      currentUpstreamRevisionId: 'revision-5',
+    })
+
+    expect(store.getDriveUpstreamDoc).not.toHaveBeenCalled()
+    expect(store.getDriveRevisionDoc).toHaveBeenCalledWith(
+      localUri,
+      'revision-1'
+    )
+    expect(
+      getNotebookDiffDocument(
+        `drive-upstream-diff-${encodeURIComponent(localUri)}`
+      )?.base
+    ).toEqual({
+      label: 'Drive revision revision-1',
+      revisionId: 'revision-1',
+    })
+  })
+
+  it('loads a stale current-upstream revision as a historical revision after verifying Drive head', async () => {
+    const localUri = 'local://file/drive'
+    const record = {
+      id: localUri,
+      name: 'drive.json',
+      remoteId: 'https://drive.google.com/file/d/file123/view',
+      lastRemoteChecksum: 'base',
+      lastSynced: '',
+      lastUpstreamVersion: { revisionId: 'revision-5' },
+      doc: serialize(notebook([cell({ refId: 'a', value: 'local' })])),
+      md5Checksum: 'local',
+    }
+    const store = {
+      files: {
+        get: vi.fn(async () => record),
+      },
+      getDriveUpstreamDoc: vi.fn(async () => ({
+        doc: serialize(
+          notebook([cell({ refId: 'a', value: 'new upstream head' })])
+        ),
+        version: { revisionId: 'revision-6' },
+      })),
+      getDriveRevisionDoc: vi.fn(async () =>
+        serialize(notebook([cell({ refId: 'a', value: 'older' })]))
+      ),
+    } as unknown as LocalNotebooks
+
+    await openNotebookDriveRevisionDiff(store, localUri, 'revision-5', {
+      resolutionKind: 'drive-upstream-diff',
+      currentUpstreamRevisionId: 'revision-5',
+    })
+
+    expect(store.getDriveUpstreamDoc).toHaveBeenCalledWith(localUri)
+    expect(store.getDriveRevisionDoc).toHaveBeenCalledWith(
+      localUri,
+      'revision-5'
+    )
+    expect(
+      getNotebookDiffDocument(
+        `drive-upstream-diff-${encodeURIComponent(localUri)}`
+      )?.base
+    ).toEqual({
+      label: 'Drive revision revision-5',
+      revisionId: 'revision-5',
+    })
   })
 
   it('keeps conflict revision selections in the existing conflict diff document', async () => {
