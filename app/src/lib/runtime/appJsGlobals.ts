@@ -103,6 +103,22 @@ type NotebookReferenceInfo = {
   source: 'local' | 'fs' | 'drive' | 'unknown'
 }
 
+type DocumentContent = {
+  uri: string
+  requestedUri?: string
+  name: string
+  mimeType?: string
+  content: string
+  syncStatus?: string
+  version?: {
+    checksum?: string
+    revisionId?: string
+    modifiedTime?: string
+  }
+}
+
+type DocumentUpdateResult = Omit<DocumentContent, 'content'>
+
 type RunnerSync = {
   onUpdated?: (runner: Runner) => void
   onDeleted?: (name: string) => void
@@ -796,6 +812,129 @@ export function createAppJsGlobals({
     )
   }
 
+  const resolveDocumentLocalUri = async (reference: string) => {
+    const rawReference = String(reference ?? '').trim()
+    if (!rawReference) {
+      throw new Error('Usage: documents.get(uri). URI is required.')
+    }
+    const parsedUri = normalizeNotebookReferenceUri(rawReference)
+    const driveUri = canonicalizeDriveUri(parsedUri)
+    if (parsedUri.startsWith('local://file/')) {
+      return {
+        localUri: parsedUri,
+        requestedUri: parsedUri === rawReference ? undefined : rawReference,
+      }
+    }
+    if (driveUri) {
+      const record = await findLocalRecordForRemote(driveUri)
+      if (!record) {
+        throw new Error(
+          `Drive document ${driveUri} is not mirrored locally. Open it in Runme before using documents.get/update.`
+        )
+      }
+      return {
+        localUri: record.id,
+        requestedUri: rawReference,
+      }
+    }
+    throw new Error(
+      `Unsupported document URI ${rawReference}. Expected local://file/<id> or a mirrored Google Drive file URL.`
+    )
+  }
+
+  const buildDocumentContent = async (
+    uri: string,
+    requestedUri?: string,
+    includeContent = true
+  ): Promise<DocumentContent> => {
+    const localStore = resolveLocalMirrorStore()
+    const metadata = await localStore.getMetadata(uri)
+    if (!metadata || metadata.type !== NotebookStoreItemType.File) {
+      throw new Error(`Local document record not found for ${uri}`)
+    }
+    const record = await localStore.files.get(uri)
+    if (!record) {
+      throw new Error(`Local document record not found for ${uri}`)
+    }
+    const [content, syncState] = await Promise.all([
+      includeContent ? localStore.loadContent(uri) : Promise.resolve(''),
+      localStore.getSyncState(uri),
+    ])
+    const versionSource = syncState.lastUpstreamVersion ?? {}
+    return {
+      uri,
+      ...(requestedUri && requestedUri !== uri ? { requestedUri } : {}),
+      name: metadata.name || record.name,
+      mimeType: metadata.mimeType ?? record.mimeType,
+      content,
+      syncStatus: syncState.status,
+      version: {
+        checksum: versionSource.checksum ?? record.md5Checksum,
+        revisionId: versionSource.revisionId,
+        modifiedTime: versionSource.modifiedTime,
+      },
+    }
+  }
+
+  const documentsHelpers = {
+    get: async (uri: string): Promise<DocumentContent> => {
+      const resolved = await resolveDocumentLocalUri(uri)
+      return buildDocumentContent(resolved.localUri, resolved.requestedUri)
+    },
+    update: async (
+      uri: string,
+      content: string,
+      options?: {
+        mimeType?: string
+        expectedVersion?: string
+        flush?: boolean
+      }
+    ): Promise<DocumentUpdateResult> => {
+      const resolved = await resolveDocumentLocalUri(uri)
+      const localStore = resolveLocalMirrorStore()
+      const current = await buildDocumentContent(
+        resolved.localUri,
+        resolved.requestedUri
+      )
+      const expectedVersion = options?.expectedVersion?.trim()
+      if (expectedVersion) {
+        const acceptedVersions = new Set(
+          [
+            current.version?.checksum,
+            current.version?.revisionId,
+          ].filter((item): item is string => !!item)
+        )
+        if (!acceptedVersions.has(expectedVersion)) {
+          throw new Error(
+            `Document version mismatch for ${resolved.localUri}: expected ${expectedVersion}, current ${current.version?.revisionId ?? current.version?.checksum ?? '<unknown>'}`
+          )
+        }
+      }
+      const mimeType =
+        options?.mimeType?.trim() || current.mimeType || 'application/json'
+      await localStore.saveContent(resolved.localUri, String(content), mimeType)
+      if (options?.flush) {
+        await localStore.sync(resolved.localUri)
+      }
+      const updated = await buildDocumentContent(
+        resolved.localUri,
+        resolved.requestedUri,
+        false
+      )
+      const { content: _content, ...result } = updated
+      return result
+    },
+    help: () => {
+      return [
+        'documents.get(uri)                         - Read raw document content from the local mirror',
+        'documents.update(uri, content, options?)   - Write raw document content to the local mirror',
+        '  options.mimeType                         - Preserve or set the content MIME type',
+        '  options.expectedVersion                  - Optional optimistic checksum/revision guard',
+        '  options.flush                            - Wait for the backing-store sync attempt',
+      ].join('\n')
+    },
+  }
+
   const resolveNotebookReference = async (
     reference?: unknown
   ): Promise<NotebookReferenceInfo> => {
@@ -1057,6 +1196,7 @@ export function createAppJsGlobals({
   return {
     runme: runmeApi,
     notebooks: notebooksHelpers,
+    documents: documentsHelpers,
     notebookDiff: notebookDiffApi,
     codex: codexApi,
     opfs: {
@@ -1638,6 +1778,7 @@ export function createAppJsGlobals({
         'Available namespaces:',
         '  runme           - Notebook helpers (run all, clear outputs)',
         '  notebooks       - Notebook document API plus create/append helpers',
+        '  documents       - Raw URI-based document content get/update helpers',
         '  notebookDiff    - Compare revisions and resolve notebook sync conflicts',
         '  opfs            - Origin-private browser file storage helpers',
         '  net             - Browser network helpers',
@@ -1657,6 +1798,7 @@ export function createAppJsGlobals({
         '  await app.getSessionId()',
         '  await app.getSessionID()',
         '  await notebooks.createLocal("hello")',
+        '  const doc = await documents.get("local://file/...")',
         '  await notebooks.appendCell({ kind: "code", value: "print(1)", languageId: "python" })',
         '  const diff = await notebookDiff.diffDriveRevision({ revisionId })',
         '  await drive.authorize()',

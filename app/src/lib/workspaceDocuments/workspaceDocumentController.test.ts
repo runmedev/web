@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkspaceDocumentController } from "./workspaceDocumentController";
-import { deriveWorkspaceDocumentTitle } from "./workspaceDocumentTypes";
+import {
+  deriveWorkspaceDocumentTitle,
+  type WorkspaceDocument,
+} from "./workspaceDocumentTypes";
+import { EXCALIDRAW_MIME_TYPE } from "../../storage/excalidraw";
 
-function createMemoryPersistence(initial: Array<{ uri: string; title: string }> = []) {
+function createMemoryPersistence(initial: WorkspaceDocument[] = []) {
   let documents = initial;
   return {
     loadDocuments: vi.fn(() => documents),
-    saveDocuments: vi.fn((next: Array<{ uri: string; title: string }>) => {
+    saveDocuments: vi.fn((next: WorkspaceDocument[]) => {
       documents = next.map((item) => ({ ...item }));
     }),
   };
@@ -45,10 +49,15 @@ describe("WorkspaceDocumentController", () => {
     ]);
   });
 
-  it("persists only restorable notebook documents", () => {
+  it("persists only restorable workspace documents", () => {
     const controller = new WorkspaceDocumentController();
 
     controller.showDocument("local://file/a", { title: "a.json" });
+    controller.showDocument("local://file/diagram123", {
+      title: "diagram.excalidraw",
+      requestedUri: "https://drive.google.com/file/d/diagram123/view",
+      mimeType: EXCALIDRAW_MIME_TYPE,
+    });
     controller.showDocument("diff://notebook/1", { title: "Diff" });
     controller.showDocument("status://drive-link", { title: "Drive Link Status" });
 
@@ -56,20 +65,39 @@ describe("WorkspaceDocumentController", () => {
       JSON.parse(window.sessionStorage.getItem("runme/workspaceDocuments") ?? "[]"),
     ).toEqual([
       { uri: "local://file/a", title: "a.json" },
+      {
+        uri: "local://file/diagram123",
+        title: "diagram.excalidraw",
+        requestedUri: "https://drive.google.com/file/d/diagram123/view",
+        mimeType: EXCALIDRAW_MIME_TYPE,
+      },
     ]);
   });
 
-  it("restores only restorable notebook documents", () => {
+  it("restores only restorable workspace documents", () => {
     const controller = new WorkspaceDocumentController(
       createMemoryPersistence([
         { uri: "diff://notebook/1", title: "Diff" },
         { uri: "local://file/a", title: "a.json" },
+        {
+          uri: "local://file/diagram123",
+          title: "diagram.excalidraw",
+          requestedUri: "https://drive.google.com/file/d/diagram123/view",
+          mimeType: EXCALIDRAW_MIME_TYPE,
+        },
+        { uri: "excalidraw://drive/old", title: "old.excalidraw" },
         { uri: "status://drive-link", title: "Drive Link Status" },
       ]),
     );
 
     expect(controller.getSnapshot().documents).toEqual([
       { uri: "local://file/a", title: "a.json" },
+      {
+        uri: "local://file/diagram123",
+        title: "diagram.excalidraw",
+        requestedUri: "https://drive.google.com/file/d/diagram123/view",
+        mimeType: EXCALIDRAW_MIME_TYPE,
+      },
     ]);
   });
 

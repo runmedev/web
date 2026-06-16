@@ -1107,6 +1107,44 @@ export class DriveNotebookStore {
         : NotebookStoreItemType.File,
       children: [],
       remoteUri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
+      mimeType: file.mimeType ?? 'application/json',
+      parents: [parentUri],
+    }
+  }
+
+  async createContent(
+    parentUri: string,
+    name: string,
+    content: string,
+    mimeType: string = 'application/octet-stream'
+  ): Promise<NotebookStoreItem> {
+    const { id, type } = parseDriveItem(parentUri)
+    if (type !== NotebookStoreItemType.Folder) {
+      throw new Error('DriveNotebookStore.createContent expects a folder URI')
+    }
+    const client = await this.getFilesClient()
+    let file = await client.create({
+      name,
+      mimeType,
+      parents: [id],
+      content,
+    })
+
+    if (!file.id) {
+      throw new Error('Failed to create Google Drive file')
+    }
+    const fileId = file.id
+    file = await client.ensureParent(file, id)
+    const isFolder = file.mimeType === DRIVE_FOLDER_MIME_TYPE
+    return {
+      uri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
+      name: file.name ?? name,
+      type: isFolder
+        ? NotebookStoreItemType.Folder
+        : NotebookStoreItemType.File,
+      children: [],
+      remoteUri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
+      mimeType: file.mimeType ?? mimeType,
       parents: [parentUri],
     }
   }
@@ -1138,6 +1176,7 @@ export class DriveNotebookStore {
       type: NotebookStoreItemType.Folder,
       children: [],
       remoteUri: folderUri,
+      mimeType: folder.mimeType ?? DRIVE_FOLDER_MIME_TYPE,
       parents: [parentUri],
     }
   }
@@ -1261,6 +1300,7 @@ export class DriveNotebookStore {
           : NotebookStoreItemType.File,
         children: [],
         remoteUri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
+        mimeType: file.mimeType,
         parents: [],
       }
     })
@@ -1480,6 +1520,7 @@ export class DriveNotebookStore {
         : NotebookStoreItemType.File,
       children: [],
       remoteUri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
+      mimeType,
       parents: [],
     }
   }
@@ -1502,6 +1543,7 @@ export class DriveNotebookStore {
       type: NotebookStoreItemType.File,
       children: [],
       remoteUri: driveFileUrl(fileId),
+      mimeType: file.mimeType,
       parents: [],
     }
   }
@@ -1525,6 +1567,20 @@ export class DriveNotebookStore {
       mimeType,
       content,
     })
+  }
+
+  async loadContent(uri: string): Promise<string> {
+    const { id, type } = parseDriveItem(uri)
+    if (type !== NotebookStoreItemType.File) {
+      throw new Error('DriveNotebookStore.loadContent expects a file URI')
+    }
+    const client = await this.getFilesClient()
+    const response = await client.get({
+      fileId: id,
+      supportsAllDrives: true,
+      alt: 'media',
+    })
+    return extractBody(response)
   }
 
   async getMetadata(uri: string): Promise<NotebookStoreItem | null> {
@@ -1580,6 +1636,7 @@ export class DriveNotebookStore {
       type: resolvedType,
       children: [],
       remoteUri: uri,
+      mimeType: result?.mimeType,
       parents: parentUris,
     }
   }
@@ -1624,6 +1681,7 @@ export async function fetchDriveItemWithParents(
     type: isFolder ? NotebookStoreItemType.Folder : NotebookStoreItemType.File,
     children: [],
     remoteUri: isFolder ? driveFolderUrl(meta.id) : driveFileUrl(meta.id),
+    mimeType: meta.mimeType,
     parents: parentUris,
   }
 
@@ -1652,6 +1710,7 @@ export async function fetchDriveItemWithParents(
         remoteUri: parentIsFolder
           ? driveFolderUrl(parentMeta.id)
           : driveFileUrl(parentMeta.id),
+        mimeType: parentMeta.mimeType,
         parents: [],
       })
     } catch (error) {

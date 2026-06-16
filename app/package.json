@@ -26,6 +26,7 @@
     "@connectrpc/connect-node": "^2.0.2",
     "@connectrpc/connect-web": "^2.0.2",
     "@datadog/datadog-api-client": "^1.45.0",
+    "@excalidraw/excalidraw": "0.18.1",
     "@heroicons/react": "2.2.0",
     "@monaco-editor/react": "^4.7.0",
     "@openai/chatkit-react": "1.5.0",

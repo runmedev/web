@@ -36,6 +36,7 @@ import {
   isDriveLinkStatusUri,
   isDriveSyncStatusUri,
   DRIVE_SYNC_STATUS_DOCUMENT_URI,
+  isExcalidrawWorkspaceDocument,
   isNotebookDiffUri,
   isNotebookDocumentUri,
   isVersionInfoUri,
@@ -137,23 +138,25 @@ function OpenDocumentsPanel() {
                 doc.state,
                 doc.readOnly
               )
-              const kind = isNotebookDocumentUri(doc.uri)
-                ? 'Notebook'
-                : isNotebookDiffUri(doc.uri)
-                  ? 'Diff'
-                  : isDriveLinkStatusUri(doc.uri)
-                    ? 'Status'
-                    : isDriveSyncStatusUri(doc.uri)
-                      ? 'Drive Sync'
-                      : isVersionInfoUri(doc.uri)
-                        ? 'Version'
-                        : isRunnerStatusUri(doc.uri)
-                          ? 'Runner Status'
-                          : isAppConsoleUri(doc.uri)
-                            ? 'App Console'
-                            : isLogsUri(doc.uri)
-                              ? 'Logs'
-                              : 'Document'
+              const kind = isExcalidrawWorkspaceDocument(doc)
+                ? 'Excalidraw'
+                : isNotebookDocumentUri(doc.uri)
+                  ? 'Notebook'
+                  : isNotebookDiffUri(doc.uri)
+                    ? 'Diff'
+                    : isDriveLinkStatusUri(doc.uri)
+                      ? 'Status'
+                      : isDriveSyncStatusUri(doc.uri)
+                        ? 'Drive Sync'
+                        : isVersionInfoUri(doc.uri)
+                          ? 'Version'
+                          : isRunnerStatusUri(doc.uri)
+                            ? 'Runner Status'
+                            : isAppConsoleUri(doc.uri)
+                              ? 'App Console'
+                              : isLogsUri(doc.uri)
+                                ? 'Logs'
+                                : 'Document'
               return (
                 <li key={doc.uri}>
                   <div

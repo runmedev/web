@@ -16,6 +16,7 @@ type Scenario =
   | 'credentials'
   | 'drive'
   | 'driveSave'
+  | 'documents'
   | 'notebooksCreate'
 
 class MockSandboxPort {
@@ -97,6 +98,23 @@ class MockSandboxPort {
           method: 'drive.saveAsCurrentNotebook',
           args: ['root', 'Comments demo.ipynb'],
         })
+      } else if (this.scenario === 'documents') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'documents.get',
+          args: ['local://file/test4'],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 2,
+          method: 'documents.update',
+          args: [
+            'local://file/test4',
+            '{"type":"excalidraw","elements":[{"id":"label","type":"text","text":"Box A"}]}',
+            { mimeType: 'application/vnd.excalidraw+json' },
+          ],
+        })
       } else if (this.scenario === 'notebooksCreate') {
         this.emit({
           type: 'host-call',
@@ -152,6 +170,14 @@ class MockSandboxPort {
         this.emit({
           type: 'stdout',
           data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+      if (this.scenario === 'documents' && this.hostResults.has(2)) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(2) ?? null)}\n`,
         })
         this.emit({ type: 'exit', exitCode: 0 })
         return
@@ -601,6 +627,70 @@ describe('SandboxJSKernel', () => {
     )
     expect(stdout).toContain('"authFlow":"service_account"')
     expect(stdout).toContain('runme-drive-test@example.iam.gserviceaccount.com')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports raw document helpers through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string, args: unknown[]) => {
+      if (method === 'documents.get') {
+        return {
+          uri: args[0],
+          name: 'test4.excalidraw',
+          mimeType: 'application/vnd.excalidraw+json',
+          content: '{"type":"excalidraw","elements":[]}',
+        }
+      }
+      if (method === 'documents.update') {
+        return {
+          uri: args[0],
+          name: 'test4.excalidraw',
+          mimeType: (args[2] as { mimeType?: string } | undefined)?.mimeType,
+          syncStatus: 'local-only',
+        }
+      }
+      return null
+    })
+
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('documents'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run(
+      [
+        "const doc = await documents.get('local://file/test4');",
+        "const scene = JSON.parse(doc.content);",
+        "scene.elements.push({ id: 'label', type: 'text', text: 'Box A' });",
+        "console.log(await documents.update(doc.uri, JSON.stringify(scene), { mimeType: doc.mimeType }));",
+      ].join('\n')
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith('documents.get', [
+      'local://file/test4',
+    ])
+    expect(bridgeCall).toHaveBeenCalledWith('documents.update', [
+      'local://file/test4',
+      '{"type":"excalidraw","elements":[{"id":"label","type":"text","text":"Box A"}]}',
+      { mimeType: 'application/vnd.excalidraw+json' },
+    ])
+    expect(stdout).toContain('test4.excalidraw')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
   })
