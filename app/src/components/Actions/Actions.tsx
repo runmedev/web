@@ -65,6 +65,7 @@ import {
   isDriveLinkStatusUri,
   isDriveSyncStatusUri,
   isAppConsoleUri,
+  isExcalidrawWorkspaceDocument,
   isLogsUri,
   isNotebookDiffUri,
   isNotebookDocumentUri,
@@ -104,6 +105,7 @@ import AppConsole from '../AppConsole/AppConsole'
 import LogsPane from '../Logs/LogsPane'
 import { ActionOutputItems } from './ActionOutputItems'
 import React from 'react'
+import ExcalidrawDocument from '../Excalidraw/ExcalidrawDocument'
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
   'data-state'?: 'active' | 'inactive'
@@ -2215,6 +2217,10 @@ function renderWorkspaceDocument({
   onDriveLogin: () => void
   onDriveRetry: () => void
 }) {
+  if (isExcalidrawWorkspaceDocument(document)) {
+    return <ExcalidrawDocument document={document} />
+  }
+
   if (isNotebookDocumentUri(document.uri)) {
     const entry: OpenNotebookEntry = {
       uri: document.uri,

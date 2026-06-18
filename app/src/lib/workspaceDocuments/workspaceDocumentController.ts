@@ -87,6 +87,8 @@ class SessionStorageWorkspaceDocumentPersistence
       const persisted = restorable.map((item) => ({
         uri: item.uri,
         title: item.title,
+        requestedUri: item.requestedUri,
+        mimeType: item.mimeType,
       }))
       window.sessionStorage.setItem(
         WORKSPACE_DOCUMENTS_STORAGE_KEY,
@@ -110,6 +112,8 @@ function normalizeWorkspaceDocument(item: unknown): WorkspaceDocument | null {
   return {
     uri,
     title: candidate.title?.trim() || deriveWorkspaceDocumentTitle(uri),
+    requestedUri: candidate.requestedUri?.trim() || undefined,
+    mimeType: candidate.mimeType?.trim() || undefined,
   }
 }
 
@@ -148,6 +152,7 @@ export class WorkspaceDocumentController {
       uri: normalizedUri,
       title,
       requestedUri: options?.requestedUri,
+      mimeType: options?.mimeType,
       state: options?.state,
       readOnly: options?.readOnly,
       errorMessage: options?.errorMessage,
@@ -161,6 +166,7 @@ export class WorkspaceDocumentController {
       if (
         existing?.title === nextDocument.title &&
         existing?.requestedUri === nextDocument.requestedUri &&
+        existing?.mimeType === nextDocument.mimeType &&
         existing?.state === nextDocument.state &&
         existing?.readOnly === nextDocument.readOnly &&
         existing?.errorMessage === nextDocument.errorMessage &&

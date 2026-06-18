@@ -44,6 +44,12 @@ import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useWorkspaceDocumentContext } from "../../contexts/WorkspaceDocumentContext";
 import { driveLinkCoordinator } from "../../lib/driveLinkCoordinator";
 import { openNotebookUpstreamDiff } from "../../lib/notebookDiff/conflict";
+import {
+  EXCALIDRAW_MIME_TYPE,
+  createInitialExcalidrawDocumentJson,
+  isExcalidrawFileName,
+  isExcalidrawDocumentMetadata,
+} from "../../storage/excalidraw";
 
 interface ContextMenuState {
   uri: string;
@@ -111,6 +117,10 @@ function createFileNode(
 
 function isJsonNotebookFile(name: string): boolean {
   return /\.json$/i.test(name.trim());
+}
+
+function isVisibleDocumentFile(name: string): boolean {
+  return isJsonNotebookFile(name) || isExcalidrawFileName(name)
 }
 
 function setChildrenForFolder(
@@ -505,7 +515,9 @@ export function WorkspaceExplorer() {
             }
           }
 
-          const localFileUri = await store.addFile(item.uri, item.name);
+          const localFileUri = await store.addFile(item.uri, item.name, {
+            mimeType: item.mimeType,
+          });
           if (!workspaceItems.includes(localFileUri)) {
             addItem(localFileUri);
             workspaceItems = [...workspaceItems, localFileUri];
@@ -657,7 +669,7 @@ export function WorkspaceExplorer() {
             } else if (childMetadata?.type === NotebookStoreItemType.File) {
               if (
                 folderMetadata.remoteUri &&
-                !isJsonNotebookFile(childMetadata.name)
+                !isVisibleDocumentFile(childMetadata.name)
               ) {
                 continue;
               }
@@ -701,6 +713,22 @@ export function WorkspaceExplorer() {
           console.error("Notebook metadata missing for", uri);
           return;
         }
+        if (isExcalidrawDocumentMetadata(item)) {
+          const remoteUri = item.remoteUri;
+          if (remoteUri && !isDriveItemUri(remoteUri)) {
+            throw new Error(
+              "Excalidraw document has an invalid Google Drive URI.",
+            );
+          }
+          showDocument(item.uri, {
+            title: item.name,
+            requestedUri: remoteUri,
+            mimeType: item.mimeType ?? EXCALIDRAW_MIME_TYPE,
+          });
+          setCurrentDoc(item.uri);
+          setErrorMessage(null);
+          return;
+        }
         const result = await openNotebook(item.uri, { name: item.name });
         setCurrentDoc(result.localUri);
         setErrorMessage(null);
@@ -711,7 +739,57 @@ export function WorkspaceExplorer() {
         );
       }
     },
-    [fsStore, openNotebook, setCurrentDoc, store],
+    [fsStore, openNotebook, setCurrentDoc, showDocument, store],
+  );
+
+  const handleCreateExcalidrawDocument = useCallback(
+    async (folderUri: string) => {
+      if (!store) {
+        return;
+      }
+      try {
+        const folderMetadata = await store.getMetadata(folderUri);
+        const remoteFolderUri =
+          folderMetadata?.remoteUri ??
+          (isDriveItemUri(folderUri) ? folderUri : undefined);
+        if (
+          !remoteFolderUri ||
+          folderMetadata?.type !== NotebookStoreItemType.Folder
+        ) {
+          throw new Error(
+            "Excalidraw diagrams can only be created in Google Drive folders.",
+          );
+        }
+        treeRef.current?.open(folderUri);
+        const timestamp = formatShortTimestamp(new Date());
+        const name = `untitled-${timestamp}.excalidraw`;
+        const created = await store.createContent(
+          folderUri,
+          name,
+          createInitialExcalidrawDocumentJson(),
+          EXCALIDRAW_MIME_TYPE,
+        );
+        await fetchChildren(folderUri);
+        setPendingEditId(created.uri);
+        setErrorMessage(null);
+        showToast({
+          message: remoteFolderUri
+            ? "Excalidraw diagram queued for Google Drive sync"
+            : "Excalidraw diagram created",
+          tone: "success",
+        });
+      } catch (error) {
+        console.error("Failed to create Excalidraw diagram", error);
+        setErrorMessage(
+          "Unable to create an Excalidraw diagram. Please try again.",
+        );
+        showToast({
+          message: "Could not create Excalidraw diagram",
+          tone: "error",
+        });
+      }
+    },
+    [fetchChildren, store],
   );
 
   const handleCreateDocument = useCallback(
@@ -1240,6 +1318,27 @@ function formatShortTimestamp(date: Date): string {
               >
                 New Document
               </button>
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setContextMenu(null);
+                  if (adjustedContextMenu.parentUri) {
+                    void handleCreateExcalidrawDocument(
+                      adjustedContextMenu.parentUri,
+                    );
+                  } else {
+                    console.warn(
+                      "Cannot create Excalidraw diagram: no parent folder for",
+                      adjustedContextMenu.uri,
+                    );
+                  }
+                }}
+              >
+                New Excalidraw Diagram
+              </button>
               {adjustedContextMenu.remoteUri && (
                 <button
                   type="button"
@@ -1354,6 +1453,22 @@ function formatShortTimestamp(date: Date): string {
               >
                 New Document
               </button>
+              {adjustedContextMenu.remoteUri && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setContextMenu(null);
+                    void handleCreateExcalidrawDocument(
+                      adjustedContextMenu.uri,
+                    );
+                  }}
+                >
+                  New Excalidraw Diagram
+                </button>
+              )}
               {adjustedContextMenu.remoteUri && (
                 <button
                   type="button"

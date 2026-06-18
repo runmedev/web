@@ -15,6 +15,7 @@ help()
 
 - `runme`: notebook helpers,
 - `notebooks`: notebook document API,
+- `documents`: raw URI-based document content API,
 - `explorer`: workspace and file-mount helpers,
 - `runmeRunners`: runner configuration,
 - `jupyter`: Jupyter server and kernel lifecycle,
@@ -33,6 +34,7 @@ help()
 explorer.help()
 runme.help()
 notebooks.help()
+documents.help()
 runmeRunners.help()
 drive.help()
 agent.help()
@@ -70,6 +72,51 @@ await notebooks.show(
 await notebooks.show(
   '[Notebook](https://drive.google.com/file/d/149JKKTgljRiwszwb06Ms74GOYhCOPMNg/view)'
 )
+```
+
+Read and update raw document content, including Excalidraw scenes:
+
+```js
+const doc = await documents.get('local://file/cb1c8a9f-6dad-4e1a-9cbc-467ddebc3018')
+const scene = JSON.parse(doc.content)
+scene.elements.push({
+  id: crypto.randomUUID(),
+  type: 'text',
+  x: 120,
+  y: 80,
+  width: 80,
+  height: 25,
+  angle: 0,
+  strokeColor: '#1e1e1e',
+  backgroundColor: 'transparent',
+  fillStyle: 'solid',
+  strokeWidth: 2,
+  strokeStyle: 'solid',
+  roughness: 1,
+  opacity: 100,
+  groupIds: [],
+  frameId: null,
+  roundness: null,
+  seed: Date.now(),
+  version: 1,
+  versionNonce: Date.now(),
+  isDeleted: false,
+  boundElements: null,
+  updated: Date.now(),
+  link: null,
+  locked: false,
+  text: 'Box A',
+  fontSize: 20,
+  fontFamily: 5,
+  textAlign: 'left',
+  verticalAlign: 'top',
+  containerId: null,
+  originalText: 'Box A',
+  lineHeight: 1.25,
+})
+await documents.update(doc.uri, JSON.stringify(scene, null, 2), {
+  mimeType: doc.mimeType,
+})
 ```
 
 Runner setup:
@@ -124,6 +171,8 @@ app.harness.setDefault('configured-harness-name')
 - If a user wants an action that has no visible button, check the App Console before saying the feature is missing.
 - Prefer `notebooks.appendCell({ kind, ... })` for simple inserts before writing
   raw `notebooks.update(...)` mutations by hand.
+- Use `documents.get(uri)` and `documents.update(uri, content, options)` for
+  raw content edits to non-notebook documents such as Excalidraw diagrams.
 - Use `notebooks.resolve(reference)` to turn local URIs, Runme share URLs,
   Drive URLs, and Markdown links into a title, `localUri`, `remoteUri`,
   `shareUrl`, and replacement-ready `markdownLink`.

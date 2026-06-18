@@ -6,6 +6,10 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { MimeType, parser_pb } from '../runme/client'
 import { MemoryConflictDocStorage } from './conflictDocs'
+import {
+  EXCALIDRAW_MIME_TYPE,
+  createInitialExcalidrawDocumentJson,
+} from './excalidraw'
 import LocalNotebooks, {
   type LocalFileRecord,
   type LocalFolderRecord,
@@ -348,6 +352,154 @@ describe('LocalNotebooks pending Drive create', () => {
       remoteUri,
       '{malformed-json',
       'application/json'
+    )
+  })
+
+  it('creates pending Excalidraw files with raw content and MIME type', async () => {
+    const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const content = createInitialExcalidrawDocumentJson()
+    const driveStore = {
+      create: vi.fn(),
+      createContent: vi.fn(async () => ({
+        uri: remoteUri,
+        name: 'diagram.excalidraw',
+        type: NotebookStoreItemType.File,
+        children: [],
+        remoteUri,
+        mimeType: EXCALIDRAW_MIME_TYPE,
+        parents: [parentRemoteUri],
+      })),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: 'remote-created',
+        headRevisionId: 'revision-1',
+      })),
+      getMetadata: vi.fn(),
+      saveContent: vi.fn(async () => undefined),
+    }
+    const store = createTestStore(driveStore)
+    await store.folders.put({
+      id: 'local://folder/drive',
+      name: 'Drive',
+      remoteId: parentRemoteUri,
+      children: [],
+      lastSynced: '',
+    })
+
+    const item = await store.createContent(
+      'local://folder/drive',
+      'diagram.excalidraw',
+      content,
+      EXCALIDRAW_MIME_TYPE
+    )
+    await store.sync(item.uri)
+
+    expect(driveStore.create).not.toHaveBeenCalled()
+    expect(driveStore.createContent).toHaveBeenCalledWith(
+      parentRemoteUri,
+      'diagram.excalidraw',
+      content,
+      EXCALIDRAW_MIME_TYPE
+    )
+    await expect(store.files.get(item.uri)).resolves.toMatchObject({
+      remoteId: remoteUri,
+      mimeType: EXCALIDRAW_MIME_TYPE,
+      doc: content,
+      lastRemoteChecksum: 'remote-created',
+    })
+  })
+
+  it('saves Drive-backed Excalidraw files as raw content without notebook loading', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const content = createInitialExcalidrawDocumentJson()
+    const driveStore = {
+      getVersionMetadata: vi
+        .fn()
+        .mockResolvedValueOnce({
+          md5Checksum: 'remote-before-save',
+          headRevisionId: 'revision-1',
+        })
+        .mockResolvedValueOnce({
+          md5Checksum: 'remote-after-save',
+          headRevisionId: 'revision-2',
+      }),
+      getMetadata: vi.fn(async () => ({
+        uri: remoteUri,
+        name: 'diagram.excalidraw',
+        type: NotebookStoreItemType.File,
+        children: [],
+        remoteUri,
+        mimeType: EXCALIDRAW_MIME_TYPE,
+        parents: [],
+      })),
+      load: vi.fn(),
+      saveContent: vi.fn(async () => undefined),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: 'local://file/excalidraw',
+      name: 'diagram.excalidraw',
+      mimeType: EXCALIDRAW_MIME_TYPE,
+      remoteId: remoteUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    await store.saveContent(
+      'local://file/excalidraw',
+      content,
+      EXCALIDRAW_MIME_TYPE
+    )
+    await store.sync('local://file/excalidraw')
+
+    expect(driveStore.load).not.toHaveBeenCalled()
+    expect(driveStore.saveContent).toHaveBeenCalledWith(
+      remoteUri,
+      content,
+      EXCALIDRAW_MIME_TYPE
+    )
+    await expect(store.files.get('local://file/excalidraw')).resolves.toMatchObject(
+      {
+        doc: content,
+        mimeType: EXCALIDRAW_MIME_TYPE,
+        lastRemoteChecksum: 'remote-after-save',
+      }
+    )
+  })
+
+  it('hydrates raw Excalidraw content from Drive into the local mirror', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const content = createInitialExcalidrawDocumentJson()
+    const driveStore = {
+      loadContent: vi.fn(async () => content),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: 'remote-content',
+        headRevisionId: 'revision-1',
+      })),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: 'local://file/excalidraw',
+      name: 'diagram.excalidraw',
+      mimeType: EXCALIDRAW_MIME_TYPE,
+      remoteId: remoteUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    await expect(store.loadContent('local://file/excalidraw')).resolves.toBe(
+      content
+    )
+    expect(driveStore.loadContent).toHaveBeenCalledWith(remoteUri)
+    await expect(store.files.get('local://file/excalidraw')).resolves.toMatchObject(
+      {
+        doc: content,
+        lastRemoteChecksum: 'remote-content',
+      }
     )
   })
 

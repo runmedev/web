@@ -25,6 +25,7 @@ Benefits:
 - authenticate Drive access,
 - mount a Drive link or folder,
 - open a Drive notebook,
+- create or open an Excalidraw diagram in a Drive folder,
 - save the current notebook to Drive,
 - copy a notebook into another Drive folder,
 - inspect or requeue pending sync.
@@ -87,6 +88,48 @@ Service-account credentials loaded from App Console are saved in
 after a reload. This is convenient for tests but means the private key is stored
 in browser-accessible storage. Keep these keys tightly scoped to disposable test
 Drive folders and prefer a server-side token broker for production.
+
+## Excalidraw diagrams in Drive
+
+Drive-backed workspace folders can contain Excalidraw diagrams alongside Runme
+notebooks. Runme stores each diagram as a normal Drive file with an Excalidraw
+JSON scene body.
+
+Supported file names:
+
+- `*.excalidraw`
+- `*.excalidraw.json`
+
+Runme creates new diagrams with this MIME type:
+
+```text
+application/vnd.excalidraw+json
+```
+
+To create a diagram:
+
+1. Mount a Google Drive folder in the workspace explorer.
+2. Right-click the mounted Drive folder.
+3. Select `New Excalidraw Diagram`.
+4. Rename the new explorer entry if needed.
+5. Open the diagram and draw in the Excalidraw tab.
+
+New diagrams appear in the explorer immediately through the local mirror. Runme
+then creates the backing Drive file asynchronously and updates the local row
+with the Drive URI. The editor autosaves changes back to the backing Drive file
+after a short debounce. The tab header shows `Ready`, `Saving...`, or
+`Saved to Drive`.
+
+Existing `.excalidraw` files appear in Drive-backed folders and open as
+workspace document tabs. The tab URI remains the local mirror URI
+(`local://file/<uuid>`); the file's MIME type or filename selects the
+Excalidraw renderer.
+
+Current limitations:
+
+- diagram creation is Drive-only,
+- concurrent edits are last-writer-wins,
+- there is no PNG/SVG export action yet.
 
 ## Useful App Console commands
 

@@ -25,6 +25,10 @@ import {
   type RevisionDocStorage,
   createDefaultRevisionDocStorage,
 } from './revisionDocs'
+import {
+  EXCALIDRAW_MIME_TYPE,
+  isExcalidrawFileName,
+} from './excalidraw'
 
 // Local folder URI is a special folder that contains all notebooks which are local (i.e. not synced to Drive)
 export const LOCAL_FOLDER_URI = 'local://folder/local'
@@ -32,6 +36,8 @@ export const LOCAL_FOLDER_URI = 'local://folder/local'
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
 } as unknown as Parameters<typeof toJsonString>[2]
+
+const NOTEBOOK_MIME_TYPE = 'application/json'
 
 /**
  * LocalFileRecord captures the information needed to persist a notebook locally.
@@ -45,6 +51,8 @@ export interface LocalFileRecord {
   id: string
   /** Friendly name for the notebook, used when rendering the UI. */
   name: string
+  /** Content MIME type used to select the document renderer. */
+  mimeType?: string
   /** Upstream URI. Browser-only notebooks use the same local://file/... URI. */
   remoteId: string
   /** Creation-time upstream parent URI used to finish a pending remote create. */
@@ -286,6 +294,10 @@ export class LocalNotebooks extends Dexie {
             delete file.parentRemoteIdWhenCreated
           })
       })
+    this.version(6).stores({
+      files: '&id, remoteId, lastRemoteChecksum, md5Checksum, name, lastSynced',
+      folders: '&id, remoteId, name, lastSynced',
+    })
 
     // Bind the table helpers so callers can access them directly.
     this.files = this.table('files')
@@ -307,7 +319,11 @@ export class LocalNotebooks extends Dexie {
    * local URI. If the file has already been mirrored we simply hand back the
    * existing identifier.
    */
-  async addFile(remoteUri: string, name?: string): Promise<string> {
+  async addFile(
+    remoteUri: string,
+    name?: string,
+    options?: { mimeType?: string }
+  ): Promise<string> {
     if (!remoteUri) {
       throw new Error('addFile requires a non-empty remote URI')
     }
@@ -317,8 +333,16 @@ export class LocalNotebooks extends Dexie {
       .equals(remoteUri)
       .first()
     if (existing) {
+      const changes: Partial<LocalFileRecord> = {}
       if (name && name !== existing.name) {
-        await this.files.update(existing.id, { name })
+        changes.name = name
+      }
+      const mimeType = resolveDocumentMimeType(name, options?.mimeType)
+      if (mimeType && mimeType !== existing.mimeType) {
+        changes.mimeType = mimeType
+      }
+      if (Object.keys(changes).length > 0) {
+        await this.files.update(existing.id, changes)
       }
       return existing.id
     }
@@ -326,10 +350,12 @@ export class LocalNotebooks extends Dexie {
     const id = this.generateLocalUri('file')
     const resolvedName =
       name ?? this.deriveDisplayNameFromUri(remoteUri) ?? 'Untitled Notebook'
+    const mimeType = resolveDocumentMimeType(resolvedName, options?.mimeType)
 
     const record: LocalFileRecord = {
       id,
       name: resolvedName,
+      mimeType,
       remoteId: remoteUri,
       lastRemoteChecksum: '',
       lastSynced: '',
@@ -414,6 +440,7 @@ export class LocalNotebooks extends Dexie {
     const record: LocalFileRecord = {
       id,
       name,
+      mimeType: NOTEBOOK_MIME_TYPE,
       remoteId: upstreamUri,
       lastRemoteChecksum: checksum,
       lastUpstreamVersion: { checksum },
@@ -490,7 +517,9 @@ export class LocalNotebooks extends Dexie {
 
     for (const item of items) {
       if (item.type === NotebookStoreItemType.File) {
-        const localUri = await this.addFile(item.uri, item.name)
+        const localUri = await this.addFile(item.uri, item.name, {
+          mimeType: item.mimeType,
+        })
         childUris.push(localUri)
       } else if (item.type === NotebookStoreItemType.Folder) {
         const localFolderUri = await this.updateFolder(item.uri, item.name)
@@ -660,6 +689,7 @@ export class LocalNotebooks extends Dexie {
       return {
         uri: record.id,
         name: record.name,
+        mimeType: record.mimeType,
         type: NotebookStoreItemType.File,
         children: [],
         remoteUri: publicRemoteUri(record),
@@ -702,6 +732,76 @@ export class LocalNotebooks extends Dexie {
     if (!record?.conflict) {
       this.enqueueSync(uri)
       this.enqueueMarkdownSync(uri)
+    }
+  }
+
+  async loadContent(uri: string): Promise<string> {
+    if (!uri.startsWith('local://file/')) {
+      throw new Error(
+        'LocalNotebooks.loadContent expects a local://file/ URI; got ' + uri
+      )
+    }
+
+    const record = await this.files.get(uri)
+    if (!record) {
+      throw new Error(`Local file record not found for ${uri}`)
+    }
+    if (record.doc || !isDriveUri(record.remoteId)) {
+      return record.doc ?? ''
+    }
+
+    const content = await this.driveStore.loadContent(record.remoteId)
+    let upstreamVersion: UpstreamVersion = {}
+    try {
+      upstreamVersion = driveMetadataToUpstreamVersion(
+        await this.driveStore.getVersionMetadata(record.remoteId)
+      )
+    } catch (error) {
+      appLogger.warn('Failed to record version metadata for raw Drive content', {
+        attrs: {
+          scope: 'storage.drive.sync',
+          localUri: uri,
+          remoteUri: record.remoteId,
+          error: String(error),
+        },
+      })
+    }
+    await this.files.update(uri, {
+      doc: content,
+      md5Checksum: md5(content),
+      lastRemoteChecksum: upstreamVersion.checksum ?? '',
+      lastUpstreamVersion: upstreamVersion,
+      lastSynced: nowIsoString(),
+      lastSyncError: undefined,
+    })
+    return content
+  }
+
+  async saveContent(
+    uri: string,
+    content: string,
+    mimeType: string
+  ): Promise<void> {
+    if (!uri.startsWith('local://file/')) {
+      throw new Error(
+        'LocalNotebooks.saveContent expects a local://file/ URI; got ' + uri
+      )
+    }
+
+    const record = await this.files.get(uri)
+    if (!record) {
+      throw new Error(`Local file record not found for ${uri}`)
+    }
+
+    const checksum = md5(content)
+    await this.files.update(uri, {
+      doc: content,
+      md5Checksum: checksum,
+      mimeType,
+    })
+    this.notifySync(uri)
+    if (!record.conflict) {
+      this.enqueueSync(uri)
     }
   }
 
@@ -1009,6 +1109,26 @@ export class LocalNotebooks extends Dexie {
   }
 
   async create(parentUri: string, name: string): Promise<NotebookStoreItem> {
+    return this.createLocalFile(parentUri, name, {
+      mimeType: NOTEBOOK_MIME_TYPE,
+      content: '',
+    })
+  }
+
+  async createContent(
+    parentUri: string,
+    name: string,
+    content: string,
+    mimeType: string
+  ): Promise<NotebookStoreItem> {
+    return this.createLocalFile(parentUri, name, { mimeType, content })
+  }
+
+  private async createLocalFile(
+    parentUri: string,
+    name: string,
+    options: { mimeType: string; content: string }
+  ): Promise<NotebookStoreItem> {
     if (!parentUri.startsWith('local://folder/')) {
       throw new Error('LocalNotebooks.create expects a folder parent URI')
     }
@@ -1020,17 +1140,19 @@ export class LocalNotebooks extends Dexie {
 
     const fileUri = this.generateLocalUri('file')
     const isDriveBackedParent = isDriveUri(parent.remoteId)
+    const checksum = options.content ? md5(options.content) : ''
     const record: LocalFileRecord = {
       id: fileUri,
       name,
+      mimeType: options.mimeType,
       remoteId: isDriveBackedParent ? '' : fileUri,
       parentRemoteIdWhenCreated: isDriveBackedParent
         ? parent.remoteId
         : undefined,
       lastRemoteChecksum: '',
       lastSynced: isDriveBackedParent ? '' : nowIsoString(),
-      doc: '',
-      md5Checksum: '',
+      doc: options.content,
+      md5Checksum: checksum,
     }
     await this.files.put(record)
 
@@ -1070,6 +1192,7 @@ export class LocalNotebooks extends Dexie {
       type: NotebookStoreItemType.File,
       children: [],
       remoteUri: undefined,
+      mimeType: options.mimeType,
       parents: [parentUri],
     }
   }
@@ -1596,12 +1719,39 @@ export class LocalNotebooks extends Dexie {
     )
     let synced = false
 
+    if (record.mimeType && record.mimeType !== NOTEBOOK_MIME_TYPE) {
+      await this.saveLocalDocToDrive(
+        localUri,
+        remoteUri,
+        localDoc,
+        record.mimeType
+      )
+      const updatedVersion = driveMetadataToUpstreamVersion(
+        await this.driveStore.getVersionMetadata(remoteUri)
+      )
+      const updatedChecksum = updatedVersion.checksum ?? localChecksum
+      await this.files.update(localUri, {
+        lastRemoteChecksum: updatedChecksum,
+        lastUpstreamVersion: updatedVersion,
+        md5Checksum: localChecksum,
+        lastSynced: nowIsoString(),
+        lastSyncError: undefined,
+      })
+      synced = true
+      return
+    }
+
     // Case 1: The checksum reported by Drive matches the version we last
     // observed. This means no external party has modified the remote file and
     // the local content is authoritative. We can safely push our data back to
     // Drive without risking data loss.
     if (currentRemoteChecksum === lastReadChecksum) {
-      await this.saveLocalDocToDrive(localUri, remoteUri, localDoc)
+      await this.saveLocalDocToDrive(
+        localUri,
+        remoteUri,
+        localDoc,
+        record.mimeType
+      )
       const updatedVersion = driveMetadataToUpstreamVersion(
         await this.driveStore.getVersionMetadata(remoteUri)
       )
@@ -1626,7 +1776,12 @@ export class LocalNotebooks extends Dexie {
         completedPendingCreate &&
         serializedNotebookHasUserContent(localDoc)
       ) {
-        await this.saveLocalDocToDrive(localUri, remoteUri, localDoc)
+        await this.saveLocalDocToDrive(
+          localUri,
+          remoteUri,
+          localDoc,
+          record.mimeType
+        )
         const updatedVersion = driveMetadataToUpstreamVersion(
           await this.driveStore.getVersionMetadata(remoteUri)
         )
@@ -1733,7 +1888,12 @@ export class LocalNotebooks extends Dexie {
     // keep the baseline empty.
     if (!currentRemoteChecksum) {
       if (localDoc) {
-        await this.saveLocalDocToDrive(localUri, remoteUri, localDoc)
+        await this.saveLocalDocToDrive(
+          localUri,
+          remoteUri,
+          localDoc,
+          record.mimeType
+        )
         const updatedVersion = driveMetadataToUpstreamVersion(
           await this.driveStore.getVersionMetadata(remoteUri)
         )
@@ -1769,8 +1929,14 @@ export class LocalNotebooks extends Dexie {
   private async saveLocalDocToDrive(
     localUri: string,
     remoteUri: string,
-    localDoc: string
+    localDoc: string,
+    mimeType: string | undefined
   ): Promise<void> {
+    if (mimeType && mimeType !== NOTEBOOK_MIME_TYPE) {
+      await this.driveStore.saveContent(remoteUri, localDoc, mimeType)
+      return
+    }
+
     if (!localDoc) {
       await this.driveStore.save(
         remoteUri,
@@ -1810,7 +1976,15 @@ export class LocalNotebooks extends Dexie {
       )
     }
 
-    const newFile = await this.driveStore.create(parentRemoteUri, record.name)
+    const newFile =
+      record.mimeType && record.mimeType !== NOTEBOOK_MIME_TYPE
+        ? await this.driveStore.createContent(
+            parentRemoteUri,
+            record.name,
+            record.doc ?? '',
+            record.mimeType
+          )
+        : await this.driveStore.create(parentRemoteUri, record.name)
     let version: UpstreamVersion = {}
     try {
       version = driveMetadataToUpstreamVersion(
@@ -1835,6 +2009,7 @@ export class LocalNotebooks extends Dexie {
 
     await this.files.update(localUri, {
       name: newFile.name ?? record.name,
+      mimeType: newFile.mimeType ?? record.mimeType ?? NOTEBOOK_MIME_TYPE,
       remoteId: newFile.uri,
       parentRemoteIdWhenCreated: undefined,
       lastRemoteChecksum: version.checksum ?? '',
@@ -2332,6 +2507,20 @@ function publicRemoteUri(record: {
   return isLocalFileUpstream(record.remoteId, record.id)
     ? undefined
     : record.remoteId || undefined
+}
+
+function resolveDocumentMimeType(
+  name: string | undefined,
+  mimeType: string | undefined
+): string | undefined {
+  const trimmedMimeType = mimeType?.trim()
+  if (trimmedMimeType) {
+    return trimmedMimeType
+  }
+  if (isExcalidrawFileName(name)) {
+    return EXCALIDRAW_MIME_TYPE
+  }
+  return undefined
 }
 
 function isFilesystemUri(uri: string | undefined): boolean {

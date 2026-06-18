@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   removeItem: vi.fn(),
   store: {
     getMetadata: vi.fn(),
+    createContent: vi.fn(),
     createFolder: vi.fn(),
     moveToTrash: vi.fn(),
     sync: vi.fn(),
@@ -167,6 +168,16 @@ describe('WorkspaceExplorer current document handling', () => {
       remoteUri: 'https://drive.google.com/drive/folders/new',
       parents: ['local://folder/drive'],
     })
+    mocks.store.createContent.mockReset()
+    mocks.store.createContent.mockResolvedValue({
+      uri: 'local://file/excalidraw',
+      name: 'untitled-20260616-1200.excalidraw',
+      type: NotebookStoreItemType.File,
+      children: [],
+      remoteUri: undefined,
+      mimeType: 'application/vnd.excalidraw+json',
+      parents: ['local://folder/drive'],
+    })
     mocks.store.moveToTrash.mockReset()
     mocks.store.moveToTrash.mockResolvedValue(undefined)
     mocks.store.sync.mockReset()
@@ -221,6 +232,92 @@ describe('WorkspaceExplorer current document handling', () => {
         'Reports'
       )
     })
+  })
+
+  it('creates an Excalidraw diagram through the local mirror before Drive sync', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: [],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    const driveRoot = await screen.findByText('Drive Root')
+    fireEvent.contextMenu(driveRoot)
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'New Excalidraw Diagram',
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.store.createContent).toHaveBeenCalledWith(
+        'local://folder/drive',
+        expect.stringMatching(/^untitled-\d{8}-\d{4}\.excalidraw$/),
+        expect.stringMatching(/"type":\s*"excalidraw"/),
+        'application/vnd.excalidraw+json'
+      )
+    })
+    expect(mocks.showDocument).not.toHaveBeenCalled()
+    expect(mocks.setCurrentDoc).not.toHaveBeenCalledWith(
+      'local://file/excalidraw'
+    )
+  })
+
+  it('opens a pending local Excalidraw diagram before the Drive URI is available', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/excalidraw'],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/excalidraw') {
+        return {
+          uri,
+          name: 'diagram.excalidraw',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: undefined,
+          mimeType: 'application/vnd.excalidraw+json',
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.click(await screen.findByText('diagram.excalidraw'))
+
+    await waitFor(() => {
+      expect(mocks.showDocument).toHaveBeenCalledWith(
+        'local://file/excalidraw',
+        {
+          title: 'diagram.excalidraw',
+          requestedUri: undefined,
+          mimeType: 'application/vnd.excalidraw+json',
+        }
+      )
+    })
+    expect(mocks.setCurrentDoc).toHaveBeenCalledWith('local://file/excalidraw')
   })
 
   it('moves a Drive-backed file to Google Drive trash from the context menu after confirmation', async () => {

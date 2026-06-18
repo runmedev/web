@@ -94,6 +94,10 @@ function AppRouter() {
 }
 
 function App({ branding }: AppProps) {
+  return <RunmeApp branding={branding} />
+}
+
+function RunmeApp({ branding }: AppProps) {
   const appBranding = {
     name: branding?.name ?? 'runme notebook',
     logo: branding?.logo ?? runmeIcon,

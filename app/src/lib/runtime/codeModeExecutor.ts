@@ -472,6 +472,18 @@ async function handleSandboxAppKernelBridgeCall({
         String(args[1] ?? '')
       )
     }
+    case 'documents.get':
+      return globals.documents.get(String(args[0] ?? ''))
+    case 'documents.update':
+      return globals.documents.update(
+        String(args[0] ?? ''),
+        String(args[1] ?? ''),
+        (args[2] as {
+          mimeType?: string
+          expectedVersion?: string
+          flush?: boolean
+        }) ?? undefined
+      )
     case 'notebookDiff.listDriveRevisions':
       return notebookDiffApi.listDriveRevisions(args[0] as any)
     case 'notebookDiff.diffDriveRevision':

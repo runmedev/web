@@ -981,7 +981,8 @@ export class NotebookData {
                     method,
                     args,
                     runmeApi,
-                    notebooksApiBridgeServer
+                    notebooksApiBridgeServer,
+                    appGlobals
                   ),
               },
               hooks,
@@ -1060,7 +1061,8 @@ export class NotebookData {
     method: string,
     args: unknown[],
     runmeApi: RunmeConsoleApi,
-    notebooksApiBridgeServer: NotebooksApiBridgeServer
+    notebooksApiBridgeServer: NotebooksApiBridgeServer,
+    appGlobals: ReturnType<typeof createAppJsGlobals>
   ): Promise<unknown> {
     const target = args[0]
     switch (method) {
@@ -1089,6 +1091,18 @@ export class NotebookData {
         return getClaimedSessionId()
       case 'app.getSessionID':
         return getClaimedSessionId()
+      case 'documents.get':
+        return appGlobals.documents.get(String(args[0] ?? ''))
+      case 'documents.update':
+        return appGlobals.documents.update(
+          String(args[0] ?? ''),
+          String(args[1] ?? ''),
+          (args[2] as {
+            mimeType?: string
+            expectedVersion?: string
+            flush?: boolean
+          }) ?? undefined
+        )
       default:
         if (method.startsWith('notebooks.')) {
           return notebooksApiBridgeServer.handleMessage({

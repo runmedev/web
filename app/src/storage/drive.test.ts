@@ -84,6 +84,79 @@ describe("isDriveItemUri", () => {
 });
 
 describe("DriveNotebookStore", () => {
+  it("creates arbitrary Drive content with the provided MIME type", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/drive/v3/files") {
+          expect(init?.method).toBe("POST");
+          expect(JSON.parse(String(init?.body))).toMatchObject({
+            name: "diagram.excalidraw",
+            mimeType: "application/vnd.excalidraw+json",
+            parents: ["folder123"],
+          });
+          return new Response(
+            JSON.stringify({
+              id: "file123",
+              name: "diagram.excalidraw",
+              mimeType: "application/vnd.excalidraw+json",
+              parents: ["folder123"],
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        if (url.pathname === "/upload/drive/v3/files/file123") {
+          expect(init?.method).toBe("PATCH");
+          expect(init?.headers).toMatchObject({
+            "Content-Type": "application/vnd.excalidraw+json",
+          });
+          expect(init?.body).toBe('{"type":"excalidraw"}');
+          return new Response("", { status: 200 });
+        }
+        throw new Error(`Unexpected Drive request: ${url.toString()}`);
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const result = await store.createContent(
+      "https://drive.google.com/drive/folders/folder123",
+      "diagram.excalidraw",
+      '{"type":"excalidraw"}',
+      "application/vnd.excalidraw+json",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      uri: "https://drive.google.com/file/d/file123/view",
+      name: "diagram.excalidraw",
+      type: NotebookStoreItemType.File,
+      remoteUri: "https://drive.google.com/file/d/file123/view",
+      mimeType: "application/vnd.excalidraw+json",
+    });
+  });
+
+  it("loads arbitrary Drive file content as text", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      expect(url.pathname).toBe("/drive/v3/files/file123");
+      expect(url.searchParams.get("alt")).toBe("media");
+      return new Response('{"type":"excalidraw"}', {
+        status: 200,
+        headers: { "Content-Type": "application/vnd.excalidraw+json" },
+      });
+    });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    await expect(
+      store.loadContent("https://drive.google.com/file/d/file123/view"),
+    ).resolves.toBe('{"type":"excalidraw"}');
+  });
+
   it("uses shared drive name for shared drive root folder metadata", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     const fetchMock = vi
@@ -180,6 +253,7 @@ describe("DriveNotebookStore", () => {
       type: NotebookStoreItemType.Folder,
       children: [],
       remoteUri: "https://drive.google.com/drive/folders/folder123",
+      mimeType: "application/vnd.google-apps.folder",
       parents: ["https://drive.google.com/drive/folders/parent123"],
     });
   });

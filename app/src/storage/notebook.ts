@@ -9,6 +9,7 @@ export interface NotebookStoreItem {
   type: NotebookStoreItemType;
   children: string[];
   remoteUri?: string;
+  mimeType?: string;
   parents: string[];
 }
 

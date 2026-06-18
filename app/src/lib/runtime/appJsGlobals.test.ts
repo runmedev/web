@@ -2,6 +2,25 @@
 import { create } from '@bufbuild/protobuf'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('@excalidraw/excalidraw', () => ({
+  CaptureUpdateAction: { NEVER: 'never' },
+  Excalidraw: () => null,
+  restore: (data: any) => ({
+    elements: data?.elements ?? [],
+    appState: data?.appState ?? {},
+    files: data?.files ?? {},
+  }),
+  serializeAsJSON: (elements: unknown[], appState: unknown, files: unknown) =>
+    JSON.stringify({
+      type: 'excalidraw',
+      elements,
+      appState,
+      files,
+    }),
+}))
+
+vi.mock('@excalidraw/excalidraw/index.css', () => ({}))
+
 import { parser_pb } from '../../runme/client'
 import { GoogleClientManager } from '../googleClientManager'
 import { appState } from './AppState'
@@ -125,6 +144,168 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     await expect(globals.notebooks.shareUrl()).resolves.toBe(
       'http://localhost:3000/?doc=local%3A%2F%2Ffile%2Fcurrent'
     )
+  })
+
+  it('reads raw document content from the local mirror', async () => {
+    const localStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: 'local://file/diagram',
+        name: 'test4.excalidraw',
+        type: 'file',
+        mimeType: 'application/vnd.excalidraw+json',
+        children: [],
+        remoteUri: undefined,
+        parents: [],
+      })),
+      files: {
+        get: vi.fn(async () => ({
+          id: 'local://file/diagram',
+          name: 'test4.excalidraw',
+          mimeType: 'application/vnd.excalidraw+json',
+          remoteId: 'local://file/diagram',
+          doc: '{"type":"excalidraw"}',
+          md5Checksum: 'local-checksum',
+        })),
+      },
+      loadContent: vi.fn(async () => '{"type":"excalidraw"}'),
+      getSyncState: vi.fn(async () => ({
+        status: 'local-only',
+        localUri: 'local://file/diagram',
+        remoteId: 'local://file/diagram',
+      })),
+    }
+    appState.setLocalNotebooks(localStore as any)
+    const globals = createAppJsGlobals({
+      runme: createRunme(),
+    })
+
+    const doc = await globals.documents.get('local://file/diagram')
+
+    expect(localStore.loadContent).toHaveBeenCalledWith('local://file/diagram')
+    expect(doc).toMatchObject({
+      uri: 'local://file/diagram',
+      name: 'test4.excalidraw',
+      mimeType: 'application/vnd.excalidraw+json',
+      content: '{"type":"excalidraw"}',
+      syncStatus: 'local-only',
+      version: {
+        checksum: 'local-checksum',
+      },
+    })
+  })
+
+  it('updates raw document content in the local mirror', async () => {
+    const localStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: 'local://file/diagram',
+        name: 'test4.excalidraw',
+        type: 'file',
+        mimeType: 'application/vnd.excalidraw+json',
+        children: [],
+        remoteUri: undefined,
+        parents: [],
+      })),
+      files: {
+        get: vi
+          .fn()
+          .mockResolvedValueOnce({
+            id: 'local://file/diagram',
+            name: 'test4.excalidraw',
+            mimeType: 'application/vnd.excalidraw+json',
+            remoteId: 'local://file/diagram',
+            doc: '{"type":"excalidraw"}',
+            md5Checksum: 'before',
+          })
+          .mockResolvedValueOnce({
+            id: 'local://file/diagram',
+            name: 'test4.excalidraw',
+            mimeType: 'application/vnd.excalidraw+json',
+            remoteId: 'local://file/diagram',
+            doc: '{"type":"excalidraw","elements":[]}',
+            md5Checksum: 'after',
+          }),
+      },
+      loadContent: vi.fn(async () => '{"type":"excalidraw"}'),
+      getSyncState: vi.fn(async () => ({
+        status: 'local-only',
+        localUri: 'local://file/diagram',
+        remoteId: 'local://file/diagram',
+      })),
+      saveContent: vi.fn(async () => undefined),
+      sync: vi.fn(async () => undefined),
+    }
+    appState.setLocalNotebooks(localStore as any)
+    const globals = createAppJsGlobals({
+      runme: createRunme(),
+    })
+
+    const result = await globals.documents.update(
+      'local://file/diagram',
+      '{"type":"excalidraw","elements":[]}',
+      {
+        mimeType: 'application/vnd.excalidraw+json',
+        expectedVersion: 'before',
+        flush: true,
+      }
+    )
+
+    expect(localStore.saveContent).toHaveBeenCalledWith(
+      'local://file/diagram',
+      '{"type":"excalidraw","elements":[]}',
+      'application/vnd.excalidraw+json'
+    )
+    expect(localStore.sync).toHaveBeenCalledWith('local://file/diagram')
+    expect(result).toMatchObject({
+      uri: 'local://file/diagram',
+      name: 'test4.excalidraw',
+      syncStatus: 'local-only',
+      version: {
+        checksum: 'after',
+      },
+    })
+    expect(result).not.toHaveProperty('content')
+  })
+
+  it('rejects raw document updates when the expected version does not match', async () => {
+    const localStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: 'local://file/diagram',
+        name: 'test4.excalidraw',
+        type: 'file',
+        mimeType: 'application/vnd.excalidraw+json',
+        children: [],
+        remoteUri: undefined,
+        parents: [],
+      })),
+      files: {
+        get: vi.fn(async () => ({
+          id: 'local://file/diagram',
+          name: 'test4.excalidraw',
+          mimeType: 'application/vnd.excalidraw+json',
+          remoteId: 'local://file/diagram',
+          doc: '{"type":"excalidraw"}',
+          md5Checksum: 'actual',
+        })),
+      },
+      loadContent: vi.fn(async () => '{"type":"excalidraw"}'),
+      getSyncState: vi.fn(async () => ({
+        status: 'local-only',
+        localUri: 'local://file/diagram',
+        remoteId: 'local://file/diagram',
+      })),
+      saveContent: vi.fn(async () => undefined),
+    }
+    appState.setLocalNotebooks(localStore as any)
+    const globals = createAppJsGlobals({
+      runme: createRunme(),
+    })
+
+    await expect(
+      globals.documents.update('local://file/diagram', '{}', {
+        expectedVersion: 'stale',
+      })
+    ).rejects.toThrow('Document version mismatch')
+    expect(localStore.saveContent).not.toHaveBeenCalled()
   })
 
   it('starts Google Drive OAuth from runtime globals without returning raw tokens', async () => {

@@ -1,5 +1,6 @@
 import type { NotebookTabState } from '../notebookDataController'
 import type { NotebookOwnershipRecord } from '../tabCoordination/notebookOwnership'
+import { isExcalidrawDocumentMetadata } from '../../storage/excalidraw'
 
 export const DRIVE_LINK_STATUS_DOCUMENT_URI = 'status://drive-link'
 export const DRIVE_SYNC_STATUS_DOCUMENT_URI = 'status://drive-sync'
@@ -12,6 +13,7 @@ export interface WorkspaceDocument {
   uri: string
   title: string
   requestedUri?: string
+  mimeType?: string
   state?: NotebookTabState
   readOnly?: boolean
   errorMessage?: string
@@ -31,6 +33,15 @@ export function isNotebookDocumentUri(
 
 export function isNotebookDiffUri(uri: string | null | undefined): boolean {
   return typeof uri === 'string' && uri.startsWith('diff://notebook/')
+}
+
+export function isExcalidrawWorkspaceDocument(
+  document: Pick<WorkspaceDocument, 'title' | 'mimeType'> | null | undefined
+): boolean {
+  return isExcalidrawDocumentMetadata({
+    name: document?.title,
+    mimeType: document?.mimeType,
+  })
 }
 
 export function isDriveLinkStatusUri(uri: string | null | undefined): boolean {
