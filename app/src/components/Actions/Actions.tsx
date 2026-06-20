@@ -2894,6 +2894,8 @@ export default function Actions() {
                   explorer.addFolder(){'\n'}
                   explorer.mountDrive(driveUrl){'\n'}
                   explorer.openPicker(){'\n'}
+                  explorer.editName(uri){'\n'}
+                  explorer.renameFolder(uri, name){'\n'}
                   explorer.listFolders(){'\n'}
                   runme.getCurrentNotebook(){'\n'}
                   runme.clear(){'\n'}

@@ -80,6 +80,7 @@ type SendOutput = (data: string) => void
 
 type RuntimeNotebookStore = {
   create: (parentUri: string, name: string) => Promise<{ uri: string }>
+  rename?: (uri: string, name: string) => Promise<unknown>
   save: (uri: string, notebook: parser_pb.Notebook) => Promise<unknown>
 }
 
@@ -375,6 +376,9 @@ export function createAppJsGlobals({
       return
     }
     appState.removeWorkspaceItem(uri)
+  }
+  const editWorkspaceItemName = (uri: string) => {
+    appState.startWorkspaceItemRename(uri)
   }
   const resolveStore = () => resolveNotebookStore?.() ?? appState.localNotebooks
   const openNotebookForRuntime = async (uri: string) => {
@@ -1835,6 +1839,42 @@ export function createAppJsGlobals({
         removeWorkspaceItem(uri)
         return `Removed: ${uri}`
       },
+      editName: (uri: string) => {
+        if (!uri) {
+          return 'Usage: explorer.editName(uri)'
+        }
+        editWorkspaceItemName(uri)
+        return `Editing name: ${uri}`
+      },
+      renameFolder: async (uri: string, name: string) => {
+        const nextName = name?.trim()
+        if (!uri || !nextName) {
+          throw new Error('Usage: explorer.renameFolder(uri, name)')
+        }
+        if (uri.startsWith('local://folder/')) {
+          const localStore = resolveLocalMirrorStore()
+          const renamed = await localStore.rename(uri, nextName)
+          const message = `Renamed folder: ${uri} -> ${nextName}`
+          emitLine(sendOutput, message)
+          return renamed
+        }
+        if (isDriveItemUri(uri)) {
+          const parsed = parseDriveItem(uri)
+          if (parsed.type !== NotebookStoreItemType.Folder) {
+            throw new Error('explorer.renameFolder(uri, name) requires a folder URI.')
+          }
+          if (!appState.driveNotebookStore) {
+            throw new Error('Google Drive notebook store is not initialized yet.')
+          }
+          const renamed = await appState.driveNotebookStore.rename(uri, nextName)
+          const message = `Renamed Drive folder: ${uri} -> ${nextName}`
+          emitLine(sendOutput, message)
+          return renamed
+        }
+        throw new Error(
+          'explorer.renameFolder(uri, name) requires a local://folder or Google Drive folder URI.'
+        )
+      },
       listFolders: () => {
         const items = getWorkspaceItems()
         if (items.length === 0) {
@@ -1849,6 +1889,8 @@ export function createAppJsGlobals({
           'explorer.openPicker()           - Alias for explorer.addFolder()',
           'explorer.importMarkdown()       - Import a local Markdown file as a notebook',
           'explorer.removeFolder(uri)      - Remove a folder from workspace',
+          'explorer.editName(uri)          - Open inline rename for a workspace item',
+          'explorer.renameFolder(uri,name) - Rename a workspace folder programmatically',
           'explorer.listFolders()          - List all workspace folders',
           'explorer.help()                 - Show this help',
         ].join('\n')

@@ -253,6 +253,37 @@ describe('WorkspaceExplorer current document handling', () => {
     })
   })
 
+  it('starts inline rename from a Drive-backed folder context menu', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: [],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    const driveRoot = await screen.findByText('Drive Root')
+    fireEvent.contextMenu(driveRoot)
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Rename',
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.treeEdit).toHaveBeenCalledWith('local://folder/drive')
+    })
+  })
+
   it('creates an Excalidraw diagram through the local mirror before Drive sync', async () => {
     mocks.workspaceItems = ['local://folder/drive']
     mocks.store.getMetadata.mockImplementation(async (uri: string) => {

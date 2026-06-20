@@ -44,6 +44,7 @@ import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useWorkspaceDocumentContext } from "../../contexts/WorkspaceDocumentContext";
 import { driveLinkCoordinator } from "../../lib/driveLinkCoordinator";
 import { openNotebookUpstreamDiff } from "../../lib/notebookDiff/conflict";
+import { appState } from "../../lib/runtime/AppState";
 import {
   EXCALIDRAW_MIME_TYPE,
   createInitialExcalidrawDocumentJson,
@@ -847,6 +848,13 @@ export function WorkspaceExplorer() {
     setPendingEditId(uri);
   }, []);
 
+  useEffect(() => {
+    appState.setWorkspaceRenameHandler(handleStartRename);
+    return () => {
+      appState.setWorkspaceRenameHandler(null);
+    };
+  }, [handleStartRename]);
+
 function formatShortTimestamp(date: Date): string {
   const pad = (value: number) => value.toString().padStart(2, "0");
   const year = date.getFullYear();
@@ -1422,29 +1430,42 @@ function formatShortTimestamp(date: Date): string {
           ) : adjustedContextMenu.type === NotebookStoreItemType.Folder ? (
             <>
               {!adjustedContextMenu.uri.startsWith("fs://") && (
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setContextMenu(null);
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setContextMenu(null);
 
-                  void (async () => {
-                    try {
-                      if (store) {
-                        await store.sync(adjustedContextMenu.uri);
+                    void (async () => {
+                      try {
+                        if (store) {
+                          await store.sync(adjustedContextMenu.uri);
+                        }
+                      } catch (error) {
+                        console.error("Failed to sync folder", error);
+                      } finally {
+                        await fetchChildren(adjustedContextMenu.uri);
                       }
-                    } catch (error) {
-                      console.error("Failed to sync folder", error);
-                    } finally {
-                      await fetchChildren(adjustedContextMenu.uri);
-                    }
-                  })();
-                }}
-              >
-                Sync
-              </button>
+                    })();
+                  }}
+                >
+                  Sync
+                </button>
+              )}
+              {adjustedContextMenu.remoteUri && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleStartRename(adjustedContextMenu.uri);
+                  }}
+                >
+                  Rename
+                </button>
               )}
               <button
                 type="button"
@@ -1502,7 +1523,7 @@ function formatShortTimestamp(date: Date): string {
                   Copy Share Link
                 </button>
               )}
-          {adjustedContextMenu.uri !== LOCAL_FOLDER_URI && (
+              {adjustedContextMenu.uri !== LOCAL_FOLDER_URI && (
                 <button
                   type="button"
                   className="ctx-menu-item text-red-600"

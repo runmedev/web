@@ -13,6 +13,7 @@ type Scenario =
   | 'lowLevel'
   | 'codex'
   | 'app'
+  | 'explorer'
   | 'credentials'
   | 'drive'
   | 'driveSave'
@@ -76,6 +77,19 @@ class MockSandboxPort {
           callId: 1,
           method: 'app.getSessionID',
           args: [],
+        })
+      } else if (this.scenario === 'explorer') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'explorer.renameFolder',
+          args: ['local://folder/drive', 'Renamed Folder'],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 2,
+          method: 'explorer.editName',
+          args: ['local://folder/drive'],
         })
       } else if (this.scenario === 'credentials') {
         this.emit({
@@ -170,6 +184,18 @@ class MockSandboxPort {
         this.emit({
           type: 'stdout',
           data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+      if (this.scenario === 'explorer' && this.hostResults.has(2)) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
+        })
+        this.emit({
+          type: 'stdout',
+          data: `${String(this.hostResults.get(2) ?? '')}\n`,
         })
         this.emit({ type: 'exit', exitCode: 0 })
         return
@@ -579,6 +605,62 @@ describe('SandboxJSKernel', () => {
     ])
     expect(stdout).toContain('"status":"started"')
     expect(stdout).toContain('"mode":"new_tab"')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports explorer folder helpers through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'explorer.renameFolder') {
+        return {
+          uri: 'local://folder/drive',
+          name: 'Renamed Folder',
+          type: 'folder',
+        }
+      }
+      if (method === 'explorer.editName') {
+        return 'Editing name: local://folder/drive'
+      }
+      return null
+    })
+
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('explorer'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run(
+      [
+        "console.log(await explorer.renameFolder('local://folder/drive', 'Renamed Folder'));",
+        "console.log(await explorer.editName('local://folder/drive'));",
+      ].join('\n')
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith('explorer.renameFolder', [
+      'local://folder/drive',
+      'Renamed Folder',
+    ])
+    expect(bridgeCall).toHaveBeenCalledWith('explorer.editName', [
+      'local://folder/drive',
+    ])
+    expect(stdout).toContain('Renamed Folder')
+    expect(stdout).toContain('Editing name: local://folder/drive')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
   })

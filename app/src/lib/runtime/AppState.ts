@@ -37,6 +37,7 @@ export class AppState {
       ) => Promise<StartGoogleDriveOAuthResult>)
     | null = null;
   private workspaceHandlers: WorkspaceHandlers | null = null;
+  private workspaceRenameHandler: ((uri: string) => void) | null = null;
   private runnerHandlers: RunnerHandlers | null = null;
 
   private constructor() {}
@@ -90,6 +91,17 @@ export class AppState {
 
   removeWorkspaceItem(uri: string): void {
     this.workspaceHandlers?.removeItem(uri);
+  }
+
+  setWorkspaceRenameHandler(handler: ((uri: string) => void) | null): void {
+    this.workspaceRenameHandler = handler;
+  }
+
+  startWorkspaceItemRename(uri: string): void {
+    if (!this.workspaceRenameHandler) {
+      throw new Error("Workspace rename handler is not initialized");
+    }
+    this.workspaceRenameHandler(uri);
   }
 
   setRunnerHandlers(handlers: RunnerHandlers | null): void {

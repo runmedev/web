@@ -52,6 +52,11 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'app.getSessionId',
   'app.getSessionID',
   'app.startGoogleDriveOAuth',
+  'explorer.mountDrive',
+  'explorer.removeFolder',
+  'explorer.editName',
+  'explorer.renameFolder',
+  'explorer.listFolders',
   'credentials.google.setServiceAccountFromFilePath',
   'drive.authorize',
   'drive.refreshAuth',
@@ -326,6 +331,20 @@ function buildSandboxSrcDoc(options: {
           getSessionID: () => hostCall("app.getSessionID", []),
           startGoogleDriveOAuth: (options) => hostCall("app.startGoogleDriveOAuth", [options]),
         };
+        const explorer = {
+          mountDrive: (driveUrl) => hostCall("explorer.mountDrive", [driveUrl]),
+          removeFolder: (uri) => hostCall("explorer.removeFolder", [uri]),
+          editName: (uri) => hostCall("explorer.editName", [uri]),
+          renameFolder: (uri, name) => hostCall("explorer.renameFolder", [uri, name]),
+          listFolders: () => hostCall("explorer.listFolders", []),
+          help: () => {
+            consoleProxy.log("explorer.mountDrive(driveUrl)");
+            consoleProxy.log("explorer.removeFolder(uri)");
+            consoleProxy.log("explorer.editName(uri)");
+            consoleProxy.log("explorer.renameFolder(uri, name)");
+            consoleProxy.log("explorer.listFolders()");
+          },
+        };
         const credentials = {
           google: {
             setServiceAccountFromFilePath: (path) =>
@@ -386,6 +405,10 @@ function buildSandboxSrcDoc(options: {
           consoleProxy.log("- await app.getSessionId()");
           consoleProxy.log("- await app.getSessionID()");
           consoleProxy.log("- await app.startGoogleDriveOAuth({ mode?, prompt? })");
+          consoleProxy.log("- await explorer.mountDrive(driveUrl)");
+          consoleProxy.log("- await explorer.editName(uri)");
+          consoleProxy.log("- await explorer.renameFolder(uri, name)");
+          consoleProxy.log("- await explorer.listFolders()");
           consoleProxy.log("- await credentials.google.setServiceAccountFromFilePath(path)");
           consoleProxy.log("- await drive.authorize({ mode?, prompt? })");
           consoleProxy.log("- await drive.saveAsCurrentNotebook(folderIdOrUri, fileName)");
@@ -405,12 +428,13 @@ function buildSandboxSrcDoc(options: {
               "notebookDiff",
               "codex",
               "app",
+              "explorer",
               "credentials",
               "drive",
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, opfs, net, notebooks, documents, notebookDiff, codex, app, credentials, drive, help);
+            await runner(consoleProxy, runme, opfs, net, notebooks, documents, notebookDiff, codex, app, explorer, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });

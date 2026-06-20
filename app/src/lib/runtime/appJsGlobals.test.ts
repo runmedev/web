@@ -70,6 +70,7 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     appState.setLocalNotebooks(null)
     appState.setOpenNotebookHandler(null)
     appState.setGoogleDriveOAuthHandler(null)
+    appState.setWorkspaceRenameHandler(null)
     window.localStorage.clear()
     ;(
       GoogleClientManager as unknown as {
@@ -144,6 +145,48 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     await expect(globals.notebooks.shareUrl()).resolves.toBe(
       'http://localhost:3000/?doc=local%3A%2F%2Ffile%2Fcurrent'
     )
+  })
+
+  it('opens inline workspace rename from the explorer runtime API', () => {
+    const startRename = vi.fn()
+    appState.setWorkspaceRenameHandler(startRename)
+    const globals = createAppJsGlobals({
+      runme: createRunme(),
+    })
+
+    const result = globals.explorer.editName('local://folder/drive')
+
+    expect(result).toBe('Editing name: local://folder/drive')
+    expect(startRename).toHaveBeenCalledWith('local://folder/drive')
+  })
+
+  it('renames a local workspace folder from the explorer runtime API', async () => {
+    const localStore = {
+      rename: vi.fn(async (uri: string, name: string) => ({
+        uri,
+        name,
+        type: 'folder',
+        children: [],
+      })),
+    }
+    appState.setLocalNotebooks(localStore as any)
+    const globals = createAppJsGlobals({
+      runme: createRunme(),
+    })
+
+    const result = await globals.explorer.renameFolder(
+      'local://folder/drive',
+      'Renamed Folder'
+    )
+
+    expect(localStore.rename).toHaveBeenCalledWith(
+      'local://folder/drive',
+      'Renamed Folder'
+    )
+    expect(result).toMatchObject({
+      uri: 'local://folder/drive',
+      name: 'Renamed Folder',
+    })
   })
 
   it('reads raw document content from the local mirror', async () => {
