@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
     sync: vi.fn(),
   },
   openNotebookUpstreamDiff: vi.fn(),
+  treeEdit: vi.fn(),
   workspaceItems: [] as string[],
 }))
 
@@ -37,7 +38,7 @@ vi.mock('react-arborist', async () => {
         parent: { open: vi.fn() },
       }),
       open: vi.fn(),
-      edit: vi.fn(async () => undefined),
+      edit: mocks.treeEdit,
     }))
 
     const renderItems = (items: any[], parent: any = null): React.ReactNode =>
@@ -183,6 +184,8 @@ describe('WorkspaceExplorer current document handling', () => {
     mocks.store.sync.mockReset()
     mocks.openNotebookUpstreamDiff.mockReset()
     mocks.openNotebookUpstreamDiff.mockResolvedValue(undefined)
+    mocks.treeEdit.mockReset()
+    mocks.treeEdit.mockResolvedValue(undefined)
     vi.spyOn(window, 'prompt').mockReturnValue('Reports')
     vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
@@ -200,7 +203,57 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(mocks.setCurrentDoc).not.toHaveBeenCalledWith(null)
   })
 
-  it('creates a Google Drive folder from a Drive-backed folder context menu', async () => {
+  it('creates a Google Drive folder inline from a Drive-backed folder context menu', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: mocks.store.createFolder.mock.calls.length
+            ? ['local://folder/new']
+            : [],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://folder/new') {
+        return {
+          uri,
+          name: 'New Folder',
+          type: NotebookStoreItemType.Folder,
+          children: [],
+          remoteUri: 'https://drive.google.com/drive/folders/new',
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    const driveRoot = await screen.findByText('Drive Root')
+    fireEvent.contextMenu(driveRoot)
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'New Google Drive Folder',
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.store.createFolder).toHaveBeenCalledWith(
+        'local://folder/drive',
+        'New Folder'
+      )
+    })
+    expect(window.prompt).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(mocks.treeEdit).toHaveBeenCalledWith('local://folder/new')
+    })
+  })
+
+  it('starts inline rename from a Drive-backed folder context menu', async () => {
     mocks.workspaceItems = ['local://folder/drive']
     mocks.store.getMetadata.mockImplementation(async (uri: string) => {
       if (uri === 'local://folder/drive') {
@@ -222,15 +275,12 @@ describe('WorkspaceExplorer current document handling', () => {
     fireEvent.contextMenu(driveRoot)
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'New Google Drive Folder',
+        name: 'Rename',
       })
     )
 
     await waitFor(() => {
-      expect(mocks.store.createFolder).toHaveBeenCalledWith(
-        'local://folder/drive',
-        'Reports'
-      )
+      expect(mocks.treeEdit).toHaveBeenCalledWith('local://folder/drive')
     })
   })
 

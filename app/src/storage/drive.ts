@@ -1500,8 +1500,11 @@ export class DriveNotebookStore {
 
   async rename(uri: string, name: string): Promise<NotebookStoreItem> {
     const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
-      throw new Error('DriveNotebookStore.rename expects a file URI')
+    if (
+      type !== NotebookStoreItemType.File &&
+      type !== NotebookStoreItemType.Folder
+    ) {
+      throw new Error('DriveNotebookStore.rename expects a file or folder URI')
     }
     const client = await this.getFilesClient()
     const file = await client.update({

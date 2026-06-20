@@ -420,6 +420,19 @@ async function handleSandboxAppKernelBridgeCall({
         ...(result.accessToken ? { accessToken: '<redacted>' } : {}),
       }
     }
+    case 'explorer.mountDrive':
+      return globals.explorer.mountDrive(String(args[0] ?? ''))
+    case 'explorer.removeFolder':
+      return globals.explorer.removeFolder(String(args[0] ?? ''))
+    case 'explorer.editName':
+      return globals.explorer.editName(String(args[0] ?? ''))
+    case 'explorer.renameFolder':
+      return globals.explorer.renameFolder(
+        String(args[0] ?? ''),
+        String(args[1] ?? '')
+      )
+    case 'explorer.listFolders':
+      return globals.explorer.listFolders()
     case 'credentials.google.setServiceAccountFromFilePath': {
       const selection = await readServiceAccountJsonFromLocalPath(
         String(args[0] ?? '')

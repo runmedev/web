@@ -44,6 +44,7 @@ import { useNotebookContext } from "../../contexts/NotebookContext";
 import { useWorkspaceDocumentContext } from "../../contexts/WorkspaceDocumentContext";
 import { driveLinkCoordinator } from "../../lib/driveLinkCoordinator";
 import { openNotebookUpstreamDiff } from "../../lib/notebookDiff/conflict";
+import { appState } from "../../lib/runtime/AppState";
 import {
   EXCALIDRAW_MIME_TYPE,
   createInitialExcalidrawDocumentJson,
@@ -820,23 +821,14 @@ export function WorkspaceExplorer() {
         return;
       }
 
-      const name =
-        typeof window === "undefined"
-          ? DEFAULT_DRIVE_FOLDER_NAME
-          : window.prompt("Folder name", DEFAULT_DRIVE_FOLDER_NAME);
-      if (name === null) {
-        return;
-      }
-
-      const trimmedName = name.trim();
-      if (!trimmedName) {
-        return;
-      }
-
       try {
         treeRef.current?.open(folderUri);
-        await store.createFolder(folderUri, trimmedName);
+        const newFolder = await store.createFolder(
+          folderUri,
+          DEFAULT_DRIVE_FOLDER_NAME,
+        );
         await fetchChildren(folderUri);
+        setPendingEditId(newFolder.uri);
         setErrorMessage(null);
         showToast({ message: "Google Drive folder created", tone: "success" });
       } catch (error) {
@@ -855,6 +847,13 @@ export function WorkspaceExplorer() {
     setContextMenu(null);
     setPendingEditId(uri);
   }, []);
+
+  useEffect(() => {
+    appState.setWorkspaceRenameHandler(handleStartRename);
+    return () => {
+      appState.setWorkspaceRenameHandler(null);
+    };
+  }, [handleStartRename]);
 
 function formatShortTimestamp(date: Date): string {
   const pad = (value: number) => value.toString().padStart(2, "0");
@@ -1007,12 +1006,20 @@ function formatShortTimestamp(date: Date): string {
         node.reset();
         return;
       }
-      if (target.type !== NotebookStoreItemType.File) {
+      if (
+        target.type !== NotebookStoreItemType.File &&
+        target.type !== NotebookStoreItemType.Folder
+      ) {
         node.reset();
         return;
       }
       const trimmed = name.trim();
-      const nextName = trimmed === "" ? "untitled.json" : trimmed;
+      const nextName =
+        trimmed === ""
+          ? target.type === NotebookStoreItemType.Folder
+            ? DEFAULT_DRIVE_FOLDER_NAME
+            : "untitled.json"
+          : trimmed;
       try {
         await targetStore.rename(target.uri, nextName);
         const parentUri = node.parent?.data.uri;
@@ -1026,8 +1033,8 @@ function formatShortTimestamp(date: Date): string {
         setErrorMessage(null);
         setPendingEditId(null);
       } catch (error) {
-        console.error("Failed to rename notebook", error);
-        setErrorMessage("Unable to rename document. Please try again.");
+        console.error("Failed to rename workspace item", error);
+        setErrorMessage("Unable to rename item. Please try again.");
         node.reset();
       }
     },
@@ -1251,7 +1258,13 @@ function formatShortTimestamp(date: Date): string {
             children={renderNode}
             onToggle={handleToggle}
             onClick={() => setContextMenu(null)}
-            disableEdit={(data) => data.type !== NotebookStoreItemType.File}
+            disableEdit={(data) =>
+              data.type !== NotebookStoreItemType.File &&
+              !(
+                data.type === NotebookStoreItemType.Folder &&
+                Boolean(data.remoteUri)
+              )
+            }
             onRename={handleRename}
           />
         </div>
@@ -1417,29 +1430,42 @@ function formatShortTimestamp(date: Date): string {
           ) : adjustedContextMenu.type === NotebookStoreItemType.Folder ? (
             <>
               {!adjustedContextMenu.uri.startsWith("fs://") && (
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setContextMenu(null);
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setContextMenu(null);
 
-                  void (async () => {
-                    try {
-                      if (store) {
-                        await store.sync(adjustedContextMenu.uri);
+                    void (async () => {
+                      try {
+                        if (store) {
+                          await store.sync(adjustedContextMenu.uri);
+                        }
+                      } catch (error) {
+                        console.error("Failed to sync folder", error);
+                      } finally {
+                        await fetchChildren(adjustedContextMenu.uri);
                       }
-                    } catch (error) {
-                      console.error("Failed to sync folder", error);
-                    } finally {
-                      await fetchChildren(adjustedContextMenu.uri);
-                    }
-                  })();
-                }}
-              >
-                Sync
-              </button>
+                    })();
+                  }}
+                >
+                  Sync
+                </button>
+              )}
+              {adjustedContextMenu.remoteUri && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleStartRename(adjustedContextMenu.uri);
+                  }}
+                >
+                  Rename
+                </button>
               )}
               <button
                 type="button"
@@ -1497,7 +1523,7 @@ function formatShortTimestamp(date: Date): string {
                   Copy Share Link
                 </button>
               )}
-          {adjustedContextMenu.uri !== LOCAL_FOLDER_URI && (
+              {adjustedContextMenu.uri !== LOCAL_FOLDER_URI && (
                 <button
                   type="button"
                   className="ctx-menu-item text-red-600"
