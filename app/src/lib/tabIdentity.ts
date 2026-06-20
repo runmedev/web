@@ -1,4 +1,5 @@
 export const SESSION_QUERY_PARAM = "session";
+const SESSION_STORAGE_KEY = "runme/sessionId";
 
 let sessionId: string | null = null;
 let claimedSessionId: string | null = null;
@@ -90,6 +91,55 @@ function createSessionId(): string {
     SESSION_PREFIXES[randomIndex(SESSION_PREFIXES.length)],
     SESSION_NOUNS[randomIndex(SESSION_NOUNS.length)],
   ].join("-");
+}
+
+function getSessionStorage(): Storage | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function readStoredSessionId(): string | null {
+  const storage = getSessionStorage();
+  if (!storage) {
+    return null;
+  }
+
+  try {
+    return storage.getItem(SESSION_STORAGE_KEY)?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredSessionId(id: string): void {
+  const storage = getSessionStorage();
+  if (!storage) {
+    return;
+  }
+
+  try {
+    storage.setItem(SESSION_STORAGE_KEY, id);
+  } catch {
+    // Session identity still works in memory when storage is unavailable.
+  }
+}
+
+function initializeSessionId(): string {
+  const stored = readStoredSessionId();
+  if (stored) {
+    return stored;
+  }
+
+  const created = createSessionId();
+  writeStoredSessionId(created);
+  return created;
 }
 
 function hasWebLocks(): boolean {
@@ -187,6 +237,7 @@ async function claimSessionId(): Promise<string> {
     if (await tryClaimSessionId(candidate)) {
       sessionId = candidate;
       claimedSessionId = candidate;
+      writeStoredSessionId(candidate);
       updateSessionQueryParam(candidate);
       return candidate;
     }
@@ -195,6 +246,7 @@ async function claimSessionId(): Promise<string> {
   // If every readable name is actively locked, fall back to the current
   // candidate so the app still has a stable session label.
   claimedSessionId = getSessionId();
+  writeStoredSessionId(claimedSessionId);
   updateSessionQueryParam(claimedSessionId);
   return claimedSessionId;
 }
@@ -202,15 +254,14 @@ async function claimSessionId(): Promise<string> {
 /**
  * getSessionId returns the Runme browser session identifier for this page.
  *
- * The id is intentionally in memory only and generated per page load. Browser
- * tab duplication copies the URL and may copy sessionStorage, so neither is a
- * reliable source of tab identity. Web Locks remain the ownership authority for
- * editable notebook state; this id is metadata for Codex/browser-tab routing
- * and blocked-state UI.
+ * The id is scoped to sessionStorage so a page refresh preserves the same
+ * browser session. Browser tab duplication may copy both the URL and
+ * sessionStorage, so Web Locks remain the ownership authority and force a new
+ * persisted id when another live tab already owns the stored one.
  */
 export function getSessionId(): string {
   if (!sessionId) {
-    sessionId = createSessionId();
+    sessionId = initializeSessionId();
   }
   return sessionId;
 }

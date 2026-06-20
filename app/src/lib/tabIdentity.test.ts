@@ -16,6 +16,7 @@ describe('tab identity', () => {
 
   afterEach(() => {
     __resetTabIdForTests()
+    window.sessionStorage.clear()
     window.history.replaceState(null, '', '/')
     vi.restoreAllMocks()
     if (originalLocksDescriptor) {
@@ -25,28 +26,30 @@ describe('tab identity', () => {
     }
   })
 
-  it('replaces a copied session query parameter with the page session id', () => {
+  it('uses sessionStorage as the page-load session id source', async () => {
+    window.sessionStorage.setItem('runme/sessionId', 'session-from-storage')
     window.history.replaceState(null, '', '/?session=session-from-url#cell-a')
 
     const sessionId = ensureSessionQueryParam()
+    const claimed = await getClaimedSessionId()
 
-    expect(sessionId).toBeTruthy()
-    expect(sessionId).not.toBe('session-from-url')
-    expect(sessionId).toMatch(/^[a-z]+-[a-z]+$/)
+    expect(sessionId).toBe('session-from-storage')
+    expect(claimed).toBe(sessionId)
     expect(getSessionId()).toBe(sessionId)
-    expect(window.location.search).toBe(
-      `?session=${encodeURIComponent(sessionId)}`
-    )
+    expect(window.location.search).toBe('?session=session-from-storage')
     expect(window.location.hash).toBe('#cell-a')
   })
 
-  it('adds a session query parameter when the URL does not have one', () => {
+  it('adds a session query parameter when the URL does not have one', async () => {
     window.history.replaceState(null, '', '/?doc=local%3A%2F%2Fnote#section')
 
     const sessionId = ensureSessionQueryParam()
+    const claimed = await getClaimedSessionId()
 
     expect(sessionId).toBeTruthy()
+    expect(claimed).toBe(sessionId)
     expect(sessionId).toMatch(/^[a-z]+-[a-z]+$/)
+    expect(window.sessionStorage.getItem('runme/sessionId')).toBe(sessionId)
     expect(window.location.search).toContain('doc=local%3A%2F%2Fnote')
     expect(window.location.search).toContain(
       `session=${encodeURIComponent(sessionId)}`
@@ -87,6 +90,9 @@ describe('tab identity', () => {
 
     expect(initial).toBe('amber-anchor')
     expect(claimed).toBe('blue-beacon')
+    expect(window.sessionStorage.getItem('runme/sessionId')).toBe(
+      'blue-beacon'
+    )
     expect(window.location.search).toBe('?session=blue-beacon')
     expect(request).toHaveBeenCalledWith(
       'runme:session:amber-anchor',
