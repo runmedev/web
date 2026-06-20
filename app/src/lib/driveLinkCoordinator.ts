@@ -102,13 +102,40 @@ function toDriveLinkAccessErrorMessage(remoteUri: string): string {
   return `Failed to load shared Drive link (${remoteUri}). The file may not exist or you may not have permission to access it.`;
 }
 
+function getIntentStorage(): Storage | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function clearLegacyLocalIntents(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Ignore cleanup failures. Session-scoped intent storage remains primary.
+  }
+}
+
 function loadIntents(): DriveLinkIntent[] {
-  if (typeof window === "undefined" || !window.localStorage) {
+  clearLegacyLocalIntents();
+
+  const storage = getIntentStorage();
+  if (!storage) {
     return [];
   }
 
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = storage.getItem(STORAGE_KEY);
     if (!raw) {
       return [];
     }
@@ -126,7 +153,7 @@ function loadIntents(): DriveLinkIntent[] {
       )
       .map((intent) => ({
         ...intent,
-        // "processing" can be left behind in localStorage after reload/crash.
+        // "processing" can be left behind in sessionStorage after reload/crash.
         // Treat it as pending so the coordinator can resume it.
         status: intent.status === "processing" ? "pending" : intent.status,
       }));
@@ -136,16 +163,19 @@ function loadIntents(): DriveLinkIntent[] {
 }
 
 function persistIntents(intents: DriveLinkIntent[]): void {
-  if (typeof window === "undefined" || !window.localStorage) {
+  clearLegacyLocalIntents();
+
+  const storage = getIntentStorage();
+  if (!storage) {
     return;
   }
 
   try {
     if (intents.length === 0) {
-      window.localStorage.removeItem(STORAGE_KEY);
+      storage.removeItem(STORAGE_KEY);
       return;
     }
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(intents));
+    storage.setItem(STORAGE_KEY, JSON.stringify(intents));
   } catch {
     // Ignore persistence failures.
   }
