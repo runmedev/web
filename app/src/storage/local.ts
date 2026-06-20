@@ -1265,8 +1265,61 @@ export class LocalNotebooks extends Dexie {
   }
 
   async rename(uri: string, name: string): Promise<NotebookStoreItem> {
+    if (uri.startsWith('local://folder/')) {
+      const record = await this.folders.get(uri)
+      if (!record) {
+        throw new Error(`Local folder record not found for ${uri}`)
+      }
+
+      let nextName = name
+      let nextRemoteId = record.remoteId
+
+      if (isDriveUri(record.remoteId)) {
+        const remoteItem = await this.driveStore.rename(record.remoteId, name)
+        nextName = remoteItem.name || name
+        nextRemoteId = remoteItem.remoteUri ?? remoteItem.uri ?? record.remoteId
+      }
+
+      await this.folders.update(uri, {
+        name: nextName,
+        remoteId: nextRemoteId,
+      })
+
+      const parentFolder = await this.findParentFolder(uri)
+
+      if (canDispatchWindowEvents()) {
+        window.dispatchEvent(
+          new CustomEvent('local-notebook-updated', {
+            detail: {
+              uri,
+              name: nextName,
+              remoteUri: publicRemoteUri({
+                ...record,
+                remoteId: nextRemoteId,
+              }),
+            },
+          })
+        )
+      }
+
+      const updatedRecord = {
+        ...record,
+        name: nextName,
+        remoteId: nextRemoteId,
+      }
+
+      return {
+        uri,
+        name: nextName,
+        type: NotebookStoreItemType.Folder,
+        children: [...record.children],
+        remoteUri: publicRemoteUri(updatedRecord),
+        parents: parentFolder ? [parentFolder.id] : [],
+      }
+    }
+
     if (!uri.startsWith('local://file/')) {
-      throw new Error('LocalNotebooks.rename expects a file URI')
+      throw new Error('LocalNotebooks.rename expects a file or folder URI')
     }
 
     const record = await this.files.get(uri)

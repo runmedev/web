@@ -298,6 +298,46 @@ describe("DriveNotebookStore", () => {
     });
   });
 
+  it("renames Drive folders through the metadata update API", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/drive/v3/files/folder123");
+        expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+        expect(init?.method).toBe("PATCH");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          name: "Renamed Folder",
+        });
+        return new Response(
+          JSON.stringify({
+            id: "folder123",
+            name: "Renamed Folder",
+            mimeType: "application/vnd.google-apps.folder",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const result = await store.rename(
+      "https://drive.google.com/drive/folders/folder123",
+      "Renamed Folder",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      uri: "https://drive.google.com/drive/folders/folder123",
+      name: "Renamed Folder",
+      type: NotebookStoreItemType.Folder,
+      remoteUri: "https://drive.google.com/drive/folders/folder123",
+    });
+  });
+
   it("moves Drive files to trash through the metadata update API", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     const fetchMock = vi

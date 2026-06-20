@@ -609,6 +609,50 @@ describe('LocalNotebooks rename', () => {
     )
   })
 
+  it('renames Drive-backed folders upstream before updating the local mirror', async () => {
+    const remoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const renamedRemoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const driveStore = {
+      rename: vi.fn(async () => ({
+        uri: renamedRemoteUri,
+        name: 'Renamed Folder',
+        type: NotebookStoreItemType.Folder,
+        children: [],
+        remoteUri: renamedRemoteUri,
+        parents: [],
+      })),
+    }
+    const store = createTestStore(driveStore)
+    await store.folders.put({
+      id: 'local://folder/parent',
+      name: 'Parent',
+      remoteId: 'https://drive.google.com/drive/folders/parent123',
+      children: ['local://folder/drive'],
+      lastSynced: '',
+    })
+    await store.folders.put({
+      id: 'local://folder/drive',
+      name: 'New Folder',
+      remoteId: remoteUri,
+      children: [],
+      lastSynced: '',
+    })
+
+    const result = await store.rename('local://folder/drive', 'Renamed Folder')
+
+    expect(driveStore.rename).toHaveBeenCalledWith(remoteUri, 'Renamed Folder')
+    expect(result).toMatchObject({
+      uri: 'local://folder/drive',
+      name: 'Renamed Folder',
+      type: NotebookStoreItemType.Folder,
+      remoteUri: renamedRemoteUri,
+      parents: ['local://folder/parent'],
+    })
+    expect((await store.folders.get('local://folder/drive'))?.name).toBe(
+      'Renamed Folder'
+    )
+  })
+
   it('does not update Drive-backed local metadata when the upstream rename fails', async () => {
     const remoteUri = 'https://drive.google.com/file/d/file123/view'
     const driveStore = {

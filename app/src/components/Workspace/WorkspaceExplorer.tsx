@@ -820,23 +820,14 @@ export function WorkspaceExplorer() {
         return;
       }
 
-      const name =
-        typeof window === "undefined"
-          ? DEFAULT_DRIVE_FOLDER_NAME
-          : window.prompt("Folder name", DEFAULT_DRIVE_FOLDER_NAME);
-      if (name === null) {
-        return;
-      }
-
-      const trimmedName = name.trim();
-      if (!trimmedName) {
-        return;
-      }
-
       try {
         treeRef.current?.open(folderUri);
-        await store.createFolder(folderUri, trimmedName);
+        const newFolder = await store.createFolder(
+          folderUri,
+          DEFAULT_DRIVE_FOLDER_NAME,
+        );
         await fetchChildren(folderUri);
+        setPendingEditId(newFolder.uri);
         setErrorMessage(null);
         showToast({ message: "Google Drive folder created", tone: "success" });
       } catch (error) {
@@ -1007,12 +998,20 @@ function formatShortTimestamp(date: Date): string {
         node.reset();
         return;
       }
-      if (target.type !== NotebookStoreItemType.File) {
+      if (
+        target.type !== NotebookStoreItemType.File &&
+        target.type !== NotebookStoreItemType.Folder
+      ) {
         node.reset();
         return;
       }
       const trimmed = name.trim();
-      const nextName = trimmed === "" ? "untitled.json" : trimmed;
+      const nextName =
+        trimmed === ""
+          ? target.type === NotebookStoreItemType.Folder
+            ? DEFAULT_DRIVE_FOLDER_NAME
+            : "untitled.json"
+          : trimmed;
       try {
         await targetStore.rename(target.uri, nextName);
         const parentUri = node.parent?.data.uri;
@@ -1026,8 +1025,8 @@ function formatShortTimestamp(date: Date): string {
         setErrorMessage(null);
         setPendingEditId(null);
       } catch (error) {
-        console.error("Failed to rename notebook", error);
-        setErrorMessage("Unable to rename document. Please try again.");
+        console.error("Failed to rename workspace item", error);
+        setErrorMessage("Unable to rename item. Please try again.");
         node.reset();
       }
     },
@@ -1251,7 +1250,13 @@ function formatShortTimestamp(date: Date): string {
             children={renderNode}
             onToggle={handleToggle}
             onClick={() => setContextMenu(null)}
-            disableEdit={(data) => data.type !== NotebookStoreItemType.File}
+            disableEdit={(data) =>
+              data.type !== NotebookStoreItemType.File &&
+              !(
+                data.type === NotebookStoreItemType.Folder &&
+                Boolean(data.remoteUri)
+              )
+            }
             onRename={handleRename}
           />
         </div>
