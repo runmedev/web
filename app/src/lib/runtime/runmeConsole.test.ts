@@ -657,6 +657,40 @@ describe('createNotebooksApi', () => {
     ])
   })
 
+  it('rejects invalid insert cell kinds before mutating the notebook', async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell('cell-a', 'echo a')],
+    })
+    const model = new FakeNotebookData('local://one', 'One', notebook)
+    const appendCell = vi.spyOn(model, 'appendCell')
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    })
+
+    await expect(
+      api.update({
+        target: { uri: 'local://one' },
+        operations: [
+          {
+            op: 'insert',
+            at: { index: -1 },
+            cells: [
+              { kind: 'markup', value: '# Valid cell' },
+              { kind: 'markdown', value: '# Invalid cell' } as any,
+            ],
+          },
+        ],
+      })
+    ).rejects.toThrow(
+      'Invalid notebooks.update insert cell kind at cells[1]: "markdown". Expected "code" or "markup"; use "markup" for Markdown cells.'
+    )
+
+    expect(appendCell).not.toHaveBeenCalled()
+    expect(model.updates).toEqual([])
+    expect(notebook.cells.map((cell) => cell.refId)).toEqual(['cell-a'])
+  })
+
   it('rejects notebooks.update without an explicit target', async () => {
     const notebook = create(parser_pb.NotebookSchema, {
       cells: [codeCell('cell-a', 'echo a')],

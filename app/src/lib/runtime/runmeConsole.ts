@@ -398,6 +398,17 @@ function insertCells(
   if (!Array.isArray(specs) || specs.length === 0) {
     return
   }
+
+  for (const [index, spec] of specs.entries()) {
+    const kind = (spec as { kind?: unknown } | null)?.kind
+    if (kind !== 'code' && kind !== 'markup') {
+      throw new Error(
+        `Invalid notebooks.update insert cell kind at cells[${index}]: ${JSON.stringify(kind)}. ` +
+          'Expected "code" or "markup"; use "markup" for Markdown cells.'
+      )
+    }
+  }
+
   if (
     typeof notebook.appendCell !== 'function' ||
     typeof notebook.addCellBefore !== 'function' ||
