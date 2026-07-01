@@ -691,6 +691,41 @@ describe('createNotebooksApi', () => {
     expect(notebook.cells.map((cell) => cell.refId)).toEqual(['cell-a'])
   })
 
+  it('rejects invalid insert cell kinds before applying earlier operations', async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell('cell-a', 'echo a')],
+    })
+    const model = new FakeNotebookData('local://one', 'One', notebook)
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    })
+
+    await expect(
+      api.update({
+        target: { uri: 'local://one' },
+        operations: [
+          {
+            op: 'update',
+            refId: 'cell-a',
+            patch: { value: 'echo updated' },
+          },
+          {
+            op: 'insert',
+            at: { index: -1 },
+            cells: [{ kind: 'markdown', value: '# Invalid cell' } as any],
+          },
+        ],
+      })
+    ).rejects.toThrow(
+      'Invalid notebooks.update insert cell kind at cells[0]: "markdown". Expected "code" or "markup"; use "markup" for Markdown cells.'
+    )
+
+    expect(model.updates).toEqual([])
+    expect(notebook.cells.map((cell) => cell.refId)).toEqual(['cell-a'])
+    expect(notebook.cells[0]?.value).toBe('echo a')
+  })
+
   it('rejects notebooks.update without an explicit target', async () => {
     const notebook = create(parser_pb.NotebookSchema, {
       cells: [codeCell('cell-a', 'echo a')],

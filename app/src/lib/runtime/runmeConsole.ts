@@ -390,11 +390,7 @@ function addCellAfterForSpec(
   )
 }
 
-function insertCells(
-  notebook: NotebookDataLike,
-  at: CellLocation,
-  specs: InsertCellSpec[]
-): void {
+function assertValidInsertCellSpecs(specs: InsertCellSpec[]): void {
   if (!Array.isArray(specs) || specs.length === 0) {
     return
   }
@@ -408,6 +404,18 @@ function insertCells(
       )
     }
   }
+}
+
+function insertCells(
+  notebook: NotebookDataLike,
+  at: CellLocation,
+  specs: InsertCellSpec[]
+): void {
+  if (!Array.isArray(specs) || specs.length === 0) {
+    return
+  }
+
+  assertValidInsertCellSpecs(specs)
 
   if (
     typeof notebook.appendCell !== 'function' ||
@@ -631,6 +639,12 @@ export function createNotebooksApi({
             operations
           )}.`
         )
+      }
+
+      for (const operation of operations) {
+        if (operation.op === 'insert') {
+          assertValidInsertCellSpecs(operation.cells)
+        }
       }
 
       for (const [index, operation] of operations.entries()) {
