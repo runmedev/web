@@ -1,5 +1,6 @@
 import { appLogger } from '../logging/runtime'
 import { SANDBOX_NOTEBOOKS_API_METHODS } from './notebooksApiBridge'
+import { makeJsonSafe } from './runmeConsole'
 
 type KernelHooks = {
   onStdout?: (data: string) => void
@@ -13,6 +14,13 @@ type RunOptions = {
 
 type SandboxBridge = {
   call: (method: string, args: unknown[]) => Promise<unknown> | unknown
+}
+
+type SerializedHostError = {
+  name: string
+  message: string
+  code?: string
+  details?: unknown
 }
 
 type SandboxMessage =
@@ -31,6 +39,29 @@ type SandboxSession = {
 const SANDBOX_INIT_MESSAGE = 'runme-appkernel-sandbox-init'
 const LOAD_TIMEOUT_MS = 3_000
 const READY_TIMEOUT_MS = 3_000
+
+function serializeHostError(error: unknown): string | SerializedHostError {
+  const message = error instanceof Error ? error.message : String(error)
+  if (!error || typeof error !== 'object') {
+    return message
+  }
+
+  const candidate = error as {
+    name?: unknown
+    code?: unknown
+    details?: unknown
+  }
+  if (typeof candidate.code !== 'string' && candidate.details === undefined) {
+    return message
+  }
+
+  return makeJsonSafe({
+    name: typeof candidate.name === 'string' ? candidate.name : 'Error',
+    message,
+    ...(typeof candidate.code === 'string' ? { code: candidate.code } : {}),
+    ...(candidate.details !== undefined ? { details: candidate.details } : {}),
+  })
+}
 
 const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'runme.clear',
@@ -251,6 +282,23 @@ function buildSandboxSrcDoc(options: {
             pending.set(callId, { resolve, reject });
             post({ type: "host-call", callId, method, args });
           });
+
+        const createHostError = (payload) => {
+          if (payload && typeof payload === "object") {
+            const error = new Error(String(payload.message ?? "Host call failed"));
+            if (typeof payload.name === "string") {
+              error.name = payload.name;
+            }
+            if (typeof payload.code === "string") {
+              error.code = payload.code;
+            }
+            if ("details" in payload) {
+              error.details = payload.details;
+            }
+            return error;
+          }
+          return new Error(String(payload ?? "Host call failed"));
+        };
 
         const consoleProxy = {
           log: (...args) => post({ type: "stdout", data: formatArgs(args) }),
@@ -475,7 +523,7 @@ function buildSandboxSrcDoc(options: {
                 return;
               }
               if (payload.type === "host-error") {
-                callbacks.reject(new Error(String(payload.error ?? "Host call failed")));
+                callbacks.reject(createHostError(payload.error));
               }
             };
             if (typeof port.start === "function") {
@@ -653,7 +701,7 @@ export class SandboxJSKernel {
       port.postMessage({
         type: 'host-error',
         callId,
-        error: String(error),
+        error: serializeHostError(error),
       })
     }
   }

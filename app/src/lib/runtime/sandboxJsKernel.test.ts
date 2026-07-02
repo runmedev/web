@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
 
+import { NotebookUpdateError } from './runmeConsole'
 import {
   CODE_MODE_SANDBOX_ALLOWED_METHODS,
   SandboxJSKernel,
@@ -20,6 +21,7 @@ type Scenario =
   | 'driveSave'
   | 'documents'
   | 'notebooksCreate'
+  | 'notebooksUpdateError'
 
 class MockSandboxPort {
   onmessage: ((event: MessageEvent<any>) => void) | null = null
@@ -155,9 +157,23 @@ class MockSandboxPort {
           method: 'notebooks.appendCell',
           args: [
             {
-              target: { handle: { uri: 'local://file/comments-demo', revision: '1' } },
+              target: {
+                handle: { uri: 'local://file/comments-demo', revision: '1' },
+              },
               kind: 'markup',
               value: '# Comments demo',
+            },
+          ],
+        })
+      } else if (this.scenario === 'notebooksUpdateError') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'notebooks.update',
+          args: [
+            {
+              target: { uri: 'local://file/demo' },
+              operations: [],
             },
           ],
         })
@@ -295,6 +311,14 @@ class MockSandboxPort {
     }
 
     if (type === 'host-error') {
+      if (this.scenario === 'notebooksUpdateError') {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(message.error ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
       if (this.scenario === 'disallowed' || this.scenario === 'lowLevel') {
         this.emit({ type: 'stderr', data: String(message.error ?? '') + '\n' })
         this.emit({ type: 'exit', exitCode: 1 })
@@ -834,9 +858,9 @@ describe('SandboxJSKernel', () => {
     await kernel.run(
       [
         "const doc = await documents.get('local://file/test4');",
-        "const scene = JSON.parse(doc.content);",
+        'const scene = JSON.parse(doc.content);',
         "scene.elements.push({ id: 'label', type: 'text', text: 'Box A' });",
-        "console.log(await documents.update(doc.uri, JSON.stringify(scene), { mimeType: doc.mimeType }));",
+        'console.log(await documents.update(doc.uri, JSON.stringify(scene), { mimeType: doc.mimeType }));',
       ].join('\n')
     )
 
@@ -869,20 +893,23 @@ describe('SandboxJSKernel', () => {
       return null
     })
 
-    const kernel = new TestableSandboxJSKernel(new MockSandboxPort('driveSave'), {
-      bridge: { call: bridgeCall },
-      hooks: {
-        onStdout: (data) => {
-          stdout += data
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('driveSave'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
         },
-        onStderr: (data) => {
-          stderr += data
-        },
-        onExit: (code) => {
-          exitCode = code
-        },
-      },
-    })
+      }
+    )
 
     await kernel.run(
       "console.log(await drive.saveAsCurrentNotebook('root', 'Comments demo.ipynb'));"
@@ -945,7 +972,9 @@ describe('SandboxJSKernel', () => {
     ])
     expect(bridgeCall).toHaveBeenCalledWith('notebooks.appendCell', [
       {
-        target: { handle: { uri: 'local://file/comments-demo', revision: '1' } },
+        target: {
+          handle: { uri: 'local://file/comments-demo', revision: '1' },
+        },
         kind: 'markup',
         value: '# Comments demo',
       },
@@ -953,5 +982,81 @@ describe('SandboxJSKernel', () => {
     expect(stdout).toContain('cell-comments-demo')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
+  })
+
+  it('serializes structured notebook update errors through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async () => {
+      throw new NotebookUpdateError({
+        method: 'notebooks.update',
+        code: 'NOTEBOOK_UPDATE_FAILED',
+        failedOperationIndex: 1,
+        failedOperation: {
+          op: 'update',
+          refId: 'missing-cell',
+          patch: { value: 'echo missing' },
+        },
+        failedOperationError: 'Cell not found: missing-cell',
+        appliedOperationCount: 1,
+        operationStatuses: [
+          { index: 0, status: 'applied' },
+          {
+            index: 1,
+            status: 'failed',
+            error: 'Cell not found: missing-cell',
+          },
+        ],
+        beforeHandle: { uri: 'local://file/demo', revision: 'before' },
+        afterHandle: { uri: 'local://file/demo', revision: 'after' },
+      })
+    })
+
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('notebooksUpdateError'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run('await notebooks.update({ operations: [] });')
+
+    const serialized = JSON.parse(stdout)
+    expect(bridgeCall).toHaveBeenCalledWith('notebooks.update', [
+      {
+        target: { uri: 'local://file/demo' },
+        operations: [],
+      },
+    ])
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+    expect(serialized).toMatchObject({
+      name: 'NotebookUpdateError',
+      code: 'NOTEBOOK_UPDATE_FAILED',
+      details: {
+        failedOperationIndex: 1,
+        appliedOperationCount: 1,
+        operationStatuses: [
+          { index: 0, status: 'applied' },
+          {
+            index: 1,
+            status: 'failed',
+            error: 'Cell not found: missing-cell',
+          },
+        ],
+      },
+    })
   })
 })

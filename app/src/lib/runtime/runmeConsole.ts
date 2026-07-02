@@ -110,6 +110,53 @@ export type NotebookMutation =
       refIds: string[]
     }
 
+export type NotebookUpdateOperationStatus =
+  | { index: number; status: 'applied' }
+  | { index: number; status: 'failed'; error: string }
+  | { index: number; status: 'not_attempted' }
+
+export type NotebookUpdateErrorDetails = {
+  method: 'notebooks.update'
+  code: 'NOTEBOOK_UPDATE_FAILED'
+  failedOperationIndex: number
+  failedOperation: unknown
+  failedOperationError: string
+  appliedOperationCount: number
+  operationStatuses: NotebookUpdateOperationStatus[]
+  beforeHandle: NotebookHandle
+  afterHandle: NotebookHandle
+}
+
+export class NotebookUpdateError extends Error {
+  readonly code = 'NOTEBOOK_UPDATE_FAILED'
+  readonly details: NotebookUpdateErrorDetails
+
+  constructor(details: NotebookUpdateErrorDetails) {
+    super(
+      `notebooks.update failed at operations[${details.failedOperationIndex}] ` +
+        `after applying ${details.appliedOperationCount} operation(s): ` +
+        details.failedOperationError
+    )
+    this.name = 'NotebookUpdateError'
+    this.details = details
+    Object.setPrototypeOf(this, NotebookUpdateError.prototype)
+  }
+
+  toJSON(): {
+    name: string
+    message: string
+    code: typeof this.code
+    details: NotebookUpdateErrorDetails
+  } {
+    return {
+      name: this.name,
+      message: this.message,
+      code: this.code,
+      details: this.details,
+    }
+  }
+}
+
 export type NotebookMethod = 'list' | 'get' | 'update' | 'delete' | 'execute'
 
 export type NotebooksApi = {
@@ -525,6 +572,66 @@ function formatNotebookMutationError(
   )
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function createOperationStatuses({
+  operationCount,
+  appliedOperationCount,
+  failedOperationIndex,
+  failedOperationError,
+}: {
+  operationCount: number
+  appliedOperationCount: number
+  failedOperationIndex: number
+  failedOperationError: string
+}): NotebookUpdateOperationStatus[] {
+  return Array.from({ length: operationCount }, (_value, index) => {
+    if (index < appliedOperationCount) {
+      return { index, status: 'applied' }
+    }
+    if (index === failedOperationIndex) {
+      return { index, status: 'failed', error: failedOperationError }
+    }
+    return { index, status: 'not_attempted' }
+  })
+}
+
+function createNotebookUpdateError({
+  operations,
+  failedOperationIndex,
+  error,
+  appliedOperationCount,
+  beforeHandle,
+  afterHandle,
+}: {
+  operations: NotebookMutation[]
+  failedOperationIndex: number
+  error: unknown
+  appliedOperationCount: number
+  beforeHandle: NotebookHandle
+  afterHandle: NotebookHandle
+}): NotebookUpdateError {
+  const failedOperationError = errorMessage(error)
+  return new NotebookUpdateError({
+    method: 'notebooks.update',
+    code: 'NOTEBOOK_UPDATE_FAILED',
+    failedOperationIndex,
+    failedOperation: operations[failedOperationIndex],
+    failedOperationError,
+    appliedOperationCount,
+    operationStatuses: createOperationStatuses({
+      operationCount: operations.length,
+      appliedOperationCount,
+      failedOperationIndex,
+      failedOperationError,
+    }),
+    beforeHandle,
+    afterHandle,
+  })
+}
+
 export function createNotebooksApi({
   resolveNotebook,
   listNotebooks,
@@ -641,31 +748,51 @@ export function createNotebooksApi({
         )
       }
 
-      for (const operation of operations) {
-        if (operation.op === 'insert') {
-          assertValidInsertCellSpecs(operation.cells)
+      for (const [index, operation] of operations.entries()) {
+        try {
+          if (operation.op === 'insert') {
+            assertValidInsertCellSpecs(operation.cells)
+          }
+        } catch (error) {
+          throw createNotebookUpdateError({
+            operations,
+            failedOperationIndex: index,
+            error,
+            appliedOperationCount: 0,
+            beforeHandle,
+            afterHandle: makeHandle(notebook),
+          })
         }
       }
 
+      let appliedOperationCount = 0
       for (const [index, operation] of operations.entries()) {
-        if (operation.op === 'insert') {
-          insertCells(notebook, operation.at, operation.cells)
-          continue
-        }
-        if (operation.op === 'update') {
-          updateCellPatch(notebook, operation.refId, operation.patch)
-          continue
-        }
-        if (operation.op === 'remove') {
-          if (typeof notebook.removeCell !== 'function') {
-            throw new Error('Notebook does not support remove operations.')
+        try {
+          if (operation.op === 'insert') {
+            insertCells(notebook, operation.at, operation.cells)
+          } else if (operation.op === 'update') {
+            updateCellPatch(notebook, operation.refId, operation.patch)
+          } else if (operation.op === 'remove') {
+            if (typeof notebook.removeCell !== 'function') {
+              throw new Error('Notebook does not support remove operations.')
+            }
+            for (const refId of operation.refIds ?? []) {
+              notebook.removeCell(refId)
+            }
+          } else {
+            throw new Error(formatNotebookMutationError(index, operation))
           }
-          for (const refId of operation.refIds ?? []) {
-            notebook.removeCell(refId)
-          }
-          continue
+          appliedOperationCount += 1
+        } catch (error) {
+          throw createNotebookUpdateError({
+            operations,
+            failedOperationIndex: index,
+            error,
+            appliedOperationCount,
+            beforeHandle,
+            afterHandle: makeHandle(notebook),
+          })
         }
-        throw new Error(formatNotebookMutationError(index, operation))
       }
 
       return makeDocument(notebook)
