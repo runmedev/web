@@ -84,6 +84,95 @@ describe("isDriveItemUri", () => {
 });
 
 describe("DriveNotebookStore", () => {
+  it("forwards native Drive files.list search parameters and returns paging metadata", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/drive/v3/files");
+        expect(url.searchParams.get("q")).toBe(
+          "name = 'eval_read.json' and trashed = false",
+        );
+        expect(url.searchParams.get("corpora")).toBe("drive");
+        expect(url.searchParams.get("driveId")).toBe("shared-drive-1");
+        expect(url.searchParams.get("includeItemsFromAllDrives")).toBe("true");
+        expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+        expect(url.searchParams.get("orderBy")).toBe("modifiedTime desc");
+        expect(url.searchParams.get("pageSize")).toBe("25");
+        expect(url.searchParams.get("pageToken")).toBe("page-1");
+        expect(url.searchParams.get("fields")).toBe(
+          "nextPageToken,incompleteSearch,files(id,name,mimeType,modifiedTime)",
+        );
+        return new Response(
+          JSON.stringify({
+            files: [
+              {
+                id: "file123",
+                name: "eval_read.json",
+                mimeType: "application/json",
+                modifiedTime: "2026-07-02T00:00:00Z",
+              },
+              {
+                id: "folder123",
+                name: "Evaluation notebooks",
+                mimeType: "application/vnd.google-apps.folder",
+              },
+              {
+                id: "metadata123",
+                name: "Metadata without MIME type",
+              },
+            ],
+            nextPageToken: "page-2",
+            incompleteSearch: true,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const result = await store.search({
+      q: "name = 'eval_read.json' and trashed = false",
+      corpora: "drive",
+      driveId: "shared-drive-1",
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      orderBy: "modifiedTime desc",
+      pageSize: 25,
+      pageToken: "page-1",
+      fields:
+        "nextPageToken,incompleteSearch,files(id,name,mimeType,modifiedTime)",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      files: [
+        {
+          id: "file123",
+          name: "eval_read.json",
+          mimeType: "application/json",
+          modifiedTime: "2026-07-02T00:00:00Z",
+          uri: "https://drive.google.com/file/d/file123/view",
+        },
+        {
+          id: "folder123",
+          name: "Evaluation notebooks",
+          mimeType: "application/vnd.google-apps.folder",
+          uri: "https://drive.google.com/drive/folders/folder123",
+        },
+        {
+          id: "metadata123",
+          name: "Metadata without MIME type",
+        },
+      ],
+      nextPageToken: "page-2",
+      incompleteSearch: true,
+    });
+  });
+
   it("creates arbitrary Drive content with the provided MIME type", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     const fetchMock = vi

@@ -108,6 +108,31 @@ later notebook operations.
 Do not rely on "current notebook" after the initial resolution, because the user
 may switch notebooks while Codex is working.
 
+When the user identifies a Drive-backed notebook by name or metadata rather
+than by URL, use Runme's AppKernel Drive API instead of searching the rendered
+page with DOM tools:
+
+```js
+const result = await drive.search({
+  q: "name = 'eval_read.json' and trashed = false",
+  orderBy: 'modifiedTime desc',
+  pageSize: 100,
+  fields: 'nextPageToken,files(id,name,mimeType,modifiedTime)',
+})
+
+if (result.files.length !== 1) {
+  throw new Error(`Expected one notebook, found ${result.files.length}`)
+}
+await notebooks.show(result.files[0].uri)
+```
+
+`drive.search` accepts the native Google Drive v3 `files.list` request,
+including the full `q` grammar, shared-drive parameters, ordering, field
+selection, and pagination. Include `id` and `mimeType` in `fields` so Runme can
+add a notebook-ready `uri` to each result. In WebMCP code mode, this call runs
+through the authenticated Runme AppKernel and does not require a separate
+Google Drive connector.
+
 ## Relationship to the chat panel
 
 Do not confuse this mode with the Runme AI Chat panel:

@@ -34,6 +34,7 @@ import {
   listDriveFolderItems,
   moveDriveFileToTrash,
   saveNotebookAsDriveCopy,
+  searchDriveFiles,
   updateDriveFileBytes,
 } from '../driveTransfer'
 import { googleClientManager } from '../googleClientManager'
@@ -1968,6 +1969,11 @@ export function createAppJsGlobals({
         emitLine(sendOutput, `Listed ${items.length} Drive item(s)`)
         return items
       },
+      search: async (request: Record<string, unknown>) => {
+        const result = await searchDriveFiles(request)
+        emitLine(sendOutput, `Found ${result.files.length} Drive item(s)`)
+        return result
+      },
       create: async (folder: string, name: string) => {
         const id = await createDriveFile(folder, name)
         emitLine(sendOutput, `Created Drive file ${id}`)
@@ -2056,6 +2062,7 @@ export function createAppJsGlobals({
       help: () => {
         return [
           'drive.list(folder)            - List Drive items in a folder',
+          'drive.search(request)         - Run a Google Drive files.list request with native q/list parameters',
           'drive.authorize(options?)      - Start a fresh Google Drive OAuth flow; options: { mode?, prompt? }',
           'drive.refreshAuth(options?)    - Alias for drive.authorize(options?)',
           'drive.create(folder, name)     - Create a Drive file in folder; returns file id',

@@ -1,5 +1,6 @@
 import { appState } from "./runtime/AppState";
 import {
+  type DriveSearchResult,
   driveFileUrl,
   driveFolderUrl,
   parseDriveItem,
@@ -108,6 +109,47 @@ export async function listDriveFolderItems(folder: string) {
       attrs: {
         scope: "drive.transfer",
         folderRef,
+        error: String(error),
+      },
+    });
+    throw error;
+  }
+}
+
+/**
+ * Executes a Google Drive files.list request through the authenticated Drive
+ * store. The request remains unmodified so App Console and WebMCP callers can
+ * use the complete Drive query grammar and list parameter surface.
+ */
+export async function searchDriveFiles(
+  request: Record<string, unknown>,
+): Promise<DriveSearchResult> {
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("drive.search requires a Google Drive files.list request object");
+  }
+
+  appLogger.info("Searching Google Drive files", {
+    attrs: {
+      scope: "drive.transfer",
+      hasQuery: typeof request.q === "string" && request.q.length > 0,
+      hasPageToken: typeof request.pageToken === "string" && request.pageToken.length > 0,
+    },
+  });
+  try {
+    const result = await ensureDriveStore().search(request);
+    appLogger.info("Searched Google Drive files", {
+      attrs: {
+        scope: "drive.transfer",
+        count: result.files.length,
+        hasNextPage: Boolean(result.nextPageToken),
+        incompleteSearch: result.incompleteSearch === true,
+      },
+    });
+    return result;
+  } catch (error) {
+    appLogger.error("Failed to search Google Drive files", {
+      attrs: {
+        scope: "drive.transfer",
         error: String(error),
       },
     });
