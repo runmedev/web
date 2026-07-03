@@ -149,6 +149,25 @@ Google OAuth flow. They are useful when the Drive status button does not appear
 to launch auth, or when a human or agent needs an explicit auth refresh from App
 Console.
 
+Search Google Drive with the complete Drive v3 `files.list` request surface:
+
+```js
+const result = await drive.search({
+  q: "name = 'example.runme.md' and trashed = false",
+  orderBy: 'modifiedTime desc',
+  pageSize: 100,
+  fields:
+    'nextPageToken,incompleteSearch,files(id,name,mimeType,parents,modifiedTime)',
+})
+console.table(result.files)
+await notebooks.show(result.files[0].uri)
+```
+
+The request is passed through unchanged, so use Google Drive's native `q`,
+corpora, shared-drive, ordering, pagination, spaces, and fields parameters.
+Include `id` and `mimeType` in `fields` when the returned file should have a
+Runme-ready `uri`. Continue with `result.nextPageToken` when it is present.
+
 App config:
 
 ```js
@@ -178,3 +197,6 @@ app.harness.setDefault('configured-harness-name')
   `shareUrl`, and replacement-ready `markdownLink`.
 - Use `notebooks.show(reference)` when Codex needs one command that opens a
   local notebook tab or hands a Drive reference to shared-link coordination.
+- Prefer `drive.search(...)` over DOM inspection when Codex knows a Drive file
+  name or can express the intended file with the Drive query grammar. Resolve a
+  unique result, then pass its `uri` to `notebooks.show(...)`.

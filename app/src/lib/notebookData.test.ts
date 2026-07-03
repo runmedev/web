@@ -1034,6 +1034,7 @@ describe("NotebookData.runCodeCell", () => {
       value: [
         'console.log(typeof drive);',
         'console.log(typeof drive.create);',
+        'console.log(typeof drive.search);',
         'console.log(typeof drive.saveAsCurrentNotebook);',
         'console.log(typeof drive.listPendingSync);',
         'console.log(typeof drive.requeuePendingSync);',

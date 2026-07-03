@@ -2,7 +2,8 @@
 
 ## Status
 
-Draft proposal.
+Draft proposal. Modified on 2026-07-03 to clarify alternatives around direct
+`gapi` exposure and the current `drive.search` implementation direction.
 
 ## Problem
 
@@ -93,12 +94,21 @@ References:
 
 ## Proposed Agent Interface
 
-Expose a read-only `drive` namespace to AppKernel / code mode with two
-functions:
+The current MVP, implemented by PR #274, exposes `drive.search(...)` in the
+existing AppKernel `drive` namespace. `drive.search` is a Runme wrapper around
+Google Drive v3 `files.list`: it accepts the native list request shape, forwards
+the request to Drive, preserves paging metadata, and adds a Runme-compatible
+`uri` to returned files when the caller includes `id` and `mimeType` in the
+requested fields.
+
+The longer-term read-oriented agent surface should add `drive.open(...)`,
+query-building helpers, sidecar resolution helpers, and stronger guardrails.
 
 ```ts
-type DriveQueryRequest = {
-  q: string;
+type DriveSearchRequest = {
+  // Native Google Drive v3 files.list parameters.
+  q?: string;
+  fields?: string;
   pageSize?: number;
   pageToken?: string;
   orderBy?: string;
@@ -107,20 +117,22 @@ type DriveQueryRequest = {
   includeItemsFromAllDrives?: boolean;
   supportsAllDrives?: boolean;
   spaces?: string;
+  [key: string]: unknown;
 };
 
-type DriveQueryMatch = {
-  uri: string;
-  id: string;
-  name: string;
-  mimeType: string;
+type DriveSearchFile = {
+  uri?: string;
+  id?: string;
+  name?: string;
+  mimeType?: string;
   modifiedTime?: string;
-  parents: string[];
+  parents?: string[];
   webViewLink?: string;
+  [key: string]: unknown;
 };
 
-type DriveQueryResponse = {
-  matches: DriveQueryMatch[];
+type DriveSearchResponse = {
+  files: DriveSearchFile[];
   nextPageToken?: string;
   incompleteSearch?: boolean;
 };
@@ -144,34 +156,50 @@ type DriveOpenResponse = {
 };
 
 interface DriveAgentApi {
-  query(request: DriveQueryRequest): Promise<DriveQueryResponse>;
+  search(request: DriveSearchRequest): Promise<DriveSearchResponse>;
+
+  // Future follow-up.
   open(request: DriveOpenRequest): Promise<DriveOpenResponse>;
 }
 ```
 
-### `drive.query`
+### `drive.search`
 
-`drive.query` should pass the caller's `q` expression directly to Drive
-`files.list` after applying only safety guardrails that do not reduce query
-expressiveness.
+`drive.search` should pass the caller's request directly to Drive `files.list`
+so App Console, WebMCP, and Codex code mode can use Drive's native `q`
+expression, field masks, shared-drive parameters, pagination, and ordering.
+
+PR #274 intentionally keeps the request surface close to `files.list` rather
+than inventing a custom search DSL. It does, however, keep Drive client details
+behind Runme's Drive store and enriches results with Runme URIs.
 
 Recommended behavior:
 
-- Always use a fixed response field mask that returns only read-only metadata
-  needed by `open` and UI/debugging.
-- Cap `pageSize` to a safe maximum (for example 100).
-- Default `supportsAllDrives=true` and `includeItemsFromAllDrives=true` so
-  shared-drive notebooks are discoverable.
-- Preserve caller-supplied `corpora`, `driveId`, `spaces`, and `orderBy`.
-- Return stable canonical Drive URIs built from file IDs, not path-like names.
+- Preserve caller-supplied `q`, `fields`, `pageSize`, `pageToken`,
+  `corpora`, `driveId`, `spaces`, shared-drive options, and `orderBy`.
+- Add stable canonical Drive URIs built from file IDs when results include
+  `id` and `mimeType`.
+- Encourage callers to request explicit fields such as
+  `nextPageToken,incompleteSearch,files(id,name,mimeType,parents,modifiedTime)`.
+- In a follow-up, cap `pageSize` to a safe maximum and consider a conservative
+  default `fields` value when callers omit one.
+- In a follow-up, default `supportsAllDrives=true` and
+  `includeItemsFromAllDrives=true` if that proves more ergonomic for shared
+  Drive notebooks.
+
+`drive.list(folderIdOrUri)` is separate from `drive.search(...)`.
+`drive.list` is a folder-browsing convenience API for the Explorer and returns
+`NotebookStoreItem` objects. Internally it can be implemented using
+`drive.search` with a fixed parent-folder query, but callers should use
+`drive.search` when they need the general Drive query/list surface.
 
 ### Query builder helpers
 
 Instead of a `mode` argument, query shaping should happen before calling
-`drive.query(...)` using composable helpers that return native Drive `q`
+`drive.search(...)` using composable helpers that return native Drive `q`
 strings.
 
-This keeps `drive.query` itself aligned with Drive's API while still making
+This keeps `drive.search` itself aligned with Drive's API while still making
 common query patterns easy to express and chain.
 
 Example helper API:
@@ -183,7 +211,7 @@ const q = drive.q
   .restrictToMarkdownSidecars()
   .build();
 
-const result = await drive.query({
+const result = await drive.search({
   q,
   orderBy: "modifiedTime desc",
   pageSize: 20,
@@ -193,7 +221,7 @@ const result = await drive.query({
 Equivalent functional style:
 
 ```ts
-const result = await drive.query({
+const result = await drive.search({
   q: drive.q.restrictToMarkdownSidecars(
     "fullText contains 'SLO burn rate' and modifiedTime >= '2026-01-01T00:00:00'",
   ),
@@ -237,7 +265,7 @@ const q = drive.q
   .restrictToMarkdownSidecars()
   .build();
 
-const result = await drive.query({
+const result = await drive.search({
   q,
   corpora: "drive",
   driveId: "<shared-drive-id>",
@@ -275,7 +303,7 @@ Recommended behavior:
 
 ## Sidecar Resolution Design
 
-Query result post-processing should also be separate from `drive.query(...)`.
+Query result post-processing should also be separate from `drive.search(...)`.
 That avoids mixing "what Drive should search" with "how Runme interprets the
 matches".
 
@@ -283,21 +311,21 @@ Proposed helper:
 
 ```ts
 type DriveNotebookMatch = {
-  notebook: DriveQueryMatch;
-  sidecar: DriveQueryMatch;
+  notebook: DriveSearchFile;
+  sidecar: DriveSearchFile;
   resolution: "resolved" | "missing" | "ambiguous";
-  candidates?: DriveQueryMatch[];
+  candidates?: DriveSearchFile[];
 };
 
 interface DriveResultResolvers {
-  resolveNotebookSidecars(matches: DriveQueryMatch[]): Promise<DriveNotebookMatch[]>;
+  resolveNotebookSidecars(files: DriveSearchFile[]): Promise<DriveNotebookMatch[]>;
 }
 ```
 
 Example:
 
 ```ts
-const sidecarMatches = await drive.query({
+const sidecarMatches = await drive.search({
   q: drive.q.restrictToMarkdownSidecars(
     "fullText contains 'feature flag cleanup'",
   ),
@@ -305,7 +333,7 @@ const sidecarMatches = await drive.query({
 });
 
 const notebookMatches = await drive.results.resolveNotebookSidecars(
-  sidecarMatches.matches,
+  sidecarMatches.files,
 );
 
 for (const match of notebookMatches) {
@@ -360,6 +388,36 @@ notebook files deterministically without relying on sibling-name inference.
 
 ## Alternatives Considered
 
+### Expose the raw `gapi.client.drive.files.list` API
+
+Another option is to make the dynamically loaded Google API client directly
+available in App Console and code mode, for example by exposing
+`gapi.client.drive.files.list(...)` to agent-authored JavaScript.
+
+That approach is not the right default for Runme:
+
+- It leaks the implementation detail that the current browser Drive client is
+  backed by Google's dynamically generated `gapi` client. Runme also uses
+  fetch-backed Drive clients in tests and service-account flows, and the
+  AppKernel API should not force callers to know which client is active.
+- It exposes a broad generated client object rather than a small, reviewed
+  Runme-owned surface. That makes it easier to accidentally expose write,
+  share, copy, or delete methods alongside read-only search.
+- It does not return Runme-native identifiers. Search results still need
+  post-processing to add stable Drive file/folder URIs that can be passed to
+  `notebooks.show(...)`, sidecar resolution helpers, and other Runme APIs.
+- It gives Runme no clean place to add logging, auth refresh behavior, response
+  size limits, field-mask defaults, or future safety guardrails.
+- It couples agent examples and user docs to a generated third-party API shape
+  rather than a stable Runme API.
+
+Current recommendation:
+
+- Keep `gapi` and other Drive clients behind `DriveNotebookStore` and expose a
+  small Runme API such as `drive.search(...)`.
+- Preserve the native Drive `files.list` request shape at that boundary so the
+  agent still gets Drive's full query expressiveness.
+
 ### Use the built-in Google Drive connector in the Responses API
 
 OpenAI's Responses API supports first-party connectors, including Google Drive,
@@ -392,7 +450,7 @@ Main downside of the Runme-owned JS API approach:
 
 Current recommendation:
 
-- Prefer the Runme-owned `drive.query`, `drive.q`, `drive.results`, and
+- Prefer the Runme-owned `drive.search`, `drive.q`, `drive.results`, and
   `drive.open` AppKernel API as the primary design.
 - Keep the built-in Responses Google Drive connector as a fallback or future
   implementation option if we discover that maintaining a custom agentic Drive
@@ -400,41 +458,56 @@ Current recommendation:
 
 ## Safety and Policy
 
-This interface should be intentionally read-only.
+The long-term agent-facing interface should be intentionally read-oriented.
+PR #274 adds a read-oriented `drive.search` method to the existing AppKernel
+`drive` namespace, but that namespace also contains broader App Console helpers
+for user-driven Drive operations. Future Codex-specific or policy-specific
+exposure should keep the agent's default Drive surface narrower than the full
+App Console surface.
 
 - Do not expose `create`, `save`, `saveContent`, `rename`, `copy`, `share`, or
-  `delete` through the agent-facing `drive` namespace.
+  `delete` through a default agent-facing read surface.
 - Use the user's existing Drive auth context and request only read scopes for
   agent search/open.
 - Do not let `open` fetch arbitrary URLs; only Drive file IDs/URLs accepted by
   the existing Drive parser should be allowed.
-- Cap `pageSize`, response bytes, and `open.maxBytes` so a broad search or a
-  large notebook cannot flood the tool response.
-- Keep a fixed metadata field mask so the model cannot use `fields` to ask for
-  unexpected Drive resource fields.
+- Preserve Drive's native `files.list` request expressiveness for
+  `drive.search`, but add practical limits in a follow-up: cap `pageSize`, set
+  a conservative default `fields` mask when omitted, and cap returned output
+  bytes.
+- Cap `open.maxBytes` so a large notebook cannot flood the tool response.
 - Emit structured errors for malformed `q`, unsupported MIME types, folder
   content reads, missing files, and permission-denied responses.
 
 ## Implementation Plan
 
-1. Add a small read-only Drive client method layer around the existing
-   Drive files client:
-   - `queryFiles(request)` -> `files.list`
+1. Add a small Drive client method layer around the existing Drive files client:
+   - `searchFiles(request)` / `drive.search(request)` -> `files.list`
    - `openFileMetadata(uri)` -> `files.get(fields=...)`
    - `openFileText(uri, maxBytes)` -> `files.get(alt=media)`
-2. Add sidecar-aware query resolution:
+2. PR #274 implements the first search/list part:
+   - forward the native Drive `files.list` request shape,
+   - preserve `nextPageToken` and `incompleteSearch`,
+   - add Runme `uri` values when returned files include `id` and `mimeType`,
+   - expose the method in App Console and WebMCP/code-mode sandbox as
+     `drive.search(...)`.
+3. Add sidecar-aware query resolution:
    - implement `drive.q.restrictToMarkdownSidecars(...)`,
    - implement `drive.results.resolveNotebookSidecars(...)`,
    - start with naming-based sidecar-to-notebook resolution.
-3. Expose a read-only `drive.query` and `drive.open` AppKernel API for
-   code-mode agent flows.
-4. Update agent instructions/tool docs to teach this pattern:
+4. Add `drive.open(...)` for read-only metadata/text/notebook JSON fetches.
+5. Add follow-up guardrails for the agent-facing path:
+   - cap `pageSize`,
+   - default or constrain `fields` where appropriate,
+   - cap returned output bytes,
+   - keep write helpers out of the default agent read surface.
+6. Update agent instructions/tool docs to teach this pattern:
    - use Drive `q` directly,
    - search Markdown sidecars for notebook text,
    - open canonical notebook files for final inspection.
-5. Add tests against the fake Drive server and at least one manual Drive CUJ
+7. Add tests against the fake Drive server and at least one manual Drive CUJ
    notebook covering sidecar search and notebook open.
-6. Consider a v1 sidecar schema migration to persist reciprocal Drive
+8. Consider a v1 sidecar schema migration to persist reciprocal Drive
    `appProperties` links and remove naming-based ambiguity.
 
 ## Test Plan
@@ -448,7 +521,7 @@ This interface should be intentionally read-only.
 - Manual CUJ test against real Drive:
   - create/save a Drive notebook,
   - wait for sidecar sync,
-  - search by notebook body text through `drive.query`,
+  - search by notebook body text through `drive.search`,
   - open the returned notebook through `drive.open`,
   - verify no write operation is available from the agent API.
 
@@ -460,7 +533,7 @@ This interface should be intentionally read-only.
   when notebook resolution fails, or return sidecar hits with explicit
   ambiguity metadata?
 - Do we want a dedicated `drive.queryNotebookText(...)` convenience wrapper, or
-  is `drive.query(...)` plus `drive.results.resolveNotebookSidecars(...)`
+  is `drive.search(...)` plus `drive.results.resolveNotebookSidecars(...)`
   enough?
 - Should AppKernel expose this as direct JS helpers only, or also generate
   first-class MCP tools from a proto contract?

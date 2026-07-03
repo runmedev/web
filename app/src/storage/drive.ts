@@ -39,6 +39,17 @@ export type DriveDoc = {
   trashed?: boolean
 }
 
+export type DriveSearchFile = DriveDoc &
+  Record<string, unknown> & {
+    uri?: string
+  }
+
+export type DriveSearchResult = {
+  files: DriveSearchFile[]
+  nextPageToken?: string
+  incompleteSearch?: boolean
+}
+
 type Drive = {
   id?: string
   name?: string
@@ -86,7 +97,13 @@ interface GapiGlobal {
 type DriveCreateResponse = { result?: DriveDoc }
 type DriveUpdateResponse = { result?: DriveDoc }
 type DriveGetResponse = { result?: Drive }
-type DriveListResponse = { result?: { files?: DriveDoc[] } }
+type DriveListResponse = {
+  result?: {
+    files?: DriveSearchFile[]
+    nextPageToken?: string
+    incompleteSearch?: boolean
+  }
+}
 type DriveRevisionListResponse = {
   result?: { revisions?: DriveRevision[]; nextPageToken?: string }
 }
@@ -1277,8 +1294,7 @@ export class DriveNotebookStore {
         'Google Drive URI must reference a folder to list contents'
       )
     }
-    const client = await this.getFilesClient()
-    const response = await client.list({
+    const response = await this.search({
       q: `'${id}' in parents and trashed = false`,
       includeItemsFromAllDrives: true,
       supportsAllDrives: true,
@@ -1286,8 +1302,8 @@ export class DriveNotebookStore {
       fields: 'files(id,name,mimeType)',
     })
 
-    const files = (response.result?.files ?? []).filter(
-      (file): file is DriveDoc & { id: string } => Boolean(file?.id)
+    const files = response.files.filter(
+      (file): file is DriveSearchFile & { id: string } => Boolean(file?.id)
     )
 
     return files.map((file) => {
@@ -1304,6 +1320,31 @@ export class DriveNotebookStore {
         parents: [],
       }
     })
+  }
+
+  /**
+   * Runs a Google Drive files.list request without narrowing its query surface.
+   * The request is forwarded as-is so callers can use the complete Drive `q`
+   * grammar and list parameters. Returned files retain their Drive metadata and
+   * gain a Runme-compatible URI when the response includes an id and MIME type.
+   */
+  async search(request: Record<string, unknown>): Promise<DriveSearchResult> {
+    const client = await this.getFilesClient()
+    const response = await client.list(request)
+    const result = response.result ?? {}
+    return {
+      ...result,
+      files: (result.files ?? []).map((file) => {
+        if (!file.id || !file.mimeType) {
+          return { ...file }
+        }
+        const isFolder = file.mimeType === DRIVE_FOLDER_MIME_TYPE
+        return {
+          ...file,
+          uri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
+        }
+      }),
+    }
   }
 
   async listComments(uri: string): Promise<DriveComment[]> {

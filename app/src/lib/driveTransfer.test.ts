@@ -7,6 +7,7 @@ import {
   createDriveFile,
   listDriveFolderItems,
   saveNotebookAsDriveCopy,
+  searchDriveFiles,
   updateDriveFileBytes,
 } from "./driveTransfer";
 import { parser_pb } from "../runme/client";
@@ -69,6 +70,42 @@ describe("driveTransfer", () => {
       "https://drive.google.com/drive/folders/folder123",
     );
     expect(items).toHaveLength(1);
+  });
+
+  it("forwards Google Drive files.list search requests", async () => {
+    const request = {
+      q: "name = 'eval_read.json' and trashed = false",
+      pageSize: 25,
+      fields: "nextPageToken,files(id,name,mimeType)",
+    };
+    const expected = {
+      files: [
+        {
+          id: "abc123",
+          name: "eval_read.json",
+          mimeType: "application/json",
+          uri: "https://drive.google.com/file/d/abc123/view",
+        },
+      ],
+      nextPageToken: "next-page",
+    };
+    const search = vi.fn().mockResolvedValue(expected);
+    appState.setDriveNotebookStore({ search } as any);
+
+    const result = await searchDriveFiles(request);
+
+    expect(search).toHaveBeenCalledWith(request);
+    expect(result).toEqual(expected);
+  });
+
+  it("rejects non-object Drive search requests", async () => {
+    appState.setDriveNotebookStore({ search: vi.fn() } as any);
+
+    await expect(
+      searchDriveFiles("name = 'eval_read.json'" as any),
+    ).rejects.toThrow(
+      "drive.search requires a Google Drive files.list request object",
+    );
   });
 
   it("copies a notebook file to another drive folder", async () => {

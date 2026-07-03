@@ -16,6 +16,7 @@ type Scenario =
   | 'explorer'
   | 'credentials'
   | 'drive'
+  | 'driveSearch'
   | 'driveSave'
   | 'documents'
   | 'notebooksCreate'
@@ -105,6 +106,18 @@ class MockSandboxPort {
           method: 'drive.authorize',
           args: [{ mode: 'new_tab' }],
         })
+      } else if (this.scenario === 'driveSearch') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'drive.search',
+          args: [
+            {
+              q: "name = 'eval_read.json' and trashed = false",
+              pageSize: 25,
+            },
+          ],
+        })
       } else if (this.scenario === 'driveSave') {
         this.emit({
           type: 'host-call',
@@ -173,6 +186,14 @@ class MockSandboxPort {
         return
       }
       if (this.scenario === 'drive' && this.hostResults.has(1)) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+      if (this.scenario === 'driveSearch' && this.hostResults.has(1)) {
         this.emit({
           type: 'stdout',
           data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
@@ -605,6 +626,61 @@ describe('SandboxJSKernel', () => {
     ])
     expect(stdout).toContain('"status":"started"')
     expect(stdout).toContain('"mode":"new_tab"')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('passes native Drive search requests through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'drive.search') {
+        return {
+          files: [
+            {
+              id: 'file123',
+              name: 'eval_read.json',
+              mimeType: 'application/json',
+              uri: 'https://drive.google.com/file/d/file123/view',
+            },
+          ],
+          nextPageToken: 'page-2',
+        }
+      }
+      return null
+    })
+
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('driveSearch'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run(
+      "console.log(await drive.search({ q: \"name = 'eval_read.json' and trashed = false\", pageSize: 25 }));"
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith('drive.search', [
+      {
+        q: "name = 'eval_read.json' and trashed = false",
+        pageSize: 25,
+      },
+    ])
+    expect(stdout).toContain('eval_read.json')
+    expect(stdout).toContain('page-2')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
   })

@@ -6,6 +6,7 @@ import {
   createDriveFile,
   listDriveFolderItems,
   saveNotebookAsDriveCopy,
+  searchDriveFiles,
   updateDriveFileBytes,
 } from '../driveTransfer'
 import { appState } from './AppState'
@@ -460,6 +461,8 @@ async function handleSandboxAppKernelBridgeCall({
     }
     case 'drive.list':
       return listDriveFolderItems(String(args[0] ?? ''))
+    case 'drive.search':
+      return searchDriveFiles(args[0] as Record<string, unknown>)
     case 'drive.create':
       return createDriveFile(String(args[0] ?? ''), String(args[1] ?? ''))
     case 'drive.update': {

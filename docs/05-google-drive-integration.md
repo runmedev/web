@@ -138,6 +138,7 @@ drive.help()
 await drive.authorize()
 await drive.refreshAuth()
 drive.list(folderIdOrUri)
+drive.search(filesListRequest)
 drive.create(folderIdOrUri, "name.json")
 drive.trash(fileIdOrUri)
 drive.saveAsCurrentNotebook(folderIdOrUri, "name.json")
@@ -145,6 +146,71 @@ drive.copyNotebook(sourceIdOrUri, targetFolderIdOrUri, "name.json")
 drive.listPendingSync()
 drive.requeuePendingSync()
 ```
+
+### Search Drive with native query syntax
+
+`drive.search(request)` passes `request` directly to the Google Drive v3
+[`files.list`](https://developers.google.com/drive/api/reference/rest/v3/files/list)
+API. Use the native Drive `q` grammar and list parameters, including `corpora`,
+`driveId`, `spaces`, `orderBy`, `pageSize`, `pageToken`, and `fields`:
+
+```js
+const result = await drive.search({
+  q: "name = 'eval_read.json' and trashed = false",
+  orderBy: 'modifiedTime desc',
+  pageSize: 100,
+  fields:
+    'nextPageToken,incompleteSearch,files(id,name,mimeType,parents,modifiedTime)',
+})
+
+console.table(result.files)
+```
+
+Runme preserves the file metadata requested in `fields` and adds a `uri` to
+each result when `id` and `mimeType` are present. That URI can be passed to the
+notebook APIs without constructing a Drive URL:
+
+```js
+if (result.files.length !== 1) {
+  throw new Error(`Expected one notebook, found ${result.files.length}`)
+}
+await notebooks.show(result.files[0].uri)
+```
+
+Use `nextPageToken` to retrieve every matching file:
+
+```js
+const files = []
+let pageToken
+
+do {
+  const page = await drive.search({
+    q: "mimeType != 'application/vnd.google-apps.folder' and trashed = false",
+    pageSize: 1000,
+    pageToken,
+    fields: 'nextPageToken,files(id,name,mimeType)',
+  })
+  files.push(...page.files)
+  pageToken = page.nextPageToken
+} while (pageToken)
+```
+
+For a shared drive, use the same parameters required by the Drive API:
+
+```js
+const result = await drive.search({
+  q: "name contains 'evaluation' and trashed = false",
+  corpora: 'drive',
+  driveId: '<shared-drive-id>',
+  includeItemsFromAllDrives: true,
+  supportsAllDrives: true,
+  fields: 'nextPageToken,files(id,name,mimeType,parents)',
+})
+```
+
+`drive.list(folderIdOrUri)` remains the simpler choice for listing one known
+folder. Use `drive.search` when the caller needs Drive query expressions,
+pagination, ordering, shared-drive scoping, or additional file metadata.
 
 `drive.authorize()` starts a fresh Google Drive OAuth flow. It first clears any
 locally stored Drive OAuth handoff state from a previous redirect or new-tab

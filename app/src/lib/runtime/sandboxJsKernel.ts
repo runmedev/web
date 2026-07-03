@@ -61,6 +61,7 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'drive.authorize',
   'drive.refreshAuth',
   'drive.list',
+  'drive.search',
   'drive.create',
   'drive.update',
   'drive.saveAsCurrentNotebook',
@@ -355,6 +356,7 @@ function buildSandboxSrcDoc(options: {
           authorize: (options) => hostCall("drive.authorize", [options]),
           refreshAuth: (options) => hostCall("drive.refreshAuth", [options]),
           list: (folder) => hostCall("drive.list", [folder]),
+          search: (request) => hostCall("drive.search", [request]),
           create: (folder, name) => hostCall("drive.create", [folder, name]),
           update: (idOrUri, bytes) => hostCall("drive.update", [idOrUri, bytes]),
           saveAsCurrentNotebook: (folder, name) =>
@@ -363,6 +365,7 @@ function buildSandboxSrcDoc(options: {
             consoleProxy.log("drive.authorize({ mode?, prompt? })");
             consoleProxy.log("drive.refreshAuth({ mode?, prompt? })");
             consoleProxy.log("drive.list(folderIdOrUri)");
+            consoleProxy.log("drive.search(filesListRequest)");
             consoleProxy.log("drive.create(folderIdOrUri, name)");
             consoleProxy.log("drive.update(fileIdOrUri, bytes)");
             consoleProxy.log("drive.saveAsCurrentNotebook(folderIdOrUri, name)");

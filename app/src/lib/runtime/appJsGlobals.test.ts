@@ -383,6 +383,40 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     expect(output.join('')).toContain('Google Drive OAuth authorized.')
   })
 
+  it('searches Google Drive with native files.list parameters', async () => {
+    const request = {
+      q: "name = 'eval_read.json' and trashed = false",
+      orderBy: 'modifiedTime desc',
+      fields: 'nextPageToken,files(id,name,mimeType)',
+    }
+    const search = vi.fn(async () => ({
+      files: [
+        {
+          id: 'file123',
+          name: 'eval_read.json',
+          mimeType: 'application/json',
+          uri: 'https://drive.google.com/file/d/file123/view',
+        },
+      ],
+      nextPageToken: 'page-2',
+    }))
+    const output: string[] = []
+    appState.setDriveNotebookStore({ search } as any)
+    const globals = createAppJsGlobals({
+      runme: createRunme(),
+      sendOutput: (data) => output.push(data),
+    })
+
+    const result = await globals.drive.search(request)
+
+    expect(search).toHaveBeenCalledWith(request)
+    expect(result.nextPageToken).toBe('page-2')
+    expect(result.files[0]?.uri).toBe(
+      'https://drive.google.com/file/d/file123/view'
+    )
+    expect(output.join('')).toContain('Found 1 Drive item(s)')
+  })
+
   it('moves Google Drive files to trash from browser AppKernel drive globals', async () => {
     const remoteUri = 'https://drive.google.com/file/d/file123/view'
     const moveToTrash = vi.fn(async () => ({
