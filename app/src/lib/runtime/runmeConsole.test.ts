@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { RunmeMetadataKey, parser_pb } from '../../contexts/CellContext'
 import {
   type NotebookDataLike,
+  NotebookUpdateError,
   createNotebooksApi,
   createRunmeConsoleApi,
 } from './runmeConsole'
@@ -655,6 +656,135 @@ describe('createNotebooksApi', () => {
       parser_pb.CellKind.CODE,
       parser_pb.CellKind.MARKUP,
     ])
+  })
+
+  it('rejects invalid insert cell kinds before mutating the notebook', async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell('cell-a', 'echo a')],
+    })
+    const model = new FakeNotebookData('local://one', 'One', notebook)
+    const appendCell = vi.spyOn(model, 'appendCell')
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    })
+
+    await expect(
+      api.update({
+        target: { uri: 'local://one' },
+        operations: [
+          {
+            op: 'insert',
+            at: { index: -1 },
+            cells: [
+              { kind: 'markup', value: '# Valid cell' },
+              { kind: 'markdown', value: '# Invalid cell' } as any,
+            ],
+          },
+        ],
+      })
+    ).rejects.toThrow(
+      'Invalid notebooks.update insert cell kind at cells[1]: "markdown". Expected "code" or "markup"; use "markup" for Markdown cells.'
+    )
+
+    expect(appendCell).not.toHaveBeenCalled()
+    expect(model.updates).toEqual([])
+    expect(notebook.cells.map((cell) => cell.refId)).toEqual(['cell-a'])
+  })
+
+  it('rejects invalid insert cell kinds before applying earlier operations', async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell('cell-a', 'echo a')],
+    })
+    const model = new FakeNotebookData('local://one', 'One', notebook)
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    })
+
+    await expect(
+      api.update({
+        target: { uri: 'local://one' },
+        operations: [
+          {
+            op: 'update',
+            refId: 'cell-a',
+            patch: { value: 'echo updated' },
+          },
+          {
+            op: 'insert',
+            at: { index: -1 },
+            cells: [{ kind: 'markdown', value: '# Invalid cell' } as any],
+          },
+        ],
+      })
+    ).rejects.toThrow(
+      'Invalid notebooks.update insert cell kind at cells[0]: "markdown". Expected "code" or "markup"; use "markup" for Markdown cells.'
+    )
+
+    expect(model.updates).toEqual([])
+    expect(notebook.cells.map((cell) => cell.refId)).toEqual(['cell-a'])
+    expect(notebook.cells[0]?.value).toBe('echo a')
+  })
+
+  it('reports applied, failed, and not-attempted operations on update failure', async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell('cell-a', 'echo a'), codeCell('cell-b', 'echo b')],
+    })
+    const model = new FakeNotebookData('local://one', 'One', notebook)
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+    })
+
+    let caught: unknown
+    try {
+      await api.update({
+        target: { uri: 'local://one' },
+        operations: [
+          {
+            op: 'update',
+            refId: 'cell-a',
+            patch: { value: 'echo updated' },
+          },
+          {
+            op: 'update',
+            refId: 'missing-cell',
+            patch: { value: 'echo missing' },
+          },
+          {
+            op: 'remove',
+            refIds: ['cell-b'],
+          },
+        ],
+      })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(NotebookUpdateError)
+    const error = caught as NotebookUpdateError
+    expect(error.code).toBe('NOTEBOOK_UPDATE_FAILED')
+    expect(error.details.appliedOperationCount).toBe(1)
+    expect(error.details.failedOperationIndex).toBe(1)
+    expect(error.details.failedOperationError).toBe(
+      'Cell not found: missing-cell'
+    )
+    expect(error.details.operationStatuses).toEqual([
+      { index: 0, status: 'applied' },
+      { index: 1, status: 'failed', error: 'Cell not found: missing-cell' },
+      { index: 2, status: 'not_attempted' },
+    ])
+    expect(error.details.beforeHandle.uri).toBe('local://one')
+    expect(error.details.afterHandle.uri).toBe('local://one')
+    expect(error.details.afterHandle.revision).not.toBe(
+      error.details.beforeHandle.revision
+    )
+    expect(notebook.cells.map((cell) => cell.refId)).toEqual([
+      'cell-a',
+      'cell-b',
+    ])
+    expect(notebook.cells[0]?.value).toBe('echo updated')
   })
 
   it('rejects notebooks.update without an explicit target', async () => {
