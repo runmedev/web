@@ -30,3 +30,7 @@ Current runner identities:
   exists to tighten execution boundaries.
 - If the user wants fast local notebook manipulation without backend setup,
   AppKernel is often the right first choice.
+- When calling `notebooks.update` through WebMCP `ExecuteCode`, catch
+  `NOTEBOOK_UPDATE_FAILED` inside the executed JavaScript and print the
+  structured `error.details` fields. See
+  [codex-chrome-webmcp.md](codex-chrome-webmcp.md#handling-partial-notebook-update-failures).

@@ -108,6 +108,8 @@ later notebook operations.
 Do not rely on "current notebook" after the initial resolution, because the user
 may switch notebooks while Codex is working.
 
+## Drive-backed notebook lookup
+
 When the user identifies a Drive-backed notebook by name or metadata rather
 than by URL, use Runme's AppKernel Drive API instead of searching the rendered
 page with DOM tools:
@@ -132,6 +134,106 @@ selection, and pagination. Include `id` and `mimeType` in `fields` so Runme can
 add a notebook-ready `uri` to each result. In WebMCP code mode, this call runs
 through the authenticated Runme AppKernel and does not require a separate
 Google Drive connector.
+
+## Handling partial notebook update failures
+
+Agents that mutate notebooks through WebMCP should run JavaScript with
+`ExecuteCode` and catch `notebooks.update` failures inside that JavaScript. The
+WebMCP tool returns merged stdout/stderr text, so structured failure details are
+only visible to the agent if the executed code catches the error and prints or
+otherwise returns the fields it needs.
+
+`notebooks.update` can apply multiple operations. If operation `K + 1` fails
+after the first `K` operations succeed, the promise rejects with an error whose
+`code` is `NOTEBOOK_UPDATE_FAILED`. The error includes `details` with:
+
+- `appliedOperationCount`: number of operations that completed before the
+  failure,
+- `failedOperationIndex`: zero-based index of the operation that failed,
+- `operationStatuses`: per-operation status values,
+- `beforeHandle`: notebook handle before the update started,
+- `afterHandle`: notebook handle after the failure.
+
+Use this pattern when calling `notebooks.update` from WebMCP `ExecuteCode`:
+
+```js
+const doc = await notebooks.get({ uri: 'local://file/demo.runme.md' })
+
+try {
+  const updated = await notebooks.update({
+    target: { handle: doc.handle },
+    operations: [
+      {
+        op: 'update',
+        refId: 'cell-a',
+        patch: { value: 'echo updated' },
+      },
+      {
+        op: 'update',
+        refId: 'missing-cell',
+        patch: { value: 'echo missing' },
+      },
+      {
+        op: 'remove',
+        refIds: ['cell-b'],
+      },
+    ],
+  })
+
+  console.log(
+    JSON.stringify({
+      status: 'ok',
+      handle: updated.handle,
+    })
+  )
+} catch (error) {
+  if (error?.code === 'NOTEBOOK_UPDATE_FAILED') {
+    console.log(
+      JSON.stringify({
+        status: 'partial_failure',
+        appliedOperationCount: error.details.appliedOperationCount,
+        failedOperationIndex: error.details.failedOperationIndex,
+        operationStatuses: error.details.operationStatuses,
+        afterHandle: error.details.afterHandle,
+      })
+    )
+  } else {
+    throw error
+  }
+}
+```
+
+For that example, the output tells the caller that operation `0` was applied,
+operation `1` failed, and operation `2` was not attempted:
+
+```json
+{
+  "status": "partial_failure",
+  "appliedOperationCount": 1,
+  "failedOperationIndex": 1,
+  "operationStatuses": [
+    { "index": 0, "status": "applied" },
+    { "index": 1, "status": "failed", "error": "Cell not found: missing-cell" },
+    { "index": 2, "status": "not_attempted" }
+  ],
+  "afterHandle": {
+    "uri": "local://file/demo.runme.md",
+    "revision": "..."
+  }
+}
+```
+
+After a partial failure, agents should use `afterHandle` when re-reading the
+notebook state. Inside the `NOTEBOOK_UPDATE_FAILED` catch branch:
+
+```js
+const current = await notebooks.get({ handle: error.details.afterHandle })
+console.log(JSON.stringify({ currentHandle: current.handle }))
+```
+
+Do not assume the whole update rolled back. `notebooks.update` reports which
+operations were applied; it does not make multi-operation updates fully
+transactional.
 
 ## Relationship to the chat panel
 
