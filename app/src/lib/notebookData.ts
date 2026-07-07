@@ -24,7 +24,10 @@ import {
   resolveAppKernelRunnerMode,
 } from './runtime/appKernel'
 import { JSKernel } from './runtime/jsKernel'
-import { buildJupyterChannelsWebSocketURL } from './runtime/jupyterManager'
+import {
+  buildJupyterChannelsWebSocketURL,
+  getJupyterManager,
+} from './runtime/jupyterManager'
 import {
   type NotebooksApiBridgeServer,
   createHostNotebooksApi,
@@ -58,6 +61,7 @@ export type NotebookSnapshot = {
   readonly notebook: parser_pb.Notebook
   readonly loaded: boolean
   readonly readOnly?: boolean
+  readonly releasePending?: boolean
 }
 
 const localTextEncoder = new TextEncoder()
@@ -425,13 +429,32 @@ export class NotebookData {
   private snapshotCache: NotebookSnapshot
   private loaded: boolean
   private readOnly: boolean
+  private releasePending = false
   private activeStreams: Map<string, StreamsLike> = new Map()
-  private activeJupyterSockets: Map<string, WebSocket> = new Map()
+  private activeJupyterSockets = new Map<
+    string,
+    {
+      socket: WebSocket
+      runnerName: string
+      serverName: string
+      kernelID: string
+    }
+  >()
+  private activeAppKernelExecutions = new Map<
+    string,
+    {
+      runID: string
+      generation: number
+      abortController: AbortController
+    }
+  >()
+  private executionGeneration = 0
 
   private refToCellData: Map<string, CellData> = new Map()
   // Debounce auto-save writes so keystrokes don't trigger a full disk write
   // (and in dev, a Vite page reload) on every change.
   private persistTimer: ReturnType<typeof setTimeout> | null = null
+  private persistInFlight: Promise<void> = Promise.resolve()
   private readonly persistDelayMs = 750
   private readonly resolveNotebookForAppKernel: (
     target?: unknown
@@ -518,12 +541,11 @@ export class NotebookData {
   }
 
   async flushPendingPersist(): Promise<void> {
-    if (!this.persistTimer) {
-      return
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer)
+      this.persistTimer = null
     }
-    clearTimeout(this.persistTimer)
-    this.persistTimer = null
-    await this.persist()
+    await this.persist({ throwOnError: true })
   }
 
   /**
@@ -559,6 +581,7 @@ export class NotebookData {
     { persist = true }: { persist?: boolean } = {}
   ): void {
     this.notebook = clone(parser_pb.NotebookSchema, notebook)
+    this.refToCellData.clear()
     this.rebuildIndex()
     this.validateCells()
     this.sequence = this.computeHighestSequence()
@@ -702,6 +725,111 @@ export class NotebookData {
     return this.readOnly
   }
 
+  setReleasePending(releasePending: boolean): void {
+    if (this.releasePending === releasePending) {
+      return
+    }
+    this.releasePending = releasePending
+    this.snapshotCache = this.buildSnapshot()
+    this.emit()
+  }
+
+  isReleasePending(): boolean {
+    return this.releasePending
+  }
+
+  async cancelActiveExecutions(
+    message = 'Execution cancelled because another session requested write access.\n'
+  ): Promise<void> {
+    this.executionGeneration += 1
+    const activeRefIds = new Set<string>([
+      ...this.activeStreams.keys(),
+      ...this.activeJupyterSockets.keys(),
+      ...this.activeAppKernelExecutions.keys(),
+    ])
+
+    const streams = Array.from(this.activeStreams.values())
+    this.activeStreams.clear()
+    for (const stream of streams) {
+      try {
+        stream.close()
+      } catch {
+        // Cancellation is best-effort; a broken stream must not retain ownership.
+      }
+    }
+
+    const jupyterExecutions = Array.from(this.activeJupyterSockets.values())
+    this.activeJupyterSockets.clear()
+    const interruptControllers = jupyterExecutions.map(
+      () => new AbortController()
+    )
+    const interrupts = jupyterExecutions.map((execution, index) =>
+      getJupyterManager().interruptKernel(
+        execution.runnerName,
+        execution.serverName,
+        execution.kernelID,
+        { signal: interruptControllers[index]?.signal }
+      )
+    )
+    for (const execution of jupyterExecutions) {
+      const { socket } = execution
+      socket.onopen = null
+      socket.onmessage = null
+      socket.onerror = null
+      socket.onclose = null
+      try {
+        socket.close()
+      } catch {
+        // The kernel interrupt can still cancel execution if the socket is stale.
+      }
+    }
+
+    for (const execution of this.activeAppKernelExecutions.values()) {
+      execution.abortController.abort()
+    }
+    this.activeAppKernelExecutions.clear()
+
+    for (const refId of activeRefIds) {
+      const cell = this.getCellProto(refId)
+      if (!cell) {
+        continue
+      }
+      cell.metadata ??= {}
+      cell.metadata[RunmeMetadataKey.ExitCode] = '130'
+      delete cell.metadata[RunmeMetadataKey.Pid]
+      cell.outputs = [...cell.outputs, ...createStdTextOutputs('', message)]
+      const cellData = this.refToCellData.get(refId)
+      cellData?.updateCachedSnapshotFromNotebook(cell)
+      cellData?.emitContentChange()
+    }
+    if (activeRefIds.size > 0) {
+      this.snapshotCache = this.buildSnapshot()
+      this.emit()
+      this.schedulePersist()
+    }
+
+    if (interrupts.length > 0) {
+      let interruptTimeout: ReturnType<typeof setTimeout> | null = null
+      try {
+        await Promise.race([
+          Promise.allSettled(interrupts).then(() => undefined),
+          new Promise<void>((resolve) => {
+            interruptTimeout = setTimeout(() => {
+              for (const controller of interruptControllers) {
+                controller.abort()
+              }
+              resolve()
+            }, 2_000)
+          }),
+        ])
+      } finally {
+        if (interruptTimeout) {
+          clearTimeout(interruptTimeout)
+        }
+      }
+    }
+  }
+
   // Returns the runID if the cell was started successfully.
   // empty string otherwise
   runCodeCell(cell: parser_pb.Cell): string {
@@ -743,7 +871,7 @@ export class NotebookData {
     existing?.close()
     this.activeStreams.delete(cell.refId)
     const existingJupyterSocket = this.activeJupyterSockets.get(cell.refId)
-    existingJupyterSocket?.close()
+    existingJupyterSocket?.socket.close()
     this.activeJupyterSockets.delete(cell.refId)
 
     // Bump sequence and attach to metadata.
@@ -764,16 +892,17 @@ export class NotebookData {
     }
 
     const runID = genRunID()
+    const generation = this.executionGeneration
     cell.metadata[RunmeMetadataKey.LastRunID] = runID
     this.updateCell(cell)
 
     if (useAppKernel) {
-      this.runCodeCellWithAppKernel(cell, runID, appKernelMode)
+      this.runCodeCellWithAppKernel(cell, runID, appKernelMode, generation)
       return runID
     }
 
     if (useJupyterKernel) {
-      this.runCodeCellWithJupyterKernel(cell, runID, runner!)
+      this.runCodeCellWithJupyterKernel(cell, runID, runner!, generation)
       return runID
     }
 
@@ -782,6 +911,7 @@ export class NotebookData {
       runID,
       sequence: this.sequence,
       runner: runner!,
+      generation,
     })
     if (!streams) {
       return ''
@@ -884,7 +1014,13 @@ export class NotebookData {
       typeof seqValue === 'string' ? Number.parseInt(seqValue, 10) : Number.NaN
     const sequence = Number.isNaN(parsedSeq) ? this.sequence : parsedSeq
 
-    return this.createAndBindStreams({ cell, runID, sequence, runner })
+    return this.createAndBindStreams({
+      cell,
+      runID,
+      sequence,
+      runner,
+      generation: this.executionGeneration,
+    })
   }
 
   private createCell(
@@ -914,6 +1050,11 @@ export class NotebookData {
   }
 
   private assertWritable(): void {
+    if (this.releasePending) {
+      throw new Error(
+        `Notebook ${this.uri} is releasing its write lock for another session.`
+      )
+    }
     if (this.readOnly) {
       throw new Error(
         `Notebook ${this.uri} is open read-only in this browser tab.`
@@ -924,7 +1065,8 @@ export class NotebookData {
   private runCodeCellWithAppKernel(
     cell: parser_pb.Cell,
     runID: string,
-    mode: AppKernelRunnerMode
+    mode: AppKernelRunnerMode,
+    generation: number
   ): void {
     const refId = cell.refId
     const languageId = (cell.languageId ?? '').trim().toLowerCase()
@@ -948,6 +1090,14 @@ export class NotebookData {
     let stdout = ''
     let stderr = ''
     let finalExitCode = 0
+    const abortController = new AbortController()
+    const execution = { runID, generation, abortController }
+    this.activeAppKernelExecutions.get(refId)?.abortController.abort()
+    this.activeAppKernelExecutions.set(refId, execution)
+    const isCurrentExecution = () =>
+      this.activeAppKernelExecutions.get(refId) === execution &&
+      this.executionGeneration === generation &&
+      !this.releasePending
 
     appLogger.info('Starting AppKernel cell execution', {
       attrs: {
@@ -961,13 +1111,19 @@ export class NotebookData {
 
     const hooks = {
       onStdout: (data: string) => {
-        stdout += data
+        if (isCurrentExecution()) {
+          stdout += data
+        }
       },
       onStderr: (data: string) => {
-        stderr += data
+        if (isCurrentExecution()) {
+          stderr += data
+        }
       },
       onExit: (code: number) => {
-        finalExitCode = code
+        if (isCurrentExecution()) {
+          finalExitCode = code
+        }
       },
     }
 
@@ -986,7 +1142,7 @@ export class NotebookData {
                   ),
               },
               hooks,
-            }).run(source)
+            }).run(source, { signal: abortController.signal })
           : new JSKernel({
               globals: appGlobals,
               hooks,
@@ -1021,6 +1177,10 @@ export class NotebookData {
         stderr += `${String(error)}\n`
       })
       .finally(() => {
+        if (!isCurrentExecution()) {
+          return
+        }
+        this.activeAppKernelExecutions.delete(refId)
         const updated = this.getCellProto(refId)
         if (!updated) {
           return
@@ -1117,7 +1277,8 @@ export class NotebookData {
   private runCodeCellWithJupyterKernel(
     cell: parser_pb.Cell,
     runID: string,
-    runner: Runner
+    runner: Runner,
+    generation: number
   ): void {
     const refId = cell.refId
     const source = cell.value ?? ''
@@ -1182,7 +1343,16 @@ export class NotebookData {
     }
 
     const socket = new WebSocket(channelsURL)
-    this.activeJupyterSockets.set(refId, socket)
+    this.activeJupyterSockets.set(refId, {
+      socket,
+      runnerName: runner.name,
+      serverName,
+      kernelID: selectedKernelID,
+    })
+    const isCurrentExecution = () =>
+      this.executionGeneration === generation &&
+      this.activeJupyterSockets.get(refId)?.socket === socket &&
+      !this.releasePending
 
     const executeMsgID = crypto.randomUUID().replace(/-/g, '')
     const sessionID = crypto.randomUUID().replace(/-/g, '')
@@ -1328,6 +1498,9 @@ export class NotebookData {
     }
 
     const updateCellOutputs = (transient: boolean) => {
+      if (!isCurrentExecution()) {
+        return false
+      }
       const updated = this.getCellProto(refId)
       if (!updated) {
         return false
@@ -1358,7 +1531,7 @@ export class NotebookData {
     }
 
     const markCompleted = (code: number) => {
-      if (completed) {
+      if (completed || !isCurrentExecution()) {
         return
       }
       completed = true
@@ -1384,6 +1557,10 @@ export class NotebookData {
     }
 
     socket.onopen = () => {
+      if (!isCurrentExecution()) {
+        socket.close()
+        return
+      }
       const executeRequest = {
         channel: 'shell',
         header: {
@@ -1409,7 +1586,7 @@ export class NotebookData {
     }
 
     socket.onmessage = (event) => {
-      if (completed) {
+      if (completed || !isCurrentExecution()) {
         return
       }
       if (typeof event.data !== 'string') {
@@ -1502,7 +1679,7 @@ export class NotebookData {
     }
 
     socket.onerror = () => {
-      if (completed) {
+      if (completed || !isCurrentExecution()) {
         return
       }
       appendText(
@@ -1514,7 +1691,7 @@ export class NotebookData {
     }
 
     socket.onclose = () => {
-      if (completed) {
+      if (completed || !isCurrentExecution()) {
         return
       }
       // Long-running Jupyter executions can be quiet; completion is gated on
@@ -1553,11 +1730,13 @@ export class NotebookData {
     runID,
     sequence,
     runner,
+    generation,
   }: {
     cell: parser_pb.Cell
     runID: string
     sequence: number
     runner: Runner
+    generation: number
   }): StreamsLike | undefined {
     const streams = new Streams({
       knownID: `cell_${cell.refId}`,
@@ -1574,10 +1753,19 @@ export class NotebookData {
     bindStreamsToCell({
       refId: cell.refId,
       streams,
-      getCell: (ref) => this.getCellProto(ref),
-      updateCell: (next, options) => this.updateCell(next, options),
+      getCell: (ref) =>
+        this.executionGeneration === generation && !this.releasePending
+          ? this.getCellProto(ref)
+          : null,
+      updateCell: (next, options) => {
+        if (this.executionGeneration === generation && !this.releasePending) {
+          this.updateCell(next, options)
+        }
+      },
       onClose: (refId) => {
-        this.activeStreams.delete(refId)
+        if (this.activeStreams.get(refId) === streams) {
+          this.activeStreams.delete(refId)
+        }
       },
     })
 
@@ -1610,6 +1798,7 @@ export class NotebookData {
       name: this.name,
       loaded: this.loaded,
       readOnly: this.readOnly,
+      releasePending: this.releasePending,
       notebook: clone(parser_pb.NotebookSchema, this.notebook),
     }
   }
@@ -1624,18 +1813,29 @@ export class NotebookData {
     })
   }
 
-  private async persist(): Promise<void> {
+  private async persist({
+    throwOnError = false,
+  }: { throwOnError?: boolean } = {}): Promise<void> {
     if (this.readOnly || !this.notebookStore) {
       return
     }
-    try {
-      await this.notebookStore.save(this.uri, this.notebook)
-    } catch (error) {
+    const store = this.notebookStore
+    const save = this.persistInFlight
+      .catch(() => undefined)
+      .then(async () => {
+        await store.save(this.uri, this.notebook)
+      })
+    this.persistInFlight = save.catch((error) => {
       console.error('NotebookData failed to persist notebook', {
         uri: this.uri,
         error,
       })
+    })
+    if (throwOnError) {
+      await save
+      return
     }
+    await this.persistInFlight
   }
 
   private schedulePersist(): void {

@@ -51,6 +51,58 @@ type LockCallback = (
 
 const heldLocks = new Map<string, Promise<unknown>>()
 
+class FakeOwnershipChannelBus {
+  private readonly channels = new Set<FakeOwnershipChannel>()
+
+  createChannel(): FakeOwnershipChannel {
+    const channel = new FakeOwnershipChannel(this)
+    this.channels.add(channel)
+    return channel
+  }
+
+  post(sender: FakeOwnershipChannel, message: unknown): void {
+    queueMicrotask(() => {
+      for (const channel of this.channels) {
+        if (channel !== sender) {
+          channel.deliver(message)
+        }
+      }
+    })
+  }
+
+  close(channel: FakeOwnershipChannel): void {
+    this.channels.delete(channel)
+  }
+}
+
+class FakeOwnershipChannel {
+  private readonly listeners = new Set<(event: MessageEvent<unknown>) => void>()
+
+  constructor(private readonly bus: FakeOwnershipChannelBus) {}
+
+  addEventListener(
+    _type: 'message',
+    listener: (event: MessageEvent<unknown>) => void
+  ): void {
+    this.listeners.add(listener)
+  }
+
+  postMessage(message: unknown): void {
+    this.bus.post(this, message)
+  }
+
+  deliver(message: unknown): void {
+    for (const listener of this.listeners) {
+      listener(new MessageEvent('message', { data: message }))
+    }
+  }
+
+  close(): void {
+    this.listeners.clear()
+    this.bus.close(this)
+  }
+}
+
 function installFakeWebLocks(): void {
   Object.defineProperty(navigator, 'locks', {
     configurable: true,
@@ -199,5 +251,142 @@ describe('NotebookOwnershipManager', () => {
 
     await flushReleasedNotebookLocks()
     manager.dispose()
+  })
+
+  it('broadcasts by notebook and lets only the live owner release', async () => {
+    const bus = new FakeOwnershipChannelBus()
+    const first = new NotebookOwnershipManager({
+      dbName: 'force-release-test',
+      tabId: 'tab-owner',
+      channel: bus.createChannel(),
+    })
+    const requester = new NotebookOwnershipManager({
+      dbName: 'force-release-test',
+      tabId: 'tab-requester',
+      channel: bus.createChannel(),
+    })
+    const nonOwner = new NotebookOwnershipManager({
+      dbName: 'force-release-test',
+      tabId: 'tab-non-owner',
+      channel: bus.createChannel(),
+    })
+    const acquired = await first.acquire('local://file/a')
+    expect(acquired.status).toBe('acquired')
+    if (acquired.status !== 'acquired') {
+      return
+    }
+    const ownerHandler = vi.fn(async () => {
+      acquired.lease.release()
+      await acquired.lease.released
+      return { status: 'released' as const }
+    })
+    const nonOwnerHandler = vi.fn(async () => ({ status: 'released' as const }))
+    first.setForceReleaseHandler(ownerHandler)
+    nonOwner.setForceReleaseHandler(nonOwnerHandler)
+
+    await expect(
+      requester.requestForceRelease('local://file/a', { timeoutMs: 100 })
+    ).resolves.toEqual({ status: 'released' })
+
+    expect(ownerHandler).toHaveBeenCalledTimes(1)
+    expect(nonOwnerHandler).not.toHaveBeenCalled()
+    const requesterAcquire = await requester.acquire('local://file/a')
+    expect(requesterAcquire.status).toBe('acquired')
+    if (requesterAcquire.status === 'acquired') {
+      requesterAcquire.lease.release()
+      await requesterAcquire.lease.released
+    }
+    first.dispose()
+    requester.dispose()
+    nonOwner.dispose()
+  })
+
+  it('ignores expired force-release requests', async () => {
+    const bus = new FakeOwnershipChannelBus()
+    const ownerChannel = bus.createChannel()
+    const senderChannel = bus.createChannel()
+    const owner = new NotebookOwnershipManager({
+      dbName: 'expired-request-test',
+      tabId: 'tab-owner',
+      channel: ownerChannel,
+    })
+    const acquired = await owner.acquire('local://file/a')
+    expect(acquired.status).toBe('acquired')
+    const handler = vi.fn(async () => ({ status: 'released' as const }))
+    owner.setForceReleaseHandler(handler)
+
+    senderChannel.postMessage({
+      type: 'force-release-request',
+      requestId: 'expired',
+      notebookUri: 'local://file/a',
+      requesterTabId: 'tab-requester',
+      requesterLabel: 'Requester',
+      requesterUrl: 'http://localhost/requester',
+      createdAt: new Date(Date.now() - 20_000).toISOString(),
+      expiresAt: new Date(Date.now() - 10_000).toISOString(),
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(handler).not.toHaveBeenCalled()
+    if (acquired.status === 'acquired') {
+      acquired.lease.release()
+      await acquired.lease.released
+    }
+    owner.dispose()
+    senderChannel.close()
+  })
+
+  it('ignores stale force-release requests with future expirations', async () => {
+    const bus = new FakeOwnershipChannelBus()
+    const ownerChannel = bus.createChannel()
+    const senderChannel = bus.createChannel()
+    const owner = new NotebookOwnershipManager({
+      dbName: 'stale-request-test',
+      tabId: 'tab-owner',
+      channel: ownerChannel,
+    })
+    const acquired = await owner.acquire('local://file/a')
+    expect(acquired.status).toBe('acquired')
+    const handler = vi.fn(async () => ({ status: 'released' as const }))
+    owner.setForceReleaseHandler(handler)
+
+    senderChannel.postMessage({
+      type: 'force-release-request',
+      requestId: 'stale',
+      notebookUri: 'local://file/a',
+      requesterTabId: 'tab-requester',
+      requesterLabel: 'Requester',
+      requesterUrl: 'http://localhost/requester',
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+      expiresAt: new Date(Date.now() + 10_000).toISOString(),
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(handler).not.toHaveBeenCalled()
+    if (acquired.status === 'acquired') {
+      acquired.lease.release()
+      await acquired.lease.released
+    }
+    owner.dispose()
+    senderChannel.close()
+  })
+
+  it('returns a retryable timeout without automatically retrying', async () => {
+    const bus = new FakeOwnershipChannelBus()
+    const requester = new NotebookOwnershipManager({
+      dbName: 'force-release-timeout-test',
+      tabId: 'tab-requester',
+      channel: bus.createChannel(),
+    })
+
+    await expect(
+      requester.requestForceRelease('local://file/a', { timeoutMs: 5 })
+    ).resolves.toEqual({
+      status: 'timeout',
+      message:
+        'The other session did not respond. The notebook is still read-only.',
+    })
+
+    requester.dispose()
   })
 })

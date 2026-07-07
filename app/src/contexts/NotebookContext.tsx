@@ -30,6 +30,8 @@ type NotebookContextValue = {
   ) => Promise<OpenNotebookResult>;
   useNotebookSnapshot: (uri: string) => NotebookSnapshot | null;
   useNotebookList: () => OpenNotebookEntry[];
+  requestWriteAccess: (uri: string) => Promise<OpenNotebookResult>;
+  refreshReadOnlyNotebook: (uri: string) => Promise<void>;
   removeNotebook: (uri: string) => string | null;
 };
 
@@ -66,6 +68,16 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
 
   const removeNotebook = useCallback(
     (uri: string) => controller.closeNotebook(uri),
+    [controller],
+  );
+
+  const requestWriteAccess = useCallback(
+    (uri: string) => controller.requestWriteAccess(uri),
+    [controller],
+  );
+
+  const refreshReadOnlyNotebook = useCallback(
+    (uri: string) => controller.refreshReadOnlyNotebook(uri),
     [controller],
   );
 
@@ -142,12 +154,16 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
       openNotebook,
       useNotebookSnapshot,
       useNotebookList,
+      requestWriteAccess,
+      refreshReadOnlyNotebook,
       removeNotebook,
     }),
     [
       getNotebookData,
       openNotebook,
+      refreshReadOnlyNotebook,
       removeNotebook,
+      requestWriteAccess,
       useNotebookList,
       useNotebookSnapshot,
     ],

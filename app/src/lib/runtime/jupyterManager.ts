@@ -576,6 +576,26 @@ class JupyterManager {
     this.bumpVersion();
   }
 
+  async interruptKernel(
+    runnerName: string,
+    serverName: string,
+    kernelID: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void> {
+    const effectiveRunner = this.normalizeRunnerName(runnerName);
+    if (!kernelID.trim()) {
+      throw new Error("Kernel ID is required.");
+    }
+    const baseURL = runnerEndpointToHttpBase(this.resolveRunnerEndpoint(effectiveRunner));
+    await this.fetchJSON<unknown>(
+      `${baseURL}/v1/jupyter/servers/${encodePathSegment(serverName)}/kernels/${encodePathSegment(kernelID)}:interrupt`,
+      {
+        method: "POST",
+        signal: options?.signal,
+      },
+    );
+  }
+
   async resolveKernelID(
     runnerName: string,
     serverName: string,

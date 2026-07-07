@@ -23,6 +23,7 @@ export type NotebookDataLike = {
   getName: () => string
   getNotebook: () => parser_pb.Notebook
   isReadOnly?: () => boolean
+  isReleasePending?: () => boolean
   flushPendingPersist?: () => Promise<void>
   loadNotebook?: (
     notebook: parser_pb.Notebook,
@@ -52,6 +53,7 @@ export type NotebookSummary = {
   name: string
   isOpen: boolean
   readOnly?: boolean
+  releasePending?: boolean
   source: 'local' | 'fs' | 'drive'
 }
 
@@ -271,6 +273,7 @@ function makeDocument(notebook: NotebookDataLike): NotebookDocument {
       name: notebook.getName(),
       isOpen: true,
       readOnly: notebook.isReadOnly?.() ?? false,
+      releasePending: notebook.isReleasePending?.() ?? false,
       source: inferNotebookSource(notebook.getUri()),
     },
     handle,
@@ -336,6 +339,11 @@ function assertNotebookWritable(
   method: 'update' | 'delete' | 'execute' | 'clear' | 'runAll' | 'rerun',
   notebook: NotebookDataLike
 ): void {
+  if (notebook.isReleasePending?.()) {
+    throw new Error(
+      `${method} is not allowed because notebook ${notebook.getUri()} is releasing its write lock for another session.`
+    )
+  }
   if (notebook.isReadOnly?.()) {
     throw new Error(
       `${method} is not allowed because notebook ${notebook.getUri()} is open read-only in this browser tab.`
@@ -705,6 +713,7 @@ export function createNotebooksApi({
         name: notebook.getName(),
         isOpen: true,
         readOnly: notebook.isReadOnly?.() ?? false,
+        releasePending: notebook.isReleasePending?.() ?? false,
         source: inferNotebookSource(notebook.getUri()),
       }))
       if (query?.uriPrefix) {

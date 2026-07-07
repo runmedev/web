@@ -591,9 +591,65 @@ describe("NotebookData persistence", () => {
       }),
     );
   });
+
+  it("propagates a final flush failure", async () => {
+    const save = vi.fn().mockRejectedValue(new Error("disk full"));
+    const model = new NotebookData({
+      notebook: create(parser_pb.NotebookSchema, { cells: [] }),
+      uri: "local://file/flush-failure.md",
+      name: "flush-failure.md",
+      notebookStore: { save },
+      loaded: true,
+    });
+
+    await expect(model.flushPendingPersist()).rejects.toThrow("disk full");
+  });
 });
 
 describe("NotebookData.runCodeCell", () => {
+  it("blocks mutations and cancels active streams during lock release", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-cancel",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "bash",
+      outputs: [],
+      metadata: {},
+      value: "sleep 30",
+    });
+    const model = new NotebookData({
+      notebook: create(parser_pb.NotebookSchema, { cells: [cell] }),
+      uri: "local://file/cancel.md",
+      name: "cancel.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    const cellData = model.getCell(cell.refId);
+    model.runCodeCell(cell);
+    const stream = model.getActiveStream(cell.refId) as
+      | (StreamsLike & { close: ReturnType<typeof vi.fn> })
+      | undefined;
+    expect(stream).toBeTruthy();
+
+    model.setReleasePending(true);
+    await model.cancelActiveExecutions();
+
+    expect(stream?.close).toHaveBeenCalledTimes(1);
+    expect(
+      model.getCellSnapshot(cell.refId)?.metadata?.[RunmeMetadataKey.ExitCode],
+    ).toBe("130");
+    const stderr = (model.getCellSnapshot(cell.refId)?.outputs ?? [])
+      .flatMap((output) => output.items)
+      .filter((item) => item.mime === MimeType.VSCodeNotebookStdErr)
+      .map((item) => new TextDecoder().decode(item.data))
+      .join("");
+    expect(stderr).toContain("another session requested write access");
+    expect(cellData?.snapshot?.metadata?.[RunmeMetadataKey.ExitCode]).toBe(
+      "130",
+    );
+    expect(() => model.appendCell()).toThrow("releasing its write lock");
+  });
+
   it("returns empty run id when no runner is available", () => {
     getWithFallback.mockReturnValueOnce(undefined);
     const logError = vi.spyOn(appLogger, "error");

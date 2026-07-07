@@ -16,6 +16,10 @@ export interface WorkspaceDocument {
   mimeType?: string
   state?: NotebookTabState
   readOnly?: boolean
+  releasePending?: boolean
+  writeAccessRequestState?: 'pending' | 'error'
+  writeAccessErrorMessage?: string
+  refreshErrorMessage?: string
   errorMessage?: string
   owner?: NotebookOwnershipRecord | null
 }

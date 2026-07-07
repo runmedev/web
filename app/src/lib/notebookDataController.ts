@@ -7,8 +7,11 @@ import { NotebookData, type NotebookSnapshot } from './notebookData'
 import { getNotebookSessionPersistence } from './notebookSessionPersistence'
 import type { NotebookDataLike } from './runtime/runmeConsole'
 import {
+  type ForceReleaseHandlerResult,
+  type ForceReleaseRequest,
   type NotebookLease,
   type NotebookOwnershipManager,
+  type NotebookOwnershipMessage,
   type NotebookOwnershipRecord,
   getNotebookOwnershipManager,
 } from './tabCoordination/notebookOwnership'
@@ -26,6 +29,10 @@ export interface OpenNotebookEntry {
   name: string
   state: NotebookTabState
   readOnly?: boolean
+  releasePending?: boolean
+  writeAccessRequestState?: 'pending' | 'error'
+  writeAccessErrorMessage?: string
+  refreshErrorMessage?: string
   errorMessage?: string
   owner?: NotebookOwnershipRecord | null
 }
@@ -98,6 +105,17 @@ export class NotebookDataController {
   private readonly listeners = new Set<() => void>()
   private snapshot: NotebookDataControllerSnapshot = { openNotebooks: [] }
   private restored = false
+  private readonly releasingNotebooks = new Set<string>()
+  private readonly writeAccessRequests = new Map<
+    string,
+    Promise<OpenNotebookResult>
+  >()
+  private unsubscribeOwnershipMessages: (() => void) | null = null
+  private unregisterForceReleaseHandler: (() => void) | null = null
+
+  private constructor() {
+    this.bindOwnershipManager()
+  }
 
   getSnapshot(): NotebookDataControllerSnapshot {
     this.ensureRestored()
@@ -116,8 +134,11 @@ export class NotebookDataController {
     this.ensureRestored()
     this.localNotebooks = options.localNotebooks
     for (const handle of this.notebooks.values()) {
+      const uri = handle.data.getUri()
       handle.data.setNotebookStore(
-        this.createOwnedNotebookStore(handle.data.getUri())
+        this.leases.has(uri) && !handle.data.isReadOnly()
+          ? this.createOwnedNotebookStore(uri)
+          : null
       )
     }
     if (this.localNotebooks) {
@@ -126,7 +147,9 @@ export class NotebookDataController {
   }
 
   configureOwnershipManager(manager: NotebookOwnershipManager): void {
+    this.unbindOwnershipManager()
     this.ownershipManager = manager
+    this.bindOwnershipManager()
   }
 
   async openNotebook(
@@ -147,6 +170,10 @@ export class NotebookDataController {
       name,
       state: 'loading',
       readOnly: false,
+      releasePending: false,
+      writeAccessRequestState: undefined,
+      writeAccessErrorMessage: undefined,
+      refreshErrorMessage: undefined,
       errorMessage: undefined,
       owner: undefined,
     })
@@ -214,14 +241,17 @@ export class NotebookDataController {
     }
     this.leases.set(localUri, acquireResult.lease)
 
+    const existingWasReadOnly =
+      this.notebooks.get(localUri)?.data.isReadOnly() ?? false
+
     const handle = this.ensureNotebookData({
       uri: localUri,
       name,
       loaded: false,
-      readOnly: false,
+      readOnly: existingWasReadOnly,
     })
 
-    if (handle.loaded) {
+    if (handle.loaded && !existingWasReadOnly) {
       handle.data.setNotebookStore(this.createOwnedNotebookStore(localUri))
       handle.data.setReadOnly(false)
       entry = this.upsertOpenEntry({
@@ -229,6 +259,10 @@ export class NotebookDataController {
         name: handle.data.getName(),
         state: 'loaded',
         readOnly: false,
+        releasePending: false,
+        writeAccessRequestState: undefined,
+        writeAccessErrorMessage: undefined,
+        refreshErrorMessage: undefined,
         errorMessage: undefined,
         owner: undefined,
       })
@@ -238,15 +272,19 @@ export class NotebookDataController {
     if (this.localNotebooks) {
       try {
         const notebook = await this.localNotebooks.load(localUri)
+        handle.data.loadNotebook(notebook, { persist: false })
         handle.data.setNotebookStore(this.createOwnedNotebookStore(localUri))
         handle.data.setReadOnly(false)
-        handle.data.loadNotebook(notebook, { persist: false })
         handle.loaded = true
         entry = this.upsertOpenEntry({
           ...entry,
           name: await this.resolveNotebookName(localUri, name),
           state: 'loaded',
           readOnly: false,
+          releasePending: false,
+          writeAccessRequestState: undefined,
+          writeAccessErrorMessage: undefined,
+          refreshErrorMessage: undefined,
           errorMessage: undefined,
           owner: undefined,
         })
@@ -288,6 +326,199 @@ export class NotebookDataController {
 
   getNotebookSnapshot(localUri: string): NotebookSnapshot | null {
     return this.getNotebookData(localUri)?.getSnapshot() ?? null
+  }
+
+  requestWriteAccess(localUri: string): Promise<OpenNotebookResult> {
+    const pending = this.writeAccessRequests.get(localUri)
+    if (pending) {
+      return pending
+    }
+    const request = this.requestWriteAccessInternal(localUri).finally(() => {
+      if (this.writeAccessRequests.get(localUri) === request) {
+        this.writeAccessRequests.delete(localUri)
+      }
+    })
+    this.writeAccessRequests.set(localUri, request)
+    return request
+  }
+
+  private async requestWriteAccessInternal(
+    localUri: string
+  ): Promise<OpenNotebookResult> {
+    this.ensureRestored()
+    const entry = this.openNotebooks.find((item) => item.uri === localUri)
+    if (!entry) {
+      throw new Error(`Notebook ${localUri} is not open.`)
+    }
+
+    this.upsertOpenEntry({
+      ...entry,
+      writeAccessRequestState: 'pending',
+      writeAccessErrorMessage: undefined,
+    })
+    try {
+      const immediate = await this.openNotebook(localUri, { name: entry.name })
+      if (!immediate.entry.readOnly && immediate.entry.state === 'loaded') {
+        return immediate
+      }
+      if (immediate.entry.state === 'error' && !immediate.entry.readOnly) {
+        return immediate
+      }
+      const currentEntry =
+        this.openNotebooks.find((item) => item.uri === localUri) ?? entry
+      this.upsertOpenEntry({
+        ...currentEntry,
+        writeAccessRequestState: 'pending',
+        writeAccessErrorMessage: undefined,
+      })
+
+      const result = await this.ownershipManager.requestForceRelease(localUri)
+      if (result.status !== 'released') {
+        return this.setWriteAccessError(localUri, currentEntry, result.message)
+      }
+
+      const reopened = await this.openNotebook(localUri, { name: entry.name })
+      if (reopened.entry.readOnly || reopened.entry.state !== 'loaded') {
+        return this.setWriteAccessError(
+          localUri,
+          reopened.entry,
+          'Write access was released, but another session acquired it first. Retry to request access again.'
+        )
+      }
+      return reopened
+    } catch (error) {
+      return this.setWriteAccessError(
+        localUri,
+        entry,
+        `Could not request write access: ${String(error)}`
+      )
+    }
+  }
+
+  private setWriteAccessError(
+    localUri: string,
+    fallbackEntry: OpenNotebookEntry,
+    message: string
+  ): OpenNotebookResult {
+    const nextEntry = this.openNotebooks.find((item) => item.uri === localUri)
+    const failedEntry = this.upsertOpenEntry({
+      ...(nextEntry ?? fallbackEntry),
+      writeAccessRequestState: 'error',
+      writeAccessErrorMessage: message,
+    })
+    return { localUri, entry: failedEntry }
+  }
+
+  async refreshReadOnlyNotebook(localUri: string): Promise<void> {
+    const entry = this.openNotebooks.find((item) => item.uri === localUri)
+    if (!entry?.readOnly) {
+      return
+    }
+    await this.reloadReadOnlyNotebook(localUri, entry.owner ?? null)
+  }
+
+  async forceReleaseNotebook(
+    request: ForceReleaseRequest
+  ): Promise<ForceReleaseHandlerResult> {
+    const localUri = request.notebookUri
+    const lease = this.leases.get(localUri)
+    if (!lease || !(await lease.isCurrentOwner())) {
+      return { status: 'not-owner' }
+    }
+    if (this.releasingNotebooks.has(localUri)) {
+      return {
+        status: 'busy',
+        message:
+          'The other session is already processing a write-access request.',
+      }
+    }
+
+    const handle = this.notebooks.get(localUri)
+    const entry = this.openNotebooks.find((item) => item.uri === localUri)
+    if (!handle || !entry) {
+      return {
+        status: 'failed',
+        message: 'The owning session no longer has the notebook open.',
+      }
+    }
+
+    this.releasingNotebooks.add(localUri)
+    try {
+      try {
+        handle.data.setReleasePending(true)
+        this.upsertOpenEntry({
+          ...entry,
+          releasePending: true,
+          writeAccessErrorMessage: undefined,
+        })
+        await handle.data.cancelActiveExecutions()
+        await handle.data.flushPendingPersist()
+      } catch (error) {
+        handle.data.setReleasePending(false)
+        handle.data.setReadOnly(false)
+        handle.data.setNotebookStore(this.createOwnedNotebookStore(localUri))
+        const currentEntry =
+          this.openNotebooks.find((item) => item.uri === localUri) ?? entry
+        this.upsertOpenEntry({
+          ...currentEntry,
+          state: 'loaded',
+          readOnly: false,
+          releasePending: false,
+          writeAccessErrorMessage: `Could not save changes before releasing write access: ${String(error)}`,
+        })
+        return {
+          status: 'failed',
+          message: `The other session could not save changes before releasing the lock: ${String(error)}`,
+        }
+      }
+
+      // From this point onward the old session must never become writable again.
+      // Cleanup failures after release cannot restore an authoritative Web Lock.
+      lease.release()
+      try {
+        await lease.released
+      } catch (error) {
+        appLogger.error('Notebook lease cleanup failed after release', {
+          attrs: { scope: 'notebook-session', localUri, error },
+        })
+      }
+      if (this.leases.get(localUri) === lease) {
+        this.leases.delete(localUri)
+      }
+      handle.data.setNotebookStore(null)
+      handle.data.setReadOnly(true)
+      handle.data.setReleasePending(false)
+      const currentEntry =
+        this.openNotebooks.find((item) => item.uri === localUri) ?? entry
+      try {
+        this.upsertOpenEntry({
+          ...currentEntry,
+          state: 'loaded',
+          readOnly: true,
+          releasePending: false,
+          owner: null,
+          errorMessage: undefined,
+        })
+      } catch (error) {
+        appLogger.error('Failed to persist released notebook UI state', {
+          attrs: { scope: 'notebook-session', localUri, error },
+        })
+      }
+
+      try {
+        const newOwner = await this.ownershipManager.getOwner(localUri)
+        if (newOwner && newOwner.epoch !== lease.epoch) {
+          await this.reloadReadOnlyNotebook(localUri, newOwner)
+        }
+      } catch (error) {
+        appLogger.error('Failed to refresh notebook after ownership transfer', {
+          attrs: { scope: 'notebook-session', localUri, error },
+        })
+      }
+      return { status: 'released' }
+    } finally {
+      this.releasingNotebooks.delete(localUri)
+    }
   }
 
   private async resolveLocalUri(uri: string, name?: string): Promise<string> {
@@ -466,6 +697,82 @@ export class NotebookDataController {
     this.leases.delete(uri)
   }
 
+  private bindOwnershipManager(): void {
+    this.unregisterForceReleaseHandler =
+      this.ownershipManager.setForceReleaseHandler((request) =>
+        this.forceReleaseNotebook(request)
+      )
+    this.unsubscribeOwnershipMessages =
+      this.ownershipManager.subscribeToMessages((message) => {
+        this.handleOwnershipMessage(message)
+      })
+  }
+
+  private unbindOwnershipManager(): void {
+    this.unregisterForceReleaseHandler?.()
+    this.unregisterForceReleaseHandler = null
+    this.unsubscribeOwnershipMessages?.()
+    this.unsubscribeOwnershipMessages = null
+  }
+
+  private handleOwnershipMessage(message: NotebookOwnershipMessage): void {
+    if (message.type !== 'owner-acquired') {
+      return
+    }
+    if (this.leases.has(message.record.notebookUri)) {
+      return
+    }
+    const handle = this.notebooks.get(message.record.notebookUri)
+    if (!handle?.data.isReadOnly()) {
+      return
+    }
+    void this.reloadReadOnlyNotebook(message.record.notebookUri, message.record)
+  }
+
+  private async reloadReadOnlyNotebook(
+    localUri: string,
+    owner: NotebookOwnershipRecord | null
+  ): Promise<void> {
+    const handle = this.notebooks.get(localUri)
+    const entry = this.openNotebooks.find((item) => item.uri === localUri)
+    if (
+      !handle ||
+      !entry ||
+      !handle.data.isReadOnly() ||
+      this.leases.has(localUri) ||
+      !this.localNotebooks
+    ) {
+      return
+    }
+    try {
+      const notebook = await this.localNotebooks.load(localUri)
+      handle.data.setNotebookStore(null)
+      handle.data.setReleasePending(false)
+      handle.data.setReadOnly(true)
+      handle.data.loadNotebook(notebook, { persist: false })
+      handle.loaded = true
+      this.upsertOpenEntry({
+        ...entry,
+        name: await this.resolveNotebookName(localUri, entry.name),
+        state: 'loaded',
+        readOnly: true,
+        releasePending: false,
+        owner,
+        refreshErrorMessage: undefined,
+        errorMessage: undefined,
+      })
+    } catch (error) {
+      this.upsertOpenEntry({
+        ...entry,
+        state: 'loaded',
+        readOnly: true,
+        releasePending: false,
+        owner,
+        refreshErrorMessage: `Could not refresh the read-only notebook: ${String(error)}`,
+      })
+    }
+  }
+
   private async loadOpenNotebooks(): Promise<void> {
     if (!this.localNotebooks) {
       return
@@ -515,6 +822,7 @@ export class NotebookDataController {
   }
 
   private dispose(): void {
+    this.unbindOwnershipManager()
     for (const lease of this.leases.values()) {
       lease.release()
     }
@@ -525,6 +833,8 @@ export class NotebookDataController {
     this.notebooks.clear()
     this.openNotebooks = []
     this.listeners.clear()
+    this.releasingNotebooks.clear()
+    this.writeAccessRequests.clear()
     this.snapshot = { openNotebooks: [] }
     this.restored = false
     this.localNotebooks = null
