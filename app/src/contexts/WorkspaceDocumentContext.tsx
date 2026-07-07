@@ -58,6 +58,10 @@ export function WorkspaceDocumentProvider({
         requestedUri: notebook.requestedUri,
         state: notebook.state,
         readOnly: notebook.readOnly,
+        releasePending: notebook.releasePending,
+        writeAccessRequestState: notebook.writeAccessRequestState,
+        writeAccessErrorMessage: notebook.writeAccessErrorMessage,
+        refreshErrorMessage: notebook.refreshErrorMessage,
         errorMessage: notebook.errorMessage,
         owner: notebook.owner,
       })

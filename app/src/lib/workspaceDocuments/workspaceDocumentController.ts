@@ -155,6 +155,10 @@ export class WorkspaceDocumentController {
       mimeType: options?.mimeType,
       state: options?.state,
       readOnly: options?.readOnly,
+      releasePending: options?.releasePending,
+      writeAccessRequestState: options?.writeAccessRequestState,
+      writeAccessErrorMessage: options?.writeAccessErrorMessage,
+      refreshErrorMessage: options?.refreshErrorMessage,
       errorMessage: options?.errorMessage,
       owner: options?.owner,
     }
@@ -169,6 +173,12 @@ export class WorkspaceDocumentController {
         existing?.mimeType === nextDocument.mimeType &&
         existing?.state === nextDocument.state &&
         existing?.readOnly === nextDocument.readOnly &&
+        existing?.releasePending === nextDocument.releasePending &&
+        existing?.writeAccessRequestState ===
+          nextDocument.writeAccessRequestState &&
+        existing?.writeAccessErrorMessage ===
+          nextDocument.writeAccessErrorMessage &&
+        existing?.refreshErrorMessage === nextDocument.refreshErrorMessage &&
         existing?.errorMessage === nextDocument.errorMessage &&
         existing?.owner === nextDocument.owner
       ) {

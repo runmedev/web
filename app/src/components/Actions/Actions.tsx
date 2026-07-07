@@ -1685,12 +1685,21 @@ function NotebookTabContent({
   isWindowFocused: boolean
   onCellFocus: (docUri: string, state: NotebookActiveCellState) => void
 }) {
-  const { getNotebookData, openNotebook, useNotebookSnapshot } =
-    useNotebookContext()
+  const {
+    getNotebookData,
+    refreshReadOnlyNotebook,
+    requestWriteAccess,
+    useNotebookSnapshot,
+  } = useNotebookContext()
   const { store } = useNotebookStore()
   const notebookSnapshot = useNotebookSnapshot(docUri)
   const syncState = useNotebookSyncState(docUri)
-  const readOnly = Boolean(entry.readOnly || notebookSnapshot?.readOnly)
+  const releasePending = Boolean(
+    entry.releasePending || notebookSnapshot?.releasePending
+  )
+  const readOnly = Boolean(
+    entry.readOnly || notebookSnapshot?.readOnly || releasePending
+  )
   const isDriveBacked = isDriveBackedNotebook(entry, syncState)
   const { commentsPanelOpen, openCommentsPanel, setCommentsPanelOpen } =
     useCommentsPanel()
@@ -1984,16 +1993,25 @@ function NotebookTabContent({
             </Text>
           )}
           <Text size="2" as="p">
-            Close this notebook in the other tab, then retry here.
+            Request write access to save the other tab and switch it to
+            read-only.
           </Text>
+          {entry.writeAccessErrorMessage && (
+            <Text size="2" as="p" color="red">
+              {entry.writeAccessErrorMessage}
+            </Text>
+          )}
         </div>
         <Button
           variant="soft"
+          disabled={entry.writeAccessRequestState === 'pending'}
           onClick={() => {
-            void openNotebook(docUri, { name: entry.name })
+            void requestWriteAccess(docUri)
           }}
         >
-          Retry
+          {entry.writeAccessRequestState === 'pending'
+            ? 'Requesting write access...'
+            : 'Request write access'}
         </Button>
       </div>
     )
@@ -2049,19 +2067,65 @@ function NotebookTabContent({
         {/* Full-width notebook column with horizontal padding for breathing room.
             Cells expand to fill the available width of the tab content area. */}
         <div id="notebook-column" className="w-full py-2 px-8">
-          {readOnly && (
+          {releasePending ? (
             <div
               className="mb-3 flex items-center gap-2 rounded-nb-sm border border-nb-border bg-nb-surface-2 px-3 py-2 text-xs text-nb-text-muted"
-              data-testid="notebook-readonly-banner"
+              data-testid="notebook-owner-locked-banner"
             >
               <LockClosedIcon className="h-4 w-4 text-nb-text-muted" />
               <span>
-                {ownerSessionId
-                  ? `Read-only. This notebook is open for editing in session ${ownerSessionId}.`
-                  : 'Read-only. This notebook is open for editing in another browser tab.'}
+                Another session requested write access. Saving changes and
+                switching this notebook to read-only.
               </span>
             </div>
-          )}
+          ) : readOnly ? (
+            <div
+              className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-nb-sm border border-nb-border bg-nb-surface-2 px-3 py-2 text-xs text-nb-text-muted"
+              data-testid="notebook-readonly-banner"
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <LockClosedIcon className="h-4 w-4 shrink-0 text-nb-text-muted" />
+                <div className="min-w-0">
+                  <p>
+                    {ownerSessionId
+                      ? `Read-only. This notebook is open for editing in session ${ownerSessionId}.`
+                      : 'Read-only. This notebook is open for editing in another browser tab.'}
+                  </p>
+                  {entry.writeAccessErrorMessage && (
+                    <p className="mt-1 text-red-600">
+                      {entry.writeAccessErrorMessage}
+                    </p>
+                  )}
+                  {entry.refreshErrorMessage && (
+                    <p className="mt-1 text-red-600">
+                      {entry.refreshErrorMessage}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {entry.refreshErrorMessage && (
+                  <Button
+                    size="1"
+                    variant="soft"
+                    onClick={() => void refreshReadOnlyNotebook(docUri)}
+                  >
+                    Refresh
+                  </Button>
+                )}
+                <Button
+                  size="1"
+                  variant="soft"
+                  disabled={entry.writeAccessRequestState === 'pending'}
+                  onClick={() => void requestWriteAccess(docUri)}
+                >
+                  {entry.writeAccessRequestState === 'pending'
+                    ? 'Requesting...'
+                    : 'Request write access'}
+                </Button>
+              </div>
+            </div>
+          ) : null}
           {cellDatas.length === 0 ? (
             <div
               id="empty-notebook-prompt"
@@ -2228,6 +2292,10 @@ function renderWorkspaceDocument({
       name: document.title,
       state: document.state ?? 'loading',
       readOnly: document.readOnly,
+      releasePending: document.releasePending,
+      writeAccessRequestState: document.writeAccessRequestState,
+      writeAccessErrorMessage: document.writeAccessErrorMessage,
+      refreshErrorMessage: document.refreshErrorMessage,
       errorMessage: document.errorMessage,
       ...(document.owner !== undefined ? { owner: document.owner } : {}),
     }

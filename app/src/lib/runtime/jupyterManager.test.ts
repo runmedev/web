@@ -150,4 +150,57 @@ describe("jupyterManager aliases", () => {
       }),
     ).rejects.toThrow('Kernel alias "openai2" already exists');
   });
+
+  it("interrupts a running kernel through the runner API", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/v1/jupyter/servers")) {
+        return jsonResponse([
+          { name: "port-8888", runner: "dev", base_url: "http://127.0.0.1:8888" },
+        ]);
+      }
+      if (url.endsWith("/v1/jupyter/servers/port-8888/kernels") && method === "GET") {
+        return jsonResponse([{ id: "kernel-1", name: "python3" }]);
+      }
+      if (
+        url.endsWith(
+          "/v1/jupyter/servers/port-8888/kernels/kernel-1:interrupt",
+        ) && method === "POST"
+      ) {
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    vi.doMock("./runnersManager", () => ({
+      DEFAULT_RUNNER_PLACEHOLDER: "<default>",
+      getRunnersManager: () => ({
+        getDefaultRunnerName: () => "dev",
+        getWithFallback: () => ({ name: "dev", endpoint: "http://127.0.0.1:5191" }),
+      }),
+    }));
+    vi.doMock("../../token", () => ({
+      getAuthData: vi.fn(async () => null),
+    }));
+    vi.doMock("../../browserAdapter.client", () => ({
+      getBrowserAdapter: () => ({ simpleAuth: {} }),
+    }));
+
+    const { getJupyterManager } = await import("./jupyterManager");
+    const manager = getJupyterManager();
+    const abortController = new AbortController();
+    await manager.interruptKernel("dev", "port-8888", "kernel-1", {
+      signal: abortController.signal,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:5191/v1/jupyter/servers/port-8888/kernels/kernel-1:interrupt",
+      expect.objectContaining({
+        method: "POST",
+        signal: abortController.signal,
+      }),
+    );
+  });
 });

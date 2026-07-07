@@ -1,6 +1,6 @@
 import { create } from '@bufbuild/protobuf'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../contexts/CellContext'
 import type { LocalNotebooks } from '../storage/local'
@@ -11,7 +11,9 @@ import {
 } from './notebookDataController'
 import type {
   AcquireResult,
+  ForceReleaseRequest,
   NotebookOwnershipManager,
+  NotebookOwnershipMessage,
 } from './tabCoordination/notebookOwnership'
 
 vi.mock('@runmedev/renderers', () => ({
@@ -99,6 +101,7 @@ function createFakeOwnershipManager(
     tabId: 'tab-test',
     epoch: 'epoch-test',
     release: vi.fn(),
+    released: Promise.resolve(),
     isCurrentOwner: vi.fn(async () => true),
   }
   return {
@@ -117,9 +120,26 @@ function createFakeOwnershipManager(
     release: vi.fn(),
     getOwner: vi.fn(async () => null),
     subscribe: vi.fn(() => () => {}),
+    subscribeToMessages: vi.fn(() => () => {}),
+    setForceReleaseHandler: vi.fn(() => () => {}),
+    requestForceRelease: vi.fn(async () => ({ status: 'released' })),
     isCurrentOwner: vi.fn(async () => true),
     dispose: vi.fn(),
   } as unknown as NotebookOwnershipManager
+}
+
+function createForceReleaseRequest(notebookUri: string): ForceReleaseRequest {
+  const now = Date.now()
+  return {
+    type: 'force-release-request',
+    requestId: 'request-test',
+    notebookUri,
+    requesterTabId: 'tab-requester',
+    requesterLabel: 'Requester',
+    requesterUrl: 'http://localhost/requester',
+    createdAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + 10_000).toISOString(),
+  }
 }
 
 describe('NotebookDataController', () => {
@@ -498,6 +518,7 @@ describe('NotebookDataController', () => {
           tabId: 'tab-test',
           epoch: 'epoch-test',
           release,
+          released: Promise.resolve(),
           isCurrentOwner: vi.fn(async () => true),
         },
       })
@@ -535,6 +556,7 @@ describe('NotebookDataController', () => {
           tabId: 'tab-test',
           epoch: 'epoch-test',
           release,
+          released: Promise.resolve(),
           isCurrentOwner: vi.fn(async () => true),
         },
       })
@@ -558,5 +580,447 @@ describe('NotebookDataController', () => {
       controller.getNotebookData('local://file/demo')?.getSnapshot().loaded
     ).toBe(true)
     expect(release).not.toHaveBeenCalled()
+  })
+
+  it('locks, flushes, and converts the owner to read-only before releasing', async () => {
+    const uri = 'local://file/owned'
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'owned.json',
+      remoteId: uri,
+      notebook: createNotebook('before'),
+    })
+    let finishSave!: () => void
+    localStore.save.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSave = resolve
+        })
+    )
+    const release = vi.fn()
+    const lease = {
+      notebookUri: uri,
+      tabId: 'tab-owner',
+      epoch: 'epoch-owner',
+      release,
+      released: Promise.resolve(),
+      isCurrentOwner: vi.fn(async () => true),
+    }
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(
+      createFakeOwnershipManager({ status: 'acquired', lease })
+    )
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    await controller.openNotebook(uri)
+    const data = controller.getNotebookData(uri)!
+    const cancelExecutions = vi.spyOn(data, 'cancelActiveExecutions')
+
+    const releaseResult = controller.forceReleaseNotebook(
+      createForceReleaseRequest(uri)
+    )
+
+    await waitFor(() => {
+      expect(data.getSnapshot().releasePending).toBe(true)
+    })
+    expect(() => data.appendCell()).toThrow('releasing its write lock')
+    expect(cancelExecutions).toHaveBeenCalledTimes(1)
+    expect(release).not.toHaveBeenCalled()
+
+    finishSave()
+    await expect(releaseResult).resolves.toEqual({ status: 'released' })
+
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(localStore.save.mock.invocationCallOrder[0]).toBeLessThan(
+      release.mock.invocationCallOrder[0]!
+    )
+    expect(data.getSnapshot()).toEqual(
+      expect.objectContaining({ readOnly: true, releasePending: false })
+    )
+    expect(controller.getOpenNotebooks()[0]).toEqual(
+      expect.objectContaining({ readOnly: true, releasePending: false })
+    )
+  })
+
+  it('keeps ownership when the final save fails', async () => {
+    const uri = 'local://file/save-failure'
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'save-failure.json',
+      remoteId: uri,
+      notebook: createNotebook('before'),
+    })
+    localStore.save.mockRejectedValueOnce(new Error('disk full'))
+    const release = vi.fn()
+    const lease = {
+      notebookUri: uri,
+      tabId: 'tab-owner',
+      epoch: 'epoch-owner',
+      release,
+      released: Promise.resolve(),
+      isCurrentOwner: vi.fn(async () => true),
+    }
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(
+      createFakeOwnershipManager({ status: 'acquired', lease })
+    )
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    await controller.openNotebook(uri)
+
+    const result = await controller.forceReleaseNotebook(
+      createForceReleaseRequest(uri)
+    )
+
+    expect(result).toEqual(
+      expect.objectContaining({ status: 'failed', message: expect.any(String) })
+    )
+    expect(release).not.toHaveBeenCalled()
+    expect(controller.getNotebookData(uri)?.getSnapshot()).toEqual(
+      expect.objectContaining({ readOnly: false, releasePending: false })
+    )
+  })
+
+  it('does not reopen a notebook closed while the final save is pending', async () => {
+    const uri = 'local://file/closed-during-release'
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'closed-during-release.json',
+      remoteId: uri,
+      notebook: createNotebook('before'),
+    })
+    let failSave!: (error: Error) => void
+    localStore.save.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failSave = reject
+        })
+    )
+    const release = vi.fn()
+    const lease = {
+      notebookUri: uri,
+      tabId: 'tab-owner',
+      epoch: 'epoch-owner',
+      release,
+      released: Promise.resolve(),
+      isCurrentOwner: vi.fn(async () => true),
+    }
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(
+      createFakeOwnershipManager({ status: 'acquired', lease })
+    )
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    await controller.openNotebook(uri)
+
+    const result = controller.forceReleaseNotebook(
+      createForceReleaseRequest(uri)
+    )
+    await waitFor(() => expect(localStore.save).toHaveBeenCalledTimes(1))
+    controller.closeNotebook(uri)
+    failSave(new Error('disk full'))
+
+    await expect(result).resolves.toEqual(
+      expect.objectContaining({ status: 'failed' })
+    )
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(controller.getOpenNotebooks()).toEqual([])
+    expect(controller.getNotebookData(uri)).toBeUndefined()
+  })
+
+  it('keeps a notebook closed when its pending final save succeeds', async () => {
+    const uri = 'local://file/closed-after-save'
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'closed-after-save.json',
+      remoteId: uri,
+      notebook: createNotebook('before'),
+    })
+    let finishSave!: () => void
+    localStore.save.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSave = resolve
+        })
+    )
+    const release = vi.fn()
+    const lease = {
+      notebookUri: uri,
+      tabId: 'tab-owner',
+      epoch: 'epoch-owner',
+      release,
+      released: Promise.resolve(),
+      isCurrentOwner: vi.fn(async () => true),
+    }
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(
+      createFakeOwnershipManager({ status: 'acquired', lease })
+    )
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    await controller.openNotebook(uri)
+
+    const result = controller.forceReleaseNotebook(
+      createForceReleaseRequest(uri)
+    )
+    await waitFor(() => expect(localStore.save).toHaveBeenCalledTimes(1))
+    controller.closeNotebook(uri)
+    finishSave()
+
+    await expect(result).resolves.toEqual({ status: 'released' })
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(controller.getOpenNotebooks()).toEqual([])
+    expect(controller.getNotebookData(uri)).toBeUndefined()
+  })
+
+  it('reloads when the new owner acquires before release cleanup finishes', async () => {
+    const uri = 'local://file/release-race'
+    const localStore = createFakeLocalNotebooks()
+    const record = {
+      id: uri,
+      name: 'release-race.json',
+      remoteId: uri,
+      notebook: createNotebook('owner save'),
+    }
+    localStore.records.set(uri, record)
+    let finishRelease!: () => void
+    const released = new Promise<void>((resolve) => {
+      finishRelease = resolve
+    })
+    const lease = {
+      notebookUri: uri,
+      tabId: 'tab-owner',
+      epoch: 'epoch-owner',
+      release: vi.fn(),
+      released,
+      isCurrentOwner: vi.fn(async () => true),
+    }
+    const newOwner = {
+      notebookUri: uri,
+      ownerTabId: 'tab-requester',
+      ownerLabel: 'Requester',
+      ownerUrl: 'http://localhost/requester',
+      ownerStartedAt: new Date().toISOString(),
+      epoch: 'epoch-requester',
+    }
+    let messageListener: ((message: NotebookOwnershipMessage) => void) | null =
+      null
+    const manager = createFakeOwnershipManager({ status: 'acquired', lease })
+    vi.mocked(manager.subscribeToMessages).mockImplementation((listener) => {
+      messageListener = listener
+      return () => {
+        messageListener = null
+      }
+    })
+    vi.mocked(manager.getOwner).mockResolvedValue(newOwner)
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(manager)
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    await controller.openNotebook(uri)
+
+    const result = controller.forceReleaseNotebook(
+      createForceReleaseRequest(uri)
+    )
+    await waitFor(() => expect(lease.release).toHaveBeenCalledTimes(1))
+    record.notebook = createNotebook('requester save')
+    messageListener?.({ type: 'owner-acquired', record: newOwner })
+    finishRelease()
+
+    await expect(result).resolves.toEqual({ status: 'released' })
+    expect(
+      controller.getNotebookData(uri)?.getCellSnapshot('cell-1')?.value
+    ).toBe('requester save')
+    expect(controller.getNotebookData(uri)?.isReadOnly()).toBe(true)
+    expect(controller.getOpenNotebooks()[0]?.owner).toEqual(newOwner)
+  })
+
+  it('reloads the owner save before the requester becomes editable', async () => {
+    const uri = 'local://file/takeover'
+    const localStore = createFakeLocalNotebooks()
+    const record = {
+      id: uri,
+      name: 'takeover.json',
+      remoteId: uri,
+      notebook: createNotebook('stale'),
+    }
+    localStore.records.set(uri, record)
+    const owner = {
+      notebookUri: uri,
+      ownerTabId: 'tab-owner',
+      ownerLabel: 'Owner',
+      ownerUrl: 'http://localhost/owner',
+      ownerStartedAt: new Date().toISOString(),
+      epoch: 'epoch-owner',
+    }
+    const manager = createFakeOwnershipManager()
+    vi.mocked(manager.acquire)
+      .mockResolvedValueOnce({ status: 'blocked', owner })
+      .mockResolvedValueOnce({ status: 'blocked', owner })
+      .mockResolvedValueOnce({
+        status: 'acquired',
+        lease: {
+          notebookUri: uri,
+          tabId: 'tab-requester',
+          epoch: 'epoch-requester',
+          release: vi.fn(),
+          released: Promise.resolve(),
+          isCurrentOwner: vi.fn(async () => true),
+        },
+      })
+    vi.mocked(manager.requestForceRelease).mockResolvedValue({
+      status: 'released',
+    })
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(manager)
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    await controller.openNotebook(uri)
+    record.notebook = createNotebook('owner final save')
+
+    const result = await controller.requestWriteAccess(uri)
+
+    expect(manager.requestForceRelease).toHaveBeenCalledTimes(1)
+    expect(result.entry.readOnly).toBe(false)
+    expect(
+      controller.getNotebookData(uri)?.getCellSnapshot('cell-1')?.value
+    ).toBe('owner final save')
+  })
+
+  it('acquires immediately when stale owner metadata outlives the lock', async () => {
+    const uri = 'local://file/stale-owner'
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'stale-owner.json',
+      remoteId: uri,
+      notebook: createNotebook('latest'),
+    })
+    const owner = {
+      notebookUri: uri,
+      ownerTabId: 'tab-gone',
+      ownerLabel: 'Gone owner',
+      ownerUrl: 'http://localhost/gone',
+      ownerStartedAt: new Date().toISOString(),
+      epoch: 'epoch-gone',
+    }
+    const manager = createFakeOwnershipManager()
+    vi.mocked(manager.acquire)
+      .mockResolvedValueOnce({ status: 'blocked', owner })
+      .mockResolvedValueOnce({
+        status: 'acquired',
+        lease: {
+          notebookUri: uri,
+          tabId: 'tab-requester',
+          epoch: 'epoch-requester',
+          release: vi.fn(),
+          released: Promise.resolve(),
+          isCurrentOwner: vi.fn(async () => true),
+        },
+      })
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(manager)
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    await controller.openNotebook(uri)
+
+    const result = await controller.requestWriteAccess(uri)
+
+    expect(result.entry.readOnly).toBe(false)
+    expect(manager.requestForceRelease).not.toHaveBeenCalled()
+  })
+
+  it('surfaces coordination errors instead of staying pending', async () => {
+    const uri = 'local://file/request-error'
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'request-error.json',
+      remoteId: uri,
+      notebook: createNotebook('value'),
+    })
+    const owner = {
+      notebookUri: uri,
+      ownerTabId: 'tab-owner',
+      ownerLabel: 'Owner',
+      ownerUrl: 'http://localhost/owner',
+      ownerStartedAt: new Date().toISOString(),
+      epoch: 'epoch-owner',
+    }
+    const manager = createFakeOwnershipManager()
+    vi.mocked(manager.acquire).mockResolvedValue({ status: 'blocked', owner })
+    vi.mocked(manager.requestForceRelease).mockRejectedValue(
+      new Error('IndexedDB unavailable')
+    )
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(manager)
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    await controller.openNotebook(uri)
+
+    const result = await controller.requestWriteAccess(uri)
+
+    expect(result.entry.writeAccessRequestState).toBe('error')
+    expect(result.entry.writeAccessErrorMessage).toContain(
+      'IndexedDB unavailable'
+    )
+  })
+
+  it('reloads a former owner read-only after another tab acquires', async () => {
+    const uri = 'local://file/former-owner'
+    const localStore = createFakeLocalNotebooks()
+    const record = {
+      id: uri,
+      name: 'former-owner.json',
+      remoteId: uri,
+      notebook: createNotebook('old'),
+    }
+    localStore.records.set(uri, record)
+    const owner = {
+      notebookUri: uri,
+      ownerTabId: 'tab-other',
+      ownerLabel: 'New owner',
+      ownerUrl: 'http://localhost/new-owner',
+      ownerStartedAt: new Date().toISOString(),
+      epoch: 'epoch-new-owner',
+    }
+    let messageListener: ((message: NotebookOwnershipMessage) => void) | null =
+      null
+    const manager = createFakeOwnershipManager({ status: 'blocked', owner })
+    vi.mocked(manager.subscribeToMessages).mockImplementation((listener) => {
+      messageListener = listener
+      return () => {
+        messageListener = null
+      }
+    })
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(manager)
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    await controller.openNotebook(uri)
+    record.notebook = createNotebook('new writer save')
+
+    messageListener?.({ type: 'owner-acquired', record: owner })
+
+    await waitFor(() => {
+      expect(
+        controller.getNotebookData(uri)?.getCellSnapshot('cell-1')?.value
+      ).toBe('new writer save')
+    })
+    expect(controller.getNotebookData(uri)?.isReadOnly()).toBe(true)
+    expect(controller.getOpenNotebooks()[0]?.owner).toEqual(owner)
   })
 })

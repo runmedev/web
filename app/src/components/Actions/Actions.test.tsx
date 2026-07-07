@@ -30,6 +30,10 @@ const contextMocks = vi.hoisted(() => ({
     requestedUri?: string
     state?: 'loading' | 'loaded' | 'blocked' | 'error'
     readOnly?: boolean
+    releasePending?: boolean
+    writeAccessRequestState?: 'pending' | 'error'
+    writeAccessErrorMessage?: string
+    refreshErrorMessage?: string
     owner?: NotebookOwnershipRecord | null
   }>,
   currentDoc: null as string | null,
@@ -37,12 +41,15 @@ const contextMocks = vi.hoisted(() => ({
   showDocument: vi.fn(),
   closeWorkspaceDocument: vi.fn(),
   getNotebookData: vi.fn(),
+  requestWriteAccess: vi.fn(async () => undefined),
+  refreshReadOnlyNotebook: vi.fn(async () => undefined),
   notebookSnapshots: new Map<
     string,
     {
       uri: string
       loaded: boolean
       readOnly?: boolean
+      releasePending?: boolean
       notebook: parser_pb.Notebook
     }
   >(),
@@ -94,6 +101,8 @@ vi.mock('../../contexts/SettingsContext', () => ({
 vi.mock('../../contexts/NotebookContext', () => ({
   useNotebookContext: () => ({
     getNotebookData: contextMocks.getNotebookData,
+    requestWriteAccess: contextMocks.requestWriteAccess,
+    refreshReadOnlyNotebook: contextMocks.refreshReadOnlyNotebook,
     useNotebookSnapshot: (uri: string) =>
       contextMocks.notebookSnapshots.get(uri) ?? null,
   }),
@@ -280,6 +289,10 @@ beforeEach(() => {
   contextMocks.closeWorkspaceDocument.mockReset()
   contextMocks.getNotebookData.mockReset()
   contextMocks.getNotebookData.mockReturnValue(null)
+  contextMocks.requestWriteAccess.mockReset()
+  contextMocks.requestWriteAccess.mockResolvedValue(undefined)
+  contextMocks.refreshReadOnlyNotebook.mockReset()
+  contextMocks.refreshReadOnlyNotebook.mockResolvedValue(undefined)
   contextMocks.notebookSnapshots.clear()
   contextMocks.notebookStore = null
   conflictMocks.openNotebookConflictDiff.mockReset()
@@ -365,6 +378,91 @@ describe('Actions tabs', () => {
       screen.getByTestId('notebook-readonly-banner').textContent
     ).toContain('session calm-harbor')
     expect(screen.queryByLabelText('Add first cell')).toBeNull()
+  })
+
+  it('requests write access from a read-only notebook banner', () => {
+    const uri = 'local://file/reference.runme.md'
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      {
+        uri,
+        title: 'reference.runme.md',
+        state: 'loaded',
+        readOnly: true,
+      },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      readOnly: true,
+      notebook: create(parser_pb.NotebookSchema, { metadata: {}, cells: [] }),
+    })
+
+    render(<Actions />)
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Request write access' })
+    )
+
+    expect(contextMocks.requestWriteAccess).toHaveBeenCalledWith(uri)
+  })
+
+  it('renders owner locked mode immediately without prompting', () => {
+    const uri = 'local://file/owned.runme.md'
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      {
+        uri,
+        title: 'owned.runme.md',
+        state: 'loaded',
+        releasePending: true,
+      },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      releasePending: true,
+      notebook: create(parser_pb.NotebookSchema, { metadata: {}, cells: [] }),
+    })
+
+    render(<Actions />)
+
+    expect(
+      screen.getByTestId('notebook-owner-locked-banner').textContent
+    ).toContain('Saving changes and switching this notebook to read-only')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByLabelText('Add first cell')).toBeNull()
+  })
+
+  it('surfaces a timeout and requires the user to retry', () => {
+    const uri = 'local://file/timeout.runme.md'
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      {
+        uri,
+        title: 'timeout.runme.md',
+        state: 'loaded',
+        readOnly: true,
+        writeAccessRequestState: 'error',
+        writeAccessErrorMessage:
+          'The other session did not respond. The notebook is still read-only.',
+      },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      readOnly: true,
+      notebook: create(parser_pb.NotebookSchema, { metadata: {}, cells: [] }),
+    })
+
+    render(<Actions />)
+
+    expect(
+      screen.getByTestId('notebook-readonly-banner').textContent
+    ).toContain('The other session did not respond')
+    expect(
+      screen.getByRole('button', { name: 'Request write access' })
+    ).toBeTruthy()
+    expect(contextMocks.requestWriteAccess).not.toHaveBeenCalled()
   })
 
   it('shows the owner session when a notebook is blocked by another tab', () => {
