@@ -323,8 +323,30 @@ describe("MarkdownCell", () => {
     });
 
     const rendered = screen.getByTestId("markdown-rendered");
+    expect(rendered.getAttribute("role")).toBeNull();
+    expect(rendered.getAttribute("tabindex")).toBeNull();
+    expect(rendered.getAttribute("aria-label")).toBeNull();
     fireEvent.doubleClick(rendered);
     fireEvent.keyDown(rendered, { key: "Enter" });
+
+    expect(screen.getByTestId("markdown-rendered")).toBeTruthy();
+    expect(screen.queryByTestId("markdown-editor")).toBeNull();
+  });
+
+  it("starts inactive empty read-only markdown in rendered mode", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-read-only-empty-inactive",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "",
+    });
+
+    renderMarkdownCell(
+      new StubCellData(cell) as unknown as CellData,
+      { readOnly: true },
+    );
 
     expect(screen.getByTestId("markdown-rendered")).toBeTruthy();
     expect(screen.queryByTestId("markdown-editor")).toBeNull();

@@ -220,6 +220,9 @@ const MarkdownCell = memo(
     // Start in rendered mode unless the cell is empty (new cell)
     const [rendered, setRendered] = useState(() => {
       const value = cell?.value ?? ''
+      if (readOnly) {
+        return true
+      }
       if (value.trim() && isActiveCell && activeFocusRole === 'editor') {
         return false
       }
@@ -232,6 +235,7 @@ const MarkdownCell = memo(
 
     // Get the current cell value
     const value = cell?.value ?? ''
+    const canOpenSource = !readOnly || Boolean(value.trim())
     const shouldOwnFocus = isActiveCell && isWindowFocused
     const tracksActiveCell = Boolean(onFocusRoleChange)
 
@@ -272,15 +276,15 @@ const MarkdownCell = memo(
         return
       }
       if (
-        (!readOnly && (activeFocusRole === 'editor' || !value.trim())) ||
-        (readOnly && activeFocusRole === 'editor' && Boolean(value.trim()))
+        (activeFocusRole === 'editor' && canOpenSource) ||
+        (!readOnly && !value.trim())
       ) {
         setRendered(false)
         return
       }
       setRendered(true)
       renderedRef.current?.focus()
-    }, [activeFocusRole, readOnly, shouldOwnFocus, value])
+    }, [activeFocusRole, canOpenSource, readOnly, shouldOwnFocus, value])
 
     useEffect(() => {
       if (!shouldOwnFocus || activeFocusRole !== 'rendered' || !rendered) {
@@ -300,13 +304,13 @@ const MarkdownCell = memo(
      * Handle switching to edit mode when user double-clicks rendered content.
      */
     const handleDoubleClick = useCallback(() => {
-      if (readOnly && !value.trim()) {
+      if (!canOpenSource) {
         return
       }
       setRendered(false)
       setEditorFocusIntent(true)
       onFocusRoleChange?.('editor')
-    }, [onFocusRoleChange, readOnly, value])
+    }, [canOpenSource, onFocusRoleChange])
 
     /**
      * Handle keyboard activation on the rendered container for accessibility.
@@ -321,7 +325,7 @@ const MarkdownCell = memo(
           return
         }
         if (event.key === 'Enter' || event.key === ' ') {
-          if (readOnly && !value.trim()) {
+          if (!canOpenSource) {
             return
           }
           event.preventDefault()
@@ -330,7 +334,7 @@ const MarkdownCell = memo(
           onFocusRoleChange?.('editor')
         }
       },
-      [onFocusRoleChange, readOnly, value]
+      [canOpenSource, onFocusRoleChange]
     )
 
     /**
@@ -417,15 +421,17 @@ const MarkdownCell = memo(
           <div
             id={`markdown-rendered-${cell.refId}`}
             className="cursor-text rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
-            onDoubleClick={handleDoubleClick}
-            onKeyDown={handleRenderedKeyDown}
+            onDoubleClick={canOpenSource ? handleDoubleClick : undefined}
+            onKeyDown={canOpenSource ? handleRenderedKeyDown : undefined}
             ref={renderedRef}
-            tabIndex={0}
-            role="button"
+            tabIndex={canOpenSource ? 0 : undefined}
+            role={canOpenSource ? 'button' : undefined}
             aria-label={
-              readOnly
-                ? 'Double-click or press Enter to view read-only markdown source'
-                : 'Double-click or press Enter to edit markdown'
+              canOpenSource
+                ? readOnly
+                  ? 'Double-click or press Enter to view read-only markdown source'
+                  : 'Double-click or press Enter to edit markdown'
+                : undefined
             }
             data-testid="markdown-rendered"
             data-cell-focus-role="rendered"
