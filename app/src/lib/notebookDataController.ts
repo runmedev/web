@@ -454,22 +454,39 @@ export class NotebookDataController {
         await handle.data.cancelActiveExecutions()
         await handle.data.flushPendingPersist()
       } catch (error) {
-        handle.data.setReleasePending(false)
-        handle.data.setReadOnly(false)
-        handle.data.setNotebookStore(this.createOwnedNotebookStore(localUri))
-        const currentEntry =
-          this.openNotebooks.find((item) => item.uri === localUri) ?? entry
-        this.upsertOpenEntry({
-          ...currentEntry,
-          state: 'loaded',
-          readOnly: false,
-          releasePending: false,
-          writeAccessErrorMessage: `Could not save changes before releasing write access: ${String(error)}`,
-        })
+        const currentEntry = this.openNotebooks.find(
+          (item) => item.uri === localUri
+        )
+        if (
+          currentEntry &&
+          this.notebooks.get(localUri) === handle &&
+          this.leases.get(localUri) === lease
+        ) {
+          handle.data.setReleasePending(false)
+          handle.data.setReadOnly(false)
+          handle.data.setNotebookStore(this.createOwnedNotebookStore(localUri))
+          this.upsertOpenEntry({
+            ...currentEntry,
+            state: 'loaded',
+            readOnly: false,
+            releasePending: false,
+            writeAccessErrorMessage: `Could not save changes before releasing write access: ${String(error)}`,
+          })
+        }
         return {
           status: 'failed',
           message: `The other session could not save changes before releasing the lock: ${String(error)}`,
         }
+      }
+
+      // Closing the notebook releases its lease. Do not let this asynchronous
+      // request mutate a notebook that was closed or subsequently reopened.
+      if (
+        !this.openNotebooks.some((item) => item.uri === localUri) ||
+        this.notebooks.get(localUri) !== handle ||
+        this.leases.get(localUri) !== lease
+      ) {
+        return { status: 'released' }
       }
 
       // From this point onward the old session must never become writable again.
@@ -485,11 +502,15 @@ export class NotebookDataController {
       if (this.leases.get(localUri) === lease) {
         this.leases.delete(localUri)
       }
+      const currentEntry = this.openNotebooks.find(
+        (item) => item.uri === localUri
+      )
+      if (!currentEntry || this.notebooks.get(localUri) !== handle) {
+        return { status: 'released' }
+      }
       handle.data.setNotebookStore(null)
       handle.data.setReadOnly(true)
       handle.data.setReleasePending(false)
-      const currentEntry =
-        this.openNotebooks.find((item) => item.uri === localUri) ?? entry
       try {
         this.upsertOpenEntry({
           ...currentEntry,

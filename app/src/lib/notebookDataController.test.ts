@@ -685,6 +685,102 @@ describe('NotebookDataController', () => {
     )
   })
 
+  it('does not reopen a notebook closed while the final save is pending', async () => {
+    const uri = 'local://file/closed-during-release'
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'closed-during-release.json',
+      remoteId: uri,
+      notebook: createNotebook('before'),
+    })
+    let failSave!: (error: Error) => void
+    localStore.save.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failSave = reject
+        })
+    )
+    const release = vi.fn()
+    const lease = {
+      notebookUri: uri,
+      tabId: 'tab-owner',
+      epoch: 'epoch-owner',
+      release,
+      released: Promise.resolve(),
+      isCurrentOwner: vi.fn(async () => true),
+    }
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(
+      createFakeOwnershipManager({ status: 'acquired', lease })
+    )
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    await controller.openNotebook(uri)
+
+    const result = controller.forceReleaseNotebook(
+      createForceReleaseRequest(uri)
+    )
+    await waitFor(() => expect(localStore.save).toHaveBeenCalledTimes(1))
+    controller.closeNotebook(uri)
+    failSave(new Error('disk full'))
+
+    await expect(result).resolves.toEqual(
+      expect.objectContaining({ status: 'failed' })
+    )
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(controller.getOpenNotebooks()).toEqual([])
+    expect(controller.getNotebookData(uri)).toBeUndefined()
+  })
+
+  it('keeps a notebook closed when its pending final save succeeds', async () => {
+    const uri = 'local://file/closed-after-save'
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'closed-after-save.json',
+      remoteId: uri,
+      notebook: createNotebook('before'),
+    })
+    let finishSave!: () => void
+    localStore.save.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSave = resolve
+        })
+    )
+    const release = vi.fn()
+    const lease = {
+      notebookUri: uri,
+      tabId: 'tab-owner',
+      epoch: 'epoch-owner',
+      release,
+      released: Promise.resolve(),
+      isCurrentOwner: vi.fn(async () => true),
+    }
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(
+      createFakeOwnershipManager({ status: 'acquired', lease })
+    )
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    await controller.openNotebook(uri)
+
+    const result = controller.forceReleaseNotebook(
+      createForceReleaseRequest(uri)
+    )
+    await waitFor(() => expect(localStore.save).toHaveBeenCalledTimes(1))
+    controller.closeNotebook(uri)
+    finishSave()
+
+    await expect(result).resolves.toEqual({ status: 'released' })
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(controller.getOpenNotebooks()).toEqual([])
+    expect(controller.getNotebookData(uri)).toBeUndefined()
+  })
+
   it('reloads when the new owner acquires before release cleanup finishes', async () => {
     const uri = 'local://file/release-race'
     const localStore = createFakeLocalNotebooks()
