@@ -172,11 +172,11 @@ const Editor = memo(
     useEffect(() => {
       const wasFocused = previousShouldFocusRef.current;
       previousShouldFocusRef.current = shouldFocus;
-      if (!shouldFocus || wasFocused || readOnly || !editorRef.current) {
+      if (!shouldFocus || wasFocused || !editorRef.current) {
         return;
       }
       editorRef.current.focus?.();
-    }, [readOnly, shouldFocus]);
+    }, [shouldFocus]);
 
     useEffect(() => {
       return () => {

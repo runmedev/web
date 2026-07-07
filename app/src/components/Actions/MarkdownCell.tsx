@@ -179,7 +179,7 @@ interface MarkdownCellProps {
   isWindowFocused?: boolean
   /** Notify parent when markdown focus target changes explicitly */
   onFocusRoleChange?: (focusRole: CellFocusRole) => void
-  /** Render and inspect only; editing controls are disabled. */
+  /** Allow source inspection, but prevent content and metadata changes. */
   readOnly?: boolean
 }
 
@@ -220,9 +220,6 @@ const MarkdownCell = memo(
     // Start in rendered mode unless the cell is empty (new cell)
     const [rendered, setRendered] = useState(() => {
       const value = cell?.value ?? ''
-      if (readOnly) {
-        return true
-      }
       if (value.trim() && isActiveCell && activeFocusRole === 'editor') {
         return false
       }
@@ -274,7 +271,7 @@ const MarkdownCell = memo(
       if (!shouldOwnFocus || previouslyOwnedFocus) {
         return
       }
-      if (!readOnly && (activeFocusRole === 'editor' || !value.trim())) {
+      if (activeFocusRole === 'editor' || (!readOnly && !value.trim())) {
         setRendered(false)
         return
       }
@@ -300,13 +297,10 @@ const MarkdownCell = memo(
      * Handle switching to edit mode when user double-clicks rendered content.
      */
     const handleDoubleClick = useCallback(() => {
-      if (readOnly) {
-        return
-      }
       setRendered(false)
       setEditorFocusIntent(true)
       onFocusRoleChange?.('editor')
-    }, [onFocusRoleChange, readOnly])
+    }, [onFocusRoleChange])
 
     /**
      * Handle keyboard activation on the rendered container for accessibility.
@@ -321,16 +315,13 @@ const MarkdownCell = memo(
           return
         }
         if (event.key === 'Enter' || event.key === ' ') {
-          if (readOnly) {
-            return
-          }
           event.preventDefault()
           setRendered(false)
           setEditorFocusIntent(true)
           onFocusRoleChange?.('editor')
         }
       },
-      [onFocusRoleChange, readOnly]
+      [onFocusRoleChange]
     )
 
     /**
@@ -421,10 +412,10 @@ const MarkdownCell = memo(
             onKeyDown={handleRenderedKeyDown}
             ref={renderedRef}
             tabIndex={0}
-            role={readOnly ? undefined : 'button'}
+            role="button"
             aria-label={
               readOnly
-                ? 'Read-only markdown'
+                ? 'Double-click or press Enter to view read-only markdown source'
                 : 'Double-click or press Enter to edit markdown'
             }
             data-testid="markdown-rendered"
@@ -449,7 +440,6 @@ const MarkdownCell = memo(
               fontSize={fontSettings.fontSize}
               fontFamily={fontSettings.fontFamily}
               shouldFocus={
-                !readOnly &&
                 !rendered &&
                 ((shouldOwnFocus && activeFocusRole === 'editor') ||
                   editorFocusIntent)
@@ -476,9 +466,9 @@ const MarkdownCell = memo(
                 </select>
               </div>
               <div className="text-xs text-nb-text-muted">
-                Press{' '}
+                {readOnly && 'Read-only. '}Press{' '}
                 <kbd className="px-1 py-0.5 bg-nb-surface-3 rounded">Esc</kbd>{' '}
-                or run the cell to render
+                {readOnly ? 'to render' : 'or run the cell to render'}
               </div>
             </div>
           </div>

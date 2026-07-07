@@ -14,11 +14,13 @@ vi.mock("./Editor", () => ({
     value,
     onChange,
     shouldFocus = false,
+    readOnly = false,
   }: {
     id: string;
     value: string;
     onChange: (value: string) => void;
     shouldFocus?: boolean;
+    readOnly?: boolean;
   }) => {
     const ref = React.useRef<HTMLTextAreaElement | null>(null);
     const previousShouldFocusRef = React.useRef(false);
@@ -38,6 +40,7 @@ vi.mock("./Editor", () => ({
         data-testid="mock-markdown-editor-input"
         id={id}
         value={value}
+        readOnly={readOnly}
         onChange={(event) => onChange(event.target.value)}
       />
     );
@@ -266,6 +269,39 @@ describe("MarkdownCell", () => {
     expect(document.activeElement).toBe(
       screen.getByTestId("mock-markdown-editor-input"),
     );
+  });
+
+  it("opens read-only markdown source without allowing changes", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-read-only",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "# Copy me",
+    });
+    const stub = new StubCellData(cell);
+
+    renderMarkdownCell(stub as unknown as CellData, { readOnly: true });
+
+    const rendered = screen.getByTestId("markdown-rendered");
+    expect(rendered.getAttribute("aria-label")).toContain(
+      "view read-only markdown source",
+    );
+    fireEvent.doubleClick(rendered);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const input = screen.getByTestId(
+      "mock-markdown-editor-input",
+    ) as HTMLTextAreaElement;
+    expect(input.readOnly).toBe(true);
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.change(input, { target: { value: "changed" } });
+    expect(stub.snapshot.value).toBe("# Copy me");
   });
 
   it("focuses rendered markdown when leaving editor mode with escape", async () => {
