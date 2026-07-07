@@ -179,7 +179,7 @@ interface MarkdownCellProps {
   isWindowFocused?: boolean
   /** Notify parent when markdown focus target changes explicitly */
   onFocusRoleChange?: (focusRole: CellFocusRole) => void
-  /** Render and inspect only; editing controls are disabled. */
+  /** Allow source inspection, but prevent content and metadata changes. */
   readOnly?: boolean
 }
 
@@ -235,6 +235,7 @@ const MarkdownCell = memo(
 
     // Get the current cell value
     const value = cell?.value ?? ''
+    const canOpenSource = !readOnly || Boolean(value.trim())
     const shouldOwnFocus = isActiveCell && isWindowFocused
     const tracksActiveCell = Boolean(onFocusRoleChange)
 
@@ -274,13 +275,16 @@ const MarkdownCell = memo(
       if (!shouldOwnFocus || previouslyOwnedFocus) {
         return
       }
-      if (!readOnly && (activeFocusRole === 'editor' || !value.trim())) {
+      if (
+        (activeFocusRole === 'editor' && canOpenSource) ||
+        (!readOnly && !value.trim())
+      ) {
         setRendered(false)
         return
       }
       setRendered(true)
       renderedRef.current?.focus()
-    }, [activeFocusRole, readOnly, shouldOwnFocus, value])
+    }, [activeFocusRole, canOpenSource, readOnly, shouldOwnFocus, value])
 
     useEffect(() => {
       if (!shouldOwnFocus || activeFocusRole !== 'rendered' || !rendered) {
@@ -300,13 +304,13 @@ const MarkdownCell = memo(
      * Handle switching to edit mode when user double-clicks rendered content.
      */
     const handleDoubleClick = useCallback(() => {
-      if (readOnly) {
+      if (!canOpenSource) {
         return
       }
       setRendered(false)
       setEditorFocusIntent(true)
       onFocusRoleChange?.('editor')
-    }, [onFocusRoleChange, readOnly])
+    }, [canOpenSource, onFocusRoleChange])
 
     /**
      * Handle keyboard activation on the rendered container for accessibility.
@@ -321,7 +325,7 @@ const MarkdownCell = memo(
           return
         }
         if (event.key === 'Enter' || event.key === ' ') {
-          if (readOnly) {
+          if (!canOpenSource) {
             return
           }
           event.preventDefault()
@@ -330,7 +334,7 @@ const MarkdownCell = memo(
           onFocusRoleChange?.('editor')
         }
       },
-      [onFocusRoleChange, readOnly]
+      [canOpenSource, onFocusRoleChange]
     )
 
     /**
@@ -417,15 +421,17 @@ const MarkdownCell = memo(
           <div
             id={`markdown-rendered-${cell.refId}`}
             className="cursor-text rounded-nb-md border border-transparent p-4 transition-[border-color,background-color,box-shadow] duration-200 hover:border-nb-border hover:bg-nb-surface-2/60 hover:shadow-nb-xs"
-            onDoubleClick={handleDoubleClick}
-            onKeyDown={handleRenderedKeyDown}
+            onDoubleClick={canOpenSource ? handleDoubleClick : undefined}
+            onKeyDown={canOpenSource ? handleRenderedKeyDown : undefined}
             ref={renderedRef}
-            tabIndex={0}
-            role={readOnly ? undefined : 'button'}
+            tabIndex={canOpenSource ? 0 : undefined}
+            role={canOpenSource ? 'button' : undefined}
             aria-label={
-              readOnly
-                ? 'Read-only markdown'
-                : 'Double-click or press Enter to edit markdown'
+              canOpenSource
+                ? readOnly
+                  ? 'Double-click or press Enter to view read-only markdown source'
+                  : 'Double-click or press Enter to edit markdown'
+                : undefined
             }
             data-testid="markdown-rendered"
             data-cell-focus-role="rendered"
@@ -449,7 +455,6 @@ const MarkdownCell = memo(
               fontSize={fontSettings.fontSize}
               fontFamily={fontSettings.fontFamily}
               shouldFocus={
-                !readOnly &&
                 !rendered &&
                 ((shouldOwnFocus && activeFocusRole === 'editor') ||
                   editorFocusIntent)
@@ -476,9 +481,9 @@ const MarkdownCell = memo(
                 </select>
               </div>
               <div className="text-xs text-nb-text-muted">
-                Press{' '}
+                {readOnly && 'Read-only. '}Press{' '}
                 <kbd className="px-1 py-0.5 bg-nb-surface-3 rounded">Esc</kbd>{' '}
-                or run the cell to render
+                {readOnly ? 'to render' : 'or run the cell to render'}
               </div>
             </div>
           </div>
