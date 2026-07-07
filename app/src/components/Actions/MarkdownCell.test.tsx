@@ -304,6 +304,32 @@ describe("MarkdownCell", () => {
     expect(stub.snapshot.value).toBe("# Copy me");
   });
 
+  it("keeps empty read-only markdown in rendered mode", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-read-only-empty",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "",
+    });
+    const stub = new StubCellData(cell);
+
+    renderMarkdownCell(stub as unknown as CellData, {
+      readOnly: true,
+      isActiveCell: true,
+      activeFocusRole: "editor",
+      isWindowFocused: true,
+    });
+
+    const rendered = screen.getByTestId("markdown-rendered");
+    fireEvent.doubleClick(rendered);
+    fireEvent.keyDown(rendered, { key: "Enter" });
+
+    expect(screen.getByTestId("markdown-rendered")).toBeTruthy();
+    expect(screen.queryByTestId("markdown-editor")).toBeNull();
+  });
+
   it("focuses rendered markdown when leaving editor mode with escape", async () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "md-escape-rendered",

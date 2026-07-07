@@ -271,7 +271,10 @@ const MarkdownCell = memo(
       if (!shouldOwnFocus || previouslyOwnedFocus) {
         return
       }
-      if (activeFocusRole === 'editor' || (!readOnly && !value.trim())) {
+      if (
+        (!readOnly && (activeFocusRole === 'editor' || !value.trim())) ||
+        (readOnly && activeFocusRole === 'editor' && Boolean(value.trim()))
+      ) {
         setRendered(false)
         return
       }
@@ -297,10 +300,13 @@ const MarkdownCell = memo(
      * Handle switching to edit mode when user double-clicks rendered content.
      */
     const handleDoubleClick = useCallback(() => {
+      if (readOnly && !value.trim()) {
+        return
+      }
       setRendered(false)
       setEditorFocusIntent(true)
       onFocusRoleChange?.('editor')
-    }, [onFocusRoleChange])
+    }, [onFocusRoleChange, readOnly, value])
 
     /**
      * Handle keyboard activation on the rendered container for accessibility.
@@ -315,13 +321,16 @@ const MarkdownCell = memo(
           return
         }
         if (event.key === 'Enter' || event.key === ' ') {
+          if (readOnly && !value.trim()) {
+            return
+          }
           event.preventDefault()
           setRendered(false)
           setEditorFocusIntent(true)
           onFocusRoleChange?.('editor')
         }
       },
-      [onFocusRoleChange]
+      [onFocusRoleChange, readOnly, value]
     )
 
     /**
