@@ -53,7 +53,6 @@ const MAX_LATENCY_DEADLINE_MS = 4_000
 const RECONNECT_THROTTLE_MS = 1_000
 const MAX_CONSECUTIVE_FAILURES = 3
 const FAILURE_WINDOW_MS = 5_000
-const INITIAL_CONNECT_FAILURES = 1
 
 export type StreamError = Error | pb.WebsocketStatus
 
@@ -183,7 +182,6 @@ class Streams {
 
   // Track consecutive connection failures to detect unreachable backend
   private connectionFailures: number[] = []
-  private hasConnectedOnce = false
 
   constructor({ knownID, runID, sequence, options }: StreamsProps) {
     // Set the identifiers
@@ -365,11 +363,7 @@ class Streams {
 
         if (this.autoReconnect) {
           if (!opened) {
-            const shouldStop = recordConnectionFailure(
-              this.hasConnectedOnce
-                ? MAX_CONSECUTIVE_FAILURES
-                : INITIAL_CONNECT_FAILURES
-            )
+            const shouldStop = recordConnectionFailure(MAX_CONSECUTIVE_FAILURES)
             if (shouldStop || terminalFailure) {
               return
             }
@@ -387,9 +381,7 @@ class Streams {
           return
         }
 
-        const shouldStop = recordConnectionFailure(
-          opened ? MAX_CONSECUTIVE_FAILURES : INITIAL_CONNECT_FAILURES
-        )
+        const shouldStop = recordConnectionFailure(MAX_CONSECUTIVE_FAILURES)
         if (shouldStop || terminalFailure) {
           return
         }
@@ -461,7 +453,6 @@ class Streams {
       const onOpen = () => {
         // Reset failure tracking on successful connection
         this.connectionFailures = []
-        this.hasConnectedOnce = true
         opened = true
 
         observer.next(socket)
