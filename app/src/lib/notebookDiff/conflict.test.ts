@@ -229,6 +229,52 @@ describe('removeInsertedConflictCell', () => {
     expect(result.localNotebook.cells[0]?.value).toBe('unsaved a edit')
     expect(result.document.diff.summary.insertedCells).toBe(0)
   })
+
+  it('removes the indexed local-only cell when refIds are duplicated', async () => {
+    const upstreamNotebook = notebook([
+      cell({ refId: 'duplicate', value: 'upstream value' }),
+    ])
+    const localNotebook = notebook([
+      cell({ refId: 'duplicate', value: 'keep me' }),
+      cell({ refId: 'duplicate', value: 'remove me' }),
+    ])
+    const diff = computeNotebookDiff(upstreamNotebook, localNotebook)
+    const insertedRow = diff.cells.find(
+      (row) => row.kind === 'inserted' && row.compareCell?.value === 'remove me'
+    )
+    let record = {
+      id: 'local://file/conflict',
+      name: 'conflict.json',
+      doc: serialize(localNotebook),
+      conflict: {
+        detectedAt: '2026-06-01T00:00:00.000Z',
+        upstreamChecksum: 'upstream',
+        localChecksumAtDetection: 'local',
+      },
+    }
+    const store = {
+      files: {
+        get: vi.fn(async () => record),
+      },
+      getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
+      save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
+        record = {
+          ...record,
+          doc: serialize(saved),
+        }
+      }),
+    } as unknown as LocalNotebooks
+
+    const result = await removeInsertedConflictCell(
+      store,
+      'local://file/conflict',
+      insertedRow!
+    )
+
+    expect(result.localNotebook.cells).toHaveLength(1)
+    expect(result.localNotebook.cells[0]?.value).toBe('keep me')
+    expect(result.document.diff.summary.insertedCells).toBe(0)
+  })
 })
 
 describe('Drive upstream diff documents', () => {

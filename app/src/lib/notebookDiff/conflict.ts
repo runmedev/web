@@ -339,6 +339,8 @@ function findInsertedCellIndex(
   row: CellDiff
 ): number {
   const localCells = localNotebook.cells ?? []
+  const compareCell = row.compareCell
+  const compareIndex = row.compareIndex
   const refId = row.compareCell?.refId
   if (refId) {
     const matchingIndexes = localCells.flatMap((cell, index) =>
@@ -348,13 +350,23 @@ function findInsertedCellIndex(
       return matchingIndexes[0]
     }
     if (matchingIndexes.length > 1) {
+      const indexedCandidate =
+        compareIndex === undefined ? undefined : localCells[compareIndex]
+      if (
+        compareIndex !== undefined &&
+        indexedCandidate?.refId === refId &&
+        compareCell &&
+        indexedCandidate.kind === compareCell.kind &&
+        indexedCandidate.languageId === compareCell.languageId &&
+        indexedCandidate.value === compareCell.value
+      ) {
+        return compareIndex
+      }
       throw new Error(`Local notebook has duplicate cell refId ${refId}.`)
     }
     throw new Error(`Local cell ${refId} is no longer present.`)
   }
 
-  const compareCell = row.compareCell
-  const compareIndex = row.compareIndex
   if (compareCell && compareIndex !== undefined) {
     const candidate = localCells[compareIndex]
     if (
