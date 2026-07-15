@@ -297,6 +297,12 @@ function createEmptyNotebook(): parser_pb.Notebook {
   return create(parser_pb.NotebookSchema, { cells: [], metadata: {} })
 }
 
+const NOTEBOOK_OPEN_RESOLVE_POLL_MS = 10
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 function defaultEnsureFilesystemStore(): FilesystemNotebookStore | null {
   if (appState.filesystemStore) {
     return appState.filesystemStore
@@ -382,12 +388,32 @@ export function createAppJsGlobals({
     appState.startWorkspaceItemRename(uri)
   }
   const resolveStore = () => resolveNotebookStore?.() ?? appState.localNotebooks
+  const waitForOpenedNotebook = async (uri: string) => {
+    // Notebook navigation only updates current-doc first. The concrete
+    // NotebookData model is created later by React effects, so callers that
+    // need to operate on the opened notebook must wait for eventual
+    // materialization instead of failing on a fixed timeout window.
+    while (true) {
+      const candidates = [
+        resolveNotebook?.(uri),
+        resolveNotebook?.({ uri }),
+        resolveNotebook?.(),
+        runme.getCurrentNotebook(),
+      ]
+      if (candidates.some((notebook) => notebook?.getUri() === uri)) {
+        return
+      }
+      await sleep(NOTEBOOK_OPEN_RESOLVE_POLL_MS)
+    }
+  }
   const openNotebookForRuntime = async (uri: string) => {
     if (openNotebook) {
       await openNotebook(uri)
+      await waitForOpenedNotebook(uri)
       return
     }
     await appState.openNotebook(uri)
+    await waitForOpenedNotebook(uri)
   }
   const resolveLocalMirrorStore = () => {
     if (!appState.localNotebooks) {
