@@ -1429,7 +1429,7 @@ export class LocalNotebooks extends Dexie {
         } catch (error) {
           clearMarkdownUri = true
           appLogger.warn(
-            'Failed to move notebook markdown sidecar; it will be recreated on the next sync',
+            'Failed to move notebook markdown sidecar; it will be recreated after the notebook move',
             {
               attrs: {
                 scope: 'storage.drive.move',
@@ -1458,6 +1458,21 @@ export class LocalNotebooks extends Dexie {
         children: [...destinationFolder.children, uri],
         lastSynced: nowIsoString(),
       })
+    }
+
+    if (clearMarkdownUri && file) {
+      try {
+        await this.syncMarkdownFile(uri)
+      } catch (error) {
+        appLogger.warn('Failed to recreate notebook markdown sidecar after move', {
+          attrs: {
+            scope: 'storage.drive.move',
+            code: 'DRIVE_MARKDOWN_SIDECAR_RECREATE_FAILED',
+            localUri: uri,
+            error: String(error),
+          },
+        })
+      }
     }
 
     return {

@@ -272,18 +272,29 @@ describe('LocalNotebooks pending Drive create', () => {
     })
   })
 
-  it('clears the markdown sidecar URI when its Drive move fails', async () => {
+  it('recreates the markdown sidecar when its Drive move fails', async () => {
     const sourceRemoteUri =
       'https://drive.google.com/drive/folders/source123'
     const destinationRemoteUri =
       'https://drive.google.com/drive/folders/destination123'
     const itemRemoteUri = 'https://drive.google.com/file/d/item123/view'
     const markdownUri = 'https://drive.google.com/file/d/markdown123/view'
+    const replacementMarkdownUri =
+      'https://drive.google.com/file/d/replacement-markdown123/view'
     const driveStore = {
       move: vi
         .fn()
         .mockResolvedValueOnce({})
         .mockRejectedValueOnce(new Error('Sidecar move failed')),
+      getMetadata: vi.fn(async () => ({
+        uri: itemRemoteUri,
+        name: 'notebook.json',
+        type: NotebookStoreItemType.File,
+        children: [],
+        parents: [destinationRemoteUri],
+      })),
+      create: vi.fn(async () => ({ uri: replacementMarkdownUri })),
+      saveContent: vi.fn(async () => undefined),
     }
     const store = createTestStore(driveStore)
     await store.folders.put({
@@ -307,7 +318,7 @@ describe('LocalNotebooks pending Drive create', () => {
       markdownUri,
       lastRemoteChecksum: '',
       lastSynced: '',
-      doc: '',
+      doc: notebookJson('print("hello")'),
       md5Checksum: '',
     })
 
@@ -315,8 +326,17 @@ describe('LocalNotebooks pending Drive create', () => {
 
     expect(driveStore.move).toHaveBeenCalledTimes(2)
     await expect(store.files.get('local://file/item')).resolves.toMatchObject({
-      markdownUri: undefined,
+      markdownUri: replacementMarkdownUri,
     })
+    expect(driveStore.create).toHaveBeenCalledWith(
+      destinationRemoteUri,
+      'notebook.index.md'
+    )
+    expect(driveStore.saveContent).toHaveBeenCalledWith(
+      replacementMarkdownUri,
+      expect.stringContaining('print("hello")'),
+      'text/markdown'
+    )
     expect(
       (await store.folders.get('local://folder/destination'))?.children
     ).toEqual(['local://file/item'])
