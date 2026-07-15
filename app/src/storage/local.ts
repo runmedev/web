@@ -1362,6 +1362,85 @@ export class LocalNotebooks extends Dexie {
     }
   }
 
+  async move(
+    uri: string,
+    destinationFolderUri: string
+  ): Promise<NotebookStoreItem> {
+    const sourceParent = await this.findParentFolder(uri)
+    const destinationFolder = await this.folders.get(destinationFolderUri)
+    if (!sourceParent) {
+      throw new Error(`Local parent folder not found for ${uri}`)
+    }
+    if (!destinationFolder) {
+      throw new Error(
+        `Local destination folder not found for ${destinationFolderUri}`
+      )
+    }
+    if (
+      !isDriveUri(sourceParent.remoteId) ||
+      !isDriveUri(destinationFolder.remoteId)
+    ) {
+      throw new Error('LocalNotebooks.move only supports Drive-backed folders')
+    }
+    if (sourceParent.id === destinationFolder.id) {
+      throw new Error('LocalNotebooks.move expects a new destination folder')
+    }
+
+    const file = uri.startsWith('local://file/')
+      ? await this.files.get(uri)
+      : null
+    const folder = uri.startsWith('local://folder/')
+      ? await this.folders.get(uri)
+      : null
+    const item = file ?? folder
+    if (!item) {
+      throw new Error(`Local Drive-backed item not found for ${uri}`)
+    }
+    if (!isDriveUri(item.remoteId)) {
+      throw new Error('LocalNotebooks.move expects a Drive-backed item')
+    }
+    if (folder) {
+      let ancestor: LocalFolderRecord | null = destinationFolder
+      while (ancestor) {
+        if (ancestor.id === folder.id) {
+          throw new Error(
+            'LocalNotebooks.move cannot move a folder into itself or a descendant'
+          )
+        }
+        ancestor = await this.findParentFolder(ancestor.id)
+      }
+    }
+
+    await this.driveStore.move(
+      item.remoteId,
+      sourceParent.remoteId,
+      destinationFolder.remoteId
+    )
+
+    await this.folders.update(sourceParent.id, {
+      children: sourceParent.children.filter((childUri) => childUri !== uri),
+      lastSynced: nowIsoString(),
+    })
+    if (!destinationFolder.children.includes(uri)) {
+      await this.folders.update(destinationFolder.id, {
+        children: [...destinationFolder.children, uri],
+        lastSynced: nowIsoString(),
+      })
+    }
+
+    return {
+      uri,
+      name: item.name,
+      type: file
+        ? NotebookStoreItemType.File
+        : NotebookStoreItemType.Folder,
+      children: folder ? [...folder.children] : [],
+      remoteUri: item.remoteId,
+      mimeType: file?.mimeType,
+      parents: [destinationFolderUri],
+    }
+  }
+
   async moveToTrash(uri: string): Promise<void> {
     if (!uri.startsWith('local://file/')) {
       throw new Error('LocalNotebooks.moveToTrash expects a file URI')

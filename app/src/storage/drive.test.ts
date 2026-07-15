@@ -427,6 +427,51 @@ describe("DriveNotebookStore", () => {
     });
   });
 
+  it("moves Drive items between folders through the parent update API", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/drive/v3/files/file123");
+        expect(url.searchParams.get("addParents")).toBe("destination123");
+        expect(url.searchParams.get("removeParents")).toBe("source123");
+        expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+        expect(init?.method).toBe("PATCH");
+        expect(init?.body).toBeUndefined();
+        return new Response(
+          JSON.stringify({
+            id: "file123",
+            name: "notebook.json",
+            mimeType: "application/json",
+            parents: ["destination123"],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const result = await store.move(
+      "https://drive.google.com/file/d/file123/view",
+      "https://drive.google.com/drive/folders/source123",
+      "https://drive.google.com/drive/folders/destination123",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      uri: "https://drive.google.com/file/d/file123/view",
+      name: "notebook.json",
+      type: NotebookStoreItemType.File,
+      children: [],
+      remoteUri: "https://drive.google.com/file/d/file123/view",
+      mimeType: "application/json",
+      parents: ["https://drive.google.com/drive/folders/destination123"],
+    });
+  });
+
   it("moves Drive files to trash through the metadata update API", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     const fetchMock = vi
