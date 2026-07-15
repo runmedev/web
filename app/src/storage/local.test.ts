@@ -225,6 +225,123 @@ describe('LocalNotebooks pending Drive create', () => {
     })
   })
 
+  it('moves a notebook markdown sidecar with its Drive-backed file', async () => {
+    const sourceRemoteUri =
+      'https://drive.google.com/drive/folders/source123'
+    const destinationRemoteUri =
+      'https://drive.google.com/drive/folders/destination123'
+    const itemRemoteUri = 'https://drive.google.com/file/d/item123/view'
+    const markdownUri = 'https://drive.google.com/file/d/markdown123/view'
+    const driveStore = {
+      move: vi.fn(async () => ({})),
+    }
+    const store = createTestStore(driveStore)
+    await store.folders.put({
+      id: 'local://folder/source',
+      name: 'Source',
+      remoteId: sourceRemoteUri,
+      children: ['local://file/item'],
+      lastSynced: '',
+    })
+    await store.folders.put({
+      id: 'local://folder/destination',
+      name: 'Destination',
+      remoteId: destinationRemoteUri,
+      children: [],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: 'local://file/item',
+      name: 'notebook.json',
+      remoteId: itemRemoteUri,
+      markdownUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    await store.move('local://file/item', 'local://folder/destination')
+
+    expect(driveStore.move.mock.calls).toEqual([
+      [itemRemoteUri, sourceRemoteUri, destinationRemoteUri],
+      [markdownUri, sourceRemoteUri, destinationRemoteUri],
+    ])
+    await expect(store.files.get('local://file/item')).resolves.toMatchObject({
+      markdownUri,
+    })
+  })
+
+  it('recreates the markdown sidecar when its Drive move fails', async () => {
+    const sourceRemoteUri =
+      'https://drive.google.com/drive/folders/source123'
+    const destinationRemoteUri =
+      'https://drive.google.com/drive/folders/destination123'
+    const itemRemoteUri = 'https://drive.google.com/file/d/item123/view'
+    const markdownUri = 'https://drive.google.com/file/d/markdown123/view'
+    const replacementMarkdownUri =
+      'https://drive.google.com/file/d/replacement-markdown123/view'
+    const driveStore = {
+      move: vi
+        .fn()
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce(new Error('Sidecar move failed')),
+      getMetadata: vi.fn(async () => ({
+        uri: itemRemoteUri,
+        name: 'notebook.json',
+        type: NotebookStoreItemType.File,
+        children: [],
+        parents: [destinationRemoteUri],
+      })),
+      create: vi.fn(async () => ({ uri: replacementMarkdownUri })),
+      saveContent: vi.fn(async () => undefined),
+    }
+    const store = createTestStore(driveStore)
+    await store.folders.put({
+      id: 'local://folder/source',
+      name: 'Source',
+      remoteId: sourceRemoteUri,
+      children: ['local://file/item'],
+      lastSynced: '',
+    })
+    await store.folders.put({
+      id: 'local://folder/destination',
+      name: 'Destination',
+      remoteId: destinationRemoteUri,
+      children: [],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: 'local://file/item',
+      name: 'notebook.json',
+      remoteId: itemRemoteUri,
+      markdownUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: notebookJson('print("hello")'),
+      md5Checksum: '',
+    })
+
+    await store.move('local://file/item', 'local://folder/destination')
+
+    expect(driveStore.move).toHaveBeenCalledTimes(2)
+    await expect(store.files.get('local://file/item')).resolves.toMatchObject({
+      markdownUri: replacementMarkdownUri,
+    })
+    expect(driveStore.create).toHaveBeenCalledWith(
+      destinationRemoteUri,
+      'notebook.index.md'
+    )
+    expect(driveStore.saveContent).toHaveBeenCalledWith(
+      replacementMarkdownUri,
+      expect.stringContaining('print("hello")'),
+      'text/markdown'
+    )
+    expect(
+      (await store.folders.get('local://folder/destination'))?.children
+    ).toEqual(['local://file/item'])
+  })
+
   it('preserves the local folder tree when a Drive move fails', async () => {
     const sourceRemoteUri =
       'https://drive.google.com/drive/folders/source123'

@@ -493,6 +493,13 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(mocks.treeProps.disableDrag(dragNode.data)).toBe(false)
     expect(
       mocks.treeProps.disableDrop({
+        parentNode: null,
+        dragNodes: [dragNode],
+        index: 0,
+      })
+    ).toBe(true)
+    expect(
+      mocks.treeProps.disableDrop({
         parentNode: destinationNode,
         dragNodes: [dragNode],
         index: 0,
