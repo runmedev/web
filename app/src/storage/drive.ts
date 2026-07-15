@@ -111,6 +111,11 @@ type DriveRevisionListResponse = {
 interface DriveFilesClient {
   create(doc: DriveDoc): Promise<DriveDoc>
   update(doc: DriveDoc): Promise<DriveDoc>
+  move(
+    fileId: string,
+    sourceParentId: string,
+    destinationParentId: string
+  ): Promise<DriveDoc>
   get(
     request: Record<string, unknown>
   ): Promise<{ body?: string; result?: unknown }>
@@ -355,6 +360,21 @@ class GapiDriveFilesClient implements DriveFilesClient {
     }
 
     return file
+  }
+
+  async move(
+    fileId: string,
+    sourceParentId: string,
+    destinationParentId: string
+  ): Promise<DriveDoc> {
+    const response = (await this.files.update({
+      fileId,
+      addParents: destinationParentId,
+      removeParents: sourceParentId,
+      supportsAllDrives: true,
+      fields: 'id,name,mimeType,parents',
+    } as Record<string, unknown>)) as DriveUpdateResponse
+    return response.result ?? { id: fileId }
   }
 
   get(
@@ -618,6 +638,26 @@ class FetchDriveFilesClient implements DriveFilesClient {
     }
 
     return file.id ? file : { ...doc }
+  }
+
+  async move(
+    fileId: string,
+    sourceParentId: string,
+    destinationParentId: string
+  ): Promise<DriveDoc> {
+    const response = await this.request(
+      'PATCH',
+      `/drive/v3/files/${encodeURIComponent(fileId)}`,
+      {
+        params: {
+          addParents: destinationParentId,
+          removeParents: sourceParentId,
+          supportsAllDrives: 'true',
+          fields: 'id,name,mimeType,parents',
+        },
+      }
+    )
+    return (response.result ?? { id: fileId }) as DriveDoc
   }
 
   get(
@@ -1566,6 +1606,54 @@ export class DriveNotebookStore {
       remoteUri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
       mimeType,
       parents: [],
+    }
+  }
+
+  async move(
+    uri: string,
+    sourceParentUri: string,
+    destinationParentUri: string
+  ): Promise<NotebookStoreItem> {
+    const item = parseDriveItem(uri)
+    const sourceParent = parseDriveItem(sourceParentUri)
+    const destinationParent = parseDriveItem(destinationParentUri)
+    if (
+      item.type !== NotebookStoreItemType.File &&
+      item.type !== NotebookStoreItemType.Folder
+    ) {
+      throw new Error('DriveNotebookStore.move expects a file or folder URI')
+    }
+    if (
+      sourceParent.type !== NotebookStoreItemType.Folder ||
+      destinationParent.type !== NotebookStoreItemType.Folder
+    ) {
+      throw new Error('DriveNotebookStore.move expects folder parent URIs')
+    }
+    if (sourceParent.id === destinationParent.id) {
+      throw new Error('DriveNotebookStore.move expects a new destination folder')
+    }
+
+    const client = await this.getFilesClient()
+    const file = await client.move(
+      item.id,
+      sourceParent.id,
+      destinationParent.id
+    )
+    const fileId = file.id ?? item.id
+    const isFolder =
+      file.mimeType === DRIVE_FOLDER_MIME_TYPE ||
+      item.type === NotebookStoreItemType.Folder
+    const itemUri = isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId)
+    return {
+      uri: itemUri,
+      name: file.name ?? uri,
+      type: isFolder
+        ? NotebookStoreItemType.Folder
+        : NotebookStoreItemType.File,
+      children: [],
+      remoteUri: itemUri,
+      mimeType: file.mimeType,
+      parents: [destinationParentUri],
     }
   }
 

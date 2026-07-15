@@ -163,6 +163,116 @@ describe('LocalNotebooks pending Drive create', () => {
     ).toContain(item.uri)
   })
 
+  it('moves a Drive-backed folder and updates the local folder tree', async () => {
+    const sourceRemoteUri =
+      'https://drive.google.com/drive/folders/source123'
+    const destinationRemoteUri =
+      'https://drive.google.com/drive/folders/destination123'
+    const itemRemoteUri = 'https://drive.google.com/drive/folders/item123'
+    const driveStore = {
+      move: vi.fn(async () => ({
+        uri: itemRemoteUri,
+        name: 'Reports',
+        type: NotebookStoreItemType.Folder,
+        children: [],
+        remoteUri: itemRemoteUri,
+        parents: [destinationRemoteUri],
+      })),
+    }
+    const store = createTestStore(driveStore)
+    await store.folders.put({
+      id: 'local://folder/source',
+      name: 'Source',
+      remoteId: sourceRemoteUri,
+      children: ['local://folder/item'],
+      lastSynced: '',
+    })
+    await store.folders.put({
+      id: 'local://folder/destination',
+      name: 'Destination',
+      remoteId: destinationRemoteUri,
+      children: [],
+      lastSynced: '',
+    })
+    await store.folders.put({
+      id: 'local://folder/item',
+      name: 'Reports',
+      remoteId: itemRemoteUri,
+      children: [],
+      lastSynced: '',
+    })
+
+    const item = await store.move(
+      'local://folder/item',
+      'local://folder/destination'
+    )
+
+    expect(driveStore.move).toHaveBeenCalledWith(
+      itemRemoteUri,
+      sourceRemoteUri,
+      destinationRemoteUri
+    )
+    expect(
+      (await store.folders.get('local://folder/source'))?.children
+    ).toEqual([])
+    expect(
+      (await store.folders.get('local://folder/destination'))?.children
+    ).toEqual(['local://folder/item'])
+    expect(item).toMatchObject({
+      uri: 'local://folder/item',
+      type: NotebookStoreItemType.Folder,
+      parents: ['local://folder/destination'],
+    })
+  })
+
+  it('preserves the local folder tree when a Drive move fails', async () => {
+    const sourceRemoteUri =
+      'https://drive.google.com/drive/folders/source123'
+    const destinationRemoteUri =
+      'https://drive.google.com/drive/folders/destination123'
+    const itemRemoteUri = 'https://drive.google.com/file/d/item123/view'
+    const driveStore = {
+      move: vi.fn(async () => {
+        throw new Error('Google Drive authorization is required.')
+      }),
+    }
+    const store = createTestStore(driveStore)
+    await store.folders.put({
+      id: 'local://folder/source',
+      name: 'Source',
+      remoteId: sourceRemoteUri,
+      children: ['local://file/item'],
+      lastSynced: '',
+    })
+    await store.folders.put({
+      id: 'local://folder/destination',
+      name: 'Destination',
+      remoteId: destinationRemoteUri,
+      children: [],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: 'local://file/item',
+      name: 'notebook.json',
+      remoteId: itemRemoteUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    await expect(
+      store.move('local://file/item', 'local://folder/destination')
+    ).rejects.toThrow('Google Drive authorization is required.')
+
+    expect(
+      (await store.folders.get('local://folder/source'))?.children
+    ).toEqual(['local://file/item'])
+    expect(
+      (await store.folders.get('local://folder/destination'))?.children
+    ).toEqual([])
+  })
+
   it('persists pending upstream parent when Drive create fails', async () => {
     const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
     const driveStore = {

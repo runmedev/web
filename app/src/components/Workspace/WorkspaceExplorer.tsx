@@ -124,6 +124,15 @@ function isVisibleDocumentFile(name: string): boolean {
   return isJsonNotebookFile(name) || isExcalidrawFileName(name)
 }
 
+function isMovableDriveNode(data: TreeNode): boolean {
+  return (
+    Boolean(data.remoteUri) &&
+    Boolean(data.parentUri) &&
+    (data.type === NotebookStoreItemType.File ||
+      data.type === NotebookStoreItemType.Folder)
+  )
+}
+
 function setChildrenForFolder(
   nodes: TreeNode[],
   folderUri: string,
@@ -1041,6 +1050,79 @@ function formatShortTimestamp(date: Date): string {
     [fetchChildren, fsStore, store],
   );
 
+  const handleMove = useCallback(
+    async ({
+      dragNodes,
+      parentNode,
+    }: {
+      dragNodes: NodeApi<TreeNode>[];
+      parentNode: NodeApi<TreeNode> | null;
+    }) => {
+      if (
+        !store ||
+        !parentNode ||
+        parentNode.data.type !== NotebookStoreItemType.Folder ||
+        !parentNode.data.remoteUri
+      ) {
+        return;
+      }
+
+      const destinationUri = parentNode.data.uri;
+      const movableNodes = dragNodes.filter(
+        (node) =>
+          isMovableDriveNode(node.data) &&
+          node.data.parentUri !== destinationUri,
+      );
+      if (movableNodes.length === 0) {
+        return;
+      }
+
+      const refreshUris = new Set<string>([destinationUri]);
+      for (const node of movableNodes) {
+        if (node.data.parentUri) {
+          refreshUris.add(node.data.parentUri);
+        }
+      }
+
+      try {
+        for (const node of movableNodes) {
+          await store.move(node.data.uri, destinationUri);
+        }
+        treeRef.current?.open(destinationUri);
+        setErrorMessage(null);
+        showToast({
+          message:
+            movableNodes.length === 1
+              ? `Moved "${movableNodes[0].data.name}" to "${parentNode.data.name}"`
+              : `Moved ${movableNodes.length} items to "${parentNode.data.name}"`,
+          tone: "success",
+        });
+      } catch (error) {
+        appLogger.error("Failed to move Drive item", {
+          attrs: {
+            scope: "storage.drive.move",
+            code: "DRIVE_ITEM_MOVE_FAILED",
+            destinationUri,
+            itemUris: movableNodes.map((node) => node.data.uri),
+            error: String(error),
+          },
+        });
+        setErrorMessage(
+          "Unable to move Google Drive item. Check your Drive access and try again.",
+        );
+        showToast({
+          message: "Could not move Google Drive item",
+          tone: "error",
+        });
+      } finally {
+        await Promise.all(
+          [...refreshUris].map((folderUri) => fetchChildren(folderUri)),
+        );
+      }
+    },
+    [fetchChildren, store],
+  );
+
   const handleOpenLocalFolder = useCallback(async () => {
     if (!fsStore) {
       return;
@@ -1265,6 +1347,25 @@ function formatShortTimestamp(date: Date): string {
                 Boolean(data.remoteUri)
               )
             }
+            disableDrag={(data) => !isMovableDriveNode(data)}
+            disableDrop={({ parentNode, dragNodes }) => {
+              if (
+                parentNode.data.type !== NotebookStoreItemType.Folder ||
+                !parentNode.data.remoteUri ||
+                dragNodes.some(
+                  (node) =>
+                    !isMovableDriveNode(node.data) ||
+                    node.data.uri === parentNode.data.uri ||
+                    node.isAncestorOf(parentNode),
+                )
+              ) {
+                return true;
+              }
+              return dragNodes.every(
+                (node) => node.data.parentUri === parentNode.data.uri,
+              );
+            }}
+            onMove={handleMove}
             onRename={handleRename}
           />
         </div>

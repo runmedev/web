@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { NotebookStoreItemType } from '../../storage/notebook'
@@ -19,17 +19,21 @@ const mocks = vi.hoisted(() => ({
     getMetadata: vi.fn(),
     createContent: vi.fn(),
     createFolder: vi.fn(),
+    move: vi.fn(),
     moveToTrash: vi.fn(),
     sync: vi.fn(),
   },
   openNotebookUpstreamDiff: vi.fn(),
   treeEdit: vi.fn(),
+  treeProps: null as any,
   workspaceItems: [] as string[],
 }))
 
 vi.mock('react-arborist', async () => {
   const React = await vi.importActual<typeof import('react')>('react')
-  const Tree = React.forwardRef(({ data, children, onToggle }: any, ref) => {
+  const Tree = React.forwardRef((props: any, ref) => {
+    const { data, children, onToggle } = props
+    mocks.treeProps = props
     React.useImperativeHandle(ref, () => ({
       get: (id: string) => ({
         data: { uri: id, type: 'folder' },
@@ -50,6 +54,7 @@ vi.mock('react-arborist', async () => {
           handleClick: vi.fn(),
           toggle: vi.fn(() => onToggle?.(item.id)),
           parent,
+          isAncestorOf: vi.fn(() => false),
           reset: vi.fn(),
         }
         return (
@@ -181,11 +186,14 @@ describe('WorkspaceExplorer current document handling', () => {
     })
     mocks.store.moveToTrash.mockReset()
     mocks.store.moveToTrash.mockResolvedValue(undefined)
+    mocks.store.move.mockReset()
+    mocks.store.move.mockResolvedValue(undefined)
     mocks.store.sync.mockReset()
     mocks.openNotebookUpstreamDiff.mockReset()
     mocks.openNotebookUpstreamDiff.mockResolvedValue(undefined)
     mocks.treeEdit.mockReset()
     mocks.treeEdit.mockResolvedValue(undefined)
+    mocks.treeProps = null
     vi.spyOn(window, 'prompt').mockReturnValue('Reports')
     vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
@@ -419,6 +427,92 @@ describe('WorkspaceExplorer current document handling', () => {
         'local://file/untitled'
       )
     })
+  })
+
+  it('moves a Drive-backed file into a Drive folder via the tree move handler', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/notebook', 'local://folder/reports'],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/notebook') {
+        return {
+          uri,
+          name: 'notebook.json',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/file123/view',
+          parents: ['local://folder/drive'],
+        }
+      }
+      if (uri === 'local://folder/reports') {
+        return {
+          uri,
+          name: 'Reports',
+          type: NotebookStoreItemType.Folder,
+          children: [],
+          remoteUri: 'https://drive.google.com/drive/folders/reports123',
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+    await screen.findByText('Drive Root')
+
+    const dragNode = {
+      data: {
+        id: 'local://file/notebook',
+        uri: 'local://file/notebook',
+        name: 'notebook.json',
+        type: NotebookStoreItemType.File,
+        remoteUri: 'https://drive.google.com/file/d/file123/view',
+        parentUri: 'local://folder/drive',
+      },
+      isAncestorOf: vi.fn(() => false),
+    }
+    const destinationNode = {
+      data: {
+        id: 'local://folder/reports',
+        uri: 'local://folder/reports',
+        name: 'Reports',
+        type: NotebookStoreItemType.Folder,
+        remoteUri: 'https://drive.google.com/drive/folders/reports123',
+        parentUri: 'local://folder/drive',
+      },
+    }
+
+    expect(mocks.treeProps.disableDrag(dragNode.data)).toBe(false)
+    expect(
+      mocks.treeProps.disableDrop({
+        parentNode: destinationNode,
+        dragNodes: [dragNode],
+        index: 0,
+      })
+    ).toBe(false)
+
+    await act(async () => {
+      await mocks.treeProps.onMove({
+        dragIds: ['local://file/notebook'],
+        dragNodes: [dragNode],
+        parentId: 'local://folder/reports',
+        parentNode: destinationNode,
+        index: 0,
+      })
+    })
+
+    expect(mocks.store.move).toHaveBeenCalledWith(
+      'local://file/notebook',
+      'local://folder/reports'
+    )
   })
 
   it('opens an upstream diff from a Drive-backed file context menu', async () => {
