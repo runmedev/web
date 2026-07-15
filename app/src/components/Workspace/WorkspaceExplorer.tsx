@@ -1350,6 +1350,7 @@ function formatShortTimestamp(date: Date): string {
             disableDrag={(data) => !isMovableDriveNode(data)}
             disableDrop={({ parentNode, dragNodes }) => {
               if (
+                !parentNode ||
                 parentNode.data.type !== NotebookStoreItemType.Folder ||
                 !parentNode.data.remoteUri ||
                 dragNodes.some(

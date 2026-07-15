@@ -1417,6 +1417,38 @@ export class LocalNotebooks extends Dexie {
       destinationFolder.remoteId
     )
 
+    let clearMarkdownUri = false
+    if (file?.markdownUri) {
+      if (isDriveUri(file.markdownUri)) {
+        try {
+          await this.driveStore.move(
+            file.markdownUri,
+            sourceParent.remoteId,
+            destinationFolder.remoteId
+          )
+        } catch (error) {
+          clearMarkdownUri = true
+          appLogger.warn(
+            'Failed to move notebook markdown sidecar; it will be recreated on the next sync',
+            {
+              attrs: {
+                scope: 'storage.drive.move',
+                code: 'DRIVE_MARKDOWN_SIDECAR_MOVE_FAILED',
+                localUri: uri,
+                markdownUri: file.markdownUri,
+                error: String(error),
+              },
+            }
+          )
+        }
+      } else {
+        clearMarkdownUri = true
+      }
+    }
+    if (clearMarkdownUri) {
+      await this.files.update(uri, { markdownUri: undefined })
+    }
+
     await this.folders.update(sourceParent.id, {
       children: sourceParent.children.filter((childUri) => childUri !== uri),
       lastSynced: nowIsoString(),
