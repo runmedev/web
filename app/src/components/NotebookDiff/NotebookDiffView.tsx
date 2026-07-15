@@ -14,6 +14,7 @@ import type {
 import {
   openNotebookDriveRevisionDiff,
   refreshNotebookConflictDiff,
+  removeInsertedConflictCell,
   restoreDeletedConflictCell,
 } from '../../lib/notebookDiff/conflict'
 import type { DriveRevision } from '../../storage/drive'
@@ -261,6 +262,63 @@ function RestoreDeletedCellButton({
   )
 }
 
+function RemoveInsertedCellButton({
+  localUri,
+  row,
+  onRemoved,
+}: {
+  localUri: string
+  row: CellDiff
+  onRemoved: (document: NotebookDiffDocument) => void
+}) {
+  const { store } = useNotebookStore()
+  const [isRemoving, setIsRemoving] = useState(false)
+
+  const removeCell = async () => {
+    if (!store) {
+      return
+    }
+    setIsRemoving(true)
+    try {
+      const notebookData = getNotebookDataController().getNotebookData(localUri)
+      await notebookData?.flushPendingPersist()
+      const result = await removeInsertedConflictCell(store, localUri, row, {
+        localNotebook: notebookData?.getSnapshot().notebook,
+      })
+      notebookData?.loadNotebook(result.localNotebook, { persist: false })
+      onRemoved(result.document)
+      showToast({
+        message: 'Removed local-only cell from the local notebook.',
+        tone: 'success',
+      })
+    } catch {
+      showToast({
+        message: 'Unable to remove local-only cell. Please try again.',
+        tone: 'error',
+      })
+    } finally {
+      setIsRemoving(false)
+    }
+  }
+
+  return (
+    <Button
+      type="button"
+      size="1"
+      color="red"
+      variant="soft"
+      disabled={!store || isRemoving}
+      aria-label="Remove cell from local notebook"
+      title="Remove cell from local notebook"
+      onClick={() => {
+        void removeCell()
+      }}
+    >
+      {isRemoving ? 'Removing...' : 'Remove local'}
+    </Button>
+  )
+}
+
 function revisionLabel(revision: DriveRevision): string {
   const modified = revision.modifiedTime
     ? new Date(revision.modifiedTime).toLocaleString()
@@ -434,6 +492,13 @@ function DiffRow({
             localUri={conflictLocalUri}
             row={row}
             onRestored={onConflictDocumentChanged}
+          />
+        )}
+        {conflictLocalUri && row.kind === 'inserted' && (
+          <RemoveInsertedCellButton
+            localUri={conflictLocalUri}
+            row={row}
+            onRemoved={onConflictDocumentChanged}
           />
         )}
       </div>

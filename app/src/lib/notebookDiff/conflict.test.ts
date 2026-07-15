@@ -6,6 +6,7 @@ import type LocalNotebooks from '../../storage/local'
 import {
   openNotebookDriveRevisionDiff,
   openNotebookUpstreamDiff,
+  removeInsertedConflictCell,
   restoreDeletedConflictCell,
 } from './conflict'
 import { computeNotebookDiff } from './diff'
@@ -164,6 +165,69 @@ describe('restoreDeletedConflictCell', () => {
       'c',
     ])
     expect(saved?.cells[0]?.value).toBe('unsaved a edit')
+  })
+})
+
+describe('removeInsertedConflictCell', () => {
+  it('removes a local-only cell while preserving other live notebook edits', async () => {
+    const upstreamNotebook = notebook([
+      cell({ refId: 'a', value: 'a' }),
+      cell({ refId: 'c', value: 'c' }),
+    ])
+    const staleLocalNotebook = notebook([
+      cell({ refId: 'a', value: 'stale a' }),
+      cell({ refId: 'local-only', value: 'remove me' }),
+      cell({ refId: 'c', value: 'c' }),
+    ])
+    const liveLocalNotebook = notebook([
+      cell({ refId: 'a', value: 'unsaved a edit' }),
+      cell({ refId: 'local-only', value: 'remove me' }),
+      cell({ refId: 'c', value: 'c' }),
+    ])
+    const diff = computeNotebookDiff(upstreamNotebook, staleLocalNotebook)
+    const insertedRow = diff.cells.find(
+      (row) => row.compareCell?.refId === 'local-only'
+    )
+    let record = {
+      id: 'local://file/conflict',
+      name: 'conflict.json',
+      remoteId: 'https://drive.google.com/file/d/file123/view',
+      lastRemoteChecksum: 'base',
+      lastSynced: '',
+      doc: serialize(staleLocalNotebook),
+      md5Checksum: 'local',
+      conflict: {
+        detectedAt: '2026-06-01T00:00:00.000Z',
+        upstreamChecksum: 'upstream',
+        localChecksumAtDetection: 'local',
+      },
+    }
+    const store = {
+      files: {
+        get: vi.fn(async () => record),
+      },
+      getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
+      save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
+        record = {
+          ...record,
+          doc: serialize(saved),
+        }
+      }),
+    } as unknown as LocalNotebooks
+
+    const result = await removeInsertedConflictCell(
+      store,
+      'local://file/conflict',
+      insertedRow!,
+      { localNotebook: liveLocalNotebook }
+    )
+
+    expect(store.save).toHaveBeenCalledTimes(1)
+    expect(
+      result.localNotebook.cells.map((savedCell) => savedCell.refId)
+    ).toEqual(['a', 'c'])
+    expect(result.localNotebook.cells[0]?.value).toBe('unsaved a edit')
+    expect(result.document.diff.summary.insertedCells).toBe(0)
   })
 })
 

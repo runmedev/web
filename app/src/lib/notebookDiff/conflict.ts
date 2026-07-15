@@ -14,14 +14,19 @@ import {
   registerNotebookDiffDocument,
 } from './registry'
 
-export interface RestoredConflictCellResult {
+export interface ConflictCellMutationResult {
   document: NotebookDiffDocument
   localNotebook: parser_pb.Notebook
 }
 
-export interface RestoreDeletedConflictCellOptions {
+export type RestoredConflictCellResult = ConflictCellMutationResult
+
+export interface ConflictCellMutationOptions {
   localNotebook?: parser_pb.Notebook
 }
+
+export type RestoreDeletedConflictCellOptions = ConflictCellMutationOptions
+export type RemoveInsertedConflictCellOptions = ConflictCellMutationOptions
 
 type DriveDiffResolutionKind = NonNullable<
   NotebookDiffDocument['resolution']
@@ -311,6 +316,86 @@ export async function restoreDeletedConflictCell(
     row.baseIndex ?? localCells.length
   )
   localNotebook.cells.splice(insertIndex, 0, restoredCell)
+
+  await store.save(localUri, localNotebook)
+
+  const updatedRecord = await store.files.get(localUri)
+  if (!updatedRecord) {
+    throw new Error(`Local notebook record not found for ${localUri}`)
+  }
+  return {
+    document: await registerConflictDiffDocument(
+      store,
+      localUri,
+      updatedRecord,
+      record.conflict
+    ),
+    localNotebook,
+  }
+}
+
+function findInsertedCellIndex(
+  localNotebook: parser_pb.Notebook,
+  row: CellDiff
+): number {
+  const localCells = localNotebook.cells ?? []
+  const refId = row.compareCell?.refId
+  if (refId) {
+    const matchingIndexes = localCells.flatMap((cell, index) =>
+      cell.refId === refId ? [index] : []
+    )
+    if (matchingIndexes.length === 1) {
+      return matchingIndexes[0]
+    }
+    if (matchingIndexes.length > 1) {
+      throw new Error(`Local notebook has duplicate cell refId ${refId}.`)
+    }
+    throw new Error(`Local cell ${refId} is no longer present.`)
+  }
+
+  const compareCell = row.compareCell
+  const compareIndex = row.compareIndex
+  if (compareCell && compareIndex !== undefined) {
+    const candidate = localCells[compareIndex]
+    if (
+      candidate &&
+      !candidate.refId &&
+      candidate.kind === compareCell.kind &&
+      candidate.languageId === compareCell.languageId &&
+      candidate.value === compareCell.value
+    ) {
+      return compareIndex
+    }
+  }
+
+  throw new Error('Local cell is no longer present at the expected position.')
+}
+
+export async function removeInsertedConflictCell(
+  store: LocalNotebooks,
+  localUri: string,
+  row: CellDiff,
+  options: RemoveInsertedConflictCellOptions = {}
+): Promise<ConflictCellMutationResult> {
+  if (row.kind !== 'inserted' || !row.compareCell) {
+    throw new Error(
+      'Only cells present exclusively in the local notebook can be removed.'
+    )
+  }
+
+  const record = await store.files.get(localUri)
+  if (!record) {
+    throw new Error(`Local notebook record not found for ${localUri}`)
+  }
+  if (!record.conflict) {
+    throw new Error(`Local notebook ${localUri} does not have a conflict`)
+  }
+
+  const localNotebook = options.localNotebook
+    ? clone(parser_pb.NotebookSchema, options.localNotebook)
+    : parseNotebookJson(record.doc ?? '', 'local')
+  const removeIndex = findInsertedCellIndex(localNotebook, row)
+  localNotebook.cells.splice(removeIndex, 1)
 
   await store.save(localUri, localNotebook)
 
