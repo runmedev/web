@@ -2,8 +2,9 @@
 
 ## Status
 
-Proposed. The client-side safety fix is implemented in this change. Reliable
-cross-session resume requires the runner protocol change described below.
+The client-side safety fix is implemented in this change. The runner protocol
+is unchanged. The protocol section below is a possible future improvement for
+restoring reliable cross-session resume; it is not part of this change.
 
 ## Decision
 
@@ -15,8 +16,9 @@ attach a new stream for that run. The cell will explain that the process may
 still be running and that the user should check the runner before repeating a
 non-idempotent command.
 
-We will re-enable cross-session resume only after the runner can distinguish a
-new execution from a resume attempt and can replay a retained terminal outcome.
+This change does not attempt cross-session resume. A future runner protocol
+could restore that capability by distinguishing a new execution from a resume
+attempt and replaying a retained terminal outcome.
 
 ## Incident
 
@@ -121,12 +123,42 @@ This fix intentionally disables cross-session backend execution resume. The
 current protocol cannot implement that feature without sometimes reporting
 false liveness.
 
-## Runner Protocol Fix
+## Behavior Without a Runner Protocol Change
 
-The runner should separate creation from attachment and retain terminal state
-for a bounded period.
+Normal execution monitoring is unchanged while the original in-memory notebook
+model owns the stream. The cell shows as running after receiving a PID, streams
+output, and becomes completed when it observes the exit code. Transient stream
+reconnection can also continue while that live monitor retains its execution
+context.
 
-The connection intent should be explicit:
+Once that ownership is lost, the client favors an honest loss-of-knowledge
+state over a false running state:
+
+- Loading a notebook with a PID but no exit code changes the execution to
+  `unknown`; it does not open a stream for the persisted `runID`.
+- A terminal monitoring error changes the execution to `unknown` and resolves
+  callers waiting for the run.
+- The stale PID is cleared, so the cell no longer shows a running indicator or
+  accepts input for that execution.
+- Existing output is preserved and a warning explains that the outcome is
+  unknown. The client does not synthesize a successful or failed exit code.
+- The underlying process might already have exited or might still be running
+  without a client monitor. The user must inspect its effects or runner state
+  before deciding whether it is safe to run the cell again.
+
+Consequently, this change fixes indefinite false-running UI but does not provide
+cross-session resume or recovery of a missed exit result. New executions are
+unaffected.
+
+## Possible Future Runner Protocol Improvement
+
+The following is a suggested future design. It is not implemented or required
+by the client safety fix in this change.
+
+A future protocol could separate creation from attachment and retain terminal
+state for a bounded period.
+
+For example, the connection intent could be explicit:
 
 ```text
 ws://runner/ws?id=<stream-id>&runID=<run-id>&mode=start
@@ -137,7 +169,7 @@ ws://runner/ws?id=<stream-id>&runID=<run-id>&mode=resume
 - `mode=resume` attaches to an existing or retained run and never creates one.
 - an unknown resume target returns a terminal `not_found` result.
 
-The first response should describe authoritative execution state:
+The first response could describe authoritative execution state:
 
 ```proto
 message ExecutionSnapshot {
@@ -155,11 +187,12 @@ message ExecutionSnapshot {
 }
 ```
 
-The runner should retain at least the terminal snapshot for longer than the
-browser's reconnect window. Replaying stdout and stderr is useful but not
-required to fix liveness. Replaying `state`, `pid`, and `exit_code` is required.
+Such a protocol would need to retain at least the terminal snapshot for longer
+than the browser's reconnect window. Replaying stdout and stderr would be useful
+but is not necessary to fix liveness; replaying `state`, `pid`, and `exit_code`
+would be.
 
-With that contract, the client can safely use these transitions:
+With that possible contract, the client could safely use these transitions:
 
 - resumed `running` snapshot: restore the running UI;
 - resumed `completed` snapshot: persist the real exit code;
@@ -205,7 +238,8 @@ The client regression suite covers:
   becomes `unknown`;
 - `CellData.run()` resolves when monitoring becomes `unknown`.
 
-The future runner change should add integration coverage for reconnecting:
+If a future runner protocol adopts these semantics, its integration coverage
+should include reconnecting:
 
 - while a quiet process is running;
 - after a process exits while the client is disconnected;
