@@ -3,7 +3,12 @@ import type { StreamsLike } from "@runmedev/renderers";
 import { Subject } from "rxjs";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { MimeType, RunmeMetadataKey, parser_pb } from "../contexts/CellContext";
+import {
+  MimeType,
+  RunmeExecutionState,
+  RunmeMetadataKey,
+  parser_pb,
+} from "../contexts/CellContext";
 import { LOCAL_FOLDER_URI } from "../storage/local";
 import { appLogger } from "./logging/runtime";
 import { appState } from "./runtime/AppState";
@@ -463,11 +468,52 @@ describe("bindStreamsToCell", () => {
 
     expect(current.metadata?.[RunmeMetadataKey.Pid]).toBeUndefined();
     expect(current.metadata?.[RunmeMetadataKey.ExitCode]).toBe("0");
+    expect(current.metadata?.[RunmeMetadataKey.ExecutionState]).toBe(
+      RunmeExecutionState.Completed,
+    );
+  });
+
+  it("marks the outcome unknown when monitoring fails after a pid", () => {
+    const refId = "cell-monitor-failed";
+    const cell = create(parser_pb.CellSchema, {
+      refId,
+      kind: parser_pb.CellKind.CODE,
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.LastRunID]: "run-monitor-failed",
+      },
+    });
+
+    let current = cell;
+    const fake = makeFakeStreams();
+    bindStreamsToCell({
+      refId,
+      streams: fake,
+      getCell: () => current,
+      updateCell: (next) => {
+        current = next;
+      },
+    });
+
+    fake.pid$.next(123);
+    fake.errors$.next(new Error("run is no longer available"));
+
+    expect(current.metadata?.[RunmeMetadataKey.Pid]).toBeUndefined();
+    expect(current.metadata?.[RunmeMetadataKey.ExitCode]).toBeUndefined();
+    expect(current.metadata?.[RunmeMetadataKey.ExecutionState]).toBe(
+      RunmeExecutionState.Unknown,
+    );
+    const stderr = current.outputs
+      .flatMap((output) => output.items)
+      .find((item) => item.mime === MimeType.VSCodeNotebookStdErr);
+    expect(
+      new TextDecoder().decode(stderr?.data ?? new Uint8Array()),
+    ).toContain("Execution monitoring was interrupted");
   });
 });
 
 describe("NotebookData.getActiveStream", () => {
-  it("recovers stream when metadata indicates an active run", () => {
+  it("does not treat a persisted pid as proof of a live run", () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-recover",
       kind: parser_pb.CellKind.CODE,
@@ -487,40 +533,19 @@ describe("NotebookData.getActiveStream", () => {
       loaded: true,
     });
 
-    const stream = model.getActiveStream(cell.refId) as any;
-    expect(stream).toBeTruthy();
-    expect(stream.runID).toBe("existing-run");
-    expect(stream.sequence).toBe(7);
-  });
-
-  it("clears recovered streams after the run exits", () => {
-    const cell = create(parser_pb.CellSchema, {
-      refId: "cell-finished",
-      kind: parser_pb.CellKind.CODE,
-      outputs: [],
-      metadata: {
-        [RunmeMetadataKey.Pid]: "1234",
-        [RunmeMetadataKey.LastRunID]: "existing-run",
-        [RunmeMetadataKey.Sequence]: "7",
-      },
-    });
-    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
-    const model = new NotebookData({
-      notebook,
-      uri: "nb://test",
-      name: "test",
-      notebookStore: null,
-      loaded: true,
-    });
-
-    const stream = model.getActiveStream(cell.refId) as {
-      exitCode: Subject<number>;
-    };
-    expect(stream).toBeTruthy();
-
-    stream.exitCode.next(0);
-
     expect(model.getActiveStream(cell.refId)).toBeUndefined();
+    const reconciled = model.getCellSnapshot(cell.refId);
+    expect(reconciled?.metadata?.[RunmeMetadataKey.Pid]).toBeUndefined();
+    expect(reconciled?.metadata?.[RunmeMetadataKey.ExitCode]).toBeUndefined();
+    expect(reconciled?.metadata?.[RunmeMetadataKey.ExecutionState]).toBe(
+      RunmeExecutionState.Unknown,
+    );
+    const stderr = reconciled?.outputs
+      .flatMap((output) => output.items)
+      .find((item) => item.mime === MimeType.VSCodeNotebookStdErr);
+    expect(
+      new TextDecoder().decode(stderr?.data ?? new Uint8Array()),
+    ).toContain("process may still be running");
   });
 
   it("does not recover when exit code metadata is present", () => {
@@ -707,6 +732,46 @@ describe("NotebookData.runCodeCell", () => {
 
     const runID = model.runCodeCell(cell);
     expect(runID).toBe("");
+  });
+
+  it("resolves CellData.run when execution monitoring becomes unknown", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-monitor-interrupted",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "bash",
+      outputs: [],
+      metadata: {},
+      value: "sleep 30",
+    });
+    const model = new NotebookData({
+      notebook: create(parser_pb.NotebookSchema, { cells: [cell] }),
+      uri: "nb://test",
+      name: "test",
+      notebookStore: null,
+      loaded: true,
+    });
+    const cellData = model.getCell(cell.refId);
+    expect(cellData).toBeTruthy();
+
+    const run = cellData!.run();
+    const stream = model.getActiveStream(cell.refId) as
+      | (StreamsLike & {
+          pid: Subject<number>;
+          errors: Subject<Error>;
+        })
+      | undefined;
+    expect(stream).toBeTruthy();
+
+    stream!.pid.next(123);
+    stream!.errors.next(new Error("execution record expired"));
+    await run;
+
+    const updated = model.getCellSnapshot(cell.refId);
+    expect(updated?.metadata?.[RunmeMetadataKey.Pid]).toBeUndefined();
+    expect(updated?.metadata?.[RunmeMetadataKey.ExitCode]).toBeUndefined();
+    expect(updated?.metadata?.[RunmeMetadataKey.ExecutionState]).toBe(
+      RunmeExecutionState.Unknown,
+    );
   });
 
   it("executes javascript locally with appkernel and records stdout + exit code", async () => {

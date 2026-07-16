@@ -876,6 +876,7 @@ function clearCellRunMetadata(cell: parser_pb.Cell): void {
   delete cell.metadata[RunmeMetadataKey.LastRunID]
   delete cell.metadata[RunmeMetadataKey.Pid]
   delete cell.metadata[RunmeMetadataKey.ExitCode]
+  delete cell.metadata[RunmeMetadataKey.ExecutionState]
 }
 
 export function createRunmeConsoleApi({
@@ -905,7 +906,8 @@ export function createRunmeConsoleApi({
       const hasRunMetadata =
         typeof cell.metadata?.[RunmeMetadataKey.LastRunID] === 'string' ||
         typeof cell.metadata?.[RunmeMetadataKey.Pid] === 'string' ||
-        typeof cell.metadata?.[RunmeMetadataKey.ExitCode] === 'string'
+        typeof cell.metadata?.[RunmeMetadataKey.ExitCode] === 'string' ||
+        typeof cell.metadata?.[RunmeMetadataKey.ExecutionState] === 'string'
       if (!hasOutputs && !hasRunMetadata) {
         continue
       }

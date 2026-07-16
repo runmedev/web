@@ -3,6 +3,7 @@ import { create } from "@bufbuild/protobuf";
 import {
   AgentMetadataKey,
   MimeType,
+  RunmeExecutionState,
   RunmeMetadataKey,
   parser_pb,
 } from "../runme/client";
@@ -62,4 +63,11 @@ const TypingCell = create(parser_pb.CellSchema, {
 });
 
 // eslint-disable-next-line react-refresh/only-export-components
-export { parser_pb, TypingCell, MimeType, RunmeMetadataKey, AgentMetadataKey };
+export {
+  parser_pb,
+  TypingCell,
+  MimeType,
+  RunmeMetadataKey,
+  RunmeExecutionState,
+  AgentMetadataKey,
+};

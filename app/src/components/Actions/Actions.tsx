@@ -663,6 +663,23 @@ export function Action({
   const [exitCode, setExitCode] = useState<number | null>(null)
 
   useEffect(() => {
+    const rawPid = cell?.metadata?.[RunmeMetadataKey.Pid]
+    const parsedPid =
+      typeof rawPid === 'string' ? Number.parseInt(rawPid, 10) : Number.NaN
+    setPid(Number.isNaN(parsedPid) ? null : parsedPid)
+
+    const rawExitCode = cell?.metadata?.[RunmeMetadataKey.ExitCode]
+    const parsedExitCode =
+      typeof rawExitCode === 'string'
+        ? Number.parseInt(rawExitCode, 10)
+        : Number.NaN
+    setExitCode(Number.isNaN(parsedExitCode) ? null : parsedExitCode)
+  }, [
+    cell?.metadata?.[RunmeMetadataKey.ExitCode],
+    cell?.metadata?.[RunmeMetadataKey.Pid],
+  ])
+
+  useEffect(() => {
     const fallbackUri = docUri.trim() || null
     if (!store || !docUri.startsWith('local://')) {
       setShareTarget({ docUri, targetUri: fallbackUri })

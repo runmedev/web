@@ -210,6 +210,7 @@ describe('createRunmeConsoleApi', () => {
             [RunmeMetadataKey.LastRunID]: 'run-cell-a',
             [RunmeMetadataKey.Pid]: '42',
             [RunmeMetadataKey.ExitCode]: '0',
+            [RunmeMetadataKey.ExecutionState]: 'completed',
           },
         }),
         codeCell('cell-b', 'echo bye'),
@@ -229,6 +230,7 @@ describe('createRunmeConsoleApi', () => {
     expect(updated?.metadata?.[RunmeMetadataKey.LastRunID]).toBeUndefined()
     expect(updated?.metadata?.[RunmeMetadataKey.Pid]).toBeUndefined()
     expect(updated?.metadata?.[RunmeMetadataKey.ExitCode]).toBeUndefined()
+    expect(updated?.metadata?.[RunmeMetadataKey.ExecutionState]).toBeUndefined()
     expect(model.updates).toHaveLength(1)
   })
 
