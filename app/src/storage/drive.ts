@@ -1334,19 +1334,28 @@ export class DriveNotebookStore {
         'Google Drive URI must reference a folder to list contents'
       )
     }
-    const response = await this.search({
-      q: `'${id}' in parents and trashed = false`,
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true,
-      orderBy: 'name',
-      fields: 'files(id,name,mimeType)',
-    })
+    const files: DriveSearchFile[] = []
+    let pageToken: string | undefined
 
-    const files = response.files.filter(
+    do {
+      const response = await this.search({
+        q: `'${id}' in parents and trashed = false`,
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+        orderBy: 'name',
+        pageSize: 1000,
+        pageToken,
+        fields: 'nextPageToken,files(id,name,mimeType)',
+      })
+      files.push(...response.files)
+      pageToken = response.nextPageToken
+    } while (pageToken)
+
+    const validFiles = files.filter(
       (file): file is DriveSearchFile & { id: string } => Boolean(file?.id)
     )
 
-    return files.map((file) => {
+    return validFiles.map((file) => {
       const isFolder = file.mimeType === DRIVE_FOLDER_MIME_TYPE
       return {
         uri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),

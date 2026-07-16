@@ -173,6 +173,67 @@ describe("DriveNotebookStore", () => {
     });
   });
 
+  it("paginates Drive folder listings beyond the first page", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const firstPageFiles = Array.from({ length: 100 }, (_, index) => ({
+      id: `dated-${index}`,
+      name: `20260715_notebook_${index}.json`,
+      mimeType: "application/json",
+    }));
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/drive/v3/files");
+        expect(url.searchParams.get("q")).toBe(
+          "'folder123' in parents and trashed = false",
+        );
+        expect(url.searchParams.get("includeItemsFromAllDrives")).toBe("true");
+        expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+        expect(url.searchParams.get("orderBy")).toBe("name");
+        expect(url.searchParams.get("pageSize")).toBe("1000");
+        expect(url.searchParams.get("fields")).toBe(
+          "nextPageToken,files(id,name,mimeType)",
+        );
+
+        const pageToken = url.searchParams.get("pageToken");
+        const body = pageToken
+          ? {
+              files: [
+                {
+                  id: "oncall-guide",
+                  name: "oncall_guide.json",
+                  mimeType: "application/json",
+                },
+              ],
+            }
+          : { files: firstPageFiles, nextPageToken: "page-2" };
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const result = await store.list(
+      "https://drive.google.com/drive/folders/folder123",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("pageToken"),
+    ).toBeNull();
+    expect(
+      new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("pageToken"),
+    ).toBe("page-2");
+    expect(result).toHaveLength(101);
+    expect(result.at(-1)).toMatchObject({
+      uri: "https://drive.google.com/file/d/oncall-guide/view",
+      name: "oncall_guide.json",
+      type: NotebookStoreItemType.File,
+    });
+  });
+
   it("creates arbitrary Drive content with the provided MIME type", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     const fetchMock = vi
