@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     sync: vi.fn(),
   },
   openNotebookUpstreamDiff: vi.fn(),
+  dragHandle: vi.fn(),
   treeEdit: vi.fn(),
   treeProps: null as any,
   workspaceItems: [] as string[],
@@ -62,6 +63,7 @@ vi.mock('react-arborist', async () => {
             {children({
               node,
               style: {},
+              dragHandle: mocks.dragHandle,
             })}
             {item.children?.length ? renderItems(item.children, node) : null}
           </div>
@@ -190,6 +192,7 @@ describe('WorkspaceExplorer current document handling', () => {
     mocks.store.move.mockResolvedValue(undefined)
     mocks.store.sync.mockReset()
     mocks.openNotebookUpstreamDiff.mockReset()
+    mocks.dragHandle.mockReset()
     mocks.openNotebookUpstreamDiff.mockResolvedValue(undefined)
     mocks.treeEdit.mockReset()
     mocks.treeEdit.mockResolvedValue(undefined)
@@ -467,6 +470,17 @@ describe('WorkspaceExplorer current document handling', () => {
 
     render(<WorkspaceExplorer />)
     await screen.findByText('Drive Root')
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    await screen.findByText('notebook.json')
+
+    expect(
+      mocks.dragHandle.mock.calls.some(
+        ([element]) =>
+          element instanceof HTMLElement &&
+          element.dataset.nodeId === 'local://file/notebook'
+      )
+    ).toBe(true)
 
     const dragNode = {
       data: {
