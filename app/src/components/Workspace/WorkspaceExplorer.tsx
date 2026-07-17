@@ -7,7 +7,12 @@ import {
   type CSSProperties,
   type MouseEvent,
 } from "react";
-import { Tree, type NodeApi, type TreeApi } from "react-arborist";
+import {
+  Tree,
+  type NodeApi,
+  type NodeRendererProps,
+  type TreeApi,
+} from "react-arborist";
 import { ChevronRightIcon, ChevronDownIcon } from "@heroicons/react/20/solid";
 import { CloudArrowUpIcon, DocumentTextIcon, FolderIcon, FolderPlusIcon } from "@heroicons/react/24/outline";
 import useResizeObserver from "use-resize-observer";
@@ -875,13 +880,7 @@ function formatShortTimestamp(date: Date): string {
 }
 
   const renderNode = useCallback(
-    ({
-      node,
-      style,
-    }: {
-      node: NodeApi<TreeNode, unknown>;
-      style: CSSProperties;
-    }) => {
+    ({ node, style, dragHandle }: NodeRendererProps<TreeNode>) => {
       if (node.isEditing) {
         return <EditableTreeNode node={node} style={style} />;
       }
@@ -906,6 +905,7 @@ function formatShortTimestamp(date: Date): string {
       };
       return (
         <div
+          ref={dragHandle}
           style={style}
           className="flex h-full items-center gap-1.5 overflow-hidden px-2 text-sm"
           data-node-id={data.uri}
