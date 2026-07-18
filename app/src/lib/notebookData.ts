@@ -1,3 +1,4 @@
+import { Code } from '@buf/googleapis_googleapis.bufbuild_es/google/rpc/code_pb'
 import { clone, create } from '@bufbuild/protobuf'
 import {
   Heartbeat,
@@ -123,8 +124,17 @@ const RUNNER_BACKEND_UNAVAILABLE_MESSAGE =
 
 const EXECUTION_MONITOR_INTERRUPTED_MESSAGE =
   'Execution monitoring was interrupted before Runme received a final exit code. ' +
-  'The process may still be running, but this client cannot confirm its state. ' +
-  'Check the runner before re-running commands that are not idempotent.\n'
+  'The runner no longer has this execution. Its final exit code is unknown. ' +
+  'Check external effects before re-running commands that are not idempotent.\n'
+
+function isRunNotFoundError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code?: unknown }).code === Code.NOT_FOUND
+  )
+}
 
 function decodeBase64ToBytes(value: string): Uint8Array {
   try {
@@ -404,6 +414,7 @@ export const bindStreamsToCell: StreamBinder = ({
       })
       const updated = getCell(refId)
       if (
+        isRunNotFoundError(err) &&
         updated?.metadata &&
         typeof updated.metadata[RunmeMetadataKey.ExitCode] !== 'string'
       ) {

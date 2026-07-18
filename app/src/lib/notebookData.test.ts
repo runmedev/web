@@ -1,4 +1,5 @@
 import { create } from "@bufbuild/protobuf";
+import { Code } from "@buf/googleapis_googleapis.bufbuild_es/google/rpc/code_pb";
 import type { StreamsLike } from "@runmedev/renderers";
 import { Subject } from "rxjs";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -338,7 +339,7 @@ type FakeStreams = StreamsLike & {
   exitCode$: Subject<number>;
   pid$: Subject<number>;
   mimeType$: Subject<string>;
-  errors$: Subject<Error>;
+  errors$: Subject<Error | { code: Code; message: string }>;
 };
 
 function makeFakeStreams(): FakeStreams {
@@ -347,7 +348,7 @@ function makeFakeStreams(): FakeStreams {
   const exitCode$ = new Subject<number>();
   const pid$ = new Subject<number>();
   const mimeType$ = new Subject<string>();
-  const errors$ = new Subject<Error>();
+  const errors$ = new Subject<Error | { code: Code; message: string }>();
 
   return {
     stdout: stdout$,
@@ -477,7 +478,7 @@ describe("bindStreamsToCell", () => {
     );
   });
 
-  it("marks the outcome unknown when monitoring fails after a pid", () => {
+  it("keeps the outcome running after a non-authoritative monitoring error", () => {
     const refId = "cell-monitor-failed";
     const cell = create(parser_pb.CellSchema, {
       refId,
@@ -500,7 +501,39 @@ describe("bindStreamsToCell", () => {
     });
 
     fake.pid$.next(123);
-    fake.errors$.next(new Error("run is no longer available"));
+    fake.errors$.next(new Error("runner is temporarily unreachable"));
+
+    expect(current.metadata?.[RunmeMetadataKey.Pid]).toBe("123");
+    expect(current.metadata?.[RunmeMetadataKey.ExitCode]).toBeUndefined();
+    expect(current.metadata?.[RunmeMetadataKey.ExecutionState]).toBe(
+      RunmeExecutionState.Running,
+    );
+  });
+
+  it("marks the outcome unknown when the runner no longer has the run", () => {
+    const refId = "cell-run-not-found";
+    const cell = create(parser_pb.CellSchema, {
+      refId,
+      kind: parser_pb.CellKind.CODE,
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.LastRunID]: "run-not-found",
+      },
+    });
+
+    let current = cell;
+    const fake = makeFakeStreams();
+    bindStreamsToCell({
+      refId,
+      streams: fake,
+      getCell: () => current,
+      updateCell: (next) => {
+        current = next;
+      },
+    });
+
+    fake.pid$.next(123);
+    fake.errors$.next({ code: Code.NOT_FOUND, message: "run not found" });
 
     expect(current.metadata?.[RunmeMetadataKey.Pid]).toBeUndefined();
     expect(current.metadata?.[RunmeMetadataKey.ExitCode]).toBeUndefined();
@@ -765,13 +798,16 @@ describe("NotebookData.runCodeCell", () => {
     const stream = model.getActiveStream(cell.refId) as
       | (StreamsLike & {
           pid: Subject<number>;
-          errors: Subject<Error>;
+          errors: Subject<Error | { code: Code; message: string }>;
         })
       | undefined;
     expect(stream).toBeTruthy();
 
     stream!.pid.next(123);
-    stream!.errors.next(new Error("execution record expired"));
+    stream!.errors.next({
+      code: Code.NOT_FOUND,
+      message: "execution record expired",
+    });
     await run;
 
     const updated = model.getCellSnapshot(cell.refId);

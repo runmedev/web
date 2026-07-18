@@ -188,11 +188,11 @@ know the new protocol.
 
 Runme Web will persist `runme.dev/executionState`:
 
-| State       | Meaning                                                         |
-| ----------- | --------------------------------------------------------------- |
-| `running`   | The runner acknowledged the run and no terminal result arrived. |
-| `completed` | The client observed an exit code.                               |
-| `unknown`   | Monitoring ended without an authoritative terminal result.      |
+| State       | Meaning                                                    |
+| ----------- | ---------------------------------------------------------- |
+| `running`   | The client has no authoritative terminal result.           |
+| `completed` | The client observed an exit code.                          |
+| `unknown`   | The runner reported that it no longer retains the `runID`. |
 
 A new execution will send `START` and wait for `CREATED` before releasing its
 queued execute request.
@@ -203,11 +203,29 @@ client will send `RESUME` for the persisted `runID`:
 - `RUNNING`: retain the PID and continue monitoring;
 - `NOT_FOUND`: clear the PID, set `executionState=unknown`, preserve existing
   output, and append an explanatory warning;
-- terminal transport or protocol failure: use the same `unknown` transition
-  after reconnect attempts are exhausted.
+- transport failure: retain the PID and `running` state and keep reconnecting.
 
 `unknown` is not an exit status. The client will not synthesize exit code `0`
 or `1`.
+
+### Unreachable runners and user recovery
+
+Connection failure is not a terminal execution result. The client will keep the
+cell in the running state until it receives an exit response or the runner
+returns `NOT_FOUND`. This can leave a cell running indefinitely when its runner
+was on a VM that no longer exists, but it avoids turning a network outage into
+a false execution result.
+
+Users can select another runner and rerun the cell. The rerun creates a new
+`runID` and stops monitoring the old one. If the old runner is unreachable, the
+client cannot guarantee that its process stopped, so users must treat
+non-idempotent commands carefully.
+
+A future UI should let users explicitly abandon an unreachable run. Abandoning
+will clear local running state and record `unknown`; it will not claim that the
+remote process was cancelled. Confirmed remote cancellation requires a runner
+connection and a separate cancellation acknowledgement, which this protocol
+does not add.
 
 ### Browser refresh during a long execution
 
@@ -260,8 +278,9 @@ Web tests verify:
 - execute requests remain queued until `CREATED`;
 - persisted running metadata sends `RESUME` with the saved `runID`;
 - `NOT_FOUND` becomes a terminal monitoring error;
-- monitoring errors set `unknown`, clear the PID, and preserve an explanatory
+- `NOT_FOUND` sets `unknown`, clears the PID, and preserves an explanatory
   stderr output;
+- transport failures preserve the PID and running state while reconnecting;
 - callers waiting for the run resolve when monitoring becomes `unknown`.
 
 ### Future terminal-state retention

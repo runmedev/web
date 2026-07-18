@@ -122,6 +122,38 @@ describe('Streams', () => {
     streams.close()
   })
 
+  it('keeps retrying when the runner is unreachable', async () => {
+    const streams = new Streams({
+      knownID: 'cell-unreachable',
+      runID: 'run-unreachable',
+      sequence: 2,
+      options: {
+        runnerEndpoint: 'ws://localhost:9977/ws',
+        interceptors: [],
+        autoReconnect: true,
+        initialIntent: RunIntent.RESUME,
+      },
+    })
+    const errors: unknown[] = []
+    const errorSubscription = streams.errors.subscribe((error) => {
+      errors.push(error)
+    })
+
+    streams.connect(Heartbeat.INITIAL).subscribe()
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      expect(MockWebSocket.instances).toHaveLength(attempt + 1)
+      MockWebSocket.instances[attempt].failConnection()
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+
+    expect(MockWebSocket.instances).toHaveLength(5)
+    expect(errors).toEqual([])
+
+    errorSubscription.unsubscribe()
+    streams.close()
+  })
+
   it('uses resume intent before reconnecting a persisted run', async () => {
     const streams = new Streams({
       knownID: 'cell-resume',
