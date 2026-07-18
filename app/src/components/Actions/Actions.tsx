@@ -15,6 +15,7 @@ import { Button, ScrollArea, Tabs, Text } from '@radix-ui/themes'
 
 import {
   ChatBubbleLeftIcon,
+  LinkIcon,
   LockClosedIcon,
   XMarkIcon,
 } from '@heroicons/react/20/solid'
@@ -40,8 +41,10 @@ import {
   type NotebookActiveCellState,
 } from '../../lib/notebookActiveCellState'
 import {
+  copyNotebookCellShareUrl,
   copyNotebookMarkdownLink,
   copyNotebookShareUrl,
+  parseNotebookCellFragment,
 } from '../../lib/shareLinks'
 import { isHtmlLanguageId, isMarkdownLanguageId } from '../../lib/cellContent'
 import { PlayIcon, PlusIcon, SpinnerIcon, TrashIcon } from './icons'
@@ -453,6 +456,27 @@ function CellCommentButton({
   )
 }
 
+function CellLinkButton({
+  onClick,
+  className = '',
+}: {
+  onClick: () => void
+  className?: string
+}) {
+  const label = 'Copy link to cell'
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className={`icon-btn text-nb-text-muted hover:bg-nb-accent-muted hover:text-nb-accent focus-visible:bg-nb-accent-muted focus-visible:text-nb-accent ${className}`}
+    >
+      <LinkIcon className="h-4 w-4" />
+    </button>
+  )
+}
+
 // Action is an editor and an optional Runme console
 const LANGUAGE_OPTIONS = [
   { label: 'Markdown', value: 'markdown' },
@@ -545,6 +569,7 @@ export function Action({
   commentsAvailable = false,
   commentCount = 0,
   onStartComment,
+  isDeepLinkTarget = false,
 }: {
   cellData: CellData
   docUri?: string
@@ -557,6 +582,7 @@ export function Action({
   commentsAvailable?: boolean
   commentCount?: number
   onStartComment?: (cellId: string) => void
+  isDeepLinkTarget?: boolean
 }) {
   const { store } = useNotebookStore()
   const { listRunners, defaultRunnerName } = useRunners()
@@ -609,28 +635,44 @@ export function Action({
     x: number
     y: number
   } | null>(null)
-  const [shareRemoteUri, setShareRemoteUri] = useState<string | null>(null)
+  const [shareTarget, setShareTarget] = useState<{
+    docUri: string
+    targetUri: string | null
+  }>(() => {
+    const fallbackUri = docUri.trim() || null
+    return {
+      docUri,
+      targetUri: store && docUri.startsWith('local://') ? null : fallbackUri,
+    }
+  })
+  const shareTargetUri =
+    shareTarget.docUri === docUri ? shareTarget.targetUri : null
   const [htmlEditRequest, setHtmlEditRequest] = useState(0)
   const [markdownEditRequest, setMarkdownEditRequest] = useState(0)
   const [pid, setPid] = useState<number | null>(null)
   const [exitCode, setExitCode] = useState<number | null>(null)
 
   useEffect(() => {
+    const fallbackUri = docUri.trim() || null
     if (!store || !docUri.startsWith('local://')) {
-      setShareRemoteUri(null)
+      setShareTarget({ docUri, targetUri: fallbackUri })
       return
     }
 
     let cancelled = false
+    setShareTarget({ docUri, targetUri: null })
     void (async () => {
       try {
         const metadata = await store.getMetadata(docUri)
         if (!cancelled) {
-          setShareRemoteUri(metadata?.remoteUri ?? null)
+          setShareTarget({
+            docUri,
+            targetUri: metadata?.remoteUri?.trim() || fallbackUri,
+          })
         }
       } catch {
         if (!cancelled) {
-          setShareRemoteUri(null)
+          setShareTarget({ docUri, targetUri: fallbackUri })
         }
       }
     })()
@@ -679,7 +721,7 @@ export function Action({
     }
 
     const menuWidth = 200
-    const menuHeight = shareRemoteUri ? 128 : 88
+    const menuHeight = shareTargetUri && cell?.refId.trim() ? 128 : 88
     const left = Math.max(
       0,
       Math.min(contextMenu.x, window.innerWidth - menuWidth)
@@ -689,7 +731,7 @@ export function Action({
       Math.min(contextMenu.y, window.innerHeight - menuHeight)
     )
     return { x: left, y: top }
-  }, [contextMenu, shareRemoteUri])
+  }, [cell?.refId, contextMenu, shareTargetUri])
 
   const runCode = useCallback(() => {
     if (readOnly) {
@@ -759,26 +801,33 @@ export function Action({
   }, [cellData, readOnly])
 
   const handleCopyShareLink = useCallback(async () => {
-    if (!shareRemoteUri) {
+    if (!shareTargetUri || !cell?.refId) {
       setContextMenu(null)
       return
     }
 
     try {
-      await copyNotebookShareUrl(shareRemoteUri)
+      await copyNotebookCellShareUrl(shareTargetUri, cell.refId)
+      showToast({ message: 'Link to cell copied', tone: 'success' })
     } catch (error) {
-      appLogger.error('Failed to copy notebook share link from document menu', {
+      appLogger.error('Failed to copy notebook cell link from cell menu', {
         attrs: {
-          scope: 'storage.drive.share',
-          code: 'DRIVE_SHARE_LINK_COPY_FAILED',
-          remoteUri: shareRemoteUri,
+          scope: 'notebook.share',
+          code: 'NOTEBOOK_CELL_LINK_COPY_FAILED',
+          notebookUri: shareTargetUri,
+          cellRefId: cell.refId,
           error: String(error),
         },
+      })
+      showToast({
+        message:
+          'Could not copy the cell link. Check clipboard permissions and try again.',
+        tone: 'error',
       })
     } finally {
       setContextMenu(null)
     }
-  }, [shareRemoteUri])
+  }, [cell?.refId, shareTargetUri])
 
   const handleStartComment = useCallback(() => {
     if (!cell?.refId || !onStartComment) {
@@ -1171,6 +1220,16 @@ export function Action({
     commentCount > 0 || (isActiveCell && isWindowFocused)
       ? 'opacity-100'
       : 'pointer-events-none opacity-0 transition-opacity duration-150 group-hover/cell:pointer-events-auto group-hover/cell:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100'
+  const cellLinkVisibilityClass = isActiveCell
+    ? 'opacity-100'
+    : 'pointer-events-none opacity-0 transition-opacity duration-150 group-hover/cell:pointer-events-auto group-hover/cell:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100'
+  const deepLinkTargetClass = isDeepLinkTarget
+    ? 'rounded-nb-md outline outline-2 outline-offset-2 outline-nb-accent'
+    : ''
+  const contextMenuLinkLabel = isDriveItemUri(shareTargetUri ?? undefined)
+    ? 'Copy link to cell'
+    : 'Copy local link to cell'
+  const canCopyCellLink = Boolean(shareTargetUri && cell.refId.trim())
 
   // Render markdown cells with in-place rendering (Jupyter-style)
   // No run button, no output area - just the markdown rendered in-place
@@ -1178,7 +1237,7 @@ export function Action({
     return (
       <div
         id={`markdown-action-${cell.refId}`}
-        className="group/cell relative flex min-w-0"
+        className={`group/cell relative flex min-w-0 ${deepLinkTargetClass}`}
         onContextMenu={handleContextMenu}
         onFocusCapture={handleFocusCapture}
         data-testid="markdown-action"
@@ -1230,6 +1289,12 @@ export function Action({
               onClick={handleStartComment}
               className={`absolute right-10 top-2 h-6 w-6 ${cellCommentVisibilityClass}`}
             />
+            {canCopyCellLink && (
+              <CellLinkButton
+                onClick={() => void handleCopyShareLink()}
+                className={`absolute right-[4.5rem] top-2 h-6 w-6 ${cellLinkVisibilityClass}`}
+              />
+            )}
             {/* Trash icon on the right, visible on hover */}
             <button
               type="button"
@@ -1251,7 +1316,7 @@ export function Action({
             }}
             onContextMenu={(event) => event.preventDefault()}
           >
-            {shareRemoteUri && (
+            {canCopyCellLink && (
               <button
                 type="button"
                 className="ctx-menu-item"
@@ -1260,7 +1325,7 @@ export function Action({
                   void handleCopyShareLink()
                 }}
               >
-                Copy Share Link
+                {contextMenuLinkLabel}
               </button>
             )}
             <button
@@ -1295,7 +1360,7 @@ export function Action({
     return (
       <div
         id={`html-action-${cell.refId}`}
-        className="group/cell relative flex min-w-0"
+        className={`group/cell relative flex min-w-0 ${deepLinkTargetClass}`}
         onContextMenu={handleContextMenu}
         data-testid="html-action"
         data-cell-ref-id={cell.refId}
@@ -1340,6 +1405,12 @@ export function Action({
               onClick={handleStartComment}
               className={`absolute right-10 top-2 h-6 w-6 ${cellCommentVisibilityClass}`}
             />
+            {canCopyCellLink && (
+              <CellLinkButton
+                onClick={() => void handleCopyShareLink()}
+                className={`absolute right-[4.5rem] top-2 h-6 w-6 ${cellLinkVisibilityClass}`}
+              />
+            )}
             <button
               type="button"
               aria-label="Delete cell"
@@ -1360,7 +1431,7 @@ export function Action({
             }}
             onContextMenu={(event) => event.preventDefault()}
           >
-            {shareRemoteUri && (
+            {canCopyCellLink && (
               <button
                 type="button"
                 className="ctx-menu-item"
@@ -1369,7 +1440,7 @@ export function Action({
                   void handleCopyShareLink()
                 }}
               >
-                Copy Share Link
+                {contextMenuLinkLabel}
               </button>
             )}
             <button
@@ -1406,7 +1477,7 @@ export function Action({
   return (
     <div
       id={`code-action-${cell.refId}`}
-      className="group/cell relative flex"
+      className={`group/cell relative flex ${deepLinkTargetClass}`}
       onContextMenu={handleContextMenu}
       onFocusCapture={handleFocusCapture}
       data-testid="code-action"
@@ -1580,6 +1651,12 @@ export function Action({
               )}
             </div>
             <div className="flex items-center gap-1">
+              {canCopyCellLink && (
+                <CellLinkButton
+                  onClick={() => void handleCopyShareLink()}
+                  className={`h-7 w-7 ${cellLinkVisibilityClass}`}
+                />
+              )}
               <CellCommentButton
                 count={commentCount}
                 available={commentsAvailable}
@@ -1630,7 +1707,7 @@ export function Action({
           }}
           onContextMenu={(event) => event.preventDefault()}
         >
-          {shareRemoteUri && (
+          {canCopyCellLink && (
             <button
               type="button"
               className="ctx-menu-item"
@@ -1639,7 +1716,7 @@ export function Action({
                 void handleCopyShareLink()
               }}
             >
-              Copy Share Link
+              {contextMenuLinkLabel}
             </button>
           )}
           <button
@@ -1674,6 +1751,7 @@ function NotebookTabContent({
   docUri,
   entry,
   activeCell,
+  deepLinkCellId,
   isSelected,
   isWindowFocused,
   onCellFocus,
@@ -1681,6 +1759,7 @@ function NotebookTabContent({
   docUri: string
   entry: OpenNotebookEntry
   activeCell: NotebookActiveCellState | null
+  deepLinkCellId: string | null
   isSelected: boolean
   isWindowFocused: boolean
   onCellFocus: (docUri: string, state: NotebookActiveCellState) => void
@@ -1693,6 +1772,13 @@ function NotebookTabContent({
   } = useNotebookContext()
   const { store } = useNotebookStore()
   const notebookSnapshot = useNotebookSnapshot(docUri)
+  const notebookRootRef = useRef<HTMLDivElement | null>(null)
+  const appliedDeepLinkRef = useRef<string | null>(null)
+  const reportedMissingDeepLinkRef = useRef<string | null>(null)
+  const highlightTimeoutRef = useRef<number | null>(null)
+  const [highlightedDeepLinkCellId, setHighlightedDeepLinkCellId] = useState<
+    string | null
+  >(null)
   const syncState = useNotebookSyncState(docUri)
   const releasePending = Boolean(
     entry.releasePending || notebookSnapshot?.releasePending
@@ -1750,20 +1836,32 @@ function NotebookTabContent({
     [cellLabels, comments]
   )
 
-  const selectCommentCell = useCallback((cellId: string) => {
-    const element =
-      document.getElementById(`code-action-${cellId}`) ??
-      document.getElementById(`markdown-action-${cellId}`) ??
-      document.getElementById(`html-action-${cellId}`)
-    const focusRole = element?.id.startsWith('markdown-action-')
-      ? 'rendered'
-      : 'editor'
-    const nextState = createNotebookActiveCellState(cellId, focusRole)
-    if (nextState) {
-      onCellFocus(docUri, nextState)
-    }
-    element?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [docUri, onCellFocus])
+  const findCellElement = useCallback((cellId: string) => {
+    const elements =
+      notebookRootRef.current?.querySelectorAll<HTMLElement>(
+        '[data-cell-ref-id]'
+      ) ?? []
+    return (
+      Array.from(elements).find(
+        (element) => element.dataset.cellRefId === cellId
+      ) ?? null
+    )
+  }, [])
+
+  const selectCommentCell = useCallback(
+    (cellId: string) => {
+      const element = findCellElement(cellId)
+      const focusRole = element?.id.startsWith('markdown-action-')
+        ? 'rendered'
+        : 'editor'
+      const nextState = createNotebookActiveCellState(cellId, focusRole)
+      if (nextState) {
+        onCellFocus(docUri, nextState)
+      }
+      element?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    },
+    [docUri, findCellElement, onCellFocus]
+  )
 
   const startCommentDraft = useCallback(
     (cellId: string) => {
@@ -1955,6 +2053,70 @@ function NotebookTabContent({
     [commentsRemoteUri, refreshComments]
   )
 
+  useEffect(() => {
+    if (!deepLinkCellId) {
+      appliedDeepLinkRef.current = null
+      reportedMissingDeepLinkRef.current = null
+      setHighlightedDeepLinkCellId(null)
+      return
+    }
+    if (!isSelected || !notebookSnapshot?.loaded) {
+      return
+    }
+
+    const applicationKey = JSON.stringify([docUri, deepLinkCellId])
+    if (appliedDeepLinkRef.current === applicationKey) {
+      return
+    }
+
+    const element = findCellElement(deepLinkCellId)
+    if (!element) {
+      if (
+        syncState?.status !== 'syncing' &&
+        reportedMissingDeepLinkRef.current !== applicationKey
+      ) {
+        showToast({
+          message: 'The linked cell no longer exists in this notebook.',
+          tone: 'error',
+        })
+        reportedMissingDeepLinkRef.current = applicationKey
+      }
+      return
+    }
+
+    element.scrollIntoView({
+      block: 'center',
+      inline: 'nearest',
+      behavior: 'auto',
+    })
+    appliedDeepLinkRef.current = applicationKey
+    reportedMissingDeepLinkRef.current = null
+    setHighlightedDeepLinkCellId(deepLinkCellId)
+    if (highlightTimeoutRef.current !== null) {
+      window.clearTimeout(highlightTimeoutRef.current)
+    }
+    highlightTimeoutRef.current = window.setTimeout(() => {
+      setHighlightedDeepLinkCellId(null)
+      highlightTimeoutRef.current = null
+    }, 2_000)
+  }, [
+    cellDatas,
+    deepLinkCellId,
+    docUri,
+    findCellElement,
+    isSelected,
+    notebookSnapshot?.loaded,
+    syncState?.status,
+  ])
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimeoutRef.current !== null) {
+        window.clearTimeout(highlightTimeoutRef.current)
+      }
+    }
+  }, [])
+
   if (readOnly && !isSelected) {
     return (
       <div
@@ -2056,7 +2218,7 @@ function NotebookTabContent({
   }
 
   return (
-    <div className="flex h-full min-w-0">
+    <div ref={notebookRootRef} className="flex h-full min-w-0">
       <ScrollArea
         key={`scroll-${docUri}`}
         type="auto"
@@ -2160,6 +2322,7 @@ function NotebookTabContent({
                     isActiveCell={activeCell?.refId === refId}
                     activeFocusRole={activeCell?.focusRole ?? 'editor'}
                     isWindowFocused={isWindowFocused}
+                    isDeepLinkTarget={highlightedDeepLinkCellId === refId}
                     onFocusStateChange={(state) => onCellFocus(docUri, state)}
                     readOnly={readOnly}
                     commentsAvailable={commentsStatus === 'available'}
@@ -2267,6 +2430,7 @@ function UnknownDocumentTab({ uri }: { uri: string }) {
 function renderWorkspaceDocument({
   document,
   activeCell,
+  deepLinkCellId,
   isSelected,
   isWindowFocused,
   onCellFocus,
@@ -2275,6 +2439,7 @@ function renderWorkspaceDocument({
 }: {
   document: WorkspaceDocument
   activeCell: NotebookActiveCellState | null
+  deepLinkCellId: string | null
   isSelected: boolean
   isWindowFocused: boolean
   onCellFocus: (docUri: string, state: NotebookActiveCellState) => void
@@ -2304,6 +2469,7 @@ function renderWorkspaceDocument({
         docUri={document.uri}
         entry={entry}
         activeCell={activeCell}
+        deepLinkCellId={deepLinkCellId}
         isSelected={isSelected}
         isWindowFocused={isWindowFocused}
         onCellFocus={onCellFocus}
@@ -2357,6 +2523,11 @@ export default function Actions() {
   const [selectedTabUri, setSelectedTabUri] = useState<string | null>(null)
   const [activeCellsByDoc, setActiveCellsByDoc] =
     useState<NotebookActiveCellMap>(() => loadNotebookActiveCellMap())
+  const [deepLinkCellId, setDeepLinkCellId] = useState<string | null>(() =>
+    typeof window === 'undefined'
+      ? null
+      : parseNotebookCellFragment(window.location.hash)
+  )
   const [isWindowFocused, setIsWindowFocused] = useState(() => {
     if (typeof document === 'undefined') {
       return false
@@ -2379,6 +2550,22 @@ export default function Actions() {
   } | null>(null)
   const tabTriggerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const pendingSelectedTabUriRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const syncCellFragment = () => {
+      setDeepLinkCellId(parseNotebookCellFragment(window.location.hash))
+    }
+    window.addEventListener('hashchange', syncCellFragment)
+    window.addEventListener('popstate', syncCellFragment)
+    return () => {
+      window.removeEventListener('hashchange', syncCellFragment)
+      window.removeEventListener('popstate', syncCellFragment)
+    }
+  }, [])
   //const { data: run } = useRun(runName);
 
   // useEffect(() => {
@@ -2678,7 +2865,8 @@ export default function Actions() {
                 ? remoteUri
                 : current.googleDriveUri,
               canOpenUpstreamDiff:
-                docUri.startsWith('local://') && isGoogleDriveFileUri(remoteUri),
+                docUri.startsWith('local://') &&
+                isGoogleDriveFileUri(remoteUri),
             }
           })
         } catch (error) {
@@ -3149,6 +3337,7 @@ export default function Actions() {
                   {renderWorkspaceDocument({
                     document: doc,
                     activeCell: activeCellsByDoc[doc.uri] ?? null,
+                    deepLinkCellId,
                     isSelected: resolvedSelectedTabUri === doc.uri,
                     isWindowFocused:
                       isWindowFocused && resolvedSelectedTabUri === doc.uri,

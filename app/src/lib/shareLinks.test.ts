@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildNotebookCellFragment,
+  buildNotebookCellShareUrl,
   buildNotebookMarkdownLink,
   buildNotebookShareBaseUrl,
   buildNotebookShareUrl,
   getNotebookShareTarget,
   normalizeNotebookReferenceUri,
+  parseNotebookCellFragment,
 } from './shareLinks'
 
 describe('buildNotebookShareUrl', () => {
@@ -29,6 +32,48 @@ describe('buildNotebookShareUrl', () => {
     expect(() => buildNotebookShareUrl('   ')).toThrow(
       'A notebook URI is required to build a share link'
     )
+  })
+})
+
+describe('notebook cell links', () => {
+  it('builds a share URL with an encoded cell ref ID fragment', () => {
+    window.history.replaceState(null, '', '/workspace?foo=bar#old-cell')
+
+    expect(
+      buildNotebookCellShareUrl(
+        'https://drive.google.com/file/d/shared-file-123/view',
+        'cell/with spaces'
+      )
+    ).toBe(
+      'http://localhost:3000/workspace?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2Fshared-file-123%2Fview#cell=cell%2Fwith%20spaces'
+    )
+  })
+
+  it('builds a canonical namespaced fragment', () => {
+    expect(buildNotebookCellFragment('cell/with spaces')).toBe(
+      '#cell=cell%2Fwith%20spaces'
+    )
+  })
+
+  it('rejects an empty cell ref ID', () => {
+    expect(() =>
+      buildNotebookCellShareUrl('local://file/notebook', '  ')
+    ).toThrow('A cell reference ID is required to build a cell link')
+  })
+
+  it('decodes cell fragments and tolerates malformed encoding', () => {
+    expect(parseNotebookCellFragment('#cell=cell%2Fwith%20spaces')).toBe(
+      'cell/with spaces'
+    )
+    expect(parseNotebookCellFragment('#cell=bad%2')).toBe('bad%2')
+    expect(parseNotebookCellFragment('#cell=')).toBeNull()
+    expect(parseNotebookCellFragment('')).toBeNull()
+  })
+
+  it('ignores bare and other named fragments', () => {
+    expect(parseNotebookCellFragment('#legacy%2Fcell')).toBeNull()
+    expect(parseNotebookCellFragment('#access_token=secret')).toBeNull()
+    expect(parseNotebookCellFragment('#section=overview')).toBeNull()
   })
 })
 

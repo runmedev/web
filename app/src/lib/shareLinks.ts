@@ -42,6 +42,37 @@ export function buildNotebookShareUrl(remoteUri: string): string {
   return url.toString()
 }
 
+export function buildNotebookCellShareUrl(
+  remoteUri: string,
+  cellRefId: string
+): string {
+  return `${buildNotebookShareUrl(remoteUri)}${buildNotebookCellFragment(
+    cellRefId
+  )}`
+}
+
+export function buildNotebookCellFragment(cellRefId: string): string {
+  const trimmedCellRefId = cellRefId.trim()
+  if (!trimmedCellRefId) {
+    throw new Error('A cell reference ID is required to build a cell link')
+  }
+
+  return `#cell=${encodeURIComponent(trimmedCellRefId)}`
+}
+
+export function parseNotebookCellFragment(hash: string): string | null {
+  const fragment = hash.startsWith('#') ? hash.slice(1) : hash
+  if (!fragment.startsWith('cell=')) {
+    return null
+  }
+
+  try {
+    return decodeURIComponent(fragment.slice('cell='.length)) || null
+  } catch {
+    return fragment.slice('cell='.length) || null
+  }
+}
+
 export function buildNotebookMarkdownLink(
   name: string,
   remoteUri: string
@@ -59,6 +90,22 @@ export async function copyNotebookShareUrl(remoteUri: string): Promise<string> {
   }
 
   const shareUrl = buildNotebookShareUrl(remoteUri)
+  await window.navigator.clipboard.writeText(shareUrl)
+  return shareUrl
+}
+
+export async function copyNotebookCellShareUrl(
+  remoteUri: string,
+  cellRefId: string
+): Promise<string> {
+  if (
+    typeof window === 'undefined' ||
+    !window.navigator?.clipboard?.writeText
+  ) {
+    throw new Error('Clipboard access is unavailable in this browser')
+  }
+
+  const shareUrl = buildNotebookCellShareUrl(remoteUri, cellRefId)
   await window.navigator.clipboard.writeText(shareUrl)
   return shareUrl
 }
