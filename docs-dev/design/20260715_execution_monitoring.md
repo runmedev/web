@@ -90,6 +90,48 @@ The design must:
 This version does not retain completed results or survive loss of the runner's
 in-memory run registry.
 
+## Background
+
+### Execution and connection identifiers
+
+Runme uses different identifiers for an execution and for a connection to that
+execution:
+
+| Identifier | Scope                    | Lifetime                                                            |
+| ---------- | ------------------------ | ------------------------------------------------------------------- |
+| `runID`    | One command execution    | Stable from execution start through every reconnect                 |
+| `streamID` | One WebSocket connection | Generated when the socket is opened and discarded when it is closed |
+
+The web client generates `runID` as `run_<ULID>`. The runner uses it as the key
+for the multiplexer that owns an execution. The client persists the value as
+`runme.dev/lastRunID` so a reloaded notebook can refer to the same execution.
+
+The client generates `streamID` as a UUID without dashes for each connection.
+The runner uses it to add and remove that connection from the run's
+multiplexer. One `runID` can therefore have several `streamID` values over its
+lifetime, and more than one client can connect to the same run. Reconnecting
+after a browser refresh means using the original `runID` with a new
+`streamID`.
+
+### Current WebSocket request
+
+The web client opens the runner WebSocket with this URL shape:
+
+```text
+<runnerEndpoint>?id=<streamID>&runID=<runID>
+```
+
+`id` and `runID` are the only query arguments that the `Streams` client adds.
+If the configured runner endpoint already contains other query arguments, the
+client preserves them; it sets or replaces `id` and `runID`. The runner
+requires both values before upgrading the connection.
+
+After the upgrade, application messages contain `knownId`, `runId`, and, when
+available, `authorization`. `knownId` identifies the notebook cell rather than
+an execution. The proposed `OpenRunRequest.intent` is also an application
+message field. None of these fields is added as a query argument. `runID` is
+currently present both in the WebSocket URL and in application messages.
+
 ## Proposal
 
 ### Protocol
@@ -125,9 +167,6 @@ acting on the intent.
 The client must wait for `OpenRunResponse` before sending execute requests or
 heartbeats. A second `OpenRunRequest` on the same WebSocket will fail with
 `FAILED_PRECONDITION`.
-
-`runID` identifies one execution across connections. `streamID` identifies one
-WebSocket connection and changes on every reconnect.
 
 ### Runner behavior
 
