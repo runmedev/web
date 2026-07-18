@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { Helmet } from 'react-helmet'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import Callback from './routes/callback'
-import RunRoute from './routes/run'
 import RunsRoute from './routes/runs'
 import { Theme } from '@radix-ui/themes'
 import '@radix-ui/themes/styles.css'
@@ -79,7 +78,6 @@ function AppRouter() {
           element={<Navigate replace to={APP_ROUTE_PATHS.home} />}
         />
         <Route path="/runs" element={<RunsRoute />} />
-        <Route path="/runs/:runName" element={<RunRoute />} />
         <Route path="/runs/:runName/edit" element={<MainPage />} />
         <Route path="/auth/status" element={<BrowserAuthStatus />} />
         <Route path="/oidc/callback" element={<Callback />} />

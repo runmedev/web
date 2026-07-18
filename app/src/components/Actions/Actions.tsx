@@ -45,7 +45,6 @@ import {
 } from '../../lib/shareLinks'
 import { isHtmlLanguageId, isMarkdownLanguageId } from '../../lib/cellContent'
 import { PlayIcon, PlusIcon, SpinnerIcon, TrashIcon } from './icons'
-//import { useRun } from "../../lib/useRun.js";
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import { useRunners } from '../../contexts/RunnersContext'
 import { useCommentsPanel } from '../../contexts/CommentsPanelContext'
@@ -2379,34 +2378,6 @@ export default function Actions() {
   } | null>(null)
   const tabTriggerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const pendingSelectedTabUriRef = useRef<string | null>(null)
-  //const { data: run } = useRun(runName);
-
-  // useEffect(() => {
-  //   if (cellsInitialized) {
-  //     return;
-  //   }
-  //   if (run) {
-  //     const fallbackName = run?.name ?? runName ?? "Run Notebook";
-  //     const targetUri =
-  //       currentDocUri ??
-  //       (runName ? `run:${runName}` : "run-notebook");
-  //     const notebook = create(parser_pb.NotebookSchema, {
-  //       cells: run.notebook?.cells ?? [],
-  //       metadata: run.notebook?.metadata ?? {},
-  //     });
-  //     const data = ensureNotebook({
-  //       uri: targetUri,
-  //       name: fallbackName,
-  //       notebook,
-  //     });
-  //     data.loadNotebook(notebook);
-  //     data.setName(fallbackName);
-  //     console.log("useEffect is calling setCurrentDoc because run is true", targetUri);
-  //     setCurrentDoc(targetUri);
-  //     setCellsInitialized(true);
-  //   }
-  // }, [cellsInitialized, currentDocUri, ensureNotebook, run, runName, setCurrentDoc]);
-
   const { registerRenderer, unregisterRenderer } = useOutput()
   const workspaceDocumentUris = useMemo(
     () => new Set(workspaceDocuments.map((document) => document.uri)),

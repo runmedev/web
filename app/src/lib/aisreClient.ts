@@ -1,6 +1,4 @@
 import {
-  Code,
-  ConnectError,
   type CallOptions,
   type Client,
   type Interceptor,
@@ -12,7 +10,6 @@ import {
   RunsService,
   type CreateRunRequest,
   type CreateRunResponse,
-  type Run,
   type UpdateRunRequest,
   type UpdateRunResponse,
   type ListRunsRequest,
@@ -111,28 +108,6 @@ export class AisreClient {
 
     this.client = createClient(RunsService, transport);
     this.parserClient = createClient(ParserService, transport);
-  }
-
-  /**
-   * Fetches a run by name. Returns undefined when the run is not found rather
-   * than surfacing a 404 to simplify callers.
-   */
-  async getRun(
-    name: string,
-    options?: RequestOptions,
-  ): Promise<Run | undefined> {
-    try {
-      const response = await this.client.getRun(
-        { name },
-        this.mergeCallOptions(options),
-      );
-      return response.run ?? undefined;
-    } catch (error) {
-      if (isNotFoundError(error)) {
-        return undefined;
-      }
-      throw error;
-    }
   }
 
   async listRuns(params: ListRunsParams = {}): Promise<ListRunsResponse> {
@@ -276,10 +251,6 @@ function timestampToIsoString(
 
 function stripTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, "");
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return error instanceof ConnectError && error.code === Code.NotFound;
 }
 
 export function createAisreClient(options?: AisreClientOptions): AisreClient {
