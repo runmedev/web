@@ -1,82 +1,100 @@
-# 2026-07-15: Cell Execution Monitoring Semantics
+# Cell Execution Monitoring Across Reconnects
 
-## Status
+- **Author:** Jeremy Lewi
+- **Date:** 2026-07-15
+- **Status:** Draft
 
-This design is implemented by coordinated draft changes to the Runme runner and
-Runme Web. It replaces the earlier client-only proposal that disabled
-cross-session resume.
+## TL;DR
 
-The first version distinguishes starting a run from resuming one. Retaining and
-replaying a completed run's terminal result remains a future protocol extension.
+Runme Web can show a cell as running after its process has exited. The bug
+occurs when the browser misses the exit response and reconnects with a `runID`
+that the runner no longer knows. The old runner interprets the unknown `runID`
+as a new execution and creates an empty multiplexer. That multiplexer answers
+heartbeats but never produces an exit event.
 
-## Decision
+We will add an `OpenRunRequest` as the first WebSocket application message. Its
+intent is either `START` or `RESUME`. `RESUME` will attach only to an active run
+and return `NOT_FOUND` rather than create a new one. The runner will retain its
+legacy create-or-attach behavior for clients that do not send
+`OpenRunRequest`.
 
-The first application message on a new execution WebSocket will declare whether
-the client intends to start a new run or resume an existing run. The runner will
-acknowledge that intent before the client sends execute requests or heartbeats.
+This change restores active-run recovery after a browser refresh. It does not
+retain completed results. If a run finishes while the browser is disconnected,
+the client will record the outcome as `unknown`. Retaining terminal results is
+a future protocol extension.
 
-- `START` creates a new execution and fails if its `runID` already exists.
-- `RESUME` attaches to an active execution and fails if its `runID` is unknown.
-- A legacy client that does not send the negotiation message keeps the existing
-  create-or-attach behavior.
+## Motivation
 
-`runID` identifies an execution across connections. `streamID` identifies one
-WebSocket connection to that execution and is regenerated on reconnect.
+### Bug
 
-This removes the ambiguity that caused stale cells to appear to run forever. A
-resume request can no longer create an empty multiplexer for an execution that
-has already disappeared.
-
-## Incident
-
-Three cells in a local notebook showed as running after their commands had
-finished. Each cell contained:
+Three cells in a local notebook remained in the running state after their
+commands had finished. Each cell had:
 
 - `runme.dev/lastRunID`
 - `runme.dev/pid`
 - no `runme.dev/exitCode`
 
-The operating-system processes no longer existed. Clearing the PIDs stopped the
-running indicators, confirming that the UI was rendering persisted execution
-metadata rather than live process state.
+The operating-system processes no longer existed. Clearing the persisted PIDs
+removed the running indicators.
 
-The state is reproducible without a live process:
+The failure is reproducible:
 
 1. Start a backend cell execution.
-2. Deliver and persist its PID.
-3. Disconnect the browser before the exit response arrives.
-4. Let the process finish and let the runner remove its `runID`.
-5. Recreate the browser notebook model and reconnect with the old `runID`.
+2. Persist the PID and `runID`.
+3. Disconnect the browser before it receives the exit response.
+4. Let the process finish and let the runner remove the `runID`.
+5. Reload the notebook and reconnect with the persisted `runID`.
 
-Previously, the runner treated that unknown `runID` as a request to create a
-new multiplexer. It answered heartbeats, but the multiplexer had no process and
-would never produce an exit event. The cell therefore remained active.
+The old runner uses one operation for two intents:
 
-## Existing Contract and Ambiguity
+- an existing `runID` attaches the connection to its multiplexer;
+- an unknown `runID` creates a multiplexer.
 
-The web client persists three relevant facts:
+Step 5 therefore creates an empty multiplexer. Heartbeats succeed, but no
+process is attached and no exit response will arrive. The cell remains active
+indefinitely.
 
-- `lastRunID` identifies an execution attempt.
-- `pid` records that the runner reported a process.
-- `exitCode` records an observed terminal process result.
+### Why the client cannot infer liveness
 
-The runner previously used one operation for two meanings:
+The client persists three observations:
 
-- a connection for an existing `runID` joined its multiplexer;
-- a connection for an unknown `runID` created a multiplexer.
+- `lastRunID` identifies an execution attempt;
+- `pid` records that the runner reported a process;
+- `exitCode` records an observed terminal result.
 
-Completed runs are removed from the in-memory map, and responses are broadcast
-live rather than replayed to later connections. After reconnecting, the client
-therefore could not distinguish a quiet running process from a completed,
-forgotten, or runner-lost process. Heartbeat success only proved transport
-health; it did not prove process liveness.
+A PID without an exit code does not prove that the process is still running.
+PIDs are runner-local and can be reused. A heartbeat proves transport health,
+not process liveness. A silence timeout is also unsafe because a valid process
+can produce no output for hours.
 
-No browser timeout can resolve this ambiguity because a valid process may be
-quiet for an arbitrary amount of time.
+After reconnecting, the client cannot distinguish:
 
-## Protocol
+1. an active but quiet process;
+2. a process that finished while the client was disconnected;
+3. a run lost because the runner restarted;
+4. an empty multiplexer created for an expired `runID`.
 
-The WebSocket request and response envelopes add an open-run exchange:
+The runner must resolve this ambiguity.
+
+### Requirements
+
+The design must:
+
+- reconnect to an active execution after a browser refresh;
+- never create a run when the client intends to resume;
+- stop showing a cell as running when the resume target does not exist;
+- preserve the existing behavior for legacy clients;
+- avoid inventing a successful or failed exit code;
+- distinguish the execution identifier from the WebSocket identifier.
+
+This version does not retain completed results or survive loss of the runner's
+in-memory run registry.
+
+## Proposal
+
+### Protocol
+
+The WebSocket envelopes will add an explicit open-run exchange:
 
 ```proto
 enum RunIntent {
@@ -100,48 +118,36 @@ message OpenRunResponse {
 }
 ```
 
-For a negotiating client, `OpenRunRequest` must be the first application
-message. The runner validates authorization and identity before acting on the
-intent. The result matrix is:
+`OpenRunRequest` must be the first application message from a negotiating
+client. The runner will validate authorization, `runID`, and `knownID` before
+acting on the intent.
+
+The client must wait for `OpenRunResponse` before sending execute requests or
+heartbeats. A second `OpenRunRequest` on the same WebSocket will fail with
+`FAILED_PRECONDITION`.
+
+`runID` identifies one execution across connections. `streamID` identifies one
+WebSocket connection and changes on every reconnect.
+
+### Runner behavior
 
 | Intent   | Runner state          | Result                                     |
 | -------- | --------------------- | ------------------------------------------ |
-| `START`  | `runID` is unknown    | Create it; reply `CREATED`                 |
+| `START`  | `runID` is unknown    | Create it and return `CREATED`             |
 | `START`  | `runID` exists        | Return `ALREADY_EXISTS`                    |
-| `RESUME` | active `runID` exists | Attach to it; reply `RUNNING`              |
+| `RESUME` | active `runID` exists | Attach to it and return `RUNNING`          |
 | `RESUME` | `runID` is unknown    | Return `NOT_FOUND`; do not create anything |
 
-After a successful response, reconnects for that `Streams` instance use
-`RESUME`. A second negotiation message on the same WebSocket is rejected.
+After a successful `START`, later connections for the same client-side stream
+will use `RESUME`.
 
-The client waits for `OpenRunResponse` before releasing queued execute requests
-or starting heartbeat traffic. This guarantees that the first operation has an
-unambiguous meaning.
+If the first request is not `OpenRunRequest`, the runner will use the legacy
+create-or-attach path. This preserves compatibility with clients that do not
+know the new protocol.
 
-### Legacy Clients
+### Web client behavior
 
-Backward compatibility is server-side. If the first request is not
-`OpenRunRequest`, the runner processes it with the old create-or-attach
-semantics. Clients that know nothing about negotiation therefore continue to
-work against the new runner without changes.
-
-The inverse is not guaranteed: an old runner does not understand the new first
-message. Deployment must therefore be runner-first.
-
-| Client     | Runner | Behavior                                 |
-| ---------- | ------ | ---------------------------------------- |
-| Legacy     | New    | Existing create-or-attach behavior       |
-| Negotiated | New    | Explicit `START`/`RESUME` behavior       |
-| Negotiated | Legacy | Unsupported; deploy the new runner first |
-
-Putting intent in the WebSocket query string was rejected because a legacy
-runner could ignore an unknown query argument and silently retain the ambiguous
-behavior. An application-level request produces an explicit response or an
-explicit protocol failure.
-
-## Web Client Behavior
-
-The web client persists `runme.dev/executionState` with these values:
+Runme Web will persist `runme.dev/executionState`:
 
 | State       | Meaning                                                         |
 | ----------- | --------------------------------------------------------------- |
@@ -149,109 +155,140 @@ The web client persists `runme.dev/executionState` with these values:
 | `completed` | The client observed an exit code.                               |
 | `unknown`   | Monitoring ended without an authoritative terminal result.      |
 
-When a notebook model is recreated with a PID, a `lastRunID`, and no exit code,
-it creates a stream using `RESUME` instead of assuming that the PID proves
-liveness or immediately discarding the run:
+A new execution will send `START` and wait for `CREATED` before releasing its
+queued execute request.
 
-- `RUNNING`: retain the PID and continue monitoring the same execution;
-- `NOT_FOUND`: clear the PID, set `executionState=unknown`, preserve prior
-  output, and explain that the result is unknown;
-- terminal transport/protocol failure: use the same `unknown` transition after
-  reconnect policy is exhausted.
+When a notebook is reloaded with a PID, `lastRunID`, and no exit code, the
+client will send `RESUME` for the persisted `runID`:
 
-`unknown` is terminal for the browser operation waiting on the run, but it is
-not a process exit status. The client does not synthesize exit code `0` or `1`.
+- `RUNNING`: retain the PID and continue monitoring;
+- `NOT_FOUND`: clear the PID, set `executionState=unknown`, preserve existing
+  output, and append an explanatory warning;
+- terminal transport or protocol failure: use the same `unknown` transition
+  after reconnect attempts are exhausted.
 
-```mermaid
-stateDiagram-v2
-    [*] --> negotiating: START or RESUME
-    negotiating --> running: CREATED or RUNNING
-    negotiating --> unknown: NOT_FOUND or terminal error
-    running --> completed: exit code observed
-    running --> negotiating: WebSocket reconnect
-    running --> unknown: terminal monitoring failure
-    completed --> negotiating: user starts another run
-    unknown --> negotiating: user starts another run
-```
+`unknown` is not an exit status. The client will not synthesize exit code `0`
+or `1`.
 
-### Ten-hour Execution and Browser Refresh
+### Browser refresh during a long execution
 
-Suppose a cell starts a ten-hour command and the browser refreshes after five
-hours. The notebook reloads the persisted `runID` and opens a WebSocket with a
-new `streamID`. Its first message is `RESUME` for the original `runID`.
+Consider a ten-hour command followed by a browser refresh after five hours.
+The reloaded notebook opens a WebSocket with a new `streamID` and sends
+`RESUME` for the original `runID`.
 
-If the runner still has that active execution, it replies `RUNNING`, attaches
-the new stream to the existing multiplexer, and the browser resumes monitoring
-the same process. It does not start the command again.
+If the runner still owns the execution, it returns `RUNNING` and attaches the
+new connection to the existing multiplexer. The browser resumes monitoring the
+same process without executing the command again.
 
-If the execution finished while the browser was absent, this version of the
-runner has already discarded it and returns `NOT_FOUND`. The browser records
-`unknown` rather than displaying a false running state. Recovering the actual
-exit code in that case requires terminal-state retention.
+If the run finished while the browser was disconnected, the runner has already
+removed it and returns `NOT_FOUND`. The browser records `unknown` rather than
+displaying false liveness.
 
-## Future: Terminal-State Retention
+### Compatibility and rollout
 
-This first protocol fix authoritatively answers whether a run is active. It does
-not yet preserve completed results. A future version should retain a bounded
-execution snapshot containing at least `runID`, terminal state, PID, and exit
-code for longer than the expected reconnect window.
+Backward compatibility is runner-side:
 
-With that extension, `RESUME` could return `COMPLETED` and replay the real exit
-code when the process ended during disconnection. Output replay would be useful
-but is not required to fix liveness. Retention limits, runner restarts, and
-snapshot persistence need a separate design decision.
+| Client     | Runner | Behavior                               |
+| ---------- | ------ | -------------------------------------- |
+| Legacy     | New    | Existing create-or-attach behavior     |
+| Negotiated | New    | Explicit `START` and `RESUME` behavior |
+| Negotiated | Legacy | Unsupported                            |
 
-## Rejected Alternatives
+We will deploy the runner before the web client:
 
-### Check the PID from the browser
-
-PIDs are runner-local. The browser cannot test them portably, and PID reuse can
-produce false positives.
-
-### Mark interrupted executions successful or failed
-
-A missing exit event supports neither conclusion. Synthesizing exit code `0` or
-`1` would corrupt execution history.
-
-### Use a quiet-period timeout
-
-Long-running commands can produce no output for an arbitrary period. Silence is
-not a terminal protocol event.
-
-### Keep reconnecting with implicit semantics
-
-The old runner creates an empty multiplexer for an unknown `runID`, so a
-successful heartbeat does not confirm that the original process exists.
-
-## Rollout
-
-1. Deploy the backward-compatible runner implementation.
-2. Verify that legacy clients continue to execute and reconnect.
+1. Deploy the runner with negotiation and the legacy fallback.
+2. Verify existing clients still execute and reconnect.
 3. Deploy the negotiating web client.
-4. Consider terminal-state retention as a follow-up protocol change.
 
-The web implementation currently serializes the small negotiation envelope
-directly because the published Buf package does not yet contain the new schema.
-It should switch to the generated message types after the runner proto is
-published.
+The web client currently serializes the small negotiation envelope directly
+because the published Buf package does not contain the new schema. It will use
+the generated message types after the runner proto is published.
 
-## Tests
+### Validation
 
-Runner coverage verifies:
+Runner tests verify:
 
-- negotiated `START` creates a run and returns `CREATED`;
+- `START` creates a run and returns `CREATED`;
 - duplicate `START` returns `ALREADY_EXISTS`;
-- negotiated `RESUME` attaches to the active run and returns `RUNNING`;
-- `RESUME` for an unknown run returns `NOT_FOUND` without creating a run;
+- `RESUME` attaches to an active run and returns `RUNNING`;
+- missing `RESUME` returns `NOT_FOUND` without creating a run;
 - legacy first messages retain create-or-attach behavior;
 - existing round-trip and inactivity behavior remains intact.
 
-Web coverage verifies:
+Web tests verify:
 
-- a `START` negotiation is the first message;
-- execute requests remain queued until `CREATED` is received;
-- persisted PID-without-exit metadata negotiates `RESUME` with the saved
-  `runID`;
-- stream errors become `unknown`, clear the PID, and preserve an explanatory
+- `START` is the first message;
+- execute requests remain queued until `CREATED`;
+- persisted running metadata sends `RESUME` with the saved `runID`;
+- `NOT_FOUND` becomes a terminal monitoring error;
+- monitoring errors set `unknown`, clear the PID, and preserve an explanatory
   stderr output;
-- `CellData.run()` resolves when monitoring becomes `unknown`.
+- callers waiting for the run resolve when monitoring becomes `unknown`.
+
+### Future terminal-state retention
+
+A later protocol version should retain a bounded terminal snapshot containing
+at least `runID`, state, PID, and exit code. `RESUME` could then return
+`COMPLETED` when the process finished during disconnection.
+
+Output replay is useful but not required to resolve liveness. Retention limits,
+runner restarts, and snapshot persistence require a separate design.
+
+## Alternatives
+
+### Put intent in the WebSocket query
+
+An old runner could ignore an unknown query parameter and retain the ambiguous
+behavior. A first application message requires an explicit response or an
+explicit protocol failure.
+
+### Mark persisted executions `unknown` without reconnecting
+
+This client-only fix prevents false liveness but abandons active executions
+after a browser refresh. Explicit `RESUME` preserves recovery without allowing
+an unknown run to be created.
+
+### Check the PID from the browser
+
+The PID belongs to the runner host. The browser cannot inspect it portably, and
+PID reuse can produce false positives.
+
+### Use a quiet-period timeout
+
+A long-running command may be silent indefinitely. Silence is not a terminal
+protocol event.
+
+### Mark an interrupted execution successful or failed
+
+A missing exit response supports neither conclusion. Synthesizing exit code
+`0` or `1` would corrupt execution history.
+
+### Keep the implicit reconnect behavior
+
+The old behavior creates an empty multiplexer for an unknown `runID`.
+Successful heartbeats from that multiplexer do not prove that the original
+process exists.
+
+## References
+
+- [Runner protocol draft PR](https://github.com/runmedev/runme/pull/1247) —
+  adds `OpenRunRequest`, implements negotiated runner behavior, and covers
+  start, resume, error, and legacy paths.
+- [Runme Web draft PR](https://github.com/runmedev/web/pull/282) — implements
+  client negotiation, persisted-run recovery, execution-state repair, and web
+  regression tests.
+- [WebSocket protocol schema](https://github.com/runmedev/runme/blob/codex/run-intent-negotiation/api/proto/runme/stream/v1/websockets.proto) —
+  defines the `RunIntent`, `RunState`, `OpenRunRequest`, and `OpenRunResponse`
+  wire types.
+- [Web stream implementation](https://github.com/runmedev/web/blob/codex/fix-stale-cell-execution/packages/renderers/src/streams.ts) —
+  sends the negotiation request and gates heartbeat and execution traffic on
+  the response.
+- [Notebook execution state implementation](https://github.com/runmedev/web/blob/codex/fix-stale-cell-execution/app/src/lib/notebookData.ts) —
+  restores persisted runs with `RESUME` and records `unknown` after terminal
+  monitoring failures.
+- [Stale cell execution investigation notebook](https://drive.google.com/file/d/1OTZffhR0d2GX2x5gVJ43qiIHa7bTfUkX/view) —
+  summarizes the observed failure, selected protocol fix, refresh behavior,
+  and implementation links.
+- [Codex investigation and implementation thread](codex://threads/019f4dd8-eff5-7dd1-be50-392508c916b0) —
+  records the protocol discussion, compatibility analysis, implementation,
+  and validation.
