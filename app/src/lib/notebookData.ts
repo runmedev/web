@@ -1,6 +1,7 @@
 import { clone, create } from '@bufbuild/protobuf'
 import {
   Heartbeat,
+  RunIntent,
   Streams,
   type StreamsLike,
   genRunID,
@@ -516,8 +517,6 @@ export class NotebookData {
     this.readOnly = readOnly
     this.sequence = this.computeHighestSequence()
     this.rebuildIndex()
-    const reconciledInterruptedExecutions =
-      this.reconcileInterruptedExecutions()
     this.snapshotCache = this.buildSnapshot()
     this.resolveNotebookForAppKernel =
       resolveNotebookForAppKernel ??
@@ -532,52 +531,6 @@ export class NotebookData {
       (() => {
         return [this]
       })
-    if (reconciledInterruptedExecutions && !this.readOnly) {
-      this.schedulePersist()
-    }
-  }
-
-  /**
-   * A persisted PID records that a process once started. It does not prove the
-   * process is still live after this browser model has been recreated. The
-   * current runner protocol cannot distinguish attaching to a live run from
-   * creating an empty multiplexer for an expired run ID, so claiming that such
-   * cells are still running would be unsafe.
-   */
-  private reconcileInterruptedExecutions(): boolean {
-    let changed = false
-    for (const cell of this.notebook.cells) {
-      const metadata = cell.metadata ?? {}
-      const hasPid =
-        typeof metadata[RunmeMetadataKey.Pid] === 'string' &&
-        metadata[RunmeMetadataKey.Pid].length > 0
-      const hasExitCode =
-        typeof metadata[RunmeMetadataKey.ExitCode] === 'string' &&
-        metadata[RunmeMetadataKey.ExitCode].length > 0
-      const monitoredHere =
-        this.activeStreams.has(cell.refId) ||
-        this.activeJupyterSockets.has(cell.refId) ||
-        this.activeAppKernelExecutions.has(cell.refId)
-
-      if (!hasPid || hasExitCode || monitoredHere) {
-        continue
-      }
-
-      delete metadata[RunmeMetadataKey.Pid]
-      if (
-        metadata[RunmeMetadataKey.ExecutionState] !==
-        RunmeExecutionState.Unknown
-      ) {
-        cell.outputs = [
-          ...cell.outputs,
-          ...createStdTextOutputs('', EXECUTION_MONITOR_INTERRUPTED_MESSAGE),
-        ]
-      }
-      metadata[RunmeMetadataKey.ExecutionState] = RunmeExecutionState.Unknown
-      cell.metadata = metadata
-      changed = true
-    }
-    return changed
   }
 
   private matchesNotebookTarget(target: unknown): boolean {
@@ -661,12 +614,10 @@ export class NotebookData {
     this.rebuildIndex()
     this.validateCells()
     this.sequence = this.computeHighestSequence()
-    const reconciledInterruptedExecutions =
-      this.reconcileInterruptedExecutions()
     this.loaded = true
     this.snapshotCache = this.buildSnapshot()
     this.emit()
-    if ((persist || reconciledInterruptedExecutions) && !this.readOnly) {
+    if (persist && !this.readOnly) {
       this.schedulePersist()
     }
   }
@@ -1066,7 +1017,37 @@ export class NotebookData {
       return existing
     }
 
-    return undefined
+    const hasPid =
+      typeof metadata[RunmeMetadataKey.Pid] === 'string' &&
+      metadata[RunmeMetadataKey.Pid].length > 0
+    const runID =
+      typeof metadata[RunmeMetadataKey.LastRunID] === 'string'
+        ? metadata[RunmeMetadataKey.LastRunID]
+        : ''
+
+    if (!cell || !hasPid || hasExitCode || !runID) {
+      return undefined
+    }
+
+    const runner = this.getRunner(cell)
+    if (!runner || !runner.endpoint) {
+      console.warn('Cannot resume stream; no runner available', { refId })
+      return undefined
+    }
+
+    const seqValue = metadata[RunmeMetadataKey.Sequence]
+    const parsedSeq =
+      typeof seqValue === 'string' ? Number.parseInt(seqValue, 10) : Number.NaN
+    const sequence = Number.isNaN(parsedSeq) ? this.sequence : parsedSeq
+
+    return this.createAndBindStreams({
+      cell,
+      runID,
+      sequence,
+      runner,
+      generation: this.executionGeneration,
+      intent: RunIntent.RESUME,
+    })
   }
 
   private createCell(
@@ -1794,12 +1775,14 @@ export class NotebookData {
     sequence,
     runner,
     generation,
+    intent = RunIntent.START,
   }: {
     cell: parser_pb.Cell
     runID: string
     sequence: number
     runner: Runner
     generation: number
+    intent?: RunIntent
   }): StreamsLike | undefined {
     const streams = new Streams({
       knownID: `cell_${cell.refId}`,
@@ -1809,6 +1792,7 @@ export class NotebookData {
         runnerEndpoint: runner.endpoint,
         interceptors: runner.interceptors ?? [],
         autoReconnect: runner.reconnect ?? true,
+        initialIntent: intent,
       },
     })
     this.activeStreams.set(cell.refId, streams)

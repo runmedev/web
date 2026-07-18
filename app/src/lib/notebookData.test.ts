@@ -59,6 +59,10 @@ vi.mock("@runmedev/renderers", () => {
   return {
     Streams: FakeStreams,
     Heartbeat: { INITIAL: "INITIAL" },
+    RunIntent: {
+      START: "RUN_INTENT_START",
+      RESUME: "RUN_INTENT_RESUME",
+    },
     genRunID: () => "run-generated",
     ClientMessages: {},
     setContext: vi.fn(),
@@ -513,7 +517,7 @@ describe("bindStreamsToCell", () => {
 });
 
 describe("NotebookData.getActiveStream", () => {
-  it("does not treat a persisted pid as proof of a live run", () => {
+  it("negotiates resume for persisted running metadata", () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-recover",
       kind: parser_pb.CellKind.CODE,
@@ -533,19 +537,23 @@ describe("NotebookData.getActiveStream", () => {
       loaded: true,
     });
 
-    expect(model.getActiveStream(cell.refId)).toBeUndefined();
-    const reconciled = model.getCellSnapshot(cell.refId);
-    expect(reconciled?.metadata?.[RunmeMetadataKey.Pid]).toBeUndefined();
-    expect(reconciled?.metadata?.[RunmeMetadataKey.ExitCode]).toBeUndefined();
-    expect(reconciled?.metadata?.[RunmeMetadataKey.ExecutionState]).toBe(
+    const stream = model.getActiveStream(cell.refId) as unknown as {
+      runID: string;
+      sequence: number;
+      options: { initialIntent: string };
+    };
+    expect(stream).toBeDefined();
+    expect(stream.runID).toBe("existing-run");
+    expect(stream.sequence).toBe(7);
+    expect(stream.options.initialIntent).toBe("RUN_INTENT_RESUME");
+    expect(model.getActiveStream(cell.refId)).toBe(stream);
+
+    const current = model.getCellSnapshot(cell.refId);
+    expect(current?.metadata?.[RunmeMetadataKey.Pid]).toBe("1234");
+    expect(current?.metadata?.[RunmeMetadataKey.ExitCode]).toBeUndefined();
+    expect(current?.metadata?.[RunmeMetadataKey.ExecutionState]).not.toBe(
       RunmeExecutionState.Unknown,
     );
-    const stderr = reconciled?.outputs
-      .flatMap((output) => output.items)
-      .find((item) => item.mime === MimeType.VSCodeNotebookStdErr);
-    expect(
-      new TextDecoder().decode(stderr?.data ?? new Uint8Array()),
-    ).toContain("process may still be running");
   });
 
   it("does not recover when exit code metadata is present", () => {

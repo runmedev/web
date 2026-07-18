@@ -67,6 +67,13 @@ export enum Heartbeat {
   INITIAL = 'INITIAL',
 }
 
+export enum RunIntent {
+  START = 'RUN_INTENT_START',
+  RESUME = 'RUN_INTENT_RESUME',
+}
+
+type OpenRunState = 'RUN_STATE_CREATED' | 'RUN_STATE_RUNNING'
+
 export type Authorization = {
   bearerToken: string | undefined
 }
@@ -91,6 +98,7 @@ type StreamsProps = {
     runnerEndpoint: string
     interceptors: Interceptor[]
     autoReconnect: boolean
+    initialIntent?: RunIntent
   }
 }
 
@@ -179,6 +187,7 @@ class Streams {
   private readonly runnerEndpoint: string
   private readonly interceptors: Interceptor[]
   private readonly autoReconnect: boolean
+  private nextIntent: RunIntent
 
   // Track consecutive connection failures to detect unreachable backend
   private connectionFailures: number[] = []
@@ -193,6 +202,7 @@ class Streams {
     this.runnerEndpoint = options.runnerEndpoint
     this.interceptors = options.interceptors
     this.autoReconnect = options.autoReconnect
+    this.nextIntent = options.initialIntent ?? RunIntent.START
 
     // Turn the connectables into hot observables
     this._latenciesConnectable.connect()
@@ -324,8 +334,10 @@ class Streams {
       url.searchParams.set('runID', this.runID)
       const socket = new WebSocket(url.toString())
       let opened = false
+      let negotiationComplete = false
       let failureRecorded = false
       let terminalFailure = false
+      const intent = this.nextIntent
 
       const recordConnectionFailure = (requiredFailures: number) => {
         if (failureRecorded) {
@@ -392,26 +404,61 @@ class Streams {
           console.warn('Unexpected WebSocket message type:', typeof event.data)
           return
         }
+
+        let rawMessage: { openRunResponse?: { state?: OpenRunState } }
+        try {
+          rawMessage = JSON.parse(event.data)
+        } catch (err) {
+          console.error('Failed to parse WebsocketResponse:', err)
+          return
+        }
+
+        if (rawMessage.openRunResponse) {
+          const state = rawMessage.openRunResponse.state
+          const expectedState =
+            intent === RunIntent.START
+              ? 'RUN_STATE_CREATED'
+              : 'RUN_STATE_RUNNING'
+          if (state !== expectedState) {
+            terminalFailure = true
+            observer.error(
+              new Error(
+                `Runner returned ${state ?? 'an unspecified state'} for ${intent}`
+              )
+            )
+            return
+          }
+
+          negotiationComplete = true
+          opened = true
+          this.connectionFailures = []
+          this.nextIntent = RunIntent.RESUME
+          observer.next(socket)
+          return
+        }
+
         let message: pb.WebsocketResponse
         try {
           message = parseWebsocketResponse(event.data)
         } catch (err) {
           console.error('Failed to parse WebsocketResponse:', err)
+          return
         }
 
-        const status = message!.status
+        const status = message.status
         if (status && status.code !== Code.OK) {
+          terminalFailure = true
           observer.error(status)
           return
         }
 
         // Pong is noop
-        if (message!.pong) {
+        if (message.pong) {
           // We could measure latency here
           return
         }
 
-        const response = message!.payload.value as ExecuteResponse
+        const response = message.payload.value as ExecuteResponse
         if (response.stdoutData && response.stdoutData.length > 0) {
           this.callback?.({
             type: ClientMessages.terminalStdout,
@@ -451,11 +498,18 @@ class Streams {
       }
 
       const onOpen = () => {
-        // Reset failure tracking on successful connection
-        this.connectionFailures = []
-        opened = true
-
-        observer.next(socket)
+        void sendOpenRunRequest({
+          intent,
+          interceptors: this.interceptors,
+          socket,
+          knownID: this.knownID,
+          runID: this.runID,
+        }).catch((err) => {
+          if (!negotiationComplete) {
+            terminalFailure = true
+            observer.error(err)
+          }
+        })
       }
 
       // Attach event listeners
@@ -647,29 +701,13 @@ function parseWebsocketResponse(data: string): pb.WebsocketResponse {
   return fromJson(pb.WebsocketResponseSchema, parsed)
 }
 
-// Sends a WebsocketRequest over a WebSocket after adding knownId, runId, and authorization.
-async function sendWebsocketRequest({
-  req,
+async function resolveAuthorization({
   interceptors,
   socket,
-  knownID,
-  runID,
 }: {
-  req: pb.WebsocketRequest
   interceptors: Interceptor[]
   socket: WebSocket
-  knownID?: string
-  runID?: string
-}) {
-  // knownID tracks the origin cell/cell of the request.
-  if (knownID) {
-    req.knownId = knownID
-  }
-  // runID identifies the specific execution of the request.
-  if (runID) {
-    req.runId = runID
-  }
-
+}): Promise<string | null> {
   // Create a dummy unary request for interceptor compatibility
   const authzReq: UnaryRequest = {
     stream: false,
@@ -704,9 +742,59 @@ async function sendWebsocketRequest({
   // Call the final interceptor chain
   const appliedAuthzResp = await next(authzReq)
 
+  return appliedAuthzResp.header.get('Authorization')
+}
+
+async function sendOpenRunRequest({
+  intent,
+  interceptors,
+  socket,
+  knownID,
+  runID,
+}: {
+  intent: RunIntent
+  interceptors: Interceptor[]
+  socket: WebSocket
+  knownID: string
+  runID: string
+}) {
+  const authorization = await resolveAuthorization({ interceptors, socket })
+  socket.send(
+    JSON.stringify({
+      openRunRequest: { intent },
+      ...(authorization ? { authorization } : {}),
+      knownId: knownID,
+      runId: runID,
+    })
+  )
+}
+
+// Sends a WebsocketRequest over a WebSocket after adding knownId, runId, and authorization.
+async function sendWebsocketRequest({
+  req,
+  interceptors,
+  socket,
+  knownID,
+  runID,
+}: {
+  req: pb.WebsocketRequest
+  interceptors: Interceptor[]
+  socket: WebSocket
+  knownID?: string
+  runID?: string
+}) {
+  // knownID tracks the origin cell/cell of the request.
+  if (knownID) {
+    req.knownId = knownID
+  }
+  // runID identifies the specific execution of the request.
+  if (runID) {
+    req.runId = runID
+  }
+
   // Websockets do not support authorization headers directly, so we add it to the request.
   // However, going the HTTP header route allows reusing interceptors across Connect and WebSockets.
-  const authorization = appliedAuthzResp.header.get('Authorization')
+  const authorization = await resolveAuthorization({ interceptors, socket })
   if (authorization && req) {
     req.authorization = authorization
   }
