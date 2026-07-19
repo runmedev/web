@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
+import {
+  render,
+  screen,
+  act,
+  fireEvent,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { clone, create } from '@bufbuild/protobuf'
 import {
   APPKERNEL_RUNNER_NAME,
@@ -70,6 +77,10 @@ const conflictMocks = vi.hoisted(() => ({
   openNotebookUpstreamDiff: vi.fn(async () => undefined),
   refreshNotebookConflictDiff: vi.fn(async () => undefined),
   restoreDeletedConflictCell: vi.fn(async () => undefined),
+}))
+
+const toastMocks = vi.hoisted(() => ({
+  showToast: vi.fn(),
 }))
 
 // Minimal mocks for contexts Action consumes
@@ -149,6 +160,10 @@ vi.mock('../../lib/notebookDiff/conflict', () => ({
   openNotebookUpstreamDiff: conflictMocks.openNotebookUpstreamDiff,
   refreshNotebookConflictDiff: conflictMocks.refreshNotebookConflictDiff,
   restoreDeletedConflictCell: conflictMocks.restoreDeletedConflictCell,
+}))
+
+vi.mock('../../lib/toast', () => ({
+  showToast: toastMocks.showToast,
 }))
 
 vi.mock('../../lib/runtime/jupyterManager', () => ({
@@ -279,6 +294,7 @@ class StubCellData {
 
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
+  window.history.replaceState(null, '', '/')
   contextMocks.workspaceDocuments = []
   contextMocks.currentDoc = null
   contextMocks.setCurrentDoc.mockReset()
@@ -301,9 +317,166 @@ beforeEach(() => {
   conflictMocks.openNotebookUpstreamDiff.mockResolvedValue(undefined)
   conflictMocks.refreshNotebookConflictDiff.mockReset()
   conflictMocks.refreshNotebookConflictDiff.mockResolvedValue(undefined)
+  toastMocks.showToast.mockReset()
 })
 
 describe('Actions tabs', () => {
+  it('scrolls to and highlights the selected notebook cell named by the URL fragment', async () => {
+    const uri = 'local://file/deep-link.runme.md'
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'target/cell',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      value: 'Deep-link target',
+      metadata: {},
+    })
+    const cellData = new StubCellData(cell)
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'deep-link.runme.md', state: 'loaded' },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, {
+        metadata: {},
+        cells: [cell],
+      }),
+    })
+    contextMocks.getNotebookData.mockReturnValue({
+      getCell: vi.fn(() => cellData),
+    })
+    window.history.replaceState(null, '', '/#cell=target%2Fcell')
+
+    render(<Actions />)
+
+    await waitFor(() => {
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({
+        block: 'center',
+        inline: 'nearest',
+        behavior: 'auto',
+      })
+    })
+    const targetElement = (
+      Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>
+    ).mock.instances.find(
+      (element) => (element as HTMLElement).dataset.cellRefId === 'target/cell'
+    ) as HTMLElement | undefined
+    expect(targetElement).toBeTruthy()
+    expect(targetElement?.dataset.cellRefId).toBe('target/cell')
+    await waitFor(() => {
+      expect(targetElement?.className).toContain('outline-nb-accent')
+    })
+  })
+
+  it('scopes a cell fragment to the notebook selected by the doc link', async () => {
+    const restoredUri = 'local://file/restored.runme.md'
+    const targetUri = 'local://file/deep-link-target.runme.md'
+    const targetCell = create(parser_pb.CellSchema, {
+      refId: 'target-cell',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      value: 'Deep-link target',
+      metadata: {},
+    })
+    const targetCellData = new StubCellData(targetCell)
+    contextMocks.currentDoc = restoredUri
+    contextMocks.workspaceDocuments = [
+      { uri: restoredUri, title: 'restored.runme.md', state: 'loaded' },
+      { uri: targetUri, title: 'deep-link-target.runme.md', state: 'loaded' },
+    ]
+    contextMocks.notebookSnapshots.set(restoredUri, {
+      uri: restoredUri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, {
+        metadata: {},
+        cells: [],
+      }),
+    })
+    contextMocks.notebookSnapshots.set(targetUri, {
+      uri: targetUri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, {
+        metadata: {},
+        cells: [targetCell],
+      }),
+    })
+    contextMocks.getNotebookData.mockImplementation((uri: string) =>
+      uri === targetUri
+        ? {
+            getCell: vi.fn(() => targetCellData),
+          }
+        : {
+            getCell: vi.fn(),
+          }
+    )
+    window.history.replaceState(
+      null,
+      '',
+      `/?doc=${encodeURIComponent(targetUri)}#cell=target-cell`
+    )
+
+    const view = render(<Actions />)
+    const deepLinkScrollCalls = () =>
+      (
+        Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>
+      ).mock.calls.filter(([options]) => options?.block === 'center')
+
+    expect(deepLinkScrollCalls()).toHaveLength(0)
+    expect(toastMocks.showToast).not.toHaveBeenCalled()
+
+    contextMocks.currentDoc = targetUri
+    window.history.replaceState(null, '', '/#cell=target-cell')
+    view.rerender(<Actions />)
+
+    await waitFor(() => {
+      expect(deepLinkScrollCalls()).toHaveLength(1)
+    })
+    expect(toastMocks.showToast).not.toHaveBeenCalled()
+
+    contextMocks.currentDoc = restoredUri
+    view.rerender(<Actions />)
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole('tab', { name: 'restored.runme.md' })
+          .getAttribute('data-state')
+      ).toBe('active')
+    })
+    expect(deepLinkScrollCalls()).toHaveLength(1)
+    expect(toastMocks.showToast).not.toHaveBeenCalled()
+  })
+
+  it('reports a deep link whose cell no longer exists', async () => {
+    const uri = 'local://file/missing-deep-link.runme.md'
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'missing-deep-link.runme.md', state: 'loaded' },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, {
+        metadata: {},
+        cells: [],
+      }),
+    })
+    contextMocks.getNotebookData.mockReturnValue({
+      getCell: vi.fn(),
+    })
+    window.history.replaceState(null, '', '/#cell=deleted-cell')
+
+    render(<Actions />)
+
+    await waitFor(() => {
+      expect(toastMocks.showToast).toHaveBeenCalledWith({
+        message: 'The linked cell no longer exists in this notebook.',
+        tone: 'error',
+      })
+    })
+  })
+
   it('enables horizontal scrolling for wide notebook content', () => {
     const uri = 'local://file/wide-table.runme.md'
     contextMocks.currentDoc = uri
@@ -1101,6 +1274,189 @@ describe('Actions tabs', () => {
 })
 
 describe('Action component', () => {
+  it('copies a deep link for the cell from its context menu', async () => {
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(async () => ({ remoteUri })),
+      getSyncState: vi.fn(),
+      rename: vi.fn(),
+      subscribeSync: vi.fn(() => () => {}),
+    }
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'cell/with spaces',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      value: 'Link to me',
+      metadata: {},
+    })
+    const stub = new StubCellData(cell)
+    window.history.replaceState(null, '', '/workspace?ignored=1#old')
+
+    render(
+      <Action
+        cellData={stub as unknown as CellData}
+        docUri="local://file/notebook"
+        isFirst={false}
+      />
+    )
+
+    fireEvent.contextMenu(screen.getByTestId('markdown-action'))
+    const contextMenu = document.querySelector('.ctx-menu')
+    expect(contextMenu).toBeTruthy()
+    fireEvent.click(
+      await within(contextMenu as HTMLElement).findByRole('button', {
+        name: 'Copy link to cell',
+      })
+    )
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        'http://localhost:3000/workspace?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2Ffile123%2Fview#cell=cell%2Fwith%20spaces'
+      )
+    })
+    expect(toastMocks.showToast).toHaveBeenCalledWith({
+      message: 'Link to cell copied',
+      tone: 'success',
+    })
+  })
+
+  it('waits for Drive metadata before offering a cell link', async () => {
+    let resolveMetadata: ((value: { remoteUri: string }) => void) | undefined
+    const metadata = new Promise<{ remoteUri: string }>((resolve) => {
+      resolveMetadata = resolve
+    })
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(() => metadata),
+      getSyncState: vi.fn(),
+      rename: vi.fn(),
+      subscribeSync: vi.fn(() => () => {}),
+    }
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'metadata-target',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      value: 'Link to me',
+      metadata: {},
+    })
+
+    render(
+      <Action
+        cellData={new StubCellData(cell) as unknown as CellData}
+        docUri="local://file/notebook"
+        isFirst={false}
+      />
+    )
+
+    expect(
+      screen.queryByRole('button', { name: 'Copy link to cell' })
+    ).toBeNull()
+
+    resolveMetadata?.({
+      remoteUri: 'https://drive.google.com/file/d/file123/view',
+    })
+
+    expect(
+      await screen.findByRole('button', { name: 'Copy link to cell' })
+    ).toBeTruthy()
+  })
+
+  it('does not offer a cell link without a ref ID', () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: '',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      value: 'Unidentified cell',
+      metadata: {},
+    })
+
+    render(
+      <Action
+        cellData={new StubCellData(cell) as unknown as CellData}
+        docUri="local://file/notebook"
+        isFirst={false}
+      />
+    )
+
+    expect(
+      screen.queryByRole('button', { name: 'Copy link to cell' })
+    ).toBeNull()
+  })
+
+  it.each([
+    ['code', parser_pb.CellKind.CODE, 'bash'],
+    ['markdown', parser_pb.CellKind.MARKUP, 'markdown'],
+    ['HTML', parser_pb.CellKind.CODE, 'html'],
+  ])(
+    'exposes a primary cell link action for %s cells',
+    async (_, kind, languageId) => {
+      const writeText = vi.fn(async () => undefined)
+      Object.defineProperty(window.navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText },
+      })
+      const cell = create(parser_pb.CellSchema, {
+        refId: 'primary-link',
+        kind,
+        languageId,
+        value: 'Link to me',
+        metadata: {},
+      })
+
+      render(
+        <Action
+          cellData={new StubCellData(cell) as unknown as CellData}
+          docUri="local://file/notebook"
+          isFirst={false}
+        />
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: 'Copy link to cell' }))
+
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith(
+          'http://localhost:3000/?doc=local%3A%2F%2Ffile%2Fnotebook#cell=primary-link'
+        )
+      })
+    }
+  )
+
+  it('reports a clipboard failure when copying a cell link', async () => {
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn(async () => Promise.reject('denied')) },
+    })
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'copy-failure',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      value: 'Link to me',
+      metadata: {},
+    })
+
+    render(
+      <Action
+        cellData={new StubCellData(cell) as unknown as CellData}
+        docUri="local://file/notebook"
+        isFirst={false}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link to cell' }))
+
+    await waitFor(() => {
+      expect(toastMocks.showToast).toHaveBeenCalledWith({
+        message:
+          'Could not copy the cell link. Check clipboard permissions and try again.',
+        tone: 'error',
+      })
+    })
+  })
+
   it('disables code-cell mutations in read-only mode', () => {
     const cell = create(parser_pb.CellSchema, {
       refId: 'cell-readonly',
