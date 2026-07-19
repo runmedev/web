@@ -1952,16 +1952,18 @@ function NotebookTabContent({
 
   const handleImageDrop = useCallback(
     (event: ReactDragEvent<HTMLDivElement>) => {
+      const files = Array.from(event.dataTransfer.files)
+      if (files.length > 0) {
+        event.preventDefault()
+      }
+      setImageDragActive(false)
       if (readOnly) {
         return
       }
-      const files = Array.from(event.dataTransfer.files)
       const images = files.filter(isSupportedImageFile)
-      setImageDragActive(false)
       if (images.length === 0) {
         return
       }
-      event.preventDefault()
       void embedImageFiles(images)
     },
     [embedImageFiles, readOnly]

@@ -4,6 +4,7 @@ import {
   render,
   screen,
   act,
+  createEvent,
   fireEvent,
   waitFor,
   within,
@@ -415,6 +416,44 @@ describe('Actions tabs', () => {
         file
       )
     })
+    expect(screen.queryByTestId('image-drop-target')).toBeNull()
+  })
+
+  it('prevents browser navigation for unsupported file drops', () => {
+    const uri = 'local://file/images.json'
+    const notebookData = {
+      getCell: vi.fn(),
+      appendCell: vi.fn(),
+    }
+    const file = new File([new Uint8Array([1, 2, 3])], 'notes.txt', {
+      type: '',
+    })
+    const dataTransfer = {
+      items: [{ kind: 'file', type: '' }],
+      files: [file],
+      dropEffect: 'none',
+    }
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'images.json', state: 'loaded' },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, { metadata: {}, cells: [] }),
+    })
+    contextMocks.getNotebookData.mockReturnValue(notebookData)
+
+    render(<Actions />)
+    const notebookContent = screen.getByTestId('notebook-content')
+    fireEvent.dragOver(notebookContent, { dataTransfer })
+    expect(screen.getByTestId('image-drop-target')).toBeTruthy()
+
+    const dropEvent = createEvent.drop(notebookContent, { dataTransfer })
+    fireEvent(notebookContent, dropEvent)
+
+    expect(dropEvent.defaultPrevented).toBe(true)
+    expect(imageEmbeddingMocks.embedImageInNotebook).not.toHaveBeenCalled()
     expect(screen.queryByTestId('image-drop-target')).toBeNull()
   })
 
