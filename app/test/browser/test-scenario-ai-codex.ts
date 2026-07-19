@@ -1096,7 +1096,6 @@ try {
     fail(`Failed to parse fake codex websocket logs: ${String(error)}`);
   }
 
-  run("agent-browser wait 1800");
 } catch (error) {
   fail(`Scenario execution error: ${String(error)}`);
 } finally {
