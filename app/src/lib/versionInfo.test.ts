@@ -13,9 +13,6 @@ describe('versionInfo', () => {
       VITE_RUNME_VERSION_WEB_REPO: 'runmedev/web',
       VITE_RUNME_VERSION_WEB_BRANCH: 'main',
       VITE_RUNME_VERSION_WEB_COMMIT: 'web-sha',
-      VITE_RUNME_VERSION_CODEX_REPO: 'openai/codex',
-      VITE_RUNME_VERSION_CODEX_BRANCH: 'main',
-      VITE_RUNME_VERSION_CODEX_COMMIT: 'codex-sha',
       VITE_RUNME_VERSION_BUCKET: 'gs://runme-hosted',
     })
 
@@ -26,9 +23,6 @@ describe('versionInfo', () => {
         'webRepo: runmedev/web',
         'webBranch: main',
         'webCommit: web-sha',
-        'codexRepo: openai/codex',
-        'codexBranch: main',
-        'codexCommit: codex-sha',
         'bucket: gs://runme-hosted',
       ].join('\n')
     )

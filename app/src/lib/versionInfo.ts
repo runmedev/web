@@ -3,9 +3,6 @@ export interface RunmeVersionInfo {
   webRepo: string | null
   webBranch: string | null
   webCommit: string | null
-  codexRepo: string | null
-  codexBranch: string | null
-  codexCommit: string | null
   bucket: string | null
 }
 
@@ -14,9 +11,6 @@ const VERSION_YAML_KEYS: Array<keyof RunmeVersionInfo> = [
   'webRepo',
   'webBranch',
   'webCommit',
-  'codexRepo',
-  'codexBranch',
-  'codexCommit',
   'bucket',
 ]
 
@@ -32,9 +26,6 @@ export function normalizeRunmeVersionInfo(
     webRepo: normalizeVersionValue(env.VITE_RUNME_VERSION_WEB_REPO),
     webBranch: normalizeVersionValue(env.VITE_RUNME_VERSION_WEB_BRANCH),
     webCommit: normalizeVersionValue(env.VITE_RUNME_VERSION_WEB_COMMIT),
-    codexRepo: normalizeVersionValue(env.VITE_RUNME_VERSION_CODEX_REPO),
-    codexBranch: normalizeVersionValue(env.VITE_RUNME_VERSION_CODEX_BRANCH),
-    codexCommit: normalizeVersionValue(env.VITE_RUNME_VERSION_CODEX_COMMIT),
     bucket: normalizeVersionValue(env.VITE_RUNME_VERSION_BUCKET),
   }
 }

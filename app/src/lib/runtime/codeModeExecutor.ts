@@ -1,7 +1,3 @@
-import { googleClientManager } from '../googleClientManager'
-import { appLogger } from '../logging/runtime'
-import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
-import { getClaimedSessionId } from '../tabIdentity'
 import {
   createDriveFile,
   listDriveFolderItems,
@@ -9,13 +5,16 @@ import {
   searchDriveFiles,
   updateDriveFileBytes,
 } from '../driveTransfer'
+import { googleClientManager } from '../googleClientManager'
+import { appLogger } from '../logging/runtime'
+import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
+import { getClaimedSessionId } from '../tabIdentity'
 import { appState } from './AppState'
 import { createAppJsGlobals } from './appJsGlobals'
 import {
   createAppKernelNetworkApi,
   createAppKernelOpfsApi,
 } from './appKernelLowLevelApis'
-import { getCodexTurnEvents, listCodexTurns } from './codexTurns'
 import { JSKernel } from './jsKernel'
 import {
   type NotebooksApiBridgeServer,
@@ -392,13 +391,6 @@ async function handleSandboxAppKernelBridgeCall({
         cellCount: notebook.getNotebook().cells.length,
       }
     }
-    case 'codex.turns.list':
-      return await listCodexTurns()
-    case 'codex.turns.getEvents':
-      return await getCodexTurnEvents(
-        String(args[0] ?? ''),
-        (args[1] as { sessionId?: string }) ?? undefined
-      )
     case 'app.getSessionId':
       return getClaimedSessionId()
     case 'app.getSessionID':

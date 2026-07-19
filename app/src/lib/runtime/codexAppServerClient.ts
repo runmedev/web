@@ -1,53 +1,20 @@
 import { appLogger } from "../logging/runtime";
 import {
-  getCodexAppServerProxyClient,
   type CodexProxyJsonRpcNotification,
+  getCodexAppServerProxyClient,
 } from "./codexAppServerProxyClient";
-import { getCodexWasmAppServerClient } from "./codexWasmAppServerClient";
-import type { BrowserSessionOptions } from "./codexWasmHarnessLoader";
-import type { CodexWasmCodeExecutor } from "./codexWasmWorkerClient";
 
-export type CodexAppServerTransport = "proxy" | "wasm";
 export type { CodexProxyJsonRpcNotification };
 
 class CodexAppServerClient {
-  private transport: CodexAppServerTransport = "proxy";
   private listeners = new Set<() => void>();
-  private notificationHandlers = new Set<
-    (notification: CodexProxyJsonRpcNotification) => void
-  >();
+  private notificationHandlers = new Set<(notification: CodexProxyJsonRpcNotification) => void>();
 
   constructor() {
-    const forwardNotifications =
-      (transport: CodexAppServerTransport) =>
-      (notification: CodexProxyJsonRpcNotification) => {
-        if (this.transport !== transport) {
-          return;
-        }
-        this.notificationHandlers.forEach((handler) => handler(notification));
-      };
-
     getCodexAppServerProxyClient().subscribe(() => this.notify());
-    getCodexWasmAppServerClient().subscribe(() => this.notify());
-    getCodexAppServerProxyClient().subscribeNotifications(
-      forwardNotifications("proxy"),
-    );
-    getCodexWasmAppServerClient().subscribeNotifications(
-      forwardNotifications("wasm"),
-    );
-  }
-
-  useTransport(transport: CodexAppServerTransport): void {
-    if (this.transport === transport) {
-      return;
-    }
-    this.currentClient().disconnect();
-    this.transport = transport;
-    this.notify();
-  }
-
-  getTransport(): CodexAppServerTransport {
-    return this.transport;
+    getCodexAppServerProxyClient().subscribeNotifications((notification) => {
+      this.notificationHandlers.forEach((handler) => handler(notification));
+    });
   }
 
   subscribe(listener: () => void): () => void {
@@ -66,45 +33,28 @@ class CodexAppServerClient {
     };
   }
 
-  getSnapshot(): { state: string; url: string | null; lastError: string | null } {
-    return this.currentClient().getSnapshot();
+  getSnapshot(): {
+    state: string;
+    url: string | null;
+    lastError: string | null;
+  } {
+    return getCodexAppServerProxyClient().getSnapshot();
   }
 
   setAuthorizationResolver(resolver: (() => Promise<string>) | null): void {
     getCodexAppServerProxyClient().setAuthorizationResolver(resolver);
   }
 
-  setCodeExecutor(executor: CodexWasmCodeExecutor | null): void {
-    getCodexWasmAppServerClient().setCodeExecutor(executor);
-  }
-
   async connectProxy(url: string, authorization: string): Promise<void> {
-    this.useTransport("proxy");
     await getCodexAppServerProxyClient().connect(url, authorization);
   }
 
-  async connectWasm(options: {
-    apiKey: string;
-    sessionOptions?: BrowserSessionOptions;
-  }): Promise<void> {
-    this.useTransport("wasm");
-    await getCodexWasmAppServerClient().connect(options);
-  }
-
   disconnect(): void {
-    this.currentClient().disconnect();
+    getCodexAppServerProxyClient().disconnect();
   }
 
   async sendRequest<T = unknown>(method: string, params?: unknown): Promise<T> {
-    return await this.currentClient().sendRequest<T>(method, params);
-  }
-
-  private currentClient():
-    | ReturnType<typeof getCodexAppServerProxyClient>
-    | ReturnType<typeof getCodexWasmAppServerClient> {
-    return this.transport === "wasm"
-      ? getCodexWasmAppServerClient()
-      : getCodexAppServerProxyClient();
+    return await getCodexAppServerProxyClient().sendRequest<T>(method, params);
   }
 
   private notify(): void {

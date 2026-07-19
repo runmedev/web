@@ -20,12 +20,10 @@ import (
 )
 
 const (
-	defaultWebRepo     = "runmedev/web"
-	defaultCodexRepo   = "openai/codex"
-	defaultCodexBranch = "dev/jlewi/wasm"
-	defaultBucket      = "gs://runme-hosted"
-	shortSHALen        = 8
-	versionFileName    = "version.yaml"
+	defaultWebRepo  = "runmedev/web"
+	defaultBucket   = "gs://runme-hosted"
+	shortSHALen     = 8
+	versionFileName = "version.yaml"
 )
 
 var hashedAssetPattern = regexp.MustCompile(`\.[A-Za-z0-9_-]{8,}\.[^.]+$`)
@@ -33,11 +31,8 @@ var hashedAssetPattern = regexp.MustCompile(`\.[A-Za-z0-9_-]{8,}\.[^.]+$`)
 type config struct {
 	webBranch string
 
-	codexBranch string
-
-	webRepo   string
-	codexRepo string
-	bucket    string
+	webRepo string
+	bucket  string
 
 	dryRun bool
 
@@ -50,14 +45,11 @@ type repoSource struct {
 }
 
 type releaseVersion struct {
-	BuildDate   string `yaml:"buildDate"`
-	WebRepo     string `yaml:"webRepo"`
-	WebBranch   string `yaml:"webBranch"`
-	WebCommit   string `yaml:"webCommit"`
-	CodexRepo   string `yaml:"codexRepo"`
-	CodexBranch string `yaml:"codexBranch"`
-	CodexCommit string `yaml:"codexCommit"`
-	Bucket      string `yaml:"bucket"`
+	BuildDate string `yaml:"buildDate"`
+	WebRepo   string `yaml:"webRepo"`
+	WebBranch string `yaml:"webBranch"`
+	WebCommit string `yaml:"webCommit"`
+	Bucket    string `yaml:"bucket"`
 }
 
 type publishFile struct {
@@ -87,9 +79,7 @@ func newRootCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&cfg.webBranch, "web", "", "branch name in the web repo")
-	cmd.Flags().StringVar(&cfg.codexBranch, "codex", defaultCodexBranch, "branch name in the codex repo")
 	cmd.Flags().StringVar(&cfg.webRepo, "web-repo", defaultWebRepo, "web repo slug, URL, or local path")
-	cmd.Flags().StringVar(&cfg.codexRepo, "codex-repo", defaultCodexRepo, "codex repo slug, URL, or local path")
 	cmd.Flags().StringVar(&cfg.bucket, "bucket", defaultBucket, "destination bucket URL (gs://...) or local directory")
 	cmd.Flags().BoolVar(&cfg.dryRun, "dry-run", false, "build and evaluate publish state without uploading")
 	cmd.Flags().StringVar(&cfg.tmpBase, "tmpdir", os.TempDir(), "base temporary directory")
@@ -103,29 +93,16 @@ func run(ctx context.Context, cfg config) error {
 	if err != nil {
 		return fmt.Errorf("resolve --web-repo: %w", err)
 	}
-	codexSource, err := resolveRepoSource(cfg.codexRepo)
-	if err != nil {
-		return fmt.Errorf("resolve --codex-repo: %w", err)
-	}
-
 	webSHA, err := gitRemoteBranchHead(ctx, webSource.cloneSource, cfg.webBranch)
 	if err != nil {
 		return fmt.Errorf("resolve web branch head: %w", err)
 	}
-	codexSHA, err := gitRemoteBranchHead(ctx, codexSource.cloneSource, cfg.codexBranch)
-	if err != nil {
-		return fmt.Errorf("resolve codex branch head: %w", err)
-	}
-
 	version := releaseVersion{
-		BuildDate:   time.Now().Format(time.RFC3339),
-		WebRepo:     webSource.identity,
-		WebBranch:   cfg.webBranch,
-		WebCommit:   webSHA,
-		CodexRepo:   codexSource.identity,
-		CodexBranch: cfg.codexBranch,
-		CodexCommit: codexSHA,
-		Bucket:      cfg.bucket,
+		BuildDate: time.Now().Format(time.RFC3339),
+		WebRepo:   webSource.identity,
+		WebBranch: cfg.webBranch,
+		WebCommit: webSHA,
+		Bucket:    cfg.bucket,
 	}
 
 	current, exists, err := readVersion(ctx, cfg.bucket)
@@ -134,14 +111,14 @@ func run(ctx context.Context, cfg config) error {
 	}
 	if exists && versionMatches(version, current) {
 		if cfg.dryRun {
-			fmt.Printf("release already current (continuing due to dry-run): web=%s codex=%s bucket=%s\n", shortSHA(webSHA, shortSHALen), shortSHA(codexSHA, shortSHALen), cfg.bucket)
+			fmt.Printf("release already current (continuing due to dry-run): web=%s bucket=%s\n", shortSHA(webSHA, shortSHALen), cfg.bucket)
 		} else {
-			fmt.Printf("release already current: web=%s codex=%s bucket=%s\n", shortSHA(webSHA, shortSHALen), shortSHA(codexSHA, shortSHALen), cfg.bucket)
+			fmt.Printf("release already current: web=%s bucket=%s\n", shortSHA(webSHA, shortSHALen), cfg.bucket)
 			return nil
 		}
 	}
 
-	workDir := filepath.Join(cfg.tmpBase, fmt.Sprintf("web-%s-codex-%s", shortSHA(webSHA, shortSHALen), shortSHA(codexSHA, shortSHALen)))
+	workDir := filepath.Join(cfg.tmpBase, fmt.Sprintf("web-%s", shortSHA(webSHA, shortSHALen)))
 	if err := os.RemoveAll(workDir); err != nil {
 		return fmt.Errorf("clean working directory: %w", err)
 	}
@@ -151,16 +128,11 @@ func run(ctx context.Context, cfg config) error {
 	fmt.Printf("working directory: %s\n", workDir)
 
 	webDir := filepath.Join(workDir, "web")
-	codexDir := filepath.Join(workDir, "codex")
 
 	if err := gitCloneAndCheckout(ctx, webDir, webSource.cloneSource, cfg.webBranch, webSHA); err != nil {
 		return fmt.Errorf("clone web repository: %w", err)
 	}
-	if err := gitCloneAndCheckout(ctx, codexDir, codexSource.cloneSource, cfg.codexBranch, codexSHA); err != nil {
-		return fmt.Errorf("clone codex repository: %w", err)
-	}
-
-	if err := buildReleasePayload(ctx, webDir, codexDir, version); err != nil {
+	if err := buildReleasePayload(ctx, webDir, version); err != nil {
 		return err
 	}
 
@@ -171,13 +143,6 @@ func run(ctx context.Context, cfg config) error {
 	if err := assertFile(filepath.Join(distDir, "index.html")); err != nil {
 		return fmt.Errorf("validate index.html: %w", err)
 	}
-	if err := assertFile(filepath.Join(distDir, "generated", "codex-wasm", "codex_wasm_harness.js")); err != nil {
-		return fmt.Errorf("validate codex wasm JS asset: %w", err)
-	}
-	if err := assertFile(filepath.Join(distDir, "generated", "codex-wasm", "codex_wasm_harness_bg.wasm")); err != nil {
-		return fmt.Errorf("validate codex wasm WASM asset: %w", err)
-	}
-
 	if err := writeVersionYAML(distDir, version); err != nil {
 		return fmt.Errorf("write version file: %w", err)
 	}
@@ -205,7 +170,7 @@ func run(ctx context.Context, cfg config) error {
 	return nil
 }
 
-func buildReleasePayload(ctx context.Context, webDir, codexDir string, version releaseVersion) error {
+func buildReleasePayload(ctx context.Context, webDir string, version releaseVersion) error {
 	for _, cmdline := range []string{
 		"pnpm install --frozen-lockfile",
 		"pnpm run build:renderers",
@@ -213,31 +178,6 @@ func buildReleasePayload(ctx context.Context, webDir, codexDir string, version r
 		if err := runShell(ctx, webDir, nil, cmdline); err != nil {
 			return fmt.Errorf("build web prerequisites (%q): %w", cmdline, err)
 		}
-	}
-
-	codexRsDir := filepath.Join(codexDir, "codex-rs")
-	toolchain, err := activeRustToolchain(ctx, codexRsDir)
-	if err != nil {
-		return fmt.Errorf("resolve codex rust toolchain: %w", err)
-	}
-
-	if err := runCmd(ctx, codexRsDir, nil, "rustup", "target", "add", "--toolchain", toolchain, "wasm32-unknown-unknown"); err != nil {
-		return fmt.Errorf("ensure wasm target: %w", err)
-	}
-
-	if err := ensureWasmBindgenCLI(ctx, codexRsDir); err != nil {
-		return fmt.Errorf("ensure wasm-bindgen-cli: %w", err)
-	}
-
-	wasmHarnessDir := filepath.Join(codexRsDir, "wasm-harness")
-	if err := runShell(ctx, wasmHarnessDir, nil, "./scripts/build-browser-demo.sh"); err != nil {
-		return fmt.Errorf("build codex wasm harness: %w", err)
-	}
-
-	wasmPkgDir := filepath.Join(wasmHarnessDir, "examples", "pkg")
-	syncEnv := append(os.Environ(), "CODEX_WASM_PKG_DIR="+wasmPkgDir)
-	if err := runShell(ctx, filepath.Join(webDir, "app"), syncEnv, "pnpm run sync:codex-wasm"); err != nil {
-		return fmt.Errorf("sync codex wasm assets: %w", err)
 	}
 
 	buildEnv := append(os.Environ(), versionBuildEnv(version)...)
@@ -254,82 +194,8 @@ func versionBuildEnv(version releaseVersion) []string {
 		"VITE_RUNME_VERSION_WEB_REPO=" + version.WebRepo,
 		"VITE_RUNME_VERSION_WEB_BRANCH=" + version.WebBranch,
 		"VITE_RUNME_VERSION_WEB_COMMIT=" + version.WebCommit,
-		"VITE_RUNME_VERSION_CODEX_REPO=" + version.CodexRepo,
-		"VITE_RUNME_VERSION_CODEX_BRANCH=" + version.CodexBranch,
-		"VITE_RUNME_VERSION_CODEX_COMMIT=" + version.CodexCommit,
 		"VITE_RUNME_VERSION_BUCKET=" + version.Bucket,
 	}
-}
-
-func activeRustToolchain(ctx context.Context, dir string) (string, error) {
-	out, err := runCmdOutput(ctx, dir, nil, "rustup", "show", "active-toolchain")
-	if err != nil {
-		return "", err
-	}
-
-	fields := strings.Fields(string(out))
-	if len(fields) == 0 {
-		return "", errors.New("empty rustup active-toolchain output")
-	}
-	return fields[0], nil
-}
-
-func ensureWasmBindgenCLI(ctx context.Context, codexRsDir string) error {
-	requiredVersion, err := wasmBindgenVersionFromCargoLock(filepath.Join(codexRsDir, "Cargo.lock"))
-	if err != nil {
-		return err
-	}
-
-	currentVersion, err := installedWasmBindgenVersion(ctx)
-	if err == nil && currentVersion == requiredVersion {
-		return nil
-	}
-
-	return runCmd(ctx, "", nil, "cargo", "install", "wasm-bindgen-cli", "--version", requiredVersion, "--locked", "--force")
-}
-
-func installedWasmBindgenVersion(ctx context.Context) (string, error) {
-	out, err := runCmdOutput(ctx, "", nil, "wasm-bindgen", "--version")
-	if err != nil {
-		return "", err
-	}
-
-	fields := strings.Fields(string(out))
-	if len(fields) < 2 {
-		return "", fmt.Errorf("unexpected wasm-bindgen --version output: %q", strings.TrimSpace(string(out)))
-	}
-	return strings.TrimSpace(fields[len(fields)-1]), nil
-}
-
-func wasmBindgenVersionFromCargoLock(lockPath string) (string, error) {
-	content, err := os.ReadFile(lockPath)
-	if err != nil {
-		return "", err
-	}
-
-	lines := strings.Split(string(content), "\n")
-	for i := 0; i < len(lines); i++ {
-		if strings.TrimSpace(lines[i]) != "name = \"wasm-bindgen\"" {
-			continue
-		}
-
-		for j := i + 1; j < len(lines); j++ {
-			line := strings.TrimSpace(lines[j])
-			if line == "[[package]]" {
-				break
-			}
-			if strings.HasPrefix(line, "version = ") {
-				version := strings.TrimPrefix(line, "version = ")
-				version = strings.Trim(version, "\"")
-				if version == "" {
-					break
-				}
-				return version, nil
-			}
-		}
-	}
-
-	return "", errors.New("wasm-bindgen version not found in Cargo.lock")
 }
 
 func collectPublishFiles(distDir string) ([]publishFile, error) {
@@ -464,9 +330,6 @@ func versionMatches(desired, current releaseVersion) bool {
 	return desired.WebRepo == current.WebRepo &&
 		desired.WebBranch == current.WebBranch &&
 		desired.WebCommit == current.WebCommit &&
-		desired.CodexRepo == current.CodexRepo &&
-		desired.CodexBranch == current.CodexBranch &&
-		desired.CodexCommit == current.CodexCommit &&
 		desired.Bucket == current.Bucket
 }
 

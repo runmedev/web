@@ -1,5 +1,3 @@
-import type { BrowserSessionOptions } from './codexWasmHarnessLoader'
-
 export const RUNME_PUBLIC_DOCS_DRIVE_FOLDER_URL =
   'https://drive.google.com/drive/folders/1Qdg_VA4ZBlOKojJqW2CqSVuJ2p2I4yS5'
 
@@ -59,20 +57,12 @@ export const RUNME_RESPONSES_DIRECT_INSTRUCTIONS = [
   RUNME_SHARED_RUNTIME_INSTRUCTIONS,
 ].join('\n')
 
-const RUNME_CODEX_WASM_OVERLAY = [
+const RUNME_CODEX_OVERLAY = [
   'When you need to inspect or modify notebooks, use Codex code mode.',
   'Codex code mode executes JavaScript in the same Runme AppKernel runtime described above.',
 ]
 
-export const RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS = [
-  ...RUNME_CODEX_WASM_OVERLAY,
+export const RUNME_CODEX_DEVELOPER_INSTRUCTIONS = [
+  ...RUNME_CODEX_OVERLAY,
   RUNME_SHARED_RUNTIME_INSTRUCTIONS,
 ].join('\n')
-
-export function buildRunmeCodexWasmSessionOptions(): BrowserSessionOptions {
-  return {
-    instructions: {
-      developer: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
-    },
-  }
-}

@@ -1,28 +1,20 @@
 import { getCodexAppServerClient } from "./codexAppServerClient";
 import { createCodexChatKitAdapter } from "./codexChatKitAdapter";
 import { getCodexConversationController } from "./codexConversationController";
-import type { CodeModeExecutor } from "./codeModeExecutor";
+import { type CodexToolBridgeHandler, getCodexToolBridge } from "./codexToolBridge";
 import type { ConversationController } from "./conversationController";
 import type { HarnessChatKitAdapter, HarnessRuntime } from "./harnessChatKitAdapter";
 import {
+  type HarnessProfile,
   buildCodexAppServerWsUrl,
   buildCodexBridgeWsUrl,
-  type HarnessProfile,
 } from "./harnessManager";
-import {
-  getCodexToolBridge,
-  type CodexToolBridgeHandler,
-} from "./codexToolBridge";
-import { createCodexWasmCodeExecutor } from "./codexWasmCodeExecutor";
-import { buildRunmeCodexWasmSessionOptions } from "./runmeChatkitPrompts";
 
 export type CreateCodexHarnessRuntimeOptions = {
   profile: HarnessProfile;
   projectId?: string;
   resolveAuthorization?: () => Promise<string>;
-  codeModeExecutor?: CodeModeExecutor;
   codexBridgeHandler?: CodexToolBridgeHandler;
-  wasmApiKey?: string;
 };
 
 function applyCodexProjectSelection(projectId?: string): void {
@@ -40,13 +32,10 @@ async function refreshCodexConversationState(): Promise<void> {
 function clearCodexClient(): void {
   const client = getCodexAppServerClient();
   client.setAuthorizationResolver(null);
-  client.setCodeExecutor(null);
   client.disconnect();
 }
 
-function clearCodexBridge(
-  cleanup: (() => void) | null,
-): null {
+function clearCodexBridge(cleanup: (() => void) | null): null {
   const bridge = getCodexToolBridge();
   cleanup?.();
   bridge.setHandler(null);
@@ -61,9 +50,7 @@ function configureCodexBridge(options: {
 }): () => void {
   const bridge = getCodexToolBridge();
   bridge.setHandler(options.bridgeHandler ?? null);
-  void Promise.resolve(
-    bridge.connect(options.bridgeUrl, options.authorization),
-  ).catch(() => {
+  void Promise.resolve(bridge.connect(options.bridgeUrl, options.authorization)).catch(() => {
     // Bridge connection errors are surfaced through bridge snapshot state/logging.
   });
   return () => {
@@ -96,16 +83,11 @@ export class CodexProxyHarnessRuntime implements HarnessRuntime {
 
     const client = getCodexAppServerClient();
     try {
-      client.setCodeExecutor(null);
-      client.useTransport("proxy");
       client.setAuthorizationResolver(this.options.resolveAuthorization ?? null);
       const authorization = this.options.resolveAuthorization
         ? await this.options.resolveAuthorization()
         : "";
-      await client.connectProxy(
-        buildCodexAppServerWsUrl(this.profile.baseUrl),
-        authorization,
-      );
+      await client.connectProxy(buildCodexAppServerWsUrl(this.profile.baseUrl), authorization);
       this.bridgeSubscriptionCleanup = configureCodexBridge({
         bridgeUrl: buildCodexBridgeWsUrl(this.profile.baseUrl),
         bridgeHandler: this.options.codexBridgeHandler,
@@ -121,66 +103,6 @@ export class CodexProxyHarnessRuntime implements HarnessRuntime {
 
   stop(): void {
     this.bridgeSubscriptionCleanup = clearCodexBridge(this.bridgeSubscriptionCleanup);
-    clearCodexClient();
-    this.started = false;
-  }
-
-  getConversationController(): ConversationController {
-    return this.controller;
-  }
-
-  createChatKitAdapter(): HarnessChatKitAdapter {
-    return this.adapter;
-  }
-}
-
-export class CodexWasmHarnessRuntime implements HarnessRuntime {
-  readonly profile: HarnessProfile;
-  private readonly options: CreateCodexHarnessRuntimeOptions;
-  private readonly controller: ConversationController;
-  private readonly adapter: HarnessChatKitAdapter;
-  private started = false;
-
-  constructor(options: CreateCodexHarnessRuntimeOptions) {
-    this.profile = options.profile;
-    this.options = options;
-    this.controller = getCodexConversationController();
-    this.adapter = createCodexChatKitAdapter();
-  }
-
-  async start(): Promise<void> {
-    applyCodexProjectSelection(this.options.projectId);
-    if (this.started) {
-      await refreshCodexConversationState();
-      return;
-    }
-
-    const client = getCodexAppServerClient();
-    try {
-      client.setCodeExecutor(
-        this.options.codeModeExecutor
-          ? createCodexWasmCodeExecutor({
-              codeModeExecutor: this.options.codeModeExecutor,
-            })
-          : null,
-      );
-      client.useTransport("wasm");
-      client.setAuthorizationResolver(null);
-      await client.connectWasm({
-        apiKey: this.options.wasmApiKey ?? "",
-        sessionOptions: buildRunmeCodexWasmSessionOptions(),
-      });
-      clearCodexBridge(null);
-      await refreshCodexConversationState();
-      this.started = true;
-    } catch (error) {
-      this.stop();
-      throw error;
-    }
-  }
-
-  stop(): void {
-    clearCodexBridge(null);
     clearCodexClient();
     this.started = false;
   }

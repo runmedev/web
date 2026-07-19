@@ -175,13 +175,11 @@ The web app is deployed as static files for `web.runme.dev`.
 This repo includes a GitHub Actions workflow at `.github/workflows/releaser.yaml`
 and a releaser binary under `releaser/` that:
 
-1. Clones the web repo and the Codex repo
-2. Builds the Codex WASM harness
-3. Runs `pnpm -C app run sync:codex-wasm`
-4. Builds `app/dist`
-5. Publishes the built files to `gs://runme-hosted`
-6. Uploads `version.yaml` last as the release marker
+1. Clones the web repo
+2. Builds `app/dist`
+3. Publishes the built files to `gs://runme-hosted`
+4. Uploads `version.yaml` last as the release marker
 
 The releaser is level-based. It reads `gs://runme-hosted/version.yaml` and
-skips the publish if the deployed `webCommit` and `codexCommit` already match
-the desired inputs.
+skips the publish if the deployed `webCommit` already matches the desired
+input.

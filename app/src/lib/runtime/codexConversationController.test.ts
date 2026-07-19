@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS } from "./runmeChatkitPrompts";
+
+import { createCodexConversationControllerForTests } from "./codexConversationController";
+import { RUNME_CODEX_DEVELOPER_INSTRUCTIONS } from "./runmeChatkitPrompts";
 
 const project = {
   id: "project-1",
@@ -16,7 +18,6 @@ const project = {
 const notificationHandlers = new Set<(notification: any) => void>();
 const proxyClient = {
   sendRequest: vi.fn(),
-  getTransport: vi.fn(() => "proxy"),
   subscribeNotifications: vi.fn((handler: (notification: any) => void) => {
     notificationHandlers.add(handler);
     return () => {
@@ -40,10 +41,6 @@ vi.mock("./codexProjectManager", () => ({
   getCodexProjectManager: () => projectManager,
 }));
 
-import {
-  createCodexConversationControllerForTests,
-} from "./codexConversationController";
-
 type ConversationFixtureEvent = {
   kind: "request" | "response" | "notification";
   payload: Record<string, unknown>;
@@ -59,11 +56,7 @@ type ExpectedChatKitFixture = {
 };
 
 function loadJSONFixture<T>(...parts: string[]): T {
-  const fixturePath = path.resolve(
-    process.cwd(),
-    "src/lib/runtime/__fixtures__",
-    ...parts,
-  );
+  const fixturePath = path.resolve(process.cwd(), "src/lib/runtime/__fixtures__", ...parts);
   return JSON.parse(readFileSync(fixturePath, "utf8")) as T;
 }
 
@@ -78,8 +71,7 @@ function buildConversationReplay(fixture: ConversationFixture): {
   fixture.events.forEach((event) => {
     if (event.kind === "request") {
       const id = typeof event.payload.id === "number" ? event.payload.id : null;
-      const method =
-        typeof event.payload.method === "string" ? event.payload.method : null;
+      const method = typeof event.payload.method === "string" ? event.payload.method : null;
       if (id !== null && method) {
         requestMethodsById.set(id, method);
       }
@@ -108,12 +100,11 @@ function buildConversationReplay(fixture: ConversationFixture): {
 function normalizeChatKitEvents(
   events: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
-  const defaultResponseId =
-    (
-      events.findLast(
-        (event) => event.type === "response.completed",
-      )?.response as { id?: string } | undefined
-    )?.id;
+  const defaultResponseId = (
+    events.findLast((event) => event.type === "response.completed")?.response as
+      | { id?: string }
+      | undefined
+  )?.id;
   const rawResponseCreatedIds = new Set(
     events
       .filter((event) => event.type === "response.created")
@@ -198,9 +189,8 @@ function normalizeChatKitEvents(
             response_id: defaultResponseId,
             item_id: itemId,
             text:
-              (
-                event.item as { content?: Array<{ text?: string }> } | undefined
-              )?.content?.[0]?.text ?? "",
+              (event.item as { content?: Array<{ text?: string }> } | undefined)?.content?.[0]
+                ?.text ?? "",
           });
         }
         return normalized;
@@ -227,9 +217,11 @@ function normalizeChatKitEvents(
                 item_id: event.item_id,
                 text:
                   (
-                    event.update as {
-                      content?: { text?: string };
-                    } | undefined
+                    event.update as
+                      | {
+                          content?: { text?: string };
+                        }
+                      | undefined
                   )?.content?.text ?? "",
               },
               !rawContentPartDoneIds.has(String(event.item_id)) && {
@@ -238,9 +230,11 @@ function normalizeChatKitEvents(
                 item_id: event.item_id,
                 text:
                   (
-                    event.update as {
-                      content?: { text?: string };
-                    } | undefined
+                    event.update as
+                      | {
+                          content?: { text?: string };
+                        }
+                      | undefined
                   )?.content?.text ?? "",
               },
             ].filter(Boolean);
@@ -260,9 +254,8 @@ function normalizeChatKitEvents(
             response_id: defaultResponseId,
             item_id: (event.item as { id?: string } | undefined)?.id,
             text:
-              (
-                event.item as { content?: Array<{ text?: string }> } | undefined
-              )?.content?.[0]?.text ?? "",
+              (event.item as { content?: Array<{ text?: string }> } | undefined)?.content?.[0]
+                ?.text ?? "",
           },
         ];
       case "response.created":
@@ -323,9 +316,8 @@ function normalizeChatKitEvents(
             response_id: event.response_id,
             item_id: (event.item as { id?: string } | undefined)?.id,
             text:
-              (
-                event.item as { content?: Array<{ text?: string }> } | undefined
-              )?.content?.[0]?.text ?? "",
+              (event.item as { content?: Array<{ text?: string }> } | undefined)?.content?.[0]
+                ?.text ?? "",
           },
         ];
       case "response.completed":
@@ -362,8 +354,6 @@ describe("CodexConversationController", () => {
   beforeEach(() => {
     vi.useRealTimers();
     proxyClient.sendRequest.mockReset();
-    proxyClient.getTransport.mockReset();
-    proxyClient.getTransport.mockReturnValue("proxy");
     proxyClient.subscribeNotifications.mockClear();
     notificationHandlers.clear();
     projectManager.setDefault.mockClear();
@@ -372,7 +362,12 @@ describe("CodexConversationController", () => {
   it("refreshes history using thread/list scoped to the selected project cwd", async () => {
     proxyClient.sendRequest.mockResolvedValueOnce({
       threads: [
-        { id: "thread-1", title: "One", cwd: "/workspace", last_turn_id: "turn-1" },
+        {
+          id: "thread-1",
+          title: "One",
+          cwd: "/workspace",
+          last_turn_id: "turn-1",
+        },
       ],
     });
 
@@ -387,25 +382,6 @@ describe("CodexConversationController", () => {
         id: "thread-1",
         title: "One",
         cwd: "/workspace",
-        previousResponseId: "turn-1",
-      }),
-    ]);
-  });
-
-  it("does not send project cwd when refreshing history in wasm mode", async () => {
-    proxyClient.getTransport.mockReturnValue("wasm");
-    proxyClient.sendRequest.mockResolvedValueOnce({
-      threads: [{ id: "thread-1", title: "One", last_turn_id: "turn-1" }],
-    });
-
-    const controller = createCodexConversationControllerForTests();
-    await controller.refreshHistory();
-
-    expect(proxyClient.sendRequest).toHaveBeenCalledWith("thread/list", undefined);
-    expect(controller.getSnapshot().threads).toEqual([
-      expect.objectContaining({
-        id: "thread-1",
-        title: "One",
         previousResponseId: "turn-1",
       }),
     ]);
@@ -461,7 +437,9 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: unknown[] = [];
-    await controller.streamUserMessage("hello", { emit: (payload) => events.push(payload) });
+    await controller.streamUserMessage("hello", {
+      emit: (payload) => events.push(payload),
+    });
 
     expect(proxyClient.sendRequest).toHaveBeenCalledWith(
       "thread/start",
@@ -472,7 +450,7 @@ describe("CodexConversationController", () => {
         approvalPolicy: "never",
         sandboxPolicy: "workspace-write",
         personality: "pragmatic",
-        developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
+        developerInstructions: RUNME_CODEX_DEVELOPER_INSTRUCTIONS,
       }),
     );
     expect(events).toEqual(
@@ -487,87 +465,6 @@ describe("CodexConversationController", () => {
       ]),
     );
     expect(controller.getSnapshot().currentThreadId).toBe("thread-bootstrap");
-  });
-
-  it("omits project cwd when lazily creating a thread in wasm mode", async () => {
-    proxyClient.getTransport.mockReturnValue("wasm");
-    proxyClient.sendRequest.mockImplementation(async (method: string, params?: unknown) => {
-      if (method === "thread/start") {
-        return {
-          thread: {
-            id: "thread-bootstrap",
-            title: "Bootstrap Thread",
-          },
-        };
-      }
-      if (method === "turn/start") {
-        expect(params).toEqual(
-          expect.objectContaining({
-            threadId: "thread-bootstrap",
-          }),
-        );
-        queueMicrotask(() => {
-          notificationHandlers.forEach((handler) => {
-            handler({
-              jsonrpc: "2.0",
-              method: "turn/completed",
-              params: {
-                threadId: "thread-bootstrap",
-                turnId: "turn-bootstrap",
-              },
-            });
-          });
-        });
-        return { turnId: "turn-bootstrap" };
-      }
-      if (method === "thread/read") {
-        expect(params).toEqual({
-          threadId: "thread-bootstrap",
-          includeTurns: true,
-        });
-        return {
-          thread: {
-            id: "thread-bootstrap",
-            title: "Bootstrap Thread",
-            items: [],
-          },
-        };
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-
-    const controller = createCodexConversationControllerForTests();
-    const events: unknown[] = [];
-    await controller.streamUserMessage("hello", { emit: (payload) => events.push(payload) });
-
-    expect(proxyClient.sendRequest).toHaveBeenCalledWith(
-      "thread/start",
-      expect.not.objectContaining({
-        cwd: expect.anything(),
-      }),
-    );
-    expect(proxyClient.sendRequest).toHaveBeenCalledWith(
-      "thread/start",
-      expect.objectContaining({
-        projectId: "project-1",
-        model: "gpt-5.4",
-        approvalPolicy: "never",
-        sandboxPolicy: "workspace-write",
-        personality: "pragmatic",
-        developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
-      }),
-    );
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "thread.created",
-          thread: expect.objectContaining({
-            id: "thread-bootstrap",
-            title: "Bootstrap Thread",
-          }),
-        }),
-      ]),
-    );
   });
 
   it("uses a per-request model override for thread start and turn start", async () => {
@@ -612,7 +509,11 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: any[] = [];
-    await controller.streamUserMessage("hello", { emit: (payload) => events.push(payload) }, "gpt-5.4");
+    await controller.streamUserMessage(
+      "hello",
+      { emit: (payload) => events.push(payload) },
+      "gpt-5.4",
+    );
 
     expect(events).toEqual(
       expect.arrayContaining([
@@ -653,16 +554,18 @@ describe("CodexConversationController", () => {
     expect(controller.getSnapshot().currentTurnId).toBeNull();
 
     await controller.interruptActiveTurn();
-    expect(proxyClient.sendRequest).not.toHaveBeenCalledWith(
-      "turn/interrupt",
-      expect.anything(),
-    );
+    expect(proxyClient.sendRequest).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
   });
 
   it("returns cached thread details when items are already present", async () => {
     proxyClient.sendRequest.mockResolvedValueOnce({
       threads: [
-        { id: "thread-1", title: "One", cwd: "/workspace", last_turn_id: "turn-1" },
+        {
+          id: "thread-1",
+          title: "One",
+          cwd: "/workspace",
+          last_turn_id: "turn-1",
+        },
       ],
     });
 
@@ -824,12 +727,9 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: any[] = [];
-    const nextState = await controller.streamUserMessage(
-      'print("hello")',
-      {
-        emit: (payload) => events.push(payload),
-      },
-    );
+    const nextState = await controller.streamUserMessage('print("hello")', {
+      emit: (payload) => events.push(payload),
+    });
 
     expect(nextState).toEqual({
       threadId: "thread-1",
@@ -866,9 +766,7 @@ describe("CodexConversationController", () => {
         }),
       ]),
     );
-    expect(
-      events.filter((event) => event?.type === "response.completed"),
-    ).toHaveLength(2);
+    expect(events.filter((event) => event?.type === "response.completed")).toHaveLength(2);
     expect(controller.getSnapshot().currentThreadId).toBe("thread-1");
     expect(controller.getSnapshot().currentTurnId).toBeNull();
   });
@@ -1109,12 +1007,9 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: any[] = [];
-    const nextState = await controller.streamUserMessage(
-      "hello",
-      {
-        emit: (payload) => events.push(payload),
-      },
-    );
+    const nextState = await controller.streamUserMessage("hello", {
+      emit: (payload) => events.push(payload),
+    });
 
     expect(nextState).toEqual({
       threadId: "thread-fresh",
@@ -1141,57 +1036,7 @@ describe("CodexConversationController", () => {
           expect.objectContaining({
             threadId: "thread-1",
             cwd: "/workspace",
-            developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
-          }),
-        );
-        return { thread: { id: "thread-1" } };
-      }
-      if (method === "turn/start") {
-        queueMicrotask(() => {
-          notificationHandlers.forEach((handler) => {
-            handler({
-              jsonrpc: "2.0",
-              method: "turn.completed",
-              params: {
-                threadId: "thread-1",
-                turnId: "turn-1",
-              },
-            });
-          });
-        });
-        return { turnId: "turn-1" };
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-
-    const controller = createCodexConversationControllerForTests();
-    await controller.selectThread("thread-1");
-    await controller.streamUserMessage("hello", { emit: vi.fn() });
-  });
-
-  it("omits project cwd when resuming a thread in wasm mode", async () => {
-    proxyClient.getTransport.mockReturnValue("wasm");
-    proxyClient.sendRequest.mockImplementation(async (method: string, params?: unknown) => {
-      if (method === "thread/read") {
-        return {
-          thread: {
-            id: "thread-1",
-            title: "Existing Thread",
-            cwd: "/workspace",
-            turns: [],
-          },
-        };
-      }
-      if (method === "thread/resume") {
-        expect(params).toEqual(
-          expect.objectContaining({
-            threadId: "thread-1",
-            developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
-          }),
-        );
-        expect(params).toEqual(
-          expect.not.objectContaining({
-            cwd: expect.anything(),
+            developerInstructions: RUNME_CODEX_DEVELOPER_INSTRUCTIONS,
           }),
         );
         return { thread: { id: "thread-1" } };
@@ -1332,12 +1177,9 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: any[] = [];
-    const nextState = await controller.streamUserMessage(
-      'print("hello")',
-      {
-        emit: (payload) => events.push(payload),
-      },
-    );
+    const nextState = await controller.streamUserMessage('print("hello")', {
+      emit: (payload) => events.push(payload),
+    });
 
     expect(nextState).toEqual({
       threadId: "thread-1",
@@ -1412,7 +1254,8 @@ describe("CodexConversationController", () => {
                 threadId: "thread-1",
                 turnId: "turn-1",
                 itemId: "msg-2",
-                delta: "It's a minimal Runme notebook for configuring and using a local Codex instance.",
+                delta:
+                  "It's a minimal Runme notebook for configuring and using a local Codex instance.",
               },
             });
             handler({
@@ -1445,12 +1288,9 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: any[] = [];
-    const nextState = await controller.streamUserMessage(
-      "What is this notebook about",
-      {
-        emit: (payload) => events.push(payload),
-      },
-    );
+    const nextState = await controller.streamUserMessage("What is this notebook about", {
+      emit: (payload) => events.push(payload),
+    });
 
     expect(nextState).toEqual({
       threadId: "thread-1",
@@ -1490,18 +1330,14 @@ describe("CodexConversationController", () => {
         }),
       ]),
     );
-    expect(
-      events.filter((event) => event?.type === "response.completed"),
-    ).toEqual([
+    expect(events.filter((event) => event?.type === "response.completed")).toEqual([
       expect.objectContaining({
         type: "response.completed",
         response: expect.objectContaining({ id: "turn-1" }),
       }),
     ]);
 
-    const thread = controller
-      .getSnapshot()
-      .threads.find((item) => item.id === "thread-1");
+    const thread = controller.getSnapshot().threads.find((item) => item.id === "thread-1");
     const assistantItems = thread?.items.filter((item) => item.role === "assistant") ?? [];
     expect(assistantItems).toHaveLength(2);
     expect(assistantItems.at(0)?.content[0]?.text).toBe(
@@ -1601,18 +1437,14 @@ describe("CodexConversationController", () => {
       }),
     );
     expect(
-      events.filter(
-        (event) => event?.type === "thread.item.done" && event?.item?.id === "msg-1",
-      ),
+      events.filter((event) => event?.type === "thread.item.done" && event?.item?.id === "msg-1"),
     ).toHaveLength(0);
 
     emitTurnCompleted?.();
     await streamPromise;
 
     expect(
-      events.filter(
-        (event) => event?.type === "thread.item.done" && event?.item?.id === "msg-1",
-      ),
+      events.filter((event) => event?.type === "thread.item.done" && event?.item?.id === "msg-1"),
     ).toHaveLength(1);
   });
 
@@ -1677,12 +1509,9 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: any[] = [];
-    const nextState = await controller.streamUserMessage(
-      "Can you speak french?",
-      {
-        emit: (payload) => events.push(payload),
-      },
-    );
+    const nextState = await controller.streamUserMessage("Can you speak french?", {
+      emit: (payload) => events.push(payload),
+    });
 
     expect(nextState).toEqual({
       threadId: "thread-1",
@@ -1950,9 +1779,7 @@ describe("CodexConversationController", () => {
         event?.delta === "I’m searching the docs first.",
     );
     const finalItemDoneIndex = events.findIndex(
-      (event) =>
-        event?.type === "response.output_item.done" &&
-        event?.item?.id === "msg-final-1",
+      (event) => event?.type === "response.output_item.done" && event?.item?.id === "msg-final-1",
     );
 
     expect(commentaryDeltaIndex).toBeGreaterThanOrEqual(0);
@@ -2036,14 +1863,10 @@ describe("CodexConversationController", () => {
         event?.delta === "I’m inspecting the Jupyter integration first.",
     );
     const finalItemDoneIndex = events.findIndex(
-      (event) =>
-        event?.type === "response.output_item.done" &&
-        event?.item?.id === "msg-final-1",
+      (event) => event?.type === "response.output_item.done" && event?.item?.id === "msg-final-1",
     );
     const reasoningItemAddedIndex = events.findIndex(
-      (event) =>
-        event?.type === "response.output_item.added" &&
-        event?.item?.id === "reasoning-1",
+      (event) => event?.type === "response.output_item.added" && event?.item?.id === "reasoning-1",
     );
 
     expect(reasoningDeltaIndex).toBeGreaterThanOrEqual(0);
@@ -2229,19 +2052,13 @@ describe("CodexConversationController", () => {
     });
 
     const assistantAdded = events.filter(
-      (event) =>
-        event?.type === "thread.item.added" &&
-        event?.item?.type === "assistant_message",
+      (event) => event?.type === "thread.item.added" && event?.item?.type === "assistant_message",
     );
     const assistantDone = events.filter(
-      (event) =>
-        event?.type === "thread.item.done" &&
-        event?.item?.type === "assistant_message",
+      (event) => event?.type === "thread.item.done" && event?.item?.type === "assistant_message",
     );
     const outputDone = events.filter(
-      (event) =>
-        event?.type === "thread.item.done" &&
-        event?.item?.type === "assistant_message",
+      (event) => event?.type === "thread.item.done" && event?.item?.type === "assistant_message",
     );
 
     expect(assistantAdded).toHaveLength(1);
@@ -2374,14 +2191,8 @@ describe("CodexConversationController", () => {
       outputFile: "agent-message-only.output.json",
     },
   ])("$name", async ({ inputFile, outputFile }) => {
-    const fixture = loadJSONFixture<ConversationFixture>(
-      "codex-chatkit",
-      inputFile,
-    );
-    const expected = loadJSONFixture<ExpectedChatKitFixture>(
-      "codex-chatkit",
-      outputFile,
-    );
+    const fixture = loadJSONFixture<ConversationFixture>("codex-chatkit", inputFile);
+    const expected = loadJSONFixture<ExpectedChatKitFixture>("codex-chatkit", outputFile);
     const { responseQueues, notifications } = buildConversationReplay(fixture);
 
     proxyClient.sendRequest.mockImplementation(async (method: string) => {
@@ -2404,20 +2215,13 @@ describe("CodexConversationController", () => {
 
     const controller = createCodexConversationControllerForTests();
     const events: Array<Record<string, unknown>> = [];
-    const nextState = await controller.streamUserMessage(
-      fixture.prompt,
-      {
-        emit: (payload) => events.push(payload as Record<string, unknown>),
-      },
-    );
+    const nextState = await controller.streamUserMessage(fixture.prompt, {
+      emit: (payload) => events.push(payload as Record<string, unknown>),
+    });
 
-    expect(normalizeChatKitEvents(events)).toEqual(
-      normalizeExpectedFixtureEvents(expected.events),
-    );
+    expect(normalizeChatKitEvents(events)).toEqual(normalizeExpectedFixtureEvents(expected.events));
 
-    const finalState = expected.events.findLast(
-      (event) => event.type === "response.completed",
-    );
+    const finalState = expected.events.findLast((event) => event.type === "response.completed");
     if (finalState) {
       expect(nextState.previousResponseId).toBe(finalState.response_id);
       expect(nextState.threadId).toBeTypeOf("string");
