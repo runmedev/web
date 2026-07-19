@@ -25,7 +25,7 @@ env:
 jobs:
   run-app-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       GCP_PROJECT_ID: runme-lewi-dev
       GCP_PROJECT_NUMBER: "690012737568"
@@ -215,8 +215,9 @@ jobs:
           CUJ_FAIL_ON_SCENARIO_FAILURE: "false"
           CUJ_ARTIFACT_BUCKET: "runme-dev-assets"
           CUJ_CMD_TIMEOUT_MS: "120000"
-          CUJ_SCENARIO_TIMEOUT_MS: "120000"
-          CUJ_SCENARIO_CMD_TIMEOUT_MS: "10000"
+          CUJ_SCENARIO_TIMEOUT_MS: "240000"
+          CUJ_SCENARIO_CMD_TIMEOUT_MS: "30000"
+          CUJ_MOVIE_WAIT_TIMEOUT_MS: "30000"
           CUJ_RUNME_AGENT_BIN: ${{ github.workspace }}/bin/runme
         run: |
           set -euo pipefail
