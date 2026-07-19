@@ -5,6 +5,7 @@ import type { NotebookDataLike } from './runtime/runmeConsole'
 
 export const MAX_EMBEDDED_IMAGE_BYTES = 10 * 1024 * 1024
 export const LOCAL_IMAGE_ENDPOINT = '/__runme-dev/local-image'
+const MAX_ERROR_DETAIL_BYTES = 4 * 1024
 
 const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
   '.avif': 'image/avif',
@@ -166,12 +167,50 @@ async function readResponseBytes(response: Response): Promise<Uint8Array> {
   return bytes
 }
 
+async function readResponseErrorDetail(response: Response): Promise<string> {
+  const reader = response.body?.getReader()
+  if (!reader) {
+    return ''
+  }
+
+  const decoder = new TextDecoder()
+  let detail = ''
+  let totalBytes = 0
+  try {
+    while (totalBytes < MAX_ERROR_DETAIL_BYTES) {
+      const { done, value } = await reader.read()
+      if (done) {
+        detail += decoder.decode()
+        break
+      }
+
+      const remaining = MAX_ERROR_DETAIL_BYTES - totalBytes
+      const chunk =
+        value.byteLength > remaining ? value.subarray(0, remaining) : value
+      totalBytes += chunk.byteLength
+      detail += decoder.decode(chunk, { stream: true })
+
+      if (
+        value.byteLength > remaining ||
+        totalBytes >= MAX_ERROR_DETAIL_BYTES
+      ) {
+        await reader.cancel().catch(() => undefined)
+        detail += decoder.decode()
+        break
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return detail.trim()
+}
+
 async function imageFromResponse(
   response: Response,
   name: string
 ): Promise<EmbeddedImage> {
   if (!response.ok) {
-    const detail = await response.text().catch(() => '')
+    const detail = await readResponseErrorDetail(response).catch(() => '')
     throw new Error(
       `Failed to read image (${response.status}): ${detail || response.statusText}`
     )

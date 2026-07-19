@@ -156,6 +156,43 @@ describe('image embedding', () => {
     expect(cancel).toHaveBeenCalled()
   })
 
+  it('bounds error response details without reading the full body', async () => {
+    const cancel = vi.fn(async () => undefined)
+    const releaseLock = vi.fn()
+    const read = vi.fn(async () => ({
+      done: false,
+      value: new TextEncoder().encode(
+        `server failed: ${'x'.repeat(5 * 1024)}`
+      ),
+    }))
+    const text = vi.fn(async () => {
+      throw new Error('unbounded response.text() should not be called')
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        return {
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+          headers: new Headers({ 'Content-Type': 'text/plain' }),
+          body: {
+            getReader: () => ({ read, cancel, releaseLock }),
+          },
+          text,
+        } as unknown as Response
+      })
+    )
+
+    await expect(
+      readEmbeddedImageSource('https://example.com/failure.png')
+    ).rejects.toThrow('Failed to read image (500): server failed:')
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(cancel).toHaveBeenCalled()
+    expect(releaseLock).toHaveBeenCalled()
+    expect(text).not.toHaveBeenCalled()
+  })
+
   it('uses the native image picker and recognizes extension-only images', async () => {
     const file = new File([new Uint8Array([1])], 'diagram.png', { type: '' })
     ;(window as any).showOpenFilePicker = vi.fn(async () => [
