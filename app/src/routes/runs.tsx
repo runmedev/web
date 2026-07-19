@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 
 import {
   Box,
@@ -160,14 +160,7 @@ export default function RunsRoute() {
           {data.runs.map((run) => {
             return (
               <Table.Row key={run.name}>
-                <Table.Cell>
-                  <Link
-                    to={`/runs/${encodeURIComponent(run.name)}`}
-                    className="text-blue-600 underline"
-                  >
-                    {run.name}
-                  </Link>
-                </Table.Cell>
+                <Table.Cell>{run.name}</Table.Cell>
                 <Table.Cell>
                   {run.lastUpdated
                     ? formatter.format(new Date(run.lastUpdated))

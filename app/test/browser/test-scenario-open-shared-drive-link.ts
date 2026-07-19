@@ -571,14 +571,14 @@ run(
 run("agent-browser reload");
 run("agent-browser wait 4500");
 
-const folderExplorerSnapshot = run(
+const folderExplorerText = run(
   "agent-browser get text '#workspace-explorer-box'",
 ).stdout;
 writeArtifact(
   "scenario-open-shared-drive-link-07-folder-explorer.txt",
-  folderExplorerSnapshot,
+  folderExplorerText,
 );
-if (/Shared Drive Folder/i.test(folderExplorerSnapshot)) {
+if (/Shared Drive Folder/i.test(folderExplorerText)) {
   pass("Shared folder query links mount the folder in Explorer");
 } else {
   fail("Shared folder query links did not mount the folder in Explorer");
