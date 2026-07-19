@@ -197,3 +197,4 @@ No notebook data migration is required.
 
 - [Issue #209: Add deep linking and bookmarks](https://github.com/runmedev/web/issues/209)
 - [PR #240: Preserve fragments while opening shared notebooks](https://github.com/runmedev/web/pull/240)
+- [PR #285: Add notebook cell deep links](https://github.com/runmedev/web/pull/285)
