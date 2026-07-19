@@ -2528,6 +2528,16 @@ export default function Actions() {
       ? null
       : parseNotebookCellFragment(window.location.hash)
   )
+  const [deepLinkRequestedDocUri, setDeepLinkRequestedDocUri] = useState<
+    string | null
+  >(() =>
+    typeof window === 'undefined'
+      ? null
+      : new URLSearchParams(window.location.search).get('doc')?.trim() || null
+  )
+  const [deepLinkTargetDocUri, setDeepLinkTargetDocUri] = useState<
+    string | null
+  >(null)
   const [isWindowFocused, setIsWindowFocused] = useState(() => {
     if (typeof document === 'undefined') {
       return false
@@ -2558,6 +2568,10 @@ export default function Actions() {
 
     const syncCellFragment = () => {
       setDeepLinkCellId(parseNotebookCellFragment(window.location.hash))
+      setDeepLinkRequestedDocUri(
+        new URLSearchParams(window.location.search).get('doc')?.trim() || null
+      )
+      setDeepLinkTargetDocUri(null)
     }
     window.addEventListener('hashchange', syncCellFragment)
     window.addEventListener('popstate', syncCellFragment)
@@ -2610,6 +2624,48 @@ export default function Actions() {
     (currentDocIsOpen ? currentDocUri : null) ??
     workspaceDocuments[0]?.uri ??
     ''
+  const urlHasDocParam =
+    typeof window !== 'undefined' &&
+    Boolean(new URLSearchParams(window.location.search).get('doc')?.trim())
+  const hasPendingUrlDocIntent = driveLinkSnapshot.intents.some(
+    (intent) => intent.source === 'url'
+  )
+
+  useEffect(() => {
+    if (!deepLinkCellId) {
+      setDeepLinkTargetDocUri(null)
+      return
+    }
+    const targetDocUri = deepLinkRequestedDocUri
+      ? currentDocUri
+      : resolvedSelectedTabUri
+    if (
+      deepLinkTargetDocUri ||
+      !targetDocUri ||
+      (deepLinkRequestedDocUri && !currentDocIsOpen)
+    ) {
+      return
+    }
+    if (
+      deepLinkRequestedDocUri &&
+      (urlHasDocParam ||
+        hasPendingUrlDocIntent ||
+        Boolean(driveLinkSnapshot.lastErrorMessage))
+    ) {
+      return
+    }
+    setDeepLinkTargetDocUri(targetDocUri)
+  }, [
+    currentDocIsOpen,
+    currentDocUri,
+    deepLinkCellId,
+    deepLinkRequestedDocUri,
+    deepLinkTargetDocUri,
+    driveLinkSnapshot.lastErrorMessage,
+    hasPendingUrlDocIntent,
+    resolvedSelectedTabUri,
+    urlHasDocParam,
+  ])
 
   const handleCellFocus = useCallback(
     (docUri: string, state: NotebookActiveCellState) => {
@@ -3337,7 +3393,8 @@ export default function Actions() {
                   {renderWorkspaceDocument({
                     document: doc,
                     activeCell: activeCellsByDoc[doc.uri] ?? null,
-                    deepLinkCellId,
+                    deepLinkCellId:
+                      deepLinkTargetDocUri === doc.uri ? deepLinkCellId : null,
                     isSelected: resolvedSelectedTabUri === doc.uri,
                     isWindowFocused:
                       isWindowFocused && resolvedSelectedTabUri === doc.uri,

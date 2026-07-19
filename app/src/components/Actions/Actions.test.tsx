@@ -369,6 +369,85 @@ describe('Actions tabs', () => {
     })
   })
 
+  it('scopes a cell fragment to the notebook selected by the doc link', async () => {
+    const restoredUri = 'local://file/restored.runme.md'
+    const targetUri = 'local://file/deep-link-target.runme.md'
+    const targetCell = create(parser_pb.CellSchema, {
+      refId: 'target-cell',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      value: 'Deep-link target',
+      metadata: {},
+    })
+    const targetCellData = new StubCellData(targetCell)
+    contextMocks.currentDoc = restoredUri
+    contextMocks.workspaceDocuments = [
+      { uri: restoredUri, title: 'restored.runme.md', state: 'loaded' },
+      { uri: targetUri, title: 'deep-link-target.runme.md', state: 'loaded' },
+    ]
+    contextMocks.notebookSnapshots.set(restoredUri, {
+      uri: restoredUri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, {
+        metadata: {},
+        cells: [],
+      }),
+    })
+    contextMocks.notebookSnapshots.set(targetUri, {
+      uri: targetUri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, {
+        metadata: {},
+        cells: [targetCell],
+      }),
+    })
+    contextMocks.getNotebookData.mockImplementation((uri: string) =>
+      uri === targetUri
+        ? {
+            getCell: vi.fn(() => targetCellData),
+          }
+        : {
+            getCell: vi.fn(),
+          }
+    )
+    window.history.replaceState(
+      null,
+      '',
+      `/?doc=${encodeURIComponent(targetUri)}#cell=target-cell`
+    )
+
+    const view = render(<Actions />)
+    const deepLinkScrollCalls = () =>
+      (
+        Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>
+      ).mock.calls.filter(([options]) => options?.block === 'center')
+
+    expect(deepLinkScrollCalls()).toHaveLength(0)
+    expect(toastMocks.showToast).not.toHaveBeenCalled()
+
+    contextMocks.currentDoc = targetUri
+    window.history.replaceState(null, '', '/#cell=target-cell')
+    view.rerender(<Actions />)
+
+    await waitFor(() => {
+      expect(deepLinkScrollCalls()).toHaveLength(1)
+    })
+    expect(toastMocks.showToast).not.toHaveBeenCalled()
+
+    contextMocks.currentDoc = restoredUri
+    view.rerender(<Actions />)
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole('tab', { name: 'restored.runme.md' })
+          .getAttribute('data-state')
+      ).toBe('active')
+    })
+    expect(deepLinkScrollCalls()).toHaveLength(1)
+    expect(toastMocks.showToast).not.toHaveBeenCalled()
+  })
+
   it('reports a deep link whose cell no longer exists', async () => {
     const uri = 'local://file/missing-deep-link.runme.md'
     contextMocks.currentDoc = uri
