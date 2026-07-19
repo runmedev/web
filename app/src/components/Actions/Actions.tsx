@@ -1,5 +1,6 @@
 import {
   type ChangeEvent,
+  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
   useCallback,
   useEffect,
@@ -17,6 +18,7 @@ import {
   ChatBubbleLeftIcon,
   LinkIcon,
   LockClosedIcon,
+  PhotoIcon,
   XMarkIcon,
 } from '@heroicons/react/20/solid'
 import { MimeType, RunmeMetadataKey, parser_pb } from '../../runme/client'
@@ -92,6 +94,11 @@ import {
 import type { NotebookSyncState } from '../../storage/local'
 import { NotebookStoreItemType } from '../../storage/notebook'
 import { showToast } from '../../lib/toast'
+import {
+  embedImageInNotebook,
+  isSupportedImageFile,
+  pickImageFromLocalFilesystem,
+} from '../../lib/imageEmbedding'
 import { appState } from '../../lib/runtime/AppState'
 import {
   createCellCommentAnchor,
@@ -1839,6 +1846,9 @@ function NotebookTabContent({
   } = useNotebookContext()
   const { store } = useNotebookStore()
   const notebookSnapshot = useNotebookSnapshot(docUri)
+  const notebookData = notebookSnapshot
+    ? getNotebookData(notebookSnapshot.uri)
+    : null
   const notebookRootRef = useRef<HTMLDivElement | null>(null)
   const appliedDeepLinkRef = useRef<string | null>(null)
   const reportedMissingDeepLinkRef = useRef<string | null>(null)
@@ -1846,6 +1856,8 @@ function NotebookTabContent({
   const [highlightedDeepLinkCellId, setHighlightedDeepLinkCellId] = useState<
     string | null
   >(null)
+  const [embeddingImage, setEmbeddingImage] = useState(false)
+  const [imageDragActive, setImageDragActive] = useState(false)
   const syncState = useNotebookSyncState(docUri)
   const releasePending = Boolean(
     entry.releasePending || notebookSnapshot?.releasePending
@@ -1864,14 +1876,13 @@ function NotebookTabContent({
     if (!notebookSnapshot) {
       return []
     }
-    const data = getNotebookData(notebookSnapshot.uri)
-    if (!data) {
+    if (!notebookData) {
       return []
     }
     return (notebookSnapshot.notebook.cells ?? [])
-      .map((c) => (c?.refId ? data.getCell(c.refId) : null))
+      .map((c) => (c?.refId ? notebookData.getCell(c.refId) : null))
       .filter((c): c is CellData => Boolean(c))
-  }, [getNotebookData, notebookSnapshot, shouldRenderCells])
+  }, [notebookData, notebookSnapshot, shouldRenderCells])
   const [commentsRemoteUri, setCommentsRemoteUri] = useState<string | null>(
     null
   )
@@ -1928,6 +1939,107 @@ function NotebookTabContent({
       element?.scrollIntoView({ block: 'center', behavior: 'smooth' })
     },
     [docUri, findCellElement, onCellFocus]
+  )
+
+  const embedImageFiles = useCallback(
+    async (files: File[]) => {
+      if (readOnly || !notebookData || files.length === 0) {
+        return
+      }
+      setEmbeddingImage(true)
+      try {
+        for (const file of files) {
+          await embedImageInNotebook(notebookData, file)
+        }
+        showToast({
+          message:
+            files.length === 1
+              ? `Embedded ${files[0]?.name || 'image'}.`
+              : `Embedded ${files.length} images.`,
+          tone: 'success',
+        })
+      } catch (error) {
+        showToast({
+          message: `Failed to embed image: ${String(error)}`,
+          tone: 'error',
+        })
+      } finally {
+        setEmbeddingImage(false)
+      }
+    },
+    [notebookData, readOnly]
+  )
+
+  const handleEmbedImage = useCallback(async () => {
+    try {
+      const file = await pickImageFromLocalFilesystem()
+      if (file) {
+        await embedImageFiles([file])
+      }
+    } catch (error) {
+      showToast({
+        message: `Failed to select image: ${String(error)}`,
+        tone: 'error',
+      })
+    }
+  }, [embedImageFiles])
+
+  const handleImageDragOver = useCallback(
+    (event: ReactDragEvent<HTMLDivElement>) => {
+      const hasFile = Array.from(event.dataTransfer.items).some(
+        (item) => item.kind === 'file'
+      )
+      if (!hasFile) {
+        return
+      }
+      event.preventDefault()
+      if (readOnly) {
+        event.dataTransfer.dropEffect = 'none'
+        setImageDragActive(false)
+        return
+      }
+      event.dataTransfer.dropEffect = 'copy'
+      setImageDragActive(true)
+    },
+    [readOnly]
+  )
+
+  const handleImageDragLeave = useCallback(
+    (event: ReactDragEvent<HTMLDivElement>) => {
+      if (
+        event.relatedTarget instanceof Node &&
+        event.currentTarget.contains(event.relatedTarget)
+      ) {
+        return
+      }
+      setImageDragActive(false)
+    },
+    []
+  )
+
+  const handleImageDrop = useCallback(
+    (event: ReactDragEvent<HTMLDivElement>) => {
+      const files = Array.from(event.dataTransfer.files)
+      if (files.length > 0) {
+        event.preventDefault()
+      }
+      setImageDragActive(false)
+      if (readOnly) {
+        return
+      }
+      const images = files.filter(isSupportedImageFile)
+      if (images.length === 0) {
+        if (files.length > 0) {
+          showToast({
+            message: 'Only supported image files can be embedded.',
+            tone: 'error',
+          })
+        }
+        return
+      }
+      void embedImageFiles(images)
+    },
+    [embedImageFiles, readOnly]
   )
 
   const startCommentDraft = useCallback(
@@ -2273,7 +2385,7 @@ function NotebookTabContent({
     )
   }
 
-  const data = getNotebookData(notebookSnapshot.uri)
+  const data = notebookData
   const ownerSessionId = getNotebookOwnerSessionId(entry.owner)
 
   if (
@@ -2285,7 +2397,22 @@ function NotebookTabContent({
   }
 
   return (
-    <div ref={notebookRootRef} className="flex h-full min-w-0">
+    <div
+      ref={notebookRootRef}
+      className="relative flex h-full min-w-0"
+      data-testid="notebook-content"
+      onDragOver={handleImageDragOver}
+      onDragLeave={handleImageDragLeave}
+      onDrop={handleImageDrop}
+    >
+      {imageDragActive && (
+        <div
+          className="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-nb-md border-2 border-dashed border-nb-accent bg-nb-accent-muted/90 text-sm font-medium text-nb-accent"
+          data-testid="image-drop-target"
+        >
+          Drop image to embed
+        </div>
+      )}
       <ScrollArea
         key={`scroll-${docUri}`}
         type="auto"
@@ -2366,14 +2493,26 @@ function NotebookTabContent({
                   : 'This notebook has no cells yet.'}
               </p>
               {!readOnly && (
-                <button
-                  type="button"
-                  className="cell-add-btn h-8 w-8"
-                  aria-label="Add first cell"
-                  onClick={() => data?.appendCell(parser_pb.CellKind.MARKUP)}
-                >
-                  <PlusIcon className="h-5 w-5" />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="cell-add-btn h-8 w-8"
+                    aria-label="Add first cell"
+                    onClick={() => data?.appendCell(parser_pb.CellKind.MARKUP)}
+                  >
+                    <PlusIcon className="h-5 w-5" />
+                  </button>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted disabled:cursor-wait disabled:opacity-60"
+                    aria-label="Embed image as first cell"
+                    disabled={embeddingImage}
+                    onClick={() => void handleEmbedImage()}
+                  >
+                    <PhotoIcon className="h-3.5 w-3.5" />
+                    <span>{embeddingImage ? 'Embedding…' : 'Embed image'}</span>
+                  </button>
+                </div>
               )}
             </div>
           ) : (
@@ -2399,7 +2538,7 @@ function NotebookTabContent({
                 )
               })}
               {!readOnly && (
-                <div className="flex justify-center py-3">
+                <div className="flex justify-center gap-2 py-3">
                   <button
                     type="button"
                     className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted"
@@ -2408,6 +2547,16 @@ function NotebookTabContent({
                   >
                     <PlusIcon width={10} height={10} />
                     <span>Add cell</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted disabled:cursor-wait disabled:opacity-60"
+                    aria-label="Embed image at end"
+                    disabled={embeddingImage}
+                    onClick={() => void handleEmbedImage()}
+                  >
+                    <PhotoIcon className="h-3.5 w-3.5" />
+                    <span>{embeddingImage ? 'Embedding…' : 'Embed image'}</span>
                   </button>
                 </div>
               )}

@@ -187,6 +187,7 @@ export function createCodeModeExecutor(options: {
         truncated = true
       }
 
+      const abortController = new AbortController()
       const globals = createAppJsGlobals({
         runme: runmeApi,
         sendOutput: (data) => {
@@ -197,12 +198,12 @@ export function createCodeModeExecutor(options: {
         listNotebooks,
         opfsApi,
         networkApi,
+        signal: abortController.signal,
       })
       const notebooksApiBridgeServer = createNotebooksApiBridgeServer({
         notebooksApi: globals.notebooks as typeof hostNotebooksApi,
       })
 
-      const abortController = new AbortController()
       let finalExitCode = 0
       const kernelRun =
         mode === 'sandbox'
@@ -395,6 +396,13 @@ async function handleSandboxAppKernelBridgeCall({
       return getClaimedSessionId()
     case 'app.getSessionID':
       return getClaimedSessionId()
+    case 'embed':
+      return globals.embed(
+        args[0] as Parameters<typeof globals.embed>[0],
+        (args[1] as
+          | { target?: unknown; alt?: string; name?: string }
+          | undefined) ?? undefined
+      )
     case 'app.startGoogleDriveOAuth':
     case 'drive.authorize':
     case 'drive.refreshAuth': {
@@ -514,6 +522,9 @@ async function handleSandboxAppKernelBridgeCall({
       }
       if (method === 'notebooks.appendCell') {
         return (globals.notebooks as any).appendCell(args[0])
+      }
+      if (method === 'notebooks.embed') {
+        return (globals.notebooks as any).embed(args[0], args[1])
       }
       if (method.startsWith('notebooks.')) {
         return notebooksApiBridgeServer.handleMessage({

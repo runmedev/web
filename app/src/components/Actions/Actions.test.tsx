@@ -4,6 +4,7 @@ import {
   render,
   screen,
   act,
+  createEvent,
   fireEvent,
   waitFor,
   within,
@@ -83,6 +84,19 @@ const conflictMocks = vi.hoisted(() => ({
 
 const toastMocks = vi.hoisted(() => ({
   showToast: vi.fn(),
+}))
+
+const imageEmbeddingMocks = vi.hoisted(() => ({
+  embedImageInNotebook: vi.fn(async () => ({
+    uri: 'local://file/images',
+    cell: { refId: 'image-cell' },
+  })),
+  pickImageFromLocalFilesystem: vi.fn(async (): Promise<File | null> => null),
+  isSupportedImageFile: vi.fn(
+    (file: File) =>
+      file.type.startsWith('image/') ||
+      /\.(avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i.test(file.name)
+  ),
 }))
 
 // Minimal mocks for contexts Action consumes
@@ -168,6 +182,8 @@ vi.mock('../../lib/notebookDiff/conflict', () => ({
 vi.mock('../../lib/toast', () => ({
   showToast: toastMocks.showToast,
 }))
+
+vi.mock('../../lib/imageEmbedding', () => imageEmbeddingMocks)
 
 vi.mock('../../lib/runtime/jupyterManager', () => ({
   getJupyterManager: () => ({
@@ -326,9 +342,136 @@ beforeEach(() => {
   conflictMocks.refreshNotebookConflictDiff.mockReset()
   conflictMocks.refreshNotebookConflictDiff.mockResolvedValue(undefined)
   toastMocks.showToast.mockReset()
+  imageEmbeddingMocks.embedImageInNotebook.mockClear()
+  imageEmbeddingMocks.pickImageFromLocalFilesystem.mockReset()
+  imageEmbeddingMocks.pickImageFromLocalFilesystem.mockResolvedValue(null)
+  imageEmbeddingMocks.isSupportedImageFile.mockClear()
 })
 
 describe('Actions tabs', () => {
+  it('embeds an image selected from the button beside Add cell', async () => {
+    const uri = 'local://file/images.json'
+    const notebookData = {
+      getCell: vi.fn(),
+      appendCell: vi.fn(),
+    }
+    const file = new File([new Uint8Array([1, 2, 3])], 'screenshot.png', {
+      type: 'image/png',
+    })
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'images.json', state: 'loaded' },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, { metadata: {}, cells: [] }),
+    })
+    contextMocks.getNotebookData.mockReturnValue(notebookData)
+    imageEmbeddingMocks.pickImageFromLocalFilesystem.mockResolvedValue(file)
+
+    render(<Actions />)
+    fireEvent.click(screen.getByLabelText('Embed image as first cell'))
+
+    await waitFor(() => {
+      expect(imageEmbeddingMocks.embedImageInNotebook).toHaveBeenCalledWith(
+        notebookData,
+        file
+      )
+    })
+    expect(toastMocks.showToast).toHaveBeenCalledWith({
+      message: 'Embedded screenshot.png.',
+      tone: 'success',
+    })
+  })
+
+  it('embeds dropped image files and shows the drop target', async () => {
+    const uri = 'local://file/images.json'
+    const notebookData = {
+      getCell: vi.fn(),
+      appendCell: vi.fn(),
+    }
+    const file = new File([new Uint8Array([1, 2, 3])], 'diagram.png', {
+      type: 'image/png',
+    })
+    const dataTransfer = {
+      items: [{ kind: 'file', type: 'image/png' }],
+      files: [file],
+      dropEffect: 'none',
+    }
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'images.json', state: 'loaded' },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, { metadata: {}, cells: [] }),
+    })
+    contextMocks.getNotebookData.mockReturnValue(notebookData)
+
+    render(<Actions />)
+    const notebookContent = screen.getByTestId('notebook-content')
+    fireEvent.dragOver(notebookContent, { dataTransfer })
+    expect(screen.getByTestId('image-drop-target')).toBeTruthy()
+    expect(dataTransfer.dropEffect).toBe('copy')
+
+    fireEvent.drop(notebookContent, { dataTransfer })
+
+    await waitFor(() => {
+      expect(imageEmbeddingMocks.embedImageInNotebook).toHaveBeenCalledWith(
+        notebookData,
+        file
+      )
+    })
+    expect(screen.queryByTestId('image-drop-target')).toBeNull()
+  })
+
+  it('prevents browser navigation for unsupported file drags and drops', () => {
+    const uri = 'local://file/images.json'
+    const notebookData = {
+      getCell: vi.fn(),
+      appendCell: vi.fn(),
+    }
+    const file = new File([new Uint8Array([1, 2, 3])], 'notes.txt', {
+      type: 'text/plain',
+    })
+    const dataTransfer = {
+      items: [{ kind: 'file', type: 'text/plain' }],
+      files: [file],
+      dropEffect: 'none',
+    }
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'images.json', state: 'loaded' },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, { metadata: {}, cells: [] }),
+    })
+    contextMocks.getNotebookData.mockReturnValue(notebookData)
+
+    render(<Actions />)
+    const notebookContent = screen.getByTestId('notebook-content')
+    const dragOverEvent = createEvent.dragOver(notebookContent, { dataTransfer })
+    fireEvent(notebookContent, dragOverEvent)
+
+    expect(dragOverEvent.defaultPrevented).toBe(true)
+    expect(screen.getByTestId('image-drop-target')).toBeTruthy()
+
+    const dropEvent = createEvent.drop(notebookContent, { dataTransfer })
+    fireEvent(notebookContent, dropEvent)
+
+    expect(dropEvent.defaultPrevented).toBe(true)
+    expect(imageEmbeddingMocks.embedImageInNotebook).not.toHaveBeenCalled()
+    expect(toastMocks.showToast).toHaveBeenCalledWith({
+      message: 'Only supported image files can be embedded.',
+      tone: 'error',
+    })
+    expect(screen.queryByTestId('image-drop-target')).toBeNull()
+  })
+
   it('scrolls to and highlights the selected notebook cell named by the URL fragment', async () => {
     const uri = 'local://file/deep-link.runme.md'
     const cell = create(parser_pb.CellSchema, {

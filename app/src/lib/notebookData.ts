@@ -1078,10 +1078,12 @@ export class NotebookData {
       resolveNotebook: this.resolveNotebookForAppKernel,
       listNotebooks: this.listNotebooksForAppKernel,
     })
+    const abortController = new AbortController()
     const appGlobals = createAppJsGlobals({
       runme: runmeApi,
       resolveNotebook: this.resolveNotebookForAppKernel,
       listNotebooks: this.listNotebooksForAppKernel,
+      signal: abortController.signal,
     })
     const notebooksApiBridgeServer = createNotebooksApiBridgeServer({
       notebooksApi: appGlobals.notebooks as typeof hostNotebooksApi,
@@ -1090,7 +1092,6 @@ export class NotebookData {
     let stdout = ''
     let stderr = ''
     let finalExitCode = 0
-    const abortController = new AbortController()
     const execution = { runID, generation, abortController }
     this.activeAppKernelExecutions.get(refId)?.abortController.abort()
     this.activeAppKernelExecutions.set(refId, execution)
@@ -1251,6 +1252,14 @@ export class NotebookData {
         return getClaimedSessionId()
       case 'app.getSessionID':
         return getClaimedSessionId()
+      case 'embed':
+      case 'notebooks.embed':
+        return appGlobals.embed(
+          args[0] as Parameters<typeof appGlobals.embed>[0],
+          (args[1] as
+            | { target?: unknown; alt?: string; name?: string }
+            | undefined) ?? undefined
+        )
       case 'documents.get':
         return appGlobals.documents.get(String(args[0] ?? ''))
       case 'documents.update':

@@ -19,6 +19,8 @@ differently.
 - run a single code cell from the notebook UI,
 - inspect stdout and stderr inline,
 - interact with long-running or terminal-style processes in the cell console,
+- embed an image with the **Embed image** button or by dropping an image file
+  onto the notebook,
 - rerun or clear notebook output through App Console helpers.
 
 ## Useful App Console helpers
@@ -29,7 +31,12 @@ runme.clear()
 runme.clearOutputs()
 runme.runAll()
 runme.rerun()
+await embed('/tmp/screenshot.png', { alt: 'Screenshot' })
 ```
+
+`embed(...)` stores the image bytes in a non-runnable HTML cell. It accepts
+image URLs, data URLs, browser `File`/`Blob` objects, and absolute local paths
+when Runme is running through the local development server.
 
 ## Output behavior
 

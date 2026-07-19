@@ -5,6 +5,7 @@ import { NotebookUpdateError } from './runmeConsole'
 import {
   CODE_MODE_SANDBOX_ALLOWED_METHODS,
   SandboxJSKernel,
+  buildSandboxSrcDoc,
 } from './sandboxJsKernel'
 
 type Scenario =
@@ -20,6 +21,7 @@ type Scenario =
   | 'driveSave'
   | 'documents'
   | 'notebooksCreate'
+  | 'notebooksEmbed'
   | 'notebooksUpdateError'
 
 class MockSandboxPort {
@@ -151,6 +153,19 @@ class MockSandboxPort {
             },
           ],
         })
+      } else if (this.scenario === 'notebooksEmbed') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'embed',
+          args: ['/tmp/screenshot.png', { alt: 'Screenshot' }],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 2,
+          method: 'notebooks.embed',
+          args: ['data:image/png;base64,AQID', undefined],
+        })
       } else if (this.scenario === 'notebooksUpdateError') {
         this.emit({
           type: 'host-call',
@@ -243,6 +258,22 @@ class MockSandboxPort {
         this.emit({ type: 'exit', exitCode: 0 })
         return
       }
+      if (
+        this.scenario === 'notebooksEmbed' &&
+        this.hostResults.has(1) &&
+        this.hostResults.has(2)
+      ) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
+        })
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(2) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
       if (this.scenario === 'credentials' && this.hostResults.has(1)) {
         this.emit({
           type: 'stdout',
@@ -327,6 +358,18 @@ class TestableSandboxJSKernel extends SandboxJSKernel {
 }
 
 describe('SandboxJSKernel', () => {
+  it('passes the top-level embed helper into the dynamic runner', () => {
+    const srcDoc = buildSandboxSrcDoc({
+      enableOpfs: true,
+      enableNet: true,
+    })
+
+    expect(srcDoc).toMatch(/"net",\s+"embed",\s+"notebooks"/)
+    expect(srcDoc).toContain(
+      'runner(consoleProxy, runme, opfs, net, embed, notebooks'
+    )
+  })
+
   it('runs javascript and resolves runme host calls through the bridge', async () => {
     let stdout = ''
     let stderr = ''
@@ -910,6 +953,54 @@ describe('SandboxJSKernel', () => {
       },
     ])
     expect(stdout).toContain('cell-comments-demo')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports image embedding through top-level and notebooks sandbox helpers', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'embed' || method === 'notebooks.embed') {
+        return {
+          uri: 'local://file/images',
+          cell: { refId: 'image-cell', languageId: 'html' },
+        }
+      }
+      return null
+    })
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('notebooksEmbed'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run(
+      "console.log(await embed('/tmp/screenshot.png', { alt: 'Screenshot' })); console.log(await notebooks.embed('data:image/png;base64,AQID'));"
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith('embed', [
+      '/tmp/screenshot.png',
+      { alt: 'Screenshot' },
+    ])
+    expect(bridgeCall).toHaveBeenCalledWith('notebooks.embed', [
+      'data:image/png;base64,AQID',
+      undefined,
+    ])
+    expect(stdout).toContain('image-cell')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
   })

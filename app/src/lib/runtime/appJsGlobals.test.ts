@@ -2,6 +2,12 @@
 import { create } from '@bufbuild/protobuf'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { parser_pb } from '../../runme/client'
+import { GoogleClientManager } from '../googleClientManager'
+import { appState } from './AppState'
+import { createAppJsGlobals } from './appJsGlobals'
+import type { NotebookDataLike, RunmeConsoleApi } from './runmeConsole'
+
 vi.mock('@excalidraw/excalidraw', () => ({
   CaptureUpdateAction: { NEVER: 'never' },
   Excalidraw: () => null,
@@ -21,13 +27,9 @@ vi.mock('@excalidraw/excalidraw', () => ({
 
 vi.mock('@excalidraw/excalidraw/index.css', () => ({}))
 
-import { parser_pb } from '../../runme/client'
-import { GoogleClientManager } from '../googleClientManager'
-import { appState } from './AppState'
-import { createAppJsGlobals } from './appJsGlobals'
-import type { NotebookDataLike, RunmeConsoleApi } from './runmeConsole'
-
 class FakeNotebookData implements NotebookDataLike {
+  private readonly notebook = create(parser_pb.NotebookSchema, { cells: [] })
+
   constructor(
     private readonly uri: string,
     private readonly name: string
@@ -42,13 +44,38 @@ class FakeNotebookData implements NotebookDataLike {
   }
 
   getNotebook(): parser_pb.Notebook {
-    return create(parser_pb.NotebookSchema, { cells: [] })
+    return this.notebook
   }
 
-  updateCell(): void {}
+  updateCell(cell: parser_pb.Cell): void {
+    const index = this.notebook.cells.findIndex(
+      (candidate) => candidate.refId === cell.refId
+    )
+    this.notebook.cells[index] = create(parser_pb.CellSchema, cell)
+  }
 
   getCell(): null {
     return null
+  }
+
+  appendCell(
+    kind = parser_pb.CellKind.CODE,
+    languageId?: string | null
+  ): parser_pb.Cell {
+    const cell = create(parser_pb.CellSchema, {
+      refId: `cell-${this.notebook.cells.length + 1}`,
+      kind,
+      languageId: languageId ?? 'bash',
+      metadata: {},
+    })
+    this.notebook.cells.push(cell)
+    return cell
+  }
+
+  removeCell(refId: string): void {
+    this.notebook.cells = this.notebook.cells.filter(
+      (cell) => cell.refId !== refId
+    )
   }
 }
 
@@ -145,6 +172,67 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     await expect(globals.notebooks.shareUrl()).resolves.toBe(
       'http://localhost:3000/?doc=local%3A%2F%2Ffile%2Fcurrent'
     )
+  })
+
+  it('exposes the shared image embed helper at the top level and on notebooks', async () => {
+    const notebook = new FakeNotebookData(
+      'local://file/current',
+      'Current.json'
+    )
+    const sendOutput = vi.fn()
+    const globals = createAppJsGlobals({
+      runme: createRunme(notebook),
+      sendOutput,
+    })
+
+    const result = await globals.embed(
+      new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }),
+      { name: 'screenshot.png' }
+    )
+
+    expect(result.cell.languageId).toBe('html')
+    expect(notebook.getNotebook().cells[0]?.value).toContain(
+      'data:image/png;base64,AQID'
+    )
+    expect(globals.notebooks.embed).toBe(globals.embed)
+    await expect(globals.notebooks.help('embed')).resolves.toContain(
+      'notebooks.embed'
+    )
+    expect(sendOutput).toHaveBeenCalledWith(
+      'Embedded image screenshot.png.\r\n'
+    )
+  })
+
+  it('resolves object image targets to the requested notebook URI', async () => {
+    const current = new FakeNotebookData('local://file/current', 'Current.json')
+    const requested = new FakeNotebookData(
+      'local://file/requested',
+      'Requested.json'
+    )
+    const resolveNotebook = vi.fn((target?: unknown) =>
+      target === requested.getUri() ? requested : current
+    )
+    const globals = createAppJsGlobals({
+      runme: createRunme(current),
+      resolveNotebook,
+    })
+
+    await globals.notebooks.embed(
+      new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }),
+      {
+        target: {
+          handle: {
+            uri: requested.getUri(),
+            revision: 'requested-revision',
+          },
+        },
+        name: 'requested.png',
+      }
+    )
+
+    expect(resolveNotebook).toHaveBeenCalledWith(requested.getUri())
+    expect(current.getNotebook().cells).toHaveLength(0)
+    expect(requested.getNotebook().cells).toHaveLength(1)
   })
 
   it('opens inline workspace rename from the explorer runtime API', () => {

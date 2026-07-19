@@ -281,7 +281,9 @@ function makeDocument(notebook: NotebookDataLike): NotebookDocument {
   }
 }
 
-function resolveTargetUri(target?: NotebookTarget): string | null {
+export function resolveNotebookTargetUri(
+  target?: NotebookTarget
+): string | null {
   if (target === undefined) {
     return null
   }
@@ -650,7 +652,7 @@ export function createNotebooksApi({
   const resolveNotebookByTarget = (
     target?: NotebookTarget
   ): NotebookDataLike => {
-    const uri = resolveTargetUri(target)
+    const uri = resolveNotebookTargetUri(target)
     const resolved = uri ? resolveNotebook(uri) : resolveNotebook()
     if (!resolved) {
       throw new Error('No notebook found for the requested target.')

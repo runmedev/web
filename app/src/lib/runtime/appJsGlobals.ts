@@ -39,6 +39,10 @@ import {
 } from '../driveTransfer'
 import { googleClientManager } from '../googleClientManager'
 import {
+  type EmbeddedImageSource,
+  embedImageInNotebook,
+} from '../imageEmbedding'
+import {
   deserializeMarkdownToNotebook,
   getImportedFileBytes,
   getImportedFileName,
@@ -71,8 +75,10 @@ import { getJupyterManager } from './jupyterManager'
 import { responsesDirectConfigManager } from './responsesDirectConfigManager'
 import {
   type NotebookDataLike,
+  type NotebookTarget,
   type RunmeConsoleApi,
   createNotebooksApi,
+  resolveNotebookTargetUri,
 } from './runmeConsole'
 import { getRunnersManager } from './runnersManager'
 
@@ -347,6 +353,7 @@ export function createAppJsGlobals({
   ensureAccessToken,
   opfsApi,
   networkApi,
+  signal,
 }: {
   runme: RunmeConsoleApi
   sendOutput?: SendOutput
@@ -360,6 +367,7 @@ export function createAppJsGlobals({
   ensureAccessToken?: EnsureAccessToken
   opfsApi?: AppKernelOpfsApi
   networkApi?: AppKernelNetworkApi
+  signal?: AbortSignal
 }) {
   const getWorkspaceItems = () =>
     workspace?.getItems?.() ?? appState.getWorkspaceItems()
@@ -993,6 +1001,39 @@ export function createAppJsGlobals({
     )
   }
 
+  const embedImageForRuntime = async (
+    source: EmbeddedImageSource,
+    options?: {
+      target?: unknown
+      alt?: string
+      name?: string
+    }
+  ) => {
+    const target =
+      options?.target === undefined
+        ? undefined
+        : (resolveNotebookTargetUri(options.target as NotebookTarget) ??
+          undefined)
+    const notebook = resolveNotebook
+      ? resolveNotebook(target)
+      : target === undefined
+        ? runme.getCurrentNotebook()
+        : null
+    if (!notebook) {
+      throw new Error('No target notebook is open for image embedding.')
+    }
+    const result = await embedImageInNotebook(notebook, source, {
+      alt: options?.alt,
+      name: options?.name,
+      signal,
+    })
+    emitLine(
+      sendOutput,
+      `Embedded image ${result.cell.metadata?.['runme.dev/embeddedImageName'] || result.cell.refId}.`
+    )
+    return result
+  }
+
   const notebooksHelpers = {
     ...notebooksApi,
     help: async (topic?: string) => {
@@ -1001,6 +1042,9 @@ export function createAppJsGlobals({
       }
       if (topic === 'appendCell') {
         return 'notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? }): Promise<{ handle, cell }>. Inserts a cell into the current or targeted notebook. kind must be "code" or "markup".'
+      }
+      if (topic === 'embed') {
+        return 'notebooks.embed(source, options?: { target?, alt?, name? }): Promise<{ uri, cell }>. Embeds image bytes from a URL, absolute local development path, data URL, File, or Blob in an HTML cell.'
       }
       if (topic === 'resolve') {
         return 'notebooks.resolve(reference?): Promise<NotebookReferenceInfo>. Accepts a local URI, Drive URL, Runme share URL, Markdown link, or notebook target and returns title, localUri, remoteUri, shareUrl, and markdownLink.'
@@ -1022,6 +1066,7 @@ export function createAppJsGlobals({
         base,
         '- notebooks.createLocal(name, options?)',
         '- notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? })',
+        '- notebooks.embed(source, options?)',
         '- notebooks.resolve(reference?)',
         '- notebooks.show(reference?)',
         '- notebooks.shareUrl(reference?)',
@@ -1067,6 +1112,7 @@ export function createAppJsGlobals({
         },
       })
     },
+    embed: embedImageForRuntime,
     resolve: resolveNotebookReference,
     show: showNotebookReference,
     shareUrl: async (reference?: unknown) => {
@@ -1168,6 +1214,7 @@ export function createAppJsGlobals({
   return {
     runme: runmeApi,
     notebooks: notebooksHelpers,
+    embed: embedImageForRuntime,
     documents: documentsHelpers,
     notebookDiff: notebookDiffApi,
     codex: codexApi,
@@ -1772,6 +1819,7 @@ export function createAppJsGlobals({
         '  await notebooks.createLocal("hello")',
         '  const doc = await documents.get("local://file/...")',
         '  await notebooks.appendCell({ kind: "code", value: "print(1)", languageId: "python" })',
+        '  await embed("/tmp/screenshot.png", { alt: "Screenshot" })',
         '  const diff = await notebookDiff.diffDriveRevision({ revisionId })',
         '  await drive.authorize()',
         '  runmeRunners.ensure("openai-local", "ws://localhost:9988/ws", { setDefault: true })',

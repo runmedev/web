@@ -116,6 +116,13 @@ vi.mock("./runtime/sandboxJsKernel", () => ({
           this.hooks.onStdout?.(`${doc?.summary?.name ?? ""}\n`);
           this.hooks.onStdout?.(`${doc?.notebook?.cells?.length ?? 0}\n`);
         }
+        if (source.includes("notebooks.embed")) {
+          const result = (await this.bridge.call("notebooks.embed", [
+            "data:image/png;base64,AQID",
+            { name: "sandbox.png" },
+          ])) as { cell?: { languageId?: string } };
+          this.hooks.onStdout?.(`${result.cell?.languageId ?? ""}\n`);
+        }
         if (source.includes("app.getSessionID")) {
           const sessionId = await this.bridge.call("app.getSessionID", []);
           this.hooks.onStdout?.(`${String(sessionId)}\n`);
@@ -365,6 +372,7 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
   appState.setDriveNotebookStore(null);
   appState.setLocalNotebooks(null);
   appState.setOpenNotebookHandler(null);
@@ -931,6 +939,118 @@ describe("NotebookData.runCodeCell", () => {
       .join("");
     expect(stdoutText).toContain("sandbox-notebooks-get.runme.md");
     expect(stdoutText).toContain("1");
+  });
+
+  it("embeds images from sandbox appkernel javascript cells", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(new Uint8Array([1, 2, 3]), {
+          headers: {
+            "Content-Type": "image/png",
+            "Content-Length": "3",
+          },
+        });
+      }),
+    );
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-notebooks-embed-sandbox",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_SANDBOX_RUNNER_NAME,
+      },
+      value: [
+        'const result = await notebooks.embed("data:image/png;base64,AQID", { name: "sandbox.png" });',
+        "console.log(result.cell.languageId);",
+      ].join("\n"),
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "sandbox-notebooks-embed.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => {
+      const snap = model.getCellSnapshot(cell.refId);
+      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+    });
+
+    const updated = model.getCellSnapshot(cell.refId);
+    const stdoutText = (updated?.outputs ?? [])
+      .flatMap((o) => o.items)
+      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+      .map((i) => new TextDecoder().decode(i.data))
+      .join("");
+    const imageCell = model.getNotebook().cells.find(
+      (candidate) =>
+        candidate.metadata?.["runme.dev/embeddedImage"] === "true",
+    );
+    expect(stdoutText).toContain("html");
+    expect(imageCell?.languageId).toBe("html");
+    expect(imageCell?.value).toContain("data:image/png;base64,AQID");
+  });
+
+  it("aborts pending sandbox appkernel image embeds when execution is cancelled", async () => {
+    let fetchSignal: AbortSignal | null | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            fetchSignal = init?.signal;
+            fetchSignal?.addEventListener(
+              "abort",
+              () => reject(fetchSignal?.reason),
+              { once: true },
+            );
+          }),
+      ),
+    );
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-appkernel-notebooks-embed-cancelled",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "javascript",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.RunnerName]: APPKERNEL_SANDBOX_RUNNER_NAME,
+      },
+      value:
+        'await notebooks.embed("https://example.com/slow.png", { name: "slow.png" });',
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "nb://test",
+      name: "sandbox-notebooks-embed-cancelled.runme.md",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    await waitForCondition(() => fetchSignal !== undefined);
+    await model.cancelActiveExecutions("Cancelled for test.\n");
+    await Promise.resolve();
+
+    expect(fetchSignal?.aborted).toBe(true);
+    expect(
+      model
+        .getNotebook()
+        .cells.some(
+          (candidate) =>
+            candidate.metadata?.["runme.dev/embeddedImage"] === "true",
+        ),
+    ).toBe(false);
+    expect(
+      model.getCellSnapshot(cell.refId)?.metadata?.[
+        RunmeMetadataKey.ExitCode
+      ],
+    ).toBe("130");
   });
 
   it("exposes the fresh Runme session id inside sandbox appkernel javascript cells", async () => {
