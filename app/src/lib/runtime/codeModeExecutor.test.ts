@@ -9,6 +9,7 @@ import {
   createCodeModeExecutor,
   getCodeModeErrorOutput,
 } from './codeModeExecutor'
+import { SandboxJSKernel } from './sandboxJsKernel'
 
 const createNotebook = () => {
   const notebook = create(parser_pb.NotebookSchema, {
@@ -124,6 +125,62 @@ describe('codeModeExecutor', () => {
 
     expect(result.output).toContain(await getClaimedSessionId())
     expect(result.output).not.toContain('code-mode-session')
+  })
+
+  it('preserves Blob sources for top-level sandbox embed calls', async () => {
+    const notebook = create(parser_pb.NotebookSchema, { cells: [] })
+    const notebookData = {
+      getUri: () => 'local://images.runme.md',
+      getName: () => 'images.runme.md',
+      getNotebook: () => notebook,
+      getCell: () => null,
+      appendCell: (
+        kind = parser_pb.CellKind.CODE,
+        languageId?: string | null
+      ) => {
+        const cell = create(parser_pb.CellSchema, {
+          refId: `cell-${notebook.cells.length + 1}`,
+          kind,
+          languageId: languageId ?? 'bash',
+          metadata: {},
+        })
+        notebook.cells.push(cell)
+        return cell
+      },
+      updateCell: (cell: parser_pb.Cell) => {
+        const index = notebook.cells.findIndex(
+          (candidate) => candidate.refId === cell.refId
+        )
+        notebook.cells[index] = create(parser_pb.CellSchema, cell)
+      },
+    }
+    const source = new Blob([new Uint8Array([1, 2, 3])], {
+      type: 'image/png',
+    })
+    vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(
+      async function () {
+        const bridge = (
+          this as unknown as {
+            bridge: {
+              call: (method: string, args: unknown[]) => Promise<unknown>
+            }
+          }
+        ).bridge
+        await bridge.call('embed', [source, { name: 'sandbox.png' }])
+      }
+    )
+    const executor = createCodeModeExecutor({
+      mode: 'sandbox',
+      resolveNotebook: () => notebookData,
+      listNotebooks: () => [notebookData],
+    })
+
+    await executor.execute({
+      source: 'webmcp',
+      code: 'await embed(source)',
+    })
+
+    expect(notebook.cells[0]?.value).toContain('data:image/png;base64,AQID')
   })
 
   it('returns partial output when execution times out', async () => {

@@ -203,6 +203,38 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     )
   })
 
+  it('resolves object image targets to the requested notebook URI', async () => {
+    const current = new FakeNotebookData('local://file/current', 'Current.json')
+    const requested = new FakeNotebookData(
+      'local://file/requested',
+      'Requested.json'
+    )
+    const resolveNotebook = vi.fn((target?: unknown) =>
+      target === requested.getUri() ? requested : current
+    )
+    const globals = createAppJsGlobals({
+      runme: createRunme(current),
+      resolveNotebook,
+    })
+
+    await globals.notebooks.embed(
+      new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }),
+      {
+        target: {
+          handle: {
+            uri: requested.getUri(),
+            revision: 'requested-revision',
+          },
+        },
+        name: 'requested.png',
+      }
+    )
+
+    expect(resolveNotebook).toHaveBeenCalledWith(requested.getUri())
+    expect(current.getNotebook().cells).toHaveLength(0)
+    expect(requested.getNotebook().cells).toHaveLength(1)
+  })
+
   it('opens inline workspace rename from the explorer runtime API', () => {
     const startRename = vi.fn()
     appState.setWorkspaceRenameHandler(startRename)

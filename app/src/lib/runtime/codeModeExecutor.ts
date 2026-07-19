@@ -405,7 +405,7 @@ async function handleSandboxAppKernelBridgeCall({
       return getClaimedSessionId()
     case 'embed':
       return globals.embed(
-        String(args[0] ?? ''),
+        args[0] as Parameters<typeof globals.embed>[0],
         (args[1] as
           | { target?: unknown; alt?: string; name?: string }
           | undefined) ?? undefined

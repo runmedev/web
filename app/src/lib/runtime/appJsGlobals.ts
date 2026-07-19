@@ -76,8 +76,10 @@ import { getJupyterManager } from './jupyterManager'
 import { responsesDirectConfigManager } from './responsesDirectConfigManager'
 import {
   type NotebookDataLike,
+  type NotebookTarget,
   type RunmeConsoleApi,
   createNotebooksApi,
+  resolveNotebookTargetUri,
 } from './runmeConsole'
 import { getRunnersManager } from './runnersManager'
 
@@ -1038,9 +1040,16 @@ export function createAppJsGlobals({
       name?: string
     }
   ) => {
-    const notebook = (resolveNotebook ?? (() => runme.getCurrentNotebook()))(
-      options?.target
-    )
+    const target =
+      options?.target === undefined
+        ? undefined
+        : (resolveNotebookTargetUri(options.target as NotebookTarget) ??
+          undefined)
+    const notebook = resolveNotebook
+      ? resolveNotebook(target)
+      : target === undefined
+        ? runme.getCurrentNotebook()
+        : null
     if (!notebook) {
       throw new Error('No target notebook is open for image embedding.')
     }
