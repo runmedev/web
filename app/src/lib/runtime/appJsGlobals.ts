@@ -354,6 +354,7 @@ export function createAppJsGlobals({
   ensureAccessToken,
   opfsApi,
   networkApi,
+  signal,
 }: {
   runme: RunmeConsoleApi
   sendOutput?: SendOutput
@@ -367,6 +368,7 @@ export function createAppJsGlobals({
   ensureAccessToken?: EnsureAccessToken
   opfsApi?: AppKernelOpfsApi
   networkApi?: AppKernelNetworkApi
+  signal?: AbortSignal
 }) {
   const getWorkspaceItems = () =>
     workspace?.getItems?.() ?? appState.getWorkspaceItems()
@@ -1056,6 +1058,7 @@ export function createAppJsGlobals({
     const result = await embedImageInNotebook(notebook, source, {
       alt: options?.alt,
       name: options?.name,
+      signal,
     })
     emitLine(
       sendOutput,

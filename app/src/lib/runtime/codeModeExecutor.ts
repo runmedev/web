@@ -188,6 +188,7 @@ export function createCodeModeExecutor(options: {
         truncated = true
       }
 
+      const abortController = new AbortController()
       const globals = createAppJsGlobals({
         runme: runmeApi,
         sendOutput: (data) => {
@@ -198,12 +199,12 @@ export function createCodeModeExecutor(options: {
         listNotebooks,
         opfsApi,
         networkApi,
+        signal: abortController.signal,
       })
       const notebooksApiBridgeServer = createNotebooksApiBridgeServer({
         notebooksApi: globals.notebooks as typeof hostNotebooksApi,
       })
 
-      const abortController = new AbortController()
       let finalExitCode = 0
       const kernelRun =
         mode === 'sandbox'

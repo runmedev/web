@@ -27,6 +27,7 @@ const createNotebook = () => {
 describe('codeModeExecutor', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
     __resetTabIdForTests()
     window.history.replaceState(null, '', '/')
   })
@@ -202,6 +203,87 @@ describe('codeModeExecutor', () => {
       expect(String(error)).toMatch(/timed out/)
       expect(getCodeModeErrorOutput(error)).toContain('started')
     }
+  })
+
+  it('aborts pending image embeds before they can append after timeout', async () => {
+    const notebook = create(parser_pb.NotebookSchema, { cells: [] })
+    const notebookData = {
+      getUri: () => 'local://images.runme.md',
+      getName: () => 'images.runme.md',
+      getNotebook: () => notebook,
+      getCell: () => null,
+      appendCell: (
+        kind = parser_pb.CellKind.CODE,
+        languageId?: string | null
+      ) => {
+        const cell = create(parser_pb.CellSchema, {
+          refId: `cell-${notebook.cells.length + 1}`,
+          kind,
+          languageId: languageId ?? 'bash',
+          metadata: {},
+        })
+        notebook.cells.push(cell)
+        return cell
+      },
+      updateCell: (cell: parser_pb.Cell) => {
+        const index = notebook.cells.findIndex(
+          (candidate) => candidate.refId === cell.refId
+        )
+        notebook.cells[index] = create(parser_pb.CellSchema, cell)
+      },
+      removeCell: (refId: string) => {
+        notebook.cells = notebook.cells.filter(
+          (candidate) => candidate.refId !== refId
+        )
+      },
+    }
+    let fetchSignal: AbortSignal | undefined
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            fetchSignal = init?.signal ?? undefined
+            fetchSignal?.addEventListener(
+              'abort',
+              () => reject(fetchSignal?.reason),
+              { once: true }
+            )
+          })
+      )
+    )
+    vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(
+      async function () {
+        const bridge = (
+          this as unknown as {
+            bridge: {
+              call: (method: string, args: unknown[]) => Promise<unknown>
+            }
+          }
+        ).bridge
+        await bridge.call('embed', [
+          'https://example.com/slow.png',
+          { name: 'slow.png' },
+        ])
+      }
+    )
+    const executor = createCodeModeExecutor({
+      mode: 'sandbox',
+      timeoutMs: 20,
+      resolveNotebook: () => notebookData,
+      listNotebooks: () => [notebookData],
+    })
+
+    await expect(
+      executor.execute({
+        source: 'webmcp',
+        code: "await embed('https://example.com/slow.png')",
+      })
+    ).rejects.toThrow('timed out')
+    await Promise.resolve()
+
+    expect(fetchSignal?.aborted).toBe(true)
+    expect(notebook.cells).toHaveLength(0)
   })
 
   it('exposes opfs and net helpers in browser mode', async () => {

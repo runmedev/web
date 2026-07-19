@@ -26,6 +26,7 @@ export type EmbeddedImageSource = string | Blob
 export type EmbedImageOptions = {
   alt?: string
   name?: string
+  signal?: AbortSignal
 }
 
 export type EmbeddedImage = {
@@ -96,6 +97,16 @@ function assertImageSize(size: number): void {
   }
 }
 
+function throwIfImageEmbeddingAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return
+  }
+  throw (
+    signal.reason ??
+    new DOMException('Image embedding was aborted.', 'AbortError')
+  )
+}
+
 function assertImageMimeType(
   mimeType: string | null | undefined,
   name: string
@@ -109,7 +120,12 @@ function assertImageMimeType(
   return normalized
 }
 
-async function imageFromBlob(blob: Blob, name: string): Promise<EmbeddedImage> {
+async function imageFromBlob(
+  blob: Blob,
+  name: string,
+  signal?: AbortSignal
+): Promise<EmbeddedImage> {
+  throwIfImageEmbeddingAborted(signal)
   assertImageSize(blob.size)
   const mimeType = assertImageMimeType(blob.type, name)
   const buffer =
@@ -122,6 +138,7 @@ async function imageFromBlob(blob: Blob, name: string): Promise<EmbeddedImage> {
           reader.onload = () => resolve(reader.result as ArrayBuffer)
           reader.readAsArrayBuffer(blob)
         })
+  throwIfImageEmbeddingAborted(signal)
   const bytes = new Uint8Array(buffer)
   assertImageSize(bytes.byteLength)
   return {
@@ -131,19 +148,29 @@ async function imageFromBlob(blob: Blob, name: string): Promise<EmbeddedImage> {
   }
 }
 
-async function readResponseBytes(response: Response): Promise<Uint8Array> {
+async function readResponseBytes(
+  response: Response,
+  signal?: AbortSignal
+): Promise<Uint8Array> {
+  throwIfImageEmbeddingAborted(signal)
   const reader = response.body?.getReader()
   if (!reader) {
     const bytes = new Uint8Array(await response.arrayBuffer())
+    throwIfImageEmbeddingAborted(signal)
     assertImageSize(bytes.byteLength)
     return bytes
   }
 
   const chunks: Uint8Array[] = []
   let totalBytes = 0
+  const cancelReader = () => {
+    void reader.cancel(signal?.reason).catch(() => undefined)
+  }
+  signal?.addEventListener('abort', cancelReader, { once: true })
   try {
     while (true) {
       const { done, value } = await reader.read()
+      throwIfImageEmbeddingAborted(signal)
       if (done) {
         break
       }
@@ -155,6 +182,7 @@ async function readResponseBytes(response: Response): Promise<Uint8Array> {
       chunks.push(value)
     }
   } finally {
+    signal?.removeEventListener('abort', cancelReader)
     reader.releaseLock()
   }
 
@@ -167,7 +195,11 @@ async function readResponseBytes(response: Response): Promise<Uint8Array> {
   return bytes
 }
 
-async function readResponseErrorDetail(response: Response): Promise<string> {
+async function readResponseErrorDetail(
+  response: Response,
+  signal?: AbortSignal
+): Promise<string> {
+  throwIfImageEmbeddingAborted(signal)
   const reader = response.body?.getReader()
   if (!reader) {
     return ''
@@ -176,9 +208,14 @@ async function readResponseErrorDetail(response: Response): Promise<string> {
   const decoder = new TextDecoder()
   let detail = ''
   let totalBytes = 0
+  const cancelReader = () => {
+    void reader.cancel(signal?.reason).catch(() => undefined)
+  }
+  signal?.addEventListener('abort', cancelReader, { once: true })
   try {
     while (totalBytes < MAX_ERROR_DETAIL_BYTES) {
       const { done, value } = await reader.read()
+      throwIfImageEmbeddingAborted(signal)
       if (done) {
         detail += decoder.decode()
         break
@@ -200,6 +237,7 @@ async function readResponseErrorDetail(response: Response): Promise<string> {
       }
     }
   } finally {
+    signal?.removeEventListener('abort', cancelReader)
     reader.releaseLock()
   }
   return detail.trim()
@@ -207,10 +245,17 @@ async function readResponseErrorDetail(response: Response): Promise<string> {
 
 async function imageFromResponse(
   response: Response,
-  name: string
+  name: string,
+  signal?: AbortSignal
 ): Promise<EmbeddedImage> {
+  throwIfImageEmbeddingAborted(signal)
   if (!response.ok) {
-    const detail = await readResponseErrorDetail(response).catch(() => '')
+    const detail = await readResponseErrorDetail(response, signal).catch(
+      (error) => {
+        throwIfImageEmbeddingAborted(signal)
+        return String(error)
+      }
+    )
     throw new Error(
       `Failed to read image (${response.status}): ${detail || response.statusText}`
     )
@@ -223,7 +268,7 @@ async function imageFromResponse(
     response.headers.get('content-type'),
     name
   )
-  const bytes = await readResponseBytes(response)
+  const bytes = await readResponseBytes(response, signal)
   return {
     bytes,
     mimeType,
@@ -231,35 +276,48 @@ async function imageFromResponse(
   }
 }
 
-async function fetchImage(source: string): Promise<EmbeddedImage> {
+async function fetchImage(
+  source: string,
+  signal?: AbortSignal
+): Promise<EmbeddedImage> {
   const name = nameFromSource(source)
   let response: Response
   try {
-    response = await fetch(source)
+    response = await fetch(source, { signal })
   } catch (error) {
+    throwIfImageEmbeddingAborted(signal)
     throw new Error(
       `Failed to fetch image ${source}. The URL may not permit browser requests: ${String(error)}`
     )
   }
-  return imageFromResponse(response, name)
+  return imageFromResponse(response, name, signal)
 }
 
-async function readLocalImagePath(source: string): Promise<EmbeddedImage> {
+async function readLocalImagePath(
+  source: string,
+  signal?: AbortSignal
+): Promise<EmbeddedImage> {
   const localPath = localPathFromSource(source)
   const url = new URL(LOCAL_IMAGE_ENDPOINT, window.location.origin)
   url.searchParams.set('path', localPath)
-  return imageFromResponse(await fetch(url.toString()), baseName(localPath))
+  return imageFromResponse(
+    await fetch(url.toString(), { signal }),
+    baseName(localPath),
+    signal
+  )
 }
 
 export async function readEmbeddedImageSource(
-  source: EmbeddedImageSource
+  source: EmbeddedImageSource,
+  options: Pick<EmbedImageOptions, 'signal'> = {}
 ): Promise<EmbeddedImage> {
+  throwIfImageEmbeddingAborted(options.signal)
   if (source instanceof Blob) {
     const fileName =
       'name' in source && typeof source.name === 'string'
         ? source.name
         : 'embedded-image'
-    return imageFromBlob(source, fileName)
+    return imageFromBlob(source, fileName, options.signal)
   }
 
   const trimmed = source.trim()
@@ -270,7 +328,7 @@ export async function readEmbeddedImageSource(
   }
 
   if (isAbsoluteLocalPath(trimmed)) {
-    return readLocalImagePath(trimmed)
+    return readLocalImagePath(trimmed, options.signal)
   }
 
   let parsed: URL
@@ -282,7 +340,7 @@ export async function readEmbeddedImageSource(
   if (!['http:', 'https:', 'data:', 'blob:'].includes(parsed.protocol)) {
     throw new Error(`Unsupported image URL protocol: ${parsed.protocol}`)
   }
-  return fetchImage(parsed.toString())
+  return fetchImage(parsed.toString(), options.signal)
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -325,7 +383,10 @@ export async function embedImageInNotebook(
     throw new Error('Notebook does not support appending image cells.')
   }
 
-  const image = await readEmbeddedImageSource(source)
+  const image = await readEmbeddedImageSource(source, {
+    signal: options.signal,
+  })
+  throwIfImageEmbeddingAborted(options.signal)
   const inserted = notebook.appendCell(parser_pb.CellKind.CODE, 'html')
   try {
     const updated = create(parser_pb.CellSchema, inserted)
@@ -336,6 +397,7 @@ export async function embedImageInNotebook(
       'runme.dev/embeddedImageMimeType': image.mimeType,
       'runme.dev/embeddedImageName': options.name?.trim() || image.name,
     }
+    throwIfImageEmbeddingAborted(options.signal)
     notebook.updateCell(updated)
     return {
       uri: notebook.getUri(),
