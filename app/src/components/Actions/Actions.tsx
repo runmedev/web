@@ -1919,18 +1919,18 @@ function NotebookTabContent({
 
   const handleImageDragOver = useCallback(
     (event: ReactDragEvent<HTMLDivElement>) => {
-      if (readOnly) {
-        return
-      }
-      const hasImageCandidate = Array.from(event.dataTransfer.items).some(
-        (item) =>
-          item.kind === 'file' &&
-          (!item.type || item.type.toLowerCase().startsWith('image/'))
+      const hasFile = Array.from(event.dataTransfer.items).some(
+        (item) => item.kind === 'file'
       )
-      if (!hasImageCandidate) {
+      if (!hasFile) {
         return
       }
       event.preventDefault()
+      if (readOnly) {
+        event.dataTransfer.dropEffect = 'none'
+        setImageDragActive(false)
+        return
+      }
       event.dataTransfer.dropEffect = 'copy'
       setImageDragActive(true)
     },

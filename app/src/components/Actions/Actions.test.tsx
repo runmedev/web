@@ -419,17 +419,17 @@ describe('Actions tabs', () => {
     expect(screen.queryByTestId('image-drop-target')).toBeNull()
   })
 
-  it('prevents browser navigation for unsupported file drops', () => {
+  it('prevents browser navigation for unsupported file drags and drops', () => {
     const uri = 'local://file/images.json'
     const notebookData = {
       getCell: vi.fn(),
       appendCell: vi.fn(),
     }
     const file = new File([new Uint8Array([1, 2, 3])], 'notes.txt', {
-      type: '',
+      type: 'text/plain',
     })
     const dataTransfer = {
-      items: [{ kind: 'file', type: '' }],
+      items: [{ kind: 'file', type: 'text/plain' }],
       files: [file],
       dropEffect: 'none',
     }
@@ -446,7 +446,10 @@ describe('Actions tabs', () => {
 
     render(<Actions />)
     const notebookContent = screen.getByTestId('notebook-content')
-    fireEvent.dragOver(notebookContent, { dataTransfer })
+    const dragOverEvent = createEvent.dragOver(notebookContent, { dataTransfer })
+    fireEvent(notebookContent, dragOverEvent)
+
+    expect(dragOverEvent.defaultPrevented).toBe(true)
     expect(screen.getByTestId('image-drop-target')).toBeTruthy()
 
     const dropEvent = createEvent.drop(notebookContent, { dataTransfer })
