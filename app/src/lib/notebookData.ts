@@ -1251,6 +1251,14 @@ export class NotebookData {
         return getClaimedSessionId()
       case 'app.getSessionID':
         return getClaimedSessionId()
+      case 'embed':
+      case 'notebooks.embed':
+        return appGlobals.embed(
+          args[0] as Parameters<typeof appGlobals.embed>[0],
+          (args[1] as
+            | { target?: unknown; alt?: string; name?: string }
+            | undefined) ?? undefined
+        )
       case 'documents.get':
         return appGlobals.documents.get(String(args[0] ?? ''))
       case 'documents.update':

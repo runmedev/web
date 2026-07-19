@@ -5,6 +5,7 @@ import { NotebookUpdateError } from './runmeConsole'
 import {
   CODE_MODE_SANDBOX_ALLOWED_METHODS,
   SandboxJSKernel,
+  buildSandboxSrcDoc,
 } from './sandboxJsKernel'
 
 type Scenario =
@@ -385,6 +386,18 @@ class TestableSandboxJSKernel extends SandboxJSKernel {
 }
 
 describe('SandboxJSKernel', () => {
+  it('passes the top-level embed helper into the dynamic runner', () => {
+    const srcDoc = buildSandboxSrcDoc({
+      enableOpfs: true,
+      enableNet: true,
+    })
+
+    expect(srcDoc).toMatch(/"net",\s+"embed",\s+"notebooks"/)
+    expect(srcDoc).toContain(
+      'runner(consoleProxy, runme, opfs, net, embed, notebooks'
+    )
+  })
+
   it('runs javascript and resolves runme host calls through the bridge', async () => {
     let stdout = ''
     let stderr = ''

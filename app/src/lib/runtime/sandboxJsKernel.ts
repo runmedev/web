@@ -123,7 +123,7 @@ export const CODE_MODE_SANDBOX_ALLOWED_METHODS = [
   ...LOW_LEVEL_SANDBOX_ALLOWED_METHODS,
 ]
 
-function buildSandboxSrcDoc(options: {
+export function buildSandboxSrcDoc(options: {
   enableOpfs: boolean
   enableNet: boolean
 }): string {
@@ -480,6 +480,7 @@ function buildSandboxSrcDoc(options: {
               "runme",
               "opfs",
               "net",
+              "embed",
               "notebooks",
               "documents",
               "notebookDiff",
@@ -491,7 +492,7 @@ function buildSandboxSrcDoc(options: {
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, opfs, net, notebooks, documents, notebookDiff, codex, app, explorer, credentials, drive, help);
+            await runner(consoleProxy, runme, opfs, net, embed, notebooks, documents, notebookDiff, codex, app, explorer, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });
