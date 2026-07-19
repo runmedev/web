@@ -425,6 +425,12 @@ describe('SidePanelContent ChatKit persistence', () => {
             refId: 'cell-one',
             value: '# Title\n\n### Details',
           },
+          {
+            kind: 2,
+            languageId: 'markdown',
+            refId: 'cell-two',
+            value: '## Second cell',
+          },
         ],
       },
     }
@@ -434,16 +440,20 @@ describe('SidePanelContent ChatKit persistence', () => {
     const notebookElement = document.createElement('div')
     notebookElement.dataset.documentId = currentDocUri
     notebookElement.appendChild(cellElement)
+    const secondCellElement = document.createElement('div')
+    secondCellElement.dataset.cellRefId = 'cell-two'
+    secondCellElement.scrollIntoView = vi.fn()
+    notebookElement.appendChild(secondCellElement)
     document.body.appendChild(notebookElement)
 
     render(<SidePanelContent />)
 
-    expect(screen.getByText('2 headings')).toBeTruthy()
+    expect(screen.getByText('3 headings')).toBeTruthy()
     expect(
       screen.getByRole('button', { name: 'Details' }).dataset.headingLevel
     ).toBe('3')
-    fireEvent.click(screen.getByRole('button', { name: 'Title' }))
-    expect(cellElement.scrollIntoView).toHaveBeenCalledWith({
+    fireEvent.click(screen.getByRole('button', { name: 'Second cell' }))
+    expect(secondCellElement.scrollIntoView).toHaveBeenCalledWith({
       behavior: 'smooth',
       block: 'center',
     })

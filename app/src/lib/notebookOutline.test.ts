@@ -45,13 +45,19 @@ describe('extractNotebookOutline', () => {
     ])
   })
 
-  it('ignores code cells and accepts markup cells without a language id', () => {
+  it('accepts Markdown-language code cells and markup cells without a language id', () => {
     const outline = extractNotebookOutline([
       {
         kind: parser_pb.CellKind.CODE,
         languageId: 'markdown',
-        refId: 'code-cell',
-        value: '# Not a markup cell',
+        refId: 'markdown-code-cell',
+        value: '# Markdown code cell',
+      },
+      {
+        kind: parser_pb.CellKind.CODE,
+        languageId: 'python',
+        refId: 'python-code-cell',
+        value: '# Python comment',
       },
       {
         kind: parser_pb.CellKind.MARKUP,
@@ -63,6 +69,12 @@ describe('extractNotebookOutline', () => {
     ])
 
     expect(outline).toEqual([
+      {
+        cellRefId: 'markdown-code-cell',
+        level: 1,
+        line: 1,
+        text: 'Markdown code cell',
+      },
       {
         cellRefId: 'legacy-markup-cell',
         level: 1,

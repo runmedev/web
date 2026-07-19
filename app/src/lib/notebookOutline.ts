@@ -1,4 +1,5 @@
 import { parser_pb } from '../contexts/CellContext'
+import { isMarkdownLanguageId } from './cellContent'
 
 export type NotebookOutlineEntry = {
   cellRefId: string
@@ -96,7 +97,10 @@ export function extractNotebookOutline(
   cells: readonly OutlineCell[]
 ): NotebookOutlineEntry[] {
   return cells.flatMap((cell) => {
-    if (cell.kind !== parser_pb.CellKind.MARKUP || !cell.refId) {
+    const isMarkdownCell =
+      cell.kind === parser_pb.CellKind.MARKUP ||
+      isMarkdownLanguageId(cell.languageId)
+    if (!isMarkdownCell || !cell.refId) {
       return []
     }
     return extractCellHeadings(cell)
