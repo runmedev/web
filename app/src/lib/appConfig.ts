@@ -868,13 +868,18 @@ export function setAppConfigFromYaml(
 
 export function isLocalConfigPreferredOnLoad(): boolean {
   if (typeof window === 'undefined' || !window.localStorage) {
+    return import.meta.env.DEV
+  }
+  const storedPreference = normalizeString(
+    window.localStorage.getItem(APP_CONFIG_PREFER_LOCAL_STORAGE_KEY)
+  )
+  if (storedPreference === 'true') {
+    return true
+  }
+  if (storedPreference === 'false') {
     return false
   }
-  return (
-    normalizeString(
-      window.localStorage.getItem(APP_CONFIG_PREFER_LOCAL_STORAGE_KEY)
-    ) === 'true'
-  )
+  return import.meta.env.DEV
 }
 
 export function setLocalConfigPreferredOnLoad(preferLocal: boolean): boolean {

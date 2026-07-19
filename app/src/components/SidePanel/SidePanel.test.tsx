@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
 import { useEffect } from 'react'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-type PanelKey = 'explorer' | 'open-documents' | 'chatkit' | null
+type PanelKey = 'explorer' | 'open-documents' | 'outline' | 'chatkit' | null
 
 let authData: {} | null = null
 let isDriveSyncing = false
@@ -19,6 +25,17 @@ let openDocumentsState: {
 let runnersState: { name: string; endpoint: string; reconnect: boolean }[] = []
 let chatKitMountCount = 0
 let chatKitUnmountCount = 0
+let notebookSnapshotState: {
+  loaded: boolean
+  notebook: {
+    cells: {
+      kind: number
+      languageId: string
+      refId: string
+      value: string
+    }[]
+  }
+} | null = null
 const ensureAccessTokenMock = vi.fn(async () => 'token')
 const startGoogleDriveOAuthMock = vi.fn(async () => ({
   status: 'started',
@@ -78,6 +95,18 @@ vi.mock('../../contexts/GoogleAuthContext', () => ({
   }),
 }))
 
+vi.mock('../../contexts/NotebookContext', () => ({
+  useNotebookContext: () => ({
+    useNotebookSnapshot: () => notebookSnapshotState,
+  }),
+}))
+
+vi.mock('../../contexts/NotebookStoreContext', () => ({
+  useNotebookStore: () => ({
+    store: null,
+  }),
+}))
+
 vi.mock('../../contexts/RunnersContext', () => ({
   useRunners: () => ({
     defaultRunnerName: runnersState[0]?.name ?? null,
@@ -114,6 +143,7 @@ describe('SidePanelToolbar drive status button', () => {
     runnersState = []
     chatKitMountCount = 0
     chatKitUnmountCount = 0
+    notebookSnapshotState = null
     ensureAccessTokenMock.mockClear()
     startGoogleDriveOAuthMock.mockClear()
     loginWithRedirectMock.mockClear()
@@ -214,12 +244,20 @@ describe('SidePanelToolbar drive status button', () => {
     expect(togglePanelMock).toHaveBeenCalledWith('open-documents')
   })
 
-  it('exposes an App Console button in the toolbar', () => {
+  it('exposes an Outline button in the toolbar', () => {
     render(<SidePanelToolbar />)
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Open App Console' })
+      screen.getByRole('button', { name: 'Toggle Outline panel' })
     )
+
+    expect(togglePanelMock).toHaveBeenCalledWith('outline')
+  })
+
+  it('exposes an App Console button in the toolbar', () => {
+    render(<SidePanelToolbar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open App Console' }))
 
     expect(showDocumentMock).toHaveBeenCalledWith('app://console', {
       title: 'App Console',
@@ -313,6 +351,7 @@ describe('SidePanelContent ChatKit persistence', () => {
     runnersState = []
     chatKitMountCount = 0
     chatKitUnmountCount = 0
+    notebookSnapshotState = null
     setCurrentDocMock.mockClear()
     showDocumentMock.mockClear()
     closeWorkspaceDocumentMock.mockClear()
@@ -383,6 +422,97 @@ describe('SidePanelContent ChatKit persistence', () => {
     expect(closeWorkspaceDocumentMock).toHaveBeenCalledWith(
       'local://file/alpha.json'
     )
+  })
+
+  it('focuses outline cells and copies their deep links', async () => {
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    activePanelState = 'outline'
+    currentDocUri = 'local://file/outline.json'
+    notebookSnapshotState = {
+      loaded: true,
+      notebook: {
+        cells: [
+          {
+            kind: 1,
+            languageId: 'markdown',
+            refId: 'cell-one',
+            value: '# Title\n\n### Details',
+          },
+          {
+            kind: 2,
+            languageId: 'markdown',
+            refId: 'cell-two',
+            value: '## Second cell',
+          },
+        ],
+      },
+    }
+    const cellElement = document.createElement('div')
+    cellElement.dataset.cellRefId = 'cell-one'
+    cellElement.scrollIntoView = vi.fn()
+    const notebookElement = document.createElement('div')
+    notebookElement.dataset.documentId = currentDocUri
+    notebookElement.appendChild(cellElement)
+    const secondCellElement = document.createElement('div')
+    secondCellElement.dataset.cellRefId = 'cell-two'
+    secondCellElement.scrollIntoView = vi.fn()
+    const secondCellFocusTarget = document.createElement('button')
+    secondCellFocusTarget.dataset.cellFocusRole = 'rendered'
+    secondCellElement.appendChild(secondCellFocusTarget)
+    notebookElement.appendChild(secondCellElement)
+    document.body.appendChild(notebookElement)
+
+    render(<SidePanelContent />)
+
+    expect(screen.getByText('3 headings')).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: 'Details' }).dataset.headingLevel
+    ).toBe('3')
+    fireEvent.click(screen.getByRole('button', { name: 'Second cell' }))
+    expect(secondCellElement.scrollIntoView).toHaveBeenCalledWith({
+      behavior: 'smooth',
+      block: 'center',
+    })
+    expect(document.activeElement).toBe(secondCellFocusTarget)
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Copy link to Second cell' })
+    )
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        'http://localhost:3000/?doc=local%3A%2F%2Ffile%2Foutline.json#cell=cell-two'
+      )
+    })
+
+    notebookElement.remove()
+  })
+
+  it('shows an outline empty state for notebooks without headings', () => {
+    activePanelState = 'outline'
+    currentDocUri = 'local://file/outline.json'
+    notebookSnapshotState = {
+      loaded: true,
+      notebook: {
+        cells: [
+          {
+            kind: 1,
+            languageId: 'markdown',
+            refId: 'cell-one',
+            value: 'No headings yet.',
+          },
+        ],
+      },
+    }
+
+    render(<SidePanelContent />)
+
+    expect(
+      screen.getByText('Add Markdown headings to build an outline.')
+    ).toBeTruthy()
   })
 
   it('shows blocked notebook status from open entry metadata', () => {

@@ -7,7 +7,6 @@ export const APP_ROUTE_PATHS = {
   oidcCallback: "/oidc/callback",
   googleDriveOauthCallback: "/gdrive/callback",
   runs: "/runs",
-  run: (runName: string) => `/runs/${runName}`,
   editRun: (runName: string) => `/runs/${runName}/edit`,
 } as const;
 

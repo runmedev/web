@@ -1,12 +1,9 @@
-import type { HarnessProfile } from "./harnessManager";
 import type { CodeModeExecutor } from "./codeModeExecutor";
-import type { HarnessChatKitAdapter, HarnessRuntime } from "./harnessChatKitAdapter";
-import type { ConversationController } from "./conversationController";
-import {
-  CodexProxyHarnessRuntime,
-  CodexWasmHarnessRuntime,
-} from "./codexHarnessRuntimes";
+import { CodexProxyHarnessRuntime } from "./codexHarnessRuntimes";
 import type { CodexToolBridgeHandler } from "./codexToolBridge";
+import type { ConversationController } from "./conversationController";
+import type { HarnessChatKitAdapter, HarnessRuntime } from "./harnessChatKitAdapter";
+import type { HarnessProfile } from "./harnessManager";
 import {
   createResponsesDirectChatKitAdapter,
   createResponsesDirectConversationController,
@@ -18,7 +15,6 @@ export type CreateHarnessRuntimeOptions = {
   resolveAuthorization?: () => Promise<string>;
   codeModeExecutor?: CodeModeExecutor;
   codexBridgeHandler?: CodexToolBridgeHandler;
-  wasmApiKey?: string;
   responsesApiBaseUrl?: string;
 };
 
@@ -64,7 +60,6 @@ class HarnessRuntimeManager {
       profile: options.profile,
       projectId: options.projectId ?? null,
       responsesApiBaseUrl: options.responsesApiBaseUrl ?? null,
-      wasmApiKey: options.wasmApiKey ?? null,
     });
   }
 
@@ -83,10 +78,7 @@ class HarnessRuntimeManager {
     const signature = this.buildSignature(options);
     const existing = this.runtimes.get(options.profile.name);
     if (existing) {
-      if (
-        existing.signature === signature &&
-        this.sameRuntimeInputs(existing.options, options)
-      ) {
+      if (existing.signature === signature && this.sameRuntimeInputs(existing.options, options)) {
         return existing.runtime;
       }
       existing.runtime.stop();
@@ -96,9 +88,7 @@ class HarnessRuntimeManager {
     const runtime =
       options.profile.adapter === "responses-direct"
         ? new ResponsesDirectHarnessRuntime(options)
-        : options.profile.adapter === "codex-wasm"
-          ? new CodexWasmHarnessRuntime(options)
-          : new CodexProxyHarnessRuntime(options);
+        : new CodexProxyHarnessRuntime(options);
     this.runtimes.set(options.profile.name, {
       signature,
       runtime,
@@ -116,7 +106,6 @@ class HarnessRuntimeManager {
       profile,
       projectId: existing.options.projectId ?? null,
       responsesApiBaseUrl: existing.options.responsesApiBaseUrl ?? null,
-      wasmApiKey: existing.options.wasmApiKey ?? null,
     });
     if (existing.signature === signature) {
       return;

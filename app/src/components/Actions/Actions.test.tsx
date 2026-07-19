@@ -14,6 +14,7 @@ import {
   APPKERNEL_RUNNER_NAME,
   APPKERNEL_SANDBOX_RUNNER_NAME,
 } from '../../lib/runtime/appKernel'
+import { driveLinkCoordinator } from '../../lib/driveLinkCoordinator'
 
 import { parser_pb, RunmeMetadataKey } from '../../runme/client'
 import type { CellData } from '../../lib/notebookData'
@@ -49,6 +50,7 @@ const contextMocks = vi.hoisted(() => ({
   showDocument: vi.fn(),
   closeWorkspaceDocument: vi.fn(),
   getNotebookData: vi.fn(),
+  openNotebook: vi.fn(),
   requestWriteAccess: vi.fn(async () => undefined),
   refreshReadOnlyNotebook: vi.fn(async () => undefined),
   notebookSnapshots: new Map<
@@ -126,6 +128,7 @@ vi.mock('../../contexts/SettingsContext', () => ({
 vi.mock('../../contexts/NotebookContext', () => ({
   useNotebookContext: () => ({
     getNotebookData: contextMocks.getNotebookData,
+    openNotebook: contextMocks.openNotebook,
     requestWriteAccess: contextMocks.requestWriteAccess,
     refreshReadOnlyNotebook: contextMocks.refreshReadOnlyNotebook,
     useNotebookSnapshot: (uri: string) =>
@@ -321,6 +324,11 @@ beforeEach(() => {
   contextMocks.closeWorkspaceDocument.mockReset()
   contextMocks.getNotebookData.mockReset()
   contextMocks.getNotebookData.mockReturnValue(null)
+  contextMocks.openNotebook.mockReset()
+  contextMocks.openNotebook.mockImplementation(async (uri: string) => ({
+    localUri: uri,
+    entry: { name: 'Notes.json' },
+  }))
   contextMocks.requestWriteAccess.mockReset()
   contextMocks.requestWriteAccess.mockResolvedValue(undefined)
   contextMocks.refreshReadOnlyNotebook.mockReset()
@@ -1413,6 +1421,73 @@ describe('Actions tabs', () => {
 })
 
 describe('Action component', () => {
+  it('opens Runme notebook links in the current workspace', async () => {
+    const targetUri = 'local://file/notes'
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'markdown-notebook-link',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      value: `[Notes](/?doc=${encodeURIComponent(targetUri)}#cell=markup%2Fintro)`,
+      metadata: {},
+    })
+
+    render(
+      <Action
+        cellData={new StubCellData(cell) as unknown as CellData}
+        isFirst={false}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('link', { name: 'Notes' }))
+
+    await waitFor(() => {
+      expect(contextMocks.openNotebook).toHaveBeenCalledWith(targetUri)
+    })
+    expect(contextMocks.showDocument).toHaveBeenCalledWith(targetUri, {
+      title: 'Notes.json',
+    })
+    expect(contextMocks.setCurrentDoc).toHaveBeenCalledWith(targetUri)
+    expect(window.location.hash).toBe('#cell=markup%2Fintro')
+  })
+
+  it('routes Drive-backed Runme links through shared-link coordination', async () => {
+    const targetUri = 'https://drive.google.com/file/d/file123/view'
+    const enqueue = vi
+      .spyOn(driveLinkCoordinator, 'enqueue')
+      .mockResolvedValue(undefined)
+    const getSnapshot = vi
+      .spyOn(driveLinkCoordinator, 'getSnapshot')
+      .mockReturnValue({
+        intents: [],
+        authBlocked: false,
+        lastErrorMessage: null,
+      })
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'markdown-drive-link',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      value: `[Notes](/?doc=${encodeURIComponent(targetUri)})`,
+      metadata: {},
+    })
+
+    render(
+      <Action
+        cellData={new StubCellData(cell) as unknown as CellData}
+        isFirst={false}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('link', { name: 'Notes' }))
+
+    await waitFor(() => {
+      expect(enqueue).toHaveBeenCalledWith(targetUri, 'manual')
+    })
+    expect(contextMocks.openNotebook).not.toHaveBeenCalled()
+
+    enqueue.mockRestore()
+    getSnapshot.mockRestore()
+  })
+
   it('copies a deep link for the cell from its context menu', async () => {
     const writeText = vi.fn(async () => undefined)
     Object.defineProperty(window.navigator, 'clipboard', {

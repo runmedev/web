@@ -5,6 +5,7 @@ import {
   ChatBubbleLeftRightIcon,
   DocumentTextIcon,
   InformationCircleIcon,
+  Bars3BottomLeftIcon,
   QueueListIcon,
   ServerStackIcon,
   UserCircleIcon,
@@ -21,6 +22,7 @@ import {
 } from 'react'
 
 import ChatKitPanel from '../ChatKit/ChatKitPanel'
+import NotebookOutlinePanel from './NotebookOutlinePanel'
 import WorkspaceExplorer from '../Workspace/WorkspaceExplorer'
 import {
   getBrowserAdapter,
@@ -375,6 +377,18 @@ export function SidePanelToolbar() {
         <button
           type="button"
           className={`${sideButtonBase} ${
+            activePanel === 'outline' ? sideButtonActive : sideButtonInactive
+          }`}
+          aria-pressed={activePanel === 'outline'}
+          aria-label="Toggle Outline panel"
+          onClick={() => togglePanel('outline')}
+        >
+          <Bars3BottomLeftIcon className="h-5 w-5" />
+          <span className={tooltipBase}>Outline</span>
+        </button>
+        <button
+          type="button"
+          className={`${sideButtonBase} ${
             activePanel === 'chatkit' ? sideButtonActive : sideButtonInactive
           }`}
           aria-pressed={activePanel === 'chatkit'}
@@ -553,6 +567,11 @@ export function SidePanelContent() {
       >
         <OpenDocumentsPanel />
       </div>
+      {activePanel === 'outline' ? (
+        <div className="flex h-full min-h-0 w-full">
+          <NotebookOutlinePanel />
+        </div>
+      ) : null}
       {shouldRenderChatKit ? (
         <div
           className={`h-full min-h-0 w-full overflow-hidden ${activePanel === 'chatkit' ? 'flex' : 'hidden'}`}

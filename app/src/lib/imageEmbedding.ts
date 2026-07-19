@@ -19,8 +19,6 @@ const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
   '.webp': 'image/webp',
 }
 
-const IMAGE_FILE_EXTENSIONS = Object.keys(IMAGE_MIME_BY_EXTENSION)
-
 export type EmbeddedImageSource = string | Blob
 
 export type EmbedImageOptions = {
@@ -430,31 +428,6 @@ function pickImageWithFileInput(): Promise<File | null> {
 }
 
 export async function pickImageFromLocalFilesystem(): Promise<File | null> {
-  if (
-    typeof window !== 'undefined' &&
-    typeof window.showOpenFilePicker === 'function'
-  ) {
-    try {
-      const [handle] = await window.showOpenFilePicker({
-        multiple: false,
-        excludeAcceptAllOption: false,
-        types: [
-          {
-            description: 'Image files',
-            accept: {
-              'image/*': IMAGE_FILE_EXTENSIONS,
-            },
-          },
-        ],
-      })
-      return handle ? handle.getFile() : null
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        return null
-      }
-      throw error
-    }
-  }
   return pickImageWithFileInput()
 }
 

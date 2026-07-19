@@ -1,17 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+
 import { appLogger } from "../logging/runtime";
-import {
-  getCodexProjectManager,
-  type CodexProject,
-} from "./codexProjectManager";
-import { RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS } from "./runmeChatkitPrompts";
-import {
-  getCodexAppServerClient,
-  type CodexAppServerTransport,
-  type CodexProxyJsonRpcNotification,
-} from "./codexAppServerClient";
-import { logCodexEvent } from "./codexLogging";
-import type { ConversationController } from "./conversationController";
 import type {
   ChatKitAssistantMessageItem,
   ChatKitEndOfTurnItem,
@@ -20,6 +9,14 @@ import type {
   ChatKitStreamEvent,
   ChatKitUserMessageItem,
 } from "./chatkitProtocol";
+import {
+  type CodexProxyJsonRpcNotification,
+  getCodexAppServerClient,
+} from "./codexAppServerClient";
+import { logCodexEvent } from "./codexLogging";
+import { type CodexProject, getCodexProjectManager } from "./codexProjectManager";
+import type { ConversationController } from "./conversationController";
+import { RUNME_CODEX_DEVELOPER_INSTRUCTIONS } from "./runmeChatkitPrompts";
 
 export type CodexConversationItem = {
   id: string;
@@ -62,23 +59,13 @@ type CodexStreamSink = {
 
 const CODEX_TURN_INACTIVITY_TIMEOUT_MS = 120_000;
 
-function summarizeCodexText(value: unknown): string {
-  return extractText(value).slice(0, 160);
-}
-
 function emitLoggedChatkitEvent(sink: CodexStreamSink, payload: ChatKitStreamEvent): void {
   const payloadRecord = asRecord(payload);
   const responseRecord = asRecord(payloadRecord.response);
   const itemRecord = asRecord(payloadRecord.item);
   const payloadType = asString(payloadRecord.type) ?? null;
-  const responseId =
-    asString(payloadRecord.response_id) ??
-    asString(responseRecord.id) ??
-    null;
-  const itemId =
-    asString(payloadRecord.item_id) ??
-    asString(itemRecord.id) ??
-    null;
+  const responseId = asString(payloadRecord.response_id) ?? asString(responseRecord.id) ?? null;
+  const itemId = asString(payloadRecord.item_id) ?? asString(itemRecord.id) ?? null;
   logCodexEvent("Codex adapter emitted ChatKit event", {
     scope: "chatkit.codex_adapter",
     direction: "derived",
@@ -251,9 +238,10 @@ function flattenThreadTurnItems(value: unknown): unknown[] {
   });
 }
 
-function getNotificationPayloadRecord(
-  params: JsonRecord,
-): { payload: JsonRecord; message: JsonRecord } {
+function getNotificationPayloadRecord(params: JsonRecord): {
+  payload: JsonRecord;
+  message: JsonRecord;
+} {
   const message = asRecord(params.msg);
   const base = Object.keys(message).length > 0 ? message : params;
   const payload = {
@@ -342,39 +330,25 @@ function toConversationItem(value: unknown): CodexConversationItem | null {
     type: "message",
     role,
     status,
-    createdAt:
-      asString(record.createdAt) ??
-      asString(record.created_at),
+    createdAt: asString(record.createdAt) ?? asString(record.created_at),
     content,
   };
 }
 
-function getTurnItemsForThread(
-  value: unknown,
-  turnId: string,
-): JsonRecord[] {
+function getTurnItemsForThread(value: unknown, turnId: string): JsonRecord[] {
   const thread = asRecord(asRecord(value).thread);
   const turns = Array.isArray(thread.turns) ? thread.turns : [];
   const turn = turns.find((candidate) => {
     const record = asRecord(candidate);
-    return (
-      asString(record.id) ??
-      asString(record.turnId) ??
-      asString(record.turn_id)
-    ) === turnId;
+    return (asString(record.id) ?? asString(record.turnId) ?? asString(record.turn_id)) === turnId;
   });
-  const items = Array.isArray(asRecord(turn).items)
-    ? (asRecord(turn).items as unknown[])
-    : [];
+  const items = Array.isArray(asRecord(turn).items) ? (asRecord(turn).items as unknown[]) : [];
   return items.map((item) => asRecord(item));
 }
 
 function parseThreadFromListEntry(value: unknown): CodexConversationThread | null {
   const record = asRecord(value);
-  const id =
-    asString(record.id) ??
-    asString(record.threadId) ??
-    asString(record.thread_id);
+  const id = asString(record.id) ?? asString(record.threadId) ?? asString(record.thread_id);
   if (!id) {
     return null;
   }
@@ -414,23 +388,19 @@ function parseThreadDetail(value: unknown): CodexConversationThread | null {
     return null;
   }
 
-  const itemsCandidate =
-    Array.isArray(threadRecord.items)
-      ? threadRecord.items
-      : Array.isArray(asRecord(threadRecord.items).data)
-        ? (asRecord(threadRecord.items).data as unknown[])
-        : Array.isArray(record.items)
-          ? (record.items as unknown[])
-          : Array.isArray(asRecord(record.items).data)
-            ? (asRecord(record.items).data as unknown[])
-            : flattenThreadTurnItems(value);
+  const itemsCandidate = Array.isArray(threadRecord.items)
+    ? threadRecord.items
+    : Array.isArray(asRecord(threadRecord.items).data)
+      ? (asRecord(threadRecord.items).data as unknown[])
+      : Array.isArray(record.items)
+        ? (record.items as unknown[])
+        : Array.isArray(asRecord(record.items).data)
+          ? (asRecord(record.items).data as unknown[])
+          : flattenThreadTurnItems(value);
 
   return {
     id,
-    title:
-      asString(threadRecord.title) ??
-      asString(threadRecord.name) ??
-      "Untitled thread",
+    title: asString(threadRecord.title) ?? asString(threadRecord.name) ?? "Untitled thread",
     updatedAt:
       asString(threadRecord.updatedAt) ??
       asString(threadRecord.updated_at) ??
@@ -569,10 +539,7 @@ class CodexConversationController implements ConversationController {
     this.historyError = null;
     this.notify();
     try {
-      const result = await proxy.sendRequest(
-        "thread/list",
-        this.buildThreadListParams(project, proxy.getTransport()),
-      );
+      const result = await proxy.sendRequest("thread/list", this.buildThreadListParams(project));
       const record = asRecord(result);
       const entries = Array.isArray(record.threads)
         ? (record.threads as unknown[])
@@ -634,12 +601,8 @@ class CodexConversationController implements ConversationController {
           : Array.isArray(asRecord(resultThread.items).data)
             ? (asRecord(resultThread.items).data as unknown[]).length
             : 0,
-        threadTurnsCount: Array.isArray(resultThread.turns)
-          ? resultThread.turns.length
-          : 0,
-        topLevelTurnsCount: Array.isArray(resultRecord.turns)
-          ? resultRecord.turns.length
-          : 0,
+        threadTurnsCount: Array.isArray(resultThread.turns) ? resultThread.turns.length : 0,
+        topLevelTurnsCount: Array.isArray(resultRecord.turns) ? resultRecord.turns.length : 0,
       },
     });
     const detail = parseThreadDetail(result);
@@ -649,7 +612,7 @@ class CodexConversationController implements ConversationController {
     const current = this.threads.get(detail.id);
     this.threads.set(detail.id, {
       ...detail,
-      items: detail.items.length > 0 ? detail.items : current?.items ?? [],
+      items: detail.items.length > 0 ? detail.items : (current?.items ?? []),
     });
     this.notify();
     return this.threads.get(detail.id)!;
@@ -707,10 +670,7 @@ class CodexConversationController implements ConversationController {
     const proxy = getCodexAppServerClient();
     const project = this.getSnapshot().selectedProject;
     const created = asRecord(
-      await proxy.sendRequest(
-        "thread/start",
-        this.buildProjectDefaults(project, modelOverride),
-      ),
+      await proxy.sendRequest("thread/start", this.buildProjectDefaults(project, modelOverride)),
     );
     const threadId =
       asString(created.threadId) ??
@@ -737,10 +697,7 @@ class CodexConversationController implements ConversationController {
         asString(created.previous_response_id) ??
         asString(threadRecord.lastTurnId) ??
         asString(threadRecord.last_turn_id),
-      cwd:
-        asString(created.cwd) ??
-        asString(threadRecord.cwd) ??
-        project.cwd,
+      cwd: asString(created.cwd) ?? asString(threadRecord.cwd) ?? project.cwd,
       items: [],
     };
     const existing = this.threads.get(threadId);
@@ -778,9 +735,7 @@ class CodexConversationController implements ConversationController {
     const proxy = getCodexAppServerClient();
     const project = this.getSnapshot().selectedProject;
     const effectiveModel = asString(modelOverride) ?? project.model;
-    const { created, thread: activeThread } = await this.ensureThreadForSend(
-      effectiveModel,
-    );
+    const { created, thread: activeThread } = await this.ensureThreadForSend(effectiveModel);
     let threadId = this.currentThreadId ?? activeThread.id;
     if (!threadId) {
       throw new Error("No active Codex thread available before turn/start");
@@ -812,23 +767,11 @@ class CodexConversationController implements ConversationController {
     this.appendThreadItem(threadId, userItem);
     emitLoggedChatkitEvent(sink, {
       type: "thread.item.added",
-      item: buildUserThreadItem(
-        threadId,
-        userItem.id,
-        input,
-        userCreatedAt,
-        effectiveModel,
-      ),
+      item: buildUserThreadItem(threadId, userItem.id, input, userCreatedAt, effectiveModel),
     });
     emitLoggedChatkitEvent(sink, {
       type: "thread.item.done",
-      item: buildUserThreadItem(
-        threadId,
-        userItem.id,
-        input,
-        userCreatedAt,
-        effectiveModel,
-      ),
+      item: buildUserThreadItem(threadId, userItem.id, input, userCreatedAt, effectiveModel),
     });
     this.notify();
 
@@ -881,10 +824,8 @@ class CodexConversationController implements ConversationController {
         }
         const params = asRecord(notification.params);
         const { payload } = getNotificationPayloadRecord(params);
-        const notificationThreadId =
-          asString(payload.threadId) ?? asString(payload.thread_id);
-        const notificationTurnId =
-          asString(payload.turnId) ?? asString(payload.turn_id);
+        const notificationThreadId = asString(payload.threadId) ?? asString(payload.thread_id);
+        const notificationTurnId = asString(payload.turnId) ?? asString(payload.turn_id);
         if (
           !turnIdForNotifications &&
           notificationTurnId &&
@@ -919,14 +860,10 @@ class CodexConversationController implements ConversationController {
         const hasCanonicalAssistantItem = (responseId: string): boolean => {
           const canonicalItemId = canonicalAssistantItemIds.get(responseId);
           return Boolean(
-            canonicalItemId &&
-              !isSyntheticAssistantItemId(responseId, canonicalItemId),
+            canonicalItemId && !isSyntheticAssistantItemId(responseId, canonicalItemId),
           );
         };
-        const markCanonicalAssistantItem = (
-          responseId: string,
-          itemId: string,
-        ): void => {
+        const markCanonicalAssistantItem = (responseId: string, itemId: string): void => {
           if (isSyntheticAssistantItemId(responseId, itemId)) {
             return;
           }
@@ -936,9 +873,7 @@ class CodexConversationController implements ConversationController {
         const finalizePendingResponseItem = (pendingItemId: string) => {
           const pendingText = itemTexts.get(pendingItemId) ?? "";
           const responseId = itemResponseIds.get(pendingItemId) ?? lastResponseId;
-          const outputIndex = (
-            responseItemIds.get(responseId) ?? []
-          ).indexOf(pendingItemId);
+          const outputIndex = (responseItemIds.get(responseId) ?? []).indexOf(pendingItemId);
           emitLoggedChatkitEvent(sink, {
             type: "thread.item.updated",
             item_id: pendingItemId,
@@ -972,12 +907,7 @@ class CodexConversationController implements ConversationController {
               annotations: [],
             },
           });
-          this.updateAssistantItem(
-            threadId!,
-            pendingItemId,
-            pendingText,
-            "completed",
-          );
+          this.updateAssistantItem(threadId!, pendingItemId, pendingText, "completed");
           emitLoggedChatkitEvent(sink, {
             type: "thread.item.done",
             item: buildAssistantThreadItem(
@@ -992,108 +922,90 @@ class CodexConversationController implements ConversationController {
             type: "response.output_item.done",
             response_id: responseId,
             output_index: outputIndex >= 0 ? outputIndex : 0,
-            item: buildAssistantResponseItem(
-              pendingItemId,
-              pendingText,
-              "completed",
-            ),
+            item: buildAssistantResponseItem(pendingItemId, pendingText, "completed"),
           });
           pendingThreadCompletionItems.delete(pendingItemId);
         };
         const ensureMessageStarted = (responseId: string, itemId: string) => {
-        const flushPendingThreadCompletions = (targetResponseId?: string) => {
-          [...pendingThreadCompletionItems].forEach((pendingItemId) => {
-            const pendingResponseId = itemResponseIds.get(pendingItemId);
-            if (
-              targetResponseId &&
-              pendingResponseId &&
-              pendingResponseId !== targetResponseId
-            ) {
-              return;
-            }
-            finalizePendingResponseItem(pendingItemId);
-          });
-        };
-        if (itemResponseIds.has(itemId)) {
-          return;
-        }
-        if (
-          isSyntheticAssistantItemId(responseId, itemId) &&
-          hasCanonicalAssistantItem(responseId)
-        ) {
-          return;
-        }
-        if (!responseCreatedEvents.has(responseId)) {
+          const flushPendingThreadCompletions = (targetResponseId?: string) => {
+            [...pendingThreadCompletionItems].forEach((pendingItemId) => {
+              const pendingResponseId = itemResponseIds.get(pendingItemId);
+              if (targetResponseId && pendingResponseId && pendingResponseId !== targetResponseId) {
+                return;
+              }
+              finalizePendingResponseItem(pendingItemId);
+            });
+          };
+          if (itemResponseIds.has(itemId)) {
+            return;
+          }
+          if (
+            isSyntheticAssistantItemId(responseId, itemId) &&
+            hasCanonicalAssistantItem(responseId)
+          ) {
+            return;
+          }
+          if (!responseCreatedEvents.has(responseId)) {
+            emitLoggedChatkitEvent(sink, {
+              type: "response.created",
+              response: { id: responseId },
+            });
+            responseCreatedEvents.add(responseId);
+          }
+          flushPendingThreadCompletions(responseId);
+          const createdAt = new Date().toISOString();
+          const itemIds = responseItemIds.get(responseId) ?? [];
+          const outputIndex = itemIds.length;
+          responseItemIds.set(responseId, [...itemIds, itemId]);
+          itemResponseIds.set(itemId, responseId);
+          itemTexts.set(itemId, "");
+          itemCreatedAts.set(itemId, createdAt);
+          if (!responseCreatedAts.has(responseId)) {
+            responseCreatedAts.set(responseId, createdAt);
+          }
+          if (!responseOutputAddedEvents.has(itemId)) {
+            emitLoggedChatkitEvent(sink, {
+              type: "response.output_item.added",
+              response_id: responseId,
+              output_index: outputIndex,
+              item: buildAssistantResponseItem(itemId, "", "in_progress"),
+            });
+            responseOutputAddedEvents.add(itemId);
+            emitLoggedChatkitEvent(sink, {
+              type: "response.content_part.added",
+              response_id: responseId,
+              output_index: outputIndex,
+              item_id: itemId,
+              content_index: 0,
+              part: {
+                type: "output_text",
+                text: "",
+                annotations: [],
+              },
+            });
+          }
           emitLoggedChatkitEvent(sink, {
-            type: "response.created",
-            response: { id: responseId },
+            type: "thread.item.added",
+            item: buildAssistantThreadItem(threadId!, itemId, "", "in_progress", createdAt),
           });
-          responseCreatedEvents.add(responseId);
-        }
-        flushPendingThreadCompletions(responseId);
-        const createdAt = new Date().toISOString();
-        const itemIds = responseItemIds.get(responseId) ?? [];
-        const outputIndex = itemIds.length;
-        responseItemIds.set(responseId, [...itemIds, itemId]);
-        itemResponseIds.set(itemId, responseId);
-        itemTexts.set(itemId, "");
-        itemCreatedAts.set(itemId, createdAt);
-        if (!responseCreatedAts.has(responseId)) {
-          responseCreatedAts.set(responseId, createdAt);
-        }
-        if (!responseOutputAddedEvents.has(itemId)) {
           emitLoggedChatkitEvent(sink, {
-            type: "response.output_item.added",
-            response_id: responseId,
-            output_index: outputIndex,
-            item: buildAssistantResponseItem(itemId, "", "in_progress"),
-          });
-          responseOutputAddedEvents.add(itemId);
-          emitLoggedChatkitEvent(sink, {
-            type: "response.content_part.added",
-            response_id: responseId,
-            output_index: outputIndex,
+            type: "thread.item.updated",
             item_id: itemId,
-            content_index: 0,
-            part: {
-              type: "output_text",
-              text: "",
-              annotations: [],
+            update: {
+              type: "assistant_message.content_part.added",
+              content_index: 0,
+              content: {
+                type: "output_text",
+                text: "",
+                annotations: [],
+              },
             },
           });
-        }
-        emitLoggedChatkitEvent(sink, {
-          type: "thread.item.added",
-          item: buildAssistantThreadItem(
-            threadId!,
-            itemId,
-            "",
-            "in_progress",
-            createdAt,
-          ),
-        });
-        emitLoggedChatkitEvent(sink, {
-          type: "thread.item.updated",
-          item_id: itemId,
-          update: {
-            type: "assistant_message.content_part.added",
-            content_index: 0,
-            content: {
-              type: "output_text",
-              text: "",
-              annotations: [],
-            },
-          },
-        });
-        this.appendThreadItem(threadId!, createAssistantItem(itemId));
-        this.updateAssistantItem(threadId!, itemId, "", "in_progress");
-        this.notify();
+          this.appendThreadItem(threadId!, createAssistantItem(itemId));
+          this.updateAssistantItem(threadId!, itemId, "", "in_progress");
+          this.notify();
         };
-        const completeAssistantItem = (
-          responseId: string,
-          itemId: string,
-          text?: string,
-        ) => {
+        const completeAssistantItem = (responseId: string, itemId: string, text?: string) => {
           if (completedItems.has(itemId)) {
             return;
           }
@@ -1134,10 +1046,7 @@ class CodexConversationController implements ConversationController {
               threadId: threadId!,
               includeTurns: true,
             });
-            const turnItems = getTurnItemsForThread(
-              threadRead,
-              turnIdForNotifications,
-            );
+            const turnItems = getTurnItemsForThread(threadRead, turnIdForNotifications);
             turnItems.forEach((item) => {
               if (!isAssistantMessageType(item.type)) {
                 return;
@@ -1196,9 +1105,7 @@ class CodexConversationController implements ConversationController {
               delta: mapped.text,
             },
           });
-          const outputIndex = (
-            responseItemIds.get(mapped.responseId) ?? []
-          ).indexOf(mapped.itemId);
+          const outputIndex = (responseItemIds.get(mapped.responseId) ?? []).indexOf(mapped.itemId);
           emitLoggedChatkitEvent(sink, {
             type: "response.output_text.delta",
             response_id: mapped.responseId,
@@ -1216,20 +1123,12 @@ class CodexConversationController implements ConversationController {
               return;
             }
             const pending = pendingSyntheticItems.get(mapped.responseId);
-            completeAssistantItem(
-              mapped.responseId,
-              mapped.itemId,
-              mapped.text ?? pending?.text,
-            );
+            completeAssistantItem(mapped.responseId, mapped.itemId, mapped.text ?? pending?.text);
             pendingSyntheticItems.delete(mapped.responseId);
             return;
           }
           markCanonicalAssistantItem(mapped.responseId, mapped.itemId);
-          completeAssistantItem(
-            mapped.responseId,
-            mapped.itemId,
-            mapped.text,
-          );
+          completeAssistantItem(mapped.responseId, mapped.itemId, mapped.text);
           return;
         }
         if (mapped.kind === "completed") {
@@ -1253,39 +1152,39 @@ class CodexConversationController implements ConversationController {
               });
             });
           }
-        [...pendingThreadCompletionItems].forEach((pendingItemId) => {
-          finalizePendingResponseItem(pendingItemId);
-        });
-        const responseIdsToComplete =
-          responseItemIds.size > 0
-            ? [...responseItemIds.keys()]
-            : [lastResponseId || turnIdForNotifications || `resp-${Date.now()}`];
-        responseIdsToComplete.forEach((responseId) => {
-          if (completedResponses.has(responseId)) {
-            return;
-          }
-          emitLoggedChatkitEvent(sink, {
-            type: "thread.item.done",
-            item: buildEndOfTurnItem(
-              threadId!,
-              responseId,
-              responseCreatedAts.get(responseId) ?? new Date().toISOString(),
-            ),
+          [...pendingThreadCompletionItems].forEach((pendingItemId) => {
+            finalizePendingResponseItem(pendingItemId);
           });
-          lastResponseId = responseId;
-        });
-        responseIdsToComplete.forEach((responseId) => {
-          if (completedResponses.has(responseId)) {
-            return;
-          }
-          emitLoggedChatkitEvent(sink, {
-            type: "response.completed",
-            response: { id: responseId },
+          const responseIdsToComplete =
+            responseItemIds.size > 0
+              ? [...responseItemIds.keys()]
+              : [lastResponseId || turnIdForNotifications || `resp-${Date.now()}`];
+          responseIdsToComplete.forEach((responseId) => {
+            if (completedResponses.has(responseId)) {
+              return;
+            }
+            emitLoggedChatkitEvent(sink, {
+              type: "thread.item.done",
+              item: buildEndOfTurnItem(
+                threadId!,
+                responseId,
+                responseCreatedAts.get(responseId) ?? new Date().toISOString(),
+              ),
+            });
+            lastResponseId = responseId;
           });
-          completedResponses.add(responseId);
-        });
-        finished = true;
-        resolveCompletion?.();
+          responseIdsToComplete.forEach((responseId) => {
+            if (completedResponses.has(responseId)) {
+              return;
+            }
+            emitLoggedChatkitEvent(sink, {
+              type: "response.completed",
+              response: { id: responseId },
+            });
+            completedResponses.add(responseId);
+          });
+          finished = true;
+          resolveCompletion?.();
         }
       })().catch((error) => {
         if (finished) {
@@ -1342,7 +1241,9 @@ class CodexConversationController implements ConversationController {
     };
   }
 
-  async handleListItems(threadId: string): Promise<{ data: CodexConversationItem[]; has_more: false }> {
+  async handleListItems(
+    threadId: string,
+  ): Promise<{ data: CodexConversationItem[]; has_more: false }> {
     const thread = await this.getThread(threadId);
     return {
       data: thread.items,
@@ -1351,41 +1252,23 @@ class CodexConversationController implements ConversationController {
   }
 
   private buildProjectDefaults(project: CodexProject, modelOverride?: string): JsonRecord {
-    const transport = this.getTransport();
     const defaults: JsonRecord = {
       projectId: project.id,
       model: asString(modelOverride) ?? project.model,
       approvalPolicy: project.approvalPolicy,
       sandboxPolicy: project.sandboxPolicy,
       personality: project.personality,
-      developerInstructions: RUNME_CODEX_WASM_DEVELOPER_INSTRUCTIONS,
+      developerInstructions: RUNME_CODEX_DEVELOPER_INSTRUCTIONS,
       writableRoots: project.writableRoots,
+      cwd: project.cwd,
     };
-    if (transport !== "wasm") {
-      defaults.cwd = project.cwd;
-    }
     return defaults;
   }
 
-  private buildThreadListParams(
-    project: CodexProject,
-    transport: CodexAppServerTransport,
-  ): JsonRecord | undefined {
-    if (transport === "wasm") {
-      return undefined;
-    }
+  private buildThreadListParams(project: CodexProject): JsonRecord {
     return {
       cwd: project.cwd,
     };
-  }
-
-  private getTransport(): CodexAppServerTransport {
-    const client = getCodexAppServerClient() as {
-      getTransport?: () => CodexAppServerTransport;
-    };
-    return typeof client.getTransport === "function"
-      ? client.getTransport()
-      : "proxy";
   }
 
   private listThreadsForProject(projectId: string): CodexConversationThread[] {
@@ -1440,14 +1323,9 @@ class CodexConversationController implements ConversationController {
   ): MappedAssistantEvent | null {
     const params = asRecord(notification.params);
     const { payload, message } = getNotificationPayloadRecord(params);
-    const notificationThreadId =
-      asString(payload.threadId) ?? asString(payload.thread_id);
-    const notificationTurnId =
-      asString(payload.turnId) ?? asString(payload.turn_id);
-    if (
-      notificationThreadId &&
-      notificationThreadId !== threadId
-    ) {
+    const notificationThreadId = asString(payload.threadId) ?? asString(payload.thread_id);
+    const notificationTurnId = asString(payload.turnId) ?? asString(payload.turn_id);
+    if (notificationThreadId && notificationThreadId !== threadId) {
       return null;
     }
     if (turnId && notificationTurnId && notificationTurnId !== turnId) {
@@ -1460,17 +1338,13 @@ class CodexConversationController implements ConversationController {
       notificationTurnId ??
       turnId ??
       "resp-codex";
-    const itemId =
-      asString(payload.itemId) ??
-      asString(payload.item_id) ??
-      `${responseId}-item`;
+    const itemId = asString(payload.itemId) ?? asString(payload.item_id) ?? `${responseId}-item`;
 
     switch (notification.method) {
       case "turn.message.started":
         return { kind: "message_started", responseId, itemId };
       case "turn.output_text.delta": {
-        const fallbackDelta =
-          extractText(payload) || extractText(message) || extractText(params);
+        const fallbackDelta = extractText(payload) || extractText(message) || extractText(params);
         const delta =
           asString(payload.delta) ??
           asString(message.delta) ??
@@ -1479,13 +1353,9 @@ class CodexConversationController implements ConversationController {
         return delta ? { kind: "delta", responseId, itemId, text: delta } : null;
       }
       case "turn.output_text.done": {
-        const fallbackText =
-          extractText(payload) || extractText(message) || extractText(params);
+        const fallbackText = extractText(payload) || extractText(message) || extractText(params);
         const text =
-          asString(payload.text) ??
-          asString(message.text) ??
-          asString(params.text) ??
-          fallbackText;
+          asString(payload.text) ?? asString(message.text) ?? asString(params.text) ?? fallbackText;
         return { kind: "done", responseId, itemId, text };
       }
       case "turn.completed":
@@ -1512,7 +1382,12 @@ class CodexConversationController implements ConversationController {
           return null;
         }
         const text = asString(item.text) ?? extractText(item);
-        return { kind: "done", responseId, itemId: asString(item.id) ?? itemId, text };
+        return {
+          kind: "done",
+          responseId,
+          itemId: asString(item.id) ?? itemId,
+          text,
+        };
       }
       case "item/reasoning/summaryTextDelta": {
         const delta = asString(payload.delta) ?? extractText(payload);

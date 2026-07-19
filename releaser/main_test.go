@@ -53,14 +53,11 @@ func TestVersionBuildEnv(t *testing.T) {
 	t.Parallel()
 
 	version := releaseVersion{
-		BuildDate:   "2026-06-03T12:00:00Z",
-		WebRepo:     "runmedev/web",
-		WebBranch:   "main",
-		WebCommit:   "web-sha",
-		CodexRepo:   "openai/codex",
-		CodexBranch: "dev/jlewi/wasm",
-		CodexCommit: "codex-sha",
-		Bucket:      "gs://runme-hosted",
+		BuildDate: "2026-06-03T12:00:00Z",
+		WebRepo:   "runmedev/web",
+		WebBranch: "main",
+		WebCommit: "web-sha",
+		Bucket:    "gs://runme-hosted",
 	}
 
 	got := versionBuildEnv(version)
@@ -69,9 +66,6 @@ func TestVersionBuildEnv(t *testing.T) {
 		"VITE_RUNME_VERSION_WEB_REPO=runmedev/web",
 		"VITE_RUNME_VERSION_WEB_BRANCH=main",
 		"VITE_RUNME_VERSION_WEB_COMMIT=web-sha",
-		"VITE_RUNME_VERSION_CODEX_REPO=openai/codex",
-		"VITE_RUNME_VERSION_CODEX_BRANCH=dev/jlewi/wasm",
-		"VITE_RUNME_VERSION_CODEX_COMMIT=codex-sha",
 		"VITE_RUNME_VERSION_BUCKET=gs://runme-hosted",
 	}
 	if len(got) != len(want) {

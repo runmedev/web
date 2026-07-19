@@ -193,15 +193,24 @@ describe('image embedding', () => {
     expect(text).not.toHaveBeenCalled()
   })
 
-  it('uses the native image picker and recognizes extension-only images', async () => {
+  it('uses the compatible file input and recognizes extension-only images', async () => {
     const file = new File([new Uint8Array([1])], 'diagram.png', { type: '' })
-    ;(window as any).showOpenFilePicker = vi.fn(async () => [
-      {
-        getFile: async () => file,
-      },
-    ])
+    const nativePicker = vi.fn()
+    ;(window as any).showOpenFilePicker = nativePicker
 
-    await expect(pickImageFromLocalFilesystem()).resolves.toBe(file)
+    const selected = pickImageFromLocalFilesystem()
+    const input = document.querySelector<HTMLInputElement>(
+      'input[type="file"][accept="image/*"]'
+    )
+    expect(input).not.toBeNull()
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [file],
+    })
+    input?.dispatchEvent(new Event('change'))
+
+    await expect(selected).resolves.toBe(file)
+    expect(nativePicker).not.toHaveBeenCalled()
     expect(isSupportedImageFile(file)).toBe(true)
     expect(
       isSupportedImageFile(

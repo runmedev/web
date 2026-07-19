@@ -12,9 +12,6 @@ const FIELD_LABELS: Array<[keyof RunmeVersionInfo, string]> = [
   ['webRepo', 'Web Repository'],
   ['webBranch', 'Web Branch'],
   ['webCommit', 'Web Commit'],
-  ['codexRepo', 'Codex Repository'],
-  ['codexBranch', 'Codex Branch'],
-  ['codexCommit', 'Codex Commit'],
   ['bucket', 'Bucket'],
 ]
 

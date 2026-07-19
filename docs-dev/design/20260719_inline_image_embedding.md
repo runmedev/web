@@ -155,9 +155,10 @@ document the command.
 
 ### File picker
 
-An **Embed image** button will appear beside **Add cell**. It will open
-`showOpenFilePicker` when available and fall back to an invisible
-`<input type="file" accept="image/*">`.
+An **Embed image** button will appear beside **Add cell**. It will use an
+invisible `<input type="file" accept="image/*">`. This path works across
+embedded browser hosts and avoids host-specific failures in the File System
+Access API's native `showOpenFilePicker` integration.
 
 The selected `File` will be passed to the domain function. React will own only
 picker progress, errors, and toast presentation.

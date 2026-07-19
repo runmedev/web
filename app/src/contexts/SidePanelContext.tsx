@@ -1,6 +1,11 @@
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 
-export type PanelKey = "explorer" | "open-documents" | "chatkit" | null;
+export type PanelKey =
+  | "explorer"
+  | "open-documents"
+  | "outline"
+  | "chatkit"
+  | null;
 
 interface SidePanelContextValue {
   activePanel: PanelKey;
@@ -26,6 +31,7 @@ export function SidePanelProvider({ children }: { children: ReactNode }) {
         stored === "explorer" ||
         stored === "open-documents" ||
         stored === "open-notebooks" ||
+        stored === "outline" ||
         stored === "chatkit"
       ) {
         return stored === "open-notebooks" ? "open-documents" : stored;

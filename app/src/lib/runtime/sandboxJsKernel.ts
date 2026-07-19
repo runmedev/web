@@ -71,8 +71,6 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'runme.getCurrentNotebook',
   'runme.help',
   'embed',
-  'codex.turns.list',
-  'codex.turns.getEvents',
   'notebookDiff.listDriveRevisions',
   'notebookDiff.diffDriveRevision',
   'notebookDiff.openDiffTab',
@@ -360,25 +358,6 @@ export function buildSandboxSrcDoc(options: {
           restoreAllDeletedCells: (args) => hostCall("notebookDiff.restoreAllDeletedCells", [args]),
           help: () => hostCall("notebookDiff.help", []),
         };
-        const codex = {
-          turns: {
-            list: () => hostCall("codex.turns.list", []),
-            getEvents: (turnId, options) =>
-              hostCall("codex.turns.getEvents", [turnId, options]),
-            help: () => {
-              consoleProxy.log("codex.turns.list()");
-              consoleProxy.log("codex.turns.getEvents(turnId, { sessionId? })");
-              consoleProxy.log("const [latest] = await codex.turns.list(); console.log(await codex.turns.getEvents(latest.turnId));");
-              consoleProxy.log("codex.turns.help()");
-            },
-          },
-          help: () => {
-            consoleProxy.log("codex.turns.list()");
-            consoleProxy.log("codex.turns.getEvents(turnId, { sessionId? })");
-            consoleProxy.log("const [latest] = await codex.turns.list(); console.log(await codex.turns.getEvents(latest.turnId));");
-            consoleProxy.log("codex.turns.help()");
-          },
-        };
         const app = {
           getSessionId: () => hostCall("app.getSessionId", []),
           getSessionID: () => hostCall("app.getSessionID", []),
@@ -456,9 +435,6 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebookDiff.listConflictCells({ target?, localUri? })");
           consoleProxy.log("- notebookDiff.restoreDeletedCell({ target?, localUri?, refId?, rowId? })");
           consoleProxy.log("- notebookDiff.restoreAllDeletedCells({ target?, localUri? })");
-          consoleProxy.log("- codex.turns.list()");
-          consoleProxy.log("- codex.turns.getEvents(turnId, { sessionId? })");
-          consoleProxy.log("- const [latest] = await codex.turns.list(); consoleProxy.log(await codex.turns.getEvents(latest.turnId));");
           consoleProxy.log("- await app.getSessionId()");
           consoleProxy.log("- await app.getSessionID()");
           consoleProxy.log("- await app.startGoogleDriveOAuth({ mode?, prompt? })");
@@ -484,7 +460,6 @@ export function buildSandboxSrcDoc(options: {
               "notebooks",
               "documents",
               "notebookDiff",
-              "codex",
               "app",
               "explorer",
               "credentials",
@@ -492,7 +467,7 @@ export function buildSandboxSrcDoc(options: {
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, opfs, net, embed, notebooks, documents, notebookDiff, codex, app, explorer, credentials, drive, help);
+            await runner(consoleProxy, runme, opfs, net, embed, notebooks, documents, notebookDiff, app, explorer, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });

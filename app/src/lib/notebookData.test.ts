@@ -1,20 +1,17 @@
-import { Subject } from "rxjs";
 import { create } from "@bufbuild/protobuf";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { parser_pb, MimeType, RunmeMetadataKey } from "../contexts/CellContext";
 import type { StreamsLike } from "@runmedev/renderers";
+import { Subject } from "rxjs";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { MimeType, RunmeMetadataKey, parser_pb } from "../contexts/CellContext";
+import { LOCAL_FOLDER_URI } from "../storage/local";
+import { appLogger } from "./logging/runtime";
+import { appState } from "./runtime/AppState";
 import {
   APPKERNEL_RUNNER_NAME,
   APPKERNEL_SANDBOX_RUNNER_NAME,
 } from "./runtime/appKernel";
-import { appState } from "./runtime/AppState";
-import { LOCAL_FOLDER_URI } from "../storage/local";
-import {
-  appendCodexWasmJournalEntry,
-  resetCodexWasmJournalEntries,
-} from "./runtime/codexWasmEventJournal";
 import { __resetTabIdForTests, getClaimedSessionId } from "./tabIdentity";
-import { appLogger } from "./logging/runtime";
 
 const mockRunner = {
   name: "mock-runner",
@@ -35,7 +32,12 @@ vi.mock("@runmedev/renderers", () => {
     runID: string;
     sequence: number;
     options: unknown;
-    constructor(opts: { knownID: string; runID: string; sequence: number; options: unknown }) {
+    constructor(opts: {
+      knownID: string;
+      runID: string;
+      sequence: number;
+      options: unknown;
+    }) {
       this.knownID = opts.knownID;
       this.runID = opts.runID;
       this.sequence = opts.sequence;
@@ -93,7 +95,10 @@ vi.mock("./runtime/sandboxJsKernel", () => ({
           const notebook = (await this.bridge.call(
             "runme.getCurrentNotebook",
             [],
-          )) as { name?: string; cellCount?: number } | null;
+          )) as {
+            name?: string;
+            cellCount?: number;
+          } | null;
           this.hooks.onStdout?.(`${notebook?.name ?? ""}\n`);
           this.hooks.onStdout?.(`${notebook?.cellCount ?? ""}\n`);
         }
@@ -104,7 +109,10 @@ vi.mock("./runtime/sandboxJsKernel", () => ({
         if (source.includes("notebooks.get")) {
           const doc = (await this.bridge.call("notebooks.get", [
             undefined,
-          ])) as { summary?: { name?: string }; notebook?: { cells?: unknown[] } };
+          ])) as {
+            summary?: { name?: string };
+            notebook?: { cells?: unknown[] };
+          };
           this.hooks.onStdout?.(`${doc?.summary?.name ?? ""}\n`);
           this.hooks.onStdout?.(`${doc?.notebook?.cells?.length ?? 0}\n`);
         }
@@ -155,7 +163,8 @@ const runnersManager = {
   delete: vi.fn((name: string) => {
     runnerStore.delete(name);
     if (defaultRunnerName === name) {
-      defaultRunnerName = runnerStore.size > 0 ? [...runnerStore.keys()][0] : null;
+      defaultRunnerName =
+        runnerStore.size > 0 ? [...runnerStore.keys()][0] : null;
     }
   }),
   getDefaultRunnerName: vi.fn(() => defaultRunnerName),
@@ -175,7 +184,7 @@ const harnessStore = new Map<
   {
     name: string;
     baseUrl: string;
-    adapter: "responses-direct" | "codex" | "codex-wasm";
+    adapter: "responses-direct" | "codex";
   }
 >();
 let defaultHarnessName: string | null = null;
@@ -196,11 +205,7 @@ const harnessManager = {
     );
   }),
   update: vi.fn(
-    (
-      name: string,
-      baseUrl: string,
-      adapter: "responses-direct" | "codex" | "codex-wasm",
-    ) => {
+    (name: string, baseUrl: string, adapter: "responses-direct" | "codex") => {
       const next = { name, baseUrl, adapter };
       harnessStore.set(name, next);
       if (!defaultHarnessName) {
@@ -212,7 +217,8 @@ const harnessManager = {
   delete: vi.fn((name: string) => {
     harnessStore.delete(name);
     if (defaultHarnessName === name) {
-      defaultHarnessName = harnessStore.size > 0 ? [...harnessStore.keys()][0] : null;
+      defaultHarnessName =
+        harnessStore.size > 0 ? [...harnessStore.keys()][0] : null;
     }
   }),
   setDefault: vi.fn((name: string) => {
@@ -221,19 +227,8 @@ const harnessManager = {
     }
   }),
   resolveChatkitUrl: vi.fn(
-    (
-      profile: {
-        baseUrl: string;
-        adapter: "responses-direct" | "codex" | "codex-wasm";
-      },
-    ) =>
-      `${profile.baseUrl}/${
-        profile.adapter === "codex"
-          ? "chatkit-codex"
-          : profile.adapter === "codex-wasm"
-            ? "chatkit-codex-wasm"
-            : "chatkit-responses-direct"
-      }`,
+    (profile: { baseUrl: string; adapter: "responses-direct" | "codex" }) =>
+      `${profile.baseUrl}/${profile.adapter === "codex" ? "chatkit-codex" : "chatkit-responses-direct"}`,
   ),
 };
 vi.mock("./runtime/harnessManager", () => ({
@@ -390,7 +385,6 @@ afterEach(async () => {
   defaultCodexProjectId = null;
   __resetTabIdForTests();
   window.history.replaceState(null, "", "/");
-  await resetCodexWasmJournalEntries();
 });
 
 async function waitForCondition(
@@ -820,7 +814,9 @@ describe("NotebookData.runCodeCell", () => {
       .flatMap((o) => o.items)
       .find((i) => i.mime === MimeType.VSCodeNotebookStdOut);
     expect(stdoutItem).toBeTruthy();
-    expect(new TextDecoder().decode(stdoutItem!.data)).toContain("hello-no-runner");
+    expect(new TextDecoder().decode(stdoutItem!.data)).toContain(
+      "hello-no-runner",
+    );
   });
 
   it("supports runme helper access inside appkernel javascript cells", async () => {
@@ -832,7 +828,8 @@ describe("NotebookData.runCodeCell", () => {
       metadata: {
         [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
       },
-      value: 'const nb = runme.getCurrentNotebook(); console.log(Boolean(nb)); console.log(nb?.getName?.() ?? "");',
+      value:
+        'const nb = runme.getCurrentNotebook(); console.log(Boolean(nb)); console.log(nb?.getName?.() ?? "");',
     });
     const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
     const model = new NotebookData({
@@ -1143,9 +1140,7 @@ describe("NotebookData.runCodeCell", () => {
         "handle" in target &&
         typeof (target as { handle?: { uri?: unknown } }).handle?.uri ===
           "string" &&
-        (
-          target as { handle: { uri: string } }
-        ).handle.uri.trim() !== ""
+        (target as { handle: { uri: string } }).handle.uri.trim() !== ""
       ) {
         return (target as { handle: { uri: string } }).handle.uri.trim();
       }
@@ -1208,17 +1203,17 @@ describe("NotebookData.runCodeCell", () => {
         [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
       },
       value: [
-        'console.log(typeof drive);',
-        'console.log(typeof drive.create);',
-        'console.log(typeof drive.search);',
-        'console.log(typeof drive.saveAsCurrentNotebook);',
-        'console.log(typeof drive.listPendingSync);',
-        'console.log(typeof drive.requeuePendingSync);',
-        'console.log(typeof googleClientManager.get);',
-        'console.log(typeof oidc.getStatus);',
-        'console.log(typeof app.getDefaultConfigUrl);',
-        'console.log(typeof app.openNotebook);',
-        'console.log(typeof app.setConfigFromYaml);',
+        "console.log(typeof drive);",
+        "console.log(typeof drive.create);",
+        "console.log(typeof drive.search);",
+        "console.log(typeof drive.saveAsCurrentNotebook);",
+        "console.log(typeof drive.listPendingSync);",
+        "console.log(typeof drive.requeuePendingSync);",
+        "console.log(typeof googleClientManager.get);",
+        "console.log(typeof oidc.getStatus);",
+        "console.log(typeof app.getDefaultConfigUrl);",
+        "console.log(typeof app.openNotebook);",
+        "console.log(typeof app.setConfigFromYaml);",
       ].join("\n"),
     });
     const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
@@ -1258,10 +1253,10 @@ describe("NotebookData.runCodeCell", () => {
       value: [
         'console.log(app.runners.update("local", "ws://localhost:5190/ws"));',
         'console.log(app.runners.setDefault("local"));',
-        'console.log(app.runners.getDefault());',
+        "console.log(app.runners.getDefault());",
         'console.log(app.harness.update("local-codex", "http://localhost:5190", "codex"));',
         'console.log(app.harness.setDefault("local-codex"));',
-        'console.log(app.harness.getDefault());',
+        "console.log(app.harness.getDefault());",
       ].join("\n"),
     });
     const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
@@ -1287,7 +1282,9 @@ describe("NotebookData.runCodeCell", () => {
       .join("");
     expect(stdoutText).toContain("Runner local set to ws://localhost:5190/ws");
     expect(stdoutText).toContain("Default runner set to local");
-    expect(stdoutText).toContain("Default runner: local (ws://localhost:5190/ws)");
+    expect(stdoutText).toContain(
+      "Default runner: local (ws://localhost:5190/ws)",
+    );
     expect(stdoutText).toContain(
       "Harness local-codex set to http://localhost:5190 (codex)",
     );
@@ -1336,8 +1333,12 @@ describe("NotebookData.runCodeCell", () => {
       .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
       .map((i) => new TextDecoder().decode(i.data))
       .join("");
-    expect(stdoutText).toContain("Codex project Runme Repo created (project-1)");
-    expect(stdoutText).toContain("Codex project Runme Repo updated (project-1)");
+    expect(stdoutText).toContain(
+      "Codex project Runme Repo created (project-1)",
+    );
+    expect(stdoutText).toContain(
+      "Codex project Runme Repo updated (project-1)",
+    );
     expect(stdoutText).toContain("Default codex project set to project-1");
     expect(stdoutText).toContain(
       "Default codex project: Runme Repo (project-1, cwd=/Users/jlewi/code/runmecodex/web, model=gpt-5-mini)",
@@ -1345,110 +1346,6 @@ describe("NotebookData.runCodeCell", () => {
     expect(stdoutText).toContain(
       "project-1: Runme Repo (/Users/jlewi/code/runmecodex/web, model=gpt-5-mini, sandbox=workspace-write, approval=never) (default)",
     );
-  });
-
-  it("exposes codex turn journal helpers in appkernel cells", async () => {
-    await resetCodexWasmJournalEntries();
-    await appendCodexWasmJournalEntry({
-      seq: 1,
-      ts: "2026-04-18T00:00:00.000Z",
-      sessionId: "session-1",
-      threadId: "thread-1",
-      turnId: "turn-older",
-      direction: "server_to_client",
-      kind: "notification",
-      method: "turn/started",
-      payload: { method: "turn/started" },
-    });
-    await appendCodexWasmJournalEntry({
-      seq: 2,
-      ts: "2026-04-18T00:00:01.000Z",
-      sessionId: "session-1",
-      threadId: "thread-1",
-      turnId: "turn-older",
-      direction: "server_to_client",
-      kind: "notification",
-      method: "turn/completed",
-      payload: { method: "turn/completed" },
-    });
-    await appendCodexWasmJournalEntry({
-      seq: 3,
-      ts: "2026-04-18T00:00:02.000Z",
-      sessionId: "session-1",
-      threadId: "thread-1",
-      turnId: "turn-latest",
-      direction: "server_to_client",
-      kind: "notification",
-      method: "turn/started",
-      payload: { method: "turn/started" },
-    });
-    await appendCodexWasmJournalEntry({
-      seq: 4,
-      ts: "2026-04-18T00:00:03.000Z",
-      sessionId: "session-1",
-      threadId: "thread-1",
-      turnId: "turn-latest",
-      direction: "server_to_client",
-      kind: "notification",
-      method: "item/agentMessage/delta",
-      payload: { method: "item/agentMessage/delta" },
-    });
-    await appendCodexWasmJournalEntry({
-      seq: 5,
-      ts: "2026-04-18T00:00:04.000Z",
-      sessionId: "session-1",
-      threadId: "thread-1",
-      turnId: "turn-latest",
-      direction: "server_to_client",
-      kind: "notification",
-      method: "turn/completed",
-      payload: { method: "turn/completed" },
-    });
-
-    const cell = create(parser_pb.CellSchema, {
-      refId: "cell-appkernel-codex-turns-helpers",
-      kind: parser_pb.CellKind.CODE,
-      languageId: "javascript",
-      outputs: [],
-      metadata: {
-        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
-      },
-      value: [
-        "const turns = await codex.turns.list();",
-        "console.log(turns[0].turnId);",
-        "console.log(turns[0].eventCount);",
-        "const events = await codex.turns.getEvents(turns[0].turnId);",
-        "console.log(events.map((event) => event.method).join(','));",
-        "console.log(app.codex.turns === codex.turns);",
-      ].join("\n"),
-    });
-    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
-    const model = new NotebookData({
-      notebook,
-      uri: "nb://test",
-      name: "codex-turns-helpers.runme.md",
-      notebookStore: null,
-      loaded: true,
-    });
-
-    model.runCodeCell(cell);
-    await waitForCondition(() => {
-      const snap = model.getCellSnapshot(cell.refId);
-      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
-    });
-
-    const updated = model.getCellSnapshot(cell.refId);
-    const stdoutText = (updated?.outputs ?? [])
-      .flatMap((o) => o.items)
-      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
-      .map((i) => new TextDecoder().decode(i.data))
-      .join("");
-    expect(stdoutText).toContain("turn-latest");
-    expect(stdoutText).toContain("\n3\n");
-    expect(stdoutText).toContain(
-      "turn/started,item/agentMessage/delta,turn/completed",
-    );
-    expect(stdoutText).toContain("true");
   });
 
   it("exposes app.responsesDirect and credentials.openai helpers in appkernel cells", async () => {
@@ -1500,7 +1397,10 @@ describe("NotebookData.runCodeCell", () => {
       uri: "https://drive.google.com/file/d/saveas123/view",
     });
     const saveContent = vi.fn().mockResolvedValue(undefined);
-    appState.setDriveNotebookStore({ create: createRemote, saveContent } as any);
+    appState.setDriveNotebookStore({
+      create: createRemote,
+      saveContent,
+    } as any);
     const addFile = vi.fn().mockResolvedValue("local://file/saveas-copy");
     const saveLocal = vi.fn().mockResolvedValue(undefined);
     appState.setLocalNotebooks({ addFile, save: saveLocal } as any);
@@ -1517,8 +1417,8 @@ describe("NotebookData.runCodeCell", () => {
       },
       value: [
         'const result = await drive.saveAsCurrentNotebook("folder123", "copy.json");',
-        'console.log(result.fileId);',
-        'console.log(result.localUri);',
+        "console.log(result.fileId);",
+        "console.log(result.localUri);",
       ].join("\n"),
     });
     const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
@@ -1579,8 +1479,9 @@ describe("NotebookData.runCodeCell", () => {
         (target as { handle?: { uri?: string } }).handle?.uri
       ) {
         return (
-          notebooksByUri.get((target as { handle: { uri: string } }).handle.uri) ??
-          null
+          notebooksByUri.get(
+            (target as { handle: { uri: string } }).handle.uri,
+          ) ?? null
         );
       }
       return null;
@@ -1592,18 +1493,20 @@ describe("NotebookData.runCodeCell", () => {
       uri: "local://file/helloworld",
       name: "helloworld",
     });
-    const saveLocal = vi.fn().mockImplementation(async (uri: string, notebook: parser_pb.Notebook) => {
-      const createdModel = new NotebookData({
-        notebook,
-        uri,
-        name: "helloworld",
-        notebookStore: null,
-        loaded: true,
-        resolveNotebookForAppKernel: resolveNotebook,
-        listNotebooksForAppKernel: listNotebooks,
+    const saveLocal = vi
+      .fn()
+      .mockImplementation(async (uri: string, notebook: parser_pb.Notebook) => {
+        const createdModel = new NotebookData({
+          notebook,
+          uri,
+          name: "helloworld",
+          notebookStore: null,
+          loaded: true,
+          resolveNotebookForAppKernel: resolveNotebook,
+          listNotebooksForAppKernel: listNotebooks,
+        });
+        notebooksByUri.set(uri, createdModel);
       });
-      notebooksByUri.set(uri, createdModel);
-    });
     appState.setLocalNotebooks({ create: createLocal, save: saveLocal } as any);
     const openNotebook = vi.fn().mockImplementation(async (uri: string) => {
       activeUri = uri;
@@ -1620,26 +1523,26 @@ describe("NotebookData.runCodeCell", () => {
       },
       value: [
         'const created = await notebooks.createLocal("helloworld");',
-        'console.log(created.summary.name);',
-        'const code = await notebooks.appendCell({',
-        '  target: { handle: created.handle },',
+        "console.log(created.summary.name);",
+        "const code = await notebooks.appendCell({",
+        "  target: { handle: created.handle },",
         '  kind: "code",',
         '  languageId: "python",',
-        '  value: \'print("hello world")\',',
+        "  value: 'print(\"hello world\")',",
         '  metadata: { name: "hello-python" },',
-        '});',
-        'console.log(code.cell.languageId);',
-        'console.log(code.cell.value);',
-        'console.log(code.cell.metadata?.name);',
-        'const markdown = await notebooks.appendCell({',
-        '  target: { handle: code.handle },',
+        "});",
+        "console.log(code.cell.languageId);",
+        "console.log(code.cell.value);",
+        "console.log(code.cell.metadata?.name);",
+        "const markdown = await notebooks.appendCell({",
+        "  target: { handle: code.handle },",
         '  kind: "markup",',
         '  value: "# Notes",',
-        '});',
-        'console.log(markdown.cell.languageId);',
-        'console.log(markdown.cell.value);',
-        'const refreshed = await notebooks.get({ handle: markdown.handle });',
-        'console.log(refreshed.notebook.cells.length);',
+        "});",
+        "console.log(markdown.cell.languageId);",
+        "console.log(markdown.cell.value);",
+        "const refreshed = await notebooks.get({ handle: markdown.handle });",
+        "console.log(refreshed.notebook.cells.length);",
       ].join("\n"),
     });
     const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
@@ -1668,7 +1571,9 @@ describe("NotebookData.runCodeCell", () => {
     expect(createdModel).toBeTruthy();
     expect(createdModel?.getNotebook().cells).toHaveLength(2);
     expect(createdModel?.getNotebook().cells[0]?.languageId).toBe("python");
-    expect(createdModel?.getNotebook().cells[0]?.value).toContain('print("hello world")');
+    expect(createdModel?.getNotebook().cells[0]?.value).toContain(
+      'print("hello world")',
+    );
     expect(createdModel?.getNotebook().cells[1]?.languageId).toBe("markdown");
 
     const updated = model.getCellSnapshot(cell.refId);
@@ -1696,7 +1601,7 @@ describe("NotebookData.runCodeCell", () => {
       },
       value: [
         'console.log(runmeRunners.ensure("openai-local", "ws://localhost:9988/ws", { setDefault: true }));',
-        'console.log(runmeRunners.getDefault());',
+        "console.log(runmeRunners.getDefault());",
       ].join("\n"),
     });
     const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
@@ -1720,7 +1625,9 @@ describe("NotebookData.runCodeCell", () => {
       .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
       .map((i) => new TextDecoder().decode(i.data))
       .join("");
-    expect(stdoutText).toContain("Runner openai-local set to ws://localhost:9988/ws");
+    expect(stdoutText).toContain(
+      "Runner openai-local set to ws://localhost:9988/ws",
+    );
     expect(stdoutText).toContain("Default runner set to openai-local");
     expect(stdoutText).toContain(
       "Default runner: openai-local (ws://localhost:9988/ws)",
@@ -1818,7 +1725,9 @@ describe("NotebookData.runCodeCell", () => {
     });
 
     const updated = model.getCellSnapshot(cell.refId);
-    const mimes = (updated?.outputs ?? []).flatMap((o) => o.items.map((i) => i.mime));
+    const mimes = (updated?.outputs ?? []).flatMap((o) =>
+      o.items.map((i) => i.mime),
+    );
     expect(mimes).not.toContain(MimeType.StatefulRunmeTerminal);
     expect(mimes).toContain(MimeType.VSCodeNotebookStdOut);
   });

@@ -69,7 +69,6 @@ import {
   type CodexProject,
   getCodexProjectManager,
 } from './codexProjectManager'
-import { getCodexTurnEvents, listCodexTurns } from './codexTurns'
 import { type HarnessAdapter, getHarnessManager } from './harnessManager'
 import { getHarnessRuntimeManager } from './harnessRuntimeManager'
 import { getJupyterManager } from './jupyterManager'
@@ -439,13 +438,6 @@ export function createAppJsGlobals({
   const harnessRuntimeManager = getHarnessRuntimeManager()
   const codexProjectManager = getCodexProjectManager()
   const responsesDirect = responsesDirectConfigManager
-  const codexTurnsHelp = [
-    'codex.turns.list()                       - List recorded Codex turns from the local browser journal',
-    'codex.turns.getEvents(turnId, options?) - Return journal rows for a given turn id',
-    '  options.sessionId                      - Optional session filter when turn ids must be disambiguated',
-    '  Example: const [latest] = await codex.turns.list(); console.log(await codex.turns.getEvents(latest.turnId));',
-    'codex.turns.help()                      - Show this help',
-  ].join('\n')
   const codexProjectApi = {
     list: () => {
       const projects = codexProjectManager.list()
@@ -511,30 +503,13 @@ export function createAppJsGlobals({
       return message
     },
   }
-  const codexTurnsApi = {
-    list: async () => await listCodexTurns(),
-    getEvents: async (
-      turnId: string,
-      options?: {
-        sessionId?: string
-      }
-    ) => await getCodexTurnEvents(String(turnId ?? ''), options),
-    help: () => {
-      emitLine(sendOutput, codexTurnsHelp)
-      return codexTurnsHelp
-    },
-  }
   const codexApi = {
     help: () => {
-      const message = [
-        'codex.project.* - Manage configured Codex projects',
-        codexTurnsHelp,
-      ].join('\n')
+      const message = 'codex.project.* - Manage configured Codex projects'
       emitLine(sendOutput, message)
       return message
     },
     project: codexProjectApi,
-    turns: codexTurnsApi,
   }
 
   const normalizeHarnessAdapter = (
@@ -543,13 +518,6 @@ export function createAppJsGlobals({
     const normalized = (value ?? '').trim().toLowerCase()
     if (normalized === 'codex') {
       return { adapter: 'codex' }
-    }
-    if (
-      normalized === 'codex-wasm' ||
-      normalized === 'codex_wasm' ||
-      normalized === 'codexwasm'
-    ) {
-      return { adapter: 'codex-wasm' }
     }
     if (normalized === 'responses' || normalized === 'response') {
       return {
@@ -912,10 +880,9 @@ export function createAppJsGlobals({
       const expectedVersion = options?.expectedVersion?.trim()
       if (expectedVersion) {
         const acceptedVersions = new Set(
-          [
-            current.version?.checksum,
-            current.version?.revisionId,
-          ].filter((item): item is string => !!item)
+          [current.version?.checksum, current.version?.revisionId].filter(
+            (item): item is string => !!item
+          )
         )
         if (!acceptedVersions.has(expectedVersion)) {
           throw new Error(
@@ -1910,12 +1877,19 @@ export function createAppJsGlobals({
         if (isDriveItemUri(uri)) {
           const parsed = parseDriveItem(uri)
           if (parsed.type !== NotebookStoreItemType.Folder) {
-            throw new Error('explorer.renameFolder(uri, name) requires a folder URI.')
+            throw new Error(
+              'explorer.renameFolder(uri, name) requires a folder URI.'
+            )
           }
           if (!appState.driveNotebookStore) {
-            throw new Error('Google Drive notebook store is not initialized yet.')
+            throw new Error(
+              'Google Drive notebook store is not initialized yet.'
+            )
           }
-          const renamed = await appState.driveNotebookStore.rename(uri, nextName)
+          const renamed = await appState.driveNotebookStore.rename(
+            uri,
+            nextName
+          )
           const message = `Renamed Drive folder: ${uri} -> ${nextName}`
           emitLine(sendOutput, message)
           return renamed

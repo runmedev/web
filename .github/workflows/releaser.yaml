@@ -10,10 +10,6 @@ on:
         description: "web repo branch"
         required: false
         default: "main"
-      codex_branch:
-        description: "codex repo branch"
-        required: false
-        default: "dev/jlewi/wasm"
       dry_run:
         description: "Run without publishing"
         type: boolean
@@ -45,7 +41,6 @@ jobs:
       GCP_SERVICE_ACCOUNT_EMAIL: runme-gha@runme-lewi-dev.iam.gserviceaccount.com
       RELEASER_BUCKET: gs://runme-hosted
       RELEASER_WEB_REPO: runmedev/web
-      RELEASER_CODEX_REPO: openai/codex
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -83,17 +78,6 @@ jobs:
         with:
           run_install: false
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Install wasm-bindgen
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo install wasm-bindgen-cli --locked
-
       - name: Build releaser
         shell: bash
         run: |
@@ -109,16 +93,12 @@ jobs:
           set -euo pipefail
 
           WEB_BRANCH="main"
-          CODEX_BRANCH="dev/jlewi/wasm"
           BUCKET="${RELEASER_BUCKET}"
           DRY_RUN="false"
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             if [ -n "${{ github.event.inputs.web_branch }}" ]; then
               WEB_BRANCH="${{ github.event.inputs.web_branch }}"
-            fi
-            if [ -n "${{ github.event.inputs.codex_branch }}" ]; then
-              CODEX_BRANCH="${{ github.event.inputs.codex_branch }}"
             fi
             if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
               DRY_RUN="true"
@@ -132,8 +112,6 @@ jobs:
 
           ./releaser-bin \
             --web="${WEB_BRANCH}" \
-            --codex="${CODEX_BRANCH}" \
             --web-repo="${RELEASER_WEB_REPO}" \
-            --codex-repo="${RELEASER_CODEX_REPO}" \
             --bucket="${BUCKET}" \
             --dry-run="${DRY_RUN}"

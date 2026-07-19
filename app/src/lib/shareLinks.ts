@@ -73,6 +73,76 @@ export function parseNotebookCellFragment(hash: string): string | null {
   }
 }
 
+export type NotebookShareLinkTarget = {
+  notebookUri: string
+  cellRefId: string | null
+}
+
+const RUNME_GATEWAY_HOSTNAME =
+  /^runme\.gateway\.unified-\d+\.internal\.api\.openai\.org$/i
+
+function isKnownRunmeAppHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase()
+  return (
+    normalized === 'localhost' ||
+    normalized === '127.0.0.1' ||
+    normalized === '[::1]' ||
+    normalized === 'web.runme.dev' ||
+    normalized.endsWith('.web.runme.dev') ||
+    RUNME_GATEWAY_HOSTNAME.test(normalized)
+  )
+}
+
+function canOpenNotebookShareLinkInCurrentApp(
+  url: URL,
+  browserUrl: URL
+): boolean {
+  return (
+    url.origin === browserUrl.origin ||
+    (isKnownRunmeAppHostname(url.hostname) &&
+      isKnownRunmeAppHostname(browserUrl.hostname))
+  )
+}
+
+export function parseNotebookShareLink(
+  href: string,
+  baseUrl?: string
+): NotebookShareLinkTarget | null {
+  const trimmed = href.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const browserBaseUrl =
+    baseUrl ??
+    (typeof window === 'undefined' ? undefined : window.location.href)
+
+  try {
+    const url = browserBaseUrl
+      ? new URL(trimmed, browserBaseUrl)
+      : new URL(trimmed)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return null
+    }
+    if (
+      browserBaseUrl &&
+      !canOpenNotebookShareLinkInCurrentApp(url, new URL(browserBaseUrl))
+    ) {
+      return null
+    }
+    const notebookUri = url.searchParams.get('doc')?.trim()
+    if (!notebookUri) {
+      return null
+    }
+    return {
+      notebookUri,
+      cellRefId: parseNotebookCellFragment(url.hash),
+    }
+  } catch {
+    return null
+  }
+}
+
 export function buildNotebookMarkdownLink(
   name: string,
   remoteUri: string

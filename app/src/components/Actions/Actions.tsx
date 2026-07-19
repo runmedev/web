@@ -47,10 +47,10 @@ import {
   copyNotebookMarkdownLink,
   copyNotebookShareUrl,
   parseNotebookCellFragment,
+  parseNotebookShareLink,
 } from '../../lib/shareLinks'
 import { isHtmlLanguageId, isMarkdownLanguageId } from '../../lib/cellContent'
 import { PlayIcon, PlusIcon, SpinnerIcon, TrashIcon } from './icons'
-//import { useRun } from "../../lib/useRun.js";
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import { useRunners } from '../../contexts/RunnersContext'
 import { useCommentsPanel } from '../../contexts/CommentsPanelContext'
@@ -592,6 +592,9 @@ export function Action({
   isDeepLinkTarget?: boolean
 }) {
   const { store } = useNotebookStore()
+  const { openNotebook } = useNotebookContext()
+  const { showDocument } = useWorkspaceDocumentContext()
+  const { setCurrentDoc } = useCurrentDoc()
   const { listRunners, defaultRunnerName } = useRunners()
   const jupyterManager = useMemo(() => getJupyterManager(), [])
   const jupyterVersion = useSyncExternalStore(
@@ -796,6 +799,69 @@ export function Action({
       onFocusStateChange(nextState)
     },
     [cell?.refId, onFocusStateChange]
+  )
+
+  const handleMarkdownLinkClick = useCallback(
+    (href: string): boolean => {
+      const target = parseNotebookShareLink(href)
+      if (!target) {
+        return false
+      }
+      const isLocalNotebook =
+        target.notebookUri.startsWith('local://file/') ||
+        target.notebookUri.startsWith('fs://')
+      if (!isLocalNotebook && !isDriveItemUri(target.notebookUri)) {
+        return false
+      }
+
+      void (async () => {
+        try {
+          if (isLocalNotebook) {
+            const result = await openNotebook(target.notebookUri)
+            showDocument(result.localUri, {
+              title: result.entry.name,
+            })
+            setCurrentDoc(result.localUri)
+          } else {
+            await driveLinkCoordinator.enqueue(target.notebookUri, 'manual')
+            const isPending = driveLinkCoordinator
+              .getSnapshot()
+              .intents.some((intent) => intent.remoteUri === target.notebookUri)
+            if (isPending) {
+              return
+            }
+          }
+
+          const nextUrl = new URL(window.location.href)
+          nextUrl.hash = target.cellRefId
+            ? `cell=${encodeURIComponent(target.cellRefId)}`
+            : ''
+          window.history.pushState(
+            null,
+            '',
+            `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`
+          )
+          window.dispatchEvent(new PopStateEvent('popstate'))
+        } catch (error) {
+          appLogger.error('Failed to open rendered Markdown notebook link', {
+            attrs: {
+              scope: 'notebook.markdown-link',
+              code: 'MARKDOWN_NOTEBOOK_LINK_OPEN_FAILED',
+              href,
+              notebookUri: target.notebookUri,
+              error: String(error),
+            },
+          })
+          showToast({
+            message: 'Could not open the linked notebook.',
+            tone: 'error',
+          })
+        }
+      })()
+
+      return true
+    },
+    [openNotebook, setCurrentDoc, showDocument]
   )
 
   const handleRemoveCell = useCallback(() => {
@@ -1289,6 +1355,7 @@ export function Action({
               activeFocusRole={activeFocusRole}
               isWindowFocused={isWindowFocused}
               onFocusRoleChange={handleMarkdownFocusRoleChange}
+              onLinkClick={handleMarkdownLinkClick}
             />
             <CellCommentButton
               count={commentCount}
@@ -2703,7 +2770,6 @@ export default function Actions() {
   } | null>(null)
   const tabTriggerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const pendingSelectedTabUriRef = useRef<string | null>(null)
-
   useEffect(() => {
     if (typeof window === 'undefined') {
       return
@@ -2723,33 +2789,6 @@ export default function Actions() {
       window.removeEventListener('popstate', syncCellFragment)
     }
   }, [])
-  //const { data: run } = useRun(runName);
-
-  // useEffect(() => {
-  //   if (cellsInitialized) {
-  //     return;
-  //   }
-  //   if (run) {
-  //     const fallbackName = run?.name ?? runName ?? "Run Notebook";
-  //     const targetUri =
-  //       currentDocUri ??
-  //       (runName ? `run:${runName}` : "run-notebook");
-  //     const notebook = create(parser_pb.NotebookSchema, {
-  //       cells: run.notebook?.cells ?? [],
-  //       metadata: run.notebook?.metadata ?? {},
-  //     });
-  //     const data = ensureNotebook({
-  //       uri: targetUri,
-  //       name: fallbackName,
-  //       notebook,
-  //     });
-  //     data.loadNotebook(notebook);
-  //     data.setName(fallbackName);
-  //     console.log("useEffect is calling setCurrentDoc because run is true", targetUri);
-  //     setCurrentDoc(targetUri);
-  //     setCellsInitialized(true);
-  //   }
-  // }, [cellsInitialized, currentDocUri, ensureNotebook, run, runName, setCurrentDoc]);
 
   const { registerRenderer, unregisterRenderer } = useOutput()
   const workspaceDocumentUris = useMemo(

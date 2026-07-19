@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-export type HarnessAdapter = "responses-direct" | "codex" | "codex-wasm";
+export type HarnessAdapter = "responses-direct" | "codex";
 
 export interface HarnessProfile {
   name: string;
@@ -26,11 +26,10 @@ const HARNESS_CHANGED_EVENT = "runme:harness-changed";
 const CHATKIT_ROUTE_BY_ADAPTER: Record<HarnessAdapter, string> = {
   "responses-direct": "/responses/direct/chatkit",
   codex: "/codex/chatkit",
-  "codex-wasm": "/codex/wasm/chatkit",
 };
 
 function isHarnessAdapter(value: unknown): value is HarnessAdapter {
-  return value === "responses-direct" || value === "codex" || value === "codex-wasm";
+  return value === "responses-direct" || value === "codex";
 }
 
 function normalizeStoredHarnessAdapter(value: unknown): HarnessAdapter | null {
@@ -49,8 +48,7 @@ function normalizeBaseUrl(value: string): string {
 }
 
 export function buildChatkitUrl(baseUrl: string, adapter: HarnessAdapter): string {
-  const route =
-    CHATKIT_ROUTE_BY_ADAPTER[adapter] ?? CHATKIT_ROUTE_BY_ADAPTER["responses-direct"];
+  const route = CHATKIT_ROUTE_BY_ADAPTER[adapter] ?? CHATKIT_ROUTE_BY_ADAPTER["responses-direct"];
   if (!baseUrl.trim()) {
     return route;
   }
@@ -65,9 +63,12 @@ export function buildChatkitUrl(baseUrl: string, adapter: HarnessAdapter): strin
   }
 }
 
-export function buildCodexBridgeWsUrl(baseUrl: string, options?: {
-  forceReplace?: boolean;
-}): string {
+export function buildCodexBridgeWsUrl(
+  baseUrl: string,
+  options?: {
+    forceReplace?: boolean;
+  },
+): string {
   const forceReplace = options?.forceReplace === true;
   try {
     const url = new URL(baseUrl);
@@ -83,7 +84,7 @@ export function buildCodexBridgeWsUrl(baseUrl: string, options?: {
   } catch {
     const trimmed = baseUrl.trim().replace(/\/+$/, "");
     const normalized = trimmed.replace(/^https?:\/\//, (prefix) =>
-      prefix === "https://" ? "wss://" : "ws://"
+      prefix === "https://" ? "wss://" : "ws://",
     );
     const qs = forceReplace ? "?force_replace=true" : "";
     return `${normalized}/codex/ws${qs}`;
@@ -101,7 +102,7 @@ export function buildCodexAppServerWsUrl(baseUrl: string): string {
   } catch {
     const trimmed = baseUrl.trim().replace(/\/+$/, "");
     const normalized = trimmed.replace(/^https?:\/\//, (prefix) =>
-      prefix === "https://" ? "wss://" : "ws://"
+      prefix === "https://" ? "wss://" : "ws://",
     );
     return `${normalized}/codex/app-server/ws`;
   }
@@ -276,24 +277,26 @@ class HarnessManager {
         };
       }
 
-      const parsed = JSON.parse(raw) as Partial<HarnessStorage> | null;
+      const parsed = JSON.parse(raw) as {
+        harnesses?: unknown;
+        defaultHarnessName?: unknown;
+      } | null;
       const entries = Array.isArray(parsed?.harnesses) ? parsed.harnesses : [];
       const harnesses = new Map<string, HarnessProfile>();
 
       for (const entry of entries) {
-        const wasLegacyResponses = entry?.adapter === "responses";
-        const adapter = normalizeStoredHarnessAdapter(entry?.adapter);
-        if (
-          !entry ||
-          typeof entry !== "object" ||
-          typeof entry.name !== "string" ||
-          !adapter
-        ) {
+        if (!entry || typeof entry !== "object") {
           continue;
         }
-        const name = normalizeName(entry.name);
+        const candidate = entry as Record<string, unknown>;
+        const wasLegacyResponses = candidate.adapter === "responses";
+        const adapter = normalizeStoredHarnessAdapter(candidate.adapter);
+        if (typeof candidate.name !== "string" || !adapter) {
+          continue;
+        }
+        const name = normalizeName(candidate.name);
         let baseUrl = normalizeBaseUrl(
-          typeof entry.baseUrl === "string" ? entry.baseUrl : "",
+          typeof candidate.baseUrl === "string" ? candidate.baseUrl : "",
         );
         // Legacy "responses" entries targeted runme /chatkit, not the upstream
         // Responses API. After migration to responses-direct, default to OpenAI.
@@ -322,12 +325,11 @@ class HarnessManager {
       }
 
       const requestedDefault =
-        typeof parsed?.defaultHarnessName === "string"
-          ? parsed.defaultHarnessName
-          : "";
+        typeof parsed?.defaultHarnessName === "string" ? parsed.defaultHarnessName : "";
       const firstHarnessName = this.firstHarnessName(harnesses);
-      const defaultHarnessName =
-        harnesses.has(requestedDefault) ? requestedDefault : firstHarnessName;
+      const defaultHarnessName = harnesses.has(requestedDefault)
+        ? requestedDefault
+        : firstHarnessName;
 
       return {
         harnesses,
@@ -345,9 +347,7 @@ class HarnessManager {
 
   private firstHarnessName(harnesses: Map<string, HarnessProfile>): string {
     const first = harnesses.keys().next().value;
-    return typeof first === "string" && first.length > 0
-      ? first
-      : DEFAULT_HARNESS_NAME;
+    return typeof first === "string" && first.length > 0 ? first : DEFAULT_HARNESS_NAME;
   }
 
   private persistAndNotify(): void {
