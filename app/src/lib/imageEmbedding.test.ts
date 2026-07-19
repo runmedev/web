@@ -87,6 +87,21 @@ describe('image embedding', () => {
     expect(notebook.getNotebook().cells).toHaveLength(1)
   })
 
+  it('infers an untyped Blob MIME type from the supplied name', async () => {
+    const notebook = createNotebook()
+    const blob = new Blob([new Uint8Array([137, 80, 78, 71])])
+
+    const result = await embedImageInNotebook(notebook, blob, {
+      name: 'plot.png',
+    })
+
+    expect(result.cell.value).toContain('data:image/png;base64,iVBORw==')
+    expect(result.cell.metadata).toMatchObject({
+      'runme.dev/embeddedImageMimeType': 'image/png',
+      'runme.dev/embeddedImageName': 'plot.png',
+    })
+  })
+
   it('reads an absolute image path through the local development endpoint', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       expect(url).toContain('/__runme-dev/local-image')

@@ -307,14 +307,15 @@ async function readLocalImagePath(
 
 export async function readEmbeddedImageSource(
   source: EmbeddedImageSource,
-  options: Pick<EmbedImageOptions, 'signal'> = {}
+  options: Pick<EmbedImageOptions, 'name' | 'signal'> = {}
 ): Promise<EmbeddedImage> {
   throwIfImageEmbeddingAborted(options.signal)
   if (source instanceof Blob) {
     const fileName =
-      'name' in source && typeof source.name === 'string'
+      options.name?.trim() ||
+      ('name' in source && typeof source.name === 'string'
         ? source.name
-        : 'embedded-image'
+        : 'embedded-image')
     return imageFromBlob(source, fileName, options.signal)
   }
 
@@ -382,6 +383,7 @@ export async function embedImageInNotebook(
   }
 
   const image = await readEmbeddedImageSource(source, {
+    name: options.name,
     signal: options.signal,
   })
   throwIfImageEmbeddingAborted(options.signal)
