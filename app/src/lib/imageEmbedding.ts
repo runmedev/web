@@ -18,6 +18,8 @@ const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.webp': 'image/webp',
 }
+const IMAGE_MIME_TYPE_PATTERN =
+  /^image\/[a-z0-9][a-z0-9!#$%&'*+.^_|~-]*$/
 
 export type EmbeddedImageSource = string | Blob
 
@@ -110,7 +112,7 @@ function assertImageMimeType(
   name: string
 ): string {
   const normalized = normalizeMimeType(mimeType) || inferImageMimeType(name)
-  if (!normalized.startsWith('image/')) {
+  if (!IMAGE_MIME_TYPE_PATTERN.test(normalized)) {
     throw new Error(
       `Unsupported image type ${mimeType || '(missing MIME type)'} for ${name}.`
     )

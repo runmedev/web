@@ -102,6 +102,16 @@ describe('image embedding', () => {
     })
   })
 
+  it('rejects image MIME values that can break the data URL attribute', async () => {
+    const blob = new Blob([new Uint8Array([137, 80, 78, 71])], {
+      type: 'image/png" data-bad="x',
+    })
+
+    await expect(readEmbeddedImageSource(blob)).rejects.toThrow(
+      'Unsupported image type'
+    )
+  })
+
   it('reads an absolute image path through the local development endpoint', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       expect(url).toContain('/__runme-dev/local-image')
