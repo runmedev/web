@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -112,6 +112,43 @@ function fail(message: string): void {
 
 function writeArtifact(name: string, content: string): void {
   writeFileSync(join(OUTPUT_DIR, name), content, "utf-8");
+}
+
+function sleepMs(milliseconds: number): void {
+  const waitBuffer = new SharedArrayBuffer(4);
+  Atomics.wait(new Int32Array(waitBuffer), 0, 0, milliseconds);
+}
+
+function waitForMovieFile(
+  path: string,
+  timeoutMs = 15000,
+): { exists: boolean; sizeBytes: number; stable: boolean } {
+  const deadline = Date.now() + timeoutMs;
+  let lastSize = -1;
+  let stableReads = 0;
+
+  while (Date.now() < deadline) {
+    if (existsSync(path)) {
+      const sizeBytes = statSync(path).size;
+      if (sizeBytes > 0 && sizeBytes === lastSize) {
+        stableReads += 1;
+        if (stableReads >= 2) {
+          return { exists: true, sizeBytes, stable: true };
+        }
+      } else {
+        lastSize = sizeBytes;
+        stableReads = 0;
+      }
+    }
+    sleepMs(400);
+  }
+
+  const exists = existsSync(path);
+  return {
+    exists,
+    sizeBytes: exists ? statSync(path).size : 0,
+    stable: false,
+  };
 }
 
 function escapeDoubleQuotes(value: string): string {
@@ -323,10 +360,26 @@ try {
   fail(`Scenario execution error: ${String(error)}`);
 } finally {
   if (startedRecording) {
-    run("agent-browser record stop", {
-      timeoutMs: 30000,
+    run("agent-browser wait 800");
+    const recordStop = run("agent-browser record stop", {
+      timeoutMs: 60000,
       throwOnAgentBrowserTimeout: false,
     });
+    console.log(
+      `[movie-check] record-stop status=${recordStop.status} output=${JSON.stringify(
+        `${recordStop.stdout}\n${recordStop.stderr}`.trim(),
+      )}`,
+    );
+    if (recordStop.status !== 0) {
+      fail(`record stop command failed with status ${recordStop.status}`);
+    }
+    const movieProbe = waitForMovieFile(MOVIE_PATH);
+    console.log(
+      `[movie-check] path=${MOVIE_PATH} exists=${movieProbe.exists} size_bytes=${movieProbe.sizeBytes} stable=${movieProbe.stable}`,
+    );
+    if (!movieProbe.exists || movieProbe.sizeBytes === 0) {
+      fail(`Movie missing or empty after record stop: ${MOVIE_PATH}`);
+    }
   }
   if (!AGENT_BROWSER_KEEP_OPEN) {
     run("agent-browser close");
