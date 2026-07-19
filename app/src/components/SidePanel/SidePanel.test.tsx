@@ -3,7 +3,7 @@ import { useEffect } from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-type PanelKey = 'explorer' | 'open-documents' | 'chatkit' | null
+type PanelKey = 'explorer' | 'open-documents' | 'outline' | 'chatkit' | null
 
 let authData: {} | null = null
 let isDriveSyncing = false
@@ -19,6 +19,17 @@ let openDocumentsState: {
 let runnersState: { name: string; endpoint: string; reconnect: boolean }[] = []
 let chatKitMountCount = 0
 let chatKitUnmountCount = 0
+let notebookSnapshotState: {
+  loaded: boolean
+  notebook: {
+    cells: {
+      kind: number
+      languageId: string
+      refId: string
+      value: string
+    }[]
+  }
+} | null = null
 const ensureAccessTokenMock = vi.fn(async () => 'token')
 const startGoogleDriveOAuthMock = vi.fn(async () => ({
   status: 'started',
@@ -78,6 +89,12 @@ vi.mock('../../contexts/GoogleAuthContext', () => ({
   }),
 }))
 
+vi.mock('../../contexts/NotebookContext', () => ({
+  useNotebookContext: () => ({
+    useNotebookSnapshot: () => notebookSnapshotState,
+  }),
+}))
+
 vi.mock('../../contexts/RunnersContext', () => ({
   useRunners: () => ({
     defaultRunnerName: runnersState[0]?.name ?? null,
@@ -114,6 +131,7 @@ describe('SidePanelToolbar drive status button', () => {
     runnersState = []
     chatKitMountCount = 0
     chatKitUnmountCount = 0
+    notebookSnapshotState = null
     ensureAccessTokenMock.mockClear()
     startGoogleDriveOAuthMock.mockClear()
     loginWithRedirectMock.mockClear()
@@ -214,12 +232,20 @@ describe('SidePanelToolbar drive status button', () => {
     expect(togglePanelMock).toHaveBeenCalledWith('open-documents')
   })
 
-  it('exposes an App Console button in the toolbar', () => {
+  it('exposes an Outline button in the toolbar', () => {
     render(<SidePanelToolbar />)
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Open App Console' })
+      screen.getByRole('button', { name: 'Toggle Outline panel' })
     )
+
+    expect(togglePanelMock).toHaveBeenCalledWith('outline')
+  })
+
+  it('exposes an App Console button in the toolbar', () => {
+    render(<SidePanelToolbar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open App Console' }))
 
     expect(showDocumentMock).toHaveBeenCalledWith('app://console', {
       title: 'App Console',
@@ -313,6 +339,7 @@ describe('SidePanelContent ChatKit persistence', () => {
     runnersState = []
     chatKitMountCount = 0
     chatKitUnmountCount = 0
+    notebookSnapshotState = null
     setCurrentDocMock.mockClear()
     showDocumentMock.mockClear()
     closeWorkspaceDocumentMock.mockClear()
@@ -383,6 +410,69 @@ describe('SidePanelContent ChatKit persistence', () => {
     expect(closeWorkspaceDocumentMock).toHaveBeenCalledWith(
       'local://file/alpha.json'
     )
+  })
+
+  it('renders Markdown headings and scrolls the selected cell into view', () => {
+    activePanelState = 'outline'
+    currentDocUri = 'local://file/outline.json'
+    notebookSnapshotState = {
+      loaded: true,
+      notebook: {
+        cells: [
+          {
+            kind: 1,
+            languageId: 'markdown',
+            refId: 'cell-one',
+            value: '# Title\n\n### Details',
+          },
+        ],
+      },
+    }
+    const cellElement = document.createElement('div')
+    cellElement.dataset.cellRefId = 'cell-one'
+    cellElement.scrollIntoView = vi.fn()
+    const notebookElement = document.createElement('div')
+    notebookElement.dataset.documentId = currentDocUri
+    notebookElement.appendChild(cellElement)
+    document.body.appendChild(notebookElement)
+
+    render(<SidePanelContent />)
+
+    expect(screen.getByText('2 headings')).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: 'Details' }).dataset.headingLevel
+    ).toBe('3')
+    fireEvent.click(screen.getByRole('button', { name: 'Title' }))
+    expect(cellElement.scrollIntoView).toHaveBeenCalledWith({
+      behavior: 'smooth',
+      block: 'center',
+    })
+
+    notebookElement.remove()
+  })
+
+  it('shows an outline empty state for notebooks without headings', () => {
+    activePanelState = 'outline'
+    currentDocUri = 'local://file/outline.json'
+    notebookSnapshotState = {
+      loaded: true,
+      notebook: {
+        cells: [
+          {
+            kind: 1,
+            languageId: 'markdown',
+            refId: 'cell-one',
+            value: 'No headings yet.',
+          },
+        ],
+      },
+    }
+
+    render(<SidePanelContent />)
+
+    expect(
+      screen.getByText('Add Markdown headings to build an outline.')
+    ).toBeTruthy()
   })
 
   it('shows blocked notebook status from open entry metadata', () => {

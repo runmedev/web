@@ -1,73 +1,92 @@
-import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  ReactNode,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 
-export type PanelKey = "explorer" | "open-documents" | "chatkit" | null;
+export type PanelKey =
+  | 'explorer'
+  | 'open-documents'
+  | 'outline'
+  | 'chatkit'
+  | null
 
 interface SidePanelContextValue {
-  activePanel: PanelKey;
-  togglePanel: (panel: Exclude<PanelKey, null>) => void;
-  setPanel: (panel: PanelKey) => void;
+  activePanel: PanelKey
+  togglePanel: (panel: Exclude<PanelKey, null>) => void
+  setPanel: (panel: PanelKey) => void
 }
 
-const STORAGE_KEY = "runme.sidePanel.active";
-const LEGACY_STORAGE_KEY = "aisre.sidePanel.active";
+const STORAGE_KEY = 'runme.sidePanel.active'
+const LEGACY_STORAGE_KEY = 'aisre.sidePanel.active'
 
-const SidePanelContext = createContext<SidePanelContextValue | undefined>(undefined);
+const SidePanelContext = createContext<SidePanelContextValue | undefined>(
+  undefined
+)
 
 export function SidePanelProvider({ children }: { children: ReactNode }) {
   const [activePanel, setActivePanel] = useState<PanelKey>(() => {
-    if (typeof window === "undefined") {
-      return "explorer";
+    if (typeof window === 'undefined') {
+      return 'explorer'
     }
     try {
       const stored =
         localStorage.getItem(STORAGE_KEY) ??
-        localStorage.getItem(LEGACY_STORAGE_KEY);
+        localStorage.getItem(LEGACY_STORAGE_KEY)
       if (
-        stored === "explorer" ||
-        stored === "open-documents" ||
-        stored === "open-notebooks" ||
-        stored === "chatkit"
+        stored === 'explorer' ||
+        stored === 'open-documents' ||
+        stored === 'open-notebooks' ||
+        stored === 'outline' ||
+        stored === 'chatkit'
       ) {
-        return stored === "open-notebooks" ? "open-documents" : stored;
+        return stored === 'open-notebooks' ? 'open-documents' : stored
       }
     } catch (error) {
-      console.error("Failed to read side panel state", error);
+      console.error('Failed to read side panel state', error)
     }
-    return "explorer";
-  });
+    return 'explorer'
+  })
 
   useEffect(() => {
     try {
       if (activePanel) {
-        localStorage.setItem(STORAGE_KEY, activePanel);
-        localStorage.removeItem(LEGACY_STORAGE_KEY);
+        localStorage.setItem(STORAGE_KEY, activePanel)
+        localStorage.removeItem(LEGACY_STORAGE_KEY)
       } else {
-        localStorage.removeItem(STORAGE_KEY);
-        localStorage.removeItem(LEGACY_STORAGE_KEY);
+        localStorage.removeItem(STORAGE_KEY)
+        localStorage.removeItem(LEGACY_STORAGE_KEY)
       }
     } catch (error) {
-      console.error("Failed to persist side panel state", error);
+      console.error('Failed to persist side panel state', error)
     }
-  }, [activePanel]);
+  }, [activePanel])
 
   const value = useMemo(
     () => ({
       activePanel,
       togglePanel: (panel: Exclude<PanelKey, null>) => {
-        setActivePanel((prev) => (prev === panel ? null : panel));
+        setActivePanel((prev) => (prev === panel ? null : panel))
       },
       setPanel: setActivePanel,
     }),
-    [activePanel],
-  );
+    [activePanel]
+  )
 
-  return <SidePanelContext.Provider value={value}>{children}</SidePanelContext.Provider>;
+  return (
+    <SidePanelContext.Provider value={value}>
+      {children}
+    </SidePanelContext.Provider>
+  )
 }
 
 export function useSidePanel() {
-  const ctx = useContext(SidePanelContext);
+  const ctx = useContext(SidePanelContext)
   if (!ctx) {
-    throw new Error("useSidePanel must be used within a SidePanelProvider");
+    throw new Error('useSidePanel must be used within a SidePanelProvider')
   }
-  return ctx;
+  return ctx
 }
