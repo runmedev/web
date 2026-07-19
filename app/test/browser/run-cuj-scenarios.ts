@@ -411,8 +411,11 @@ function assertConfiguredBackendCommandIsRunmeAgent(command: string): void {
   }
 }
 
-function run(command: string, cwd = SCRIPT_DIR): CommandResult {
-  const timeoutMs = Number(process.env.CUJ_CMD_TIMEOUT_MS ?? "240000");
+function run(
+  command: string,
+  cwd = SCRIPT_DIR,
+  timeoutMs = Number(process.env.CUJ_CMD_TIMEOUT_MS ?? "240000"),
+): CommandResult {
   const result = spawnSync(command, {
     shell: true,
     encoding: "utf-8",
@@ -1115,6 +1118,20 @@ async function main(): Promise<void> {
       const scenarioRunEnv: NodeJS.ProcessEnv = buildScenarioBrowserEnv(scenarioEnv, scenarioName);
       let runResult = runNodeScript(compiled, APP_ROOT, scenarioRunEnv);
       printOutput(runResult.stdout, runResult.stderr);
+
+      const scenarioSession = scenarioRunEnv.AGENT_BROWSER_SESSION?.trim();
+      if (scenarioSession) {
+        const cleanupResult = run(
+          `agent-browser --session ${shellQuote(scenarioSession)} close`,
+          APP_ROOT,
+          30_000,
+        );
+        if (cleanupResult.status !== 0) {
+          console.warn(
+            `[CUJ] Browser session cleanup retry failed for ${scenarioName} (exit ${cleanupResult.status})`,
+          );
+        }
+      }
 
       const outputCombined = `${runResult.stdout}\n${runResult.stderr}`;
       for (const moviePath of parseMoviePaths(outputCombined)) {
