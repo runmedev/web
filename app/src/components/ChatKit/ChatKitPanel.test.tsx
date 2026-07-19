@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-type HarnessAdapter = "responses-direct" | "codex" | "codex-wasm";
+type HarnessAdapter = "responses-direct" | "codex";
 
 let harnessState: {
   harnesses: Array<{ name: string; baseUrl: string; adapter: HarnessAdapter }>;
@@ -15,7 +15,12 @@ let codexProjectsState: {
 };
 let codexConversationState: {
   selectedProject: { id: string; name: string };
-  threads: Array<{ id: string; title: string; updatedAt?: string; previousResponseId?: string }>;
+  threads: Array<{
+    id: string;
+    title: string;
+    updatedAt?: string;
+    previousResponseId?: string;
+  }>;
   currentThreadId: string | null;
   currentTurnId: string | null;
   loadingHistory: boolean;
@@ -26,7 +31,11 @@ let responsesDirectConfigState: {
   apiKey: string;
 };
 let currentDocUriState: string | null;
-let bridgeSnapshot: { state: "idle" | "connecting" | "open" | "closed" | "error"; url: string | null; lastError: string | null };
+let bridgeSnapshot: {
+  state: "idle" | "connecting" | "open" | "closed" | "error";
+  url: string | null;
+  lastError: string | null;
+};
 let setThreadIdMock: ReturnType<typeof vi.fn>;
 let fetchUpdatesMock: ReturnType<typeof vi.fn>;
 const harnessManagerMock = {
@@ -58,11 +67,8 @@ const bridgeMock = {
   getSnapshot: vi.fn(() => bridgeSnapshot),
 };
 const proxyMock = {
-  useTransport: vi.fn(),
   connectProxy: vi.fn(async () => {}),
-  connectWasm: vi.fn(async () => {}),
   disconnect: vi.fn(),
-  setCodeExecutor: vi.fn(),
   setAuthorizationResolver: vi.fn(),
 };
 const codexControllerMock = {
@@ -174,7 +180,7 @@ vi.mock("../../lib/runtime/codexProjectManager", () => ({
 
 vi.mock("../../lib/runtime/harnessManager", async () => {
   const actual = await vi.importActual<typeof import("../../lib/runtime/harnessManager")>(
-    "../../lib/runtime/harnessManager"
+    "../../lib/runtime/harnessManager",
   );
   return {
     ...actual,
@@ -191,7 +197,7 @@ import ChatKitPanel from "./ChatKitPanel";
 
 describe("ChatKitPanel codex harness routing", () => {
   beforeEach(() => {
-    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({} as CanvasRenderingContext2D));
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({}) as CanvasRenderingContext2D);
     harnessState = {
       harnesses: [
         {
@@ -203,11 +209,6 @@ describe("ChatKitPanel codex harness routing", () => {
           name: "local-codex",
           baseUrl: "http://127.0.0.1:31337",
           adapter: "codex",
-        },
-        {
-          name: "local-codex-wasm",
-          baseUrl: "",
-          adapter: "codex-wasm",
         },
       ],
       defaultHarness: {
@@ -254,11 +255,8 @@ describe("ChatKitPanel codex harness routing", () => {
     bridgeMock.setHandler.mockClear();
     bridgeMock.subscribe.mockClear();
     bridgeMock.getSnapshot.mockClear();
-    proxyMock.useTransport.mockClear();
     proxyMock.connectProxy.mockClear();
-    proxyMock.connectWasm.mockClear();
     proxyMock.disconnect.mockClear();
-    proxyMock.setCodeExecutor.mockClear();
     proxyMock.setAuthorizationResolver.mockClear();
     codexControllerMock.setSelectedProject.mockClear();
     codexControllerMock.refreshHistory.mockClear();
@@ -280,7 +278,7 @@ describe("ChatKitPanel codex harness routing", () => {
   });
 
   it("routes ChatKit to responses-direct and does not connect codex bridge", async () => {
-    const { rerender } = render(<ChatKitPanel />);
+    render(<ChatKitPanel />);
     await waitForChatKitToRerender();
 
     const config = getLatestChatKitConfig();
@@ -290,19 +288,19 @@ describe("ChatKitPanel codex harness routing", () => {
   });
 
   it("renders a harness selector and switches the default harness", async () => {
-    const { rerender } = render(<ChatKitPanel />);
+    render(<ChatKitPanel />);
 
     const selector = screen.getByTestId("chatkit-harness-select") as HTMLSelectElement;
     expect(selector.value).toBe("default");
-    expect(selector.options).toHaveLength(3);
+    expect(selector.options).toHaveLength(2);
 
     await act(async () => {
       fireEvent.change(selector, {
-        target: { value: "local-codex-wasm" },
+        target: { value: "local-codex" },
       });
     });
 
-    expect(harnessManagerMock.setDefault).toHaveBeenCalledWith("local-codex-wasm");
+    expect(harnessManagerMock.setDefault).toHaveBeenCalledWith("local-codex");
   });
 
   it("routes ChatKit to responses-direct adapter URL and uses responses-direct fetch", async () => {
@@ -315,40 +313,7 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(config.api.url).toBe("http://127.0.0.1:31337/responses/direct/chatkit");
 
     await act(async () => {
-      const response = await config.api.fetch(
-        "http://127.0.0.1:31337/responses/direct/chatkit",
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            type: "threads.create",
-            params: {
-              input: {
-                content: [{ type: "input_text", text: "hello" }],
-              },
-            },
-          }),
-        },
-      );
-      await response.text();
-    });
-
-    expect(bridgeMock.connect).not.toHaveBeenCalled();
-  });
-
-  it("routes ChatKit to codex-wasm adapter URL and initializes the wasm app-server client", async () => {
-    harnessState.defaultHarness.adapter = "codex-wasm";
-
-    const { rerender } = render(<ChatKitPanel />);
-    await waitFor(() => expect(proxyMock.connectWasm).toHaveBeenCalled());
-
-    const config = getLatestChatKitConfig();
-    expect(config.api.url).toBe("http://127.0.0.1:31337/codex/wasm/chatkit");
-
-    await act(async () => {
-      await config.api.fetch("http://127.0.0.1:31337/codex/wasm/chatkit", {
+      const response = await config.api.fetch("http://127.0.0.1:31337/responses/direct/chatkit", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -362,35 +327,19 @@ describe("ChatKitPanel codex harness routing", () => {
           },
         }),
       });
+      await response.text();
     });
 
-    expect(codexControllerMock.streamUserMessage).toHaveBeenCalled();
-    await waitFor(() => expect(proxyMock.useTransport).toHaveBeenCalledWith("wasm"));
-    expect(proxyMock.setCodeExecutor).toHaveBeenCalledWith(expect.any(Function));
-    await waitFor(() =>
-      expect(proxyMock.connectWasm).toHaveBeenCalledWith({
-        apiKey: "sk-test",
-        sessionOptions: expect.objectContaining({
-          instructions: expect.objectContaining({
-            developer: expect.stringContaining(
-              "Executed JavaScript runs inside the Runme AppKernel runtime.",
-            ),
-          }),
-        }),
-      }),
-    );
     expect(bridgeMock.connect).not.toHaveBeenCalled();
   });
 
   it("renders an app-owned model picker with gpt-5.4", () => {
     render(<ChatKitPanel />);
 
-    const modelSelect = screen.getByTestId(
-      "chat-shell-model-select",
-    ) as HTMLSelectElement;
-    expect(
-      [...modelSelect.options].map((option) => option.value),
-    ).toEqual(expect.arrayContaining(["gpt-5.4"]));
+    const modelSelect = screen.getByTestId("chat-shell-model-select") as HTMLSelectElement;
+    expect([...modelSelect.options].map((option) => option.value)).toEqual(
+      expect.arrayContaining(["gpt-5.4"]),
+    );
   });
 
   it("routes ChatKit to /codex/app-server/ws and connects codex bridge + proxy websocket", async () => {
@@ -406,9 +355,6 @@ describe("ChatKitPanel codex harness routing", () => {
         "ws://127.0.0.1:31337/codex/ws",
         "Bearer test-id-token",
       ),
-    );
-    await waitFor(() =>
-      expect(proxyMock.useTransport).toHaveBeenCalledWith("proxy"),
     );
     await waitFor(() =>
       expect(proxyMock.connectProxy).toHaveBeenCalledWith(
@@ -495,9 +441,7 @@ describe("ChatKitPanel codex harness routing", () => {
     render(<ChatKitPanel />);
 
     expect(getLatestChatKitConfig().initialThread).toBe("thread-bootstrap");
-    await waitFor(() =>
-      expect(setThreadIdMock).toHaveBeenCalledWith("thread-bootstrap"),
-    );
+    await waitFor(() => expect(setThreadIdMock).toHaveBeenCalledWith("thread-bootstrap"));
   });
 
   it("routes codex prompt requests through the codex conversation controller", async () => {
@@ -508,7 +452,7 @@ describe("ChatKitPanel codex harness routing", () => {
     const config = getLatestChatKitConfig();
 
     await act(async () => {
-      const response = await config.api.fetch("http://127.0.0.1:31337/codex/chatkit", {
+      await config.api.fetch("http://127.0.0.1:31337/codex/chatkit", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -546,9 +490,7 @@ describe("ChatKitPanel codex harness routing", () => {
     };
     rerender(<ChatKitPanel />);
 
-    expect(getLatestChatKitConfig().api.url).toBe(
-      "http://127.0.0.1:31337/codex/chatkit",
-    );
+    expect(getLatestChatKitConfig().api.url).toBe("http://127.0.0.1:31337/codex/chatkit");
     await waitFor(() =>
       expect(bridgeMock.connect).toHaveBeenCalledWith(
         "ws://127.0.0.1:31337/codex/ws",
@@ -594,9 +536,9 @@ describe("ChatKitPanel codex harness routing", () => {
 
     expect(screen.getByTestId("conversation-drawer")).toBeTruthy();
     expect(screen.getByTestId("codex-project-select")).toBeTruthy();
-    expect(
-      screen.getByTestId("codex-thread-thread-1").textContent ?? "",
-    ).toContain("Investigate latency");
+    expect(screen.getByTestId("codex-thread-thread-1").textContent ?? "").toContain(
+      "Investigate latency",
+    );
   });
 
   it("closes the conversation drawer from its close button", async () => {
@@ -636,7 +578,7 @@ describe("ChatKitPanel codex harness routing", () => {
       },
     ];
 
-    const { rerender } = render(<ChatKitPanel />);
+    render(<ChatKitPanel />);
     await waitFor(() => expect(proxyMock.connectProxy).toHaveBeenCalled());
 
     await act(async () => {
@@ -690,23 +632,23 @@ describe("ChatKitPanel codex harness routing", () => {
     expect(screen.getByTestId("codex-stream-error").textContent).toContain(
       "Timed out waiting for codex turn completion",
     );
-    expect(appLoggerMock.error).toHaveBeenCalledWith(
-      "ChatKit response stream failed",
-      {
-        attrs: {
-          scope: "chatkit.panel",
-          adapter: "codex",
-          error: "Timed out waiting for codex turn completion",
-        },
+    expect(appLoggerMock.error).toHaveBeenCalledWith("ChatKit response stream failed", {
+      attrs: {
+        scope: "chatkit.panel",
+        adapter: "codex",
+        error: "Timed out waiting for codex turn completion",
       },
-    );
+    });
   });
 
   it("logs codex timing milestones from submit through first streamed text", async () => {
     harnessState.defaultHarness.adapter = "codex";
     codexControllerMock.streamUserMessage.mockImplementationOnce(
       async (_input: string, sink: { emit: (payload: unknown) => void }) => {
-        sink.emit({ type: "response.created", response: { id: "turn-timing-1" } });
+        sink.emit({
+          type: "response.created",
+          response: { id: "turn-timing-1" },
+        });
         sink.emit({
           type: "response.output_text.delta",
           response_id: "turn-timing-1",
@@ -855,7 +797,9 @@ describe("ChatKitPanel codex harness routing", () => {
       selectedProject: { id: "project-2", name: "Docs Repo" },
     };
     rerender(<ChatKitPanel />);
-    await waitFor(() => expect(codexControllerMock.setSelectedProject).toHaveBeenCalledWith("project-2"));
+    await waitFor(() =>
+      expect(codexControllerMock.setSelectedProject).toHaveBeenCalledWith("project-2"),
+    );
 
     expect(codexControllerMock.refreshHistory).toHaveBeenCalled();
     expect(setThreadIdMock).toHaveBeenCalledWith(null);

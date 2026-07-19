@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   __resetHarnessManagerForTests,
+  buildChatkitUrl,
   buildCodexAppServerWsUrl,
   buildCodexBridgeWsUrl,
-  buildChatkitUrl,
   getHarnessManager,
 } from "./harnessManager";
 
@@ -46,13 +46,6 @@ describe("harnessManager", () => {
     );
   });
 
-  it("builds codex-wasm route for local codex wasm harnesses", () => {
-    expect(buildChatkitUrl("http://localhost:1234", "codex-wasm")).toBe(
-      "http://localhost:1234/codex/wasm/chatkit",
-    );
-    expect(buildChatkitUrl("", "codex-wasm")).toBe("/codex/wasm/chatkit");
-  });
-
   it("builds responses-direct route for direct OpenAI harnesses", () => {
     expect(buildChatkitUrl("http://localhost:1234", "responses-direct")).toBe(
       "http://localhost:1234/responses/direct/chatkit",
@@ -61,12 +54,8 @@ describe("harnessManager", () => {
   });
 
   it("builds codex websocket bridge URL", () => {
-    expect(buildCodexBridgeWsUrl("http://localhost:1234")).toBe(
-      "ws://localhost:1234/codex/ws",
-    );
-    expect(buildCodexBridgeWsUrl("https://example.com/base")).toBe(
-      "wss://example.com/codex/ws",
-    );
+    expect(buildCodexBridgeWsUrl("http://localhost:1234")).toBe("ws://localhost:1234/codex/ws");
+    expect(buildCodexBridgeWsUrl("https://example.com/base")).toBe("wss://example.com/codex/ws");
     expect(buildCodexBridgeWsUrl("http://localhost:1234", { forceReplace: true })).toBe(
       "ws://localhost:1234/codex/ws?force_replace=true",
     );
@@ -86,7 +75,11 @@ describe("harnessManager", () => {
       HARNESS_STORAGE_KEY,
       JSON.stringify({
         harnesses: [
-          { name: "legacy", baseUrl: "http://127.0.0.1:9090", adapter: "responses" },
+          {
+            name: "legacy",
+            baseUrl: "http://127.0.0.1:9090",
+            adapter: "responses",
+          },
         ],
         defaultHarnessName: "legacy",
       }),
@@ -112,23 +105,29 @@ describe("harnessManager", () => {
     expect(active.adapter).toBe("responses-direct");
   });
 
-  it("allows empty baseUrl for codex-wasm adapter", () => {
-    const mgr = getHarnessManager();
-    mgr.update("local-codex-wasm", "", "codex-wasm");
-    mgr.setDefault("local-codex-wasm");
-
-    const active = mgr.getDefault();
-    expect(active.name).toBe("local-codex-wasm");
-    expect(active.baseUrl).toBe("");
-    expect(active.adapter).toBe("codex-wasm");
-    expect(mgr.resolveChatkitUrl(active)).toBe("/codex/wasm/chatkit");
-  });
-
   it("rejects empty baseUrl for codex adapter", () => {
     const mgr = getHarnessManager();
     expect(() => mgr.update("codex-local", "", "codex")).toThrow(
       "Harness baseUrl is required for codex adapter",
     );
+  });
+
+  it("ignores persisted codex-wasm profiles and falls back to responses-direct", () => {
+    localStorage.setItem(
+      HARNESS_STORAGE_KEY,
+      JSON.stringify({
+        harnesses: [{ name: "removed", baseUrl: "", adapter: "codex-wasm" }],
+        defaultHarnessName: "removed",
+      }),
+    );
+    __resetHarnessManagerForTests();
+
+    const active = getHarnessManager().getDefault();
+    expect(active).toEqual({
+      name: "local-responses",
+      baseUrl: "",
+      adapter: "responses-direct",
+    });
   });
 
   it("syncs harness updates from storage events", () => {
@@ -138,7 +137,11 @@ describe("harnessManager", () => {
       HARNESS_STORAGE_KEY,
       JSON.stringify({
         harnesses: [
-          { name: "external-codex", baseUrl: "http://127.0.0.1:9999", adapter: "codex" },
+          {
+            name: "external-codex",
+            baseUrl: "http://127.0.0.1:9999",
+            adapter: "codex",
+          },
         ],
         defaultHarnessName: "external-codex",
       }),
@@ -163,7 +166,11 @@ describe("harnessManager", () => {
       HARNESS_STORAGE_KEY,
       JSON.stringify({
         harnesses: [
-          { name: "same-window-codex", baseUrl: "http://127.0.0.1:7777", adapter: "codex" },
+          {
+            name: "same-window-codex",
+            baseUrl: "http://127.0.0.1:7777",
+            adapter: "codex",
+          },
         ],
         defaultHarnessName: "same-window-codex",
       }),

@@ -13,9 +13,7 @@ import {
   buildChatkitUrl,
   type HarnessProfile,
 } from '../../lib/runtime/harnessManager'
-import {
-  buildCodexChatKitFetchOptions,
-} from '../../lib/runtime/codexChatKitAdapter'
+import { buildCodexChatKitFetchOptions } from '../../lib/runtime/codexChatKitAdapter'
 import { createChatKitFetchFromAdapter } from '../../lib/runtime/createChatKitFetchFromAdapter'
 import {
   getCodexConversationController,
@@ -30,18 +28,13 @@ import type {
   HarnessRuntime,
 } from '../../lib/runtime/harnessChatKitAdapter'
 import { getHarnessRuntimeManager } from '../../lib/runtime/harnessRuntimeManager'
-import {
-  createCodexBridgeToolHandler,
-} from '../../lib/runtime/notebookToolHandlers'
+import { createCodexBridgeToolHandler } from '../../lib/runtime/notebookToolHandlers'
 import {
   getCodexProjectManager,
   useCodexProjects,
 } from '../../lib/runtime/codexProjectManager'
 import { appLogger } from '../../lib/logging/runtime'
-import {
-  responsesDirectConfigManager,
-  useResponsesDirectConfigSnapshot,
-} from '../../lib/runtime/responsesDirectConfigManager'
+import { responsesDirectConfigManager } from '../../lib/runtime/responsesDirectConfigManager'
 import { useCodeModeExecutor } from '../../lib/runtime/useCodeModeExecutor'
 
 import { getAccessToken, getAuthData } from '../../token'
@@ -121,7 +114,7 @@ type ChatKitTurnTiming = {
 }
 
 function isCodexHarness(adapter: HarnessProfile['adapter']): boolean {
-  return adapter === 'codex' || adapter === 'codex-wasm'
+  return adapter === 'codex'
 }
 
 function readPersistedModelSelection(
@@ -153,14 +146,9 @@ function persistModelSelection(
   try {
     const raw = window.localStorage.getItem(CHAT_MODEL_STORAGE_KEY)
     const parsed =
-      raw && raw.trim()
-        ? (JSON.parse(raw) as Record<string, unknown>)
-        : {}
+      raw && raw.trim() ? (JSON.parse(raw) as Record<string, unknown>) : {}
     parsed[adapter] = model
-    window.localStorage.setItem(
-      CHAT_MODEL_STORAGE_KEY,
-      JSON.stringify(parsed)
-    )
+    window.localStorage.setItem(CHAT_MODEL_STORAGE_KEY, JSON.stringify(parsed))
   } catch {
     // Ignore persistence failures and continue with in-memory state.
   }
@@ -184,16 +172,10 @@ function extractResponseIdFromSSEEvent(
 function extractVisibleTextFromSSEEvent(
   payload: Record<string, unknown>
 ): string {
-  if (
-    typeof payload.delta === 'string' &&
-    payload.delta.trim().length > 0
-  ) {
+  if (typeof payload.delta === 'string' && payload.delta.trim().length > 0) {
     return payload.delta
   }
-  if (
-    typeof payload.text === 'string' &&
-    payload.text.trim().length > 0
-  ) {
+  if (typeof payload.text === 'string' && payload.text.trim().length > 0) {
     return payload.text
   }
   const part = payload.part
@@ -354,19 +336,17 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false)
   const [codexStreamError, setCodexStreamError] = useState<string | null>(null)
   const [codexThreadBootstrapComplete, setCodexThreadBootstrapComplete] =
-    useState(
-      defaultHarness.adapter !== 'codex' &&
-        defaultHarness.adapter !== 'codex-wasm'
-    )
-  const [activeAdapter, setActiveAdapter] = useState<HarnessChatKitAdapter | null>(
-    null
-  )
+    useState(defaultHarness.adapter !== 'codex')
+  const [activeAdapter, setActiveAdapter] =
+    useState<HarnessChatKitAdapter | null>(null)
   const [activeController, setActiveController] =
     useState<ConversationController | null>(null)
   const chatkitDomainKey = getConfiguredChatKitDomainKey()
   const [showConversationDrawer, setShowConversationDrawer] = useState(false)
   const [drawerThreadsLoading, setDrawerThreadsLoading] = useState(false)
-  const [drawerThreadsError, setDrawerThreadsError] = useState<string | null>(null)
+  const [drawerThreadsError, setDrawerThreadsError] = useState<string | null>(
+    null
+  )
   const runtimeRef = useRef<HarnessRuntime | null>(null)
   const activeTurnTimingRef = useRef<ChatKitTurnTiming | null>(null)
   const chatkitActionsRef = useRef<{
@@ -375,11 +355,11 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   } | null>(null)
   const lastAppliedThreadRef = useRef<string | null>(null)
   const harnessRuntimeManager = useMemo(() => getHarnessRuntimeManager(), [])
-  const responsesDirectConfig = useResponsesDirectConfigSnapshot()
   const codexProjects = useCodexProjects()
   const { defaultProject } = codexProjects
   const codexConversation = useCodexConversationSnapshot()
-  const conversationSnapshot = useConversationControllerSnapshot(activeController)
+  const conversationSnapshot =
+    useConversationControllerSnapshot(activeController)
   const currentThreadId = conversationSnapshot?.currentThreadId ?? null
   const selectedModel =
     conversationSnapshot?.selectedModel ??
@@ -398,10 +378,7 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
   )
   const handleSseEvent = useCallback(
     (rawEvent: string) => {
-      const logTiming = (
-        phase: string,
-        attrs: Record<string, unknown>
-      ) => {
+      const logTiming = (phase: string, attrs: Record<string, unknown>) => {
         appLogger.info('ChatKit timing', {
           attrs: {
             scope: 'chatkit.panel',
@@ -436,8 +413,11 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
             if (activeTurn) {
               logTiming('failed', {
                 responseId:
-                  extractResponseIdFromSSEEvent(parsed) ?? activeTurn.responseId,
-                elapsedMs: Math.round(performance.now() - activeTurn.submittedAtMs),
+                  extractResponseIdFromSSEEvent(parsed) ??
+                  activeTurn.responseId,
+                elapsedMs: Math.round(
+                  performance.now() - activeTurn.submittedAtMs
+                ),
                 submittedAt: activeTurn.submittedAtIso,
                 promptChars: activeTurn.prompt.length,
                 error: message,
@@ -490,7 +470,8 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
                   scope: 'chatkit.panel',
                   adapter: defaultHarness.adapter,
                   responseId:
-                    extractResponseIdFromSSEEvent(parsed) ?? activeTurn?.responseId,
+                    extractResponseIdFromSSEEvent(parsed) ??
+                    activeTurn?.responseId,
                   eventType: parsed.type,
                   textChars: visibleText.length,
                   preview: visibleText.slice(0, 160),
@@ -505,7 +486,8 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
               activeTurn.firstVisibleMessageAtMs = performance.now()
               logTiming('first_visible_message', {
                 responseId:
-                  extractResponseIdFromSSEEvent(parsed) ?? activeTurn.responseId,
+                  extractResponseIdFromSSEEvent(parsed) ??
+                  activeTurn.responseId,
                 eventType: parsed.type,
                 ttfmMs: Math.round(
                   activeTurn.firstVisibleMessageAtMs - activeTurn.submittedAtMs
@@ -521,13 +503,15 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
             if (activeTurn) {
               logTiming('completed', {
                 responseId:
-                  extractResponseIdFromSSEEvent(parsed) ?? activeTurn.responseId,
+                  extractResponseIdFromSSEEvent(parsed) ??
+                  activeTurn.responseId,
                 totalTurnTimeMs: Math.round(
                   performance.now() - activeTurn.submittedAtMs
                 ),
                 submittedAt: activeTurn.submittedAtIso,
                 promptChars: activeTurn.prompt.length,
-                sawFirstVisibleMessage: activeTurn.firstVisibleMessageAtMs != null,
+                sawFirstVisibleMessage:
+                  activeTurn.firstVisibleMessageAtMs != null,
               })
               activeTurnTimingRef.current = null
             }
@@ -551,13 +535,10 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       return undefined
     }
     if (isCodexHarness(defaultHarness.adapter)) {
-      return createChatKitFetchFromAdapter(
-        activeAdapter,
-        {
-          ...buildCodexChatKitFetchOptions(),
-          resolveModel: () => selectedModel,
-        }
-      )
+      return createChatKitFetchFromAdapter(activeAdapter, {
+        ...buildCodexChatKitFetchOptions(),
+        resolveModel: () => selectedModel,
+      })
     }
     return createChatKitFetchFromAdapter(activeAdapter, {
       unsupportedRequestPrefix: 'unsupported_responses_direct_request',
@@ -605,14 +586,11 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     return `Bearer ${idToken}`
   }, [defaultHarness.adapter, defaultHarness.baseUrl])
 
-  const selectedProjectId =
-    isCodexHarness(defaultHarness.adapter) ? defaultProject.id : undefined
+  const selectedProjectId = isCodexHarness(defaultHarness.adapter)
+    ? defaultProject.id
+    : undefined
   const codexBridgeHandler =
     defaultHarness.adapter === 'codex' ? handleCodexBridgeToolCall : undefined
-  const wasmApiKey =
-    defaultHarness.adapter === 'codex-wasm'
-      ? responsesDirectConfig.apiKey
-      : undefined
   const responsesApiBaseUrl =
     defaultHarness.adapter === 'responses-direct'
       ? defaultHarness.baseUrl
@@ -669,17 +647,13 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
           : undefined,
       codeModeExecutor,
       codexBridgeHandler,
-      wasmApiKey,
       responsesApiBaseUrl,
     })
     runtimeRef.current = runtime
     lastAppliedThreadRef.current = null
     setActiveController(runtime.getConversationController())
     setActiveAdapter(runtime.createChatKitAdapter())
-    setCodexThreadBootstrapComplete(
-      defaultHarness.adapter !== 'codex' &&
-        defaultHarness.adapter !== 'codex-wasm'
-    )
+    setCodexThreadBootstrapComplete(defaultHarness.adapter !== 'codex')
     setCodexStreamError(null)
 
     let canceled = false
@@ -726,7 +700,6 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     responsesApiBaseUrl,
     resolveCodexAuthorization,
     selectedProjectId,
-    wasmApiKey,
   ])
 
   useEffect(() => {
@@ -873,11 +846,11 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
       })
     },
     onThreadChange: ({ threadId }) => {
-      const liveCodexSnapshot =
-        isCodexHarness(defaultHarness.adapter)
-          ? getCodexConversationController().getSnapshot()
-          : null
-      const liveCodexCurrentThreadId = liveCodexSnapshot?.currentThreadId ?? null
+      const liveCodexSnapshot = isCodexHarness(defaultHarness.adapter)
+        ? getCodexConversationController().getSnapshot()
+        : null
+      const liveCodexCurrentThreadId =
+        liveCodexSnapshot?.currentThreadId ?? null
       const liveCodexCurrentTurnId = liveCodexSnapshot?.currentTurnId ?? null
       if (
         threadId == null &&
@@ -992,23 +965,29 @@ function ChatKitPanelInner({ defaultHarness }: ChatKitPanelInnerProps) {
     setShowConversationDrawer(false)
   }, [activeController])
 
-  const handleSelectThread = useCallback(async (threadId: string) => {
-    await activeController?.selectThread(threadId)
-    await chatkitActionsRef.current?.setThreadId(threadId, 'select_thread')
-    await chatkitActionsRef.current?.fetchUpdates('select_thread')
-    setShowConversationDrawer(false)
-  }, [activeController])
+  const handleSelectThread = useCallback(
+    async (threadId: string) => {
+      await activeController?.selectThread(threadId)
+      await chatkitActionsRef.current?.setThreadId(threadId, 'select_thread')
+      await chatkitActionsRef.current?.fetchUpdates('select_thread')
+      setShowConversationDrawer(false)
+    },
+    [activeController]
+  )
 
-  const handleCodexProjectChange = useCallback(async (projectId: string) => {
-    if (activeController?.setSelectedProject) {
-      await activeController.setSelectedProject(projectId)
-    } else {
-      getCodexProjectManager().setDefault(projectId)
-    }
-    await chatkitActionsRef.current?.setThreadId(null, 'project_change')
-    setCodexStreamError(null)
-    setShowConversationDrawer(false)
-  }, [activeController])
+  const handleCodexProjectChange = useCallback(
+    async (projectId: string) => {
+      if (activeController?.setSelectedProject) {
+        await activeController.setSelectedProject(projectId)
+      } else {
+        getCodexProjectManager().setDefault(projectId)
+      }
+      await chatkitActionsRef.current?.setThreadId(null, 'project_change')
+      setCodexStreamError(null)
+      setShowConversationDrawer(false)
+    },
+    [activeController]
+  )
 
   const handleToggleConversationDrawer = useCallback(async () => {
     if (showConversationDrawer) {
