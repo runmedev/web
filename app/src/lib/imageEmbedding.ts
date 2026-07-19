@@ -130,6 +130,42 @@ async function imageFromBlob(blob: Blob, name: string): Promise<EmbeddedImage> {
   }
 }
 
+async function readResponseBytes(response: Response): Promise<Uint8Array> {
+  const reader = response.body?.getReader()
+  if (!reader) {
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    assertImageSize(bytes.byteLength)
+    return bytes
+  }
+
+  const chunks: Uint8Array[] = []
+  let totalBytes = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) {
+        break
+      }
+      totalBytes += value.byteLength
+      if (totalBytes > MAX_EMBEDDED_IMAGE_BYTES) {
+        await reader.cancel().catch(() => undefined)
+        assertImageSize(totalBytes)
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  const bytes = new Uint8Array(totalBytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return bytes
+}
+
 async function imageFromResponse(
   response: Response,
   name: string
@@ -148,8 +184,7 @@ async function imageFromResponse(
     response.headers.get('content-type'),
     name
   )
-  const bytes = new Uint8Array(await response.arrayBuffer())
-  assertImageSize(bytes.byteLength)
+  const bytes = await readResponseBytes(response)
   return {
     bytes,
     mimeType,

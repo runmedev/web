@@ -130,6 +130,32 @@ describe('image embedding', () => {
     )
   })
 
+  it('stops streaming a response when it exceeds the image limit', async () => {
+    const cancel = vi.fn()
+    let chunkIndex = 0
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const size =
+          chunkIndex++ === 0 ? MAX_EMBEDDED_IMAGE_BYTES - 1024 : 1025
+        controller.enqueue(new Uint8Array(size))
+      },
+      cancel,
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        return new Response(stream, {
+          headers: { 'Content-Type': 'image/png' },
+        })
+      })
+    )
+
+    await expect(
+      readEmbeddedImageSource('https://example.com/oversized.png')
+    ).rejects.toThrow('Image is too large')
+    expect(cancel).toHaveBeenCalled()
+  })
+
   it('uses the native image picker and recognizes extension-only images', async () => {
     const file = new File([new Uint8Array([1])], 'diagram.png', { type: '' })
     ;(window as any).showOpenFilePicker = vi.fn(async () => [
