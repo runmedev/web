@@ -465,6 +465,10 @@ describe('Actions tabs', () => {
 
     expect(dropEvent.defaultPrevented).toBe(true)
     expect(imageEmbeddingMocks.embedImageInNotebook).not.toHaveBeenCalled()
+    expect(toastMocks.showToast).toHaveBeenCalledWith({
+      message: 'Only supported image files can be embedded.',
+      tone: 'error',
+    })
     expect(screen.queryByTestId('image-drop-target')).toBeNull()
   })
 

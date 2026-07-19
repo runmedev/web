@@ -2029,6 +2029,12 @@ function NotebookTabContent({
       }
       const images = files.filter(isSupportedImageFile)
       if (images.length === 0) {
+        if (files.length > 0) {
+          showToast({
+            message: 'Only supported image files can be embedded.',
+            tone: 'error',
+          })
+        }
         return
       }
       void embedImageFiles(images)
