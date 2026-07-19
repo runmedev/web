@@ -77,7 +77,9 @@ await notebooks.show(
 Read and update raw document content, including Excalidraw scenes:
 
 ```js
-const doc = await documents.get('local://file/cb1c8a9f-6dad-4e1a-9cbc-467ddebc3018')
+const doc = await documents.get(
+  'local://file/cb1c8a9f-6dad-4e1a-9cbc-467ddebc3018'
+)
 const scene = JSON.parse(doc.content)
 scene.elements.push({
   id: crypto.randomUUID(),
@@ -119,6 +121,21 @@ await documents.update(doc.uri, JSON.stringify(scene, null, 2), {
 })
 ```
 
+Embed image bytes in the current or a targeted notebook:
+
+```js
+await embed('/tmp/screenshot.png', { alt: 'Settings dialog' })
+await notebooks.embed('https://example.com/diagram.png', {
+  target: { uri: 'local://file/cb1c8a9f-6dad-4e1a-9cbc-467ddebc3018' },
+  name: 'architecture.png',
+})
+```
+
+The command appends a non-runnable HTML cell containing an inline image data
+URL. It accepts browser `File`/`Blob` objects, image data URLs, HTTP(S) URLs,
+and absolute local paths when the Vite development server is running. Images
+larger than 10 MiB are rejected.
+
 Runner setup:
 
 ```js
@@ -133,7 +150,9 @@ oidc.setClientToDrive()
 credentials.google.setClientId('...')
 credentials.google.setClientSecret('...')
 await credentials.google.setServiceAccountFromFile()
-await credentials.google.setServiceAccountFromFilePath('/Users/jlewi/secrets/aisre-gdrive-oai-test-8ba1a40f228e.json')
+await credentials.google.setServiceAccountFromFilePath(
+  '/Users/jlewi/secrets/aisre-gdrive-oai-test-8ba1a40f228e.json'
+)
 ```
 
 Start or refresh Google Drive OAuth:
@@ -190,6 +209,8 @@ app.harness.setDefault('configured-harness-name')
 - If a user wants an action that has no visible button, check the App Console before saying the feature is missing.
 - Prefer `notebooks.appendCell({ kind, ... })` for simple inserts before writing
   raw `notebooks.update(...)` mutations by hand.
+- Use `embed(source, options)` or `notebooks.embed(source, options)` to preserve
+  screenshots and other image bytes as authored notebook content.
 - Use `documents.get(uri)` and `documents.update(uri, content, options)` for
   raw content edits to non-notebook documents such as Excalidraw diagrams.
 - Use `notebooks.resolve(reference)` to turn local URIs, Runme share URLs,

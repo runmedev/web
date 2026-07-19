@@ -11,7 +11,20 @@ const backendProxyTarget =
   "http://127.0.0.1:9977";
 const LOCAL_SERVICE_ACCOUNT_KEY_ENDPOINT =
   "/__runme-dev/service-account-key";
+const LOCAL_IMAGE_ENDPOINT = "/__runme-dev/local-image";
 const MAX_LOCAL_KEY_BYTES = 1024 * 1024;
+const MAX_LOCAL_IMAGE_BYTES = 10 * 1024 * 1024;
+const IMAGE_MIME_BY_EXTENSION = new Map([
+  [".avif", "image/avif"],
+  [".bmp", "image/bmp"],
+  [".gif", "image/gif"],
+  [".ico", "image/x-icon"],
+  [".jpeg", "image/jpeg"],
+  [".jpg", "image/jpeg"],
+  [".png", "image/png"],
+  [".svg", "image/svg+xml"],
+  [".webp", "image/webp"],
+]);
 
 function localServiceAccountKeyPlugin() {
   return {
@@ -63,6 +76,47 @@ function localServiceAccountKeyPlugin() {
   };
 }
 
+function localImagePlugin() {
+  return {
+    name: "runme-local-image",
+    configureServer(server) {
+      server.middlewares.use(LOCAL_IMAGE_ENDPOINT, async (req, res) => {
+        try {
+          const requestUrl = new URL(req.url ?? "", "http://localhost");
+          const rawPath = requestUrl.searchParams.get("path") ?? "";
+          if (!rawPath || !path.isAbsolute(rawPath)) {
+            res.statusCode = 400;
+            res.end("Expected an absolute image path.");
+            return;
+          }
+
+          const extension = path.extname(rawPath).toLowerCase();
+          const mimeType = IMAGE_MIME_BY_EXTENSION.get(extension);
+          if (!mimeType) {
+            res.statusCode = 400;
+            res.end("Local image path must use a supported image extension.");
+            return;
+          }
+
+          const bytes = await readFile(rawPath);
+          if (bytes.byteLength > MAX_LOCAL_IMAGE_BYTES) {
+            res.statusCode = 413;
+            res.end("Local image file is too large.");
+            return;
+          }
+
+          res.setHeader("Content-Type", mimeType);
+          res.setHeader("Content-Length", String(bytes.byteLength));
+          res.end(bytes);
+        } catch (error) {
+          res.statusCode = 500;
+          res.end(`Failed to read local image: ${String(error)}`);
+        }
+      });
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   // Use root-relative assets so LB rewrites to /index.html still load bundles from /.
@@ -76,6 +130,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
     localServiceAccountKeyPlugin(),
+    localImagePlugin(),
     svgr({
       // Copied options from UIKit
       svgrOptions: {

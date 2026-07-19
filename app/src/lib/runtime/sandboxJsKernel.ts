@@ -70,6 +70,7 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'runme.rerun',
   'runme.getCurrentNotebook',
   'runme.help',
+  'embed',
   'codex.turns.list',
   'codex.turns.getEvents',
   'notebookDiff.listDriveRevisions',
@@ -101,6 +102,7 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   ...SANDBOX_NOTEBOOKS_API_METHODS,
   'notebooks.createLocal',
   'notebooks.appendCell',
+  'notebooks.embed',
 ]
 
 const LOW_LEVEL_SANDBOX_ALLOWED_METHODS = [
@@ -316,6 +318,7 @@ function buildSandboxSrcDoc(options: {
           getCurrentNotebook: () => hostCall("runme.getCurrentNotebook", []),
           help: () => hostCall("runme.help", []),
         };
+        const embed = (source, options) => hostCall("embed", [source, options]);
 
         ${opfsHelper}
 
@@ -330,6 +333,7 @@ function buildSandboxSrcDoc(options: {
           execute: (args) => callHost("notebooks.execute", [args]),
           createLocal: (name, options) => callHost("notebooks.createLocal", [name, options]),
           appendCell: (args) => callHost("notebooks.appendCell", [args]),
+          embed: (source, options) => callHost("notebooks.embed", [source, options]),
           resolve: (reference) => callHost("notebooks.resolve", [reference]),
           show: (reference) => callHost("notebooks.show", [reference]),
           shareUrl: (reference) => callHost("notebooks.shareUrl", [reference]),
@@ -428,6 +432,7 @@ function buildSandboxSrcDoc(options: {
           consoleProxy.log("- runme.rerun([target])");
           consoleProxy.log("- runme.getCurrentNotebook()");
           consoleProxy.log("- runme.help()");
+          consoleProxy.log("- embed(source, { target?, alt?, name? })");
           ${opfsHelpLines}
           ${netHelpLines}
           consoleProxy.log("- notebooks.help([topic])");
@@ -437,6 +442,7 @@ function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebooks.execute({ target, refIds })");
           consoleProxy.log("- notebooks.createLocal(name, options?)");
           consoleProxy.log("- notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? })");
+          consoleProxy.log("- notebooks.embed(source, { target?, alt?, name? })");
           consoleProxy.log("- notebooks.resolve([reference])");
           consoleProxy.log("- notebooks.show([reference])");
           consoleProxy.log("- notebooks.shareUrl([reference])");
