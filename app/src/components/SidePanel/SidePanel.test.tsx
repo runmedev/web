@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { useEffect } from 'react'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 type PanelKey = 'explorer' | 'open-documents' | 'outline' | 'chatkit' | null
@@ -92,6 +98,12 @@ vi.mock('../../contexts/GoogleAuthContext', () => ({
 vi.mock('../../contexts/NotebookContext', () => ({
   useNotebookContext: () => ({
     useNotebookSnapshot: () => notebookSnapshotState,
+  }),
+}))
+
+vi.mock('../../contexts/NotebookStoreContext', () => ({
+  useNotebookStore: () => ({
+    store: null,
   }),
 }))
 
@@ -412,7 +424,12 @@ describe('SidePanelContent ChatKit persistence', () => {
     )
   })
 
-  it('renders Markdown headings and scrolls the selected cell into view', () => {
+  it('focuses outline cells and copies their deep links', async () => {
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
     activePanelState = 'outline'
     currentDocUri = 'local://file/outline.json'
     notebookSnapshotState = {
@@ -443,6 +460,9 @@ describe('SidePanelContent ChatKit persistence', () => {
     const secondCellElement = document.createElement('div')
     secondCellElement.dataset.cellRefId = 'cell-two'
     secondCellElement.scrollIntoView = vi.fn()
+    const secondCellFocusTarget = document.createElement('button')
+    secondCellFocusTarget.dataset.cellFocusRole = 'rendered'
+    secondCellElement.appendChild(secondCellFocusTarget)
     notebookElement.appendChild(secondCellElement)
     document.body.appendChild(notebookElement)
 
@@ -456,6 +476,16 @@ describe('SidePanelContent ChatKit persistence', () => {
     expect(secondCellElement.scrollIntoView).toHaveBeenCalledWith({
       behavior: 'smooth',
       block: 'center',
+    })
+    expect(document.activeElement).toBe(secondCellFocusTarget)
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Copy link to Second cell' })
+    )
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        'http://localhost:3000/?doc=local%3A%2F%2Ffile%2Foutline.json#cell=cell-two'
+      )
     })
 
     notebookElement.remove()
