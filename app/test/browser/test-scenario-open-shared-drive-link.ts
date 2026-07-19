@@ -438,10 +438,10 @@ takeScreenshot(FILE_LOADED_SCREENSHOT);
 
 openNotebookDocumentContextMenu();
 snapshot = run("agent-browser snapshot -i").stdout;
-if (/Copy Share Link/i.test(snapshot)) {
-  pass("Notebook document context menu offers a share link action");
+if (/Copy (?:local )?link to cell/i.test(snapshot)) {
+  pass("Notebook cell context menu offers a cell link action");
 } else {
-  fail("Notebook document context menu did not offer a share link action");
+  fail("Notebook cell context menu did not offer a cell link action");
 }
 takeScreenshot(DOCUMENT_SHARE_MENU_SCREENSHOT);
 
@@ -571,7 +571,9 @@ run(
 run("agent-browser reload");
 run("agent-browser wait 4500");
 
-const folderExplorerSnapshot = run("agent-browser snapshot -i").stdout;
+const folderExplorerSnapshot = run(
+  "agent-browser get text '#workspace-explorer-box'",
+).stdout;
 writeArtifact(
   "scenario-open-shared-drive-link-07-folder-explorer.txt",
   folderExplorerSnapshot,
