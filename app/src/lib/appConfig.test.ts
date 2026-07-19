@@ -385,13 +385,13 @@ describe('appConfig OIDC Google shorthand', () => {
       setLocalConfigPreferredOnLoad,
     } = await loadModules()
 
-    expect(isLocalConfigPreferredOnLoad()).toBe(false)
-
-    expect(disableAppConfigOverridesOnLoad()).toBe(true)
     expect(isLocalConfigPreferredOnLoad()).toBe(true)
 
     expect(setLocalConfigPreferredOnLoad(false)).toBe(false)
     expect(isLocalConfigPreferredOnLoad()).toBe(false)
+
+    expect(disableAppConfigOverridesOnLoad()).toBe(true)
+    expect(isLocalConfigPreferredOnLoad()).toBe(true)
 
     expect(enableAppConfigOverridesOnLoad()).toBe(false)
     expect(isLocalConfigPreferredOnLoad()).toBe(false)
