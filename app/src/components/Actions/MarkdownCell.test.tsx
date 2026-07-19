@@ -419,4 +419,85 @@ describe("MarkdownCell", () => {
       screen.getByTestId("markdown-rendered"),
     );
   });
+
+  it("opens ordinary links in a new tab", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-external-link",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "[Runme](https://runme.dev/)",
+    });
+    const onLinkClick = vi.fn(() => false);
+    const openWindow = vi.spyOn(window, "open").mockImplementation(() => null);
+
+    renderMarkdownCell(new StubCellData(cell) as unknown as CellData, {
+      onLinkClick,
+    });
+
+    const link = screen.getByRole("link", { name: "Runme" });
+    expect(link.getAttribute("href")).toBe("https://runme.dev/");
+    expect(link.getAttribute("target")).toBe("_blank");
+
+    const event = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    expect(link.dispatchEvent(event)).toBe(false);
+    expect(onLinkClick).toHaveBeenCalledWith("https://runme.dev/");
+    expect(openWindow).toHaveBeenCalledWith(
+      "https://runme.dev/",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    openWindow.mockRestore();
+  });
+
+  it("prevents native navigation for intercepted Runme notebook links", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-notebook-link",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "[Notes](https://runme.example/?doc=local%3A%2F%2Ffile%2Fnotes)",
+    });
+    const onLinkClick = vi.fn(() => true);
+    const openWindow = vi.spyOn(window, "open").mockImplementation(() => null);
+
+    renderMarkdownCell(new StubCellData(cell) as unknown as CellData, {
+      onLinkClick,
+    });
+
+    const link = screen.getByRole("link", { name: "Notes" });
+    const event = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    expect(link.dispatchEvent(event)).toBe(false);
+    expect(onLinkClick).toHaveBeenCalledOnce();
+    expect(openWindow).not.toHaveBeenCalled();
+
+    openWindow.mockRestore();
+  });
+
+  it("does not enter edit mode when a rendered link is double-clicked", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-double-click-link",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "[Runme](https://runme.dev/)",
+    });
+
+    renderMarkdownCell(new StubCellData(cell) as unknown as CellData);
+
+    fireEvent.doubleClick(screen.getByRole("link", { name: "Runme" }));
+
+    expect(screen.getByTestId("markdown-rendered")).toBeTruthy();
+    expect(screen.queryByTestId("markdown-editor")).toBeNull();
+  });
 });

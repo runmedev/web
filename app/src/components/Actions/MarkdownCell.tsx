@@ -116,17 +116,6 @@ const markdownComponents: Components = {
       {children}
     </blockquote>
   ),
-  a: ({ children, href, ...props }) => (
-    <a
-      href={href}
-      className="text-blue-600 hover:underline"
-      target="_blank"
-      rel="noopener noreferrer"
-      {...props}
-    >
-      {children}
-    </a>
-  ),
   table: ({ children, ...props }) => (
     <div className="overflow-x-auto mb-3">
       <table className="min-w-full border border-nb-border-strong" {...props}>
@@ -179,6 +168,8 @@ interface MarkdownCellProps {
   isWindowFocused?: boolean
   /** Notify parent when markdown focus target changes explicitly */
   onFocusRoleChange?: (focusRole: CellFocusRole) => void
+  /** Intercept links that should open inside the current Runme workspace. */
+  onLinkClick?: (href: string) => boolean
   /** Allow source inspection, but prevent content and metadata changes. */
   readOnly?: boolean
 }
@@ -204,6 +195,7 @@ const MarkdownCell = memo(
     activeFocusRole = 'editor',
     isWindowFocused = false,
     onFocusRoleChange,
+    onLinkClick,
     readOnly = false,
   }: MarkdownCellProps) => {
     // Subscribe to cell data changes using useSyncExternalStore for tearing-safe reads
@@ -382,6 +374,35 @@ const MarkdownCell = memo(
       }
     }, [readOnly, value])
 
+    const renderedMarkdownComponents = useMemo<Components>(
+      () => ({
+        ...markdownComponents,
+        a: ({ children, href, ...props }) => (
+          <a
+            href={href}
+            className="text-blue-600 hover:underline"
+            target="_blank"
+            rel="noopener noreferrer"
+            {...props}
+            onClick={(event) => {
+              event.stopPropagation()
+              event.preventDefault()
+              if (href && onLinkClick?.(href)) {
+                return
+              }
+              if (href) {
+                window.open(href, '_blank', 'noopener,noreferrer')
+              }
+            }}
+            onDoubleClick={(event) => event.stopPropagation()}
+          >
+            {children}
+          </a>
+        ),
+      }),
+      [onLinkClick]
+    )
+
     // Memoize the rendered markdown to avoid unnecessary re-renders
     const renderedMarkdown = useMemo(() => {
       if (!value.trim()) {
@@ -397,13 +418,13 @@ const MarkdownCell = memo(
         <div className="prose prose-sm max-w-none">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
-            components={markdownComponents}
+            components={renderedMarkdownComponents}
           >
             {value}
           </ReactMarkdown>
         </div>
       )
-    }, [readOnly, value])
+    }, [readOnly, renderedMarkdownComponents, value])
 
     if (!cell) {
       return null
@@ -501,6 +522,7 @@ const MarkdownCell = memo(
       prevProps.activeFocusRole === nextProps.activeFocusRole &&
       prevProps.isWindowFocused === nextProps.isWindowFocused &&
       prevProps.onFocusRoleChange === nextProps.onFocusRoleChange &&
+      prevProps.onLinkClick === nextProps.onLinkClick &&
       prevProps.readOnly === nextProps.readOnly
     )
   }

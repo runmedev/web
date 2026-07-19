@@ -9,6 +9,7 @@ import {
   getNotebookShareTarget,
   normalizeNotebookReferenceUri,
   parseNotebookCellFragment,
+  parseNotebookShareLink,
 } from './shareLinks'
 
 describe('buildNotebookShareUrl', () => {
@@ -74,6 +75,75 @@ describe('notebook cell links', () => {
     expect(parseNotebookCellFragment('#legacy%2Fcell')).toBeNull()
     expect(parseNotebookCellFragment('#access_token=secret')).toBeNull()
     expect(parseNotebookCellFragment('#section=overview')).toBeNull()
+  })
+})
+
+describe('parseNotebookShareLink', () => {
+  it('extracts the notebook and cell targets from a Runme share link', () => {
+    expect(
+      parseNotebookShareLink(
+        'https://runme.example/workspace?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2Ffile123%2Fview#cell=markup%2Fintro',
+        'https://runme.example/?session=calm-harbor'
+      )
+    ).toEqual({
+      notebookUri: 'https://drive.google.com/file/d/file123/view',
+      cellRefId: 'markup/intro',
+    })
+  })
+
+  it('resolves relative links against the current Runme app URL', () => {
+    expect(
+      parseNotebookShareLink(
+        '?doc=local%3A%2F%2Ffile%2Fnotes',
+        'https://runme.example/workspace?session=calm-harbor'
+      )
+    ).toEqual({
+      notebookUri: 'local://file/notes',
+      cellRefId: null,
+    })
+  })
+
+  it('accepts links between known Runme app origins', () => {
+    const driveUri = 'https://drive.google.com/file/d/file123/view'
+    const gatewayUrl = `https://runme.gateway.unified-0.internal.api.openai.org/?doc=${encodeURIComponent(
+      driveUri
+    )}`
+    const localhostUrl = `http://localhost:5173/?doc=${encodeURIComponent(driveUri)}`
+
+    expect(
+      parseNotebookShareLink(
+        gatewayUrl,
+        'http://localhost:5173/?session=red-valley'
+      )
+    ).toEqual({
+      notebookUri: driveUri,
+      cellRefId: null,
+    })
+    expect(
+      parseNotebookShareLink(
+        localhostUrl,
+        'https://runme.gateway.unified-0.internal.api.openai.org/?session=blue-meadow'
+      )
+    ).toEqual({
+      notebookUri: driveUri,
+      cellRefId: null,
+    })
+  })
+
+  it('ignores ordinary web links and unsupported protocols', () => {
+    expect(parseNotebookShareLink('https://example.com/docs')).toBeNull()
+    expect(
+      parseNotebookShareLink(
+        'https://other.example/?doc=local%3A%2F%2Ffile%2Fnotes',
+        'https://runme.example/'
+      )
+    ).toBeNull()
+    expect(
+      parseNotebookShareLink(
+        'mailto:someone@example.com?doc=local%3A%2F%2Ffile%2Fnotes'
+      )
+    ).toBeNull()
+    expect(parseNotebookShareLink('not a valid link')).toBeNull()
   })
 })
 
