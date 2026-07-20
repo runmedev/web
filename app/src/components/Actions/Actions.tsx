@@ -1664,7 +1664,9 @@ export function Action({
                   ) : (
                     <>
                       <option value={DEFAULT_RUNNER_PLACEHOLDER}>
-                        {defaultRunnerName ? `${defaultRunnerName}` : 'default'}
+                        {defaultRunnerName
+                          ? `default (${defaultRunnerName})`
+                          : 'default'}
                       </option>
                       {listRunners()
                         .filter((runner) => !isAppKernelRunnerName(runner.name))

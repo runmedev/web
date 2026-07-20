@@ -99,6 +99,16 @@ const imageEmbeddingMocks = vi.hoisted(() => ({
   ),
 }))
 
+const runnerContextMocks = vi.hoisted(() => ({
+  runners: [] as Array<{
+    name: string
+    endpoint: string
+    reconnect: boolean
+    interceptors: []
+  }>,
+  defaultRunnerName: '<default>' as string | null,
+}))
+
 // Minimal mocks for contexts Action consumes
 vi.mock('../../contexts/OutputContext', () => ({
   useOutput: () => ({
@@ -113,8 +123,8 @@ vi.mock('../../contexts/OutputContext', () => ({
 
 vi.mock('../../contexts/RunnersContext', () => ({
   useRunners: () => ({
-    listRunners: () => [],
-    defaultRunnerName: '<default>',
+    listRunners: () => runnerContextMocks.runners,
+    defaultRunnerName: runnerContextMocks.defaultRunnerName,
   }),
 }))
 
@@ -346,6 +356,8 @@ beforeEach(() => {
   imageEmbeddingMocks.pickImageFromLocalFilesystem.mockReset()
   imageEmbeddingMocks.pickImageFromLocalFilesystem.mockResolvedValue(null)
   imageEmbeddingMocks.isSupportedImageFile.mockClear()
+  runnerContextMocks.runners = []
+  runnerContextMocks.defaultRunnerName = '<default>'
 })
 
 describe('Actions tabs', () => {
@@ -2008,6 +2020,57 @@ describe('Action component', () => {
     )
     expect(runnerSelect).toBeTruthy()
     expect(kernelSelect).toBeNull()
+  })
+
+  it('distinguishes the virtual default choice from the explicit default runner', () => {
+    runnerContextMocks.runners = [
+      {
+        name: 'default',
+        endpoint: 'ws://localhost:9977/ws',
+        reconnect: true,
+        interceptors: [],
+      },
+      {
+        name: 'local',
+        endpoint: 'ws://localhost:9988/ws',
+        reconnect: true,
+        interceptors: [],
+      },
+      {
+        name: 'openai-local',
+        endpoint: 'ws://localhost:9988/ws',
+        reconnect: true,
+        interceptors: [],
+      },
+    ]
+    runnerContextMocks.defaultRunnerName = 'openai-local'
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'cell-runner-default-label',
+      kind: parser_pb.CellKind.CODE,
+      languageId: 'bash',
+      outputs: [],
+      metadata: {},
+      value: 'echo hello',
+    })
+    const stub = new StubCellData(cell)
+
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />)
+
+    const select = document.getElementById(
+      'runner-select-cell-runner-default-label'
+    ) as HTMLSelectElement | null
+    expect(select).toBeTruthy()
+    expect(
+      [...select!.options].map((option) => ({
+        value: option.value,
+        label: option.textContent,
+      }))
+    ).toEqual([
+      { value: '<default>', label: 'default (openai-local)' },
+      { value: 'default', label: 'default' },
+      { value: 'local', label: 'local' },
+      { value: 'openai-local', label: 'openai-local' },
+    ])
   })
 
   it('shows kernel selector (not runner selector) for jupyter cells', () => {
