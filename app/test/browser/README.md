@@ -59,14 +59,13 @@ The hello-world scenario validates an end-to-end flow:
 - run the first cell
 - assert executed cell outputs contain `hello world`
 
-The no-runner logs scenario validates failure diagnostics:
+The no-runner logs scenario validates unreachable-runner semantics:
 
 - remove configured runners
-- minimize the bottom pane before execution
 - attempt to execute a code cell
-- re-expand the bottom pane
+- assert the execution remains running without a terminal result
 - open the Logs tab
-- assert the no-runner error is visible in logs
+- assert transport failure did not synthesize a terminal backend error
 
 Run it with:
 

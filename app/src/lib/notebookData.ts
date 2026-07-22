@@ -1,13 +1,20 @@
+import { Code } from '@buf/googleapis_googleapis.bufbuild_es/google/rpc/code_pb'
 import { clone, create } from '@bufbuild/protobuf'
 import {
   Heartbeat,
+  RunIntent,
   Streams,
   type StreamsLike,
   genRunID,
 } from '@runmedev/renderers'
 
 import { getBrowserAdapter } from '../browserAdapter.client'
-import { MimeType, RunmeMetadataKey, parser_pb } from '../contexts/CellContext'
+import {
+  MimeType,
+  RunmeExecutionState,
+  RunmeMetadataKey,
+  parser_pb,
+} from '../contexts/CellContext'
 import { isHtmlLanguageId } from './cellContent'
 import {
   IOPUB_INCOMPLETE_METADATA_KEY,
@@ -114,6 +121,20 @@ const JUPYTER_LIMITS = {
 
 const RUNNER_BACKEND_UNAVAILABLE_MESSAGE =
   'Runme backend server is not running. Please start it and try again.'
+
+const EXECUTION_MONITOR_INTERRUPTED_MESSAGE =
+  'Execution monitoring was interrupted before Runme received a final exit code. ' +
+  'The runner no longer has this execution. Its final exit code is unknown. ' +
+  'Check external effects before re-running commands that are not idempotent.\n'
+
+function isRunNotFoundError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code?: unknown }).code === Code.NOT_FOUND
+  )
+}
 
 function decodeBase64ToBytes(value: string): Uint8Array {
   try {
@@ -363,12 +384,16 @@ export const bindStreamsToCell: StreamBinder = ({
       const updated = getCell(refId)
       if (!updated || !updated.metadata) return
       updated.metadata[RunmeMetadataKey.Pid] = pid.toString()
+      updated.metadata[RunmeMetadataKey.ExecutionState] =
+        RunmeExecutionState.Running
       updateCell(updated, { transient: true })
     }),
     streams.exitCode.subscribe((code) => {
       const updated = getCell(refId)
       if (!updated || !updated.metadata) return
       updated.metadata[RunmeMetadataKey.ExitCode] = code.toString()
+      updated.metadata[RunmeMetadataKey.ExecutionState] =
+        RunmeExecutionState.Completed
       delete updated.metadata[RunmeMetadataKey.Pid]
       updateCell(updated)
       flushStdoutBuffer()
@@ -387,6 +412,21 @@ export const bindStreamsToCell: StreamBinder = ({
           error: String(err),
         },
       })
+      const updated = getCell(refId)
+      if (
+        isRunNotFoundError(err) &&
+        updated?.metadata &&
+        typeof updated.metadata[RunmeMetadataKey.ExitCode] !== 'string'
+      ) {
+        delete updated.metadata[RunmeMetadataKey.Pid]
+        updated.metadata[RunmeMetadataKey.ExecutionState] =
+          RunmeExecutionState.Unknown
+        updated.outputs = [
+          ...updated.outputs,
+          ...createStdTextOutputs('', EXECUTION_MONITOR_INTERRUPTED_MESSAGE),
+        ]
+        updateCell(updated)
+      }
       flushStdoutBuffer()
       finalizeIopubStream()
       finish()
@@ -796,6 +836,8 @@ export class NotebookData {
       }
       cell.metadata ??= {}
       cell.metadata[RunmeMetadataKey.ExitCode] = '130'
+      cell.metadata[RunmeMetadataKey.ExecutionState] =
+        RunmeExecutionState.Completed
       delete cell.metadata[RunmeMetadataKey.Pid]
       cell.outputs = [...cell.outputs, ...createStdTextOutputs('', message)]
       const cellData = this.refToCellData.get(refId)
@@ -879,6 +921,7 @@ export class NotebookData {
     cell.metadata ??= {}
     delete cell.metadata[RunmeMetadataKey.ExitCode]
     delete cell.metadata[RunmeMetadataKey.Pid]
+    cell.metadata[RunmeMetadataKey.ExecutionState] = RunmeExecutionState.Running
     cell.metadata[RunmeMetadataKey.Sequence] = this.sequence.toString()
 
     // Clear outputs on each execution start for Jupyter/IPython; for other
@@ -985,10 +1028,6 @@ export class NotebookData {
       return existing
     }
 
-    // Check if the cell has metadata indicating an active run we can recover.
-    // If there is a PID and lastRunID is set but no exit code we interpret that
-    // as an active run.
-
     const hasPid =
       typeof metadata[RunmeMetadataKey.Pid] === 'string' &&
       metadata[RunmeMetadataKey.Pid].length > 0
@@ -1003,12 +1042,10 @@ export class NotebookData {
 
     const runner = this.getRunner(cell)
     if (!runner || !runner.endpoint) {
-      console.warn('Cannot recover stream; no runner available', {
-        refId,
-      })
+      console.warn('Cannot resume stream; no runner available', { refId })
       return undefined
     }
-    console.log('Trying to resume streams for cell', { refId, runID })
+
     const seqValue = metadata[RunmeMetadataKey.Sequence]
     const parsedSeq =
       typeof seqValue === 'string' ? Number.parseInt(seqValue, 10) : Number.NaN
@@ -1020,6 +1057,7 @@ export class NotebookData {
       sequence,
       runner,
       generation: this.executionGeneration,
+      intent: RunIntent.RESUME,
     })
   }
 
@@ -1196,6 +1234,8 @@ export class NotebookData {
 
         updated.metadata ??= {}
         updated.metadata[RunmeMetadataKey.ExitCode] = `${finalExitCode}`
+        updated.metadata[RunmeMetadataKey.ExecutionState] =
+          RunmeExecutionState.Completed
         delete updated.metadata[RunmeMetadataKey.Pid]
 
         // AppKernel runs are not terminal-stream based. Drop stale terminal MIME
@@ -1313,6 +1353,8 @@ export class NotebookData {
       if (updated) {
         updated.metadata ??= {}
         updated.metadata[RunmeMetadataKey.ExitCode] = '1'
+        updated.metadata[RunmeMetadataKey.ExecutionState] =
+          RunmeExecutionState.Completed
         delete updated.metadata[RunmeMetadataKey.Pid]
         updated.outputs = createStdTextOutputs(
           '',
@@ -1341,6 +1383,8 @@ export class NotebookData {
       if (updated) {
         updated.metadata ??= {}
         updated.metadata[RunmeMetadataKey.ExitCode] = '1'
+        updated.metadata[RunmeMetadataKey.ExecutionState] =
+          RunmeExecutionState.Completed
         delete updated.metadata[RunmeMetadataKey.Pid]
         updated.outputs = createStdTextOutputs(
           '',
@@ -1553,6 +1597,8 @@ export class NotebookData {
         if (currentRunID === runID) {
           updated.metadata ??= {}
           updated.metadata[RunmeMetadataKey.ExitCode] = `${code}`
+          updated.metadata[RunmeMetadataKey.ExecutionState] =
+            RunmeExecutionState.Completed
           delete updated.metadata[RunmeMetadataKey.Pid]
           this.updateCell(updated)
         }
@@ -1740,12 +1786,14 @@ export class NotebookData {
     sequence,
     runner,
     generation,
+    intent = RunIntent.START,
   }: {
     cell: parser_pb.Cell
     runID: string
     sequence: number
     runner: Runner
     generation: number
+    intent?: RunIntent
   }): StreamsLike | undefined {
     const streams = new Streams({
       knownID: `cell_${cell.refId}`,
@@ -1755,6 +1803,7 @@ export class NotebookData {
         runnerEndpoint: runner.endpoint,
         interceptors: runner.interceptors ?? [],
         autoReconnect: runner.reconnect ?? true,
+        initialIntent: intent,
       },
     })
     this.activeStreams.set(cell.refId, streams)
@@ -2076,6 +2125,12 @@ export class CellData {
     }
     const activeRunID = snap.metadata?.[RunmeMetadataKey.LastRunID]
     const exitCode = snap.metadata?.[RunmeMetadataKey.ExitCode]
-    return activeRunID !== runID || typeof exitCode === 'string'
+    const executionState = snap.metadata?.[RunmeMetadataKey.ExecutionState]
+    return (
+      activeRunID !== runID ||
+      typeof exitCode === 'string' ||
+      executionState === RunmeExecutionState.Completed ||
+      executionState === RunmeExecutionState.Unknown
+    )
   }
 }

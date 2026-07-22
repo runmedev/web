@@ -3,7 +3,7 @@ import { getContext, setContext } from './messaging'
 import { ClientMessages } from './types'
 
 export { default as Streams, type Authorization } from './streams'
-export { genRunID, Heartbeat, type StreamError } from './streams'
+export { genRunID, Heartbeat, RunIntent, type StreamError } from './streams'
 
 export {
   ConsoleView,

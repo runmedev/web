@@ -34,6 +34,7 @@ const TRANSIENT_METADATA_KEYS = new Set<string>([
   RunmeMetadataKey.LastRunID,
   RunmeMetadataKey.Pid,
   RunmeMetadataKey.ExitCode,
+  RunmeMetadataKey.ExecutionState,
 ]);
 
 type IndexedCell = {
