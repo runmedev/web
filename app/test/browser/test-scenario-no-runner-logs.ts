@@ -276,6 +276,7 @@ for (const file of [
   'scenario-no-runner-logs-03-runner-state.txt',
   'scenario-no-runner-logs-04-opened-notebook.txt',
   'scenario-no-runner-logs-05-after-run.txt',
+  'scenario-no-runner-logs-05b-execution-state.txt',
   'scenario-no-runner-logs-06-logs-pane.txt',
   'scenario-no-runner-logs-07-logs-visible.png',
   'scenario-no-runner-logs-auth-seed.txt',
@@ -452,6 +453,48 @@ if (runTrigger.status === 0 && runTrigger.stdout.includes('ok')) {
 snapshot = run('agent-browser snapshot -i').stdout
 writeArtifact('scenario-no-runner-logs-05-after-run.txt', snapshot)
 
+const executionStateProbe = run(
+  `agent-browser eval "(async () => {
+    const ln = window.app?.localNotebooks;
+    if (!ln) return 'missing-local-notebooks';
+    const record = await ln.files.get('local://file/${SCENARIO_NOTEBOOK_NAME}');
+    if (!record) return 'missing-notebook-record';
+    const notebook = JSON.parse(record.doc || '{}');
+    const cell = Array.isArray(notebook.cells)
+      ? notebook.cells.find((candidate) => candidate?.refId === 'cell_no_runner')
+      : null;
+    const metadata = cell?.metadata && typeof cell.metadata === 'object'
+      ? cell.metadata
+      : {};
+    const executionState = metadata['runme.dev/executionState'];
+    const lastRunID = metadata['runme.dev/lastRunID'];
+    const exitCode = metadata['runme.dev/exitCode'];
+    if (
+      executionState === 'running' &&
+      typeof lastRunID === 'string' &&
+      lastRunID.length > 0 &&
+      typeof exitCode !== 'string'
+    ) {
+      return 'running-without-terminal-result';
+    }
+    return JSON.stringify({ executionState, lastRunID, exitCode });
+  })()"`
+)
+const executionStateResult =
+  `${executionStateProbe.stdout}\n${executionStateProbe.stderr}`.trim()
+writeArtifact(
+  'scenario-no-runner-logs-05b-execution-state.txt',
+  executionStateResult
+)
+if (
+  executionStateProbe.status === 0 &&
+  executionStateResult.includes('running-without-terminal-result')
+) {
+  pass('Kept execution running while the runner was unreachable')
+} else {
+  fail('Execution did not remain running while the runner was unreachable')
+}
+
 let logsTabVisible = false
 const tabAttemptStates: string[] = []
 for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -495,13 +538,13 @@ const logsText = run(
 ).stdout
 writeArtifact('scenario-no-runner-logs-06-logs-pane.txt', logsText)
 if (
-  logsText.includes(
+  !logsText.includes(
     'Runme backend server is not running. Please start it and try again.'
   )
 ) {
-  pass('Observed backend-unavailable error in Logs tab')
+  pass('Did not synthesize a terminal error for an unreachable runner')
 } else {
-  fail('Logs tab did not show backend-unavailable execution error')
+  fail('Unreachable runner was incorrectly treated as a terminal error')
 }
 
 run('agent-browser wait 1500')
