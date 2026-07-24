@@ -1598,7 +1598,7 @@ describe('Action component', () => {
 
       await waitFor(() => {
         expect(writeText).toHaveBeenCalledWith(
-          '[Demo notebook#Prepare [workspace\\]](http://localhost:3000/workspace?doc=local%3A%2F%2Ffile%2Fnotebook#cell=setup-cell)'
+          '[Demo notebook#Prepare \\[workspace\\]](http://localhost:3000/workspace?doc=local%3A%2F%2Ffile%2Fnotebook#cell=setup-cell)'
         )
       })
       expect(toastMocks.showToast).toHaveBeenCalledWith({

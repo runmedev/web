@@ -1,6 +1,11 @@
 const MARKDOWN_LANGUAGE_IDS = new Set(['markdown', 'md'])
 const HTML_LANGUAGE_IDS = new Set(['html', 'htm'])
 
+/**
+ * Derives a user-facing title from the cell's first non-empty line.
+ * Repeated Markdown heading (`#`) and line-comment (`//`) prefixes are removed;
+ * cells without remaining text use a stable fallback.
+ */
 export function getCellTitle(value: string): string {
   const firstContentLine =
     value

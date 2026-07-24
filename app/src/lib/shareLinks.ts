@@ -30,7 +30,7 @@ function getNotebookLinkText(name: string): string {
 }
 
 function escapeMarkdownLinkText(text: string): string {
-  return text.replace(/\\/g, '\\\\').replace(/\]/g, '\\]')
+  return text.replace(/\\/g, '\\\\').replace(/\[/g, '\\[').replace(/\]/g, '\\]')
 }
 
 export function buildNotebookShareUrl(remoteUri: string): string {
