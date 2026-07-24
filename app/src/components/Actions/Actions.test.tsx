@@ -466,7 +466,9 @@ describe('Actions tabs', () => {
 
     render(<Actions />)
     const notebookContent = screen.getByTestId('notebook-content')
-    const dragOverEvent = createEvent.dragOver(notebookContent, { dataTransfer })
+    const dragOverEvent = createEvent.dragOver(notebookContent, {
+      dataTransfer,
+    })
     fireEvent(notebookContent, dragOverEvent)
 
     expect(dragOverEvent.defaultPrevented).toBe(true)
@@ -1551,6 +1553,50 @@ describe('Action component', () => {
     })
     expect(toastMocks.showToast).toHaveBeenCalledWith({
       message: 'Link to cell copied',
+      tone: 'success',
+    })
+  })
+
+  it('copies a markdown link with inferred notebook and cell titles', async () => {
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'setup-cell',
+      kind: parser_pb.CellKind.CODE,
+      languageId: 'javascript',
+      value: '\n// Prepare [workspace]\nconsole.log("ready")',
+      metadata: {},
+    })
+    window.history.replaceState(null, '', '/workspace')
+
+    render(
+      <Action
+        cellData={new StubCellData(cell) as unknown as CellData}
+        docUri="local://file/notebook"
+        docTitle="Demo notebook.json"
+        isFirst={false}
+      />
+    )
+
+    fireEvent.contextMenu(screen.getByTestId('code-action'))
+    const contextMenu = document.querySelector('.ctx-menu')
+    expect(contextMenu).toBeTruthy()
+    fireEvent.click(
+      within(contextMenu as HTMLElement).getByRole('button', {
+        name: 'Copy Markdown Link',
+      })
+    )
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        '[Demo notebook#Prepare [workspace\\]](http://localhost:3000/workspace?doc=local%3A%2F%2Ffile%2Fnotebook#cell=setup-cell)'
+      )
+    })
+    expect(toastMocks.showToast).toHaveBeenCalledWith({
+      message: 'Markdown link to cell copied',
       tone: 'success',
     })
   })

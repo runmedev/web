@@ -43,6 +43,7 @@ import {
   type NotebookActiveCellState,
 } from '../../lib/notebookActiveCellState'
 import {
+  copyNotebookCellMarkdownLink,
   copyNotebookCellShareUrl,
   copyNotebookMarkdownLink,
   copyNotebookShareUrl,
@@ -567,6 +568,7 @@ function normalizeLanguageId(
 export function Action({
   cellData,
   docUri = '',
+  docTitle = '',
   isFirst,
   isActiveCell = false,
   activeFocusRole = 'editor',
@@ -580,6 +582,7 @@ export function Action({
 }: {
   cellData: CellData
   docUri?: string
+  docTitle?: string
   isFirst: boolean
   isActiveCell?: boolean
   activeFocusRole?: CellFocusRole
@@ -731,7 +734,7 @@ export function Action({
     }
 
     const menuWidth = 200
-    const menuHeight = shareTargetUri && cell?.refId.trim() ? 128 : 88
+    const menuHeight = shareTargetUri && cell?.refId.trim() ? 164 : 88
     const left = Math.max(
       0,
       Math.min(contextMenu.x, window.innerWidth - menuWidth)
@@ -901,6 +904,45 @@ export function Action({
       setContextMenu(null)
     }
   }, [cell?.refId, shareTargetUri])
+
+  const handleCopyMarkdownLink = useCallback(async () => {
+    if (!shareTargetUri || !cell?.refId) {
+      setContextMenu(null)
+      return
+    }
+
+    const notebookTitle =
+      docTitle.trim() || getNotebookDisplayName(docUri || shareTargetUri)
+    try {
+      await copyNotebookCellMarkdownLink(
+        notebookTitle,
+        cell.value,
+        shareTargetUri,
+        cell.refId
+      )
+      showToast({ message: 'Markdown link to cell copied', tone: 'success' })
+    } catch (error) {
+      appLogger.error(
+        'Failed to copy notebook cell Markdown link from cell menu',
+        {
+          attrs: {
+            scope: 'notebook.share',
+            code: 'NOTEBOOK_CELL_MARKDOWN_LINK_COPY_FAILED',
+            notebookUri: shareTargetUri,
+            cellRefId: cell.refId,
+            error: String(error),
+          },
+        }
+      )
+      showToast({
+        message:
+          'Could not copy the cell Markdown link. Check clipboard permissions and try again.',
+        tone: 'error',
+      })
+    } finally {
+      setContextMenu(null)
+    }
+  }, [cell?.refId, cell?.value, docTitle, docUri, shareTargetUri])
 
   const handleStartComment = useCallback(() => {
     if (!cell?.refId || !onStartComment) {
@@ -1391,16 +1433,28 @@ export function Action({
             onContextMenu={(event) => event.preventDefault()}
           >
             {canCopyCellLink && (
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  void handleCopyShareLink()
-                }}
-              >
-                {contextMenuLinkLabel}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void handleCopyShareLink()
+                  }}
+                >
+                  {contextMenuLinkLabel}
+                </button>
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void handleCopyMarkdownLink()
+                  }}
+                >
+                  Copy Markdown Link
+                </button>
+              </>
             )}
             <button
               type="button"
@@ -1506,16 +1560,28 @@ export function Action({
             onContextMenu={(event) => event.preventDefault()}
           >
             {canCopyCellLink && (
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  void handleCopyShareLink()
-                }}
-              >
-                {contextMenuLinkLabel}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void handleCopyShareLink()
+                  }}
+                >
+                  {contextMenuLinkLabel}
+                </button>
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void handleCopyMarkdownLink()
+                  }}
+                >
+                  Copy Markdown Link
+                </button>
+              </>
             )}
             <button
               type="button"
@@ -1784,16 +1850,28 @@ export function Action({
           onContextMenu={(event) => event.preventDefault()}
         >
           {canCopyCellLink && (
-            <button
-              type="button"
-              className="ctx-menu-item"
-              onClick={(event) => {
-                event.stopPropagation()
-                void handleCopyShareLink()
-              }}
-            >
-              {contextMenuLinkLabel}
-            </button>
+            <>
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleCopyShareLink()
+                }}
+              >
+                {contextMenuLinkLabel}
+              </button>
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleCopyMarkdownLink()
+                }}
+              >
+                Copy Markdown Link
+              </button>
+            </>
           )}
           <button
             type="button"
@@ -2526,6 +2604,7 @@ function NotebookTabContent({
                     key={`action-${refId}`}
                     cellData={cellData}
                     docUri={docUri}
+                    docTitle={entry.name}
                     isFirst={index === 0}
                     isActiveCell={activeCell?.refId === refId}
                     activeFocusRole={activeCell?.focusRole ?? 'editor'}

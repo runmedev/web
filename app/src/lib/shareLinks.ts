@@ -1,3 +1,5 @@
+import { getCellTitle } from './cellContent'
+
 function getShareBaseUrl(): URL {
   if (typeof window === 'undefined') {
     throw new Error('Share links are only available in a browser environment')
@@ -151,6 +153,18 @@ export function buildNotebookMarkdownLink(
   return `[${linkText}](${buildNotebookShareUrl(remoteUri)})`
 }
 
+export function buildNotebookCellMarkdownLink(
+  name: string,
+  cellValue: string,
+  remoteUri: string,
+  cellRefId: string
+): string {
+  const linkText = escapeMarkdownLinkText(
+    `${getNotebookLinkText(name)}#${getCellTitle(cellValue)}`
+  )
+  return `[${linkText}](${buildNotebookCellShareUrl(remoteUri, cellRefId)})`
+}
+
 export async function copyNotebookShareUrl(remoteUri: string): Promise<string> {
   if (
     typeof window === 'undefined' ||
@@ -178,6 +192,29 @@ export async function copyNotebookCellShareUrl(
   const shareUrl = buildNotebookCellShareUrl(remoteUri, cellRefId)
   await window.navigator.clipboard.writeText(shareUrl)
   return shareUrl
+}
+
+export async function copyNotebookCellMarkdownLink(
+  name: string,
+  cellValue: string,
+  remoteUri: string,
+  cellRefId: string
+): Promise<string> {
+  if (
+    typeof window === 'undefined' ||
+    !window.navigator?.clipboard?.writeText
+  ) {
+    throw new Error('Clipboard access is unavailable in this browser')
+  }
+
+  const markdownLink = buildNotebookCellMarkdownLink(
+    name,
+    cellValue,
+    remoteUri,
+    cellRefId
+  )
+  await window.navigator.clipboard.writeText(markdownLink)
+  return markdownLink
 }
 
 export async function copyNotebookMarkdownLink(

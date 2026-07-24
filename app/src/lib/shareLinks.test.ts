@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildNotebookCellFragment,
+  buildNotebookCellMarkdownLink,
   buildNotebookCellShareUrl,
   buildNotebookMarkdownLink,
   buildNotebookShareBaseUrl,
@@ -60,6 +61,36 @@ describe('notebook cell links', () => {
     expect(() =>
       buildNotebookCellShareUrl('local://file/notebook', '  ')
     ).toThrow('A cell reference ID is required to build a cell link')
+  })
+
+  it('builds markdown using the notebook and inferred cell titles', () => {
+    window.history.replaceState(null, '', '/workspace')
+
+    expect(
+      buildNotebookCellMarkdownLink(
+        'Demo notebook.json',
+        '\n## Install dependencies\npnpm install',
+        'local://file/notebook',
+        'cell/with spaces'
+      )
+    ).toBe(
+      '[Demo notebook#Install dependencies](http://localhost:3000/workspace?doc=local%3A%2F%2Ffile%2Fnotebook#cell=cell%2Fwith%20spaces)'
+    )
+  })
+
+  it('escapes markdown characters in cell link text', () => {
+    window.history.replaceState(null, '', '/')
+
+    expect(
+      buildNotebookCellMarkdownLink(
+        String.raw`Notebook [draft].json`,
+        String.raw`// Review [inputs]`,
+        'local://file/notebook',
+        'review'
+      )
+    ).toBe(
+      String.raw`[Notebook [draft\]#Review [inputs\]](http://localhost:3000/?doc=local%3A%2F%2Ffile%2Fnotebook#cell=review)`
+    )
   })
 
   it('decodes cell fragments and tolerates malformed encoding', () => {
