@@ -3,8 +3,9 @@ const HTML_LANGUAGE_IDS = new Set(['html', 'htm'])
 
 /**
  * Derives a user-facing title from the cell's first non-empty line.
- * Repeated Markdown heading (`#`) and line-comment (`//`) prefixes are removed;
- * cells without remaining text use a stable fallback.
+ * Repeated Markdown heading (`#` followed by whitespace) and line-comment
+ * (`//`) prefixes are removed; cells without remaining text use a stable
+ * fallback.
  */
 export function getCellTitle(value: string): string {
   const firstContentLine =
@@ -13,7 +14,7 @@ export function getCellTitle(value: string): string {
       .find((line) => line.trim())
       ?.trim() ?? ''
   const withoutLeadingMarker = firstContentLine
-    .replace(/^(?:(?:#{1,6}|\/\/+)\s*)+/, '')
+    .replace(/^(?:(?:#{1,6}(?:[ \t]+|$)|\/\/+[ \t]*))+/, '')
     .trim()
 
   return withoutLeadingMarker || 'Untitled cell'
