@@ -354,20 +354,6 @@ export function SidePanelToolbar() {
         <button
           type="button"
           className={`${sideButtonBase} ${
-            activePanel === 'documentation'
-              ? sideButtonActive
-              : sideButtonInactive
-          }`}
-          aria-pressed={activePanel === 'documentation'}
-          aria-label="Toggle Documentation panel"
-          onClick={() => togglePanel('documentation')}
-        >
-          <BookOpenIcon className="h-5 w-5" />
-          <span className={tooltipBase}>Documentation</span>
-        </button>
-        <button
-          type="button"
-          className={`${sideButtonBase} ${
             activePanel === 'explorer' ? sideButtonActive : sideButtonInactive
           }`}
           aria-pressed={activePanel === 'explorer'}
@@ -527,6 +513,20 @@ export function SidePanelToolbar() {
         >
           <UserCircleIcon className="h-5 w-5" />
           <span className={tooltipBase}>{authData ? 'Logout' : 'Login'}</span>
+        </button>
+        <button
+          type="button"
+          className={`${sideButtonBase} ${
+            activePanel === 'documentation'
+              ? sideButtonActive
+              : sideButtonInactive
+          }`}
+          aria-pressed={activePanel === 'documentation'}
+          aria-label="Toggle Documentation panel"
+          onClick={() => togglePanel('documentation')}
+        >
+          <BookOpenIcon className="h-5 w-5" />
+          <span className={tooltipBase}>Documentation</span>
         </button>
         <button
           type="button"

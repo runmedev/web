@@ -240,13 +240,19 @@ describe('SidePanelToolbar drive status button', () => {
     expect(togglePanelMock).toHaveBeenCalledWith('outline')
   })
 
-  it('exposes a Documentation Explorer button in the toolbar', () => {
+  it('places the Documentation Explorer button directly above About', () => {
     render(<SidePanelToolbar />)
 
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Toggle Documentation panel' })
-    )
+    const documentationButton = screen.getByRole('button', {
+      name: 'Toggle Documentation panel',
+    })
+    const aboutButton = screen.getByRole('button', {
+      name: 'Open Version Information',
+    })
 
+    expect(documentationButton.nextElementSibling).toBe(aboutButton)
+
+    fireEvent.click(documentationButton)
     expect(togglePanelMock).toHaveBeenCalledWith('documentation')
   })
 
