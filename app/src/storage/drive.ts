@@ -17,6 +17,7 @@ const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
 } as unknown as Parameters<typeof toJsonString>[2]
 const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder'
+const DRIVE_CREATE_OPERATION_PROPERTY = 'runmeCreateOperationId'
 
 let gapiScriptPromise: Promise<void> | null = null
 let clientPromise: Promise<DriveFilesClient> | null = null
@@ -37,6 +38,7 @@ export type DriveDoc = {
   driveId?: string
   content?: string
   trashed?: boolean
+  appProperties?: Record<string, string>
 }
 
 export type DriveSearchFile = DriveDoc &
@@ -314,6 +316,9 @@ class GapiDriveFilesClient implements DriveFilesClient {
     if (typeof doc.trashed === 'boolean') {
       resource.trashed = doc.trashed
     }
+    if (doc.appProperties) {
+      resource.appProperties = doc.appProperties
+    }
     return resource
   }
 
@@ -574,6 +579,9 @@ class FetchDriveFilesClient implements DriveFilesClient {
     }
     if (typeof doc.trashed === 'boolean') {
       resource.trashed = doc.trashed
+    }
+    if (doc.appProperties) {
+      resource.appProperties = doc.appProperties
     }
     return resource
   }
@@ -1126,6 +1134,14 @@ function extractBody(response: { body?: string; result?: unknown }): string {
   throw new Error('Google Drive response did not include any content')
 }
 
+export interface DriveCreateOptions {
+  createOperationId?: string
+}
+
+function escapeDriveQueryValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+}
+
 export class DriveNotebookStore {
   // ensureAccessToken is injected because it comes from the GoogleAuthContext
   constructor(private readonly ensureAccessToken: () => Promise<string>) {}
@@ -1137,7 +1153,11 @@ export class DriveNotebookStore {
     return ensureDriveFilesClient(token)
   }
 
-  async create(parentUri: string, name: string): Promise<NotebookStoreItem> {
+  async create(
+    parentUri: string,
+    name: string,
+    options: DriveCreateOptions = {}
+  ): Promise<NotebookStoreItem> {
     const { id, type } = parseDriveItem(parentUri)
     if (type !== NotebookStoreItemType.Folder) {
       throw new Error('DriveNotebookStore.create expects a folder URI')
@@ -1148,6 +1168,13 @@ export class DriveNotebookStore {
       mimeType: 'application/json',
       parents: [id],
       content: createInitialNotebookJson(),
+      ...(options.createOperationId
+        ? {
+            appProperties: {
+              [DRIVE_CREATE_OPERATION_PROPERTY]: options.createOperationId,
+            },
+          }
+        : {}),
     })
 
     if (!file.id) {
@@ -1173,7 +1200,8 @@ export class DriveNotebookStore {
     parentUri: string,
     name: string,
     content: string,
-    mimeType: string = 'application/octet-stream'
+    mimeType: string = 'application/octet-stream',
+    options: DriveCreateOptions = {}
   ): Promise<NotebookStoreItem> {
     const { id, type } = parseDriveItem(parentUri)
     if (type !== NotebookStoreItemType.Folder) {
@@ -1185,6 +1213,13 @@ export class DriveNotebookStore {
       mimeType,
       parents: [id],
       content,
+      ...(options.createOperationId
+        ? {
+            appProperties: {
+              [DRIVE_CREATE_OPERATION_PROPERTY]: options.createOperationId,
+            },
+          }
+        : {}),
     })
 
     if (!file.id) {
@@ -1202,6 +1237,60 @@ export class DriveNotebookStore {
       children: [],
       remoteUri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
       mimeType: file.mimeType ?? mimeType,
+      parents: [parentUri],
+    }
+  }
+
+  async findByCreateOperation(
+    parentUri: string,
+    createOperationId: string
+  ): Promise<NotebookStoreItem | null> {
+    const { id, type } = parseDriveItem(parentUri)
+    if (type !== NotebookStoreItemType.Folder) {
+      throw new Error(
+        'DriveNotebookStore.findByCreateOperation expects a folder URI'
+      )
+    }
+    if (!createOperationId) {
+      throw new Error(
+        'DriveNotebookStore.findByCreateOperation requires an operation id'
+      )
+    }
+
+    const escapedParentId = escapeDriveQueryValue(id)
+    const escapedOperationId = escapeDriveQueryValue(createOperationId)
+    const result = await this.search({
+      q:
+        `'${escapedParentId}' in parents and trashed = false and ` +
+        `appProperties has { key='${DRIVE_CREATE_OPERATION_PROPERTY}' and ` +
+        `value='${escapedOperationId}' }`,
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      orderBy: 'createdTime asc',
+      pageSize: 2,
+      fields: 'files(id,name,mimeType,parents,createdTime,appProperties)',
+    })
+
+    if (result.files.length > 1) {
+      throw new Error(
+        `Multiple Drive files found for create operation ${createOperationId}`
+      )
+    }
+    const file = result.files[0]
+    if (!file?.id) {
+      return null
+    }
+
+    const isFolder = file.mimeType === DRIVE_FOLDER_MIME_TYPE
+    return {
+      uri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
+      name: file.name ?? 'Untitled item',
+      type: isFolder
+        ? NotebookStoreItemType.Folder
+        : NotebookStoreItemType.File,
+      children: [],
+      remoteUri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
+      mimeType: file.mimeType,
       parents: [parentUri],
     }
   }
@@ -1639,7 +1728,9 @@ export class DriveNotebookStore {
       throw new Error('DriveNotebookStore.move expects folder parent URIs')
     }
     if (sourceParent.id === destinationParent.id) {
-      throw new Error('DriveNotebookStore.move expects a new destination folder')
+      throw new Error(
+        'DriveNotebookStore.move expects a new destination folder'
+      )
     }
 
     const client = await this.getFilesClient()

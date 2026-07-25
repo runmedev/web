@@ -19,6 +19,10 @@ import {
   type DriveVersionMetadata,
   isDriveItemUri,
 } from './drive'
+import {
+  type DriveSyncCoordinator,
+  browserDriveSyncCoordinator,
+} from './driveSyncCoordinator'
 import type { FilesystemNotebookStore } from './fs'
 import { NotebookStoreItem, NotebookStoreItemType } from './notebook'
 import {
@@ -57,8 +61,12 @@ export interface LocalFileRecord {
   remoteId: string
   /** Creation-time upstream parent URI used to finish a pending remote create. */
   parentRemoteIdWhenCreated?: string
+  /** Stable idempotency key for creating the primary Drive file. */
+  driveCreateOperationId?: string
   /** Remote Drive URI of the Markdown sidecar (e.g. *.index.md) if present. */
   markdownUri?: string
+  /** Stable idempotency key for creating the Markdown sidecar. */
+  markdownCreateOperationId?: string
   /**
    * Checksum returned by the most recent Drive sync. Empty string means the
    * notebook has never been uploaded or the checksum was unavailable.
@@ -198,6 +206,7 @@ export class LocalNotebooks extends Dexie {
   folders!: Table<LocalFolderRecord, string>
 
   private readonly driveStore: DriveNotebookStore
+  private readonly driveSyncCoordinator: DriveSyncCoordinator
   private filesystemStore: FilesystemNotebookStore | null = null
   private readonly conflictDocStorage: ConflictDocStorage
   private readonly revisionDocStorage: RevisionDocStorage
@@ -211,7 +220,8 @@ export class LocalNotebooks extends Dexie {
     driveStore: DriveNotebookStore,
     databaseName: string = 'runme-local-notebooks',
     conflictDocStorage: ConflictDocStorage = createDefaultConflictDocStorage(),
-    revisionDocStorage: RevisionDocStorage = createDefaultRevisionDocStorage()
+    revisionDocStorage: RevisionDocStorage = createDefaultRevisionDocStorage(),
+    driveSyncCoordinator: DriveSyncCoordinator = browserDriveSyncCoordinator
   ) {
     super(databaseName)
 
@@ -304,6 +314,7 @@ export class LocalNotebooks extends Dexie {
     this.folders = this.table('folders')
 
     this.driveStore = driveStore
+    this.driveSyncCoordinator = driveSyncCoordinator
     this.conflictDocStorage = conflictDocStorage
     this.revisionDocStorage = revisionDocStorage
 
@@ -1149,6 +1160,7 @@ export class LocalNotebooks extends Dexie {
       parentRemoteIdWhenCreated: isDriveBackedParent
         ? parent.remoteId
         : undefined,
+      driveCreateOperationId: isDriveBackedParent ? uuidv4() : undefined,
       lastRemoteChecksum: '',
       lastSynced: isDriveBackedParent ? '' : nowIsoString(),
       doc: options.content,
@@ -1528,6 +1540,12 @@ export class LocalNotebooks extends Dexie {
       throw new Error('syncMarkdownFile expects a local://file/ URI')
     }
 
+    await this.driveSyncCoordinator.runExclusive(localUri, () =>
+      this.syncMarkdownFileInner(localUri)
+    )
+  }
+
+  private async syncMarkdownFileInner(localUri: string): Promise<void> {
     const record = await this.files.get(localUri)
     if (!record) {
       throw new Error(`Local notebook record not found for ${localUri}`)
@@ -1560,8 +1578,21 @@ export class LocalNotebooks extends Dexie {
 
       const baseName = name.replace(/\.[^.]+$/, '')
       const markdownName = `${baseName}.index.md`
-
-      const markdownFile = await driveStore.create(parentUri, markdownName)
+      const createOperationId = record.markdownCreateOperationId ?? uuidv4()
+      if (!record.markdownCreateOperationId) {
+        await this.files.update(localUri, {
+          markdownCreateOperationId: createOperationId,
+        })
+      }
+      const existingFile = await driveStore.findByCreateOperation(
+        parentUri,
+        createOperationId
+      )
+      const markdownFile =
+        existingFile ??
+        (await driveStore.create(parentUri, markdownName, {
+          createOperationId,
+        }))
       markdownUri = markdownFile.uri
       await this.files.update(localUri, { markdownUri })
     }
@@ -1779,15 +1810,19 @@ export class LocalNotebooks extends Dexie {
       return existingSync
     }
 
-    const operation = Promise.resolve().then(async () => {
-      try {
-        await this.syncFileInner(localUri)
-        await this.files.update(localUri, { lastSyncError: undefined })
-      } catch (error) {
-        await this.files.update(localUri, { lastSyncError: String(error) })
-        throw error
-      }
-    })
+    const operation = Promise.resolve().then(() =>
+      this.driveSyncCoordinator.runExclusive(localUri, async () => {
+        try {
+          // Re-read and reconcile only after acquiring the cross-context lock.
+          // Another tab may have completed the pending create while we waited.
+          await this.syncFileInner(localUri)
+          await this.files.update(localUri, { lastSyncError: undefined })
+        } catch (error) {
+          await this.files.update(localUri, { lastSyncError: String(error) })
+          throw error
+        }
+      })
+    )
     this.inFlightSyncs.set(localUri, operation)
     this.notifySync(localUri)
 
@@ -2155,15 +2190,29 @@ export class LocalNotebooks extends Dexie {
       )
     }
 
+    const createOperationId = record.driveCreateOperationId ?? uuidv4()
+    if (!record.driveCreateOperationId) {
+      await this.files.update(localUri, {
+        driveCreateOperationId: createOperationId,
+      })
+    }
+    const existingFile = await this.driveStore.findByCreateOperation(
+      parentRemoteUri,
+      createOperationId
+    )
     const newFile =
-      record.mimeType && record.mimeType !== NOTEBOOK_MIME_TYPE
+      existingFile ??
+      (record.mimeType && record.mimeType !== NOTEBOOK_MIME_TYPE
         ? await this.driveStore.createContent(
             parentRemoteUri,
             record.name,
             record.doc ?? '',
-            record.mimeType
+            record.mimeType,
+            { createOperationId }
           )
-        : await this.driveStore.create(parentRemoteUri, record.name)
+        : await this.driveStore.create(parentRemoteUri, record.name, {
+            createOperationId,
+          }))
     let version: UpstreamVersion = {}
     try {
       version = driveMetadataToUpstreamVersion(
@@ -2203,6 +2252,8 @@ export class LocalNotebooks extends Dexie {
         localUri,
         parentRemoteUri,
         remoteUri: newFile.uri,
+        createOperationId,
+        outcome: existingFile ? 'adopted' : 'created',
         upstreamChecksum: version.checksum,
         upstreamRevisionId: version.revisionId,
       },
