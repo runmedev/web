@@ -239,6 +239,7 @@ function ensureBackendAssetsAndConfig(
     "assistantServer:",
     "  bindAddress: 127.0.0.1",
     `  port: ${parseBackendPort(backendUrl)}`,
+    "  agentService: false",
     "  parserService: true",
     "  runnerService: true",
     `  staticAssets: "${assetsDir}"`,
