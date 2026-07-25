@@ -22,8 +22,8 @@ Get the web app to a state where a user can:
 3. Configure a runner if needed:
 
 ```js
-runmeRunners.update("default", "ws://localhost:9977/ws")
-runmeRunners.setDefault("default")
+runmeRunners.update('default', 'ws://localhost:9977/ws')
+runmeRunners.setDefault('default')
 ```
 
 4. Mount or open a notebook:
@@ -47,7 +47,7 @@ explorer.importMarkdown()
 - configure the active harness if the default is wrong,
 - open the AI side panel from the left toolbar.
 
-## High-value facts for Codex
+## Key facts
 
 - The default page is the notebook workspace at `/`.
 - The app persists runner, harness, and config state in browser storage.

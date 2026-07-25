@@ -387,7 +387,6 @@ export async function uploadCujArtifacts(options: UploadOptions = {}): Promise<U
     "index.md",
     "pr-comment.md",
     "cuj-oidc-token.json",
-    "cuj-openai-key.txt",
   ]);
 
   const absoluteFiles = await listFilesRecursive(outputDir);

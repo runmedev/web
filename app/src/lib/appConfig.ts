@@ -1,7 +1,7 @@
 import YAML from 'yaml'
 
-import type { OidcConfig } from '../auth/oidcConfig'
 import type { GoogleServiceAccountCredentials } from '../auth/googleServiceAccount'
+import type { OidcConfig } from '../auth/oidcConfig'
 import { OIDC_STORAGE_KEY, oidcConfigManager } from '../auth/oidcConfig'
 import { agentEndpointManager } from './agentEndpointManager'
 import { getOidcCallbackUrl, resolveAppUrl } from './appBase'
@@ -19,7 +19,6 @@ import {
   setGoogleDriveBaseUrl,
 } from './googleDriveRuntime'
 import { appLogger } from './logging/runtime'
-import { responsesDirectConfigManager } from './runtime/responsesDirectConfigManager'
 
 type StoredRunner = {
   name: string
@@ -70,28 +69,15 @@ export interface GoogleDriveRuntimeConfig {
   serviceAccount?: GoogleServiceAccountCredentials
 }
 
-export interface ChatkitRuntimeConfig {
-  domainKey: string
-}
-
 export interface AgentRuntimeConfig {
   endpoint: string
   defaultRunnerEndpoint: string
-  openai: AgentOpenAIRuntimeConfig
-}
-
-export interface AgentOpenAIRuntimeConfig {
-  authMethod: string
-  organization: string
-  project: string
-  vectorStores: string[]
 }
 
 export interface RuntimeAppConfig {
   agent: AgentRuntimeConfig
   oidc: OidcRuntimeConfig
   googleDrive: GoogleDriveRuntimeConfig
-  chatkit: ChatkitRuntimeConfig
 }
 
 export type AppliedAppConfig = {
@@ -100,14 +86,6 @@ export type AppliedAppConfig = {
   googleOAuth?: GoogleOAuthClientConfig
   agentEndpoint?: string
   defaultRunnerEndpoint?: string
-  chatkitDomainKey?: string
-  responsesDirect?: {
-    authMethod: string
-    openaiOrganization: string
-    openaiProject: string
-    vectorStores: string[]
-    apiKeySet: boolean
-  }
   warnings: string[]
 }
 
@@ -356,37 +334,6 @@ export function getConfiguredDefaultRunnerEndpoint(): string {
   )
 }
 
-export function resolveDefaultChatKitDomainKeyFallback(): string {
-  const envValue = normalizeString(import.meta.env.VITE_CHATKIT_DOMAIN_KEY)
-  if (envValue) {
-    return envValue
-  }
-  if (
-    typeof window !== 'undefined' &&
-    window.location.hostname === 'localhost'
-  ) {
-    return 'domain_pk_localhost_dev'
-  }
-  return 'domain_pk_68f8054e7da081908cc1972e9167ec270895bf04413e753b'
-}
-
-function readStoredChatKitDomainKey(storage: Storage): string | undefined {
-  const settings = readSettingsFromStorage(storage)
-  const settingsChatkit = asRecord(settings.chatkit)
-  return normalizeString(settingsChatkit?.domainKey)
-}
-
-export function getConfiguredChatKitDomainKey(): string {
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return resolveDefaultChatKitDomainKeyFallback()
-  }
-
-  return (
-    readStoredChatKitDomainKey(window.localStorage) ??
-    resolveDefaultChatKitDomainKeyFallback()
-  )
-}
-
 function pickString(source: Record<string, unknown>, keys: string[]): string {
   for (const key of keys) {
     const value = asNonEmptyString(source[key])
@@ -420,12 +367,6 @@ function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
     agent: {
       endpoint: '',
       defaultRunnerEndpoint: '',
-      openai: {
-        authMethod: '',
-        organization: '',
-        project: '',
-        vectorStores: [],
-      },
     },
     oidc: {
       clientExchange: false,
@@ -439,9 +380,6 @@ function createDefaultRuntimeAppConfig(): RuntimeAppConfig {
       authFlow: 'implicit',
       authUxMode: 'new_tab',
       serviceAccount: undefined,
-    },
-    chatkit: {
-      domainKey: '',
     },
   }
 }
@@ -463,10 +401,6 @@ export class RuntimeAppConfigSchema {
     const oidcGeneric = asRecord(oidc?.generic)
     const oidcGoogle = asRecord(oidc?.google)
     const drive = asRecord(root.googleDrive)
-    const chatkit = asRecord(root.chatkit)
-    const topLevelOpenAI = asRecord(root.openai)
-    const cloudAssistant = asRecord(root.cloudAssistant)
-    const agentOpenAI = asRecord(agent?.openai)
 
     parsed.agent = {
       endpoint:
@@ -475,32 +409,6 @@ export class RuntimeAppConfigSchema {
       defaultRunnerEndpoint:
         pickString(agent ?? {}, ['defaultRunnerEndpoint', 'runnerEndpoint']) ||
         asNonEmptyString(root.defaultRunnerEndpoint),
-      openai: {
-        authMethod:
-          pickString(agentOpenAI ?? {}, [
-            'authMethod',
-            'auth_method',
-            'method',
-          ]) ||
-          pickString(topLevelOpenAI ?? {}, [
-            'authMethod',
-            'auth_method',
-            'method',
-          ]),
-        organization:
-          pickString(agentOpenAI ?? {}, ['organization']) ||
-          pickString(topLevelOpenAI ?? {}, ['organization']),
-        project:
-          pickString(agentOpenAI ?? {}, ['project']) ||
-          pickString(topLevelOpenAI ?? {}, ['project']),
-        vectorStores: (() => {
-          const explicit = asStringArray(agentOpenAI?.vectorStores)
-          if (explicit.length > 0) {
-            return explicit
-          }
-          return asStringArray(cloudAssistant?.vectorStores)
-        })(),
-      },
     }
 
     if (oidc) {
@@ -559,12 +467,6 @@ export class RuntimeAppConfigSchema {
       }
     }
 
-    if (chatkit) {
-      parsed.chatkit = {
-        domainKey: pickString(chatkit, ['domainKey', 'domain_key']),
-      }
-    }
-
     return parsed
   }
 }
@@ -602,28 +504,11 @@ export function applyAppConfig(
   const rawOidc = asRecord(rawConfig.oidc)
   const hasOidcGoogleBlock = isRecord(rawOidc?.google)
   const hasGoogleDriveBlock = isRecord(rawConfig.googleDrive)
-  const hasChatkitBlock = isRecord(rawConfig.chatkit)
-  const rawAgent = asRecord(rawConfig.agent)
-  const hasAgentOpenAIBlock = isRecord(asRecord(rawAgent?.openai))
-  const hasTopLevelOpenAIBlock = isRecord(rawConfig.openai)
-  const hasCloudAssistantBlock = isRecord(rawConfig.cloudAssistant)
-  const hasResponsesDirectConfigBlock =
-    hasAgentOpenAIBlock || hasTopLevelOpenAIBlock || hasCloudAssistantBlock
   const warnings: string[] = []
   let oidc: OidcConfig | undefined
   let googleOAuth: GoogleOAuthClientConfig | undefined
   let agentEndpoint: string | undefined
   let defaultRunnerEndpoint: string | undefined
-  let chatkitDomainKey: string | undefined
-  let responsesDirect:
-    | {
-        authMethod: string
-        openaiOrganization: string
-        openaiProject: string
-        vectorStores: string[]
-        apiKeySet: boolean
-      }
-    | undefined
 
   const oidcConfig: Partial<OidcConfig> = {}
   const genericOidcConfig = parsed.oidc.generic
@@ -640,7 +525,6 @@ export function applyAppConfig(
   const clientSecret =
     googleOidcClientSecret ?? normalizeString(genericOidcConfig.clientSecret)
   const redirectUri = normalizeString(genericOidcConfig.redirectUrl)
-  const configuredChatkitDomainKey = normalizeString(parsed.chatkit.domainKey)
   const skipOidcFromConfig = preserveLocalConfiguration && hasLocalOidcConfig
   if (skipOidcFromConfig) {
     try {
@@ -729,7 +613,6 @@ export function applyAppConfig(
   if (localStorageRef) {
     const settings = readSettingsFromStorage(localStorageRef)
     const settingsWebApp = asRecord(settings.webApp)
-    const settingsChatkit = asRecord(settings.chatkit)
     const configAgentEndpoint = normalizeString(parsed.agent.endpoint)
     const hadAgentOverride = agentEndpointManager.hasOverride()
     agentEndpointManager.setDefaultEndpoint(configAgentEndpoint)
@@ -758,72 +641,6 @@ export function applyAppConfig(
     } else if (hasStoredRunnerEndpoint) {
       defaultRunnerEndpoint = readStoredRunnerEndpoint(localStorageRef)
     }
-
-    const storedChatkitDomainKey = readStoredChatKitDomainKey(localStorageRef)
-    if (!storedChatkitDomainKey && configuredChatkitDomainKey) {
-      chatkitDomainKey = configuredChatkitDomainKey
-      settings.chatkit = {
-        ...(settingsChatkit ?? {}),
-        domainKey: configuredChatkitDomainKey,
-      }
-      writeSettingsToStorage(localStorageRef, settings)
-    } else {
-      chatkitDomainKey = storedChatkitDomainKey
-    }
-  }
-
-  if (!chatkitDomainKey) {
-    chatkitDomainKey = configuredChatkitDomainKey
-  }
-  if (hasChatkitBlock && !configuredChatkitDomainKey) {
-    warnings.push('ChatKit config missing domainKey')
-  }
-
-  const configuredOpenAIAuthMethod = normalizeString(
-    parsed.agent.openai.authMethod
-  )
-  const configuredOpenAIOrganization = normalizeString(
-    parsed.agent.openai.organization
-  )
-  const configuredOpenAIProject = normalizeString(parsed.agent.openai.project)
-  const configuredVectorStores = parsed.agent.openai.vectorStores
-
-  const shouldApplyResponsesDirectDefaults =
-    hasResponsesDirectConfigBlock ||
-    responsesDirectConfigManager.hasInitializedConfig()
-  const responsesDirectSnapshot = shouldApplyResponsesDirectDefaults
-    ? responsesDirectConfigManager.applyDefaults({
-        authMethod: configuredOpenAIAuthMethod,
-        openaiOrganization: configuredOpenAIOrganization,
-        openaiProject: configuredOpenAIProject,
-        vectorStores: configuredVectorStores,
-      })
-    : responsesDirectConfigManager.getSnapshot()
-  responsesDirect = {
-    authMethod: responsesDirectSnapshot.authMethod,
-    openaiOrganization: responsesDirectSnapshot.openaiOrganization,
-    openaiProject: responsesDirectSnapshot.openaiProject,
-    vectorStores: responsesDirectSnapshot.vectorStores,
-    apiKeySet: responsesDirectSnapshot.apiKey.length > 0,
-  }
-
-  if (hasResponsesDirectConfigBlock) {
-    if (responsesDirectSnapshot.authMethod === 'oauth') {
-      if (!responsesDirectSnapshot.openaiOrganization) {
-        warnings.push(
-          'Direct Responses OAuth requires openai organization (agent.openai.organization)'
-        )
-      }
-      if (!responsesDirectSnapshot.openaiProject) {
-        warnings.push(
-          'Direct Responses OAuth requires openai project (agent.openai.project)'
-        )
-      }
-    } else if (!responsesDirectSnapshot.apiKey) {
-      warnings.push(
-        'Direct Responses API key auth selected; set API key via app.responsesDirect.setAPIKey(...)'
-      )
-    }
   }
 
   return {
@@ -832,8 +649,6 @@ export function applyAppConfig(
     googleOAuth,
     agentEndpoint,
     defaultRunnerEndpoint,
-    chatkitDomainKey,
-    responsesDirect,
     warnings,
   }
 }

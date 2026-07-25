@@ -85,8 +85,8 @@ To run CUJs against a specific existing `agent-browser` session/profile (for
 example, a logged-in browser), set:
 
 ```bash
-AGENT_BROWSER_SESSION=runmecodex \
-AGENT_BROWSER_PROFILE="$HOME/chrome-profiles/runmecodex" \
+AGENT_BROWSER_SESSION=runme-web \
+AGENT_BROWSER_PROFILE="$HOME/chrome-profiles/runme-web" \
 AGENT_BROWSER_HEADED=true \
 pnpm -C app run cuj:run
 ```

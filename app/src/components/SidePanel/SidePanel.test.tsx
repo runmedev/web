@@ -1,15 +1,8 @@
 // @vitest-environment jsdom
-import { useEffect } from 'react'
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-type PanelKey = 'explorer' | 'open-documents' | 'outline' | 'chatkit' | null
+type PanelKey = 'explorer' | 'open-documents' | 'outline' | null
 
 let authData: {} | null = null
 let isDriveSyncing = false
@@ -23,8 +16,6 @@ let openDocumentsState: {
   readOnly?: boolean
 }[] = []
 let runnersState: { name: string; endpoint: string; reconnect: boolean }[] = []
-let chatKitMountCount = 0
-let chatKitUnmountCount = 0
 let notebookSnapshotState: {
   loaded: boolean
   notebook: {
@@ -114,18 +105,6 @@ vi.mock('../../contexts/RunnersContext', () => ({
   }),
 }))
 
-vi.mock('../ChatKit/ChatKitPanel', () => ({
-  default: () => {
-    useEffect(() => {
-      chatKitMountCount += 1
-      return () => {
-        chatKitUnmountCount += 1
-      }
-    }, [])
-    return <div data-testid="chatkit-panel-mock" />
-  },
-}))
-
 vi.mock('../Workspace/WorkspaceExplorer', () => ({
   default: () => <div data-testid="workspace-explorer-mock" />,
 }))
@@ -141,8 +120,6 @@ describe('SidePanelToolbar drive status button', () => {
     currentDocUri = null
     openDocumentsState = []
     runnersState = []
-    chatKitMountCount = 0
-    chatKitUnmountCount = 0
     notebookSnapshotState = null
     ensureAccessTokenMock.mockClear()
     startGoogleDriveOAuthMock.mockClear()
@@ -343,41 +320,16 @@ describe('SidePanelToolbar drive status button', () => {
   })
 })
 
-describe('SidePanelContent ChatKit persistence', () => {
+describe('SidePanelContent', () => {
   beforeEach(() => {
     activePanelState = 'explorer'
     currentDocUri = null
     openDocumentsState = []
     runnersState = []
-    chatKitMountCount = 0
-    chatKitUnmountCount = 0
     notebookSnapshotState = null
     setCurrentDocMock.mockClear()
     showDocumentMock.mockClear()
     closeWorkspaceDocumentMock.mockClear()
-  })
-
-  it('keeps ChatKit mounted when switching from ChatKit to Explorer and back', () => {
-    activePanelState = 'chatkit'
-    const { rerender } = render(<SidePanelContent />)
-
-    expect(screen.getByTestId('chatkit-panel-mock')).toBeTruthy()
-    expect(chatKitMountCount).toBe(1)
-    expect(chatKitUnmountCount).toBe(0)
-
-    activePanelState = 'explorer'
-    rerender(<SidePanelContent />)
-
-    expect(screen.getByTestId('chatkit-panel-mock')).toBeTruthy()
-    expect(screen.getByTestId('workspace-explorer-mock')).toBeTruthy()
-    expect(chatKitUnmountCount).toBe(0)
-
-    activePanelState = 'chatkit'
-    rerender(<SidePanelContent />)
-
-    expect(screen.getByTestId('chatkit-panel-mock')).toBeTruthy()
-    expect(chatKitMountCount).toBe(1)
-    expect(chatKitUnmountCount).toBe(0)
   })
 
   it('keeps the explorer subtree mounted when the side panel is collapsed', () => {

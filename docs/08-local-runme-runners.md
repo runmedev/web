@@ -8,7 +8,7 @@ server-backed notebook execution.
 ## Canonical setup
 
 ```js
-runmeRunners.ensure("default", "ws://localhost:9977/ws", { setDefault: true })
+runmeRunners.ensure('default', 'ws://localhost:9977/ws', { setDefault: true })
 ```
 
 Adjust the endpoint to match the actual Runme agent port and host.
@@ -32,7 +32,7 @@ Adjust the endpoint to match the actual Runme agent port and host.
 - no default runner,
 - auth or proxy mismatch.
 
-## High-value facts for Codex
+## Key facts
 
 - If a user says "run bash," start by checking the configured backend runner.
 - The current docs and older examples may mention `app.runners.*`; the current

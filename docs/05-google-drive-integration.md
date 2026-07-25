@@ -43,10 +43,10 @@ Example:
 
 ```yaml
 googleDrive:
-  clientID: "<google-drive-client-id>"
-  clientSecret: ""
-  authFlow: "implicit"
-  authUxMode: "new_tab"
+  clientID: '<google-drive-client-id>'
+  clientSecret: ''
+  authFlow: 'implicit'
+  authUxMode: 'new_tab'
 ```
 
 Meaning:
@@ -73,10 +73,10 @@ Service account example:
 
 ```yaml
 googleDrive:
-  authFlow: "service_account"
+  authFlow: 'service_account'
   serviceAccount:
-    client_email: "<service-account>@<project>.iam.gserviceaccount.com"
-    private_key_id: "<key-id>"
+    client_email: '<service-account>@<project>.iam.gserviceaccount.com'
+    private_key_id: '<key-id>'
     private_key: |
       -----BEGIN PRIVATE KEY-----
       ...
@@ -139,10 +139,10 @@ await drive.authorize()
 await drive.refreshAuth()
 drive.list(folderIdOrUri)
 drive.search(filesListRequest)
-drive.create(folderIdOrUri, "name.json")
+drive.create(folderIdOrUri, 'name.json')
 drive.trash(fileIdOrUri)
-drive.saveAsCurrentNotebook(folderIdOrUri, "name.json")
-drive.copyNotebook(sourceIdOrUri, targetFolderIdOrUri, "name.json")
+drive.saveAsCurrentNotebook(folderIdOrUri, 'name.json')
+drive.copyNotebook(sourceIdOrUri, targetFolderIdOrUri, 'name.json')
 drive.listPendingSync()
 drive.requeuePendingSync()
 ```
@@ -225,13 +225,14 @@ operation.
 `drive.trash(fileIdOrUri)` moves a Google Drive file to Drive trash. It is
 available in browser AppKernel JavaScript, including App Console and browser JS
 notebook cells, and is intentionally not exposed in the AppKernel sandbox. For
-bulk cleanup, have Codex insert a browser JS notebook cell that lists candidate
+bulk cleanup, insert a browser JS notebook cell that lists candidate
 files first, then review and run the trash command manually:
 
 ```js
 const files = await drive.list(folderIdOrUri)
 const targets = files.filter(
-  (item) => item.type === "file" && item.name.toLowerCase().startsWith("untitled"),
+  (item) =>
+    item.type === 'file' && item.name.toLowerCase().startsWith('untitled')
 )
 console.table(targets)
 // After review:
@@ -241,15 +242,15 @@ console.table(targets)
 Optional arguments:
 
 ```js
-await drive.authorize({ mode: "new_tab" })
-await drive.authorize({ mode: "redirect" })
-await drive.authorize({ mode: "popup", prompt: "consent" })
+await drive.authorize({ mode: 'new_tab' })
+await drive.authorize({ mode: 'redirect' })
+await drive.authorize({ mode: 'popup', prompt: 'consent' })
 ```
 
 `mode` can be `"new_tab"`, `"redirect"`, or `"popup"`. `prompt` can be
 `"none"` or `"consent"`.
 
-## High-value facts for Codex
+## Key facts
 
 - Drive auth and OIDC auth are related but not identical flows.
 - A Drive-backed notebook may be healthy locally while upstream sync is blocked.

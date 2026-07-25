@@ -7,9 +7,7 @@ Users may need to configure more than one of these:
 - OIDC sign-in for the web app,
 - Google OAuth for Drive access,
 - backend agent endpoint,
-- app-config YAML,
-- OpenAI or Responses-direct credentials,
-- AI harness selection.
+- app-config YAML.
 
 ## OIDC helpers
 
@@ -17,24 +15,26 @@ Users may need to configure more than one of these:
 oidc.get()
 oidc.setGoogleDefaults()
 oidc.setClientToDrive()
-oidc.setClientId("...")
-oidc.setClientSecret("...")
-oidc.setDiscoveryURL("...")
+oidc.setClientId('...')
+oidc.setClientSecret('...')
+oidc.setDiscoveryURL('...')
 oidc.getStatus()
 ```
 
 ## Google Drive OAuth helpers
 
 ```js
-credentials.google.setClientId("...")
-credentials.google.setClientSecret("...")
-credentials.google.setAuthFlow("implicit") // or "pkce"
-credentials.google.setAuthUxMode("redirect") // or "popup"
+credentials.google.setClientId('...')
+credentials.google.setClientSecret('...')
+credentials.google.setAuthFlow('implicit') // or "pkce"
+credentials.google.setAuthUxMode('redirect') // or "popup"
 await drive.authorize()
 await drive.refreshAuth()
 await app.startGoogleDriveOAuth()
 await credentials.google.setServiceAccountFromFile()
-await credentials.google.setServiceAccountFromFilePath("/Users/jlewi/secrets/aisre-gdrive-oai-test-8ba1a40f228e.json")
+await credentials.google.setServiceAccountFromFilePath(
+  '/Users/jlewi/secrets/aisre-gdrive-oai-test-8ba1a40f228e.json'
+)
 ```
 
 `drive.authorize()` and `app.startGoogleDriveOAuth()` both start a new Google
@@ -52,9 +52,9 @@ For automated tests, app config can select service-account Drive auth:
 
 ```yaml
 googleDrive:
-  authFlow: "service_account"
+  authFlow: 'service_account'
   serviceAccount:
-    client_email: "<service-account>@<project>.iam.gserviceaccount.com"
+    client_email: '<service-account>@<project>.iam.gserviceaccount.com'
     private_key: |
       -----BEGIN PRIVATE KEY-----
       ...
@@ -91,10 +91,10 @@ app.setLocalConfigPreferredOnLoad(true)
 app.enableConfigOverridesOnLoad()
 ```
 
-## High-value facts for Codex
+## Key facts
 
-- App config can inject defaults for agent endpoint, runner endpoint, OIDC, Drive,
-  and ChatKit-related values.
+- App config can inject defaults for agent endpoint, runner endpoint, OIDC, and
+  Drive values.
 - OIDC auth and Drive auth can share credentials, but they solve different problems.
 - If the app loads but features are unavailable, configuration mismatch is a more
   likely cause than a rendering bug.

@@ -29,7 +29,7 @@ explorer.help()
 explorer.addFolder()
 explorer.openPicker()
 explorer.importMarkdown()
-explorer.mountDrive("https://drive.google.com/...")
+explorer.mountDrive('https://drive.google.com/...')
 explorer.listFolders()
 explorer.removeFolder(uri)
 ```
@@ -40,7 +40,7 @@ explorer.removeFolder(uri)
 - Folder expansion is lazy; children are fetched when the folder opens.
 - Drive links may enqueue coordination work before a notebook becomes editable.
 
-## High-value facts for Codex
+## Key facts
 
 - Opening a file from the explorer is the safest way to make it the current document.
 - Removing a folder from the explorer does not necessarily delete its upstream source.

@@ -2,7 +2,6 @@ import {
   ChatBubbleLeftIcon,
   CommandLineIcon,
   FolderIcon,
-  ChatBubbleLeftRightIcon,
   DocumentTextIcon,
   InformationCircleIcon,
   Bars3BottomLeftIcon,
@@ -21,7 +20,6 @@ import {
   type MouseEvent,
 } from 'react'
 
-import ChatKitPanel from '../ChatKit/ChatKitPanel'
 import NotebookOutlinePanel from './NotebookOutlinePanel'
 import WorkspaceExplorer from '../Workspace/WorkspaceExplorer'
 import {
@@ -389,18 +387,6 @@ export function SidePanelToolbar() {
         <button
           type="button"
           className={`${sideButtonBase} ${
-            activePanel === 'chatkit' ? sideButtonActive : sideButtonInactive
-          }`}
-          aria-pressed={activePanel === 'chatkit'}
-          aria-label="Toggle ChatKit panel"
-          onClick={() => togglePanel('chatkit')}
-        >
-          <ChatBubbleLeftRightIcon className="h-5 w-5" />
-          <span className={tooltipBase}>AI Chat</span>
-        </button>
-        <button
-          type="button"
-          className={`${sideButtonBase} ${
             commentsPanelOpen ? sideButtonActive : sideButtonInactive
           }`}
           aria-pressed={commentsPanelOpen}
@@ -542,16 +528,6 @@ export function SidePanelToolbar() {
 
 export function SidePanelContent() {
   const { activePanel } = useSidePanel()
-  const [hasActivatedChatKit, setHasActivatedChatKit] = useState(
-    activePanel === 'chatkit'
-  )
-  const shouldRenderChatKit = hasActivatedChatKit || activePanel === 'chatkit'
-
-  useEffect(() => {
-    if (activePanel === 'chatkit') {
-      setHasActivatedChatKit(true)
-    }
-  }, [activePanel])
 
   return (
     <div className="relative h-full min-h-0 w-full">
@@ -570,14 +546,6 @@ export function SidePanelContent() {
       {activePanel === 'outline' ? (
         <div className="flex h-full min-h-0 w-full">
           <NotebookOutlinePanel />
-        </div>
-      ) : null}
-      {shouldRenderChatKit ? (
-        <div
-          className={`h-full min-h-0 w-full overflow-hidden ${activePanel === 'chatkit' ? 'flex' : 'hidden'}`}
-          aria-hidden={activePanel !== 'chatkit'}
-        >
-          <ChatKitPanel />
         </div>
       ) : null}
     </div>

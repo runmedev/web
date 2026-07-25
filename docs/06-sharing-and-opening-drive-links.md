@@ -67,7 +67,7 @@ Local references open directly in a notebook tab. Drive references are queued
 through the shared-link coordinator, which handles auth, local mirroring, and
 opening the resulting local notebook.
 
-## High-value facts for Codex
+## Key facts
 
 - Treat link opening as a coordination flow, not just "navigate to URL."
 - If the user is not authenticated yet, failure may be temporary and recoverable.

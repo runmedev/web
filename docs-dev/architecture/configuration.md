@@ -40,13 +40,11 @@ Google shortcut:
 oidc:
   clientExchange: true
   google:
-    clientID: "<google-oidc-client-id>"
+    clientID: '<google-oidc-client-id>'
 googleDrive:
-  clientID: "<google-drive-client-id>"
-  clientSecret: ""
-  baseUrl: "http://127.0.0.1:9090"
-chatkit:
-  domainKey: "<chatkit-domain-key>"
+  clientID: '<google-drive-client-id>'
+  clientSecret: ''
+  baseUrl: 'http://127.0.0.1:9090'
 ```
 
 Generic OIDC:
@@ -55,19 +53,17 @@ Generic OIDC:
 oidc:
   clientExchange: true
   generic:
-    clientID: "<oidc-client-id>"
-    clientSecret: ""
-    discoveryURL: "https://accounts.example.com/.well-known/openid-configuration"
-    redirectURL: "https://web.runme.dev/oidc/callback"
+    clientID: '<oidc-client-id>'
+    clientSecret: ''
+    discoveryURL: 'https://accounts.example.com/.well-known/openid-configuration'
+    redirectURL: 'https://web.runme.dev/oidc/callback'
     scopes:
-      - "openid"
-      - "email"
+      - 'openid'
+      - 'email'
 googleDrive:
-  clientID: "<google-drive-client-id>"
-  clientSecret: ""
-  baseUrl: "http://127.0.0.1:9090"
-chatkit:
-  domainKey: "<chatkit-domain-key>"
+  clientID: '<google-drive-client-id>'
+  clientSecret: ''
+  baseUrl: 'http://127.0.0.1:9090'
 ```
 
 When `oidc.google` is present, runtime config loading applies the same Google OIDC defaults as `oidc.setGoogleDefaults()` and then sets the configured client ID. Use `oidc.generic` when you need to override the discovery URL, redirect URL, or scopes explicitly.
@@ -88,10 +84,10 @@ Example:
 
 ```yaml
 googleDrive:
-  clientID: "<google-drive-client-id>"
-  clientSecret: ""
-  authFlow: "implicit"
-  authUxMode: "new_tab"
+  clientID: '<google-drive-client-id>'
+  clientSecret: ''
+  authFlow: 'implicit'
+  authUxMode: 'new_tab'
 ```
 
 Behavior:
@@ -141,7 +137,7 @@ This module defines:
 
 - `RuntimeAppConfig` interface for the normalized config shape (concrete defaults, no optional fields).
 - `RuntimeAppConfigSchema.fromUnknown(...)` for normalizing untyped parsed YAML.
-- Agent config block for assistant/runner endpoints (with backward-compatible parsing of legacy top-level endpoint keys).
+- Agent config block for backend and runner endpoints (with backward-compatible parsing of legacy top-level endpoint keys).
 - OIDC and Google Drive config blocks (including key normalization such as `clientID` and `discoveryURL`).
 - Empty-string sentinel for unset string values.
 - Drive base URL field; upload endpoint derivation and fallback behavior are handled by Drive client initialization code.

@@ -32,7 +32,7 @@ This opens the system directory picker and mounts the chosen folder as an
 - this is not a raw shell filesystem mount,
 - unsupported browsers should fall back to local notebooks or Drive.
 
-## High-value facts for Codex
+## Key facts
 
 - If a user asks to mount a filesystem path directly, the current UX still goes
   through the picker rather than accepting an arbitrary path string.

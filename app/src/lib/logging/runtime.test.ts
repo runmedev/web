@@ -1,102 +1,103 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from 'vitest'
 
-import { createLoggingRuntime } from "./runtime";
+import { createLoggingRuntime } from './runtime'
 
-describe("logging runtime", () => {
-  it("stores newest-first events and returns snapshots", () => {
-    const runtime = createLoggingRuntime();
+describe('logging runtime', () => {
+  it('stores newest-first events and returns snapshots', () => {
+    const runtime = createLoggingRuntime()
 
-    runtime.log("info", "first");
-    runtime.log("error", "second", { attrs: { code: "E2" } });
+    runtime.log('info', 'first')
+    runtime.log('error', 'second', { attrs: { code: 'E2' } })
 
-    const events = runtime.list();
-    expect(events).toHaveLength(2);
-    expect(events[0].message).toBe("second");
-    expect(events[1].message).toBe("first");
-    expect(events[0].attrs).toEqual({ code: "E2" });
+    const events = runtime.list()
+    expect(events).toHaveLength(2)
+    expect(events[0].message).toBe('second')
+    expect(events[1].message).toBe('first')
+    expect(events[0].attrs).toEqual({ code: 'E2' })
 
-    events[0].message = "mutated";
-    expect(runtime.list()[0].message).toBe("second");
-  });
+    events[0].message = 'mutated'
+    expect(runtime.list()[0].message).toBe('second')
+  })
 
-  it("supports level filters and limits", () => {
-    const runtime = createLoggingRuntime();
+  it('supports level filters and limits', () => {
+    const runtime = createLoggingRuntime()
 
-    runtime.log("debug", "d");
-    runtime.log("info", "i");
-    runtime.log("warn", "w");
-    runtime.log("error", "e");
+    runtime.log('debug', 'd')
+    runtime.log('info', 'i')
+    runtime.log('warn', 'w')
+    runtime.log('error', 'e')
 
-    expect(runtime.list({ minLevel: "warn" }).map((event) => event.level)).toEqual([
-      "error",
-      "warn",
-    ]);
-    expect(runtime.list({ level: "info" }).map((event) => event.message)).toEqual(["i"]);
-    expect(runtime.list({ limit: 1 })).toHaveLength(1);
-  });
+    expect(
+      runtime.list({ minLevel: 'warn' }).map((event) => event.level)
+    ).toEqual(['error', 'warn'])
+    expect(
+      runtime.list({ level: 'info' }).map((event) => event.message)
+    ).toEqual(['i'])
+    expect(runtime.list({ limit: 1 })).toHaveLength(1)
+  })
 
-  it("keeps only a bounded in-memory history", () => {
-    const runtime = createLoggingRuntime();
+  it('keeps only a bounded in-memory history', () => {
+    const runtime = createLoggingRuntime()
 
     for (let index = 0; index < 520; index += 1) {
-      runtime.log("info", `m-${index}`);
+      runtime.log('info', `m-${index}`)
     }
 
-    const events = runtime.list();
-    expect(events).toHaveLength(500);
-    expect(events[0].message).toBe("m-519");
-    expect(events[events.length - 1].message).toBe("m-20");
-  });
+    const events = runtime.list()
+    expect(events).toHaveLength(500)
+    expect(events[0].message).toBe('m-519')
+    expect(events[events.length - 1].message).toBe('m-20')
+  })
 
-  it("notifies subscribers and supports unsubscribe", () => {
-    const runtime = createLoggingRuntime();
-    const listener = vi.fn();
+  it('notifies subscribers and supports unsubscribe', () => {
+    const runtime = createLoggingRuntime()
+    const listener = vi.fn()
 
-    const unsubscribe = runtime.subscribe(listener);
-    runtime.log("info", "before-unsubscribe");
-    expect(listener).toHaveBeenCalledTimes(1);
+    const unsubscribe = runtime.subscribe(listener)
+    runtime.log('info', 'before-unsubscribe')
+    expect(listener).toHaveBeenCalledTimes(1)
 
-    unsubscribe();
-    runtime.log("info", "after-unsubscribe");
-    expect(listener).toHaveBeenCalledTimes(1);
-  });
+    unsubscribe()
+    runtime.log('info', 'after-unsubscribe')
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
 
-  it("falls back to a generated id when randomUUID throws", () => {
-    const runtime = createLoggingRuntime();
+  it('falls back to a generated id when randomUUID throws', () => {
+    const runtime = createLoggingRuntime()
     const randomUUIDSpy = vi
-      .spyOn(globalThis.crypto, "randomUUID")
+      .spyOn(globalThis.crypto, 'randomUUID')
       .mockImplementation(() => {
-        throw new Error("randomUUID unavailable");
-      });
+        throw new Error('randomUUID unavailable')
+      })
 
     try {
-      const event = runtime.log("info", "fallback-id");
-      expect(event.id).toMatch(/^log-/);
+      const event = runtime.log('info', 'fallback-id')
+      expect(event.id).toMatch(/^log-/)
     } finally {
-      randomUUIDSpy.mockRestore();
+      randomUUIDSpy.mockRestore()
     }
-  });
+  })
 
-  it("mirrors chatkit and codex scoped logs to console in dev", () => {
-    const runtime = createLoggingRuntime();
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  it('mirrors WebMCP scoped logs to console in dev', () => {
+    const runtime = createLoggingRuntime()
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     try {
-      runtime.log("info", "chatkit info", { attrs: { scope: "chatkit.panel" } });
-      runtime.log("warn", "codex warn", { attrs: { scope: "codex.proxy" } });
-      runtime.log("error", "other error", { attrs: { scope: "other.scope" } });
+      runtime.log('info', 'WebMCP info', { attrs: { scope: 'webmcp.tools' } })
+      runtime.log('warn', 'WebMCP warn', { attrs: { scope: 'webmcp.execute' } })
+      runtime.log('error', 'other error', { attrs: { scope: 'other.scope' } })
 
-      expect(infoSpy).toHaveBeenCalledTimes(1);
-      expect(infoSpy.mock.calls[0]?.[0]).toBe("[appLogger] chatkit info");
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(warnSpy.mock.calls[0]?.[0]).toBe("[appLogger] codex warn");
-      expect(errorSpy).not.toHaveBeenCalled();
+      expect(infoSpy).toHaveBeenCalledTimes(1)
+      expect(infoSpy.mock.calls[0]?.[0]).toBe('[appLogger] WebMCP info')
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+      expect(warnSpy.mock.calls[0]?.[0]).toBe('[appLogger] WebMCP warn')
+      expect(errorSpy).not.toHaveBeenCalled()
     } finally {
-      infoSpy.mockRestore();
-      warnSpy.mockRestore();
-      errorSpy.mockRestore();
+      infoSpy.mockRestore()
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
     }
-  });
-});
+  })
+})

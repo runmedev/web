@@ -19,7 +19,7 @@ These notebooks are a first-class backend, not just a temporary cache.
 In App Console, the fastest way to create a local notebook is:
 
 ```js
-await notebooks.createLocal("helloworld")
+await notebooks.createLocal('helloworld')
 ```
 
 That creates a browser-local notebook, opens it in the UI, and returns the
@@ -46,7 +46,7 @@ The UI deliberately separates:
 That keeps the app usable when auth drops, connectivity fails, or an upstream
 file is temporarily unavailable.
 
-## High-value facts for Codex
+## Key facts
 
 - Do not assume "local" means disposable.
 - A user can have important unsynced work entirely in browser storage.

@@ -13,10 +13,10 @@ is managed separately from normal backend runner configuration.
 ## Useful App Console commands
 
 ```js
-jupyter.servers.get("default")
-jupyter.kernels.start("default", "serverName", { kernelSpec: "python3" })
-jupyter.kernels.get("default", "serverName")
-jupyter.kernels.stop("default", "serverName", "kernelIdOrName")
+jupyter.servers.get('default')
+jupyter.kernels.start('default', 'serverName', { kernelSpec: 'python3' })
+jupyter.kernels.get('default', 'serverName')
+jupyter.kernels.stop('default', 'serverName', 'kernelIdOrName')
 ```
 
 ## When to use Jupyter
@@ -31,7 +31,7 @@ jupyter.kernels.stop("default", "serverName", "kernelIdOrName")
 - kernel lifecycle matters separately from notebook tabs,
 - misconfiguration can look like execution failure even when the UI itself is healthy.
 
-## High-value facts for Codex
+## Key facts
 
 - A valid backend runner is usually still part of the setup story because the
   Runme proxy sits between the web app and Jupyter.
