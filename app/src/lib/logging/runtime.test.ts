@@ -85,12 +85,14 @@ describe('logging runtime', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     try {
-      runtime.log('info', 'WebMCP info', { attrs: { scope: 'webmcp.tools' } })
+      runtime.log('info', 'WebMCP registration', { attrs: { scope: 'webmcp' } })
       runtime.log('warn', 'WebMCP warn', { attrs: { scope: 'webmcp.execute' } })
       runtime.log('error', 'other error', { attrs: { scope: 'other.scope' } })
 
       expect(infoSpy).toHaveBeenCalledTimes(1)
-      expect(infoSpy.mock.calls[0]?.[0]).toBe('[appLogger] WebMCP info')
+      expect(infoSpy.mock.calls[0]?.[0]).toBe(
+        '[appLogger] WebMCP registration'
+      )
       expect(warnSpy).toHaveBeenCalledTimes(1)
       expect(warnSpy.mock.calls[0]?.[0]).toBe('[appLogger] WebMCP warn')
       expect(errorSpy).not.toHaveBeenCalled()

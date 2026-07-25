@@ -41,15 +41,9 @@ explorer.importMarkdown()
 5. Open a notebook from the explorer.
 6. Run a code cell from the notebook UI.
 
-## If AI is needed
-
-- log in first if the harness depends on backend auth,
-- configure the active harness if the default is wrong,
-- open the AI side panel from the left toolbar.
-
 ## Key facts
 
 - The default page is the notebook workspace at `/`.
-- The app persists runner, harness, and config state in browser storage.
+- The app persists runner and config state in browser storage.
 - Local notebooks are first-class. A user does not need Google Drive to start.
 - `App Console` and `Logs` open as document tabs from the left navigation bar.
