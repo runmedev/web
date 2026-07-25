@@ -175,4 +175,23 @@ describe('CurrentDocInitializer', () => {
     expect(window.location.search).toBe('?existing=1')
     expect(window.location.hash).toBe('#section')
   })
+
+  it('opens a Markdown HTML link as a read-only document', async () => {
+    const uri =
+      'https://github.com/runmedev/web/blob/abc123/docs/00-getting-started.md'
+    setDocUrl(uri)
+
+    render(<CurrentDocInitializer />)
+
+    await waitFor(() => {
+      expect(mocks.setCurrentDoc).toHaveBeenCalledWith(uri)
+    })
+    expect(mocks.openNotebook).not.toHaveBeenCalled()
+    expect(mocks.showDocument).toHaveBeenCalledWith(uri, {
+      title: '00-getting-started',
+      mimeType: 'text/markdown',
+      readOnly: true,
+    })
+    expect(window.location.search).toBe('?existing=1')
+  })
 })

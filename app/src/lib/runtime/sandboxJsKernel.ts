@@ -95,6 +95,7 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'drive.create',
   'drive.update',
   'drive.saveAsCurrentNotebook',
+  'documents.list',
   'documents.get',
   'documents.update',
   ...SANDBOX_NOTEBOOKS_API_METHODS,
@@ -341,9 +342,11 @@ export function buildSandboxSrcDoc(options: {
 
         const notebooks = createSandboxNotebooksApiClient(hostCall);
         const documents = {
+          list: () => hostCall("documents.list", []),
           get: (uri) => hostCall("documents.get", [uri]),
           update: (uri, content, options) => hostCall("documents.update", [uri, content, options]),
           help: () => {
+            consoleProxy.log("documents.list()");
             consoleProxy.log("documents.get(uri)");
             consoleProxy.log("documents.update(uri, content, { mimeType?, expectedVersion?, flush? })");
           },
@@ -426,6 +429,7 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebooks.show([reference])");
           consoleProxy.log("- notebooks.shareUrl([reference])");
           consoleProxy.log("- notebooks.markdownLink([reference])");
+          consoleProxy.log("- documents.list()");
           consoleProxy.log("- documents.get(uri)");
           consoleProxy.log("- documents.update(uri, content, { mimeType?, expectedVersion?, flush? })");
           consoleProxy.log("- notebookDiff.listDriveRevisions([target])");

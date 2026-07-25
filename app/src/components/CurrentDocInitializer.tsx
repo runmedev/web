@@ -6,10 +6,15 @@ import { useWorkspaceDocumentContext } from '../contexts/WorkspaceDocumentContex
 import {
   deriveWorkspaceDocumentTitle,
   isAppConsoleUri,
+  isDocumentationDocumentUri,
   isDriveSyncStatusUri,
   isLogsUri,
   isRunnerStatusUri,
 } from '../lib/workspaceDocuments/workspaceDocumentTypes'
+import {
+  DOCUMENTATION_MIME_TYPE,
+  markDocumentationOpened,
+} from '../lib/documentation'
 
 function isNotebookDocParam(uri: string): boolean {
   return uri.startsWith('local://file/') || uri.startsWith('fs://')
@@ -49,6 +54,17 @@ export function CurrentDocInitializer() {
     ) {
       showDocument(docParam, {
         title: deriveWorkspaceDocumentTitle(docParam),
+      })
+      setCurrentDoc(docParam)
+      clearDocParam()
+      return
+    }
+    if (isDocumentationDocumentUri(docParam)) {
+      markDocumentationOpened(docParam)
+      showDocument(docParam, {
+        title: deriveWorkspaceDocumentTitle(docParam).replace(/\.md$/i, ''),
+        mimeType: DOCUMENTATION_MIME_TYPE,
+        readOnly: true,
       })
       setCurrentDoc(docParam)
       clearDocParam()

@@ -3,6 +3,7 @@ import { SidePanelContent, SidePanelToolbar } from "../SidePanel/SidePanel";
 import { useSidePanel } from "../../contexts/SidePanelContext";
 import { CommentsPanelProvider } from "../../contexts/CommentsPanelContext";
 import { CurrentDocInitializer } from "../CurrentDocInitializer";
+import { DocumentationInitializer } from "../Documentation/DocumentationInitializer";
 
 const SIDE_PANEL_WIDTH = 360;
 const TOOLBAR_WIDTH = 48; // ~12 tailwind units (12 * 4px)
@@ -15,6 +16,7 @@ export default function MainPage() {
     <CommentsPanelProvider>
       <div id="main-page" className="flex h-screen w-screen bg-nb-bg">
         <CurrentDocInitializer />
+        <DocumentationInitializer />
         <div className="flex h-full min-h-0 w-full">
           <div
             id="toolbar-column"

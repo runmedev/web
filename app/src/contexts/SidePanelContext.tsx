@@ -1,6 +1,11 @@
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 
-export type PanelKey = "explorer" | "open-documents" | "outline" | null;
+export type PanelKey =
+  | "explorer"
+  | "documentation"
+  | "open-documents"
+  | "outline"
+  | null;
 
 interface SidePanelContextValue {
   activePanel: PanelKey;
@@ -24,6 +29,7 @@ export function SidePanelProvider({ children }: { children: ReactNode }) {
         localStorage.getItem(LEGACY_STORAGE_KEY);
       if (
         stored === "explorer" ||
+        stored === "documentation" ||
         stored === "open-documents" ||
         stored === "open-notebooks" ||
         stored === "outline"

@@ -1,5 +1,6 @@
 import {
   ChatBubbleLeftIcon,
+  BookOpenIcon,
   CommandLineIcon,
   FolderIcon,
   DocumentTextIcon,
@@ -22,6 +23,7 @@ import {
 
 import NotebookOutlinePanel from './NotebookOutlinePanel'
 import WorkspaceExplorer from '../Workspace/WorkspaceExplorer'
+import DocumentationExplorer from '../Documentation/DocumentationExplorer'
 import {
   getBrowserAdapter,
   useBrowserAuthData,
@@ -35,6 +37,7 @@ import { useWorkspaceDocumentContext } from '../../contexts/WorkspaceDocumentCon
 import {
   isDriveLinkStatusUri,
   isDriveSyncStatusUri,
+  isDocumentationDocumentUri,
   DRIVE_SYNC_STATUS_DOCUMENT_URI,
   isExcalidrawWorkspaceDocument,
   isNotebookDiffUri,
@@ -142,21 +145,23 @@ function OpenDocumentsPanel() {
                 ? 'Excalidraw'
                 : isNotebookDocumentUri(doc.uri)
                   ? 'Notebook'
-                  : isNotebookDiffUri(doc.uri)
-                    ? 'Diff'
-                    : isDriveLinkStatusUri(doc.uri)
-                      ? 'Status'
-                      : isDriveSyncStatusUri(doc.uri)
-                        ? 'Drive Sync'
-                        : isVersionInfoUri(doc.uri)
-                          ? 'Version'
-                          : isRunnerStatusUri(doc.uri)
-                            ? 'Runner Status'
-                            : isAppConsoleUri(doc.uri)
-                              ? 'App Console'
-                              : isLogsUri(doc.uri)
-                                ? 'Logs'
-                                : 'Document'
+                  : isDocumentationDocumentUri(doc.uri)
+                    ? 'Documentation'
+                    : isNotebookDiffUri(doc.uri)
+                      ? 'Diff'
+                      : isDriveLinkStatusUri(doc.uri)
+                        ? 'Status'
+                        : isDriveSyncStatusUri(doc.uri)
+                          ? 'Drive Sync'
+                          : isVersionInfoUri(doc.uri)
+                            ? 'Version'
+                            : isRunnerStatusUri(doc.uri)
+                              ? 'Runner Status'
+                              : isAppConsoleUri(doc.uri)
+                                ? 'App Console'
+                                : isLogsUri(doc.uri)
+                                  ? 'Logs'
+                                  : 'Document'
               return (
                 <li key={doc.uri}>
                   <div
@@ -349,6 +354,20 @@ export function SidePanelToolbar() {
         <button
           type="button"
           className={`${sideButtonBase} ${
+            activePanel === 'documentation'
+              ? sideButtonActive
+              : sideButtonInactive
+          }`}
+          aria-pressed={activePanel === 'documentation'}
+          aria-label="Toggle Documentation panel"
+          onClick={() => togglePanel('documentation')}
+        >
+          <BookOpenIcon className="h-5 w-5" />
+          <span className={tooltipBase}>Documentation</span>
+        </button>
+        <button
+          type="button"
+          className={`${sideButtonBase} ${
             activePanel === 'explorer' ? sideButtonActive : sideButtonInactive
           }`}
           aria-pressed={activePanel === 'explorer'}
@@ -536,6 +555,12 @@ export function SidePanelContent() {
         aria-hidden={activePanel !== 'explorer'}
       >
         <WorkspaceExplorer />
+      </div>
+      <div
+        className={`h-full min-h-0 w-full ${activePanel === 'documentation' ? 'flex' : 'hidden'}`}
+        aria-hidden={activePanel !== 'documentation'}
+      >
+        <DocumentationExplorer />
       </div>
       <div
         className={`h-full min-h-0 w-full ${activePanel === 'open-documents' ? 'flex' : 'hidden'}`}

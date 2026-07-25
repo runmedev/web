@@ -1,5 +1,6 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import { execFileSync } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { defineConfig } from "vite";
@@ -25,6 +26,25 @@ const IMAGE_MIME_BY_EXTENSION = new Map([
   [".svg", "image/svg+xml"],
   [".webp", "image/webp"],
 ]);
+
+function resolveWebCommit(): string | undefined {
+  const configured = process.env.VITE_RUNME_VERSION_WEB_COMMIT?.trim();
+  if (configured) {
+    return configured;
+  }
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+const webCommit = resolveWebCommit();
+const webRepository =
+  process.env.VITE_RUNME_VERSION_WEB_REPO?.trim() || "runmedev/web";
 
 function localServiceAccountKeyPlugin() {
   return {
@@ -123,6 +143,12 @@ export default defineConfig({
   // Use root-relative assets so LB rewrites to /index.html still load bundles from /.
   base: "/",
   cacheDir: ".vite",
+  define: {
+    "import.meta.env.VITE_RUNME_VERSION_WEB_REPO":
+      JSON.stringify(webRepository),
+    "import.meta.env.VITE_RUNME_VERSION_WEB_COMMIT":
+      JSON.stringify(webCommit ?? ""),
+  },
   publicDir: "assets",
   optimizeDeps: {
     exclude: ["@runmedev/renderers"],

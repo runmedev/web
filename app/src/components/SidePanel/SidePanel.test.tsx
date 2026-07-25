@@ -2,7 +2,12 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-type PanelKey = 'explorer' | 'open-documents' | 'outline' | null
+type PanelKey =
+  | 'explorer'
+  | 'documentation'
+  | 'open-documents'
+  | 'outline'
+  | null
 
 let authData: {} | null = null
 let isDriveSyncing = false
@@ -107,6 +112,10 @@ vi.mock('../../contexts/RunnersContext', () => ({
 
 vi.mock('../Workspace/WorkspaceExplorer', () => ({
   default: () => <div data-testid="workspace-explorer-mock" />,
+}))
+
+vi.mock('../Documentation/DocumentationExplorer', () => ({
+  default: () => <div data-testid="documentation-explorer-mock" />,
 }))
 
 import { SidePanelContent, SidePanelToolbar } from './SidePanel'
@@ -231,6 +240,16 @@ describe('SidePanelToolbar drive status button', () => {
     expect(togglePanelMock).toHaveBeenCalledWith('outline')
   })
 
+  it('exposes a Documentation Explorer button in the toolbar', () => {
+    render(<SidePanelToolbar />)
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Toggle Documentation panel' })
+    )
+
+    expect(togglePanelMock).toHaveBeenCalledWith('documentation')
+  })
+
   it('exposes an App Console button in the toolbar', () => {
     render(<SidePanelToolbar />)
 
@@ -344,6 +363,14 @@ describe('SidePanelContent', () => {
     expect(screen.getByTestId('workspace-explorer-mock')).toBeTruthy()
   })
 
+  it('renders the Documentation Explorer panel', () => {
+    activePanelState = 'documentation'
+
+    render(<SidePanelContent />)
+
+    expect(screen.getByTestId('documentation-explorer-mock')).toBeTruthy()
+  })
+
   it('renders the Open Documents panel and routes document actions through shared context state', () => {
     activePanelState = 'open-documents'
     currentDocUri = 'local://file/alpha.json'
@@ -355,6 +382,11 @@ describe('SidePanelContent', () => {
       { uri: 'status://drive-sync', title: 'Google Drive Sync Status' },
       { uri: 'app://console', title: 'App Console' },
       { uri: 'app://logs', title: 'Logs' },
+      {
+        uri: 'https://github.com/runmedev/web/blob/abc123/docs/00-getting-started.md',
+        title: 'Getting Started',
+        readOnly: true,
+      },
     ]
     closeWorkspaceDocumentMock.mockReturnValue('diff://notebook/beta')
 
@@ -369,6 +401,11 @@ describe('SidePanelContent', () => {
     expect(screen.getByText('Drive Sync · status://drive-sync')).toBeTruthy()
     expect(screen.getByText('App Console · app://console')).toBeTruthy()
     expect(screen.getByText('Logs · app://logs')).toBeTruthy()
+    expect(
+      screen.getByText(
+        'Documentation · https://github.com/runmedev/web/blob/abc123/docs/00-getting-started.md'
+      )
+    ).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Close alpha.json' }))
     expect(closeWorkspaceDocumentMock).toHaveBeenCalledWith(

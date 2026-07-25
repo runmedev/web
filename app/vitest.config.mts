@@ -4,6 +4,14 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   cacheDir: '.vite',
+  define: {
+    'import.meta.env.VITE_RUNME_VERSION_WEB_REPO': JSON.stringify(
+      process.env.VITE_RUNME_VERSION_WEB_REPO || 'runmedev/web'
+    ),
+    'import.meta.env.VITE_RUNME_VERSION_WEB_COMMIT': JSON.stringify(
+      process.env.VITE_RUNME_VERSION_WEB_COMMIT || 'test-web-commit'
+    ),
+  },
   plugins: [react()],
   test: {
     environment: 'jsdom',

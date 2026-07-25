@@ -70,6 +70,7 @@ import {
 import {
   isDriveLinkStatusUri,
   isDriveSyncStatusUri,
+  isDocumentationDocumentUri,
   isAppConsoleUri,
   isExcalidrawWorkspaceDocument,
   isLogsUri,
@@ -117,6 +118,7 @@ import LogsPane from '../Logs/LogsPane'
 import { ActionOutputItems } from './ActionOutputItems'
 import React from 'react'
 import ExcalidrawDocument from '../Excalidraw/ExcalidrawDocument'
+import RemoteMarkdownDocument from '../Documentation/RemoteMarkdownDocument'
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
   'data-state'?: 'active' | 'inactive'
@@ -2793,6 +2795,10 @@ function renderWorkspaceDocument({
 
   if (isNotebookDiffUri(document.uri)) {
     return <NotebookDiffTabContent diffUri={document.uri} />
+  }
+
+  if (isDocumentationDocumentUri(document.uri)) {
+    return <RemoteMarkdownDocument document={document} />
   }
 
   if (isDriveLinkStatusUri(document.uri)) {

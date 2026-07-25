@@ -325,6 +325,41 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     })
   })
 
+  it('lists commit-pinned documentation and fetches remote Markdown', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => '# Getting Started',
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const globals = createAppJsGlobals({
+      runme: createRunme(),
+    })
+
+    const [gettingStarted] = globals.documents.list()
+    expect(gettingStarted).toMatchObject({
+      title: 'Getting Started',
+      readOnly: true,
+    })
+    expect(gettingStarted.uri).toContain(
+      'https://github.com/runmedev/web/blob/'
+    )
+
+    const document = await globals.documents.get(gettingStarted.uri)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      gettingStarted.rawUri,
+      expect.any(Object)
+    )
+    expect(document).toMatchObject({
+      uri: gettingStarted.uri,
+      mimeType: 'text/markdown',
+      content: '# Getting Started',
+      readOnly: true,
+    })
+  })
+
   it('updates raw document content in the local mirror', async () => {
     const localStore = {
       getMetadata: vi.fn(async () => ({
