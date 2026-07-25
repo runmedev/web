@@ -22,6 +22,7 @@ import {
   maybeParseIPykernelMessage,
 } from './ipykernel'
 import { appLogger } from './logging/runtime'
+import { markOnboardingTaskComplete } from './onboarding'
 import { buildExecuteRequest } from './runme'
 import type { Runner } from './runner'
 import { createAppJsGlobals } from './runtime/appJsGlobals'
@@ -660,6 +661,13 @@ export class NotebookData {
     }
 
     if (!transient) {
+      if (
+        cloned.metadata[RunmeMetadataKey.ExecutionState] ===
+          RunmeExecutionState.Completed &&
+        typeof cloned.metadata[RunmeMetadataKey.ExitCode] === 'string'
+      ) {
+        markOnboardingTaskComplete('run-first-cell')
+      }
       this.snapshotCache = this.buildSnapshot()
       this.emit()
       this.schedulePersist()

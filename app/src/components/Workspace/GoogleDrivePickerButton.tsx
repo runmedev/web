@@ -5,6 +5,7 @@ import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { driveFolderUrl } from "../../storage/drive";
 import { googleClientManager } from "../../lib/googleClientManager";
+import { markOnboardingTaskComplete } from "../../lib/onboarding";
 
 type PickerAction = "picked" | "cancel";
 
@@ -126,6 +127,7 @@ export function GoogleDrivePickerButton({
               if (!workspaceUris.includes(localUri)) {
                 addItem(localUri);
               }
+              markOnboardingTaskComplete("add-drive-folder");
             } catch (error) {
               console.error("Failed to mirror Drive folder", error);
             }

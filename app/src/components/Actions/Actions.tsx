@@ -74,6 +74,7 @@ import {
   isAppConsoleUri,
   isExcalidrawWorkspaceDocument,
   isLogsUri,
+  isOnboardingDocumentUri,
   isNotebookDiffUri,
   isNotebookDocumentUri,
   isVersionInfoUri,
@@ -119,6 +120,7 @@ import { ActionOutputItems } from './ActionOutputItems'
 import React from 'react'
 import ExcalidrawDocument from '../Excalidraw/ExcalidrawDocument'
 import RemoteMarkdownDocument from '../Documentation/RemoteMarkdownDocument'
+import OnboardingDocument from '../Onboarding/OnboardingDocument'
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
   'data-state'?: 'active' | 'inactive'
@@ -2801,6 +2803,10 @@ function renderWorkspaceDocument({
     return <RemoteMarkdownDocument document={document} />
   }
 
+  if (isOnboardingDocumentUri(document.uri)) {
+    return <OnboardingDocument />
+  }
+
   if (isDriveLinkStatusUri(document.uri)) {
     return <DriveLinkStatusTab onLogin={onDriveLogin} onRetry={onDriveRetry} />
   }
@@ -2916,7 +2922,8 @@ export default function Actions() {
     Boolean(currentDocUri && isNotebookDocumentUri(currentDocUri)) &&
     openNotebooks.some(
       (notebook) =>
-        notebook.uri === currentDocUri || notebook.requestedUri === currentDocUri
+        notebook.uri === currentDocUri ||
+        notebook.requestedUri === currentDocUri
     )
   const resolvedSelectedTabUri =
     (selectedTabIsOpen ? selectedTabUri : null) ??

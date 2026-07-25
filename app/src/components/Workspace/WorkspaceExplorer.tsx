@@ -50,6 +50,7 @@ import { useWorkspaceDocumentContext } from "../../contexts/WorkspaceDocumentCon
 import { driveLinkCoordinator } from "../../lib/driveLinkCoordinator";
 import { openNotebookUpstreamDiff } from "../../lib/notebookDiff/conflict";
 import { appState } from "../../lib/runtime/AppState";
+import { markOnboardingTaskComplete } from "../../lib/onboarding";
 import {
   EXCALIDRAW_MIME_TYPE,
   createInitialExcalidrawDocumentJson,
@@ -818,6 +819,7 @@ export function WorkspaceExplorer() {
         const timestamp = formatShortTimestamp(new Date());
         const name = `untitled-${timestamp}.json`;
         const newItem = await targetStore.create(folderUri, name);
+        markOnboardingTaskComplete("create-first-notebook");
         await fetchChildren(folderUri);
         setPendingEditId(newItem.uri);
         setErrorMessage(null);

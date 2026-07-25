@@ -1,3 +1,4 @@
+import { markOnboardingTaskComplete } from './onboarding'
 import { type RunmeVersionInfo, runmeVersionInfo } from './versionInfo'
 
 export const DOCUMENTATION_MIME_TYPE = 'text/markdown'
@@ -272,5 +273,6 @@ export function markDocumentationOpened(uri: string): void {
   }
   if (uri === gettingStarted.uri || uri === gettingStarted.rawUri) {
     markGettingStartedOpened()
+    markOnboardingTaskComplete('read-getting-started')
   }
 }
