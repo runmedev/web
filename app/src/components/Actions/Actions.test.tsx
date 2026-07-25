@@ -45,6 +45,12 @@ const contextMocks = vi.hoisted(() => ({
     refreshErrorMessage?: string
     owner?: NotebookOwnershipRecord | null
   }>,
+  openNotebooks: [] as Array<{
+    uri: string
+    requestedUri: string
+    name: string
+    state: 'loading' | 'loaded' | 'blocked' | 'error'
+  }>,
   currentDoc: null as string | null,
   setCurrentDoc: vi.fn(),
   showDocument: vi.fn(),
@@ -141,6 +147,7 @@ vi.mock('../../contexts/NotebookContext', () => ({
     openNotebook: contextMocks.openNotebook,
     requestWriteAccess: contextMocks.requestWriteAccess,
     refreshReadOnlyNotebook: contextMocks.refreshReadOnlyNotebook,
+    useNotebookList: () => contextMocks.openNotebooks,
     useNotebookSnapshot: (uri: string) =>
       contextMocks.notebookSnapshots.get(uri) ?? null,
   }),
@@ -325,6 +332,7 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
   window.history.replaceState(null, '', '/')
   contextMocks.workspaceDocuments = []
+  contextMocks.openNotebooks = []
   contextMocks.currentDoc = null
   contextMocks.setCurrentDoc.mockReset()
   contextMocks.setCurrentDoc.mockImplementation((uri: string | null) => {
@@ -938,6 +946,35 @@ describe('Actions tabs', () => {
         'local://file/restored'
       )
     })
+  })
+
+  it('preserves a current notebook while its workspace tab is restoring', async () => {
+    const restoredUri = 'local://file/restored.runme.md'
+    contextMocks.currentDoc = restoredUri
+    contextMocks.openNotebooks = [
+      {
+        uri: restoredUri,
+        requestedUri: restoredUri,
+        name: 'restored.runme.md',
+        state: 'loading',
+      },
+    ]
+    contextMocks.workspaceDocuments = [
+      {
+        uri: 'https://github.com/runmedev/web/blob/abc123/docs/00-getting-started.md',
+        title: 'Getting Started',
+        readOnly: true,
+      },
+    ]
+
+    render(<Actions />)
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('tab', { name: /Getting Started/ })
+      ).toBeTruthy()
+    })
+    expect(contextMocks.setCurrentDoc).not.toHaveBeenCalled()
   })
 
   it('renames the notebook from the tab context menu', async () => {

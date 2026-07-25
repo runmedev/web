@@ -2831,8 +2831,9 @@ function renderWorkspaceDocument({
 export default function Actions() {
   const { useWorkspaceDocuments, showDocument, closeWorkspaceDocument } =
     useWorkspaceDocumentContext()
-  const { getNotebookData } = useNotebookContext()
+  const { getNotebookData, useNotebookList } = useNotebookContext()
   const { store } = useNotebookStore()
+  const openNotebooks = useNotebookList()
   const workspaceDocuments = useWorkspaceDocuments()
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const currentDocUri = getCurrentDoc()
@@ -2911,6 +2912,12 @@ export default function Actions() {
   const currentDocIsOpen = currentDocUri
     ? workspaceDocumentUris.has(currentDocUri)
     : false
+  const currentDocIsRestoring =
+    Boolean(currentDocUri && isNotebookDocumentUri(currentDocUri)) &&
+    openNotebooks.some(
+      (notebook) =>
+        notebook.uri === currentDocUri || notebook.requestedUri === currentDocUri
+    )
   const resolvedSelectedTabUri =
     (selectedTabIsOpen ? selectedTabUri : null) ??
     (currentDocIsOpen ? currentDocUri : null) ??
@@ -3007,11 +3014,12 @@ export default function Actions() {
     if (selectedTabUri && !selectedTabIsOpen) {
       setSelectedTabUri(null)
     }
-    if (currentDocUri && !currentDocIsOpen) {
+    if (currentDocUri && !currentDocIsOpen && !currentDocIsRestoring) {
       setCurrentDoc(workspaceDocuments[0]?.uri ?? null)
     }
   }, [
     currentDocIsOpen,
+    currentDocIsRestoring,
     currentDocUri,
     selectedTabIsOpen,
     selectedTabUri,
