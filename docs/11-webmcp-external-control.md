@@ -162,13 +162,17 @@ try {
   console.log(JSON.stringify({ status: 'ok', handle: updated.handle }))
 } catch (error) {
   if (error?.code === 'NOTEBOOK_UPDATE_FAILED') {
+    const current = await notebooks.get({
+      handle: error.details.afterHandle,
+    })
+
     console.log(
       JSON.stringify({
         status: 'partial_failure',
         appliedOperationCount: error.details.appliedOperationCount,
         failedOperationIndex: error.details.failedOperationIndex,
         operationStatuses: error.details.operationStatuses,
-        afterHandle: error.details.afterHandle,
+        currentHandle: current.handle,
       })
     )
   } else {
@@ -177,13 +181,7 @@ try {
 }
 ```
 
-After a partial failure, use `afterHandle` when re-reading notebook state:
-
-```js
-const current = await notebooks.get({ handle: error.details.afterHandle })
-console.log(JSON.stringify({ currentHandle: current.handle }))
-```
-
-Do not assume the whole update rolled back. `notebooks.update` reports which
-operations were applied; it does not make multi-operation updates fully
+The reread stays inside the `NOTEBOOK_UPDATE_FAILED` branch where `error` is in
+scope. Do not assume the whole update rolled back. `notebooks.update` reports
+which operations were applied; it does not make multi-operation updates fully
 transactional.
