@@ -60,6 +60,10 @@ describe("WorkspaceDocumentController", () => {
     });
     controller.showDocument("diff://notebook/1", { title: "Diff" });
     controller.showDocument("status://drive-link", { title: "Drive Link Status" });
+    controller.showDocument(
+      "https://github.com/runmedev/web/blob/abc123/docs/00-getting-started.md",
+      { title: "Getting Started", mimeType: "text/markdown", readOnly: true },
+    );
 
     expect(
       JSON.parse(window.sessionStorage.getItem("runme/workspaceDocuments") ?? "[]"),
@@ -70,6 +74,12 @@ describe("WorkspaceDocumentController", () => {
         title: "diagram.excalidraw",
         requestedUri: "https://drive.google.com/file/d/diagram123/view",
         mimeType: EXCALIDRAW_MIME_TYPE,
+      },
+      {
+        uri: "https://github.com/runmedev/web/blob/abc123/docs/00-getting-started.md",
+        title: "Getting Started",
+        mimeType: "text/markdown",
+        readOnly: true,
       },
     ]);
   });

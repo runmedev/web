@@ -171,6 +171,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.gcp_auth.outputs.access_token }}
           CUJ_MANAGE_SERVERS: "true"
+          CUJ_OIDC_TOKEN_TTL_SECONDS: "1800"
           CUJ_FRONTEND_CMD: "pnpm run dev:app"
           CUJ_UPLOAD: "true"
           CUJ_COMMENT: "false"

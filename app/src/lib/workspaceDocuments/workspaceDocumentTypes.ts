@@ -1,6 +1,7 @@
+import { isExcalidrawDocumentMetadata } from '../../storage/excalidraw'
+import { isRemoteMarkdownUri } from '../documentation'
 import type { NotebookTabState } from '../notebookDataController'
 import type { NotebookOwnershipRecord } from '../tabCoordination/notebookOwnership'
-import { isExcalidrawDocumentMetadata } from '../../storage/excalidraw'
 
 export const DRIVE_LINK_STATUS_DOCUMENT_URI = 'status://drive-link'
 export const DRIVE_SYNC_STATUS_DOCUMENT_URI = 'status://drive-sync'
@@ -72,8 +73,14 @@ export function isLogsUri(uri: string | null | undefined): boolean {
   return uri === LOGS_DOCUMENT_URI
 }
 
+export function isDocumentationDocumentUri(
+  uri: string | null | undefined
+): uri is string {
+  return isRemoteMarkdownUri(uri)
+}
+
 export function isRestorableWorkspaceDocument(uri: string): boolean {
-  return isNotebookDocumentUri(uri)
+  return isNotebookDocumentUri(uri) || isDocumentationDocumentUri(uri)
 }
 
 export function deriveWorkspaceDocumentTitle(uri: string): string {

@@ -89,6 +89,7 @@ class SessionStorageWorkspaceDocumentPersistence
         title: item.title,
         requestedUri: item.requestedUri,
         mimeType: item.mimeType,
+        readOnly: item.readOnly,
       }))
       window.sessionStorage.setItem(
         WORKSPACE_DOCUMENTS_STORAGE_KEY,
@@ -114,6 +115,7 @@ function normalizeWorkspaceDocument(item: unknown): WorkspaceDocument | null {
     title: candidate.title?.trim() || deriveWorkspaceDocumentTitle(uri),
     requestedUri: candidate.requestedUri?.trim() || undefined,
     mimeType: candidate.mimeType?.trim() || undefined,
+    ...(candidate.readOnly === true ? { readOnly: true } : {}),
   }
 }
 

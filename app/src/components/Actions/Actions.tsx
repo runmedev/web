@@ -70,6 +70,7 @@ import {
 import {
   isDriveLinkStatusUri,
   isDriveSyncStatusUri,
+  isDocumentationDocumentUri,
   isAppConsoleUri,
   isExcalidrawWorkspaceDocument,
   isLogsUri,
@@ -117,6 +118,7 @@ import LogsPane from '../Logs/LogsPane'
 import { ActionOutputItems } from './ActionOutputItems'
 import React from 'react'
 import ExcalidrawDocument from '../Excalidraw/ExcalidrawDocument'
+import RemoteMarkdownDocument from '../Documentation/RemoteMarkdownDocument'
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
   'data-state'?: 'active' | 'inactive'
@@ -2795,6 +2797,10 @@ function renderWorkspaceDocument({
     return <NotebookDiffTabContent diffUri={document.uri} />
   }
 
+  if (isDocumentationDocumentUri(document.uri)) {
+    return <RemoteMarkdownDocument document={document} />
+  }
+
   if (isDriveLinkStatusUri(document.uri)) {
     return <DriveLinkStatusTab onLogin={onDriveLogin} onRetry={onDriveRetry} />
   }
@@ -2825,8 +2831,9 @@ function renderWorkspaceDocument({
 export default function Actions() {
   const { useWorkspaceDocuments, showDocument, closeWorkspaceDocument } =
     useWorkspaceDocumentContext()
-  const { getNotebookData } = useNotebookContext()
+  const { getNotebookData, getOpenNotebooks } = useNotebookContext()
   const { store } = useNotebookStore()
+  const openNotebooks = getOpenNotebooks()
   const workspaceDocuments = useWorkspaceDocuments()
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const currentDocUri = getCurrentDoc()
@@ -2905,6 +2912,12 @@ export default function Actions() {
   const currentDocIsOpen = currentDocUri
     ? workspaceDocumentUris.has(currentDocUri)
     : false
+  const currentDocIsRestoring =
+    Boolean(currentDocUri && isNotebookDocumentUri(currentDocUri)) &&
+    openNotebooks.some(
+      (notebook) =>
+        notebook.uri === currentDocUri || notebook.requestedUri === currentDocUri
+    )
   const resolvedSelectedTabUri =
     (selectedTabIsOpen ? selectedTabUri : null) ??
     (currentDocIsOpen ? currentDocUri : null) ??
@@ -3001,11 +3014,12 @@ export default function Actions() {
     if (selectedTabUri && !selectedTabIsOpen) {
       setSelectedTabUri(null)
     }
-    if (currentDocUri && !currentDocIsOpen) {
+    if (currentDocUri && !currentDocIsOpen && !currentDocIsRestoring) {
       setCurrentDoc(workspaceDocuments[0]?.uri ?? null)
     }
   }, [
     currentDocIsOpen,
+    currentDocIsRestoring,
     currentDocUri,
     selectedTabIsOpen,
     selectedTabUri,

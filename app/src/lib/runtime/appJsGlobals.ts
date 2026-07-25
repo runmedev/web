@@ -27,6 +27,11 @@ import {
   setAppConfigFromYaml,
   setLocalConfigPreferredOnLoad,
 } from '../appConfig'
+import {
+  fetchRemoteMarkdownDocument,
+  isRemoteMarkdownUri,
+  listDocumentation,
+} from '../documentation'
 import { driveLinkCoordinator } from '../driveLinkCoordinator'
 import {
   copyDriveNotebookFile,
@@ -109,6 +114,7 @@ type DocumentContent = {
   name: string
   mimeType?: string
   content: string
+  readOnly?: boolean
   syncStatus?: string
   version?: {
     checksum?: string
@@ -716,7 +722,11 @@ export function createAppJsGlobals({
   }
 
   const documentsHelpers = {
+    list: () => listDocumentation(),
     get: async (uri: string): Promise<DocumentContent> => {
+      if (isRemoteMarkdownUri(uri)) {
+        return fetchRemoteMarkdownDocument(uri)
+      }
       const resolved = await resolveDocumentLocalUri(uri)
       return buildDocumentContent(resolved.localUri, resolved.requestedUri)
     },
@@ -764,7 +774,9 @@ export function createAppJsGlobals({
     },
     help: () => {
       return [
+        'documents.list()                           - List commit-pinned Runme documentation',
         'documents.get(uri)                         - Read raw document content from the local mirror',
+        '                                             or fetch a read-only remote Markdown document',
         'documents.update(uri, content, options?)   - Write raw document content to the local mirror',
         '  options.mimeType                         - Preserve or set the content MIME type',
         '  options.expectedVersion                  - Optional optimistic checksum/revision guard',
@@ -1551,7 +1563,7 @@ export function createAppJsGlobals({
         'Available namespaces:',
         '  runme           - Notebook helpers (run all, clear outputs)',
         '  notebooks       - Notebook document API plus create/append helpers',
-        '  documents       - Raw URI-based document content get/update helpers',
+        '  documents       - List/read docs plus raw local document updates',
         '  notebookDiff    - Compare revisions and resolve notebook sync conflicts',
         '  opfs            - Origin-private browser file storage helpers',
         '  net             - Browser network helpers',
@@ -1570,6 +1582,7 @@ export function createAppJsGlobals({
         '  await app.getSessionId()',
         '  await app.getSessionID()',
         '  await notebooks.createLocal("hello")',
+        '  console.table(documents.list())',
         '  const doc = await documents.get("local://file/...")',
         '  await notebooks.appendCell({ kind: "code", value: "print(1)", languageId: "python" })',
         '  await embed("/tmp/screenshot.png", { alt: "Screenshot" })',

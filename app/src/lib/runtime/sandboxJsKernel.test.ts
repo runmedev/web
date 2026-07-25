@@ -119,12 +119,18 @@ class MockSandboxPort {
         this.emit({
           type: 'host-call',
           callId: 1,
+          method: 'documents.list',
+          args: [],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 2,
           method: 'documents.get',
           args: ['local://file/test4'],
         })
         this.emit({
           type: 'host-call',
-          callId: 2,
+          callId: 3,
           method: 'documents.update',
           args: [
             'local://file/test4',
@@ -791,6 +797,14 @@ describe('SandboxJSKernel', () => {
     let stderr = ''
     let exitCode = -1
     const bridgeCall = vi.fn(async (method: string, args: unknown[]) => {
+      if (method === 'documents.list') {
+        return [
+          {
+            title: 'Getting Started',
+            uri: 'https://github.com/runmedev/web/blob/abc123/docs/00-getting-started.md',
+          },
+        ]
+      }
       if (method === 'documents.get') {
         return {
           uri: args[0],
@@ -830,6 +844,7 @@ describe('SandboxJSKernel', () => {
 
     await kernel.run(
       [
+        'console.log(await documents.list());',
         "const doc = await documents.get('local://file/test4');",
         'const scene = JSON.parse(doc.content);',
         "scene.elements.push({ id: 'label', type: 'text', text: 'Box A' });",
@@ -837,6 +852,7 @@ describe('SandboxJSKernel', () => {
       ].join('\n')
     )
 
+    expect(bridgeCall).toHaveBeenCalledWith('documents.list', [])
     expect(bridgeCall).toHaveBeenCalledWith('documents.get', [
       'local://file/test4',
     ])
