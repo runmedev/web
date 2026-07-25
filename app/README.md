@@ -45,7 +45,7 @@ Refresh the webapp for the settings to take effect.
 
 ## Configure Signon in the webapp with OIDC
 
-You need to signon into the app in order to authenticate to the different services the app talks to (e.g. kernels and the AI backend).
+You need to sign on to authenticate to protected runner and parser services.
 You do this with OIDC. You'll need an OIDC provider such as
 
 - Google
@@ -94,7 +94,7 @@ This should print out information about your OIDC token.
 
 ## Run a server
 
-We need to start the Runme server to provide a kernel and AI backend.
+Start the Runme server to provide runner and parser backends.
 
 Clone the Runme Repo [https://github.com/runmedev/runme](https://github.com/runmedev/runme)
 
@@ -109,7 +109,6 @@ cp ${REPODIR}$/app/config.dev.yaml \
 
 Make the relevant changes to your config
 
-- Set the path to your OpenAI API Key
 - Change your email in the IAM rules
 - Add the Google OAuth Client ID
 
@@ -126,7 +125,7 @@ go run ./ agent --config=${HOME}/.runme-agent/config.dev.yaml serve
   ```yaml
   # app-configs.yaml is a file that will be served by the server as a static asset.
   # It will be used by the frontend to configure itself.
-  # The agent mints OAuth tokens for the user to login to the assistant and the runners
+  # The server uses OIDC tokens to authorize protected runner and parser APIs.
   oidc:
     # OIDC callback handling should happen in the browser.
     clientExchange: true
@@ -141,9 +140,6 @@ go run ./ agent --config=${HOME}/.runme-agent/config.dev.yaml serve
     authFlow: 'implicit'
     # Optional: popup, redirect, or new_tab
     authUxMode: 'new_tab'
-
-  chatkit:
-    domainKey: '<chatkit-domain-key>'
   ```
 
   If you need to override the discovery URL, redirect URL, or scopes explicitly, add an `oidc.generic` block alongside `oidc.google`.

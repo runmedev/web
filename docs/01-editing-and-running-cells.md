@@ -44,7 +44,7 @@ when Runme is running through the local development server.
 - interactive terminal input is supported for console-style execution paths,
 - Jupyter output may be translated from kernel messages before rendering.
 
-## High-value facts for Codex
+## Key facts
 
 - "Run this notebook" is often best interpreted as `runme.runAll()` or repeated
   cell execution, depending on context.

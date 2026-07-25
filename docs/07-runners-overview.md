@@ -21,10 +21,10 @@ Runner configuration is persisted in browser storage and includes:
 
 ```js
 runmeRunners.get()
-runmeRunners.update("default", "ws://localhost:9977/ws")
+runmeRunners.update('default', 'ws://localhost:9977/ws')
 runmeRunners.getDefault()
-runmeRunners.setDefault("default")
-runmeRunners.delete("default")
+runmeRunners.setDefault('default')
+runmeRunners.delete('default')
 ```
 
 ## Selection guidance
@@ -33,7 +33,7 @@ runmeRunners.delete("default")
 - use AppKernel for browser-native JavaScript execution,
 - use Jupyter when a notebook must talk to a Jupyter server and kernel.
 
-## High-value facts for Codex
+## Key facts
 
 - Many execution failures reduce to "wrong runner" or "no default runner."
 - Runner config is user state, not repo state.

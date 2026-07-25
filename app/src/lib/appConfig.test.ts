@@ -71,119 +71,6 @@ describe('appConfig OIDC Google shorthand', () => {
     })
   })
 
-  it('stores the ChatKit domain key from app config in local storage', async () => {
-    const { applyAppConfig, getConfiguredChatKitDomainKey } =
-      await loadModules()
-
-    const result = applyAppConfig(
-      {
-        agent: {
-          endpoint: 'http://localhost:9977',
-        },
-        chatkit: {
-          domainKey: 'domain_pk_configured',
-        },
-      },
-      'http://localhost/configs/app-configs.yaml'
-    )
-
-    expect(result.warnings).toEqual([])
-    expect(result.chatkitDomainKey).toBe('domain_pk_configured')
-    expect(getConfiguredChatKitDomainKey()).toBe('domain_pk_configured')
-
-    const stored = JSON.parse(
-      window.localStorage.getItem('cloudAssistantSettings') ?? '{}'
-    )
-    expect(stored.chatkit).toEqual({
-      domainKey: 'domain_pk_configured',
-    })
-  })
-
-  it('falls back to the existing ChatKit localhost default when no config is stored', async () => {
-    const { getConfiguredChatKitDomainKey } = await loadModules()
-
-    expect(getConfiguredChatKitDomainKey()).toBe('domain_pk_localhost_dev')
-  })
-
-  it('applies direct Responses OpenAI config from agent.openai', async () => {
-    const { applyAppConfig } = await loadModules()
-
-    const result = applyAppConfig(
-      {
-        agent: {
-          endpoint: 'http://localhost:9977',
-          openai: {
-            authMethod: 'OAuth',
-            organization: 'org-test',
-            project: 'proj-test',
-            vectorStores: ['vs_1', 'vs_2'],
-          },
-        },
-      },
-      'http://localhost/configs/app-configs.yaml'
-    )
-
-    expect(result.warnings).toEqual([])
-    expect(result.responsesDirect).toEqual({
-      authMethod: 'oauth',
-      openaiOrganization: 'org-test',
-      openaiProject: 'proj-test',
-      vectorStores: ['vs_1', 'vs_2'],
-      apiKeySet: false,
-    })
-  })
-
-  it('supports go-style top-level OpenAI and cloudAssistant vectorStores', async () => {
-    const { applyAppConfig } = await loadModules()
-
-    const result = applyAppConfig(
-      {
-        agent: {
-          endpoint: 'http://localhost:9977',
-        },
-        openai: {
-          authMethod: 'OAuth',
-          organization: 'org-top-level',
-          project: 'proj-top-level',
-        },
-        cloudAssistant: {
-          vectorStores: ['vs_top'],
-        },
-      },
-      'http://localhost/configs/app-configs.yaml'
-    )
-
-    expect(result.warnings).toEqual([])
-    expect(result.responsesDirect).toEqual({
-      authMethod: 'oauth',
-      openaiOrganization: 'org-top-level',
-      openaiProject: 'proj-top-level',
-      vectorStores: ['vs_top'],
-      apiKeySet: false,
-    })
-  })
-
-  it('warns when direct Responses is configured for API key auth without a key', async () => {
-    const { applyAppConfig } = await loadModules()
-
-    const result = applyAppConfig(
-      {
-        agent: {
-          endpoint: 'http://localhost:9977',
-          openai: {
-            authMethod: 'APIKey',
-          },
-        },
-      },
-      'http://localhost/configs/app-configs.yaml'
-    )
-
-    expect(result.responsesDirect?.authMethod).toBe('api_key')
-    expect(result.warnings).toContain(
-      'Direct Responses API key auth selected; set API key via app.responsesDirect.setAPIKey(...)'
-    )
-  })
-
   it('preserves the runtime Google Drive base URL when config omits it', async () => {
     const { applyAppConfig } = await loadModules()
     const { setGoogleDriveBaseUrl, getGoogleDriveBaseUrl } = await import(
@@ -353,7 +240,8 @@ describe('appConfig OIDC Google shorthand', () => {
           authFlow: 'service_account',
           serviceAccount: {
             client_email: 'runme-drive-test@example.iam.gserviceaccount.com',
-            private_key: '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
+            private_key:
+              '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
             private_key_id: 'key-id',
             scopes: ['https://www.googleapis.com/auth/drive.readonly'],
           },
@@ -401,23 +289,12 @@ describe('appConfig OIDC Google shorthand', () => {
     const { setAppConfigFromYaml } = await loadModules()
 
     const result = setAppConfigFromYaml(
-      [
-        'agent:',
-        '  endpoint: http://localhost:9977',
-        '  openai:',
-        '    authMethod: OAuth',
-        '    organization: org-inline',
-        '    project: proj-inline',
-      ].join('\n'),
+      ['agent:', '  endpoint: http://localhost:9977'].join('\n'),
       'inline://test-config.yaml'
     )
 
     expect(result.url).toBe('inline://test-config.yaml')
     expect(result.agentEndpoint).toBe('http://localhost:9977')
-    expect(result.responsesDirect).toMatchObject({
-      authMethod: 'oauth',
-      openaiOrganization: 'org-inline',
-      openaiProject: 'proj-inline',
-    })
+    expect(result.warnings).toEqual([])
   })
 })

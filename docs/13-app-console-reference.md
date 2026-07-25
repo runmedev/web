@@ -23,7 +23,7 @@ help()
 - `drive`: Drive file and sync helpers,
 - `oidc`: sign-in configuration and auth inspection,
 - `credentials`: shorthand credential managers,
-- `app`: app config, harness, Codex project, and related global controls,
+- `app`: app config and related global controls,
 - `opfs`: browser private file storage helpers,
 - `net`: browser HTTP GET helper.
 
@@ -194,15 +194,7 @@ app.getDefaultConfigUrl()
 app.setConfig(app.getDefaultConfigUrl())
 ```
 
-Harness setup:
-
-```js
-app.harness.get()
-app.harness.getDefault()
-app.harness.setDefault('configured-harness-name')
-```
-
-## High-value facts for Codex
+## Key facts
 
 - The App Console is a supported user surface, not just a developer escape hatch.
 - Current namespace names matter. Prefer exact names from code over stale README examples.
@@ -216,8 +208,8 @@ app.harness.setDefault('configured-harness-name')
 - Use `notebooks.resolve(reference)` to turn local URIs, Runme share URLs,
   Drive URLs, and Markdown links into a title, `localUri`, `remoteUri`,
   `shareUrl`, and replacement-ready `markdownLink`.
-- Use `notebooks.show(reference)` when Codex needs one command that opens a
+- Use `notebooks.show(reference)` when automation needs one command that opens a
   local notebook tab or hands a Drive reference to shared-link coordination.
-- Prefer `drive.search(...)` over DOM inspection when Codex knows a Drive file
+- Prefer `drive.search(...)` over DOM inspection when automation knows a Drive file
   name or can express the intended file with the Drive query grammar. Resolve a
   unique result, then pass its `uri` to `notebooks.show(...)`.

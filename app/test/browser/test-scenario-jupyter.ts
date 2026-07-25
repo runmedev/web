@@ -387,7 +387,7 @@ function configureNotebookFocusedLayout(attempts = 3): { ok: boolean; detail: st
       }
 
       const activePanelButton = document.querySelector(
-        'button[aria-label=\"Toggle Explorer panel\"][aria-pressed=\"true\"], button[aria-label=\"Toggle ChatKit panel\"][aria-pressed=\"true\"]'
+        'button[aria-label=\"Toggle Explorer panel\"][aria-pressed=\"true\"]'
       );
       if (activePanelButton instanceof HTMLButtonElement) {
         result.activePanelLabel = activePanelButton.getAttribute('aria-label') || '';
@@ -401,7 +401,7 @@ function configureNotebookFocusedLayout(attempts = 3): { ok: boolean; detail: st
       );
       const activePanelStillVisible = Boolean(
         document.querySelector(
-          'button[aria-label=\"Toggle Explorer panel\"][aria-pressed=\"true\"], button[aria-label=\"Toggle ChatKit panel\"][aria-pressed=\"true\"]'
+          'button[aria-label=\"Toggle Explorer panel\"][aria-pressed=\"true\"]'
         )
       );
       result.appConsoleCollapsed = !appConsoleStillExpanded;

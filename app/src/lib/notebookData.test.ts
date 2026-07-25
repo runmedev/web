@@ -189,147 +189,6 @@ vi.mock("./runtime/runnersManager", () => ({
   getRunnersManager: () => runnersManager,
 }));
 
-const harnessStore = new Map<
-  string,
-  {
-    name: string;
-    baseUrl: string;
-    adapter: "responses-direct" | "codex";
-  }
->();
-let defaultHarnessName: string | null = null;
-const harnessManager = {
-  list: vi.fn(() => [...harnessStore.values()]),
-  getDefaultName: vi.fn(() => defaultHarnessName ?? ""),
-  getDefault: vi.fn(() => {
-    if (defaultHarnessName && harnessStore.has(defaultHarnessName)) {
-      return harnessStore.get(defaultHarnessName)!;
-    }
-    const first = harnessStore.values().next().value;
-    return (
-      first ?? {
-        name: "local-responses",
-        baseUrl: "http://localhost",
-        adapter: "responses-direct",
-      }
-    );
-  }),
-  update: vi.fn(
-    (name: string, baseUrl: string, adapter: "responses-direct" | "codex") => {
-      const next = { name, baseUrl, adapter };
-      harnessStore.set(name, next);
-      if (!defaultHarnessName) {
-        defaultHarnessName = name;
-      }
-      return next;
-    },
-  ),
-  delete: vi.fn((name: string) => {
-    harnessStore.delete(name);
-    if (defaultHarnessName === name) {
-      defaultHarnessName =
-        harnessStore.size > 0 ? [...harnessStore.keys()][0] : null;
-    }
-  }),
-  setDefault: vi.fn((name: string) => {
-    if (harnessStore.has(name)) {
-      defaultHarnessName = name;
-    }
-  }),
-  resolveChatkitUrl: vi.fn(
-    (profile: { baseUrl: string; adapter: "responses-direct" | "codex" }) =>
-      `${profile.baseUrl}/${profile.adapter === "codex" ? "chatkit-codex" : "chatkit-responses-direct"}`,
-  ),
-};
-vi.mock("./runtime/harnessManager", () => ({
-  getHarnessManager: () => harnessManager,
-}));
-
-const codexProjectStore = new Map<
-  string,
-  {
-    id: string;
-    name: string;
-    cwd: string;
-    model: string;
-    approvalPolicy: string;
-    sandboxPolicy: string;
-    personality: string;
-  }
->();
-let defaultCodexProjectId: string | null = null;
-const codexProjectManager = {
-  list: vi.fn(() => [...codexProjectStore.values()]),
-  getDefaultId: vi.fn(() => defaultCodexProjectId ?? ""),
-  getDefault: vi.fn(() => {
-    if (defaultCodexProjectId && codexProjectStore.has(defaultCodexProjectId)) {
-      return codexProjectStore.get(defaultCodexProjectId)!;
-    }
-    const first = codexProjectStore.values().next().value;
-    return (
-      first ?? {
-        id: "local-default",
-        name: "Local Project",
-        cwd: ".",
-        model: "gpt-5.4",
-        approvalPolicy: "never",
-        sandboxPolicy: "workspace-write",
-        personality: "default",
-      }
-    );
-  }),
-  create: vi.fn(
-    (
-      name: string,
-      cwd: string,
-      model: string,
-      sandboxPolicy: string,
-      approvalPolicy: string,
-      personality: string,
-    ) => {
-      const id = `project-${codexProjectStore.size + 1}`;
-      const next = {
-        id,
-        name,
-        cwd,
-        model,
-        sandboxPolicy,
-        approvalPolicy,
-        personality,
-      };
-      codexProjectStore.set(id, next);
-      if (!defaultCodexProjectId) {
-        defaultCodexProjectId = id;
-      }
-      return next;
-    },
-  ),
-  update: vi.fn((id: string, patch: Record<string, unknown>) => {
-    const current = codexProjectStore.get(id);
-    if (!current) {
-      throw new Error(`Codex project ${id} not found`);
-    }
-    const next = { ...current, ...patch, id };
-    codexProjectStore.set(id, next);
-    return next;
-  }),
-  delete: vi.fn((id: string) => {
-    codexProjectStore.delete(id);
-    if (defaultCodexProjectId === id) {
-      defaultCodexProjectId =
-        codexProjectStore.size > 0 ? [...codexProjectStore.keys()][0] : null;
-    }
-  }),
-  setDefault: vi.fn((id: string) => {
-    if (codexProjectStore.has(id)) {
-      defaultCodexProjectId = id;
-    }
-  }),
-};
-vi.mock("./runtime/codexProjectManager", () => ({
-  getCodexProjectManager: () => codexProjectManager,
-}));
-
 let bindStreamsToCell: typeof import("./notebookData").bindStreamsToCell;
 let NotebookData: typeof import("./notebookData").NotebookData;
 
@@ -386,13 +245,8 @@ afterEach(async () => {
   appState.setDriveNotebookStore(null);
   appState.setLocalNotebooks(null);
   appState.setOpenNotebookHandler(null);
-  window.localStorage.removeItem("runme/responses-direct-config");
   runnerStore.clear();
   defaultRunnerName = null;
-  harnessStore.clear();
-  defaultHarnessName = null;
-  codexProjectStore.clear();
-  defaultCodexProjectId = null;
   __resetTabIdForTests();
   window.history.replaceState(null, "", "/");
 });
@@ -1350,9 +1204,9 @@ describe("NotebookData.runCodeCell", () => {
     expect(stdoutText).toContain("function");
   });
 
-  it("exposes app.runners and app.harness helpers in appkernel cells", async () => {
+  it("exposes app.runners helpers in appkernel cells", async () => {
     const cell = create(parser_pb.CellSchema, {
-      refId: "cell-appkernel-runner-harness-helpers",
+      refId: "cell-appkernel-runner-helpers",
       kind: parser_pb.CellKind.CODE,
       languageId: "javascript",
       outputs: [],
@@ -1363,16 +1217,13 @@ describe("NotebookData.runCodeCell", () => {
         'console.log(app.runners.update("local", "ws://localhost:5190/ws"));',
         'console.log(app.runners.setDefault("local"));',
         "console.log(app.runners.getDefault());",
-        'console.log(app.harness.update("local-codex", "http://localhost:5190", "codex"));',
-        'console.log(app.harness.setDefault("local-codex"));',
-        "console.log(app.harness.getDefault());",
       ].join("\n"),
     });
     const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
     const model = new NotebookData({
       notebook,
       uri: "nb://test",
-      name: "runner-harness-helpers.runme.md",
+      name: "runner-helpers.runme.md",
       notebookStore: null,
       loaded: true,
     });
@@ -1394,111 +1245,6 @@ describe("NotebookData.runCodeCell", () => {
     expect(stdoutText).toContain(
       "Default runner: local (ws://localhost:5190/ws)",
     );
-    expect(stdoutText).toContain(
-      "Harness local-codex set to http://localhost:5190 (codex)",
-    );
-    expect(stdoutText).toContain("Default harness set to local-codex");
-    expect(stdoutText).toContain(
-      "Default harness: local-codex (http://localhost:5190, codex)",
-    );
-  });
-
-  it("exposes app.codex.project helpers in appkernel cells", async () => {
-    const cell = create(parser_pb.CellSchema, {
-      refId: "cell-appkernel-codex-project-helpers",
-      kind: parser_pb.CellKind.CODE,
-      languageId: "javascript",
-      outputs: [],
-      metadata: {
-        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
-      },
-      value: [
-        'const created = app.codex.project.create("Runme Repo", "/Users/jlewi/code/runmecodex/web", "gpt-5", "workspace-write", "never", "default");',
-        "console.log(created);",
-        'console.log(app.codex.project.update("project-1", { model: "gpt-5-mini" }));',
-        'console.log(app.codex.project.setDefault("project-1"));',
-        "console.log(app.codex.project.getDefault());",
-        "console.log(app.codex.project.list());",
-      ].join("\n"),
-    });
-    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
-    const model = new NotebookData({
-      notebook,
-      uri: "nb://test",
-      name: "codex-project-helpers.runme.md",
-      notebookStore: null,
-      loaded: true,
-    });
-
-    model.runCodeCell(cell);
-    await waitForCondition(() => {
-      const snap = model.getCellSnapshot(cell.refId);
-      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
-    });
-
-    const updated = model.getCellSnapshot(cell.refId);
-    const stdoutText = (updated?.outputs ?? [])
-      .flatMap((o) => o.items)
-      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
-      .map((i) => new TextDecoder().decode(i.data))
-      .join("");
-    expect(stdoutText).toContain(
-      "Codex project Runme Repo created (project-1)",
-    );
-    expect(stdoutText).toContain(
-      "Codex project Runme Repo updated (project-1)",
-    );
-    expect(stdoutText).toContain("Default codex project set to project-1");
-    expect(stdoutText).toContain(
-      "Default codex project: Runme Repo (project-1, cwd=/Users/jlewi/code/runmecodex/web, model=gpt-5-mini)",
-    );
-    expect(stdoutText).toContain(
-      "project-1: Runme Repo (/Users/jlewi/code/runmecodex/web, model=gpt-5-mini, sandbox=workspace-write, approval=never) (default)",
-    );
-  });
-
-  it("exposes app.responsesDirect and credentials.openai helpers in appkernel cells", async () => {
-    const cell = create(parser_pb.CellSchema, {
-      refId: "cell-appkernel-responses-direct-helpers",
-      kind: parser_pb.CellKind.CODE,
-      languageId: "javascript",
-      outputs: [],
-      metadata: {
-        [RunmeMetadataKey.RunnerName]: APPKERNEL_RUNNER_NAME,
-      },
-      value: [
-        "console.log(typeof app.responsesDirect);",
-        'console.log(app.responsesDirect.setAuthMethod("APIKey").authMethod);',
-        'console.log(app.responsesDirect.setAPIKey("sk-test").apiKey ? "key-set" : "key-missing");',
-        "console.log(app.responsesDirect.get().authMethod);",
-        "console.log(typeof credentials.openai.setOpenAIProject);",
-      ].join("\n"),
-    });
-    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
-    const model = new NotebookData({
-      notebook,
-      uri: "nb://test",
-      name: "responses-direct-helpers.runme.md",
-      notebookStore: null,
-      loaded: true,
-    });
-
-    model.runCodeCell(cell);
-    await waitForCondition(() => {
-      const snap = model.getCellSnapshot(cell.refId);
-      return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
-    });
-
-    const updated = model.getCellSnapshot(cell.refId);
-    const stdoutText = (updated?.outputs ?? [])
-      .flatMap((o) => o.items)
-      .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
-      .map((i) => new TextDecoder().decode(i.data))
-      .join("");
-    expect(stdoutText).toContain("object");
-    expect(stdoutText).toContain("api_key");
-    expect(stdoutText).toContain("key-set");
-    expect(stdoutText).toContain("function");
   });
 
   it("supports drive.saveAsCurrentNotebook in appkernel cells", async () => {

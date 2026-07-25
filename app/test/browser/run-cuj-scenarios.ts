@@ -85,9 +85,6 @@ const SCENARIO_DRIVERS = [
   join(SCRIPT_DIR, "test-scenario-appkernel-javascript.ts"),
   join(SCRIPT_DIR, "test-scenario-jupyter.ts"),
   join(SCRIPT_DIR, "test-scenario-no-runner-logs.ts"),
-  join(SCRIPT_DIR, "test-scenario-ai.ts"),
-  join(SCRIPT_DIR, "test-scenario-ai-codex.ts"),
-  join(SCRIPT_DIR, "test-scenario-chatkit-thread-persistence.ts"),
   join(SCRIPT_DIR, "test-scenario-notebook-focus-persistence.ts"),
 ];
 
@@ -114,18 +111,6 @@ type FakeDriveConfig = {
   host: string;
   port: number;
   baseUrl: string;
-  serverCommand: string;
-  serverEnv: NodeJS.ProcessEnv;
-};
-
-type FakeChatkitConfig = {
-  enabled: boolean;
-  host: string;
-  port: number;
-  baseUrl: string;
-  healthUrl: string;
-  requestsUrl: string;
-  resetUrl: string;
   serverCommand: string;
   serverEnv: NodeJS.ProcessEnv;
 };
@@ -228,38 +213,6 @@ function resolveFakeDriveConfig(): FakeDriveConfig {
   };
 }
 
-function resolveFakeChatkitConfig(): FakeChatkitConfig {
-  const enabled = (process.env.CUJ_FAKE_CHATKIT_ENABLED ?? "true").toLowerCase() !== "false";
-  const host = process.env.CUJ_FAKE_CHATKIT_HOST ?? "127.0.0.1";
-  const port = Number(process.env.CUJ_FAKE_CHATKIT_PORT ?? "19989");
-  const baseUrl = process.env.CUJ_FAKE_CHATKIT_BASE_URL ?? `http://${host}:${port}`;
-  const healthUrl = process.env.CUJ_FAKE_CHATKIT_HEALTH_URL ??
-    new URL("/healthz", baseUrl).toString();
-  const requestsUrl = process.env.CUJ_FAKE_CHATKIT_REQUESTS_URL ??
-    new URL("/requests", baseUrl).toString();
-  const resetUrl = process.env.CUJ_FAKE_CHATKIT_RESET_URL ??
-    new URL("/reset", baseUrl).toString();
-  const serverScript = join(REPO_ROOT, "testing", "aiservice", "main.go");
-  const serverCommand = process.env.CUJ_FAKE_CHATKIT_CMD ?? `go run ${shellQuote(serverScript)}`;
-  const serverEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    CUJ_FAKE_CHATKIT_HOST: host,
-    CUJ_FAKE_CHATKIT_PORT: `${port}`,
-  };
-
-  return {
-    enabled,
-    host,
-    port,
-    baseUrl,
-    healthUrl,
-    requestsUrl,
-    resetUrl,
-    serverCommand,
-    serverEnv,
-  };
-}
-
 function ensureBackendAssetsAndConfig(
   frontendUrl: string,
   backendUrl: string,
@@ -272,9 +225,6 @@ function ensureBackendAssetsAndConfig(
     "<!doctype html><html><body>CUJ backend assets</body></html>\n",
     "utf-8",
   );
-  const keyFilePath = join(OUTPUT_DIR, "cuj-openai-key.txt");
-  writeFileSync(keyFilePath, "cuj-dummy-key\n", "utf-8");
-
   const configPath = join(OUTPUT_DIR, "cuj-agent-config.yaml");
   const origins = buildBackendOrigins(frontendUrl);
   const originsYaml = origins.map((origin) => `    - "${origin}"`).join("\n");
@@ -286,13 +236,10 @@ function ensureBackendAssetsAndConfig(
     "  sinks:",
     "    - path: stderr",
     "      json: false",
-    "openai:",
-    `  apiKeyFile: "${keyFilePath}"`,
-    "cloudAssistant:",
-    "  vectorStores: []",
     "assistantServer:",
     "  bindAddress: 127.0.0.1",
     `  port: ${parseBackendPort(backendUrl)}`,
+    "  agentService: false",
     "  parserService: true",
     "  runnerService: true",
     `  staticAssets: "${assetsDir}"`,
@@ -321,10 +268,6 @@ function ensureBackendAssetsAndConfig(
           '        - kind: "user"',
           `          name: "${oidc.principalEmail}"`,
           '    - role: "role/parser.user"',
-          "      members:",
-          '        - kind: "user"',
-          `          name: "${oidc.principalEmail}"`,
-          '    - role: "role/agent.user"',
           "      members:",
           '        - kind: "user"',
           `          name: "${oidc.principalEmail}"`,
@@ -913,7 +856,6 @@ async function main(): Promise<void> {
   const backendUrl = process.env.CUJ_BACKEND_URL ?? "http://localhost:9977";
   const oidc = resolveOidcAuthConfig();
   const fakeDrive = resolveFakeDriveConfig();
-  const fakeChatkit = resolveFakeChatkitConfig();
   const frontendCmd = process.env.CUJ_FRONTEND_CMD ?? "pnpm run dev:app";
   const frontendCwd = resolve(process.env.CUJ_FRONTEND_CWD ?? REPO_ROOT);
   const configuredBackendCmd = process.env.CUJ_BACKEND_CMD?.trim() ?? "";
@@ -993,35 +935,9 @@ async function main(): Promise<void> {
       await waitForHttp(frontendUrl, 90_000, "frontend");
       await waitForHttp(backendUrl, 30_000, "backend");
 
-      if (fakeChatkit.enabled) {
-        if (!process.env.CUJ_FAKE_CHATKIT_CMD && run("command -v go", REPO_ROOT).status !== 0) {
-          throw new Error(
-            "CUJ fake ChatKit server requires Go. Install Go or set CUJ_FAKE_CHATKIT_CMD.",
-          );
-        }
-        const fakeChatkitUp = await fetch(fakeChatkit.healthUrl).then(() => true).catch(() => false);
-        if (!fakeChatkitUp) {
-          services.push(
-            startService(
-              "fake-chatkit",
-              fakeChatkit.serverCommand,
-              REPO_ROOT,
-              join(OUTPUT_DIR, "fake-chatkit.log"),
-              fakeChatkit.serverEnv,
-            ),
-          );
-        }
-        await waitForHttp(fakeChatkit.healthUrl, 30_000, "fake-chatkit");
-      }
     }
 
     const scenarioEnv: NodeJS.ProcessEnv = { ...process.env };
-    if (fakeChatkit.enabled) {
-      scenarioEnv.CUJ_FAKE_CHATKIT_BASE_URL = fakeChatkit.baseUrl;
-      scenarioEnv.CUJ_FAKE_CHATKIT_HEALTH_URL = fakeChatkit.healthUrl;
-      scenarioEnv.CUJ_FAKE_CHATKIT_REQUESTS_URL = fakeChatkit.requestsUrl;
-      scenarioEnv.CUJ_FAKE_CHATKIT_RESET_URL = fakeChatkit.resetUrl;
-    }
     if (oidc.enabled) {
       const tokens = readOidcTokenFile(oidc.tokenFile);
       const idToken = process.env.CUJ_ID_TOKEN ?? tokens?.id_token ?? "";

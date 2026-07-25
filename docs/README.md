@@ -1,7 +1,6 @@
 # Runme Web User Docs
 
-These documents are user-facing, but they are written to be easy for Codex to
-retrieve and act on.
+These documents describe supported Runme Web behavior and setup.
 
 Use this set for:
 
@@ -9,7 +8,7 @@ Use this set for:
 - UI layout,
 - setup and configuration flows,
 - App Console commands,
-- runner and AI harness selection,
+- runner selection,
 - troubleshooting.
 
 Current numbered docs:
@@ -25,18 +24,10 @@ Current numbered docs:
 - [08-local-runme-runners.md](08-local-runme-runners.md)
 - [09-appkernel-browser-runners.md](09-appkernel-browser-runners.md)
 - [10-jupyter-runners.md](10-jupyter-runners.md)
-- [11-ai-chat-and-chatkit.md](11-ai-chat-and-chatkit.md)
-- [12-agentic-search-and-codex.md](12-agentic-search-and-codex.md)
 - [13-app-console-reference.md](13-app-console-reference.md)
 - [14-authentication-and-app-configuration.md](14-authentication-and-app-configuration.md)
 - [15-logs-diagnostics-and-troubleshooting.md](15-logs-diagnostics-and-troubleshooting.md)
 - [16-notebook-diffs.md](16-notebook-diffs.md)
-
-Additional topical docs:
-
-- [using-codex.md](using-codex.md)
-- [codex-chat-panel.md](codex-chat-panel.md)
-- [codex-chrome-webmcp.md](codex-chrome-webmcp.md)
 
 These docs intentionally exclude implementation-only material such as deployment
 internals and design proposals. Internal notes remain under `docs-dev/` and

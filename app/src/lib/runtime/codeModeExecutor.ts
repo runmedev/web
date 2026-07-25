@@ -27,7 +27,7 @@ import {
   SandboxJSKernel,
 } from './sandboxJsKernel'
 
-export type CodeModeSource = 'chatkit' | 'codex' | 'webmcp'
+export type CodeModeSource = 'webmcp'
 export type CodeModeRunnerMode = 'browser' | 'sandbox'
 
 const DEFAULT_TIMEOUT_MS = 15_000
@@ -136,7 +136,7 @@ export function createCodeModeExecutor(options: {
 
       appLogger.info('Code mode execution started', {
         attrs: {
-          scope: 'chatkit.code_mode',
+          scope: 'webmcp.execute_code',
           source,
           mode,
           timeoutMs,
@@ -268,7 +268,7 @@ export function createCodeModeExecutor(options: {
         const output = chunks.join('')
         appLogger.error('Code mode execution failed', {
           attrs: {
-            scope: 'chatkit.code_mode',
+            scope: 'webmcp.execute_code',
             source,
             mode,
             timeoutMs,
@@ -288,7 +288,7 @@ export function createCodeModeExecutor(options: {
       const output = chunks.join('')
       appLogger.info('Code mode execution completed', {
         attrs: {
-          scope: 'chatkit.code_mode',
+          scope: 'webmcp.execute_code',
           source,
           mode,
           code: normalizedCode,

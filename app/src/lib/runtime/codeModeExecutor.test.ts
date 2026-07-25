@@ -42,7 +42,7 @@ describe('codeModeExecutor', () => {
     })
 
     const result = await executor.execute({
-      source: 'chatkit',
+      source: 'webmcp',
       code: "console.log('one'); console.error('two'); console.log('three');",
     })
 
@@ -78,7 +78,7 @@ describe('codeModeExecutor', () => {
     })
 
     const result = await executor.execute({
-      source: 'chatkit',
+      source: 'webmcp',
       code: "console.log('abcdefghijklmnopqrstuvwxyz');",
     })
 
@@ -120,7 +120,7 @@ describe('codeModeExecutor', () => {
     })
 
     const result = await executor.execute({
-      source: 'codex',
+      source: 'webmcp',
       code: 'console.log(await app.getSessionID());',
     })
 
@@ -195,7 +195,7 @@ describe('codeModeExecutor', () => {
 
     try {
       await executor.execute({
-        source: 'codex',
+        source: 'webmcp',
         code: "console.log('started'); await new Promise(() => {});",
       })
       expect.fail('expected timeout error')
@@ -466,7 +466,7 @@ describe('codeModeExecutor', () => {
     })
 
     const result = await executor.execute({
-      source: 'codex',
+      source: 'webmcp',
       code: [
         "await opfs.mkdir('/code/runmedev', { recursive: true });",
         "await opfs.writeText('/code/runmedev/web.txt', 'hello');",

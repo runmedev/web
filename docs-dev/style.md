@@ -12,7 +12,7 @@ Use **TypeScript** as the default language for new automation scripts.
 1. Stronger maintainability through types and editor support.
 2. Better structure for reusable helpers and error handling.
 3. Consistency with the repo's primary stack (React + TypeScript).
-4. Easier for Codex and humans to evolve together over time.
+4. Easier for contributors to evolve together over time.
 
 ## Shell script guidance
 

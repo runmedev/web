@@ -83,9 +83,7 @@ flowchart LR
     B --> C[Dispatcher]
     C --> D[In-memory sink]
     C --> E[IndexedDB sink optional]
-    C --> F[AI context sink]
     D --> G[UI consumer\n(toast/activity panel)]
-    F --> H[AI chat context provider]
 ```
 
 ### 1) Logger API (producer-facing, Go `slog`-style)
@@ -95,7 +93,7 @@ Feature modules import a shared logger service and emit structured records.
 Conceptual API:
 
 ```ts
-type LogLevel = "debug" | "info" | "warn" | "error";
+type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
 type LogAttrValue =
   | string
@@ -104,21 +102,21 @@ type LogAttrValue =
   | null
   | undefined
   | LogAttrValue[]
-  | { [k: string]: LogAttrValue };
+  | { [k: string]: LogAttrValue }
 
 interface LogAttr {
-  key: string;
-  value: LogAttrValue;
+  key: string
+  value: LogAttrValue
 }
 
 interface Logger {
-  debug(msg: string, ...attrs: LogAttr[]): void;
-  info(msg: string, ...attrs: LogAttr[]): void;
-  warn(msg: string, ...attrs: LogAttr[]): void;
-  error(msg: string, err?: unknown, ...attrs: LogAttr[]): void;
+  debug(msg: string, ...attrs: LogAttr[]): void
+  info(msg: string, ...attrs: LogAttr[]): void
+  warn(msg: string, ...attrs: LogAttr[]): void
+  error(msg: string, err?: unknown, ...attrs: LogAttr[]): void
 
   // Like slog.With(...): bind context to derived logger.
-  with(...attrs: LogAttr[]): Logger;
+  with(...attrs: LogAttr[]): Logger
 }
 ```
 
@@ -129,8 +127,6 @@ Recommended conventions:
 - `error(...)` accepts `err` separately so stack/name extraction is consistent.
 
 Each call produces a normalized `LogEvent` object.
-
-
 
 ### 1a) Field population rules (`code`, `scope`, visibility hints)
 
@@ -158,23 +154,23 @@ To answer implementation details explicitly:
 ### 2) Normalized Log Event Schema
 
 ```ts
-type LogLevel = "debug" | "info" | "warn" | "error";
+type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
 interface LogEvent {
-  id: string;                // uuid
-  ts: string;                // ISO timestamp
-  level: LogLevel;
-  code: string;              // stable machine code, e.g. DRIVE_AUTH_TOKEN_FAILED
-  message: string;           // human-readable summary
-  scope: string;             // subsystem, e.g. "storage.drive", "runner.ws"
-  attrs?: Record<string, unknown>; // sanitized structured attributes
+  id: string // uuid
+  ts: string // ISO timestamp
+  level: LogLevel
+  code: string // stable machine code, e.g. DRIVE_AUTH_TOKEN_FAILED
+  message: string // human-readable summary
+  scope: string // subsystem, e.g. "storage.drive", "runner.ws"
+  attrs?: Record<string, unknown> // sanitized structured attributes
   cause?: {
-    name?: string;
-    message?: string;
-    stack?: string;
-  };
-  userVisible?: boolean;     // hint for UI surfacing
-  aiVisible?: boolean;       // hint for AI context inclusion
+    name?: string
+    message?: string
+    stack?: string
+  }
+  userVisible?: boolean // hint for UI surfacing
+  aiVisible?: boolean // hint for AI context inclusion
 }
 ```
 
@@ -198,9 +194,9 @@ Suggested sink contract:
 
 ```ts
 interface LogSink {
-  id: string;
-  accepts(event: LogEvent): boolean;
-  write(event: LogEvent): Promise<void> | void;
+  id: string
+  accepts(event: LogEvent): boolean
+  write(event: LogEvent): Promise<void> | void
 }
 ```
 
@@ -212,17 +208,17 @@ in-memory sink.
 ```ts
 interface LogQuery {
   // If set, include only events with level >= minLevel (severity ordering).
-  minLevel?: LogLevel;
+  minLevel?: LogLevel
   // Optional exact match filter.
-  level?: LogLevel;
-  scope?: string;
-  code?: string;
-  limit?: number;
+  level?: LogLevel
+  scope?: string
+  code?: string
+  limit?: number
 }
 
 interface LogStore {
-  list(query?: LogQuery): LogEvent[];
-  subscribe(cb: (event: LogEvent) => void): () => void;
+  list(query?: LogQuery): LogEvent[]
+  subscribe(cb: (event: LogEvent) => void): () => void
 }
 ```
 
@@ -232,8 +228,6 @@ Minimum required behavior for this milestone:
 - `list({ level: "warn" })` should support exact-level views when needed.
 - Results are returned newest-first and bounded by sink retention policy.
 
-
-
 ### 3b) Access pattern for application code (singleton + React hook)
 
 Application code needs a concrete way to access both emit and query APIs.
@@ -241,13 +235,13 @@ Recommended Phase 1 approach:
 
 ```ts
 interface LoggingRuntime {
-  logger: Logger;
-  store: LogStore;
-  registerSink(sink: LogSink): () => void;
+  logger: Logger
+  store: LogStore
+  registerSink(sink: LogSink): () => void
 }
 
 // app-scoped singleton created during app bootstrap
-export const loggingRuntime: LoggingRuntime = createLoggingRuntime();
+export const loggingRuntime: LoggingRuntime = createLoggingRuntime()
 ```
 
 Access options:

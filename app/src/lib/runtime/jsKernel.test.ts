@@ -96,32 +96,32 @@ describe("JSKernel", () => {
 });
 
 describe("JSKernel app globals", () => {
-  it("preserves custom app namespaces like app.harness", async () => {
+  it("preserves custom app namespaces like app.custom", async () => {
     const streams = collectStdout();
     const kernel = new JSKernel({
       globals: {
         app: {
-          harness: {
-            getDefault: () => "default-harness",
+          custom: {
+            getDefault: () => "default-custom",
           },
         },
       },
       hooks: streams,
     });
 
-    await kernel.run("console.log(app.harness.getDefault())");
+    await kernel.run("console.log(app.custom.getDefault())");
 
-    expect(streams.output.join("")).toContain("default-harness");
+    expect(streams.output.join("")).toContain("default-custom");
   });
 
-  it("preserves nested app namespaces like app.codex.project", async () => {
+  it("preserves nested app namespaces like app.tools.registry", async () => {
     const streams = collectStdout();
     const kernel = new JSKernel({
       globals: {
         app: {
-          codex: {
-            project: {
-              getDefault: () => "default-codex-project",
+          tools: {
+            registry: {
+              getDefault: () => "default-tool-registry",
             },
           },
         },
@@ -129,18 +129,18 @@ describe("JSKernel app globals", () => {
       hooks: streams,
     });
 
-    await kernel.run("console.log(app.codex.project.getDefault())");
+    await kernel.run("console.log(app.tools.registry.getDefault())");
 
-    expect(streams.output.join("")).toContain("default-codex-project");
+    expect(streams.output.join("")).toContain("default-tool-registry");
   });
 
-  it("keeps app.runners helpers while preserving app.harness", async () => {
+  it("keeps app.runners helpers while preserving app.custom", async () => {
     const streams = collectStdout();
     const kernel = new JSKernel({
       globals: {
         app: {
-          harness: {
-            getDefault: () => "default-harness",
+          custom: {
+            getDefault: () => "default-custom",
           },
         },
         runmeRunners: {
@@ -156,12 +156,12 @@ describe("JSKernel app globals", () => {
 
     await kernel.run(`
       app.runners.get();
-      console.log(app.harness.getDefault());
+      console.log(app.custom.getDefault());
     `);
 
     const output = streams.output.join("");
     expect(output).toContain("runner-list");
-    expect(output).toContain("default-harness");
+    expect(output).toContain("default-custom");
   });
 
   it("retains existing app.runners when runmeRunners is not provided", async () => {

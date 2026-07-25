@@ -13,10 +13,6 @@ logging:
 # user@domain.com with your email.
 iamPolicy:
     bindings:
-    - role: "role/agent.user"
-      members:
-        - name: "user@domain.com"
-          kind: "user"
     - role: "role/parser.user"
       members:
         - name: "user@domain.com"
@@ -24,17 +20,13 @@ iamPolicy:
     - role: "role/runner.user"
       members:
         - name: "user@domain.com"
-          kind: "user"      
-openai:
-    apiKeyFile: "/path/to/your/openai_api_key.txt"
-cloudAssistant:
-    model: model-not-set
+          kind: "user"
 
 assistantServer:
     # TODO(jlewi): How should this be set 
     staticAssets: /Users/jlewi/git_runmeweb/app/dist
     runnerService: true
-    parserService: true    
+    parserService: true
     oidc:
         google:
             # Change this to your OAuth client ID
