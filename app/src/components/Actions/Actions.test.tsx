@@ -147,7 +147,7 @@ vi.mock('../../contexts/NotebookContext', () => ({
     openNotebook: contextMocks.openNotebook,
     requestWriteAccess: contextMocks.requestWriteAccess,
     refreshReadOnlyNotebook: contextMocks.refreshReadOnlyNotebook,
-    useNotebookList: () => contextMocks.openNotebooks,
+    getOpenNotebooks: () => contextMocks.openNotebooks,
     useNotebookSnapshot: (uri: string) =>
       contextMocks.notebookSnapshots.get(uri) ?? null,
   }),

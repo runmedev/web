@@ -2831,9 +2831,9 @@ function renderWorkspaceDocument({
 export default function Actions() {
   const { useWorkspaceDocuments, showDocument, closeWorkspaceDocument } =
     useWorkspaceDocumentContext()
-  const { getNotebookData, useNotebookList } = useNotebookContext()
+  const { getNotebookData, getOpenNotebooks } = useNotebookContext()
   const { store } = useNotebookStore()
-  const openNotebooks = useNotebookList()
+  const openNotebooks = getOpenNotebooks()
   const workspaceDocuments = useWorkspaceDocuments()
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const currentDocUri = getCurrentDoc()
