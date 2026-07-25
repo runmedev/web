@@ -65,7 +65,7 @@ function shouldMirrorToConsole(event: LogEvent): boolean {
     return false
   }
 
-  return scope.startsWith('webmcp.')
+  return scope === 'webmcp' || scope.startsWith('webmcp.')
 }
 
 function mirrorEventToConsole(event: LogEvent): void {

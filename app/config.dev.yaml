@@ -25,6 +25,8 @@ iamPolicy:
 assistantServer:
     # TODO(jlewi): How should this be set 
     staticAssets: /Users/jlewi/git_runmeweb/app/dist
+    # Older Runme releases default this removed service to enabled.
+    agentService: false
     runnerService: true
     parserService: true
     oidc:

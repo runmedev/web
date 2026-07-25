@@ -24,6 +24,7 @@ Current numbered docs:
 - [08-local-runme-runners.md](08-local-runme-runners.md)
 - [09-appkernel-browser-runners.md](09-appkernel-browser-runners.md)
 - [10-jupyter-runners.md](10-jupyter-runners.md)
+- [11-webmcp-external-control.md](11-webmcp-external-control.md)
 - [13-app-console-reference.md](13-app-console-reference.md)
 - [14-authentication-and-app-configuration.md](14-authentication-and-app-configuration.md)
 - [15-logs-diagnostics-and-troubleshooting.md](15-logs-diagnostics-and-troubleshooting.md)
