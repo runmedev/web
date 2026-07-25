@@ -9,12 +9,14 @@ import {
 import { DocumentationInitializer } from './DocumentationInitializer'
 
 const mocks = vi.hoisted(() => ({
+  currentDoc: null as string | null,
   setCurrentDoc: vi.fn(),
   showDocument: vi.fn(),
 }))
 
 vi.mock('../../contexts/CurrentDocContext', () => ({
   useCurrentDoc: () => ({
+    getCurrentDoc: () => mocks.currentDoc,
     setCurrentDoc: mocks.setCurrentDoc,
   }),
 }))
@@ -29,6 +31,7 @@ describe('DocumentationInitializer', () => {
   beforeEach(() => {
     window.localStorage.clear()
     window.history.replaceState(null, '', '/')
+    mocks.currentDoc = null
     mocks.setCurrentDoc.mockReset()
     mocks.showDocument.mockReset()
   })
@@ -52,6 +55,23 @@ describe('DocumentationInitializer', () => {
     mocks.showDocument.mockClear()
     render(<DocumentationInitializer />)
     expect(mocks.showDocument).not.toHaveBeenCalled()
+  })
+
+  it('opens Getting Started in the background when a document is restored', () => {
+    const document = getGettingStartedDocument()
+    mocks.currentDoc = 'local://file/restored.runme.md'
+
+    render(<DocumentationInitializer />)
+
+    expect(mocks.showDocument).toHaveBeenCalledWith(document.uri, {
+      title: 'Getting Started',
+      mimeType: 'text/markdown',
+      readOnly: true,
+    })
+    expect(mocks.setCurrentDoc).not.toHaveBeenCalled()
+    expect(
+      window.localStorage.getItem(GETTING_STARTED_OPENED_STORAGE_KEY)
+    ).toBe('true')
   })
 
   it('does not replace an explicit doc URL', () => {

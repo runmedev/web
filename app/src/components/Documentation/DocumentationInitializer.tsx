@@ -10,7 +10,7 @@ import {
 } from '../../lib/documentation'
 
 export function DocumentationInitializer() {
-  const { setCurrentDoc } = useCurrentDoc()
+  const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const { showDocument } = useWorkspaceDocumentContext()
   const explicitDocumentRequested = useRef(
     typeof window !== 'undefined' &&
@@ -29,11 +29,13 @@ export function DocumentationInitializer() {
         mimeType: DOCUMENTATION_MIME_TYPE,
         readOnly: true,
       })
-      setCurrentDoc(document.uri)
+      if (!getCurrentDoc()) {
+        setCurrentDoc(document.uri)
+      }
     } catch (error) {
       console.error('Failed to open Getting Started documentation', error)
     }
-  }, [setCurrentDoc, showDocument])
+  }, [getCurrentDoc, setCurrentDoc, showDocument])
 
   return null
 }
