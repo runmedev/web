@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { MimeType, parser_pb } from '../runme/client'
 import { MemoryConflictDocStorage } from './conflictDocs'
+import type { DriveSyncCoordinator } from './driveSyncCoordinator'
 import {
   EXCALIDRAW_MIME_TYPE,
   createInitialExcalidrawDocumentJson,
@@ -57,11 +58,59 @@ function createMockTable<T extends { id: string }>() {
   }
 }
 
-function createTestStore(driveStore: unknown) {
+function createTestDriveSyncCoordinator(): DriveSyncCoordinator {
+  const tails = new Map<string, Promise<void>>()
+  return {
+    async runExclusive<T>(
+      localUri: string,
+      operation: () => Promise<T>
+    ): Promise<T> {
+      const previous = tails.get(localUri) ?? Promise.resolve()
+      let release!: () => void
+      const current = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const tail = previous.then(() => current)
+      tails.set(localUri, tail)
+
+      await previous
+      try {
+        return await operation()
+      } finally {
+        release()
+        if (tails.get(localUri) === tail) {
+          tails.delete(localUri)
+        }
+      }
+    },
+  }
+}
+
+type MockTable<T extends { id: string }> = ReturnType<typeof createMockTable<T>>
+
+function createTestStore(
+  driveStore: unknown,
+  options: {
+    files?: MockTable<LocalFileRecord>
+    folders?: MockTable<LocalFolderRecord>
+    driveSyncCoordinator?: DriveSyncCoordinator
+  } = {}
+) {
   const localStore = Object.create(LocalNotebooks.prototype) as any
-  localStore.files = createMockTable<LocalFileRecord>()
-  localStore.folders = createMockTable<LocalFolderRecord>()
+  localStore.files = options.files ?? createMockTable<LocalFileRecord>()
+  localStore.folders = options.folders ?? createMockTable<LocalFolderRecord>()
+  if (
+    driveStore &&
+    typeof driveStore === 'object' &&
+    !('findByCreateOperation' in driveStore)
+  ) {
+    Object.assign(driveStore, {
+      findByCreateOperation: vi.fn(async () => null),
+    })
+  }
   localStore.driveStore = driveStore
+  localStore.driveSyncCoordinator =
+    options.driveSyncCoordinator ?? createTestDriveSyncCoordinator()
   localStore.filesystemStore = null
   localStore.inFlightSyncs = new Map()
   localStore.syncListeners = new Map()
@@ -330,7 +379,8 @@ describe('LocalNotebooks pending Drive create', () => {
     })
     expect(driveStore.create).toHaveBeenCalledWith(
       destinationRemoteUri,
-      'notebook.index.md'
+      'notebook.index.md',
+      { createOperationId: expect.any(String) }
     )
     expect(driveStore.saveContent).toHaveBeenCalledWith(
       replacementMarkdownUri,
@@ -520,7 +570,8 @@ describe('LocalNotebooks pending Drive create', () => {
     })
     expect(driveStore.create).toHaveBeenCalledWith(
       parentRemoteUri,
-      'draft.json'
+      'draft.json',
+      { createOperationId: expect.any(String) }
     )
   })
 
@@ -626,7 +677,8 @@ describe('LocalNotebooks pending Drive create', () => {
       parentRemoteUri,
       'diagram.excalidraw',
       content,
-      EXCALIDRAW_MIME_TYPE
+      EXCALIDRAW_MIME_TYPE,
+      { createOperationId: expect.any(String) }
     )
     await expect(store.files.get(item.uri)).resolves.toMatchObject({
       remoteId: remoteUri,
@@ -788,6 +840,157 @@ describe('LocalNotebooks pending Drive create', () => {
     expect(record?.remoteId).toBe(remoteUri)
     expect(record?.parentRemoteIdWhenCreated).toBeUndefined()
     expect(driveStore.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('serializes pending creates across independent storage instances', async () => {
+    const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const files = createMockTable<LocalFileRecord>()
+    const driveSyncCoordinator = createTestDriveSyncCoordinator()
+    let releaseCreate!: () => void
+    let createStarted!: () => void
+    const createStartedPromise = new Promise<void>((resolve) => {
+      createStarted = resolve
+    })
+    const releaseCreatePromise = new Promise<void>((resolve) => {
+      releaseCreate = resolve
+    })
+    const driveStore = {
+      findByCreateOperation: vi.fn(async () => null),
+      create: vi.fn(async () => {
+        createStarted()
+        await releaseCreatePromise
+        return {
+          uri: remoteUri,
+          name: 'draft.json',
+          type: NotebookStoreItemType.File,
+          children: [],
+          parents: [parentRemoteUri],
+        }
+      }),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: 'checksum-1',
+        headRevisionId: 'revision-1',
+      })),
+      getMetadata: vi.fn(async () => ({
+        uri: remoteUri,
+        name: 'draft.json',
+        type: NotebookStoreItemType.File,
+        children: [],
+        parents: [parentRemoteUri],
+      })),
+      save: vi.fn(async () => ({ conflicted: false })),
+    }
+    const firstStore = createTestStore(driveStore, {
+      files,
+      driveSyncCoordinator,
+    })
+    const secondStore = createTestStore(driveStore, {
+      files,
+      driveSyncCoordinator,
+    })
+    await files.put({
+      id: 'local://file/pending',
+      name: 'draft.json',
+      remoteId: '',
+      parentRemoteIdWhenCreated: parentRemoteUri,
+      driveCreateOperationId: 'create-operation-1',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    const firstSync = firstStore.sync('local://file/pending')
+    await createStartedPromise
+    const secondSync = secondStore.sync('local://file/pending')
+    releaseCreate()
+    await Promise.all([firstSync, secondSync])
+
+    expect(driveStore.create).toHaveBeenCalledTimes(1)
+    expect(driveStore.findByCreateOperation).toHaveBeenCalledTimes(1)
+    await expect(files.get('local://file/pending')).resolves.toMatchObject({
+      remoteId: remoteUri,
+      parentRemoteIdWhenCreated: undefined,
+      driveCreateOperationId: 'create-operation-1',
+    })
+  })
+
+  it('adopts a Drive file after a crash before recording its remote id', async () => {
+    const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const operationId = 'create-operation-1'
+    const files = createMockTable<LocalFileRecord>()
+    const driveSyncCoordinator = createTestDriveSyncCoordinator()
+    const createdFile = {
+      uri: remoteUri,
+      name: 'draft.json',
+      type: NotebookStoreItemType.File,
+      children: [],
+      parents: [parentRemoteUri],
+    }
+    let wasCreated = false
+    const driveStore = {
+      findByCreateOperation: vi.fn(async () =>
+        wasCreated ? createdFile : null
+      ),
+      create: vi.fn(async () => {
+        wasCreated = true
+        return createdFile
+      }),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: 'checksum-1',
+        headRevisionId: 'revision-1',
+      })),
+      getMetadata: vi.fn(async () => ({
+        ...createdFile,
+        uri: remoteUri,
+      })),
+      save: vi.fn(async () => ({ conflicted: false })),
+    }
+    const firstStore = createTestStore(driveStore, {
+      files,
+      driveSyncCoordinator,
+    })
+    await files.put({
+      id: 'local://file/pending',
+      name: 'draft.json',
+      remoteId: '',
+      parentRemoteIdWhenCreated: parentRemoteUri,
+      driveCreateOperationId: operationId,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    const update = files.update
+    let failRemoteIdWrite = true
+    files.update = vi.fn(async (id, changes) => {
+      if (failRemoteIdWrite && changes.remoteId === remoteUri) {
+        failRemoteIdWrite = false
+        throw new Error('simulated tab crash')
+      }
+      return update(id, changes)
+    })
+
+    await expect(firstStore.sync('local://file/pending')).rejects.toThrow(
+      'simulated tab crash'
+    )
+
+    const restartedStore = createTestStore(driveStore, {
+      files,
+      driveSyncCoordinator,
+    })
+    await restartedStore.sync('local://file/pending')
+
+    expect(driveStore.create).toHaveBeenCalledTimes(1)
+    expect(driveStore.findByCreateOperation).toHaveBeenCalledTimes(2)
+    await expect(files.get('local://file/pending')).resolves.toMatchObject({
+      remoteId: remoteUri,
+      parentRemoteIdWhenCreated: undefined,
+      driveCreateOperationId: operationId,
+    })
   })
 })
 
@@ -1461,5 +1664,75 @@ describe('LocalNotebooks markdown sidecar sync', () => {
       ].join('\n'),
       'text/markdown'
     )
+  })
+
+  it('creates one sidecar across independent storage instances', async () => {
+    const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const remoteUri = 'https://drive.google.com/file/d/notebook123/view'
+    const markdownUri = 'https://drive.google.com/file/d/sidecar123/view'
+    const files = createMockTable<LocalFileRecord>()
+    const driveSyncCoordinator = createTestDriveSyncCoordinator()
+    let releaseCreate!: () => void
+    let createStarted!: () => void
+    const createStartedPromise = new Promise<void>((resolve) => {
+      createStarted = resolve
+    })
+    const releaseCreatePromise = new Promise<void>((resolve) => {
+      releaseCreate = resolve
+    })
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: remoteUri,
+        name: 'notebook.json',
+        type: NotebookStoreItemType.File,
+        children: [],
+        parents: [parentRemoteUri],
+      })),
+      findByCreateOperation: vi.fn(async () => null),
+      create: vi.fn(async () => {
+        createStarted()
+        await releaseCreatePromise
+        return {
+          uri: markdownUri,
+          name: 'notebook.index.md',
+          type: NotebookStoreItemType.File,
+          children: [],
+          parents: [parentRemoteUri],
+        }
+      }),
+      saveContent: vi.fn(async () => undefined),
+    }
+    const firstStore = createTestStore(driveStore, {
+      files,
+      driveSyncCoordinator,
+    })
+    const secondStore = createTestStore(driveStore, {
+      files,
+      driveSyncCoordinator,
+    })
+    await files.put({
+      id: 'local://file/notebook',
+      name: 'notebook.json',
+      remoteId: remoteUri,
+      markdownCreateOperationId: 'markdown-operation-1',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: notebookJson('print("hello")'),
+      md5Checksum: '',
+    })
+
+    const firstSync = firstStore.syncMarkdownFile('local://file/notebook')
+    await createStartedPromise
+    const secondSync = secondStore.syncMarkdownFile('local://file/notebook')
+    releaseCreate()
+    await Promise.all([firstSync, secondSync])
+
+    expect(driveStore.create).toHaveBeenCalledTimes(1)
+    expect(driveStore.findByCreateOperation).toHaveBeenCalledTimes(1)
+    expect(driveStore.saveContent).toHaveBeenCalledTimes(2)
+    await expect(files.get('local://file/notebook')).resolves.toMatchObject({
+      markdownUri,
+      markdownCreateOperationId: 'markdown-operation-1',
+    })
   })
 })

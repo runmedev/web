@@ -173,6 +173,54 @@ describe("DriveNotebookStore", () => {
     });
   });
 
+  it("finds a Drive file by its create operation id", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/drive/v3/files");
+        expect(url.searchParams.get("q")).toBe(
+          "'folder123' in parents and trashed = false and appProperties has { key='runmeCreateOperationId' and value='operation-123' }",
+        );
+        expect(url.searchParams.get("orderBy")).toBe("createdTime asc");
+        expect(url.searchParams.get("pageSize")).toBe("2");
+        return new Response(
+          JSON.stringify({
+            files: [
+              {
+                id: "file123",
+                name: "draft.json",
+                mimeType: "application/json",
+                parents: ["folder123"],
+                appProperties: {
+                  runmeCreateOperationId: "operation-123",
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    await expect(
+      store.findByCreateOperation(
+        "https://drive.google.com/drive/folders/folder123",
+        "operation-123",
+      ),
+    ).resolves.toMatchObject({
+      uri: "https://drive.google.com/file/d/file123/view",
+      name: "draft.json",
+      type: NotebookStoreItemType.File,
+      parents: ["https://drive.google.com/drive/folders/folder123"],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("paginates Drive folder listings beyond the first page", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     const firstPageFiles = Array.from({ length: 100 }, (_, index) => ({
@@ -246,6 +294,9 @@ describe("DriveNotebookStore", () => {
             name: "diagram.excalidraw",
             mimeType: "application/vnd.excalidraw+json",
             parents: ["folder123"],
+            appProperties: {
+              runmeCreateOperationId: "operation-123",
+            },
           });
           return new Response(
             JSON.stringify({
@@ -277,6 +328,7 @@ describe("DriveNotebookStore", () => {
       "diagram.excalidraw",
       '{"type":"excalidraw"}',
       "application/vnd.excalidraw+json",
+      { createOperationId: "operation-123" },
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
