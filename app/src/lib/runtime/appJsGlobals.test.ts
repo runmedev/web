@@ -358,6 +358,21 @@ describe('createAppJsGlobals notebook reference helpers', () => {
       content: '# Getting Started',
       readOnly: true,
     })
+
+    expect(globals.documentation.list()[0]).toEqual({
+      name: 'getting-started',
+      description:
+        'Open a notebook, configure an execution path, run a cell, and inspect its output.',
+    })
+    await expect(globals.documentation.get('getting-started')).resolves.toBe(
+      '# Getting Started'
+    )
+    expect(globals.documentation.help()).toContain(
+      'await documentation.get(name)'
+    )
+    expect(globals.documentation.help()).toContain(
+      'await documentation.list()'
+    )
   })
 
   it('updates raw document content in the local mirror', async () => {

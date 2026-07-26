@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  buildReadInstructionsForCodexInputSchema,
   READ_INSTRUCTIONS_FOR_CODEX_TOOL_DESCRIPTION,
+  buildReadInstructionsForCodexInputSchema,
   readInstructionsForCodex,
 } from './codexInstructions'
 
@@ -32,6 +32,10 @@ describe('readInstructionsForCodex', () => {
 
     expect(instructions).toContain('WebMCP')
     expect(instructions).toContain('ExecuteCode')
+    expect(instructions).toContain('listDocumentation')
+    expect(instructions).toContain('getDocumentation')
+    expect(instructions).toContain('await documentation.list()')
+    expect(instructions).toContain('documentation.get(name)')
     expect(instructions).toContain('await app.getSessionID()')
     expect(instructions).toContain('local://')
     expect(instructions).toContain("kind: 'markup'")

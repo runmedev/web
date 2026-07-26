@@ -30,6 +30,12 @@ This Runme instance is served from ${runmeOrigin}.
 - Use the \`ExecuteCode\` WebMCP tool to run AppKernel JavaScript. Print values explicitly with \`console.log(...)\`.
 - Do not edit or execute notebook cells through DOM clicks, keyboard automation, or Computer Use. If WebMCP is unavailable, stop and tell the user what must be done manually.
 
+## Read Runme documentation on demand
+
+- Call the read-only \`listDocumentation\` WebMCP tool to discover the documentation available for this exact Runme version.
+- Choose a relevant document by its name and call \`getDocumentation\` to read that page as Markdown. Retrieve only the pages needed for the task.
+- The same progressive-disclosure API is available inside \`ExecuteCode\` as \`await documentation.list()\` and \`await documentation.get(name)\`.
+
 ## Verify the browser session
 
 The URL's \`session\` query parameter identifies a candidate tab. Before changing a notebook, call \`ExecuteCode\` with:

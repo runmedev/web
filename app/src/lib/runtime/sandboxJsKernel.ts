@@ -98,6 +98,8 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'documents.list',
   'documents.get',
   'documents.update',
+  'documentation.list',
+  'documentation.get',
   ...SANDBOX_NOTEBOOKS_API_METHODS,
   'notebooks.createLocal',
   'notebooks.appendCell',
@@ -351,6 +353,14 @@ export function buildSandboxSrcDoc(options: {
             consoleProxy.log("documents.update(uri, content, { mimeType?, expectedVersion?, flush? })");
           },
         };
+        const documentation = {
+          list: () => hostCall("documentation.list", []),
+          get: (name) => hostCall("documentation.get", [name]),
+          help: () => {
+            consoleProxy.log("await documentation.list()");
+            consoleProxy.log("await documentation.get(name)");
+          },
+        };
         const notebookDiff = {
           listDriveRevisions: (target) => hostCall("notebookDiff.listDriveRevisions", [target]),
           diffDriveRevision: (args) => hostCall("notebookDiff.diffDriveRevision", [args]),
@@ -432,6 +442,8 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- documents.list()");
           consoleProxy.log("- documents.get(uri)");
           consoleProxy.log("- documents.update(uri, content, { mimeType?, expectedVersion?, flush? })");
+          consoleProxy.log("- await documentation.list()");
+          consoleProxy.log("- await documentation.get(name)");
           consoleProxy.log("- notebookDiff.listDriveRevisions([target])");
           consoleProxy.log("- notebookDiff.diffDriveRevision({ target?, revisionId, includeOutputs?, includeMetadata? })");
           consoleProxy.log("- notebookDiff.openDiffTab(diff)");
@@ -463,6 +475,7 @@ export function buildSandboxSrcDoc(options: {
               "embed",
               "notebooks",
               "documents",
+              "documentation",
               "notebookDiff",
               "app",
               "explorer",
@@ -471,7 +484,7 @@ export function buildSandboxSrcDoc(options: {
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, opfs, net, embed, notebooks, documents, notebookDiff, app, explorer, credentials, drive, help);
+            await runner(consoleProxy, runme, opfs, net, embed, notebooks, documents, documentation, notebookDiff, app, explorer, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });
