@@ -202,7 +202,7 @@ export function OnboardingDocument() {
               Welcome to Runme
             </div>
             <h1 className="mt-5 max-w-3xl text-4xl font-semibold tracking-tight text-slate-950 sm:text-5xl">
-              Document and Share How Work Gets Done
+              Document, Share, Learn
             </h1>
             <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-600">
               Use Runme to document and share what your AI did as notebooks
