@@ -104,7 +104,7 @@ describe("WebMcpToolRegistrationHost", () => {
 
     const rendered = render(<WebMcpToolRegistrationHost />);
 
-    expect(registerTool).toHaveBeenCalledTimes(2);
+    expect(registerTool).toHaveBeenCalledTimes(4);
     const executeCode = registered.find(
       ({ tool }) => tool.name === "ExecuteCode",
     );
@@ -173,6 +173,46 @@ describe("WebMcpToolRegistrationHost", () => {
     expect(instructions?.tool.execute({})).toContain(window.location.origin);
     expect(instructions?.tool.execute({})).toContain(
       "await app.getSessionID()",
+    );
+
+    const listDocumentation = registered.find(
+      ({ tool }) => tool.name === "listDocumentation",
+    );
+    expect(listDocumentation?.tool.title).toBe("List Runme Documentation");
+    expect(listDocumentation?.tool.annotations).toEqual({
+      readOnlyHint: true,
+      untrustedContentHint: false,
+    });
+    expect(listDocumentation?.tool.inputSchema).toEqual({
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    });
+    expect(JSON.parse(String(listDocumentation?.tool.execute({})))[0]).toEqual(
+      expect.objectContaining({
+        name: "getting-started",
+        description: expect.any(String),
+      }),
+    );
+
+    const getDocumentation = registered.find(
+      ({ tool }) => tool.name === "getDocumentation",
+    );
+    expect(getDocumentation?.tool.title).toBe("Get Runme Documentation");
+    expect(getDocumentation?.tool.annotations).toEqual({
+      readOnlyHint: true,
+      untrustedContentHint: false,
+    });
+    expect(getDocumentation?.tool.inputSchema).toEqual({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        name: { type: "string" },
+      },
+      required: ["name"],
+    });
+    await expect(getDocumentation?.tool.execute({})).rejects.toThrow(
+      "non-empty name returned by listDocumentation",
     );
 
     expect(registered.every(({ signal }) => signal?.aborted === false)).toBe(

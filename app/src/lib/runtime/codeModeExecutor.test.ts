@@ -128,6 +128,50 @@ describe('codeModeExecutor', () => {
     expect(result.output).not.toContain('code-mode-session')
   })
 
+  it('bridges named documentation discovery and retrieval in sandbox mode', async () => {
+    const notebook = createNotebook()
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => '# Getting Started',
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    let summaries: unknown
+    let markdown: unknown
+    vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(
+      async function (this: SandboxJSKernel) {
+        const bridge = (
+          this as unknown as {
+            bridge: {
+              call: (method: string, args: unknown[]) => Promise<unknown>
+            }
+          }
+        ).bridge
+        summaries = await bridge.call('documentation.list', [])
+        markdown = await bridge.call('documentation.get', ['getting-started'])
+      }
+    )
+    const executor = createCodeModeExecutor({
+      mode: 'sandbox',
+      resolveNotebook: () => notebook,
+      listNotebooks: () => [notebook],
+    })
+
+    await executor.execute({
+      source: 'webmcp',
+      code: "console.log(await documentation.get('getting-started'))",
+    })
+
+    expect(summaries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'getting-started' }),
+      ])
+    )
+    expect(markdown).toBe('# Getting Started')
+    expect(fetchMock).toHaveBeenCalled()
+  })
+
   it('preserves Blob sources for top-level sandbox embed calls', async () => {
     const notebook = create(parser_pb.NotebookSchema, { cells: [] })
     const notebookData = {

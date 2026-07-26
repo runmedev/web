@@ -16,6 +16,25 @@ controller needs Runme-specific operating instructions. Because the origin is
 resolved at runtime, its links work for hosted, proxied, and self-hosted Runme
 instances.
 
+Agents can browse the documentation for the exact running version without
+loading every page:
+
+1. Call the read-only `listDocumentation` WebMCP tool. It returns a compact JSON
+   array of `{ name, description }` entries.
+2. Choose the relevant name and call the read-only `getDocumentation` tool.
+   It returns that commit-pinned page as Markdown.
+
+The same API is available in AppKernel JavaScript:
+
+```js
+console.log(await documentation.list())
+console.log(await documentation.get('webmcp-external-control'))
+```
+
+Prefer this progressive-disclosure path over guessing documentation URLs or
+fetching every page. Unknown names fail without modifying page or notebook
+state.
+
 Browser tab control is exclusive: one controller session can control one tab
 at a time. Concurrent sessions should target different Runme tabs.
 

@@ -10,6 +10,18 @@ import {
   READ_INSTRUCTIONS_FOR_CODEX_TOOL_TITLE,
 } from "../../lib/runtime/codexInstructions";
 import {
+  buildGetDocumentationInputSchema,
+  buildListDocumentationInputSchema,
+  getDocumentationForAgents,
+  GET_DOCUMENTATION_TOOL_DESCRIPTION,
+  GET_DOCUMENTATION_TOOL_NAME,
+  GET_DOCUMENTATION_TOOL_TITLE,
+  listDocumentationForAgents,
+  LIST_DOCUMENTATION_TOOL_DESCRIPTION,
+  LIST_DOCUMENTATION_TOOL_NAME,
+  LIST_DOCUMENTATION_TOOL_TITLE,
+} from "../../lib/runtime/documentationTools";
+import {
   buildExecuteCodeInputSchema,
   EXECUTE_CODE_TOOL_DESCRIPTION,
   EXECUTE_CODE_TOOL_NAME,
@@ -141,12 +153,49 @@ export default function WebMcpToolRegistrationHost() {
           signal: registrationController.signal,
         },
       );
+      modelContext.registerTool(
+        {
+          name: LIST_DOCUMENTATION_TOOL_NAME,
+          title: LIST_DOCUMENTATION_TOOL_TITLE,
+          description: LIST_DOCUMENTATION_TOOL_DESCRIPTION,
+          inputSchema: buildListDocumentationInputSchema(),
+          annotations: {
+            readOnlyHint: true,
+            untrustedContentHint: false,
+          },
+          execute: () => listDocumentationForAgents(),
+        },
+        {
+          signal: registrationController.signal,
+        },
+      );
+      modelContext.registerTool(
+        {
+          name: GET_DOCUMENTATION_TOOL_NAME,
+          title: GET_DOCUMENTATION_TOOL_TITLE,
+          description: GET_DOCUMENTATION_TOOL_DESCRIPTION,
+          inputSchema: buildGetDocumentationInputSchema(),
+          annotations: {
+            readOnlyHint: true,
+            untrustedContentHint: false,
+          },
+          execute: (input) =>
+            getDocumentationForAgents(
+              typeof input?.name === "string" ? input.name : "",
+            ),
+        },
+        {
+          signal: registrationController.signal,
+        },
+      );
       appLogger.info("WebMCP tools registered", {
         attrs: {
           scope: "webmcp",
           toolNames: [
             EXECUTE_CODE_TOOL_NAME,
             READ_INSTRUCTIONS_FOR_CODEX_TOOL_NAME,
+            LIST_DOCUMENTATION_TOOL_NAME,
+            GET_DOCUMENTATION_TOOL_NAME,
           ],
         },
       });
@@ -169,6 +218,8 @@ export default function WebMcpToolRegistrationHost() {
           toolNames: [
             EXECUTE_CODE_TOOL_NAME,
             READ_INSTRUCTIONS_FOR_CODEX_TOOL_NAME,
+            LIST_DOCUMENTATION_TOOL_NAME,
+            GET_DOCUMENTATION_TOOL_NAME,
           ],
         },
       });

@@ -29,8 +29,10 @@ import {
 } from '../appConfig'
 import {
   fetchRemoteMarkdownDocument,
+  getDocumentationMarkdown,
   isRemoteMarkdownUri,
   listDocumentation,
+  listDocumentationSummaries,
 } from '../documentation'
 import { driveLinkCoordinator } from '../driveLinkCoordinator'
 import {
@@ -785,6 +787,20 @@ export function createAppJsGlobals({
     },
   }
 
+  const documentationHelpers = {
+    list: () => listDocumentationSummaries(),
+    get: (name: string) => getDocumentationMarkdown(name),
+    help: () => {
+      const message = [
+        'await documentation.list()    - List Runme documentation names and descriptions',
+        'await documentation.get(name) - Get one Runme documentation page as Markdown',
+        'documentation.help()          - Show this help',
+      ].join('\n')
+      emitLine(sendOutput, message)
+      return message
+    },
+  }
+
   const resolveNotebookReference = async (
     reference?: unknown
   ): Promise<NotebookReferenceInfo> => {
@@ -1086,6 +1102,7 @@ export function createAppJsGlobals({
     notebooks: notebooksHelpers,
     embed: embedImageForRuntime,
     documents: documentsHelpers,
+    documentation: documentationHelpers,
     notebookDiff: notebookDiffApi,
     opfs: {
       exists: (path: string) => {
@@ -1564,6 +1581,7 @@ export function createAppJsGlobals({
         '  runme           - Notebook helpers (run all, clear outputs)',
         '  notebooks       - Notebook document API plus create/append helpers',
         '  documents       - List/read docs plus raw local document updates',
+        '  documentation   - Read-only Runme documentation by stable name',
         '  notebookDiff    - Compare revisions and resolve notebook sync conflicts',
         '  opfs            - Origin-private browser file storage helpers',
         '  net             - Browser network helpers',
@@ -1584,6 +1602,8 @@ export function createAppJsGlobals({
         '  await notebooks.createLocal("hello")',
         '  console.table(documents.list())',
         '  const doc = await documents.get("local://file/...")',
+        '  console.table(await documentation.list())',
+        '  const guide = await documentation.get("getting-started")',
         '  await notebooks.appendCell({ kind: "code", value: "print(1)", languageId: "python" })',
         '  await embed("/tmp/screenshot.png", { alt: "Screenshot" })',
         '  const diff = await notebookDiff.diffDriveRevision({ revisionId })',

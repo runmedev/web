@@ -1,14 +1,16 @@
 import { readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
-
 import { describe, expect, it, vi } from 'vitest'
 
 import {
   DOCUMENTATION_MIME_TYPE,
   fetchRemoteMarkdownDocument,
+  getDocumentationEntry,
+  getDocumentationMarkdown,
   getGettingStartedDocument,
   isRemoteMarkdownUri,
   listDocumentation,
+  listDocumentationSummaries,
   resolveDocumentationHref,
   toRawMarkdownUri,
 } from './documentation'
@@ -19,9 +21,6 @@ const versionInfo: RunmeVersionInfo = {
   webRepo: 'runmedev/web',
   webBranch: 'main',
   webCommit: 'abc123def456',
-  codexRepo: null,
-  codexBranch: null,
-  codexCommit: null,
   bucket: null,
 }
 
@@ -31,6 +30,8 @@ describe('documentation catalog', () => {
 
     expect(documents.length).toBeGreaterThan(10)
     expect(documents[0]).toMatchObject({
+      name: 'getting-started',
+      description: expect.stringContaining('Open a notebook'),
       title: 'Getting Started',
       path: 'docs/00-getting-started.md',
       uri: 'https://github.com/runmedev/web/blob/abc123def456/docs/00-getting-started.md',
@@ -41,6 +42,25 @@ describe('documentation catalog', () => {
     })
     expect(documents[0]).not.toHaveProperty('content')
     expect(getGettingStartedDocument(versionInfo)).toEqual(documents[0])
+  })
+
+  it('exposes a compact, unique name and description index', () => {
+    const summaries = listDocumentationSummaries(versionInfo)
+
+    expect(summaries[0]).toEqual({
+      name: 'getting-started',
+      description:
+        'Open a notebook, configure an execution path, run a cell, and inspect its output.',
+    })
+    expect(new Set(summaries.map(({ name }) => name)).size).toBe(
+      summaries.length
+    )
+    expect(
+      summaries.every(
+        ({ name, description }) => name.length > 0 && description.length > 0
+      )
+    ).toBe(true)
+    expect(summaries[0]).not.toHaveProperty('uri')
   })
 
   it('publishes every user guide but not the repository index', () => {
@@ -102,5 +122,30 @@ describe('documentation catalog', () => {
       readOnly: true,
       version: { revisionId: 'abc123' },
     })
+  })
+
+  it('gets one commit-pinned document by its stable name', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => '# WebMCP External Control',
+    })) as unknown as typeof fetch
+
+    const content = await getDocumentationMarkdown(
+      'webmcp-external-control',
+      versionInfo,
+      fetchImpl
+    )
+
+    const entry = getDocumentationEntry('webmcp-external-control', versionInfo)
+    expect(fetchImpl).toHaveBeenCalledWith(entry.rawUri, expect.any(Object))
+    expect(content).toBe('# WebMCP External Control')
+  })
+
+  it('rejects unknown documentation names with the available index', () => {
+    expect(() => getDocumentationEntry('missing', versionInfo)).toThrow(
+      'Available names: getting-started'
+    )
   })
 })

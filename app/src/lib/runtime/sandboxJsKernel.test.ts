@@ -20,6 +20,7 @@ type Scenario =
   | 'driveSearch'
   | 'driveSave'
   | 'documents'
+  | 'documentation'
   | 'notebooksCreate'
   | 'notebooksEmbed'
   | 'notebooksUpdateError'
@@ -138,6 +139,19 @@ class MockSandboxPort {
             { mimeType: 'application/vnd.excalidraw+json' },
           ],
         })
+      } else if (this.scenario === 'documentation') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'documentation.list',
+          args: [],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 2,
+          method: 'documentation.get',
+          args: ['getting-started'],
+        })
       } else if (this.scenario === 'notebooksCreate') {
         this.emit({
           type: 'host-call',
@@ -248,6 +262,18 @@ class MockSandboxPort {
         this.emit({
           type: 'stdout',
           data: `${JSON.stringify(this.hostResults.get(2) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+      if (this.scenario === 'documentation' && this.hostResults.has(2)) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
+        })
+        this.emit({
+          type: 'stdout',
+          data: `${String(this.hostResults.get(2) ?? '')}\n`,
         })
         this.emit({ type: 'exit', exitCode: 0 })
         return
@@ -862,6 +888,59 @@ describe('SandboxJSKernel', () => {
       { mimeType: 'application/vnd.excalidraw+json' },
     ])
     expect(stdout).toContain('test4.excalidraw')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports read-only documentation helpers through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string, args: unknown[]) => {
+      if (method === 'documentation.list') {
+        return [
+          {
+            name: 'getting-started',
+            description: 'Open a notebook and run a cell.',
+          },
+        ]
+      }
+      if (method === 'documentation.get') {
+        return `# ${args[0]}`
+      }
+      return null
+    })
+
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('documentation'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run(
+      [
+        'console.log(await documentation.list());',
+        "console.log(await documentation.get('getting-started'));",
+      ].join('\n')
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith('documentation.list', [])
+    expect(bridgeCall).toHaveBeenCalledWith('documentation.get', [
+      'getting-started',
+    ])
+    expect(stdout).toContain('getting-started')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
   })

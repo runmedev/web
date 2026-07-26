@@ -488,6 +488,8 @@ async function handleSandboxAppKernelBridgeCall({
         String(args[1] ?? '')
       )
     }
+    case 'documents.list':
+      return globals.documents.list()
     case 'documents.get':
       return globals.documents.get(String(args[0] ?? ''))
     case 'documents.update':
@@ -500,6 +502,10 @@ async function handleSandboxAppKernelBridgeCall({
           flush?: boolean
         }) ?? undefined
       )
+    case 'documentation.list':
+      return globals.documentation.list()
+    case 'documentation.get':
+      return globals.documentation.get(String(args[0] ?? ''))
     case 'notebookDiff.listDriveRevisions':
       return notebookDiffApi.listDriveRevisions(args[0] as any)
     case 'notebookDiff.diffDriveRevision':

@@ -16,6 +16,7 @@ help()
 - `runme`: notebook helpers,
 - `notebooks`: notebook document API,
 - `documents`: raw URI-based document content API,
+- `documentation`: read-only, versioned Runme documentation discovery,
 - `explorer`: workspace and file-mount helpers,
 - `runmeRunners`: runner configuration,
 - `jupyter`: Jupyter server and kernel lifecycle,
@@ -35,6 +36,7 @@ explorer.help()
 runme.help()
 notebooks.help()
 documents.help()
+documentation.help()
 runmeRunners.help()
 drive.help()
 agent.help()
@@ -73,6 +75,19 @@ await notebooks.show(
   '[Notebook](https://drive.google.com/file/d/149JKKTgljRiwszwb06Ms74GOYhCOPMNg/view)'
 )
 ```
+
+Discover and read versioned Runme documentation:
+
+```js
+const available = await documentation.list()
+console.log(available)
+const guide = await documentation.get('getting-started')
+console.log(guide)
+```
+
+`await documentation.list()` returns compact `{ name, description }` entries.
+`documentation.get(name)` fetches the selected Markdown from the commit-pinned
+GitHub URL for the running app version.
 
 Read and update raw document content, including Excalidraw scenes:
 
