@@ -12,6 +12,8 @@ import type {
   TextDiffLine,
 } from '../../lib/notebookDiff/model'
 import {
+  applyConflictSourceHunk,
+  type ConflictSourceHunk,
   openNotebookDriveRevisionDiff,
   refreshNotebookConflictDiff,
   removeInsertedConflictCell,
@@ -85,40 +87,169 @@ function lineText(line: TextDiffLine, side: 'base' | 'compare'): string {
   return line.compareLine ?? ''
 }
 
+interface SourceDiffBlock {
+  kind: TextDiffLine['kind']
+  startLine: number
+  lines: TextDiffLine[]
+}
+
+function groupSourceDiffLines(lines: TextDiffLine[]): SourceDiffBlock[] {
+  return lines.reduce<SourceDiffBlock[]>((blocks, line, index) => {
+    const previous = blocks.at(-1)
+    if (previous?.kind === line.kind) {
+      previous.lines.push(line)
+    } else {
+      blocks.push({
+        kind: line.kind,
+        startLine: index,
+        lines: [line],
+      })
+    }
+    return blocks
+  }, [])
+}
+
+interface SourceHunkActionContext {
+  localUri: string
+  row: CellDiff
+  onApplied: (document: NotebookDiffDocument) => void
+  pendingHunk?: string
+  setPendingHunk: (hunk?: string) => void
+}
+
+function SourceHunkActionButton({
+  action,
+  hunk,
+}: {
+  action: SourceHunkActionContext
+  hunk: ConflictSourceHunk
+}) {
+  const { store } = useNotebookStore()
+  const isUpstream = hunk.kind === 'upstream'
+  const hunkKey = `${hunk.kind}:${hunk.startLine}`
+  const isApplying = action.pendingHunk === hunkKey
+  const label = isUpstream
+    ? 'Insert this upstream block into the local cell'
+    : 'Remove this local-only block from the local cell'
+
+  const applyHunk = async () => {
+    if (!store) {
+      return
+    }
+    action.setPendingHunk(hunkKey)
+    try {
+      const notebookData = getNotebookDataController().getNotebookData(
+        action.localUri
+      )
+      await notebookData?.flushPendingPersist()
+      const result = await applyConflictSourceHunk(
+        store,
+        action.localUri,
+        action.row,
+        hunk,
+        {
+          localNotebook: notebookData?.getSnapshot().notebook,
+        }
+      )
+      notebookData?.loadNotebook(result.localNotebook, { persist: false })
+      action.onApplied(result.document)
+      showToast({
+        message: isUpstream
+          ? 'Inserted upstream text into the local cell.'
+          : 'Removed local-only text from the local cell.',
+        tone: 'success',
+      })
+    } catch {
+      showToast({
+        message: isUpstream
+          ? 'Unable to insert upstream text. Refresh the diff and try again.'
+          : 'Unable to remove local-only text. Refresh the diff and try again.',
+        tone: 'error',
+      })
+    } finally {
+      action.setPendingHunk(undefined)
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={!store || action.pendingHunk !== undefined}
+      aria-label={label}
+      title={label}
+      className={`absolute top-0 z-10 flex h-5 w-5 items-center justify-center rounded border bg-white font-sans text-xs font-semibold shadow-sm transition-colors disabled:cursor-wait disabled:opacity-60 ${
+        isUpstream
+          ? 'right-1 border-emerald-300 text-emerald-700 hover:bg-emerald-100'
+          : 'left-1 border-red-300 text-red-700 hover:bg-red-100'
+      }`}
+      onClick={() => {
+        void applyHunk()
+      }}
+    >
+      {isApplying ? '…' : isUpstream ? '→' : '×'}
+    </button>
+  )
+}
+
 function SourceDiff({
   diff,
   side,
   fallback,
+  action,
 }: {
   diff?: TextDiff
   side: 'base' | 'compare'
   fallback: string
+  action?: SourceHunkActionContext
 }) {
-  const lines = diff?.lines.length
+  const lines: TextDiffLine[] = diff?.lines.length
     ? diff.lines
     : fallback
-      ? fallback.split(/\r?\n/)
+      ? fallback.split(/\r?\n/).map((line) => ({
+          kind: 'equal',
+          baseLine: line,
+          compareLine: line,
+        }))
       : []
+  const blocks = groupSourceDiffLines(lines)
   return (
     <pre className="m-0 overflow-x-auto whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5">
-      {lines.length === 0 ? (
+      {blocks.length === 0 ? (
         <span className="text-nb-text-faint">No source</span>
       ) : (
-        lines.map((line, index) => {
-          const normalizedLine =
-            typeof line === 'string'
-              ? ({
-                  kind: 'equal',
-                  baseLine: line,
-                  compareLine: line,
-                } as TextDiffLine)
-              : line
+        blocks.map((block) => {
+          const actionableKind =
+            side === 'base' && block.kind === 'removed'
+              ? 'upstream'
+              : side === 'compare' && block.kind === 'added'
+                ? 'local'
+                : undefined
           return (
             <div
-              key={`${side}-line-${index}`}
-              className={`min-h-5 rounded px-1 ${lineClass(normalizedLine, side)}`}
+              key={`${side}-block-${block.startLine}`}
+              className={`relative rounded ${lineClass(block.lines[0], side)}`}
             >
-              {lineText(normalizedLine, side) || ' '}
+              {block.lines.map((line, offset) => (
+                <div
+                  key={`${side}-line-${block.startLine + offset}`}
+                  className={`min-h-5 px-1 ${
+                    actionableKind === 'upstream' && offset === 0 ? 'pr-7' : ''
+                  } ${
+                    actionableKind === 'local' && offset === 0 ? 'pl-7' : ''
+                  }`}
+                >
+                  {lineText(line, side) || ' '}
+                </div>
+              ))}
+              {action && actionableKind && (
+                <SourceHunkActionButton
+                  action={action}
+                  hunk={{
+                    kind: actionableKind,
+                    startLine: block.startLine,
+                  }}
+                />
+              )}
             </div>
           )
         })
@@ -163,7 +294,15 @@ function OutputSummary({
   )
 }
 
-function CellPanel({ row, side }: { row: CellDiff; side: 'base' | 'compare' }) {
+function CellPanel({
+  row,
+  side,
+  sourceAction,
+}: {
+  row: CellDiff
+  side: 'base' | 'compare'
+  sourceAction?: SourceHunkActionContext
+}) {
   const cell = side === 'base' ? row.baseCell : row.compareCell
   const empty =
     (side === 'base' && row.kind === 'inserted') ||
@@ -195,6 +334,7 @@ function CellPanel({ row, side }: { row: CellDiff; side: 'base' | 'compare' }) {
         diff={row.sourceDiff}
         side={side}
         fallback={cell?.value ?? ''}
+        action={sourceAction}
       />
       {row.outputDiff?.changed && (
         <div className="border-t border-nb-border p-3">
@@ -459,6 +599,8 @@ function DiffRow({
   conflictLocalUri?: string
   onConflictDocumentChanged: (document: NotebookDiffDocument) => void
 }) {
+  const [pendingSourceHunk, setPendingSourceHunk] = useState<string>()
+
   if (row.kind === 'unchanged') {
     return (
       <details className="rounded border border-nb-border bg-nb-surface-2 text-sm text-nb-text-muted">
@@ -474,6 +616,17 @@ function DiffRow({
       </details>
     )
   }
+
+  const sourceAction =
+    conflictLocalUri && row.kind === 'modified' && row.sourceDiff?.changed
+      ? {
+          localUri: conflictLocalUri,
+          row,
+          onApplied: onConflictDocumentChanged,
+          pendingHunk: pendingSourceHunk,
+          setPendingHunk: setPendingSourceHunk,
+        }
+      : undefined
 
   return (
     <section className="rounded-lg border border-nb-border bg-nb-bg p-3 shadow-sm">
@@ -503,8 +656,8 @@ function DiffRow({
         )}
       </div>
       <div className="grid min-w-[920px] grid-cols-2 gap-3">
-        <CellPanel row={row} side="base" />
-        <CellPanel row={row} side="compare" />
+        <CellPanel row={row} side="base" sourceAction={sourceAction} />
+        <CellPanel row={row} side="compare" sourceAction={sourceAction} />
       </div>
     </section>
   )

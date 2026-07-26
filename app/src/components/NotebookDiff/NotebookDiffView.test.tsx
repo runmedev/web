@@ -153,6 +153,43 @@ describe('NotebookDiffContent', () => {
     ).toBeTruthy()
   })
 
+  it('shows one action for each upstream-only and local-only source block', () => {
+    const doc = {
+      id: 'conflict-diff',
+      base: { label: 'Upstream version', revisionId: 'upstream' },
+      compare: { label: 'Local version' },
+      diff: computeNotebookDiff(
+        notebook(
+          "print('shared')\nprint('upstream one')\nprint('anchor')\nprint('upstream two')"
+        ),
+        notebook(
+          "print('shared')\nprint('local one')\nprint('anchor')\nprint('local two')"
+        )
+      ),
+      resolution: {
+        kind: 'notebook-sync-conflict' as const,
+        localUri: 'local://file/conflict',
+      },
+    }
+
+    render(
+      <NotebookStoreProvider initialStore={{} as unknown as LocalNotebooks}>
+        <NotebookDiffContent document={doc} />
+      </NotebookStoreProvider>
+    )
+
+    expect(
+      screen.getAllByRole('button', {
+        name: 'Insert this upstream block into the local cell',
+      })
+    ).toHaveLength(2)
+    expect(
+      screen.getAllByRole('button', {
+        name: 'Remove this local-only block from the local cell',
+      })
+    ).toHaveLength(2)
+  })
+
   it('loads an older Drive revision from the Base revision selector', async () => {
     const upstreamNotebook = notebook("print('upstream')")
     const olderNotebook = notebook("print('older')")
@@ -263,6 +300,16 @@ describe('NotebookDiffContent', () => {
     expect(
       screen.queryByRole('button', {
         name: 'Remove cell from local notebook',
+      })
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Insert this upstream block into the local cell',
+      })
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Remove this local-only block from the local cell',
       })
     ).toBeNull()
     expect(screen.getByLabelText('Compare against')).toBeTruthy()
@@ -423,5 +470,95 @@ describe('NotebookDiffContent', () => {
     })
     expect(savedNotebook.cells).toHaveLength(0)
     expect(screen.getByText('0 inserted')).toBeTruthy()
+  })
+
+  it('applies source blocks independently and refreshes the diff', async () => {
+    const upstreamNotebook = notebook(
+      "print('shared')\nprint('upstream only')\nprint('tail')"
+    )
+    const localNotebook = notebook(
+      "print('shared')\nprint('local only')\nprint('tail')"
+    )
+    let record = {
+      id: 'local://file/conflict',
+      name: 'conflict.json',
+      doc: serialize(localNotebook),
+      conflict: {
+        detectedAt: '2026-06-01T00:00:00.000Z',
+        upstreamChecksum: 'upstream',
+        localChecksumAtDetection: 'local',
+      },
+    }
+    const localStore = {
+      files: {
+        get: vi.fn(async () => record),
+      },
+      getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
+      save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
+        record = {
+          ...record,
+          doc: serialize(saved),
+        }
+      }),
+    } as unknown as LocalNotebooks
+    const doc = {
+      id: 'conflict-diff',
+      base: { label: 'Upstream version', revisionId: 'upstream' },
+      compare: { label: 'Local version' },
+      diff: computeNotebookDiff(upstreamNotebook, localNotebook),
+      resolution: {
+        kind: 'notebook-sync-conflict' as const,
+        localUri: 'local://file/conflict',
+      },
+    }
+
+    render(
+      <NotebookStoreProvider initialStore={localStore}>
+        <NotebookDiffContent document={doc} />
+      </NotebookStoreProvider>
+    )
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Insert this upstream block into the local cell',
+      })
+    )
+
+    await waitFor(() => {
+      expect(localStore.save).toHaveBeenCalledTimes(1)
+      expect(
+        screen.queryByRole('button', {
+          name: 'Insert this upstream block into the local cell',
+        })
+      ).toBeNull()
+    })
+    let savedNotebook = fromJsonString(parser_pb.NotebookSchema, record.doc, {
+      ignoreUnknownFields: true,
+    })
+    expect(savedNotebook.cells[0]?.value).toBe(
+      "print('shared')\nprint('upstream only')\nprint('local only')\nprint('tail')"
+    )
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Remove this local-only block from the local cell',
+      })
+    )
+
+    await waitFor(() => {
+      expect(localStore.save).toHaveBeenCalledTimes(2)
+      expect(
+        screen.queryByRole('button', {
+          name: 'Remove this local-only block from the local cell',
+        })
+      ).toBeNull()
+    })
+    savedNotebook = fromJsonString(parser_pb.NotebookSchema, record.doc, {
+      ignoreUnknownFields: true,
+    })
+    expect(savedNotebook.cells[0]?.value).toBe(
+      "print('shared')\nprint('upstream only')\nprint('tail')"
+    )
+    expect(screen.getByText('0 modified')).toBeTruthy()
   })
 })
