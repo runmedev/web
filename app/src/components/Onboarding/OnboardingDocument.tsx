@@ -202,12 +202,11 @@ export function OnboardingDocument() {
               Welcome to Runme
             </div>
             <h1 className="mt-5 max-w-3xl text-4xl font-semibold tracking-tight text-slate-950 sm:text-5xl">
-              Share the work, not just the answer.
+              Document and Share How Work Gets Done
             </h1>
             <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-600">
-              Runme turns Markdown into collaborative, executable documents.
-              Build design docs and runbooks with your AI agent, then share the
-              exact context with your team.
+              Use Runme to document and share what your AI did as notebooks
+              stored in Google Drive.
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
               <button
