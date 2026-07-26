@@ -11,6 +11,7 @@ const validOptions = (
 ): GoogleAnalyticsClientOptions => ({
   measurementId: 'G-TEST123',
   hostname: 'web.runme.dev',
+  origin: 'https://web.runme.dev',
   doNotTrack: null,
   globalPrivacyControl: false,
   document,
@@ -39,6 +40,9 @@ describe('GoogleAnalyticsClient', () => {
     ['missing ID', { measurementId: undefined }],
     ['invalid ID', { measurementId: '123456789' }],
     ['non-production host', { hostname: 'localhost' }],
+    ['gateway lookalike', { hostname: 'example.runme.gateway.test' }],
+    ['gateway without a suffix', { hostname: 'runme.gateway.' }],
+    ['origin mismatch', { origin: 'https://runme.gateway.example.test' }],
     ['Do Not Track', { doNotTrack: '1' }],
     ['Global Privacy Control', { globalPrivacyControl: true }],
   ] as const)('stays disabled for %s', (_name, overrides) => {
@@ -50,6 +54,41 @@ describe('GoogleAnalyticsClient', () => {
     expect(client.initialize()).toBe(false)
     expect(globalObject).toEqual({})
     expect(document.getElementById('runme-google-analytics')).toBeNull()
+  })
+
+  it('initializes on a generic Runme gateway hostname', () => {
+    const globalObject: { dataLayer?: Array<ArrayLike<unknown>> } = {}
+    const client = new GoogleAnalyticsClient(
+      validOptions({
+        hostname: 'runme.gateway.example.test',
+        origin:
+          'https://runme.gateway.example.test:8443/private/notebook?token=secret#cell',
+        globalObject,
+      })
+    )
+
+    expect(client.initialize()).toBe(true)
+    expect(
+      globalObject.dataLayer?.map((command) => Array.from(command))
+    ).toEqual([
+      ['js', expect.any(Date)],
+      [
+        'config',
+        'G-TEST123',
+        expect.objectContaining({
+          page_location: 'https://runme.gateway.example.test:8443/',
+          page_referrer: '',
+        }),
+      ],
+      [
+        'event',
+        'page_view',
+        expect.objectContaining({
+          page_location: 'https://runme.gateway.example.test:8443/',
+          page_referrer: '',
+        }),
+      ],
+    ])
   })
 
   it('initializes once and emits one sanitized page view', () => {
