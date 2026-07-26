@@ -1,5 +1,5 @@
 import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../../runme/client'
@@ -560,5 +560,101 @@ describe('NotebookDiffContent', () => {
       "print('shared')\nprint('upstream only')\nprint('tail')"
     )
     expect(screen.getByText('0 modified')).toBeTruthy()
+  })
+
+  it('prevents concurrent conflict mutations across diff rows', async () => {
+    const createNotebook = (values: Array<[string, string]>) =>
+      create(parser_pb.NotebookSchema, {
+        cells: values.map(([refId, value]) =>
+          create(parser_pb.CellSchema, {
+            refId,
+            kind: parser_pb.CellKind.CODE,
+            languageId: 'python',
+            value,
+          })
+        ),
+        metadata: {},
+      })
+    const upstreamNotebook = createNotebook([
+      ['cell-a', 'shared a\nupstream a'],
+      ['cell-b', 'shared b\nupstream b'],
+    ])
+    const localNotebook = createNotebook([
+      ['cell-a', 'shared a\nlocal a'],
+      ['cell-b', 'shared b\nlocal b'],
+    ])
+    let record = {
+      id: 'local://file/conflict',
+      name: 'conflict.json',
+      doc: serialize(localNotebook),
+      conflict: {
+        detectedAt: '2026-06-01T00:00:00.000Z',
+        upstreamChecksum: 'upstream',
+        localChecksumAtDetection: 'local',
+      },
+    }
+    let allowSave: (() => void) | undefined
+    const saveAllowed = new Promise<void>((resolve) => {
+      allowSave = resolve
+    })
+    const localStore = {
+      files: {
+        get: vi.fn(async () => record),
+      },
+      getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
+      save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
+        await saveAllowed
+        record = {
+          ...record,
+          doc: serialize(saved),
+        }
+      }),
+    } as unknown as LocalNotebooks
+    const doc = {
+      id: 'conflict-diff',
+      base: { label: 'Upstream version', revisionId: 'upstream' },
+      compare: { label: 'Local version' },
+      diff: computeNotebookDiff(upstreamNotebook, localNotebook),
+      resolution: {
+        kind: 'notebook-sync-conflict' as const,
+        localUri: 'local://file/conflict',
+      },
+    }
+
+    render(
+      <NotebookStoreProvider initialStore={localStore}>
+        <NotebookDiffContent document={doc} />
+      </NotebookStoreProvider>
+    )
+
+    const insertButtons = screen.getAllByRole('button', {
+      name: 'Insert this upstream block into the local cell',
+    })
+    expect(insertButtons).toHaveLength(2)
+
+    fireEvent.click(insertButtons[0])
+    fireEvent.click(insertButtons[1])
+
+    await waitFor(() => {
+      expect(localStore.save).toHaveBeenCalledTimes(1)
+    })
+
+    await act(async () => {
+      allowSave?.()
+      await saveAllowed
+    })
+    await waitFor(() => {
+      expect(
+        screen.getAllByRole('button', {
+          name: 'Insert this upstream block into the local cell',
+        })
+      ).toHaveLength(1)
+    })
+
+    const savedNotebook = fromJsonString(parser_pb.NotebookSchema, record.doc, {
+      ignoreUnknownFields: true,
+    })
+    expect(savedNotebook.cells[0]?.value).toBe('shared a\nupstream a\nlocal a')
+    expect(savedNotebook.cells[1]?.value).toBe('shared b\nlocal b')
   })
 })
