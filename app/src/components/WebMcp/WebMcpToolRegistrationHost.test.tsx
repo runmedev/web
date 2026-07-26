@@ -74,28 +74,26 @@ describe("WebMcpToolRegistrationHost", () => {
     );
   });
 
-  it("registers ExecuteCode and unregisters it on cleanup", async () => {
-    let registered:
-      | {
-          tool: {
-            name: string;
-            title: string;
-            description: string;
-            inputSchema: Record<string, unknown>;
-            annotations: {
-              readOnlyHint: boolean;
-              untrustedContentHint: boolean;
-            };
-            execute: (input: { code?: unknown }) => Promise<string>;
-          };
-          signal?: AbortSignal;
-        }
-      | undefined;
+  it("registers WebMCP tools and unregisters them on cleanup", async () => {
+    const registered: Array<{
+      tool: {
+        name: string;
+        title: string;
+        description: string;
+        inputSchema: Record<string, unknown>;
+        annotations: {
+          readOnlyHint: boolean;
+          untrustedContentHint: boolean;
+        };
+        execute: (input: Record<string, unknown>) => Promise<string> | string;
+      };
+      signal?: AbortSignal;
+    }> = [];
     const registerTool = vi.fn((tool, options?: { signal?: AbortSignal }) => {
-      registered = {
+      registered.push({
         tool,
         signal: options?.signal,
-      };
+      });
     });
     Object.defineProperty(navigator, "modelContext", {
       configurable: true,
@@ -106,14 +104,16 @@ describe("WebMcpToolRegistrationHost", () => {
 
     const rendered = render(<WebMcpToolRegistrationHost />);
 
-    expect(registerTool).toHaveBeenCalledTimes(1);
-    expect(registered?.tool.name).toBe("ExecuteCode");
-    expect(registered?.tool.title).toBe("Runme Execute Code");
-    expect(registered?.tool.annotations).toEqual({
+    expect(registerTool).toHaveBeenCalledTimes(2);
+    const executeCode = registered.find(
+      ({ tool }) => tool.name === "ExecuteCode",
+    );
+    expect(executeCode?.tool.title).toBe("Runme Execute Code");
+    expect(executeCode?.tool.annotations).toEqual({
       readOnlyHint: false,
       untrustedContentHint: true,
     });
-    expect(registered?.tool.inputSchema).toEqual({
+    expect(executeCode?.tool.inputSchema).toEqual({
       type: "object",
       additionalProperties: false,
       properties: {
@@ -123,7 +123,7 @@ describe("WebMcpToolRegistrationHost", () => {
     });
 
     await expect(
-      registered?.tool.execute({
+      executeCode?.tool.execute({
         code: "console.log('hello')",
       }),
     ).resolves.toBe("webmcp output");
@@ -155,9 +155,33 @@ describe("WebMcpToolRegistrationHost", () => {
     });
     expect(appConsoleDataMock.failExecution).not.toHaveBeenCalled();
 
-    expect(registered?.signal?.aborted).toBe(false);
+    const instructions = registered.find(
+      ({ tool }) => tool.name === "readInstructionsForCodex",
+    );
+    expect(instructions?.tool.title).toBe(
+      "Read Runme Instructions for Codex",
+    );
+    expect(instructions?.tool.annotations).toEqual({
+      readOnlyHint: true,
+      untrustedContentHint: false,
+    });
+    expect(instructions?.tool.inputSchema).toEqual({
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    });
+    expect(instructions?.tool.execute({})).toContain(window.location.origin);
+    expect(instructions?.tool.execute({})).toContain(
+      "await app.getSessionID()",
+    );
+
+    expect(registered.every(({ signal }) => signal?.aborted === false)).toBe(
+      true,
+    );
     rendered.unmount();
-    expect(registered?.signal?.aborted).toBe(true);
+    expect(registered.every(({ signal }) => signal?.aborted === true)).toBe(
+      true,
+    );
   });
 
   it("marks the AppConsole cell failed when ExecuteCode rejects", async () => {

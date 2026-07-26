@@ -3,6 +3,13 @@ import { useEffect } from "react";
 import { appLogger } from "../../lib/logging/runtime";
 import { getAppConsoleData } from "../../lib/appConsole/appConsoleController";
 import {
+  buildReadInstructionsForCodexInputSchema,
+  readInstructionsForCodex,
+  READ_INSTRUCTIONS_FOR_CODEX_TOOL_DESCRIPTION,
+  READ_INSTRUCTIONS_FOR_CODEX_TOOL_NAME,
+  READ_INSTRUCTIONS_FOR_CODEX_TOOL_TITLE,
+} from "../../lib/runtime/codexInstructions";
+import {
   buildExecuteCodeInputSchema,
   EXECUTE_CODE_TOOL_DESCRIPTION,
   EXECUTE_CODE_TOOL_NAME,
@@ -25,7 +32,10 @@ type ModelContextLike = {
         readOnlyHint: boolean;
         untrustedContentHint: boolean;
       };
-      execute: (input: { code?: unknown }, client: ModelContextClientLike) => Promise<string>;
+      execute: (
+        input: Record<string, unknown>,
+        client: ModelContextClientLike,
+      ) => Promise<string> | string;
     },
     options?: { signal?: AbortSignal },
   ) => void;
@@ -115,17 +125,36 @@ export default function WebMcpToolRegistrationHost() {
           signal: registrationController.signal,
         },
       );
-      appLogger.info("WebMCP ExecuteCode tool registered", {
+      modelContext.registerTool(
+        {
+          name: READ_INSTRUCTIONS_FOR_CODEX_TOOL_NAME,
+          title: READ_INSTRUCTIONS_FOR_CODEX_TOOL_TITLE,
+          description: READ_INSTRUCTIONS_FOR_CODEX_TOOL_DESCRIPTION,
+          inputSchema: buildReadInstructionsForCodexInputSchema(),
+          annotations: {
+            readOnlyHint: true,
+            untrustedContentHint: false,
+          },
+          execute: () => readInstructionsForCodex(window.location.origin),
+        },
+        {
+          signal: registrationController.signal,
+        },
+      );
+      appLogger.info("WebMCP tools registered", {
         attrs: {
           scope: "webmcp",
-          toolName: EXECUTE_CODE_TOOL_NAME,
+          toolNames: [
+            EXECUTE_CODE_TOOL_NAME,
+            READ_INSTRUCTIONS_FOR_CODEX_TOOL_NAME,
+          ],
         },
       });
     } catch (error) {
+      registrationController.abort();
       appLogger.error("Failed to register WebMCP tool", {
         attrs: {
           scope: "webmcp",
-          toolName: EXECUTE_CODE_TOOL_NAME,
           error: String(error),
         },
       });
@@ -134,10 +163,13 @@ export default function WebMcpToolRegistrationHost() {
 
     return () => {
       registrationController.abort();
-      appLogger.info("WebMCP ExecuteCode tool unregistered", {
+      appLogger.info("WebMCP tools unregistered", {
         attrs: {
           scope: "webmcp",
-          toolName: EXECUTE_CODE_TOOL_NAME,
+          toolNames: [
+            EXECUTE_CODE_TOOL_NAME,
+            READ_INSTRUCTIONS_FOR_CODEX_TOOL_NAME,
+          ],
         },
       });
     };

@@ -9,6 +9,13 @@ the intended tab and notebook safely before using those tools.
 This is the supported integration path for Codex and other external agents.
 Runme does not include a built-in AI Chat panel.
 
+Runme also exposes the read-only `readInstructionsForCodex` WebMCP tool. It
+returns a concise Markdown version of the safe browser workflow with URLs
+generated from the current page origin. Call it before `ExecuteCode` when the
+controller needs Runme-specific operating instructions. Because the origin is
+resolved at runtime, its links work for hosted, proxied, and self-hosted Runme
+instances.
+
 Browser tab control is exclusive: one controller session can control one tab
 at a time. Concurrent sessions should target different Runme tabs.
 
