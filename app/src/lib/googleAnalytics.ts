@@ -116,6 +116,7 @@ export class GoogleAnalyticsClient {
         ...SAFE_PAGE_CONTEXT,
       })
       this.gtag = gtag
+      this.sendEvent('page_view', {})
       return true
     } catch {
       this.gtag = undefined
@@ -140,7 +141,7 @@ export class GoogleAnalyticsClient {
   }
 
   private sendEvent(
-    eventName: 'notebook_opened' | 'cell_executed',
+    eventName: 'page_view' | 'notebook_opened' | 'cell_executed',
     params: Record<string, string>
   ): void {
     try {

@@ -66,19 +66,21 @@
 
       <h2>Usage Analytics</h2>
       <p>
-        We use Google Analytics on web.runme.dev to count successful notebook
-        opens and accepted code-cell execution attempts. We send only coarse
-        categories, such as whether a notebook came from local storage, Google
-        Drive, or an HTTP address, whether it was opened read-only, and which
-        type of execution backend was used.
+        We use Google Analytics on web.runme.dev to count application visits,
+        successful notebook opens, and accepted code-cell execution attempts. We
+        send only coarse categories, such as whether a notebook came from local
+        storage, Google Drive, or an HTTP address, whether it was opened
+        read-only, and which type of execution backend was used.
       </p>
       <p>
         We do not send notebook or cell names, contents, identifiers, paths,
         URLs, session values, Google Drive file identifiers, commands, outputs,
         or errors to Google Analytics. Automatic page views and advertising
-        signals are disabled, and the page location sent with these events is
-        limited to <a href="https://web.runme.dev/">https://web.runme.dev/</a>
-        without a query string or fragment.
+        signals are disabled. Instead, each application load sends one manual
+        page view, and the page location sent with it and the other analytics
+        events is limited to
+        <a href="https://web.runme.dev/">https://web.runme.dev/</a> without a
+        query string or fragment.
       </p>
       <p>
         Google Analytics may process standard request information such as
