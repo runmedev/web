@@ -44,7 +44,7 @@ import { GoogleDrivePickerButton } from '../Workspace/GoogleDrivePickerButton'
 
 const CODEX_URL = 'https://chatgpt.com/codex'
 const CODEX_PROMPT =
-  'Open https://web.runme.dev in @Browser and help me create a shareable design document or runbook.'
+  'Open https://web.runme.dev in @Browser. Create a notebook that documents how to convert Celsius to Fahrenheit. Add and run a JavaScript cell that converts 20°C, then explain the result.'
 
 type TaskDefinition = {
   id: OnboardingTaskId
@@ -207,8 +207,8 @@ export function OnboardingDocument() {
             <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-600">
               Use Runme to collaborate with your AI on notebooks stored in
               Google Drive. Ask your AI to document how it accomplishes tasks.
-              Share those documents with your colleagues (and their AIs) so
-              they can learn.
+              Share those documents with your colleagues (and their AIs) so they
+              can learn.
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
               <button
@@ -236,11 +236,11 @@ export function OnboardingDocument() {
               Try Runme with Codex
             </div>
             <h2 className="mt-3 text-2xl font-semibold">
-              Bring an AI collaborator into your document.
+              Document What Codex Does
             </h2>
             <p className="mt-3 text-sm leading-6 text-slate-300">
-              Open Codex, launch Runme in its in-app Browser, and ask it to help
-              create a shareable design doc or runbook.
+              Open Codex, launch Runme in its in-app Browser, and ask it to
+              document a simple task as a runnable notebook.
             </p>
             <div className="mt-5 rounded-lg border border-white/10 bg-white/5 p-3 font-mono text-xs leading-5 text-slate-200">
               {CODEX_PROMPT}

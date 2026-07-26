@@ -56,6 +56,19 @@ describe('OnboardingDocument sharing step', () => {
     mocks.showToast.mockReset()
   })
 
+  it('offers Codex a machine-independent sample task', () => {
+    render(<OnboardingDocument />)
+
+    expect(
+      screen.getByRole('heading', { name: 'Document What Codex Does' })
+    ).toBeTruthy()
+    expect(
+      screen.getByText(
+        'Open https://web.runme.dev in @Browser. Create a notebook that documents how to convert Celsius to Fahrenheit. Add and run a JavaScript cell that converts 20°C, then explain the result.'
+      )
+    ).toBeTruthy()
+  })
+
   it('enables Copy Link for the most recently created Drive notebook', async () => {
     render(<OnboardingDocument />)
 
