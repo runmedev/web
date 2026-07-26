@@ -205,8 +205,10 @@ export function OnboardingDocument() {
               Document, Share, Learn
             </h1>
             <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-600">
-              Use Runme to document and share what your AI did as notebooks
-              stored in Google Drive.
+              Use Runme to collaborate with your AI on notebooks stored in
+              Google Drive. Ask your AI to document how it accomplishes tasks.
+              Share those documents with your colleagues (and their AIs) so
+              they can learn.
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
               <button
