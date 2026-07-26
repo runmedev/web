@@ -52,7 +52,7 @@ describe('GoogleAnalyticsClient', () => {
     expect(document.getElementById('runme-google-analytics')).toBeNull()
   })
 
-  it('initializes once with privacy-preserving configuration', () => {
+  it('initializes once and emits one sanitized page view', () => {
     const globalObject: { dataLayer?: Array<ArrayLike<unknown>> } = {}
     const client = new GoogleAnalyticsClient(validOptions({ globalObject }))
 
@@ -73,7 +73,7 @@ describe('GoogleAnalyticsClient', () => {
     const commands = globalObject.dataLayer?.map((command) =>
       Array.from(command)
     )
-    expect(commands).toHaveLength(2)
+    expect(commands).toHaveLength(3)
     expect(commands?.[0]?.[0]).toBe('js')
     expect(commands?.[0]?.[1]).toBeInstanceOf(Date)
     expect(commands?.[1]).toEqual([
@@ -83,6 +83,15 @@ describe('GoogleAnalyticsClient', () => {
         allow_ad_personalization_signals: false,
         allow_google_signals: false,
         send_page_view: false,
+        page_location: 'https://web.runme.dev/',
+        page_referrer: '',
+        page_title: 'Runme Web',
+      },
+    ])
+    expect(commands?.[2]).toEqual([
+      'event',
+      'page_view',
+      {
         page_location: 'https://web.runme.dev/',
         page_referrer: '',
         page_title: 'Runme Web',
@@ -102,7 +111,7 @@ describe('GoogleAnalyticsClient', () => {
     client.trackCellExecuted({ executionBackend: 'jupyter' })
 
     const events = globalObject.dataLayer
-      ?.slice(2)
+      ?.slice(3)
       .map((command) => Array.from(command))
     expect(events).toEqual([
       [
