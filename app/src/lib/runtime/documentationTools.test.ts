@@ -27,7 +27,7 @@ describe('documentation WebMCP tools', () => {
     expect(documents[0]).toEqual({
       name: 'getting-started',
       description:
-        'Open a notebook, configure an execution path, run a cell, and inspect its output.',
+        'Use this guide when opening Runme for the first time or when an agent needs the shortest path from an unopened notebook to a successful cell execution. It covers prerequisites, opening a notebook, selecting an execution path, running a cell, and checking its output. For detailed runner configuration, use one of the runner-specific guides.',
     })
     expect(documents[0]).not.toHaveProperty('content')
     expect(documents[0]).not.toHaveProperty('uri')

@@ -1,3 +1,16 @@
+---
+name: app-console-reference
+title: App Console Reference
+order: 12
+description: >-
+  Use this reference to discover supported App Console namespaces and canonical
+  JavaScript helpers for notebooks, documents, runners, Drive, authentication,
+  configuration, and diagnostics. It includes practical command examples for
+  creating or opening notebooks and inspecting runtime state. Prefer a
+  task-specific guide when conceptual setup or troubleshooting context is more
+  important than API lookup.
+---
+
 # App Console Reference
 
 ## Purpose

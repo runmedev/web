@@ -1,3 +1,15 @@
+---
+name: google-drive-integration
+title: Google Drive Integration
+order: 5
+description: >-
+  Use this guide to configure and operate Google Drive as a Runme storage
+  backend. It covers authentication behavior, Drive-backed notebooks and
+  folders, synchronization, native Drive search, Excalidraw files, and useful
+  App Console commands. For opening or sharing Drive links specifically, use
+  the sharing and opening Drive links guide.
+---
+
 # Google Drive Integration
 
 ## Purpose

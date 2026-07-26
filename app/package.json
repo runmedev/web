@@ -6,14 +6,16 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc -p tsconfig.app.json --noEmit",
-    "build": "vite build",
+    "build": "pnpm run check:documentation && vite build",
+    "generate:documentation": "node scripts/generate-documentation-manifest.mjs",
+    "check:documentation": "node scripts/generate-documentation-manifest.mjs --check",
     "cuj:build": "tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/browser/.generated test/browser/run-cuj-scenarios.ts",
     "cuj:run": "pnpm run cuj:build && node test/browser/.generated/run-cuj-scenarios.js",
     "cuj:upload": "tsc --target es2020 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck --outDir test/browser/.generated test/browser/upload-cuj-artifacts.ts && node test/browser/.generated/upload-cuj-artifacts.js",
     "lint": "eslint .",
     "format": "prettier --ignore-path .prettierignore --write .",
     "preview": "vite preview",
-    "test": "vitest"
+    "test": "pnpm run check:documentation && vitest"
   },
   "dependencies": {
     "@buf/googleapis_googleapis.bufbuild_es": "2.6.0-20250411203938-61b203b9a916.1",

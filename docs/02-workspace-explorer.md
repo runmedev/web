@@ -1,3 +1,15 @@
+---
+name: workspace-explorer
+title: Workspace Explorer
+order: 2
+description: >-
+  Use this guide to understand how the workspace explorer presents and
+  navigates local notebooks, mounted filesystem directories, and Google Drive
+  content. It covers common explorer actions, programmatic entry points, and
+  selection or refresh behavior. Use the storage-specific guides when the task
+  is mounting a directory, configuring Drive, or recovering browser-local data.
+---
+
 # Workspace Explorer
 
 ## Purpose

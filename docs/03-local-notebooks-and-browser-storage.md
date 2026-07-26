@@ -1,3 +1,15 @@
+---
+name: local-notebooks-and-browser-storage
+title: Local Notebooks And Browser Storage
+order: 3
+description: >-
+  Use this guide for notebooks stored in the browser, including local URI
+  behavior, persistence, synchronization states, and recovery expectations.
+  It explains what “local” means in Runme and why browser storage lifecycle
+  matters. It does not cover mounted filesystem workspaces or Google
+  Drive-backed notebooks.
+---
+
 # Local Notebooks And Browser Storage
 
 ## What "local" means

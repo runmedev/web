@@ -1,3 +1,15 @@
+---
+name: sharing-and-opening-drive-links
+title: Sharing And Opening Drive Links
+order: 6
+description: >-
+  Use this guide when opening a shared Google Drive notebook or folder link,
+  generating a share link, or troubleshooting the link handoff flow. It
+  explains authentication and synchronization implications, explorer
+  behavior, and the relevant App Console helpers. Use the broader Google Drive
+  integration guide for initial Drive configuration and storage behavior.
+---
+
 # Sharing And Opening Drive Links
 
 ## Purpose

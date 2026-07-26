@@ -1,3 +1,15 @@
+---
+name: authentication-and-app-configuration
+title: Authentication And App Configuration
+order: 13
+description: >-
+  Use this guide to distinguish and configure Runme's authentication and
+  application settings. It covers OIDC sign-in, Google OAuth, Drive service
+  accounts, backend agent endpoints, and app configuration URLs, with the
+  corresponding App Console helpers. Use the Google Drive integration guide
+  for Drive storage behavior after credentials are configured.
+---
+
 # Authentication And App Configuration
 
 ## Distinct configuration domains

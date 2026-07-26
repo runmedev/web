@@ -1,3 +1,15 @@
+---
+name: runners-overview
+title: Runners Overview
+order: 7
+description: >-
+  Use this guide to choose an execution backend or understand how runner
+  selection works in Runme. It compares local Runme WebSocket runners,
+  browser-hosted AppKernel runtimes, and Jupyter, and provides the common App
+  Console commands for inspecting and choosing runners. After choosing a
+  family, use its dedicated guide for setup and troubleshooting.
+---
+
 # Runners Overview
 
 ## What a runner is

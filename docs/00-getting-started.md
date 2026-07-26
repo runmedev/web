@@ -1,3 +1,15 @@
+---
+name: getting-started
+title: Getting Started
+order: 0
+description: >-
+  Use this guide when opening Runme for the first time or when an agent needs
+  the shortest path from an unopened notebook to a successful cell execution.
+  It covers prerequisites, opening a notebook, selecting an execution path,
+  running a cell, and checking its output. For detailed runner configuration,
+  use one of the runner-specific guides.
+---
+
 # Getting Started
 
 ## Goal

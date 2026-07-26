@@ -10,6 +10,8 @@
     "build:app": "pnpm -C app run build",
     "build:console": "cd packages/react-console && tsc -p tsconfig.json && vite build",
     "build:renderers": "cd packages/renderers && tsc -p tsconfig.json && vite build",
+    "generate:documentation": "pnpm -C app run generate:documentation",
+    "check:documentation": "pnpm -C app run check:documentation",
     "dev": "pnpm -C app run dev",
     "dev:app": "pnpm -C app run dev",
     "preview": "pnpm run build:app && pnpm -C app run preview",
