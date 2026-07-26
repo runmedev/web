@@ -211,6 +211,57 @@ describe('NotebookDataController', () => {
     })
   })
 
+  it('uses the upstream source for a locally addressed notebook', async () => {
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set('local://file/drive-backed', {
+      id: 'local://file/drive-backed',
+      name: 'drive-backed.json',
+      remoteId:
+        'https://drive.google.com/file/d/private-file-id/view?token=secret',
+      notebook: createNotebook(),
+    })
+    const trackNotebookOpened = vi
+      .spyOn(googleAnalytics, 'trackNotebookOpened')
+      .mockImplementation(() => {})
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(createFakeOwnershipManager())
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+
+    await controller.openNotebook('local://file/drive-backed')
+
+    expect(trackNotebookOpened).toHaveBeenCalledWith({
+      notebookSource: 'google_drive',
+      accessMode: 'read_write',
+    })
+  })
+
+  it('records a notebook again after it is closed and reopened', async () => {
+    const uri = 'local://file/reopened'
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'reopened.json',
+      remoteId: uri,
+      notebook: createNotebook(),
+    })
+    const trackNotebookOpened = vi
+      .spyOn(googleAnalytics, 'trackNotebookOpened')
+      .mockImplementation(() => {})
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(createFakeOwnershipManager())
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+
+    await controller.openNotebook(uri)
+    controller.closeNotebook(uri)
+    await controller.openNotebook(uri)
+
+    expect(trackNotebookOpened).toHaveBeenCalledTimes(2)
+  })
+
   it('does not record a notebook that fails to load', async () => {
     const localStore = createFakeLocalNotebooks()
     localStore.records.set('local://file/private-id', {

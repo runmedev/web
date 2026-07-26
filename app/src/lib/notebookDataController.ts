@@ -5,6 +5,7 @@ import type { LocalNotebooks } from '../storage/local'
 import {
   classifyNotebookAnalyticsSource,
   googleAnalytics,
+  type NotebookAnalyticsSource,
 } from './googleAnalytics'
 import { appLogger } from './logging/runtime'
 import { NotebookData, type NotebookSnapshot } from './notebookData'
@@ -169,6 +170,10 @@ export class NotebookDataController {
 
     const localUri = await this.resolveLocalUri(requestedUri, options?.name)
     const name = await this.resolveNotebookName(localUri, options?.name)
+    const notebookSource = await this.resolveNotebookAnalyticsSource(
+      requestedUri,
+      localUri
+    )
     let entry = this.upsertOpenEntry({
       uri: localUri,
       requestedUri,
@@ -232,7 +237,7 @@ export class NotebookDataController {
             owner: acquireResult.owner,
             errorMessage: undefined,
           })
-          this.trackNotebookOpened(entry)
+          this.trackNotebookOpened(entry, notebookSource)
         } catch (error) {
           entry = this.upsertOpenEntry({
             ...entry,
@@ -272,7 +277,7 @@ export class NotebookDataController {
         errorMessage: undefined,
         owner: undefined,
       })
-      this.trackNotebookOpened(entry)
+      this.trackNotebookOpened(entry, notebookSource)
       return { localUri, entry }
     }
 
@@ -295,7 +300,7 @@ export class NotebookDataController {
           errorMessage: undefined,
           owner: undefined,
         })
-        this.trackNotebookOpened(entry)
+        this.trackNotebookOpened(entry, notebookSource)
       } catch (error) {
         this.releaseLease(localUri)
         entry = this.upsertOpenEntry({
@@ -309,7 +314,10 @@ export class NotebookDataController {
     return { localUri, entry }
   }
 
-  private trackNotebookOpened(entry: OpenNotebookEntry): void {
+  private trackNotebookOpened(
+    entry: OpenNotebookEntry,
+    notebookSource: NotebookAnalyticsSource
+  ): void {
     if (
       entry.state !== 'loaded' ||
       this.analyticsOpenedNotebooks.has(entry.uri)
@@ -318,7 +326,7 @@ export class NotebookDataController {
     }
     this.analyticsOpenedNotebooks.add(entry.uri)
     googleAnalytics.trackNotebookOpened({
-      notebookSource: classifyNotebookAnalyticsSource(entry.requestedUri),
+      notebookSource,
       accessMode: entry.readOnly ? 'read_only' : 'read_write',
     })
   }
@@ -574,6 +582,29 @@ export class NotebookDataController {
     return this.localNotebooks.addFile(uri, name)
   }
 
+  private async resolveNotebookAnalyticsSource(
+    requestedUri: string,
+    localUri: string
+  ): Promise<NotebookAnalyticsSource> {
+    const requestedSource = classifyNotebookAnalyticsSource(requestedUri)
+    if (
+      requestedSource !== 'local' ||
+      !this.localNotebooks ||
+      !isLocalFileUri(localUri)
+    ) {
+      return requestedSource
+    }
+    try {
+      const metadata = await this.localNotebooks.getMetadata(localUri)
+      if (metadata?.remoteUri) {
+        return classifyNotebookAnalyticsSource(metadata.remoteUri)
+      }
+    } catch {
+      // Fall back to the safe classification of the requested URI.
+    }
+    return requestedSource
+  }
+
   private async resolveNotebookName(
     uri: string,
     fallbackName?: string
@@ -730,6 +761,7 @@ export class NotebookDataController {
       handle.unsubscribe()
     }
     this.notebooks.delete(uri)
+    this.analyticsOpenedNotebooks.delete(uri)
     this.openNotebooks = this.openNotebooks.filter((item) => item.uri !== uri)
     this.emit()
     this.persist()

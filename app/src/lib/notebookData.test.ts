@@ -641,6 +641,32 @@ describe("NotebookData.runCodeCell", () => {
     expect(trackCellExecuted).not.toHaveBeenCalled();
   });
 
+  it("does not record a Jupyter cell when no kernel is selected", () => {
+    const trackCellExecuted = vi.spyOn(
+      googleAnalytics,
+      "trackCellExecuted",
+    );
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-jupyter-no-kernel",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "jupyter",
+      outputs: [],
+      metadata: {},
+      value: "print('not sent')",
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "local://file/private-notebook-id",
+      name: "private-notebook-name",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    expect(model.runCodeCell(cell)).toBe("run-generated");
+    expect(trackCellExecuted).not.toHaveBeenCalled();
+  });
+
   it("records an accepted execution using only the backend enum", () => {
     const trackCellExecuted = vi
       .spyOn(googleAnalytics, "trackCellExecuted")

@@ -955,7 +955,6 @@ export class NotebookData {
     }
 
     if (useJupyterKernel) {
-      googleAnalytics.trackCellExecuted({ executionBackend: 'jupyter' })
       this.runCodeCellWithJupyterKernel(cell, runID, runner!, generation)
       return runID
     }
@@ -1407,6 +1406,7 @@ export class NotebookData {
       return
     }
 
+    googleAnalytics.trackCellExecuted({ executionBackend: 'jupyter' })
     const socket = new WebSocket(channelsURL)
     this.activeJupyterSockets.set(refId, {
       socket,
