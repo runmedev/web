@@ -16,6 +16,7 @@ import {
   parser_pb,
 } from '../contexts/CellContext'
 import { isHtmlLanguageId } from './cellContent'
+import { googleAnalytics } from './googleAnalytics'
 import {
   IOPUB_INCOMPLETE_METADATA_KEY,
   IOPUB_MIME_TYPE,
@@ -948,11 +949,13 @@ export class NotebookData {
     this.updateCell(cell)
 
     if (useAppKernel) {
+      googleAnalytics.trackCellExecuted({ executionBackend: 'appkernel' })
       this.runCodeCellWithAppKernel(cell, runID, appKernelMode, generation)
       return runID
     }
 
     if (useJupyterKernel) {
+      googleAnalytics.trackCellExecuted({ executionBackend: 'jupyter' })
       this.runCodeCellWithJupyterKernel(cell, runID, runner!, generation)
       return runID
     }
@@ -968,6 +971,7 @@ export class NotebookData {
       return ''
     }
 
+    googleAnalytics.trackCellExecuted({ executionBackend: 'runner' })
     const commands = cell.value ? cell.value.split('\n') : []
     const execReq = buildExecuteRequest({
       languageId: cell.languageId ?? undefined,

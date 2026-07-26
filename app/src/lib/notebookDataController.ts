@@ -2,6 +2,10 @@ import { create } from '@bufbuild/protobuf'
 
 import { parser_pb } from '../contexts/CellContext'
 import type { LocalNotebooks } from '../storage/local'
+import {
+  classifyNotebookAnalyticsSource,
+  googleAnalytics,
+} from './googleAnalytics'
 import { appLogger } from './logging/runtime'
 import { NotebookData, type NotebookSnapshot } from './notebookData'
 import { getNotebookSessionPersistence } from './notebookSessionPersistence'
@@ -105,6 +109,7 @@ export class NotebookDataController {
   private readonly listeners = new Set<() => void>()
   private snapshot: NotebookDataControllerSnapshot = { openNotebooks: [] }
   private restored = false
+  private readonly analyticsOpenedNotebooks = new Set<string>()
   private readonly releasingNotebooks = new Set<string>()
   private readonly writeAccessRequests = new Map<
     string,
@@ -227,6 +232,7 @@ export class NotebookDataController {
             owner: acquireResult.owner,
             errorMessage: undefined,
           })
+          this.trackNotebookOpened(entry)
         } catch (error) {
           entry = this.upsertOpenEntry({
             ...entry,
@@ -266,6 +272,7 @@ export class NotebookDataController {
         errorMessage: undefined,
         owner: undefined,
       })
+      this.trackNotebookOpened(entry)
       return { localUri, entry }
     }
 
@@ -288,6 +295,7 @@ export class NotebookDataController {
           errorMessage: undefined,
           owner: undefined,
         })
+        this.trackNotebookOpened(entry)
       } catch (error) {
         this.releaseLease(localUri)
         entry = this.upsertOpenEntry({
@@ -299,6 +307,20 @@ export class NotebookDataController {
     }
 
     return { localUri, entry }
+  }
+
+  private trackNotebookOpened(entry: OpenNotebookEntry): void {
+    if (
+      entry.state !== 'loaded' ||
+      this.analyticsOpenedNotebooks.has(entry.uri)
+    ) {
+      return
+    }
+    this.analyticsOpenedNotebooks.add(entry.uri)
+    googleAnalytics.trackNotebookOpened({
+      notebookSource: classifyNotebookAnalyticsSource(entry.requestedUri),
+      accessMode: entry.readOnly ? 'read_only' : 'read_write',
+    })
   }
 
   closeNotebook(localUri: string): string | null {
