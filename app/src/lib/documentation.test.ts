@@ -43,10 +43,10 @@ describe('documentation catalog', () => {
     expect(getGettingStartedDocument(versionInfo)).toEqual(documents[0])
   })
 
-  it('publishes exactly the Markdown files that exist in docs', () => {
+  it('publishes every user guide but not the repository index', () => {
     const docsDirectory = resolve(process.cwd(), '../docs')
     const markdownFiles = readdirSync(docsDirectory)
-      .filter((name) => name.endsWith('.md'))
+      .filter((name) => name.endsWith('.md') && name !== 'README.md')
       .map((name) => `docs/${name}`)
       .sort()
     const publishedPaths = listDocumentation(versionInfo)

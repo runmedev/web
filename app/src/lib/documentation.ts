@@ -80,7 +80,6 @@ const DOCUMENTATION_DEFINITIONS: readonly DocumentationDefinition[] = [
     title: 'Logs Diagnostics And Troubleshooting',
   },
   { path: 'docs/16-notebook-diffs.md', title: 'Notebook Diffs' },
-  { path: 'docs/README.md', title: 'Documentation Index' },
 ]
 
 function encodePath(path: string): string {
