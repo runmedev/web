@@ -15,27 +15,47 @@ type AnalyticsGlobal = {
   gtag?: Gtag
 }
 
+type AnalyticsPageContext = {
+  page_location: string
+  page_referrer: ''
+  page_title: 'Runme Web'
+}
+
 export interface GoogleAnalyticsClientOptions {
   measurementId?: string
   hostname: string
+  origin: string
   doNotTrack?: string | null
   globalPrivacyControl?: boolean
   document: Pick<Document, 'createElement' | 'getElementById' | 'head'>
   globalObject: AnalyticsGlobal
 }
 
-const GOOGLE_ANALYTICS_HOSTNAME = 'web.runme.dev'
+const GOOGLE_ANALYTICS_HOSTNAME_PATTERN =
+  /^(?:web\.runme\.dev|runme\.gateway\.[a-z0-9-]+(?:\.[a-z0-9-]+)*)$/i
 const GOOGLE_ANALYTICS_SCRIPT_ID = 'runme-google-analytics'
-const SAFE_PAGE_LOCATION = 'https://web.runme.dev/'
-const SAFE_PAGE_TITLE = 'Runme Web'
-const SAFE_PAGE_CONTEXT = {
-  page_location: SAFE_PAGE_LOCATION,
-  page_referrer: '',
-  page_title: SAFE_PAGE_TITLE,
-} as const
 
 function isValidMeasurementId(value: string | undefined): value is string {
   return typeof value === 'string' && /^G-[A-Z0-9]+$/.test(value)
+}
+
+function createAnalyticsPageContext(
+  origin: string,
+  hostname: string
+): AnalyticsPageContext | undefined {
+  try {
+    const url = new URL(origin)
+    if (url.protocol !== 'https:' || url.hostname !== hostname.toLowerCase()) {
+      return undefined
+    }
+    return {
+      page_location: new URL('/', url.origin).toString(),
+      page_referrer: '',
+      page_title: 'Runme Web',
+    }
+  } catch {
+    return undefined
+  }
 }
 
 export function classifyNotebookAnalyticsSource(
@@ -63,6 +83,7 @@ export function classifyNotebookAnalyticsSource(
 
 export class GoogleAnalyticsClient {
   private gtag: Gtag | undefined
+  private pageContext: AnalyticsPageContext | undefined
 
   constructor(private readonly options: GoogleAnalyticsClientOptions) {}
 
@@ -78,10 +99,13 @@ export class GoogleAnalyticsClient {
       globalPrivacyControl,
       hostname,
       measurementId,
+      origin,
     } = this.options
+    const pageContext = createAnalyticsPageContext(origin, hostname)
     if (
       !isValidMeasurementId(measurementId) ||
-      hostname !== GOOGLE_ANALYTICS_HOSTNAME ||
+      !GOOGLE_ANALYTICS_HOSTNAME_PATTERN.test(hostname) ||
+      !pageContext ||
       doNotTrack === '1' ||
       globalPrivacyControl === true
     ) {
@@ -113,13 +137,15 @@ export class GoogleAnalyticsClient {
         allow_ad_personalization_signals: false,
         allow_google_signals: false,
         send_page_view: false,
-        ...SAFE_PAGE_CONTEXT,
+        ...pageContext,
       })
+      this.pageContext = pageContext
       this.gtag = gtag
       this.sendEvent('page_view', {})
       return true
     } catch {
       this.gtag = undefined
+      this.pageContext = undefined
       return false
     }
   }
@@ -145,9 +171,12 @@ export class GoogleAnalyticsClient {
     params: Record<string, string>
   ): void {
     try {
+      if (!this.gtag || !this.pageContext) {
+        return
+      }
       this.gtag?.('event', eventName, {
         ...params,
-        ...SAFE_PAGE_CONTEXT,
+        ...this.pageContext,
       })
     } catch {
       // Analytics must never affect notebook loading or execution.
@@ -162,6 +191,7 @@ const navigatorWithPrivacySignals = navigator as Navigator & {
 export const googleAnalytics = new GoogleAnalyticsClient({
   measurementId: import.meta.env.VITE_GOOGLE_ANALYTICS_MEASUREMENT_ID,
   hostname: window.location.hostname,
+  origin: window.location.origin,
   doNotTrack: navigator.doNotTrack,
   globalPrivacyControl: navigatorWithPrivacySignals.globalPrivacyControl,
   document,
