@@ -41,6 +41,7 @@ jobs:
       GCP_SERVICE_ACCOUNT_EMAIL: runme-gha@runme-lewi-dev.iam.gserviceaccount.com
       RELEASER_BUCKET: gs://runme-hosted
       RELEASER_WEB_REPO: runmedev/web
+      VITE_GOOGLE_ANALYTICS_MEASUREMENT_ID: ${{ vars.GOOGLE_ANALYTICS_MEASUREMENT_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

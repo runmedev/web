@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  readonly VITE_GOOGLE_ANALYTICS_MEASUREMENT_ID?: string
   readonly VITE_RUNME_VERSION_BUILD_DATE?: string
   readonly VITE_RUNME_VERSION_WEB_REPO?: string
   readonly VITE_RUNME_VERSION_WEB_BRANCH?: string

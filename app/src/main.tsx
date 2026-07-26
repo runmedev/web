@@ -19,6 +19,7 @@ import {
   setLocalConfigPreferredOnLoad,
   setAppConfig,
 } from "./lib/appConfig";
+import { googleAnalytics } from "./lib/googleAnalytics";
 import { appLogger } from "./lib/logging/runtime";
 import { normalizeAppIndexUrl } from "./lib/appBase";
 import { ensurePersistentStorage } from "./lib/persistentStorage";
@@ -66,6 +67,7 @@ setContext(noopBridge);
 
 normalizeAppIndexUrl();
 ensureSessionQueryParam();
+googleAnalytics.initialize();
 
 void ensurePersistentStorage().then((status) => {
   switch (status) {

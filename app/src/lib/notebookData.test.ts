@@ -11,6 +11,7 @@ import {
   parser_pb,
 } from "../contexts/CellContext";
 import { LOCAL_FOLDER_URI } from "../storage/local";
+import { googleAnalytics } from "./googleAnalytics";
 import { appLogger } from "./logging/runtime";
 import { appState } from "./runtime/AppState";
 import {
@@ -241,6 +242,7 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   appState.setDriveNotebookStore(null);
   appState.setLocalNotebooks(null);
@@ -575,6 +577,10 @@ describe("NotebookData.runCodeCell", () => {
   it("returns empty run id when no runner is available", () => {
     getWithFallback.mockReturnValueOnce(undefined);
     const logError = vi.spyOn(appLogger, "error");
+    const trackCellExecuted = vi.spyOn(
+      googleAnalytics,
+      "trackCellExecuted",
+    );
 
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-no-runner",
@@ -604,10 +610,15 @@ describe("NotebookData.runCodeCell", () => {
         },
       },
     );
+    expect(trackCellExecuted).not.toHaveBeenCalled();
     logError.mockRestore();
   });
 
   it("returns empty run id for html content cells", () => {
+    const trackCellExecuted = vi.spyOn(
+      googleAnalytics,
+      "trackCellExecuted",
+    );
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-html",
       kind: parser_pb.CellKind.CODE,
@@ -627,6 +638,61 @@ describe("NotebookData.runCodeCell", () => {
 
     const runID = model.runCodeCell(cell);
     expect(runID).toBe("");
+    expect(trackCellExecuted).not.toHaveBeenCalled();
+  });
+
+  it("does not record a Jupyter cell when no kernel is selected", () => {
+    const trackCellExecuted = vi.spyOn(
+      googleAnalytics,
+      "trackCellExecuted",
+    );
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-jupyter-no-kernel",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "jupyter",
+      outputs: [],
+      metadata: {},
+      value: "print('not sent')",
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "local://file/private-notebook-id",
+      name: "private-notebook-name",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    expect(model.runCodeCell(cell)).toBe("run-generated");
+    expect(trackCellExecuted).not.toHaveBeenCalled();
+  });
+
+  it("records an accepted execution using only the backend enum", () => {
+    const trackCellExecuted = vi
+      .spyOn(googleAnalytics, "trackCellExecuted")
+      .mockImplementation(() => {});
+    const cell = create(parser_pb.CellSchema, {
+      refId: "private-cell-id",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "bash",
+      outputs: [],
+      metadata: {},
+      value: "echo private command",
+    });
+    const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+    const model = new NotebookData({
+      notebook,
+      uri: "local://file/private-notebook-id",
+      name: "private-notebook-name",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    expect(model.runCodeCell(cell)).toBe("run-generated");
+    expect(trackCellExecuted).toHaveBeenCalledTimes(1);
+    expect(trackCellExecuted).toHaveBeenCalledWith({
+      executionBackend: "runner",
+    });
   });
 
   it("resolves CellData.run when execution monitoring becomes unknown", async () => {
