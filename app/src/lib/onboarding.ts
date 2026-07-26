@@ -14,11 +14,18 @@ export const ONBOARDING_TASK_IDS = [
 
 export type OnboardingTaskId = (typeof ONBOARDING_TASK_IDS)[number]
 
+export type OnboardingNotebook = {
+  uri: string
+  name: string
+  remoteUri?: string
+}
+
 export type OnboardingState = {
   version: 1
   opened: boolean
   dismissed: boolean
   completedTaskIds: OnboardingTaskId[]
+  recentNotebook?: OnboardingNotebook
 }
 
 const DEFAULT_STATE: OnboardingState = {
@@ -35,6 +42,29 @@ function isOnboardingTaskId(value: unknown): value is OnboardingTaskId {
   )
 }
 
+function parseOnboardingNotebook(
+  value: unknown
+): OnboardingNotebook | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined
+  }
+  const candidate = value as {
+    uri?: unknown
+    name?: unknown
+    remoteUri?: unknown
+  }
+  if (typeof candidate.uri !== 'string' || typeof candidate.name !== 'string') {
+    return undefined
+  }
+  return {
+    uri: candidate.uri,
+    name: candidate.name,
+    ...(typeof candidate.remoteUri === 'string' && candidate.remoteUri
+      ? { remoteUri: candidate.remoteUri }
+      : {}),
+  }
+}
+
 export function parseOnboardingState(raw: string | null): OnboardingState {
   if (!raw) {
     return DEFAULT_STATE
@@ -45,7 +75,9 @@ export function parseOnboardingState(raw: string | null): OnboardingState {
       opened?: unknown
       dismissed?: unknown
       completedTaskIds?: unknown
+      recentNotebook?: unknown
     }
+    const recentNotebook = parseOnboardingNotebook(value.recentNotebook)
     return {
       version: 1,
       opened: value.opened === true,
@@ -53,6 +85,7 @@ export function parseOnboardingState(raw: string | null): OnboardingState {
       completedTaskIds: Array.isArray(value.completedTaskIds)
         ? [...new Set(value.completedTaskIds.filter(isOnboardingTaskId))]
         : [],
+      ...(recentNotebook ? { recentNotebook } : {}),
     }
   } catch {
     return DEFAULT_STATE
@@ -134,5 +167,31 @@ export function markOnboardingTaskComplete(taskId: OnboardingTaskId): void {
   persistOnboardingState({
     ...state,
     completedTaskIds: [...state.completedTaskIds, taskId],
+  })
+}
+
+export function markOnboardingNotebookCreated(
+  notebook: OnboardingNotebook
+): void {
+  const state = getOnboardingState()
+  persistOnboardingState({
+    ...state,
+    completedTaskIds: state.completedTaskIds.includes('create-first-notebook')
+      ? state.completedTaskIds
+      : [...state.completedTaskIds, 'create-first-notebook'],
+    recentNotebook: notebook,
+  })
+}
+
+export function updateOnboardingNotebookMetadata(
+  notebook: OnboardingNotebook
+): void {
+  const state = getOnboardingState()
+  if (state.recentNotebook?.uri !== notebook.uri) {
+    return
+  }
+  persistOnboardingState({
+    ...state,
+    recentNotebook: notebook,
   })
 }

@@ -50,7 +50,11 @@ import { useWorkspaceDocumentContext } from "../../contexts/WorkspaceDocumentCon
 import { driveLinkCoordinator } from "../../lib/driveLinkCoordinator";
 import { openNotebookUpstreamDiff } from "../../lib/notebookDiff/conflict";
 import { appState } from "../../lib/runtime/AppState";
-import { markOnboardingTaskComplete } from "../../lib/onboarding";
+import {
+  getOnboardingState,
+  markOnboardingNotebookCreated,
+  updateOnboardingNotebookMetadata,
+} from "../../lib/onboarding";
 import {
   EXCALIDRAW_MIME_TYPE,
   createInitialExcalidrawDocumentJson,
@@ -623,6 +627,13 @@ export function WorkspaceExplorer() {
               remoteUri: metadata.remoteUri,
             }),
           );
+          if (getOnboardingState().recentNotebook?.uri === metadata.uri) {
+            updateOnboardingNotebookMetadata({
+              uri: metadata.uri,
+              name: metadata.name,
+              remoteUri: metadata.remoteUri,
+            });
+          }
         } catch (error) {
           console.error("Failed to refresh notebook metadata", error);
         }
@@ -819,7 +830,21 @@ export function WorkspaceExplorer() {
         const timestamp = formatShortTimestamp(new Date());
         const name = `untitled-${timestamp}.json`;
         const newItem = await targetStore.create(folderUri, name);
-        markOnboardingTaskComplete("create-first-notebook");
+        markOnboardingNotebookCreated({
+          uri: newItem.uri,
+          name: newItem.name,
+          remoteUri: newItem.remoteUri,
+        });
+        if (store && newItem.uri.startsWith("local://file/")) {
+          const metadata = await store.getMetadata(newItem.uri);
+          if (metadata) {
+            updateOnboardingNotebookMetadata({
+              uri: metadata.uri,
+              name: metadata.name,
+              remoteUri: metadata.remoteUri,
+            });
+          }
+        }
         await fetchChildren(folderUri);
         setPendingEditId(newItem.uri);
         setErrorMessage(null);

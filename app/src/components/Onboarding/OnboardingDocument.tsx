@@ -29,6 +29,8 @@ import {
   getGettingStartedDocument,
   markDocumentationOpened,
 } from '../../lib/documentation'
+import { copyNotebookMarkdownLink } from '../../lib/shareLinks'
+import { showToast } from '../../lib/toast'
 import {
   dismissOnboarding,
   getOnboardingStateSnapshot,
@@ -93,8 +95,8 @@ const TASKS: TaskDefinition[] = [
     id: 'share-notebook',
     title: 'Share the notebook',
     description:
-      'Copy a link so a teammate or AI agent can work from the same context.',
-    actionLabel: 'Open Explorer',
+      'Copy a Markdown link so a teammate or AI agent can work from the same context.',
+    actionLabel: 'Copy Link',
     icon: ShareIcon,
   },
 ]
@@ -116,6 +118,8 @@ export function OnboardingDocument() {
   const { showDocument, closeWorkspaceDocument } = useWorkspaceDocumentContext()
   const [copiedPrompt, setCopiedPrompt] = useState(false)
   const [authBusy, setAuthBusy] = useState(false)
+  const [shareBusy, setShareBusy] = useState(false)
+  const [copiedNotebookLink, setCopiedNotebookLink] = useState(false)
 
   const completedTaskIds = useMemo(
     () => new Set(onboardingState.completedTaskIds),
@@ -156,6 +160,28 @@ export function OnboardingDocument() {
     await navigator.clipboard.writeText(CODEX_PROMPT)
     setCopiedPrompt(true)
     window.setTimeout(() => setCopiedPrompt(false), 2_000)
+  }
+
+  const copyRecentNotebookLink = async () => {
+    const notebook = onboardingState.recentNotebook
+    if (!notebook?.remoteUri) {
+      return
+    }
+    setShareBusy(true)
+    try {
+      await copyNotebookMarkdownLink(notebook.name, notebook.remoteUri)
+      setCopiedNotebookLink(true)
+      showToast({ message: 'Markdown link copied', tone: 'success' })
+      window.setTimeout(() => setCopiedNotebookLink(false), 2_000)
+    } catch (error) {
+      console.error('Failed to copy onboarding notebook link', error)
+      showToast({
+        message: 'Could not copy the notebook link',
+        tone: 'error',
+      })
+    } finally {
+      setShareBusy(false)
+    }
   }
 
   const dismiss = () => {
@@ -323,12 +349,33 @@ export function OnboardingDocument() {
                     <p className="mt-1 text-sm leading-5 text-slate-600">
                       {task.description}
                     </p>
-                    {!complete &&
+                    {(task.id === 'share-notebook' || !complete) &&
                       (task.id === 'add-drive-folder' ? (
                         <GoogleDrivePickerButton
                           label={task.actionLabel}
                           className="mt-3 inline-flex rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                         />
+                      ) : task.id === 'share-notebook' ? (
+                        <button
+                          type="button"
+                          disabled={
+                            !onboardingState.recentNotebook?.remoteUri ||
+                            shareBusy
+                          }
+                          title={
+                            onboardingState.recentNotebook?.remoteUri
+                              ? `Copy a Markdown link to ${onboardingState.recentNotebook.name}`
+                              : 'Create a notebook in Google Drive to enable sharing'
+                          }
+                          onClick={() => void copyRecentNotebookLink()}
+                          className="mt-3 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                        >
+                          {shareBusy
+                            ? 'Copying…'
+                            : copiedNotebookLink
+                              ? 'Copied!'
+                              : task.actionLabel}
+                        </button>
                       ) : (
                         <button
                           type="button"

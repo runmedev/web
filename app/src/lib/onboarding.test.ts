@@ -6,9 +6,11 @@ import {
   ONBOARDING_STORAGE_KEY,
   dismissOnboarding,
   getOnboardingState,
+  markOnboardingNotebookCreated,
   markOnboardingOpened,
   markOnboardingTaskComplete,
   parseOnboardingState,
+  updateOnboardingNotebookMetadata,
 } from './onboarding'
 
 describe('onboarding state', () => {
@@ -39,6 +41,49 @@ describe('onboarding state', () => {
       opened: true,
       dismissed: false,
       completedTaskIds: ['create-first-notebook'],
+    })
+  })
+
+  it('tracks the most recently created notebook and its Drive URI', () => {
+    markOnboardingNotebookCreated({
+      uri: 'local://file/first',
+      name: 'first.json',
+    })
+    markOnboardingNotebookCreated({
+      uri: 'local://file/latest',
+      name: 'latest.json',
+    })
+    updateOnboardingNotebookMetadata({
+      uri: 'local://file/latest',
+      name: 'latest.json',
+      remoteUri: 'https://drive.google.com/file/d/latest/view',
+    })
+
+    expect(getOnboardingState()).toMatchObject({
+      completedTaskIds: ['create-first-notebook'],
+      recentNotebook: {
+        uri: 'local://file/latest',
+        name: 'latest.json',
+        remoteUri: 'https://drive.google.com/file/d/latest/view',
+      },
+    })
+  })
+
+  it('ignores metadata updates for older notebooks', () => {
+    markOnboardingNotebookCreated({
+      uri: 'local://file/latest',
+      name: 'latest.json',
+    })
+
+    updateOnboardingNotebookMetadata({
+      uri: 'local://file/older',
+      name: 'older.json',
+      remoteUri: 'https://drive.google.com/file/d/older/view',
+    })
+
+    expect(getOnboardingState().recentNotebook).toEqual({
+      uri: 'local://file/latest',
+      name: 'latest.json',
     })
   })
 
