@@ -44,7 +44,7 @@ import { GoogleDrivePickerButton } from '../Workspace/GoogleDrivePickerButton'
 
 const CODEX_URL = 'https://chatgpt.com/codex'
 const CODEX_PROMPT =
-  'Open https://web.runme.dev in @Browser. Create a notebook that documents how to convert Celsius to Fahrenheit. Add and run a JavaScript cell that converts 20°C, then explain the result.'
+  "Open https://web.runme.dev in @Browser. Create a notebook with today's forecast for where I live. Document how you obtained today's forecast."
 
 type TaskDefinition = {
   id: OnboardingTaskId

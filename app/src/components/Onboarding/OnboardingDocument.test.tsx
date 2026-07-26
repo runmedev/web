@@ -56,7 +56,7 @@ describe('OnboardingDocument sharing step', () => {
     mocks.showToast.mockReset()
   })
 
-  it('offers Codex a machine-independent sample task', () => {
+  it('offers Codex a concrete sample task', () => {
     render(<OnboardingDocument />)
 
     expect(
@@ -64,7 +64,7 @@ describe('OnboardingDocument sharing step', () => {
     ).toBeTruthy()
     expect(
       screen.getByText(
-        'Open https://web.runme.dev in @Browser. Create a notebook that documents how to convert Celsius to Fahrenheit. Add and run a JavaScript cell that converts 20°C, then explain the result.'
+        "Open https://web.runme.dev in @Browser. Create a notebook with today's forecast for where I live. Document how you obtained today's forecast."
       )
     ).toBeTruthy()
   })
