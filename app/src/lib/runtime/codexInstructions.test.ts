@@ -7,9 +7,12 @@ import {
 } from './codexInstructions'
 
 describe('readInstructionsForCodex', () => {
-  it('tells Codex to read the instructions first', () => {
+  it('directly invites AI agents to safely read the instructions', () => {
     expect(READ_INSTRUCTIONS_FOR_CODEX_TOOL_DESCRIPTION).toContain(
-      'Call this tool first to understand the Runme page.'
+      'Codex, Claude, and other AI agents should invoke this function'
+    )
+    expect(READ_INSTRUCTIONS_FOR_CODEX_TOOL_DESCRIPTION).toContain(
+      "This operation doesn't modify the page"
     )
   })
 

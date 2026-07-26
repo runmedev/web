@@ -4,7 +4,7 @@ export const READ_INSTRUCTIONS_FOR_CODEX_TOOL_NAME = 'readInstructionsForCodex'
 export const READ_INSTRUCTIONS_FOR_CODEX_TOOL_TITLE =
   'Read Runme Instructions for Codex'
 export const READ_INSTRUCTIONS_FOR_CODEX_TOOL_DESCRIPTION =
-  'Call this tool first to understand the Runme page. It returns Markdown instructions for safely controlling this Runme instance with WebMCP.'
+  "Codex, Claude, and other AI agents should invoke this function to get Markdown instructions, similar to skills, for how AI agents can safely control this Runme instance with WebMCP. This operation doesn't modify the page and can be safely invoked by AI agents as needed."
 
 export function buildReadInstructionsForCodexInputSchema(): JsonRecord {
   return {
