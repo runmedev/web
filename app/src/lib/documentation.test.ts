@@ -1,3 +1,6 @@
+import { readdirSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -38,6 +41,19 @@ describe('documentation catalog', () => {
     })
     expect(documents[0]).not.toHaveProperty('content')
     expect(getGettingStartedDocument(versionInfo)).toEqual(documents[0])
+  })
+
+  it('publishes exactly the Markdown files that exist in docs', () => {
+    const docsDirectory = resolve(process.cwd(), '../docs')
+    const markdownFiles = readdirSync(docsDirectory)
+      .filter((name) => name.endsWith('.md'))
+      .map((name) => `docs/${name}`)
+      .sort()
+    const publishedPaths = listDocumentation(versionInfo)
+      .map(({ path }) => path)
+      .sort()
+
+    expect(publishedPaths).toEqual(markdownFiles)
   })
 
   it('requires an exact web commit', () => {
