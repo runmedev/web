@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { Badge, Button, ScrollArea, Text } from '@radix-ui/themes'
 
@@ -12,6 +12,8 @@ import type {
   TextDiffLine,
 } from '../../lib/notebookDiff/model'
 import {
+  applyConflictSourceHunk,
+  type ConflictSourceHunk,
   openNotebookDriveRevisionDiff,
   refreshNotebookConflictDiff,
   removeInsertedConflictCell,
@@ -85,40 +87,176 @@ function lineText(line: TextDiffLine, side: 'base' | 'compare'): string {
   return line.compareLine ?? ''
 }
 
+interface SourceDiffBlock {
+  kind: TextDiffLine['kind']
+  startLine: number
+  lines: TextDiffLine[]
+}
+
+function groupSourceDiffLines(lines: TextDiffLine[]): SourceDiffBlock[] {
+  return lines.reduce<SourceDiffBlock[]>((blocks, line, index) => {
+    const previous = blocks.at(-1)
+    if (previous?.kind === line.kind) {
+      previous.lines.push(line)
+    } else {
+      blocks.push({
+        kind: line.kind,
+        startLine: index,
+        lines: [line],
+      })
+    }
+    return blocks
+  }, [])
+}
+
+interface SourceHunkActionContext {
+  localUri: string
+  row: CellDiff
+  onApplied: (document: NotebookDiffDocument) => void
+  mutationLock: ConflictMutationLock
+}
+
+interface ConflictMutationLock {
+  pending?: string
+  acquire: (key: string) => boolean
+  release: () => void
+}
+
+function SourceHunkActionButton({
+  action,
+  hunk,
+}: {
+  action: SourceHunkActionContext
+  hunk: ConflictSourceHunk
+}) {
+  const { store } = useNotebookStore()
+  const isUpstream = hunk.kind === 'upstream'
+  const hunkKey = `source:${action.row.id}:${hunk.kind}:${hunk.startLine}`
+  const isApplying = action.mutationLock.pending === hunkKey
+  const label = isUpstream
+    ? 'Insert this upstream block into the local cell'
+    : 'Remove this local-only block from the local cell'
+
+  const applyHunk = async () => {
+    if (!store) {
+      return
+    }
+    if (!action.mutationLock.acquire(hunkKey)) {
+      return
+    }
+    try {
+      const notebookData = getNotebookDataController().getNotebookData(
+        action.localUri
+      )
+      await notebookData?.flushPendingPersist()
+      const result = await applyConflictSourceHunk(
+        store,
+        action.localUri,
+        action.row,
+        hunk,
+        {
+          localNotebook: notebookData?.getSnapshot().notebook,
+        }
+      )
+      notebookData?.loadNotebook(result.localNotebook, { persist: false })
+      action.onApplied(result.document)
+      showToast({
+        message: isUpstream
+          ? 'Inserted upstream text into the local cell.'
+          : 'Removed local-only text from the local cell.',
+        tone: 'success',
+      })
+    } catch {
+      showToast({
+        message: isUpstream
+          ? 'Unable to insert upstream text. Refresh the diff and try again.'
+          : 'Unable to remove local-only text. Refresh the diff and try again.',
+        tone: 'error',
+      })
+    } finally {
+      action.mutationLock.release()
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={!store || action.mutationLock.pending !== undefined}
+      aria-label={label}
+      title={label}
+      className={`absolute top-0 z-10 flex h-5 w-5 items-center justify-center rounded border bg-white font-sans text-xs font-semibold shadow-sm transition-colors disabled:cursor-wait disabled:opacity-60 ${
+        isUpstream
+          ? 'right-1 border-emerald-300 text-emerald-700 hover:bg-emerald-100'
+          : 'left-1 border-red-300 text-red-700 hover:bg-red-100'
+      }`}
+      onClick={() => {
+        void applyHunk()
+      }}
+    >
+      {isApplying ? '…' : isUpstream ? '→' : '×'}
+    </button>
+  )
+}
+
 function SourceDiff({
   diff,
   side,
   fallback,
+  action,
 }: {
   diff?: TextDiff
   side: 'base' | 'compare'
   fallback: string
+  action?: SourceHunkActionContext
 }) {
-  const lines = diff?.lines.length
+  const lines: TextDiffLine[] = diff?.lines.length
     ? diff.lines
     : fallback
-      ? fallback.split(/\r?\n/)
+      ? fallback.split(/\r?\n/).map((line) => ({
+          kind: 'equal',
+          baseLine: line,
+          compareLine: line,
+        }))
       : []
+  const blocks = groupSourceDiffLines(lines)
   return (
     <pre className="m-0 overflow-x-auto whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5">
-      {lines.length === 0 ? (
+      {blocks.length === 0 ? (
         <span className="text-nb-text-faint">No source</span>
       ) : (
-        lines.map((line, index) => {
-          const normalizedLine =
-            typeof line === 'string'
-              ? ({
-                  kind: 'equal',
-                  baseLine: line,
-                  compareLine: line,
-                } as TextDiffLine)
-              : line
+        blocks.map((block) => {
+          const actionableKind =
+            side === 'base' && block.kind === 'removed'
+              ? 'upstream'
+              : side === 'compare' && block.kind === 'added'
+                ? 'local'
+                : undefined
           return (
             <div
-              key={`${side}-line-${index}`}
-              className={`min-h-5 rounded px-1 ${lineClass(normalizedLine, side)}`}
+              key={`${side}-block-${block.startLine}`}
+              className={`relative rounded ${lineClass(block.lines[0], side)}`}
             >
-              {lineText(normalizedLine, side) || ' '}
+              {block.lines.map((line, offset) => (
+                <div
+                  key={`${side}-line-${block.startLine + offset}`}
+                  className={`min-h-5 px-1 ${
+                    actionableKind === 'upstream' && offset === 0 ? 'pr-7' : ''
+                  } ${
+                    actionableKind === 'local' && offset === 0 ? 'pl-7' : ''
+                  }`}
+                >
+                  {lineText(line, side) || ' '}
+                </div>
+              ))}
+              {action && actionableKind && (
+                <SourceHunkActionButton
+                  action={action}
+                  hunk={{
+                    kind: actionableKind,
+                    startLine: block.startLine,
+                  }}
+                />
+              )}
             </div>
           )
         })
@@ -163,7 +301,15 @@ function OutputSummary({
   )
 }
 
-function CellPanel({ row, side }: { row: CellDiff; side: 'base' | 'compare' }) {
+function CellPanel({
+  row,
+  side,
+  sourceAction,
+}: {
+  row: CellDiff
+  side: 'base' | 'compare'
+  sourceAction?: SourceHunkActionContext
+}) {
   const cell = side === 'base' ? row.baseCell : row.compareCell
   const empty =
     (side === 'base' && row.kind === 'inserted') ||
@@ -195,6 +341,7 @@ function CellPanel({ row, side }: { row: CellDiff; side: 'base' | 'compare' }) {
         diff={row.sourceDiff}
         side={side}
         fallback={cell?.value ?? ''}
+        action={sourceAction}
       />
       {row.outputDiff?.changed && (
         <div className="border-t border-nb-border p-3">
@@ -209,19 +356,24 @@ function RestoreDeletedCellButton({
   localUri,
   row,
   onRestored,
+  mutationLock,
 }: {
   localUri: string
   row: CellDiff
   onRestored: (document: NotebookDiffDocument) => void
+  mutationLock: ConflictMutationLock
 }) {
   const { store } = useNotebookStore()
-  const [isRestoring, setIsRestoring] = useState(false)
+  const mutationKey = `restore:${row.id}`
+  const isRestoring = mutationLock.pending === mutationKey
 
   const restoreCell = async () => {
     if (!store) {
       return
     }
-    setIsRestoring(true)
+    if (!mutationLock.acquire(mutationKey)) {
+      return
+    }
     try {
       const notebookData = getNotebookDataController().getNotebookData(localUri)
       await notebookData?.flushPendingPersist()
@@ -240,7 +392,7 @@ function RestoreDeletedCellButton({
         tone: 'error',
       })
     } finally {
-      setIsRestoring(false)
+      mutationLock.release()
     }
   }
 
@@ -250,7 +402,7 @@ function RestoreDeletedCellButton({
       size="1"
       color="red"
       variant="soft"
-      disabled={!store || isRestoring}
+      disabled={!store || mutationLock.pending !== undefined}
       aria-label="Insert upstream cell into local notebook"
       title="Insert upstream cell into local notebook"
       onClick={() => {
@@ -266,19 +418,24 @@ function RemoveInsertedCellButton({
   localUri,
   row,
   onRemoved,
+  mutationLock,
 }: {
   localUri: string
   row: CellDiff
   onRemoved: (document: NotebookDiffDocument) => void
+  mutationLock: ConflictMutationLock
 }) {
   const { store } = useNotebookStore()
-  const [isRemoving, setIsRemoving] = useState(false)
+  const mutationKey = `remove:${row.id}`
+  const isRemoving = mutationLock.pending === mutationKey
 
   const removeCell = async () => {
     if (!store) {
       return
     }
-    setIsRemoving(true)
+    if (!mutationLock.acquire(mutationKey)) {
+      return
+    }
     try {
       const notebookData = getNotebookDataController().getNotebookData(localUri)
       await notebookData?.flushPendingPersist()
@@ -297,7 +454,7 @@ function RemoveInsertedCellButton({
         tone: 'error',
       })
     } finally {
-      setIsRemoving(false)
+      mutationLock.release()
     }
   }
 
@@ -307,7 +464,7 @@ function RemoveInsertedCellButton({
       size="1"
       color="red"
       variant="soft"
-      disabled={!store || isRemoving}
+      disabled={!store || mutationLock.pending !== undefined}
       aria-label="Remove cell from local notebook"
       title="Remove cell from local notebook"
       onClick={() => {
@@ -454,10 +611,12 @@ function DiffRow({
   row,
   conflictLocalUri,
   onConflictDocumentChanged,
+  mutationLock,
 }: {
   row: CellDiff
   conflictLocalUri?: string
   onConflictDocumentChanged: (document: NotebookDiffDocument) => void
+  mutationLock: ConflictMutationLock
 }) {
   if (row.kind === 'unchanged') {
     return (
@@ -474,6 +633,16 @@ function DiffRow({
       </details>
     )
   }
+
+  const sourceAction =
+    conflictLocalUri && row.kind === 'modified' && row.sourceDiff?.changed
+      ? {
+          localUri: conflictLocalUri,
+          row,
+          onApplied: onConflictDocumentChanged,
+          mutationLock,
+        }
+      : undefined
 
   return (
     <section className="rounded-lg border border-nb-border bg-nb-bg p-3 shadow-sm">
@@ -492,6 +661,7 @@ function DiffRow({
             localUri={conflictLocalUri}
             row={row}
             onRestored={onConflictDocumentChanged}
+            mutationLock={mutationLock}
           />
         )}
         {conflictLocalUri && row.kind === 'inserted' && (
@@ -499,54 +669,71 @@ function DiffRow({
             localUri={conflictLocalUri}
             row={row}
             onRemoved={onConflictDocumentChanged}
+            mutationLock={mutationLock}
           />
         )}
       </div>
       <div className="grid min-w-[920px] grid-cols-2 gap-3">
-        <CellPanel row={row} side="base" />
-        <CellPanel row={row} side="compare" />
+        <CellPanel row={row} side="base" sourceAction={sourceAction} />
+        <CellPanel row={row} side="compare" sourceAction={sourceAction} />
       </div>
     </section>
   )
 }
 
-function ConflictResolutionActions({ localUri }: { localUri: string }) {
+function ConflictResolutionActions({
+  localUri,
+  mutationLock,
+}: {
+  localUri: string
+  mutationLock: ConflictMutationLock
+}) {
   const { store } = useNotebookStore()
-  const [isResolving, setIsResolving] = useState(false)
-  const [isRefreshing, setIsRefreshing] = useState(false)
+  const saveMutationKey = `save:${localUri}`
+  const refreshMutationKey = `refresh:${localUri}`
+  const isResolving = mutationLock.pending === saveMutationKey
+  const isRefreshing = mutationLock.pending === refreshMutationKey
 
-  const saveLocalVersion = async (force = false) => {
+  const saveLocalVersion = async () => {
     if (!store) {
       return
     }
-    setIsResolving(true)
+    if (!mutationLock.acquire(saveMutationKey)) {
+      return
+    }
     try {
-      await store.resolveConflictWithLocal(localUri, {
-        force,
-      })
-      showToast({
-        message: 'Saved local notebook version to upstream.',
-        tone: 'success',
-      })
-    } catch (error) {
-      if (error instanceof NotebookConflictChangedError && !force) {
+      try {
+        await store.resolveConflictWithLocal(localUri, {
+          force: false,
+        })
+      } catch (error) {
+        if (!(error instanceof NotebookConflictChangedError)) {
+          throw error
+        }
         const shouldOverwrite =
           typeof window !== 'undefined' &&
           window.confirm(
             'The upstream file changed again since this conflict was detected. ' +
               'Saving local version will replace the latest upstream version.'
           )
-        if (shouldOverwrite) {
-          await saveLocalVersion(true)
+        if (!shouldOverwrite) {
+          return
         }
-        return
+        await store.resolveConflictWithLocal(localUri, {
+          force: true,
+        })
       }
+      showToast({
+        message: 'Saved local notebook version to upstream.',
+        tone: 'success',
+      })
+    } catch {
       showToast({
         message: 'Unable to save local version. Please try again.',
         tone: 'error',
       })
     } finally {
-      setIsResolving(false)
+      mutationLock.release()
     }
   }
 
@@ -554,7 +741,9 @@ function ConflictResolutionActions({ localUri }: { localUri: string }) {
     if (!store) {
       return
     }
-    setIsRefreshing(true)
+    if (!mutationLock.acquire(refreshMutationKey)) {
+      return
+    }
     try {
       await refreshNotebookConflictDiff(store, localUri)
       showToast({
@@ -567,7 +756,7 @@ function ConflictResolutionActions({ localUri }: { localUri: string }) {
         tone: 'error',
       })
     } finally {
-      setIsRefreshing(false)
+      mutationLock.release()
     }
   }
 
@@ -577,7 +766,7 @@ function ConflictResolutionActions({ localUri }: { localUri: string }) {
         type="button"
         color="gray"
         variant="soft"
-        disabled={!store || isRefreshing || isResolving}
+        disabled={!store || mutationLock.pending !== undefined}
         onClick={() => {
           void refreshDiff()
         }}
@@ -587,7 +776,7 @@ function ConflictResolutionActions({ localUri }: { localUri: string }) {
       <Button
         type="button"
         color="amber"
-        disabled={!store || isResolving || isRefreshing}
+        disabled={!store || mutationLock.pending !== undefined}
         onClick={() => {
           void saveLocalVersion()
         }}
@@ -604,6 +793,24 @@ export function NotebookDiffContent({
   document: NotebookDiffDocument
 }) {
   const [currentDocument, setCurrentDocument] = useState(document)
+  const conflictMutationInFlight = useRef(false)
+  const [pendingConflictMutation, setPendingConflictMutation] =
+    useState<string>()
+  const mutationLock: ConflictMutationLock = {
+    pending: pendingConflictMutation,
+    acquire: (key) => {
+      if (conflictMutationInFlight.current) {
+        return false
+      }
+      conflictMutationInFlight.current = true
+      setPendingConflictMutation(key)
+      return true
+    },
+    release: () => {
+      conflictMutationInFlight.current = false
+      setPendingConflictMutation(undefined)
+    },
+  }
 
   useEffect(() => {
     setCurrentDocument(document)
@@ -651,6 +858,7 @@ export function NotebookDiffContent({
           {activeConflictResolution && (
             <ConflictResolutionActions
               localUri={activeConflictResolution.localUri}
+              mutationLock={mutationLock}
             />
           )}
         </div>
@@ -695,6 +903,7 @@ export function NotebookDiffContent({
               row={row}
               conflictLocalUri={activeConflictResolution?.localUri}
               onConflictDocumentChanged={setCurrentDocument}
+              mutationLock={mutationLock}
             />
           ))}
         </div>

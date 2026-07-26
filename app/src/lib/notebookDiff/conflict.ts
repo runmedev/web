@@ -27,6 +27,12 @@ export interface ConflictCellMutationOptions {
 
 export type RestoreDeletedConflictCellOptions = ConflictCellMutationOptions
 export type RemoveInsertedConflictCellOptions = ConflictCellMutationOptions
+export type ApplyConflictSourceHunkOptions = ConflictCellMutationOptions
+
+export interface ConflictSourceHunk {
+  kind: 'upstream' | 'local'
+  startLine: number
+}
 
 type DriveDiffResolutionKind = NonNullable<
   NotebookDiffDocument['resolution']
@@ -381,6 +387,168 @@ function findInsertedCellIndex(
   }
 
   throw new Error('Local cell is no longer present at the expected position.')
+}
+
+function findModifiedCellIndex(
+  localNotebook: parser_pb.Notebook,
+  row: CellDiff
+): number {
+  const localCells = localNotebook.cells ?? []
+  const compareCell = row.compareCell
+  const compareIndex = row.compareIndex
+  const refId = compareCell?.refId
+
+  if (refId) {
+    const matchingIndexes = localCells.flatMap((cell, index) =>
+      cell.refId === refId ? [index] : []
+    )
+    if (matchingIndexes.length === 1) {
+      return matchingIndexes[0]
+    }
+    if (matchingIndexes.length > 1) {
+      const indexedCandidate =
+        compareIndex === undefined ? undefined : localCells[compareIndex]
+      if (
+        compareIndex !== undefined &&
+        indexedCandidate?.refId === refId &&
+        compareCell &&
+        indexedCandidate.kind === compareCell.kind &&
+        indexedCandidate.languageId === compareCell.languageId
+      ) {
+        return compareIndex
+      }
+      throw new Error(`Local notebook has duplicate cell refId ${refId}.`)
+    }
+    throw new Error(`Local cell ${refId} is no longer present.`)
+  }
+
+  if (compareCell && compareIndex !== undefined) {
+    const candidate = localCells[compareIndex]
+    if (
+      candidate &&
+      !candidate.refId &&
+      candidate.kind === compareCell.kind &&
+      candidate.languageId === compareCell.languageId
+    ) {
+      return compareIndex
+    }
+  }
+
+  throw new Error('Local cell is no longer present at the expected position.')
+}
+
+function splitSourceLines(source: string): string[] {
+  if (!source) {
+    return []
+  }
+  return source.replace(/\r\n/g, '\n').split('\n')
+}
+
+export async function applyConflictSourceHunk(
+  store: LocalNotebooks,
+  localUri: string,
+  row: CellDiff,
+  hunk: ConflictSourceHunk,
+  options: ApplyConflictSourceHunkOptions = {}
+): Promise<ConflictCellMutationResult> {
+  if (
+    row.kind !== 'modified' ||
+    !row.baseCell ||
+    !row.compareCell ||
+    !row.sourceDiff?.changed
+  ) {
+    throw new Error('Only source hunks from modified cells can be applied.')
+  }
+
+  const expectedLineKind = hunk.kind === 'upstream' ? 'removed' : 'added'
+  const diffLines = row.sourceDiff.lines
+  const firstLine = diffLines[hunk.startLine]
+  if (
+    !firstLine ||
+    firstLine.kind !== expectedLineKind ||
+    diffLines[hunk.startLine - 1]?.kind === expectedLineKind
+  ) {
+    throw new Error('The selected source hunk is no longer available.')
+  }
+  let endLine = hunk.startLine + 1
+  while (diffLines[endLine]?.kind === expectedLineKind) {
+    endLine += 1
+  }
+  const hunkLines = diffLines.slice(hunk.startLine, endLine)
+
+  const record = await store.files.get(localUri)
+  if (!record) {
+    throw new Error(`Local notebook record not found for ${localUri}`)
+  }
+  if (!record.conflict) {
+    throw new Error(`Local notebook ${localUri} does not have a conflict`)
+  }
+
+  const localNotebook = options.localNotebook
+    ? clone(parser_pb.NotebookSchema, options.localNotebook)
+    : parseNotebookJson(record.doc ?? '', 'local')
+  const localIndex = findModifiedCellIndex(localNotebook, row)
+  const localCell = localNotebook.cells[localIndex]
+  if (!localCell) {
+    throw new Error('Local cell is no longer present at the expected position.')
+  }
+
+  if (localCell.value !== row.compareCell.value) {
+    throw new Error(
+      'The local cell changed after this diff was created. Refresh the diff and try again.'
+    )
+  }
+
+  const localLines = splitSourceLines(localCell.value)
+  const localStart = diffLines
+    .slice(0, hunk.startLine)
+    .filter((line) => line.kind !== 'removed').length
+
+  if (hunk.kind === 'upstream') {
+    localLines.splice(
+      localStart,
+      0,
+      ...hunkLines.map((line) => line.baseLine ?? '')
+    )
+  } else {
+    const expectedLocalLines = hunkLines.map((line) => line.compareLine ?? '')
+    const currentLocalLines = localLines.slice(
+      localStart,
+      localStart + expectedLocalLines.length
+    )
+    if (
+      currentLocalLines.length !== expectedLocalLines.length ||
+      currentLocalLines.some(
+        (line, index) => line !== expectedLocalLines[index]
+      )
+    ) {
+      throw new Error(
+        'The local source no longer matches this diff. Refresh the diff and try again.'
+      )
+    }
+    localLines.splice(localStart, expectedLocalLines.length)
+  }
+
+  localCell.value = localLines.join('\n')
+  localCell.outputs = []
+  localCell.metadata ??= {}
+  localCell.metadata[RunmeMetadataKey.UpdatedAt] = new Date().toISOString()
+
+  await store.save(localUri, localNotebook)
+
+  const updatedRecord = await store.files.get(localUri)
+  if (!updatedRecord) {
+    throw new Error(`Local notebook record not found for ${localUri}`)
+  }
+  return {
+    document: await registerConflictDiffDocument(
+      store,
+      localUri,
+      updatedRecord,
+      record.conflict
+    ),
+    localNotebook,
+  }
 }
 
 export async function removeInsertedConflictCell(

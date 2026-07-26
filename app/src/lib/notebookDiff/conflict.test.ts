@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { RunmeMetadataKey, parser_pb } from '../../runme/client'
 import type LocalNotebooks from '../../storage/local'
 import {
+  applyConflictSourceHunk,
   openNotebookDriveRevisionDiff,
   openNotebookUpstreamDiff,
   removeInsertedConflictCell,
@@ -274,6 +275,172 @@ describe('removeInsertedConflictCell', () => {
     expect(result.localNotebook.cells).toHaveLength(1)
     expect(result.localNotebook.cells[0]?.value).toBe('keep me')
     expect(result.document.diff.summary.insertedCells).toBe(0)
+  })
+})
+
+describe('applyConflictSourceHunk', () => {
+  it('inserts one upstream block without replacing local-only text', async () => {
+    const upstreamNotebook = notebook([
+      cell({
+        refId: 'a',
+        value: 'shared\nupstream one\nupstream two\ntail',
+      }),
+      cell({ refId: 'b', value: 'upstream b' }),
+    ])
+    const staleLocalNotebook = notebook([
+      cell({ refId: 'a', value: 'shared\nlocal only\ntail' }),
+      cell({ refId: 'b', value: 'local b' }),
+    ])
+    const liveLocalNotebook = notebook([
+      cell({ refId: 'a', value: 'shared\nlocal only\ntail' }),
+      cell({ refId: 'b', value: 'unsaved local b' }),
+    ])
+    liveLocalNotebook.cells[0].outputs = [
+      create(parser_pb.CellOutputSchema, {
+        items: [],
+      }),
+    ]
+    const diff = computeNotebookDiff(upstreamNotebook, staleLocalNotebook)
+    const modifiedRow = diff.cells.find((row) => row.compareCell?.refId === 'a')
+    let record = {
+      id: 'local://file/conflict',
+      name: 'conflict.json',
+      doc: serialize(staleLocalNotebook),
+      conflict: {
+        detectedAt: '2026-06-01T00:00:00.000Z',
+        upstreamChecksum: 'upstream',
+        localChecksumAtDetection: 'local',
+      },
+    }
+    const store = {
+      files: {
+        get: vi.fn(async () => record),
+      },
+      getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
+      save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
+        record = {
+          ...record,
+          doc: serialize(saved),
+        }
+      }),
+    } as unknown as LocalNotebooks
+
+    const startLine = modifiedRow!.sourceDiff!.lines.findIndex(
+      (line) => line.kind === 'removed'
+    )
+    const result = await applyConflictSourceHunk(
+      store,
+      'local://file/conflict',
+      modifiedRow!,
+      { kind: 'upstream', startLine },
+      { localNotebook: liveLocalNotebook }
+    )
+
+    expect(result.localNotebook.cells[0]?.value).toBe(
+      'shared\nupstream one\nupstream two\nlocal only\ntail'
+    )
+    expect(result.localNotebook.cells[0]?.outputs).toEqual([])
+    expect(result.localNotebook.cells[1]?.value).toBe('unsaved local b')
+    expect(
+      result.localNotebook.cells[0]?.metadata?.[RunmeMetadataKey.UpdatedAt]
+    ).toBeTruthy()
+  })
+
+  it('removes one local-only block without inserting upstream text', async () => {
+    const upstreamNotebook = notebook([
+      cell({ refId: 'a', value: 'shared\nupstream only\ntail' }),
+    ])
+    const localNotebook = notebook([
+      cell({ refId: 'a', value: 'shared\nlocal one\nlocal two\ntail' }),
+    ])
+    localNotebook.cells[0].outputs = [
+      create(parser_pb.CellOutputSchema, {
+        items: [],
+      }),
+    ]
+    const diff = computeNotebookDiff(upstreamNotebook, localNotebook)
+    const modifiedRow = diff.cells[0]
+    let record = {
+      id: 'local://file/conflict',
+      name: 'conflict.json',
+      doc: serialize(localNotebook),
+      conflict: {
+        detectedAt: '2026-06-01T00:00:00.000Z',
+        upstreamChecksum: 'upstream',
+        localChecksumAtDetection: 'local',
+      },
+    }
+    const store = {
+      files: {
+        get: vi.fn(async () => record),
+      },
+      getConflictUpstreamDoc: vi.fn(async () => serialize(upstreamNotebook)),
+      save: vi.fn(async (_localUri: string, saved: parser_pb.Notebook) => {
+        record = {
+          ...record,
+          doc: serialize(saved),
+        }
+      }),
+    } as unknown as LocalNotebooks
+
+    const startLine = modifiedRow.sourceDiff!.lines.findIndex(
+      (line) => line.kind === 'added'
+    )
+    const result = await applyConflictSourceHunk(
+      store,
+      'local://file/conflict',
+      modifiedRow,
+      { kind: 'local', startLine }
+    )
+
+    expect(result.localNotebook.cells[0]?.value).toBe('shared\ntail')
+    expect(result.localNotebook.cells[0]?.outputs).toEqual([])
+    expect(result.document.diff.summary.modifiedCells).toBe(1)
+  })
+
+  it('rejects a stale hunk instead of editing newly changed local source', async () => {
+    const upstreamNotebook = notebook([
+      cell({ refId: 'a', value: 'shared\nupstream only' }),
+    ])
+    const localNotebook = notebook([
+      cell({ refId: 'a', value: 'shared\nlocal only' }),
+    ])
+    const liveLocalNotebook = notebook([
+      cell({ refId: 'a', value: 'shared\nnew local edit' }),
+    ])
+    const modifiedRow = computeNotebookDiff(upstreamNotebook, localNotebook)
+      .cells[0]
+    const store = {
+      files: {
+        get: vi.fn(async () => ({
+          id: 'local://file/conflict',
+          name: 'conflict.json',
+          doc: serialize(localNotebook),
+          conflict: {
+            detectedAt: '2026-06-01T00:00:00.000Z',
+            upstreamChecksum: 'upstream',
+            localChecksumAtDetection: 'local',
+          },
+        })),
+      },
+      save: vi.fn(),
+    } as unknown as LocalNotebooks
+
+    await expect(
+      applyConflictSourceHunk(
+        store,
+        'local://file/conflict',
+        modifiedRow,
+        {
+          kind: 'upstream',
+          startLine: modifiedRow.sourceDiff!.lines.findIndex(
+            (line) => line.kind === 'removed'
+          ),
+        },
+        { localNotebook: liveLocalNotebook }
+      )
+    ).rejects.toThrow('The local cell changed after this diff was created')
+    expect(store.save).not.toHaveBeenCalled()
   })
 })
 
