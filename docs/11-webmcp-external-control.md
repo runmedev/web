@@ -6,6 +6,9 @@ Runme Web exposes WebMCP tools that let an external browser controller inspect,
 edit, and execute work in an open Runme tab. This page describes how to select
 the intended tab and notebook safely before using those tools.
 
+This is the supported integration path for Codex and other external agents.
+Runme does not include a built-in AI Chat panel.
+
 Browser tab control is exclusive: one controller session can control one tab
 at a time. Concurrent sessions should target different Runme tabs.
 

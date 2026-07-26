@@ -1,3 +1,6 @@
+import { readdirSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -38,6 +41,19 @@ describe('documentation catalog', () => {
     })
     expect(documents[0]).not.toHaveProperty('content')
     expect(getGettingStartedDocument(versionInfo)).toEqual(documents[0])
+  })
+
+  it('publishes every user guide but not the repository index', () => {
+    const docsDirectory = resolve(process.cwd(), '../docs')
+    const markdownFiles = readdirSync(docsDirectory)
+      .filter((name) => name.endsWith('.md') && name !== 'README.md')
+      .map((name) => `docs/${name}`)
+      .sort()
+    const publishedPaths = listDocumentation(versionInfo)
+      .map(({ path }) => path)
+      .sort()
+
+    expect(publishedPaths).toEqual(markdownFiles)
   })
 
   it('requires an exact web commit', () => {

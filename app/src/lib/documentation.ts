@@ -1,3 +1,4 @@
+import { markOnboardingTaskComplete } from './onboarding'
 import { type RunmeVersionInfo, runmeVersionInfo } from './versionInfo'
 
 export const DOCUMENTATION_MIME_TYPE = 'text/markdown'
@@ -63,12 +64,8 @@ const DOCUMENTATION_DEFINITIONS: readonly DocumentationDefinition[] = [
   },
   { path: 'docs/10-jupyter-runners.md', title: 'Jupyter Runners' },
   {
-    path: 'docs/11-ai-chat-and-chatkit.md',
-    title: 'AI Chat And ChatKit',
-  },
-  {
-    path: 'docs/12-agentic-search-and-codex.md',
-    title: 'Agentic Search And Codex',
+    path: 'docs/11-webmcp-external-control.md',
+    title: 'WebMCP External Control',
   },
   {
     path: 'docs/13-app-console-reference.md',
@@ -83,13 +80,6 @@ const DOCUMENTATION_DEFINITIONS: readonly DocumentationDefinition[] = [
     title: 'Logs Diagnostics And Troubleshooting',
   },
   { path: 'docs/16-notebook-diffs.md', title: 'Notebook Diffs' },
-  { path: 'docs/README.md', title: 'Documentation Index' },
-  { path: 'docs/codex-chat-panel.md', title: 'Codex Chat Panel' },
-  {
-    path: 'docs/codex-chrome-webmcp.md',
-    title: 'Codex Chrome And WebMCP',
-  },
-  { path: 'docs/using-codex.md', title: 'Using Codex' },
 ]
 
 function encodePath(path: string): string {
@@ -272,5 +262,6 @@ export function markDocumentationOpened(uri: string): void {
   }
   if (uri === gettingStarted.uri || uri === gettingStarted.rawUri) {
     markGettingStartedOpened()
+    markOnboardingTaskComplete('read-getting-started')
   }
 }

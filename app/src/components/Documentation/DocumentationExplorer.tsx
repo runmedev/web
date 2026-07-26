@@ -13,6 +13,11 @@ import {
   listDocumentation,
   markDocumentationOpened,
 } from '../../lib/documentation'
+import {
+  markOnboardingOpened,
+  ONBOARDING_DOCUMENT_URI,
+  ONBOARDING_MIME_TYPE,
+} from '../../lib/onboarding'
 
 export function DocumentationExplorer() {
   const [expanded, setExpanded] = useState(true)
@@ -44,6 +49,26 @@ export function DocumentationExplorer() {
         </p>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        <button
+          type="button"
+          className={`mb-2 flex w-full items-center gap-2 rounded-nb-sm border px-2 py-2 text-left text-sm font-medium transition-colors ${
+            currentDoc === ONBOARDING_DOCUMENT_URI
+              ? 'border-nb-accent bg-nb-accent-soft text-nb-text'
+              : 'border-nb-border bg-white/70 text-nb-text-muted hover:bg-white hover:text-nb-text'
+          }`}
+          onClick={() => {
+            markOnboardingOpened()
+            showDocument(ONBOARDING_DOCUMENT_URI, {
+              title: 'Welcome to Runme',
+              mimeType: ONBOARDING_MIME_TYPE,
+              readOnly: true,
+            })
+            setCurrentDoc(ONBOARDING_DOCUMENT_URI)
+          }}
+        >
+          <DocumentTextIcon className="h-4 w-4 shrink-0" />
+          <span className="truncate">Welcome to Runme</span>
+        </button>
         {result.error ? (
           <div className="rounded-nb-sm border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
             {result.error}

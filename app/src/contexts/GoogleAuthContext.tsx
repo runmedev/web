@@ -21,6 +21,7 @@ import type {
   GoogleDriveAuthUxMode,
 } from '../lib/googleClientManager'
 import { appLogger } from '../lib/logging/runtime'
+import { markOnboardingTaskComplete } from '../lib/onboarding'
 import { appState } from '../lib/runtime/AppState'
 
 // N.B. I couldn't make sharing work with the more restrictive "https://www.googleapis.com/auth/drive.file"
@@ -247,6 +248,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         console.error('Failed to persist Google auth token', error)
       }
+      markOnboardingTaskComplete('sign-in-google-drive')
     },
     []
   )

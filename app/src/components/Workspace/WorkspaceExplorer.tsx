@@ -51,6 +51,11 @@ import { driveLinkCoordinator } from "../../lib/driveLinkCoordinator";
 import { openNotebookUpstreamDiff } from "../../lib/notebookDiff/conflict";
 import { appState } from "../../lib/runtime/AppState";
 import {
+  getOnboardingState,
+  markOnboardingNotebookCreated,
+  updateOnboardingNotebookMetadata,
+} from "../../lib/onboarding";
+import {
   EXCALIDRAW_MIME_TYPE,
   createInitialExcalidrawDocumentJson,
   isExcalidrawFileName,
@@ -622,6 +627,13 @@ export function WorkspaceExplorer() {
               remoteUri: metadata.remoteUri,
             }),
           );
+          if (getOnboardingState().recentNotebook?.uri === metadata.uri) {
+            updateOnboardingNotebookMetadata({
+              uri: metadata.uri,
+              name: metadata.name,
+              remoteUri: metadata.remoteUri,
+            });
+          }
         } catch (error) {
           console.error("Failed to refresh notebook metadata", error);
         }
@@ -818,6 +830,21 @@ export function WorkspaceExplorer() {
         const timestamp = formatShortTimestamp(new Date());
         const name = `untitled-${timestamp}.json`;
         const newItem = await targetStore.create(folderUri, name);
+        markOnboardingNotebookCreated({
+          uri: newItem.uri,
+          name: newItem.name,
+          remoteUri: newItem.remoteUri,
+        });
+        if (store && newItem.uri.startsWith("local://file/")) {
+          const metadata = await store.getMetadata(newItem.uri);
+          if (metadata) {
+            updateOnboardingNotebookMetadata({
+              uri: metadata.uri,
+              name: metadata.name,
+              remoteUri: metadata.remoteUri,
+            });
+          }
+        }
         await fetchChildren(folderUri);
         setPendingEditId(newItem.uri);
         setErrorMessage(null);

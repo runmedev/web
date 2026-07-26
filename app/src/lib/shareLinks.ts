@@ -1,4 +1,5 @@
 import { getCellTitle } from './cellContent'
+import { markOnboardingTaskComplete } from './onboarding'
 
 function getShareBaseUrl(): URL {
   if (typeof window === 'undefined') {
@@ -175,6 +176,7 @@ export async function copyNotebookShareUrl(remoteUri: string): Promise<string> {
 
   const shareUrl = buildNotebookShareUrl(remoteUri)
   await window.navigator.clipboard.writeText(shareUrl)
+  markOnboardingTaskComplete('share-notebook')
   return shareUrl
 }
 
@@ -191,6 +193,7 @@ export async function copyNotebookCellShareUrl(
 
   const shareUrl = buildNotebookCellShareUrl(remoteUri, cellRefId)
   await window.navigator.clipboard.writeText(shareUrl)
+  markOnboardingTaskComplete('share-notebook')
   return shareUrl
 }
 
@@ -214,6 +217,7 @@ export async function copyNotebookCellMarkdownLink(
     cellRefId
   )
   await window.navigator.clipboard.writeText(markdownLink)
+  markOnboardingTaskComplete('share-notebook')
   return markdownLink
 }
 
@@ -230,6 +234,7 @@ export async function copyNotebookMarkdownLink(
 
   const markdownLink = buildNotebookMarkdownLink(name, remoteUri)
   await window.navigator.clipboard.writeText(markdownLink)
+  markOnboardingTaskComplete('share-notebook')
   return markdownLink
 }
 
