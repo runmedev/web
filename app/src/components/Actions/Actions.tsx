@@ -12,7 +12,7 @@ import {
 } from 'react'
 
 import { create } from '@bufbuild/protobuf'
-import { Button, ScrollArea, Tabs, Text } from '@radix-ui/themes'
+import { Button, ScrollArea, Tabs, Text, Tooltip } from '@radix-ui/themes'
 
 import {
   ChatBubbleLeftIcon,
@@ -380,19 +380,18 @@ function isDriveBackedNotebook(
 
 function ReadOnlyTabIndicator() {
   return (
-    <span
-      className="relative inline-flex h-4 w-4 items-center justify-center text-nb-text-muted"
-      role="img"
-      aria-label="Read-only notebook"
+    <Tooltip
+      content="Read-only. This notebook is open for editing in another browser tab."
+      side="bottom"
     >
-      <LockClosedIcon className="h-3.5 w-3.5" aria-hidden="true" />
       <span
-        role="tooltip"
-        className="pointer-events-none absolute left-1/2 top-6 z-20 hidden w-max max-w-[220px] -translate-x-1/2 rounded-nb-sm border border-nb-border bg-white px-2 py-1 text-xs font-normal text-nb-text shadow-nb-sm group-hover:inline-block group-focus:inline-block"
+        className="inline-flex h-4 w-4 items-center justify-center text-nb-text-muted"
+        role="img"
+        aria-label="Read-only notebook"
       >
-        Read-only. This notebook is open for editing in another browser tab.
+        <LockClosedIcon className="h-3.5 w-3.5" aria-hidden="true" />
       </span>
-    </span>
+    </Tooltip>
   )
 }
 

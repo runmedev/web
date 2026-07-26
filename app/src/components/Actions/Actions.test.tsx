@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
+import type { ReactElement, ReactNode } from 'react'
+
+import { Theme } from '@radix-ui/themes'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  render,
+  render as renderWithoutTheme,
   screen,
   act,
   createEvent,
@@ -31,6 +34,14 @@ import {
 } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 import { ActionOutputItems } from './ActionOutputItems'
 import Actions, { Action } from './Actions'
+
+function ThemeWrapper({ children }: { children: ReactNode }) {
+  return <Theme>{children}</Theme>
+}
+
+function render(ui: ReactElement) {
+  return renderWithoutTheme(ui, { wrapper: ThemeWrapper })
+}
 
 const contextMocks = vi.hoisted(() => ({
   workspaceDocuments: [] as Array<{
@@ -684,7 +695,7 @@ describe('Actions tabs', () => {
     )
   })
 
-  it('marks read-only notebook tabs and content clearly', () => {
+  it('marks read-only notebook tabs and content clearly', async () => {
     const uri = 'local://file/reference.runme.md'
     const owner: NotebookOwnershipRecord = {
       notebookUri: uri,
@@ -717,9 +728,17 @@ describe('Actions tabs', () => {
 
     render(<Actions />)
 
+    const readOnlyIndicators = screen.getAllByLabelText('Read-only notebook')
+    expect(readOnlyIndicators.length).toBeGreaterThan(0)
+    expect(screen.getByTitle('reference.runme.md').dataset.state).toBe('active')
+    fireEvent.pointerMove(readOnlyIndicators[0], { pointerType: 'mouse' })
+    const tooltip = await screen.findByRole('tooltip')
+    expect(tooltip.textContent).toContain(
+      'Read-only. This notebook is open for editing in another browser tab.'
+    )
     expect(
-      screen.getAllByLabelText('Read-only notebook').length
-    ).toBeGreaterThan(0)
+      document.querySelector('#notebook-tabs-scroll')?.contains(tooltip)
+    ).toBe(false)
     expect(
       screen.getByTestId('notebook-readonly-banner').textContent
     ).toContain('session calm-harbor')
@@ -970,9 +989,7 @@ describe('Actions tabs', () => {
     render(<Actions />)
 
     await waitFor(() => {
-      expect(
-        screen.getByRole('tab', { name: /Getting Started/ })
-      ).toBeTruthy()
+      expect(screen.getByRole('tab', { name: /Getting Started/ })).toBeTruthy()
     })
     expect(contextMocks.setCurrentDoc).not.toHaveBeenCalled()
   })
