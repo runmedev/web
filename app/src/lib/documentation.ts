@@ -1,3 +1,4 @@
+import { DOCUMENTATION_MANIFEST } from '../generated/documentationManifest'
 import { markOnboardingTaskComplete } from './onboarding'
 import { type RunmeVersionInfo, runmeVersionInfo } from './versionInfo'
 
@@ -9,6 +10,7 @@ export const GETTING_STARTED_OPENED_STORAGE_KEY =
 type DocumentationDefinition = {
   name: string
   description: string
+  order: number
   path: string
   title: string
 }
@@ -37,119 +39,8 @@ export type RemoteMarkdownDocument = {
   }
 }
 
-const DOCUMENTATION_DEFINITIONS: readonly DocumentationDefinition[] = [
-  {
-    name: 'getting-started',
-    description:
-      'Open a notebook, configure an execution path, run a cell, and inspect its output.',
-    path: GETTING_STARTED_DOCUMENT_PATH,
-    title: 'Getting Started',
-  },
-  {
-    name: 'editing-and-running-cells',
-    description:
-      'Edit code and Markdown cells, choose runners, execute cells, and understand saved outputs.',
-    path: 'docs/01-editing-and-running-cells.md',
-    title: 'Editing And Running Cells',
-  },
-  {
-    name: 'workspace-explorer',
-    description:
-      'Navigate local, filesystem, and Google Drive content in the workspace explorer.',
-    path: 'docs/02-workspace-explorer.md',
-    title: 'Workspace Explorer',
-  },
-  {
-    name: 'local-notebooks-and-browser-storage',
-    description:
-      'Understand local notebook persistence, browser storage, and recovery behavior.',
-    path: 'docs/03-local-notebooks-and-browser-storage.md',
-    title: 'Local Notebooks And Browser Storage',
-  },
-  {
-    name: 'filesystem-workspaces',
-    description:
-      'Mount and work with local directories through the browser File System Access API.',
-    path: 'docs/04-filesystem-workspaces.md',
-    title: 'Filesystem Workspaces',
-  },
-  {
-    name: 'google-drive-integration',
-    description:
-      'Configure Google Drive storage, browse Drive content, and understand synchronization.',
-    path: 'docs/05-google-drive-integration.md',
-    title: 'Google Drive Integration',
-  },
-  {
-    name: 'sharing-and-opening-drive-links',
-    description:
-      'Open, share, and troubleshoot Google Drive notebook and folder links.',
-    path: 'docs/06-sharing-and-opening-drive-links.md',
-    title: 'Sharing And Opening Drive Links',
-  },
-  {
-    name: 'runners-overview',
-    description:
-      'Choose among Runme, AppKernel, and Jupyter execution backends.',
-    path: 'docs/07-runners-overview.md',
-    title: 'Runners Overview',
-  },
-  {
-    name: 'local-runme-runners',
-    description: 'Configure and troubleshoot a local Runme WebSocket runner.',
-    path: 'docs/08-local-runme-runners.md',
-    title: 'Local Runme Runners',
-  },
-  {
-    name: 'appkernel-browser-runners',
-    description:
-      'Run JavaScript in browser-hosted AppKernel and sandbox runtimes.',
-    path: 'docs/09-appkernel-browser-runners.md',
-    title: 'AppKernel Browser Runners',
-  },
-  {
-    name: 'jupyter-runners',
-    description:
-      'Configure Jupyter servers and kernels for notebook execution.',
-    path: 'docs/10-jupyter-runners.md',
-    title: 'Jupyter Runners',
-  },
-  {
-    name: 'webmcp-external-control',
-    description:
-      'Safely control Runme from an external browser agent through WebMCP.',
-    path: 'docs/11-webmcp-external-control.md',
-    title: 'WebMCP External Control',
-  },
-  {
-    name: 'app-console-reference',
-    description:
-      'Use App Console namespaces for notebooks, documents, runners, Drive, and diagnostics.',
-    path: 'docs/13-app-console-reference.md',
-    title: 'App Console Reference',
-  },
-  {
-    name: 'authentication-and-app-configuration',
-    description:
-      'Configure OIDC, Google OAuth, service accounts, endpoints, and app settings.',
-    path: 'docs/14-authentication-and-app-configuration.md',
-    title: 'Authentication And App Configuration',
-  },
-  {
-    name: 'logs-diagnostics-and-troubleshooting',
-    description:
-      'Inspect logs and diagnose notebook, runner, Drive, and authentication failures.',
-    path: 'docs/15-logs-diagnostics-and-troubleshooting.md',
-    title: 'Logs Diagnostics And Troubleshooting',
-  },
-  {
-    name: 'notebook-diffs',
-    description:
-      'Compare local and Google Drive notebook revisions with notebook-aware diffs.',
-    path: 'docs/16-notebook-diffs.md',
-    title: 'Notebook Diffs',
-  },
-]
+const DOCUMENTATION_DEFINITIONS: readonly DocumentationDefinition[] =
+  DOCUMENTATION_MANIFEST
 
 function encodePath(path: string): string {
   return path
@@ -223,7 +114,7 @@ export async function getDocumentationMarkdown(
 ): Promise<string> {
   const entry = getDocumentationEntry(name, info)
   const document = await fetchRemoteMarkdownDocument(entry.uri, fetchImpl)
-  return document.content
+  return stripDocumentationFrontmatter(document.content)
 }
 
 export function getGettingStartedDocument(
@@ -303,6 +194,10 @@ function getRevisionFromGitHubUri(uri: string): string | undefined {
   return undefined
 }
 
+export function stripDocumentationFrontmatter(content: string): string {
+  return content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)(?:\r?\n)?/, '')
+}
+
 export async function fetchRemoteMarkdownDocument(
   uri: string,
   fetchImpl: typeof fetch = fetch
@@ -324,11 +219,12 @@ export async function fetchRemoteMarkdownDocument(
     )
   }
   const revisionId = getRevisionFromGitHubUri(uri)
+  const content = await response.text()
   return {
     uri,
     name: deriveRemoteDocumentName(uri),
     mimeType: DOCUMENTATION_MIME_TYPE,
-    content: await response.text(),
+    content,
     readOnly: true,
     ...(revisionId ? { version: { revisionId } } : {}),
   }

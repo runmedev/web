@@ -1,3 +1,15 @@
+---
+name: local-runme-runners
+title: Local Runme Runners
+order: 8
+description: >-
+  Use this guide to configure or troubleshoot a local Runme backend connected
+  over WebSocket. It covers the canonical endpoint setup, when a backend runner
+  is appropriate for shell or server-side execution, expected UI behavior, and
+  common connectivity failures. For browser-only JavaScript or Jupyter
+  kernels, use the corresponding runner guide.
+---
+
 # Local Runme Runners
 
 ## Purpose

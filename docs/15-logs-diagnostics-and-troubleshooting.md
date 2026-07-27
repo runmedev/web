@@ -1,3 +1,15 @@
+---
+name: logs-diagnostics-and-troubleshooting
+title: Logs Diagnostics And Troubleshooting
+order: 14
+description: >-
+  Use this guide when Runme appears unresponsive or notebook execution, runner
+  connectivity, Drive, or authentication is failing. It identifies the first
+  diagnostic surfaces, common failure classes, useful App Console probes, and
+  a practical debugging order. Pair it with the affected subsystem's guide
+  once the failure has been narrowed down.
+---
+
 # Logs Diagnostics And Troubleshooting
 
 ## First place to look

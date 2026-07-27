@@ -12,6 +12,7 @@ import {
   isRemoteMarkdownUri,
   markDocumentationOpened,
   resolveDocumentationHref,
+  stripDocumentationFrontmatter,
   toRawMarkdownUri,
 } from '../../lib/documentation'
 import type { WorkspaceDocument } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
@@ -37,7 +38,7 @@ export function RemoteMarkdownDocument({
     )
       .then((result) => {
         if (!controller.signal.aborted) {
-          setContent(result.content)
+          setContent(stripDocumentationFrontmatter(result.content))
           setLoading(false)
         }
       })

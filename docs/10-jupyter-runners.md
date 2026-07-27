@@ -1,3 +1,15 @@
+---
+name: jupyter-runners
+title: Jupyter Runners
+order: 10
+description: >-
+  Use this guide when notebook cells must execute through a Jupyter server and
+  kernel. It covers Jupyter's relationship to Runme runners, server and kernel
+  lifecycle helpers, configuration, selection guidance, and user-visible
+  behavior. Use the AppKernel guide for browser JavaScript and the local Runme
+  guide for WebSocket backend execution.
+---
+
 # Jupyter Runners
 
 ## Purpose

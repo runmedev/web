@@ -12,6 +12,7 @@ import {
   listDocumentation,
   listDocumentationSummaries,
   resolveDocumentationHref,
+  stripDocumentationFrontmatter,
   toRawMarkdownUri,
 } from './documentation'
 import type { RunmeVersionInfo } from './versionInfo'
@@ -31,7 +32,7 @@ describe('documentation catalog', () => {
     expect(documents.length).toBeGreaterThan(10)
     expect(documents[0]).toMatchObject({
       name: 'getting-started',
-      description: expect.stringContaining('Open a notebook'),
+      description: expect.stringContaining('opening Runme'),
       title: 'Getting Started',
       path: 'docs/00-getting-started.md',
       uri: 'https://github.com/runmedev/web/blob/abc123def456/docs/00-getting-started.md',
@@ -50,7 +51,7 @@ describe('documentation catalog', () => {
     expect(summaries[0]).toEqual({
       name: 'getting-started',
       description:
-        'Open a notebook, configure an execution path, run a cell, and inspect its output.',
+        'Use this guide when opening Runme for the first time or when an agent needs the shortest path from an unopened notebook to a successful cell execution. It covers prerequisites, opening a notebook, selecting an execution path, running a cell, and checking its output. For detailed runner configuration, use one of the runner-specific guides.',
     })
     expect(new Set(summaries.map(({ name }) => name)).size).toBe(
       summaries.length
@@ -124,12 +125,43 @@ describe('documentation catalog', () => {
     })
   })
 
-  it('gets one commit-pinned document by its stable name', async () => {
+  it('preserves frontmatter when fetching raw remote Markdown', async () => {
+    const source = `---
+name: getting-started
+description: A description for discovery.
+---
+
+# Getting Started`
     const fetchImpl = vi.fn(async () => ({
       ok: true,
       status: 200,
       statusText: 'OK',
-      text: async () => '# WebMCP External Control',
+      text: async () => source,
+    })) as unknown as typeof fetch
+    const uri =
+      'https://github.com/runmedev/web/blob/abc123/docs/00-getting-started.md'
+
+    const document = await fetchRemoteMarkdownDocument(uri, fetchImpl)
+
+    expect(document.content).toBe(source)
+    expect(stripDocumentationFrontmatter(source)).toBe('# Getting Started')
+    expect(stripDocumentationFrontmatter('# No frontmatter')).toBe(
+      '# No frontmatter'
+    )
+  })
+
+  it('gets one commit-pinned document by its stable name', async () => {
+    const source = `---
+name: webmcp-external-control
+description: A description for discovery.
+---
+
+# WebMCP External Control`
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => source,
     })) as unknown as typeof fetch
 
     const content = await getDocumentationMarkdown(

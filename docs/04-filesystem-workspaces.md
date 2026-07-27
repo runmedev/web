@@ -1,3 +1,15 @@
+---
+name: filesystem-workspaces
+title: Filesystem Workspaces
+order: 4
+description: >-
+  Use this guide when mounting or working with a local directory through the
+  browser File System Access API. It covers browser and permission
+  prerequisites, the canonical mount flow, expected persistence, and important
+  limitations. For browser-local notebooks that are not backed by a directory,
+  use the local notebooks and browser storage guide.
+---
+
 # Filesystem Workspaces
 
 ## Purpose

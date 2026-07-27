@@ -1,3 +1,15 @@
+---
+name: notebook-diffs
+title: Notebook Diffs
+order: 15
+description: >-
+  Use this guide to compare a local Google Drive-backed notebook with a
+  specific Drive revision using Runme's notebook-aware diff. It covers
+  prerequisites, listing available revisions, computing and opening a diff,
+  and targeting an exact open notebook. It is not a general-purpose text diff
+  or a guide to Google Drive synchronization.
+---
+
 # Notebook Diffs
 
 Runme can compute and render a notebook-aware diff between the local copy of a

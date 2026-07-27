@@ -1,3 +1,15 @@
+---
+name: appkernel-browser-runners
+title: AppKernel Browser Runners
+order: 9
+description: >-
+  Use this guide for JavaScript execution that should stay inside the browser,
+  including the standard and sandbox AppKernel runtimes. It explains when
+  AppKernel is the right choice and how its lifecycle, capabilities, and
+  limitations differ from backend Runme runners. It is not the guide for
+  Jupyter kernels or shell execution on a local backend.
+---
+
 # AppKernel Browser Runners
 
 ## Purpose

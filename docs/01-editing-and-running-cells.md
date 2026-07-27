@@ -1,3 +1,15 @@
+---
+name: editing-and-running-cells
+title: Editing And Running Cells
+order: 1
+description: >-
+  Use this guide for the core notebook editing and execution model after a
+  notebook is open. It explains code and Markdown cells, runner selection,
+  execution, saved outputs, and the App Console helpers that support common
+  editing operations. Storage setup and runner-specific configuration are
+  covered by their dedicated guides.
+---
+
 # Editing And Running Cells
 
 ## Core editing model
