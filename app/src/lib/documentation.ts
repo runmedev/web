@@ -114,7 +114,7 @@ export async function getDocumentationMarkdown(
 ): Promise<string> {
   const entry = getDocumentationEntry(name, info)
   const document = await fetchRemoteMarkdownDocument(entry.uri, fetchImpl)
-  return document.content
+  return stripDocumentationFrontmatter(document.content)
 }
 
 export function getGettingStartedDocument(
@@ -219,7 +219,7 @@ export async function fetchRemoteMarkdownDocument(
     )
   }
   const revisionId = getRevisionFromGitHubUri(uri)
-  const content = stripDocumentationFrontmatter(await response.text())
+  const content = await response.text()
   return {
     uri,
     name: deriveRemoteDocumentName(uri),

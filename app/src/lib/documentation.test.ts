@@ -125,7 +125,7 @@ describe('documentation catalog', () => {
     })
   })
 
-  it('removes generated catalog frontmatter from fetched content', async () => {
+  it('preserves frontmatter when fetching raw remote Markdown', async () => {
     const source = `---
 name: getting-started
 description: A description for discovery.
@@ -143,18 +143,25 @@ description: A description for discovery.
 
     const document = await fetchRemoteMarkdownDocument(uri, fetchImpl)
 
-    expect(document.content).toBe('# Getting Started')
+    expect(document.content).toBe(source)
+    expect(stripDocumentationFrontmatter(source)).toBe('# Getting Started')
     expect(stripDocumentationFrontmatter('# No frontmatter')).toBe(
       '# No frontmatter'
     )
   })
 
   it('gets one commit-pinned document by its stable name', async () => {
+    const source = `---
+name: webmcp-external-control
+description: A description for discovery.
+---
+
+# WebMCP External Control`
     const fetchImpl = vi.fn(async () => ({
       ok: true,
       status: 200,
       statusText: 'OK',
-      text: async () => '# WebMCP External Control',
+      text: async () => source,
     })) as unknown as typeof fetch
 
     const content = await getDocumentationMarkdown(

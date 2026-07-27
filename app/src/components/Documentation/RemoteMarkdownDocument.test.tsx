@@ -36,7 +36,7 @@ describe('RemoteMarkdownDocument', () => {
       status: 200,
       statusText: 'OK',
       text: async () =>
-        '# Getting Started\n\n[Editing cells](01-editing-and-running-cells.md)',
+        '---\nname: getting-started\ndescription: A description for discovery.\n---\n\n# Getting Started\n\n[Editing cells](01-editing-and-running-cells.md)',
     }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -56,6 +56,7 @@ describe('RemoteMarkdownDocument', () => {
         screen.getByRole('heading', { name: 'Getting Started' })
       ).toBeTruthy()
     })
+    expect(screen.queryByText('name: getting-started')).toBeNull()
     expect(fetchMock).toHaveBeenCalledWith(
       'https://raw.githubusercontent.com/runmedev/web/abc123/docs/00-getting-started.md',
       expect.objectContaining({ signal: expect.any(AbortSignal) })
