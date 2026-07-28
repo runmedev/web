@@ -608,6 +608,7 @@ export function Action({
   const [contextMenu, setContextMenu] = useState<{
     x: number
     y: number
+    selectedOutputText: string | null
   } | null>(null)
   const [shareRemoteUri, setShareRemoteUri] = useState<string | null>(null)
   const [htmlEditRequest, setHtmlEditRequest] = useState(0)
@@ -679,7 +680,9 @@ export function Action({
     }
 
     const menuWidth = 200
-    const menuHeight = shareRemoteUri ? 128 : 88
+    const menuItemCount =
+      2 + (shareRemoteUri ? 1 : 0) + (contextMenu.selectedOutputText ? 1 : 0)
+    const menuHeight = 8 + menuItemCount * 40
     const left = Math.max(
       0,
       Math.min(contextMenu.x, window.innerWidth - menuWidth)
@@ -702,7 +705,55 @@ export function Action({
     (event: ReactMouseEvent<HTMLDivElement>) => {
       event.preventDefault()
       event.stopPropagation()
-      setContextMenu({ x: event.clientX, y: event.clientY })
+
+      const eventTarget = event.target
+      const outputElement =
+        eventTarget instanceof Element
+          ? eventTarget.closest<HTMLElement>('[data-cell-output]')
+          : null
+      let selectedOutputText: string | null = null
+
+      if (outputElement) {
+        // xterm owns its selection inside the console-view shadow root, while
+        // ordinary text output uses the browser Selection API.
+        for (const pathEntry of event.nativeEvent.composedPath()) {
+          const terminal = (
+            pathEntry as {
+              terminal?: { getSelection?: () => string }
+            }
+          ).terminal
+          const terminalSelection = terminal?.getSelection?.()
+          if (terminalSelection) {
+            selectedOutputText = terminalSelection
+            break
+          }
+        }
+
+        if (!selectedOutputText) {
+          const selection = window.getSelection()
+          const selectionStartsInOutput = Boolean(
+            selection?.anchorNode &&
+              outputElement.contains(selection.anchorNode)
+          )
+          const selectionEndsInOutput = Boolean(
+            selection?.focusNode && outputElement.contains(selection.focusNode)
+          )
+          if (
+            selection &&
+            !selection.isCollapsed &&
+            selectionStartsInOutput &&
+            selectionEndsInOutput
+          ) {
+            selectedOutputText = selection.toString() || null
+          }
+        }
+      }
+
+      setContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        selectedOutputText,
+      })
     },
     []
   )
@@ -779,6 +830,29 @@ export function Action({
       setContextMenu(null)
     }
   }, [shareRemoteUri])
+
+  const handleCopyOutput = useCallback(async () => {
+    const selectedOutputText = contextMenu?.selectedOutputText
+    if (!selectedOutputText) {
+      setContextMenu(null)
+      return
+    }
+
+    try {
+      await window.navigator.clipboard.writeText(selectedOutputText)
+    } catch (error) {
+      appLogger.error('Failed to copy selected cell output', {
+        attrs: {
+          scope: 'notebook.cell.output',
+          code: 'CELL_OUTPUT_COPY_FAILED',
+          cellRefId: cell?.refId,
+          error: String(error),
+        },
+      })
+    } finally {
+      setContextMenu(null)
+    }
+  }, [cell?.refId, contextMenu?.selectedOutputText])
 
   const handleStartComment = useCallback(() => {
     if (!cell?.refId || !onStartComment) {
@@ -1606,7 +1680,7 @@ export function Action({
           {/* Output section: separated by a thin divider, inside the same card.
               max-h + overflow-auto gives a vertical scrollbar when output is tall. */}
           {(renderedOutputs || renderedOutputItems) && (
-            <div id={`cell-output-${cell.refId}`}>
+            <div id={`cell-output-${cell.refId}`} data-cell-output>
               <div className="border-t border-nb-tray-border" />
               <div
                 className="overflow-auto p-[14.4px]"
@@ -1630,6 +1704,18 @@ export function Action({
           }}
           onContextMenu={(event) => event.preventDefault()}
         >
+          {contextMenu?.selectedOutputText && (
+            <button
+              type="button"
+              className="ctx-menu-item"
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleCopyOutput()
+              }}
+            >
+              Copy Output
+            </button>
+          )}
           {shareRemoteUri && (
             <button
               type="button"

@@ -1239,6 +1239,52 @@ describe('Action component', () => {
     expect(item.textContent).not.toContain('\x1b[')
   })
 
+  it('copies selected cell output from the context menu', async () => {
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    const stdoutOutput = create(parser_pb.CellOutputSchema, {
+      items: [
+        create(parser_pb.CellOutputItemSchema, {
+          mime: 'text/plain',
+          type: 'Buffer',
+          data: new TextEncoder().encode('first line\nsecond line\n'),
+        }),
+      ],
+    })
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'cell-copy-output',
+      kind: parser_pb.CellKind.CODE,
+      languageId: 'bash',
+      outputs: [stdoutOutput],
+      metadata: {},
+      value: 'printf "first line\\nsecond line\\n"',
+    })
+    const stub = new StubCellData(cell)
+
+    render(<Action cellData={stub as unknown as CellData} isFirst={false} />)
+
+    const outputText = screen.getByText(/first line/)
+    const textNode = outputText.firstChild
+    expect(textNode).toBeTruthy()
+    const range = document.createRange()
+    range.setStart(textNode!, 0)
+    range.setEnd(textNode!, 'first line'.length)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+
+    fireEvent.contextMenu(outputText)
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Output' }))
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('first line')
+    })
+    expect(screen.queryByRole('button', { name: 'Copy Output' })).toBeNull()
+  })
+
   it('shows language selector in markdown edit mode and converts to code language', () => {
     const cell = create(parser_pb.CellSchema, {
       refId: 'cell-md',
