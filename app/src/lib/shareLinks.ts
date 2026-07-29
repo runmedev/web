@@ -45,6 +45,15 @@ export function buildNotebookShareUrl(remoteUri: string): string {
   return url.toString()
 }
 
+export function buildGoogleColabNotebookUrl(driveFileId: string): string {
+  const trimmed = driveFileId.trim()
+  if (!trimmed) {
+    throw new Error('A Google Drive file ID is required to build a Colab link')
+  }
+
+  return `https://colab.research.google.com/drive/${encodeURIComponent(trimmed)}`
+}
+
 export function buildNotebookCellShareUrl(
   remoteUri: string,
   cellRefId: string
@@ -178,6 +187,22 @@ export async function copyNotebookShareUrl(remoteUri: string): Promise<string> {
   await window.navigator.clipboard.writeText(shareUrl)
   markOnboardingTaskComplete('share-notebook')
   return shareUrl
+}
+
+export async function copyGoogleColabNotebookUrl(
+  driveFileId: string
+): Promise<string> {
+  if (
+    typeof window === 'undefined' ||
+    !window.navigator?.clipboard?.writeText
+  ) {
+    throw new Error('Clipboard access is unavailable in this browser')
+  }
+
+  const colabUrl = buildGoogleColabNotebookUrl(driveFileId)
+  await window.navigator.clipboard.writeText(colabUrl)
+  markOnboardingTaskComplete('share-notebook')
+  return colabUrl
 }
 
 export async function copyNotebookCellShareUrl(

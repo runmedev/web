@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown'
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildGoogleColabNotebookUrl,
   buildNotebookCellFragment,
   buildNotebookCellMarkdownLink,
   buildNotebookCellShareUrl,
@@ -16,6 +17,23 @@ import {
   parseNotebookCellFragment,
   parseNotebookShareLink,
 } from './shareLinks'
+
+describe('buildGoogleColabNotebookUrl', () => {
+  it('builds a Colab URL from a Google Drive file ID', () => {
+    expect(buildGoogleColabNotebookUrl('shared-file-123')).toBe(
+      'https://colab.research.google.com/drive/shared-file-123'
+    )
+  })
+
+  it('encodes the file ID and rejects empty input', () => {
+    expect(buildGoogleColabNotebookUrl('file id')).toBe(
+      'https://colab.research.google.com/drive/file%20id'
+    )
+    expect(() => buildGoogleColabNotebookUrl('   ')).toThrow(
+      'A Google Drive file ID is required to build a Colab link'
+    )
+  })
+})
 
 describe('buildNotebookShareUrl', () => {
   it('builds a share URL from the current app location', () => {

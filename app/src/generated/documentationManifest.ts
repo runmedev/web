@@ -138,4 +138,12 @@ export const DOCUMENTATION_MANIFEST = [
     order: 15,
     path: 'docs/16-notebook-diffs.md',
   },
+  {
+    name: 'ipynb-notebooks',
+    title: 'IPYNB Notebooks',
+    description:
+      'Use this guide to create, edit, save, and share Jupyter IPYNB notebooks in Runme Web. It explains extension-based format selection, conversion through the Runme protocol, preservation of Jupyter-only fields, Google Drive and Colab sharing, synchronization, and current compatibility boundaries.',
+    order: 17,
+    path: 'docs/17-ipynb-notebooks.md',
+  },
 ] as const satisfies readonly DocumentationManifestEntry[]

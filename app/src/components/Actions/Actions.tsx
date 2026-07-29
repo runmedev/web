@@ -43,6 +43,7 @@ import {
   type NotebookActiveCellState,
 } from '../../lib/notebookActiveCellState'
 import {
+  copyGoogleColabNotebookUrl,
   copyNotebookCellMarkdownLink,
   copyNotebookCellShareUrl,
   copyNotebookMarkdownLink,
@@ -50,6 +51,7 @@ import {
   parseNotebookCellFragment,
   parseNotebookShareLink,
 } from '../../lib/shareLinks'
+import { detectNotebookFileFormat } from '../../lib/notebookFormat'
 import { isHtmlLanguageId, isMarkdownLanguageId } from '../../lib/cellContent'
 import { PlayIcon, PlusIcon, SpinnerIcon, TrashIcon } from './icons'
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
@@ -2880,6 +2882,7 @@ export default function Actions() {
     title: string
     shareableUri: string
     googleDriveUri: string | null
+    isIpynb: boolean
     ownerSessionId: string | null
     canOpenUpstreamDiff: boolean
     readOnly?: boolean
@@ -3167,6 +3170,7 @@ export default function Actions() {
     const itemCount =
       4 +
       (tabContextMenu.googleDriveUri ? 1 : 0) +
+      (tabContextMenu.googleDriveUri && tabContextMenu.isIpynb ? 1 : 0) +
       (tabContextMenu.ownerSessionId ? 1 : 0) +
       (tabContextMenu.canOpenUpstreamDiff ? 1 : 0)
     const menuWidth = 220
@@ -3202,6 +3206,7 @@ export default function Actions() {
         googleDriveUri: isGoogleDriveFileUri(docUri)
           ? docUri
           : requestedDriveUri,
+        isIpynb: detectNotebookFileFormat(title) === 'ipynb',
         ownerSessionId: getNotebookOwnerSessionId(document?.owner),
         canOpenUpstreamDiff:
           docUri.startsWith('local://') && Boolean(requestedDriveUri),
@@ -3226,6 +3231,9 @@ export default function Actions() {
               googleDriveUri: isGoogleDriveFileUri(remoteUri)
                 ? remoteUri
                 : current.googleDriveUri,
+              isIpynb:
+                detectNotebookFileFormat(metadata?.name ?? current.title) ===
+                'ipynb',
               canOpenUpstreamDiff:
                 docUri.startsWith('local://') &&
                 isGoogleDriveFileUri(remoteUri),
@@ -3407,6 +3415,31 @@ export default function Actions() {
           attrs: {
             scope: 'storage.drive',
             code: 'TAB_COPY_GOOGLE_DRIVE_LINK_FAILED',
+            uri: tabContextMenu.googleDriveUri,
+            error: String(error),
+          },
+        }
+      )
+    } finally {
+      setTabContextMenu(null)
+    }
+  }, [tabContextMenu])
+
+  const handleCopyTabGoogleColabLink = useCallback(async () => {
+    if (!tabContextMenu?.googleDriveUri || !tabContextMenu.isIpynb) {
+      setTabContextMenu(null)
+      return
+    }
+    try {
+      const { id } = parseDriveItem(tabContextMenu.googleDriveUri)
+      await copyGoogleColabNotebookUrl(id)
+    } catch (error) {
+      appLogger.error(
+        'Failed to copy Google Colab link from tab context menu',
+        {
+          attrs: {
+            scope: 'storage.share',
+            code: 'TAB_COPY_GOOGLE_COLAB_LINK_FAILED',
             uri: tabContextMenu.googleDriveUri,
             error: String(error),
           },
@@ -3673,6 +3706,19 @@ export default function Actions() {
                   Copy Google Drive Link
                 </button>
               )}
+              {adjustedTabContextMenu.googleDriveUri &&
+                adjustedTabContextMenu.isIpynb && (
+                  <button
+                    type="button"
+                    className="ctx-menu-item"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void handleCopyTabGoogleColabLink()
+                    }}
+                  >
+                    Copy Google Colab Link
+                  </button>
+                )}
               {adjustedTabContextMenu.canOpenUpstreamDiff && (
                 <button
                   type="button"
