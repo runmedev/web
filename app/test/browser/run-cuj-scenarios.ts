@@ -213,18 +213,11 @@ function resolveFakeDriveConfig(): FakeDriveConfig {
   };
 }
 
-function ensureBackendAssetsAndConfig(
+function ensureBackendConfig(
   frontendUrl: string,
   backendUrl: string,
   oidc: OidcAuthConfig,
 ): string {
-  const assetsDir = join(OUTPUT_DIR, "cuj-agent-assets");
-  mkdirSync(assetsDir, { recursive: true });
-  writeFileSync(
-    join(assetsDir, "index.html"),
-    "<!doctype html><html><body>CUJ backend assets</body></html>\n",
-    "utf-8",
-  );
   const configPath = join(OUTPUT_DIR, "cuj-agent-config.yaml");
   const origins = buildBackendOrigins(frontendUrl);
   const originsYaml = origins.map((origin) => `    - "${origin}"`).join("\n");
@@ -242,7 +235,6 @@ function ensureBackendAssetsAndConfig(
     "  agentService: false",
     "  parserService: true",
     "  runnerService: true",
-    `  staticAssets: "${assetsDir}"`,
     "  corsOrigins:",
     originsYaml,
     ...(oidc.enabled
@@ -285,7 +277,7 @@ function detectBackendCommand(
   backendUrl: string,
   oidc: OidcAuthConfig,
 ): BackendCommandConfig {
-  const configPath = ensureBackendAssetsAndConfig(frontendUrl, backendUrl, oidc);
+  const configPath = ensureBackendConfig(frontendUrl, backendUrl, oidc);
   const candidateBinaries = [
     process.env.CUJ_RUNME_AGENT_BIN?.trim(),
     "runme",
