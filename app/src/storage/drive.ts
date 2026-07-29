@@ -1,6 +1,11 @@
 import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
 
 import { getGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
+import { IPYNB_MIME_TYPE } from '../lib/ipynb'
+import {
+  createInitialNotebookFile,
+  detectNotebookFileFormat,
+} from '../lib/notebookFormat'
 import { parser_pb } from '../runme/client'
 import {
   type ConflictResult,
@@ -1163,11 +1168,16 @@ export class DriveNotebookStore {
       throw new Error('DriveNotebookStore.create expects a folder URI')
     }
     const client = await this.getFilesClient()
+    const format = detectNotebookFileFormat(name)
+    const mimeType = format === 'ipynb' ? IPYNB_MIME_TYPE : 'application/json'
     let file = await client.create({
       name,
-      mimeType: 'application/json',
+      mimeType,
       parents: [id],
-      content: createInitialNotebookJson(),
+      content:
+        format === 'ipynb'
+          ? createInitialNotebookFile(name)
+          : createInitialNotebookJson(),
       ...(options.createOperationId
         ? {
             appProperties: {
@@ -1191,7 +1201,7 @@ export class DriveNotebookStore {
         : NotebookStoreItemType.File,
       children: [],
       remoteUri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
-      mimeType: file.mimeType ?? 'application/json',
+      mimeType: file.mimeType ?? mimeType,
       parents: [parentUri],
     }
   }
@@ -1675,6 +1685,28 @@ export class DriveNotebookStore {
     return fromJsonString(parser_pb.NotebookSchema, body, {
       ignoreUnknownFields: true,
     })
+  }
+
+  async loadRevisionContent(uri: string, revisionId: string): Promise<string> {
+    const { id, type } = parseDriveItem(uri)
+    if (type !== NotebookStoreItemType.File) {
+      throw new Error(
+        'DriveNotebookStore.loadRevisionContent expects a file URI'
+      )
+    }
+    if (!revisionId?.trim()) {
+      throw new Error(
+        'DriveNotebookStore.loadRevisionContent requires a revision id'
+      )
+    }
+    const client = await this.getFilesClient()
+    const response = await client.getRevision({
+      fileId: id,
+      revisionId: revisionId.trim(),
+      supportsAllDrives: true,
+      alt: 'media',
+    })
+    return extractBody(response)
   }
 
   async rename(uri: string, name: string): Promise<NotebookStoreItem> {

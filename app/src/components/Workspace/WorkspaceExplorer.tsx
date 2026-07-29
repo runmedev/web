@@ -27,6 +27,10 @@ import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
 import { appLogger } from "../../lib/logging/runtime";
 import {
+  type NotebookFileFormat,
+  isNotebookFileName,
+} from '../../lib/notebookFormat'
+import {
   copyNotebookMarkdownLink,
   copyNotebookShareUrl,
 } from "../../lib/shareLinks";
@@ -126,12 +130,8 @@ function createFileNode(
   };
 }
 
-function isJsonNotebookFile(name: string): boolean {
-  return /\.json$/i.test(name.trim());
-}
-
 function isVisibleDocumentFile(name: string): boolean {
-  return isJsonNotebookFile(name) || isExcalidrawFileName(name)
+  return isNotebookFileName(name) || isExcalidrawFileName(name)
 }
 
 function isMovableDriveNode(data: TreeNode): boolean {
@@ -208,17 +208,13 @@ const DEFAULT_DRIVE_FOLDER_NAME = "New Folder";
 
 function getContextMenuItemCount(menu: ContextMenuState): number {
   if (menu.type === NotebookStoreItemType.File) {
-    return (
-      (menu.uri.startsWith("fs://") ? 0 : 1) +
-      2 +
-      (menu.remoteUri ? 5 : 0)
-    );
+    return (menu.uri.startsWith('fs://') ? 0 : 1) + 3 + (menu.remoteUri ? 5 : 0)
   }
 
   if (menu.type === NotebookStoreItemType.Folder) {
     return (
-      (menu.uri.startsWith("fs://") ? 0 : 1) +
-      1 +
+      (menu.uri.startsWith('fs://') ? 0 : 1) +
+      2 +
       (menu.remoteUri ? 1 : 0) +
       (menu.remoteUri ? 2 : 0) +
       (menu.uri === LOCAL_FOLDER_URI ? 0 : 1)
@@ -701,8 +697,8 @@ export function WorkspaceExplorer() {
                 continue;
               }
               childNodes.push(
-                createFileNode(childMetadata, { parentUri: folderMetadata.uri }),
-              );
+                createFileNode(childMetadata, { parentUri: folderMetadata.uri })
+              )
             } else {
               childNodes.push(createPlaceholderNode(childUri, "Unknown item"));
             }
@@ -820,16 +816,16 @@ export function WorkspaceExplorer() {
   );
 
   const handleCreateDocument = useCallback(
-    async (folderUri: string) => {
-      const targetStore = storeForUri(folderUri, store, fsStore);
+    async (folderUri: string, format: NotebookFileFormat = 'runme-json') => {
+      const targetStore = storeForUri(folderUri, store, fsStore)
       if (!targetStore) {
         return;
       }
       try {
-        treeRef.current?.open(folderUri);
-        const timestamp = formatShortTimestamp(new Date());
-        const name = `untitled-${timestamp}.json`;
-        const newItem = await targetStore.create(folderUri, name);
+        treeRef.current?.open(folderUri)
+        const timestamp = formatShortTimestamp(new Date())
+        const name = `untitled-${timestamp}.${format === 'ipynb' ? 'ipynb' : 'json'}`
+        const newItem = await targetStore.create(folderUri, name)
         markOnboardingNotebookCreated({
           uri: newItem.uri,
           name: newItem.name,
@@ -849,8 +845,8 @@ export function WorkspaceExplorer() {
         setPendingEditId(newItem.uri);
         setErrorMessage(null);
       } catch (error) {
-        console.error("Failed to create notebook", error);
-        setErrorMessage("Unable to create a new document. Please try again.");
+        console.error('Failed to create notebook', error)
+        setErrorMessage('Unable to create a new notebook. Please try again.')
       }
     },
     [fetchChildren, fsStore, store],
@@ -1449,7 +1445,10 @@ function formatShortTimestamp(date: Date): string {
                   event.stopPropagation();
                   setContextMenu(null);
                   if (adjustedContextMenu.parentUri) {
-                    void handleCreateDocument(adjustedContextMenu.parentUri);
+                    void handleCreateDocument(
+                      adjustedContextMenu.parentUri,
+                      'runme-json'
+                    )
                   } else {
                     console.warn(
                       "Cannot create document: no parent folder for",
@@ -1458,7 +1457,24 @@ function formatShortTimestamp(date: Date): string {
                   }
                 }}
               >
-                New Document
+                New Runme Notebook (.json)
+              </button>
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setContextMenu(null)
+                  if (adjustedContextMenu.parentUri) {
+                    void handleCreateDocument(
+                      adjustedContextMenu.parentUri,
+                      'ipynb'
+                    )
+                  }
+                }}
+              >
+                New Jupyter Notebook (.ipynb)
               </button>
               <button
                 type="button"
@@ -1601,12 +1617,27 @@ function formatShortTimestamp(date: Date): string {
                 className="ctx-menu-item"
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
-                  event.stopPropagation();
-                  setContextMenu(null);
-                  void handleCreateDocument(adjustedContextMenu.uri);
+                  event.stopPropagation()
+                  setContextMenu(null)
+                  void handleCreateDocument(
+                    adjustedContextMenu.uri,
+                    'runme-json'
+                  )
                 }}
               >
-                New Document
+                New Runme Notebook (.json)
+              </button>
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setContextMenu(null)
+                  void handleCreateDocument(adjustedContextMenu.uri, 'ipynb')
+                }}
+              >
+                New Jupyter Notebook (.ipynb)
               </button>
               {adjustedContextMenu.remoteUri && (
                 <button

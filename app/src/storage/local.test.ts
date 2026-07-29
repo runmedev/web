@@ -4,6 +4,7 @@ import { create, toJsonString } from '@bufbuild/protobuf'
 import md5 from 'md5'
 import { describe, expect, it, vi } from 'vitest'
 
+import { IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { MimeType, parser_pb } from '../runme/client'
 import { MemoryConflictDocStorage } from './conflictDocs'
 import type { DriveSyncCoordinator } from './driveSyncCoordinator'
@@ -11,6 +12,7 @@ import {
   EXCALIDRAW_MIME_TYPE,
   createInitialExcalidrawDocumentJson,
 } from './excalidraw'
+import { MemoryIpynbShadowStorage } from './ipynbShadows'
 import LocalNotebooks, {
   type LocalFileRecord,
   type LocalFolderRecord,
@@ -94,6 +96,7 @@ function createTestStore(
     files?: MockTable<LocalFileRecord>
     folders?: MockTable<LocalFolderRecord>
     driveSyncCoordinator?: DriveSyncCoordinator
+    ipynbShadowStorage?: MemoryIpynbShadowStorage
   } = {}
 ) {
   const localStore = Object.create(LocalNotebooks.prototype) as any
@@ -118,6 +121,8 @@ function createTestStore(
   localStore.markdownSyncSubjects = new Map()
   localStore.conflictDocStorage = new MemoryConflictDocStorage()
   localStore.revisionDocStorage = new MemoryRevisionDocStorage()
+  localStore.ipynbShadowStorage =
+    options.ipynbShadowStorage ?? new MemoryIpynbShadowStorage()
   return localStore as LocalNotebooks
 }
 
@@ -991,6 +996,168 @@ describe('LocalNotebooks pending Drive create', () => {
       parentRemoteIdWhenCreated: undefined,
       driveCreateOperationId: operationId,
     })
+  })
+})
+
+describe('LocalNotebooks ipynb conversion', () => {
+  it('keeps browser-local ipynb shadows current and accepts raw ipynb updates', async () => {
+    const store = createTestStore({})
+    await store.folders.put({
+      id: 'local://folder/local',
+      name: 'Local Notebooks',
+      remoteId: 'local://folder/local',
+      children: [],
+      lastSynced: '',
+    })
+    const item = await store.create(
+      'local://folder/local',
+      'browser-smoke.ipynb'
+    )
+    const notebook = await store.load(item.uri)
+    notebook.cells.push(
+      create(parser_pb.CellSchema, {
+        kind: parser_pb.CellKind.CODE,
+        languageId: 'javascript',
+        value: 'console.log("from Runme")',
+        metadata: { 'runme.dev/runnerName': 'appkernel-js' },
+      })
+    )
+
+    await store.save(item.uri, notebook)
+    await store.sync(item.uri)
+
+    const raw = JSON.parse(await store.loadContent(item.uri))
+    expect(raw).toMatchObject({
+      nbformat: 4,
+      cells: [
+        {
+          cell_type: 'code',
+          source: 'console.log("from Runme")',
+        },
+      ],
+    })
+    expect(raw.cells[0].metadata.runme.cell.metadata).toMatchObject({
+      'runme.dev/runnerName': 'appkernel-js',
+    })
+
+    raw.cells[0].source = 'console.log("from Jupyter")'
+    await store.saveContent(
+      item.uri,
+      `${JSON.stringify(raw, null, 2)}\n`,
+      IPYNB_MIME_TYPE
+    )
+    await expect(store.load(item.uri)).resolves.toMatchObject({
+      cells: [
+        expect.objectContaining({
+          value: 'console.log("from Jupyter")',
+          languageId: 'javascript',
+        }),
+      ],
+    })
+  })
+
+  it('loads and saves ipynb while preserving Jupyter-only fields in OPFS', async () => {
+    const localUri = 'local://file/ipynb'
+    const remoteUri = 'https://drive.google.com/file/d/ipynb123/view'
+    const source = {
+      cells: [
+        {
+          cell_type: 'code',
+          id: 'code-cell',
+          metadata: { trusted: true, vendor: { folded: false } },
+          execution_count: null,
+          source: 'print("before")\n',
+          outputs: [],
+          attachments: { unexpected_but_preserved: true },
+        },
+      ],
+      metadata: {
+        kernelspec: { name: 'python3', language: 'python' },
+        colab: { provenance: ['keep-me'] },
+      },
+      nbformat: 4,
+      nbformat_minor: 5,
+    }
+    const sourceText = `${JSON.stringify(source, null, 2)}\n`
+    let savedText = ''
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: remoteUri,
+        name: 'shared.ipynb',
+        type: NotebookStoreItemType.File,
+        children: [],
+        mimeType: IPYNB_MIME_TYPE,
+        parents: [],
+      })),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: savedText ? 'remote-2' : 'remote-1',
+        headRevisionId: savedText ? 'revision-2' : 'revision-1',
+      })),
+      loadContent: vi.fn(async () => sourceText),
+      saveContent: vi.fn(
+        async (_uri: string, content: string, _mimeType: string) => {
+          savedText = content
+        }
+      ),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: localUri,
+      name: 'shared.ipynb',
+      mimeType: IPYNB_MIME_TYPE,
+      remoteId: remoteUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    await store.sync(localUri)
+    const notebook = await store.load(localUri)
+    expect(notebook.cells[0]?.value).toBe('print("before")\n')
+    expect(
+      (await store.files.get(localUri))?.ipynbPreservation?.shadowRef
+    ).toEqual(expect.objectContaining({ storage: 'opfs' }))
+
+    notebook.cells[0]!.value = 'print("after")\n'
+    await store.save(localUri, notebook)
+    await store.sync(localUri)
+
+    expect(driveStore.saveContent).toHaveBeenCalledWith(
+      remoteUri,
+      expect.any(String),
+      IPYNB_MIME_TYPE
+    )
+    const saved = JSON.parse(savedText)
+    expect(saved.cells[0].source).toBe('print("after")\n')
+    expect(saved.cells[0].metadata).toMatchObject(source.cells[0].metadata)
+    expect(saved.cells[0].attachments).toEqual(source.cells[0].attachments)
+    expect(saved.metadata).toMatchObject(source.metadata)
+    await expect(store.files.get(localUri)).resolves.toMatchObject({
+      lastRemoteChecksum: 'remote-2',
+      lastUpstreamVersion: {
+        checksum: 'remote-2',
+        revisionId: 'revision-2',
+      },
+    })
+  })
+
+  it('rejects renaming a notebook across formats', async () => {
+    const store = createTestStore({})
+    await store.files.put({
+      id: 'local://file/ipynb',
+      name: 'shared.ipynb',
+      mimeType: IPYNB_MIME_TYPE,
+      remoteId: 'local://file/ipynb',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    await expect(
+      store.rename('local://file/ipynb', 'shared.json')
+    ).rejects.toThrow('Changing notebook formats by rename')
   })
 })
 

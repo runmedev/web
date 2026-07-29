@@ -1,13 +1,13 @@
 /// <reference types="vitest" />
 // @vitest-environment node
+import { create } from '@bufbuild/protobuf'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { create, toJsonString } from "@bufbuild/protobuf";
-
-import { parser_pb } from "../runme/client";
-import { NotebookStoreItemType } from "./notebook";
-import { FilesystemNotebookStore, isFileSystemAccessSupported } from "./fs";
-import type { FsDatabase, WorkspaceRecord, FsEntryRecord } from "./fsdb";
+import { encodeRunmeNotebook } from '../lib/notebookFormat'
+import { parser_pb } from '../runme/client'
+import { FilesystemNotebookStore, isFileSystemAccessSupported } from './fs'
+import type { FsDatabase, FsEntryRecord, WorkspaceRecord } from './fsdb'
+import { NotebookStoreItemType } from './notebook'
 
 // Provide minimal browser globals for Node environment.
 const g = globalThis as any;
@@ -152,10 +152,8 @@ function createMockDb(): FsDatabase {
 // ---------------------------------------------------------------------------
 
 function makeEmptyNotebookJson(): string {
-  const nb = create(parser_pb.NotebookSchema, { cells: [] });
-  return toJsonString(parser_pb.NotebookSchema, nb, {
-    emitDefaultValues: true,
-  });
+  const nb = create(parser_pb.NotebookSchema, { cells: [] })
+  return encodeRunmeNotebook(nb)
 }
 
 // ---------------------------------------------------------------------------
@@ -336,28 +334,59 @@ describe("FilesystemNotebookStore", () => {
       const items = await store.list(ROOT_URI);
 
       // Should have the directory first, then the .json file. readme.md is filtered out.
-      expect(items).toHaveLength(2);
-      expect(items[0].type).toBe(NotebookStoreItemType.Folder);
-      expect(items[0].name).toBe("sub");
-      expect(items[1].type).toBe(NotebookStoreItemType.File);
-      expect(items[1].name).toBe("notebook.json");
-    });
+      expect(items).toHaveLength(2)
+      expect(items[0].type).toBe(NotebookStoreItemType.Folder)
+      expect(items[0].name).toBe('sub')
+      expect(items[1].type).toBe(NotebookStoreItemType.File)
+      expect(items[1].name).toBe('notebook.json')
+    })
 
-    it("filters out non-.json files", async () => {
-      rootEntries.set("readme.md", createMockFileHandle("readme.md", "# Hi"));
-      rootEntries.set("image.png", createMockFileHandle("image.png", "binary"));
+    it('returns .ipynb files with the Jupyter MIME type', async () => {
+      rootEntries.set(
+        'notebook.ipynb',
+        createMockFileHandle(
+          'notebook.ipynb',
+          JSON.stringify({
+            cells: [],
+            metadata: {},
+            nbformat: 4,
+            nbformat_minor: 5,
+          })
+        )
+      )
 
-      const items = await store.list(ROOT_URI);
-      expect(items).toHaveLength(0);
-    });
+      const items = await store.list(ROOT_URI)
 
-    it("sorts folders before files, then alphabetically", async () => {
-      rootEntries.set("b.json", createMockFileHandle("b.json", makeEmptyNotebookJson()));
-      rootEntries.set("a.json", createMockFileHandle("a.json", makeEmptyNotebookJson()));
-      rootEntries.set("z-dir", createMockDirectoryHandle("z-dir", new Map()));
-      rootEntries.set("a-dir", createMockDirectoryHandle("a-dir", new Map()));
+      expect(items).toEqual([
+        expect.objectContaining({
+          name: 'notebook.ipynb',
+          mimeType: 'application/x-ipynb+json',
+          type: NotebookStoreItemType.File,
+        }),
+      ])
+    })
 
-      const items = await store.list(ROOT_URI);
+    it('filters out non-.json files', async () => {
+      rootEntries.set('readme.md', createMockFileHandle('readme.md', '# Hi'))
+      rootEntries.set('image.png', createMockFileHandle('image.png', 'binary'))
+
+      const items = await store.list(ROOT_URI)
+      expect(items).toHaveLength(0)
+    })
+
+    it('sorts folders before files, then alphabetically', async () => {
+      rootEntries.set(
+        'b.json',
+        createMockFileHandle('b.json', makeEmptyNotebookJson())
+      )
+      rootEntries.set(
+        'a.json',
+        createMockFileHandle('a.json', makeEmptyNotebookJson())
+      )
+      rootEntries.set('z-dir', createMockDirectoryHandle('z-dir', new Map()))
+      rootEntries.set('a-dir', createMockDirectoryHandle('a-dir', new Map()))
+
+      const items = await store.list(ROOT_URI)
       expect(items.map((i) => i.name)).toEqual([
         "a-dir",
         "z-dir",
@@ -431,10 +460,51 @@ describe("FilesystemNotebookStore", () => {
       expect(notebook.cells).toEqual([]);
     });
 
-    it("records base revision after load", async () => {
-      const nbJson = makeEmptyNotebookJson();
-      const fileHandle = createMockFileHandle("notebook.json", nbJson);
-      const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent("notebook.json")}`;
+    it('loads and saves ipynb without dropping Jupyter-only fields', async () => {
+      const source = {
+        cells: [
+          {
+            cell_type: 'code',
+            id: 'code-cell',
+            metadata: { trusted: true },
+            execution_count: null,
+            source: "print('before')\n",
+            outputs: [],
+          },
+        ],
+        metadata: { colab: { name: 'keep-me' } },
+        nbformat: 4,
+        nbformat_minor: 5,
+      }
+      const fileHandle = createMockFileHandle(
+        'notebook.ipynb',
+        JSON.stringify(source)
+      )
+      const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.ipynb')}`
+      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.ipynb`, {
+        id: `${WORKSPACE_ID}:notebook.ipynb`,
+        workspaceId: WORKSPACE_ID,
+        relativePath: 'notebook.ipynb',
+        kind: 'file',
+        handle: fileHandle,
+        lastKnownMtime: 0,
+        lastKnownSize: 0,
+      })
+
+      const notebook = await store.load(fileUri)
+      notebook.cells[0]!.value = "print('after')\n"
+      await store.save(fileUri, notebook)
+
+      const saved = JSON.parse(await (await fileHandle.getFile()).text())
+      expect(saved.cells[0].source).toBe("print('after')\n")
+      expect(saved.cells[0].metadata).toMatchObject(source.cells[0].metadata)
+      expect(saved.metadata).toMatchObject(source.metadata)
+    })
+
+    it('records base revision after load', async () => {
+      const nbJson = makeEmptyNotebookJson()
+      const fileHandle = createMockFileHandle('notebook.json', nbJson)
+      const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.json')}`;
 
       (db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.json`, {
         id: `${WORKSPACE_ID}:notebook.json`,
@@ -527,17 +597,17 @@ describe("FilesystemNotebookStore", () => {
       // The mock returns fresh lastModified on each getFile call (Date.now()),
       // so a second getFile call during save will have a different timestamp.
       // We need to manipulate the mock to return different values.
-      const originalGetFile = fileHandle.getFile;
-      let callCount = 0;
-      fileHandle.getFile = vi.fn(async () => {
-        callCount++;
+      const originalGetFile = fileHandle.getFile
+      let callCount = 0
+      fileHandle.getFile = vi.fn(async (): Promise<File> => {
+        callCount++
         if (callCount === 1) {
           // During save's conflict check — return different stats.
           return {
-            text: async () => "externally modified",
+            text: async (): Promise<string> => 'externally modified',
             lastModified: 999999999,
             size: 999,
-          };
+          } as unknown as File
         }
         return originalGetFile();
       });
@@ -601,8 +671,25 @@ describe("FilesystemNotebookStore", () => {
       expect(item.parents).toEqual([ROOT_URI]);
     });
 
-    it("calls getFileHandle with create: true", async () => {
-      await store.create(ROOT_URI, "new-notebook.json");
+    it('creates a valid empty ipynb document', async () => {
+      const item = await store.create(ROOT_URI, 'new-notebook.ipynb')
+      const file = await rootEntries.get('new-notebook.ipynb').getFile()
+      const document = JSON.parse(await file.text())
+
+      expect(item).toMatchObject({
+        name: 'new-notebook.ipynb',
+        mimeType: 'application/x-ipynb+json',
+      })
+      expect(document).toMatchObject({
+        cells: [],
+        metadata: {},
+        nbformat: 4,
+        nbformat_minor: 5,
+      })
+    })
+
+    it('calls getFileHandle with create: true', async () => {
+      await store.create(ROOT_URI, 'new-notebook.json')
       expect(rootHandle.getFileHandle).toHaveBeenCalledWith(
         "new-notebook.json",
         { create: true },
@@ -666,13 +753,39 @@ describe("FilesystemNotebookStore", () => {
   // rename
   // -------------------------------------------------------------------------
 
-  describe("rename", () => {
-    it("copies content to new file and removes old", async () => {
-      const nbJson = makeEmptyNotebookJson();
-      const oldHandle = createMockFileHandle("old.json", nbJson);
-      rootEntries.set("old.json", oldHandle);
+  describe('rename', () => {
+    it('rejects changing formats by rename', async () => {
+      const oldHandle = createMockFileHandle(
+        'old.ipynb',
+        JSON.stringify({
+          cells: [],
+          metadata: {},
+          nbformat: 4,
+          nbformat_minor: 5,
+        })
+      )
+      rootEntries.set('old.ipynb', oldHandle)
+      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:old.ipynb`, {
+        id: `${WORKSPACE_ID}:old.ipynb`,
+        workspaceId: WORKSPACE_ID,
+        relativePath: 'old.ipynb',
+        kind: 'file',
+        handle: oldHandle,
+        lastKnownMtime: 0,
+        lastKnownSize: 0,
+      })
+      const oldUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('old.ipynb')}`
 
-      (db.entries as any)._store.set(`${WORKSPACE_ID}:old.json`, {
+      await expect(store.rename(oldUri, 'new.json')).rejects.toThrow(
+        'Changing notebook formats by rename'
+      )
+    })
+
+    it('copies content to new file and removes old', async () => {
+      const nbJson = makeEmptyNotebookJson()
+      const oldHandle = createMockFileHandle('old.json', nbJson)
+      rootEntries.set('old.json', oldHandle)
+      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:old.json`, {
         id: `${WORKSPACE_ID}:old.json`,
         workspaceId: WORKSPACE_ID,
         relativePath: "old.json",
@@ -692,12 +805,11 @@ describe("FilesystemNotebookStore", () => {
       );
     });
 
-    it("removes old entry from DB", async () => {
-      const nbJson = makeEmptyNotebookJson();
-      const oldHandle = createMockFileHandle("old.json", nbJson);
-      rootEntries.set("old.json", oldHandle);
-
-      (db.entries as any)._store.set(`${WORKSPACE_ID}:old.json`, {
+    it('removes old entry from DB', async () => {
+      const nbJson = makeEmptyNotebookJson()
+      const oldHandle = createMockFileHandle('old.json', nbJson)
+      rootEntries.set('old.json', oldHandle)
+      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:old.json`, {
         id: `${WORKSPACE_ID}:old.json`,
         workspaceId: WORKSPACE_ID,
         relativePath: "old.json",
@@ -713,12 +825,11 @@ describe("FilesystemNotebookStore", () => {
       expect(db.entries.delete).toHaveBeenCalledWith(`${WORKSPACE_ID}:old.json`);
     });
 
-    it("removes old file from directory", async () => {
-      const nbJson = makeEmptyNotebookJson();
-      const oldHandle = createMockFileHandle("old.json", nbJson);
-      rootEntries.set("old.json", oldHandle);
-
-      (db.entries as any)._store.set(`${WORKSPACE_ID}:old.json`, {
+    it('removes old file from directory', async () => {
+      const nbJson = makeEmptyNotebookJson()
+      const oldHandle = createMockFileHandle('old.json', nbJson)
+      rootEntries.set('old.json', oldHandle)
+      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:old.json`, {
         id: `${WORKSPACE_ID}:old.json`,
         workspaceId: WORKSPACE_ID,
         relativePath: "old.json",
@@ -734,12 +845,11 @@ describe("FilesystemNotebookStore", () => {
       expect(rootHandle.removeEntry).toHaveBeenCalledWith("old.json");
     });
 
-    it("creates new entry in DB", async () => {
-      const nbJson = makeEmptyNotebookJson();
-      const oldHandle = createMockFileHandle("old.json", nbJson);
-      rootEntries.set("old.json", oldHandle);
-
-      (db.entries as any)._store.set(`${WORKSPACE_ID}:old.json`, {
+    it('creates new entry in DB', async () => {
+      const nbJson = makeEmptyNotebookJson()
+      const oldHandle = createMockFileHandle('old.json', nbJson)
+      rootEntries.set('old.json', oldHandle)
+      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:old.json`, {
         id: `${WORKSPACE_ID}:old.json`,
         workspaceId: WORKSPACE_ID,
         relativePath: "old.json",
@@ -756,18 +866,17 @@ describe("FilesystemNotebookStore", () => {
         expect.objectContaining({
           id: `${WORKSPACE_ID}:new.json`,
           workspaceId: WORKSPACE_ID,
-          relativePath: "new.json",
-          kind: "file",
-        }),
-      );
-    });
+          relativePath: 'new.json',
+          kind: 'file',
+        })
+      )
+    })
 
-    it("sets parent URI in the returned item", async () => {
-      const nbJson = makeEmptyNotebookJson();
-      const oldHandle = createMockFileHandle("old.json", nbJson);
-      rootEntries.set("old.json", oldHandle);
-
-      (db.entries as any)._store.set(`${WORKSPACE_ID}:old.json`, {
+    it('sets parent URI in the returned item', async () => {
+      const nbJson = makeEmptyNotebookJson()
+      const oldHandle = createMockFileHandle('old.json', nbJson)
+      rootEntries.set('old.json', oldHandle)
+      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:old.json`, {
         id: `${WORKSPACE_ID}:old.json`,
         workspaceId: WORKSPACE_ID,
         relativePath: "old.json",

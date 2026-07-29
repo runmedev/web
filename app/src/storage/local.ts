@@ -4,8 +4,16 @@ import md5 from 'md5'
 import { Subject, debounceTime } from 'rxjs'
 import { v4 as uuidv4 } from 'uuid'
 
+import { IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { appLogger } from '../lib/logging/runtime'
 import { serializeNotebookToMarkdown } from '../lib/markdown/serializeNotebookToMarkdown'
+import {
+  createInitialNotebookFile,
+  decodeNotebookFile,
+  detectNotebookFileFormat,
+  encodeIpynbNotebook,
+  isNotebookFileName,
+} from '../lib/notebookFormat'
 import { appState } from '../lib/runtime/AppState'
 import { parser_pb } from '../runme/client'
 import {
@@ -24,6 +32,11 @@ import {
   browserDriveSyncCoordinator,
 } from './driveSyncCoordinator'
 import type { FilesystemNotebookStore } from './fs'
+import {
+  type IpynbPreservationState,
+  type IpynbShadowStorage,
+  createDefaultIpynbShadowStorage,
+} from './ipynbShadows'
 import { NotebookStoreItem, NotebookStoreItemType } from './notebook'
 import {
   type RevisionDocStorage,
@@ -90,6 +103,8 @@ export interface LocalFileRecord {
    * changes without re-hashing every file on each pass.
    */
   md5Checksum: string
+  /** Lossless .ipynb merge metadata. The complete shadow lives in OPFS. */
+  ipynbPreservation?: IpynbPreservationState
 }
 
 export interface UpstreamVersion {
@@ -210,6 +225,7 @@ export class LocalNotebooks extends Dexie {
   private filesystemStore: FilesystemNotebookStore | null = null
   private readonly conflictDocStorage: ConflictDocStorage
   private readonly revisionDocStorage: RevisionDocStorage
+  private readonly ipynbShadowStorage: IpynbShadowStorage
 
   private readonly syncSubjects = new Map<string, Subject<void>>()
   private readonly markdownSyncSubjects = new Map<string, Subject<void>>()
@@ -221,7 +237,8 @@ export class LocalNotebooks extends Dexie {
     databaseName: string = 'runme-local-notebooks',
     conflictDocStorage: ConflictDocStorage = createDefaultConflictDocStorage(),
     revisionDocStorage: RevisionDocStorage = createDefaultRevisionDocStorage(),
-    driveSyncCoordinator: DriveSyncCoordinator = browserDriveSyncCoordinator
+    driveSyncCoordinator: DriveSyncCoordinator = browserDriveSyncCoordinator,
+    ipynbShadowStorage: IpynbShadowStorage = createDefaultIpynbShadowStorage()
   ) {
     super(databaseName)
 
@@ -317,6 +334,7 @@ export class LocalNotebooks extends Dexie {
     this.driveSyncCoordinator = driveSyncCoordinator
     this.conflictDocStorage = conflictDocStorage
     this.revisionDocStorage = revisionDocStorage
+    this.ipynbShadowStorage = ipynbShadowStorage
 
     void this.ensureFolderRecord(LOCAL_FOLDER_URI, 'Local Notebooks')
   }
@@ -757,6 +775,17 @@ export class LocalNotebooks extends Dexie {
     if (!record) {
       throw new Error(`Local file record not found for ${uri}`)
     }
+    if (detectNotebookFileFormat(record.name) === 'ipynb') {
+      if (isLocalFileUpstream(record.remoteId, uri)) {
+        const preservation = await this.refreshLocalIpynbShadow(uri, record)
+        return this.ipynbShadowStorage.read(preservation.shadowRef)
+      }
+      if (record.ipynbPreservation) {
+        return this.ipynbShadowStorage.read(record.ipynbPreservation.shadowRef)
+      }
+      const preservation = await this.refreshLocalIpynbShadow(uri, record)
+      return this.ipynbShadowStorage.read(preservation.shadowRef)
+    }
     if (record.doc || !isDriveUri(record.remoteId)) {
       return record.doc ?? ''
     }
@@ -804,12 +833,37 @@ export class LocalNotebooks extends Dexie {
       throw new Error(`Local file record not found for ${uri}`)
     }
 
-    const checksum = md5(content)
-    await this.files.update(uri, {
-      doc: content,
-      md5Checksum: checksum,
-      mimeType,
-    })
+    if (detectNotebookFileFormat(record.name) === 'ipynb') {
+      const decoded = decodeNotebookFile(content, record.name)
+      if (!decoded.ipynb) {
+        throw new Error(`Expected ipynb content for ${record.name}`)
+      }
+      const serialized = serializeNotebook(decoded.notebook)
+      const shadowRef = await this.ipynbShadowStorage.write(uri, content)
+      const previousRef = record.ipynbPreservation?.shadowRef
+      await this.files.update(uri, {
+        doc: serialized,
+        md5Checksum: checksumForSerializedNotebook(serialized),
+        mimeType: IPYNB_MIME_TYPE,
+        ipynbPreservation: {
+          upstreamFingerprint: md5(content),
+          shadowRef,
+          jupyterIdByRunmeRefId: decoded.ipynb.jupyterIdByRunmeRefId,
+          baselineCellHashes: decoded.ipynb.baselineCellHashes,
+          baselineOutputHashes: decoded.ipynb.baselineOutputHashes,
+        },
+      })
+      if (previousRef && previousRef.path !== shadowRef.path) {
+        await this.ipynbShadowStorage.delete(previousRef).catch(() => {})
+      }
+    } else {
+      const checksum = md5(content)
+      await this.files.update(uri, {
+        doc: content,
+        md5Checksum: checksum,
+        mimeType,
+      })
+    }
     this.notifySync(uri)
     if (!record.conflict) {
       this.enqueueSync(uri)
@@ -856,17 +910,28 @@ export class LocalNotebooks extends Dexie {
     const localDoc =
       record.doc ||
       serializeNotebook(create(parser_pb.NotebookSchema, { cells: [] }))
-    await this.driveStore.saveContent(
-      record.remoteId,
-      localDoc,
-      'application/json'
-    )
+    if (detectNotebookFileFormat(record.name) === 'ipynb') {
+      await this.saveLocalDocToDrive(
+        localUri,
+        record.remoteId,
+        localDoc,
+        record.mimeType
+      )
+    } else {
+      await this.driveStore.saveContent(
+        record.remoteId,
+        localDoc,
+        NOTEBOOK_MIME_TYPE
+      )
+    }
 
     const updatedVersion = driveMetadataToUpstreamVersion(
       await this.driveStore.getVersionMetadata(record.remoteId)
     )
     const updatedChecksum =
       updatedVersion.checksum ?? checksumForSerializedNotebook(localDoc)
+    const refreshedPreservation = (await this.files.get(localUri))
+      ?.ipynbPreservation
     await this.files.update(localUri, {
       conflict: undefined,
       lastRemoteChecksum: updatedChecksum,
@@ -874,6 +939,12 @@ export class LocalNotebooks extends Dexie {
       md5Checksum: checksumForSerializedNotebook(localDoc),
       lastSynced: nowIsoString(),
       lastSyncError: undefined,
+      ipynbPreservation: refreshedPreservation
+        ? {
+            ...refreshedPreservation,
+            upstreamFingerprint: updatedChecksum,
+          }
+        : undefined,
     })
     await this.deleteConflictDoc(record.conflict)
     this.notifySync(localUri)
@@ -901,11 +972,15 @@ export class LocalNotebooks extends Dexie {
       )
     }
 
-    const upstreamNotebook = await this.driveStore.load(record.remoteId)
-    const upstreamDoc = serializeNotebook(upstreamNotebook)
     const upstreamVersion = driveMetadataToUpstreamVersion(
       await this.driveStore.getVersionMetadata(record.remoteId)
     )
+    const upstream = await this.loadDriveNotebookDocument(
+      localUri,
+      record,
+      upstreamVersion.checksum ?? ''
+    )
+    const upstreamDoc = upstream.serialized
     const upstreamChecksum =
       upstreamVersion.checksum ?? checksumForSerializedNotebook(upstreamDoc)
     const localChecksum = await this.getOrBackfillLocalChecksum(
@@ -980,13 +1055,16 @@ export class LocalNotebooks extends Dexie {
       }
     }
 
-    const upstreamNotebook = await this.driveStore.load(record.remoteId)
-    const upstreamDoc = serializeNotebook(upstreamNotebook)
     const upstreamVersion = driveMetadataToUpstreamVersion(
       await this.driveStore.getVersionMetadata(record.remoteId)
     )
+    const upstream = await this.loadDriveNotebookDocument(
+      localUri,
+      record,
+      upstreamVersion.checksum ?? ''
+    )
     return {
-      doc: upstreamDoc,
+      doc: upstream.serialized,
       version: upstreamVersion,
     }
   }
@@ -1032,11 +1110,23 @@ export class LocalNotebooks extends Dexie {
       // the exact Drive revision and storing it in OPFS for future diffs.
     }
 
-    const revisionNotebook = await this.driveStore.loadRevision(
-      record.remoteId,
-      normalizedRevisionId
-    )
-    const revisionDoc = serializeNotebook(revisionNotebook)
+    const revisionDoc =
+      detectNotebookFileFormat(record.name) === 'ipynb'
+        ? serializeNotebook(
+            decodeNotebookFile(
+              await this.driveStore.loadRevisionContent(
+                record.remoteId,
+                normalizedRevisionId
+              ),
+              record.name
+            ).notebook
+          )
+        : serializeNotebook(
+            await this.driveStore.loadRevision(
+              record.remoteId,
+              normalizedRevisionId
+            )
+          )
     await this.getRevisionDocStorage().write(
       localUri,
       normalizedRevisionId,
@@ -1120,8 +1210,9 @@ export class LocalNotebooks extends Dexie {
   }
 
   async create(parentUri: string, name: string): Promise<NotebookStoreItem> {
+    const format = detectNotebookFileFormat(name)
     return this.createLocalFile(parentUri, name, {
-      mimeType: NOTEBOOK_MIME_TYPE,
+      mimeType: format === 'ipynb' ? IPYNB_MIME_TYPE : NOTEBOOK_MIME_TYPE,
       content: '',
     })
   }
@@ -1151,7 +1242,25 @@ export class LocalNotebooks extends Dexie {
 
     const fileUri = this.generateLocalUri('file')
     const isDriveBackedParent = isDriveUri(parent.remoteId)
-    const checksum = options.content ? md5(options.content) : ''
+    let localContent = options.content
+    let ipynbPreservation: IpynbPreservationState | undefined
+    if (detectNotebookFileFormat(name) === 'ipynb') {
+      const initialIpynb = options.content || createInitialNotebookFile(name)
+      const decoded = decodeNotebookFile(initialIpynb, name)
+      localContent = serializeNotebook(decoded.notebook)
+      const shadowRef = await this.ipynbShadowStorage.write(
+        fileUri,
+        initialIpynb
+      )
+      ipynbPreservation = {
+        upstreamFingerprint: '',
+        shadowRef,
+        jupyterIdByRunmeRefId: decoded.ipynb?.jupyterIdByRunmeRefId ?? {},
+        baselineCellHashes: decoded.ipynb?.baselineCellHashes ?? {},
+        baselineOutputHashes: decoded.ipynb?.baselineOutputHashes ?? {},
+      }
+    }
+    const checksum = localContent ? md5(localContent) : ''
     const record: LocalFileRecord = {
       id: fileUri,
       name,
@@ -1163,8 +1272,9 @@ export class LocalNotebooks extends Dexie {
       driveCreateOperationId: isDriveBackedParent ? uuidv4() : undefined,
       lastRemoteChecksum: '',
       lastSynced: isDriveBackedParent ? '' : nowIsoString(),
-      doc: options.content,
+      doc: localContent,
       md5Checksum: checksum,
+      ipynbPreservation,
     }
     await this.files.put(record)
 
@@ -1339,12 +1449,25 @@ export class LocalNotebooks extends Dexie {
       throw new Error(`Local notebook record not found for ${uri}`)
     }
 
-    let nextName = name
+    const currentFormat = detectNotebookFileFormat(record.name)
+    const requestedFormat = detectNotebookFileFormat(name)
+    if (currentFormat && requestedFormat && currentFormat !== requestedFormat) {
+      throw new Error(
+        'Changing notebook formats by rename is not supported. Use Save as instead.'
+      )
+    }
+    if (currentFormat && !requestedFormat && /\.[^/]+$/.test(name.trim())) {
+      throw new Error(`Unsupported notebook file extension: ${name}`)
+    }
+    let nextName =
+      currentFormat && !requestedFormat
+        ? `${name.trim()}${currentFormat === 'ipynb' ? '.ipynb' : '.json'}`
+        : name
     let nextRemoteId = record.remoteId
 
     if (isDriveUri(record.remoteId)) {
-      const remoteItem = await this.driveStore.rename(record.remoteId, name)
-      nextName = remoteItem.name || name
+      const remoteItem = await this.driveStore.rename(record.remoteId, nextName)
+      nextName = remoteItem.name || nextName
       nextRemoteId = remoteItem.remoteUri ?? remoteItem.uri ?? record.remoteId
     }
 
@@ -1781,6 +1904,100 @@ export class LocalNotebooks extends Dexie {
     return record
   }
 
+  private async decodeUpstreamNotebook({
+    localUri,
+    record,
+    content,
+    upstreamFingerprint,
+  }: {
+    localUri: string
+    record: LocalFileRecord
+    content: string
+    upstreamFingerprint: string
+  }): Promise<{
+    notebook: parser_pb.Notebook
+    serialized: string
+    ipynbPreservation?: IpynbPreservationState
+  }> {
+    const decoded = decodeNotebookFile(content, record.name)
+    const serialized = serializeNotebook(decoded.notebook)
+    if (!decoded.ipynb) {
+      return { notebook: decoded.notebook, serialized }
+    }
+    const shadowRef = await this.ipynbShadowStorage.write(localUri, content)
+    return {
+      notebook: decoded.notebook,
+      serialized,
+      ipynbPreservation: {
+        upstreamFingerprint,
+        shadowRef,
+        jupyterIdByRunmeRefId: decoded.ipynb.jupyterIdByRunmeRefId,
+        baselineCellHashes: decoded.ipynb.baselineCellHashes,
+        baselineOutputHashes: decoded.ipynb.baselineOutputHashes,
+      },
+    }
+  }
+
+  private async refreshLocalIpynbShadow(
+    localUri: string,
+    record: LocalFileRecord
+  ): Promise<IpynbPreservationState> {
+    const parseResult = parseSerializedNotebook(record.doc ?? '')
+    if (!parseResult.ok) {
+      throw new Error(
+        `Refusing to encode unparsable Runme notebook as .ipynb: ${String(
+          parseResult.error
+        )}`
+      )
+    }
+    const previousRef = record.ipynbPreservation?.shadowRef
+    const shadowText = record.ipynbPreservation
+      ? await this.ipynbShadowStorage.read(record.ipynbPreservation.shadowRef)
+      : undefined
+    const encoded = encodeIpynbNotebook(
+      parseResult.notebook,
+      shadowText,
+      record.ipynbPreservation
+    )
+    const shadowRef = await this.ipynbShadowStorage.write(
+      localUri,
+      encoded.text
+    )
+    const preservation: IpynbPreservationState = {
+      upstreamFingerprint: md5(encoded.text),
+      shadowRef,
+      ...encoded.state,
+    }
+    await this.files.update(localUri, {
+      ipynbPreservation: preservation,
+    })
+    if (previousRef && previousRef.path !== shadowRef.path) {
+      await this.ipynbShadowStorage.delete(previousRef).catch(() => {})
+    }
+    return preservation
+  }
+
+  private async loadDriveNotebookDocument(
+    localUri: string,
+    record: LocalFileRecord,
+    upstreamFingerprint: string
+  ): Promise<{
+    notebook: parser_pb.Notebook
+    serialized: string
+    ipynbPreservation?: IpynbPreservationState
+  }> {
+    if (detectNotebookFileFormat(record.name) === 'ipynb') {
+      return this.decodeUpstreamNotebook({
+        localUri,
+        record,
+        content: await this.driveStore.loadContent(record.remoteId),
+        upstreamFingerprint,
+      })
+    }
+    const notebook = await this.driveStore.load(record.remoteId)
+    return { notebook, serialized: serializeNotebook(notebook) }
+  }
+
   /**
    * Derive a fallback display name from the tail of a remote URI. This is a
    * best-effort helper and may return null if no meaningful segment exists.
@@ -1876,6 +2093,9 @@ export class LocalNotebooks extends Dexie {
     }
 
     if (isLocalFileUpstream(record.remoteId, localUri)) {
+      if (detectNotebookFileFormat(record.name) === 'ipynb') {
+        await this.refreshLocalIpynbShadow(localUri, record)
+      }
       await this.files.update(localUri, {
         lastSynced: nowIsoString(),
         lastSyncError: undefined,
@@ -1933,7 +2153,11 @@ export class LocalNotebooks extends Dexie {
     )
     let synced = false
 
-    if (record.mimeType && record.mimeType !== NOTEBOOK_MIME_TYPE) {
+    if (
+      record.mimeType &&
+      record.mimeType !== NOTEBOOK_MIME_TYPE &&
+      !isNotebookFileName(record.name)
+    ) {
       await this.saveLocalDocToDrive(
         localUri,
         remoteUri,
@@ -2034,8 +2258,12 @@ export class LocalNotebooks extends Dexie {
         return
       }
 
-      const remoteNotebook = await this.driveStore.load(remoteUri)
-      const serialized = serializeNotebook(remoteNotebook)
+      const remote = await this.loadDriveNotebookDocument(
+        localUri,
+        record,
+        currentRemoteChecksum
+      )
+      const serialized = remote.serialized
       logRemoteOverwriteLocalDoc({
         localUri,
         remoteUri,
@@ -2054,6 +2282,7 @@ export class LocalNotebooks extends Dexie {
         lastUpstreamVersion: currentVersion,
         lastSynced: nowIsoString(),
         lastSyncError: undefined,
+        ipynbPreservation: remote.ipynbPreservation,
       })
       synced = true
       return
@@ -2064,8 +2293,12 @@ export class LocalNotebooks extends Dexie {
     // else updated the remote file and we simply need to refresh our cache.
     if (currentRemoteChecksum && currentRemoteChecksum !== lastReadChecksum) {
       if (localChecksum === lastReadChecksum) {
-        const remoteNotebook = await this.driveStore.load(remoteUri)
-        const serialized = serializeNotebook(remoteNotebook)
+        const remote = await this.loadDriveNotebookDocument(
+          localUri,
+          record,
+          currentRemoteChecksum
+        )
+        const serialized = remote.serialized
         logRemoteOverwriteLocalDoc({
           localUri,
           remoteUri,
@@ -2084,6 +2317,7 @@ export class LocalNotebooks extends Dexie {
           lastUpstreamVersion: currentVersion,
           lastSynced: nowIsoString(),
           lastSyncError: undefined,
+          ipynbPreservation: remote.ipynbPreservation,
         })
         synced = true
         return
@@ -2146,8 +2380,62 @@ export class LocalNotebooks extends Dexie {
     localDoc: string,
     mimeType: string | undefined
   ): Promise<void> {
-    if (mimeType && mimeType !== NOTEBOOK_MIME_TYPE) {
+    const record = await this.files.get(localUri)
+    if (!record) {
+      throw new Error(`Local notebook record not found for ${localUri}`)
+    }
+    if (
+      mimeType &&
+      mimeType !== NOTEBOOK_MIME_TYPE &&
+      !isNotebookFileName(record.name)
+    ) {
       await this.driveStore.saveContent(remoteUri, localDoc, mimeType)
+      return
+    }
+
+    if (detectNotebookFileFormat(record.name) === 'ipynb') {
+      const parseResult = parseSerializedNotebook(localDoc)
+      if (!parseResult.ok) {
+        throw new Error(
+          `Refusing to save unparsable Runme notebook as .ipynb: ${String(
+            parseResult.error
+          )}`
+        )
+      }
+      let shadowText: string | undefined
+      if (record.ipynbPreservation) {
+        shadowText = await this.ipynbShadowStorage.read(
+          record.ipynbPreservation.shadowRef
+        )
+      }
+      const encoded = encodeIpynbNotebook(
+        parseResult.notebook,
+        shadowText,
+        record.ipynbPreservation
+      )
+      await this.driveStore.saveContent(
+        remoteUri,
+        encoded.text,
+        IPYNB_MIME_TYPE
+      )
+      const upstreamFingerprint =
+        (await this.driveStore.getVersionMetadata(remoteUri))?.md5Checksum ??
+        md5(encoded.text)
+      const shadowRef = await this.ipynbShadowStorage.write(
+        localUri,
+        encoded.text
+      )
+      const previousRef = record.ipynbPreservation?.shadowRef
+      await this.files.update(localUri, {
+        ipynbPreservation: {
+          upstreamFingerprint,
+          shadowRef,
+          ...encoded.state,
+        },
+      })
+      if (previousRef && previousRef.path !== shadowRef.path) {
+        await this.ipynbShadowStorage.delete(previousRef).catch(() => {})
+      }
       return
     }
 
@@ -2200,19 +2488,35 @@ export class LocalNotebooks extends Dexie {
       parentRemoteUri,
       createOperationId
     )
-    const newFile =
-      existingFile ??
-      (record.mimeType && record.mimeType !== NOTEBOOK_MIME_TYPE
-        ? await this.driveStore.createContent(
-            parentRemoteUri,
-            record.name,
-            record.doc ?? '',
-            record.mimeType,
-            { createOperationId }
-          )
-        : await this.driveStore.create(parentRemoteUri, record.name, {
-            createOperationId,
-          }))
+    let newFile = existingFile
+    if (!newFile && detectNotebookFileFormat(record.name) === 'ipynb') {
+      const shadow = record.ipynbPreservation
+        ? await this.ipynbShadowStorage.read(record.ipynbPreservation.shadowRef)
+        : createInitialNotebookFile(record.name)
+      newFile = await this.driveStore.createContent(
+        parentRemoteUri,
+        record.name,
+        shadow,
+        IPYNB_MIME_TYPE,
+        { createOperationId }
+      )
+    } else if (
+      !newFile &&
+      record.mimeType &&
+      record.mimeType !== NOTEBOOK_MIME_TYPE
+    ) {
+      newFile = await this.driveStore.createContent(
+        parentRemoteUri,
+        record.name,
+        record.doc ?? '',
+        record.mimeType ?? 'application/octet-stream',
+        { createOperationId }
+      )
+    } else if (!newFile) {
+      newFile = await this.driveStore.create(parentRemoteUri, record.name, {
+        createOperationId,
+      })
+    }
     let version: UpstreamVersion = {}
     try {
       version = driveMetadataToUpstreamVersion(
@@ -2275,6 +2579,8 @@ export class LocalNotebooks extends Dexie {
   private resolveSerializedNotebookStore(upstreamUri: string): {
     load(uri: string): Promise<parser_pb.Notebook>
     save(uri: string, notebook: parser_pb.Notebook): Promise<unknown>
+    loadContent?(uri: string): Promise<string>
+    saveContent?(uri: string, content: string): Promise<void>
   } | null {
     if (isFilesystemUri(upstreamUri)) {
       return this.filesystemStore
@@ -2308,10 +2614,27 @@ export class LocalNotebooks extends Dexie {
       record
     )
     const lastRemoteChecksum = record.lastRemoteChecksum ?? ''
+    const isIpynb = detectNotebookFileFormat(record.name) === 'ipynb'
+    const readUpstream = async () => {
+      if (isIpynb) {
+        if (!upstreamStore.loadContent) {
+          throw new Error('Filesystem store cannot read raw .ipynb content')
+        }
+        const content = await upstreamStore.loadContent(upstreamUri)
+        return this.decodeUpstreamNotebook({
+          localUri,
+          record,
+          content,
+          upstreamFingerprint: md5(content),
+        })
+      }
+      const notebook = await upstreamStore.load(upstreamUri)
+      return { notebook, serialized: serializeNotebook(notebook) }
+    }
 
     if (!localDoc) {
-      const upstreamNotebook = await upstreamStore.load(upstreamUri)
-      const upstreamDoc = serializeNotebook(upstreamNotebook)
+      const upstream = await readUpstream()
+      const upstreamDoc = upstream.serialized
       await this.files.update(localUri, {
         doc: upstreamDoc,
         md5Checksum: checksumForSerializedNotebook(upstreamDoc),
@@ -2321,12 +2644,13 @@ export class LocalNotebooks extends Dexie {
         },
         lastSynced: nowIsoString(),
         lastSyncError: undefined,
+        ipynbPreservation: upstream.ipynbPreservation,
       })
       return
     }
 
-    const upstreamNotebook = await upstreamStore.load(upstreamUri)
-    const upstreamDoc = serializeNotebook(upstreamNotebook)
+    const upstream = await readUpstream()
+    const upstreamDoc = upstream.serialized
     const upstreamChecksum = checksumForSerializedNotebook(upstreamDoc)
 
     if (upstreamChecksum !== lastRemoteChecksum) {
@@ -2349,6 +2673,7 @@ export class LocalNotebooks extends Dexie {
           },
           lastSynced: nowIsoString(),
           lastSyncError: undefined,
+          ipynbPreservation: upstream.ipynbPreservation,
         })
         return
       }
@@ -2382,7 +2707,33 @@ export class LocalNotebooks extends Dexie {
       return
     }
 
-    await upstreamStore.save(upstreamUri, parseResult.notebook)
+    if (isIpynb) {
+      if (!upstreamStore.saveContent) {
+        throw new Error('Filesystem store cannot write raw .ipynb content')
+      }
+      const shadowText = record.ipynbPreservation
+        ? await this.ipynbShadowStorage.read(record.ipynbPreservation.shadowRef)
+        : undefined
+      const encoded = encodeIpynbNotebook(
+        parseResult.notebook,
+        shadowText,
+        record.ipynbPreservation
+      )
+      await upstreamStore.saveContent(upstreamUri, encoded.text)
+      const shadowRef = await this.ipynbShadowStorage.write(
+        localUri,
+        encoded.text
+      )
+      await this.files.update(localUri, {
+        ipynbPreservation: {
+          upstreamFingerprint: md5(encoded.text),
+          shadowRef,
+          ...encoded.state,
+        },
+      })
+    } else {
+      await upstreamStore.save(upstreamUri, parseResult.notebook)
+    }
     await this.files.update(localUri, {
       lastRemoteChecksum: localChecksum,
       lastUpstreamVersion: {
@@ -2409,8 +2760,12 @@ export class LocalNotebooks extends Dexie {
       )
     }
 
-    const upstreamNotebook = await this.driveStore.load(record.remoteId)
-    const upstreamDoc = serializeNotebook(upstreamNotebook)
+    const upstream = await this.loadDriveNotebookDocument(
+      localUri,
+      record,
+      upstreamVersion.checksum ?? ''
+    )
+    const upstreamDoc = upstream.serialized
     const upstreamChecksum =
       upstreamVersion.checksum || checksumForSerializedNotebook(upstreamDoc)
     const conflict = await this.createConflictState({
@@ -2743,12 +3098,18 @@ function resolveDocumentMimeType(
   name: string | undefined,
   mimeType: string | undefined
 ): string | undefined {
+  if (isExcalidrawFileName(name)) {
+    return EXCALIDRAW_MIME_TYPE
+  }
+  if (detectNotebookFileFormat(name ?? '') === 'ipynb') {
+    return IPYNB_MIME_TYPE
+  }
+  if (detectNotebookFileFormat(name ?? '') === 'runme-json') {
+    return NOTEBOOK_MIME_TYPE
+  }
   const trimmedMimeType = mimeType?.trim()
   if (trimmedMimeType) {
     return trimmedMimeType
-  }
-  if (isExcalidrawFileName(name)) {
-    return EXCALIDRAW_MIME_TYPE
   }
   return undefined
 }

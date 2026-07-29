@@ -1,12 +1,17 @@
-import { create, fromJsonString, toJsonString } from "@bufbuild/protobuf";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4 } from 'uuid'
 
-import { parser_pb } from "../runme/client";
+import { IPYNB_MIME_TYPE, type IpynbMergeState } from '../lib/ipynb'
 import {
-  NotebookStoreItem,
-  NotebookStoreItemType,
-} from "./notebook";
-import { FsDatabase, WorkspaceRecord } from "./fsdb";
+  createInitialNotebookFile,
+  decodeNotebookFile,
+  detectNotebookFileFormat,
+  encodeIpynbNotebook,
+  encodeRunmeNotebook,
+  isNotebookFileName,
+} from '../lib/notebookFormat'
+import { parser_pb } from '../runme/client'
+import { FsDatabase, WorkspaceRecord } from './fsdb'
+import { NotebookStoreItem, NotebookStoreItemType } from './notebook'
 
 // ---------------------------------------------------------------------------
 // File System Access API type augmentations
@@ -123,11 +128,36 @@ function entryRecordId(workspaceId: string, relativePath: string): string {
 // Notebook helpers
 // ---------------------------------------------------------------------------
 
-function createEmptyNotebookJson(): string {
-  const notebook = create(parser_pb.NotebookSchema, { cells: [] });
-  return toJsonString(parser_pb.NotebookSchema, notebook, {
-    emitDefaultValues: true,
-  });
+function notebookNameForCreate(name: string): string {
+  const trimmed = name.trim()
+  if (detectNotebookFileFormat(trimmed)) {
+    return trimmed
+  }
+  if (/\.[^/]+$/.test(trimmed)) {
+    throw new Error(`Unsupported notebook file extension: ${name}`)
+  }
+  return `${trimmed}.json`
+}
+
+function notebookNameForRename(oldName: string, name: string): string {
+  const oldFormat = detectNotebookFileFormat(oldName)
+  if (!oldFormat) {
+    throw new Error(`Unsupported notebook file extension: ${oldName}`)
+  }
+  const trimmed = name.trim()
+  const nextFormat = detectNotebookFileFormat(trimmed)
+  if (nextFormat && nextFormat !== oldFormat) {
+    throw new Error(
+      'Changing notebook formats by rename is not supported. Use Save as instead.'
+    )
+  }
+  if (nextFormat) {
+    return trimmed
+  }
+  if (/\.[^/]+$/.test(trimmed)) {
+    throw new Error(`Unsupported notebook file extension: ${name}`)
+  }
+  return `${trimmed}${oldFormat === 'ipynb' ? '.ipynb' : '.json'}`
 }
 
 /**
@@ -192,7 +222,11 @@ export class FilesystemNotebookStore {
   private readonly db: FsDatabase;
 
   /** In-memory base revision map keyed by entry record id. */
-  private readonly baseRevisions = new Map<string, BaseRevision>();
+  private readonly baseRevisions = new Map<string, BaseRevision>()
+  private readonly ipynbState = new Map<
+    string,
+    { shadowText: string; state: IpynbMergeState }
+  >()
 
   constructor(db?: FsDatabase) {
     this.db = db ?? new FsDatabase();
@@ -283,9 +317,9 @@ export class FilesystemNotebookStore {
 
     const items: NotebookStoreItem[] = [];
     for await (const [name, handle] of dirHandle.entries()) {
-      if (handle.kind === "file") {
-        if (!name.endsWith(".json")) {
-          continue;
+      if (handle.kind === 'file') {
+        if (!isNotebookFileName(name)) {
+          continue
         }
         const relPath = parsed.relativePath
           ? `${parsed.relativePath}/${name}`
@@ -309,6 +343,9 @@ export class FilesystemNotebookStore {
           name,
           type: NotebookStoreItemType.File,
           children: [],
+          mimeType: name.toLowerCase().endsWith('.ipynb')
+            ? IPYNB_MIME_TYPE
+            : 'application/json',
           parents: [uri],
         });
       } else if (handle.kind === "directory") {
@@ -376,11 +413,16 @@ export class FilesystemNotebookStore {
       cachedDoc: text,
     });
 
-    const notebook = fromJsonString(parser_pb.NotebookSchema, text, {
-      ignoreUnknownFields: true,
-    });
-    ensureCellRefIds(notebook);
-    return notebook;
+    const decoded = decodeNotebookFile(text, parsed.relativePath)
+    const notebook = decoded.notebook
+    if (decoded.ipynb) {
+      this.ipynbState.set(recId, {
+        shadowText: text,
+        state: decoded.ipynb,
+      })
+    }
+    ensureCellRefIds(notebook)
+    return notebook
   }
 
   async save(uri: string, notebook: parser_pb.Notebook): Promise<void> {
@@ -409,9 +451,29 @@ export class FilesystemNotebookStore {
       }
     }
 
-    const json = toJsonString(parser_pb.NotebookSchema, notebook, {
-      emitDefaultValues: true,
-    });
+    let json: string
+    if (detectNotebookFileFormat(parsed.relativePath) === 'ipynb') {
+      let preservation = this.ipynbState.get(recId)
+      if (!preservation) {
+        const currentText = await (await fileHandle.getFile()).text()
+        const decoded = decodeNotebookFile(currentText, parsed.relativePath)
+        preservation = decoded.ipynb
+          ? { shadowText: currentText, state: decoded.ipynb }
+          : undefined
+      }
+      const encoded = encodeIpynbNotebook(
+        notebook,
+        preservation?.shadowText,
+        preservation?.state
+      )
+      json = encoded.text
+      this.ipynbState.set(recId, {
+        shadowText: json,
+        state: encoded.state,
+      })
+    } else {
+      json = encodeRunmeNotebook(notebook)
+    }
 
     const writable = await fileHandle.createWritable();
     await writable.write(json);
@@ -439,21 +501,19 @@ export class FilesystemNotebookStore {
       );
     }
 
-    // Ensure .json extension so the file will be visible via list().
-    const safeName = name.endsWith(".json") ? name : `${name}.json`;
+    const safeName = notebookNameForCreate(name)
 
     const dirHandle = await this.resolveDirectoryHandle(
       parsed.workspaceId,
       parsed.relativePath,
     );
 
-    const fileHandle = await dirHandle.getFileHandle(safeName, { create: true });
+    const fileHandle = await dirHandle.getFileHandle(safeName, { create: true })
 
-    // Write an empty notebook.
-    const json = createEmptyNotebookJson();
-    const writable = await fileHandle.createWritable();
-    await writable.write(json);
-    await writable.close();
+    const json = createInitialNotebookFile(safeName)
+    const writable = await fileHandle.createWritable()
+    await writable.write(json)
+    await writable.close()
 
     const relPath = parsed.relativePath
       ? `${parsed.relativePath}/${safeName}`
@@ -484,6 +544,9 @@ export class FilesystemNotebookStore {
       name: safeName,
       type: NotebookStoreItemType.File,
       children: [],
+      mimeType: safeName.toLowerCase().endsWith('.ipynb')
+        ? IPYNB_MIME_TYPE
+        : 'application/json',
       parents: [parentUri],
     };
   }
@@ -494,8 +557,8 @@ export class FilesystemNotebookStore {
       throw new Error("FilesystemNotebookStore.rename expects a file URI");
     }
 
-    // Ensure .json extension so the file remains visible via list().
-    const safeName = name.endsWith(".json") ? name : `${name}.json`;
+    const oldName = parsed.relativePath.split('/').at(-1) ?? parsed.relativePath
+    const safeName = notebookNameForRename(oldName, name)
 
     // Read the old file contents.
     const fileHandle = await this.resolveFileHandle(
@@ -521,13 +584,15 @@ export class FilesystemNotebookStore {
     await writable.close();
 
     // Remove the old file.
-    const oldName = segments[segments.length - 1];
-    await dirHandle.removeEntry(oldName);
+    const oldEntryName = segments[segments.length - 1]
+    await dirHandle.removeEntry(oldEntryName)
 
     // Clean up old entry record.
-    const oldRecId = entryRecordId(parsed.workspaceId, parsed.relativePath);
-    await this.db.entries.delete(oldRecId);
-    this.baseRevisions.delete(oldRecId);
+    const oldRecId = entryRecordId(parsed.workspaceId, parsed.relativePath)
+    await this.db.entries.delete(oldRecId)
+    this.baseRevisions.delete(oldRecId)
+    const preservation = this.ipynbState.get(oldRecId)
+    this.ipynbState.delete(oldRecId)
 
     // Register the new entry.
     const newRelPath = parentRelPath ? `${parentRelPath}/${safeName}` : safeName;
@@ -549,7 +614,10 @@ export class FilesystemNotebookStore {
     this.baseRevisions.set(newRecId, {
       lastModified: newFile.lastModified,
       size: newFile.size,
-    });
+    })
+    if (preservation) {
+      this.ipynbState.set(newRecId, preservation)
+    }
 
     const parentUri = buildFsUri(
       parsed.workspaceId,
@@ -562,6 +630,9 @@ export class FilesystemNotebookStore {
       name: safeName,
       type: NotebookStoreItemType.File,
       children: [],
+      mimeType: safeName.toLowerCase().endsWith('.ipynb')
+        ? IPYNB_MIME_TYPE
+        : 'application/json',
       parents: [parentUri],
     };
   }
@@ -602,8 +673,63 @@ export class FilesystemNotebookStore {
       name: displayName,
       type,
       children: [],
+      mimeType:
+        type === NotebookStoreItemType.File
+          ? displayName.toLowerCase().endsWith('.ipynb')
+            ? IPYNB_MIME_TYPE
+            : 'application/json'
+          : undefined,
       parents: [parentUri],
     };
+  }
+
+  async loadContent(uri: string): Promise<string> {
+    const parsed = parseFsUri(uri)
+    if (parsed.kind !== 'file') {
+      throw new Error('FilesystemNotebookStore.loadContent expects a file URI')
+    }
+    const handle = await this.resolveFileHandle(
+      parsed.workspaceId,
+      parsed.relativePath
+    )
+    return (await handle.getFile()).text()
+  }
+
+  async saveContent(uri: string, content: string): Promise<void> {
+    const parsed = parseFsUri(uri)
+    if (parsed.kind !== 'file') {
+      throw new Error('FilesystemNotebookStore.saveContent expects a file URI')
+    }
+    const handle = await this.resolveFileHandle(
+      parsed.workspaceId,
+      parsed.relativePath
+    )
+    const recId = entryRecordId(parsed.workspaceId, parsed.relativePath)
+    const baseRevision = this.baseRevisions.get(recId)
+    if (baseRevision) {
+      const current = await handle.getFile()
+      if (
+        current.lastModified !== baseRevision.lastModified ||
+        current.size !== baseRevision.size
+      ) {
+        throw new Error(
+          `Conflict detected for ${parsed.relativePath}: the file was modified externally since last load.`
+        )
+      }
+    }
+    const writable = await handle.createWritable()
+    await writable.write(content)
+    await writable.close()
+    const updated = await handle.getFile()
+    this.baseRevisions.set(recId, {
+      lastModified: updated.lastModified,
+      size: updated.size,
+    })
+    await this.db.entries.update(recId, {
+      lastKnownMtime: updated.lastModified,
+      lastKnownSize: updated.size,
+      cachedDoc: content,
+    })
   }
 
   async getType(uri: string): Promise<NotebookStoreItemType> {
