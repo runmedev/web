@@ -146,12 +146,46 @@ describe("driveTransfer", () => {
     });
   });
 
-  it("saves a notebook as a drive copy, mirrors locally, and switches current doc", async () => {
+  it('copies ipynb bytes without dropping Jupyter-only fields', async () => {
+    const sourceUri = 'https://drive.google.com/file/d/src123/view'
+    const destinationUri = 'https://drive.google.com/file/d/copied123/view'
+    const sourceText = JSON.stringify({
+      cells: [],
+      metadata: { colab: { provenance: ['keep-me'] } },
+      nbformat: 4,
+      nbformat_minor: 5,
+    })
+    const getMetadata = vi.fn().mockResolvedValue({
+      uri: sourceUri,
+      name: 'source.ipynb',
+      type: NotebookStoreItemType.File,
+      children: [],
+      parents: [],
+    })
+    const loadContent = vi.fn().mockResolvedValue(sourceText)
+    const createContent = vi.fn().mockResolvedValue({ uri: destinationUri })
+    appState.setDriveNotebookStore({
+      getMetadata,
+      loadContent,
+      createContent,
+    } as any)
+
+    await copyDriveNotebookFile('src123', 'folder999')
+
+    expect(createContent).toHaveBeenCalledWith(
+      'https://drive.google.com/drive/folders/folder999',
+      'source.ipynb',
+      sourceText,
+      'application/x-ipynb+json'
+    )
+  })
+
+  it('saves a notebook as a drive copy, mirrors locally, and switches current doc', async () => {
     const createRemote = vi.fn().mockResolvedValue({
-      uri: "https://drive.google.com/file/d/drive123/view",
-    });
-    const saveContent = vi.fn().mockResolvedValue(undefined);
-    appState.setDriveNotebookStore({ create: createRemote, saveContent } as any);
+      uri: 'https://drive.google.com/file/d/drive123/view',
+    })
+    const saveContent = vi.fn().mockResolvedValue(undefined)
+    appState.setDriveNotebookStore({ create: createRemote, saveContent } as any)
 
     const addFile = vi.fn().mockResolvedValue("local://file/new-copy");
     const saveLocal = vi.fn().mockResolvedValue(undefined);
@@ -177,7 +211,34 @@ describe("driveTransfer", () => {
     expect(saveContent).toHaveBeenCalledWith(
       "https://drive.google.com/file/d/drive123/view",
       expect.any(String),
-      "application/json",
-    );
-  });
-});
+      'application/json'
+    )
+  })
+
+  it('uses the ipynb extension to save a Jupyter notebook', async () => {
+    const createRemote = vi.fn().mockResolvedValue({
+      uri: 'https://drive.google.com/file/d/drive123/view',
+    })
+    const saveContent = vi.fn().mockResolvedValue(undefined)
+    appState.setDriveNotebookStore({ create: createRemote, saveContent } as any)
+    appState.setLocalNotebooks({
+      addFile: vi.fn().mockResolvedValue('local://file/new-copy'),
+      save: vi.fn().mockResolvedValue(undefined),
+    } as any)
+    appState.setOpenNotebookHandler(vi.fn().mockResolvedValue(undefined))
+
+    await saveNotebookAsDriveCopy(
+      create(parser_pb.NotebookSchema, { cells: [] }),
+      'folder123',
+      'copy.ipynb'
+    )
+
+    const [, content, mimeType] = saveContent.mock.calls[0]
+    expect(mimeType).toBe('application/x-ipynb+json')
+    expect(JSON.parse(content)).toMatchObject({
+      cells: [],
+      nbformat: 4,
+      nbformat_minor: 5,
+    })
+  })
+})

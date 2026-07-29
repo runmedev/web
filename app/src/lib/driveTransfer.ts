@@ -1,14 +1,20 @@
-import { appState } from "./runtime/AppState";
+import { parser_pb } from '../runme/client'
 import {
   type DriveSearchResult,
   driveFileUrl,
   driveFolderUrl,
   parseDriveItem,
-} from "../storage/drive";
-import { NotebookStoreItemType } from "../storage/notebook";
-import { appLogger } from "./logging/runtime";
-import { parser_pb } from "../runme/client";
-import { toJsonString } from "@bufbuild/protobuf";
+} from '../storage/drive'
+import { NotebookStoreItemType } from '../storage/notebook'
+import { IPYNB_MIME_TYPE } from './ipynb'
+import { appLogger } from './logging/runtime'
+import {
+  decodeNotebookFile,
+  detectNotebookFileFormat,
+  encodeIpynbNotebook,
+  encodeRunmeNotebook,
+} from './notebookFormat'
+import { appState } from './runtime/AppState'
 
 function ensureDriveStore() {
   const store = appState.driveNotebookStore;
@@ -262,16 +268,18 @@ export async function saveNotebookAsDriveCopy(
     throw new Error("drive.saveAsCurrentNotebook requires a non-empty file name");
   }
 
-  const fileId = await createDriveFile(folder, name);
-  const remoteUri = driveFileUrl(fileId);
-  const notebookJson = toJsonString(parser_pb.NotebookSchema, notebook, {
-    emitDefaultValues: true,
-  });
+  const fileId = await createDriveFile(folder, name)
+  const remoteUri = driveFileUrl(fileId)
+  const format = detectNotebookFileFormat(name)
+  const notebookJson =
+    format === 'ipynb'
+      ? encodeIpynbNotebook(notebook).text
+      : encodeRunmeNotebook(notebook)
   await updateDriveFileBytes(
     remoteUri,
     new TextEncoder().encode(notebookJson),
-    "application/json",
-  );
+    format === 'ipynb' ? IPYNB_MIME_TYPE : 'application/json'
+  )
 
   const localStore = ensureLocalStore();
   const localUri = await localStore.addFile(remoteUri, name);
@@ -360,11 +368,32 @@ export async function copyDriveNotebookFile(
       throw new Error("drive.copyNotebook requires a non-empty file name");
     }
 
-    const sourceNotebook = await store.load(sourceUri);
-    const created = await store.create(targetFolderRef, fileName);
-    const saveResult = await store.save(created.uri, sourceNotebook);
-    if (saveResult?.conflicted) {
-      throw new Error("drive.copyNotebook failed due to save conflict");
+    const sourceFormat = detectNotebookFileFormat(metadata.name)
+    const targetFormat = detectNotebookFileFormat(fileName)
+    let sourceNotebook: parser_pb.Notebook
+    let sourceIpynb: string | undefined
+    if (sourceFormat === 'ipynb') {
+      sourceIpynb = await store.loadContent(sourceUri)
+      sourceNotebook = decodeNotebookFile(sourceIpynb, metadata.name).notebook
+    } else {
+      sourceNotebook = await store.load(sourceUri)
+    }
+
+    let created
+    if (targetFormat === 'ipynb') {
+      const content = sourceIpynb ?? encodeIpynbNotebook(sourceNotebook).text
+      created = await store.createContent(
+        targetFolderRef,
+        fileName,
+        content,
+        IPYNB_MIME_TYPE
+      )
+    } else {
+      created = await store.create(targetFolderRef, fileName)
+      const saveResult = await store.save(created.uri, sourceNotebook)
+      if (saveResult?.conflicted) {
+        throw new Error('drive.copyNotebook failed due to save conflict')
+      }
     }
 
     const { id: fileId } = parseDriveItem(created.uri);

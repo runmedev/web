@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   removeItem: vi.fn(),
   store: {
     getMetadata: vi.fn(),
+    create: vi.fn(),
     createContent: vi.fn(),
     createFolder: vi.fn(),
     move: vi.fn(),
@@ -176,6 +177,16 @@ describe('WorkspaceExplorer current document handling', () => {
       remoteUri: 'https://drive.google.com/drive/folders/new',
       parents: ['local://folder/drive'],
     })
+    mocks.store.create.mockReset()
+    mocks.store.create.mockResolvedValue({
+      uri: 'local://file/ipynb',
+      name: 'untitled.ipynb',
+      type: NotebookStoreItemType.File,
+      children: [],
+      remoteUri: undefined,
+      mimeType: 'application/x-ipynb+json',
+      parents: ['local://folder/drive'],
+    })
     mocks.store.createContent.mockReset()
     mocks.store.createContent.mockResolvedValue({
       uri: 'local://file/excalidraw',
@@ -261,6 +272,42 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(window.prompt).not.toHaveBeenCalled()
     await waitFor(() => {
       expect(mocks.treeEdit).toHaveBeenCalledWith('local://folder/new')
+    })
+  })
+
+  it('creates a Jupyter notebook from a folder context menu', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: [],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    fireEvent.contextMenu(await screen.findByText('Drive Root'))
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'New Jupyter Notebook (.ipynb)',
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.store.create).toHaveBeenCalledWith(
+        'local://folder/drive',
+        expect.stringMatching(/^untitled-\d{8}-\d{4}\.ipynb$/)
+      )
+    })
+    await waitFor(() => {
+      expect(mocks.treeEdit).toHaveBeenCalledWith('local://file/ipynb')
     })
   })
 
