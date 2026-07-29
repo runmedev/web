@@ -164,4 +164,21 @@ describe('ipynb codec', () => {
       )
     ).toThrow('Unsupported Jupyter nbformat major version: 3')
   })
+
+  it('rejects array-valued notebook and cell metadata', () => {
+    expect(() =>
+      decodeIpynb(
+        JSON.stringify({
+          ...sourceNotebook,
+          metadata: [],
+        })
+      )
+    ).toThrow('Jupyter notebook metadata must be a JSON object')
+
+    const notebook = structuredClone(sourceNotebook)
+    notebook.cells[0]!.metadata = [] as never
+    expect(() => decodeIpynb(JSON.stringify(notebook))).toThrow(
+      'Jupyter cell 0 metadata must be a JSON object'
+    )
+  })
 })

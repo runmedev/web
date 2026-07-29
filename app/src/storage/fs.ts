@@ -705,6 +705,10 @@ export class FilesystemNotebookStore {
       parsed.relativePath
     )
     const recId = entryRecordId(parsed.workspaceId, parsed.relativePath)
+    const decoded =
+      detectNotebookFileFormat(parsed.relativePath) === 'ipynb'
+        ? decodeNotebookFile(content, parsed.relativePath)
+        : undefined
     const baseRevision = this.baseRevisions.get(recId)
     if (baseRevision) {
       const current = await handle.getFile()
@@ -730,6 +734,12 @@ export class FilesystemNotebookStore {
       lastKnownSize: updated.size,
       cachedDoc: content,
     })
+    if (decoded?.ipynb) {
+      this.ipynbState.set(recId, {
+        shadowText: content,
+        state: decoded.ipynb,
+      })
+    }
   }
 
   async getType(uri: string): Promise<NotebookStoreItemType> {

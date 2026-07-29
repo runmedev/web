@@ -1142,6 +1142,82 @@ describe('LocalNotebooks ipynb conversion', () => {
     })
   })
 
+  it('accepts remote-only Drive ipynb edits without a false conflict', async () => {
+    const localUri = 'local://file/ipynb'
+    const remoteUri = 'https://drive.google.com/file/d/ipynb123/view'
+    const makeSource = (value: string) =>
+      `${JSON.stringify({
+        cells: [
+          {
+            cell_type: 'code',
+            id: 'code-cell',
+            metadata: { vendor: { folded: false } },
+            execution_count: null,
+            source: value,
+            outputs: [],
+          },
+        ],
+        metadata: { kernelspec: { name: 'python3', language: 'python' } },
+        nbformat: 4,
+        nbformat_minor: 5,
+      })}\n`
+    let remoteText = makeSource('print("before")\n')
+    let remoteChecksum = 'remote-1'
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: remoteUri,
+        name: 'shared.ipynb',
+        type: NotebookStoreItemType.File,
+        children: [],
+        mimeType: IPYNB_MIME_TYPE,
+        parents: [],
+      })),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: remoteChecksum,
+        headRevisionId: `${remoteChecksum}-revision`,
+      })),
+      loadContent: vi.fn(async () => remoteText),
+    }
+    const shadowStorage = new MemoryIpynbShadowStorage()
+    const store = createTestStore(driveStore, {
+      ipynbShadowStorage: shadowStorage,
+    })
+    await store.files.put({
+      id: localUri,
+      name: 'shared.ipynb',
+      mimeType: IPYNB_MIME_TYPE,
+      remoteId: remoteUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    await store.sync(localUri)
+    const firstShadow = (await store.files.get(localUri))!.ipynbPreservation!
+      .shadowRef
+
+    remoteText = makeSource('print("after")\n')
+    remoteChecksum = 'remote-2'
+    await store.sync(localUri)
+
+    await expect(store.load(localUri)).resolves.toMatchObject({
+      cells: [expect.objectContaining({ value: 'print("after")\n' })],
+    })
+    const record = await store.files.get(localUri)
+    expect(record?.conflict).toBeUndefined()
+    expect(record).toMatchObject({
+      lastRemoteChecksum: 'remote-2',
+      ipynbPreservation: {
+        upstreamFingerprint: 'remote-2',
+        baselineNotebookChecksum: expect.any(String),
+      },
+    })
+    await expect(shadowStorage.read(firstShadow)).rejects.toThrow(
+      'IPYNB shadow not found'
+    )
+  })
+
   it('rejects renaming a notebook across formats', async () => {
     const store = createTestStore({})
     await store.files.put({
@@ -1291,15 +1367,35 @@ describe('LocalNotebooks moveToTrash', () => {
         parents: [],
       })),
     }
-    const store = createTestStore(driveStore)
+    const shadowStorage = new MemoryIpynbShadowStorage()
+    const shadowRef = await shadowStorage.write(
+      'local://file/drive',
+      JSON.stringify({
+        cells: [],
+        metadata: {},
+        nbformat: 4,
+        nbformat_minor: 5,
+      })
+    )
+    const store = createTestStore(driveStore, {
+      ipynbShadowStorage: shadowStorage,
+    })
     await store.files.put({
       id: 'local://file/drive',
-      name: 'untitled.json',
+      name: 'untitled.ipynb',
       remoteId: remoteUri,
       lastRemoteChecksum: '',
       lastSynced: '',
       doc: '',
       md5Checksum: '',
+      ipynbPreservation: {
+        upstreamFingerprint: '',
+        baselineNotebookChecksum: '',
+        shadowRef,
+        jupyterIdByRunmeRefId: {},
+        baselineCellHashes: {},
+        baselineOutputHashes: {},
+      },
     })
     await store.folders.put({
       id: 'local://folder/drive',
@@ -1316,6 +1412,9 @@ describe('LocalNotebooks moveToTrash', () => {
     expect(
       (await store.folders.get('local://folder/drive'))?.children
     ).not.toContain('local://file/drive')
+    await expect(shadowStorage.read(shadowRef)).rejects.toThrow(
+      'IPYNB shadow not found'
+    )
   })
 })
 

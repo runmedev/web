@@ -9,6 +9,11 @@ export interface IpynbShadowRef {
 
 export interface IpynbPreservationState {
   upstreamFingerprint: string
+  /**
+   * Checksum of the Runme representation at the last successful upstream
+   * read or write. This differs from the checksum of the raw .ipynb bytes.
+   */
+  baselineNotebookChecksum?: string
   shadowRef: IpynbShadowRef
   jupyterIdByRunmeRefId: Record<string, string>
   baselineCellHashes: Record<string, string>

@@ -376,9 +376,10 @@ function validateNotebook(value: unknown): IpynbNotebook {
   if (!Array.isArray(document.cells)) {
     throw new Error('Jupyter notebook cells must be an array')
   }
-  if (!document.metadata || typeof document.metadata !== 'object') {
-    throw new Error('Jupyter notebook metadata must be an object')
-  }
+  document.metadata = asObject(
+    document.metadata,
+    'Jupyter notebook metadata'
+  )
   return document as unknown as IpynbNotebook
 }
 
@@ -417,6 +418,10 @@ export function decodeIpynb(text: string): DecodedIpynb {
         `Unsupported Jupyter cell type: ${String(sourceCell.cell_type)}`
       )
     }
+    sourceCell.metadata = asObject(
+      sourceCell.metadata,
+      `Jupyter cell ${index} metadata`
+    )
     const id = uniqueCellId(sourceCell.id, index, usedIds)
     // Treat nbformat cell IDs as repairable input. Keeping the repaired value
     // in the shadow makes the next save both valid and lossless for the rest

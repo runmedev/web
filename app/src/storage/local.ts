@@ -847,6 +847,8 @@ export class LocalNotebooks extends Dexie {
         mimeType: IPYNB_MIME_TYPE,
         ipynbPreservation: {
           upstreamFingerprint: md5(content),
+          baselineNotebookChecksum:
+            record.ipynbPreservation?.baselineNotebookChecksum,
           shadowRef,
           jupyterIdByRunmeRefId: decoded.ipynb.jupyterIdByRunmeRefId,
           baselineCellHashes: decoded.ipynb.baselineCellHashes,
@@ -1254,6 +1256,7 @@ export class LocalNotebooks extends Dexie {
       )
       ipynbPreservation = {
         upstreamFingerprint: '',
+        baselineNotebookChecksum: checksumForSerializedNotebook(localContent),
         shadowRef,
         jupyterIdByRunmeRefId: decoded.ipynb?.jupyterIdByRunmeRefId ?? {},
         baselineCellHashes: decoded.ipynb?.baselineCellHashes ?? {},
@@ -1649,6 +1652,11 @@ export class LocalNotebooks extends Dexie {
     }
     await this.deleteConflictDoc(record.conflict)
     await this.files.delete(uri)
+    if (record.ipynbPreservation) {
+      await this.ipynbShadowStorage
+        .delete(record.ipynbPreservation.shadowRef)
+        .catch(() => {})
+    }
   }
 
   /**
@@ -1930,6 +1938,7 @@ export class LocalNotebooks extends Dexie {
       serialized,
       ipynbPreservation: {
         upstreamFingerprint,
+        baselineNotebookChecksum: checksumForSerializedNotebook(serialized),
         shadowRef,
         jupyterIdByRunmeRefId: decoded.ipynb.jupyterIdByRunmeRefId,
         baselineCellHashes: decoded.ipynb.baselineCellHashes,
@@ -1965,6 +1974,9 @@ export class LocalNotebooks extends Dexie {
     )
     const preservation: IpynbPreservationState = {
       upstreamFingerprint: md5(encoded.text),
+      baselineNotebookChecksum: checksumForSerializedNotebook(
+        serializeNotebook(parseResult.notebook)
+      ),
       shadowRef,
       ...encoded.state,
     }
@@ -1975,6 +1987,15 @@ export class LocalNotebooks extends Dexie {
       await this.ipynbShadowStorage.delete(previousRef).catch(() => {})
     }
     return preservation
+  }
+
+  private async deleteReplacedIpynbShadow(
+    previous: IpynbPreservationState | undefined,
+    next: IpynbPreservationState | undefined
+  ): Promise<void> {
+    if (previous && previous.shadowRef.path !== next?.shadowRef.path) {
+      await this.ipynbShadowStorage.delete(previous.shadowRef).catch(() => {})
+    }
   }
 
   private async loadDriveNotebookDocument(
@@ -2146,6 +2167,13 @@ export class LocalNotebooks extends Dexie {
     }
 
     const lastReadChecksum = record.lastRemoteChecksum ?? ''
+    // Drive fingerprints the raw .ipynb bytes, while localChecksum fingerprints
+    // the Runme model. Keep a baseline in the same domain as localChecksum so
+    // a remote-only edit is not mistaken for a concurrent local edit.
+    const lastReadNotebookChecksum =
+      detectNotebookFileFormat(record.name) === 'ipynb'
+        ? record.ipynbPreservation?.baselineNotebookChecksum ?? lastReadChecksum
+        : lastReadChecksum
     const localDoc = record.doc ?? ''
     const localChecksum = await this.getOrBackfillLocalChecksum(
       localUri,
@@ -2284,6 +2312,10 @@ export class LocalNotebooks extends Dexie {
         lastSyncError: undefined,
         ipynbPreservation: remote.ipynbPreservation,
       })
+      await this.deleteReplacedIpynbShadow(
+        record.ipynbPreservation,
+        remote.ipynbPreservation
+      )
       synced = true
       return
     }
@@ -2292,7 +2324,7 @@ export class LocalNotebooks extends Dexie {
     // against. If our local content still matches the old checksum, someone
     // else updated the remote file and we simply need to refresh our cache.
     if (currentRemoteChecksum && currentRemoteChecksum !== lastReadChecksum) {
-      if (localChecksum === lastReadChecksum) {
+      if (localChecksum === lastReadNotebookChecksum) {
         const remote = await this.loadDriveNotebookDocument(
           localUri,
           record,
@@ -2319,6 +2351,10 @@ export class LocalNotebooks extends Dexie {
           lastSyncError: undefined,
           ipynbPreservation: remote.ipynbPreservation,
         })
+        await this.deleteReplacedIpynbShadow(
+          record.ipynbPreservation,
+          remote.ipynbPreservation
+        )
         synced = true
         return
       }
@@ -2429,6 +2465,7 @@ export class LocalNotebooks extends Dexie {
       await this.files.update(localUri, {
         ipynbPreservation: {
           upstreamFingerprint,
+          baselineNotebookChecksum: checksumForSerializedNotebook(localDoc),
           shadowRef,
           ...encoded.state,
         },
@@ -2646,6 +2683,10 @@ export class LocalNotebooks extends Dexie {
         lastSyncError: undefined,
         ipynbPreservation: upstream.ipynbPreservation,
       })
+      await this.deleteReplacedIpynbShadow(
+        record.ipynbPreservation,
+        upstream.ipynbPreservation
+      )
       return
     }
 
@@ -2675,6 +2716,10 @@ export class LocalNotebooks extends Dexie {
           lastSyncError: undefined,
           ipynbPreservation: upstream.ipynbPreservation,
         })
+        await this.deleteReplacedIpynbShadow(
+          record.ipynbPreservation,
+          upstream.ipynbPreservation
+        )
         return
       }
 
@@ -2724,13 +2769,19 @@ export class LocalNotebooks extends Dexie {
         localUri,
         encoded.text
       )
+      const preservation: IpynbPreservationState = {
+        upstreamFingerprint: md5(encoded.text),
+        baselineNotebookChecksum: localChecksum,
+        shadowRef,
+        ...encoded.state,
+      }
       await this.files.update(localUri, {
-        ipynbPreservation: {
-          upstreamFingerprint: md5(encoded.text),
-          shadowRef,
-          ...encoded.state,
-        },
+        ipynbPreservation: preservation,
       })
+      await this.deleteReplacedIpynbShadow(
+        record.ipynbPreservation,
+        preservation
+      )
     } else {
       await upstreamStore.save(upstreamUri, parseResult.notebook)
     }

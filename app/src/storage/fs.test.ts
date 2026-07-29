@@ -501,6 +501,52 @@ describe("FilesystemNotebookStore", () => {
       expect(saved.metadata).toMatchObject(source.metadata)
     })
 
+    it('uses raw ipynb updates as the preservation source for later saves', async () => {
+      const source = {
+        cells: [
+          {
+            cell_type: 'code',
+            id: 'code-cell',
+            metadata: { vendor: { folded: false } },
+            execution_count: null,
+            source: "print('before')\n",
+            outputs: [],
+          },
+        ],
+        metadata: { colab: { provenance: ['original'] } },
+        nbformat: 4,
+        nbformat_minor: 5,
+      }
+      const fileHandle = createMockFileHandle(
+        'notebook.ipynb',
+        JSON.stringify(source)
+      )
+      const fileUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('notebook.ipynb')}`
+      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:notebook.ipynb`, {
+        id: `${WORKSPACE_ID}:notebook.ipynb`,
+        workspaceId: WORKSPACE_ID,
+        relativePath: 'notebook.ipynb',
+        kind: 'file',
+        handle: fileHandle,
+        lastKnownMtime: 0,
+        lastKnownSize: 0,
+      })
+
+      const notebook = await store.load(fileUri)
+      const rawUpdate = structuredClone(source)
+      rawUpdate.cells[0]!.metadata.vendor.folded = true
+      rawUpdate.metadata.colab.provenance = ['raw-update']
+      await store.saveContent(fileUri, JSON.stringify(rawUpdate))
+
+      notebook.cells[0]!.value = "print('from Runme')\n"
+      await store.save(fileUri, notebook)
+
+      const saved = JSON.parse(await (await fileHandle.getFile()).text())
+      expect(saved.cells[0].source).toBe("print('from Runme')\n")
+      expect(saved.cells[0].metadata.vendor.folded).toBe(true)
+      expect(saved.metadata.colab.provenance).toEqual(['raw-update'])
+    })
+
     it('records base revision after load', async () => {
       const nbJson = makeEmptyNotebookJson()
       const fileHandle = createMockFileHandle('notebook.json', nbJson)
