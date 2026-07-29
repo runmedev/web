@@ -653,7 +653,10 @@ export class LocalNotebooks extends Dexie {
       localUri,
       record
     )
-    const upstreamChecksum = record.lastRemoteChecksum ?? ''
+    const upstreamChecksum =
+      detectNotebookFileFormat(record.name) === 'ipynb'
+        ? record.ipynbPreservation?.baselineNotebookChecksum ?? ''
+        : record.lastRemoteChecksum ?? ''
     return syncStateForRecord(
       { ...record, md5Checksum: localChecksum },
       localChecksum === upstreamChecksum ? 'synced' : 'pending'
@@ -782,6 +785,45 @@ export class LocalNotebooks extends Dexie {
       }
       if (record.ipynbPreservation) {
         return this.ipynbShadowStorage.read(record.ipynbPreservation.shadowRef)
+      }
+      if (isDriveUri(record.remoteId) && !record.doc) {
+        const content = await this.driveStore.loadContent(record.remoteId)
+        let upstreamVersion: UpstreamVersion = {}
+        try {
+          upstreamVersion = driveMetadataToUpstreamVersion(
+            await this.driveStore.getVersionMetadata(record.remoteId)
+          )
+        } catch (error) {
+          appLogger.warn(
+            'Failed to record version metadata for uncached Drive ipynb',
+            {
+              attrs: {
+                scope: 'storage.drive.sync',
+                localUri: uri,
+                remoteUri: record.remoteId,
+                error: String(error),
+              },
+            }
+          )
+        }
+        const upstreamFingerprint =
+          upstreamVersion.checksum ?? md5(content)
+        const decoded = await this.decodeUpstreamNotebook({
+          localUri: uri,
+          record,
+          content,
+          upstreamFingerprint,
+        })
+        await this.files.update(uri, {
+          doc: decoded.serialized,
+          md5Checksum: checksumForSerializedNotebook(decoded.serialized),
+          lastRemoteChecksum: upstreamFingerprint,
+          lastUpstreamVersion: upstreamVersion,
+          lastSynced: nowIsoString(),
+          lastSyncError: undefined,
+          ipynbPreservation: decoded.ipynbPreservation,
+        })
+        return content
       }
       const preservation = await this.refreshLocalIpynbShadow(uri, record)
       return this.ipynbShadowStorage.read(preservation.shadowRef)
@@ -2736,6 +2778,10 @@ export class LocalNotebooks extends Dexie {
           },
         }
       )
+      await this.deleteReplacedIpynbShadow(
+        upstream.ipynbPreservation,
+        record.ipynbPreservation
+      )
       return
     }
 
@@ -2756,13 +2802,15 @@ export class LocalNotebooks extends Dexie {
       if (!upstreamStore.saveContent) {
         throw new Error('Filesystem store cannot write raw .ipynb content')
       }
-      const shadowText = record.ipynbPreservation
-        ? await this.ipynbShadowStorage.read(record.ipynbPreservation.shadowRef)
+      const mergePreservation =
+        upstream.ipynbPreservation ?? record.ipynbPreservation
+      const shadowText = mergePreservation
+        ? await this.ipynbShadowStorage.read(mergePreservation.shadowRef)
         : undefined
       const encoded = encodeIpynbNotebook(
         parseResult.notebook,
         shadowText,
-        record.ipynbPreservation
+        mergePreservation
       )
       await upstreamStore.saveContent(upstreamUri, encoded.text)
       const shadowRef = await this.ipynbShadowStorage.write(
@@ -2780,6 +2828,10 @@ export class LocalNotebooks extends Dexie {
       })
       await this.deleteReplacedIpynbShadow(
         record.ipynbPreservation,
+        preservation
+      )
+      await this.deleteReplacedIpynbShadow(
+        upstream.ipynbPreservation,
         preservation
       )
     } else {

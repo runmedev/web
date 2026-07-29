@@ -1213,9 +1213,114 @@ describe('LocalNotebooks ipynb conversion', () => {
         baselineNotebookChecksum: expect.any(String),
       },
     })
+    await expect(store.getSyncState(localUri)).resolves.toMatchObject({
+      status: 'synced',
+    })
     await expect(shadowStorage.read(firstShadow)).rejects.toThrow(
       'IPYNB shadow not found'
     )
+  })
+
+  it('loads uncached Drive ipynb bytes before creating a shadow', async () => {
+    const localUri = 'local://file/ipynb'
+    const remoteUri = 'https://drive.google.com/file/d/ipynb123/view'
+    const sourceText = `${JSON.stringify({
+      cells: [
+        {
+          cell_type: 'markdown',
+          id: 'intro',
+          metadata: { vendor: { folded: true } },
+          source: '# From Drive',
+        },
+      ],
+      metadata: { colab: { provenance: ['drive'] } },
+      nbformat: 4,
+      nbformat_minor: 5,
+    })}\n`
+    const driveStore = {
+      loadContent: vi.fn(async () => sourceText),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: 'remote-checksum',
+        headRevisionId: 'remote-revision',
+      })),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: localUri,
+      name: 'shared.ipynb',
+      mimeType: IPYNB_MIME_TYPE,
+      remoteId: remoteUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    await expect(store.loadContent(localUri)).resolves.toBe(sourceText)
+    expect(driveStore.loadContent).toHaveBeenCalledWith(remoteUri)
+    await expect(store.load(localUri)).resolves.toMatchObject({
+      cells: [expect.objectContaining({ value: '# From Drive' })],
+    })
+    await expect(store.files.get(localUri)).resolves.toMatchObject({
+      lastRemoteChecksum: 'remote-checksum',
+      lastUpstreamVersion: {
+        checksum: 'remote-checksum',
+        revisionId: 'remote-revision',
+      },
+      ipynbPreservation: {
+        upstreamFingerprint: 'remote-checksum',
+        baselineNotebookChecksum: expect.any(String),
+      },
+    })
+  })
+
+  it('merges filesystem ipynb changes from the freshly read shadow', async () => {
+    const localUri = 'local://file/ipynb'
+    const remoteUri = 'fs://workspace/test/file/notebook.ipynb'
+    const makeSource = (provenance: string) =>
+      `${JSON.stringify({
+        cells: [
+          {
+            cell_type: 'code',
+            id: 'code-cell',
+            metadata: { vendor: { folded: false } },
+            execution_count: null,
+            source: 'print("same model")\n',
+            outputs: [],
+          },
+        ],
+        metadata: { colab: { provenance: [provenance] } },
+        nbformat: 4,
+        nbformat_minor: 5,
+      })}\n`
+    let filesystemText = makeSource('original')
+    const filesystemStore = {
+      loadContent: vi.fn(async () => filesystemText),
+      saveContent: vi.fn(async (_uri: string, content: string) => {
+        filesystemText = content
+      }),
+    }
+    const store = createTestStore({})
+    store.setFilesystemStore(filesystemStore as never)
+    await store.files.put({
+      id: localUri,
+      name: 'notebook.ipynb',
+      mimeType: IPYNB_MIME_TYPE,
+      remoteId: remoteUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    await store.sync(localUri)
+    filesystemText = makeSource('external-update')
+    await store.sync(localUri)
+
+    expect(filesystemStore.saveContent).toHaveBeenCalled()
+    expect(JSON.parse(filesystemText).metadata.colab.provenance).toEqual([
+      'external-update',
+    ])
   })
 
   it('rejects renaming a notebook across formats', async () => {
