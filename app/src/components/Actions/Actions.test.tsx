@@ -1086,11 +1086,61 @@ describe('Actions tabs', () => {
       screen.getByRole('tab', { name: '202602a_tb_aws_codex_136.json' })
     )
     await screen.findByRole('button', { name: 'Copy Google Drive Link' })
+    expect(
+      screen.queryByRole('button', { name: 'Copy Google Colab Link' })
+    ).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Copy Markdown Link' }))
 
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(
         '[202602a_tb_aws_codex_136](http://localhost:3000/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2F1cDDvmvjrBKQDkZi6nojVC_CSAfTSj7EV%2Fview)'
+      )
+    })
+  })
+
+  it('copies a Google Colab link for a Drive-backed ipynb tab', async () => {
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    const remoteUri =
+      'https://drive.google.com/file/d/1cDDvmvjrBKQDkZi6nojVC_CSAfTSj7EV/view'
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: 'local://file/restored',
+        name: 'analysis.ipynb',
+        type: 'file',
+        children: [],
+        remoteUri,
+        parents: [],
+      })),
+      getSyncState: vi.fn(async () => ({
+        status: 'synced',
+        localUri: 'local://file/restored',
+        remoteId: remoteUri,
+      })),
+      rename: vi.fn(),
+      subscribeSync: vi.fn(() => () => {}),
+    }
+    contextMocks.currentDoc = 'local://file/restored'
+    contextMocks.workspaceDocuments = [
+      {
+        uri: 'local://file/restored',
+        title: 'analysis.ipynb',
+      },
+    ]
+
+    render(<Actions />)
+
+    fireEvent.contextMenu(screen.getByRole('tab', { name: 'analysis.ipynb' }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Copy Google Colab Link' })
+    )
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        'https://colab.research.google.com/drive/1cDDvmvjrBKQDkZi6nojVC_CSAfTSj7EV'
       )
     })
   })

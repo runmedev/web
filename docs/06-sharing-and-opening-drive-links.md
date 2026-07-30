@@ -40,6 +40,10 @@ explorer once coordination completes.
 ## Share-link actions
 
 The explorer can copy share links for remote items that retain a `remoteUri`.
+For a Drive-backed `.ipynb` notebook, open the notebook tab's context menu and
+choose **Copy Google Colab Link** to copy a link that opens the same Drive file
+in Colab. See [IPYNB Notebooks](17-ipynb-notebooks.md) for format and
+compatibility details.
 
 ## App Console helpers
 
