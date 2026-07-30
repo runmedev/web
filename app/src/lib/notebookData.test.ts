@@ -688,6 +688,41 @@ describe("NotebookData.runCodeCell", () => {
     logError.mockRestore();
   });
 
+  it("closes an existing stream before recording a no-runner failure", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-runner-removed",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "bash",
+      outputs: [],
+      metadata: {},
+      value: "sleep 30",
+    });
+    const model = new NotebookData({
+      notebook: create(parser_pb.NotebookSchema, { cells: [cell] }),
+      uri: "nb://test",
+      name: "test",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    expect(model.runCodeCell(cell)).toBe("run-generated");
+    const stream = model.getActiveStream(cell.refId) as
+      | (StreamsLike & { close: ReturnType<typeof vi.fn> })
+      | undefined;
+    expect(stream).toBeTruthy();
+
+    getWithFallback.mockReturnValueOnce(undefined);
+    expect(model.runCodeCell(cell)).toBe("");
+
+    expect(stream?.close).toHaveBeenCalledTimes(1);
+    expect(model.getActiveStream(cell.refId)).toBeUndefined();
+    expect(
+      model.getCellSnapshot(cell.refId)?.metadata?.[
+        RunmeMetadataKey.ExecutionState
+      ],
+    ).toBe(RunmeExecutionState.Completed);
+  });
+
   it("returns empty run id for html content cells", () => {
     const trackCellExecuted = vi.spyOn(
       googleAnalytics,

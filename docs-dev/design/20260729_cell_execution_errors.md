@@ -55,15 +55,16 @@ from the cell.
 
 When runner resolution fails, `runCodeCell` will:
 
-1. retain stateful terminal output and clear stale text output;
-2. append `Runme backend server is not running. Please start it and try again.`
+1. close and remove any stream or Jupyter socket from the previous execution;
+2. retain stateful terminal output and clear stale text output;
+3. append `Runme backend server is not running. Please start it and try again.`
    as stderr;
-3. set `runme.dev/exitCode` to `1`;
-4. set `runme.dev/executionState` to `completed`;
-5. clear stale `runme.dev/pid`, `runme.dev/lastRunID`, and
+4. set `runme.dev/exitCode` to `1`;
+5. set `runme.dev/executionState` to `completed`;
+6. clear stale `runme.dev/pid`, `runme.dev/lastRunID`, and
    `runme.dev/sequence`;
-6. update and persist the cell;
-7. return an empty run ID because no runner accepted the execution.
+7. update and persist the cell;
+8. return an empty run ID because no runner accepted the execution.
 
 ### Initial runner negotiation failure
 

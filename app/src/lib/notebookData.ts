@@ -939,6 +939,17 @@ export class NotebookData {
     const useJupyterKernel =
       normalizedLanguage === 'jupyter' || normalizedLanguage === 'ipython'
     const runner = useAppKernel ? undefined : this.getRunner(cell)
+
+    // Stop any previous execution before handling the new attempt. This must
+    // happen before the no-runner early return so an old stream cannot keep
+    // mutating the cell after we record the setup failure.
+    const existing = this.activeStreams.get(cell.refId)
+    existing?.close()
+    this.activeStreams.delete(cell.refId)
+    const existingJupyterSocket = this.activeJupyterSockets.get(cell.refId)
+    existingJupyterSocket?.socket.close()
+    this.activeJupyterSockets.delete(cell.refId)
+
     if (!useAppKernel && (!runner || !runner.endpoint)) {
       console.error('No runner available for cell', cell.refId)
       appLogger.error(RUNNER_BACKEND_UNAVAILABLE_MESSAGE, {
@@ -966,15 +977,6 @@ export class NotebookData {
       this.updateCell(cell)
       return ''
     }
-
-    // If there is an existing active stream for this cell, close it before
-    // starting a new run to avoid leaking sockets.
-    const existing = this.activeStreams.get(cell.refId)
-    existing?.close()
-    this.activeStreams.delete(cell.refId)
-    const existingJupyterSocket = this.activeJupyterSockets.get(cell.refId)
-    existingJupyterSocket?.socket.close()
-    this.activeJupyterSockets.delete(cell.refId)
 
     // Bump sequence and attach to metadata.
     this.sequence += 1
