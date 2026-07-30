@@ -3,12 +3,12 @@ import { useEffect } from "react";
 import { appLogger } from "../../lib/logging/runtime";
 import { getAppConsoleData } from "../../lib/appConsole/appConsoleController";
 import {
-  buildReadInstructionsForCodexInputSchema,
-  readInstructionsForCodex,
-  READ_INSTRUCTIONS_FOR_CODEX_TOOL_DESCRIPTION,
-  READ_INSTRUCTIONS_FOR_CODEX_TOOL_NAME,
-  READ_INSTRUCTIONS_FOR_CODEX_TOOL_TITLE,
-} from "../../lib/runtime/codexInstructions";
+  buildReadInstructionsForAIAgentsInputSchema,
+  readInstructionsForAIAgents,
+  READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_DESCRIPTION,
+  READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
+  READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_TITLE,
+} from "../../lib/runtime/aiAgentInstructions";
 import {
   buildGetDocumentationInputSchema,
   buildListDocumentationInputSchema,
@@ -139,15 +139,15 @@ export default function WebMcpToolRegistrationHost() {
       );
       modelContext.registerTool(
         {
-          name: READ_INSTRUCTIONS_FOR_CODEX_TOOL_NAME,
-          title: READ_INSTRUCTIONS_FOR_CODEX_TOOL_TITLE,
-          description: READ_INSTRUCTIONS_FOR_CODEX_TOOL_DESCRIPTION,
-          inputSchema: buildReadInstructionsForCodexInputSchema(),
+          name: READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
+          title: READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_TITLE,
+          description: READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_DESCRIPTION,
+          inputSchema: buildReadInstructionsForAIAgentsInputSchema(),
           annotations: {
             readOnlyHint: true,
             untrustedContentHint: false,
           },
-          execute: () => readInstructionsForCodex(window.location.origin),
+          execute: () => readInstructionsForAIAgents(window.location.origin),
         },
         {
           signal: registrationController.signal,
@@ -193,7 +193,7 @@ export default function WebMcpToolRegistrationHost() {
           scope: "webmcp",
           toolNames: [
             EXECUTE_CODE_TOOL_NAME,
-            READ_INSTRUCTIONS_FOR_CODEX_TOOL_NAME,
+            READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
             LIST_DOCUMENTATION_TOOL_NAME,
             GET_DOCUMENTATION_TOOL_NAME,
           ],
@@ -217,7 +217,7 @@ export default function WebMcpToolRegistrationHost() {
           scope: "webmcp",
           toolNames: [
             EXECUTE_CODE_TOOL_NAME,
-            READ_INSTRUCTIONS_FOR_CODEX_TOOL_NAME,
+            READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
             LIST_DOCUMENTATION_TOOL_NAME,
             GET_DOCUMENTATION_TOOL_NAME,
           ],

@@ -156,10 +156,10 @@ describe("WebMcpToolRegistrationHost", () => {
     expect(appConsoleDataMock.failExecution).not.toHaveBeenCalled();
 
     const instructions = registered.find(
-      ({ tool }) => tool.name === "readInstructionsForCodex",
+      ({ tool }) => tool.name === "readInstructionsForAIAgents",
     );
     expect(instructions?.tool.title).toBe(
-      "Read Runme Instructions for Codex",
+      "Read Runme Instructions for AI Agents",
     );
     expect(instructions?.tool.annotations).toEqual({
       readOnlyHint: true,

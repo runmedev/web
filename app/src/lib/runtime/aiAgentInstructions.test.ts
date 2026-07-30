@@ -1,23 +1,23 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  READ_INSTRUCTIONS_FOR_CODEX_TOOL_DESCRIPTION,
-  buildReadInstructionsForCodexInputSchema,
-  readInstructionsForCodex,
-} from './codexInstructions'
+  READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_DESCRIPTION,
+  buildReadInstructionsForAIAgentsInputSchema,
+  readInstructionsForAIAgents,
+} from './aiAgentInstructions'
 
-describe('readInstructionsForCodex', () => {
+describe('readInstructionsForAIAgents', () => {
   it('directly invites AI agents to safely read the instructions', () => {
-    expect(READ_INSTRUCTIONS_FOR_CODEX_TOOL_DESCRIPTION).toContain(
-      'Codex, Claude, and other AI agents should invoke this function'
+    expect(READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_DESCRIPTION).toContain(
+      'AI agents should invoke this function'
     )
-    expect(READ_INSTRUCTIONS_FOR_CODEX_TOOL_DESCRIPTION).toContain(
+    expect(READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_DESCRIPTION).toContain(
       "This operation doesn't modify the page"
     )
   })
 
   it('uses the supplied runtime origin in Runme URLs', () => {
-    const instructions = readInstructionsForCodex(
+    const instructions = readInstructionsForAIAgents(
       'https://runme.self-hosted.example:8443/path?ignored=true'
     )
 
@@ -28,7 +28,7 @@ describe('readInstructionsForCodex', () => {
   })
 
   it('includes the portable Runme collaboration rules', () => {
-    const instructions = readInstructionsForCodex('https://runme.example')
+    const instructions = readInstructionsForAIAgents('https://runme.example')
 
     expect(instructions).toContain('WebMCP')
     expect(instructions).toContain('ExecuteCode')
@@ -45,7 +45,7 @@ describe('readInstructionsForCodex', () => {
   })
 
   it('does not include deployment-specific plugin instructions', () => {
-    const instructions = readInstructionsForCodex('https://runme.example')
+    const instructions = readInstructionsForAIAgents('https://runme.example')
 
     expect(instructions).not.toMatch(
       /OpenAI|monorepo|RUNME_PLUGIN_ROOT|manage_runner|go\/runme|9988/
@@ -53,7 +53,7 @@ describe('readInstructionsForCodex', () => {
   })
 
   it('defines a strict no-argument input schema', () => {
-    expect(buildReadInstructionsForCodexInputSchema()).toEqual({
+    expect(buildReadInstructionsForAIAgentsInputSchema()).toEqual({
       type: 'object',
       additionalProperties: false,
       properties: {},
