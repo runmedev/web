@@ -23,6 +23,7 @@ type Scenario =
   | 'documentation'
   | 'notebooksCreate'
   | 'notebooksEmbed'
+  | 'notebooksWriteAccess'
   | 'notebooksUpdateError'
 
 class MockSandboxPort {
@@ -186,6 +187,13 @@ class MockSandboxPort {
           method: 'notebooks.embed',
           args: ['data:image/png;base64,AQID', undefined],
         })
+      } else if (this.scenario === 'notebooksWriteAccess') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'notebooks.requestWriteAccess',
+          args: [{ target: { uri: 'local://file/demo' } }],
+        })
       } else if (this.scenario === 'notebooksUpdateError') {
         this.emit({
           type: 'host-call',
@@ -302,6 +310,14 @@ class MockSandboxPort {
         this.emit({
           type: 'stdout',
           data: `${JSON.stringify(this.hostResults.get(2) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+      if (this.scenario === 'notebooksWriteAccess' && this.hostResults.has(1)) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
         })
         this.emit({ type: 'exit', exitCode: 0 })
         return
@@ -766,6 +782,52 @@ describe('SandboxJSKernel', () => {
     ])
     expect(stdout).toContain('Renamed Folder')
     expect(stdout).toContain('Editing name: local://folder/drive')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports notebook write access requests through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'notebooks.requestWriteAccess') {
+        return {
+          summary: {
+            uri: 'local://file/demo',
+            readOnly: false,
+          },
+        }
+      }
+      return null
+    })
+
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('notebooksWriteAccess'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run(
+      "console.log(await notebooks.requestWriteAccess({ target: { uri: 'local://file/demo' } }));"
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith('notebooks.requestWriteAccess', [
+      { target: { uri: 'local://file/demo' } },
+    ])
+    expect(stdout).toContain('"readOnly":false')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
   })

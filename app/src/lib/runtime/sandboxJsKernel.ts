@@ -332,6 +332,7 @@ export function buildSandboxSrcDoc(options: {
           update: (args) => callHost("notebooks.update", [args]),
           delete: (target) => callHost("notebooks.delete", [target]),
           execute: (args) => callHost("notebooks.execute", [args]),
+          requestWriteAccess: (args) => callHost("notebooks.requestWriteAccess", [args]),
           createLocal: (name, options) => callHost("notebooks.createLocal", [name, options]),
           appendCell: (args) => callHost("notebooks.appendCell", [args]),
           embed: (source, options) => callHost("notebooks.embed", [source, options]),
@@ -432,6 +433,7 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebooks.get([target]) # omitted target = current UI notebook");
           consoleProxy.log("- notebooks.update({ target, expectedRevision?, operations })");
           consoleProxy.log("- notebooks.execute({ target, refIds })");
+          consoleProxy.log("- notebooks.requestWriteAccess({ target })");
           consoleProxy.log("- notebooks.createLocal(name, options?)");
           consoleProxy.log("- notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? })");
           consoleProxy.log("- notebooks.embed(source, { target?, alt?, name? })");

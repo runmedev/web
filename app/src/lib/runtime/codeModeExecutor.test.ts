@@ -172,6 +172,48 @@ describe('codeModeExecutor', () => {
     expect(fetchMock).toHaveBeenCalled()
   })
 
+  it('bridges notebook write access requests in sandbox mode', async () => {
+    const notebook = createNotebook()
+    const requestNotebookWriteAccess = vi.fn(async () => undefined)
+    let result: unknown
+    vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(
+      async function (this: SandboxJSKernel) {
+        const bridge = (
+          this as unknown as {
+            bridge: {
+              call: (method: string, args: unknown[]) => Promise<unknown>
+            }
+          }
+        ).bridge
+        result = await bridge.call('notebooks.requestWriteAccess', [
+          { target: { uri: 'local://test.runme.md' } },
+        ])
+      }
+    )
+    const executor = createCodeModeExecutor({
+      mode: 'sandbox',
+      resolveNotebook: () => notebook,
+      listNotebooks: () => [notebook],
+      requestNotebookWriteAccess,
+    })
+
+    await executor.execute({
+      source: 'webmcp',
+      code: "await notebooks.requestWriteAccess({ target: { uri: 'local://test.runme.md' } })",
+    })
+
+    expect(requestNotebookWriteAccess).toHaveBeenCalledWith(
+      'local://test.runme.md'
+    )
+    expect(result).toEqual(
+      expect.objectContaining({
+        summary: expect.objectContaining({
+          uri: 'local://test.runme.md',
+        }),
+      })
+    )
+  })
+
   it('preserves Blob sources for top-level sandbox embed calls', async () => {
     const notebook = create(parser_pb.NotebookSchema, { cells: [] })
     const notebookData = {

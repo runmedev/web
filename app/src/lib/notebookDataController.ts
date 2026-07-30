@@ -662,6 +662,8 @@ export class NotebookDataController {
         return this.getReadableNotebookData(targetUri)
       },
       listNotebooksForAppKernel: () => this.listNotebookDataLike(uri),
+      requestNotebookWriteAccess: (targetUri: string) =>
+        this.requestWriteAccess(targetUri),
     })
     const unsubscribe = data.subscribe(() => {
       this.updateOpenEntryName(data.getUri(), data.getName())

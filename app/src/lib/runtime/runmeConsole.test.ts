@@ -990,4 +990,60 @@ describe('createNotebooksApi', () => {
       })
     ).rejects.toThrow('notebooks.execute requires an explicit target notebook.')
   })
+
+  it('requests write access for an explicitly targeted notebook', async () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [codeCell('cell-a', 'echo a')],
+    })
+    const readOnlyModel = new FakeNotebookData(
+      'local://one',
+      'One',
+      notebook,
+      new Set(),
+      new Map(),
+      true
+    )
+    const writableModel = new FakeNotebookData('local://one', 'One', notebook)
+    let currentModel = readOnlyModel
+    const requestNotebookWriteAccess = vi.fn(async (uri: string) => {
+      expect(uri).toBe('local://one')
+      currentModel = writableModel
+    })
+    const api = createNotebooksApi({
+      resolveNotebook: () => currentModel,
+      listNotebooks: () => [currentModel],
+      requestNotebookWriteAccess,
+    })
+
+    const document = await api.requestWriteAccess({
+      target: { uri: 'local://one' },
+    })
+
+    expect(requestNotebookWriteAccess).toHaveBeenCalledWith('local://one')
+    expect(document.summary.uri).toBe('local://one')
+    expect(document.summary.readOnly).toBe(false)
+    await expect(api.help('requestWriteAccess')).resolves.toContain(
+      'notebooks.requestWriteAccess({ target })'
+    )
+  })
+
+  it('rejects write access requests without an explicit target', async () => {
+    const notebook = create(parser_pb.NotebookSchema, { cells: [] })
+    const model = new FakeNotebookData(
+      'local://one',
+      'One',
+      notebook,
+      new Set(),
+      new Map(),
+      true
+    )
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      requestNotebookWriteAccess: vi.fn(async () => undefined),
+    })
+
+    await expect(api.requestWriteAccess({} as any)).rejects.toThrow(
+      'notebooks.requestWriteAccess requires an explicit target notebook.'
+    )
+  })
 })

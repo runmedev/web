@@ -127,6 +127,17 @@ vi.mock("./runtime/sandboxJsKernel", () => ({
           this.hooks.onStdout?.(`${doc?.summary?.name ?? ""}\n`);
           this.hooks.onStdout?.(`${doc?.notebook?.cells?.length ?? 0}\n`);
         }
+        if (source.includes("notebooks.requestWriteAccess")) {
+          const doc = (await this.bridge.call(
+            "notebooks.requestWriteAccess",
+            [
+              {
+                target: { uri: "nb://test" },
+              },
+            ],
+          )) as { summary?: { name?: string } };
+          this.hooks.onStdout?.(`${doc?.summary?.name ?? ""}\n`);
+        }
         if (source.includes("notebooks.embed")) {
           const result = (await this.bridge.call("notebooks.embed", [
             "data:image/png;base64,AQID",
@@ -1078,6 +1089,53 @@ describe("NotebookData.runCodeCell", () => {
     expect(stdoutText).toContain("sandbox-notebooks-get.runme.md");
     expect(stdoutText).toContain("1");
   });
+
+  it.each([
+    ["browser", APPKERNEL_RUNNER_NAME],
+    ["sandbox", APPKERNEL_SANDBOX_RUNNER_NAME],
+  ])(
+    "requests notebook write access inside %s appkernel javascript cells",
+    async (_runtime, runnerName) => {
+      const cell = create(parser_pb.CellSchema, {
+        refId: `cell-appkernel-request-write-access-${_runtime}`,
+        kind: parser_pb.CellKind.CODE,
+        languageId: "javascript",
+        outputs: [],
+        metadata: {
+          [RunmeMetadataKey.RunnerName]: runnerName,
+        },
+        value: [
+          'const doc = await notebooks.requestWriteAccess({ target: { uri: "nb://test" } });',
+          "console.log(doc.summary.name);",
+        ].join("\n"),
+      });
+      const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
+      const requestNotebookWriteAccess = vi.fn(async () => undefined);
+      const model = new NotebookData({
+        notebook,
+        uri: "nb://test",
+        name: "request-write-access.runme.md",
+        notebookStore: null,
+        loaded: true,
+        requestNotebookWriteAccess,
+      });
+
+      model.runCodeCell(cell);
+      await waitForCondition(() => {
+        const snap = model.getCellSnapshot(cell.refId);
+        return snap?.metadata?.[RunmeMetadataKey.ExitCode] === "0";
+      });
+
+      expect(requestNotebookWriteAccess).toHaveBeenCalledWith("nb://test");
+      const updated = model.getCellSnapshot(cell.refId);
+      const stdoutText = (updated?.outputs ?? [])
+        .flatMap((o) => o.items)
+        .filter((i) => i.mime === MimeType.VSCodeNotebookStdOut)
+        .map((i) => new TextDecoder().decode(i.data))
+        .join("");
+      expect(stdoutText).toContain("request-write-access.runme.md");
+    },
+  );
 
   it("embeds images from sandbox appkernel javascript cells", async () => {
     vi.stubGlobal(

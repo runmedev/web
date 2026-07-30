@@ -159,7 +159,13 @@ export class NotebookUpdateError extends Error {
   }
 }
 
-export type NotebookMethod = 'list' | 'get' | 'update' | 'delete' | 'execute'
+export type NotebookMethod =
+  | 'list'
+  | 'get'
+  | 'update'
+  | 'delete'
+  | 'execute'
+  | 'requestWriteAccess'
 
 export type NotebooksApi = {
   help: (topic?: NotebookMethod) => Promise<string>
@@ -176,6 +182,9 @@ export type NotebooksApi = {
     target?: NotebookTarget
     refIds: string[]
   }) => Promise<{ handle: NotebookHandle; cells: parser_pb.Cell[] }>
+  requestWriteAccess: (args: {
+    target: NotebookTarget
+  }) => Promise<NotebookDocument>
 }
 
 export type RunmeConsoleApi = {
@@ -315,7 +324,7 @@ export function resolveNotebookTargetUri(
 }
 
 function formatMissingTargetError(
-  method: 'update' | 'delete' | 'execute'
+  method: 'update' | 'delete' | 'execute' | 'requestWriteAccess'
 ): string {
   if (method === 'update') {
     return (
@@ -327,6 +336,13 @@ function formatMissingTargetError(
   if (method === 'execute') {
     return (
       'notebooks.execute requires an explicit target notebook. ' +
+      'Pass target: { handle: doc.handle } after const doc = await notebooks.get(), ' +
+      'or target: { uri: "local://..." }.'
+    )
+  }
+  if (method === 'requestWriteAccess') {
+    return (
+      'notebooks.requestWriteAccess requires an explicit target notebook. ' +
       'Pass target: { handle: doc.handle } after const doc = await notebooks.get(), ' +
       'or target: { uri: "local://..." }.'
     )
@@ -645,9 +661,11 @@ function createNotebookUpdateError({
 export function createNotebooksApi({
   resolveNotebook,
   listNotebooks,
+  requestNotebookWriteAccess,
 }: {
   resolveNotebook: (target?: unknown) => NotebookDataLike | null
   listNotebooks?: () => NotebookDataLike[]
+  requestNotebookWriteAccess?: (uri: string) => Promise<unknown>
 }): NotebooksApi {
   const resolveNotebookByTarget = (
     target?: NotebookTarget
@@ -661,7 +679,7 @@ export function createNotebooksApi({
   }
 
   const resolveNotebookByRequiredTarget = (
-    method: 'update' | 'delete' | 'execute',
+    method: 'update' | 'delete' | 'execute' | 'requestWriteAccess',
     target?: NotebookTarget
   ): NotebookDataLike => {
     if (target === undefined) {
@@ -695,6 +713,9 @@ export function createNotebooksApi({
     if (topic === 'execute') {
       return 'notebooks.execute({ target, refIds: string[] }): Promise<{ handle, cells }>. target is required.'
     }
+    if (topic === 'requestWriteAccess') {
+      return 'notebooks.requestWriteAccess({ target }): Promise<NotebookDocument>. Cooperatively asks the current owner to save and release the notebook, then returns the refreshed document. target is required.'
+    }
     return [
       'Notebook SDK methods:',
       '- notebooks.list(query?)',
@@ -702,6 +723,7 @@ export function createNotebooksApi({
       '- notebooks.update({ target, expectedRevision?, operations })',
       '- notebooks.delete(target)',
       '- notebooks.execute({ target, refIds })',
+      '- notebooks.requestWriteAccess({ target })',
       '- notebooks.help(topic?)',
     ].join('\n')
   }
@@ -856,6 +878,20 @@ export function createNotebooksApi({
         handle: makeHandle(notebook),
         cells: executedCells,
       }
+    },
+    requestWriteAccess: async (args) => {
+      const notebook = resolveNotebookByRequiredTarget(
+        'requestWriteAccess',
+        args?.target
+      )
+      if (!requestNotebookWriteAccess) {
+        throw new Error(
+          'notebooks.requestWriteAccess is not available in this runtime.'
+        )
+      }
+      const uri = notebook.getUri()
+      await requestNotebookWriteAccess(uri)
+      return makeDocument(resolveNotebookByTarget({ uri }))
     },
   }
 }

@@ -69,6 +69,23 @@ console.log(JSON.stringify({
 
 If the user's notebook reference is ambiguous, ask which notebook to use before making a change.
 
+## Request write access when needed
+
+If \`doc.summary.readOnly\` is true because another Runme session owns the notebook, request a cooperative takeover before mutating it:
+
+\`\`\`js
+const writable = await notebooks.requestWriteAccess({
+  target: { uri: notebookUri },
+})
+console.log(JSON.stringify({
+  uri: writable.handle?.uri,
+  revision: writable.handle?.revision,
+  readOnly: writable.summary?.readOnly,
+}))
+\`\`\`
+
+Continue only when the returned document has \`summary.readOnly === false\`. The current owner saves pending changes before releasing its lock. Always pass the concrete notebook URI; do not request access to whichever notebook is currently selected.
+
 ## Make safe notebook changes
 
 - Inspect \`await notebooks.help()\` when helper availability is uncertain.

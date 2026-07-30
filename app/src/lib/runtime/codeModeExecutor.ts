@@ -106,6 +106,7 @@ export function createCodeModeExecutor(options: {
   maxCodeBytes?: number
   resolveNotebook: (target?: unknown) => NotebookDataLike | null
   listNotebooks?: () => NotebookDataLike[]
+  requestNotebookWriteAccess?: (uri: string) => Promise<unknown>
 }): CodeModeExecutor {
   const mode = options.mode ?? 'sandbox'
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
@@ -155,6 +156,7 @@ export function createCodeModeExecutor(options: {
       const hostNotebooksApi = createHostNotebooksApi({
         resolveNotebook,
         listNotebooks,
+        requestNotebookWriteAccess: options.requestNotebookWriteAccess,
       })
       const notebookDiffApi = createNotebookDiffRuntimeApi({
         notebooksApi: hostNotebooksApi,
@@ -196,6 +198,7 @@ export function createCodeModeExecutor(options: {
         },
         resolveNotebook,
         listNotebooks,
+        requestNotebookWriteAccess: options.requestNotebookWriteAccess,
         opfsApi,
         networkApi,
         signal: abortController.signal,

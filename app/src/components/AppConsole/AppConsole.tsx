@@ -185,7 +185,7 @@ export default function AppConsole({
   const { updateRunner, deleteRunner, setDefaultRunner } = useRunners()
   const { getItems, addItem, removeItem } = useWorkspace()
   const { getCurrentDoc, getLastNotebookDoc, setCurrentDoc } = useCurrentDoc()
-  const { getNotebookData, openNotebook, useNotebookList } =
+  const { getNotebookData, openNotebook, requestWriteAccess, useNotebookList } =
     useNotebookContext()
   const { showDocument } = useWorkspaceDocumentContext()
   const openNotebooks = useNotebookList()
@@ -432,6 +432,7 @@ export default function AppConsole({
         setCurrentDoc(result.localUri)
       },
       resolveNotebook: resolveNotebookData,
+      requestNotebookWriteAccess: requestWriteAccess,
       listNotebooks: () =>
         openNotebooks.reduce<NotebookDataLike[]>((items, notebook) => {
           const resolved = getNotebookData(notebook.uri)
@@ -491,6 +492,7 @@ export default function AppConsole({
     getNotebookData,
     openNotebook,
     openNotebooks,
+    requestWriteAccess,
     removeItem,
     resolveNotebookData,
     resolveNotebookStore,
