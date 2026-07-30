@@ -1,6 +1,6 @@
 import { create } from "@bufbuild/protobuf";
 import { Code } from "@buf/googleapis_googleapis.bufbuild_es/google/rpc/code_pb";
-import type { StreamsLike } from "@runmedev/renderers";
+import { RunIntent, type StreamsLike } from "@runmedev/renderers";
 import { Subject } from "rxjs";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -283,7 +283,13 @@ describe("bindStreamsToCell", () => {
     };
 
     const fake = makeFakeStreams();
-    bindStreamsToCell({ refId, streams: fake, getCell, updateCell });
+    bindStreamsToCell({
+      refId,
+      streams: fake,
+      intent: RunIntent.START,
+      getCell,
+      updateCell,
+    });
 
     fake.stdout$.next(new TextEncoder().encode("hello"));
     fake.stdout$.next(new TextEncoder().encode(" world"));
@@ -321,7 +327,13 @@ describe("bindStreamsToCell", () => {
     };
 
     const fake = makeFakeStreams();
-    bindStreamsToCell({ refId, streams: fake, getCell, updateCell });
+    bindStreamsToCell({
+      refId,
+      streams: fake,
+      intent: RunIntent.START,
+      getCell,
+      updateCell,
+    });
 
     fake.pid$.next(123);
     expect(current.metadata?.[RunmeMetadataKey.Pid]).toBe("123");
@@ -350,6 +362,7 @@ describe("bindStreamsToCell", () => {
     bindStreamsToCell({
       refId,
       streams: fake,
+      intent: RunIntent.RESUME,
       getCell: () => current,
       updateCell: (next) => {
         current = next;
@@ -382,6 +395,7 @@ describe("bindStreamsToCell", () => {
     bindStreamsToCell({
       refId,
       streams: fake,
+      intent: RunIntent.RESUME,
       getCell: () => current,
       updateCell: (next) => {
         current = next;
@@ -402,6 +416,48 @@ describe("bindStreamsToCell", () => {
     expect(
       new TextDecoder().decode(stderr?.data ?? new Uint8Array()),
     ).toContain("Execution monitoring was interrupted");
+  });
+
+  it("surfaces an initial runner protocol error in cell output", () => {
+    const refId = "cell-start-protocol-error";
+    const cell = create(parser_pb.CellSchema, {
+      refId,
+      kind: parser_pb.CellKind.CODE,
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.LastRunID]: "run-protocol-error",
+        [RunmeMetadataKey.ExecutionState]: RunmeExecutionState.Running,
+      },
+    });
+
+    let current = cell;
+    const fake = makeFakeStreams();
+    bindStreamsToCell({
+      refId,
+      streams: fake,
+      intent: RunIntent.START,
+      getCell: () => current,
+      updateCell: (next) => {
+        current = next;
+      },
+    });
+
+    fake.errors$.next({
+      code: Code.INVALID_ARGUMENT,
+      message: 'proto: unknown field "openRunRequest"',
+    });
+
+    expect(current.metadata?.[RunmeMetadataKey.Pid]).toBeUndefined();
+    expect(current.metadata?.[RunmeMetadataKey.ExitCode]).toBe("1");
+    expect(current.metadata?.[RunmeMetadataKey.ExecutionState]).toBe(
+      RunmeExecutionState.Completed,
+    );
+    const stderr = current.outputs
+      .flatMap((output) => output.items)
+      .find((item) => item.mime === MimeType.VSCodeNotebookStdErr);
+    expect(
+      new TextDecoder().decode(stderr?.data ?? new Uint8Array()),
+    ).toContain('Cell execution failed: proto: unknown field "openRunRequest"');
   });
 });
 
@@ -586,7 +642,10 @@ describe("NotebookData.runCodeCell", () => {
       refId: "cell-no-runner",
       kind: parser_pb.CellKind.CODE,
       outputs: [],
-      metadata: {},
+      metadata: {
+        [RunmeMetadataKey.LastRunID]: "stale-run",
+        [RunmeMetadataKey.Sequence]: "7",
+      },
       value: "echo hello",
     });
     const notebook = create(parser_pb.NotebookSchema, { cells: [cell] });
@@ -611,6 +670,21 @@ describe("NotebookData.runCodeCell", () => {
       },
     );
     expect(trackCellExecuted).not.toHaveBeenCalled();
+    const updated = model.getCellSnapshot(cell.refId);
+    expect(updated?.metadata?.[RunmeMetadataKey.ExitCode]).toBe("1");
+    expect(updated?.metadata?.[RunmeMetadataKey.ExecutionState]).toBe(
+      RunmeExecutionState.Completed,
+    );
+    expect(updated?.metadata?.[RunmeMetadataKey.LastRunID]).toBeUndefined();
+    expect(updated?.metadata?.[RunmeMetadataKey.Sequence]).toBeUndefined();
+    const stderr = (updated?.outputs ?? [])
+      .flatMap((output) => output.items)
+      .find((item) => item.mime === MimeType.VSCodeNotebookStdErr);
+    expect(
+      new TextDecoder().decode(stderr?.data ?? new Uint8Array()),
+    ).toContain(
+      "Runme backend server is not running. Please start it and try again.",
+    );
     logError.mockRestore();
   });
 
