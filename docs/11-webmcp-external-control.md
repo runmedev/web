@@ -3,11 +3,11 @@ name: webmcp-external-control
 title: WebMCP External Control
 order: 11
 description: >-
-  Use this guide when Codex or another external browser agent needs to inspect,
-  edit, or execute a Runme notebook through WebMCP. It defines the safe tab and
-  session selection workflow, stable notebook targeting, Drive-backed notebook
-  lookup, and recovery from partial notebook mutations. This is the primary
-  guide for automating an open Runme tab rather than operating it manually.
+  Use this guide when an external AI agent needs to inspect, edit, or execute a
+  Runme notebook through WebMCP. It defines the safe tab and session selection
+  workflow, stable notebook targeting, Drive-backed notebook lookup, and
+  recovery from partial notebook mutations. This is the primary guide for
+  automating an open Runme tab rather than operating it manually.
 ---
 
 # WebMCP External Control
@@ -18,10 +18,10 @@ Runme Web exposes WebMCP tools that let an external browser controller inspect,
 edit, and execute work in an open Runme tab. This page describes how to select
 the intended tab and notebook safely before using those tools.
 
-This is the supported integration path for Codex and other external agents.
+This is the supported integration path for external AI agents.
 Runme does not include a built-in AI Chat panel.
 
-Runme also exposes the read-only `readInstructionsForCodex` WebMCP tool. It
+Runme also exposes the read-only `readInstructionsForAIAgents` WebMCP tool. It
 returns a concise Markdown version of the safe browser workflow with URLs
 generated from the current page origin. Call it before `ExecuteCode` when the
 controller needs Runme-specific operating instructions. Because the origin is
