@@ -138,6 +138,21 @@ function isRunNotFoundError(err: unknown): boolean {
   )
 }
 
+function getExecutionErrorMessage(err: unknown): string {
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'message' in err &&
+    typeof (err as { message?: unknown }).message === 'string'
+  ) {
+    const message = (err as { message: string }).message.trim()
+    if (message.length > 0) {
+      return message
+    }
+  }
+  return String(err)
+}
+
 function decodeBase64ToBytes(value: string): Uint8Array {
   try {
     const binary = globalThis.atob(value)
@@ -156,6 +171,7 @@ type Listener = () => void
 export type StreamBinder = (args: {
   refId: string
   streams: StreamsLike
+  intent: RunIntent
   getCell: (refId: string) => parser_pb.Cell | null
   updateCell: (cell: parser_pb.Cell, options?: { transient?: boolean }) => void
   onClose?: (refId: string) => void
@@ -172,6 +188,7 @@ export type StreamBinder = (args: {
 export const bindStreamsToCell: StreamBinder = ({
   refId,
   streams,
+  intent,
   getCell,
   updateCell,
   onClose,
@@ -415,8 +432,12 @@ export const bindStreamsToCell: StreamBinder = ({
         },
       })
       const updated = getCell(refId)
+      const hasPid =
+        typeof updated?.metadata?.[RunmeMetadataKey.Pid] === 'string' &&
+        updated.metadata[RunmeMetadataKey.Pid].length > 0
       if (
         isRunNotFoundError(err) &&
+        hasPid &&
         updated?.metadata &&
         typeof updated.metadata[RunmeMetadataKey.ExitCode] !== 'string'
       ) {
@@ -426,6 +447,20 @@ export const bindStreamsToCell: StreamBinder = ({
         updated.outputs = [
           ...updated.outputs,
           ...createStdTextOutputs('', EXECUTION_MONITOR_INTERRUPTED_MESSAGE),
+        ]
+        updateCell(updated)
+      } else if (updated && intent === RunIntent.START && !hasPid) {
+        updated.metadata ??= {}
+        updated.metadata[RunmeMetadataKey.ExitCode] = '1'
+        updated.metadata[RunmeMetadataKey.ExecutionState] =
+          RunmeExecutionState.Completed
+        delete updated.metadata[RunmeMetadataKey.Pid]
+        updated.outputs = [
+          ...updated.outputs,
+          ...createStdTextOutputs(
+            '',
+            `Cell execution failed: ${getExecutionErrorMessage(err)}\n`
+          ),
         ]
         updateCell(updated)
       }
@@ -904,6 +939,17 @@ export class NotebookData {
     const useJupyterKernel =
       normalizedLanguage === 'jupyter' || normalizedLanguage === 'ipython'
     const runner = useAppKernel ? undefined : this.getRunner(cell)
+
+    // Stop any previous execution before handling the new attempt. This must
+    // happen before the no-runner early return so an old stream cannot keep
+    // mutating the cell after we record the setup failure.
+    const existing = this.activeStreams.get(cell.refId)
+    existing?.close()
+    this.activeStreams.delete(cell.refId)
+    const existingJupyterSocket = this.activeJupyterSockets.get(cell.refId)
+    existingJupyterSocket?.socket.close()
+    this.activeJupyterSockets.delete(cell.refId)
+
     if (!useAppKernel && (!runner || !runner.endpoint)) {
       console.error('No runner available for cell', cell.refId)
       appLogger.error(RUNNER_BACKEND_UNAVAILABLE_MESSAGE, {
@@ -913,17 +959,24 @@ export class NotebookData {
           runnerName: requestedRunnerName || DEFAULT_RUNNER_PLACEHOLDER,
         },
       })
+      cell.metadata ??= {}
+      cell.metadata[RunmeMetadataKey.ExitCode] = '1'
+      cell.metadata[RunmeMetadataKey.ExecutionState] =
+        RunmeExecutionState.Completed
+      delete cell.metadata[RunmeMetadataKey.Pid]
+      delete cell.metadata[RunmeMetadataKey.LastRunID]
+      delete cell.metadata[RunmeMetadataKey.Sequence]
+      cell.outputs = [
+        ...cell.outputs.filter((output) =>
+          output.items.some(
+            (item) => item.mime === MimeType.StatefulRunmeTerminal
+          )
+        ),
+        ...createStdTextOutputs('', `${RUNNER_BACKEND_UNAVAILABLE_MESSAGE}\n`),
+      ]
+      this.updateCell(cell)
       return ''
     }
-
-    // If there is an existing active stream for this cell, close it before
-    // starting a new run to avoid leaking sockets.
-    const existing = this.activeStreams.get(cell.refId)
-    existing?.close()
-    this.activeStreams.delete(cell.refId)
-    const existingJupyterSocket = this.activeJupyterSockets.get(cell.refId)
-    existingJupyterSocket?.socket.close()
-    this.activeJupyterSockets.delete(cell.refId)
 
     // Bump sequence and attach to metadata.
     this.sequence += 1
@@ -1823,6 +1876,7 @@ export class NotebookData {
     bindStreamsToCell({
       refId: cell.refId,
       streams,
+      intent,
       getCell: (ref) =>
         this.executionGeneration === generation && !this.releasePending
           ? this.getCellProto(ref)
