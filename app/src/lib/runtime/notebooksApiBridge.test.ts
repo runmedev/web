@@ -141,6 +141,9 @@ function createBridgeServer(
     execute: vi.fn(async () => {
       throw new Error('not implemented')
     }),
+    requestWriteAccess: vi.fn(async () => {
+      throw new Error('not implemented')
+    }),
     ...overrides,
   }
 
@@ -209,6 +212,41 @@ describe('createNotebooksApiBridgeServer', () => {
       title: 'demo',
     })
     expect(resolve).toHaveBeenCalledWith('local://file/demo')
+  })
+
+  it('delegates write access requests to the host notebook API', async () => {
+    const requestWriteAccess = vi.fn(async () => ({
+      summary: {
+        uri: 'local://file/demo',
+        name: 'demo.json',
+        isOpen: true,
+        readOnly: false,
+        source: 'local' as const,
+      },
+      handle: {
+        uri: 'local://file/demo',
+        revision: 'revision-after-takeover',
+      },
+      notebook: create(parser_pb.NotebookSchema, { cells: [] }),
+    }))
+    const bridgeServer = createBridgeServer({ requestWriteAccess })
+
+    await expect(
+      bridgeServer.handleMessage({
+        method: 'notebooks.requestWriteAccess',
+        args: [{ target: { uri: 'local://file/demo' } }],
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        summary: expect.objectContaining({
+          uri: 'local://file/demo',
+          readOnly: false,
+        }),
+      })
+    )
+    expect(requestWriteAccess).toHaveBeenCalledWith({
+      target: { uri: 'local://file/demo' },
+    })
   })
 
   it('returns JSON-safe get and update results for notebooks with BigInt timing fields', async () => {

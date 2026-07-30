@@ -125,6 +125,7 @@ export class JSKernel {
               "- notebooks.get([target]): get notebook document and handle; omitted target = current UI notebook",
               "- notebooks.update({ target, operations, ... }): apply notebook mutations",
               "- notebooks.execute({ target, refIds }): run selected cells",
+              "- notebooks.requestWriteAccess({ target }): cooperatively acquire notebook write access",
               "- help(): show this message",
             ].join("\n") + "\n",
           )),

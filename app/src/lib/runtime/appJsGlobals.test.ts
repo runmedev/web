@@ -203,6 +203,28 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     )
   })
 
+  it('exposes notebook write access requests through the App Console globals', async () => {
+    const notebook = new FakeNotebookData(
+      'local://file/current',
+      'Current.json'
+    )
+    const requestNotebookWriteAccess = vi.fn(async () => undefined)
+    const globals = createAppJsGlobals({
+      runme: createRunme(notebook),
+      requestNotebookWriteAccess,
+    })
+
+    const document = await globals.notebooks.requestWriteAccess({
+      target: { uri: notebook.getUri() },
+    })
+
+    expect(requestNotebookWriteAccess).toHaveBeenCalledWith(notebook.getUri())
+    expect(document.summary.uri).toBe(notebook.getUri())
+    await expect(
+      globals.notebooks.help('requestWriteAccess')
+    ).resolves.toContain('notebooks.requestWriteAccess({ target })')
+  })
+
   it('resolves object image targets to the requested notebook URI', async () => {
     const current = new FakeNotebookData('local://file/current', 'Current.json')
     const requested = new FakeNotebookData(

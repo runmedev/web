@@ -51,7 +51,8 @@ export function useCodeModeExecutor(options?: {
   mode?: CodeModeRunnerMode
 }): CodeModeExecutor {
   const mode = options?.mode ?? 'sandbox'
-  const { getNotebookData, useNotebookList } = useNotebookContext()
+  const { getNotebookData, requestWriteAccess, useNotebookList } =
+    useNotebookContext()
   const { getCurrentDoc } = useCurrentDoc()
   const currentDocUri = getCurrentDoc()
   const openNotebookList = useNotebookList()
@@ -93,6 +94,7 @@ export function useCodeModeExecutor(options?: {
       createCodeModeExecutor({
         mode,
         resolveNotebook: resolveCodeModeNotebook,
+        requestNotebookWriteAccess: requestWriteAccess,
         listNotebooks: () => {
           const uris = new Set<string>()
           for (const notebook of openNotebookListRef.current) {
@@ -114,6 +116,6 @@ export function useCodeModeExecutor(options?: {
             )
         },
       }),
-    [mode, resolveCodeModeNotebook]
+    [mode, requestWriteAccess, resolveCodeModeNotebook]
   )
 }

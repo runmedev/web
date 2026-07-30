@@ -89,6 +89,21 @@ await notebooks.show(
 )
 ```
 
+Request write access when another Runme session owns a notebook:
+
+```js
+const doc = await notebooks.get()
+const writable = await notebooks.requestWriteAccess({
+  target: { uri: doc.handle.uri },
+})
+console.log(writable.summary.readOnly)
+```
+
+The request uses the same cooperative takeover path as the
+**Request write access** button. The owner saves pending changes before
+releasing its lock. Continue mutating the notebook only when the returned
+document has `summary.readOnly === false`.
+
 Discover and read versioned Runme documentation:
 
 ```js

@@ -131,6 +131,41 @@ and use that URI or its handle for later operations.
 Do not rely on the current notebook after the initial resolution. The user may
 switch notebooks while an external controller is working.
 
+## Requesting write access
+
+`notebooks.get(...)` and `notebooks.list(...)` report `readOnly: true` when
+another Runme session currently owns the notebook's write lock. Before
+mutating that notebook, an external controller can request a cooperative
+takeover through the same WebMCP `ExecuteCode` path:
+
+```js
+const doc = await notebooks.get({
+  uri: 'local://file/demo.runme.md',
+})
+
+if (doc.summary.readOnly) {
+  const writable = await notebooks.requestWriteAccess({
+    target: { uri: doc.handle.uri },
+  })
+  console.log(
+    JSON.stringify({
+      uri: writable.handle.uri,
+      revision: writable.handle.revision,
+      readOnly: writable.summary.readOnly,
+    })
+  )
+}
+```
+
+The target is required. Runme asks the current owner session to save pending
+changes and release its lock, then retries normal ownership acquisition and
+returns the refreshed notebook document. Continue with notebook mutations only
+when the returned document has `summary.readOnly === false`.
+
+This is cooperative lock transfer, not lock stealing. The request can time out
+or lose a race to another session; in those cases the call returns or throws
+with the same ownership outcome surfaced by the **Request write access** UI.
+
 ## Drive-backed notebook lookup
 
 When a user identifies a Drive-backed notebook by name or metadata rather than

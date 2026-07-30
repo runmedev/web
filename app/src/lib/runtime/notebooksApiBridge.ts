@@ -23,6 +23,7 @@ export const SANDBOX_NOTEBOOKS_API_METHODS = [
   'notebooks.update',
   'notebooks.delete',
   'notebooks.execute',
+  'notebooks.requestWriteAccess',
   'notebooks.resolve',
   'notebooks.show',
   'notebooks.shareUrl',
@@ -55,13 +56,16 @@ function requireReferenceMethod<T extends keyof Required<NotebookReferenceApi>>(
 export function createHostNotebooksApi({
   resolveNotebook,
   listNotebooks,
+  requestNotebookWriteAccess,
 }: {
   resolveNotebook: (target?: unknown) => NotebookDataLike | null
   listNotebooks?: () => NotebookDataLike[]
+  requestNotebookWriteAccess?: (uri: string) => Promise<unknown>
 }): NotebooksApi {
   return createNotebooksApi({
     resolveNotebook,
     listNotebooks,
+    requestNotebookWriteAccess,
   })
 }
 
@@ -112,6 +116,12 @@ export function createNotebooksApiBridgeServer({
                 | undefined) ?? {
                 refIds: [],
               }
+            )
+          )
+        case 'notebooks.requestWriteAccess':
+          return callJsonSafe(() =>
+            notebooksApi.requestWriteAccess(
+              args[0] as Parameters<NotebooksApi['requestWriteAccess']>[0]
             )
           )
         case 'notebooks.resolve':

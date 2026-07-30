@@ -39,6 +39,7 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain('await app.getSessionID()')
     expect(instructions).toContain('local://')
     expect(instructions).toContain("kind: 'markup'")
+    expect(instructions).toContain('notebooks.requestWriteAccess')
     expect(instructions).toContain('expectedRevision')
     expect(instructions).toContain('NOTEBOOK_UPDATE_FAILED')
     expect(instructions).toContain('verify')
