@@ -537,6 +537,9 @@ export class NotebookData {
     target?: unknown
   ) => NotebookDataLike | null
   private readonly listNotebooksForAppKernel: () => NotebookDataLike[]
+  private readonly requestNotebookWriteAccess?: (
+    uri: string
+  ) => Promise<unknown>
 
   constructor({
     notebook,
@@ -547,6 +550,7 @@ export class NotebookData {
     readOnly = false,
     resolveNotebookForAppKernel,
     listNotebooksForAppKernel,
+    requestNotebookWriteAccess,
   }: {
     notebook: parser_pb.Notebook
     uri: string
@@ -556,6 +560,7 @@ export class NotebookData {
     readOnly?: boolean
     resolveNotebookForAppKernel?: (target?: unknown) => NotebookDataLike | null
     listNotebooksForAppKernel?: () => NotebookDataLike[]
+    requestNotebookWriteAccess?: (uri: string) => Promise<unknown>
   }) {
     this.uri = uri
     this.name = name
@@ -579,6 +584,7 @@ export class NotebookData {
       (() => {
         return [this]
       })
+    this.requestNotebookWriteAccess = requestNotebookWriteAccess
   }
 
   private matchesNotebookTarget(target: unknown): boolean {
@@ -1185,6 +1191,7 @@ export class NotebookData {
       runme: runmeApi,
       resolveNotebook: this.resolveNotebookForAppKernel,
       listNotebooks: this.listNotebooksForAppKernel,
+      requestNotebookWriteAccess: this.requestNotebookWriteAccess,
       signal: abortController.signal,
     })
     const notebooksApiBridgeServer = createNotebooksApiBridgeServer({
