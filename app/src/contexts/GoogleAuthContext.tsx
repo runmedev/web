@@ -1012,10 +1012,10 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
         return
       }
       if (event.key === STORED_DRIVE_ACCOUNT_KEY) {
-        invalidatePendingAuth(
-          'Invalidated pending Google Drive authorization after the account hint changed in another tab'
-        )
         storedDriveAccountRef.current = loadStoredDriveAccount()
+        tokenClientRef.current = null
+        oauthClientIdRef.current = null
+        oauthLoginHintRef.current = null
         return
       }
       if (event.key !== STORAGE_KEY && event.key !== LEGACY_STORAGE_KEY) {

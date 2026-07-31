@@ -355,6 +355,71 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     )
   })
 
+  it('finishes implicit authorization when another tab stores its account hint', async () => {
+    let resolveAccountLookup!: (response: Response) => void
+    const accountLookup = new Promise<Response>((resolve) => {
+      resolveAccountLookup = resolve
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => accountLookup)
+    )
+    const tokenClient = {
+      callback: vi.fn(),
+      requestAccessToken: vi.fn(),
+    }
+    tokenClient.requestAccessToken.mockImplementation(() => {
+      tokenClient.callback({
+        access_token: 'replacement-access-token',
+        expires_in: 3600,
+      })
+    })
+    window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient: vi.fn(() => tokenClient),
+        },
+      },
+    }
+    const auth = await renderWithGoogleAuthProvider()
+    const resultPromise = auth.startGoogleDriveOAuth()
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        DRIVE_ABOUT_URL,
+        expect.objectContaining({
+          headers: { Authorization: 'Bearer replacement-access-token' },
+        })
+      )
+    })
+
+    await act(async () => {
+      window.localStorage.setItem(STORED_DRIVE_ACCOUNT_KEY, 'jlewi@openai.com')
+      window.dispatchEvent(
+        new StorageEvent('storage', {
+          key: STORED_DRIVE_ACCOUNT_KEY,
+          newValue: 'jlewi@openai.com',
+          storageArea: window.localStorage,
+        })
+      )
+      resolveAccountLookup(
+        new Response(
+          JSON.stringify({ user: { emailAddress: 'jlewi@openai.com' } }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      )
+      await resultPromise
+    })
+
+    await expect(resultPromise).resolves.toMatchObject({
+      status: 'authorized',
+      accessToken: 'replacement-access-token',
+    })
+  })
+
   it('uses the Google account chooser for new-tab auth after logout', async () => {
     googleClientManager.setOAuthClient({
       authFlow: 'implicit',
