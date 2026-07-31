@@ -359,6 +359,7 @@ export function SidePanelToolbar() {
       <div className="flex flex-col items-center gap-2 pt-2">
         <button
           type="button"
+          data-tour-id="left-nav.explorer"
           className={`${sideButtonBase} ${
             activePanel === 'explorer' ? sideButtonActive : sideButtonInactive
           }`}
@@ -371,6 +372,7 @@ export function SidePanelToolbar() {
         </button>
         <button
           type="button"
+          data-tour-id="left-nav.open-documents"
           className={`${sideButtonBase} ${
             activePanel === 'open-documents'
               ? sideButtonActive
@@ -385,6 +387,7 @@ export function SidePanelToolbar() {
         </button>
         <button
           type="button"
+          data-tour-id="left-nav.outline"
           className={`${sideButtonBase} ${
             activePanel === 'outline' ? sideButtonActive : sideButtonInactive
           }`}
@@ -397,6 +400,7 @@ export function SidePanelToolbar() {
         </button>
         <button
           type="button"
+          data-tour-id="left-nav.comments"
           className={`${sideButtonBase} ${
             commentsPanelOpen ? sideButtonActive : sideButtonInactive
           }`}
@@ -409,6 +413,7 @@ export function SidePanelToolbar() {
         </button>
         <button
           type="button"
+          data-tour-id="left-nav.app-console"
           className={`${sideButtonBase} ${
             appConsoleSelected ? sideButtonActive : sideButtonInactive
           }`}
@@ -421,6 +426,7 @@ export function SidePanelToolbar() {
         </button>
         <button
           type="button"
+          data-tour-id="left-nav.logs"
           className={`${sideButtonBase} ${
             logsSelected ? sideButtonActive : sideButtonInactive
           }`}
@@ -435,6 +441,7 @@ export function SidePanelToolbar() {
       <div className="flex flex-col items-center gap-2 pb-2">
         <button
           type="button"
+          data-tour-id="left-nav.runner-status"
           className={`${sideButtonBase} ${
             getCurrentDoc() === RUNNER_STATUS_DOCUMENT_URI
               ? sideButtonActive
@@ -457,6 +464,7 @@ export function SidePanelToolbar() {
         </button>
         <button
           type="button"
+          data-tour-id="left-nav.google-drive"
           className={`${sideButtonBase} ${
             driveSyncStatusSelected ? sideButtonActive : sideButtonInactive
           }`}
@@ -519,6 +527,7 @@ export function SidePanelToolbar() {
         ) : null}
         <button
           type="button"
+          data-tour-id="left-nav.account"
           className={`${sideButtonBase} ${sideButtonInactive}`}
           aria-label={authData ? 'Logout' : 'Login'}
           onClick={() =>
@@ -532,6 +541,7 @@ export function SidePanelToolbar() {
         </button>
         <button
           type="button"
+          data-tour-id="left-nav.documentation"
           className={`${sideButtonBase} ${
             activePanel === 'documentation'
               ? sideButtonActive
@@ -546,6 +556,7 @@ export function SidePanelToolbar() {
         </button>
         <button
           type="button"
+          data-tour-id="left-nav.version"
           className={`${sideButtonBase} ${
             versionInfoSelected ? sideButtonActive : sideButtonInactive
           }`}

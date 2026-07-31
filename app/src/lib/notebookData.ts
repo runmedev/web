@@ -1348,6 +1348,16 @@ export class NotebookData {
         return runmeApi.rerun(target)
       case 'runme.help':
         return runmeApi.help()
+      case 'tour.show':
+        return appGlobals.tour.show(
+          args[0] as Parameters<typeof appGlobals.tour.show>[0]
+        )
+      case 'tour.dismiss':
+        return appGlobals.tour.dismiss()
+      case 'tour.listTargets':
+        return appGlobals.tour.listTargets()
+      case 'tour.help':
+        return appGlobals.tour.help()
       case 'runme.getCurrentNotebook': {
         const notebook = runmeApi.getCurrentNotebook()
         if (!notebook) {

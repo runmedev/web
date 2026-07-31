@@ -340,6 +340,14 @@ async function handleSandboxAppKernelBridgeCall({
       return runmeApi.rerun(target)
     case 'runme.help':
       return runmeApi.help()
+    case 'tour.show':
+      return globals.tour.show(args[0] as any)
+    case 'tour.dismiss':
+      return globals.tour.dismiss()
+    case 'tour.listTargets':
+      return globals.tour.listTargets()
+    case 'tour.help':
+      return globals.tour.help()
     case 'opfs.exists':
       return opfsApi.exists(String(args[0] ?? ''))
     case 'opfs.readText':

@@ -104,7 +104,7 @@ describe("WebMcpToolRegistrationHost", () => {
 
     const rendered = render(<WebMcpToolRegistrationHost />);
 
-    expect(registerTool).toHaveBeenCalledTimes(4);
+    expect(registerTool).toHaveBeenCalledTimes(6);
     const executeCode = registered.find(
       ({ tool }) => tool.name === "ExecuteCode",
     );
@@ -150,9 +150,12 @@ describe("WebMcpToolRegistrationHost", () => {
       "cell-1",
       "stderr chunk",
     );
-    expect(appConsoleDataMock.completeExecution).toHaveBeenCalledWith("cell-1", {
-      exitCode: 0,
-    });
+    expect(appConsoleDataMock.completeExecution).toHaveBeenCalledWith(
+      "cell-1",
+      {
+        exitCode: 0,
+      },
+    );
     expect(appConsoleDataMock.failExecution).not.toHaveBeenCalled();
 
     const instructions = registered.find(
@@ -215,6 +218,34 @@ describe("WebMcpToolRegistrationHost", () => {
       "non-empty name returned by listDocumentation",
     );
 
+    const showTourStep = registered.find(
+      ({ tool }) => tool.name === "showTourStep",
+    );
+    expect(showTourStep?.tool.annotations).toEqual({
+      readOnlyHint: false,
+      untrustedContentHint: false,
+    });
+    expect(
+      JSON.parse(
+        String(
+          showTourStep?.tool.execute({
+            target: "left-nav.google-drive",
+            message: "Click here to connect Google Drive.",
+          }),
+        ),
+      ),
+    ).toMatchObject({
+      target: "left-nav.google-drive",
+      message: "Click here to connect Google Drive.",
+    });
+
+    const dismissTour = registered.find(
+      ({ tool }) => tool.name === "dismissTour",
+    );
+    expect(JSON.parse(String(dismissTour?.tool.execute({})))).toEqual({
+      dismissed: true,
+    });
+
     expect(registered.every(({ signal }) => signal?.aborted === false)).toBe(
       true,
     );
@@ -234,9 +265,11 @@ describe("WebMcpToolRegistrationHost", () => {
     });
 
     render(<WebMcpToolRegistrationHost />);
-    const registerTool = (navigator as Navigator & {
-      modelContext?: { registerTool: ReturnType<typeof vi.fn> };
-    }).modelContext?.registerTool;
+    const registerTool = (
+      navigator as Navigator & {
+        modelContext?: { registerTool: ReturnType<typeof vi.fn> };
+      }
+    ).modelContext?.registerTool;
     const registered = registerTool?.mock.calls[0]?.[0];
 
     await expect(
@@ -263,9 +296,11 @@ describe("WebMcpToolRegistrationHost", () => {
     });
 
     render(<WebMcpToolRegistrationHost />);
-    const registerTool = (navigator as Navigator & {
-      modelContext?: { registerTool: ReturnType<typeof vi.fn> };
-    }).modelContext?.registerTool;
+    const registerTool = (
+      navigator as Navigator & {
+        modelContext?: { registerTool: ReturnType<typeof vi.fn> };
+      }
+    ).modelContext?.registerTool;
     const registered = registerTool?.mock.calls[0]?.[0];
 
     await expect(
@@ -274,9 +309,12 @@ describe("WebMcpToolRegistrationHost", () => {
       }),
     ).resolves.toBe("runtime error output");
 
-    expect(appConsoleDataMock.completeExecution).toHaveBeenCalledWith("cell-1", {
-      exitCode: 1,
-    });
+    expect(appConsoleDataMock.completeExecution).toHaveBeenCalledWith(
+      "cell-1",
+      {
+        exitCode: 1,
+      },
+    );
     expect(appConsoleDataMock.failExecution).not.toHaveBeenCalled();
   });
 });
