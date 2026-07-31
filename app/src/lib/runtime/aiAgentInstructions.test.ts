@@ -45,6 +45,22 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain('verify')
   })
 
+  it('directs agents to use tour mode for UI guidance', () => {
+    const instructions = readInstructionsForAIAgents('https://runme.example')
+
+    expect(instructions).toContain('Use tour mode for UI guidance')
+    expect(instructions).toContain(
+      'Do not respond with prose alone when the relevant control can be highlighted'
+    )
+    expect(instructions).toContain('tour.listTargets()')
+    expect(instructions).toContain('showTourStep')
+    expect(instructions).toContain('dismissTour')
+    expect(instructions).toContain('Never pass CSS selectors')
+    expect(instructions).toContain(
+      "do not click it or complete the action on the user's behalf"
+    )
+  })
+
   it('does not include deployment-specific plugin instructions', () => {
     const instructions = readInstructionsForAIAgents('https://runme.example')
 
