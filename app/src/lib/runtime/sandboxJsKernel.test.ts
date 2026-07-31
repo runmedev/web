@@ -14,6 +14,7 @@ type Scenario =
   | 'hang'
   | 'lowLevel'
   | 'app'
+  | 'tour'
   | 'explorer'
   | 'credentials'
   | 'drive'
@@ -70,6 +71,24 @@ class MockSandboxPort {
           callId: 1,
           method: 'app.getSessionID',
           args: [],
+        })
+      } else if (this.scenario === 'tour') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'tour.listTargets',
+          args: [],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 2,
+          method: 'tour.show',
+          args: [
+            {
+              target: 'left-nav.google-drive',
+              message: 'Sign in here.',
+            },
+          ],
         })
       } else if (this.scenario === 'explorer') {
         this.emit({
@@ -226,6 +245,22 @@ class MockSandboxPort {
         this.emit({
           type: 'stdout',
           data: `${String(this.hostResults.get(1) ?? '')}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+      if (
+        this.scenario === 'tour' &&
+        this.hostResults.has(1) &&
+        this.hostResults.has(2)
+      ) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
+        })
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(2) ?? null)}\n`,
         })
         this.emit({ type: 'exit', exitCode: 0 })
         return
@@ -412,9 +447,9 @@ describe('SandboxJSKernel', () => {
       enableNet: true,
     })
 
-    expect(srcDoc).toMatch(/"net",\s+"embed",\s+"notebooks"/)
+    expect(srcDoc).toMatch(/"tour",\s+"opfs",\s+"net",\s+"embed"/)
     expect(srcDoc).toContain(
-      'runner(consoleProxy, runme, opfs, net, embed, notebooks'
+      'runner(consoleProxy, runme, tour, opfs, net, embed, notebooks'
     )
   })
 
@@ -631,6 +666,46 @@ describe('SandboxJSKernel', () => {
     expect(bridgeCall).toHaveBeenCalledWith('app.getSessionID', [])
     expect(stdout).toContain('session-test')
     expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports tour guide helpers through the sandbox bridge', async () => {
+    let stdout = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'tour.listTargets') {
+        return [{ id: 'left-nav.google-drive', label: 'Google Drive' }]
+      }
+      if (method === 'tour.show') {
+        return { target: 'left-nav.google-drive', message: 'Sign in here.' }
+      }
+      return null
+    })
+
+    const kernel = new TestableSandboxJSKernel(new MockSandboxPort('tour'), {
+      bridge: { call: bridgeCall },
+      hooks: {
+        onStdout: (data) => {
+          stdout += data
+        },
+        onExit: (code) => {
+          exitCode = code
+        },
+      },
+    })
+
+    await kernel.run(
+      [
+        'console.log(await tour.listTargets());',
+        "console.log(await tour.show({ target: 'left-nav.google-drive', message: 'Sign in here.' }));",
+      ].join('\n')
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith('tour.listTargets', [])
+    expect(bridgeCall).toHaveBeenCalledWith('tour.show', [
+      { target: 'left-nav.google-drive', message: 'Sign in here.' },
+    ])
+    expect(stdout).toContain('left-nav.google-drive')
     expect(exitCode).toBe(0)
   })
 

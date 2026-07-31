@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../../runme/client'
 import { GoogleClientManager } from '../googleClientManager'
+import { dismissTour, tourGuideStore } from '../tourGuide'
 import { appState } from './AppState'
 import { createAppJsGlobals } from './appJsGlobals'
 import type { NotebookDataLike, RunmeConsoleApi } from './runmeConsole'
@@ -106,6 +107,7 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     ).singleton = null
     delete (window as any).showOpenFilePicker
     window.history.replaceState(null, '', '/')
+    dismissTour()
   })
 
   it('resolves a local URI to metadata, share URL, and Markdown link', async () => {
@@ -143,6 +145,31 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     )
     expect(info.markdownLink).toBe(
       '[Team Notes](http://localhost:3000/workspace?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2Ffile123%2Fview)'
+    )
+  })
+
+  it('exposes the shared tour guide runtime', () => {
+    const globals = createAppJsGlobals({ runme: createRunme() })
+
+    expect(globals.tour.listTargets()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'left-nav.google-drive' }),
+      ])
+    )
+    globals.tour.show({
+      target: 'left-nav.google-drive',
+      message: 'Connect Google Drive here.',
+    })
+    expect(tourGuideStore.getSnapshot()).toMatchObject({
+      target: 'left-nav.google-drive',
+      message: 'Connect Google Drive here.',
+    })
+    expect(globals.tour.dismiss()).toBe(true)
+    expect(globals.tour.help()).toContain('Timed tour example')
+    expect(globals.tour.help()).toContain('setTimeout(resolve, delayMs)')
+    expect(globals.tour.help()).toContain('finally')
+    expect(globals.tour.help()).toContain(
+      'replaces the active highlight; no intermediate dismiss is needed'
     )
   })
 

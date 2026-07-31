@@ -45,6 +45,35 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain('verify')
   })
 
+  it('directs agents to use tour mode for UI guidance', () => {
+    const instructions = readInstructionsForAIAgents('https://runme.example')
+
+    expect(instructions).toContain('Use tour mode for UI guidance')
+    expect(instructions).toContain(
+      'Do not respond with prose alone when the relevant control can be highlighted'
+    )
+    expect(instructions).toContain(
+      'console.log(JSON.stringify(await tour.listTargets()))'
+    )
+    expect(instructions).toContain('showTourStep')
+    expect(instructions).toContain('dismissTour')
+    expect(instructions).toContain('Never pass CSS selectors')
+    expect(instructions).toContain(
+      "do not click it or complete the action on the user's behalf"
+    )
+    expect(instructions).toContain('Give a complete Runme tour')
+    expect(instructions).toContain(
+      'Give me a tour of Runme which is open in the browser'
+    )
+    expect(instructions).toContain('timeoutMs')
+    expect(instructions).toContain('30000')
+    expect(instructions).toContain('setTimeout(resolve, delayMs)')
+    expect(instructions).toContain(
+      'atomically replaces the current highlight and annotation'
+    )
+    expect(instructions).toContain('do not call `tour.dismiss()` between steps')
+  })
+
   it('does not include deployment-specific plugin instructions', () => {
     const instructions = readInstructionsForAIAgents('https://runme.example')
 

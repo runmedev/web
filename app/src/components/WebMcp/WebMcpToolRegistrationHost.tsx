@@ -28,9 +28,23 @@ import {
   EXECUTE_CODE_TOOL_TITLE,
 } from "../../lib/runtime/executeCodeTool";
 import { useCodeModeExecutor } from "../../lib/runtime/useCodeModeExecutor";
+import {
+  buildDismissTourInputSchema,
+  buildShowTourStepInputSchema,
+  DISMISS_TOUR_TOOL_DESCRIPTION,
+  DISMISS_TOUR_TOOL_NAME,
+  DISMISS_TOUR_TOOL_TITLE,
+  executeDismissTour,
+  executeShowTourStep,
+  SHOW_TOUR_STEP_TOOL_DESCRIPTION,
+  SHOW_TOUR_STEP_TOOL_NAME,
+  SHOW_TOUR_STEP_TOOL_TITLE,
+} from "../../lib/runtime/tourGuideTool";
 
 type ModelContextClientLike = {
-  requestUserInteraction?: (callback: () => Promise<unknown> | unknown) => Promise<unknown>;
+  requestUserInteraction?: (
+    callback: () => Promise<unknown> | unknown,
+  ) => Promise<unknown>;
 };
 
 type ModelContextLike = {
@@ -57,9 +71,11 @@ function getModelContext(): ModelContextLike | null {
   if (typeof navigator === "undefined") {
     return null;
   }
-  const modelContext = (navigator as Navigator & {
-    modelContext?: Partial<ModelContextLike>;
-  }).modelContext;
+  const modelContext = (
+    navigator as Navigator & {
+      modelContext?: Partial<ModelContextLike>;
+    }
+  ).modelContext;
   if (!modelContext || typeof modelContext.registerTool !== "function") {
     return null;
   }
@@ -96,7 +112,14 @@ export default function WebMcpToolRegistrationHost() {
           },
           execute: async (input) => {
             const code =
-              typeof input?.code === "string" ? input.code : String(input?.code ?? "");
+              typeof input?.code === "string"
+                ? input.code
+                : String(input?.code ?? "");
+            const timeoutMs =
+              typeof input?.timeoutMs === "number" &&
+              Number.isFinite(input.timeoutMs)
+                ? Math.min(60_000, Math.max(1_000, Math.trunc(input.timeoutMs)))
+                : undefined;
             await appConsoleData.hydrate();
 
             const execution = appConsoleData.startExternalExecution(code);
@@ -105,6 +128,7 @@ export default function WebMcpToolRegistrationHost() {
               const result = await codeModeExecutor.execute({
                 code,
                 source: "webmcp",
+                ...(timeoutMs ? { timeoutMs } : {}),
                 hooks: execution
                   ? {
                       onStdout: (chunk) => {
@@ -126,7 +150,8 @@ export default function WebMcpToolRegistrationHost() {
             } catch (error) {
               if (execution) {
                 appConsoleData.failExecution(execution.cellId, {
-                  message: error instanceof Error ? error.message : String(error),
+                  message:
+                    error instanceof Error ? error.message : String(error),
                 });
               }
               throw error;
@@ -188,6 +213,38 @@ export default function WebMcpToolRegistrationHost() {
           signal: registrationController.signal,
         },
       );
+      modelContext.registerTool(
+        {
+          name: SHOW_TOUR_STEP_TOOL_NAME,
+          title: SHOW_TOUR_STEP_TOOL_TITLE,
+          description: SHOW_TOUR_STEP_TOOL_DESCRIPTION,
+          inputSchema: buildShowTourStepInputSchema(),
+          annotations: {
+            readOnlyHint: false,
+            untrustedContentHint: false,
+          },
+          execute: (input) => executeShowTourStep(input),
+        },
+        {
+          signal: registrationController.signal,
+        },
+      );
+      modelContext.registerTool(
+        {
+          name: DISMISS_TOUR_TOOL_NAME,
+          title: DISMISS_TOUR_TOOL_TITLE,
+          description: DISMISS_TOUR_TOOL_DESCRIPTION,
+          inputSchema: buildDismissTourInputSchema(),
+          annotations: {
+            readOnlyHint: false,
+            untrustedContentHint: false,
+          },
+          execute: () => executeDismissTour(),
+        },
+        {
+          signal: registrationController.signal,
+        },
+      );
       appLogger.info("WebMCP tools registered", {
         attrs: {
           scope: "webmcp",
@@ -196,6 +253,8 @@ export default function WebMcpToolRegistrationHost() {
             READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
             LIST_DOCUMENTATION_TOOL_NAME,
             GET_DOCUMENTATION_TOOL_NAME,
+            SHOW_TOUR_STEP_TOOL_NAME,
+            DISMISS_TOUR_TOOL_NAME,
           ],
         },
       });
@@ -220,6 +279,8 @@ export default function WebMcpToolRegistrationHost() {
             READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
             LIST_DOCUMENTATION_TOOL_NAME,
             GET_DOCUMENTATION_TOOL_NAME,
+            SHOW_TOUR_STEP_TOOL_NAME,
+            DISMISS_TOUR_TOOL_NAME,
           ],
         },
       });

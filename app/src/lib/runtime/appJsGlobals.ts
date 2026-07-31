@@ -67,6 +67,12 @@ import {
   normalizeNotebookReferenceUri,
 } from '../shareLinks'
 import { getClaimedSessionId } from '../tabIdentity'
+import {
+  type TourStepRequest,
+  dismissTour,
+  listTourTargets,
+  showTourStep,
+} from '../tourGuide'
 import { appState } from './AppState'
 import type {
   AppKernelNetworkApi,
@@ -1102,6 +1108,31 @@ export function createAppJsGlobals({
 
   return {
     runme: runmeApi,
+    tour: {
+      show: (request: TourStepRequest) => showTourStep(request),
+      dismiss: () => dismissTour(),
+      listTargets: () => listTourTargets(),
+      help: () =>
+        [
+          'tour.listTargets()                         - List semantic UI target ids',
+          'tour.show({ target, message, title?, placement? }) - Highlight a target and show an annotation',
+          'Calling tour.show(...) again replaces the active highlight; no intermediate dismiss is needed.',
+          'tour.dismiss()                             - Dismiss the active annotation',
+          '',
+          'Timed tour example:',
+          'const targets = await tour.listTargets()',
+          'console.table(targets)',
+          'const delayMs = 2000',
+          'try {',
+          '  for (const target of targets) {',
+          '    await tour.show({ target: target.id, title: target.label, message: target.description })',
+          '    await new Promise(resolve => setTimeout(resolve, delayMs))',
+          '  }',
+          '} finally {',
+          '  await tour.dismiss()',
+          '}',
+        ].join('\n'),
+    },
     notebooks: notebooksHelpers,
     embed: embedImageForRuntime,
     documents: documentsHelpers,
@@ -1582,6 +1613,7 @@ export function createAppJsGlobals({
       const message = [
         'Available namespaces:',
         '  runme           - Notebook helpers (run all, clear outputs)',
+        '  tour            - Highlight UI targets with AI-authored annotations',
         '  notebooks       - Notebook document API plus create/append helpers',
         '  documents       - List/read docs plus raw local document updates',
         '  documentation   - Read-only Runme documentation by stable name',
@@ -1602,6 +1634,7 @@ export function createAppJsGlobals({
         'High-value commands:',
         '  await app.getSessionId()',
         '  await app.getSessionID()',
+        '  tour.show({ target: "left-nav.google-drive", message: "Click here to connect Google Drive." })',
         '  await notebooks.createLocal("hello")',
         '  console.table(documents.list())',
         '  const doc = await documents.get("local://file/...")',

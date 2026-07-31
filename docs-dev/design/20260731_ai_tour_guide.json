@@ -1,0 +1,118 @@
+{
+  "cells": [
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "# AI Tour Guide\n\nAuthor: jlewi and Codex\n\nDate: 2026-07-31\n\nStatus: Draft\n\n## TL;DR\n\nRunme will let an AI highlight a registered UI element and place a short explanatory annotation beside it. React components opt in with semantic `data-tour-id` values. The AI invokes the shared tour runtime through either the direct WebMCP `showTourStep` tool or `tour.show(...)` in App Console and WebMCP `ExecuteCode`.\n\nThe first version covers the left navigation bar. It shows one tour step at a time, follows the target during layout changes, and can be dismissed with the close button or Escape.",
+      "languageId": "markdown",
+      "metadata": {
+        "name": "overview",
+        "runme.dev/id": "01K1GTAI000000000000000001"
+      },
+      "refId": "markup_tour_overview"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## Motivation and scope\n\nA user should be able to ask questions such as:\n\n- How do I sign in to Google Drive?\n- Where do I browse files?\n- How do I inspect runner status?\n\nThe AI should answer in context by pointing at the relevant control instead of relying only on prose.\n\n### Goals\n\n- Give agents a stable, discoverable way to identify UI targets.\n- Highlight a target without changing its behavior or stealing pointer input.\n- Place AI-authored text near the target.\n- Expose the same domain action to React, App Console, WebMCP code mode, and direct WebMCP tools.\n- Make the first implementation useful for every control in the left navigation bar.\n\n### Non-goals for v1\n\n- Persist or resume multi-step tours.\n- Let agents run arbitrary CSS selectors.\n- Automatically click controls on the user's behalf.\n- Generate annotation text inside the browser. The calling AI supplies the text.\n- Add analytics, localization, or cross-page navigation.",
+      "languageId": "markdown",
+      "metadata": {
+        "name": "goals",
+        "runme.dev/id": "01K1GTAI000000000000000002"
+      },
+      "refId": "markup_tour_goals"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## Design decisions\n\n### Select targets with semantic IDs\n\nComponents that can participate in a tour add a `data-tour-id` attribute such as `left-nav.google-drive`. A central registry provides the label and description for each supported target. Agents call `tour.listTargets()` to discover the exact IDs.\n\nWe will not accept raw selectors. CSS selectors leak DOM structure, break during refactors, can match unintended elements, and are difficult to describe safely in an agent contract. Semantic IDs keep the public contract stable while allowing the implementation to change.\n\nAdding a target requires two local edits: add `data-tour-id` to the component and register its ID and description. A future component helper can combine those steps if the registry grows large.\n\n### Render one overlay in a portal\n\nA singleton tour store holds the active step. `TourGuideOverlay` subscribes to it and renders into `document.body` with a React portal. The portal avoids clipping by the notebook and side-panel containers.\n\nThe overlay measures the target with `getBoundingClientRect()`, follows resize and scroll events, adds a padded amber focus ring, and places a fixed-width annotation on the side with the most room. It does not intercept pointer input over the target.\n\n### Keep text caller-authored\n\nThe tour runtime accepts already-generated title and message strings. It does not call a model. This separates AI reasoning from deterministic UI presentation and lets any WebMCP client use its existing model and policy stack.\n\n### Share one domain runtime\n\nReact, App Console, sandboxed AppKernel code, and direct WebMCP tools all call the same `showTourStep`, `dismissTour`, and `listTourTargets` functions. The UI does not contain a separate implementation.",
+      "languageId": "markdown",
+      "metadata": {
+        "name": "decisions",
+        "runme.dev/id": "01K1GTAI000000000000000003"
+      },
+      "refId": "markup_tour_decisions"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## API contract\n\n```ts\ntype TourPlacement = 'auto' | 'top' | 'right' | 'bottom' | 'left'\n\ntype TourStepRequest = {\n  target: string\n  message: string\n  title?: string\n  placement?: TourPlacement\n}\n\ntype TourApi = {\n  listTargets(): readonly TourTarget[]\n  show(request: TourStepRequest): TourStep\n  dismiss(): boolean\n}\n```\n\nThe direct WebMCP tool uses the same JSON shape:\n\n```json\n{\n  \"target\": \"left-nav.google-drive\",\n  \"title\": \"Sign in to Google Drive\",\n  \"message\": \"Click this button to connect Google Drive and browse Drive notebooks.\",\n  \"placement\": \"right\"\n}\n```\n\n`target` and `message` are required. The runtime trims text, rejects unknown targets, caps title and message length, and normalizes an unknown placement to `auto`. A new request replaces the previous step, making retries idempotent from the user's perspective.",
+      "languageId": "markdown",
+      "metadata": {
+        "name": "api-contract",
+        "runme.dev/id": "01K1GTAI000000000000000004"
+      },
+      "refId": "markup_tour_api"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "const targets = await tour.listTargets();\nconsole.table(targets);\n\nconst delayMs = 2000;\ntry {\n  for (const target of targets) {\n    await tour.show({\n      target: target.id,\n      title: target.label,\n      message: target.description,\n      placement: 'right',\n    });\n    await new Promise((resolve) => setTimeout(resolve, delayMs));\n  }\n} finally {\n  await tour.dismiss();\n}\n\nconsole.log(`Tour complete: ${targets.length} elements shown.`);",
+      "languageId": "javascript",
+      "metadata": {
+        "name": "show-complete-runme-tour",
+        "runme.dev/id": "01K1GTAI000000000000000011",
+        "runme.dev/runnerName": "appkernel-js-sandbox"
+      },
+      "refId": "code_tour_complete"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "### Agent instructions for a complete tour\n\nWhen the user asks for a tour of Runme in the open browser, the agent should reuse that Runme tab and its WebMCP capability, call `tour.listTargets()`, and then run the complete-tour program above through `ExecuteCode` with `timeoutMs: 30000`. The two-second delay gives the user time to see each target.\n\nThe singleton store is the sequencing contract: every `tour.show(...)` atomically replaces the active highlight and annotation. A loop must not dismiss between steps; it dismisses once after the last delay, preferably in `finally`. A focused tour may filter the discovered target list before iterating.",
+      "languageId": "markdown",
+      "metadata": {
+        "name": "complete-tour-agent-instructions",
+        "runme.dev/id": "01K1GTAI000000000000000010"
+      },
+      "refId": "markup_tour_agent_instructions"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "console.table(await tour.listTargets());",
+      "languageId": "javascript",
+      "metadata": {
+        "name": "list-tour-targets",
+        "runme.dev/id": "01K1GTAI000000000000000005",
+        "runme.dev/runnerName": "appkernel-js-sandbox"
+      },
+      "refId": "code_tour_list_targets"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "console.log(await tour.show({\n  target: 'left-nav.google-drive',\n  title: 'Sign in to Google Drive',\n  message: 'Click this button to connect Google Drive and browse Drive notebooks.',\n  placement: 'right',\n}));",
+      "languageId": "javascript",
+      "metadata": {
+        "name": "show-google-drive-tour-step",
+        "runme.dev/id": "01K1GTAI000000000000000006",
+        "runme.dev/runnerName": "appkernel-js-sandbox"
+      },
+      "refId": "code_tour_show_drive"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "console.log({ dismissed: await tour.dismiss() });",
+      "languageId": "javascript",
+      "metadata": {
+        "name": "dismiss-tour-step",
+        "runme.dev/id": "01K1GTAI000000000000000007",
+        "runme.dev/runnerName": "appkernel-js-sandbox"
+      },
+      "refId": "code_tour_dismiss"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## UX, accessibility, and safety\n\n- The annotation uses `role=dialog` and an accessible label derived from its title.\n- Escape and the visible close button dismiss the active step.\n- The focus ring is visual only and does not block clicks on the highlighted control.\n- The overlay follows scrolling and resizing and scrolls an off-screen target to the nearest visible position.\n- Text is rendered as React text, not HTML, so AI output cannot inject markup or scripts.\n- Agents can select only registered semantic targets.\n- The v1 overlay does not move keyboard focus. This avoids disrupting a user who is typing, but screen-reader announcement behavior needs dedicated usability testing.\n- The amber ring is not the only cue: the annotation names the target and explains its purpose.\n\n## Failure behavior\n\nUnknown IDs and invalid requests return errors to the caller. If a registered target is not mounted on the current route, the store accepts the step but the overlay remains hidden. A follow-up iteration should return a structured `target_not_mounted` error by adding a target-presence registry maintained by mounted components.",
+      "languageId": "markdown",
+      "metadata": {
+        "name": "ux-and-safety",
+        "runme.dev/id": "01K1GTAI000000000000000008"
+      },
+      "refId": "markup_tour_ux"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## Implementation plan and testing\n\n1. Add the semantic target registry and shared tour store.\n2. Add `data-tour-id` to each left navigation control.\n3. Render the portal-based highlight and annotation from `MainPage`.\n4. Expose `tour.listTargets()`, `tour.show(...)`, and `tour.dismiss()` to browser AppKernel and the sandbox bridge.\n5. Register direct `showTourStep` and `dismissTour` WebMCP tools.\n6. Add unit tests for validation, runtime publication, overlay positioning/dismissal, sandbox bridging, and WebMCP registration.\n7. Run `runme run build test` and exercise the direct WebMCP tool in the local app.\n\n## Rollout\n\nShip the left-navigation targets behind no flag because the overlay is dormant until invoked. The new tools do not alter existing behavior. Expand the registry only after each candidate control has a stable label and useful agent-facing description.\n\n## Follow-ups\n\n- Add a sequence API with Back, Next, progress, and per-step completion.\n- Add mounted-target discovery and structured missing-target errors.\n- Decide whether activating a tour should open a collapsed parent panel.\n- Add screen-reader live-region testing and reduced-motion styling.\n- Record opt-in analytics for requested, shown, dismissed, and completed steps.\n- Add localization once product copy is no longer entirely AI-authored.\n\n## Alternatives considered\n\n**Raw CSS selectors:** rejected because they expose implementation details and create a broad selector surface.\n\n**React refs passed directly to the AI layer:** rejected because refs do not cross the WebMCP JSON boundary and tightly couple the agent bridge to component instances.\n\n**A third-party guided-tour library:** deferred. The v1 needs one anchored bubble and one highlight. A dependency becomes attractive when we add sequencing, collision handling, focus trapping, and complex transitions.\n\n**Direct WebMCP tool only:** rejected because App Console and WebMCP code mode should invoke the same action as the UI and direct tool.",
+      "languageId": "markdown",
+      "metadata": {
+        "name": "implementation-and-alternatives",
+        "runme.dev/id": "01K1GTAI000000000000000009"
+      },
+      "refId": "markup_tour_implementation"
+    }
+  ]
+}

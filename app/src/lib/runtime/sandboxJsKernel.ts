@@ -70,6 +70,10 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'runme.rerun',
   'runme.getCurrentNotebook',
   'runme.help',
+  'tour.show',
+  'tour.dismiss',
+  'tour.listTargets',
+  'tour.help',
   'embed',
   'notebookDiff.listDriveRevisions',
   'notebookDiff.diffDriveRevision',
@@ -320,6 +324,12 @@ export function buildSandboxSrcDoc(options: {
           help: () => hostCall("runme.help", []),
         };
         const embed = (source, options) => hostCall("embed", [source, options]);
+        const tour = {
+          show: (request) => hostCall("tour.show", [request]),
+          dismiss: () => hostCall("tour.dismiss", []),
+          listTargets: () => hostCall("tour.listTargets", []),
+          help: () => hostCall("tour.help", []),
+        };
 
         ${opfsHelper}
 
@@ -425,6 +435,9 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- runme.rerun([target])");
           consoleProxy.log("- runme.getCurrentNotebook()");
           consoleProxy.log("- runme.help()");
+          consoleProxy.log("- tour.listTargets()");
+          consoleProxy.log("- tour.show({ target, message, title?, placement? })");
+          consoleProxy.log("- tour.dismiss()");
           consoleProxy.log("- embed(source, { target?, alt?, name? })");
           ${opfsHelpLines}
           ${netHelpLines}
@@ -472,6 +485,7 @@ export function buildSandboxSrcDoc(options: {
             const runner = new Function(
               "console",
               "runme",
+              "tour",
               "opfs",
               "net",
               "embed",
@@ -486,7 +500,7 @@ export function buildSandboxSrcDoc(options: {
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, opfs, net, embed, notebooks, documents, documentation, notebookDiff, app, explorer, credentials, drive, help);
+            await runner(consoleProxy, runme, tour, opfs, net, embed, notebooks, documents, documentation, notebookDiff, app, explorer, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });

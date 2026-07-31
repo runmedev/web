@@ -31,6 +31,63 @@ This Runme instance is served from ${runmeOrigin}.
 - Use the \`ExecuteCode\` WebMCP tool to run AppKernel JavaScript. Print values explicitly with \`console.log(...)\`.
 - Do not edit or execute notebook cells through DOM clicks, keyboard automation, or Computer Use. If WebMCP is unavailable, stop and tell the user what must be done manually.
 
+## Use tour mode for UI guidance
+
+When a user asks how to perform a task in the Runme interface, where a control is, or what a visible control does, use tour mode whenever a registered target can answer the question. Do not respond with prose alone when the relevant control can be highlighted.
+
+1. Discover the supported semantic targets with \`ExecuteCode\`:
+
+\`\`\`js
+console.log(JSON.stringify(await tour.listTargets()))
+\`\`\`
+
+2. Choose the exact target whose description matches the user's task. Never pass CSS selectors or invent target IDs.
+3. Prefer the direct \`showTourStep\` WebMCP tool to highlight the control. Supply a short title and an action-oriented message that explains what the control does and what the user should do next:
+
+\`\`\`json
+{
+  "target": "left-nav.google-drive",
+  "title": "Sign in to Google Drive",
+  "message": "Click this button to connect Google Drive and browse Drive-backed notebooks.",
+  "placement": "right"
+}
+\`\`\`
+
+If the direct tool is unavailable but \`tour\` is exposed in \`ExecuteCode\`, call \`tour.show({ target, title, message, placement })\`. Use \`dismissTour\` (or \`tour.dismiss()\`) when the guidance is no longer relevant.
+
+- Show one relevant step at a time; a new step replaces the previous step.
+- Keep the annotation concise and specific to the user's question.
+- Highlight and explain the control, but do not click it or complete the action on the user's behalf unless the user separately asks for that action.
+- If no registered target matches, answer in prose and explain that an in-product highlight is not available for that control.
+
+### Give a complete Runme tour
+
+Treat requests such as "Give me a tour of Runme which is open in the browser" as an explicit request to tour the existing Runme tab. Reuse that tab and its WebMCP capability. First list the targets so the tour is grounded in the UI contract, then use one \`ExecuteCode\` call to advance through them in registry order. Set \`timeoutMs\` to \`30000\` so a two-second tour of the left navigation can finish:
+
+\`\`\`js
+const targets = await tour.listTargets()
+console.table(targets)
+
+const delayMs = 2000
+try {
+  for (const target of targets) {
+    await tour.show({
+      target: target.id,
+      title: target.label,
+      message: target.description,
+      placement: 'right',
+    })
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+  }
+} finally {
+  await tour.dismiss()
+}
+
+console.log(\`Tour complete: \${targets.length} elements shown.\`)
+\`\`\`
+
+Each \`tour.show(...)\` call atomically replaces the current highlight and annotation, so do not call \`tour.dismiss()\` between steps. Dismiss once after the last delay, as in the \`finally\` block. If the user asks for only part of Runme, filter the discovered targets to the relevant controls rather than showing every target.
+
 ## Read Runme documentation on demand
 
 - Call the read-only \`listDocumentation\` WebMCP tool to discover the documentation available for this exact Runme version.

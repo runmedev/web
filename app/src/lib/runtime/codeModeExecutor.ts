@@ -96,6 +96,7 @@ export type CodeModeExecutor = {
     code: string
     source: CodeModeSource
     hooks?: CodeModeExecutionHooks
+    timeoutMs?: number
   }): Promise<{ output: string; exitCode: number }>
 }
 
@@ -109,7 +110,7 @@ export function createCodeModeExecutor(options: {
   requestNotebookWriteAccess?: (uri: string) => Promise<unknown>
 }): CodeModeExecutor {
   const mode = options.mode ?? 'sandbox'
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const defaultTimeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
   const maxCodeBytes = options.maxCodeBytes ?? DEFAULT_MAX_CODE_BYTES
 
@@ -122,7 +123,8 @@ export function createCodeModeExecutor(options: {
     })
 
   return {
-    execute: async ({ code, source, hooks }) => {
+    execute: async ({ code, source, hooks, timeoutMs }) => {
+      const executionTimeoutMs = timeoutMs ?? defaultTimeoutMs
       const normalizedCode =
         typeof code === 'string' ? code : String(code ?? '')
       const codeBytes = new TextEncoder().encode(normalizedCode).length
@@ -140,7 +142,7 @@ export function createCodeModeExecutor(options: {
           scope: 'webmcp.execute_code',
           source,
           mode,
-          timeoutMs,
+          timeoutMs: executionTimeoutMs,
           maxOutputBytes,
           maxCodeBytes,
           code: normalizedCode,
@@ -262,9 +264,11 @@ export function createCodeModeExecutor(options: {
           kernelRun,
           new Promise<void>((_resolve, reject) => {
             timer = setTimeout(() => {
-              reject(new Error(`ExecuteCode timed out after ${timeoutMs}ms`))
+              reject(
+                new Error(`ExecuteCode timed out after ${executionTimeoutMs}ms`)
+              )
               abortController.abort()
-            }, timeoutMs)
+            }, executionTimeoutMs)
           }),
         ])
       } catch (error) {
@@ -274,7 +278,7 @@ export function createCodeModeExecutor(options: {
             scope: 'webmcp.execute_code',
             source,
             mode,
-            timeoutMs,
+            timeoutMs: executionTimeoutMs,
             maxOutputBytes,
             code: normalizedCode,
             output,
@@ -340,6 +344,14 @@ async function handleSandboxAppKernelBridgeCall({
       return runmeApi.rerun(target)
     case 'runme.help':
       return runmeApi.help()
+    case 'tour.show':
+      return globals.tour.show(args[0] as any)
+    case 'tour.dismiss':
+      return globals.tour.dismiss()
+    case 'tour.listTargets':
+      return globals.tour.listTargets()
+    case 'tour.help':
+      return globals.tour.help()
     case 'opfs.exists':
       return opfsApi.exists(String(args[0] ?? ''))
     case 'opfs.readText':
