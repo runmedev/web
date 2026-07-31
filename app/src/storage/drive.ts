@@ -90,7 +90,7 @@ interface GapiGlobal {
   load: (name: string, options: GapiLoadOptions) => void
   client: {
     load: (name: string, version: string) => Promise<void>
-    setToken: (token: { access_token: string }) => void
+    setToken: (token: { access_token: string } | null) => void
     getToken?: () => { access_token?: string } | null
     drive: {
       files: GapiDriveFileMethods
