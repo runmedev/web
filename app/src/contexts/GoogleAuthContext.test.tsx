@@ -13,6 +13,9 @@ const IMPLICIT_PROMPT_MODE_KEY = 'runme/google-auth/implicit-prompt-mode'
 const AUTH_HANDOFF_MODE_KEY = 'runme/google-auth/handoff-mode'
 const SELECT_ACCOUNT_NEXT_KEY = 'runme/google-auth/select-account-next'
 const STORAGE_KEY = 'runme/google-auth/token'
+const STORED_DRIVE_ACCOUNT_KEY = 'runme/google-auth/drive-account'
+const DRIVE_ABOUT_URL =
+  'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)'
 
 function CaptureAuth(props: {
   onReady: (auth: ReturnType<typeof useGoogleAuth>) => void
@@ -77,6 +80,7 @@ async function generatePrivateKeyPem(): Promise<string> {
 describe('GoogleAuthProvider implicit redirect flow', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
     window.localStorage.clear()
     window.sessionStorage.clear()
     window.history.replaceState(null, '', '/')
@@ -86,6 +90,20 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
       authUxMode: 'popup',
     })
     delete window.google
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            user: { emailAddress: 'jlewi@openai.com' },
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      })
+    )
   })
 
   it('starts implicit redirect flow when authFlow=implicit and authUxMode=redirect', async () => {
@@ -124,6 +142,46 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     expect(window.localStorage.getItem(PKCE_RETURN_TO_KEY)).toBe('/')
     expect(window.localStorage.getItem(IMPLICIT_PROMPT_MODE_KEY)).toBe('none')
     expect(window.localStorage.getItem(PKCE_CODE_VERIFIER_KEY)).toBeNull()
+  })
+
+  it('uses the remembered Drive account for silent new-tab authorization', async () => {
+    googleClientManager.setOAuthClient({
+      authFlow: 'implicit',
+      authUxMode: 'new_tab',
+    })
+    window.localStorage.setItem(STORED_DRIVE_ACCOUNT_KEY, 'jlewi@openai.com')
+    const openSpy = vi
+      .spyOn(window, 'open')
+      .mockReturnValue(window as unknown as Window)
+    const auth = await renderWithGoogleAuthProvider()
+
+    await expect(auth.startGoogleDriveOAuth()).resolves.toMatchObject({
+      status: 'started',
+      authFlow: 'implicit',
+      mode: 'new_tab',
+    })
+
+    const authUrl = new URL(String(openSpy.mock.calls[0]?.[0]))
+    expect(authUrl.searchParams.get('prompt')).toBe('none')
+    expect(authUrl.searchParams.get('login_hint')).toBe('jlewi@openai.com')
+  })
+
+  it('preserves the remembered Drive account when consent is required', async () => {
+    googleClientManager.setOAuthClient({
+      authFlow: 'implicit',
+      authUxMode: 'new_tab',
+    })
+    window.localStorage.setItem(STORED_DRIVE_ACCOUNT_KEY, 'jlewi@openai.com')
+    const openSpy = vi
+      .spyOn(window, 'open')
+      .mockReturnValue(window as unknown as Window)
+    const auth = await renderWithGoogleAuthProvider()
+
+    await auth.startGoogleDriveOAuth({ prompt: 'consent' })
+
+    const authUrl = new URL(String(openSpy.mock.calls[0]?.[0]))
+    expect(authUrl.searchParams.get('prompt')).toBe('consent')
+    expect(authUrl.searchParams.get('login_hint')).toBe('jlewi@openai.com')
   })
 
   it('starts a fresh implicit auth flow and replaces stale handoff state', async () => {
@@ -209,6 +267,92 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
       prompt: 'select_account',
     })
     expect(window.localStorage.getItem(SELECT_ACCOUNT_NEXT_KEY)).toBeNull()
+    expect(window.localStorage.getItem(STORED_DRIVE_ACCOUNT_KEY)).toBe(
+      'jlewi@openai.com'
+    )
+  })
+
+  it('initializes popup OAuth with the remembered Drive account', async () => {
+    window.localStorage.setItem(STORED_DRIVE_ACCOUNT_KEY, 'jlewi@openai.com')
+    const tokenClient = {
+      callback: vi.fn(),
+      requestAccessToken: vi.fn(),
+    }
+    tokenClient.requestAccessToken.mockImplementation(() => {
+      tokenClient.callback({
+        access_token: 'replacement-access-token',
+        expires_in: 3600,
+      })
+    })
+    const initTokenClient = vi.fn(() => tokenClient)
+    window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient,
+        },
+      },
+    }
+    const auth = await renderWithGoogleAuthProvider()
+
+    await act(async () => {
+      await auth.startGoogleDriveOAuth()
+    })
+
+    expect(initTokenClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        login_hint: 'jlewi@openai.com',
+      })
+    )
+    expect(tokenClient.requestAccessToken).toHaveBeenCalledWith({
+      prompt: 'none',
+    })
+  })
+
+  it('adopts a remembered Drive account changed by another tab', async () => {
+    window.localStorage.setItem(
+      STORED_DRIVE_ACCOUNT_KEY,
+      'old-account@example.com'
+    )
+    const tokenClient = {
+      callback: vi.fn(),
+      requestAccessToken: vi.fn(),
+    }
+    tokenClient.requestAccessToken.mockImplementation(() => {
+      tokenClient.callback({
+        access_token: 'replacement-access-token',
+        expires_in: 3600,
+      })
+    })
+    const initTokenClient = vi.fn(() => tokenClient)
+    window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient,
+        },
+      },
+    }
+    const auth = await renderWithGoogleAuthProvider()
+
+    await act(async () => {
+      window.localStorage.setItem(
+        STORED_DRIVE_ACCOUNT_KEY,
+        'new-account@example.com'
+      )
+      window.dispatchEvent(
+        new StorageEvent('storage', {
+          key: STORED_DRIVE_ACCOUNT_KEY,
+          newValue: 'new-account@example.com',
+          storageArea: window.localStorage,
+        })
+      )
+      await auth.startGoogleDriveOAuth()
+    })
+
+    expect(initTokenClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        login_hint: 'new-account@example.com',
+      })
+    )
   })
 
   it('uses the Google account chooser for new-tab auth after logout', async () => {
@@ -216,6 +360,7 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
       authFlow: 'implicit',
       authUxMode: 'new_tab',
     })
+    window.localStorage.setItem(STORED_DRIVE_ACCOUNT_KEY, 'jlewi@openai.com')
     const openSpy = vi
       .spyOn(window, 'open')
       .mockReturnValue(window as unknown as Window)
@@ -229,6 +374,8 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     expect(openSpy).toHaveBeenCalledTimes(1)
     const authUrl = new URL(String(openSpy.mock.calls[0]?.[0]))
     expect(authUrl.searchParams.get('prompt')).toBe('select_account')
+    expect(authUrl.searchParams.get('login_hint')).toBeNull()
+    expect(window.localStorage.getItem(STORED_DRIVE_ACCOUNT_KEY)).toBeNull()
     expect(window.localStorage.getItem(SELECT_ACCOUNT_NEXT_KEY)).toBeNull()
   })
 
@@ -387,6 +534,71 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     await expect(auth.ensureAccessToken({ interactive: false })).resolves.toBe(
       'test-access-token'
     )
+  })
+
+  it('migrates an existing implicit session to a remembered Drive account', async () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        token: 'existing-access-token',
+        expiresAt: Date.now() + 30 * 60 * 1000,
+        authFlow: 'implicit',
+      })
+    )
+    const auth = await renderWithGoogleAuthProvider()
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem(STORED_DRIVE_ACCOUNT_KEY)).toBe(
+        'jlewi@openai.com'
+      )
+    })
+
+    expect(fetch).toHaveBeenCalledWith(DRIVE_ABOUT_URL, {
+      headers: { Authorization: 'Bearer existing-access-token' },
+    })
+    await expect(auth.ensureAccessToken({ interactive: false })).resolves.toBe(
+      'existing-access-token'
+    )
+  })
+
+  it('keeps implicit authorization usable when account discovery fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('', { status: 503 }))
+    )
+    const tokenClient = {
+      callback: vi.fn(),
+      requestAccessToken: vi.fn(),
+    }
+    tokenClient.requestAccessToken.mockImplementation(() => {
+      tokenClient.callback({
+        access_token: 'replacement-access-token',
+        expires_in: 3600,
+      })
+    })
+    window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient: vi.fn(() => tokenClient),
+        },
+      },
+    }
+    const auth = await renderWithGoogleAuthProvider()
+
+    let result: Awaited<ReturnType<typeof auth.startGoogleDriveOAuth>> | null =
+      null
+    await act(async () => {
+      result = await auth.startGoogleDriveOAuth()
+    })
+
+    expect(result).toMatchObject({
+      status: 'authorized',
+      accessToken: 'replacement-access-token',
+    })
+    expect(window.localStorage.getItem(STORAGE_KEY)).toContain(
+      'replacement-access-token'
+    )
+    expect(window.localStorage.getItem(STORED_DRIVE_ACCOUNT_KEY)).toBeNull()
   })
 
   it('does not reuse a cached OAuth token for service account auth', async () => {
