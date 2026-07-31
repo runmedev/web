@@ -300,7 +300,7 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
 
     expect(initTokenClient).toHaveBeenCalledWith(
       expect.objectContaining({
-        login_hint: 'jlewi@openai.com',
+        hint: 'jlewi@openai.com',
       })
     )
     expect(tokenClient.requestAccessToken).toHaveBeenCalledWith({
@@ -350,7 +350,7 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
 
     expect(initTokenClient).toHaveBeenCalledWith(
       expect.objectContaining({
-        login_hint: 'new-account@example.com',
+        hint: 'new-account@example.com',
       })
     )
   })

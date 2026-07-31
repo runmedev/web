@@ -129,7 +129,7 @@ interface GoogleOAuth {
   initTokenClient: (options: {
     client_id: string
     scope: string
-    login_hint?: string
+    hint?: string
     callback: (response: AccessTokenResponse) => void
   }) => TokenClient
   revoke?: (accessToken: string, callback: () => void) => void
@@ -1133,7 +1133,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     const client = oauth.initTokenClient({
       client_id: clientId,
       scope: DRIVE_SCOPES.join(' '),
-      ...(loginHint ? { login_hint: loginHint } : {}),
+      ...(loginHint ? { hint: loginHint } : {}),
       callback: (response: AccessTokenResponse) => {
         try {
           assertAuthOperationCurrent(authOperation)
