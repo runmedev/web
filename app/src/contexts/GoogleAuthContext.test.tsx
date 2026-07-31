@@ -232,6 +232,118 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     expect(window.localStorage.getItem(SELECT_ACCOUNT_NEXT_KEY)).toBeNull()
   })
 
+  it('does not restore credentials when a refresh finishes after logout', async () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        token: 'expired-access-token',
+        expiresAt: Date.now() - 1,
+        authFlow: 'implicit',
+        refreshToken: 'refresh-token',
+      })
+    )
+    const revoke = vi.fn((_accessToken: string, callback: () => void) => {
+      callback()
+    })
+    window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient: vi.fn(),
+          revoke,
+        },
+      },
+    }
+    let resolveRefresh!: (response: Response) => void
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveRefresh = resolve
+        })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const auth = await renderWithGoogleAuthProvider()
+
+    const pendingToken = auth.ensureAccessToken({ interactive: false })
+    const rejection = expect(pendingToken).rejects.toThrow(
+      'Google Drive session ended.'
+    )
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    await act(async () => {
+      await auth.logoutGoogleDrive()
+      resolveRefresh(
+        new Response(
+          JSON.stringify({
+            access_token: 'late-access-token',
+            expires_in: 3600,
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      )
+    })
+
+    await rejection
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull()
+    expect(revoke).toHaveBeenCalledWith(
+      'expired-access-token',
+      expect.any(Function)
+    )
+  })
+
+  it('does not restore credentials when service account minting finishes after logout', async () => {
+    googleClientManager.setOAuthClient({
+      clientId: '',
+      authFlow: 'service_account',
+      authUxMode: 'new_tab',
+      serviceAccount: {
+        clientEmail: 'runme-drive-test@example.iam.gserviceaccount.com',
+        privateKey: await generatePrivateKeyPem(),
+      },
+    })
+    let resolveMint!: (response: Response) => void
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveMint = resolve
+        })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const auth = await renderWithGoogleAuthProvider()
+
+    const pendingToken = auth.ensureAccessToken({ interactive: false })
+    const rejection = expect(pendingToken).rejects.toThrow(
+      'Google Drive session ended.'
+    )
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    await act(async () => {
+      await auth.logoutGoogleDrive()
+      resolveMint(
+        new Response(
+          JSON.stringify({
+            access_token: 'late-service-account-token',
+            expires_in: 3600,
+            token_type: 'Bearer',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      )
+    })
+
+    await rejection
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull()
+  })
+
   it('does not relaunch new-tab auth while a handoff is already in progress', async () => {
     googleClientManager.setOAuthClient({
       authFlow: 'implicit',
