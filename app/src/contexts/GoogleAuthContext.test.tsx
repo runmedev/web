@@ -310,21 +310,27 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
 
   it('retries silent popup authorization with consent when login is required', async () => {
     window.localStorage.setItem(STORED_DRIVE_ACCOUNT_KEY, 'jlewi@openai.com')
-    const tokenClient = {
+    const hintedTokenClient = {
       callback: vi.fn(),
       requestAccessToken: vi.fn(),
     }
-    tokenClient.requestAccessToken.mockImplementation(() => {
-      if (tokenClient.requestAccessToken.mock.calls.length === 1) {
-        tokenClient.callback({ error: 'login_required' })
-        return
-      }
-      tokenClient.callback({
+    const consentTokenClient = {
+      callback: vi.fn(),
+      requestAccessToken: vi.fn(),
+    }
+    hintedTokenClient.requestAccessToken.mockImplementation(() => {
+      hintedTokenClient.callback({ error: 'login_required' })
+    })
+    consentTokenClient.requestAccessToken.mockImplementation(() => {
+      consentTokenClient.callback({
         access_token: 'replacement-access-token',
         expires_in: 3600,
       })
     })
-    const initTokenClient = vi.fn(() => tokenClient)
+    const initTokenClient = vi
+      .fn()
+      .mockReturnValueOnce(hintedTokenClient)
+      .mockReturnValueOnce(consentTokenClient)
     window.google = {
       accounts: {
         oauth2: {
@@ -340,13 +346,74 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     })
 
     expect(accessToken).toBe('replacement-access-token')
-    expect(tokenClient.requestAccessToken.mock.calls).toEqual([
-      [{ prompt: 'none' }],
-      [{ prompt: 'consent' }],
-    ])
+    expect(hintedTokenClient.requestAccessToken).toHaveBeenCalledWith({
+      prompt: 'none',
+    })
+    expect(consentTokenClient.requestAccessToken).toHaveBeenCalledWith({
+      prompt: 'consent',
+    })
+    expect(initTokenClient.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ hint: 'jlewi@openai.com' })
+    )
+    expect(initTokenClient.mock.calls[1]?.[0]).not.toHaveProperty('hint')
     expect(window.localStorage.getItem(STORED_DRIVE_ACCOUNT_KEY)).toBe(
       'jlewi@openai.com'
     )
+  })
+
+  it('recreates the popup client without a stale hint before explicit consent', async () => {
+    window.localStorage.setItem(STORED_DRIVE_ACCOUNT_KEY, 'jlewi@openai.com')
+    const hintedTokenClient = {
+      callback: vi.fn(),
+      requestAccessToken: vi.fn(),
+    }
+    const consentTokenClient = {
+      callback: vi.fn(),
+      requestAccessToken: vi.fn(),
+    }
+    hintedTokenClient.requestAccessToken.mockImplementation(() => {
+      hintedTokenClient.callback({ error: 'interaction_required' })
+    })
+    consentTokenClient.requestAccessToken.mockImplementation(() => {
+      consentTokenClient.callback({
+        access_token: 'replacement-access-token',
+        expires_in: 3600,
+      })
+    })
+    const initTokenClient = vi
+      .fn()
+      .mockReturnValueOnce(hintedTokenClient)
+      .mockReturnValueOnce(consentTokenClient)
+    window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient,
+        },
+      },
+    }
+    const auth = await renderWithGoogleAuthProvider()
+
+    let result: Awaited<ReturnType<typeof auth.startGoogleDriveOAuth>> | null =
+      null
+    await act(async () => {
+      result = await auth.startGoogleDriveOAuth()
+    })
+
+    expect(result).toMatchObject({
+      status: 'authorized',
+      accessToken: 'replacement-access-token',
+    })
+
+    expect(hintedTokenClient.requestAccessToken).toHaveBeenCalledWith({
+      prompt: 'none',
+    })
+    expect(consentTokenClient.requestAccessToken).toHaveBeenCalledWith({
+      prompt: 'consent',
+    })
+    expect(initTokenClient.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ hint: 'jlewi@openai.com' })
+    )
+    expect(initTokenClient.mock.calls[1]?.[0]).not.toHaveProperty('hint')
   })
 
   it('adopts a remembered Drive account changed by another tab', async () => {
@@ -669,6 +736,102 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     await expect(auth.ensureAccessToken({ interactive: false })).resolves.toBe(
       'existing-access-token'
     )
+  })
+
+  it('does not let an old token migration overwrite a newer account', async () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        token: 'old-access-token',
+        expiresAt: Date.now() + 30 * 60 * 1000,
+        authFlow: 'implicit',
+      })
+    )
+    let resolveOldLookup!: (response: Response) => void
+    let resolveNewLookup!: (response: Response) => void
+    const oldLookup = new Promise<Response>((resolve) => {
+      resolveOldLookup = resolve
+    })
+    const newLookup = new Promise<Response>((resolve) => {
+      resolveNewLookup = resolve
+    })
+    const fetchMock = vi.fn(
+      (_url: string | URL | Request, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get('Authorization')
+        return authorization === 'Bearer old-access-token'
+          ? oldLookup
+          : newLookup
+      }
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const auth = await renderWithGoogleAuthProvider()
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        DRIVE_ABOUT_URL,
+        expect.objectContaining({
+          headers: { Authorization: 'Bearer old-access-token' },
+        })
+      )
+    })
+
+    await act(async () => {
+      auth.setAccessToken('new-access-token')
+    })
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        DRIVE_ABOUT_URL,
+        expect.objectContaining({
+          headers: { Authorization: 'Bearer new-access-token' },
+        })
+      )
+    })
+
+    await act(async () => {
+      resolveNewLookup(
+        new Response(
+          JSON.stringify({ user: { emailAddress: 'new@example.com' } }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      )
+    })
+    await waitFor(() => {
+      expect(window.localStorage.getItem(STORED_DRIVE_ACCOUNT_KEY)).toBe(
+        'new@example.com'
+      )
+    })
+
+    await act(async () => {
+      resolveOldLookup(
+        new Response(
+          JSON.stringify({ user: { emailAddress: 'old@example.com' } }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      )
+      await Promise.resolve()
+    })
+    expect(window.localStorage.getItem(STORED_DRIVE_ACCOUNT_KEY)).toBe(
+      'new@example.com'
+    )
+  })
+
+  it('does not migrate a stored service-account token as a browser account', async () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        token: 'service-account-token',
+        expiresAt: Date.now() + 30 * 60 * 1000,
+        authFlow: 'service_account',
+      })
+    )
+
+    await renderWithGoogleAuthProvider()
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(fetch).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem(STORED_DRIVE_ACCOUNT_KEY)).toBeNull()
   })
 
   it('keeps implicit authorization usable when account discovery fails', async () => {

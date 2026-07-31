@@ -494,6 +494,9 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       }
 
       assertAuthOperationCurrent(authOperation)
+      if (tokenInfoRef.current?.token !== accessToken) {
+        return
+      }
       persistStoredDriveAccount(account)
     },
     [assertAuthOperationCurrent, persistStoredDriveAccount]
@@ -969,6 +972,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     if (
       !tokenInfo?.token ||
       tokenInfo.expiresAt <= Date.now() ||
+      tokenInfo.authFlow !== 'implicit' ||
       storedDriveAccountRef.current ||
       googleClientManager.getOAuthClient().authFlow !== 'implicit'
     ) {
@@ -1297,7 +1301,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
         let requestedPrompt: GoogleOAuthPrompt | '' = promptMode ?? 'none'
         let retriedWithConsent = false
         handlersRef.current = { resolve, reject }
-        client.callback = (response: AccessTokenResponse) => {
+        const handleResponse = (response: AccessTokenResponse) => {
           try {
             assertAuthOperationCurrent(authOperation)
           } catch (error) {
@@ -1316,12 +1320,22 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
             retriedWithConsent = true
             requestedPrompt = 'consent'
             persistStoredDriveAccount(null)
-            try {
-              client.requestAccessToken({ prompt: requestedPrompt })
-            } catch (error) {
-              handlersRef.current = null
-              reject(error)
-            }
+            void ensureTokenClient().then(
+              (retryClient) => {
+                try {
+                  assertAuthOperationCurrent(authOperation)
+                  retryClient.callback = handleResponse
+                  retryClient.requestAccessToken({ prompt: requestedPrompt })
+                } catch (error) {
+                  handlersRef.current = null
+                  reject(error)
+                }
+              },
+              (error) => {
+                handlersRef.current = null
+                reject(error)
+              }
+            )
             return
           }
           const { resolve: pendingResolve, reject: pendingReject } =
@@ -1341,6 +1355,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
             authOperation
           ).then(() => pendingResolve(accessToken), pendingReject)
         }
+        client.callback = handleResponse
         try {
           client.requestAccessToken({ prompt: requestedPrompt })
         } catch (error) {
@@ -1510,7 +1525,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
                 : 'consent'
           let retriedWithConsent = false
           handlersRef.current = { resolve, reject }
-          client.callback = (response: AccessTokenResponse) => {
+          const handleResponse = (response: AccessTokenResponse) => {
             try {
               assertAuthOperationCurrent(authOperation)
             } catch (error) {
@@ -1529,12 +1544,24 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
               retriedWithConsent = true
               requestedPrompt = 'consent'
               persistStoredDriveAccount(null)
-              try {
-                client.requestAccessToken({ prompt: requestedPrompt })
-              } catch (error) {
-                handlersRef.current = null
-                reject(error)
-              }
+              void ensureTokenClient().then(
+                (retryClient) => {
+                  try {
+                    assertAuthOperationCurrent(authOperation)
+                    retryClient.callback = handleResponse
+                    retryClient.requestAccessToken({
+                      prompt: requestedPrompt,
+                    })
+                  } catch (error) {
+                    handlersRef.current = null
+                    reject(error)
+                  }
+                },
+                (error) => {
+                  handlersRef.current = null
+                  reject(error)
+                }
+              )
               return
             }
             const { resolve: pendingResolve, reject: pendingReject } =
@@ -1554,6 +1581,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
               authOperation
             ).then(() => pendingResolve(accessToken), pendingReject)
           }
+          client.callback = handleResponse
           try {
             console.log('Requesting access token from Google OAuth')
             client.requestAccessToken({ prompt: requestedPrompt })
