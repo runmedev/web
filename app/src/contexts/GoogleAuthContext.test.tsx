@@ -217,6 +217,78 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     expect(window.sessionStorage.getItem(PKCE_ERROR_KEY)).toBeNull()
   })
 
+  it('replaces an implicit account hint after PKCE authorizes another account', async () => {
+    googleClientManager.setOAuthClient({
+      authFlow: 'pkce',
+      authUxMode: 'new_tab',
+    })
+    window.localStorage.setItem(
+      STORED_DRIVE_ACCOUNT_KEY,
+      'implicit-account@example.com'
+    )
+    window.localStorage.setItem(PKCE_STATE_KEY, 'pkce-state')
+    window.localStorage.setItem(PKCE_CODE_VERIFIER_KEY, 'pkce-verifier')
+    window.localStorage.setItem(PKCE_RETURN_TO_KEY, '/')
+    window.history.replaceState(
+      null,
+      '',
+      '/gdrive/callback?code=pkce-code&state=pkce-state'
+    )
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === 'https://oauth2.googleapis.com/token') {
+        return new Response(
+          JSON.stringify({
+            access_token: 'pkce-access-token',
+            expires_in: 3600,
+            refresh_token: 'pkce-refresh-token',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      }
+      if (String(input) === DRIVE_ABOUT_URL) {
+        return new Response(
+          JSON.stringify({
+            user: { emailAddress: 'pkce-account@example.com' },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const openSpy = vi
+      .spyOn(window, 'open')
+      .mockReturnValue(window as unknown as Window)
+    const auth = await renderWithGoogleAuthProvider()
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem(STORED_DRIVE_ACCOUNT_KEY)).toBe(
+        'pkce-account@example.com'
+      )
+      expect(window.localStorage.getItem(PKCE_STATE_KEY)).toBeNull()
+    })
+
+    window.history.replaceState(null, '', '/')
+    googleClientManager.setOAuthClient({
+      authFlow: 'implicit',
+      authUxMode: 'new_tab',
+    })
+    await act(async () => {
+      await auth.startGoogleDriveOAuth()
+    })
+
+    const authUrl = new URL(String(openSpy.mock.calls[0]?.[0]))
+    expect(authUrl.searchParams.get('login_hint')).toBe(
+      'pkce-account@example.com'
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      DRIVE_ABOUT_URL,
+      expect.objectContaining({
+        headers: { Authorization: 'Bearer pkce-access-token' },
+      })
+    )
+  })
+
   it('clears and revokes Drive credentials, then asks Google to select an account', async () => {
     const tokenClient = {
       callback: vi.fn(),

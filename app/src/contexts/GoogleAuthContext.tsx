@@ -783,6 +783,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       )
     }
 
+    persistStoredDriveAccount(null)
     setAccessToken(
       tokenResponse.access_token,
       tokenResponse.expires_in ?? 3600,
@@ -790,6 +791,11 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
         refreshToken: tokenResponse.refresh_token,
       }
     )
+    await rememberDriveAccountForToken(
+      tokenResponse.access_token,
+      authOperation
+    )
+    assertAuthOperationCurrent(authOperation)
     const handoffMode = window.localStorage.getItem(AUTH_HANDOFF_MODE_KEY)
     clearPkceState()
     if (handoffMode === 'new_tab') {
@@ -802,7 +808,9 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     captureAuthOperation,
     clearPkceState,
     exchangeAuthorizationCode,
+    persistStoredDriveAccount,
     readImplicitRedirectTokenFromHash,
+    rememberDriveAccountForToken,
     setAccessToken,
   ])
 
