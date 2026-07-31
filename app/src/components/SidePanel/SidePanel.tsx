@@ -229,7 +229,8 @@ export function SidePanelToolbar() {
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const authData = useBrowserAuthData()
   const browserAdapter = getBrowserAdapter()
-  const { isDriveSyncing, startGoogleDriveOAuth } = useGoogleAuth()
+  const { isDriveSyncing, logoutGoogleDrive, startGoogleDriveOAuth } =
+    useGoogleAuth()
   const { listRunners } = useRunners()
   const [driveContextMenu, setDriveContextMenu] = useState<{
     x: number
@@ -282,9 +283,14 @@ export function SidePanelToolbar() {
     }
   }, [startGoogleDriveOAuth])
 
+  const handleDriveLogout = useCallback(async () => {
+    setDriveContextMenu(null)
+    await logoutGoogleDrive()
+  }, [logoutGoogleDrive])
+
   const openDriveContextMenu = useCallback((x: number, y: number) => {
     const menuWidth = 140
-    const menuHeight = 40
+    const menuHeight = 80
     const maxX =
       typeof window === 'undefined' ? x : window.innerWidth - menuWidth
     const maxY =
@@ -498,6 +504,16 @@ export function SidePanelToolbar() {
               }}
             >
               Status
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="block w-full px-3 py-1.5 text-left text-nb-text hover:bg-nb-surface-2"
+              onClick={() => {
+                void handleDriveLogout()
+              }}
+            >
+              Logout
             </button>
           </div>
         ) : null}

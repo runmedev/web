@@ -38,6 +38,7 @@ const startGoogleDriveOAuthMock = vi.fn(async () => ({
   authFlow: 'popup',
   mode: 'popup',
 }))
+const logoutGoogleDriveMock = vi.fn(async () => {})
 const loginWithRedirectMock = vi.fn()
 const logoutMock = vi.fn()
 const togglePanelMock = vi.fn()
@@ -86,6 +87,7 @@ vi.mock('../../contexts/CurrentDocContext', () => ({
 vi.mock('../../contexts/GoogleAuthContext', () => ({
   useGoogleAuth: () => ({
     ensureAccessToken: ensureAccessTokenMock,
+    logoutGoogleDrive: logoutGoogleDriveMock,
     startGoogleDriveOAuth: startGoogleDriveOAuthMock,
     isDriveSyncing,
   }),
@@ -132,6 +134,7 @@ describe('SidePanelToolbar drive status button', () => {
     notebookSnapshotState = null
     ensureAccessTokenMock.mockClear()
     startGoogleDriveOAuthMock.mockClear()
+    logoutGoogleDriveMock.mockClear()
     loginWithRedirectMock.mockClear()
     logoutMock.mockClear()
     togglePanelMock.mockClear()
@@ -184,6 +187,26 @@ describe('SidePanelToolbar drive status button', () => {
     })
     expect(setCurrentDocMock).toHaveBeenCalledWith('status://drive-sync')
     expect(ensureAccessTokenMock).not.toHaveBeenCalled()
+    expect(startGoogleDriveOAuthMock).not.toHaveBeenCalled()
+  })
+
+  it('logs out of Google Drive from the Drive status context menu', async () => {
+    isDriveSyncing = true
+    render(<SidePanelToolbar />)
+
+    fireEvent.contextMenu(
+      screen.getByRole('button', {
+        name: 'Google Drive status: Syncing',
+      }),
+      { clientX: 20, clientY: 40 }
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Logout' }))
+      await Promise.resolve()
+    })
+
+    expect(logoutGoogleDriveMock).toHaveBeenCalledTimes(1)
     expect(startGoogleDriveOAuthMock).not.toHaveBeenCalled()
   })
 

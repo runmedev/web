@@ -11,6 +11,7 @@ const PKCE_RETURN_TO_KEY = 'runme/google-auth/pkce-return-to'
 const PKCE_ERROR_KEY = 'runme/google-auth/pkce-error'
 const IMPLICIT_PROMPT_MODE_KEY = 'runme/google-auth/implicit-prompt-mode'
 const AUTH_HANDOFF_MODE_KEY = 'runme/google-auth/handoff-mode'
+const SELECT_ACCOUNT_NEXT_KEY = 'runme/google-auth/select-account-next'
 const STORAGE_KEY = 'runme/google-auth/token'
 
 function CaptureAuth(props: {
@@ -84,6 +85,7 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
       authFlow: 'implicit',
       authUxMode: 'popup',
     })
+    delete window.google
   })
 
   it('starts implicit redirect flow when authFlow=implicit and authUxMode=redirect', async () => {
@@ -155,6 +157,79 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     expect(window.localStorage.getItem(IMPLICIT_PROMPT_MODE_KEY)).toBe('none')
     expect(window.localStorage.getItem(AUTH_HANDOFF_MODE_KEY)).toBe('new_tab')
     expect(window.sessionStorage.getItem(PKCE_ERROR_KEY)).toBeNull()
+  })
+
+  it('clears and revokes Drive credentials, then asks Google to select an account', async () => {
+    const tokenClient = {
+      callback: vi.fn(),
+      requestAccessToken: vi.fn(),
+    }
+    tokenClient.requestAccessToken.mockImplementation(() => {
+      tokenClient.callback({
+        access_token: 'replacement-access-token',
+        expires_in: 3600,
+      })
+    })
+    const revoke = vi.fn((_accessToken: string, callback: () => void) => {
+      callback()
+    })
+    window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient: vi.fn(() => tokenClient),
+          revoke,
+        },
+      },
+    }
+    const auth = await renderWithGoogleAuthProvider()
+
+    await act(async () => {
+      auth.setAccessToken('original-access-token')
+    })
+    expect(window.localStorage.getItem(STORAGE_KEY)).toContain(
+      'original-access-token'
+    )
+
+    await act(async () => {
+      await auth.logoutGoogleDrive()
+    })
+
+    expect(revoke).toHaveBeenCalledWith(
+      'original-access-token',
+      expect.any(Function)
+    )
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull()
+    expect(window.localStorage.getItem(SELECT_ACCOUNT_NEXT_KEY)).toBe('true')
+
+    await act(async () => {
+      await auth.startGoogleDriveOAuth()
+    })
+
+    expect(tokenClient.requestAccessToken).toHaveBeenCalledWith({
+      prompt: 'select_account',
+    })
+    expect(window.localStorage.getItem(SELECT_ACCOUNT_NEXT_KEY)).toBeNull()
+  })
+
+  it('uses the Google account chooser for new-tab auth after logout', async () => {
+    googleClientManager.setOAuthClient({
+      authFlow: 'implicit',
+      authUxMode: 'new_tab',
+    })
+    const openSpy = vi
+      .spyOn(window, 'open')
+      .mockReturnValue(window as unknown as Window)
+    const auth = await renderWithGoogleAuthProvider()
+
+    await act(async () => {
+      await auth.logoutGoogleDrive()
+      await auth.startGoogleDriveOAuth()
+    })
+
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    const authUrl = new URL(String(openSpy.mock.calls[0]?.[0]))
+    expect(authUrl.searchParams.get('prompt')).toBe('select_account')
+    expect(window.localStorage.getItem(SELECT_ACCOUNT_NEXT_KEY)).toBeNull()
   })
 
   it('does not relaunch new-tab auth while a handoff is already in progress', async () => {
