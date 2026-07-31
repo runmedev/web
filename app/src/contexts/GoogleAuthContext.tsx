@@ -204,6 +204,20 @@ function buildImplicitAuthorizationUrl(options: {
   return authUrl
 }
 
+// A remembered account can outlive its Google browser session or consent.
+// Retry these silent-auth failures once with an interactive consent prompt.
+function shouldRetryImplicitPopupWithConsent(
+  response: AccessTokenResponse,
+  prompt: GoogleOAuthPrompt | ''
+): boolean {
+  return (
+    prompt === 'none' &&
+    (response.error === 'login_required' ||
+      response.error === 'interaction_required' ||
+      response.error === 'consent_required')
+  )
+}
+
 // GoogleAuthProvider owns all OAuth state for the app. It exposes a small
 // surface (ensureAccessToken / setAccessToken) through context so the rest of
 // the codebase never has to think about how tokens are minted, refreshed, or
@@ -1280,6 +1294,8 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       const client = await ensureTokenClient()
       assertAuthOperationCurrent(authOperation)
       const accessToken = await new Promise<string>((resolve, reject) => {
+        let requestedPrompt: GoogleOAuthPrompt | '' = promptMode ?? 'none'
+        let retriedWithConsent = false
         handlersRef.current = { resolve, reject }
         client.callback = (response: AccessTokenResponse) => {
           try {
@@ -1291,6 +1307,21 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
             throw error
           }
           if (!handlersRef.current) {
+            return
+          }
+          if (
+            !retriedWithConsent &&
+            shouldRetryImplicitPopupWithConsent(response, requestedPrompt)
+          ) {
+            retriedWithConsent = true
+            requestedPrompt = 'consent'
+            persistStoredDriveAccount(null)
+            try {
+              client.requestAccessToken({ prompt: requestedPrompt })
+            } catch (error) {
+              handlersRef.current = null
+              reject(error)
+            }
             return
           }
           const { resolve: pendingResolve, reject: pendingReject } =
@@ -1311,7 +1342,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
           ).then(() => pendingResolve(accessToken), pendingReject)
         }
         try {
-          client.requestAccessToken({ prompt: promptMode ?? 'none' })
+          client.requestAccessToken({ prompt: requestedPrompt })
         } catch (error) {
           handlersRef.current = null
           reject(error)
@@ -1470,6 +1501,14 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
         const client = await ensureTokenClient()
         assertAuthOperationCurrent(authOperation)
         return await new Promise<string>((resolve, reject) => {
+          let requestedPrompt: GoogleOAuthPrompt | '' = shouldSelectAccount
+            ? 'select_account'
+            : storedDriveAccountRef.current
+              ? 'none'
+              : currentInfo?.token
+                ? ''
+                : 'consent'
+          let retriedWithConsent = false
           handlersRef.current = { resolve, reject }
           client.callback = (response: AccessTokenResponse) => {
             try {
@@ -1481,6 +1520,21 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
               throw error
             }
             if (!handlersRef.current) {
+              return
+            }
+            if (
+              !retriedWithConsent &&
+              shouldRetryImplicitPopupWithConsent(response, requestedPrompt)
+            ) {
+              retriedWithConsent = true
+              requestedPrompt = 'consent'
+              persistStoredDriveAccount(null)
+              try {
+                client.requestAccessToken({ prompt: requestedPrompt })
+              } catch (error) {
+                handlersRef.current = null
+                reject(error)
+              }
               return
             }
             const { resolve: pendingResolve, reject: pendingReject } =
@@ -1502,15 +1556,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
           }
           try {
             console.log('Requesting access token from Google OAuth')
-            client.requestAccessToken({
-              prompt: shouldSelectAccount
-                ? 'select_account'
-                : storedDriveAccountRef.current
-                  ? 'none'
-                  : currentInfo?.token
-                    ? ''
-                    : 'consent',
-            })
+            client.requestAccessToken({ prompt: requestedPrompt })
           } catch (error) {
             handlersRef.current = null
             appLogger.error('Failed to request Google access token', {

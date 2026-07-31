@@ -308,6 +308,47 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     })
   })
 
+  it('retries silent popup authorization with consent when login is required', async () => {
+    window.localStorage.setItem(STORED_DRIVE_ACCOUNT_KEY, 'jlewi@openai.com')
+    const tokenClient = {
+      callback: vi.fn(),
+      requestAccessToken: vi.fn(),
+    }
+    tokenClient.requestAccessToken.mockImplementation(() => {
+      if (tokenClient.requestAccessToken.mock.calls.length === 1) {
+        tokenClient.callback({ error: 'login_required' })
+        return
+      }
+      tokenClient.callback({
+        access_token: 'replacement-access-token',
+        expires_in: 3600,
+      })
+    })
+    const initTokenClient = vi.fn(() => tokenClient)
+    window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient,
+        },
+      },
+    }
+    const auth = await renderWithGoogleAuthProvider()
+
+    let accessToken = ''
+    await act(async () => {
+      accessToken = await auth.ensureAccessToken({ interactive: true })
+    })
+
+    expect(accessToken).toBe('replacement-access-token')
+    expect(tokenClient.requestAccessToken.mock.calls).toEqual([
+      [{ prompt: 'none' }],
+      [{ prompt: 'consent' }],
+    ])
+    expect(window.localStorage.getItem(STORED_DRIVE_ACCOUNT_KEY)).toBe(
+      'jlewi@openai.com'
+    )
+  })
+
   it('adopts a remembered Drive account changed by another tab', async () => {
     window.localStorage.setItem(
       STORED_DRIVE_ACCOUNT_KEY,
