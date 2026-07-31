@@ -291,6 +291,24 @@ describe('codeModeExecutor', () => {
     }
   })
 
+  it('supports a per-execution timeout override', async () => {
+    const notebook = createNotebook()
+    const executor = createCodeModeExecutor({
+      mode: 'browser',
+      timeoutMs: 500,
+      resolveNotebook: () => notebook,
+      listNotebooks: () => [notebook],
+    })
+
+    await expect(
+      executor.execute({
+        source: 'webmcp',
+        code: 'await new Promise(() => {});',
+        timeoutMs: 20,
+      })
+    ).rejects.toThrow('ExecuteCode timed out after 20ms')
+  })
+
   it('aborts pending image embeds before they can append after timeout', async () => {
     const notebook = create(parser_pb.NotebookSchema, { cells: [] })
     const notebookData = {

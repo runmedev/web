@@ -35,6 +35,26 @@ describe('tourGuide', () => {
     unsubscribe()
   })
 
+  it('replaces the active step when the next tour element is shown', () => {
+    const listener = vi.fn()
+    const unsubscribe = tourGuideStore.subscribe(listener)
+
+    const first = showTourStep({
+      target: 'left-nav.explorer',
+      message: 'Browse files here.',
+    })
+    const second = showTourStep({
+      target: 'left-nav.open-documents',
+      message: 'See open documents here.',
+    })
+
+    expect(second.id).toBe(first.id + 1)
+    expect(tourGuideStore.getSnapshot()).toEqual(second)
+    expect(tourGuideStore.getSnapshot()).not.toEqual(first)
+    expect(listener).toHaveBeenCalledTimes(2)
+    unsubscribe()
+  })
+
   it('rejects unknown targets and empty annotations', () => {
     expect(() =>
       showTourStep({ target: 'button:nth-child(2)', message: 'Click it.' })

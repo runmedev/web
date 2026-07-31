@@ -165,6 +165,12 @@ describe('createAppJsGlobals notebook reference helpers', () => {
       message: 'Connect Google Drive here.',
     })
     expect(globals.tour.dismiss()).toBe(true)
+    expect(globals.tour.help()).toContain('Timed tour example')
+    expect(globals.tour.help()).toContain('setTimeout(resolve, delayMs)')
+    expect(globals.tour.help()).toContain('finally')
+    expect(globals.tour.help()).toContain(
+      'replaces the active highlight; no intermediate dismiss is needed'
+    )
   })
 
   it('opens a local URI from a Runme share URL', async () => {

@@ -74,4 +74,33 @@ describe('TourGuideOverlay', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
     target.remove()
   })
+
+  it('replaces the visible highlight and annotation for the next step', () => {
+    const explorer = addTarget('left-nav.explorer', 10)
+    const documents = addTarget('left-nav.open-documents', 80)
+    render(<TourGuideOverlay />)
+
+    act(() => {
+      showTourStep({
+        target: 'left-nav.explorer',
+        message: 'Browse files here.',
+      })
+    })
+    act(() => {
+      showTourStep({
+        target: 'left-nav.open-documents',
+        message: 'See open documents here.',
+      })
+    })
+
+    expect(screen.getAllByTestId('tour-guide-overlay')).toHaveLength(1)
+    expect(screen.getByRole('dialog').textContent).toContain(
+      'See open documents here.'
+    )
+    expect(screen.getByRole('dialog').textContent).not.toContain(
+      'Browse files here.'
+    )
+    explorer.remove()
+    documents.remove()
+  })
 })

@@ -118,6 +118,13 @@ describe("WebMcpToolRegistrationHost", () => {
       additionalProperties: false,
       properties: {
         code: { type: "string" },
+        timeoutMs: {
+          type: "integer",
+          minimum: 1_000,
+          maximum: 60_000,
+          description:
+            "Optional execution timeout in milliseconds. Defaults to 15000 and is capped at 60000.",
+        },
       },
       required: ["code"],
     });
@@ -125,6 +132,7 @@ describe("WebMcpToolRegistrationHost", () => {
     await expect(
       executeCode?.tool.execute({
         code: "console.log('hello')",
+        timeoutMs: 30_000,
       }),
     ).resolves.toBe("webmcp output");
     expect(appConsoleDataMock.hydrate).toHaveBeenCalledTimes(1);
@@ -134,6 +142,7 @@ describe("WebMcpToolRegistrationHost", () => {
     expect(executeMock).toHaveBeenCalledWith({
       code: "console.log('hello')",
       source: "webmcp",
+      timeoutMs: 30_000,
       hooks: {
         onStdout: expect.any(Function),
         onStderr: expect.any(Function),

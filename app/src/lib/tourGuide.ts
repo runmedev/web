@@ -125,7 +125,13 @@ function normalizePlacement(value: unknown): TourPlacement {
   return 'auto'
 }
 
-/** Shows one AI-authored annotation anchored to a registered UI target. */
+/**
+ * Shows one AI-authored annotation anchored to a registered UI target.
+ *
+ * The tour store is intentionally a singleton. Publishing a step atomically
+ * replaces the currently visible step, so callers can build timed tours by
+ * repeatedly calling showTourStep without dismissing between steps.
+ */
 export function showTourStep(request: TourStepRequest): TourStep {
   const target = requiredText(request?.target, 'target', 160)
   if (!TOUR_TARGET_IDS.has(target)) {

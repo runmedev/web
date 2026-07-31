@@ -115,6 +115,11 @@ export default function WebMcpToolRegistrationHost() {
               typeof input?.code === "string"
                 ? input.code
                 : String(input?.code ?? "");
+            const timeoutMs =
+              typeof input?.timeoutMs === "number" &&
+              Number.isFinite(input.timeoutMs)
+                ? Math.min(60_000, Math.max(1_000, Math.trunc(input.timeoutMs)))
+                : undefined;
             await appConsoleData.hydrate();
 
             const execution = appConsoleData.startExternalExecution(code);
@@ -123,6 +128,7 @@ export default function WebMcpToolRegistrationHost() {
               const result = await codeModeExecutor.execute({
                 code,
                 source: "webmcp",
+                ...(timeoutMs ? { timeoutMs } : {}),
                 hooks: execution
                   ? {
                       onStdout: (chunk) => {

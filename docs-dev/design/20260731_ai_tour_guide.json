@@ -42,6 +42,27 @@
     },
     {
       "kind": "CELL_KIND_CODE",
+      "value": "const targets = await tour.listTargets();\nconsole.table(targets);\n\nconst delayMs = 2000;\ntry {\n  for (const target of targets) {\n    await tour.show({\n      target: target.id,\n      title: target.label,\n      message: target.description,\n      placement: 'right',\n    });\n    await new Promise((resolve) => setTimeout(resolve, delayMs));\n  }\n} finally {\n  await tour.dismiss();\n}\n\nconsole.log(`Tour complete: ${targets.length} elements shown.`);",
+      "languageId": "javascript",
+      "metadata": {
+        "name": "show-complete-runme-tour",
+        "runme.dev/id": "01K1GTAI000000000000000011",
+        "runme.dev/runnerName": "appkernel-js-sandbox"
+      },
+      "refId": "code_tour_complete"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "### Agent instructions for a complete tour\n\nWhen the user asks for a tour of Runme in the open browser, the agent should reuse that Runme tab and its WebMCP capability, call `tour.listTargets()`, and then run the complete-tour program above through `ExecuteCode` with `timeoutMs: 30000`. The two-second delay gives the user time to see each target.\n\nThe singleton store is the sequencing contract: every `tour.show(...)` atomically replaces the active highlight and annotation. A loop must not dismiss between steps; it dismisses once after the last delay, preferably in `finally`. A focused tour may filter the discovered target list before iterating.",
+      "languageId": "markdown",
+      "metadata": {
+        "name": "complete-tour-agent-instructions",
+        "runme.dev/id": "01K1GTAI000000000000000010"
+      },
+      "refId": "markup_tour_agent_instructions"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
       "value": "console.table(await tour.listTargets());",
       "languageId": "javascript",
       "metadata": {

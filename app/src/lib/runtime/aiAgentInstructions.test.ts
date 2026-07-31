@@ -59,6 +59,17 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain(
       "do not click it or complete the action on the user's behalf"
     )
+    expect(instructions).toContain('Give a complete Runme tour')
+    expect(instructions).toContain(
+      'Give me a tour of Runme which is open in the browser'
+    )
+    expect(instructions).toContain('timeoutMs')
+    expect(instructions).toContain('30000')
+    expect(instructions).toContain('setTimeout(resolve, delayMs)')
+    expect(instructions).toContain(
+      'atomically replaces the current highlight and annotation'
+    )
+    expect(instructions).toContain('do not call `tour.dismiss()` between steps')
   })
 
   it('does not include deployment-specific plugin instructions', () => {
