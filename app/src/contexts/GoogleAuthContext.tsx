@@ -159,6 +159,7 @@ export function useGoogleAuth() {
 }
 
 const REFRESH_MARGIN_MS = 60_000
+const DRIVE_ACCOUNT_DISCOVERY_TIMEOUT_MS = 3_000
 
 // Google accepts an email address as login_hint and uses it to choose the
 // matching browser session. The hint is intentionally kept separate from the
@@ -431,12 +432,23 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   const rememberDriveAccountForToken = useCallback(
     async (accessToken: string, authOperation: AuthOperationVersion) => {
       let account: string | null = null
+      const controller = new AbortController()
+      let timeoutId: number | undefined
       try {
-        const response = await fetch(DRIVE_ABOUT_URL, {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-          },
-        })
+        const response = await Promise.race([
+          fetch(DRIVE_ABOUT_URL, {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+            signal: controller.signal,
+          }),
+          new Promise<never>((_, reject) => {
+            timeoutId = window.setTimeout(() => {
+              controller.abort()
+              reject(new Error('Google Drive account discovery timed out'))
+            }, DRIVE_ACCOUNT_DISCOVERY_TIMEOUT_MS)
+          }),
+        ])
         if (!response.ok) {
           throw new Error(
             `Google Drive about request failed (${response.status})`
@@ -461,6 +473,10 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
           }
         )
         return
+      } finally {
+        if (timeoutId !== undefined) {
+          window.clearTimeout(timeoutId)
+        }
       }
 
       assertAuthOperationCurrent(authOperation)
@@ -478,9 +494,10 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       expiresIn: number,
       authOperation: AuthOperationVersion
     ) => {
-      await rememberDriveAccountForToken(accessToken, authOperation)
       assertAuthOperationCurrent(authOperation)
       setAccessToken(accessToken, expiresIn, { refreshToken: null })
+      await rememberDriveAccountForToken(accessToken, authOperation)
+      assertAuthOperationCurrent(authOperation)
     },
     [assertAuthOperationCurrent, rememberDriveAccountForToken, setAccessToken]
   )

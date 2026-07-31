@@ -553,9 +553,13 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
       )
     })
 
-    expect(fetch).toHaveBeenCalledWith(DRIVE_ABOUT_URL, {
-      headers: { Authorization: 'Bearer existing-access-token' },
-    })
+    expect(fetch).toHaveBeenCalledWith(
+      DRIVE_ABOUT_URL,
+      expect.objectContaining({
+        headers: { Authorization: 'Bearer existing-access-token' },
+        signal: expect.any(AbortSignal),
+      })
+    )
     await expect(auth.ensureAccessToken({ interactive: false })).resolves.toBe(
       'existing-access-token'
     )
@@ -599,6 +603,56 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
       'replacement-access-token'
     )
     expect(window.localStorage.getItem(STORED_DRIVE_ACCOUNT_KEY)).toBeNull()
+  })
+
+  it('accepts the implicit token before a stalled account lookup times out', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => undefined))
+    )
+    const tokenClient = {
+      callback: vi.fn(),
+      requestAccessToken: vi.fn(),
+    }
+    tokenClient.requestAccessToken.mockImplementation(() => {
+      tokenClient.callback({
+        access_token: 'replacement-access-token',
+        expires_in: 3600,
+      })
+    })
+    window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient: vi.fn(() => tokenClient),
+        },
+      },
+    }
+    const auth = await renderWithGoogleAuthProvider()
+    vi.useFakeTimers()
+
+    try {
+      let resultPromise:
+        | ReturnType<typeof auth.startGoogleDriveOAuth>
+        | undefined
+      await act(async () => {
+        resultPromise = auth.startGoogleDriveOAuth()
+        await Promise.resolve()
+      })
+
+      expect(window.localStorage.getItem(STORAGE_KEY)).toContain(
+        'replacement-access-token'
+      )
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000)
+      })
+      await expect(resultPromise!).resolves.toMatchObject({
+        status: 'authorized',
+        accessToken: 'replacement-access-token',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not reuse a cached OAuth token for service account auth', async () => {
