@@ -52,7 +52,9 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain(
       'Do not respond with prose alone when the relevant control can be highlighted'
     )
-    expect(instructions).toContain('tour.listTargets()')
+    expect(instructions).toContain(
+      'console.log(JSON.stringify(await tour.listTargets()))'
+    )
     expect(instructions).toContain('showTourStep')
     expect(instructions).toContain('dismissTour')
     expect(instructions).toContain('Never pass CSS selectors')

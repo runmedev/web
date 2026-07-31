@@ -38,7 +38,7 @@ When a user asks how to perform a task in the Runme interface, where a control i
 1. Discover the supported semantic targets with \`ExecuteCode\`:
 
 \`\`\`js
-console.log(JSON.stringify(tour.listTargets()))
+console.log(JSON.stringify(await tour.listTargets()))
 \`\`\`
 
 2. Choose the exact target whose description matches the user's task. Never pass CSS selectors or invent target IDs.

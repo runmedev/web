@@ -2,6 +2,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  TOUR_TARGETS,
+  type TourTarget,
   dismissTour,
   listTourTargets,
   showTourStep,
@@ -72,5 +74,15 @@ describe('tourGuide', () => {
         expect.objectContaining({ id: 'left-nav.account' }),
       ])
     )
+  })
+
+  it('does not expose the mutable target registry to callers', () => {
+    const targets = listTourTargets() as TourTarget[]
+    targets[0]!.label = 'Changed by caller'
+    targets.pop()
+
+    const freshTargets = listTourTargets()
+    expect(freshTargets).toHaveLength(TOUR_TARGETS.length)
+    expect(freshTargets[0]?.label).toBe('File Explorer')
   })
 })

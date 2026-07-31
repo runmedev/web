@@ -171,7 +171,7 @@ export function dismissTour(): boolean {
 
 /** Returns the semantic targets that an AI may annotate. */
 export function listTourTargets(): readonly TourTarget[] {
-  return TOUR_TARGETS
+  return TOUR_TARGETS.map((target) => ({ ...target }))
 }
 
 export const tourGuideStore = {
