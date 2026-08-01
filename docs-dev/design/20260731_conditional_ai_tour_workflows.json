@@ -70,6 +70,16 @@
         "runme.dev/id": "01K1HCOND00000000000000006"
       },
       "refId": "markup_conditional_tour_agent_contract"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## Prior art and references\n\nThis proposal follows two established Runme conventions: domain behavior must be callable outside React, and React should render observable model state rather than own shared business state.\n\n### Architecture guidance\n\n- [UI Action Runtime Pattern](https://github.com/runmedev/web/blob/main/docs-dev/architecture/ui.md) requires meaningful UI actions to live in domain modules and makes React controls, App Console, WebMCP, and tests invoke the same behavior.\n- [Global Singletons](https://github.com/runmedev/web/blob/main/docs-dev/architecture/global-singletons.md) codifies the observable singleton shape: command methods, `getSnapshot()`, `subscribe(listener)`, and a React context adapter without duplicated React business state.\n\n### Prior design discussions\n\n- [Notebook Session Refactor](https://github.com/runmedev/web/blob/main/docs-dev/design/20260520_notebook_session_refactor.md) moved notebook loading and the `NotebookData` registry out of React refs into the imperative `NotebookDataController`. `NotebookContext` became a React adapter using `useSyncExternalStore`. This is the closest precedent for tour-visible UI state.\n- [`getAllRenderersRef` Bug](https://github.com/runmedev/web/blob/main/docs-dev/design/20260426_getAllRendersRefbug.md) explicitly describes notebooks as model/view: mutations update `NotebookData`, the model emits, and subscribed React views render. It documents the failure caused when an agent-facing mutation path depended on a React closure.\n- [App Console Model-View Refactor](https://github.com/runmedev/web/blob/main/docs-dev/design/20260510_app_console_model_view.md) applies the same architecture because WebMCP `ExecuteCode` and other non-UI producers could not update live state owned by `AppConsole.tsx`. The resulting `AppConsoleData` model exposes snapshots, subscriptions, and mutation methods outside React.\n\n### Current implementations\n\n- [`NotebookDataController`](https://github.com/runmedev/web/blob/main/app/src/lib/notebookDataController.ts) owns notebook session state and exposes imperative commands, `getSnapshot()`, and `subscribe()`. [`NotebookContext`](https://github.com/runmedev/web/blob/main/app/src/contexts/NotebookContext.tsx) adapts it with `useSyncExternalStore`.\n- [`AppConsoleData`](https://github.com/runmedev/web/blob/main/app/src/lib/appConsole/AppConsoleData.ts) owns console state outside React. [`useAppConsoleSnapshot`](https://github.com/runmedev/web/blob/main/app/src/lib/appConsole/useAppConsoleSnapshot.ts) subscribes the React view with `useSyncExternalStore`.\n\nThe tour state/controller should reuse this pattern instead of introducing a separate state ownership model.",
+      "languageId": "markdown",
+      "metadata": {
+        "name": "prior-art-model-view-references",
+        "runme.dev/id": "01K1HCOND00000000000000008"
+      },
+      "refId": "markup_conditional_tour_prior_art"
     }
   ],
   "metadata": {
