@@ -73,9 +73,16 @@ describe('readInstructionsForAIAgents', () => {
     )
     expect(instructions).toContain('do not call `tour.dismiss()` between steps')
     expect(instructions).toContain('Guide a conditional, multi-step task')
-    expect(instructions).toContain('startTourWorkflow')
-    expect(instructions).toContain('continueTourWorkflow')
-    expect(instructions).toContain('add-google-drive-folder')
+    expect(instructions).toContain('Scripted mode')
+    expect(instructions).toContain('Conversational mode')
+    expect(instructions).toContain('tour.getUiSnapshot()')
+    expect(instructions).toContain('tour.waitForUiChange')
+    expect(instructions).toContain('async function waitUntil(predicate)')
+    expect(instructions).toContain("tour.setActivePanel('explorer')")
+    expect(instructions).toContain('googleDriveFolderAddedCount')
+    expect(instructions).toContain(
+      "never treat the user's acknowledgement alone as proof of completion"
+    )
     expect(instructions).toContain('Do not use a fixed delay')
   })
 

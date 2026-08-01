@@ -6,7 +6,7 @@ import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { driveFolderUrl } from "../../storage/drive";
 import { googleClientManager } from "../../lib/googleClientManager";
 import { markOnboardingTaskComplete } from "../../lib/onboarding";
-import { incrementTourState } from "../../lib/tourWorkflow";
+import { tourUiController } from "../../lib/tourUiController";
 
 type PickerAction = "picked" | "cancel";
 
@@ -129,7 +129,7 @@ export function GoogleDrivePickerButton({
                 addItem(localUri);
               }
               markOnboardingTaskComplete("add-drive-folder");
-              incrementTourState("google-drive.folder-added-count");
+              tourUiController.recordGoogleDriveFolderAdded();
             } catch (error) {
               console.error("Failed to mirror Drive folder", error);
             }

@@ -90,15 +90,46 @@ Each \`tour.show(...)\` call atomically replaces the current highlight and annot
 
 ### Guide a conditional, multi-step task
 
-For a task whose next instruction depends on current UI state, use a registered tour workflow instead of a timed tour or a hand-written sequence. The workflow reads semantic application state; do not inspect DOM classes, invent selectors, or assume that the user is signed in or that a panel is open.
+For a task whose next instruction depends on current UI state, read the typed application snapshot with \`ExecuteCode\`: \`await tour.getUiSnapshot()\`. Do not inspect DOM classes, invent selectors, or assume that the user is signed in or that a panel is open. The snapshot exposes non-sensitive state including \`revision\`, \`googleDriveAuthorized\`, \`activePanel\`, and \`googleDriveFolderAddedCount\`. React subscribes to the same external controller, so \`await tour.setActivePanel('explorer')\` updates both the model and the rendered UI.
 
-For example, when the user asks how to add a Google Drive folder, call the direct \`startTourWorkflow\` tool with \`workflowId: "add-google-drive-folder"\`. It skips conditions already satisfied and highlights the first action the user still needs to take. The result includes \`sessionId\`, \`revision\`, \`status\`, and the current \`step\`.
+Choose one of these two authoring modes:
 
-When \`status\` is \`waiting\`, tell the user to perform the highlighted action, then call \`continueTourWorkflow\` with the returned \`sessionId\` and \`revision\`. This call waits for semantic UI state to change and replaces the highlight with the next incomplete step. Use a bounded \`timeoutMs\` of at most 60000. If it times out, retain the session and call it again after checking whether the user needs help; do not restart the workflow. Repeat until \`status\` is \`complete\`, then tell the user the workflow is finished.
+1. **Scripted mode.** Write plain JavaScript and run it through \`ExecuteCode\`. Read the initial snapshot, show only the first unmet step with \`tour.show(...)\`, and wait for actual progress with \`await tour.waitForUiChange({ afterRevision: snapshot.revision, timeoutMs })\`. Re-read the returned snapshot, test the condition, and repeat until the workflow is complete. Keep every wait bounded at 60000 ms or less; if a wait times out, report where the workflow paused so it can resume in a later call.
+2. **Conversational mode.** Show one step with the direct \`showTourStep\` tool, ask the user to perform it and tell you when they are done, then return control to the user. After the user says they completed the action, call \`ExecuteCode\` and inspect \`await tour.getUiSnapshot()\`. Advance to the next highlight only when the snapshot confirms the condition. If it does not, explain what remains incomplete and keep the current step active.
 
-The same API is available through \`ExecuteCode\` as \`tour.startWorkflow(id)\`, \`tour.showNextWorkflowStep(sessionId, copy?)\`, \`tour.continueWorkflow({ sessionId, afterRevision, timeoutMs })\`, \`tour.getWorkflowStatus(sessionId)\`, and \`tour.cancelWorkflow(sessionId)\`. Prefer the direct tools because each wait is independently bounded and the workflow can resume across agent turns. Cancel only when the user asks to stop or changes tasks.
+For “add a Google Drive folder”, the conditions are: first require \`googleDriveAuthorized === true\`; then require \`activePanel === 'explorer'\`; finally record the current \`googleDriveFolderAddedCount\`, highlight \`explorer.add-google-drive-folder\`, and require that count to increase. Use \`left-nav.google-drive\`, \`left-nav.explorer\`, and \`explorer.add-google-drive-folder\` as the respective targets. Skip any condition already satisfied.
 
-Do not use a fixed delay to guess when the user has acted. Do not click the highlighted controls for the user. A new workflow replaces the previous workflow session, and showing its next step replaces the existing tour overlay.
+Here is the scripted-mode shape for that task:
+
+\`\`\`js
+let state = await tour.getUiSnapshot()
+
+async function waitUntil(predicate) {
+  while (!predicate(state)) {
+    const next = await tour.waitForUiChange({
+      afterRevision: state.revision,
+      timeoutMs: 15000,
+    })
+    if (next.timedOut) throw new Error('Tour paused while waiting for the user')
+    state = next
+  }
+}
+
+if (!state.googleDriveAuthorized) {
+  await tour.show({ target: 'left-nav.google-drive', message: 'Click here to sign in to Google Drive.' })
+  await waitUntil((snapshot) => snapshot.googleDriveAuthorized)
+}
+if (state.activePanel !== 'explorer') {
+  await tour.show({ target: 'left-nav.explorer', message: 'Click here to open the File Explorer.' })
+  await waitUntil((snapshot) => snapshot.activePanel === 'explorer')
+}
+const initialFolderCount = state.googleDriveFolderAddedCount
+await tour.show({ target: 'explorer.add-google-drive-folder', message: 'Click here and choose a Google Drive folder.' })
+await waitUntil((snapshot) => snapshot.googleDriveFolderAddedCount > initialFolderCount)
+await tour.dismiss()
+\`\`\`
+
+Do not use a fixed delay to guess when the user has acted, and never treat the user's acknowledgement alone as proof of completion. Do not click action controls such as sign-in or folder selection for the user. Calling \`tour.show(...)\` or \`showTourStep\` replaces the existing tour overlay, so no intermediate dismiss is needed; call \`tour.dismiss()\` or \`dismissTour\` after completion or cancellation.
 
 ## Read Runme documentation on demand
 

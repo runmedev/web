@@ -104,7 +104,7 @@ describe("WebMcpToolRegistrationHost", () => {
 
     const rendered = render(<WebMcpToolRegistrationHost />);
 
-    expect(registerTool).toHaveBeenCalledTimes(10);
+    expect(registerTool).toHaveBeenCalledTimes(6);
     const executeCode = registered.find(
       ({ tool }) => tool.name === "ExecuteCode",
     );
@@ -255,59 +255,12 @@ describe("WebMcpToolRegistrationHost", () => {
       dismissed: true,
     });
 
-    const startTourWorkflow = registered.find(
-      ({ tool }) => tool.name === "startTourWorkflow",
-    );
-    expect(startTourWorkflow?.tool.annotations).toEqual({
-      readOnlyHint: false,
-      untrustedContentHint: false,
-    });
-    const startedWorkflow = JSON.parse(
-      String(
-        startTourWorkflow?.tool.execute({
-          workflowId: "add-google-drive-folder",
-        }),
-      ),
-    );
-    expect(startedWorkflow).toMatchObject({
-      workflowId: "add-google-drive-folder",
-      status: "waiting",
-      step: { id: "authorize-google-drive" },
-    });
-
-    const getTourWorkflowStatus = registered.find(
-      ({ tool }) => tool.name === "getTourWorkflowStatus",
-    );
-    expect(getTourWorkflowStatus?.tool.annotations.readOnlyHint).toBe(true);
     expect(
-      JSON.parse(
-        String(
-          getTourWorkflowStatus?.tool.execute({
-            sessionId: startedWorkflow.sessionId,
-          }),
-        ),
-      ),
-    ).toMatchObject({ sessionId: startedWorkflow.sessionId });
-
-    const continueTourWorkflow = registered.find(
-      ({ tool }) => tool.name === "continueTourWorkflow",
-    );
-    expect(continueTourWorkflow?.tool.inputSchema).toMatchObject({
-      required: ["sessionId", "afterRevision"],
-    });
-
-    const cancelTourWorkflow = registered.find(
-      ({ tool }) => tool.name === "cancelTourWorkflow",
-    );
+      registered.some(({ tool }) => tool.name === "startTourWorkflow"),
+    ).toBe(false);
     expect(
-      JSON.parse(
-        String(
-          cancelTourWorkflow?.tool.execute({
-            sessionId: startedWorkflow.sessionId,
-          }),
-        ),
-      ),
-    ).toEqual({ cancelled: true });
+      registered.some(({ tool }) => tool.name === "continueTourWorkflow"),
+    ).toBe(false);
 
     expect(registered.every(({ signal }) => signal?.aborted === false)).toBe(
       true,

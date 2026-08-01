@@ -2,12 +2,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  getTourWorkflowStatus,
-  publishTourState,
-  resetTourWorkflowForTests,
-  startTourWorkflow,
-} from "../../lib/tourWorkflow";
+import { tourUiController } from "../../lib/tourUiController";
 import { GoogleDrivePickerButton } from "./GoogleDrivePickerButton";
 
 const mocks = vi.hoisted(() => ({
@@ -62,7 +57,7 @@ vi.mock("../../lib/onboarding", () => ({
 
 describe("GoogleDrivePickerButton", () => {
   beforeEach(() => {
-    resetTourWorkflowForTests();
+    tourUiController.resetForTests();
     mocks.addItem.mockReset();
     mocks.ensureAccessToken.mockReset();
     mocks.ensureAccessToken.mockResolvedValue("cached-access-token");
@@ -80,7 +75,7 @@ describe("GoogleDrivePickerButton", () => {
   });
 
   afterEach(() => {
-    resetTourWorkflowForTests();
+    tourUiController.resetForTests();
   });
 
   it("reuses an access token before opening the Drive picker", async () => {
@@ -109,9 +104,8 @@ describe("GoogleDrivePickerButton", () => {
     mocks.ensureAccessToken.mockResolvedValue("token");
     mocks.getItems.mockReturnValue([]);
     mocks.updateFolder.mockResolvedValue("local://folder/selected");
-    publishTourState("google-drive.authorized", true);
-    publishTourState("side-panel.active", "explorer");
-    const session = startTourWorkflow("add-google-drive-folder");
+    const initialCount =
+      tourUiController.getSnapshot().googleDriveFolderAddedCount;
 
     render(<GoogleDrivePickerButton label="Add Google Drive folder" />);
     const button = screen.getByRole("button", {
@@ -123,7 +117,9 @@ describe("GoogleDrivePickerButton", () => {
 
     fireEvent.click(button);
     await waitFor(() => expect(mocks.openPicker).toHaveBeenCalledTimes(1));
-    expect(getTourWorkflowStatus(session.sessionId).status).toBe("waiting");
+    expect(tourUiController.getSnapshot().googleDriveFolderAddedCount).toBe(
+      initialCount,
+    );
 
     const pickerConfig = mocks.openPicker.mock.calls[0]?.[0];
     pickerConfig.callbackFunction({
@@ -138,7 +134,9 @@ describe("GoogleDrivePickerButton", () => {
     });
 
     await waitFor(() =>
-      expect(getTourWorkflowStatus(session.sessionId).status).toBe("complete"),
+      expect(tourUiController.getSnapshot().googleDriveFolderAddedCount).toBe(
+        initialCount + 1,
+      ),
     );
     expect(mocks.addItem).toHaveBeenCalledWith("local://folder/selected");
   });

@@ -6,7 +6,7 @@ import { CurrentDocInitializer } from "../CurrentDocInitializer";
 import { DocumentationInitializer } from "../Documentation/DocumentationInitializer";
 import { OnboardingInitializer } from "../Onboarding/OnboardingInitializer";
 import TourGuideOverlay from "../TourGuide/TourGuideOverlay";
-import TourWorkflowStateBridge from "../TourGuide/TourWorkflowStateBridge";
+import TourUiStateBridge from "../TourGuide/TourUiStateBridge";
 
 const SIDE_PANEL_WIDTH = 360;
 const TOOLBAR_WIDTH = 48; // ~12 tailwind units (12 * 4px)
@@ -21,7 +21,7 @@ export default function MainPage() {
         <CurrentDocInitializer />
         <DocumentationInitializer />
         <OnboardingInitializer />
-        <TourWorkflowStateBridge />
+        <TourUiStateBridge />
         <TourGuideOverlay />
         <div className="flex h-full min-h-0 w-full">
           <div
