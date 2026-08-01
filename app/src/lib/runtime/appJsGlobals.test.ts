@@ -156,6 +156,11 @@ describe('createAppJsGlobals notebook reference helpers', () => {
         expect.objectContaining({ id: 'left-nav.google-drive' }),
       ])
     )
+    expect(globals.tour.listWorkflows()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'add-google-drive-folder' }),
+      ])
+    )
     globals.tour.show({
       target: 'left-nav.google-drive',
       message: 'Connect Google Drive here.',
@@ -166,6 +171,7 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     })
     expect(globals.tour.dismiss()).toBe(true)
     expect(globals.tour.help()).toContain('Timed tour example')
+    expect(globals.tour.help()).toContain('tour.startWorkflow(id)')
     expect(globals.tour.help()).toContain('setTimeout(resolve, delayMs)')
     expect(globals.tour.help()).toContain('finally')
     expect(globals.tour.help()).toContain(

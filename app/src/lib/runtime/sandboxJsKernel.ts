@@ -73,6 +73,13 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'tour.show',
   'tour.dismiss',
   'tour.listTargets',
+  'tour.listWorkflows',
+  'tour.startWorkflow',
+  'tour.getWorkflowStatus',
+  'tour.showNextWorkflowStep',
+  'tour.waitForWorkflowChange',
+  'tour.continueWorkflow',
+  'tour.cancelWorkflow',
   'tour.help',
   'embed',
   'notebookDiff.listDriveRevisions',
@@ -328,6 +335,13 @@ export function buildSandboxSrcDoc(options: {
           show: (request) => hostCall("tour.show", [request]),
           dismiss: () => hostCall("tour.dismiss", []),
           listTargets: () => hostCall("tour.listTargets", []),
+          listWorkflows: () => hostCall("tour.listWorkflows", []),
+          startWorkflow: (workflowId) => hostCall("tour.startWorkflow", [workflowId]),
+          getWorkflowStatus: (sessionId) => hostCall("tour.getWorkflowStatus", [sessionId]),
+          showNextWorkflowStep: (sessionId, copy) => hostCall("tour.showNextWorkflowStep", [sessionId, copy]),
+          waitForWorkflowChange: (args) => hostCall("tour.waitForWorkflowChange", [args]),
+          continueWorkflow: (args) => hostCall("tour.continueWorkflow", [args]),
+          cancelWorkflow: (sessionId) => hostCall("tour.cancelWorkflow", [sessionId]),
           help: () => hostCall("tour.help", []),
         };
 
@@ -438,6 +452,12 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- tour.listTargets()");
           consoleProxy.log("- tour.show({ target, message, title?, placement? })");
           consoleProxy.log("- tour.dismiss()");
+          consoleProxy.log("- tour.listWorkflows()");
+          consoleProxy.log("- tour.startWorkflow(id)");
+          consoleProxy.log("- tour.showNextWorkflowStep(sessionId, copy?)");
+          consoleProxy.log("- tour.continueWorkflow({ sessionId, afterRevision, timeoutMs })");
+          consoleProxy.log("- tour.getWorkflowStatus(sessionId)");
+          consoleProxy.log("- tour.cancelWorkflow(sessionId)");
           consoleProxy.log("- embed(source, { target?, alt?, name? })");
           ${opfsHelpLines}
           ${netHelpLines}

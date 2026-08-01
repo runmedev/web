@@ -82,6 +82,12 @@ class MockSandboxPort {
         this.emit({
           type: 'host-call',
           callId: 2,
+          method: 'tour.listWorkflows',
+          args: [],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 3,
           method: 'tour.show',
           args: [
             {
@@ -679,6 +685,9 @@ describe('SandboxJSKernel', () => {
       if (method === 'tour.show') {
         return { target: 'left-nav.google-drive', message: 'Sign in here.' }
       }
+      if (method === 'tour.listWorkflows') {
+        return [{ id: 'add-google-drive-folder' }]
+      }
       return null
     })
 
@@ -697,11 +706,13 @@ describe('SandboxJSKernel', () => {
     await kernel.run(
       [
         'console.log(await tour.listTargets());',
+        'console.log(await tour.listWorkflows());',
         "console.log(await tour.show({ target: 'left-nav.google-drive', message: 'Sign in here.' }));",
       ].join('\n')
     )
 
     expect(bridgeCall).toHaveBeenCalledWith('tour.listTargets', [])
+    expect(bridgeCall).toHaveBeenCalledWith('tour.listWorkflows', [])
     expect(bridgeCall).toHaveBeenCalledWith('tour.show', [
       { target: 'left-nav.google-drive', message: 'Sign in here.' },
     ])

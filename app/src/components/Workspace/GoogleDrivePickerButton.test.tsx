@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  getTourWorkflowStatus,
+  publishTourState,
+  resetTourWorkflowForTests,
+  startTourWorkflow,
+} from "../../lib/tourWorkflow";
 import { GoogleDrivePickerButton } from "./GoogleDrivePickerButton";
 
 const mocks = vi.hoisted(() => ({
@@ -19,10 +25,9 @@ vi.mock("react-google-drive-picker", () => ({
 }));
 
 vi.mock("../../contexts/GoogleAuthContext", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../contexts/GoogleAuthContext")>(
-      "../../contexts/GoogleAuthContext",
-    );
+  const actual = await vi.importActual<
+    typeof import("../../contexts/GoogleAuthContext")
+  >("../../contexts/GoogleAuthContext");
   return {
     ...actual,
     useGoogleAuth: () => ({
@@ -41,9 +46,7 @@ vi.mock("../../contexts/WorkspaceContext", () => ({
 
 vi.mock("../../contexts/NotebookStoreContext", () => ({
   useNotebookStore: () => ({
-    store: {
-      updateFolder: mocks.updateFolder,
-    },
+    store: { updateFolder: mocks.updateFolder },
   }),
 }));
 
@@ -53,8 +56,13 @@ vi.mock("../../lib/googleClientManager", () => ({
   },
 }));
 
+vi.mock("../../lib/onboarding", () => ({
+  markOnboardingTaskComplete: vi.fn(),
+}));
+
 describe("GoogleDrivePickerButton", () => {
   beforeEach(() => {
+    resetTourWorkflowForTests();
     mocks.addItem.mockReset();
     mocks.ensureAccessToken.mockReset();
     mocks.ensureAccessToken.mockResolvedValue("cached-access-token");
@@ -69,6 +77,10 @@ describe("GoogleDrivePickerButton", () => {
     mocks.openPicker.mockReset();
     mocks.startGoogleDriveOAuth.mockReset();
     mocks.updateFolder.mockReset();
+  });
+
+  afterEach(() => {
+    resetTourWorkflowForTests();
   });
 
   it("reuses an access token before opening the Drive picker", async () => {
@@ -91,5 +103,43 @@ describe("GoogleDrivePickerButton", () => {
       interactive: true,
     });
     expect(mocks.startGoogleDriveOAuth).not.toHaveBeenCalled();
+  });
+
+  it("registers a semantic target and completes only after a folder is added", async () => {
+    mocks.ensureAccessToken.mockResolvedValue("token");
+    mocks.getItems.mockReturnValue([]);
+    mocks.updateFolder.mockResolvedValue("local://folder/selected");
+    publishTourState("google-drive.authorized", true);
+    publishTourState("side-panel.active", "explorer");
+    const session = startTourWorkflow("add-google-drive-folder");
+
+    render(<GoogleDrivePickerButton label="Add Google Drive folder" />);
+    const button = screen.getByRole("button", {
+      name: "Add Google Drive folder",
+    });
+    expect(button.getAttribute("data-tour-id")).toBe(
+      "explorer.add-google-drive-folder",
+    );
+
+    fireEvent.click(button);
+    await waitFor(() => expect(mocks.openPicker).toHaveBeenCalledTimes(1));
+    expect(getTourWorkflowStatus(session.sessionId).status).toBe("waiting");
+
+    const pickerConfig = mocks.openPicker.mock.calls[0]?.[0];
+    pickerConfig.callbackFunction({
+      action: "picked",
+      docs: [
+        {
+          id: "folder-id",
+          name: "Selected",
+          mimeType: "application/vnd.google-apps.folder",
+        },
+      ],
+    });
+
+    await waitFor(() =>
+      expect(getTourWorkflowStatus(session.sessionId).status).toBe("complete"),
+    );
+    expect(mocks.addItem).toHaveBeenCalledWith("local://folder/selected");
   });
 });

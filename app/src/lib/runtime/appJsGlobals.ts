@@ -73,6 +73,15 @@ import {
   listTourTargets,
   showTourStep,
 } from '../tourGuide'
+import {
+  cancelTourWorkflow,
+  continueTourWorkflow,
+  getTourWorkflowStatus,
+  listTourWorkflows,
+  showNextTourWorkflowStep,
+  startTourWorkflow,
+  waitForTourWorkflowChange,
+} from '../tourWorkflow'
 import { appState } from './AppState'
 import type {
   AppKernelNetworkApi,
@@ -1112,12 +1121,39 @@ export function createAppJsGlobals({
       show: (request: TourStepRequest) => showTourStep(request),
       dismiss: () => dismissTour(),
       listTargets: () => listTourTargets(),
+      listWorkflows: () => listTourWorkflows(),
+      startWorkflow: (workflowId: string) => startTourWorkflow(workflowId),
+      getWorkflowStatus: (sessionId?: number) =>
+        getTourWorkflowStatus(sessionId),
+      showNextWorkflowStep: (
+        sessionId?: number,
+        copy?: { title?: string; message?: string }
+      ) => showNextTourWorkflowStep(sessionId, copy),
+      waitForWorkflowChange: (args: {
+        sessionId?: number
+        afterRevision: number
+        timeoutMs?: number
+      }) => waitForTourWorkflowChange(args),
+      continueWorkflow: (args: {
+        sessionId?: number
+        afterRevision: number
+        timeoutMs?: number
+        title?: string
+        message?: string
+      }) => continueTourWorkflow(args),
+      cancelWorkflow: (sessionId?: number) => cancelTourWorkflow(sessionId),
       help: () =>
         [
           'tour.listTargets()                         - List semantic UI target ids',
           'tour.show({ target, message, title?, placement? }) - Highlight a target and show an annotation',
           'Calling tour.show(...) again replaces the active highlight; no intermediate dismiss is needed.',
           'tour.dismiss()                             - Dismiss the active annotation',
+          'tour.listWorkflows()                       - List conditional tour workflows',
+          'tour.startWorkflow(id)                     - Start and inspect a workflow session',
+          'tour.showNextWorkflowStep(sessionId, copy?) - Highlight the first incomplete step',
+          'await tour.continueWorkflow({ sessionId, afterRevision, timeoutMs }) - Wait for user progress and show the next step',
+          'tour.getWorkflowStatus(sessionId)           - Inspect current workflow state',
+          'tour.cancelWorkflow(sessionId)              - Cancel the active workflow',
           '',
           'Timed tour example:',
           'const targets = await tour.listTargets()',

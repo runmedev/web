@@ -1,0 +1,69 @@
+{
+  "cells": [
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "# Conditional AI Tour Workflows\n\nAuthor: jlewi and Codex\n\nDate: 2026-07-31\n\nStatus: Draft\n\n## TL;DR\n\nRunme will extend its single-step AI tour with state-aware workflows. A workflow is an ordered list of semantic UI conditions and annotated targets. The runtime skips conditions that are already satisfied, highlights the first incomplete step, waits for application state to change, and then resolves the next step.\n\nThe first workflow, `add-google-drive-folder`, checks Google Drive authorization, File Explorer visibility, and successful folder addition. Agents control it through resumable WebMCP calls rather than fixed delays or DOM inspection.",
+      "languageId": "markdown",
+      "metadata": {
+        "name": "overview",
+        "runme.dev/id": "01K1HCOND00000000000000001"
+      },
+      "refId": "markup_conditional_tour_overview"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## Problem and decisions\n\nA useful guide must react to what is true now. For adding a Drive folder, telling an authorized user to sign in again is wrong; pointing at a hidden Explorer control is impossible; advancing on a timer can race a human or an OAuth flow.\n\n### Goals\n\n- Read current UI state through stable semantic IDs.\n- Express conditional, ordered steps without embedding arbitrary JavaScript predicates.\n- Let the agent wait for a user action and resume across tool calls.\n- Preserve one active overlay and one active workflow session.\n- Detect successful folder addition, not merely a click.\n\n### Non-goals\n\n- Automatically click controls or complete OAuth for the user.\n- Expose CSS selectors, React component instances, tokens, or raw DOM events.\n- Build a general workflow language with loops or parallel branches.\n- Persist sessions across a full page reload in v1.\n\n### Decisions\n\nReact providers publish values such as `google-drive.authorized` and `side-panel.active` to a singleton semantic state registry. Product events publish monotonically increasing counters such as `google-drive.folder-added-count`. Conditions support only equality and changed-from-session-start. This is sufficient for ordered conditional branches while keeping evaluation deterministic and JSON-safe.\n\nA workflow session snapshots all change-based conditions. Its status is derived by finding the first incomplete step. Starting another workflow invalidates the old session. The overlay remains presentation-only: the workflow runtime chooses a semantic target, and the existing tour runtime renders it.",
+      "languageId": "markdown",
+      "metadata": {
+        "name": "decisions",
+        "runme.dev/id": "01K1HCOND00000000000000002"
+      },
+      "refId": "markup_conditional_tour_decisions"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## State machine\n\n```mermaid\nflowchart TD\n  Start[Start workflow and snapshot state] --> Auth{Drive authorized?}\n  Auth -- No --> ShowAuth[Highlight Google Drive sign-in]\n  ShowAuth --> WaitAuth[Wait for google-drive.authorized]\n  WaitAuth --> Auth\n  Auth -- Yes --> Explorer{Explorer active?}\n  Explorer -- No --> ShowExplorer[Highlight File Explorer]\n  ShowExplorer --> WaitExplorer[Wait for side-panel.active = explorer]\n  WaitExplorer --> Explorer\n  Explorer -- Yes --> ShowAdd[Highlight Add Google Drive folder]\n  ShowAdd --> WaitAdd[Wait for folder-added-count to change]\n  WaitAdd --> Complete[Dismiss overlay and return complete]\n```\n\nEvery state publication increments a revision. `continueTourWorkflow` takes the revision returned by the previous call. If newer state already exists, it returns immediately; otherwise it subscribes until state changes or the bounded timeout expires. This avoids missed events between agent calls. A timeout does not cancel or restart the session.",
+      "languageId": "markdown",
+      "metadata": {
+        "name": "state-machine",
+        "runme.dev/id": "01K1HCOND00000000000000003"
+      },
+      "refId": "markup_conditional_tour_state_machine"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## TypeScript contract\n\n```ts\ntype TourStateValue = boolean | number | string | null\n\ntype TourWorkflowCondition =\n  | { state: string; operator: 'equals'; value: TourStateValue }\n  | { state: string; operator: 'changed-from-start' }\n\ntype TourWorkflowStep = {\n  id: string\n  target: string\n  title: string\n  message: string\n  placement?: TourPlacement\n  completeWhen: TourWorkflowCondition\n}\n\ntype TourWorkflowStatus = {\n  sessionId: number\n  workflowId: string\n  status: 'waiting' | 'complete'\n  revision: number\n  step?: {\n    id: string\n    target: string\n    title: string\n    message: string\n    waitingFor: TourWorkflowCondition & { current: TourStateValue | undefined }\n  }\n}\n\ntype TourWorkflowApi = {\n  listWorkflows(): readonly TourWorkflowDefinition[]\n  startWorkflow(id: string): TourWorkflowStatus\n  showNextWorkflowStep(sessionId: number, copy?: { title?: string; message?: string }): TourWorkflowStatus\n  continueWorkflow(args: { sessionId: number; afterRevision: number; timeoutMs?: number }): Promise<TourWorkflowStatus & { timedOut: boolean }>\n  getWorkflowStatus(sessionId: number): TourWorkflowStatus\n  cancelWorkflow(sessionId: number): boolean\n}\n```\n\nWebMCP exposes `startTourWorkflow`, `continueTourWorkflow`, `getTourWorkflowStatus`, and `cancelTourWorkflow`. Start and continue also show the resolved step. Optional title and message fields let the calling AI tailor the annotation; product copy is the safe fallback.",
+      "languageId": "markdown",
+      "metadata": {
+        "name": "api-contract",
+        "runme.dev/id": "01K1HCOND00000000000000004"
+      },
+      "refId": "markup_conditional_tour_api"
+    },
+    {
+      "kind": "CELL_KIND_CODE",
+      "value": "const started = await tour.startWorkflow('add-google-drive-folder');\nlet status = await tour.showNextWorkflowStep(started.sessionId);\nconsole.log(status);\n\nwhile (status.status === 'waiting') {\n  const next = await tour.continueWorkflow({\n    sessionId: status.sessionId,\n    afterRevision: status.revision,\n    timeoutMs: 60000,\n  });\n  console.log(next);\n  if (next.timedOut) break;\n  status = next;\n}\n",
+      "languageId": "javascript",
+      "metadata": {
+        "name": "run-add-drive-folder-workflow",
+        "runme.dev/id": "01K1HCOND00000000000000005",
+        "runme.dev/runnerName": "appkernel-js-sandbox"
+      },
+      "refId": "code_conditional_tour_drive_folder"
+    },
+    {
+      "kind": "CELL_KIND_MARKUP",
+      "value": "## Agent interaction contract\n\n1. Use `startTourWorkflow` with `workflowId: add-google-drive-folder`. The runtime skips satisfied conditions and highlights the first incomplete step.\n2. Explain the highlighted action and let the user act. Do not click it for them.\n3. Call `continueTourWorkflow` with the returned session and revision. The tool waits for semantic state, then atomically replaces the overlay with the next step.\n4. On timeout, keep the same session, ask whether the user needs help, and continue waiting. Do not infer completion from elapsed time.\n5. Stop only on `complete`, an explicit user cancellation, or an unrecoverable missing target.\n\nFor OAuth flows that open another tab, the original Runme tab may remain waiting. When authorization state reaches that tab, the waiter advances. If a full reload loses the in-memory session, the agent starts a new session; equality conditions are re-read, so already completed sign-in and panel steps are skipped.\n\n## Failure and concurrency behavior\n\n- Unknown workflow and stale session IDs return explicit errors.\n- Waits are capped at 60 seconds and remove subscriptions on completion or timeout.\n- Starting a new workflow invalidates earlier sessions and dismisses their overlay.\n- A successful folder mirror increments an event counter; merely opening or canceling the picker does not complete the workflow.\n- Missing or unpublished state remains incomplete. No credential values enter the registry.\n- The current implementation is single-tab and in-memory. Cross-tab persistence is a follow-up.\n\n## Testing and rollout\n\nUnit tests cover condition skipping, step transitions, missed-event prevention, timeouts, cancellation, stale sessions, and successful event completion. Component tests verify the new target and React-state bridge. WebMCP, App Console, and sandbox tests verify the contract reaches every agent surface. Run `runme run build test`, then exercise signed-out, signed-in, collapsed-Explorer, and successful-folder-selection paths in the local app.\n\nThe workflow remains dormant until invoked, so it can ship without a flag. Future workflows should reuse existing semantic state IDs and add new state only at stable product boundaries.",
+      "languageId": "markdown",
+      "metadata": {
+        "name": "agent-contract-and-rollout",
+        "runme.dev/id": "01K1HCOND00000000000000006"
+      },
+      "refId": "markup_conditional_tour_agent_contract"
+    }
+  ],
+  "metadata": {
+    "runme.dev/notebook": "true",
+    "runme.dev/notebookDocument": "conditional-ai-tour-workflows"
+  }
+}

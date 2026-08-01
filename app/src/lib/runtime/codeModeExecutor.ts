@@ -350,6 +350,23 @@ async function handleSandboxAppKernelBridgeCall({
       return globals.tour.dismiss()
     case 'tour.listTargets':
       return globals.tour.listTargets()
+    case 'tour.listWorkflows':
+      return globals.tour.listWorkflows()
+    case 'tour.startWorkflow':
+      return globals.tour.startWorkflow(String(args[0] ?? ''))
+    case 'tour.getWorkflowStatus':
+      return globals.tour.getWorkflowStatus(args[0] as number | undefined)
+    case 'tour.showNextWorkflowStep':
+      return globals.tour.showNextWorkflowStep(
+        args[0] as number | undefined,
+        args[1] as { title?: string; message?: string } | undefined
+      )
+    case 'tour.waitForWorkflowChange':
+      return globals.tour.waitForWorkflowChange(args[0] as any)
+    case 'tour.continueWorkflow':
+      return globals.tour.continueWorkflow(args[0] as any)
+    case 'tour.cancelWorkflow':
+      return globals.tour.cancelWorkflow(args[0] as number | undefined)
     case 'tour.help':
       return globals.tour.help()
     case 'opfs.exists':

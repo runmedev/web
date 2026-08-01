@@ -20,5 +20,6 @@ This directory organizes implementation-facing documentation.
 - App Console model-view design: `docs-dev/design/20260510_app_console_model_view.md`
 - WebMCP design: `docs-dev/design/20260510_webmcp.md`
 - AI tour guide design notebook: `docs-dev/design/20260731_ai_tour_guide.json`
+- Conditional AI tour workflows design notebook: `docs-dev/design/20260731_conditional_ai_tour_workflows.json`
 - Configuration architecture: `docs-dev/architecture/configuration.md`
 - Drive testing strategy: `testing.md`

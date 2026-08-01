@@ -72,6 +72,11 @@ describe('readInstructionsForAIAgents', () => {
       'atomically replaces the current highlight and annotation'
     )
     expect(instructions).toContain('do not call `tour.dismiss()` between steps')
+    expect(instructions).toContain('Guide a conditional, multi-step task')
+    expect(instructions).toContain('startTourWorkflow')
+    expect(instructions).toContain('continueTourWorkflow')
+    expect(instructions).toContain('add-google-drive-folder')
+    expect(instructions).toContain('Do not use a fixed delay')
   })
 
   it('does not include deployment-specific plugin instructions', () => {

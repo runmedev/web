@@ -88,6 +88,18 @@ console.log(\`Tour complete: \${targets.length} elements shown.\`)
 
 Each \`tour.show(...)\` call atomically replaces the current highlight and annotation, so do not call \`tour.dismiss()\` between steps. Dismiss once after the last delay, as in the \`finally\` block. If the user asks for only part of Runme, filter the discovered targets to the relevant controls rather than showing every target.
 
+### Guide a conditional, multi-step task
+
+For a task whose next instruction depends on current UI state, use a registered tour workflow instead of a timed tour or a hand-written sequence. The workflow reads semantic application state; do not inspect DOM classes, invent selectors, or assume that the user is signed in or that a panel is open.
+
+For example, when the user asks how to add a Google Drive folder, call the direct \`startTourWorkflow\` tool with \`workflowId: "add-google-drive-folder"\`. It skips conditions already satisfied and highlights the first action the user still needs to take. The result includes \`sessionId\`, \`revision\`, \`status\`, and the current \`step\`.
+
+When \`status\` is \`waiting\`, tell the user to perform the highlighted action, then call \`continueTourWorkflow\` with the returned \`sessionId\` and \`revision\`. This call waits for semantic UI state to change and replaces the highlight with the next incomplete step. Use a bounded \`timeoutMs\` of at most 60000. If it times out, retain the session and call it again after checking whether the user needs help; do not restart the workflow. Repeat until \`status\` is \`complete\`, then tell the user the workflow is finished.
+
+The same API is available through \`ExecuteCode\` as \`tour.startWorkflow(id)\`, \`tour.showNextWorkflowStep(sessionId, copy?)\`, \`tour.continueWorkflow({ sessionId, afterRevision, timeoutMs })\`, \`tour.getWorkflowStatus(sessionId)\`, and \`tour.cancelWorkflow(sessionId)\`. Prefer the direct tools because each wait is independently bounded and the workflow can resume across agent turns. Cancel only when the user asks to stop or changes tasks.
+
+Do not use a fixed delay to guess when the user has acted. Do not click the highlighted controls for the user. A new workflow replaces the previous workflow session, and showing its next step replaces the existing tour overlay.
+
 ## Read Runme documentation on demand
 
 - Call the read-only \`listDocumentation\` WebMCP tool to discover the documentation available for this exact Runme version.

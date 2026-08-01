@@ -29,16 +29,35 @@ import {
 } from "../../lib/runtime/executeCodeTool";
 import { useCodeModeExecutor } from "../../lib/runtime/useCodeModeExecutor";
 import {
+  buildContinueTourWorkflowInputSchema,
+  buildStartTourWorkflowInputSchema,
+  buildTourWorkflowSessionInputSchema,
   buildDismissTourInputSchema,
   buildShowTourStepInputSchema,
+  CANCEL_TOUR_WORKFLOW_TOOL_DESCRIPTION,
+  CANCEL_TOUR_WORKFLOW_TOOL_NAME,
+  CANCEL_TOUR_WORKFLOW_TOOL_TITLE,
+  CONTINUE_TOUR_WORKFLOW_TOOL_DESCRIPTION,
+  CONTINUE_TOUR_WORKFLOW_TOOL_NAME,
+  CONTINUE_TOUR_WORKFLOW_TOOL_TITLE,
   DISMISS_TOUR_TOOL_DESCRIPTION,
   DISMISS_TOUR_TOOL_NAME,
   DISMISS_TOUR_TOOL_TITLE,
   executeDismissTour,
+  executeCancelTourWorkflow,
+  executeContinueTourWorkflow,
+  executeGetTourWorkflowStatus,
   executeShowTourStep,
+  executeStartTourWorkflow,
+  GET_TOUR_WORKFLOW_STATUS_TOOL_DESCRIPTION,
+  GET_TOUR_WORKFLOW_STATUS_TOOL_NAME,
+  GET_TOUR_WORKFLOW_STATUS_TOOL_TITLE,
   SHOW_TOUR_STEP_TOOL_DESCRIPTION,
   SHOW_TOUR_STEP_TOOL_NAME,
   SHOW_TOUR_STEP_TOOL_TITLE,
+  START_TOUR_WORKFLOW_TOOL_DESCRIPTION,
+  START_TOUR_WORKFLOW_TOOL_NAME,
+  START_TOUR_WORKFLOW_TOOL_TITLE,
 } from "../../lib/runtime/tourGuideTool";
 
 type ModelContextClientLike = {
@@ -245,6 +264,62 @@ export default function WebMcpToolRegistrationHost() {
           signal: registrationController.signal,
         },
       );
+      modelContext.registerTool(
+        {
+          name: START_TOUR_WORKFLOW_TOOL_NAME,
+          title: START_TOUR_WORKFLOW_TOOL_TITLE,
+          description: START_TOUR_WORKFLOW_TOOL_DESCRIPTION,
+          inputSchema: buildStartTourWorkflowInputSchema(),
+          annotations: {
+            readOnlyHint: false,
+            untrustedContentHint: false,
+          },
+          execute: (input) => executeStartTourWorkflow(input),
+        },
+        { signal: registrationController.signal },
+      );
+      modelContext.registerTool(
+        {
+          name: CONTINUE_TOUR_WORKFLOW_TOOL_NAME,
+          title: CONTINUE_TOUR_WORKFLOW_TOOL_TITLE,
+          description: CONTINUE_TOUR_WORKFLOW_TOOL_DESCRIPTION,
+          inputSchema: buildContinueTourWorkflowInputSchema(),
+          annotations: {
+            readOnlyHint: false,
+            untrustedContentHint: false,
+          },
+          execute: (input) => executeContinueTourWorkflow(input),
+        },
+        { signal: registrationController.signal },
+      );
+      modelContext.registerTool(
+        {
+          name: GET_TOUR_WORKFLOW_STATUS_TOOL_NAME,
+          title: GET_TOUR_WORKFLOW_STATUS_TOOL_TITLE,
+          description: GET_TOUR_WORKFLOW_STATUS_TOOL_DESCRIPTION,
+          inputSchema: buildTourWorkflowSessionInputSchema(),
+          annotations: {
+            readOnlyHint: true,
+            untrustedContentHint: false,
+          },
+          execute: (input) => executeGetTourWorkflowStatus(input),
+        },
+        { signal: registrationController.signal },
+      );
+      modelContext.registerTool(
+        {
+          name: CANCEL_TOUR_WORKFLOW_TOOL_NAME,
+          title: CANCEL_TOUR_WORKFLOW_TOOL_TITLE,
+          description: CANCEL_TOUR_WORKFLOW_TOOL_DESCRIPTION,
+          inputSchema: buildTourWorkflowSessionInputSchema(),
+          annotations: {
+            readOnlyHint: false,
+            untrustedContentHint: false,
+          },
+          execute: (input) => executeCancelTourWorkflow(input),
+        },
+        { signal: registrationController.signal },
+      );
       appLogger.info("WebMCP tools registered", {
         attrs: {
           scope: "webmcp",
@@ -255,6 +330,10 @@ export default function WebMcpToolRegistrationHost() {
             GET_DOCUMENTATION_TOOL_NAME,
             SHOW_TOUR_STEP_TOOL_NAME,
             DISMISS_TOUR_TOOL_NAME,
+            START_TOUR_WORKFLOW_TOOL_NAME,
+            CONTINUE_TOUR_WORKFLOW_TOOL_NAME,
+            GET_TOUR_WORKFLOW_STATUS_TOOL_NAME,
+            CANCEL_TOUR_WORKFLOW_TOOL_NAME,
           ],
         },
       });
@@ -281,6 +360,10 @@ export default function WebMcpToolRegistrationHost() {
             GET_DOCUMENTATION_TOOL_NAME,
             SHOW_TOUR_STEP_TOOL_NAME,
             DISMISS_TOUR_TOOL_NAME,
+            START_TOUR_WORKFLOW_TOOL_NAME,
+            CONTINUE_TOUR_WORKFLOW_TOOL_NAME,
+            GET_TOUR_WORKFLOW_STATUS_TOOL_NAME,
+            CANCEL_TOUR_WORKFLOW_TOOL_NAME,
           ],
         },
       });

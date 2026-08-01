@@ -1356,6 +1356,27 @@ export class NotebookData {
         return appGlobals.tour.dismiss()
       case 'tour.listTargets':
         return appGlobals.tour.listTargets()
+      case 'tour.listWorkflows':
+        return appGlobals.tour.listWorkflows()
+      case 'tour.startWorkflow':
+        return appGlobals.tour.startWorkflow(String(args[0] ?? ''))
+      case 'tour.getWorkflowStatus':
+        return appGlobals.tour.getWorkflowStatus(args[0] as number | undefined)
+      case 'tour.showNextWorkflowStep':
+        return appGlobals.tour.showNextWorkflowStep(
+          args[0] as number | undefined,
+          args[1] as { title?: string; message?: string } | undefined
+        )
+      case 'tour.waitForWorkflowChange':
+        return appGlobals.tour.waitForWorkflowChange(
+          args[0] as Parameters<typeof appGlobals.tour.waitForWorkflowChange>[0]
+        )
+      case 'tour.continueWorkflow':
+        return appGlobals.tour.continueWorkflow(
+          args[0] as Parameters<typeof appGlobals.tour.continueWorkflow>[0]
+        )
+      case 'tour.cancelWorkflow':
+        return appGlobals.tour.cancelWorkflow(args[0] as number | undefined)
       case 'tour.help':
         return appGlobals.tour.help()
       case 'runme.getCurrentNotebook': {

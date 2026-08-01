@@ -71,6 +71,11 @@ export const TOUR_TARGETS: readonly TourTarget[] = [
     description: 'Sign in to or sign out of the Runme web application.',
   },
   {
+    id: 'explorer.add-google-drive-folder',
+    label: 'Add Google Drive Folder',
+    description: 'Choose a Google Drive folder and add it to the Explorer.',
+  },
+  {
     id: 'left-nav.documentation',
     label: 'Documentation',
     description: 'Browse the documentation bundled with this Runme version.',
