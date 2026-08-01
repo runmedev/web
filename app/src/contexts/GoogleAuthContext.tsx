@@ -43,6 +43,9 @@ const IMPLICIT_PROMPT_MODE_KEY = 'runme/google-auth/implicit-prompt-mode'
 const AUTH_HANDOFF_MODE_KEY = 'runme/google-auth/handoff-mode'
 const SELECT_ACCOUNT_NEXT_KEY = 'runme/google-auth/select-account-next'
 const AUTH_SESSION_EPOCH_KEY = 'runme/google-auth/session-epoch'
+const STORED_DRIVE_ACCOUNT_KEY = 'runme/google-auth/drive-account'
+const DRIVE_ABOUT_URL =
+  'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)'
 
 interface AccessTokenInfo {
   token: string
@@ -116,10 +119,17 @@ interface AccessTokenResponse {
   error_description?: string
 }
 
+interface DriveAboutResponse {
+  user?: {
+    emailAddress?: string
+  }
+}
+
 interface GoogleOAuth {
   initTokenClient: (options: {
     client_id: string
     scope: string
+    hint?: string
     callback: (response: AccessTokenResponse) => void
   }) => TokenClient
   revoke?: (accessToken: string, callback: () => void) => void
@@ -149,6 +159,64 @@ export function useGoogleAuth() {
 }
 
 const REFRESH_MARGIN_MS = 60_000
+const DRIVE_ACCOUNT_DISCOVERY_TIMEOUT_MS = 3_000
+
+// Google accepts an email address as login_hint and uses it to choose the
+// matching browser session. The hint is intentionally kept separate from the
+// expiring access token so it survives routine implicit-token renewal.
+function loadStoredDriveAccount(): string | null {
+  try {
+    const account = window.localStorage
+      .getItem(STORED_DRIVE_ACCOUNT_KEY)
+      ?.trim()
+    return account || null
+  } catch (error) {
+    appLogger.error('Failed to read the stored Google Drive account', {
+      attrs: {
+        scope: 'storage.drive.auth',
+        code: 'DRIVE_AUTH_ACCOUNT_READ_FAILED',
+        error: String(error),
+      },
+    })
+    return null
+  }
+}
+
+// Both the initial implicit request and the consent fallback must use the same
+// URL construction so the remembered account cannot be dropped on retry.
+function buildImplicitAuthorizationUrl(options: {
+  clientId: string
+  state: string
+  promptMode: GoogleOAuthPrompt
+  loginHint?: string | null
+}): URL {
+  const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
+  authUrl.searchParams.set('client_id', options.clientId)
+  authUrl.searchParams.set('redirect_uri', getGoogleDriveOAuthCallbackUrl())
+  authUrl.searchParams.set('response_type', 'token')
+  authUrl.searchParams.set('scope', DRIVE_SCOPES.join(' '))
+  authUrl.searchParams.set('state', options.state)
+  authUrl.searchParams.set('include_granted_scopes', 'true')
+  authUrl.searchParams.set('prompt', options.promptMode)
+  if (options.loginHint) {
+    authUrl.searchParams.set('login_hint', options.loginHint)
+  }
+  return authUrl
+}
+
+// A remembered account can outlive its Google browser session or consent.
+// Retry these silent-auth failures once with an interactive consent prompt.
+function shouldRetryImplicitPopupWithConsent(
+  response: AccessTokenResponse,
+  prompt: GoogleOAuthPrompt | ''
+): boolean {
+  return (
+    prompt === 'none' &&
+    (response.error === 'login_required' ||
+      response.error === 'interaction_required' ||
+      response.error === 'consent_required')
+  )
+}
 
 // GoogleAuthProvider owns all OAuth state for the app. It exposes a small
 // surface (ensureAccessToken / setAccessToken) through context so the rest of
@@ -218,6 +286,8 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   const tokenInfoRef = useRef<AccessTokenInfo | null>(null)
   const tokenClientRef = useRef<TokenClient | null>(null)
   const oauthClientIdRef = useRef<string | null>(null)
+  const oauthLoginHintRef = useRef<string | null>(null)
+  const storedDriveAccountRef = useRef<string | null>(loadStoredDriveAccount())
   const handlersRef = useRef<PendingHandlers | null>(null)
   const pendingPromiseRef = useRef<Promise<string> | null>(null)
   const scriptPromiseRef = useRef<Promise<void> | null>(null)
@@ -270,6 +340,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     callbackPromiseRef.current = null
     tokenClientRef.current = null
     oauthClientIdRef.current = null
+    oauthLoginHintRef.current = null
     if (hadPendingAuth) {
       appLogger.info(message, {
         attrs: {
@@ -342,6 +413,110 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       markOnboardingTaskComplete('sign-in-google-drive')
     },
     []
+  )
+
+  // Updating the remembered account also invalidates the cached GIS token
+  // client because login_hint is part of that client's initialization.
+  const persistStoredDriveAccount = useCallback((account: string | null) => {
+    const normalizedAccount = account?.trim() || null
+    storedDriveAccountRef.current = normalizedAccount
+    tokenClientRef.current = null
+    oauthClientIdRef.current = null
+    oauthLoginHintRef.current = null
+    try {
+      if (normalizedAccount) {
+        window.localStorage.setItem(STORED_DRIVE_ACCOUNT_KEY, normalizedAccount)
+      } else {
+        window.localStorage.removeItem(STORED_DRIVE_ACCOUNT_KEY)
+      }
+    } catch (error) {
+      appLogger.error('Failed to persist the Google Drive account', {
+        attrs: {
+          scope: 'storage.drive.auth',
+          code: 'DRIVE_AUTH_ACCOUNT_PERSIST_FAILED',
+          error: String(error),
+        },
+      })
+    }
+  }, [])
+
+  // Drive's about resource exposes the requesting user's email using the
+  // Drive scope we already request. This avoids adding identity scopes solely
+  // to populate Google's login_hint parameter.
+  const rememberDriveAccountForToken = useCallback(
+    async (accessToken: string, authOperation: AuthOperationVersion) => {
+      let account: string | null = null
+      const controller = new AbortController()
+      let timeoutId: number | undefined
+      try {
+        const response = await Promise.race([
+          fetch(DRIVE_ABOUT_URL, {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+            signal: controller.signal,
+          }),
+          new Promise<never>((_, reject) => {
+            timeoutId = window.setTimeout(() => {
+              controller.abort()
+              reject(new Error('Google Drive account discovery timed out'))
+            }, DRIVE_ACCOUNT_DISCOVERY_TIMEOUT_MS)
+          }),
+        ])
+        if (!response.ok) {
+          throw new Error(
+            `Google Drive about request failed (${response.status})`
+          )
+        }
+        const about = (await response.json()) as DriveAboutResponse
+        account = about.user?.emailAddress?.trim() || null
+        if (!account) {
+          throw new Error(
+            'Google Drive about response did not include an email'
+          )
+        }
+      } catch (error) {
+        appLogger.warn(
+          'Failed to remember the authorized Google Drive account',
+          {
+            attrs: {
+              scope: 'storage.drive.auth',
+              code: 'DRIVE_AUTH_ACCOUNT_DISCOVERY_FAILED',
+              error: String(error),
+            },
+          }
+        )
+        return
+      } finally {
+        if (timeoutId !== undefined) {
+          window.clearTimeout(timeoutId)
+        }
+      }
+
+      assertAuthOperationCurrent(authOperation)
+      if (tokenInfoRef.current?.token !== accessToken) {
+        return
+      }
+      persistStoredDriveAccount(account)
+    },
+    [assertAuthOperationCurrent, persistStoredDriveAccount]
+  )
+
+  // Implicit OAuth responses do not contain the selected account identity.
+  // Discover and persist it before publishing the new token so another tab
+  // receives the login hint before it observes the credential update.
+  const acceptImplicitAccessToken = useCallback(
+    async (
+      accessToken: string,
+      expiresIn: number,
+      authOperation: AuthOperationVersion
+    ) => {
+      assertAuthOperationCurrent(authOperation)
+      setAccessToken(accessToken, expiresIn, { refreshToken: null })
+      await rememberDriveAccountForToken(accessToken, authOperation)
+      assertAuthOperationCurrent(authOperation)
+    },
+    [assertAuthOperationCurrent, rememberDriveAccountForToken, setAccessToken]
   )
 
   const clearPkceState = useCallback(
@@ -534,17 +709,12 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
         window.localStorage.setItem(IMPLICIT_PROMPT_MODE_KEY, 'consent')
         window.localStorage.removeItem(PKCE_CODE_VERIFIER_KEY)
 
-        const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
-        authUrl.searchParams.set('client_id', clientId)
-        authUrl.searchParams.set(
-          'redirect_uri',
-          getGoogleDriveOAuthCallbackUrl()
-        )
-        authUrl.searchParams.set('response_type', 'token')
-        authUrl.searchParams.set('scope', DRIVE_SCOPES.join(' '))
-        authUrl.searchParams.set('state', state)
-        authUrl.searchParams.set('include_granted_scopes', 'true')
-        authUrl.searchParams.set('prompt', 'consent')
+        const authUrl = buildImplicitAuthorizationUrl({
+          clientId,
+          state,
+          promptMode: 'consent',
+          loginHint: storedDriveAccountRef.current,
+        })
         window.location.assign(authUrl.toString())
         return
       }
@@ -584,7 +754,11 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
         Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : 3600
       const handoffMode = window.localStorage.getItem(AUTH_HANDOFF_MODE_KEY)
       assertAuthOperationCurrent(authOperation)
-      setAccessToken(accessToken, resolvedExpiresIn, { refreshToken: null })
+      await acceptImplicitAccessToken(
+        accessToken,
+        resolvedExpiresIn,
+        authOperation
+      )
       clearPkceState()
       if (handoffMode === 'new_tab') {
         window.close()
@@ -609,6 +783,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       )
     }
 
+    persistStoredDriveAccount(null)
     setAccessToken(
       tokenResponse.access_token,
       tokenResponse.expires_in ?? 3600,
@@ -616,6 +791,11 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
         refreshToken: tokenResponse.refresh_token,
       }
     )
+    await rememberDriveAccountForToken(
+      tokenResponse.access_token,
+      authOperation
+    )
+    assertAuthOperationCurrent(authOperation)
     const handoffMode = window.localStorage.getItem(AUTH_HANDOFF_MODE_KEY)
     clearPkceState()
     if (handoffMode === 'new_tab') {
@@ -623,11 +803,14 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     }
     window.location.replace(returnTo)
   }, [
+    acceptImplicitAccessToken,
     assertAuthOperationCurrent,
     captureAuthOperation,
     clearPkceState,
     exchangeAuthorizationCode,
+    persistStoredDriveAccount,
     readImplicitRedirectTokenFromHash,
+    rememberDriveAccountForToken,
     setAccessToken,
   ])
 
@@ -694,14 +877,15 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       window.localStorage.setItem(IMPLICIT_PROMPT_MODE_KEY, promptMode)
       window.localStorage.removeItem(PKCE_CODE_VERIFIER_KEY)
 
-      const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
-      authUrl.searchParams.set('client_id', clientId)
-      authUrl.searchParams.set('redirect_uri', getGoogleDriveOAuthCallbackUrl())
-      authUrl.searchParams.set('response_type', 'token')
-      authUrl.searchParams.set('scope', DRIVE_SCOPES.join(' '))
-      authUrl.searchParams.set('state', state)
-      authUrl.searchParams.set('include_granted_scopes', 'true')
-      authUrl.searchParams.set('prompt', promptMode)
+      const authUrl = buildImplicitAuthorizationUrl({
+        clientId,
+        state,
+        promptMode,
+        loginHint:
+          promptMode === 'select_account'
+            ? null
+            : storedDriveAccountRef.current,
+      })
 
       openAuthUrl(authUrl, mode)
     },
@@ -789,6 +973,35 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     tokenInfoRef.current = tokenInfo
   }, [tokenInfo])
 
+  // Existing sessions created before account hints were introduced are
+  // migrated while their current implicit token is still usable. Failure is
+  // non-fatal; the next successful authorization will try again.
+  useEffect(() => {
+    if (
+      !tokenInfo?.token ||
+      tokenInfo.expiresAt <= Date.now() ||
+      tokenInfo.authFlow !== 'implicit' ||
+      storedDriveAccountRef.current ||
+      googleClientManager.getOAuthClient().authFlow !== 'implicit'
+    ) {
+      return
+    }
+    const authOperation = captureAuthOperation()
+    void rememberDriveAccountForToken(tokenInfo.token, authOperation).catch(
+      (error) => {
+        if (!(error instanceof StaleGoogleAuthOperationError)) {
+          appLogger.warn('Failed to migrate the Google Drive account hint', {
+            attrs: {
+              scope: 'storage.drive.auth',
+              code: 'DRIVE_AUTH_ACCOUNT_MIGRATION_FAILED',
+              error: String(error),
+            },
+          })
+        }
+      }
+    )
+  }, [captureAuthOperation, rememberDriveAccountForToken, tokenInfo])
+
   useEffect(() => {
     const intervalId = window.setInterval(() => {
       setNowMs(Date.now())
@@ -822,6 +1035,13 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
         invalidatePendingAuth(
           'Invalidated pending Google Drive authorization after logout in another tab'
         )
+        return
+      }
+      if (event.key === STORED_DRIVE_ACCOUNT_KEY) {
+        storedDriveAccountRef.current = loadStoredDriveAccount()
+        tokenClientRef.current = null
+        oauthClientIdRef.current = null
+        oauthLoginHintRef.current = null
         return
       }
       if (event.key !== STORAGE_KEY && event.key !== LEGACY_STORAGE_KEY) {
@@ -912,14 +1132,20 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   // so subsequent callers reuse the same object.
   const ensureTokenClient = useCallback(async () => {
     const { clientId } = googleClientManager.getOAuthClient()
+    const loginHint = storedDriveAccountRef.current
     if (!clientId?.trim()) {
       throw new Error('Google OAuth client is not configured.')
     }
-    if (tokenClientRef.current && oauthClientIdRef.current === clientId) {
+    if (
+      tokenClientRef.current &&
+      oauthClientIdRef.current === clientId &&
+      oauthLoginHintRef.current === loginHint
+    ) {
       return tokenClientRef.current
     }
     tokenClientRef.current = null
     oauthClientIdRef.current = clientId
+    oauthLoginHintRef.current = loginHint
     const authOperation = captureAuthOperation()
 
     await ensureScriptLoaded()
@@ -933,6 +1159,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     const client = oauth.initTokenClient({
       client_id: clientId,
       scope: DRIVE_SCOPES.join(' '),
+      ...(loginHint ? { hint: loginHint } : {}),
       callback: (response: AccessTokenResponse) => {
         try {
           assertAuthOperationCurrent(authOperation)
@@ -947,22 +1174,26 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
         }
         const { resolve, reject } = handlersRef.current
         handlersRef.current = null
-        if (response.error || !response.access_token) {
+        const accessToken = response.access_token
+        if (response.error || !accessToken) {
           reject(response.error ?? new Error('Failed to obtain access token'))
           return
         }
-        setAccessToken(response.access_token, response.expires_in ?? 3600)
-        resolve(response.access_token)
+        void acceptImplicitAccessToken(
+          accessToken,
+          response.expires_in ?? 3600,
+          authOperation
+        ).then(() => resolve(accessToken), reject)
       },
     })
 
     tokenClientRef.current = client
     return client
   }, [
+    acceptImplicitAccessToken,
     assertAuthOperationCurrent,
     captureAuthOperation,
     ensureScriptLoaded,
-    setAccessToken,
   ])
 
   const logoutGoogleDrive = useCallback(async () => {
@@ -975,6 +1206,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     )
     callbackErrorRef.current = null
     clearPkceState()
+    persistStoredDriveAccount(null)
     setAccessToken('')
     window.gapi?.client.setToken(null)
 
@@ -1011,6 +1243,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     clearPkceState,
     ensureScriptLoaded,
     invalidatePendingAuth,
+    persistStoredDriveAccount,
     requestAccountSelectionNext,
     setAccessToken,
   ])
@@ -1046,6 +1279,9 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       const promptMode = consumeAccountSelectionRequest()
         ? 'select_account'
         : options?.prompt
+      if (promptMode === 'select_account') {
+        persistStoredDriveAccount(null)
+      }
 
       if (oauthClient.authFlow === 'pkce') {
         const mode: GoogleRedirectUxMode =
@@ -1070,8 +1306,10 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       const client = await ensureTokenClient()
       assertAuthOperationCurrent(authOperation)
       const accessToken = await new Promise<string>((resolve, reject) => {
+        let requestedPrompt: GoogleOAuthPrompt | '' = promptMode ?? 'none'
+        let retriedWithConsent = false
         handlersRef.current = { resolve, reject }
-        client.callback = (response: AccessTokenResponse) => {
+        const handleResponse = (response: AccessTokenResponse) => {
           try {
             assertAuthOperationCurrent(authOperation)
           } catch (error) {
@@ -1083,21 +1321,51 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
           if (!handlersRef.current) {
             return
           }
+          if (
+            !retriedWithConsent &&
+            shouldRetryImplicitPopupWithConsent(response, requestedPrompt)
+          ) {
+            retriedWithConsent = true
+            requestedPrompt = 'consent'
+            persistStoredDriveAccount(null)
+            void ensureTokenClient().then(
+              (retryClient) => {
+                try {
+                  assertAuthOperationCurrent(authOperation)
+                  retryClient.callback = handleResponse
+                  retryClient.requestAccessToken({ prompt: requestedPrompt })
+                } catch (error) {
+                  handlersRef.current = null
+                  reject(error)
+                }
+              },
+              (error) => {
+                handlersRef.current = null
+                reject(error)
+              }
+            )
+            return
+          }
           const { resolve: pendingResolve, reject: pendingReject } =
             handlersRef.current
           handlersRef.current = null
 
-          if (response.error || !response.access_token) {
+          const accessToken = response.access_token
+          if (response.error || !accessToken) {
             pendingReject(
               response.error ?? new Error('Failed to obtain access token')
             )
             return
           }
-          setAccessToken(response.access_token, response.expires_in ?? 3600)
-          pendingResolve(response.access_token)
+          void acceptImplicitAccessToken(
+            accessToken,
+            response.expires_in ?? 3600,
+            authOperation
+          ).then(() => pendingResolve(accessToken), pendingReject)
         }
+        client.callback = handleResponse
         try {
-          client.requestAccessToken({ prompt: promptMode ?? 'none' })
+          client.requestAccessToken({ prompt: requestedPrompt })
         } catch (error) {
           handlersRef.current = null
           reject(error)
@@ -1112,6 +1380,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       }
     },
     [
+      acceptImplicitAccessToken,
       assertAuthOperationCurrent,
       captureAuthOperation,
       clearPkceState,
@@ -1119,7 +1388,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       ensureTokenClient,
       invalidatePendingAuth,
       mintServiceAccountAccessToken,
-      setAccessToken,
+      persistStoredDriveAccount,
       startImplicitRedirect,
       startPkceRedirect,
     ]
@@ -1248,11 +1517,23 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
           )
         }
 
+        const shouldSelectAccount = consumeAccountSelectionRequest()
+        if (shouldSelectAccount) {
+          persistStoredDriveAccount(null)
+        }
         const client = await ensureTokenClient()
         assertAuthOperationCurrent(authOperation)
         return await new Promise<string>((resolve, reject) => {
+          let requestedPrompt: GoogleOAuthPrompt | '' = shouldSelectAccount
+            ? 'select_account'
+            : storedDriveAccountRef.current
+              ? 'none'
+              : currentInfo?.token
+                ? ''
+                : 'consent'
+          let retriedWithConsent = false
           handlersRef.current = { resolve, reject }
-          client.callback = (response: AccessTokenResponse) => {
+          const handleResponse = (response: AccessTokenResponse) => {
             try {
               assertAuthOperationCurrent(authOperation)
             } catch (error) {
@@ -1264,28 +1545,54 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
             if (!handlersRef.current) {
               return
             }
+            if (
+              !retriedWithConsent &&
+              shouldRetryImplicitPopupWithConsent(response, requestedPrompt)
+            ) {
+              retriedWithConsent = true
+              requestedPrompt = 'consent'
+              persistStoredDriveAccount(null)
+              void ensureTokenClient().then(
+                (retryClient) => {
+                  try {
+                    assertAuthOperationCurrent(authOperation)
+                    retryClient.callback = handleResponse
+                    retryClient.requestAccessToken({
+                      prompt: requestedPrompt,
+                    })
+                  } catch (error) {
+                    handlersRef.current = null
+                    reject(error)
+                  }
+                },
+                (error) => {
+                  handlersRef.current = null
+                  reject(error)
+                }
+              )
+              return
+            }
             const { resolve: pendingResolve, reject: pendingReject } =
               handlersRef.current
             handlersRef.current = null
 
-            if (response.error || !response.access_token) {
+            const accessToken = response.access_token
+            if (response.error || !accessToken) {
               pendingReject(
                 response.error ?? new Error('Failed to obtain access token')
               )
               return
             }
-            setAccessToken(response.access_token, response.expires_in ?? 3600)
-            pendingResolve(response.access_token)
+            void acceptImplicitAccessToken(
+              accessToken,
+              response.expires_in ?? 3600,
+              authOperation
+            ).then(() => pendingResolve(accessToken), pendingReject)
           }
+          client.callback = handleResponse
           try {
             console.log('Requesting access token from Google OAuth')
-            client.requestAccessToken({
-              prompt: consumeAccountSelectionRequest()
-                ? 'select_account'
-                : currentInfo?.token
-                  ? ''
-                  : 'consent',
-            })
+            client.requestAccessToken({ prompt: requestedPrompt })
           } catch (error) {
             handlersRef.current = null
             appLogger.error('Failed to request Google access token', {
@@ -1316,6 +1623,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       return pendingPromise
     },
     [
+      acceptImplicitAccessToken,
       assertAuthOperationCurrent,
       canUseCachedToken,
       captureAuthOperation,
@@ -1323,8 +1631,8 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       ensureTokenClient,
       hasRedirectAuthHandoffInProgress,
       mintServiceAccountAccessToken,
+      persistStoredDriveAccount,
       refreshAccessToken,
-      setAccessToken,
       startImplicitRedirect,
       startPkceRedirect,
     ]
