@@ -25,6 +25,8 @@ describe('tourUiController', () => {
     expect(before).toMatchObject({ revision: 0, activePanel: 'explorer' })
     expect(after).toMatchObject({ revision: 1, activePanel: null })
     expect(before).not.toBe(after)
+    expect(Object.isFrozen(before)).toBe(true)
+    expect(Object.isFrozen(after)).toBe(true)
     expect(listener).toHaveBeenCalledTimes(1)
 
     tourUiController.setActivePanel(null)

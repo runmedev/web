@@ -75,17 +75,21 @@ function assertPanelKey(panel: unknown): asserts panel is PanelKey {
   }
 }
 
+function freezeSnapshot(snapshot: TourUiSnapshot): TourUiSnapshot {
+  return Object.freeze(snapshot)
+}
+
 /**
  * Agent-facing model for UI state that must be observable and controllable
  * outside React. React subscribes to this controller with useSyncExternalStore.
  */
 export class TourUiController {
-  private snapshot: TourUiSnapshot = {
+  private snapshot: TourUiSnapshot = freezeSnapshot({
     revision: 0,
     activePanel: readStoredPanel(),
     googleDriveAuthorized: false,
     googleDriveFolderAddedCount: 0,
-  }
+  })
 
   private readonly listeners = new Set<Listener>()
 
@@ -160,13 +164,13 @@ export class TourUiController {
 
   /** Test-only reset for the singleton controller. */
   readonly resetForTests = (snapshot?: Partial<TourUiSnapshot>): void => {
-    this.snapshot = {
+    this.snapshot = freezeSnapshot({
       revision: 0,
       activePanel: DEFAULT_PANEL,
       googleDriveAuthorized: false,
       googleDriveFolderAddedCount: 0,
       ...snapshot,
-    }
+    })
     for (const listener of this.listeners) listener()
   }
 
@@ -177,11 +181,11 @@ export class TourUiController {
     )
     if (!changed) return this.snapshot
 
-    this.snapshot = {
+    this.snapshot = freezeSnapshot({
       ...this.snapshot,
       ...patch,
       revision: this.snapshot.revision + 1,
-    }
+    })
     for (const listener of this.listeners) listener()
     return this.snapshot
   }
