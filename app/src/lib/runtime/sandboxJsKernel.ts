@@ -73,6 +73,9 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'tour.show',
   'tour.dismiss',
   'tour.listTargets',
+  'tour.getUiSnapshot',
+  'tour.waitForUiChange',
+  'tour.setActivePanel',
   'tour.help',
   'embed',
   'notebookDiff.listDriveRevisions',
@@ -328,6 +331,9 @@ export function buildSandboxSrcDoc(options: {
           show: (request) => hostCall("tour.show", [request]),
           dismiss: () => hostCall("tour.dismiss", []),
           listTargets: () => hostCall("tour.listTargets", []),
+          getUiSnapshot: () => hostCall("tour.getUiSnapshot", []),
+          waitForUiChange: (args) => hostCall("tour.waitForUiChange", [args]),
+          setActivePanel: (panel) => hostCall("tour.setActivePanel", [panel]),
           help: () => hostCall("tour.help", []),
         };
 
@@ -438,6 +444,9 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- tour.listTargets()");
           consoleProxy.log("- tour.show({ target, message, title?, placement? })");
           consoleProxy.log("- tour.dismiss()");
+          consoleProxy.log("- tour.getUiSnapshot()");
+          consoleProxy.log("- tour.waitForUiChange({ afterRevision, timeoutMs })");
+          consoleProxy.log("- tour.setActivePanel(panel)");
           consoleProxy.log("- embed(source, { target?, alt?, name? })");
           ${opfsHelpLines}
           ${netHelpLines}

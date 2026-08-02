@@ -350,6 +350,12 @@ async function handleSandboxAppKernelBridgeCall({
       return globals.tour.dismiss()
     case 'tour.listTargets':
       return globals.tour.listTargets()
+    case 'tour.getUiSnapshot':
+      return globals.tour.getUiSnapshot()
+    case 'tour.waitForUiChange':
+      return globals.tour.waitForUiChange(args[0] as any)
+    case 'tour.setActivePanel':
+      return globals.tour.setActivePanel(args[0] as any)
     case 'tour.help':
       return globals.tour.help()
     case 'opfs.exists':

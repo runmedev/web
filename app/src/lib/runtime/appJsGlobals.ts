@@ -73,6 +73,7 @@ import {
   listTourTargets,
   showTourStep,
 } from '../tourGuide'
+import { type PanelKey, tourUiController } from '../tourUiController'
 import { appState } from './AppState'
 import type {
   AppKernelNetworkApi,
@@ -1112,12 +1113,20 @@ export function createAppJsGlobals({
       show: (request: TourStepRequest) => showTourStep(request),
       dismiss: () => dismissTour(),
       listTargets: () => listTourTargets(),
+      getUiSnapshot: () => tourUiController.getSnapshot(),
+      waitForUiChange: (args: { afterRevision: number; timeoutMs?: number }) =>
+        tourUiController.waitForChange(args),
+      setActivePanel: (panel: PanelKey) =>
+        tourUiController.setActivePanel(panel),
       help: () =>
         [
           'tour.listTargets()                         - List semantic UI target ids',
           'tour.show({ target, message, title?, placement? }) - Highlight a target and show an annotation',
           'Calling tour.show(...) again replaces the active highlight; no intermediate dismiss is needed.',
           'tour.dismiss()                             - Dismiss the active annotation',
+          'tour.getUiSnapshot()                        - Read typed, non-sensitive UI state',
+          'await tour.waitForUiChange({ afterRevision, timeoutMs }) - Wait for the next UI state revision',
+          'tour.setActivePanel(panel)                  - Open or close a side panel through the shared controller',
           '',
           'Timed tour example:',
           'const targets = await tour.listTargets()',

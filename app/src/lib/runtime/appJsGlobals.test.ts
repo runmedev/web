@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parser_pb } from '../../runme/client'
 import { GoogleClientManager } from '../googleClientManager'
 import { dismissTour, tourGuideStore } from '../tourGuide'
+import { tourUiController } from '../tourUiController'
 import { appState } from './AppState'
 import { createAppJsGlobals } from './appJsGlobals'
 import type { NotebookDataLike, RunmeConsoleApi } from './runmeConsole'
@@ -108,6 +109,7 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     delete (window as any).showOpenFilePicker
     window.history.replaceState(null, '', '/')
     dismissTour()
+    tourUiController.resetForTests()
   })
 
   it('resolves a local URI to metadata, share URL, and Markdown link', async () => {
@@ -148,7 +150,7 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     )
   })
 
-  it('exposes the shared tour guide runtime', () => {
+  it('exposes the shared tour guide runtime', async () => {
     const globals = createAppJsGlobals({ runme: createRunme() })
 
     expect(globals.tour.listTargets()).toEqual(
@@ -156,6 +158,11 @@ describe('createAppJsGlobals notebook reference helpers', () => {
         expect.objectContaining({ id: 'left-nav.google-drive' }),
       ])
     )
+    expect(globals.tour.getUiSnapshot()).toMatchObject({
+      revision: expect.any(Number),
+      googleDriveAuthorized: expect.any(Boolean),
+      googleDriveFolderAddedCount: expect.any(Number),
+    })
     globals.tour.show({
       target: 'left-nav.google-drive',
       message: 'Connect Google Drive here.',
@@ -166,11 +173,23 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     })
     expect(globals.tour.dismiss()).toBe(true)
     expect(globals.tour.help()).toContain('Timed tour example')
+    expect(globals.tour.help()).toContain('tour.getUiSnapshot()')
+    expect(globals.tour.help()).toContain('tour.waitForUiChange')
     expect(globals.tour.help()).toContain('setTimeout(resolve, delayMs)')
     expect(globals.tour.help()).toContain('finally')
     expect(globals.tour.help()).toContain(
       'replaces the active highlight; no intermediate dismiss is needed'
     )
+
+    const before = globals.tour.getUiSnapshot()
+    const waiting = globals.tour.waitForUiChange({
+      afterRevision: before.revision,
+      timeoutMs: 1_000,
+    })
+    globals.tour.setActivePanel(
+      before.activePanel === 'explorer' ? null : 'explorer'
+    )
+    await expect(waiting).resolves.toMatchObject({ timedOut: false })
   })
 
   it('opens a local URI from a Runme share URL', async () => {

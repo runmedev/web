@@ -1,11 +1,14 @@
-import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  ReactNode,
+  useContext,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
 
-export type PanelKey =
-  | "explorer"
-  | "documentation"
-  | "open-documents"
-  | "outline"
-  | null;
+import { type PanelKey, tourUiController } from "../lib/tourUiController";
+
+export type { PanelKey } from "../lib/tourUiController";
 
 interface SidePanelContextValue {
   activePanel: PanelKey;
@@ -13,61 +16,31 @@ interface SidePanelContextValue {
   setPanel: (panel: PanelKey) => void;
 }
 
-const STORAGE_KEY = "runme.sidePanel.active";
-const LEGACY_STORAGE_KEY = "aisre.sidePanel.active";
-
-const SidePanelContext = createContext<SidePanelContextValue | undefined>(undefined);
+const SidePanelContext = createContext<SidePanelContextValue | undefined>(
+  undefined,
+);
 
 export function SidePanelProvider({ children }: { children: ReactNode }) {
-  const [activePanel, setActivePanel] = useState<PanelKey>(() => {
-    if (typeof window === "undefined") {
-      return "explorer";
-    }
-    try {
-      const stored =
-        localStorage.getItem(STORAGE_KEY) ??
-        localStorage.getItem(LEGACY_STORAGE_KEY);
-      if (
-        stored === "explorer" ||
-        stored === "documentation" ||
-        stored === "open-documents" ||
-        stored === "open-notebooks" ||
-        stored === "outline"
-      ) {
-        return stored === "open-notebooks" ? "open-documents" : stored;
-      }
-    } catch (error) {
-      console.error("Failed to read side panel state", error);
-    }
-    return "explorer";
-  });
-
-  useEffect(() => {
-    try {
-      if (activePanel) {
-        localStorage.setItem(STORAGE_KEY, activePanel);
-        localStorage.removeItem(LEGACY_STORAGE_KEY);
-      } else {
-        localStorage.removeItem(STORAGE_KEY);
-        localStorage.removeItem(LEGACY_STORAGE_KEY);
-      }
-    } catch (error) {
-      console.error("Failed to persist side panel state", error);
-    }
-  }, [activePanel]);
+  const activePanel = useSyncExternalStore(
+    tourUiController.subscribe,
+    () => tourUiController.getSnapshot().activePanel,
+    () => tourUiController.getSnapshot().activePanel,
+  );
 
   const value = useMemo(
     () => ({
       activePanel,
-      togglePanel: (panel: Exclude<PanelKey, null>) => {
-        setActivePanel((prev) => (prev === panel ? null : panel));
-      },
-      setPanel: setActivePanel,
+      togglePanel: tourUiController.toggleActivePanel,
+      setPanel: tourUiController.setActivePanel,
     }),
     [activePanel],
   );
 
-  return <SidePanelContext.Provider value={value}>{children}</SidePanelContext.Provider>;
+  return (
+    <SidePanelContext.Provider value={value}>
+      {children}
+    </SidePanelContext.Provider>
+  );
 }
 
 export function useSidePanel() {

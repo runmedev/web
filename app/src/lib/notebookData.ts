@@ -1356,6 +1356,16 @@ export class NotebookData {
         return appGlobals.tour.dismiss()
       case 'tour.listTargets':
         return appGlobals.tour.listTargets()
+      case 'tour.getUiSnapshot':
+        return appGlobals.tour.getUiSnapshot()
+      case 'tour.waitForUiChange':
+        return appGlobals.tour.waitForUiChange(
+          args[0] as Parameters<typeof appGlobals.tour.waitForUiChange>[0]
+        )
+      case 'tour.setActivePanel':
+        return appGlobals.tour.setActivePanel(
+          args[0] as Parameters<typeof appGlobals.tour.setActivePanel>[0]
+        )
       case 'tour.help':
         return appGlobals.tour.help()
       case 'runme.getCurrentNotebook': {

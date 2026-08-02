@@ -82,6 +82,24 @@ class MockSandboxPort {
         this.emit({
           type: 'host-call',
           callId: 2,
+          method: 'tour.getUiSnapshot',
+          args: [],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 3,
+          method: 'tour.waitForUiChange',
+          args: [{ afterRevision: 2, timeoutMs: 1_000 }],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 4,
+          method: 'tour.setActivePanel',
+          args: ['explorer'],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 5,
           method: 'tour.show',
           args: [
             {
@@ -679,6 +697,15 @@ describe('SandboxJSKernel', () => {
       if (method === 'tour.show') {
         return { target: 'left-nav.google-drive', message: 'Sign in here.' }
       }
+      if (method === 'tour.getUiSnapshot') {
+        return { revision: 2, activePanel: 'explorer' }
+      }
+      if (method === 'tour.waitForUiChange') {
+        return { revision: 3, activePanel: 'explorer', timedOut: false }
+      }
+      if (method === 'tour.setActivePanel') {
+        return { revision: 3, activePanel: 'explorer' }
+      }
       return null
     })
 
@@ -697,11 +724,19 @@ describe('SandboxJSKernel', () => {
     await kernel.run(
       [
         'console.log(await tour.listTargets());',
+        'console.log(await tour.getUiSnapshot());',
+        'console.log(await tour.waitForUiChange({ afterRevision: 2, timeoutMs: 1000 }));',
+        "console.log(await tour.setActivePanel('explorer'));",
         "console.log(await tour.show({ target: 'left-nav.google-drive', message: 'Sign in here.' }));",
       ].join('\n')
     )
 
     expect(bridgeCall).toHaveBeenCalledWith('tour.listTargets', [])
+    expect(bridgeCall).toHaveBeenCalledWith('tour.getUiSnapshot', [])
+    expect(bridgeCall).toHaveBeenCalledWith('tour.waitForUiChange', [
+      { afterRevision: 2, timeoutMs: 1_000 },
+    ])
+    expect(bridgeCall).toHaveBeenCalledWith('tour.setActivePanel', ['explorer'])
     expect(bridgeCall).toHaveBeenCalledWith('tour.show', [
       { target: 'left-nav.google-drive', message: 'Sign in here.' },
     ])

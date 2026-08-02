@@ -72,6 +72,18 @@ describe('readInstructionsForAIAgents', () => {
       'atomically replaces the current highlight and annotation'
     )
     expect(instructions).toContain('do not call `tour.dismiss()` between steps')
+    expect(instructions).toContain('Guide a conditional, multi-step task')
+    expect(instructions).toContain('Scripted mode')
+    expect(instructions).toContain('Conversational mode')
+    expect(instructions).toContain('tour.getUiSnapshot()')
+    expect(instructions).toContain('tour.waitForUiChange')
+    expect(instructions).toContain('async function waitUntil(predicate)')
+    expect(instructions).toContain("tour.setActivePanel('explorer')")
+    expect(instructions).toContain('googleDriveFolderAddedCount')
+    expect(instructions).toContain(
+      "never treat the user's acknowledgement alone as proof of completion"
+    )
+    expect(instructions).toContain('Do not use a fixed delay')
   })
 
   it('does not include deployment-specific plugin instructions', () => {

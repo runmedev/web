@@ -255,6 +255,13 @@ describe("WebMcpToolRegistrationHost", () => {
       dismissed: true,
     });
 
+    expect(
+      registered.some(({ tool }) => tool.name === "startTourWorkflow"),
+    ).toBe(false);
+    expect(
+      registered.some(({ tool }) => tool.name === "continueTourWorkflow"),
+    ).toBe(false);
+
     expect(registered.every(({ signal }) => signal?.aborted === false)).toBe(
       true,
     );
