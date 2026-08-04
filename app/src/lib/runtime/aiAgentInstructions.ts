@@ -94,6 +94,12 @@ Each \`tour.show(...)\` call atomically replaces the current highlight and annot
 - Choose a relevant document by its name and call \`getDocumentation\` to read that page as Markdown. Retrieve only the pages needed for the task.
 - The same progressive-disclosure API is available inside \`ExecuteCode\` as \`await documentation.list()\` and \`await documentation.get(name)\`.
 
+## Understand offline mode
+
+- Runme Web is installable as a Progressive Web App. After one successful online load, the application shell and browser-local notebooks can reopen offline.
+- Google Drive sync and authorization, OIDC, remote runners, Jupyter servers, agents, and uncached external resources still require connectivity.
+- Do not describe a local edit as synchronized or remotely persisted until the relevant network-backed status confirms it.
+
 ## Verify the browser session
 
 The URL's \`session\` query parameter identifies a candidate tab. Before changing a notebook, call \`ExecuteCode\` with:

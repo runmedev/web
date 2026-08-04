@@ -1,8 +1,10 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import type { Plugin } from "vite";
 import { defineConfig } from "vite";
 import svgr from "vite-plugin-svgr";
 
@@ -26,6 +28,18 @@ const IMAGE_MIME_BY_EXTENSION = new Map([
   [".svg", "image/svg+xml"],
   [".webp", "image/webp"],
 ]);
+const PWA_PRECACHE_TOKEN = "__RUNME_PRECACHE_URLS__";
+const PWA_BUILD_TOKEN = "__RUNME_BUILD_ID__";
+const PWA_PUBLIC_ASSET_FILES = [
+  "manifest.webmanifest",
+  "pwa-192x192.png",
+  "pwa-512x512.png",
+  "configs/app-configs.yaml",
+];
+const PWA_CORE_ASSETS = [
+  "/index.html",
+  ...PWA_PUBLIC_ASSET_FILES.map((fileName) => `/${fileName}`),
+];
 
 function resolveWebCommit(): string | undefined {
   const configured = process.env.VITE_RUNME_VERSION_WEB_COMMIT?.trim();
@@ -138,6 +152,64 @@ function localImagePlugin() {
   };
 }
 
+/**
+ * Emits a service worker whose precache list matches the hashed assets from
+ * this exact Vite build. Keeping generation in the build avoids a second PWA
+ * dependency and prevents an offline page from referring to stale bundle
+ * names after a deployment.
+ */
+function pwaServiceWorkerPlugin(): Plugin {
+  return {
+    name: "runme-pwa-service-worker",
+    apply: "build",
+    async generateBundle(_outputOptions, bundle) {
+      const generatedAssets = Object.keys(bundle)
+        .filter((fileName) => !fileName.endsWith(".map"))
+        .map((fileName) => `/${fileName}`);
+      const precacheUrls = [
+        ...new Set([...PWA_CORE_ASSETS, ...generatedAssets]),
+      ].sort();
+      const buildHash = createHash("sha256").update(
+        precacheUrls.join("\n"),
+      );
+      for (const fileName of Object.keys(bundle).sort()) {
+        const output = bundle[fileName];
+        buildHash.update(fileName);
+        buildHash.update(
+          output.type === "asset" ? output.source : output.code,
+        );
+      }
+      for (const fileName of PWA_PUBLIC_ASSET_FILES) {
+        buildHash.update(fileName);
+        buildHash.update(
+          await readFile(new URL(`./assets/${fileName}`, import.meta.url)),
+        );
+      }
+      const buildId = buildHash.digest("hex").slice(0, 12);
+      const template = await readFile(
+        new URL("./src/pwa/service-worker.js", import.meta.url),
+        "utf8",
+      );
+      const source = template
+        .replace(PWA_PRECACHE_TOKEN, JSON.stringify(precacheUrls, null, 2))
+        .replace(PWA_BUILD_TOKEN, buildId);
+
+      if (source === template || source.includes(PWA_PRECACHE_TOKEN)) {
+        this.error("PWA service worker template is missing its precache token.");
+      }
+      if (source.includes(PWA_BUILD_TOKEN)) {
+        this.error("PWA service worker template is missing its build token.");
+      }
+
+      this.emitFile({
+        type: "asset",
+        fileName: "sw.js",
+        source,
+      });
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   // Use root-relative assets so LB rewrites to /index.html still load bundles from /.
@@ -166,6 +238,7 @@ export default defineConfig({
         ref: true,
       },
     }),
+    pwaServiceWorkerPlugin(),
   ],
   server: {
     proxy: {

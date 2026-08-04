@@ -23,6 +23,7 @@ import { googleAnalytics } from "./lib/googleAnalytics";
 import { appLogger } from "./lib/logging/runtime";
 import { normalizeAppIndexUrl } from "./lib/appBase";
 import { ensurePersistentStorage } from "./lib/persistentStorage";
+import { registerPwaServiceWorker } from "./lib/pwa";
 import { ensureSessionQueryParam } from "./lib/tabIdentity";
 
 type AppConfigApi = {
@@ -68,6 +69,7 @@ setContext(noopBridge);
 normalizeAppIndexUrl();
 ensureSessionQueryParam();
 googleAnalytics.initialize();
+registerPwaServiceWorker();
 
 void ensurePersistentStorage().then((status) => {
   switch (status) {

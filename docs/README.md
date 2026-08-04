@@ -30,6 +30,7 @@ Current numbered docs:
 - [15-logs-diagnostics-and-troubleshooting.md](15-logs-diagnostics-and-troubleshooting.md)
 - [16-notebook-diffs.md](16-notebook-diffs.md)
 - [17-ipynb-notebooks.md](17-ipynb-notebooks.md)
+- [18-progressive-web-app.md](18-progressive-web-app.md)
 
 These docs intentionally exclude implementation-only material such as deployment
 internals and design proposals. Internal notes remain under `docs-dev/` and

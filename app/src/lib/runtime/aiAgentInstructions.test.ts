@@ -43,6 +43,10 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain('expectedRevision')
     expect(instructions).toContain('NOTEBOOK_UPDATE_FAILED')
     expect(instructions).toContain('verify')
+    expect(instructions).toContain('Progressive Web App')
+    expect(instructions).toContain('can reopen offline')
+    expect(instructions).toContain('still require connectivity')
+    expect(instructions).toContain('synchronized or remotely persisted')
   })
 
   it('directs agents to use tour mode for UI guidance', () => {
