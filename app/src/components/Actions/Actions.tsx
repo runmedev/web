@@ -81,6 +81,7 @@ import {
   isNotebookDocumentUri,
   isVersionInfoUri,
   isRunnerStatusUri,
+  parseRunnerKernelsDocumentUri,
   type WorkspaceDocument,
 } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 import {
@@ -113,6 +114,7 @@ import {
 import DriveLinkStatusTab from '../DriveLinkStatusTab'
 import DriveSyncStatusTab from '../DriveSyncStatusTab'
 import RunnerStatusTab from '../RunnerStatusTab'
+import KernelStatusTab from '../KernelStatusTab'
 import { NotebookDiffContent } from '../NotebookDiff/NotebookDiffView'
 import VersionInfoTab from '../VersionInfoTab'
 import { NotebookCommentsPanel } from '../NotebookCommentsPanel'
@@ -2812,6 +2814,11 @@ function renderWorkspaceDocument({
 
   if (isRunnerStatusUri(document.uri)) {
     return <RunnerStatusTab />
+  }
+
+  const runnerKernels = parseRunnerKernelsDocumentUri(document.uri)
+  if (runnerKernels) {
+    return <KernelStatusTab runnerName={runnerKernels.runnerName} />
   }
 
   if (isAppConsoleUri(document.uri)) {

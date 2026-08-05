@@ -70,6 +70,13 @@ describe('jupyterManager direct kernel API', () => {
         kernelName: 'python3',
       }),
     ])
+    expect(manager.getKernelsForRunner('dev')).toEqual([
+      expect.objectContaining({
+        id: 'kernel-direct-1',
+        label: 'python3',
+        execution_state: 'starting',
+      }),
+    ])
     const [url, init] = fetchMock.mock.calls[0]
     expect(String(url)).toBe('http://127.0.0.1:5191/v1/jupyter/kernels')
     expect(init).toEqual(
@@ -87,7 +94,7 @@ describe('jupyterManager direct kernel API', () => {
   it('persists kernel aliases and restores labels after manager reload', async () => {
     const kernels: Kernel[] = []
     const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, init?: RequestInit) => {
+      async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
         const method = init?.method ?? 'GET'
         if (url.endsWith('/v1/jupyter/kernels') && method === 'GET') {

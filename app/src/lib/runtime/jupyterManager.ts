@@ -26,6 +26,10 @@ export type JupyterKernelOption = {
   kernelName: string
 }
 
+export type JupyterKernelStatus = JupyterKernelModel & {
+  label: string
+}
+
 type KernelCacheEntry = {
   model: JupyterKernelModel
   label: string
@@ -643,6 +647,18 @@ class JupyterManager {
     )
     options.sort((a, b) => a.label.localeCompare(b.label))
     return options
+  }
+
+  getKernelsForRunner(runnerName: string): JupyterKernelStatus[] {
+    const resolvedRunner = this.normalizeRunnerName(runnerName)
+    return (this.kernelsByRunner.get(resolvedRunner) ?? [])
+      .map((entry) => ({
+        ...entry.model,
+        label: entry.label || entry.model.name || entry.model.id,
+      }))
+      .sort(
+        (a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id)
+      )
   }
 
   parseKernelOptionKey(

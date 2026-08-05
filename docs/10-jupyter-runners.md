@@ -44,6 +44,9 @@ jupyter.kernels.stop('default', 'kernelIdOrName')
 - stdout and errors may be translated from Jupyter protocol messages,
 - the kernel dropdown lists live kernels from each configured runner,
 - starting a kernel immediately refreshes the dropdown cache,
+- Notebook Runner Status includes a **Manage kernels** action for each available
+  runner. The resulting tab shows kernel IDs, state, connection count, and last
+  activity, and provides start, restart, stop, and refresh controls,
 - kernel lifecycle matters separately from notebook tabs,
 - misconfiguration can look like execution failure even when the UI itself is healthy.
 
