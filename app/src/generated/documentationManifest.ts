@@ -146,4 +146,12 @@ export const DOCUMENTATION_MANIFEST = [
     order: 17,
     path: 'docs/17-ipynb-notebooks.md',
   },
+  {
+    name: 'progressive-web-app',
+    title: 'Progressive Web App And Offline Loading',
+    description:
+      'Use this guide to install Runme Web as a Progressive Web App or understand what remains available after the browser goes offline. It covers the app manifest, service-worker update behavior, cached app-shell resources, local notebook persistence, and the network-backed features that still require a connection.',
+    order: 18,
+    path: 'docs/18-progressive-web-app.md',
+  },
 ] as const satisfies readonly DocumentationManifestEntry[]
