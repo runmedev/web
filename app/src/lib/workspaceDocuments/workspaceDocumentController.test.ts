@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceDocumentController } from "./workspaceDocumentController";
 import {
   deriveWorkspaceDocumentTitle,
+  getRunnerKernelsDocumentUri,
+  parseRunnerKernelsDocumentUri,
   type WorkspaceDocument,
 } from "./workspaceDocumentTypes";
 import { EXCALIDRAW_MIME_TYPE } from "../../storage/excalidraw";
@@ -114,5 +116,15 @@ describe("WorkspaceDocumentController", () => {
   it("derives titles for App Console and Logs documents", () => {
     expect(deriveWorkspaceDocumentTitle("app://console")).toBe("App Console");
     expect(deriveWorkspaceDocumentTitle("app://logs")).toBe("Logs");
+  });
+
+  it("creates and parses runner-scoped kernel status documents", () => {
+    const uri = getRunnerKernelsDocumentUri("local runner");
+
+    expect(uri).toBe("status://runners/local%20runner/kernels");
+    expect(parseRunnerKernelsDocumentUri(uri)).toEqual({
+      runnerName: "local runner",
+    });
+    expect(deriveWorkspaceDocumentTitle(uri)).toBe("Kernels · local runner");
   });
 });

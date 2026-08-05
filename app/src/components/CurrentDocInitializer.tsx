@@ -9,6 +9,7 @@ import {
   isDocumentationDocumentUri,
   isDriveSyncStatusUri,
   isLogsUri,
+  isRunnerKernelsUri,
   isRunnerStatusUri,
 } from '../lib/workspaceDocuments/workspaceDocumentTypes'
 import {
@@ -48,6 +49,7 @@ export function CurrentDocInitializer() {
     }
     if (
       isRunnerStatusUri(docParam) ||
+      isRunnerKernelsUri(docParam) ||
       isDriveSyncStatusUri(docParam) ||
       isAppConsoleUri(docParam) ||
       isLogsUri(docParam)

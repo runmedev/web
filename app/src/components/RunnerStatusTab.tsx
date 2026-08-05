@@ -1,6 +1,12 @@
-import { ScrollArea, Text } from '@radix-ui/themes'
+import { Button, ScrollArea, Text } from '@radix-ui/themes'
 
+import { useCurrentDoc } from '../contexts/CurrentDocContext'
 import { useRunners } from '../contexts/RunnersContext'
+import { useWorkspaceDocumentContext } from '../contexts/WorkspaceDocumentContext'
+import {
+  deriveWorkspaceDocumentTitle,
+  getRunnerKernelsDocumentUri,
+} from '../lib/workspaceDocuments/workspaceDocumentTypes'
 
 function formatReconnect(reconnect: boolean): string {
   return reconnect ? 'Enabled' : 'Disabled'
@@ -8,6 +14,8 @@ function formatReconnect(reconnect: boolean): string {
 
 export function RunnerStatusTab() {
   const { defaultRunnerName, listRunners } = useRunners()
+  const { setCurrentDoc } = useCurrentDoc()
+  const { showDocument } = useWorkspaceDocumentContext()
   const runners = listRunners()
   const availableRunners = runners.filter((runner) => runner.endpoint.trim())
   const availableCount = availableRunners.length
@@ -56,20 +64,23 @@ export function RunnerStatusTab() {
               <table className="w-full table-fixed border-collapse text-left text-sm">
                 <thead>
                   <tr className="border-b border-nb-border bg-nb-surface-2 text-xs font-semibold uppercase tracking-wide text-nb-text-muted">
-                    <th className="w-[17%] whitespace-nowrap px-3 py-2">
+                    <th className="w-[14%] whitespace-nowrap px-3 py-2">
                       Name
                     </th>
-                    <th className="w-[17%] whitespace-nowrap px-3 py-2">
+                    <th className="w-[14%] whitespace-nowrap px-3 py-2">
                       Status
                     </th>
-                    <th className="w-[32%] whitespace-nowrap px-3 py-2">
+                    <th className="w-[27%] whitespace-nowrap px-3 py-2">
                       Endpoint
                     </th>
-                    <th className="w-[14%] whitespace-nowrap px-3 py-2">
+                    <th className="w-[11%] whitespace-nowrap px-3 py-2">
                       Default
                     </th>
-                    <th className="w-[20%] whitespace-nowrap px-3 py-2">
+                    <th className="w-[14%] whitespace-nowrap px-3 py-2">
                       Reconnect
+                    </th>
+                    <th className="w-[20%] whitespace-nowrap px-3 py-2">
+                      Kernels
                     </th>
                   </tr>
                 </thead>
@@ -105,6 +116,24 @@ export function RunnerStatusTab() {
                         </td>
                         <td className="px-3 py-3 text-nb-text-muted">
                           {formatReconnect(runner.reconnect)}
+                        </td>
+                        <td className="px-3 py-3">
+                          <Button
+                            size="1"
+                            variant="soft"
+                            disabled={!hasEndpoint}
+                            onClick={() => {
+                              const uri = getRunnerKernelsDocumentUri(
+                                runner.name
+                              )
+                              showDocument(uri, {
+                                title: deriveWorkspaceDocumentTitle(uri),
+                              })
+                              setCurrentDoc(uri)
+                            }}
+                          >
+                            Manage kernels
+                          </Button>
                         </td>
                       </tr>
                     )

@@ -128,6 +128,25 @@ describe('CurrentDocInitializer', () => {
     expect(window.location.hash).toBe('#section')
   })
 
+  it('opens a runner kernel status document from a doc param', async () => {
+    setDocUrl('status://runners/local%20runner/kernels')
+
+    render(<CurrentDocInitializer />)
+
+    await waitFor(() => {
+      expect(mocks.setCurrentDoc).toHaveBeenCalledWith(
+        'status://runners/local%20runner/kernels'
+      )
+    })
+    expect(mocks.openNotebook).not.toHaveBeenCalled()
+    expect(mocks.showDocument).toHaveBeenCalledWith(
+      'status://runners/local%20runner/kernels',
+      { title: 'Kernels · local runner' }
+    )
+    expect(window.location.search).toBe('?existing=1')
+    expect(window.location.hash).toBe('#section')
+  })
+
   it('opens the Drive sync status document from a doc param', async () => {
     setDocUrl('status://drive-sync')
 

@@ -8,7 +8,6 @@ import {
   genRunID,
 } from '@runmedev/renderers'
 
-import { getBrowserAdapter } from '../browserAdapter.client'
 import {
   MimeType,
   RunmeExecutionState,
@@ -35,6 +34,7 @@ import {
 import { JSKernel } from './runtime/jsKernel'
 import {
   buildJupyterChannelsWebSocketURL,
+  getJupyterAuthorization,
   getJupyterManager,
 } from './runtime/jupyterManager'
 import {
@@ -513,7 +513,6 @@ export class NotebookData {
     {
       socket: WebSocket
       runnerName: string
-      serverName: string
       kernelID: string
     }
   >()
@@ -856,7 +855,6 @@ export class NotebookData {
     const interrupts = jupyterExecutions.map((execution, index) =>
       getJupyterManager().interruptKernel(
         execution.runnerName,
-        execution.serverName,
         execution.kernelID,
         { signal: interruptControllers[index]?.signal }
       )
@@ -1014,7 +1012,7 @@ export class NotebookData {
     }
 
     if (useJupyterKernel) {
-      this.runCodeCellWithJupyterKernel(cell, runID, runner!, generation)
+      void this.runCodeCellWithJupyterKernel(cell, runID, runner!, generation)
       return runID
     }
 
@@ -1414,18 +1412,14 @@ export class NotebookData {
     }
   }
 
-  private runCodeCellWithJupyterKernel(
+  private async runCodeCellWithJupyterKernel(
     cell: parser_pb.Cell,
     runID: string,
     runner: Runner,
     generation: number
-  ): void {
+  ): Promise<void> {
     const refId = cell.refId
     const source = cell.value ?? ''
-    const serverName =
-      (cell.metadata?.[RunmeMetadataKey.JupyterServerName] as
-        | string
-        | undefined) ?? ''
     const selectedKernelID =
       (cell.metadata?.[RunmeMetadataKey.JupyterKernelID] as
         | string
@@ -1435,7 +1429,7 @@ export class NotebookData {
         | string
         | undefined) ?? ''
 
-    if (!serverName || !selectedKernelID) {
+    if (!selectedKernelID) {
       showToast({
         message: 'Select a Jupyter kernel before running a Jupyter cell.',
         tone: 'error',
@@ -1458,12 +1452,11 @@ export class NotebookData {
 
     let channelsURL: string
     try {
-      const idToken = getBrowserAdapter().simpleAuth?.idToken?.trim() ?? ''
+      const authorization = await getJupyterAuthorization()
       channelsURL = buildJupyterChannelsWebSocketURL({
         runnerEndpoint: runner.endpoint,
-        serverName,
         kernelId: selectedKernelID,
-        authorization: idToken ? `Bearer ${idToken}` : '',
+        authorization,
       })
     } catch (error) {
       showToast({
@@ -1491,7 +1484,6 @@ export class NotebookData {
     this.activeJupyterSockets.set(refId, {
       socket,
       runnerName: runner.name,
-      serverName,
       kernelID: selectedKernelID,
     })
     const isCurrentExecution = () =>
@@ -1858,7 +1850,6 @@ export class NotebookData {
         scope: 'jupyter.runner',
         refId,
         runID,
-        serverName,
         kernelID: selectedKernelID,
         kernelName: selectedKernelName,
       },
@@ -2148,15 +2139,13 @@ export class CellData {
 
   setJupyterKernel(selection: {
     runnerName?: string
-    serverName: string
     kernelId: string
     kernelName: string
   }): void {
     const snap = this.snapshot
     if (!snap) return
     snap.metadata ??= {}
-    ;(snap.metadata as any)[RunmeMetadataKey.JupyterServerName] =
-      selection.serverName
+    delete (snap.metadata as any)[RunmeMetadataKey.JupyterServerName]
     ;(snap.metadata as any)[RunmeMetadataKey.JupyterKernelID] =
       selection.kernelId
     ;(snap.metadata as any)[RunmeMetadataKey.JupyterKernelName] =
