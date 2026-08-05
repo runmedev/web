@@ -219,13 +219,13 @@ vi.mock('../../lib/runtime/jupyterManager', () => ({
     getVersion: () => 0,
     ensureRunnerData: async () => {},
     getKernelOptionsForRunner: () => [],
-    getKernelOptionKey: (serverName: string, kernelId: string) =>
-      `${serverName}:${kernelId}`,
+    getKernelOptionKey: (runnerName: string, kernelId: string) =>
+      `${runnerName}:${kernelId}`,
     parseKernelOptionKey: (key: string) => {
       if (!key.includes(':')) return null
-      const [serverName, kernelId] = key.split(':', 2)
-      if (!serverName || !kernelId) return null
-      return { serverName, kernelId }
+      const [runnerName, kernelId] = key.split(':', 2)
+      if (!runnerName || !kernelId) return null
+      return { runnerName, kernelId }
     },
   }),
 }))

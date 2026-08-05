@@ -1164,31 +1164,23 @@ export function Action({
     )
   }, [jupyterManager, jupyterRunnerNames, jupyterVersion, showKernelSelector])
   const selectedKernelKey = useMemo(() => {
-    const serverName =
-      (cell?.metadata?.[RunmeMetadataKey.JupyterServerName] as
-        | string
-        | undefined) ?? ''
     const kernelID =
       (cell?.metadata?.[RunmeMetadataKey.JupyterKernelID] as
         | string
         | undefined) ?? ''
-    if (!serverName || !kernelID) {
+    if (!kernelID) {
       return ''
     }
     const runnerName =
       (cell?.metadata?.[RunmeMetadataKey.RunnerName] as string | undefined) ??
       ''
     if (runnerName && !isAppKernelRunnerName(runnerName)) {
-      return jupyterManager.getKernelOptionKey(serverName, kernelID, runnerName)
+      return jupyterManager.getKernelOptionKey(runnerName, kernelID)
     }
     if (resolvedRunnerName) {
-      return jupyterManager.getKernelOptionKey(
-        serverName,
-        kernelID,
-        resolvedRunnerName
-      )
+      return jupyterManager.getKernelOptionKey(resolvedRunnerName, kernelID)
     }
-    return jupyterManager.getKernelOptionKey(serverName, kernelID)
+    return ''
   }, [cell, jupyterManager, resolvedRunnerName])
 
   useEffect(() => {
@@ -1211,7 +1203,6 @@ export function Action({
     }
     cellData.setJupyterKernel({
       runnerName: option.runnerName,
-      serverName: parsed.serverName,
       kernelId: parsed.kernelId,
       kernelName: option.label,
     })
@@ -1792,7 +1783,6 @@ export function Action({
                     }
                     cellData.setJupyterKernel({
                       runnerName: option.runnerName,
-                      serverName: parsed.serverName,
                       kernelId: parsed.kernelId,
                       kernelName: option.label,
                     })
