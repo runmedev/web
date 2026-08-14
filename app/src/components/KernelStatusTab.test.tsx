@@ -2,6 +2,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const createSessionId = vi.hoisted(() => vi.fn())
+
 type Kernel = {
   id: string
   name: string
@@ -77,6 +79,8 @@ vi.mock('../lib/runtime/jupyterManager', () => ({
   }),
 }))
 
+vi.mock('../lib/tabIdentity', () => ({ createSessionId }))
+
 import { KernelStatusTab } from './KernelStatusTab'
 
 describe('KernelStatusTab', () => {
@@ -97,6 +101,10 @@ describe('KernelStatusTab', () => {
     startKernel.mockClear()
     restartKernel.mockClear()
     stopKernel.mockClear()
+    createSessionId
+      .mockReset()
+      .mockReturnValueOnce('silver-wind')
+      .mockReturnValueOnce('wise-beacon')
   })
 
   it('loads and displays runner-owned kernels', async () => {
@@ -155,5 +163,32 @@ describe('KernelStatusTab', () => {
       expect(stopKernel).toHaveBeenCalledWith('default', 'kernel-1')
     )
     await waitFor(() => expect(screen.queryByText('kernel-1')).toBeNull())
+  })
+
+  it('provides a fresh memorable display name after starting a kernel', async () => {
+    render(<KernelStatusTab runnerName="default" />)
+    await waitFor(() => expect(listKernels).toHaveBeenCalled())
+
+    const displayName = screen.getByRole('textbox', { name: 'Display name' })
+    expect((displayName as HTMLInputElement).value).toBe('silver-wind')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start kernel' }))
+
+    await waitFor(() =>
+      expect(startKernel).toHaveBeenCalledWith('default', {
+        kernelSpec: 'python3',
+        name: 'silver-wind',
+        argv: [
+          'python3',
+          '-m',
+          'ipykernel_launcher',
+          '-f',
+          '{connection_file}',
+        ],
+      })
+    )
+    await waitFor(() =>
+      expect((displayName as HTMLInputElement).value).toBe('wise-beacon')
+    )
   })
 })

@@ -215,6 +215,13 @@ vi.mock('../../lib/toast', () => ({
 vi.mock('../../lib/imageEmbedding', () => imageEmbeddingMocks)
 
 vi.mock('../../lib/runtime/jupyterManager', () => ({
+  DEFAULT_JUPYTER_KERNEL_ARGV: [
+    'python3',
+    '-m',
+    'ipykernel_launcher',
+    '-f',
+    '{connection_file}',
+  ],
   getJupyterManager: () => ({
     subscribe: () => () => {},
     getVersion: () => 0,

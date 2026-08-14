@@ -11,6 +11,7 @@ import {
   DEFAULT_JUPYTER_KERNEL_ARGV,
   getJupyterManager,
 } from '../lib/runtime/jupyterManager'
+import { createSessionId } from '../lib/tabIdentity'
 
 const defaultKernelArgv = JSON.stringify(DEFAULT_JUPYTER_KERNEL_ARGV)
 
@@ -77,7 +78,7 @@ export function KernelStatusTab({ runnerName }: { runnerName: string }) {
   )
   const [kernelSpec, setKernelSpec] = useState('python3')
   const [kernelArgv, setKernelArgv] = useState(defaultKernelArgv)
-  const [alias, setAlias] = useState('')
+  const [alias, setAlias] = useState(createSessionId)
   const [loading, setLoading] = useState(true)
   const [operation, setOperation] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState('')
@@ -119,7 +120,7 @@ export function KernelStatusTab({ runnerName }: { runnerName: string }) {
         argv: requestedArgv,
         ...(alias.trim() ? { name: alias.trim() } : {}),
       })
-      setAlias('')
+      setAlias(createSessionId())
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
     } finally {
