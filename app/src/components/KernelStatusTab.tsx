@@ -1,4 +1,4 @@
-import { Button, ScrollArea, Text, TextField } from '@radix-ui/themes'
+import { Button, ScrollArea, Text, TextArea, TextField } from '@radix-ui/themes'
 import {
   useCallback,
   useEffect,
@@ -7,7 +7,39 @@ import {
   useSyncExternalStore,
 } from 'react'
 
-import { getJupyterManager } from '../lib/runtime/jupyterManager'
+import {
+  DEFAULT_JUPYTER_KERNEL_ARGV,
+  getJupyterManager,
+} from '../lib/runtime/jupyterManager'
+
+const defaultKernelArgv = JSON.stringify(DEFAULT_JUPYTER_KERNEL_ARGV)
+
+function parseKernelArgv(value: string): string[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    throw new Error('Kernel command must be a valid JSON array.')
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length === 0 ||
+    parsed.some((argument) => typeof argument !== 'string')
+  ) {
+    throw new Error('Kernel command must be a non-empty JSON array of strings.')
+  }
+  const placeholderCount = parsed.reduce(
+    (count, argument) =>
+      count + argument.split('{connection_file}').length - 1,
+    0
+  )
+  if (placeholderCount !== 1) {
+    throw new Error(
+      'Kernel command must contain exactly one {connection_file} placeholder.'
+    )
+  }
+  return parsed
+}
 
 function formatLastActivity(value?: string): string {
   if (!value) {
@@ -44,6 +76,7 @@ export function KernelStatusTab({ runnerName }: { runnerName: string }) {
     [manager, runnerName, version]
   )
   const [kernelSpec, setKernelSpec] = useState('python3')
+  const [kernelArgv, setKernelArgv] = useState(defaultKernelArgv)
   const [alias, setAlias] = useState('')
   const [loading, setLoading] = useState(true)
   const [operation, setOperation] = useState<string | null>(null)
@@ -71,11 +104,19 @@ export function KernelStatusTab({ runnerName }: { runnerName: string }) {
       setErrorMessage('Kernel spec is required.')
       return
     }
+    let requestedArgv: string[]
+    try {
+      requestedArgv = parseKernelArgv(kernelArgv)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+      return
+    }
     setOperation('start')
     setErrorMessage('')
     try {
       await manager.startKernel(runnerName, {
         kernelSpec: requestedKernelSpec,
+        argv: requestedArgv,
         ...(alias.trim() ? { name: alias.trim() } : {}),
       })
       setAlias('')
@@ -84,7 +125,7 @@ export function KernelStatusTab({ runnerName }: { runnerName: string }) {
     } finally {
       setOperation(null)
     }
-  }, [alias, kernelSpec, manager, runnerName])
+  }, [alias, kernelArgv, kernelSpec, manager, runnerName])
 
   const restartKernel = useCallback(
     async (kernelID: string) => {
@@ -148,6 +189,27 @@ export function KernelStatusTab({ runnerName }: { runnerName: string }) {
             Start a kernel
           </Text>
           <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_auto] sm:items-end">
+            <label className="space-y-1 sm:col-span-3">
+              <Text
+                size="1"
+                as="p"
+                className="font-semibold text-nb-text-muted"
+              >
+                Kernel command (JSON argv)
+              </Text>
+              <TextArea
+                aria-label="Kernel command"
+                value={kernelArgv}
+                disabled={operation !== null}
+                onChange={(event) => setKernelArgv(event.target.value)}
+                resize="vertical"
+              />
+              <Text size="1" as="p" className="text-nb-text-faint">
+                Paths are resolved on the runner host. Include exactly one{' '}
+                <span className="font-mono">{'{connection_file}'}</span>{' '}
+                placeholder.
+              </Text>
+            </label>
             <label className="space-y-1">
               <Text
                 size="1"

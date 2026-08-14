@@ -5,6 +5,14 @@ import { DEFAULT_RUNNER_PLACEHOLDER, getRunnersManager } from './runnersManager'
 
 const KERNEL_ALIASES_STORAGE_KEY = 'runme/jupyterKernelAliases'
 
+export const DEFAULT_JUPYTER_KERNEL_ARGV = [
+  'python3',
+  '-m',
+  'ipykernel_launcher',
+  '-f',
+  '{connection_file}',
+] as const
+
 export type JupyterKernelModel = {
   id: string
   name: string
@@ -16,6 +24,7 @@ export type JupyterKernelModel = {
 export type JupyterKernelStartOptions = {
   kernelSpec?: string
   name?: string
+  argv?: string[]
 }
 
 export type JupyterKernelOption = {
@@ -480,9 +489,17 @@ class JupyterManager {
       }
     }
 
-    const payload: Record<string, unknown> = {}
-    if (options?.kernelSpec?.trim()) {
-      payload.name = options.kernelSpec.trim()
+    const kernelSpec = options?.kernelSpec?.trim() || 'python3'
+    const argv = options?.argv ?? [...DEFAULT_JUPYTER_KERNEL_ARGV]
+    if (
+      argv.length === 0 ||
+      argv.some((argument) => typeof argument !== 'string')
+    ) {
+      throw new Error('Kernel argv must be a non-empty array of strings.')
+    }
+    const payload: Record<string, unknown> = {
+      name: kernelSpec,
+      argv,
     }
     const kernel = await this.fetchJSON<JupyterKernelModel>(
       `${baseURL}/v1/jupyter/kernels`,

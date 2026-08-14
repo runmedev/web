@@ -83,7 +83,16 @@ describe('jupyterManager direct kernel API', () => {
       expect.objectContaining({
         method: 'POST',
         credentials: 'include',
-        body: JSON.stringify({ name: 'python3' }),
+        body: JSON.stringify({
+          name: 'python3',
+          argv: [
+            'python3',
+            '-m',
+            'ipykernel_launcher',
+            '-f',
+            '{connection_file}',
+          ],
+        }),
       })
     )
     expect(new Headers(init?.headers).get('Authorization')).toBe(

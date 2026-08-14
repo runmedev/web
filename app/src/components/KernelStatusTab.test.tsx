@@ -27,7 +27,7 @@ const listKernels = vi.fn(async () => {
 const startKernel = vi.fn(
   async (
     _runnerName: string,
-    options: { kernelSpec?: string; name?: string }
+    options: { kernelSpec?: string; name?: string; argv?: string[] }
   ) => {
     const kernel = {
       id: 'kernel-2',
@@ -56,6 +56,13 @@ const stopKernel = vi.fn(async (_runnerName: string, kernelID: string) => {
 })
 
 vi.mock('../lib/runtime/jupyterManager', () => ({
+  DEFAULT_JUPYTER_KERNEL_ARGV: [
+    'python3',
+    '-m',
+    'ipykernel_launcher',
+    '-f',
+    '{connection_file}',
+  ],
   getJupyterManager: () => ({
     subscribe: (listener: () => void) => {
       listeners.add(listener)
@@ -110,6 +117,12 @@ describe('KernelStatusTab', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Kernel spec' }), {
       target: { value: 'python-custom' },
     })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Kernel command' }), {
+      target: {
+        value:
+          '["/workspace/.venv/bin/python","-m","ipykernel_launcher","-f","{connection_file}"]',
+      },
+    })
     fireEvent.change(screen.getByRole('textbox', { name: 'Display name' }), {
       target: { value: 'training' },
     })
@@ -119,6 +132,13 @@ describe('KernelStatusTab', () => {
       expect(startKernel).toHaveBeenCalledWith('default', {
         kernelSpec: 'python-custom',
         name: 'training',
+        argv: [
+          '/workspace/.venv/bin/python',
+          '-m',
+          'ipykernel_launcher',
+          '-f',
+          '{connection_file}',
+        ],
       })
     )
     expect(await screen.findByText('training')).toBeTruthy()

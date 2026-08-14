@@ -1353,11 +1353,11 @@ export function createAppJsGlobals({
       kernels: {
         start: async (
           runnerName: string,
-          options?: { kernelSpec?: string; name?: string }
+          options?: { kernelSpec?: string; name?: string; argv?: string[] }
         ) => {
           if (!runnerName?.trim()) {
             throw new Error(
-              'Usage: jupyter.kernels.start(runnerName, { kernelSpec? })'
+              'Usage: jupyter.kernels.start(runnerName, { kernelSpec?, name?, argv? })'
             )
           }
           try {

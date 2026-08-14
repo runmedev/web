@@ -40,9 +40,13 @@ an isolated stateful session even when both kernels use the same spec.
    when that runner does not have an endpoint.
 3. Use the runner-scoped kernel tab to inspect kernel name, full kernel ID,
    execution state, active connection count, and last activity.
-4. Enter an allowlisted kernel spec, normally `python3`, and optionally a
-   display name. Select **Start kernel**.
-5. Use **Refresh** when another client or process may have changed the runner's
+4. Enter the kernel command as a JSON `argv` array. The default launches
+   `python3`; replace its first element with a virtual-environment interpreter,
+   such as `/workspace/.venv/bin/python`. Paths are resolved on the runner
+   host. Keep exactly one `{connection_file}` placeholder.
+5. Enter a kernel name and, optionally, a browser-local display name. Select
+   **Start kernel**.
+6. Use **Refresh** when another client or process may have changed the runner's
    kernels.
 
 The lifecycle controls have these effects:
@@ -75,6 +79,13 @@ kernel-management tab or App Console.
 const analysis = await jupyter.kernels.start('default', {
   kernelSpec: 'python3',
   name: 'analysis',
+  argv: [
+    '/workspace/.venv/bin/python',
+    '-m',
+    'ipykernel_launcher',
+    '-f',
+    '{connection_file}',
+  ],
 })
 jupyter.kernels.get('default')
 jupyter.kernels.interrupt('default', analysis.id)
@@ -90,7 +101,8 @@ attached correctly.
 
 - Python notebooks,
 - notebook kernels that need Jupyter semantics,
-- environments exposed by an allowlisted kernel profile on the Runme runner.
+- Python virtual environments and other Jupyter kernels installed on the Runme
+  runner.
 
 ## User-visible behavior
 
@@ -117,11 +129,34 @@ WS     /v1/jupyter/kernels/{kernel_id}/channels
 These routes manage Runme-owned kernels directly. The old
 `/v1/jupyter/servers/...` registry and proxy routes are not part of this model.
 
+Kernel creation uses the Jupyter kernelspec `argv` convention:
+
+```json
+{
+  "name": "project-venv",
+  "argv": [
+    "/workspace/.venv/bin/python",
+    "-m",
+    "ipykernel_launcher",
+    "-f",
+    "{connection_file}"
+  ]
+}
+```
+
+The server validates the array, replaces the single `{connection_file}`
+placeholder with an owner-only file, and starts the executable directly without
+a shell. Restart reuses the stored launch specification. The command is not
+returned in kernel models or written to lifecycle logs.
+
 ## Key facts
 
 - A valid backend runner is required because it owns the kernel processes and
   performs WebSocket-to-ZeroMQ bridging.
 - The web app authenticates kernel HTTP requests with the current OIDC ID token.
+- `RunnerUserRole` authorizes starting client-specified kernel processes as the
+  runner's operating-system user. Treat that role as host code-execution
+  permission.
 - The initial channels implementation supports Jupyter's JSON WebSocket
   messages. Binary buffers and the `v1.kernel.websocket.jupyter.org`
   subprotocol are rejected explicitly until binary protocol support is added.
