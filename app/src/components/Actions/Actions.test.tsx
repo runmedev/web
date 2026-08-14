@@ -29,6 +29,7 @@ import {
 } from '../../lib/notebookDiff/registry'
 import {
   APP_CONSOLE_DOCUMENT_URI,
+  getRunnerKernelsDocumentUri,
   LOGS_DOCUMENT_URI,
   VERSION_INFO_DOCUMENT_URI,
 } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
@@ -214,18 +215,30 @@ vi.mock('../../lib/toast', () => ({
 vi.mock('../../lib/imageEmbedding', () => imageEmbeddingMocks)
 
 vi.mock('../../lib/runtime/jupyterManager', () => ({
+  DEFAULT_JUPYTER_KERNEL_ARGV: [
+    'python3',
+    '-m',
+    'ipykernel_launcher',
+    '-f',
+    '{connection_file}',
+  ],
   getJupyterManager: () => ({
     subscribe: () => () => {},
     getVersion: () => 0,
     ensureRunnerData: async () => {},
     getKernelOptionsForRunner: () => [],
-    getKernelOptionKey: (serverName: string, kernelId: string) =>
-      `${serverName}:${kernelId}`,
+    getKernelsForRunner: () => [],
+    listKernels: async () => [],
+    startKernel: async () => ({ id: 'kernel-1', name: 'python3' }),
+    restartKernel: async () => ({ id: 'kernel-1', name: 'python3' }),
+    stopKernel: async () => {},
+    getKernelOptionKey: (runnerName: string, kernelId: string) =>
+      `${runnerName}:${kernelId}`,
     parseKernelOptionKey: (key: string) => {
       if (!key.includes(':')) return null
-      const [serverName, kernelId] = key.split(':', 2)
-      if (!serverName || !kernelId) return null
-      return { serverName, kernelId }
+      const [runnerName, kernelId] = key.split(':', 2)
+      if (!runnerName || !kernelId) return null
+      return { runnerName, kernelId }
     },
   }),
 }))
@@ -1539,6 +1552,20 @@ describe('Actions tabs', () => {
       screen.getByTestId('app-console-mock').getAttribute('data-show-header')
     ).toBe('false')
     expect(screen.getByTestId('logs-pane-mock')).toBeTruthy()
+  })
+
+  it('renders a runner kernel status workspace document as a tab', async () => {
+    const uri = getRunnerKernelsDocumentUri('default')
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [{ uri, title: 'Kernels · default' }]
+
+    render(<Actions />)
+
+    expect(screen.getByRole('tab', { name: 'Kernels · default' })).toBeTruthy()
+    expect(screen.getByText('Jupyter Kernels')).toBeTruthy()
+    expect(
+      await screen.findByText('No kernels are running on this runner.')
+    ).toBeTruthy()
   })
 })
 

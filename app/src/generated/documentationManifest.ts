@@ -94,7 +94,7 @@ export const DOCUMENTATION_MANIFEST = [
     name: 'jupyter-runners',
     title: 'Jupyter Runners',
     description:
-      "Use this guide when notebook cells must execute through a Jupyter server and kernel. It covers Jupyter's relationship to Runme runners, server and kernel lifecycle helpers, configuration, selection guidance, and user-visible behavior. Use the AppKernel guide for browser JavaScript and the local Runme guide for WebSocket backend execution.",
+      "Use this guide when notebook cells must execute through a Jupyter kernel. It covers Runme's kernel-management UI, direct lifecycle helpers, kernel selection, runner scoping, and troubleshooting. Use the AppKernel guide for browser JavaScript and the local Runme guide for WebSocket backend execution.",
     order: 10,
     path: 'docs/10-jupyter-runners.md',
   },

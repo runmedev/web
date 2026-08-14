@@ -8,6 +8,8 @@ export const DRIVE_LINK_STATUS_DOCUMENT_URI = 'status://drive-link'
 export const DRIVE_SYNC_STATUS_DOCUMENT_URI = 'status://drive-sync'
 export const VERSION_INFO_DOCUMENT_URI = 'app://version'
 export const RUNNER_STATUS_DOCUMENT_URI = 'status://runners'
+const RUNNER_KERNELS_DOCUMENT_PREFIX = `${RUNNER_STATUS_DOCUMENT_URI}/`
+const RUNNER_KERNELS_DOCUMENT_SUFFIX = '/kernels'
 export const APP_CONSOLE_DOCUMENT_URI = 'app://console'
 export const LOGS_DOCUMENT_URI = 'app://logs'
 
@@ -66,6 +68,43 @@ export function isRunnerStatusUri(uri: string | null | undefined): boolean {
   return uri === RUNNER_STATUS_DOCUMENT_URI
 }
 
+export function getRunnerKernelsDocumentUri(runnerName: string): string {
+  const normalizedRunnerName = runnerName.trim()
+  if (!normalizedRunnerName) {
+    throw new Error('Runner name is required.')
+  }
+  return `${RUNNER_KERNELS_DOCUMENT_PREFIX}${encodeURIComponent(normalizedRunnerName)}${RUNNER_KERNELS_DOCUMENT_SUFFIX}`
+}
+
+export function parseRunnerKernelsDocumentUri(
+  uri: string | null | undefined
+): { runnerName: string } | null {
+  if (
+    typeof uri !== 'string' ||
+    !uri.startsWith(RUNNER_KERNELS_DOCUMENT_PREFIX) ||
+    !uri.endsWith(RUNNER_KERNELS_DOCUMENT_SUFFIX)
+  ) {
+    return null
+  }
+  const encodedRunnerName = uri.slice(
+    RUNNER_KERNELS_DOCUMENT_PREFIX.length,
+    -RUNNER_KERNELS_DOCUMENT_SUFFIX.length
+  )
+  if (!encodedRunnerName || encodedRunnerName.includes('/')) {
+    return null
+  }
+  try {
+    const runnerName = decodeURIComponent(encodedRunnerName).trim()
+    return runnerName ? { runnerName } : null
+  } catch {
+    return null
+  }
+}
+
+export function isRunnerKernelsUri(uri: string | null | undefined): boolean {
+  return parseRunnerKernelsDocumentUri(uri) !== null
+}
+
 export function isAppConsoleUri(uri: string | null | undefined): boolean {
   return uri === APP_CONSOLE_DOCUMENT_URI
 }
@@ -107,6 +146,10 @@ export function deriveWorkspaceDocumentTitle(uri: string): string {
   }
   if (isRunnerStatusUri(documentUri)) {
     return 'Notebook Runner Status'
+  }
+  const runnerKernels = parseRunnerKernelsDocumentUri(documentUri)
+  if (runnerKernels) {
+    return `Kernels · ${runnerKernels.runnerName}`
   }
   if (isAppConsoleUri(documentUri)) {
     return 'App Console'

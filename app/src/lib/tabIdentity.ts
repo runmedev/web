@@ -86,7 +86,7 @@ function randomIndex(maxExclusive: number): number {
   return Math.floor(Math.random() * maxExclusive);
 }
 
-function createSessionId(): string {
+export function createSessionId(): string {
   return [
     SESSION_PREFIXES[randomIndex(SESSION_PREFIXES.length)],
     SESSION_NOUNS[randomIndex(SESSION_NOUNS.length)],

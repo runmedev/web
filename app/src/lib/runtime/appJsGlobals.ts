@@ -1350,44 +1350,19 @@ export function createAppJsGlobals({
       },
     },
     jupyter: {
-      servers: {
-        get: async (runnerName: string) => {
-          if (!runnerName?.trim()) {
-            throw new Error('Usage: jupyter.servers.get(runnerName)')
-          }
-          try {
-            const servers = await jupyterManager.listServers(runnerName)
-            const message =
-              servers.length === 0
-                ? 'No Jupyter servers configured.'
-                : JSON.stringify(servers, null, 2)
-            emitLine(sendOutput, message)
-            return servers
-          } catch (error) {
-            const message = `Failed to list Jupyter servers: ${String(error)}`
-            emitLine(sendOutput, message)
-            throw error
-          }
-        },
-      },
       kernels: {
         start: async (
           runnerName: string,
-          serverName: string,
-          options?: { kernelSpec?: string; name?: string; path?: string }
+          options?: { kernelSpec?: string; name?: string; argv?: string[] }
         ) => {
-          if (!runnerName?.trim() || !serverName?.trim()) {
+          if (!runnerName?.trim()) {
             throw new Error(
-              'Usage: jupyter.kernels.start(runnerName, serverName, options?)'
+              'Usage: jupyter.kernels.start(runnerName, { kernelSpec?, name?, argv? })'
             )
           }
           try {
-            const kernel = await jupyterManager.startKernel(
-              runnerName,
-              serverName,
-              options
-            )
-            const message = `Started kernel ${kernel.id} on ${runnerName}/${serverName} (${kernel.name})`
+            const kernel = await jupyterManager.startKernel(runnerName, options)
+            const message = `Started kernel ${kernel.id} on ${runnerName} (${kernel.name})`
             emitLine(sendOutput, message)
             emitLine(sendOutput, JSON.stringify(kernel, null, 2))
             return kernel
@@ -1397,20 +1372,15 @@ export function createAppJsGlobals({
             throw error
           }
         },
-        get: async (runnerName: string, serverName: string) => {
-          if (!runnerName?.trim() || !serverName?.trim()) {
-            throw new Error(
-              'Usage: jupyter.kernels.get(runnerName, serverName)'
-            )
+        get: async (runnerName: string) => {
+          if (!runnerName?.trim()) {
+            throw new Error('Usage: jupyter.kernels.get(runnerName)')
           }
           try {
-            const kernels = await jupyterManager.listKernels(
-              runnerName,
-              serverName
-            )
+            const kernels = await jupyterManager.listKernels(runnerName)
             const message =
               kernels.length === 0
-                ? `No kernels running on ${runnerName}/${serverName}.`
+                ? `No kernels running on ${runnerName}.`
                 : JSON.stringify(kernels, null, 2)
             emitLine(sendOutput, message)
             return kernels
@@ -1420,27 +1390,15 @@ export function createAppJsGlobals({
             throw error
           }
         },
-        stop: async (
-          runnerName: string,
-          serverName: string,
-          kernelNameOrId: string
-        ) => {
-          if (
-            !runnerName?.trim() ||
-            !serverName?.trim() ||
-            !kernelNameOrId?.trim()
-          ) {
+        stop: async (runnerName: string, kernelNameOrId: string) => {
+          if (!runnerName?.trim() || !kernelNameOrId?.trim()) {
             throw new Error(
-              'Usage: jupyter.kernels.stop(runnerName, serverName, kernelNameOrId)'
+              'Usage: jupyter.kernels.stop(runnerName, kernelNameOrId)'
             )
           }
           try {
-            await jupyterManager.stopKernel(
-              runnerName,
-              serverName,
-              kernelNameOrId
-            )
-            const message = `Stopped kernel ${kernelNameOrId} on ${runnerName}/${serverName}`
+            await jupyterManager.stopKernel(runnerName, kernelNameOrId)
+            const message = `Stopped kernel ${kernelNameOrId} on ${runnerName}`
             emitLine(sendOutput, message)
             return message
           } catch (error) {
@@ -1448,6 +1406,30 @@ export function createAppJsGlobals({
             emitLine(sendOutput, message)
             throw error
           }
+        },
+        interrupt: async (runnerName: string, kernelId: string) => {
+          if (!runnerName?.trim() || !kernelId?.trim()) {
+            throw new Error(
+              'Usage: jupyter.kernels.interrupt(runnerName, kernelId)'
+            )
+          }
+          await jupyterManager.interruptKernel(runnerName, kernelId)
+          const message = `Interrupted kernel ${kernelId} on ${runnerName}`
+          emitLine(sendOutput, message)
+          return message
+        },
+        restart: async (runnerName: string, kernelId: string) => {
+          if (!runnerName?.trim() || !kernelId?.trim()) {
+            throw new Error(
+              'Usage: jupyter.kernels.restart(runnerName, kernelId)'
+            )
+          }
+          const kernel = await jupyterManager.restartKernel(
+            runnerName,
+            kernelId
+          )
+          emitLine(sendOutput, JSON.stringify(kernel, null, 2))
+          return kernel
         },
       },
     },
@@ -1631,7 +1613,7 @@ export function createAppJsGlobals({
         '  net             - Browser network helpers',
         '  explorer        - Manage workspace folders and notebooks',
         '  runmeRunners    - Configure runner endpoints',
-        '  jupyter         - Manage Jupyter servers and kernels',
+        '  jupyter         - Manage runner-owned Jupyter kernels',
         '  agent           - Configure the backend endpoint',
         '  files           - Import local files and access their bytes',
         '  drive           - List/create/copy/update Google Drive notebook files',

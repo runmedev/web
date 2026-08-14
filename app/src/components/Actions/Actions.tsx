@@ -81,6 +81,7 @@ import {
   isNotebookDocumentUri,
   isVersionInfoUri,
   isRunnerStatusUri,
+  parseRunnerKernelsDocumentUri,
   type WorkspaceDocument,
 } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
 import {
@@ -113,6 +114,7 @@ import {
 import DriveLinkStatusTab from '../DriveLinkStatusTab'
 import DriveSyncStatusTab from '../DriveSyncStatusTab'
 import RunnerStatusTab from '../RunnerStatusTab'
+import KernelStatusTab from '../KernelStatusTab'
 import { NotebookDiffContent } from '../NotebookDiff/NotebookDiffView'
 import VersionInfoTab from '../VersionInfoTab'
 import { NotebookCommentsPanel } from '../NotebookCommentsPanel'
@@ -1164,31 +1166,23 @@ export function Action({
     )
   }, [jupyterManager, jupyterRunnerNames, jupyterVersion, showKernelSelector])
   const selectedKernelKey = useMemo(() => {
-    const serverName =
-      (cell?.metadata?.[RunmeMetadataKey.JupyterServerName] as
-        | string
-        | undefined) ?? ''
     const kernelID =
       (cell?.metadata?.[RunmeMetadataKey.JupyterKernelID] as
         | string
         | undefined) ?? ''
-    if (!serverName || !kernelID) {
+    if (!kernelID) {
       return ''
     }
     const runnerName =
       (cell?.metadata?.[RunmeMetadataKey.RunnerName] as string | undefined) ??
       ''
     if (runnerName && !isAppKernelRunnerName(runnerName)) {
-      return jupyterManager.getKernelOptionKey(serverName, kernelID, runnerName)
+      return jupyterManager.getKernelOptionKey(runnerName, kernelID)
     }
     if (resolvedRunnerName) {
-      return jupyterManager.getKernelOptionKey(
-        serverName,
-        kernelID,
-        resolvedRunnerName
-      )
+      return jupyterManager.getKernelOptionKey(resolvedRunnerName, kernelID)
     }
-    return jupyterManager.getKernelOptionKey(serverName, kernelID)
+    return ''
   }, [cell, jupyterManager, resolvedRunnerName])
 
   useEffect(() => {
@@ -1211,7 +1205,6 @@ export function Action({
     }
     cellData.setJupyterKernel({
       runnerName: option.runnerName,
-      serverName: parsed.serverName,
       kernelId: parsed.kernelId,
       kernelName: option.label,
     })
@@ -1792,7 +1785,6 @@ export function Action({
                     }
                     cellData.setJupyterKernel({
                       runnerName: option.runnerName,
-                      serverName: parsed.serverName,
                       kernelId: parsed.kernelId,
                       kernelName: option.label,
                     })
@@ -2822,6 +2814,11 @@ function renderWorkspaceDocument({
 
   if (isRunnerStatusUri(document.uri)) {
     return <RunnerStatusTab />
+  }
+
+  const runnerKernels = parseRunnerKernelsDocumentUri(document.uri)
+  if (runnerKernels) {
+    return <KernelStatusTab runnerName={runnerKernels.runnerName} />
   }
 
   if (isAppConsoleUri(document.uri)) {
