@@ -22,6 +22,7 @@ type Scenario =
   | 'driveSave'
   | 'documents'
   | 'documentation'
+  | 'comments'
   | 'notebooksCreate'
   | 'notebooksEmbed'
   | 'notebooksWriteAccess'
@@ -190,6 +191,29 @@ class MockSandboxPort {
           method: 'documentation.get',
           args: ['getting-started'],
         })
+      } else if (this.scenario === 'comments') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'comments.list',
+          args: [
+            {
+              target: { uri: 'local://file/test' },
+              status: 'open',
+            },
+          ],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 2,
+          method: 'comments.resolve',
+          args: [
+            {
+              target: { uri: 'local://file/test' },
+              commentId: 'comment-1',
+            },
+          ],
+        })
       } else if (this.scenario === 'notebooksCreate') {
         this.emit({
           type: 'host-call',
@@ -335,6 +359,18 @@ class MockSandboxPort {
         this.emit({
           type: 'stdout',
           data: `${String(this.hostResults.get(2) ?? '')}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+      if (this.scenario === 'comments' && this.hostResults.has(2)) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
+        })
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(2) ?? null)}\n`,
         })
         this.emit({ type: 'exit', exitCode: 0 })
         return
@@ -1113,6 +1149,62 @@ describe('SandboxJSKernel', () => {
       'getting-started',
     ])
     expect(stdout).toContain('getting-started')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports notebook comment and anchor helpers through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'comments.list') {
+        return [
+          {
+            id: 'comment-1',
+            content: 'Clarify this.',
+            currentResolution: { status: 'exact', start: 5, end: 24 },
+          },
+        ]
+      }
+      if (method === 'comments.resolve') {
+        return { action: 'resolve' }
+      }
+      return null
+    })
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('comments'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run(
+      [
+        "const found = await comments.list({ target: { uri: 'local://file/test' }, status: 'open' });",
+        'console.log(found);',
+        "console.log(await comments.resolve({ target: { uri: 'local://file/test' }, commentId: 'comment-1' }));",
+      ].join('\n')
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith('comments.list', [
+      { target: { uri: 'local://file/test' }, status: 'open' },
+    ])
+    expect(bridgeCall).toHaveBeenCalledWith('comments.resolve', [
+      { target: { uri: 'local://file/test' }, commentId: 'comment-1' },
+    ])
+    expect(stdout).toContain('Clarify this.')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
   })

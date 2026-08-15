@@ -126,4 +126,57 @@ describe('rendered Markdown projection', () => {
       ],
     })
   })
+
+  it('respects child offsets when an annotated span is the range container', () => {
+    const source = 'one two'
+    const projection = buildRenderedMarkdownProjection(source)
+    const root = document.createElement('div')
+    root.innerHTML = [
+      '<span data-runme-projection-start="0" data-runme-projection-end="4">one </span>',
+      '<span data-runme-projection-start="4" data-runme-projection-end="7">two</span>',
+    ].join('')
+    document.body.append(root)
+    const spans = root.querySelectorAll('span')
+    const range = document.createRange()
+    range.setStart(spans[0]!, 1)
+    range.setEnd(spans[1]!, 1)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    expect(
+      captureRenderedMarkdownSelection({
+        root,
+        selection,
+        cellId: 'cell-1',
+        source,
+        projection,
+      })
+    ).toMatchObject({
+      selectors: [
+        { type: 'TextPositionSelector', start: 4, end: 7 },
+        { type: 'TextQuoteSelector', exact: 'two' },
+      ],
+    })
+
+    range.setStart(spans[0]!, 0)
+    range.setEnd(spans[1]!, 0)
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    expect(
+      captureRenderedMarkdownSelection({
+        root,
+        selection,
+        cellId: 'cell-1',
+        source,
+        projection,
+      })
+    ).toMatchObject({
+      selectors: [
+        { type: 'TextPositionSelector', start: 0, end: 4 },
+        { type: 'TextQuoteSelector', exact: 'one ' },
+      ],
+    })
+  })
 })

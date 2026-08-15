@@ -7,22 +7,28 @@ import {
   sourceRangesForProjectionRange,
 } from '../markdown/renderedMarkdownProjection'
 import {
+  type CommentAnchor,
   type CommentLocationState,
   parseCommentAnchor,
+  resolveRenderedTextAnchor,
   toCellCommentThreads,
 } from '../notebookComments'
 import type { NotebookDataLike } from './runmeConsole'
 
-export const LIST_NOTEBOOK_COMMENTS_TOOL_NAME = 'listNotebookComments'
-export const LIST_NOTEBOOK_COMMENTS_TOOL_TITLE = 'List Notebook Comments'
-export const LIST_NOTEBOOK_COMMENTS_TOOL_DESCRIPTION =
-  'List Google Drive comments for an open Runme notebook and resolve each annotation to the reviewed rendered-Markdown quote, editable source hints, and current target status.'
-
 type CommentStatusFilter = 'open' | 'resolved' | 'all'
 
 export type ListNotebookCommentsInput = {
-  uri?: string
+  target?: unknown
   status?: CommentStatusFilter
+}
+
+export type CommentMutationInput = {
+  target?: unknown
+  commentId: string
+}
+
+export type CommentReplyInput = CommentMutationInput & {
+  content: string
 }
 
 export type AgentAnnotation = {
@@ -30,6 +36,7 @@ export type AgentAnnotation = {
   content: string
   resolved: boolean
   replies: unknown[]
+  anchor: CommentAnchor | null
   originalTarget: {
     cellId: string
     surface: 'cell' | 'rendered-markdown'
@@ -44,28 +51,6 @@ export type AgentAnnotation = {
     confidence: 'exact' | 'derived' | 'unavailable'
   } | null
   currentResolution: CommentLocationState | null
-}
-
-export function buildListNotebookCommentsInputSchema(): Record<
-  string,
-  unknown
-> {
-  return {
-    type: 'object',
-    additionalProperties: false,
-    properties: {
-      uri: {
-        type: 'string',
-        description:
-          'Optional concrete local:// notebook URI. Omit to use the current notebook.',
-      },
-      status: {
-        type: 'string',
-        enum: ['open', 'resolved', 'all'],
-        description: 'Comment lifecycle filter. Defaults to open.',
-      },
-    },
-  }
 }
 
 function findCell(
@@ -94,39 +79,56 @@ async function remoteUriForNotebook(args: {
     : null
 }
 
-export async function listNotebookCommentsForAgents(args: {
-  input: ListNotebookCommentsInput
-  currentUri: string | null
-  resolveNotebook: (uri: string) => NotebookDataLike | null
-  localNotebooks: LocalNotebooks | null
-  driveNotebookStore: DriveNotebookStore | null
-}): Promise<AgentAnnotation[]> {
-  const uri = args.input.uri?.trim() || args.currentUri
-  if (!uri) {
-    throw new Error('No current notebook is available. Pass a concrete uri.')
-  }
-  const notebookData = args.resolveNotebook(uri)
+type NotebookCommentsRuntimeDependencies = {
+  resolveNotebook: (target?: unknown) => NotebookDataLike | null
+  resolveLocalNotebooks: () => LocalNotebooks | null
+  resolveDriveNotebookStore: () => DriveNotebookStore | null
+}
+
+async function resolveCommentsContext(
+  dependencies: NotebookCommentsRuntimeDependencies,
+  target?: unknown
+): Promise<{
+  notebookData: NotebookDataLike
+  driveNotebookStore: DriveNotebookStore
+  remoteUri: string
+}> {
+  const notebookData = dependencies.resolveNotebook(target)
   if (!notebookData) {
-    throw new Error(`Notebook is not open: ${uri}`)
+    throw new Error('The target notebook is not open.')
   }
-  if (!args.driveNotebookStore) {
+  const driveNotebookStore = dependencies.resolveDriveNotebookStore()
+  if (!driveNotebookStore) {
     throw new Error('Google Drive comments are unavailable.')
   }
   const remoteUri = await remoteUriForNotebook({
-    uri,
-    localNotebooks: args.localNotebooks,
+    uri: notebookData.getUri(),
+    localNotebooks: dependencies.resolveLocalNotebooks(),
   })
   if (!remoteUri) {
     throw new Error('Notebook is not backed by a Google Drive file.')
   }
-  const comments = await args.driveNotebookStore.listComments(remoteUri)
+  return {
+    notebookData,
+    driveNotebookStore,
+    remoteUri,
+  }
+}
+
+export async function listNotebookComments(
+  dependencies: NotebookCommentsRuntimeDependencies,
+  input: ListNotebookCommentsInput = {}
+): Promise<AgentAnnotation[]> {
+  const { notebookData, driveNotebookStore, remoteUri } =
+    await resolveCommentsContext(dependencies, input.target)
+  const comments = await driveNotebookStore.listComments(remoteUri)
   const notebook = notebookData.getNotebook()
   const identities = notebook.cells.map((cell) => ({
     refId: cell.refId,
     value: cell.value,
     metadata: cell.metadata,
   }))
-  const filter = args.input.status ?? 'open'
+  const filter = input.status ?? 'open'
   return toCellCommentThreads(comments, identities)
     .filter((thread) => {
       if (filter === 'all') {
@@ -157,6 +159,7 @@ export async function listNotebookCommentsForAgents(args: {
         content: thread.comment.content ?? '',
         resolved: Boolean(thread.comment.resolved),
         replies: thread.comment.replies ?? [],
+        anchor,
         originalTarget: anchor
           ? {
               cellId: anchor.cellId,
@@ -187,4 +190,82 @@ export async function listNotebookCommentsForAgents(args: {
         currentResolution: thread.location,
       } satisfies AgentAnnotation
     })
+}
+
+export function resolveCommentAnchor(args: {
+  anchor: string
+  source: string
+}): {
+  anchor: CommentAnchor
+  currentResolution: CommentLocationState
+  editableSourceRanges: Array<{ start: number; end: number }>
+} {
+  const anchor = parseCommentAnchor(args.anchor)
+  if (!anchor) {
+    throw new Error('The comment anchor is not a valid Runme anchor.')
+  }
+  if (anchor.type === 'cell') {
+    return {
+      anchor,
+      currentResolution: { status: 'cell' },
+      editableSourceRanges: [],
+    }
+  }
+  const currentResolution = resolveRenderedTextAnchor(anchor, args.source)
+  const editableSourceRanges =
+    currentResolution.status === 'exact' || currentResolution.status === 'moved'
+      ? sourceRangesForProjectionRange(
+          buildRenderedMarkdownProjection(args.source),
+          args.source,
+          currentResolution.start,
+          currentResolution.end
+        )
+      : []
+  return { anchor, currentResolution, editableSourceRanges }
+}
+
+export function createNotebookCommentsRuntimeApi(
+  dependencies: NotebookCommentsRuntimeDependencies
+) {
+  return {
+    list: (input: ListNotebookCommentsInput = {}) =>
+      listNotebookComments(dependencies, input),
+    parseAnchor: (anchor: string) => parseCommentAnchor(anchor),
+    resolveAnchor: (args: { anchor: string; source: string }) =>
+      resolveCommentAnchor(args),
+    reply: async (input: CommentReplyInput) => {
+      const { driveNotebookStore, remoteUri } = await resolveCommentsContext(
+        dependencies,
+        input.target
+      )
+      return driveNotebookStore.replyToComment(
+        remoteUri,
+        input.commentId,
+        input.content
+      )
+    },
+    resolve: async (input: CommentMutationInput) => {
+      const { driveNotebookStore, remoteUri } = await resolveCommentsContext(
+        dependencies,
+        input.target
+      )
+      return driveNotebookStore.resolveComment(remoteUri, input.commentId)
+    },
+    reopen: async (input: CommentMutationInput) => {
+      const { driveNotebookStore, remoteUri } = await resolveCommentsContext(
+        dependencies,
+        input.target
+      )
+      return driveNotebookStore.reopenComment(remoteUri, input.commentId)
+    },
+    help: () =>
+      [
+        'await comments.list({ target?, status? })',
+        'comments.parseAnchor(anchor)',
+        'comments.resolveAnchor({ anchor, source })',
+        'await comments.reply({ target?, commentId, content })',
+        'await comments.resolve({ target?, commentId })',
+        'await comments.reopen({ target?, commentId })',
+      ].join('\n'),
+  }
 }

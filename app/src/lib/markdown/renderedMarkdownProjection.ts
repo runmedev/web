@@ -314,14 +314,18 @@ function boundarySpan(
     if (!text) {
       return null
     }
+    const elementOffset =
+      container === direct
+        ? offset <= 0
+          ? 0
+          : text.data.length
+        : direction === 'start'
+          ? 0
+          : text.data.length
     return {
       span: direct,
       utf16Offset:
-        container.nodeType === Node.TEXT_NODE
-          ? offset
-          : direction === 'start'
-            ? 0
-            : text.data.length,
+        container.nodeType === Node.TEXT_NODE ? offset : elementOffset,
     }
   }
   if (!(container instanceof Element)) {
@@ -345,9 +349,7 @@ function boundarySpan(
     } else {
       candidate =
         Array.from(
-          child.querySelectorAll<HTMLElement>(
-            '[data-runme-projection-start]'
-          )
+          child.querySelectorAll<HTMLElement>('[data-runme-projection-start]')
         ).at(-1) ?? null
     }
   } else {

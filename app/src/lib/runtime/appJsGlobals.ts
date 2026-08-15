@@ -80,6 +80,7 @@ import type {
   AppKernelOpfsApi,
 } from './appKernelLowLevelApis'
 import { getJupyterManager } from './jupyterManager'
+import { createNotebookCommentsRuntimeApi } from './notebookCommentsRuntime'
 import {
   type NotebookDataLike,
   type NotebookTarget,
@@ -444,6 +445,19 @@ export function createAppJsGlobals({
     resolveDriveNotebookStore: () => appState.driveNotebookStore,
     resolveNotebook: resolveNotebook ?? (() => runme.getCurrentNotebook()),
   })
+  const commentsApi = createNotebookCommentsRuntimeApi({
+    resolveNotebook: resolveNotebook ?? (() => runme.getCurrentNotebook()),
+    resolveLocalNotebooks: () => appState.localNotebooks,
+    resolveDriveNotebookStore: () => appState.driveNotebookStore,
+  })
+  const commentsHelpers = {
+    ...commentsApi,
+    help: () => {
+      const message = commentsApi.help()
+      emitLine(sendOutput, message)
+      return message
+    },
+  }
   const jupyterManager = getJupyterManager()
 
   const openWorkspaceAndAdd = () => {
@@ -1146,6 +1160,7 @@ export function createAppJsGlobals({
     embed: embedImageForRuntime,
     documents: documentsHelpers,
     documentation: documentationHelpers,
+    comments: commentsHelpers,
     notebookDiff: notebookDiffApi,
     opfs: {
       exists: (path: string) => {
@@ -1608,6 +1623,7 @@ export function createAppJsGlobals({
         '  notebooks       - Notebook document API plus create/append helpers',
         '  documents       - List/read docs plus raw local document updates',
         '  documentation   - Read-only Runme documentation by stable name',
+        '  comments        - Read Drive comments and resolve Runme anchors',
         '  notebookDiff    - Compare revisions and resolve notebook sync conflicts',
         '  opfs            - Origin-private browser file storage helpers',
         '  net             - Browser network helpers',
@@ -1631,6 +1647,7 @@ export function createAppJsGlobals({
         '  const doc = await documents.get("local://file/...")',
         '  console.table(await documentation.list())',
         '  const guide = await documentation.get("getting-started")',
+        '  console.table(await comments.list({ status: "open" }))',
         '  await notebooks.appendCell({ kind: "code", value: "print(1)", languageId: "python" })',
         '  await embed("/tmp/screenshot.png", { alt: "Screenshot" })',
         '  const diff = await notebookDiff.diffDriveRevision({ revisionId })',

@@ -145,7 +145,6 @@ export function createCodeModeExecutor(options: {
           timeoutMs: executionTimeoutMs,
           maxOutputBytes,
           maxCodeBytes,
-          code: normalizedCode,
           codeBytes,
         },
       })
@@ -280,8 +279,8 @@ export function createCodeModeExecutor(options: {
             mode,
             timeoutMs: executionTimeoutMs,
             maxOutputBytes,
-            code: normalizedCode,
-            output,
+            outputBytes,
+            truncated,
             error: String(error),
           },
         })
@@ -298,8 +297,6 @@ export function createCodeModeExecutor(options: {
           scope: 'webmcp.execute_code',
           source,
           mode,
-          code: normalizedCode,
-          output,
           outputBytes,
           truncated,
         },
@@ -527,6 +524,18 @@ async function handleSandboxAppKernelBridgeCall({
       return globals.documentation.list()
     case 'documentation.get':
       return globals.documentation.get(String(args[0] ?? ''))
+    case 'comments.list':
+      return globals.comments.list((args[0] as any) ?? {})
+    case 'comments.parseAnchor':
+      return globals.comments.parseAnchor(String(args[0] ?? ''))
+    case 'comments.resolveAnchor':
+      return globals.comments.resolveAnchor(args[0] as any)
+    case 'comments.reply':
+      return globals.comments.reply(args[0] as any)
+    case 'comments.resolve':
+      return globals.comments.resolve(args[0] as any)
+    case 'comments.reopen':
+      return globals.comments.reopen(args[0] as any)
     case 'notebookDiff.listDriveRevisions':
       return notebookDiffApi.listDriveRevisions(args[0] as any)
     case 'notebookDiff.diffDriveRevision':

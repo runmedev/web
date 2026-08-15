@@ -5,10 +5,10 @@ order: 12
 description: >-
   Use this reference to discover supported App Console namespaces and canonical
   JavaScript helpers for notebooks, documents, runners, Drive, authentication,
-  configuration, and diagnostics. It includes practical command examples for
-  creating or opening notebooks and inspecting runtime state. Prefer a
-  task-specific guide when conceptual setup or troubleshooting context is more
-  important than API lookup.
+  comments and anchors, configuration, and diagnostics. It includes practical
+  command examples for creating or opening notebooks and inspecting runtime
+  state. Prefer a task-specific guide when conceptual setup or troubleshooting
+  context is more important than API lookup.
 ---
 
 # App Console Reference
@@ -30,6 +30,7 @@ help()
 - `notebooks`: notebook document API,
 - `documents`: raw URI-based document content API,
 - `documentation`: read-only, versioned Runme documentation discovery,
+- `comments`: Drive comment threads and Runme anchor resolution,
 - `explorer`: workspace and file-mount helpers,
 - `runmeRunners`: runner configuration,
 - `jupyter`: Jupyter server and kernel lifecycle,
@@ -50,6 +51,7 @@ runme.help()
 notebooks.help()
 documents.help()
 documentation.help()
+comments.help()
 runmeRunners.help()
 drive.help()
 agent.help()
@@ -116,6 +118,30 @@ console.log(guide)
 `await documentation.list()` returns compact `{ name, description }` entries.
 `documentation.get(name)` fetches the selected Markdown from the commit-pinned
 GitHub URL for the running app version.
+
+List and resolve comments on a Drive-backed notebook:
+
+```js
+const doc = await notebooks.get()
+const target = { uri: doc.handle.uri }
+const annotations = await comments.list({ target, status: 'open' })
+console.log(JSON.stringify(annotations, null, 2))
+```
+
+Each annotation includes the original rendered target, current editable source
+ranges, and resolution status. Use `comments.parseAnchor(anchor)` and
+`comments.resolveAnchor({ anchor, source })` for standalone anchor inspection.
+Reply, resolve, or reopen only when the user requested that collaboration
+action:
+
+```js
+await comments.reply({ target, commentId, content: 'Addressed.' })
+await comments.resolve({ target, commentId })
+await comments.reopen({ target, commentId })
+```
+
+The same namespace is available inside WebMCP `ExecuteCode`. Runme does not
+register a comment-specific WebMCP tool.
 
 Read and update raw document content, including Excalidraw scenes:
 

@@ -3,10 +3,13 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../../runme/client'
 import type { DriveNotebookStore } from '../../storage/drive'
-import { listNotebookCommentsForAgents } from './notebookCommentsTool'
+import {
+  createNotebookCommentsRuntimeApi,
+  listNotebookComments,
+} from './notebookCommentsRuntime'
 import type { NotebookDataLike } from './runmeConsole'
 
-describe('listNotebookCommentsForAgents', () => {
+describe('notebook comments runtime', () => {
   it('returns the reviewed target and editable source for agents', async () => {
     const anchor = JSON.stringify({
       runme: {
@@ -55,16 +58,18 @@ describe('listNotebookCommentsForAgents', () => {
       ],
     })
     const notebookData = {
+      getUri: () => 'https://drive.google.com/file/d/file123/view',
       getNotebook: () => notebook,
     } as unknown as NotebookDataLike
 
-    const result = await listNotebookCommentsForAgents({
-      input: {},
-      currentUri: 'https://drive.google.com/file/d/file123/view',
-      resolveNotebook: () => notebookData,
-      localNotebooks: null,
-      driveNotebookStore,
-    })
+    const result = await listNotebookComments(
+      {
+        resolveNotebook: () => notebookData,
+        resolveLocalNotebooks: () => null,
+        resolveDriveNotebookStore: () => driveNotebookStore,
+      },
+      {}
+    )
 
     expect(listComments).toHaveBeenCalledWith(
       'https://drive.google.com/file/d/file123/view'
@@ -73,6 +78,10 @@ describe('listNotebookCommentsForAgents', () => {
       expect.objectContaining({
         id: 'comment-1',
         content: 'Clarify this.',
+        anchor: expect.objectContaining({
+          type: 'cell-text',
+          cellId: 'cell-1',
+        }),
         originalTarget: expect.objectContaining({
           cellId: 'cell-1',
           surface: 'rendered-markdown',
@@ -91,5 +100,33 @@ describe('listNotebookCommentsForAgents', () => {
         currentResolution: { status: 'exact', start: 5, end: 24 },
       }),
     ])
+  })
+
+  it('exposes Drive comment lifecycle operations through one runtime API', async () => {
+    const replyToComment = vi.fn(async () => ({ id: 'reply-1' }))
+    const resolveComment = vi.fn(async () => ({ action: 'resolve' }))
+    const reopenComment = vi.fn(async () => ({ action: 'reopen' }))
+    const driveNotebookStore = {
+      replyToComment,
+      resolveComment,
+      reopenComment,
+    } as unknown as DriveNotebookStore
+    const notebookData = {
+      getUri: () => 'https://drive.google.com/file/d/file123/view',
+    } as unknown as NotebookDataLike
+    const comments = createNotebookCommentsRuntimeApi({
+      resolveNotebook: () => notebookData,
+      resolveLocalNotebooks: () => null,
+      resolveDriveNotebookStore: () => driveNotebookStore,
+    })
+
+    await comments.reply({ commentId: 'comment-1', content: 'Done.' })
+    await comments.resolve({ commentId: 'comment-1' })
+    await comments.reopen({ commentId: 'comment-1' })
+
+    const uri = 'https://drive.google.com/file/d/file123/view'
+    expect(replyToComment).toHaveBeenCalledWith(uri, 'comment-1', 'Done.')
+    expect(resolveComment).toHaveBeenCalledWith(uri, 'comment-1')
+    expect(reopenComment).toHaveBeenCalledWith(uri, 'comment-1')
   })
 })

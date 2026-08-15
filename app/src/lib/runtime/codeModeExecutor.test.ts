@@ -61,10 +61,10 @@ describe('codeModeExecutor', () => {
     const completed = infoSpy.mock.calls.find(
       ([message]) => message === 'Code mode execution completed'
     )
-    expect(started?.[1]?.attrs?.code).toContain("console.log('one')")
-    expect(completed?.[1]?.attrs?.output).toContain('one')
-    expect(completed?.[1]?.attrs?.output).toContain('two')
-    expect(completed?.[1]?.attrs?.output).toContain('three')
+    expect(started?.[1]?.attrs?.code).toBeUndefined()
+    expect(started?.[1]?.attrs?.codeBytes).toBeGreaterThan(0)
+    expect(completed?.[1]?.attrs?.output).toBeUndefined()
+    expect(completed?.[1]?.attrs?.outputBytes).toBeGreaterThan(0)
     infoSpy.mockRestore()
   })
 

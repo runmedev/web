@@ -107,6 +107,12 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'documents.update',
   'documentation.list',
   'documentation.get',
+  'comments.list',
+  'comments.parseAnchor',
+  'comments.resolveAnchor',
+  'comments.reply',
+  'comments.resolve',
+  'comments.reopen',
   ...SANDBOX_NOTEBOOKS_API_METHODS,
   'notebooks.createLocal',
   'notebooks.appendCell',
@@ -378,6 +384,22 @@ export function buildSandboxSrcDoc(options: {
             consoleProxy.log("await documentation.get(name)");
           },
         };
+        const comments = {
+          list: (args) => hostCall("comments.list", [args]),
+          parseAnchor: (anchor) => hostCall("comments.parseAnchor", [anchor]),
+          resolveAnchor: (args) => hostCall("comments.resolveAnchor", [args]),
+          reply: (args) => hostCall("comments.reply", [args]),
+          resolve: (args) => hostCall("comments.resolve", [args]),
+          reopen: (args) => hostCall("comments.reopen", [args]),
+          help: () => {
+            consoleProxy.log("await comments.list({ target?, status? })");
+            consoleProxy.log("await comments.parseAnchor(anchor)");
+            consoleProxy.log("await comments.resolveAnchor({ anchor, source })");
+            consoleProxy.log("await comments.reply({ target?, commentId, content })");
+            consoleProxy.log("await comments.resolve({ target?, commentId })");
+            consoleProxy.log("await comments.reopen({ target?, commentId })");
+          },
+        };
         const notebookDiff = {
           listDriveRevisions: (target) => hostCall("notebookDiff.listDriveRevisions", [target]),
           diffDriveRevision: (args) => hostCall("notebookDiff.diffDriveRevision", [args]),
@@ -468,6 +490,12 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- documents.update(uri, content, { mimeType?, expectedVersion?, flush? })");
           consoleProxy.log("- await documentation.list()");
           consoleProxy.log("- await documentation.get(name)");
+          consoleProxy.log("- await comments.list({ target?, status? })");
+          consoleProxy.log("- await comments.parseAnchor(anchor)");
+          consoleProxy.log("- await comments.resolveAnchor({ anchor, source })");
+          consoleProxy.log("- await comments.reply({ target?, commentId, content })");
+          consoleProxy.log("- await comments.resolve({ target?, commentId })");
+          consoleProxy.log("- await comments.reopen({ target?, commentId })");
           consoleProxy.log("- notebookDiff.listDriveRevisions([target])");
           consoleProxy.log("- notebookDiff.diffDriveRevision({ target?, revisionId, includeOutputs?, includeMetadata? })");
           consoleProxy.log("- notebookDiff.openDiffTab(diff)");
@@ -501,6 +529,7 @@ export function buildSandboxSrcDoc(options: {
               "notebooks",
               "documents",
               "documentation",
+              "comments",
               "notebookDiff",
               "app",
               "explorer",
@@ -509,7 +538,7 @@ export function buildSandboxSrcDoc(options: {
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, tour, opfs, net, embed, notebooks, documents, documentation, notebookDiff, app, explorer, credentials, drive, help);
+            await runner(consoleProxy, runme, tour, opfs, net, embed, notebooks, documents, documentation, comments, notebookDiff, app, explorer, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });

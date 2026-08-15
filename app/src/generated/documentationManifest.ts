@@ -102,7 +102,7 @@ export const DOCUMENTATION_MANIFEST = [
     name: 'webmcp-external-control',
     title: 'WebMCP External Control',
     description:
-      'Use this guide when an external AI agent needs to inspect, edit, or execute a Runme notebook through WebMCP. It defines the safe tab and session selection workflow, stable notebook targeting, Drive-backed notebook lookup, and recovery from partial notebook mutations. This is the primary guide for automating an open Runme tab rather than operating it manually.',
+      'Use this guide when an external AI agent needs to inspect, edit, or execute a Runme notebook through WebMCP. It defines the safe tab and session selection workflow, stable notebook targeting, Drive comments and anchors, Drive-backed notebook lookup, and recovery from partial notebook mutations. This is the primary guide for automating an open Runme tab rather than operating it manually.',
     order: 11,
     path: 'docs/11-webmcp-external-control.md',
   },
@@ -110,7 +110,7 @@ export const DOCUMENTATION_MANIFEST = [
     name: 'app-console-reference',
     title: 'App Console Reference',
     description:
-      'Use this reference to discover supported App Console namespaces and canonical JavaScript helpers for notebooks, documents, runners, Drive, authentication, configuration, and diagnostics. It includes practical command examples for creating or opening notebooks and inspecting runtime state. Prefer a task-specific guide when conceptual setup or troubleshooting context is more important than API lookup.',
+      'Use this reference to discover supported App Console namespaces and canonical JavaScript helpers for notebooks, documents, runners, Drive, authentication, comments and anchors, configuration, and diagnostics. It includes practical command examples for creating or opening notebooks and inspecting runtime state. Prefer a task-specific guide when conceptual setup or troubleshooting context is more important than API lookup.',
     order: 12,
     path: 'docs/13-app-console-reference.md',
   },
