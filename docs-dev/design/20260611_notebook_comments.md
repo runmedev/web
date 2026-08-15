@@ -278,13 +278,16 @@ under format-specific field names. Cell kind is not part of identity. New
 anchors store only the opaque canonical `cellId` and do not include
 `cellIdKind`.
 
-The reader continues accepting version 1 anchors with `cellIdKind`. It resolves
-legacy `code_<id>` and `markup_<id>` values through the notebook's migration
-aliases. Exact canonical matches win. An alias that maps to multiple cells is
-shown as ambiguous instead of being silently retargeted.
+The reader continues accepting the version 1 anchor shape, but treats its
+`cellId` as an opaque identifier and ignores `cellIdKind`. Both anchor versions
+resolve by exact `Cell.refId` equality only. Runme does not strip or synthesize
+`code_` or `markup_` prefixes and does not consult legacy alias metadata.
 
-If a cell is deleted, keep the Drive comment. The UI should render it as an
-orphaned thread if the anchor no longer resolves.
+If no cell has the exact anchored ID, keep the Drive comment and render it as
+an orphaned ("Deleted cell") thread. This includes comments whose old anchor is
+`markup_intro` when the current notebook contains only `intro`. This simple,
+consistent behavior may orphan a small number of existing comments, which is
+an accepted compatibility tradeoff.
 
 If a cell is moved, the thread follows the cell id.
 

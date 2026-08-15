@@ -9,7 +9,6 @@ type CommentsPanelItem = {
   key: string
   cellId: string | null
   orphaned: boolean
-  ambiguous: boolean
   threads: CellCommentThread[]
   draftCellId?: string
 }
@@ -73,8 +72,7 @@ export function NotebookCommentsPanel({
       return null
     }
     const activeItem = panelItems.find(
-      (item) =>
-        item.cellId === activeCellId && !item.orphaned && !item.ambiguous
+      (item) => item.cellId === activeCellId && !item.orphaned
     )
     return activeItem?.key ?? null
   }, [activeCellId, panelItems])
@@ -103,8 +101,7 @@ export function NotebookCommentsPanel({
     }
     const targetCommentId = findReplyTargetCommentId(
       sortedThreads.filter(
-        (thread) =>
-          thread.cellId === draftCellId && !thread.orphaned && !thread.ambiguous
+        (thread) => thread.cellId === draftCellId && !thread.orphaned
       )
     )
     const submit = targetCommentId
@@ -121,7 +118,7 @@ export function NotebookCommentsPanel({
     const targetCommentId = findReplyTargetCommentId(item.threads)
     const submit = targetCommentId
       ? onReply(targetCommentId, content)
-      : item.cellId && !item.orphaned && !item.ambiguous
+      : item.cellId && !item.orphaned
         ? onCreateComment(item.cellId, content)
         : Promise.resolve()
     void submit.then(() => {
@@ -236,16 +233,10 @@ export function NotebookCommentsPanel({
               const isActiveThread =
                 activeThreadKey === item.key ||
                 Boolean(
-                  activeCellId &&
-                    activeCellId === item.cellId &&
-                    !item.orphaned &&
-                    !item.ambiguous
+                  activeCellId && activeCellId === item.cellId && !item.orphaned
                 )
               const isActiveCell = Boolean(
-                activeCellId &&
-                  item.cellId === activeCellId &&
-                  !item.orphaned &&
-                  !item.ambiguous
+                activeCellId && item.cellId === activeCellId && !item.orphaned
               )
               const canEditThread = isActiveThread && !item.draftCellId
               const replyDraft = replyDrafts[item.key] ?? ''
@@ -265,7 +256,7 @@ export function NotebookCommentsPanel({
                   }`}
                   onClick={() => {
                     setActiveThreadKey(item.key)
-                    if (item.cellId && !item.orphaned && !item.ambiguous) {
+                    if (item.cellId && !item.orphaned) {
                       onSelectCell(item.cellId)
                     }
                   }}
@@ -278,7 +269,7 @@ export function NotebookCommentsPanel({
                     }
                     event.preventDefault()
                     setActiveThreadKey(item.key)
-                    if (item.cellId && !item.orphaned && !item.ambiguous) {
+                    if (item.cellId && !item.orphaned) {
                       onSelectCell(item.cellId)
                     }
                   }}
@@ -293,7 +284,7 @@ export function NotebookCommentsPanel({
                       cellLabels={cellLabels}
                       isActiveCell={isActiveCell}
                       onSelectCell={() => {
-                        if (item.cellId && !item.orphaned && !item.ambiguous) {
+                        if (item.cellId && !item.orphaned) {
                           setActiveThreadKey(item.key)
                           onSelectCell(item.cellId)
                         }
@@ -469,7 +460,7 @@ function ThreadLocation({
   isActiveCell: boolean
   onSelectCell: () => void
 }) {
-  if (item.cellId && !item.orphaned && !item.ambiguous) {
+  if (item.cellId && !item.orphaned) {
     return (
       <button
         type="button"
@@ -485,13 +476,6 @@ function ThreadLocation({
       >
         {cellLabels.get(item.cellId) ?? 'Cell'}
       </button>
-    )
-  }
-  if (item.cellId && item.ambiguous) {
-    return (
-      <div className="text-xs font-medium text-nb-text-faint">
-        Ambiguous cell
-      </div>
     )
   }
   if (item.cellId && item.orphaned) {
@@ -614,7 +598,7 @@ function sortCommentPanelItems(
   const itemsByCell = new Map<string, CommentsPanelItem>()
 
   sortedThreads.forEach((thread) => {
-    if (thread.cellId && !thread.orphaned && !thread.ambiguous) {
+    if (thread.cellId && !thread.orphaned) {
       const key = getCellThreadKey(thread.cellId)
       let item = itemsByCell.get(key)
       if (!item) {
@@ -623,7 +607,6 @@ function sortCommentPanelItems(
           key,
           cellId: thread.cellId,
           orphaned: false,
-          ambiguous: false,
           threads: [],
         }
         itemsByCell.set(key, item)
@@ -638,7 +621,6 @@ function sortCommentPanelItems(
       key: `thread:${getThreadKey(thread)}`,
       cellId: thread.cellId,
       orphaned: thread.orphaned,
-      ambiguous: thread.ambiguous,
       threads: [thread],
     })
   })
@@ -660,12 +642,11 @@ function sortCommentPanelItems(
     key: draftKey,
     cellId: draftCellId,
     orphaned: false,
-    ambiguous: false,
     threads: [],
     draftCellId,
   }
   const insertionIndex = items.findIndex((item) => {
-    if (!item.cellId || item.orphaned || item.ambiguous) {
+    if (!item.cellId || item.orphaned) {
       return true
     }
     return cellIndex(cellLabels, item.cellId) > draftIndex
@@ -682,16 +663,13 @@ function sortCommentPanelItems(
 }
 
 function threadGroup(thread: CellCommentThread): number {
-  if (thread.cellId && !thread.orphaned && !thread.ambiguous) {
+  if (thread.cellId && !thread.orphaned) {
     return 0
   }
-  if (thread.ambiguous) {
+  if (thread.orphaned) {
     return 1
   }
-  if (thread.orphaned) {
-    return 2
-  }
-  return 3
+  return 2
 }
 
 function cellIndex(cellLabels: Map<string, string>, cellId: string): number {

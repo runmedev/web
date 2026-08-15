@@ -1054,9 +1054,6 @@ describe('LocalNotebooks ipynb conversion', () => {
     const loaded = await store.load('local://file/cached-ipynb')
 
     expect(loaded.cells[0]?.refId).toBe('intro')
-    expect(
-      loaded.cells[0]?.metadata['runme.dev/legacyCellRefIds']
-    ).toBeUndefined()
   })
 
   it('keeps browser-local ipynb shadows current and accepts raw ipynb updates', async () => {

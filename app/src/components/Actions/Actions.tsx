@@ -2003,9 +2003,7 @@ function NotebookTabContent({
     () =>
       cellDatas.flatMap((cellData) => {
         const cell = cellData.snapshot
-        return cell?.refId
-          ? [{ refId: cell.refId, metadata: cell.metadata }]
-          : []
+        return cell?.refId ? [{ refId: cell.refId }] : []
       }),
     [cellDatas]
   )

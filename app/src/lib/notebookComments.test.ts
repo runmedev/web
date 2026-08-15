@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 
-import { LEGACY_CELL_REF_IDS_METADATA_KEY } from './cellIdentity'
 import {
   createCellCommentAnchor,
   groupCommentsByCell,
@@ -31,7 +30,6 @@ describe('notebook comment anchors', () => {
       type: 'cell',
       cellId: 'cell-legacy',
       version: 1,
-      cellIdKind: 'runme-ref-id',
     })
   })
 
@@ -65,30 +63,33 @@ describe('notebook comment anchors', () => {
   })
 
   it('groups only unresolved cell comments', () => {
-    const grouped = groupCommentsByCell([
-      {
-        id: 'comment-1',
-        anchor: createCellCommentAnchor('cell-1'),
-        content: 'open',
-      },
-      {
-        id: 'comment-2',
-        anchor: createCellCommentAnchor('cell-1'),
-        resolved: true,
-        content: 'resolved',
-      },
-      {
-        id: 'comment-3',
-        content: 'unanchored',
-      },
-    ])
+    const grouped = groupCommentsByCell(
+      [
+        {
+          id: 'comment-1',
+          anchor: createCellCommentAnchor('cell-1'),
+          content: 'open',
+        },
+        {
+          id: 'comment-2',
+          anchor: createCellCommentAnchor('cell-1'),
+          resolved: true,
+          content: 'resolved',
+        },
+        {
+          id: 'comment-3',
+          content: 'unanchored',
+        },
+      ],
+      [{ refId: 'cell-1' }]
+    )
 
     expect(grouped.get('cell-1')?.map((comment) => comment.id)).toEqual([
       'comment-1',
     ])
   })
 
-  it('resolves legacy kind-prefixed anchors to canonical cell ids', () => {
+  it('treats legacy anchor cell ids as opaque and orphans missing ids', () => {
     const comments = [
       {
         id: 'legacy-comment',
@@ -104,19 +105,16 @@ describe('notebook comment anchors', () => {
       },
     ]
 
-    expect(
-      groupCommentsByCell(comments, [{ refId: 'intro' }]).get('intro')
-    ).toHaveLength(1)
+    expect(groupCommentsByCell(comments, [{ refId: 'intro' }]).size).toBe(0)
     expect(
       toCellCommentThreads(comments, [{ refId: 'intro' }])[0]
     ).toMatchObject({
-      cellId: 'intro',
-      orphaned: false,
-      ambiguous: false,
+      cellId: 'markup_intro',
+      orphaned: true,
     })
   })
 
-  it('prefers exact canonical ids over legacy alias interpretations', () => {
+  it('resolves an exact cell id even when it has a historical prefix', () => {
     const comments = [
       {
         id: 'exact-comment',
@@ -129,31 +127,38 @@ describe('notebook comment anchors', () => {
     expect(toCellCommentThreads(comments, cells)[0]).toMatchObject({
       cellId: 'markup_intro',
       orphaned: false,
-      ambiguous: false,
     })
   })
 
-  it('surfaces ambiguous legacy aliases instead of grouping them', () => {
+  it('does not reinterpret missing v2 canonical ids as legacy aliases', () => {
     const comments = [
       {
-        id: 'ambiguous-comment',
-        anchor: createCellCommentAnchor('legacy id'),
-        content: 'ambiguous',
+        id: 'missing-v2-comment',
+        anchor: createCellCommentAnchor('markup_intro'),
+        content: 'missing canonical target',
       },
     ]
-    const metadata = {
-      [LEGACY_CELL_REF_IDS_METADATA_KEY]: JSON.stringify(['legacy id']),
-    }
-    const cells = [
-      { refId: 'first', metadata },
-      { refId: 'second', metadata },
-    ]
+    const cells = [{ refId: 'intro' }]
 
     expect(groupCommentsByCell(comments, cells).size).toBe(0)
     expect(toCellCommentThreads(comments, cells)[0]).toMatchObject({
-      cellId: 'legacy id',
-      orphaned: false,
-      ambiguous: true,
+      cellId: 'markup_intro',
+      orphaned: true,
     })
+  })
+
+  it('marks cell comments as orphaned when the notebook has no cells', () => {
+    const [thread] = toCellCommentThreads(
+      [
+        {
+          id: 'comment-with-no-target',
+          anchor: createCellCommentAnchor('cell-1'),
+          content: 'missing target',
+        },
+      ],
+      []
+    )
+
+    expect(thread).toMatchObject({ cellId: 'cell-1', orphaned: true })
   })
 })
