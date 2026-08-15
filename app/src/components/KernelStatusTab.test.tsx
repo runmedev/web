@@ -108,9 +108,13 @@ describe('KernelStatusTab', () => {
   })
 
   it('loads and displays runner-owned kernels', async () => {
-    render(<KernelStatusTab runnerName="default" />)
+    const { container } = render(<KernelStatusTab runnerName="default" />)
 
     await waitFor(() => expect(listKernels).toHaveBeenCalledWith('default'))
+    expect(container.querySelector('#kernel-status-tab')).toBeTruthy()
+    expect(container.querySelector('#kernel-start-panel')).toBeTruthy()
+    expect(container.querySelector('#kernel-list-panel')).toBeTruthy()
+    expect(container.querySelector('#kernel-actions-kernel-1')).toBeTruthy()
     expect(screen.getByText('Jupyter Kernels')).toBeTruthy()
     expect(screen.getByText('analysis')).toBeTruthy()
     expect(screen.getByText('kernel-1')).toBeTruthy()

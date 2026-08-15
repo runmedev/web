@@ -27,6 +27,14 @@ const mockRunner = {
   interceptors: [],
 };
 
+const tokenMocks = vi.hoisted(() => ({
+  getAuthData: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("./token", () => ({
+  getAuthData: tokenMocks.getAuthData,
+}));
+
 vi.mock("@runmedev/renderers", () => {
   class FakeStreams {
     stdout = new Subject<Uint8Array>();
@@ -260,6 +268,7 @@ afterEach(async () => {
   appState.setOpenNotebookHandler(null);
   runnerStore.clear();
   defaultRunnerName = null;
+  tokenMocks.getAuthData.mockReset().mockResolvedValue(null);
   __resetTabIdForTests();
   window.history.replaceState(null, "", "/");
 });
@@ -598,6 +607,50 @@ describe("NotebookData persistence", () => {
 });
 
 describe("NotebookData.runCodeCell", () => {
+  it("cancels a Jupyter launch that is waiting for authentication", async () => {
+    let resolveAuth: ((value: null) => void) | undefined;
+    tokenMocks.getAuthData.mockReturnValueOnce(
+      new Promise<null>((resolve) => {
+        resolveAuth = resolve;
+      }),
+    );
+    const WebSocketConstructor = vi.fn();
+    vi.stubGlobal("WebSocket", WebSocketConstructor);
+
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-jupyter-auth-pending",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "jupyter",
+      outputs: [],
+      metadata: {
+        [RunmeMetadataKey.JupyterKernelID]: "kernel-1",
+        [RunmeMetadataKey.JupyterKernelName]: "analysis",
+      },
+      value: "print('not sent')",
+    });
+    const model = new NotebookData({
+      notebook: create(parser_pb.NotebookSchema, { cells: [cell] }),
+      uri: "nb://test",
+      name: "test",
+      notebookStore: null,
+      loaded: true,
+    });
+
+    expect(model.runCodeCell(cell)).toBe("run-generated");
+    model.setReleasePending(true);
+    await model.cancelActiveExecutions();
+    resolveAuth?.(null);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(WebSocketConstructor).not.toHaveBeenCalled();
+    const updated = model.getCellSnapshot(cell.refId);
+    expect(updated?.metadata?.[RunmeMetadataKey.ExitCode]).toBe("130");
+    expect(updated?.metadata?.[RunmeMetadataKey.ExecutionState]).toBe(
+      RunmeExecutionState.Completed,
+    );
+  });
+
   it("blocks mutations and cancels active streams during lock release", async () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-cancel",

@@ -1,195 +1,134 @@
-# CUJ: Jupyter Servers and Kernels as Runners
+# CUJ: Direct Jupyter Kernels as Runners
 
 ## Goal
 
-Define an end-to-end user journey where:
-
-1. User starts a Jupyter server from a Runme notebook cell.
-2. User syncs running Jupyter server metadata into Runme config from a notebook cell.
-3. User starts/stops kernels via Runme APIs.
-4. Kernels appear as selectable runners for notebook cells.
+Verify the end-to-end journey in which Runme starts an `ipykernel` process,
+bridges its ZeroMQ channels to the browser, and exposes that kernel as a target
+for notebook cells. A separate Jupyter Server is not part of this flow.
 
 ## Preconditions
 
-- Runme web UI is running at `http://localhost:5173`.
-- Runme backend/agent is running at `http://localhost:9977`.
-- Python environment includes `jupyter` and `ipykernel`.
-- App Console (JS/AppKernel) is available.
-- Local shell runner (`local`) is configured and can execute bash cells.
+- Runme Web is running at `http://localhost:5173`.
+- A Runme backend with the direct Jupyter kernel API is running at
+  `http://localhost:9977`.
+- The signed-in user has `RunnerUserRole` permission on that backend.
+- The runner host has Python and `ipykernel` installed. Set
+  `CUJ_JUPYTER_PYTHON` when the desired interpreter is not `python3`.
+- App Console (AppKernel JavaScript) is available.
+- A runner named `local` points at the backend and is the default runner.
 
-## Data Model Assumption
+## Direct Kernel Model
 
-- Jupyter server records include:
-  - `name` (for example `port-8888`)
-  - `runner` (Runme host/proxy runner, for example `local`)
-  - `baseUrl` (for example `http://127.0.0.1:8888`)
-  - `token`
-- Kernels are treated as runners in notebook execution UX.
-- A kernel runner belongs to one Jupyter server record.
+- The browser addresses kernels through a Runme runner, not through a Jupyter
+  Server record.
+- The start request supplies the complete kernel command as `argv`. It contains
+  exactly one `{connection_file}` placeholder, which Runme replaces with the
+  generated connection-file path.
+- The returned kernel ID is the durable API identifier. The optional name is a
+  human-friendly alias used by the UI.
+- Cell metadata stores the runner name, kernel ID, and kernel name. It does not
+  store a Jupyter Server name.
+- Runme owns the kernel process, connection file, HMAC key, ZeroMQ sockets, and
+  WebSocket-to-ZeroMQ bridge.
 
-## Step-by-Step User Flow (What User Does and Sees)
+## Step-by-Step User Flow
 
-1. User opens or creates a Runme notebook `jupyter-control.runme.md`.
-2. User adds a bash cell and runs:
-
-```bash
-jupyter server --no-browser --port=8888 > /tmp/jupyter-server.log 2>&1 &
-echo $! > /tmp/jupyter-server.pid
-sleep 2
-```
-
-3. User sees the cell complete successfully and server PID written to `/tmp/jupyter-server.pid`.
-4. In the same control notebook, user adds another bash cell and runs:
-
-```bash
-python - <<'PY'
-import json
-import os
-import pathlib
-import subprocess
-from urllib.parse import urlparse, urlunparse
-
-config_dir = os.environ["RUNME_CONFIG_DIR"]
-jupyter_dir = pathlib.Path(config_dir) / "jupyter"
-jupyter_dir.mkdir(parents=True, exist_ok=True)
-
-servers = json.loads(
-    subprocess.check_output(["jupyter", "server", "list", "--jsonlist"], text=True)
-)
-
-for server in servers:
-    parsed = urlparse(server["url"])
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    name = f"port-{port}"
-    path = parsed.path or "/"
-    if not path.endswith("/"):
-        path += "/"
-    base_url = urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
-
-    payload = {
-        "runner": "local",
-        "base_url": base_url,
-    }
-    if server.get("token"):
-        payload["token"] = server["token"]
-
-    output_path = jupyter_dir / f"{name}.json"
-    output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    os.chmod(output_path, 0o600)
-    print(f"synced {name} -> {output_path}")
-PY
-```
-
-5. User sees output containing `synced port-8888 -> ${RUNME_CONFIG_DIR}/jupyter/port-8888.json`.
-6. User opens Runme App Console.
-7. User ensures host runner exists for proxying (example):
+1. The user opens a notebook containing two Jupyter cells.
+2. In App Console, the user ensures the runner exists:
 
 ```javascript
-app.runners.update("local", "ws://localhost:9977/ws");
-app.runners.setDefault("local");
+app.runners.update('local', 'ws://localhost:9977/ws')
+app.runners.setDefault('local')
 ```
 
-8. User verifies registered servers:
+3. The user starts a direct kernel. To use a virtual environment, the first
+   argument is the absolute path to that environment's Python executable:
 
 ```javascript
-jupyter.servers.get();
+const kernel = await jupyter.kernels.start('local', {
+  kernelSpec: 'python3',
+  name: 'py3-local-1',
+  argv: [
+    '/workspace/.venv/bin/python',
+    '-m',
+    'ipykernel_launcher',
+    '-f',
+    '{connection_file}',
+  ],
+})
 ```
 
-9. User sees `port-8888` in server list with runner `local`.
-10. User starts a kernel on that server:
+4. The user lists kernels owned by the runner:
 
 ```javascript
-jupyter.kernels.start("port-8888", {
-  kernelSpec: "python3",
-  name: "py3-local-1"
-});
+await jupyter.kernels.get('local')
 ```
 
-11. User verifies kernel list:
-
-```javascript
-jupyter.kernels.get("port-8888");
-```
-
-12. User sees kernel `py3-local-1` in running state with a kernel id.
-13. User opens a notebook with two Python cells:
+5. The result includes `kernel.id`, the name `py3-local-1`, and its current
+   execution state.
+6. For both Jupyter cells, the user selects runner `local` and kernel
+   `py3-local-1`.
+7. The first cell defines state:
 
 ```python
-# Cell A
 shared_value = 42
 print("set", shared_value)
 ```
 
+8. The first cell completes and displays `set 42`.
+9. The second cell reads the same state:
+
 ```python
-# Cell B
 print("read", shared_value)
 ```
 
-14. For Cell A, user configures execution selectors:
-   - Language: `ipython`
-   - Runner: `local` (host/proxy runner)
-   - Kernel: `py3-local-1` (kernel runner)
-15. User runs Cell A and sees status transition idle -> running -> completed.
-16. User sees Cell A output: `set 42`.
-17. For Cell B, user sets the same execution selectors:
-   - Language: `ipython`
-   - Runner: `local`
-   - Kernel: `py3-local-1`
-18. User runs Cell B.
-19. User sees Cell B output: `read 42` (variable defined in Cell A is available).
-20. User opens Kernel dropdown for another cell and sees `py3-local-1` available.
-21. User stops the kernel in App Console:
+10. The second cell completes and displays `read 42`, proving both executions
+    used the same kernel.
+11. The user stops the kernel by its returned ID:
 
 ```javascript
-jupyter.kernels.stop("port-8888", "py3-local-1");
+await jupyter.kernels.stop('local', kernel.id)
 ```
 
-22. User verifies kernel is stopped:
+12. A subsequent `jupyter.kernels.get("local")` no longer returns that kernel.
 
-```javascript
-jupyter.kernels.get("port-8888");
-```
-
-23. User sees `py3-local-1` as stopped/absent from active kernel list.
-24. User returns to `jupyter-control.runme.md`, adds a bash cell, and runs:
-
-```bash
-jupyter server stop 8888
-```
-
-25. User sees server stop confirmation in cell output.
+The same lifecycle is available through the runner-status Kernels tab, which
+can start, refresh, restart, and stop direct kernels without using App Console.
 
 ## Machine-Verifiable Acceptance Criteria
 
-- [ ] Jupyter server start command runs from a notebook bash cell and exits successfully.
-- [ ] Sync bash cell runs `jupyter server list --jsonlist` and writes `${RUNME_CONFIG_DIR}/jupyter/port-8888.json`.
-- [ ] Sync bash cell writes config with restrictive permissions.
-- [ ] `jupyter.servers.get()` includes `port-8888` with runner binding.
-- [ ] App Console accepts `jupyter.kernels.start(server, options)` and returns kernel metadata.
-- [ ] `jupyter.kernels.get(server)` shows started kernel state and id.
-- [ ] Cell execution UI exposes `Language` selector and supports `ipython`.
-- [ ] Cell execution UI exposes `Runner` selector and supports `local`.
-- [ ] Cell execution UI exposes `Kernel` selector and supports `py3-local-1`.
-- [ ] Running Cell A with selected kernel returns `set 42`.
-- [ ] Running Cell B with same selected kernel returns `read 42`.
-- [ ] Cell B succeeds without `NameError`, proving shared REPL state across cells.
-- [ ] Kernel appears in Kernel selector as a runnable target.
-- [ ] `jupyter.kernels.stop(server, kernel)` removes/stops it for future runs.
-- [ ] `jupyter server stop 8888` runs from a notebook bash cell and reports successful stop.
-- [ ] Browser only talks to Runme; Runme handles Jupyter HTTP/WebSocket interactions.
+- [ ] The scenario verifies the configured Python can import `ipykernel`.
+- [ ] `jupyter.kernels.start(runner, options)` sends the full `argv` command and
+      returns kernel metadata with an ID.
+- [ ] `jupyter.kernels.get(runner)` includes the new kernel.
+- [ ] No `jupyter.servers.*` method or server-scoped kernel argument is used.
+- [ ] The cell UI exposes runner and kernel selectors.
+- [ ] Selecting a kernel persists runner name, kernel ID, and kernel name, with
+      no Jupyter Server name.
+- [ ] Cell A displays `set 42`.
+- [ ] Cell B displays `read 42` without `NameError`.
+- [ ] `jupyter.kernels.stop(runner, kernelID)` stops the selected kernel.
+- [ ] Browser requests only target Runme's direct kernel HTTP and WebSocket
+      endpoints; Runme handles kernel process and ZeroMQ communication.
+- [ ] The scenario emits machine-readable probes plus screenshots or video in
+      `app/test/browser/test-output/`.
 
-## Negative Path
+## Negative Paths
 
-1. User registers server with invalid token.
-2. User runs `jupyter.kernels.start(...)` or executes a cell.
-3. User sees explicit auth error and no kernel is marked running.
-
-4. User stops Jupyter server but keeps stale kernel selection in notebook.
-5. User runs the cell.
-6. User sees connection failure with a recovery hint to restart server or rebind kernel.
+1. **Unauthorized start:** use a user without `RunnerUserRole`; kernel creation
+   fails with a permission error and no kernel is registered.
+2. **Invalid command:** omit `{connection_file}` or provide an executable that
+   does not exist; creation fails with a useful error and no live kernel remains.
+3. **Stale selection:** stop a selected kernel, then execute a cell that still
+   references its ID; execution fails clearly and the user can select or start a
+   replacement kernel.
+4. **Ownership release during authentication:** release the notebook write lock
+   while authorization is pending; the delayed launch must not open a WebSocket
+   or mutate the cancelled cell.
 
 ## Out of Scope (v0)
 
-- Runme launching Jupyter server process.
-- Rich output parity (widgets/comm channels/custom MIME behavior).
-- Multi-user access policy and hardening.
+- Jupyter Server discovery, registration, or HTTP proxying.
+- Widget and arbitrary binary-buffer parity beyond the supported channels
+  protocol.
+- Automatically discovering every Python virtual environment on a runner.

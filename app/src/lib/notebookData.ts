@@ -516,6 +516,13 @@ export class NotebookData {
       kernelID: string
     }
   >()
+  private pendingJupyterExecutions = new Map<
+    string,
+    {
+      runID: string
+      generation: number
+    }
+  >()
   private activeAppKernelExecutions = new Map<
     string,
     {
@@ -834,6 +841,7 @@ export class NotebookData {
     const activeRefIds = new Set<string>([
       ...this.activeStreams.keys(),
       ...this.activeJupyterSockets.keys(),
+      ...this.pendingJupyterExecutions.keys(),
       ...this.activeAppKernelExecutions.keys(),
     ])
 
@@ -849,6 +857,7 @@ export class NotebookData {
 
     const jupyterExecutions = Array.from(this.activeJupyterSockets.values())
     this.activeJupyterSockets.clear()
+    this.pendingJupyterExecutions.clear()
     const interruptControllers = jupyterExecutions.map(
       () => new AbortController()
     )
@@ -953,6 +962,7 @@ export class NotebookData {
     const existingJupyterSocket = this.activeJupyterSockets.get(cell.refId)
     existingJupyterSocket?.socket.close()
     this.activeJupyterSockets.delete(cell.refId)
+    this.pendingJupyterExecutions.delete(cell.refId)
 
     if (!useAppKernel && (!runner || !runner.endpoint)) {
       console.error('No runner available for cell', cell.refId)
@@ -1450,15 +1460,34 @@ export class NotebookData {
       return
     }
 
+    // Authentication can pause a launch long enough for a rerun or ownership
+    // release to supersede it. Register the pending attempt before awaiting so
+    // cancellation can both invalidate it and mark the cell as cancelled.
+    const pendingExecution = { runID, generation }
+    this.pendingJupyterExecutions.set(refId, pendingExecution)
+    const isCurrentLaunch = () =>
+      this.pendingJupyterExecutions.get(refId) === pendingExecution &&
+      this.executionGeneration === generation &&
+      this.getCellProto(refId)?.metadata?.[RunmeMetadataKey.LastRunID] ===
+        runID &&
+      !this.releasePending
+
     let channelsURL: string
     try {
       const authorization = await getJupyterAuthorization()
+      if (!isCurrentLaunch()) {
+        return
+      }
       channelsURL = buildJupyterChannelsWebSocketURL({
         runnerEndpoint: runner.endpoint,
         kernelId: selectedKernelID,
         authorization,
       })
     } catch (error) {
+      if (!isCurrentLaunch()) {
+        return
+      }
+      this.pendingJupyterExecutions.delete(refId)
       showToast({
         message: 'Failed to create Jupyter channels URL from runner endpoint.',
         tone: 'error',
@@ -1479,6 +1508,7 @@ export class NotebookData {
       return
     }
 
+    this.pendingJupyterExecutions.delete(refId)
     googleAnalytics.trackCellExecuted({ executionBackend: 'jupyter' })
     const socket = new WebSocket(channelsURL)
     this.activeJupyterSockets.set(refId, {
