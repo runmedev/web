@@ -15,6 +15,7 @@ import { createSessionId } from '../lib/tabIdentity'
 
 const defaultKernelArgv = JSON.stringify(DEFAULT_JUPYTER_KERNEL_ARGV)
 
+/** Parses and validates the command template sent to the runner. */
 function parseKernelArgv(value: string): string[] {
   let parsed: unknown
   try {
@@ -30,8 +31,7 @@ function parseKernelArgv(value: string): string[] {
     throw new Error('Kernel command must be a non-empty JSON array of strings.')
   }
   const placeholderCount = parsed.reduce(
-    (count, argument) =>
-      count + argument.split('{connection_file}').length - 1,
+    (count, argument) => count + argument.split('{connection_file}').length - 1,
     0
   )
   if (placeholderCount !== 1) {
@@ -42,6 +42,7 @@ function parseKernelArgv(value: string): string[] {
   return parsed
 }
 
+/** Formats the API timestamp for the status table without hiding invalid data. */
 function formatLastActivity(value?: string): string {
   if (!value) {
     return '—'
@@ -50,6 +51,7 @@ function formatLastActivity(value?: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
+/** Maps kernel lifecycle states to the status badge color used in the table. */
 function stateClassName(state?: string): string {
   switch (state?.toLowerCase()) {
     case 'idle':
@@ -65,6 +67,13 @@ function stateClassName(state?: string): string {
   }
 }
 
+/**
+ * Shows and controls the kernels owned by one runner.
+ *
+ * The Jupyter manager owns the shared kernel cache. This component subscribes
+ * to its version counter with useSyncExternalStore, while local React state is
+ * limited to form input, loading, and the operation currently in flight.
+ */
 export function KernelStatusTab({ runnerName }: { runnerName: string }) {
   const manager = useMemo(() => getJupyterManager(), [])
   const version = useSyncExternalStore(
@@ -165,9 +174,15 @@ export function KernelStatusTab({ runnerName }: { runnerName: string }) {
       className="flex-1 p-4"
       data-testid="kernel-status-scroll"
     >
-      <div className="mx-auto flex h-full max-w-6xl flex-col gap-6 text-sm">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="space-y-2">
+      <div
+        id="kernel-status-tab"
+        className="mx-auto flex h-full max-w-6xl flex-col gap-6 text-sm"
+      >
+        <div
+          id="kernel-status-header"
+          className="flex flex-wrap items-start justify-between gap-3"
+        >
+          <div id="kernel-status-heading" className="space-y-2">
             <Text size="5" weight="bold" as="p" className="text-nb-text">
               Jupyter Kernels
             </Text>
@@ -185,11 +200,17 @@ export function KernelStatusTab({ runnerName }: { runnerName: string }) {
           </Button>
         </div>
 
-        <div className="rounded-lg border border-nb-border bg-white p-4">
+        <div
+          id="kernel-start-panel"
+          className="rounded-lg border border-nb-border bg-white p-4"
+        >
           <Text size="3" weight="bold" as="p" className="text-nb-text">
             Start a kernel
           </Text>
-          <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_auto] sm:items-end">
+          <div
+            id="kernel-start-form"
+            className="mt-4 grid gap-3 sm:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_auto] sm:items-end"
+          >
             <label className="space-y-1 sm:col-span-3">
               <Text
                 size="1"
@@ -254,6 +275,7 @@ export function KernelStatusTab({ runnerName }: { runnerName: string }) {
 
         {errorMessage && (
           <div
+            id="kernel-status-error"
             role="alert"
             className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
           >
@@ -261,8 +283,14 @@ export function KernelStatusTab({ runnerName }: { runnerName: string }) {
           </div>
         )}
 
-        <div className="rounded-lg border border-nb-border bg-white p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        <div
+          id="kernel-list-panel"
+          className="rounded-lg border border-nb-border bg-white p-4"
+        >
+          <div
+            id="kernel-list-header"
+            className="flex flex-wrap items-center justify-between gap-3"
+          >
             <Text size="3" weight="bold" as="p" className="text-nb-text">
               Running kernels
             </Text>
@@ -276,7 +304,7 @@ export function KernelStatusTab({ runnerName }: { runnerName: string }) {
               No kernels are running on this runner.
             </Text>
           ) : (
-            <div className="mt-4 overflow-x-auto">
+            <div id="kernel-list-scroll" className="mt-4 overflow-x-auto">
               <table className="w-full border-collapse text-left text-sm">
                 <thead>
                   <tr className="border-b border-nb-border bg-nb-surface-2 text-xs font-semibold uppercase tracking-wide text-nb-text-muted">
@@ -302,7 +330,10 @@ export function KernelStatusTab({ runnerName }: { runnerName: string }) {
                         <td className="px-3 py-3 font-medium text-nb-text">
                           {kernel.label}
                           {kernel.label !== kernel.name && (
-                            <div className="mt-1 text-xs font-normal text-nb-text-faint">
+                            <div
+                              id={`kernel-name-${kernel.id}`}
+                              className="mt-1 text-xs font-normal text-nb-text-faint"
+                            >
                               {kernel.name}
                             </div>
                           )}
@@ -324,7 +355,10 @@ export function KernelStatusTab({ runnerName }: { runnerName: string }) {
                           {formatLastActivity(kernel.last_activity)}
                         </td>
                         <td className="px-3 py-3">
-                          <div className="flex flex-wrap gap-2">
+                          <div
+                            id={`kernel-actions-${kernel.id}`}
+                            className="flex flex-wrap gap-2"
+                          >
                             <Button
                               size="1"
                               variant="soft"

@@ -1,7 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
 import {
   scrollToBottomOfNotebook,
   scrollToTopOfCell,
@@ -12,29 +19,30 @@ const FRONTEND_URL = process.env.CUJ_FRONTEND_URL ?? "http://localhost:5173";
 const BACKEND_URL = process.env.CUJ_BACKEND_URL ?? "http://localhost:9977";
 const SCENARIO_NOTEBOOK_NAME = "scenario-jupyter-cuj.runme.md";
 const SCENARIO_NOTEBOOK_URI = `local://file/${SCENARIO_NOTEBOOK_NAME}`;
-const JUPYTER_PORT = Number(process.env.CUJ_JUPYTER_PORT ?? "18888");
+const JUPYTER_PYTHON = process.env.CUJ_JUPYTER_PYTHON?.trim() || "python3";
 const CUJ_ID_TOKEN = process.env.CUJ_ID_TOKEN?.trim() ?? "";
 const CUJ_ACCESS_TOKEN = process.env.CUJ_ACCESS_TOKEN?.trim() ?? CUJ_ID_TOKEN;
 const tokenExpiresAtEnv = Number(process.env.CUJ_TOKEN_EXPIRES_AT ?? "");
-const CUJ_TOKEN_EXPIRES_AT = Number.isFinite(tokenExpiresAtEnv) && tokenExpiresAtEnv > Date.now()
-  ? tokenExpiresAtEnv
-  : Date.now() + 5 * 60 * 1000;
+const CUJ_TOKEN_EXPIRES_AT =
+  Number.isFinite(tokenExpiresAtEnv) && tokenExpiresAtEnv > Date.now()
+    ? tokenExpiresAtEnv
+    : Date.now() + 5 * 60 * 1000;
 
 const CURRENT_FILE_DIR = dirname(fileURLToPath(import.meta.url));
 const SCRIPT_DIR =
-  CURRENT_FILE_DIR.endsWith("/.generated") || CURRENT_FILE_DIR.endsWith("\\.generated")
+  CURRENT_FILE_DIR.endsWith("/.generated") ||
+  CURRENT_FILE_DIR.endsWith("\\.generated")
     ? dirname(CURRENT_FILE_DIR)
     : CURRENT_FILE_DIR;
 const OUTPUT_DIR = join(SCRIPT_DIR, "test-output");
 const MOVIE_PATH = join(OUTPUT_DIR, "scenario-jupyter-cuj-walkthrough.webm");
 const AGENT_BROWSER_SESSION = process.env.AGENT_BROWSER_SESSION?.trim() ?? "";
 const AGENT_BROWSER_PROFILE = process.env.AGENT_BROWSER_PROFILE?.trim() ?? "";
-const AGENT_BROWSER_HEADED = (process.env.AGENT_BROWSER_HEADED ?? "false")
-  .trim()
-  .toLowerCase() === "true";
-const AGENT_BROWSER_KEEP_OPEN = (process.env.AGENT_BROWSER_KEEP_OPEN ?? "false")
-  .trim()
-  .toLowerCase() === "true";
+const AGENT_BROWSER_HEADED =
+  (process.env.AGENT_BROWSER_HEADED ?? "false").trim().toLowerCase() === "true";
+const AGENT_BROWSER_KEEP_OPEN =
+  (process.env.AGENT_BROWSER_KEEP_OPEN ?? "false").trim().toLowerCase() ===
+  "true";
 
 let passCount = 0;
 let failCount = 0;
@@ -77,7 +85,11 @@ function toWsUrl(url: string): string {
 const BACKEND_WS = toWsUrl(BACKEND_URL);
 
 // TODO(jlewi): This should really be shared tooling for all the scenarios.
-function run(command: string): { status: number; stdout: string; stderr: string } {
+function run(command: string): {
+  status: number;
+  stdout: string;
+  stderr: string;
+} {
   const effectiveCommand = withAgentBrowserOptions(command);
   console.log(`Running command: ${effectiveCommand}`);
   const timeoutMs = Number(process.env.CUJ_SCENARIO_CMD_TIMEOUT_MS ?? "30000");
@@ -89,7 +101,9 @@ function run(command: string): { status: number; stdout: string; stderr: string 
     killSignal: "SIGKILL",
   });
   const errorCode =
-    typeof result.error === "object" && result.error !== null && "code" in result.error
+    typeof result.error === "object" &&
+    result.error !== null &&
+    "code" in result.error
       ? String((result.error as { code?: string }).code ?? "")
       : "";
   const timedOut = errorCode === "ETIMEDOUT";
@@ -100,7 +114,11 @@ function run(command: string): { status: number; stdout: string; stderr: string 
   const stdout = result.stdout ?? "";
   const stderr = `${result.stderr ?? ""}${timeoutHint}`;
   const clip = (value: string): string => {
-    if (!Number.isFinite(maxLogChars) || maxLogChars <= 0 || value.length <= maxLogChars) {
+    if (
+      !Number.isFinite(maxLogChars) ||
+      maxLogChars <= 0 ||
+      value.length <= maxLogChars
+    ) {
       return value;
     }
     return `${value.slice(0, maxLogChars)}\n...[truncated ${value.length - maxLogChars} chars]...`;
@@ -119,7 +137,7 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
-function agentBrowserCommand(subcommand: string): string {  
+function agentBrowserCommand(subcommand: string): string {
   const parts: string[] = ["agent-browser"];
   if (AGENT_BROWSER_SESSION) {
     parts.push("--session", shellQuote(AGENT_BROWSER_SESSION));
@@ -229,7 +247,9 @@ function runWithRetry(command: string, attempts = 3, waitMs = 1200): void {
       run(agentBrowserCommand(`wait ${waitMs}`));
     }
   }
-  throw new Error(`Command failed after ${attempts} attempts: ${command}\n${lastError}`);
+  throw new Error(
+    `Command failed after ${attempts} attempts: ${command}\n${lastError}`,
+  );
 }
 
 function probeNotebook(): NotebookProbe {
@@ -279,7 +299,9 @@ function probeNotebook(): NotebookProbe {
 
   try {
     const parsed = JSON.parse(raw) as unknown;
-    return (typeof parsed === "string" ? JSON.parse(parsed) : parsed) as NotebookProbe;
+    return (
+      typeof parsed === "string" ? JSON.parse(parsed) : parsed
+    ) as NotebookProbe;
   } catch {
     return { status: "parse-error" };
   }
@@ -363,7 +385,10 @@ function captureStepScreenshot(filename: string): void {
   run(agentBrowserCommand(`screenshot ${join(OUTPUT_DIR, filename)}`));
 }
 
-function configureNotebookFocusedLayout(attempts = 3): { ok: boolean; detail: string } {
+function configureNotebookFocusedLayout(attempts = 3): {
+  ok: boolean;
+  detail: string;
+} {
   let lastDetail = "no-attempt";
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const detail = evalInBrowser(`(async () => {
@@ -541,7 +566,9 @@ function captureKernelDropdownSnapshot(
       return JSON.stringify({ status: 'ok', visibleRows, options });
     })()"`),
   );
-  const detail = parseAgentEvalString(`${inspect.stdout}\n${inspect.stderr}`.trim());
+  const detail = parseAgentEvalString(
+    `${inspect.stdout}\n${inspect.stderr}`.trim(),
+  );
   writeArtifact(optionsName, detail);
   run(agentBrowserCommand(`screenshot ${join(OUTPUT_DIR, screenshotName)}`));
   // Restore normal select rendering.
@@ -604,8 +631,7 @@ function waitForRenderedCellOutput(
   return getRenderedCellOutputText(cellRefId);
 }
 
-function captureSetupDiagnostics(serverName: string): string {
-  const escapedServerName = serverName.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+function captureSetupDiagnostics(): string {
   const raw = run(
     agentBrowserCommand(`eval "(async () => {
       const out = {};
@@ -620,12 +646,7 @@ function captureSetupDiagnostics(serverName: string): string {
         out.runnersGetDefaultError = String(error);
       }
       try {
-        out.servers = await jupyter.servers.get('local');
-      } catch (error) {
-        out.serversError = String(error);
-      }
-      try {
-        out.kernels = await jupyter.kernels.get('local', '${escapedServerName}');
+        out.kernels = await jupyter.kernels.get('local');
       } catch (error) {
         out.kernelsError = String(error);
       }
@@ -738,7 +759,9 @@ function finalizeAndExit(): never {
   } else {
     console.log("Keeping agent browser session open as per configuration");
   }
-  console.log(`Assertions: ${totalCount}, Passed: ${passCount}, Failed: ${failCount}`);
+  console.log(
+    `Assertions: ${totalCount}, Passed: ${passCount}, Failed: ${failCount}`,
+  );
   process.exit(failCount > 0 ? 1 : 0);
 }
 
@@ -753,8 +776,6 @@ for (const file of [
   "scenario-jupyter-cuj-02-after-seed.txt",
   "scenario-jupyter-cuj-02a-layout-post-seed.txt",
   "scenario-jupyter-cuj-03-opened.txt",
-  "scenario-jupyter-cuj-04-start-output.txt",
-  "scenario-jupyter-cuj-05-sync-output.txt",
   "scenario-jupyter-cuj-06a-kernel-output.txt",
   "scenario-jupyter-cuj-06-setup-output.txt",
   "scenario-jupyter-cuj-06-setup-rendered-output.txt",
@@ -770,8 +791,6 @@ for (const file of [
   "scenario-jupyter-cuj-07a-ipy-a-trigger.png",
   "scenario-jupyter-cuj-07-ipy-a-output.txt",
   "scenario-jupyter-cuj-08-ipy-b-output.txt",
-  "scenario-jupyter-cuj-09a-stop-server-trigger.png",
-  "scenario-jupyter-cuj-09-stop-output.txt",
   "scenario-jupyter-cuj-10-probe.json",
 ]) {
   rmSync(join(OUTPUT_DIR, file), { force: true });
@@ -783,17 +802,15 @@ if (run("command -v agent-browser").status !== 0) {
   process.exit(2);
 }
 
-if (run("command -v jupyter").status !== 0) {
-  console.error("ERROR: jupyter CLI is required on PATH for jupyter CUJ scenario");
+if (
+  run(`${shellQuote(JUPYTER_PYTHON)} -c ${shellQuote("import ipykernel")}`)
+    .status !== 0
+) {
+  console.error(
+    `ERROR: ${JUPYTER_PYTHON} must be able to import ipykernel for the jupyter CUJ scenario`,
+  );
   process.exit(1);
 }
-const jupyterBinResult = run("command -v jupyter");
-const JUPYTER_BIN = (jupyterBinResult.stdout || "").trim().split(/\r?\n/)[0]?.trim() ?? "";
-if (!JUPYTER_BIN) {
-  console.error("ERROR: unable to resolve jupyter CLI path for jupyter CUJ scenario");
-  process.exit(1);
-}
-const JUPYTER_BIN_SH = shellQuote(JUPYTER_BIN);
 
 if (run(`curl -sf ${FRONTEND_URL}`).status !== 0) {
   console.error(`ERROR: frontend is not running at ${FRONTEND_URL}`);
@@ -860,7 +877,8 @@ if (CUJ_ID_TOKEN) {
       }
     })()"`),
   );
-  const existingAuthResult = `${existingAuthProbe.stdout}\n${existingAuthProbe.stderr}`.trim();
+  const existingAuthResult =
+    `${existingAuthProbe.stdout}\n${existingAuthProbe.stderr}`.trim();
   writeArtifact("scenario-jupyter-cuj-auth-existing.txt", existingAuthResult);
 
   let shouldInject = true;
@@ -871,7 +889,11 @@ if (CUJ_ID_TOKEN) {
         hasToken?: boolean;
         expiresAt?: number;
       };
-      if (parsed.hasAuth && parsed.hasToken && Number(parsed.expiresAt ?? 0) > Date.now() + 60_000) {
+      if (
+        parsed.hasAuth &&
+        parsed.hasToken &&
+        Number(parsed.expiresAt ?? 0) > Date.now() + 60_000
+      ) {
         shouldInject = false;
       }
     } catch {
@@ -917,151 +939,40 @@ if (shouldReloadAfterConfig) {
 const initialLayout = configureNotebookFocusedLayout();
 writeArtifact("scenario-jupyter-cuj-01a-layout.txt", initialLayout.detail);
 if (initialLayout.ok) {
-  pass("Applied notebook-focused layout (app console minimized, side panel collapsed)");
+  pass(
+    "Applied notebook-focused layout (app console minimized, side panel collapsed)",
+  );
 } else {
-  fail(`Could not fully apply notebook-focused layout (${initialLayout.detail})`);
+  fail(
+    `Could not fully apply notebook-focused layout (${initialLayout.detail})`,
+  );
 }
 
-run(agentBrowserCommand(`screenshot ${join(OUTPUT_DIR, "scenario-jupyter-cuj-01-initial.png")}`));
+run(
+  agentBrowserCommand(
+    `screenshot ${join(OUTPUT_DIR, "scenario-jupyter-cuj-01-initial.png")}`,
+  ),
+);
 
-const startServerCell = [
-  "python - <<'PY'",
-  "import json",
-  "import subprocess",
-  "import sys",
-  "import time",
-  "",
-  `jupyter_bin = ${JSON.stringify(JUPYTER_BIN)}`,
-  `port = ${JUPYTER_PORT}`,
-  "log_path = '/tmp/jupyter-server.log'",
-  "pid_path = '/tmp/jupyter-server.pid'",
-  "subprocess.run([jupyter_bin, 'server', 'stop', str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)",
-  "with open(log_path, 'ab', buffering=0) as log_file:",
-  "    proc = subprocess.Popen(",
-  "        [jupyter_bin, 'server', '--no-browser', f'--port={port}'],",
-  "        stdin=subprocess.DEVNULL,",
-  "        stdout=log_file,",
-  "        stderr=log_file,",
-  "        start_new_session=True,",
-  "    )",
-  "with open(pid_path, 'w', encoding='utf-8') as fh:",
-  "    fh.write(str(proc.pid))",
-  "",
-  "for _ in range(60):",
-  "    try:",
-  "        servers = json.loads(subprocess.check_output([jupyter_bin, 'server', 'list', '--jsonlist'], text=True))",
-  "    except Exception:",
-  "        servers = []",
-  "    if any((s.get('port') == port) for s in servers):",
-  "        print(f'jupyter-ready {port}')",
-  "        sys.exit(0)",
-  "    time.sleep(1)",
-  "",
-  "print(f'jupyter server on port {port} did not become ready', file=sys.stderr)",
-  "print('--- /tmp/jupyter-server.log ---', file=sys.stderr)",
-  "try:",
-  "    with open(log_path, 'r', encoding='utf-8', errors='ignore') as fh:",
-  "        for line in fh.readlines()[-200:]:",
-  "            print(line.rstrip('\\n'), file=sys.stderr)",
-  "except Exception as exc:",
-  "    print(f'failed reading log: {exc}', file=sys.stderr)",
-  "sys.exit(1)",
-  "PY",
-].join("\n");
-
-const syncFallbackConfigDir = OUTPUT_DIR.replace(/\\/g, "/");
-const serverAlias = `port-${JUPYTER_PORT}-${Date.now()}`;
 const kernelAlias = `py3-local-${Date.now()}`;
 
-const syncServersCell = [
-  "python - <<'PY'",
-  "import json",
-  "import os",
-  "import pathlib",
-  "import subprocess",
-  "from urllib.parse import urlparse, urlunparse",
-  "",
-  `jupyter_bin = ${JSON.stringify(JUPYTER_BIN)}`,
-  "candidate_config_dirs = []",
-  "env_config_dir = os.environ.get('RUNME_CONFIG_DIR')",
-  "if env_config_dir:",
-  "    candidate_config_dirs.append(env_config_dir)",
-  `candidate_config_dirs.append('${syncFallbackConfigDir}')`,
-  "candidate_config_dirs.append(os.path.join(os.path.expanduser('~'), '.runme-agent'))",
-  "resolved_config_dirs = []",
-  "seen = set()",
-  "for entry in candidate_config_dirs:",
-  "    if not entry:",
-  "        continue",
-  "    normalized = os.path.abspath(entry)",
-  "    if normalized in seen:",
-  "        continue",
-  "    seen.add(normalized)",
-  "    resolved_config_dirs.append(normalized)",
-  "",
-  "servers = json.loads(subprocess.check_output([jupyter_bin, 'server', 'list', '--jsonlist'], text=True))",
-  "if not servers:",
-  "    raise RuntimeError('No running jupyter servers found')",
-  "for server in servers:",
-  "    parsed = urlparse(server['url'])",
-  "    port = parsed.port or (443 if parsed.scheme == 'https' else 80)",
-  `    if port != ${JUPYTER_PORT}:`,
-  "        continue",
-  `    name = '${serverAlias}'`,
-  "    path = parsed.path or '/'",
-  "    if not path.endswith('/'):",
-  "        path += '/'",
-  "    base_url = urlunparse((parsed.scheme, parsed.netloc, path, '', '', ''))",
-  "",
-  "    payload = {'runner': 'local', 'base_url': base_url}",
-  "    token = server.get('token')",
-  "    if token:",
-  "        payload['token'] = token",
-  "",
-  "    for config_dir in resolved_config_dirs:",
-  "        jupyter_dir = pathlib.Path(config_dir) / 'jupyter'",
-  "        jupyter_dir.mkdir(parents=True, exist_ok=True)",
-  `        exact = jupyter_dir / '${serverAlias}.json'`,
-  "        if exact.exists():",
-  "            try:",
-  "                exact.unlink()",
-  "            except OSError:",
-  "                pass",
-  `        for stale in jupyter_dir.glob('port-${JUPYTER_PORT}-*.json'):`,
-  "            try:",
-  "                stale.unlink()",
-  "            except OSError:",
-  "                pass",
-  "        output_path = jupyter_dir / (name + '.json')",
-  "        output_path.write_text(json.dumps(payload, indent=2) + '\\n', encoding='utf-8')",
-  "        os.chmod(output_path, 0o600)",
-  "        print('synced ' + name + ' -> ' + str(output_path))",
-  "PY",
-].join("\n");
-
 const setupKernelCell = [
-  `const selectedServerName = '${serverAlias}';`,
   `const selectedKernelAlias = '${kernelAlias}';`,
-  "console.log('[setup] begin', selectedServerName, selectedKernelAlias);",
+  "console.log('[setup] begin', selectedKernelAlias);",
   "try {",
   `  const updateMessage = app.runners.update("local", "${BACKEND_WS}");`,
   "  console.log('[setup] app.runners.update', updateMessage);",
   "  const defaultMessage = app.runners.setDefault('local');",
   "  console.log('[setup] app.runners.setDefault', defaultMessage);",
-  "  try {",
-  "    const servers = await jupyter.servers.get('local');",
-  "    console.log('[setup] jupyter.servers.get', JSON.stringify(servers));",
-  "  } catch (serverError) {",
-  "    console.error('[setup] jupyter.servers.get error', String(serverError));",
-  "  }",
-  "  const kernel = await jupyter.kernels.start('local', selectedServerName, {",
+  "  const kernel = await jupyter.kernels.start('local', {",
   "    kernelSpec: 'python3',",
   "    name: selectedKernelAlias,",
+  `    argv: [${JSON.stringify(JUPYTER_PYTHON)}, '-m', 'ipykernel_launcher', '-f', '{connection_file}'],`,
   "  });",
   "  console.log('[setup] kernel-started', JSON.stringify(kernel));",
-  "  const kernels = await jupyter.kernels.get('local', selectedServerName);",
+  "  const kernels = await jupyter.kernels.get('local');",
   "  console.log('[setup] jupyter.kernels.get', JSON.stringify(kernels));",
-  "  console.log('kernel-ready', kernel.id, selectedServerName, selectedKernelAlias);",
+  "  console.log('kernel-ready', kernel.id, selectedKernelAlias);",
   "} catch (error) {",
   "  const message = error instanceof Error ? error.message : String(error);",
   "  const stack = error instanceof Error && error.stack ? error.stack : '';",
@@ -1072,7 +983,6 @@ const setupKernelCell = [
 ].join("\n");
 
 const stopKernelCell = [
-  `const selectedServerName = '${serverAlias}';`,
   "const nb = runme.getCurrentNotebook();",
   "const ipyA = nb?.getCell('cell_ipy_a')?.snapshot;",
   "const ipyB = nb?.getCell('cell_ipy_b')?.snapshot;",
@@ -1083,76 +993,17 @@ const stopKernelCell = [
   "  throw new Error('Missing runme.dev/jupyterKernelID on IPython cell metadata');",
   "}",
   "console.log('[stop] using-kernel-id', kernelId);",
-  "await jupyter.kernels.stop('local', selectedServerName, kernelId);",
+  "await jupyter.kernels.stop('local', kernelId);",
+  "const remainingKernels = await jupyter.kernels.get('local');",
+  "if (remainingKernels.some((kernel) => kernel.id === kernelId)) {",
+  "  throw new Error('Stopped kernel is still present in the runner kernel list');",
+  "}",
   "console.log('kernel-stopped', kernelId);",
-].join("\n");
-
-const stopServerCell = [
-  "python - <<'PY'",
-  "import os",
-  "import signal",
-  "import time",
-  "",
-  "pid_path = '/tmp/jupyter-server.pid'",
-  "pid = None",
-  "if os.path.exists(pid_path):",
-  "    try:",
-  "        with open(pid_path, 'r', encoding='utf-8') as fh:",
-  "            value = fh.read().strip()",
-  "        pid = int(value) if value else None",
-  "    except Exception:",
-  "        pid = None",
-  "",
-  "if pid:",
-  "    try:",
-  "        os.kill(pid, signal.SIGTERM)",
-  "    except ProcessLookupError:",
-  "        pid = None",
-  "    except PermissionError:",
-  "        pid = None",
-  "",
-  "if pid:",
-  "    for _ in range(30):",
-  "        try:",
-  "            os.kill(pid, 0)",
-  "        except ProcessLookupError:",
-  "            pid = None",
-  "            break",
-  "        time.sleep(0.1)",
-  "",
-  "if pid:",
-  "    try:",
-  "        os.kill(pid, signal.SIGKILL)",
-  "    except Exception:",
-  "        pass",
-  "",
-  "print('server-stopped')",
-  "PY",
 ].join("\n");
 
 const notebook = {
   metadata: {},
   cells: [
-    {
-      refId: "cell_start_server",
-      kind: 2,
-      languageId: "bash",
-      value: startServerCell,
-      metadata: {
-        "runme.dev/runnerName": "local",
-      },
-      outputs: [],
-    },
-    {
-      refId: "cell_sync_servers",
-      kind: 2,
-      languageId: "bash",
-      value: syncServersCell,
-      metadata: {
-        "runme.dev/runnerName": "local",
-      },
-      outputs: [],
-    },
     {
       refId: "cell_setup_kernel",
       kind: 2,
@@ -1167,7 +1018,7 @@ const notebook = {
       refId: "cell_ipy_a",
       kind: 2,
       languageId: "jupyter",
-      value: "shared_value = 42\nprint(\"set\", shared_value)",
+      value: 'shared_value = 42\nprint("set", shared_value)',
       metadata: {
         "runme.dev/runnerName": "local",
       },
@@ -1177,7 +1028,7 @@ const notebook = {
       refId: "cell_ipy_b",
       kind: 2,
       languageId: "jupyter",
-      value: "print(\"read\", shared_value)",
+      value: 'print("read", shared_value)',
       metadata: {
         "runme.dev/runnerName": "local",
       },
@@ -1193,20 +1044,12 @@ const notebook = {
       },
       outputs: [],
     },
-    {
-      refId: "cell_stop_server",
-      kind: 2,
-      languageId: "bash",
-      value: stopServerCell,
-      metadata: {
-        "runme.dev/runnerName": "local",
-      },
-      outputs: [],
-    },
   ],
 };
 
-const notebookBase64 = Buffer.from(JSON.stringify(notebook), "utf-8").toString("base64");
+const notebookBase64 = Buffer.from(JSON.stringify(notebook), "utf-8").toString(
+  "base64",
+);
 
 const seedCommandResult = run(
   agentBrowserCommand(`eval "(async () => {
@@ -1243,17 +1086,22 @@ run(agentBrowserCommand("reload"));
 run(agentBrowserCommand("wait 2200"));
 
 const postSeedLayout = configureNotebookFocusedLayout();
-writeArtifact("scenario-jupyter-cuj-02a-layout-post-seed.txt", postSeedLayout.detail);
+writeArtifact(
+  "scenario-jupyter-cuj-02a-layout-post-seed.txt",
+  postSeedLayout.detail,
+);
 if (postSeedLayout.ok) {
   pass("Re-applied notebook-focused layout after notebook reload");
 } else {
-  fail(`Could not re-apply notebook-focused layout after notebook reload (${postSeedLayout.detail})`);
+  fail(
+    `Could not re-apply notebook-focused layout after notebook reload (${postSeedLayout.detail})`,
+  );
 }
 
 let snapshot = run(agentBrowserCommand("snapshot -i")).stdout;
 writeArtifact("scenario-jupyter-cuj-02-after-seed.txt", snapshot);
 
-if (waitForRunButton("cell_start_server")) {
+if (waitForRunButton("cell_setup_kernel")) {
   pass("Opened jupyter CUJ notebook");
 } else {
   fail("Could not find jupyter CUJ notebook run controls");
@@ -1263,56 +1111,12 @@ if (waitForRunButton("cell_start_server")) {
 snapshot = run(agentBrowserCommand("snapshot -i")).stdout;
 writeArtifact("scenario-jupyter-cuj-03-opened.txt", snapshot);
 
-if (clickRun("cell_start_server")) {
-  pass("Triggered server start bash cell");
-} else {
-  fail("Failed to trigger server start bash cell");
-}
+let probe: NotebookProbe;
 
-let probe = waitForNotebookProbe((p) => {
-  const c = p.cells?.find((cell) => cell.refId === "cell_start_server");
-  return p.status === "ok" && !!c && c.exitCode === "0";
-}, 90000);
-scrollToBottomOfNotebookView();
-let startCell = probe.cells?.find((cell) => cell.refId === "cell_start_server");
-writeArtifact("scenario-jupyter-cuj-04-start-output.txt", startCell?.decodedText ?? "");
-if (probe.status === "ok" && startCell?.exitCode === "0") {
-  pass("Server start bash cell exited successfully");
-} else {
-  fail("Server start bash cell failed");
-  finalizeAndExit();
-}
-
-if (clickRun("cell_sync_servers")) {
-  pass("Triggered server sync bash cell");
-} else {
-  fail("Failed to trigger server sync bash cell");
-}
-
-probe = waitForNotebookProbe((p) => {
-  const c = p.cells?.find((cell) => cell.refId === "cell_sync_servers");
-  return (
-    p.status === "ok" &&
-    !!c &&
-    c.exitCode === "0" &&
-    new RegExp(`synced\\s+port-${JUPYTER_PORT}`, "i").test(c.decodedText ?? "")
-  );
-}, 45000);
-scrollToBottomOfNotebookView();
-const syncCell = probe.cells?.find((cell) => cell.refId === "cell_sync_servers");
-writeArtifact("scenario-jupyter-cuj-05-sync-output.txt", syncCell?.decodedText ?? "");
-if (
-  probe.status === "ok" &&
-  syncCell?.exitCode === "0" &&
-  new RegExp(`synced\\s+port-${JUPYTER_PORT}`, "i").test(syncCell.decodedText ?? "")
-) {
-  pass(`Server sync bash cell wrote port-${JUPYTER_PORT} config`);
-} else {
-  fail("Server sync bash cell did not write expected config output");
-  finalizeAndExit();
-}
-
-const setupRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_setup_kernel")?.lastRunID ?? "").trim();
+const setupRunIDBefore = (
+  probeNotebook().cells?.find((cell) => cell.refId === "cell_setup_kernel")
+    ?.lastRunID ?? ""
+).trim();
 if (clickRun("cell_setup_kernel")) {
   pass("Triggered AppKernel setup cell");
 } else {
@@ -1320,15 +1124,18 @@ if (clickRun("cell_setup_kernel")) {
   finalizeAndExit();
 }
 
-let setupWaitResult = waitForCellExecutionCompletion("cell_setup_kernel", setupRunIDBefore, 90000);
-probe = setupWaitResult.probe;
-let setupCell = setupWaitResult.cell ?? probe.cells?.find((cell) => cell.refId === "cell_setup_kernel");
-let setupOutputText = setupCell?.decodedText ?? "";
-let setupSucceeded = (
-  setupWaitResult.ok &&
-  probe.status === "ok" &&
-  setupCell?.exitCode === "0"
+let setupWaitResult = waitForCellExecutionCompletion(
+  "cell_setup_kernel",
+  setupRunIDBefore,
+  90000,
 );
+probe = setupWaitResult.probe;
+let setupCell =
+  setupWaitResult.cell ??
+  probe.cells?.find((cell) => cell.refId === "cell_setup_kernel");
+let setupOutputText = setupCell?.decodedText ?? "";
+let setupSucceeded =
+  setupWaitResult.ok && probe.status === "ok" && setupCell?.exitCode === "0";
 
 if (
   !setupSucceeded &&
@@ -1341,49 +1148,70 @@ if (
       return 'ok';
     })()"`),
   );
-  const authFallbackResult = `${authFallback.stdout}\n${authFallback.stderr}`.trim();
+  const authFallbackResult =
+    `${authFallback.stdout}\n${authFallback.stderr}`.trim();
   writeArtifact("scenario-jupyter-cuj-auth-fallback.txt", authFallbackResult);
   if (authFallback.status === 0 && authFallbackResult.includes("ok")) {
-    pass("Cleared seeded OIDC token after setup auth/network failure and retried setup");
+    pass(
+      "Cleared seeded OIDC token after setup auth/network failure and retried setup",
+    );
     run(agentBrowserCommand("reload"));
     run(agentBrowserCommand("wait 2200"));
-    const retryRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_setup_kernel")?.lastRunID ?? "").trim();
+    const retryRunIDBefore = (
+      probeNotebook().cells?.find((cell) => cell.refId === "cell_setup_kernel")
+        ?.lastRunID ?? ""
+    ).trim();
     if (clickRun("cell_setup_kernel")) {
       pass("Retried AppKernel setup cell");
     } else {
       fail("Failed to trigger AppKernel setup retry");
       finalizeAndExit();
     }
-    setupWaitResult = waitForCellExecutionCompletion("cell_setup_kernel", retryRunIDBefore, 90000);
+    setupWaitResult = waitForCellExecutionCompletion(
+      "cell_setup_kernel",
+      retryRunIDBefore,
+      90000,
+    );
     probe = setupWaitResult.probe;
-    setupCell = setupWaitResult.cell ?? probe.cells?.find((cell) => cell.refId === "cell_setup_kernel");
+    setupCell =
+      setupWaitResult.cell ??
+      probe.cells?.find((cell) => cell.refId === "cell_setup_kernel");
     setupOutputText = setupCell?.decodedText ?? "";
-    setupSucceeded = (
+    setupSucceeded =
       setupWaitResult.ok &&
       probe.status === "ok" &&
-      setupCell?.exitCode === "0"
-    );
+      setupCell?.exitCode === "0";
   }
 }
 
 writeArtifact("scenario-jupyter-cuj-06-setup-output.txt", setupOutputText);
-writeArtifact("scenario-jupyter-cuj-06-setup-cell-probe.json", JSON.stringify(setupCell ?? {}, null, 2));
+writeArtifact(
+  "scenario-jupyter-cuj-06-setup-cell-probe.json",
+  JSON.stringify(setupCell ?? {}, null, 2),
+);
 writeArtifact(
   "scenario-jupyter-cuj-06-setup-rendered-output.txt",
   getRenderedCellOutputText("cell_setup_kernel"),
 );
-writeArtifact("scenario-jupyter-cuj-06-setup-diagnostics.json", captureSetupDiagnostics(serverAlias));
+writeArtifact(
+  "scenario-jupyter-cuj-06-setup-diagnostics.json",
+  captureSetupDiagnostics(),
+);
 scrollCellIntoView("cell_setup_kernel");
-run(agentBrowserCommand(`screenshot ${join(OUTPUT_DIR, "scenario-jupyter-cuj-06-setup-screenshot.png")}`));
+run(
+  agentBrowserCommand(
+    `screenshot ${join(OUTPUT_DIR, "scenario-jupyter-cuj-06-setup-screenshot.png")}`,
+  ),
+);
 if (!setupWaitResult.ok) {
-  fail(
-    `AppKernel setup cell did not complete (${setupWaitResult.reason})`,
-  );
+  fail(`AppKernel setup cell did not complete (${setupWaitResult.reason})`);
   finalizeAndExit();
 }
 
 if (!/kernel-started|kernel-ready/i.test(setupOutputText)) {
-  fail("AppKernel setup cell completed but did not report kernel-started/kernel-ready");
+  fail(
+    "AppKernel setup cell completed but did not report kernel-started/kernel-ready",
+  );
   finalizeAndExit();
 }
 
@@ -1402,11 +1230,16 @@ captureKernelDropdownSnapshot(
   "scenario-jupyter-cuj-06b-kernel-dropdown-a.png",
   "scenario-jupyter-cuj-06b-kernel-dropdown-a-options.txt",
 );
-writeArtifact("scenario-jupyter-cuj-06b-kernel-select-a.txt", kernelSelectA.detail);
+writeArtifact(
+  "scenario-jupyter-cuj-06b-kernel-select-a.txt",
+  kernelSelectA.detail,
+);
 if (kernelSelectA.ok) {
   pass("Selected Jupyter kernel from dropdown for cell A");
 } else {
-  fail(`Failed to select Jupyter kernel from dropdown for cell A (${kernelSelectA.detail})`);
+  fail(
+    `Failed to select Jupyter kernel from dropdown for cell A (${kernelSelectA.detail})`,
+  );
   finalizeAndExit();
 }
 
@@ -1416,11 +1249,16 @@ captureKernelDropdownSnapshot(
   "scenario-jupyter-cuj-06c-kernel-dropdown-b.png",
   "scenario-jupyter-cuj-06c-kernel-dropdown-b-options.txt",
 );
-writeArtifact("scenario-jupyter-cuj-06c-kernel-select-b.txt", kernelSelectB.detail);
+writeArtifact(
+  "scenario-jupyter-cuj-06c-kernel-select-b.txt",
+  kernelSelectB.detail,
+);
 if (kernelSelectB.ok) {
   pass("Selected Jupyter kernel from dropdown for cell B");
 } else {
-  fail(`Failed to select Jupyter kernel from dropdown for cell B (${kernelSelectB.detail})`);
+  fail(
+    `Failed to select Jupyter kernel from dropdown for cell B (${kernelSelectB.detail})`,
+  );
   finalizeAndExit();
 }
 
@@ -1431,8 +1269,8 @@ probe = waitForNotebookProbe((p) => {
     p.status === "ok" &&
     !!ipyA &&
     !!ipyB &&
-    ipyA.jupyterServerName === serverAlias &&
-    ipyB.jupyterServerName === serverAlias &&
+    !ipyA.jupyterServerName &&
+    !ipyB.jupyterServerName &&
     /[a-f0-9-]{8,}/i.test(ipyA.jupyterKernelID ?? "") &&
     /[a-f0-9-]{8,}/i.test(ipyB.jupyterKernelID ?? "") &&
     ipyA.jupyterKernelName === kernelAlias &&
@@ -1462,8 +1300,8 @@ writeArtifact(
 );
 if (
   probe.status === "ok" &&
-  ipyAMeta?.jupyterServerName === serverAlias &&
-  ipyBMeta?.jupyterServerName === serverAlias &&
+  !ipyAMeta?.jupyterServerName &&
+  !ipyBMeta?.jupyterServerName &&
   /[a-f0-9-]{8,}/i.test(ipyAMeta?.jupyterKernelID ?? "") &&
   /[a-f0-9-]{8,}/i.test(ipyBMeta?.jupyterKernelID ?? "") &&
   ipyAMeta?.jupyterKernelName === kernelAlias &&
@@ -1475,7 +1313,10 @@ if (
   finalizeAndExit();
 }
 
-const ipyARunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_ipy_a")?.lastRunID ?? "").trim();
+const ipyARunIDBefore = (
+  probeNotebook().cells?.find((cell) => cell.refId === "cell_ipy_a")
+    ?.lastRunID ?? ""
+).trim();
 const ipyATriggeredByClick = clickRun("cell_ipy_a");
 captureStepScreenshot("scenario-jupyter-cuj-07a-ipy-a-trigger.png");
 if (ipyATriggeredByClick) {
@@ -1483,18 +1324,26 @@ if (ipyATriggeredByClick) {
 } else {
   const ipyAStarted = waitForCellRunStart("cell_ipy_a", ipyARunIDBefore, 7000);
   if (ipyAStarted.started) {
-    pass("Triggered IPython cell A (detected run start despite missing click ack)");
+    pass(
+      "Triggered IPython cell A (detected run start despite missing click ack)",
+    );
   } else {
     fail("Failed to trigger IPython cell A");
   }
 }
 probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_ipy_a");
-  return p.status === "ok" && !!c && c.exitCode === "0" && /set\s+42/i.test(c.decodedText ?? "");
+  return (
+    p.status === "ok" &&
+    !!c &&
+    c.exitCode === "0" &&
+    /set\s+42/i.test(c.decodedText ?? "")
+  );
 }, 45000);
 scrollToBottomOfNotebookView();
 const ipyAProbeCell = probe.cells?.find((cell) => cell.refId === "cell_ipy_a");
-const ipyAOutput = ipyAProbeCell?.decodedText ?? getRenderedCellOutputText("cell_ipy_a");
+const ipyAOutput =
+  ipyAProbeCell?.decodedText ?? getRenderedCellOutputText("cell_ipy_a");
 writeArtifact("scenario-jupyter-cuj-07-ipy-a-output.txt", ipyAOutput);
 if (/set\s+42/i.test(ipyAOutput)) {
   pass("IPython cell A output contains 'set 42'");
@@ -1510,11 +1359,17 @@ if (clickRun("cell_ipy_b")) {
 }
 probe = waitForNotebookProbe((p) => {
   const c = p.cells?.find((cell) => cell.refId === "cell_ipy_b");
-  return p.status === "ok" && !!c && c.exitCode === "0" && /read\s+42/i.test(c.decodedText ?? "");
+  return (
+    p.status === "ok" &&
+    !!c &&
+    c.exitCode === "0" &&
+    /read\s+42/i.test(c.decodedText ?? "")
+  );
 }, 45000);
 scrollToBottomOfNotebookView();
 const ipyBProbeCell = probe.cells?.find((cell) => cell.refId === "cell_ipy_b");
-const ipyBOutput = ipyBProbeCell?.decodedText ?? getRenderedCellOutputText("cell_ipy_b");
+const ipyBOutput =
+  ipyBProbeCell?.decodedText ?? getRenderedCellOutputText("cell_ipy_b");
 writeArtifact("scenario-jupyter-cuj-08-ipy-b-output.txt", ipyBOutput);
 if (/read\s+42/i.test(ipyBOutput)) {
   pass("IPython cell B output contains 'read 42'");
@@ -1534,39 +1389,17 @@ probe = waitForNotebookProbe((p) => {
   return p.status === "ok" && !!c && c.exitCode === "0";
 }, 30000);
 scrollToBottomOfNotebookView();
-const stopKernelProbe = probe.cells?.find((cell) => cell.refId === "cell_stop_kernel");
+const stopKernelProbe = probe.cells?.find(
+  (cell) => cell.refId === "cell_stop_kernel",
+);
 if (probe.status === "ok" && stopKernelProbe?.exitCode === "0") {
   pass("Kernel stop cell exited successfully");
 } else {
   fail("Kernel stop cell failed");
 }
 
-const stopServerRunIDBefore = (probeNotebook().cells?.find((cell) => cell.refId === "cell_stop_server")?.lastRunID ?? "").trim();
-const stopServerTriggeredByClick = clickRun("cell_stop_server");
-captureStepScreenshot("scenario-jupyter-cuj-09a-stop-server-trigger.png");
-if (stopServerTriggeredByClick) {
-  pass("Triggered server stop bash cell");
-} else {
-  const stopServerStarted = waitForCellRunStart("cell_stop_server", stopServerRunIDBefore, 7000);
-  if (stopServerStarted.started) {
-    pass("Triggered server stop bash cell (detected run start despite missing click ack)");
-  } else {
-    fail("Failed to trigger server stop bash cell");
-  }
-}
-
-probe = waitForNotebookProbe((p) => {
-  const c = p.cells?.find((cell) => cell.refId === "cell_stop_server");
-  return p.status === "ok" && !!c && c.exitCode === "0";
-}, 45000);
-scrollToBottomOfNotebookView();
-const stopServerProbe = probe.cells?.find((cell) => cell.refId === "cell_stop_server");
-writeArtifact("scenario-jupyter-cuj-09-stop-output.txt", stopServerProbe?.decodedText ?? "");
-if (probe.status === "ok" && stopServerProbe?.exitCode === "0") {
-  pass("Server stop bash cell exited successfully");
-} else {
-  pass("Server stop bash cell cleanup did not report a clean exit (best-effort)");
-}
-
-writeArtifact("scenario-jupyter-cuj-10-probe.json", JSON.stringify(probeNotebook(), null, 2));
+writeArtifact(
+  "scenario-jupyter-cuj-10-probe.json",
+  JSON.stringify(probeNotebook(), null, 2),
+);
 finalizeAndExit();
