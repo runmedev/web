@@ -258,6 +258,20 @@ describe('NotebookCommentsPanel', () => {
 
     expect(onSelectCell).not.toHaveBeenCalled()
   })
+
+  it('surfaces ambiguous legacy comment anchors without selecting a cell', () => {
+    const onSelectCell = vi.fn()
+    const ambiguous = thread('ambiguous comment', 'legacy-cell', {
+      id: 'comment-ambiguous',
+    })
+    ambiguous.ambiguous = true
+
+    renderPanel({ threads: [ambiguous], onSelectCell })
+
+    expect(screen.getByText('Ambiguous cell')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Cell' })).toBeNull()
+    expect(onSelectCell).not.toHaveBeenCalled()
+  })
 })
 
 function thread(
@@ -268,6 +282,7 @@ function thread(
   return {
     cellId,
     orphaned: false,
+    ambiguous: false,
     comment: {
       id: overrides.id,
       content,

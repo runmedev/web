@@ -147,11 +147,13 @@ jobs:
           sudo apt-get install -y ffmpeg
           ffmpeg -version
 
-      - name: Checkout Runme (main)
+      - name: Checkout Runme (direct Jupyter bridge)
         uses: actions/checkout@v4
         with:
           repository: runmedev/runme
-          ref: main
+          # The Web client uses the direct /v1/jupyter/kernels API from
+          # runmedev/runme#1280. Return this to main after that PR merges.
+          ref: refs/pull/1280/head
           path: runme-src
           fetch-depth: 1
 

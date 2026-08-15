@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid'
 
+import { migrateNotebookCellIds } from '../lib/cellIdentity'
 import { IPYNB_MIME_TYPE, type IpynbMergeState } from '../lib/ipynb'
 import {
   createInitialNotebookFile,
@@ -158,29 +159,6 @@ function notebookNameForRename(oldName: string, name: string): string {
     throw new Error(`Unsupported notebook file extension: ${name}`)
   }
   return `${trimmed}${oldFormat === 'ipynb' ? '.ipynb' : '.json'}`
-}
-
-/**
- * Normalizes notebook cells loaded from JSON by ensuring every cell has a
- * stable `refId`. Some fixtures only include the legacy `runme.dev/id` metadata
- * entry, which the UI cannot render without converting to `refId`.
- */
-function ensureCellRefIds(notebook: parser_pb.Notebook): void {
-  for (const cell of notebook.cells ?? []) {
-    if (cell?.refId) {
-      continue;
-    }
-    const metadata = cell.metadata ?? {};
-    const legacyId = metadata["runme.dev/id"];
-    const fallbackId =
-      typeof legacyId === "string" && legacyId.trim().length > 0
-        ? legacyId
-        : `cell_${crypto.randomUUID().replace(/-/g, "")}`;
-    cell.refId = fallbackId;
-    if (!cell.metadata) {
-      cell.metadata = metadata;
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -421,7 +399,6 @@ export class FilesystemNotebookStore {
         state: decoded.ipynb,
       })
     }
-    ensureCellRefIds(notebook)
     return notebook
   }
 
@@ -451,6 +428,7 @@ export class FilesystemNotebookStore {
       }
     }
 
+    migrateNotebookCellIds(notebook)
     let json: string
     if (detectNotebookFileFormat(parsed.relativePath) === 'ipynb') {
       let preservation = this.ipynbState.get(recId)

@@ -45,7 +45,7 @@ function createSingleMarkupCellNotebook(markdownText: string): parser_pb.Noteboo
         kind: parser_pb.CellKind.MARKUP,
         role: parser_pb.CellRole.USER,
         languageId: "markdown",
-        refId: `markup_${crypto.randomUUID().replace(/-/g, "")}`,
+        refId: crypto.randomUUID().replace(/-/g, ""),
         value: markdownText,
         metadata: {},
       }),

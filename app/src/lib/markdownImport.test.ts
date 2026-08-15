@@ -49,6 +49,7 @@ describe("deserializeMarkdownToNotebook", () => {
     expect(notebook.cells).toHaveLength(1);
     expect(notebook.cells[0]?.kind).toBe(parser_pb.CellKind.MARKUP);
     expect(notebook.cells[0]?.value).toBe("# Title\ncontent");
+    expect(notebook.cells[0]?.refId).toMatch(/^[0-9a-f]{32}$/);
   });
 
   it("returns parser output when deserialization succeeds", async () => {

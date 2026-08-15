@@ -1000,6 +1000,65 @@ describe('LocalNotebooks pending Drive create', () => {
 })
 
 describe('LocalNotebooks ipynb conversion', () => {
+  it('migrates cached kind-prefixed identities through the preservation map', async () => {
+    const shadowStorage = new MemoryIpynbShadowStorage()
+    const shadowText = JSON.stringify({
+      cells: [
+        {
+          cell_type: 'markdown',
+          id: 'intro',
+          metadata: {},
+          source: '# Intro',
+        },
+      ],
+      metadata: {},
+      nbformat: 4,
+      nbformat_minor: 5,
+    })
+    const shadowRef = await shadowStorage.write(
+      'local://file/cached-ipynb',
+      shadowText
+    )
+    const store = createTestStore({}, { ipynbShadowStorage: shadowStorage })
+    const cached = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'markup_intro',
+          kind: parser_pb.CellKind.MARKUP,
+          value: '# Intro',
+        }),
+      ],
+    })
+    await store.files.put({
+      id: 'local://file/cached-ipynb',
+      name: 'cached.ipynb',
+      mimeType: IPYNB_MIME_TYPE,
+      remoteId: 'local://file/cached-ipynb',
+      lastRemoteChecksum: '',
+      lastSynced: new Date().toISOString(),
+      doc: toJsonString(
+        parser_pb.NotebookSchema,
+        cached,
+        NOTEBOOK_JSON_WRITE_OPTIONS
+      ),
+      md5Checksum: '',
+      ipynbPreservation: {
+        upstreamFingerprint: md5(shadowText),
+        shadowRef,
+        jupyterIdByRunmeRefId: { markup_intro: 'intro' },
+        baselineCellHashes: {},
+        baselineOutputHashes: {},
+      },
+    })
+
+    const loaded = await store.load('local://file/cached-ipynb')
+
+    expect(loaded.cells[0]?.refId).toBe('intro')
+    expect(
+      loaded.cells[0]?.metadata['runme.dev/legacyCellRefIds']
+    ).toBeUndefined()
+  })
+
   it('keeps browser-local ipynb shadows current and accepts raw ipynb updates', async () => {
     const store = createTestStore({})
     await store.folders.put({
