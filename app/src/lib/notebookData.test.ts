@@ -560,6 +560,7 @@ describe("NotebookData cell defaults", () => {
 
     expect(cell.languageId).toBe("markdown");
     expect(cell.kind).toBe(parser_pb.CellKind.CODE);
+    expect(cell.refId).toMatch(/^[0-9a-f]{32}$/);
   });
 });
 

@@ -2,10 +2,14 @@ import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
 import md5 from 'md5'
 
 import { MimeType, parser_pb } from '../runme/client'
+import {
+  LEGACY_IPYNB_CELL_ID_METADATA_KEY,
+  assertCanonicalNotebookCellIds,
+  uniqueCanonicalCellId,
+} from './cellIdentity'
 
 export const IPYNB_MIME_TYPE = 'application/x-ipynb+json'
 export const IPYNB_RAW_CELL_METADATA_KEY = 'runme.dev/ipynbRawCell'
-export const IPYNB_CELL_ID_METADATA_KEY = 'runme.dev/ipynbCellId'
 
 const IPYNB_OUTPUT_TYPE = 'runme.dev/ipynbOutputType'
 const IPYNB_OUTPUT_METADATA = 'runme.dev/ipynbOutputMetadata'
@@ -123,7 +127,7 @@ function runmeCellEnvelope(cell: parser_pb.Cell): JsonObject {
   delete json.refId
   const metadata = optionalObject(json.metadata)
   if (metadata) {
-    delete metadata[IPYNB_CELL_ID_METADATA_KEY]
+    delete metadata[LEGACY_IPYNB_CELL_ID_METADATA_KEY]
     delete metadata[IPYNB_RAW_CELL_METADATA_KEY]
     if (Object.keys(metadata).length === 0) {
       delete json.metadata
@@ -158,30 +162,6 @@ function sourceText(source: unknown): string {
     return source.join('')
   }
   throw new Error('Jupyter cell source must be a string or string array')
-}
-
-function legalCellId(value: unknown, fallback: string): string {
-  const candidate =
-    typeof value === 'string'
-      ? value.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64)
-      : ''
-  return candidate || fallback.slice(0, 64)
-}
-
-function uniqueCellId(
-  value: unknown,
-  index: number,
-  used: Set<string>
-): string {
-  const base = legalCellId(value, `cell-${index + 1}`)
-  let candidate = base
-  let suffix = 2
-  while (used.has(candidate)) {
-    const tail = `-${suffix++}`
-    candidate = `${base.slice(0, 64 - tail.length)}${tail}`
-  }
-  used.add(candidate)
-  return candidate
 }
 
 function languageIdForNotebook(metadata: JsonObject): string {
@@ -422,7 +402,7 @@ export function decodeIpynb(text: string): DecodedIpynb {
       sourceCell.metadata,
       `Jupyter cell ${index} metadata`
     )
-    const id = uniqueCellId(sourceCell.id, index, usedIds)
+    const id = uniqueCanonicalCellId(sourceCell.id, index, usedIds)
     // Treat nbformat cell IDs as repairable input. Keeping the repaired value
     // in the shadow makes the next save both valid and lossless for the rest
     // of the cell object.
@@ -432,11 +412,11 @@ export function decodeIpynb(text: string): DecodedIpynb {
       sourceCell.cell_type === 'code'
         ? parser_pb.CellKind.CODE
         : parser_pb.CellKind.MARKUP
-    const refId = `${kind === parser_pb.CellKind.CODE ? 'code' : 'markup'}_${id}`
+    const refId = id
     const metadata: Record<string, string> = {
       ...(preservedCell?.metadata ?? {}),
-      [IPYNB_CELL_ID_METADATA_KEY]: id,
     }
+    delete metadata[LEGACY_IPYNB_CELL_ID_METADATA_KEY]
     if (sourceCell.cell_type === 'raw') {
       metadata[IPYNB_RAW_CELL_METADATA_KEY] = 'true'
     }
@@ -494,18 +474,12 @@ export function decodeIpynb(text: string): DecodedIpynb {
   }
 }
 
-function newJupyterId(cell: parser_pb.Cell, index: number): string {
-  return legalCellId(
-    cell.metadata?.[IPYNB_CELL_ID_METADATA_KEY] || cell.refId,
-    `cell-${index + 1}`
-  )
-}
-
 export function encodeIpynb(
   notebook: parser_pb.Notebook,
   shadowText?: string,
   previousState?: Partial<IpynbMergeState>
 ): EncodedIpynb {
+  assertCanonicalNotebookCellIds(notebook)
   const shadow = shadowText
     ? validateNotebook(JSON.parse(shadowText))
     : createEmptyIpynb()
@@ -514,21 +488,27 @@ export function encodeIpynb(
       .filter((cell) => typeof cell.id === 'string')
       .map((cell) => [cell.id as string, cell])
   )
-  const usedIds = new Set<string>()
   const jupyterIdByRunmeRefId: Record<string, string> = {}
   const baselineCellHashes: Record<string, string> = {}
   const baselineOutputHashes: Record<string, string> = {}
-
-  const cells = notebook.cells.map((cell, index): IpynbCell => {
-    const mappedId = previousState?.jupyterIdByRunmeRefId?.[cell.refId]
-    const id = uniqueCellId(
-      mappedId ?? newJupyterId(cell, index),
-      index,
-      usedIds
+  const previousRefIdByJupyterId = new Map(
+    Object.entries(previousState?.jupyterIdByRunmeRefId ?? {}).map(
+      ([refId, jupyterId]) => [jupyterId, refId]
     )
-    const matched = mappedId ? sourceById.get(mappedId) : undefined
+  )
+
+  const cells = notebook.cells.map((cell): IpynbCell => {
+    const id = cell.refId
+    const matched = sourceById.get(id)
+    const previousRefId = previousRefIdByJupyterId.get(id)
+    const baselineRefId =
+      previousState?.baselineOutputHashes?.[cell.refId] !== undefined
+        ? cell.refId
+        : previousRefId
     const outputUnchanged =
-      previousState?.baselineOutputHashes?.[cell.refId] === outputHash(cell)
+      (baselineRefId
+        ? previousState?.baselineOutputHashes?.[baselineRefId]
+        : undefined) === outputHash(cell)
     const raw = cell.metadata?.[IPYNB_RAW_CELL_METADATA_KEY] === 'true'
     const cellType: IpynbCell['cell_type'] =
       cell.kind === parser_pb.CellKind.CODE ? 'code' : raw ? 'raw' : 'markdown'

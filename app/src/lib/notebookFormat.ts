@@ -1,6 +1,7 @@
 import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
 
 import { parser_pb } from '../runme/client'
+import { migrateNotebookCellIds } from './cellIdentity'
 import {
   type DecodedIpynb,
   type EncodedIpynb,
@@ -50,14 +51,13 @@ export function decodeNotebookFile(
     const ipynb = decodeIpynb(text)
     return { format, notebook: ipynb.notebook, ipynb }
   }
-  return {
-    format,
-    notebook: text
-      ? fromJsonString(parser_pb.NotebookSchema, text, {
-          ignoreUnknownFields: true,
-        })
-      : create(parser_pb.NotebookSchema, { cells: [] }),
-  }
+  const notebook = text
+    ? fromJsonString(parser_pb.NotebookSchema, text, {
+        ignoreUnknownFields: true,
+      })
+    : create(parser_pb.NotebookSchema, { cells: [] })
+  migrateNotebookCellIds(notebook)
+  return { format, notebook }
 }
 
 export function encodeRunmeNotebook(notebook: parser_pb.Notebook): string {

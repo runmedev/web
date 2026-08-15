@@ -1149,8 +1149,7 @@ export class NotebookData {
       normalizedLanguage && normalizedLanguage.length > 0
         ? normalizedLanguage
         : 'markdown'
-    const refPrefix = isMarkup ? 'markup' : 'code'
-    const refID = `${refPrefix}_${crypto.randomUUID().replace(/-/g, '')}`
+    const refID = crypto.randomUUID().replace(/-/g, '')
     const now = new Date().toISOString()
     return create(parser_pb.CellSchema, {
       metadata: {

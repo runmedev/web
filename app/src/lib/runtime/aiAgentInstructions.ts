@@ -175,6 +175,13 @@ console.log(JSON.stringify({
 
 If the user's notebook reference is ambiguous, ask which notebook to use before making a change.
 
+## Preserve cell identity
+
+- Treat a cell's \`refId\` as an opaque canonical identifier. Do not infer the cell kind or storage format from prefixes such as \`code_\` or \`markup_\`.
+- Runme JSON \`Cell.refId\` and IPYNB \`cell.id\` are the same identity serialized under format-specific field names.
+- Do not add, remove, or rewrite a cell ID unless the user explicitly requests an identity migration or the notebook API repairs invalid legacy data.
+- When updating or executing cells, reuse the exact \`refId\` returned by \`notebooks.get({ uri })\`.
+
 ## Request write access when needed
 
 If \`doc.summary.readOnly\` is true because another Runme session owns the notebook, request a cooperative takeover before mutating it:

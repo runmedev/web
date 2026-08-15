@@ -266,17 +266,22 @@ Store a Runme-specific JSON payload in the Drive comment `anchor` field:
 ```json
 {
   "runme": {
-    "version": 1,
+    "version": 2,
     "type": "cell",
-    "cellId": "code_85a39e07",
-    "cellIdKind": "runme-ref-id"
+    "cellId": "85a39e07"
   }
 }
 ```
 
-For imported `.ipynb`, preserve the Jupyter cell `id` and map it to Runme's
-stable cell identity. When a Drive comment anchors to an imported notebook cell,
-the anchor should use the same stable id Runme uses to render that cell.
+`Cell.refId` and IPYNB `cell.id` are the same canonical identity serialized
+under format-specific field names. Cell kind is not part of identity. New
+anchors store only the opaque canonical `cellId` and do not include
+`cellIdKind`.
+
+The reader continues accepting version 1 anchors with `cellIdKind`. It resolves
+legacy `code_<id>` and `markup_<id>` values through the notebook's migration
+aliases. Exact canonical matches win. An alias that maps to multiple cells is
+shown as ambiguous instead of being silently retargeted.
 
 If a cell is deleted, keep the Drive comment. The UI should render it as an
 orphaned thread if the anchor no longer resolves.
@@ -316,7 +321,6 @@ type NotebookCommentThread = {
 type CommentAnchor = {
   type: 'cell'
   cellId: string
-  cellIdKind: 'runme-ref-id' | 'ipynb-cell-id'
 }
 
 type NotebookCommentReply = {

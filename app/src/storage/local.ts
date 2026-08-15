@@ -4,6 +4,7 @@ import md5 from 'md5'
 import { Subject, debounceTime } from 'rxjs'
 import { v4 as uuidv4 } from 'uuid'
 
+import { migrateNotebookCellIds } from '../lib/cellIdentity'
 import { IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { appLogger } from '../lib/logging/runtime'
 import { serializeNotebookToMarkdown } from '../lib/markdown/serializeNotebookToMarkdown'
@@ -1190,6 +1191,7 @@ export class LocalNotebooks extends Dexie {
       )
     }
 
+    migrateNotebookCellIds(notebook)
     const serialized = serializeNotebook(notebook)
     const checksum = checksumForSerializedNotebook(serialized)
 
@@ -1244,9 +1246,16 @@ export class LocalNotebooks extends Dexie {
     }
 
     try {
-      return fromJsonString(parser_pb.NotebookSchema, record.doc, {
+      const notebook = fromJsonString(parser_pb.NotebookSchema, record.doc, {
         ignoreUnknownFields: true,
       })
+      migrateNotebookCellIds(
+        notebook,
+        detectNotebookFileFormat(record.name) === 'ipynb'
+          ? record.ipynbPreservation?.jupyterIdByRunmeRefId
+          : undefined
+      )
+      return notebook
     } catch (error) {
       console.error('Failed to parse notebook from local store', error)
       return create(parser_pb.NotebookSchema, { cells: [] })

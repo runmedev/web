@@ -1999,13 +1999,23 @@ function NotebookTabContent({
     })
     return labels
   }, [cellDatas])
+  const commentCellIdentities = useMemo(
+    () =>
+      cellDatas.flatMap((cellData) => {
+        const cell = cellData.snapshot
+        return cell?.refId
+          ? [{ refId: cell.refId, metadata: cell.metadata }]
+          : []
+      }),
+    [cellDatas]
+  )
   const commentsByCell = useMemo(
-    () => groupCommentsByCell(comments),
-    [comments]
+    () => groupCommentsByCell(comments, commentCellIdentities),
+    [commentCellIdentities, comments]
   )
   const commentThreads = useMemo(
-    () => toCellCommentThreads(comments, new Set(cellLabels.keys())),
-    [cellLabels, comments]
+    () => toCellCommentThreads(comments, commentCellIdentities),
+    [commentCellIdentities, comments]
   )
 
   const findCellElement = useCallback((cellId: string) => {

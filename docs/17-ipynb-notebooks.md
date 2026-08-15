@@ -54,6 +54,27 @@ shared document. The OPFS shadow belongs to the current browser profile and is
 supporting preservation data, not a second user-visible notebook or Markdown
 sidecar.
 
+## Cell identity
+
+Runme uses one canonical cell identifier in both notebook formats:
+
+- Runme JSON stores it as `Cell.refId`.
+- IPYNB stores the same value as `cell.id`.
+
+The IPYNB codec does not duplicate that identity in the per-cell Runme metadata
+envelope.
+
+Cell IDs are opaque. Their value does not encode whether a cell is code or
+markup, and changing a cell's kind does not change its identity. Canonical IDs
+use Jupyter's cell-ID constraints: 1–64 ASCII letters, digits, hyphens, or
+underscores, unique within the notebook.
+
+When Runme opens legacy content with a missing, invalid, or duplicate ID, it
+repairs the ID deterministically. Older Runme releases derived IDs such as
+`code_<id>` and `markup_<id>` from IPYNB cells. Runme recognizes those values
+as migration aliases for existing Drive comment anchors, but new files and
+comments use only the canonical ID.
+
 ## Sharing through Google Colab
 
 Google Colab can open an IPYNB file stored in Google Drive:
@@ -105,6 +126,7 @@ avoid relying on files or credentials that exist only in one runtime.
 - The extension determines the saved format.
 - The Runme protocol remains the internal data model.
 - Load and save convert between IPYNB and the Runme protocol.
+- `Cell.refId` and IPYNB `cell.id` contain the same canonical value.
 - OPFS preserves Jupyter-only fields that the Runme model cannot represent.
 - Only Drive-backed IPYNB notebooks expose a Google Colab link.
 - Drive permissions determine who can open the copied Colab link.

@@ -3,7 +3,6 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  IPYNB_CELL_ID_METADATA_KEY,
   IPYNB_RAW_CELL_METADATA_KEY,
   decodeIpynb,
   encodeIpynb,
@@ -67,13 +66,18 @@ describe('ipynb codec', () => {
     const decoded = decodeIpynb(text)
 
     expect(decoded.notebook.cells).toHaveLength(3)
+    expect(decoded.notebook.cells.map((cell) => cell.refId)).toEqual([
+      'intro',
+      'raw-cell',
+      'code-cell',
+    ])
     expect(decoded.notebook.cells[0]?.value).toBe('# Hello\nworld')
     expect(
       decoded.notebook.cells[1]?.metadata?.[IPYNB_RAW_CELL_METADATA_KEY]
     ).toBe('true')
     expect(
-      decoded.notebook.cells[2]?.metadata?.[IPYNB_CELL_ID_METADATA_KEY]
-    ).toBe('code-cell')
+      decoded.notebook.cells[2]?.metadata?.['runme.dev/ipynbCellId']
+    ).toBeUndefined()
     expect(decoded.notebook.cells[2]?.outputs).toHaveLength(2)
 
     decoded.notebook.cells[2]!.value = 'print("edited")\n'
@@ -95,6 +99,11 @@ describe('ipynb codec', () => {
       sourceNotebook.cells[2].outputs
     )
     expect(roundTripped.metadata).toMatchObject(sourceNotebook.metadata)
+    expect(roundTripped.cells[2].id).toBe('code-cell')
+    expect(roundTripped.cells[2].metadata.runme.cell.refId).toBeUndefined()
+    expect(
+      decodeIpynb(encoded.text).notebook.cells.map((cell) => cell.refId)
+    ).toEqual(['intro', 'raw-cell', 'code-cell'])
   })
 
   it('repairs duplicate and invalid cell ids without losing cell metadata', () => {
@@ -113,8 +122,34 @@ describe('ipynb codec', () => {
     )
 
     expect(ids).toEqual(['invalid-id', 'invalid-id-2', 'code-cell'])
+    expect(decoded.notebook.cells.map((cell) => cell.refId)).toEqual(ids)
     expect(JSON.parse(encoded.text).cells[0].metadata).toMatchObject(
       sourceNotebook.cells[0].metadata
+    )
+  })
+
+  it('preserves identity when a cell changes kind', () => {
+    const decoded = decodeIpynb(JSON.stringify(sourceNotebook))
+    decoded.notebook.cells[0]!.kind = decoded.notebook.cells[2]!.kind
+
+    const encoded = encodeIpynb(
+      decoded.notebook,
+      JSON.stringify(sourceNotebook),
+      decoded
+    )
+    const cell = JSON.parse(encoded.text).cells[0]
+
+    expect(cell.cell_type).toBe('code')
+    expect(cell.id).toBe('intro')
+    expect(decodeIpynb(encoded.text).notebook.cells[0]?.refId).toBe('intro')
+  })
+
+  it('rejects non-canonical Runme identities instead of creating aliases', () => {
+    const decoded = decodeIpynb(JSON.stringify(sourceNotebook))
+    decoded.notebook.cells[0]!.refId = 'invalid id'
+
+    expect(() => encodeIpynb(decoded.notebook)).toThrow(
+      'invalid canonical refId'
     )
   })
 

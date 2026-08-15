@@ -38,6 +38,12 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain('documentation.get(name)')
     expect(instructions).toContain('await app.getSessionID()')
     expect(instructions).toContain('local://')
+    expect(instructions).toContain('opaque canonical identifier')
+    expect(instructions).toContain('IPYNB `cell.id`')
+    expect(instructions).toContain(
+      'Do not infer the cell kind or storage format'
+    )
+    expect(instructions).toContain('reuse the exact `refId`')
     expect(instructions).toContain("kind: 'markup'")
     expect(instructions).toContain('notebooks.requestWriteAccess')
     expect(instructions).toContain('expectedRevision')
