@@ -1,6 +1,5 @@
 import type { parser_pb } from '../runme/client'
 
-export const LEGACY_CELL_REF_IDS_METADATA_KEY = 'runme.dev/legacyCellRefIds'
 export const LEGACY_IPYNB_CELL_ID_METADATA_KEY = 'runme.dev/ipynbCellId'
 
 const CELL_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
@@ -28,26 +27,6 @@ export function uniqueCanonicalCellId(
   }
   used.add(candidate)
   return candidate
-}
-
-export function legacyCellRefIds(
-  metadata: Record<string, string> | undefined
-): string[] {
-  const value = metadata?.[LEGACY_CELL_REF_IDS_METADATA_KEY]
-  if (!value) {
-    return []
-  }
-  try {
-    const parsed = JSON.parse(value)
-    return Array.isArray(parsed)
-      ? parsed.filter(
-          (candidate): candidate is string =>
-            typeof candidate === 'string' && candidate.length > 0
-        )
-      : []
-  } catch {
-    return []
-  }
 }
 
 /**
@@ -89,18 +68,6 @@ export function migrateNotebookCellIds(
 
     changed = true
     cell.refId = canonical
-    if (original && original !== canonical) {
-      // Kind-prefixed IPYNB identities are recoverable from the canonical ID
-      // and should not become permanent per-cell metadata. Other legacy IDs
-      // need an explicit alias so Drive comments can continue to resolve.
-      if (preferred === original) {
-        const aliases = new Set([...legacyCellRefIds(cell.metadata), original])
-        aliases.delete(canonical)
-        cell.metadata[LEGACY_CELL_REF_IDS_METADATA_KEY] = JSON.stringify([
-          ...aliases,
-        ])
-      }
-    }
   })
 
   return { changed }

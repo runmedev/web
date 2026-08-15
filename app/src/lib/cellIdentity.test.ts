@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 
 import { parser_pb } from '../runme/client'
 import {
-  LEGACY_CELL_REF_IDS_METADATA_KEY,
   assertCanonicalNotebookCellIds,
   migrateNotebookCellIds,
 } from './cellIdentity'
@@ -25,12 +24,6 @@ describe('cell identity', () => {
       'invalid-id-2',
       'cell-3',
     ])
-    expect(notebook.cells[0]?.metadata[LEGACY_CELL_REF_IDS_METADATA_KEY]).toBe(
-      '["invalid id"]'
-    )
-    expect(notebook.cells[1]?.metadata[LEGACY_CELL_REF_IDS_METADATA_KEY]).toBe(
-      '["invalid id"]'
-    )
     expect(migrateNotebookCellIds(notebook).changed).toBe(false)
   })
 
@@ -42,9 +35,6 @@ describe('cell identity', () => {
     migrateNotebookCellIds(notebook, { markup_intro: 'intro' })
 
     expect(notebook.cells[0]?.refId).toBe('intro')
-    expect(
-      notebook.cells[0]?.metadata[LEGACY_CELL_REF_IDS_METADATA_KEY]
-    ).toBeUndefined()
   })
 
   it('promotes a legacy metadata id to the canonical refId', () => {

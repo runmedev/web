@@ -259,17 +259,18 @@ describe('NotebookCommentsPanel', () => {
     expect(onSelectCell).not.toHaveBeenCalled()
   })
 
-  it('surfaces ambiguous legacy comment anchors without selecting a cell', () => {
+  it('shows missing comment targets as deleted cells without selecting them', () => {
     const onSelectCell = vi.fn()
-    const ambiguous = thread('ambiguous comment', 'legacy-cell', {
-      id: 'comment-ambiguous',
+    const orphaned = thread('orphaned comment', 'markup_intro', {
+      id: 'comment-orphaned',
     })
-    ambiguous.ambiguous = true
+    orphaned.orphaned = true
 
-    renderPanel({ threads: [ambiguous], onSelectCell })
+    renderPanel({ threads: [orphaned], onSelectCell })
 
-    expect(screen.getByText('Ambiguous cell')).toBeTruthy()
+    expect(screen.getByText('Deleted cell')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Cell' })).toBeNull()
+    fireEvent.click(screen.getByText('orphaned comment').closest('article')!)
     expect(onSelectCell).not.toHaveBeenCalled()
   })
 })
@@ -282,7 +283,6 @@ function thread(
   return {
     cellId,
     orphaned: false,
-    ambiguous: false,
     comment: {
       id: overrides.id,
       content,
