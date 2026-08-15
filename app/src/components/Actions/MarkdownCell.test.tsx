@@ -500,4 +500,70 @@ describe("MarkdownCell", () => {
     expect(screen.getByTestId("markdown-rendered")).toBeTruthy();
     expect(screen.queryByTestId("markdown-editor")).toBeNull();
   });
+
+  it("annotates rendered text and creates a target from a browser selection", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-comment-selection",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "Read **the [migration guide](https://example.com)** today.",
+    });
+    const onStartRenderedComment = vi.fn();
+
+    renderMarkdownCell(new StubCellData(cell) as unknown as CellData, {
+      commentsAvailable: true,
+      onStartRenderedComment,
+    });
+
+    const rendered = screen.getByTestId("markdown-rendered");
+    expect(rendered.getAttribute("data-runme-cell-id")).toBe(
+      "md-comment-selection",
+    );
+    expect(rendered.getAttribute("data-runme-projection")).toBe(
+      "runme-markdown-text@1",
+    );
+    const selectedSpan = screen.getByText("migration guide");
+    expect(selectedSpan.getAttribute("data-runme-projection-start")).toBe("9");
+    expect(selectedSpan.getAttribute("data-runme-source-start")).toBe("12");
+
+    const range = document.createRange();
+    range.setStart(selectedSpan.firstChild!, 0);
+    range.setEnd(selectedSpan.firstChild!, "migration guide".length);
+    Object.defineProperty(range, "getBoundingClientRect", {
+      value: () => ({
+        bottom: 20,
+        height: 10,
+        left: 10,
+        right: 90,
+        top: 10,
+        width: 80,
+        x: 10,
+        y: 10,
+        toJSON: () => ({}),
+      }),
+    });
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    fireEvent.pointerUp(rendered);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Comment on selected text" }),
+    );
+    expect(onStartRenderedComment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "cell-text",
+        cellId: "md-comment-selection",
+        selectors: [
+          { type: "TextPositionSelector", start: 9, end: 24 },
+          expect.objectContaining({
+            type: "TextQuoteSelector",
+            exact: "migration guide",
+          }),
+        ],
+      }),
+    );
+  });
 });

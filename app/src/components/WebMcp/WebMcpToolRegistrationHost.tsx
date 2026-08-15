@@ -1,14 +1,14 @@
-import { useEffect } from "react";
+import { useEffect } from 'react'
 
-import { appLogger } from "../../lib/logging/runtime";
-import { getAppConsoleData } from "../../lib/appConsole/appConsoleController";
+import { appLogger } from '../../lib/logging/runtime'
+import { getAppConsoleData } from '../../lib/appConsole/appConsoleController'
 import {
   buildReadInstructionsForAIAgentsInputSchema,
   readInstructionsForAIAgents,
   READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_DESCRIPTION,
   READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
   READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_TITLE,
-} from "../../lib/runtime/aiAgentInstructions";
+} from '../../lib/runtime/aiAgentInstructions'
 import {
   buildGetDocumentationInputSchema,
   buildListDocumentationInputSchema,
@@ -20,14 +20,14 @@ import {
   LIST_DOCUMENTATION_TOOL_DESCRIPTION,
   LIST_DOCUMENTATION_TOOL_NAME,
   LIST_DOCUMENTATION_TOOL_TITLE,
-} from "../../lib/runtime/documentationTools";
+} from '../../lib/runtime/documentationTools'
 import {
   buildExecuteCodeInputSchema,
   EXECUTE_CODE_TOOL_DESCRIPTION,
   EXECUTE_CODE_TOOL_NAME,
   EXECUTE_CODE_TOOL_TITLE,
-} from "../../lib/runtime/executeCodeTool";
-import { useCodeModeExecutor } from "../../lib/runtime/useCodeModeExecutor";
+} from '../../lib/runtime/executeCodeTool'
+import { useCodeModeExecutor } from '../../lib/runtime/useCodeModeExecutor'
 import {
   buildDismissTourInputSchema,
   buildShowTourStepInputSchema,
@@ -39,65 +39,65 @@ import {
   SHOW_TOUR_STEP_TOOL_DESCRIPTION,
   SHOW_TOUR_STEP_TOOL_NAME,
   SHOW_TOUR_STEP_TOOL_TITLE,
-} from "../../lib/runtime/tourGuideTool";
+} from '../../lib/runtime/tourGuideTool'
 
 type ModelContextClientLike = {
   requestUserInteraction?: (
-    callback: () => Promise<unknown> | unknown,
-  ) => Promise<unknown>;
-};
+    callback: () => Promise<unknown> | unknown
+  ) => Promise<unknown>
+}
 
 type ModelContextLike = {
   registerTool: (
     tool: {
-      name: string;
-      title: string;
-      description: string;
-      inputSchema: Record<string, unknown>;
+      name: string
+      title: string
+      description: string
+      inputSchema: Record<string, unknown>
       annotations: {
-        readOnlyHint: boolean;
-        untrustedContentHint: boolean;
-      };
+        readOnlyHint: boolean
+        untrustedContentHint: boolean
+      }
       execute: (
         input: Record<string, unknown>,
-        client: ModelContextClientLike,
-      ) => Promise<string> | string;
+        client: ModelContextClientLike
+      ) => Promise<string> | string
     },
-    options?: { signal?: AbortSignal },
-  ) => void;
-};
+    options?: { signal?: AbortSignal }
+  ) => void
+}
 
 function getModelContext(): ModelContextLike | null {
-  if (typeof navigator === "undefined") {
-    return null;
+  if (typeof navigator === 'undefined') {
+    return null
   }
   const modelContext = (
     navigator as Navigator & {
-      modelContext?: Partial<ModelContextLike>;
+      modelContext?: Partial<ModelContextLike>
     }
-  ).modelContext;
-  if (!modelContext || typeof modelContext.registerTool !== "function") {
-    return null;
+  ).modelContext
+  if (!modelContext || typeof modelContext.registerTool !== 'function') {
+    return null
   }
-  return modelContext as ModelContextLike;
+  return modelContext as ModelContextLike
 }
 
 export default function WebMcpToolRegistrationHost() {
-  const codeModeExecutor = useCodeModeExecutor({ mode: "sandbox" });
-  const appConsoleData = getAppConsoleData();
+  const codeModeExecutor = useCodeModeExecutor({ mode: 'sandbox' })
+  const appConsoleData = getAppConsoleData()
 
   useEffect(() => {
-    const modelContext = getModelContext();
+    const modelContext = getModelContext()
     if (!modelContext) {
-      appLogger.debug("WebMCP unavailable; skipping tool registration", {
+      appLogger.debug('WebMCP unavailable; skipping tool registration', {
         attrs: {
-          scope: "webmcp",
+          scope: 'webmcp',
         },
-      });
-      return;
+      })
+      return
     }
 
-    const registrationController = new AbortController();
+    const registrationController = new AbortController()
 
     try {
       modelContext.registerTool(
@@ -112,56 +112,56 @@ export default function WebMcpToolRegistrationHost() {
           },
           execute: async (input) => {
             const code =
-              typeof input?.code === "string"
+              typeof input?.code === 'string'
                 ? input.code
-                : String(input?.code ?? "");
+                : String(input?.code ?? '')
             const timeoutMs =
-              typeof input?.timeoutMs === "number" &&
+              typeof input?.timeoutMs === 'number' &&
               Number.isFinite(input.timeoutMs)
                 ? Math.min(60_000, Math.max(1_000, Math.trunc(input.timeoutMs)))
-                : undefined;
-            await appConsoleData.hydrate();
+                : undefined
+            await appConsoleData.hydrate()
 
-            const execution = appConsoleData.startExternalExecution(code);
+            const execution = appConsoleData.startExternalExecution(code)
 
             try {
               const result = await codeModeExecutor.execute({
                 code,
-                source: "webmcp",
+                source: 'webmcp',
                 ...(timeoutMs ? { timeoutMs } : {}),
                 hooks: execution
                   ? {
                       onStdout: (chunk) => {
-                        appConsoleData.appendStdout(execution.cellId, chunk);
+                        appConsoleData.appendStdout(execution.cellId, chunk)
                       },
                       onStderr: (chunk) => {
-                        appConsoleData.appendStderr(execution.cellId, chunk);
+                        appConsoleData.appendStderr(execution.cellId, chunk)
                       },
                     }
                   : undefined,
-              });
+              })
 
               if (execution) {
                 appConsoleData.completeExecution(execution.cellId, {
                   exitCode: result.exitCode,
-                });
+                })
               }
-              return result.output;
+              return result.output
             } catch (error) {
               if (execution) {
                 appConsoleData.failExecution(execution.cellId, {
                   message:
                     error instanceof Error ? error.message : String(error),
-                });
+                })
               }
-              throw error;
+              throw error
             }
           },
         },
         {
           signal: registrationController.signal,
-        },
-      );
+        }
+      )
       modelContext.registerTool(
         {
           name: READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
@@ -176,8 +176,8 @@ export default function WebMcpToolRegistrationHost() {
         },
         {
           signal: registrationController.signal,
-        },
-      );
+        }
+      )
       modelContext.registerTool(
         {
           name: LIST_DOCUMENTATION_TOOL_NAME,
@@ -192,8 +192,8 @@ export default function WebMcpToolRegistrationHost() {
         },
         {
           signal: registrationController.signal,
-        },
-      );
+        }
+      )
       modelContext.registerTool(
         {
           name: GET_DOCUMENTATION_TOOL_NAME,
@@ -206,13 +206,13 @@ export default function WebMcpToolRegistrationHost() {
           },
           execute: (input) =>
             getDocumentationForAgents(
-              typeof input?.name === "string" ? input.name : "",
+              typeof input?.name === 'string' ? input.name : ''
             ),
         },
         {
           signal: registrationController.signal,
-        },
-      );
+        }
+      )
       modelContext.registerTool(
         {
           name: SHOW_TOUR_STEP_TOOL_NAME,
@@ -227,8 +227,8 @@ export default function WebMcpToolRegistrationHost() {
         },
         {
           signal: registrationController.signal,
-        },
-      );
+        }
+      )
       modelContext.registerTool(
         {
           name: DISMISS_TOUR_TOOL_NAME,
@@ -243,11 +243,11 @@ export default function WebMcpToolRegistrationHost() {
         },
         {
           signal: registrationController.signal,
-        },
-      );
-      appLogger.info("WebMCP tools registered", {
+        }
+      )
+      appLogger.info('WebMCP tools registered', {
         attrs: {
-          scope: "webmcp",
+          scope: 'webmcp',
           toolNames: [
             EXECUTE_CODE_TOOL_NAME,
             READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
@@ -257,23 +257,23 @@ export default function WebMcpToolRegistrationHost() {
             DISMISS_TOUR_TOOL_NAME,
           ],
         },
-      });
+      })
     } catch (error) {
-      registrationController.abort();
-      appLogger.error("Failed to register WebMCP tool", {
+      registrationController.abort()
+      appLogger.error('Failed to register WebMCP tool', {
         attrs: {
-          scope: "webmcp",
+          scope: 'webmcp',
           error: String(error),
         },
-      });
-      return;
+      })
+      return
     }
 
     return () => {
-      registrationController.abort();
-      appLogger.info("WebMCP tools unregistered", {
+      registrationController.abort()
+      appLogger.info('WebMCP tools unregistered', {
         attrs: {
-          scope: "webmcp",
+          scope: 'webmcp',
           toolNames: [
             EXECUTE_CODE_TOOL_NAME,
             READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
@@ -283,9 +283,9 @@ export default function WebMcpToolRegistrationHost() {
             DISMISS_TOUR_TOOL_NAME,
           ],
         },
-      });
-    };
-  }, [appConsoleData, codeModeExecutor]);
+      })
+    }
+  }, [appConsoleData, codeModeExecutor])
 
-  return null;
+  return null
 }

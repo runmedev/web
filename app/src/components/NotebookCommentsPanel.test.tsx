@@ -8,7 +8,10 @@ import {
 } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { CellCommentThread } from '../lib/notebookComments'
+import type {
+  CellCommentThread,
+  CommentDraftTarget,
+} from '../lib/notebookComments'
 import { createCellCommentAnchor } from '../lib/notebookComments'
 import { NotebookCommentsPanel } from './NotebookCommentsPanel'
 
@@ -21,7 +24,7 @@ function renderPanel(overrides = {}) {
     threads: [],
     cellLabels: new Map<string, string>(),
     activeCellId: null,
-    draftCellId: null,
+    draftTarget: null,
     busy: false,
     onCancelDraft: noop,
     onCreateComment: noopAsync,
@@ -84,7 +87,7 @@ describe('NotebookCommentsPanel', () => {
         thread('comment on cell three', 'cell-3', { id: 'comment-3' }),
         thread('comment on cell one', 'cell-1', { id: 'comment-1' }),
       ],
-      draftCellId: 'cell-2',
+      draftTarget: { type: 'cell' as const, cellId: 'cell-2' },
       cellLabels: new Map([
         ['cell-1', 'Cell 1'],
         ['cell-2', 'Cell 2'],
@@ -103,7 +106,7 @@ describe('NotebookCommentsPanel', () => {
 
   it('marks the draft comment active when its cell has focus', () => {
     renderPanel({
-      draftCellId: 'cell-2',
+      draftTarget: { type: 'cell' as const, cellId: 'cell-2' },
       activeCellId: 'cell-2',
       cellLabels: new Map([['cell-2', 'Cell 2']]),
     })
@@ -120,7 +123,7 @@ describe('NotebookCommentsPanel', () => {
         thread('first comment on cell four', 'cell-4', { id: 'comment-1' }),
         thread('second comment on cell four', 'cell-4', { id: 'comment-2' }),
       ],
-      draftCellId: 'cell-4',
+      draftTarget: { type: 'cell' as const, cellId: 'cell-4' },
       activeCellId: 'cell-4',
       cellLabels: new Map([['cell-4', 'Cell 4']]),
     })
@@ -154,7 +157,9 @@ describe('NotebookCommentsPanel', () => {
       ]),
     })
 
-    const inactiveArticle = screen.getByText('inactive thread').closest('article')
+    const inactiveArticle = screen
+      .getByText('inactive thread')
+      .closest('article')
     const activeArticle = screen.getByText('active thread').closest('article')
 
     expect(inactiveArticle).not.toBeNull()
@@ -179,7 +184,9 @@ describe('NotebookCommentsPanel', () => {
         name: 'Reply',
       })
     ).toBeTruthy()
-    expect(within(activeArticle as HTMLElement).getByText('Active')).toBeTruthy()
+    expect(
+      within(activeArticle as HTMLElement).getByText('Active')
+    ).toBeTruthy()
   })
 
   it('moves the active thread when the focused cell changes', async () => {
@@ -273,7 +280,123 @@ describe('NotebookCommentsPanel', () => {
     fireEvent.click(screen.getByText('orphaned comment').closest('article')!)
     expect(onSelectCell).not.toHaveBeenCalled()
   })
+
+  it('shows a rendered selection draft as its own quoted thread', () => {
+    renderPanel({
+      threads: [thread('whole cell comment', 'cell-1', { id: 'whole-cell' })],
+      draftTarget: rangeDraftTarget(),
+      activeCellId: 'cell-1',
+      cellLabels: new Map([['cell-1', 'Cell 1']]),
+    })
+
+    expect(screen.getByText('the migration guide')).toBeTruthy()
+    expect(
+      document.querySelectorAll('[data-comment-panel-item="thread"]')
+    ).toHaveLength(2)
+  })
+
+  it('keeps a comment draft when creation fails', async () => {
+    const onCreateComment = vi.fn(async () => {
+      throw new Error('credential expired')
+    })
+    renderPanel({
+      draftTarget: rangeDraftTarget(),
+      cellLabels: new Map([['cell-1', 'Cell 1']]),
+      onCreateComment,
+    })
+
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'Please clarify this.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }))
+
+    await waitFor(() => expect(onCreateComment).toHaveBeenCalledOnce())
+    expect(textarea.value).toBe('Please clarify this.')
+  })
+
+  it('keeps only the selected range thread active within one cell', async () => {
+    renderPanel({
+      threads: [
+        rangeThread('first range', 'comment-range-1', 5, 8),
+        rangeThread('second range', 'comment-range-2', 12, 18),
+      ],
+      activeCellId: 'cell-1',
+      cellLabels: new Map([['cell-1', 'Cell 1']]),
+    })
+
+    const first = screen.getByText('first range').closest('article')!
+    const second = screen.getByText('second range').closest('article')!
+    fireEvent.click(second)
+
+    await waitFor(() => {
+      expect(first.getAttribute('aria-current')).toBeNull()
+      expect(second.getAttribute('aria-current')).toBe('true')
+    })
+  })
 })
+
+function rangeDraftTarget(): CommentDraftTarget {
+  return {
+    type: 'cell-text',
+    cellId: 'cell-1',
+    surface: 'rendered-markdown',
+    source: 'Read **the migration guide**.',
+    projection: {
+      name: 'runme-markdown-text',
+      version: 1,
+      text: 'Read the migration guide.',
+      segments: [],
+    },
+    selectors: [
+      { type: 'TextPositionSelector', start: 5, end: 24 },
+      { type: 'TextQuoteSelector', exact: 'the migration guide' },
+    ],
+    sourceHints: [{ start: 7, end: 26 }],
+  }
+}
+
+function rangeThread(
+  content: string,
+  id: string,
+  start: number,
+  end: number
+): CellCommentThread {
+  return {
+    cellId: 'cell-1',
+    orphaned: false,
+    anchor: {
+      type: 'cell-text',
+      cellId: 'cell-1',
+      version: 2,
+      surface: 'rendered-markdown',
+      state: {
+        driveRevisionId: 'revision-1',
+        sourceSha256: 'source-hash',
+        projection: {
+          name: 'runme-markdown-text',
+          version: 1,
+          sha256: 'projection-hash',
+        },
+      },
+      selectors: [
+        { type: 'TextPositionSelector', start, end },
+        {
+          type: 'TextQuoteSelector',
+          exact: `range ${start}-${end}`,
+        },
+      ],
+    },
+    location: { status: 'exact', start, end },
+    comment: {
+      id,
+      content,
+      createdTime: '2026-06-14T10:00:00Z',
+      modifiedTime: '2026-06-14T10:00:00Z',
+      author: { displayName: 'Tester' },
+      resolved: false,
+      replies: [],
+    },
+  }
+}
 
 function thread(
   content: string,
@@ -283,6 +406,12 @@ function thread(
   return {
     cellId,
     orphaned: false,
+    anchor: {
+      type: 'cell',
+      cellId,
+      version: 2,
+    },
+    location: { status: 'cell' },
     comment: {
       id: overrides.id,
       content,

@@ -186,6 +186,10 @@ export type DriveComment = {
   deleted?: boolean
   htmlContent?: string
   content?: string
+  quotedFileContent?: {
+    mimeType?: string
+    value?: string
+  }
   mentionedEmailAddresses?: string[]
   assigneeEmailAddress?: string
   replies?: DriveReply[]
@@ -199,7 +203,7 @@ type DriveCommentListResponse = {
 }
 
 const DRIVE_COMMENT_FIELDS =
-  'id,createdTime,modifiedTime,resolved,anchor,author(displayName,photoLink,me),deleted,htmlContent,content,replies(id,createdTime,modifiedTime,action,author(displayName,photoLink,me),deleted,htmlContent,content)'
+  'id,createdTime,modifiedTime,resolved,anchor,author(displayName,photoLink,me),deleted,htmlContent,content,quotedFileContent(mimeType,value),replies(id,createdTime,modifiedTime,action,author(displayName,photoLink,me),deleted,htmlContent,content)'
 const DRIVE_COMMENT_LIST_FIELDS = `nextPageToken,comments(${DRIVE_COMMENT_FIELDS})`
 
 class GapiDriveFilesClient implements DriveFilesClient {
@@ -1522,7 +1526,12 @@ export class DriveNotebookStore {
   async createComment(
     uri: string,
     content: string,
-    anchor?: string
+    options?:
+      | string
+      | {
+          anchor?: string
+          quotedFileContent?: { mimeType: 'text/plain'; value: string }
+        }
   ): Promise<DriveComment> {
     const { id, type } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
@@ -1532,12 +1541,16 @@ export class DriveNotebookStore {
     if (!trimmedContent) {
       throw new Error('DriveNotebookStore.createComment requires content')
     }
+    const anchor = typeof options === 'string' ? options : options?.anchor
+    const quotedFileContent =
+      typeof options === 'string' ? undefined : options?.quotedFileContent
     const client = await this.getFilesClient()
     const response = await client.createComment({
       fileId: id,
       resource: {
         content: trimmedContent,
         ...(anchor ? { anchor } : {}),
+        ...(quotedFileContent ? { quotedFileContent } : {}),
       },
       fields: DRIVE_COMMENT_FIELDS,
     })

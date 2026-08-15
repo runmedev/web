@@ -53,8 +53,11 @@
     "react-router-dom": "^6.26.2",
     "react18-json-view": "0.2.9",
     "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "remark-rehype": "^11.1.2",
     "rxjs": "^7.8.2",
     "ulid": "^2.4.0",
+    "unified": "^11.0.5",
     "use-resize-observer": "^9.1.0",
     "uuid": "^11.1.0",
     "yaml": "^2.8.1"

@@ -653,6 +653,44 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     )
   })
 
+  it('exposes Drive comments through the shared AppKernel globals', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const notebook = new FakeNotebookData(remoteUri, 'review.ipynb')
+    const cell = notebook.appendCell(parser_pb.CellKind.MARKUP, 'markdown')
+    cell.value = 'Review this paragraph.'
+    notebook.updateCell(cell)
+    const listComments = vi.fn(async () => [
+      {
+        id: 'comment-1',
+        content: 'Clarify this.',
+        resolved: false,
+        anchor: JSON.stringify({
+          runme: { version: 2, type: 'cell', cellId: cell.refId },
+        }),
+      },
+    ])
+    appState.setDriveNotebookStore({ listComments } as any)
+    const globals = createAppJsGlobals({
+      runme: createRunme(notebook),
+      resolveNotebook: () => notebook,
+    })
+
+    const annotations = await globals.comments.list()
+
+    expect(listComments).toHaveBeenCalledWith(remoteUri)
+    expect(annotations).toEqual([
+      expect.objectContaining({
+        id: 'comment-1',
+        content: 'Clarify this.',
+        editableSource: expect.objectContaining({
+          cellId: cell.refId,
+          content: 'Review this paragraph.',
+        }),
+        currentResolution: { status: 'cell' },
+      }),
+    ])
+  })
+
   it('loads Google service account credentials from a picked local JSON file', async () => {
     const sendOutput = vi.fn()
     const serviceAccountJson = JSON.stringify({

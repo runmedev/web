@@ -2449,7 +2449,10 @@ describe('Action component', () => {
     fireEvent.contextMenu(screen.getByTestId('markdown-action'))
     fireEvent.click(screen.getByRole('button', { name: 'Add Comment' }))
 
-    expect(onStartComment).toHaveBeenCalledWith('cell-md-context-comment')
+    expect(onStartComment).toHaveBeenCalledWith({
+      type: 'cell',
+      cellId: 'cell-md-context-comment',
+    })
     expect(screen.queryByRole('button', { name: 'Add Comment' })).toBeNull()
   })
 })

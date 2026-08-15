@@ -363,6 +363,43 @@ The view model should be derived from:
 Runme may cache this model in memory or IndexedDB for responsiveness. The cache
 is not the source of truth.
 
+## Agent Runtime API
+
+Expose comments through the shared AppKernel `comments` namespace and the
+`ExecuteCode` sandbox bridge. Do not register comment-specific WebMCP tools.
+Agents should compose comment reads, notebook edits, verification, replies, and
+resolution in JavaScript executed through the existing `ExecuteCode` tool.
+
+```ts
+type CommentsApi = {
+  list(args?: {
+    target?: NotebookTarget
+    status?: 'open' | 'resolved' | 'all'
+  }): Promise<AgentAnnotation[]>
+  parseAnchor(anchor: string): CommentAnchor | null
+  resolveAnchor(args: { anchor: string; source: string }): ResolvedCommentAnchor
+  reply(args: {
+    target?: NotebookTarget
+    commentId: string
+    content: string
+  }): Promise<DriveReply>
+  resolve(args: {
+    target?: NotebookTarget
+    commentId: string
+  }): Promise<DriveReply>
+  reopen(args: {
+    target?: NotebookTarget
+    commentId: string
+  }): Promise<DriveReply>
+  help(): string
+}
+```
+
+`AgentAnnotation` includes the parsed anchor, original rendered quote and
+selectors, current editable Markdown source ranges, and resolution status.
+Agents must use the canonical cell ID from the resolved target and must not
+infer targets from comment text or the comments-panel DOM.
+
 ## UI Proposal
 
 V0 should use a Google Docs-like split between margin affordances and a global
@@ -486,7 +523,9 @@ type NotebookCommentsAvailability =
   | { enabled: false; reason: 'not-drive-backed' | 'missing-permission' }
 
 type NotebookCommentsService = {
-  getAvailability(target?: NotebookTarget): Promise<NotebookCommentsAvailability>
+  getAvailability(
+    target?: NotebookTarget
+  ): Promise<NotebookCommentsAvailability>
   listThreads(args: {
     target?: NotebookTarget
     status?: 'open' | 'resolved' | 'all'
@@ -518,11 +557,29 @@ Expose an AppKernel API after the internal service is stable:
 ```ts
 type NotebooksCommentsApi = {
   availability(target?: NotebookTarget): Promise<NotebookCommentsAvailability>
-  list(args?: { target?: NotebookTarget; status?: 'open' | 'resolved' | 'all' }): Promise<NotebookCommentThread[]>
-  create(args: { target?: NotebookTarget; cellId: string; content: string }): Promise<NotebookCommentThread>
-  reply(args: { target?: NotebookTarget; driveCommentId: string; content: string }): Promise<NotebookCommentThread>
-  resolve(args: { target?: NotebookTarget; driveCommentId: string; content?: string }): Promise<NotebookCommentThread>
-  reopen(args: { target?: NotebookTarget; driveCommentId: string }): Promise<NotebookCommentThread>
+  list(args?: {
+    target?: NotebookTarget
+    status?: 'open' | 'resolved' | 'all'
+  }): Promise<NotebookCommentThread[]>
+  create(args: {
+    target?: NotebookTarget
+    cellId: string
+    content: string
+  }): Promise<NotebookCommentThread>
+  reply(args: {
+    target?: NotebookTarget
+    driveCommentId: string
+    content: string
+  }): Promise<NotebookCommentThread>
+  resolve(args: {
+    target?: NotebookTarget
+    driveCommentId: string
+    content?: string
+  }): Promise<NotebookCommentThread>
+  reopen(args: {
+    target?: NotebookTarget
+    driveCommentId: string
+  }): Promise<NotebookCommentThread>
 }
 ```
 
@@ -580,7 +637,9 @@ Agent mentions need explicit product behavior:
    entry point.
 6. Add mention parsing for `@codex`.
 7. Emit local comment-created events for comments created in the current tab.
-8. Add AppKernel comments API once the internal Drive comments service settles.
+8. Expose the Drive comments service through the AppKernel `comments` namespace
+   and the `ExecuteCode` sandbox bridge. Do not add comment-specific WebMCP
+   tools.
 9. Spike Workspace Events subscriptions for Drive comment and reply events,
    including Pub/Sub setup, OAuth scopes, renewal behavior, and event payloads.
 10. Decide whether Workspace Events-backed agent dispatch is part of V0 or the
