@@ -731,6 +731,44 @@ describe("DriveNotebookStore", () => {
     expect(comment.id).toBe("comment-1");
   });
 
+  it("creates range comments with reviewed content", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (_input, init) => {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          content: "Clarify this text",
+          anchor: "range-anchor",
+          quotedFileContent: {
+            mimeType: "text/plain",
+            value: "migration guide",
+          },
+        });
+        return new Response(
+          JSON.stringify({ id: "comment-range", content: "Clarify this text" }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    await store.createComment(
+      "https://drive.google.com/file/d/file123/view",
+      "Clarify this text",
+      {
+        anchor: "range-anchor",
+        quotedFileContent: {
+          mimeType: "text/plain",
+          value: "migration guide",
+        },
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("resolves Drive comments through replies", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     const fetchMock = vi

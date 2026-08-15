@@ -108,9 +108,12 @@ import {
 import { appState } from '../../lib/runtime/AppState'
 import {
   createCellCommentAnchor,
+  createCellTextCommentAnchor,
   groupCommentsByCell,
   toCellCommentThreads,
+  type CommentDraftTarget,
 } from '../../lib/notebookComments'
+import { buildRenderedMarkdownProjection } from '../../lib/markdown/renderedMarkdownProjection'
 import DriveLinkStatusTab from '../DriveLinkStatusTab'
 import DriveSyncStatusTab from '../DriveSyncStatusTab'
 import RunnerStatusTab from '../RunnerStatusTab'
@@ -598,7 +601,7 @@ export function Action({
   readOnly?: boolean
   commentsAvailable?: boolean
   commentCount?: number
-  onStartComment?: (cellId: string) => void
+  onStartComment?: (target: CommentDraftTarget) => void
   isDeepLinkTarget?: boolean
 }) {
   const { store } = useNotebookStore()
@@ -973,7 +976,7 @@ export function Action({
       setContextMenu(null)
       return
     }
-    onStartComment(cell.refId)
+    onStartComment({ type: 'cell', cellId: cell.refId })
     setContextMenu(null)
   }, [cell?.refId, onStartComment])
 
@@ -1413,6 +1416,8 @@ export function Action({
               isWindowFocused={isWindowFocused}
               onFocusRoleChange={handleMarkdownFocusRoleChange}
               onLinkClick={handleMarkdownLinkClick}
+              commentsAvailable={commentsAvailable}
+              onStartRenderedComment={onStartComment}
             />
             <CellCommentButton
               count={commentCount}
@@ -1988,7 +1993,9 @@ function NotebookTabContent({
   >()
   const [comments, setComments] = useState<DriveComment[]>([])
   const [commentsBusy, setCommentsBusy] = useState(false)
-  const [draftCellId, setDraftCellId] = useState<string | null>(null)
+  const [draftTarget, setDraftTarget] = useState<CommentDraftTarget | null>(
+    null
+  )
   const cellLabels = useMemo(() => {
     const labels = new Map<string, string>()
     cellDatas.forEach((cellData, index) => {
@@ -2003,7 +2010,14 @@ function NotebookTabContent({
     () =>
       cellDatas.flatMap((cellData) => {
         const cell = cellData.snapshot
-        return cell?.refId ? [{ refId: cell.refId }] : []
+        return cell?.refId
+          ? [
+              {
+                refId: cell.refId,
+                value: cell.value,
+              },
+            ]
+          : []
       }),
     [cellDatas]
   )
@@ -2145,10 +2159,10 @@ function NotebookTabContent({
   )
 
   const startCommentDraft = useCallback(
-    (cellId: string) => {
+    (target: CommentDraftTarget) => {
       openCommentsPanel()
-      setDraftCellId(cellId)
-      selectCommentCell(cellId)
+      setDraftTarget(target)
+      selectCommentCell(target.cellId)
     },
     [openCommentsPanel, selectCommentCell]
   )
@@ -2177,7 +2191,7 @@ function NotebookTabContent({
 
   useEffect(() => {
     let cancelled = false
-    setDraftCellId(null)
+    setDraftTarget(null)
     setCommentsErrorMessage(undefined)
 
     void (async () => {
@@ -2238,34 +2252,85 @@ function NotebookTabContent({
   }, [refreshComments])
 
   const handleCreateComment = useCallback(
-    async (cellId: string, content: string) => {
+    async (target: CommentDraftTarget, content: string) => {
       const driveStore = appState.driveNotebookStore
       if (!commentsRemoteUri || !driveStore) {
         showToast({
           tone: 'error',
           message: 'Comments are only available for Google Drive notebooks.',
         })
-        return
+        throw new Error(
+          'Comments are only available for Google Drive notebooks.'
+        )
       }
       setCommentsBusy(true)
       try {
-        await driveStore.createComment(
-          commentsRemoteUri,
-          content,
-          createCellCommentAnchor(cellId)
-        )
-        setDraftCellId(null)
+        if (target.type === 'cell-text') {
+          const currentCell = cellDatas
+            .map((cellData) => cellData.snapshot)
+            .find((cell) => cell?.refId === target.cellId)
+          if (!currentCell || currentCell.value !== target.source) {
+            throw new Error(
+              'The Markdown cell changed after the selection was captured. Reselect the text before commenting.'
+            )
+          }
+          const currentProjection = buildRenderedMarkdownProjection(
+            currentCell.value
+          )
+          if (currentProjection.text !== target.projection.text) {
+            throw new Error(
+              'The rendered Markdown changed after the selection was captured. Reselect the text before commenting.'
+            )
+          }
+          if (store && docUri.startsWith('local://')) {
+            await notebookData?.flushPendingPersist?.()
+            await store.sync(docUri)
+            const state = await store.getSyncState(docUri)
+            if (state.status !== 'synced') {
+              throw new Error(
+                `The notebook could not be synchronized before commenting (${state.status}).`
+              )
+            }
+          }
+          const driveRevisionId = (
+            await driveStore.getVersionMetadata(commentsRemoteUri)
+          )?.headRevisionId
+          if (!driveRevisionId) {
+            throw new Error(
+              'Google Drive did not return a revision for the selected notebook state.'
+            )
+          }
+          const anchor = await createCellTextCommentAnchor(
+            target,
+            driveRevisionId
+          )
+          await driveStore.createComment(commentsRemoteUri, content, {
+            anchor,
+            quotedFileContent: {
+              mimeType: 'text/plain',
+              value: target.selectors[1].exact,
+            },
+          })
+        } else {
+          await driveStore.createComment(
+            commentsRemoteUri,
+            content,
+            createCellCommentAnchor(target.cellId)
+          )
+        }
+        setDraftTarget(null)
         await refreshComments()
       } catch (error) {
         showToast({
           tone: 'error',
           message: `Failed to create comment: ${String(error)}`,
         })
+        throw error
       } finally {
         setCommentsBusy(false)
       }
     },
-    [commentsRemoteUri, refreshComments]
+    [cellDatas, commentsRemoteUri, docUri, notebookData, refreshComments, store]
   )
 
   const handleReplyToComment = useCallback(
@@ -2674,9 +2739,9 @@ function NotebookTabContent({
           threads={commentThreads}
           cellLabels={cellLabels}
           activeCellId={activeCell?.refId ?? null}
-          draftCellId={draftCellId}
+          draftTarget={draftTarget}
           busy={commentsBusy}
-          onCancelDraft={() => setDraftCellId(null)}
+          onCancelDraft={() => setDraftTarget(null)}
           onCreateComment={handleCreateComment}
           onReply={handleReplyToComment}
           onResolve={handleResolveComment}

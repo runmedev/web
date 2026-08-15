@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
+import { buildRenderedMarkdownProjection } from './markdown/renderedMarkdownProjection'
 import {
   createCellCommentAnchor,
+  createCellTextCommentAnchor,
   groupCommentsByCell,
   parseCellCommentAnchor,
+  parseCommentAnchor,
+  resolveRenderedTextAnchor,
   toCellCommentThreads,
 } from './notebookComments'
 
@@ -160,5 +164,113 @@ describe('notebook comment anchors', () => {
     )
 
     expect(thread).toMatchObject({ cellId: 'cell-1', orphaned: true })
+  })
+
+  it('round-trips rendered Markdown selectors with revision state', async () => {
+    const source = 'Read **the [migration guide](https://example.com)** today.'
+    const projection = buildRenderedMarkdownProjection(source)
+    const serialized = await createCellTextCommentAnchor(
+      {
+        type: 'cell-text',
+        cellId: 'cell-1',
+        surface: 'rendered-markdown',
+        source,
+        projection,
+        selectors: [
+          { type: 'TextPositionSelector', start: 5, end: 24 },
+          {
+            type: 'TextQuoteSelector',
+            exact: 'the migration guide',
+            prefix: 'Read ',
+            suffix: ' today.',
+          },
+        ],
+        sourceHints: [
+          { start: 7, end: 11 },
+          { start: 12, end: 27 },
+        ],
+      },
+      'revision-7'
+    )
+
+    expect(parseCommentAnchor(serialized)).toMatchObject({
+      type: 'cell-text',
+      cellId: 'cell-1',
+      surface: 'rendered-markdown',
+      state: {
+        driveRevisionId: 'revision-7',
+        sourceSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        projection: {
+          name: 'runme-markdown-text',
+          version: 1,
+          sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        },
+      },
+    })
+  })
+
+  it('resolves exact, moved, ambiguous, and outdated rendered targets', () => {
+    const anchor = parseCommentAnchor(
+      JSON.stringify({
+        runme: {
+          version: 2,
+          type: 'cell-text',
+          cellId: 'cell-1',
+          surface: 'rendered-markdown',
+          state: {
+            driveRevisionId: 'revision-7',
+            sourceSha256: 'source-hash',
+            projection: {
+              name: 'runme-markdown-text',
+              version: 1,
+              sha256: 'projection-hash',
+            },
+          },
+          selectors: [
+            { type: 'TextPositionSelector', start: 5, end: 24 },
+            {
+              type: 'TextQuoteSelector',
+              exact: 'the migration guide',
+              prefix: 'Read ',
+              suffix: ' today.',
+            },
+          ],
+        },
+      })
+    )
+    expect(anchor?.type).toBe('cell-text')
+    if (anchor?.type !== 'cell-text') {
+      throw new Error('Expected a rendered text anchor')
+    }
+
+    expect(
+      resolveRenderedTextAnchor(
+        anchor,
+        'Read **the [migration guide](https://example.com)** today.'
+      )
+    ).toEqual({ status: 'exact', start: 5, end: 24 })
+    expect(
+      resolveRenderedTextAnchor(
+        anchor,
+        'Before. Read **the [migration guide](https://example.com)** today.'
+      )
+    ).toEqual({ status: 'moved', start: 13, end: 32 })
+    expect(
+      resolveRenderedTextAnchor(
+        anchor,
+        'the migration guide and the migration guide'
+      )
+    ).toEqual({
+      status: 'ambiguous',
+      candidates: [
+        { start: 0, end: 19 },
+        { start: 24, end: 43 },
+      ],
+    })
+    expect(resolveRenderedTextAnchor(anchor, 'The guide was removed.')).toEqual(
+      {
+        status: 'outdated',
+      }
+    )
   })
 })

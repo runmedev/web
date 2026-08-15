@@ -32,6 +32,7 @@ describe('readInstructionsForAIAgents', () => {
 
     expect(instructions).toContain('WebMCP')
     expect(instructions).toContain('ExecuteCode')
+    expect(instructions).toContain('listNotebookComments')
     expect(instructions).toContain('listDocumentation')
     expect(instructions).toContain('getDocumentation')
     expect(instructions).toContain('await documentation.list()')

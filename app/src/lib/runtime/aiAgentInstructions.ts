@@ -29,6 +29,7 @@ This Runme instance is served from ${runmeOrigin}.
 - Reuse a Runme tab whose URL begins with ${runmeOrigin}. A session URL has the form \`${sessionUrl}\`.
 - Claim the selected tab and use its page-provided WebMCP tools for notebook reads, edits, and execution.
 - Use the \`ExecuteCode\` WebMCP tool to run AppKernel JavaScript. Print values explicitly with \`console.log(...)\`.
+- Use the read-only \`listNotebookComments\` WebMCP tool to retrieve unresolved Drive comments together with their reviewed target, editable source hints, and current resolution. Do not infer a target from the comment body or comments-panel DOM.
 - Do not edit or execute notebook cells through DOM clicks, keyboard automation, or Computer Use. If WebMCP is unavailable, stop and tell the user what must be done manually.
 
 ## Use tour mode for UI guidance

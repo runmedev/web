@@ -1,5 +1,7 @@
 import { useEffect } from "react";
 
+import { useCurrentDoc } from "../../contexts/CurrentDocContext";
+import { useNotebookContext } from "../../contexts/NotebookContext";
 import { appLogger } from "../../lib/logging/runtime";
 import { getAppConsoleData } from "../../lib/appConsole/appConsoleController";
 import {
@@ -27,7 +29,15 @@ import {
   EXECUTE_CODE_TOOL_NAME,
   EXECUTE_CODE_TOOL_TITLE,
 } from "../../lib/runtime/executeCodeTool";
+import {
+  buildListNotebookCommentsInputSchema,
+  listNotebookCommentsForAgents,
+  LIST_NOTEBOOK_COMMENTS_TOOL_DESCRIPTION,
+  LIST_NOTEBOOK_COMMENTS_TOOL_NAME,
+  LIST_NOTEBOOK_COMMENTS_TOOL_TITLE,
+} from "../../lib/runtime/notebookCommentsTool";
 import { useCodeModeExecutor } from "../../lib/runtime/useCodeModeExecutor";
+import { appState } from "../../lib/runtime/AppState";
 import {
   buildDismissTourInputSchema,
   buildShowTourStepInputSchema,
@@ -85,6 +95,8 @@ function getModelContext(): ModelContextLike | null {
 export default function WebMcpToolRegistrationHost() {
   const codeModeExecutor = useCodeModeExecutor({ mode: "sandbox" });
   const appConsoleData = getAppConsoleData();
+  const { getCurrentDoc } = useCurrentDoc();
+  const { getNotebookData } = useNotebookContext();
 
   useEffect(() => {
     const modelContext = getModelContext();
@@ -100,6 +112,33 @@ export default function WebMcpToolRegistrationHost() {
     const registrationController = new AbortController();
 
     try {
+      modelContext.registerTool(
+        {
+          name: LIST_NOTEBOOK_COMMENTS_TOOL_NAME,
+          title: LIST_NOTEBOOK_COMMENTS_TOOL_TITLE,
+          description: LIST_NOTEBOOK_COMMENTS_TOOL_DESCRIPTION,
+          inputSchema: buildListNotebookCommentsInputSchema(),
+          annotations: {
+            readOnlyHint: true,
+            untrustedContentHint: true,
+          },
+          execute: async (input) =>
+            JSON.stringify(
+              await listNotebookCommentsForAgents({
+                input,
+                currentUri: getCurrentDoc(),
+                resolveNotebook: (uri) => getNotebookData(uri) ?? null,
+                localNotebooks: appState.localNotebooks,
+                driveNotebookStore: appState.driveNotebookStore,
+              }),
+              null,
+              2,
+            ),
+        },
+        {
+          signal: registrationController.signal,
+        },
+      );
       modelContext.registerTool(
         {
           name: EXECUTE_CODE_TOOL_NAME,
@@ -253,6 +292,7 @@ export default function WebMcpToolRegistrationHost() {
             READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
             LIST_DOCUMENTATION_TOOL_NAME,
             GET_DOCUMENTATION_TOOL_NAME,
+            LIST_NOTEBOOK_COMMENTS_TOOL_NAME,
             SHOW_TOUR_STEP_TOOL_NAME,
             DISMISS_TOUR_TOOL_NAME,
           ],
@@ -279,13 +319,14 @@ export default function WebMcpToolRegistrationHost() {
             READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
             LIST_DOCUMENTATION_TOOL_NAME,
             GET_DOCUMENTATION_TOOL_NAME,
+            LIST_NOTEBOOK_COMMENTS_TOOL_NAME,
             SHOW_TOUR_STEP_TOOL_NAME,
             DISMISS_TOUR_TOOL_NAME,
           ],
         },
       });
     };
-  }, [appConsoleData, codeModeExecutor]);
+  }, [appConsoleData, codeModeExecutor, getCurrentDoc, getNotebookData]);
 
   return null;
 }

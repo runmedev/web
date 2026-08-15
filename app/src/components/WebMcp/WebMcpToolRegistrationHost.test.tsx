@@ -33,6 +33,14 @@ vi.mock("../../lib/logging/runtime", () => ({
   appLogger: appLoggerMock,
 }));
 
+vi.mock("../../contexts/CurrentDocContext", () => ({
+  useCurrentDoc: () => ({ getCurrentDoc: () => null }),
+}));
+
+vi.mock("../../contexts/NotebookContext", () => ({
+  useNotebookContext: () => ({ getNotebookData: () => null }),
+}));
+
 import WebMcpToolRegistrationHost from "./WebMcpToolRegistrationHost";
 
 describe("WebMcpToolRegistrationHost", () => {
@@ -104,7 +112,15 @@ describe("WebMcpToolRegistrationHost", () => {
 
     const rendered = render(<WebMcpToolRegistrationHost />);
 
-    expect(registerTool).toHaveBeenCalledTimes(6);
+    expect(registerTool).toHaveBeenCalledTimes(7);
+    const listNotebookComments = registered.find(
+      ({ tool }) => tool.name === "listNotebookComments",
+    );
+    expect(listNotebookComments?.tool.title).toBe("List Notebook Comments");
+    expect(listNotebookComments?.tool.annotations).toEqual({
+      readOnlyHint: true,
+      untrustedContentHint: true,
+    });
     const executeCode = registered.find(
       ({ tool }) => tool.name === "ExecuteCode",
     );
@@ -286,7 +302,9 @@ describe("WebMcpToolRegistrationHost", () => {
         modelContext?: { registerTool: ReturnType<typeof vi.fn> };
       }
     ).modelContext?.registerTool;
-    const registered = registerTool?.mock.calls[0]?.[0];
+    const registered = registerTool?.mock.calls
+      .map((call) => call[0])
+      .find((tool) => tool.name === "ExecuteCode");
 
     await expect(
       registered?.execute({
@@ -317,7 +335,9 @@ describe("WebMcpToolRegistrationHost", () => {
         modelContext?: { registerTool: ReturnType<typeof vi.fn> };
       }
     ).modelContext?.registerTool;
-    const registered = registerTool?.mock.calls[0]?.[0];
+    const registered = registerTool?.mock.calls
+      .map((call) => call[0])
+      .find((tool) => tool.name === "ExecuteCode");
 
     await expect(
       registered?.execute({

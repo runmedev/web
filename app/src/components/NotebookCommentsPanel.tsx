@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 
-import type { CellCommentThread } from '../lib/notebookComments'
+import type {
+  CellCommentThread,
+  CommentDraftTarget,
+} from '../lib/notebookComments'
 
 type CommentsStatus = 'loading' | 'available' | 'unavailable' | 'error'
 type CommentsFilter = 'open' | 'resolved' | 'all'
@@ -10,7 +13,7 @@ type CommentsPanelItem = {
   cellId: string | null
   orphaned: boolean
   threads: CellCommentThread[]
-  draftCellId?: string
+  draftTarget?: CommentDraftTarget
 }
 
 export function NotebookCommentsPanel({
@@ -19,7 +22,7 @@ export function NotebookCommentsPanel({
   threads,
   cellLabels,
   activeCellId,
-  draftCellId,
+  draftTarget,
   busy,
   onCancelDraft,
   onCreateComment,
@@ -35,10 +38,13 @@ export function NotebookCommentsPanel({
   threads: CellCommentThread[]
   cellLabels: Map<string, string>
   activeCellId?: string | null
-  draftCellId: string | null
+  draftTarget: CommentDraftTarget | null
   busy: boolean
   onCancelDraft: () => void
-  onCreateComment: (cellId: string, content: string) => Promise<void>
+  onCreateComment: (
+    target: CommentDraftTarget,
+    content: string
+  ) => Promise<void>
   onReply: (commentId: string, content: string) => Promise<void>
   onResolve: (commentId: string) => Promise<void>
   onReopen: (commentId: string) => Promise<void>
@@ -56,8 +62,8 @@ export function NotebookCommentsPanel({
     [cellLabels, filter, threads]
   )
   const panelItems = useMemo(
-    () => sortCommentPanelItems(sortedThreads, cellLabels, draftCellId),
-    [cellLabels, draftCellId, sortedThreads]
+    () => sortCommentPanelItems(sortedThreads, cellLabels, draftTarget),
+    [cellLabels, draftTarget, sortedThreads]
   )
   const counts = useMemo(
     () => ({
@@ -80,8 +86,14 @@ export function NotebookCommentsPanel({
   useEffect(() => {
     const visibleKeys = new Set(panelItems.map((item) => item.key))
     const firstThreadKey = panelItems[0]?.key ?? null
+    const currentItem = panelItems.find((item) => item.key === activeThreadKey)
+    const currentItemMatchesActiveCell = Boolean(
+      activeCellId &&
+        currentItem?.cellId === activeCellId &&
+        !currentItem.orphaned
+    )
     const nextActiveThreadKey =
-      activeCellThreadKey ??
+      (currentItemMatchesActiveCell ? activeThreadKey : activeCellThreadKey) ??
       (activeThreadKey && visibleKeys.has(activeThreadKey)
         ? activeThreadKey
         : firstThreadKey)
@@ -89,25 +101,31 @@ export function NotebookCommentsPanel({
     if (nextActiveThreadKey !== activeThreadKey) {
       setActiveThreadKey(nextActiveThreadKey)
     }
-  }, [activeCellThreadKey, activeThreadKey, panelItems])
+  }, [activeCellId, activeCellThreadKey, activeThreadKey, panelItems])
 
   const submitDraft = () => {
-    if (!draftCellId) {
+    if (!draftTarget) {
       return
     }
     const content = draft.trim()
     if (!content) {
       return
     }
-    const targetCommentId = findReplyTargetCommentId(
-      sortedThreads.filter(
-        (thread) => thread.cellId === draftCellId && !thread.orphaned
-      )
-    )
+    const targetCommentId =
+      draftTarget.type === 'cell'
+        ? findReplyTargetCommentId(
+            sortedThreads.filter(
+              (thread) =>
+                thread.anchor?.type === 'cell' &&
+                thread.cellId === draftTarget.cellId &&
+                !thread.orphaned
+            )
+          )
+        : null
     const submit = targetCommentId
       ? onReply(targetCommentId, content).then(onCancelDraft)
-      : onCreateComment(draftCellId, content)
-    void submit.then(() => setDraft(''))
+      : onCreateComment(draftTarget, content)
+    void submit.then(() => setDraft('')).catch(() => undefined)
   }
 
   const submitThreadReply = (item: CommentsPanelItem) => {
@@ -119,7 +137,7 @@ export function NotebookCommentsPanel({
     const submit = targetCommentId
       ? onReply(targetCommentId, content)
       : item.cellId && !item.orphaned
-        ? onCreateComment(item.cellId, content)
+        ? onCreateComment({ type: 'cell', cellId: item.cellId }, content)
         : Promise.resolve()
     void submit.then(() => {
       setReplyDrafts((current) => ({ ...current, [item.key]: '' }))
@@ -214,7 +232,7 @@ export function NotebookCommentsPanel({
         )}
         {status === 'available' &&
           sortedThreads.length === 0 &&
-          !draftCellId && (
+          !draftTarget && (
             <div className="rounded-nb-sm border border-dashed border-nb-border bg-white p-3 text-sm text-nb-text-muted">
               {threads.length === 0
                 ? 'No comments yet. Use a cell comment button to start a thread.'
@@ -230,15 +248,24 @@ export function NotebookCommentsPanel({
               const resolvedThreads = item.threads.filter(
                 (thread) => thread.comment.resolved
               )
+              const isRangeItem = Boolean(
+                item.draftTarget?.type === 'cell-text' ||
+                  item.threads.some(
+                    (thread) => thread.anchor?.type === 'cell-text'
+                  )
+              )
               const isActiveThread =
                 activeThreadKey === item.key ||
                 Boolean(
-                  activeCellId && activeCellId === item.cellId && !item.orphaned
+                  !isRangeItem &&
+                    activeCellId &&
+                    activeCellId === item.cellId &&
+                    !item.orphaned
                 )
               const isActiveCell = Boolean(
                 activeCellId && item.cellId === activeCellId && !item.orphaned
               )
-              const canEditThread = isActiveThread && !item.draftCellId
+              const canEditThread = isActiveThread && !item.draftTarget
               const replyDraft = replyDrafts[item.key] ?? ''
 
               return (
@@ -317,7 +344,7 @@ export function NotebookCommentsPanel({
                     </div>
                   )}
 
-                  {item.draftCellId && (
+                  {item.draftTarget && (
                     <form
                       aria-current={isActiveThread ? 'true' : undefined}
                       data-comment-panel-item="draft"
@@ -329,8 +356,13 @@ export function NotebookCommentsPanel({
                     >
                       <label className="block text-xs font-medium text-nb-text-muted">
                         New comment on{' '}
-                        {cellLabels.get(item.draftCellId) ?? 'cell'}
+                        {cellLabels.get(item.draftTarget.cellId) ?? 'cell'}
                       </label>
+                      {item.draftTarget.type === 'cell-text' && (
+                        <blockquote className="mt-2 border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
+                          {item.draftTarget.selectors[1].exact}
+                        </blockquote>
+                      )}
                       <textarea
                         className="mt-2 h-24 w-full resize-none rounded-nb-sm border border-nb-border bg-white p-2 text-sm text-nb-text outline-none focus:border-nb-accent"
                         value={draft}
@@ -518,11 +550,22 @@ function CommentMessage({
           </span>
         )}
       </div>
+      {thread.anchor?.type === 'cell-text' && (
+        <div className="mb-2 rounded-nb-sm bg-nb-surface-2 px-2 py-1.5">
+          <blockquote className="border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
+            {thread.anchor.selectors[1].exact}
+          </blockquote>
+          {thread.location && thread.location.status !== 'exact' && (
+            <div className="mt-1 text-[11px] font-medium capitalize text-nb-text-faint">
+              {thread.location.status.replace(/-/g, ' ')}
+            </div>
+          )}
+        </div>
+      )}
       <p className="whitespace-pre-wrap text-sm text-nb-text">
         {comment.content ?? ''}
       </p>
-      {(comment.replies ?? []).filter((reply) => !reply.deleted).length >
-        0 && (
+      {(comment.replies ?? []).filter((reply) => !reply.deleted).length > 0 && (
         <div className="mt-3 space-y-2 border-l border-nb-border pl-3">
           {(comment.replies ?? [])
             .filter((reply) => !reply.deleted)
@@ -592,13 +635,17 @@ function sortCommentThreads(
 function sortCommentPanelItems(
   sortedThreads: CellCommentThread[],
   cellLabels: Map<string, string>,
-  draftCellId: string | null
+  draftTarget: CommentDraftTarget | null
 ): CommentsPanelItem[] {
   const items: CommentsPanelItem[] = []
   const itemsByCell = new Map<string, CommentsPanelItem>()
 
   sortedThreads.forEach((thread) => {
-    if (thread.cellId && !thread.orphaned) {
+    if (
+      thread.anchor?.type !== 'cell-text' &&
+      thread.cellId &&
+      !thread.orphaned
+    ) {
       const key = getCellThreadKey(thread.cellId)
       let item = itemsByCell.get(key)
       if (!item) {
@@ -625,25 +672,29 @@ function sortCommentPanelItems(
     })
   })
 
-  if (!draftCellId) {
+  if (!draftTarget) {
     return items
   }
 
-  const draftKey = getCellThreadKey(draftCellId)
-  const existingItem = itemsByCell.get(draftKey)
+  const draftKey =
+    draftTarget.type === 'cell'
+      ? getCellThreadKey(draftTarget.cellId)
+      : `draft:${draftTarget.cellId}:${draftTarget.selectors[0].start}:${draftTarget.selectors[0].end}`
+  const existingItem =
+    draftTarget.type === 'cell' ? itemsByCell.get(draftKey) : undefined
   if (existingItem) {
-    existingItem.draftCellId = draftCellId
+    existingItem.draftTarget = draftTarget
     return items
   }
 
-  const draftIndex = cellIndex(cellLabels, draftCellId)
+  const draftIndex = cellIndex(cellLabels, draftTarget.cellId)
   const draftItem: CommentsPanelItem = {
     type: 'thread',
     key: draftKey,
-    cellId: draftCellId,
+    cellId: draftTarget.cellId,
     orphaned: false,
     threads: [],
-    draftCellId,
+    draftTarget,
   }
   const insertionIndex = items.findIndex((item) => {
     if (!item.cellId || item.orphaned) {
@@ -698,9 +749,7 @@ function getThreadKey(thread: CellCommentThread): string {
   )
 }
 
-function findReplyTargetCommentId(
-  threads: CellCommentThread[]
-): string | null {
+function findReplyTargetCommentId(threads: CellCommentThread[]): string | null {
   const openThreads = threads.filter(
     (thread) => !thread.comment.resolved && thread.comment.id
   )
