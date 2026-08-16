@@ -398,6 +398,7 @@ export function buildSandboxSrcDoc(options: {
             consoleProxy.log("await comments.reply({ target?, commentId, content })");
             consoleProxy.log("await comments.resolve({ target?, commentId })");
             consoleProxy.log("await comments.reopen({ target?, commentId })");
+            consoleProxy.log("comments.list includes sync.status; writes persist locally before asynchronous Drive reconciliation; Drive replies include a visible Runme identity footer");
           },
         };
         const notebookDiff = {
@@ -496,6 +497,7 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- await comments.reply({ target?, commentId, content })");
           consoleProxy.log("- await comments.resolve({ target?, commentId })");
           consoleProxy.log("- await comments.reopen({ target?, commentId })");
+          consoleProxy.log("- comments.list includes sync.status; writes persist locally before asynchronous Drive reconciliation; Drive replies include a visible Runme identity footer");
           consoleProxy.log("- notebookDiff.listDriveRevisions([target])");
           consoleProxy.log("- notebookDiff.diffDriveRevision({ target?, revisionId, includeOutputs?, includeMetadata? })");
           consoleProxy.log("- notebookDiff.openDiffTab(diff)");

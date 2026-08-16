@@ -17,6 +17,7 @@ export type CellCommentAnchor = {
   type: 'cell'
   cellId: string
   version: 1 | 2
+  clientCommentId?: string
 }
 
 export type CellTextCommentAnchor = {
@@ -35,6 +36,7 @@ export type CellTextCommentAnchor = {
   }
   selectors: [TextPositionSelector, TextQuoteSelector]
   sourceHints?: TextRange[]
+  clientCommentId?: string
 }
 
 export type CommentAnchor = CellCommentAnchor | CellTextCommentAnchor
@@ -58,6 +60,8 @@ type RunmeCommentAnchorPayload = {
     state?: CellTextCommentAnchor['state']
     selectors?: unknown
     sourceHints?: unknown
+    clientCommentId?: unknown
+    clientOperationId?: unknown
   }
 }
 
@@ -83,19 +87,24 @@ export type CellAnchorResolution = {
   orphaned: boolean
 }
 
-export function createCellCommentAnchor(cellId: string): string {
+export function createCellCommentAnchor(
+  cellId: string,
+  clientCommentId?: string
+): string {
   return JSON.stringify({
     runme: {
       version: RUNME_COMMENT_ANCHOR_VERSION,
       type: 'cell',
       cellId,
+      ...(clientCommentId ? { clientCommentId } : {}),
     },
   })
 }
 
 export async function createCellTextCommentAnchor(
   target: RenderedMarkdownSelectionDraft,
-  driveRevisionId: string
+  driveRevisionId: string,
+  clientCommentId?: string
 ): Promise<string> {
   const [position, quote] = target.selectors
   if (
@@ -124,6 +133,43 @@ export async function createCellTextCommentAnchor(
     ...(target.sourceHints.length > 0
       ? { sourceHints: target.sourceHints }
       : {}),
+    ...(clientCommentId ? { clientCommentId } : {}),
+  }
+  return JSON.stringify({ runme: anchor })
+}
+
+export function createPendingCellTextCommentAnchor(
+  target: RenderedMarkdownSelectionDraft,
+  clientCommentId: string
+): string {
+  const [position, quote] = target.selectors
+  if (
+    sliceByCodePoint(target.projection.text, position.start, position.end) !==
+    quote.exact
+  ) {
+    throw new Error(
+      'The rendered Markdown selection no longer matches its projection.'
+    )
+  }
+  const anchor: CellTextCommentAnchor = {
+    version: RUNME_COMMENT_ANCHOR_VERSION,
+    type: 'cell-text',
+    cellId: target.cellId,
+    surface: 'rendered-markdown',
+    state: {
+      driveRevisionId: `local-pending:${clientCommentId}`,
+      sourceSha256: 'local-pending',
+      projection: {
+        name: RENDERED_MARKDOWN_PROJECTION_NAME,
+        version: target.projection.version,
+        sha256: 'local-pending',
+      },
+    },
+    selectors: target.selectors,
+    ...(target.sourceHints.length > 0
+      ? { sourceHints: target.sourceHints }
+      : {}),
+    clientCommentId,
   }
   return JSON.stringify({ runme: anchor })
 }
@@ -195,7 +241,18 @@ export function parseCommentAnchor(
     }
 
     if (anchorType === 'cell') {
-      return { type: 'cell', cellId: runme.cellId, version }
+      const clientCommentId =
+        typeof runme.clientCommentId === 'string'
+          ? runme.clientCommentId
+          : typeof runme.clientOperationId === 'string'
+            ? runme.clientOperationId
+            : undefined
+      return {
+        type: 'cell',
+        cellId: runme.cellId,
+        version,
+        ...(clientCommentId ? { clientCommentId } : {}),
+      }
     }
 
     if (
@@ -220,6 +277,12 @@ export function parseCommentAnchor(
     if (runme.sourceHints !== undefined && !sourceHints) {
       return null
     }
+    const clientCommentId =
+      typeof runme.clientCommentId === 'string'
+        ? runme.clientCommentId
+        : typeof runme.clientOperationId === 'string'
+          ? runme.clientOperationId
+          : undefined
     return {
       type: 'cell-text',
       cellId: runme.cellId,
@@ -228,6 +291,7 @@ export function parseCommentAnchor(
       state: runme.state,
       selectors: [runme.selectors[0], runme.selectors[1]],
       ...(sourceHints ? { sourceHints } : {}),
+      ...(clientCommentId ? { clientCommentId } : {}),
     }
   } catch {
     return null

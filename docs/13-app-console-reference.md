@@ -129,7 +129,9 @@ console.log(JSON.stringify(annotations, null, 2))
 ```
 
 Each annotation includes the original rendered target, current editable source
-ranges, and resolution status. Use `comments.parseAnchor(anchor)` and
+ranges, resolution status, and a `sync` field. `pending`, `syncing`, and
+`failed` annotations are durable local operations that may not yet be visible
+to collaborators in Google Drive. Use `comments.parseAnchor(anchor)` and
 `comments.resolveAnchor({ anchor, source })` for standalone anchor inspection.
 Reply, resolve, or reopen only when the user requested that collaboration
 action:
@@ -139,6 +141,17 @@ await comments.reply({ target, commentId, content: 'Addressed.' })
 await comments.resolve({ target, commentId })
 await comments.reopen({ target, commentId })
 ```
+
+These mutations persist locally before returning and reconcile with Google
+Drive asynchronously. Top-level comments are desired state identified by a
+`clientCommentId` in the Drive anchor, so Runme can detect an already-created
+comment after an interrupted response. Drive replies have no writable metadata
+field, so Runme appends a compact visible footer such as
+`[runme:v1;reply=<clientReplyId>]`. This lets Runme reconcile replies by stable
+identity while keeping the protocol transparent in Drive's native UI; Runme
+strips a valid terminal footer in its own UI. Call `comments.list` again when
+remote completion matters and inspect `sync.status` (`pending`, `syncing`,
+`uncertain`, `failed`, or `synced`).
 
 The same namespace is available inside WebMCP `ExecuteCode`. Runme does not
 register a comment-specific WebMCP tool.

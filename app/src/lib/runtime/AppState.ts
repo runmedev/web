@@ -5,6 +5,7 @@ import type {
 import { DriveNotebookStore } from "../../storage/drive";
 import { FilesystemNotebookStore } from "../../storage/fs";
 import LocalNotebooks from "../../storage/local";
+import LocalComments from "../../storage/localComments";
 import type { Runner } from "../runner";
 
 type WorkspaceHandlers = {
@@ -29,6 +30,7 @@ export class AppState {
   driveNotebookStore: DriveNotebookStore | null = null;
   filesystemStore: FilesystemNotebookStore | null = null;
   localNotebooks: LocalNotebooks | null = null;
+  localComments: LocalComments | null = null;
   private openNotebookHandler: ((uri: string) => void | Promise<void>) | null =
     null;
   private googleDriveOAuthHandler:
@@ -59,6 +61,10 @@ export class AppState {
 
   setLocalNotebooks(store: LocalNotebooks | null): void {
     this.localNotebooks = store;
+  }
+
+  setLocalComments(store: LocalComments | null): void {
+    this.localComments = store;
   }
 
   setOpenNotebookHandler(

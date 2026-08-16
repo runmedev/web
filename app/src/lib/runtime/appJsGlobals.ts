@@ -449,6 +449,7 @@ export function createAppJsGlobals({
     resolveNotebook: resolveNotebook ?? (() => runme.getCurrentNotebook()),
     resolveLocalNotebooks: () => appState.localNotebooks,
     resolveDriveNotebookStore: () => appState.driveNotebookStore,
+    resolveLocalComments: () => appState.localComments,
   })
   const commentsHelpers = {
     ...commentsApi,

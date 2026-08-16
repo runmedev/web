@@ -173,6 +173,9 @@ export type DriveReply = {
   deleted?: boolean
   htmlContent?: string
   content?: string
+  runmeSyncStatus?: 'pending' | 'syncing' | 'uncertain' | 'failed'
+  runmeSyncError?: string
+  runmeOperationId?: string
 }
 
 export type DriveComment = {
@@ -193,6 +196,9 @@ export type DriveComment = {
   mentionedEmailAddresses?: string[]
   assigneeEmailAddress?: string
   replies?: DriveReply[]
+  runmeSyncStatus?: 'pending' | 'syncing' | 'uncertain' | 'failed'
+  runmeSyncError?: string
+  runmeOperationId?: string
 }
 
 type DriveCommentListResponse = {
@@ -1540,7 +1546,7 @@ export class DriveNotebookStore {
       const response = await client.listComments({
         fileId: id,
         supportsAllDrives: true,
-        includeDeleted: false,
+        includeDeleted: true,
         fields: DRIVE_COMMENT_LIST_FIELDS,
         ...(pageToken ? { pageToken } : {}),
       })

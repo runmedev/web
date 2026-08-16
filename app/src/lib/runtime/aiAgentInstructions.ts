@@ -195,7 +195,7 @@ const annotations = await comments.list({
 console.log(JSON.stringify(annotations, null, 2))
 \`\`\`
 
-Each annotation includes the parsed \`anchor\`, the original rendered selection in \`originalTarget\`, current Markdown in \`editableSource\`, and \`currentResolution\`.
+Each annotation includes the parsed \`anchor\`, the original rendered selection in \`originalTarget\`, current Markdown in \`editableSource\`, \`currentResolution\`, and a \`sync\` field. A \`pending\`, \`syncing\`, or \`failed\` annotation is durable local feedback but may not yet be visible to Drive collaborators.
 
 - Use \`editableSource.cellId\` as the canonical \`refId\` for notebook updates.
 - For \`currentResolution.status\` equal to \`exact\` or \`moved\`, use \`editableSource.ranges\` to locate the corresponding Markdown source and \`originalTarget.reviewedContent\` to understand the rendered selection.
@@ -213,6 +213,8 @@ await comments.reply({
 })
 await comments.resolve({ target: { uri: notebookUri }, commentId })
 \`\`\`
+
+Comment mutations persist locally before returning and reconcile with Google Drive asynchronously. Top-level comments use an anchored client ID. Because Drive replies expose no writable metadata field, Runme adds a compact visible \`[runme:v1;reply=<clientReplyId>]\` footer in Drive and strips a valid terminal footer in Runme. Call \`comments.list\` again when remote completion matters. Do not describe a reply or resolution as synchronized while its \`sync.status\` is not \`synced\`.
 
 Use \`comments.reopen({ target, commentId })\` only when the user asks to reopen a resolved thread.
 

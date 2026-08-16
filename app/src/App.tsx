@@ -26,6 +26,7 @@ import { DriveNotebookStore } from './storage/drive'
 import { FilesystemNotebookStore } from './storage/fs'
 import { isFileSystemAccessSupported } from './storage/fs'
 import LocalNotebooks from './storage/local'
+import LocalComments from './storage/localComments'
 import { CurrentDocProvider } from './contexts/CurrentDocContext'
 import { WorkspaceDocumentProvider } from './contexts/WorkspaceDocumentContext'
 import {
@@ -208,10 +209,12 @@ function NotebookStoreInitializer() {
       ensureAccessToken({ interactive: false })
     )
     const localStore = new LocalNotebooks(driveStore)
+    const localComments = new LocalComments(driveStore)
     localStore.setFilesystemStore(fsInstanceRef.current)
 
     appState.setDriveNotebookStore(driveStore)
     appState.setLocalNotebooks(localStore)
+    appState.setLocalComments(localComments)
 
     instanceRef.current = localStore
     setStore(localStore)
