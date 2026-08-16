@@ -995,22 +995,31 @@ export function Action({
       setContextMenu(null)
       return
     }
-    if (contextMenu?.captureRenderedSelection) {
-      const target = contextMenu.captureRenderedSelection()
-      if (!target) {
-        setContextMenu(null)
-        showToast({
-          message: 'The text selection changed. Select it again to comment.',
-          tone: 'error',
-        })
-        return
-      }
-      onStartComment(target)
-    } else {
-      onStartComment({ type: 'cell', cellId: cell.refId })
-    }
+    onStartComment({ type: 'cell', cellId: cell.refId })
     setContextMenu(null)
-  }, [cell?.refId, contextMenu, onStartComment])
+  }, [cell?.refId, onStartComment])
+
+  const handleContextMenuComment = useCallback(() => {
+    if (!contextMenu?.captureRenderedSelection) {
+      handleStartComment()
+      return
+    }
+    if (!onStartComment) {
+      setContextMenu(null)
+      return
+    }
+    const target = contextMenu.captureRenderedSelection()
+    if (!target) {
+      setContextMenu(null)
+      showToast({
+        message: 'The text selection changed. Select it again to comment.',
+        tone: 'error',
+      })
+      return
+    }
+    onStartComment(target)
+    setContextMenu(null)
+  }, [contextMenu, handleStartComment, onStartComment])
 
   const sequenceLabel = useMemo(() => {
     if (!cell) {
@@ -1516,7 +1525,7 @@ export function Action({
               disabled={!commentsAvailable}
               onClick={(event) => {
                 event.stopPropagation()
-                handleStartComment()
+                handleContextMenuComment()
               }}
             >
               {contextMenu?.captureRenderedSelection

@@ -2521,4 +2521,63 @@ describe('Action component', () => {
     )
     selection.removeAllRanges()
   })
+
+  it('keeps the cell comment button independent of a selection menu', () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'cell-md-independent-comment',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      outputs: [],
+      metadata: {},
+      value: 'Select this text.',
+    })
+    const stub = new StubCellData(cell)
+    const onStartComment = vi.fn()
+
+    render(
+      <Action
+        cellData={stub as unknown as CellData}
+        isFirst={false}
+        commentsAvailable
+        onStartComment={onStartComment}
+      />
+    )
+
+    const text = screen.getByText('Select this text.').firstChild!
+    const range = document.createRange()
+    range.setStart(text, 0)
+    range.setEnd(text, 6)
+    Object.defineProperty(range, 'getBoundingClientRect', {
+      value: () => ({
+        bottom: 20,
+        height: 10,
+        left: 10,
+        right: 70,
+        top: 10,
+        width: 60,
+        x: 10,
+        y: 10,
+        toJSON: () => ({}),
+      }),
+    })
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    fireEvent.contextMenu(screen.getByTestId('markdown-rendered'), {
+      clientX: 40,
+      clientY: 20,
+    })
+    expect(
+      screen.getByRole('button', { name: 'Comment on selected text' })
+    ).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add comment' }))
+
+    expect(onStartComment).toHaveBeenCalledWith({
+      type: 'cell',
+      cellId: 'cell-md-independent-comment',
+    })
+    selection.removeAllRanges()
+  })
 })
