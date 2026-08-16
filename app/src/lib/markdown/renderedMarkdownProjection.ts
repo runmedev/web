@@ -382,10 +382,40 @@ function projectionOffset(boundary: {
   return start + utf16OffsetToCodePointOffset(text.data, boundary.utf16Offset)
 }
 
-function isGraphemeBoundary(value: string, offset: number): boolean {
-  if (offset === 0 || offset === codePoints(value).length) {
-    return true
+function areGraphemeBoundaries(
+  value: string,
+  offsets: readonly number[]
+): boolean {
+  const requestedOffsets = [...new Set(offsets)].sort((a, b) => a - b)
+  if (
+    requestedOffsets.some((offset) => !Number.isInteger(offset) || offset < 0)
+  ) {
+    return false
   }
+
+  const utf16Offsets = new Map<number, number>()
+  let codePointOffset = 0
+  let utf16Offset = 0
+  let requestedIndex = 0
+  while (requestedOffsets[requestedIndex] === 0) {
+    utf16Offsets.set(0, 0)
+    requestedIndex += 1
+  }
+  for (const symbol of value) {
+    if (requestedIndex >= requestedOffsets.length) {
+      break
+    }
+    utf16Offset += symbol.length
+    codePointOffset += 1
+    while (requestedOffsets[requestedIndex] === codePointOffset) {
+      utf16Offsets.set(codePointOffset, utf16Offset)
+      requestedIndex += 1
+    }
+  }
+  if (requestedIndex < requestedOffsets.length) {
+    return false
+  }
+
   type Segment = { index: number }
   type SegmenterConstructor = new (
     locales?: string | string[],
@@ -396,14 +426,21 @@ function isGraphemeBoundary(value: string, offset: number): boolean {
   if (typeof Segmenter !== 'function') {
     return true
   }
-  const boundaries = new Set<number>([0])
+
+  const pending = new Set(utf16Offsets.values())
+  pending.delete(value.length)
+  if (pending.size === 0) {
+    return true
+  }
   for (const segment of new Segmenter(undefined, {
     granularity: 'grapheme',
   }).segment(value)) {
-    boundaries.add(codePoints(value.slice(0, segment.index)).length)
+    pending.delete(segment.index)
+    if (pending.size === 0) {
+      return true
+    }
   }
-  boundaries.add(codePoints(value).length)
-  return boundaries.has(offset)
+  return false
 }
 
 export function sourceRangesForProjectionRange(
@@ -502,11 +539,7 @@ export function captureRenderedMarkdownRange(args: {
   }
   const start = projectionOffset(startBoundary)
   const end = projectionOffset(endBoundary)
-  if (
-    start >= end ||
-    !isGraphemeBoundary(projection.text, start) ||
-    !isGraphemeBoundary(projection.text, end)
-  ) {
+  if (start >= end || !areGraphemeBoundaries(projection.text, [start, end])) {
     return null
   }
   const exact = sliceByCodePoint(projection.text, start, end)
