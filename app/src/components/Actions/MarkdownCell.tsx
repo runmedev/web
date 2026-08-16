@@ -27,6 +27,7 @@ import {
   useState,
   useSyncExternalStore,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
@@ -37,7 +38,7 @@ import { parser_pb } from '../../runme/client'
 import type { CellData } from '../../lib/notebookData'
 import type { CellFocusRole } from '../../lib/notebookActiveCellState'
 import {
-  captureRenderedMarkdownSelection,
+  captureRenderedMarkdownRange,
   createRenderedMarkdownProjectionPlugin,
   RENDERED_MARKDOWN_PROJECTION_NAME,
   RENDERED_MARKDOWN_PROJECTION_VERSION,
@@ -182,8 +183,12 @@ interface MarkdownCellProps {
   readOnly?: boolean
   /** Whether the current Drive-backed notebook can accept comments. */
   commentsAvailable?: boolean
-  /** Start a comment draft for a rendered Markdown text selection. */
-  onStartRenderedComment?: (target: RenderedMarkdownSelectionDraft) => void
+  /** Open the cell context menu with a lazily captured rendered selection. */
+  onRenderedSelectionContextMenu?: (request: {
+    x: number
+    y: number
+    captureSelection: () => RenderedMarkdownSelectionDraft | null
+  }) => void
 }
 
 /**
@@ -210,7 +215,7 @@ const MarkdownCell = memo(
     onLinkClick,
     readOnly = false,
     commentsAvailable = false,
-    onStartRenderedComment,
+    onRenderedSelectionContextMenu,
   }: MarkdownCellProps) => {
     // Subscribe to cell data changes using useSyncExternalStore for tearing-safe reads
     const cell = useSyncExternalStore(
@@ -239,11 +244,6 @@ const MarkdownCell = memo(
     const previousShouldOwnFocusRef = useRef(false)
     const [editorFocusIntent, setEditorFocusIntent] = useState(false)
     const [renderedFocusIntent, setRenderedFocusIntent] = useState(false)
-    const [selectionAction, setSelectionAction] = useState<{
-      target: RenderedMarkdownSelectionDraft
-      left: number
-      top: number
-    } | null>(null)
 
     // Get the current cell value
     const value = cell?.value ?? ''
@@ -316,10 +316,6 @@ const MarkdownCell = memo(
      * Handle switching to edit mode when user double-clicks rendered content.
      */
     const handleDoubleClick = useCallback(() => {
-      const selection = document.getSelection()
-      if (selection && !selection.isCollapsed) {
-        return
-      }
       if (!canOpenSource) {
         return
       }
@@ -328,40 +324,53 @@ const MarkdownCell = memo(
       onFocusRoleChange?.('editor')
     }, [canOpenSource, onFocusRoleChange])
 
-    const captureSelection = useCallback(() => {
-      const root = renderedRef.current
-      const projection = projectionRef.current
-      const selection = document.getSelection()
-      if (
-        !root ||
-        !projection ||
-        !selection ||
-        !cell?.refId ||
-        !commentsAvailable ||
-        !onStartRenderedComment
-      ) {
-        setSelectionAction(null)
-        return
-      }
-      const target = captureRenderedMarkdownSelection({
-        root,
-        selection,
-        cellId: cell.refId,
-        source: value,
-        projection,
-      })
-      if (!target) {
-        setSelectionAction(null)
-        return
-      }
-      const rangeRect = selection.getRangeAt(0).getBoundingClientRect()
-      const rootRect = root.getBoundingClientRect()
-      setSelectionAction({
-        target,
-        left: Math.max(8, rangeRect.left - rootRect.left),
-        top: Math.max(8, rangeRect.bottom - rootRect.top + 6),
-      })
-    }, [cell?.refId, commentsAvailable, onStartRenderedComment, value])
+    const handleRenderedContextMenu = useCallback(
+      (event: ReactMouseEvent<HTMLDivElement>) => {
+        const root = renderedRef.current
+        const projection = projectionRef.current
+        const selection = document.getSelection()
+        if (
+          !root ||
+          !projection ||
+          !selection ||
+          !cell?.refId ||
+          !commentsAvailable ||
+          !onRenderedSelectionContextMenu ||
+          selection.rangeCount !== 1 ||
+          selection.isCollapsed
+        ) {
+          return
+        }
+        const range = selection.getRangeAt(0)
+        if (
+          !root.contains(range.startContainer) ||
+          !root.contains(range.endContainer)
+        ) {
+          return
+        }
+
+        event.preventDefault()
+        event.stopPropagation()
+        const rangeSnapshot = range.cloneRange()
+        const hasPointerPosition = event.clientX !== 0 || event.clientY !== 0
+        const rangeRect = hasPointerPosition
+          ? null
+          : range.getBoundingClientRect()
+        onRenderedSelectionContextMenu({
+          x: hasPointerPosition ? event.clientX : (rangeRect?.left ?? 0),
+          y: hasPointerPosition ? event.clientY : (rangeRect?.bottom ?? 0),
+          captureSelection: () =>
+            captureRenderedMarkdownRange({
+              root,
+              range: rangeSnapshot,
+              cellId: cell.refId,
+              source: value,
+              projection,
+            }),
+        })
+      },
+      [cell?.refId, commentsAvailable, onRenderedSelectionContextMenu, value]
+    )
 
     /**
      * Handle keyboard activation on the rendered container for accessibility.
@@ -528,30 +537,9 @@ const MarkdownCell = memo(
             data-runme-projection={`${RENDERED_MARKDOWN_PROJECTION_NAME}@${RENDERED_MARKDOWN_PROJECTION_VERSION}`}
             data-cell-focus-role="rendered"
             onFocus={() => onFocusRoleChange?.('rendered')}
-            onPointerUp={captureSelection}
-            onKeyUp={captureSelection}
+            onContextMenu={handleRenderedContextMenu}
           >
             {renderedMarkdown}
-            {selectionAction && (
-              <button
-                type="button"
-                className="absolute z-20 rounded-nb-sm bg-nb-accent px-2 py-1 text-xs font-medium text-white shadow-nb-lg"
-                style={{
-                  left: selectionAction.left,
-                  top: selectionAction.top,
-                }}
-                aria-label="Comment on selected text"
-                data-testid="rendered-selection-comment"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  onStartRenderedComment?.(selectionAction.target)
-                  setSelectionAction(null)
-                }}
-              >
-                Comment
-              </button>
-            )}
           </div>
         ) : (
           // Editor view - Escape, run, or focusing another cell renders it
@@ -618,7 +606,8 @@ const MarkdownCell = memo(
       prevProps.onLinkClick === nextProps.onLinkClick &&
       prevProps.readOnly === nextProps.readOnly &&
       prevProps.commentsAvailable === nextProps.commentsAvailable &&
-      prevProps.onStartRenderedComment === nextProps.onStartRenderedComment
+      prevProps.onRenderedSelectionContextMenu ===
+        nextProps.onRenderedSelectionContextMenu
     )
   }
 )
