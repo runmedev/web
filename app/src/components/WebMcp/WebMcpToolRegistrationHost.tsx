@@ -22,11 +22,24 @@ import {
   LIST_DOCUMENTATION_TOOL_TITLE,
 } from '../../lib/runtime/documentationTools'
 import {
+  buildCancelExecuteCodeOperationInputSchema,
   buildExecuteCodeInputSchema,
+  buildGetExecuteCodeOperationInputSchema,
+  CANCEL_EXECUTE_CODE_OPERATION_TOOL_DESCRIPTION,
+  CANCEL_EXECUTE_CODE_OPERATION_TOOL_NAME,
+  CANCEL_EXECUTE_CODE_OPERATION_TOOL_TITLE,
   EXECUTE_CODE_TOOL_DESCRIPTION,
   EXECUTE_CODE_TOOL_NAME,
   EXECUTE_CODE_TOOL_TITLE,
+  GET_EXECUTE_CODE_OPERATION_TOOL_DESCRIPTION,
+  GET_EXECUTE_CODE_OPERATION_TOOL_NAME,
+  GET_EXECUTE_CODE_OPERATION_TOOL_TITLE,
 } from '../../lib/runtime/executeCodeTool'
+import type {
+  CancelExecuteCodeOperationInput,
+  GetExecuteCodeOperationInput,
+} from '../../lib/runtime/codeOperationTypes'
+import { useCodeOperationRegistry } from '../../lib/runtime/useCodeOperationRegistry'
 import { useCodeModeExecutor } from '../../lib/runtime/useCodeModeExecutor'
 import {
   buildDismissTourInputSchema,
@@ -84,6 +97,7 @@ function getModelContext(): ModelContextLike | null {
 
 export default function WebMcpToolRegistrationHost() {
   const codeModeExecutor = useCodeModeExecutor({ mode: 'sandbox' })
+  const codeOperationRegistry = useCodeOperationRegistry(codeModeExecutor)
   const appConsoleData = getAppConsoleData()
 
   useEffect(() => {
@@ -115,39 +129,67 @@ export default function WebMcpToolRegistrationHost() {
               typeof input?.code === 'string'
                 ? input.code
                 : String(input?.code ?? '')
-            const timeoutMs =
-              typeof input?.timeoutMs === 'number' &&
-              Number.isFinite(input.timeoutMs)
-                ? Math.min(60_000, Math.max(1_000, Math.trunc(input.timeoutMs)))
-                : undefined
             await appConsoleData.hydrate()
-
-            const execution = appConsoleData.startExternalExecution(code)
+            const executionState: {
+              current: ReturnType<typeof appConsoleData.startExternalExecution>
+            } = { current: null }
 
             try {
-              const result = await codeModeExecutor.execute({
+              const result = await codeOperationRegistry.start({
                 code,
-                source: 'webmcp',
-                ...(timeoutMs ? { timeoutMs } : {}),
-                hooks: execution
-                  ? {
-                      onStdout: (chunk) => {
-                        appConsoleData.appendStdout(execution.cellId, chunk)
-                      },
-                      onStderr: (chunk) => {
-                        appConsoleData.appendStderr(execution.cellId, chunk)
-                      },
+                ...(typeof input?.timeoutMs === 'number'
+                  ? { timeoutMs: input.timeoutMs }
+                  : {}),
+                ...(input?.timeoutBehavior === 'cancel' ||
+                input?.timeoutBehavior === 'continue'
+                  ? { timeoutBehavior: input.timeoutBehavior }
+                  : {}),
+                ...(typeof input?.maxRuntimeMs === 'number'
+                  ? { maxRuntimeMs: input.maxRuntimeMs }
+                  : {}),
+                ...(typeof input?.idempotencyKey === 'string'
+                  ? { idempotencyKey: input.idempotencyKey }
+                  : {}),
+                onAccepted: () => {
+                  executionState.current =
+                    appConsoleData.startExternalExecution(code)
+                },
+                hooks: {
+                  onStdout: (chunk) => {
+                    const execution = executionState.current
+                    if (execution) {
+                      appConsoleData.appendStdout(execution.cellId, chunk)
                     }
-                  : undefined,
+                  },
+                  onStderr: (chunk) => {
+                    const execution = executionState.current
+                    if (execution) {
+                      appConsoleData.appendStderr(execution.cellId, chunk)
+                    }
+                  },
+                },
+                onSettled: (operation) => {
+                  const execution = executionState.current
+                  if (!execution) {
+                    return
+                  }
+                  if (operation.status === 'succeeded') {
+                    appConsoleData.completeExecution(execution.cellId, {
+                      exitCode: operation.exitCode ?? 0,
+                    })
+                    return
+                  }
+                  appConsoleData.failExecution(execution.cellId, {
+                    exitCode: operation.exitCode ?? 1,
+                    message:
+                      operation.error?.message ??
+                      `ExecuteCode operation ended with status ${operation.status}.`,
+                  })
+                },
               })
-
-              if (execution) {
-                appConsoleData.completeExecution(execution.cellId, {
-                  exitCode: result.exitCode,
-                })
-              }
-              return result.output
+              return JSON.stringify(result)
             } catch (error) {
+              const execution = executionState.current
               if (execution) {
                 appConsoleData.failExecution(execution.cellId, {
                   message:
@@ -157,6 +199,48 @@ export default function WebMcpToolRegistrationHost() {
               throw error
             }
           },
+        },
+        {
+          signal: registrationController.signal,
+        }
+      )
+      modelContext.registerTool(
+        {
+          name: GET_EXECUTE_CODE_OPERATION_TOOL_NAME,
+          title: GET_EXECUTE_CODE_OPERATION_TOOL_TITLE,
+          description: GET_EXECUTE_CODE_OPERATION_TOOL_DESCRIPTION,
+          inputSchema: buildGetExecuteCodeOperationInputSchema(),
+          annotations: {
+            readOnlyHint: true,
+            untrustedContentHint: true,
+          },
+          execute: async (input) =>
+            JSON.stringify(
+              await codeOperationRegistry.get(
+                input as GetExecuteCodeOperationInput
+              )
+            ),
+        },
+        {
+          signal: registrationController.signal,
+        }
+      )
+      modelContext.registerTool(
+        {
+          name: CANCEL_EXECUTE_CODE_OPERATION_TOOL_NAME,
+          title: CANCEL_EXECUTE_CODE_OPERATION_TOOL_TITLE,
+          description: CANCEL_EXECUTE_CODE_OPERATION_TOOL_DESCRIPTION,
+          inputSchema: buildCancelExecuteCodeOperationInputSchema(),
+          annotations: {
+            readOnlyHint: false,
+            untrustedContentHint: true,
+          },
+          execute: async (input) =>
+            JSON.stringify(
+              await codeOperationRegistry.cancel(
+                input as CancelExecuteCodeOperationInput
+              )
+            ),
         },
         {
           signal: registrationController.signal,
@@ -250,6 +334,8 @@ export default function WebMcpToolRegistrationHost() {
           scope: 'webmcp',
           toolNames: [
             EXECUTE_CODE_TOOL_NAME,
+            GET_EXECUTE_CODE_OPERATION_TOOL_NAME,
+            CANCEL_EXECUTE_CODE_OPERATION_TOOL_NAME,
             READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
             LIST_DOCUMENTATION_TOOL_NAME,
             GET_DOCUMENTATION_TOOL_NAME,
@@ -276,6 +362,8 @@ export default function WebMcpToolRegistrationHost() {
           scope: 'webmcp',
           toolNames: [
             EXECUTE_CODE_TOOL_NAME,
+            GET_EXECUTE_CODE_OPERATION_TOOL_NAME,
+            CANCEL_EXECUTE_CODE_OPERATION_TOOL_NAME,
             READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
             LIST_DOCUMENTATION_TOOL_NAME,
             GET_DOCUMENTATION_TOOL_NAME,
@@ -285,7 +373,7 @@ export default function WebMcpToolRegistrationHost() {
         },
       })
     }
-  }, [appConsoleData, codeModeExecutor])
+  }, [appConsoleData, codeOperationRegistry])
 
   return null
 }

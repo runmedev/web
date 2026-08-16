@@ -309,6 +309,41 @@ describe('codeModeExecutor', () => {
     ).rejects.toThrow('ExecuteCode timed out after 20ms')
   })
 
+  it('propagates caller cancellation to the sandbox kernel', async () => {
+    const notebook = createNotebook()
+    let kernelSignal: AbortSignal | undefined
+    vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(
+      async (_code, options) => {
+        kernelSignal = options?.signal ?? undefined
+        if (!kernelSignal?.aborted) {
+          await new Promise<void>((resolve) => {
+            kernelSignal?.addEventListener('abort', () => resolve(), {
+              once: true,
+            })
+          })
+        }
+      }
+    )
+    const executor = createCodeModeExecutor({
+      mode: 'sandbox',
+      timeoutMs: 10_000,
+      resolveNotebook: () => notebook,
+      listNotebooks: () => [notebook],
+    })
+    const controller = new AbortController()
+
+    const execution = executor.execute({
+      source: 'webmcp',
+      code: 'await slowWork()',
+      signal: controller.signal,
+    })
+    await Promise.resolve()
+    controller.abort(new DOMException('Cancelled', 'AbortError'))
+
+    await expect(execution).resolves.toEqual({ output: '', exitCode: 0 })
+    expect(kernelSignal?.aborted).toBe(true)
+  })
+
   it('aborts pending image embeds before they can append after timeout', async () => {
     const notebook = create(parser_pb.NotebookSchema, { cells: [] })
     const notebookData = {

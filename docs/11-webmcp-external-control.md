@@ -48,6 +48,84 @@ Prefer this progressive-disclosure path over guessing documentation URLs or
 fetching every page. Unknown names fail without modifying page or notebook
 state.
 
+## ExecuteCode operation lifecycle
+
+`ExecuteCode` uses one API for fast and long-running AppKernel work. Every
+accepted request returns a JSON operation snapshot with a Runme-assigned
+`operationId`; callers do not have to predict whether a call will finish
+synchronously.
+
+The request controls two distinct time limits:
+
+- `timeoutMs` is only the initial response wait budget. It defaults to 15
+  seconds and is capped at 60 seconds.
+- `maxRuntimeMs` is the hard sandbox runtime limit. It defaults to 10 minutes
+  and is capped at 60 minutes.
+
+When `timeoutMs` expires, `timeoutBehavior: "continue"` (the default) returns a
+`queued` or `running` snapshot and leaves the operation running. Explicitly set
+`timeoutBehavior: "cancel"` when the sandbox should be cancelled at that
+boundary. A cancellation cannot guarantee that a deployment, Drive request,
+or other downstream system has also stopped; check
+`error.downstreamMayContinue` and verify the downstream system when it is true.
+
+For example, start potentially slow work without guessing its duration:
+
+```json
+{
+  "code": "const result = await drive.search({ q: \"trashed = false\" }); console.log(JSON.stringify(result));",
+  "timeoutBehavior": "continue",
+  "maxRuntimeMs": 600000,
+  "idempotencyKey": "drive-search-for-current-task"
+}
+```
+
+The response has this shape:
+
+```json
+{
+  "operationId": "exec_…",
+  "status": "running",
+  "waitExpired": true,
+  "pollAfterMs": 1000,
+  "output": {
+    "events": [],
+    "nextSequence": 0,
+    "latestSequence": 0,
+    "hasMore": false,
+    "truncated": false,
+    "droppedBytes": 0
+  }
+}
+```
+
+Poll non-terminal work with `GetExecuteCodeOperation`. Pass the prior
+`output.nextSequence` as `afterSequence` to receive only new output, and use a
+bounded `waitMs` of at most 30 seconds for long polling:
+
+```json
+{
+  "operationId": "exec_…",
+  "afterSequence": 0,
+  "waitMs": 30000,
+  "maxBytes": 65536
+}
+```
+
+Consume `output.events` in sequence order and repeat until the status is one of
+`succeeded`, `failed`, `cancelled`, `interrupted`, or `expired`. Use
+`CancelExecuteCodeOperation` for explicit cancellation. Results and bounded
+stdout/stderr events are stored in IndexedDB for 24 hours so a caller can poll
+after the initial tool call returns. A page reload marks a previously active
+operation `interrupted`, because Runme can recover its record but not the live
+sandbox control handle.
+
+Use a stable `idempotencyKey` for side-effecting work that might be retried.
+Runme assigns the operation ID and returns the original operation for a retry
+with the same key and execution input. Reusing a key with different code or a
+different hard runtime limit fails with `IDEMPOTENCY_CONFLICT`. Never resubmit
+a mutation merely because the initial response returned `running` or was lost.
+
 Browser tab control is exclusive: one controller session can control one tab
 at a time. Concurrent sessions should target different Runme tabs.
 

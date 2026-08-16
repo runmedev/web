@@ -2,8 +2,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 
-const { executeMock, appConsoleDataMock, appLoggerMock } = vi.hoisted(() => ({
+const {
+  executeMock,
+  startOperationMock,
+  getOperationMock,
+  cancelOperationMock,
+  appConsoleDataMock,
+  appLoggerMock,
+} = vi.hoisted(() => ({
   executeMock: vi.fn(),
+  startOperationMock: vi.fn(),
+  getOperationMock: vi.fn(),
+  cancelOperationMock: vi.fn(),
   appConsoleDataMock: {
     hydrate: vi.fn(),
     startExternalExecution: vi.fn(),
@@ -22,6 +32,14 @@ const { executeMock, appConsoleDataMock, appLoggerMock } = vi.hoisted(() => ({
 vi.mock('../../lib/runtime/useCodeModeExecutor', () => ({
   useCodeModeExecutor: () => ({
     execute: executeMock,
+  }),
+}))
+
+vi.mock('../../lib/runtime/useCodeOperationRegistry', () => ({
+  useCodeOperationRegistry: () => ({
+    start: startOperationMock,
+    get: getOperationMock,
+    cancel: cancelOperationMock,
   }),
 }))
 
@@ -46,7 +64,41 @@ import WebMcpToolRegistrationHost from './WebMcpToolRegistrationHost'
 describe('WebMcpToolRegistrationHost', () => {
   beforeEach(() => {
     executeMock.mockReset()
-    executeMock.mockResolvedValue({ output: 'webmcp output', exitCode: 0 })
+    startOperationMock.mockReset()
+    startOperationMock.mockImplementation(async (input) => {
+      input.onAccepted?.('exec-1')
+      input.hooks?.onStdout?.('stdout chunk')
+      input.hooks?.onStderr?.('stderr chunk')
+      const operation = {
+        operationId: 'exec-1',
+        status: 'succeeded',
+        createdAt: '2026-08-16T00:00:00.000Z',
+        completedAt: '2026-08-16T00:00:01.000Z',
+        expiresAt: '2026-08-17T00:00:00.000Z',
+        waitExpired: false,
+        exitCode: 0,
+        output: {
+          events: [],
+          nextSequence: 0,
+          latestSequence: 0,
+          hasMore: false,
+          truncated: false,
+          droppedBytes: 0,
+        },
+      }
+      input.onSettled?.(operation)
+      return operation
+    })
+    getOperationMock.mockReset()
+    getOperationMock.mockResolvedValue({
+      operationId: 'exec-1',
+      status: 'running',
+    })
+    cancelOperationMock.mockReset()
+    cancelOperationMock.mockResolvedValue({
+      operationId: 'exec-1',
+      status: 'cancelled',
+    })
     appConsoleDataMock.hydrate.mockReset()
     appConsoleDataMock.hydrate.mockResolvedValue(undefined)
     appConsoleDataMock.startExternalExecution.mockReset()
@@ -112,7 +164,7 @@ describe('WebMcpToolRegistrationHost', () => {
 
     const rendered = render(<WebMcpToolRegistrationHost />)
 
-    expect(registerTool).toHaveBeenCalledTimes(6)
+    expect(registerTool).toHaveBeenCalledTimes(8)
     expect(
       registered.some(({ tool }) => tool.name === 'listNotebookComments')
     ).toBe(false)
@@ -134,7 +186,29 @@ describe('WebMcpToolRegistrationHost', () => {
           minimum: 1_000,
           maximum: 60_000,
           description:
-            'Optional execution timeout in milliseconds. Defaults to 15000 and is capped at 60000.',
+            'Optional initial response wait budget in milliseconds. Defaults to 15000 and is capped at 60000. It is not the hard execution deadline.',
+        },
+        timeoutBehavior: {
+          type: 'string',
+          enum: ['continue', 'cancel'],
+          default: 'continue',
+          description:
+            'What to do when timeoutMs expires. continue returns a running operation for later polling; cancel aborts the sandbox. Defaults to continue.',
+        },
+        maxRuntimeMs: {
+          type: 'integer',
+          minimum: 1_000,
+          maximum: 3_600_000,
+          default: 600_000,
+          description:
+            'Hard runtime limit for the operation in milliseconds. Defaults to 600000 and is capped at 3600000.',
+        },
+        idempotencyKey: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+          description:
+            'Optional caller token for safely deduplicating a retried request. Runme still assigns the operationId.',
         },
       },
       required: ['code'],
@@ -145,23 +219,21 @@ describe('WebMcpToolRegistrationHost', () => {
         code: "console.log('hello')",
         timeoutMs: 30_000,
       })
-    ).resolves.toBe('webmcp output')
+    ).resolves.toContain('"operationId":"exec-1"')
     expect(appConsoleDataMock.hydrate).toHaveBeenCalledTimes(1)
     expect(appConsoleDataMock.startExternalExecution).toHaveBeenCalledWith(
       "console.log('hello')"
     )
-    expect(executeMock).toHaveBeenCalledWith({
+    expect(startOperationMock).toHaveBeenCalledWith({
       code: "console.log('hello')",
-      source: 'webmcp',
       timeoutMs: 30_000,
       hooks: {
         onStdout: expect.any(Function),
         onStderr: expect.any(Function),
       },
+      onAccepted: expect.any(Function),
+      onSettled: expect.any(Function),
     })
-    const executeArgs = executeMock.mock.calls[0]?.[0]
-    executeArgs?.hooks?.onStdout?.('stdout chunk')
-    executeArgs?.hooks?.onStderr?.('stderr chunk')
     expect(appConsoleDataMock.appendStdout).toHaveBeenCalledWith(
       'cell-1',
       'stdout chunk'
@@ -177,6 +249,28 @@ describe('WebMcpToolRegistrationHost', () => {
       }
     )
     expect(appConsoleDataMock.failExecution).not.toHaveBeenCalled()
+
+    const getOperation = registered.find(
+      ({ tool }) => tool.name === 'GetExecuteCodeOperation'
+    )
+    expect(getOperation?.tool.annotations.readOnlyHint).toBe(true)
+    await getOperation?.tool.execute({
+      operationId: 'exec-1',
+      afterSequence: 2,
+    })
+    expect(getOperationMock).toHaveBeenCalledWith({
+      operationId: 'exec-1',
+      afterSequence: 2,
+    })
+
+    const cancelOperation = registered.find(
+      ({ tool }) => tool.name === 'CancelExecuteCodeOperation'
+    )
+    expect(cancelOperation?.tool.annotations.readOnlyHint).toBe(false)
+    await cancelOperation?.tool.execute({ operationId: 'exec-1' })
+    expect(cancelOperationMock).toHaveBeenCalledWith({
+      operationId: 'exec-1',
+    })
 
     const instructions = registered.find(
       ({ tool }) => tool.name === 'readInstructionsForAIAgents'
@@ -280,8 +374,8 @@ describe('WebMcpToolRegistrationHost', () => {
     )
   })
 
-  it('marks the AppConsole cell failed when ExecuteCode rejects', async () => {
-    executeMock.mockRejectedValueOnce(new Error('boom'))
+  it('does not create an AppConsole cell when ExecuteCode is rejected before acceptance', async () => {
+    startOperationMock.mockRejectedValueOnce(new Error('boom'))
     Object.defineProperty(navigator, 'modelContext', {
       configurable: true,
       value: {
@@ -305,15 +399,33 @@ describe('WebMcpToolRegistrationHost', () => {
       })
     ).rejects.toThrow('boom')
 
-    expect(appConsoleDataMock.failExecution).toHaveBeenCalledWith('cell-1', {
-      message: 'boom',
-    })
+    expect(appConsoleDataMock.startExternalExecution).not.toHaveBeenCalled()
+    expect(appConsoleDataMock.failExecution).not.toHaveBeenCalled()
   })
 
-  it('uses the resolved ExecuteCode exit code when finalizing the AppConsole cell', async () => {
-    executeMock.mockResolvedValueOnce({
-      output: 'runtime error output',
-      exitCode: 1,
+  it('marks the AppConsole cell failed when the operation settles unsuccessfully', async () => {
+    startOperationMock.mockImplementationOnce(async (input) => {
+      input.onAccepted?.('exec-2')
+      const operation = {
+        operationId: 'exec-2',
+        status: 'failed',
+        createdAt: '2026-08-16T00:00:00.000Z',
+        completedAt: '2026-08-16T00:00:01.000Z',
+        expiresAt: '2026-08-17T00:00:00.000Z',
+        waitExpired: false,
+        exitCode: 7,
+        error: { code: 'EXECUTION_FAILED', message: 'boom' },
+        output: {
+          events: [],
+          nextSequence: 0,
+          latestSequence: 0,
+          hasMore: false,
+          truncated: false,
+          droppedBytes: 0,
+        },
+      }
+      input.onSettled?.(operation)
+      return operation
     })
     Object.defineProperty(navigator, 'modelContext', {
       configurable: true,
@@ -336,14 +448,12 @@ describe('WebMcpToolRegistrationHost', () => {
       registered?.execute({
         code: "throw new Error('boom')",
       })
-    ).resolves.toBe('runtime error output')
+    ).resolves.toContain('"status":"failed"')
 
-    expect(appConsoleDataMock.completeExecution).toHaveBeenCalledWith(
-      'cell-1',
-      {
-        exitCode: 1,
-      }
-    )
-    expect(appConsoleDataMock.failExecution).not.toHaveBeenCalled()
+    expect(appConsoleDataMock.failExecution).toHaveBeenCalledWith('cell-1', {
+      exitCode: 7,
+      message: 'boom',
+    })
+    expect(appConsoleDataMock.completeExecution).not.toHaveBeenCalled()
   })
 })

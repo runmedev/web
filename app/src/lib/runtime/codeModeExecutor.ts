@@ -97,6 +97,7 @@ export type CodeModeExecutor = {
     source: CodeModeSource
     hooks?: CodeModeExecutionHooks
     timeoutMs?: number
+    signal?: AbortSignal
   }): Promise<{ output: string; exitCode: number }>
 }
 
@@ -123,7 +124,7 @@ export function createCodeModeExecutor(options: {
     })
 
   return {
-    execute: async ({ code, source, hooks, timeoutMs }) => {
+    execute: async ({ code, source, hooks, timeoutMs, signal }) => {
       const executionTimeoutMs = timeoutMs ?? defaultTimeoutMs
       const normalizedCode =
         typeof code === 'string' ? code : String(code ?? '')
@@ -191,6 +192,12 @@ export function createCodeModeExecutor(options: {
       }
 
       const abortController = new AbortController()
+      const abortFromCaller = () => abortController.abort(signal?.reason)
+      if (signal?.aborted) {
+        abortFromCaller()
+      } else {
+        signal?.addEventListener('abort', abortFromCaller, { once: true })
+      }
       const globals = createAppJsGlobals({
         runme: runmeApi,
         sendOutput: (data) => {
@@ -286,6 +293,7 @@ export function createCodeModeExecutor(options: {
         })
         throw withOutput(error, output)
       } finally {
+        signal?.removeEventListener('abort', abortFromCaller)
         if (timer) {
           clearTimeout(timer)
         }
