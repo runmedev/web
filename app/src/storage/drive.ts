@@ -273,6 +273,19 @@ class GapiDriveFilesClient implements DriveFilesClient {
     return { result: JSON.parse(text) }
   }
 
+  private getUtf8Media(
+    path: string,
+    request: Record<string, unknown>
+  ): Promise<{ body?: string; result?: unknown }> {
+    const params = { ...request }
+    delete params.fileId
+    delete params.revisionId
+
+    // GAPI decodes media response bytes as Latin-1. Fetch's Response.text()
+    // decodes them as UTF-8, preserving emoji and other non-ASCII text.
+    return this.request('GET', path, { params, expectText: true })
+  }
+
   // setContent uploads content to a Google Drive file using a media upload.
   // https://content.googleapis.com/upload/drive/v3/files/19uA730OLadqxfEUgUHN35YAQDAt2Pcax?uploadType=media&alt=json
   // It looks like gapi unlike node clients don't have helper methods for media uploads
@@ -394,6 +407,13 @@ class GapiDriveFilesClient implements DriveFilesClient {
   get(
     request: Record<string, unknown>
   ): Promise<{ body?: string; result?: unknown }> {
+    if (request.alt === 'media') {
+      const fileId = String(request.fileId ?? '')
+      return this.getUtf8Media(
+        `/drive/v3/files/${encodeURIComponent(fileId)}`,
+        request
+      )
+    }
     return this.files.get(request as any) as Promise<{
       body?: string
       result?: unknown
@@ -419,6 +439,14 @@ class GapiDriveFilesClient implements DriveFilesClient {
   getRevision(
     request: Record<string, unknown>
   ): Promise<{ body?: string; result?: unknown }> {
+    if (request.alt === 'media') {
+      const fileId = String(request.fileId ?? '')
+      const revisionId = String(request.revisionId ?? '')
+      return this.getUtf8Media(
+        `/drive/v3/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revisionId)}`,
+        request
+      )
+    }
     return this.revisions.get(request as any) as Promise<{
       body?: string
       result?: unknown
