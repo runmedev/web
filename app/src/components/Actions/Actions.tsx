@@ -2050,6 +2050,7 @@ function NotebookTabContent({
   )
   const [draftContent, setDraftContent] = useState('')
   const commentsSyncInFlightRef = useRef<Promise<void> | null>(null)
+  const commentsSyncRerunRequestedRef = useRef(false)
   const cellLabels = useMemo(() => {
     const labels = new Map<string, string>()
     cellDatas.forEach((cellData, index) => {
@@ -2338,12 +2339,18 @@ function NotebookTabContent({
       return Promise.resolve()
     }
     if (commentsSyncInFlightRef.current) {
+      // A new local operation may have been saved after the in-flight pass took
+      // its snapshot. Coalesce callers, but always run one follow-up pass.
+      commentsSyncRerunRequestedRef.current = true
       return commentsSyncInFlightRef.current
     }
     const pending = (async () => {
-      await preparePendingCommentCreates()
-      await localComments.reconcile(commentsRemoteUri)
-      await loadLocalComments()
+      do {
+        commentsSyncRerunRequestedRef.current = false
+        await preparePendingCommentCreates()
+        await localComments.reconcile(commentsRemoteUri)
+        await loadLocalComments()
+      } while (commentsSyncRerunRequestedRef.current)
     })()
       .catch((error) => {
         setCommentsSyncErrorMessage(String(error))
