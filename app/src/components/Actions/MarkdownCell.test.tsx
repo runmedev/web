@@ -271,6 +271,38 @@ describe("MarkdownCell", () => {
     );
   });
 
+  it("enters edit mode when double-clicking selected rendered text", async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-selected-edit",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "hello world",
+    });
+    const stub = new StubCellData(cell);
+
+    renderMarkdownCell(stub as unknown as CellData);
+
+    const rendered = screen.getByTestId("markdown-rendered");
+    const text = screen.getByText("hello world").firstChild!;
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, 5);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    fireEvent.doubleClick(rendered);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("markdown-editor")).toBeTruthy();
+    selection.removeAllRanges();
+  });
+
   it("opens read-only markdown source without allowing changes", async () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "md-read-only",
@@ -501,7 +533,7 @@ describe("MarkdownCell", () => {
     expect(screen.queryByTestId("markdown-editor")).toBeNull();
   });
 
-  it("annotates rendered text and creates a target from a browser selection", () => {
+  it("defers rendered selector capture until the context-menu action", () => {
     const cell = create(parser_pb.CellSchema, {
       refId: "md-comment-selection",
       kind: parser_pb.CellKind.MARKUP,
@@ -510,11 +542,11 @@ describe("MarkdownCell", () => {
       metadata: {},
       value: "Read **the [migration guide](https://example.com)** today.",
     });
-    const onStartRenderedComment = vi.fn();
+    const onRenderedSelectionContextMenu = vi.fn();
 
     renderMarkdownCell(new StubCellData(cell) as unknown as CellData, {
       commentsAvailable: true,
-      onStartRenderedComment,
+      onRenderedSelectionContextMenu,
     });
 
     const rendered = screen.getByTestId("markdown-rendered");
@@ -547,12 +579,14 @@ describe("MarkdownCell", () => {
     const selection = window.getSelection()!;
     selection.removeAllRanges();
     selection.addRange(range);
-    fireEvent.pointerUp(rendered);
+    fireEvent.contextMenu(rendered, { clientX: 40, clientY: 20 });
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Comment on selected text" }),
-    );
-    expect(onStartRenderedComment).toHaveBeenCalledWith(
+    expect(onRenderedSelectionContextMenu).toHaveBeenCalledOnce();
+    const request = onRenderedSelectionContextMenu.mock.calls[0][0];
+    expect(request).toMatchObject({ x: 40, y: 20 });
+
+    selection.removeAllRanges();
+    expect(request.captureSelection()).toEqual(
       expect.objectContaining({
         type: "cell-text",
         cellId: "md-comment-selection",

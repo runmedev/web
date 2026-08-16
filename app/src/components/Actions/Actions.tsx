@@ -113,7 +113,10 @@ import {
   toCellCommentThreads,
   type CommentDraftTarget,
 } from '../../lib/notebookComments'
-import { buildRenderedMarkdownProjection } from '../../lib/markdown/renderedMarkdownProjection'
+import {
+  buildRenderedMarkdownProjection,
+  type RenderedMarkdownSelectionDraft,
+} from '../../lib/markdown/renderedMarkdownProjection'
 import DriveLinkStatusTab from '../DriveLinkStatusTab'
 import DriveSyncStatusTab from '../DriveSyncStatusTab'
 import RunnerStatusTab from '../RunnerStatusTab'
@@ -657,6 +660,7 @@ export function Action({
   const [contextMenu, setContextMenu] = useState<{
     x: number
     y: number
+    captureRenderedSelection?: () => RenderedMarkdownSelectionDraft | null
   } | null>(null)
   const [shareTarget, setShareTarget] = useState<{
     docUri: string
@@ -785,6 +789,21 @@ export function Action({
       event.preventDefault()
       event.stopPropagation()
       setContextMenu({ x: event.clientX, y: event.clientY })
+    },
+    []
+  )
+
+  const handleRenderedSelectionContextMenu = useCallback(
+    (request: {
+      x: number
+      y: number
+      captureSelection: () => RenderedMarkdownSelectionDraft | null
+    }) => {
+      setContextMenu({
+        x: request.x,
+        y: request.y,
+        captureRenderedSelection: request.captureSelection,
+      })
     },
     []
   )
@@ -979,6 +998,28 @@ export function Action({
     onStartComment({ type: 'cell', cellId: cell.refId })
     setContextMenu(null)
   }, [cell?.refId, onStartComment])
+
+  const handleContextMenuComment = useCallback(() => {
+    if (!contextMenu?.captureRenderedSelection) {
+      handleStartComment()
+      return
+    }
+    if (!onStartComment) {
+      setContextMenu(null)
+      return
+    }
+    const target = contextMenu.captureRenderedSelection()
+    if (!target) {
+      setContextMenu(null)
+      showToast({
+        message: 'The text selection changed. Select it again to comment.',
+        tone: 'error',
+      })
+      return
+    }
+    onStartComment(target)
+    setContextMenu(null)
+  }, [contextMenu, handleStartComment, onStartComment])
 
   const sequenceLabel = useMemo(() => {
     if (!cell) {
@@ -1417,7 +1458,9 @@ export function Action({
               onFocusRoleChange={handleMarkdownFocusRoleChange}
               onLinkClick={handleMarkdownLinkClick}
               commentsAvailable={commentsAvailable}
-              onStartRenderedComment={onStartComment}
+              onRenderedSelectionContextMenu={
+                handleRenderedSelectionContextMenu
+              }
             />
             <CellCommentButton
               count={commentCount}
@@ -1482,10 +1525,12 @@ export function Action({
               disabled={!commentsAvailable}
               onClick={(event) => {
                 event.stopPropagation()
-                handleStartComment()
+                handleContextMenuComment()
               }}
             >
-              Add Comment
+              {contextMenu?.captureRenderedSelection
+                ? 'Comment on selected text'
+                : 'Add Comment'}
             </button>
             <button
               type="button"

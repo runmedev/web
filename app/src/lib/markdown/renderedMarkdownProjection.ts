@@ -462,7 +462,23 @@ export function captureRenderedMarkdownSelection(args: {
   if (selection.rangeCount !== 1 || selection.isCollapsed) {
     return null
   }
-  const range = selection.getRangeAt(0)
+  return captureRenderedMarkdownRange({
+    root,
+    range: selection.getRangeAt(0),
+    cellId,
+    source,
+    projection,
+  })
+}
+
+export function captureRenderedMarkdownRange(args: {
+  root: HTMLElement
+  range: Range
+  cellId: string
+  source: string
+  projection: RenderedMarkdownProjection
+}): RenderedMarkdownSelectionDraft | null {
+  const { root, range, cellId, source, projection } = args
   if (
     !root.contains(range.startContainer) ||
     !root.contains(range.endContainer)
