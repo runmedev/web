@@ -1489,6 +1489,12 @@ export function Action({
         {adjustedContextMenu && (
           <div
             className="ctx-menu"
+            data-runme-context-menu-cell-id={cell.refId}
+            data-runme-context-menu-kind={
+              contextMenu?.captureRenderedSelection
+                ? 'rendered-selection'
+                : 'cell'
+            }
             style={{
               top: adjustedContextMenu.y,
               left: adjustedContextMenu.x,
@@ -1522,6 +1528,11 @@ export function Action({
             <button
               type="button"
               className="ctx-menu-item"
+              data-runme-context-menu-action={
+                contextMenu?.captureRenderedSelection
+                  ? 'comment-selection'
+                  : 'comment-cell'
+              }
               disabled={!commentsAvailable}
               onClick={(event) => {
                 event.stopPropagation()

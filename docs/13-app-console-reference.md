@@ -31,6 +31,7 @@ help()
 - `documents`: raw URI-based document content API,
 - `documentation`: read-only, versioned Runme documentation discovery,
 - `comments`: Drive comment threads and Runme anchor resolution,
+- `ui`: semantic helpers for selecting rendered Markdown and opening Runme UI,
 - `explorer`: workspace and file-mount helpers,
 - `runmeRunners`: runner configuration,
 - `jupyter`: Jupyter server and kernel lifecycle,
@@ -52,6 +53,7 @@ notebooks.help()
 documents.help()
 documentation.help()
 comments.help()
+ui.help()
 runmeRunners.help()
 drive.help()
 agent.help()
@@ -155,6 +157,47 @@ remote completion matters and inspect `sync.status` (`pending`, `syncing`,
 
 The same namespace is available inside WebMCP `ExecuteCode`. Runme does not
 register a comment-specific WebMCP tool.
+
+Programmatically exercise the rendered Markdown selection flow through the
+semantic `ui` library:
+
+```js
+const doc = await notebooks.get()
+const notebookUri = doc.summary.uri
+const cellId = doc.notebook.cells.find((cell) =>
+  cell.value.includes('migration guide')
+).refId
+
+const prepared = await ui.prepareRenderedComment({
+  target: { uri: notebookUri },
+  cellId,
+  selector: {
+    type: 'TextQuoteSelector',
+    exact: 'migration guide',
+    prefix: 'Read the ',
+    suffix: ' today.',
+  },
+})
+console.log(JSON.stringify(prepared, null, 2))
+
+// Inspect or interact with the open "Comment on selected text" menu, then:
+await ui.clearSelection()
+```
+
+`ui.selectRenderedMarkdown(request)` creates a native browser `Selection`
+without opening a menu. Calling `ui.openContextMenu` with `anchor: 'selection'`
+then dispatches the same custom context-menu path used by a user right-click.
+`ui.prepareRenderedComment(request)` combines both steps.
+The selector is expressed over the versioned rendered Markdown text projection
+and may be either a W3C-style `TextQuoteSelector` or a code-point-based
+`TextPositionSelector`.
+
+The helpers require the exact active notebook URI and canonical cell `refId`.
+They fail instead of guessing when a quote is missing or ambiguous, the cell is
+in source-edit mode, or the rendered DOM is stale. They are ephemeral: they do
+not create or submit a comment. A synthetic event can validate Runme's custom
+menu and anchor-capture path, but it is not a substitute for a manual test of
+physical pointer selection or the browser's native menu.
 
 Read and update raw document content, including Excalidraw scenes:
 

@@ -30,6 +30,7 @@ This Runme instance is served from ${runmeOrigin}.
 - Claim the selected tab and use its page-provided WebMCP tools for notebook reads, edits, and execution.
 - Use the \`ExecuteCode\` WebMCP tool to run AppKernel JavaScript. Print values explicitly with \`console.log(...)\`.
 - Use the \`comments\` library inside \`ExecuteCode\` for Drive comments and anchors. Runme does not expose a comment-specific WebMCP tool.
+- Use the \`ui\` library inside \`ExecuteCode\` to create rendered Markdown selections and open Runme's selection context menu. Do not invent CSS selectors or dispatch arbitrary DOM events.
 - Do not edit or execute notebook cells through DOM clicks, keyboard automation, or Computer Use. If WebMCP is unavailable, stop and tell the user what must be done manually.
 
 ## Use tour mode for UI guidance
@@ -182,6 +183,41 @@ If the user's notebook reference is ambiguous, ask which notebook to use before 
 - Runme JSON \`Cell.refId\` and IPYNB \`cell.id\` are the same identity serialized under format-specific field names.
 - Do not add, remove, or rewrite a cell ID unless the user explicitly requests an identity migration or the notebook API repairs invalid legacy data.
 - When updating or executing cells, reuse the exact \`refId\` returned by \`notebooks.get({ uri })\`.
+
+## Exercise rendered Markdown selection
+
+Use the semantic \`ui\` sandbox library when a test or demonstration needs a
+real browser \`Selection\` over rendered Markdown. Bind the exact active
+notebook URI and canonical cell \`refId\`; never query the DOM or construct CSS
+selectors yourself.
+
+\`\`\`js
+const prepared = await ui.prepareRenderedComment({
+  target: { uri: notebookUri },
+  cellId,
+  selector: {
+    type: 'TextQuoteSelector',
+    exact: 'migration guide',
+    prefix: 'Read the ',
+    suffix: ' today.',
+  },
+})
+console.log(JSON.stringify(prepared, null, 2))
+\`\`\`
+
+\`ui.selectRenderedMarkdown(request)\` creates the selection without opening a
+menu. \`ui.openContextMenu({ target, cellId, anchor: 'selection' })\` opens the
+same Runme custom menu used by a user right-click.
+\`ui.prepareRenderedComment(request)\` performs both steps. The selector may be
+a W3C-style \`TextQuoteSelector\` or a code-point-based
+\`TextPositionSelector\` over the versioned rendered Markdown projection.
+
+These helpers fail closed when a quote is missing or ambiguous, the requested
+notebook is not active, the cell is not rendered, or the DOM is stale. Add
+\`prefix\` and \`suffix\` when \`exact\` occurs more than once. They do not create
+or submit a comment. Use \`await ui.clearSelection()\` in cleanup. A scripted
+selection validates Runme's custom selection/menu/anchor path; retain a manual
+physical-pointer test when browser input behavior itself matters.
 
 ## Work with notebook comments
 

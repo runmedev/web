@@ -2447,7 +2447,14 @@ describe('Action component', () => {
     )
 
     fireEvent.contextMenu(screen.getByTestId('markdown-action'))
-    fireEvent.click(screen.getByRole('button', { name: 'Add Comment' }))
+    const addComment = screen.getByRole('button', { name: 'Add Comment' })
+    expect(addComment.dataset.runmeContextMenuAction).toBe('comment-cell')
+    const cellMenu = addComment.closest<HTMLElement>('.ctx-menu')
+    expect(cellMenu?.dataset.runmeContextMenuCellId).toBe(
+      'cell-md-context-comment'
+    )
+    expect(cellMenu?.dataset.runmeContextMenuKind).toBe('cell')
+    fireEvent.click(addComment)
 
     expect(onStartComment).toHaveBeenCalledWith({
       type: 'cell',
@@ -2502,9 +2509,20 @@ describe('Action component', () => {
       clientX: 40,
       clientY: 20,
     })
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Comment on selected text' })
+    const commentSelection = screen.getByRole('button', {
+      name: 'Comment on selected text',
+    })
+    expect(commentSelection.dataset.runmeContextMenuAction).toBe(
+      'comment-selection'
     )
+    const selectionMenu = commentSelection.closest<HTMLElement>('.ctx-menu')
+    expect(selectionMenu?.dataset.runmeContextMenuCellId).toBe(
+      'cell-md-selection-context-comment'
+    )
+    expect(selectionMenu?.dataset.runmeContextMenuKind).toBe(
+      'rendered-selection'
+    )
+    fireEvent.click(commentSelection)
 
     expect(onStartComment).toHaveBeenCalledWith(
       expect.objectContaining({

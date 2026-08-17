@@ -355,6 +355,16 @@ async function handleSandboxAppKernelBridgeCall({
       return globals.tour.setActivePanel(args[0] as any)
     case 'tour.help':
       return globals.tour.help()
+    case 'ui.selectRenderedMarkdown':
+      return globals.ui.selectRenderedMarkdown(args[0] as any)
+    case 'ui.openContextMenu':
+      return globals.ui.openContextMenu(args[0] as any)
+    case 'ui.prepareRenderedComment':
+      return globals.ui.prepareRenderedComment(args[0] as any)
+    case 'ui.clearSelection':
+      return globals.ui.clearSelection()
+    case 'ui.help':
+      return globals.ui.help()
     case 'opfs.exists':
       return opfsApi.exists(String(args[0] ?? ''))
     case 'opfs.readText':
