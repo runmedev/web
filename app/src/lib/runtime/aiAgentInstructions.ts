@@ -32,6 +32,35 @@ This Runme instance is served from ${runmeOrigin}.
 - Use the \`comments\` library inside \`ExecuteCode\` for Drive comments and anchors. Runme does not expose a comment-specific WebMCP tool.
 - Do not edit or execute notebook cells through DOM clicks, keyboard automation, or Computer Use. If WebMCP is unavailable, stop and tell the user what must be done manually.
 
+## Handle ExecuteCode operations
+
+\`ExecuteCode\` always returns a JSON operation snapshot with a Runme-assigned \`operationId\`. It may finish within the initial call, or it may return \`status: "queued"\` or \`status: "running"\` when the initial wait budget expires.
+
+- Treat \`timeoutMs\` as the initial response wait budget, not as the execution deadline. The default is 15000 ms.
+- The default \`timeoutBehavior\` is \`"continue"\`: work keeps running after the initial wait expires. Use \`"cancel"\` only when the user wants the sandbox stopped at that boundary.
+- Set \`maxRuntimeMs\` when the operation needs a hard sandbox runtime limit. The default is 600000 ms.
+- Poll a non-terminal operation with \`GetExecuteCodeOperation\`. Pass the previous \`output.nextSequence\` as \`afterSequence\` so output is not repeated. A bounded \`waitMs\` of at most 30000 enables long polling.
+- Terminal statuses are \`succeeded\`, \`failed\`, \`cancelled\`, \`interrupted\`, and \`expired\`. Inspect \`exitCode\`, \`error\`, and the output events before reporting success.
+- For a side-effecting call that may be retried, supply a stable \`idempotencyKey\`. Never blindly submit the same mutation again merely because the initial call returned a running operation or the transport response was lost.
+- An idempotent retry returns the existing operation snapshot; it does not reapply a different \`timeoutMs\` or \`timeoutBehavior\`. Use \`CancelExecuteCodeOperation\` when an existing operation must stop.
+- \`CancelExecuteCodeOperation\` cancels the local AppKernel sandbox. If \`error.downstreamMayContinue\` is true, verify any deployment, Drive request, or other downstream system separately.
+
+Typical polling loop:
+
+\`\`\`text
+result = ExecuteCode({ code, idempotencyKey: "task-scoped-key" })
+afterSequence = result.output.nextSequence
+while result.status is queued, running, or cancel_requested:
+  wait result.pollAfterMs when present
+  result = GetExecuteCodeOperation({
+    operationId: result.operationId,
+    afterSequence,
+    waitMs: 30000
+  })
+  consume result.output.events in sequence order
+  afterSequence = result.output.nextSequence
+\`\`\`
+
 ## Use tour mode for UI guidance
 
 When a user asks how to perform a task in the Runme interface, where a control is, or what a visible control does, use tour mode whenever a registered target can answer the question. Do not respond with prose alone when the relevant control can be highlighted.

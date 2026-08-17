@@ -32,6 +32,19 @@ describe('readInstructionsForAIAgents', () => {
 
     expect(instructions).toContain('WebMCP')
     expect(instructions).toContain('ExecuteCode')
+    expect(instructions).toContain('GetExecuteCodeOperation')
+    expect(instructions).toContain('CancelExecuteCodeOperation')
+    expect(instructions).toContain('Runme-assigned `operationId`')
+    expect(instructions).toContain('initial response wait budget')
+    expect(instructions).toContain('`timeoutBehavior` is `"continue"`')
+    expect(instructions).toContain('`maxRuntimeMs`')
+    expect(instructions).toContain('`output.nextSequence`')
+    expect(instructions).toContain('`idempotencyKey`')
+    expect(instructions).toContain('Never blindly submit the same mutation')
+    expect(instructions).toContain(
+      'does not reapply a different `timeoutMs` or `timeoutBehavior`'
+    )
+    expect(instructions).toContain('`error.downstreamMayContinue`')
     expect(instructions).toContain('comments.list')
     expect(instructions).toContain('comment-specific WebMCP tool')
     expect(instructions).toContain('comments.resolveAnchor')
