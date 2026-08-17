@@ -1,3 +1,5 @@
+import { MIN_EXECUTE_CODE_POLL_BYTES } from './codeOperationTypes'
+
 type JsonRecord = Record<string, unknown>
 
 export const EXECUTE_CODE_TOOL_NAME = 'ExecuteCode'
@@ -84,10 +86,10 @@ export function buildGetExecuteCodeOperationInputSchema(): JsonRecord {
       },
       maxBytes: {
         type: 'integer',
-        minimum: 1_024,
+        minimum: MIN_EXECUTE_CODE_POLL_BYTES,
         maximum: 262_144,
         description:
-          'Maximum retained output bytes to return in this poll. Defaults to 65536.',
+          'Maximum retained output bytes to return in this poll. Minimum 16384; defaults to 65536.',
       },
     },
     required: ['operationId'],
@@ -111,10 +113,10 @@ export function buildCancelExecuteCodeOperationInputSchema(): JsonRecord {
       },
       maxBytes: {
         type: 'integer',
-        minimum: 1_024,
+        minimum: MIN_EXECUTE_CODE_POLL_BYTES,
         maximum: 262_144,
         description:
-          'Maximum retained output bytes to return with the cancellation result. Defaults to 65536.',
+          'Maximum retained output bytes to return with the cancellation result. Minimum 16384; defaults to 65536.',
       },
     },
     required: ['operationId'],

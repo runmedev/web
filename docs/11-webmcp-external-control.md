@@ -112,6 +112,9 @@ bounded `waitMs` of at most 30 seconds for long polling:
 }
 ```
 
+`maxBytes` is bounded from 16384 to 262144 bytes because output is stored and
+retrieved in UTF-8-safe 16 KiB chunks. It defaults to 65536 bytes.
+
 Consume `output.events` in sequence order and repeat until the status is one of
 `succeeded`, `failed`, `cancelled`, `interrupted`, or `expired`. Use
 `CancelExecuteCodeOperation` for explicit cancellation. Results and bounded
@@ -125,6 +128,9 @@ Runme assigns the operation ID and returns the original operation for a retry
 with the same key and execution input. Reusing a key with different code or a
 different hard runtime limit fails with `IDEMPOTENCY_CONFLICT`. Never resubmit
 a mutation merely because the initial response returned `running` or was lost.
+An idempotent retry returns the existing snapshot immediately and does not
+reapply a different `timeoutMs` or `timeoutBehavior`; use
+`CancelExecuteCodeOperation` to stop the existing operation.
 
 Browser tab control is exclusive: one controller session can control one tab
 at a time. Concurrent sessions should target different Runme tabs.

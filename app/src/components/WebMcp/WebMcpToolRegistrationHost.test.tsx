@@ -254,6 +254,14 @@ describe('WebMcpToolRegistrationHost', () => {
       ({ tool }) => tool.name === 'GetExecuteCodeOperation'
     )
     expect(getOperation?.tool.annotations.readOnlyHint).toBe(true)
+    expect(getOperation?.tool.inputSchema).toMatchObject({
+      properties: {
+        maxBytes: {
+          minimum: 16_384,
+          maximum: 262_144,
+        },
+      },
+    })
     await getOperation?.tool.execute({
       operationId: 'exec-1',
       afterSequence: 2,
@@ -267,6 +275,14 @@ describe('WebMcpToolRegistrationHost', () => {
       ({ tool }) => tool.name === 'CancelExecuteCodeOperation'
     )
     expect(cancelOperation?.tool.annotations.readOnlyHint).toBe(false)
+    expect(cancelOperation?.tool.inputSchema).toMatchObject({
+      properties: {
+        maxBytes: {
+          minimum: 16_384,
+          maximum: 262_144,
+        },
+      },
+    })
     await cancelOperation?.tool.execute({ operationId: 'exec-1' })
     expect(cancelOperationMock).toHaveBeenCalledWith({
       operationId: 'exec-1',

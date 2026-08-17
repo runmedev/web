@@ -42,6 +42,7 @@ This Runme instance is served from ${runmeOrigin}.
 - Poll a non-terminal operation with \`GetExecuteCodeOperation\`. Pass the previous \`output.nextSequence\` as \`afterSequence\` so output is not repeated. A bounded \`waitMs\` of at most 30000 enables long polling.
 - Terminal statuses are \`succeeded\`, \`failed\`, \`cancelled\`, \`interrupted\`, and \`expired\`. Inspect \`exitCode\`, \`error\`, and the output events before reporting success.
 - For a side-effecting call that may be retried, supply a stable \`idempotencyKey\`. Never blindly submit the same mutation again merely because the initial call returned a running operation or the transport response was lost.
+- An idempotent retry returns the existing operation snapshot; it does not reapply a different \`timeoutMs\` or \`timeoutBehavior\`. Use \`CancelExecuteCodeOperation\` when an existing operation must stop.
 - \`CancelExecuteCodeOperation\` cancels the local AppKernel sandbox. If \`error.downstreamMayContinue\` is true, verify any deployment, Drive request, or other downstream system separately.
 
 Typical polling loop:

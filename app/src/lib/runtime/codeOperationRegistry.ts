@@ -23,11 +23,12 @@ import {
   MAX_EXECUTE_CODE_MAX_RUNTIME_MS,
   MAX_EXECUTE_CODE_POLL_WAIT_MS,
   MAX_EXECUTE_CODE_WAIT_TIMEOUT_MS,
+  MIN_EXECUTE_CODE_POLL_BYTES,
   type StartExecuteCodeOperationInput,
   isExecuteCodeOperationTerminal,
 } from './codeOperationTypes'
 
-const OUTPUT_EVENT_CHUNK_BYTES = 16 * 1024
+const OUTPUT_EVENT_CHUNK_BYTES = MIN_EXECUTE_CODE_POLL_BYTES
 const DEFAULT_POLL_AFTER_MS = 1_000
 const CANCEL_GRACE_MS = 1_000
 
@@ -583,7 +584,7 @@ export class CodeOperationRegistry {
       clampInteger(
         options.maxBytes,
         DEFAULT_EXECUTE_CODE_POLL_BYTES,
-        1_024,
+        MIN_EXECUTE_CODE_POLL_BYTES,
         this.maxOutputBytes
       )
     )

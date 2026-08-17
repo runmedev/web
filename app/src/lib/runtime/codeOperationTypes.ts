@@ -5,6 +5,7 @@ export const MAX_EXECUTE_CODE_MAX_RUNTIME_MS = 60 * 60_000
 export const DEFAULT_EXECUTE_CODE_OUTPUT_BYTES = 256 * 1024
 export const DEFAULT_EXECUTE_CODE_RESULT_TTL_MS = 24 * 60 * 60_000
 export const DEFAULT_EXECUTE_CODE_POLL_BYTES = 64 * 1024
+export const MIN_EXECUTE_CODE_POLL_BYTES = 16 * 1024
 export const MAX_EXECUTE_CODE_POLL_WAIT_MS = 30_000
 
 export type ExecuteCodeTimeoutBehavior = 'cancel' | 'continue'

@@ -259,6 +259,32 @@ describe('CodeOperationRegistry', () => {
     })
   })
 
+  it('paginates output within the advertised minimum page size', async () => {
+    const executor: CodeModeExecutor = {
+      execute: vi.fn(async ({ hooks }) => {
+        hooks?.onStdout?.('x'.repeat(20 * 1024))
+        return { output: '', exitCode: 0 }
+      }),
+    }
+    const { registry } = createRegistry(executor, {
+      maxOutputBytes: 64 * 1024,
+    })
+
+    const started = await registry.start({ code: "console.log('x')" })
+    const firstPage = await registry.get({
+      operationId: started.operationId,
+      maxBytes: 16 * 1024,
+    })
+
+    expect(
+      firstPage.output.events.reduce(
+        (bytes, event) => bytes + new TextEncoder().encode(event.text).length,
+        0
+      )
+    ).toBeLessThanOrEqual(16 * 1024)
+    expect(firstPage.output.hasMore).toBe(true)
+  })
+
   it('reports the hard runtime limit separately from the initial wait budget', async () => {
     const executor: CodeModeExecutor = {
       execute: vi.fn(async () => {

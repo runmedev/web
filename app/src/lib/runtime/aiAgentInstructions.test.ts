@@ -41,6 +41,9 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain('`output.nextSequence`')
     expect(instructions).toContain('`idempotencyKey`')
     expect(instructions).toContain('Never blindly submit the same mutation')
+    expect(instructions).toContain(
+      'does not reapply a different `timeoutMs` or `timeoutBehavior`'
+    )
     expect(instructions).toContain('`error.downstreamMayContinue`')
     expect(instructions).toContain('comments.list')
     expect(instructions).toContain('comment-specific WebMCP tool')
