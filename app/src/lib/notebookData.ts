@@ -1375,6 +1375,22 @@ export class NotebookData {
         )
       case 'tour.help':
         return appGlobals.tour.help()
+      case 'ui.selectRenderedMarkdown':
+        return appGlobals.ui.selectRenderedMarkdown(
+          args[0] as Parameters<typeof appGlobals.ui.selectRenderedMarkdown>[0]
+        )
+      case 'ui.openContextMenu':
+        return appGlobals.ui.openContextMenu(
+          args[0] as Parameters<typeof appGlobals.ui.openContextMenu>[0]
+        )
+      case 'ui.prepareRenderedComment':
+        return appGlobals.ui.prepareRenderedComment(
+          args[0] as Parameters<typeof appGlobals.ui.prepareRenderedComment>[0]
+        )
+      case 'ui.clearSelection':
+        return appGlobals.ui.clearSelection()
+      case 'ui.help':
+        return appGlobals.ui.help()
       case 'runme.getCurrentNotebook': {
         const notebook = runmeApi.getCurrentNotebook()
         if (!notebook) {

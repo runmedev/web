@@ -666,7 +666,7 @@ describe("DriveNotebookStore", () => {
         const url = new URL(String(input));
         expect(url.pathname).toBe("/drive/v3/files/file123/comments");
         expect(url.searchParams.get("supportsAllDrives")).toBe("true");
-        expect(url.searchParams.get("includeDeleted")).toBe("false");
+        expect(url.searchParams.get("includeDeleted")).toBe("true");
         const pageToken = url.searchParams.get("pageToken");
         const body = pageToken
           ? { comments: [{ id: "comment-2", content: "second" }] }

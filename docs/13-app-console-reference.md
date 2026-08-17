@@ -31,6 +31,7 @@ help()
 - `documents`: raw URI-based document content API,
 - `documentation`: read-only, versioned Runme documentation discovery,
 - `comments`: Drive comment threads and Runme anchor resolution,
+- `ui`: semantic helpers for selecting rendered Markdown and opening Runme UI,
 - `explorer`: workspace and file-mount helpers,
 - `runmeRunners`: runner configuration,
 - `jupyter`: Jupyter server and kernel lifecycle,
@@ -52,6 +53,7 @@ notebooks.help()
 documents.help()
 documentation.help()
 comments.help()
+ui.help()
 runmeRunners.help()
 drive.help()
 agent.help()
@@ -129,7 +131,9 @@ console.log(JSON.stringify(annotations, null, 2))
 ```
 
 Each annotation includes the original rendered target, current editable source
-ranges, and resolution status. Use `comments.parseAnchor(anchor)` and
+ranges, resolution status, and a `sync` field. `pending`, `syncing`, and
+`failed` annotations are durable local operations that may not yet be visible
+to collaborators in Google Drive. Use `comments.parseAnchor(anchor)` and
 `comments.resolveAnchor({ anchor, source })` for standalone anchor inspection.
 Reply, resolve, or reopen only when the user requested that collaboration
 action:
@@ -140,8 +144,60 @@ await comments.resolve({ target, commentId })
 await comments.reopen({ target, commentId })
 ```
 
+These mutations persist locally before returning and reconcile with Google
+Drive asynchronously. Top-level comments are desired state identified by a
+`clientCommentId` in the Drive anchor, so Runme can detect an already-created
+comment after an interrupted response. Drive replies have no writable metadata
+field, so Runme appends a compact visible footer such as
+`[runme:v1;reply=<clientReplyId>]`. This lets Runme reconcile replies by stable
+identity while keeping the protocol transparent in Drive's native UI; Runme
+strips a valid terminal footer in its own UI. Call `comments.list` again when
+remote completion matters and inspect `sync.status` (`pending`, `syncing`,
+`uncertain`, `failed`, or `synced`).
+
 The same namespace is available inside WebMCP `ExecuteCode`. Runme does not
 register a comment-specific WebMCP tool.
+
+Programmatically exercise the rendered Markdown selection flow through the
+semantic `ui` library:
+
+```js
+const doc = await notebooks.get()
+const notebookUri = doc.summary.uri
+const cellId = doc.notebook.cells.find((cell) =>
+  cell.value.includes('migration guide')
+).refId
+
+const prepared = await ui.prepareRenderedComment({
+  target: { uri: notebookUri },
+  cellId,
+  selector: {
+    type: 'TextQuoteSelector',
+    exact: 'migration guide',
+    prefix: 'Read the ',
+    suffix: ' today.',
+  },
+})
+console.log(JSON.stringify(prepared, null, 2))
+
+// Inspect or interact with the open "Comment on selected text" menu, then:
+await ui.clearSelection()
+```
+
+`ui.selectRenderedMarkdown(request)` creates a native browser `Selection`
+without opening a menu. Calling `ui.openContextMenu` with `anchor: 'selection'`
+then dispatches the same custom context-menu path used by a user right-click.
+`ui.prepareRenderedComment(request)` combines both steps.
+The selector is expressed over the versioned rendered Markdown text projection
+and may be either a W3C-style `TextQuoteSelector` or a code-point-based
+`TextPositionSelector`.
+
+The helpers require the exact active notebook URI and canonical cell `refId`.
+They fail instead of guessing when a quote is missing or ambiguous, the cell is
+in source-edit mode, or the rendered DOM is stale. They are ephemeral: they do
+not create or submit a comment. A synthetic event can validate Runme's custom
+menu and anchor-capture path, but it is not a substitute for a manual test of
+physical pointer selection or the browser's native menu.
 
 Read and update raw document content, including Excalidraw scenes:
 

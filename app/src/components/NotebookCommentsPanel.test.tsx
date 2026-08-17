@@ -25,13 +25,18 @@ function renderPanel(overrides = {}) {
     cellLabels: new Map<string, string>(),
     activeCellId: null,
     draftTarget: null,
+    draftContent: '',
     busy: false,
+    pendingCount: 0,
+    failedCount: 0,
     onCancelDraft: noop,
+    onDraftContentChange: noop,
     onCreateComment: noopAsync,
     onReply: noopAsync,
     onResolve: noopAsync,
     onReopen: noopAsync,
     onRefresh: noop,
+    onRetryFailed: noop,
     onHide: noop,
     onSelectCell: noop,
     ...overrides,
@@ -51,6 +56,32 @@ describe('NotebookCommentsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Hide' }))
 
     expect(onHide).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows locally saved operations without replacing the comments view', () => {
+    renderPanel({
+      pendingCount: 1,
+      threads: [
+        thread('Waiting to sync', 'cell-1', {
+          id: 'local:operation-1',
+          runmeSyncStatus: 'pending',
+        }),
+      ],
+      cellLabels: new Map([['cell-1', 'Cell 1']]),
+    })
+
+    expect(screen.getByText(/saved locally and waiting to sync/i)).toBeTruthy()
+    expect(screen.getByText('Waiting to sync')).toBeTruthy()
+    expect(screen.getByText('Saved locally')).toBeTruthy()
+  })
+
+  it('offers an explicit retry for failed operations', () => {
+    const onRetryFailed = vi.fn()
+    renderPanel({ failedCount: 1, onRetryFailed })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    expect(onRetryFailed).toHaveBeenCalledTimes(1)
   })
 
   it('orders anchored threads by cell order instead of modification time', () => {

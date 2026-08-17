@@ -77,6 +77,11 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'tour.waitForUiChange',
   'tour.setActivePanel',
   'tour.help',
+  'ui.selectRenderedMarkdown',
+  'ui.openContextMenu',
+  'ui.prepareRenderedComment',
+  'ui.clearSelection',
+  'ui.help',
   'embed',
   'notebookDiff.listDriveRevisions',
   'notebookDiff.diffDriveRevision',
@@ -342,6 +347,13 @@ export function buildSandboxSrcDoc(options: {
           setActivePanel: (panel) => hostCall("tour.setActivePanel", [panel]),
           help: () => hostCall("tour.help", []),
         };
+        const ui = {
+          selectRenderedMarkdown: (request) => hostCall("ui.selectRenderedMarkdown", [request]),
+          openContextMenu: (request) => hostCall("ui.openContextMenu", [request]),
+          prepareRenderedComment: (request) => hostCall("ui.prepareRenderedComment", [request]),
+          clearSelection: () => hostCall("ui.clearSelection", []),
+          help: () => hostCall("ui.help", []),
+        };
 
         ${opfsHelper}
 
@@ -398,6 +410,7 @@ export function buildSandboxSrcDoc(options: {
             consoleProxy.log("await comments.reply({ target?, commentId, content })");
             consoleProxy.log("await comments.resolve({ target?, commentId })");
             consoleProxy.log("await comments.reopen({ target?, commentId })");
+            consoleProxy.log("comments.list includes sync.status; writes persist locally before asynchronous Drive reconciliation; Drive replies include a visible Runme identity footer");
           },
         };
         const notebookDiff = {
@@ -469,6 +482,10 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- tour.getUiSnapshot()");
           consoleProxy.log("- tour.waitForUiChange({ afterRevision, timeoutMs })");
           consoleProxy.log("- tour.setActivePanel(panel)");
+          consoleProxy.log("- ui.selectRenderedMarkdown({ target: { uri }, cellId, selector })");
+          consoleProxy.log("- ui.openContextMenu({ target: { uri }, cellId, anchor: 'selection' })");
+          consoleProxy.log("- ui.prepareRenderedComment({ target: { uri }, cellId, selector })");
+          consoleProxy.log("- ui.clearSelection()");
           consoleProxy.log("- embed(source, { target?, alt?, name? })");
           ${opfsHelpLines}
           ${netHelpLines}
@@ -496,6 +513,7 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- await comments.reply({ target?, commentId, content })");
           consoleProxy.log("- await comments.resolve({ target?, commentId })");
           consoleProxy.log("- await comments.reopen({ target?, commentId })");
+          consoleProxy.log("- comments.list includes sync.status; writes persist locally before asynchronous Drive reconciliation; Drive replies include a visible Runme identity footer");
           consoleProxy.log("- notebookDiff.listDriveRevisions([target])");
           consoleProxy.log("- notebookDiff.diffDriveRevision({ target?, revisionId, includeOutputs?, includeMetadata? })");
           consoleProxy.log("- notebookDiff.openDiffTab(diff)");
@@ -523,6 +541,7 @@ export function buildSandboxSrcDoc(options: {
               "console",
               "runme",
               "tour",
+              "ui",
               "opfs",
               "net",
               "embed",
@@ -538,7 +557,7 @@ export function buildSandboxSrcDoc(options: {
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, tour, opfs, net, embed, notebooks, documents, documentation, comments, notebookDiff, app, explorer, credentials, drive, help);
+            await runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, notebookDiff, app, explorer, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });

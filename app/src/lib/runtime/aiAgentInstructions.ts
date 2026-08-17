@@ -30,6 +30,7 @@ This Runme instance is served from ${runmeOrigin}.
 - Claim the selected tab and use its page-provided WebMCP tools for notebook reads, edits, and execution.
 - Use the \`ExecuteCode\` WebMCP tool to run AppKernel JavaScript. Print values explicitly with \`console.log(...)\`.
 - Use the \`comments\` library inside \`ExecuteCode\` for Drive comments and anchors. Runme does not expose a comment-specific WebMCP tool.
+- Use the \`ui\` library inside \`ExecuteCode\` to create rendered Markdown selections and open Runme's selection context menu. Do not invent CSS selectors or dispatch arbitrary DOM events.
 - Do not edit or execute notebook cells through DOM clicks, keyboard automation, or Computer Use. If WebMCP is unavailable, stop and tell the user what must be done manually.
 
 ## Handle ExecuteCode operations
@@ -212,6 +213,41 @@ If the user's notebook reference is ambiguous, ask which notebook to use before 
 - Do not add, remove, or rewrite a cell ID unless the user explicitly requests an identity migration or the notebook API repairs invalid legacy data.
 - When updating or executing cells, reuse the exact \`refId\` returned by \`notebooks.get({ uri })\`.
 
+## Exercise rendered Markdown selection
+
+Use the semantic \`ui\` sandbox library when a test or demonstration needs a
+real browser \`Selection\` over rendered Markdown. Bind the exact active
+notebook URI and canonical cell \`refId\`; never query the DOM or construct CSS
+selectors yourself.
+
+\`\`\`js
+const prepared = await ui.prepareRenderedComment({
+  target: { uri: notebookUri },
+  cellId,
+  selector: {
+    type: 'TextQuoteSelector',
+    exact: 'migration guide',
+    prefix: 'Read the ',
+    suffix: ' today.',
+  },
+})
+console.log(JSON.stringify(prepared, null, 2))
+\`\`\`
+
+\`ui.selectRenderedMarkdown(request)\` creates the selection without opening a
+menu. \`ui.openContextMenu({ target, cellId, anchor: 'selection' })\` opens the
+same Runme custom menu used by a user right-click.
+\`ui.prepareRenderedComment(request)\` performs both steps. The selector may be
+a W3C-style \`TextQuoteSelector\` or a code-point-based
+\`TextPositionSelector\` over the versioned rendered Markdown projection.
+
+These helpers fail closed when a quote is missing or ambiguous, the requested
+notebook is not active, the cell is not rendered, or the DOM is stale. Add
+\`prefix\` and \`suffix\` when \`exact\` occurs more than once. They do not create
+or submit a comment. Use \`await ui.clearSelection()\` in cleanup. A scripted
+selection validates Runme's custom selection/menu/anchor path; retain a manual
+physical-pointer test when browser input behavior itself matters.
+
 ## Work with notebook comments
 
 Use the \`comments\` sandbox library. Do not scrape the comments panel, call Google Drive directly, or infer the target from the comment body.
@@ -224,7 +260,7 @@ const annotations = await comments.list({
 console.log(JSON.stringify(annotations, null, 2))
 \`\`\`
 
-Each annotation includes the parsed \`anchor\`, the original rendered selection in \`originalTarget\`, current Markdown in \`editableSource\`, and \`currentResolution\`.
+Each annotation includes the parsed \`anchor\`, the original rendered selection in \`originalTarget\`, current Markdown in \`editableSource\`, \`currentResolution\`, and a \`sync\` field. A \`pending\`, \`syncing\`, or \`failed\` annotation is durable local feedback but may not yet be visible to Drive collaborators.
 
 - Use \`editableSource.cellId\` as the canonical \`refId\` for notebook updates.
 - For \`currentResolution.status\` equal to \`exact\` or \`moved\`, use \`editableSource.ranges\` to locate the corresponding Markdown source and \`originalTarget.reviewedContent\` to understand the rendered selection.
@@ -242,6 +278,8 @@ await comments.reply({
 })
 await comments.resolve({ target: { uri: notebookUri }, commentId })
 \`\`\`
+
+Comment mutations persist locally before returning and reconcile with Google Drive asynchronously. Top-level comments use an anchored client ID. Because Drive replies expose no writable metadata field, Runme adds a compact visible \`[runme:v1;reply=<clientReplyId>]\` footer in Drive and strips a valid terminal footer in Runme. Call \`comments.list\` again when remote completion matters. Do not describe a reply or resolution as synchronized while its \`sync.status\` is not \`synced\`.
 
 Use \`comments.reopen({ target, commentId })\` only when the user asks to reopen a resolved thread.
 

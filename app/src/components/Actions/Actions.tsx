@@ -1489,6 +1489,12 @@ export function Action({
         {adjustedContextMenu && (
           <div
             className="ctx-menu"
+            data-runme-context-menu-cell-id={cell.refId}
+            data-runme-context-menu-kind={
+              contextMenu?.captureRenderedSelection
+                ? 'rendered-selection'
+                : 'cell'
+            }
             style={{
               top: adjustedContextMenu.y,
               left: adjustedContextMenu.x,
@@ -1522,6 +1528,11 @@ export function Action({
             <button
               type="button"
               className="ctx-menu-item"
+              data-runme-context-menu-action={
+                contextMenu?.captureRenderedSelection
+                  ? 'comment-selection'
+                  : 'comment-cell'
+              }
               disabled={!commentsAvailable}
               onClick={(event) => {
                 event.stopPropagation()
@@ -2027,6 +2038,8 @@ function NotebookTabContent({
       .map((c) => (c?.refId ? notebookData.getCell(c.refId) : null))
       .filter((c): c is CellData => Boolean(c))
   }, [notebookData, notebookSnapshot, shouldRenderCells])
+  const cellDatasRef = useRef(cellDatas)
+  cellDatasRef.current = cellDatas
   const [commentsRemoteUri, setCommentsRemoteUri] = useState<string | null>(
     null
   )
@@ -2036,11 +2049,19 @@ function NotebookTabContent({
   const [commentsErrorMessage, setCommentsErrorMessage] = useState<
     string | undefined
   >()
+  const [commentsSyncErrorMessage, setCommentsSyncErrorMessage] = useState<
+    string | undefined
+  >()
   const [comments, setComments] = useState<DriveComment[]>([])
   const [commentsBusy, setCommentsBusy] = useState(false)
+  const [pendingCommentCount, setPendingCommentCount] = useState(0)
+  const [failedCommentCount, setFailedCommentCount] = useState(0)
   const [draftTarget, setDraftTarget] = useState<CommentDraftTarget | null>(
     null
   )
+  const [draftContent, setDraftContent] = useState('')
+  const commentsSyncInFlightRef = useRef<Promise<void> | null>(null)
+  const commentsSyncRerunRequestedRef = useRef(false)
   const cellLabels = useMemo(() => {
     const labels = new Map<string, string>()
     cellDatas.forEach((cellData, index) => {
@@ -2203,14 +2224,156 @@ function NotebookTabContent({
     [embedImageFiles, readOnly]
   )
 
-  const startCommentDraft = useCallback(
-    (target: CommentDraftTarget) => {
-      openCommentsPanel()
-      setDraftTarget(target)
-      selectCommentCell(target.cellId)
-    },
-    [openCommentsPanel, selectCommentCell]
-  )
+  const loadLocalComments = useCallback(async () => {
+    const localComments = appState.localComments
+    if (!commentsRemoteUri || !localComments) {
+      return false
+    }
+    const [nextComments, records] = await Promise.all([
+      localComments.list(commentsRemoteUri),
+      localComments.listPendingRecords(commentsRemoteUri),
+    ])
+    setComments(nextComments)
+    setPendingCommentCount(
+      records.filter(
+        (record) =>
+          record.status === 'pending' ||
+          record.status === 'syncing' ||
+          record.status === 'uncertain'
+      ).length
+    )
+    setFailedCommentCount(
+      records.filter((record) => record.status === 'failed').length
+    )
+    return true
+  }, [commentsRemoteUri])
+
+  const preparePendingCommentCreates = useCallback(async () => {
+    const localComments = appState.localComments
+    const driveStore = appState.driveNotebookStore
+    if (
+      !commentsRemoteUri ||
+      !localComments ||
+      !driveStore ||
+      (typeof navigator !== 'undefined' && navigator.onLine === false)
+    ) {
+      return
+    }
+    const creates = (
+      await localComments.listPendingRecords(commentsRemoteUri)
+    ).filter(
+      (record) =>
+        record.recordType === 'desired-comment' && !record.remoteAnchor
+    )
+    if (creates.length === 0) {
+      return
+    }
+
+    try {
+      if (store && docUri.startsWith('local://')) {
+        await notebookData?.flushPendingPersist?.()
+        await store.sync(docUri)
+        const state = await store.getSyncState(docUri)
+        if (state.status !== 'synced') {
+          throw new Error(
+            `The notebook could not be synchronized before commenting (${state.status}).`
+          )
+        }
+      }
+    } catch (error) {
+      await Promise.all(
+        creates.map((operation) =>
+          localComments.markDesiredPreparationFailed(operation.id, error)
+        )
+      )
+      return
+    }
+
+    const needsRevision = creates.some(
+      (operation) => operation.target.type === 'cell-text'
+    )
+    const driveRevisionId = needsRevision
+      ? (await driveStore.getVersionMetadata(commentsRemoteUri))?.headRevisionId
+      : undefined
+
+    for (const operation of creates) {
+      try {
+        if (operation.target.type === 'cell-text') {
+          const currentCell = cellDatasRef.current
+            .map((cellData) => cellData.snapshot)
+            .find((cell) => cell?.refId === operation.target.cellId)
+          if (!currentCell || currentCell.value !== operation.target.source) {
+            throw new Error(
+              'The Markdown cell changed before this locally saved comment could sync. Reselect the text to publish it.'
+            )
+          }
+          const currentProjection = buildRenderedMarkdownProjection(
+            currentCell.value
+          )
+          if (currentProjection.text !== operation.target.projection.text) {
+            throw new Error(
+              'The rendered Markdown changed before this locally saved comment could sync. Reselect the text to publish it.'
+            )
+          }
+          if (!driveRevisionId) {
+            throw new Error(
+              'Google Drive did not return a revision for the selected notebook state.'
+            )
+          }
+          await localComments.prepareDesiredComment(
+            operation.id,
+            await createCellTextCommentAnchor(
+              operation.target,
+              driveRevisionId,
+              operation.id
+            ),
+            {
+              mimeType: 'text/plain',
+              value: operation.target.selectors[1].exact,
+            }
+          )
+        } else {
+          await localComments.prepareDesiredComment(
+            operation.id,
+            createCellCommentAnchor(operation.target.cellId, operation.id)
+          )
+        }
+      } catch (error) {
+        await localComments.markDesiredPreparationFailed(operation.id, error)
+      }
+    }
+  }, [commentsRemoteUri, docUri, notebookData, store])
+
+  const syncPendingComments = useCallback(() => {
+    const localComments = appState.localComments
+    if (!commentsRemoteUri || !localComments) {
+      return Promise.resolve()
+    }
+    if (commentsSyncInFlightRef.current) {
+      // A new local operation may have been saved after the in-flight pass took
+      // its snapshot. Coalesce callers, but always run one follow-up pass.
+      commentsSyncRerunRequestedRef.current = true
+      return commentsSyncInFlightRef.current
+    }
+    const pending = (async () => {
+      do {
+        commentsSyncRerunRequestedRef.current = false
+        await preparePendingCommentCreates()
+        await localComments.reconcile(commentsRemoteUri)
+        await loadLocalComments()
+      } while (commentsSyncRerunRequestedRef.current)
+    })()
+      .catch((error) => {
+        setCommentsSyncErrorMessage(String(error))
+      })
+      .finally(() => {
+        if (commentsSyncInFlightRef.current === pending) {
+          commentsSyncInFlightRef.current = null
+        }
+      })
+    commentsSyncInFlightRef.current = pending
+    return pending
+  }, [commentsRemoteUri, loadLocalComments, preparePendingCommentCreates])
 
   const refreshComments = useCallback(async () => {
     const driveStore = appState.driveNotebookStore
@@ -2221,22 +2384,30 @@ function NotebookTabContent({
       return
     }
 
-    setCommentsStatus('loading')
+    setCommentsStatus('available')
     setCommentsErrorMessage(undefined)
-    try {
-      const nextComments = await driveStore.listComments(commentsRemoteUri)
-      setComments(nextComments)
-      setCommentsStatus('available')
-    } catch (error) {
-      setComments([])
-      setCommentsStatus('error')
-      setCommentsErrorMessage(String(error))
+    const localComments = appState.localComments
+    if (!localComments) {
+      setCommentsStatus('loading')
+      try {
+        setComments(await driveStore.listComments(commentsRemoteUri))
+        setCommentsStatus('available')
+      } catch (error) {
+        setCommentsStatus('error')
+        setCommentsErrorMessage(String(error))
+      }
+      return
     }
-  }, [commentsRemoteUri])
+
+    await loadLocalComments()
+    setCommentsSyncErrorMessage(undefined)
+    await syncPendingComments()
+  }, [commentsRemoteUri, loadLocalComments, syncPendingComments])
 
   useEffect(() => {
     let cancelled = false
     setDraftTarget(null)
+    setDraftContent('')
     setCommentsErrorMessage(undefined)
 
     void (async () => {
@@ -2251,7 +2422,7 @@ function NotebookTabContent({
       if (isDriveItemUri(docUri)) {
         if (!cancelled) {
           setCommentsRemoteUri(docUri)
-          setCommentsStatus('loading')
+          setCommentsStatus('available')
         }
         return
       }
@@ -2271,7 +2442,7 @@ function NotebookTabContent({
         if (!cancelled) {
           if (remoteUri && isDriveItemUri(remoteUri)) {
             setCommentsRemoteUri(remoteUri)
-            setCommentsStatus('loading')
+            setCommentsStatus('available')
           } else {
             setCommentsRemoteUri(null)
             setComments([])
@@ -2292,14 +2463,115 @@ function NotebookTabContent({
     }
   }, [docUri, notebookSnapshot?.loaded, store])
 
+  const refreshCommentsRef = useRef(refreshComments)
+  refreshCommentsRef.current = refreshComments
   useEffect(() => {
-    void refreshComments()
-  }, [refreshComments])
+    void refreshCommentsRef.current()
+  }, [commentsRemoteUri])
+
+  useEffect(() => {
+    const localComments = appState.localComments
+    if (!commentsRemoteUri || !localComments) {
+      return
+    }
+    return localComments.subscribe(commentsRemoteUri, () => {
+      void loadLocalComments()
+    })
+  }, [commentsRemoteUri, loadLocalComments])
+
+  useEffect(() => {
+    const localComments = appState.localComments
+    if (!commentsRemoteUri || !localComments) {
+      return
+    }
+    let cancelled = false
+    void localComments.getDraft(docUri).then((draft) => {
+      if (cancelled || !draft || draft.remoteUri !== commentsRemoteUri) {
+        return
+      }
+      setDraftTarget(draft.target)
+      setDraftContent(draft.content)
+      openCommentsPanel()
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [commentsRemoteUri, docUri, openCommentsPanel])
+
+  useEffect(() => {
+    const sync = () => void syncPendingComments()
+    window.addEventListener('online', sync)
+    window.addEventListener('focus', sync)
+    return () => {
+      window.removeEventListener('online', sync)
+      window.removeEventListener('focus', sync)
+    }
+  }, [syncPendingComments])
+
+  const startCommentDraft = useCallback(
+    (target: CommentDraftTarget) => {
+      openCommentsPanel()
+      setDraftTarget(target)
+      setDraftContent('')
+      selectCommentCell(target.cellId)
+      if (commentsRemoteUri) {
+        void appState.localComments
+          ?.saveDraft({
+            notebookUri: docUri,
+            remoteUri: commentsRemoteUri,
+            target,
+            content: '',
+          })
+          .catch((error) => {
+            setCommentsSyncErrorMessage(
+              `Could not save the comment draft locally: ${String(error)}`
+            )
+          })
+      }
+    },
+    [commentsRemoteUri, docUri, openCommentsPanel, selectCommentCell]
+  )
+
+  const handleDraftContentChange = useCallback(
+    (content: string) => {
+      setDraftContent(content)
+      if (!commentsRemoteUri || !draftTarget) {
+        return
+      }
+      if (!content) {
+        void appState.localComments?.deleteDraft(docUri)
+        return
+      }
+      void appState.localComments
+        ?.saveDraft({
+          notebookUri: docUri,
+          remoteUri: commentsRemoteUri,
+          target: draftTarget,
+          content,
+        })
+        .catch((error) => {
+          setCommentsSyncErrorMessage(
+            `Could not save the comment draft locally: ${String(error)}`
+          )
+        })
+    },
+    [commentsRemoteUri, docUri, draftTarget]
+  )
+
+  const handleCancelCommentDraft = useCallback(() => {
+    setDraftTarget(null)
+    setDraftContent('')
+    void appState.localComments?.deleteDraft(docUri).catch((error) => {
+      setCommentsSyncErrorMessage(
+        `Could not discard the saved comment draft: ${String(error)}`
+      )
+    })
+  }, [docUri])
 
   const handleCreateComment = useCallback(
     async (target: CommentDraftTarget, content: string) => {
-      const driveStore = appState.driveNotebookStore
-      if (!commentsRemoteUri || !driveStore) {
+      const localComments = appState.localComments
+      if (!commentsRemoteUri || !localComments) {
         showToast({
           tone: 'error',
           message: 'Comments are only available for Google Drive notebooks.',
@@ -2327,44 +2599,17 @@ function NotebookTabContent({
               'The rendered Markdown changed after the selection was captured. Reselect the text before commenting.'
             )
           }
-          if (store && docUri.startsWith('local://')) {
-            await notebookData?.flushPendingPersist?.()
-            await store.sync(docUri)
-            const state = await store.getSyncState(docUri)
-            if (state.status !== 'synced') {
-              throw new Error(
-                `The notebook could not be synchronized before commenting (${state.status}).`
-              )
-            }
-          }
-          const driveRevisionId = (
-            await driveStore.getVersionMetadata(commentsRemoteUri)
-          )?.headRevisionId
-          if (!driveRevisionId) {
-            throw new Error(
-              'Google Drive did not return a revision for the selected notebook state.'
-            )
-          }
-          const anchor = await createCellTextCommentAnchor(
-            target,
-            driveRevisionId
-          )
-          await driveStore.createComment(commentsRemoteUri, content, {
-            anchor,
-            quotedFileContent: {
-              mimeType: 'text/plain',
-              value: target.selectors[1].exact,
-            },
-          })
-        } else {
-          await driveStore.createComment(
-            commentsRemoteUri,
-            content,
-            createCellCommentAnchor(target.cellId)
-          )
         }
+        await localComments.saveDesiredComment({
+          notebookUri: docUri,
+          remoteUri: commentsRemoteUri,
+          content,
+          target,
+        })
         setDraftTarget(null)
-        await refreshComments()
+        setDraftContent('')
+        await loadLocalComments()
+        void syncPendingComments()
       } catch (error) {
         showToast({
           tone: 'error',
@@ -2375,74 +2620,115 @@ function NotebookTabContent({
         setCommentsBusy(false)
       }
     },
-    [cellDatas, commentsRemoteUri, docUri, notebookData, refreshComments, store]
+    [
+      cellDatas,
+      commentsRemoteUri,
+      docUri,
+      loadLocalComments,
+      syncPendingComments,
+    ]
   )
 
   const handleReplyToComment = useCallback(
     async (commentId: string, content: string) => {
-      const driveStore = appState.driveNotebookStore
-      if (!commentsRemoteUri || !driveStore) {
+      const localComments = appState.localComments
+      if (!commentsRemoteUri || !localComments) {
         return
       }
       setCommentsBusy(true)
       try {
-        await driveStore.replyToComment(commentsRemoteUri, commentId, content)
-        await refreshComments()
+        await localComments.saveDesiredReply({
+          notebookUri: docUri,
+          remoteUri: commentsRemoteUri,
+          commentId,
+          content,
+        })
+        await loadLocalComments()
+        void syncPendingComments()
       } catch (error) {
         showToast({
           tone: 'error',
           message: `Failed to reply to comment: ${String(error)}`,
         })
+        throw error
       } finally {
         setCommentsBusy(false)
       }
     },
-    [commentsRemoteUri, refreshComments]
+    [commentsRemoteUri, docUri, loadLocalComments, syncPendingComments]
   )
 
   const handleResolveComment = useCallback(
     async (commentId: string) => {
-      const driveStore = appState.driveNotebookStore
-      if (!commentsRemoteUri || !driveStore) {
+      const localComments = appState.localComments
+      if (!commentsRemoteUri || !localComments) {
         return
       }
       setCommentsBusy(true)
       try {
-        await driveStore.resolveComment(commentsRemoteUri, commentId)
-        await refreshComments()
+        await localComments.setThreadIntent(
+          {
+            notebookUri: docUri,
+            remoteUri: commentsRemoteUri,
+            commentId,
+          },
+          true
+        )
+        await loadLocalComments()
+        void syncPendingComments()
       } catch (error) {
         showToast({
           tone: 'error',
           message: `Failed to resolve comment: ${String(error)}`,
         })
+        throw error
       } finally {
         setCommentsBusy(false)
       }
     },
-    [commentsRemoteUri, refreshComments]
+    [commentsRemoteUri, docUri, loadLocalComments, syncPendingComments]
   )
 
   const handleReopenComment = useCallback(
     async (commentId: string) => {
-      const driveStore = appState.driveNotebookStore
-      if (!commentsRemoteUri || !driveStore) {
+      const localComments = appState.localComments
+      if (!commentsRemoteUri || !localComments) {
         return
       }
       setCommentsBusy(true)
       try {
-        await driveStore.reopenComment(commentsRemoteUri, commentId)
-        await refreshComments()
+        await localComments.setThreadIntent(
+          {
+            notebookUri: docUri,
+            remoteUri: commentsRemoteUri,
+            commentId,
+          },
+          false
+        )
+        await loadLocalComments()
+        void syncPendingComments()
       } catch (error) {
         showToast({
           tone: 'error',
           message: `Failed to reopen comment: ${String(error)}`,
         })
+        throw error
       } finally {
         setCommentsBusy(false)
       }
     },
-    [commentsRemoteUri, refreshComments]
+    [commentsRemoteUri, docUri, loadLocalComments, syncPendingComments]
   )
+
+  const handleRetryFailedComments = useCallback(() => {
+    const localComments = appState.localComments
+    if (!commentsRemoteUri || !localComments) {
+      return
+    }
+    void localComments
+      .retryNeedsAttention(commentsRemoteUri)
+      .then(() => syncPendingComments())
+  }, [commentsRemoteUri, syncPendingComments])
 
   useEffect(() => {
     if (!deepLinkCellId) {
@@ -2744,7 +3030,7 @@ function NotebookTabContent({
                     isDeepLinkTarget={highlightedDeepLinkCellId === refId}
                     onFocusStateChange={(state) => onCellFocus(docUri, state)}
                     readOnly={readOnly}
-                    commentsAvailable={commentsStatus === 'available'}
+                    commentsAvailable={Boolean(commentsRemoteUri)}
                     commentCount={commentsByCell.get(refId)?.length ?? 0}
                     onStartComment={startCommentDraft}
                   />
@@ -2785,13 +3071,19 @@ function NotebookTabContent({
           cellLabels={cellLabels}
           activeCellId={activeCell?.refId ?? null}
           draftTarget={draftTarget}
+          draftContent={draftContent}
           busy={commentsBusy}
-          onCancelDraft={() => setDraftTarget(null)}
+          syncErrorMessage={commentsSyncErrorMessage}
+          pendingCount={pendingCommentCount}
+          failedCount={failedCommentCount}
+          onCancelDraft={handleCancelCommentDraft}
+          onDraftContentChange={handleDraftContentChange}
           onCreateComment={handleCreateComment}
           onReply={handleReplyToComment}
           onResolve={handleResolveComment}
           onReopen={handleReopenComment}
           onRefresh={refreshComments}
+          onRetryFailed={handleRetryFailedComments}
           onHide={() => setCommentsPanelOpen(false)}
           onSelectCell={selectCommentCell}
         />

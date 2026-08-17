@@ -23,13 +23,19 @@ export function NotebookCommentsPanel({
   cellLabels,
   activeCellId,
   draftTarget,
+  draftContent,
   busy,
+  syncErrorMessage,
+  pendingCount,
+  failedCount,
   onCancelDraft,
+  onDraftContentChange,
   onCreateComment,
   onReply,
   onResolve,
   onReopen,
   onRefresh,
+  onRetryFailed,
   onHide,
   onSelectCell,
 }: {
@@ -39,8 +45,13 @@ export function NotebookCommentsPanel({
   cellLabels: Map<string, string>
   activeCellId?: string | null
   draftTarget: CommentDraftTarget | null
+  draftContent: string
   busy: boolean
+  syncErrorMessage?: string
+  pendingCount: number
+  failedCount: number
   onCancelDraft: () => void
+  onDraftContentChange: (content: string) => void
   onCreateComment: (
     target: CommentDraftTarget,
     content: string
@@ -49,13 +60,18 @@ export function NotebookCommentsPanel({
   onResolve: (commentId: string) => Promise<void>
   onReopen: (commentId: string) => Promise<void>
   onRefresh: () => void
+  onRetryFailed: () => void
   onHide: () => void
   onSelectCell: (cellId: string) => void
 }) {
   const [filter, setFilter] = useState<CommentsFilter>('open')
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useState(draftContent)
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({})
   const [activeThreadKey, setActiveThreadKey] = useState<string | null>(null)
+
+  useEffect(() => {
+    setDraft(draftContent)
+  }, [draftContent, draftTarget])
 
   const sortedThreads = useMemo(
     () => sortCommentThreads(threads, cellLabels, filter),
@@ -125,7 +141,12 @@ export function NotebookCommentsPanel({
     const submit = targetCommentId
       ? onReply(targetCommentId, content).then(onCancelDraft)
       : onCreateComment(draftTarget, content)
-    void submit.then(() => setDraft('')).catch(() => undefined)
+    void submit
+      .then(() => {
+        setDraft('')
+        onDraftContentChange('')
+      })
+      .catch(() => undefined)
   }
 
   const submitThreadReply = (item: CommentsPanelItem) => {
@@ -139,23 +160,29 @@ export function NotebookCommentsPanel({
       : item.cellId && !item.orphaned
         ? onCreateComment({ type: 'cell', cellId: item.cellId }, content)
         : Promise.resolve()
-    void submit.then(() => {
-      setReplyDrafts((current) => ({ ...current, [item.key]: '' }))
-    })
+    void submit
+      .then(() => {
+        setReplyDrafts((current) => ({ ...current, [item.key]: '' }))
+      })
+      .catch(() => undefined)
   }
 
   const resolveThread = (item: CommentsPanelItem) => {
     const commentIds = item.threads
       .filter((thread) => !thread.comment.resolved && thread.comment.id)
       .map((thread) => thread.comment.id as string)
-    void Promise.all(commentIds.map((commentId) => onResolve(commentId)))
+    void Promise.all(commentIds.map((commentId) => onResolve(commentId))).catch(
+      () => undefined
+    )
   }
 
   const reopenThread = (item: CommentsPanelItem) => {
     const commentIds = item.threads
       .filter((thread) => thread.comment.resolved && thread.comment.id)
       .map((thread) => thread.comment.id as string)
-    void Promise.all(commentIds.map((commentId) => onReopen(commentId)))
+    void Promise.all(commentIds.map((commentId) => onReopen(commentId))).catch(
+      () => undefined
+    )
   }
 
   return (
@@ -176,7 +203,7 @@ export function NotebookCommentsPanel({
               type="button"
               className="rounded-nb-sm border border-nb-border px-2 py-1 text-xs text-nb-text-muted hover:border-nb-accent hover:text-nb-accent"
               onClick={onRefresh}
-              disabled={busy || status !== 'available'}
+              disabled={busy || status === 'unavailable'}
             >
               Refresh
             </button>
@@ -213,6 +240,38 @@ export function NotebookCommentsPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
+        {status === 'available' &&
+          (syncErrorMessage || pendingCount > 0 || failedCount > 0) && (
+            <div className="mb-3 rounded-nb-sm border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              {failedCount > 0 ? (
+                <div className="flex items-center justify-between gap-2">
+                  <span>
+                    {failedCount} comment operation
+                    {failedCount === 1 ? '' : 's'} need attention.
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded-nb-sm border border-amber-300 px-2 py-1 font-medium hover:bg-amber-100"
+                    onClick={onRetryFailed}
+                    disabled={busy}
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : pendingCount > 0 ? (
+                <span>
+                  {pendingCount} comment operation
+                  {pendingCount === 1 ? '' : 's'} saved locally and waiting to
+                  sync.
+                </span>
+              ) : (
+                <span>{syncErrorMessage}</span>
+              )}
+              {syncErrorMessage && (pendingCount > 0 || failedCount > 0) && (
+                <div className="mt-1 text-amber-700">{syncErrorMessage}</div>
+              )}
+            </div>
+          )}
         {status === 'loading' && (
           <p className="text-sm text-nb-text-muted">Loading comments...</p>
         )}
@@ -266,6 +325,9 @@ export function NotebookCommentsPanel({
                 activeCellId && item.cellId === activeCellId && !item.orphaned
               )
               const canEditThread = isActiveThread && !item.draftTarget
+              const hasLocalOperation = item.threads.some((thread) =>
+                Boolean(thread.comment.runmeSyncStatus)
+              )
               const replyDraft = replyDrafts[item.key] ?? ''
 
               return (
@@ -367,7 +429,10 @@ export function NotebookCommentsPanel({
                         className="mt-2 h-24 w-full resize-none rounded-nb-sm border border-nb-border bg-white p-2 text-sm text-nb-text outline-none focus:border-nb-accent"
                         value={draft}
                         disabled={busy}
-                        onChange={(event) => setDraft(event.target.value)}
+                        onChange={(event) => {
+                          setDraft(event.target.value)
+                          onDraftContentChange(event.target.value)
+                        }}
                         onKeyDown={(event) => {
                           if (
                             (event.metaKey || event.ctrlKey) &&
@@ -385,6 +450,7 @@ export function NotebookCommentsPanel({
                           className="rounded-nb-sm px-2 py-1 text-xs text-nb-text-muted hover:bg-nb-surface-2"
                           onClick={() => {
                             setDraft('')
+                            onDraftContentChange('')
                             onCancelDraft()
                           }}
                           disabled={busy}
@@ -402,7 +468,7 @@ export function NotebookCommentsPanel({
                     </form>
                   )}
 
-                  {canEditThread && (
+                  {canEditThread && !hasLocalOperation && (
                     <div className="mt-3 space-y-2 border-t border-nb-border pt-3">
                       {openThreads.length > 0 && (
                         <textarea
@@ -544,11 +610,27 @@ function CommentMessage({
             {formatDriveTime(comment.modifiedTime ?? comment.createdTime)}
           </div>
         </div>
-        {showStatus && (
+        {comment.runmeSyncStatus ? (
+          <span
+            className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+              comment.runmeSyncStatus === 'failed'
+                ? 'bg-red-50 text-red-700'
+                : 'bg-amber-50 text-amber-700'
+            }`}
+          >
+            {comment.runmeSyncStatus === 'failed'
+              ? 'Needs attention'
+              : comment.runmeSyncStatus === 'uncertain'
+                ? 'Confirming with Drive'
+                : comment.runmeSyncStatus === 'syncing'
+                  ? 'Syncing'
+                  : 'Saved locally'}
+          </span>
+        ) : showStatus ? (
           <span className="rounded-full bg-nb-surface-2 px-2 py-0.5 text-[11px] text-nb-text-muted">
             {comment.resolved ? 'Resolved' : 'Open'}
           </span>
-        )}
+        ) : null}
       </div>
       {thread.anchor?.type === 'cell-text' && (
         <div className="mb-2 rounded-nb-sm bg-nb-surface-2 px-2 py-1.5">
@@ -565,6 +647,9 @@ function CommentMessage({
       <p className="whitespace-pre-wrap text-sm text-nb-text">
         {comment.content ?? ''}
       </p>
+      {comment.runmeSyncError && (
+        <p className="mt-1 text-xs text-red-700">{comment.runmeSyncError}</p>
+      )}
       {(comment.replies ?? []).filter((reply) => !reply.deleted).length > 0 && (
         <div className="mt-3 space-y-2 border-l border-nb-border pl-3">
           {(comment.replies ?? [])
@@ -574,6 +659,15 @@ function CommentMessage({
                 <div className="text-[11px] font-medium text-nb-text-muted">
                   {reply.author?.displayName ?? 'Reply'}
                   {reply.action ? ` - ${reply.action}` : ''}
+                  {reply.runmeSyncStatus === 'pending'
+                    ? ' - Saved locally'
+                    : reply.runmeSyncStatus === 'syncing'
+                      ? ' - Syncing'
+                      : reply.runmeSyncStatus === 'failed'
+                        ? ' - Needs attention'
+                        : reply.runmeSyncStatus === 'uncertain'
+                          ? ' - Confirming with Drive'
+                          : ''}
                 </div>
                 {reply.content && (
                   <p className="whitespace-pre-wrap text-xs text-nb-text">

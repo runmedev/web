@@ -14,6 +14,7 @@ type Scenario =
   | 'hang'
   | 'lowLevel'
   | 'app'
+  | 'ui'
   | 'tour'
   | 'explorer'
   | 'credentials'
@@ -71,6 +72,25 @@ class MockSandboxPort {
           type: 'host-call',
           callId: 1,
           method: 'app.getSessionID',
+          args: [],
+        })
+      } else if (this.scenario === 'ui') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'ui.prepareRenderedComment',
+          args: [
+            {
+              target: { uri: 'local://fixture.ipynb' },
+              cellId: 'cell-1',
+              selector: { type: 'TextQuoteSelector', exact: 'guide' },
+            },
+          ],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 2,
+          method: 'ui.clearSelection',
           args: [],
         })
       } else if (this.scenario === 'tour') {
@@ -291,6 +311,18 @@ class MockSandboxPort {
         this.emit({ type: 'exit', exitCode: 0 })
         return
       }
+      if (this.scenario === 'ui' && this.hostResults.has(2)) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
+        })
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(2) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
       if (
         this.scenario === 'tour' &&
         this.hostResults.has(1) &&
@@ -501,9 +533,9 @@ describe('SandboxJSKernel', () => {
       enableNet: true,
     })
 
-    expect(srcDoc).toMatch(/"tour",\s+"opfs",\s+"net",\s+"embed"/)
+    expect(srcDoc).toMatch(/"tour",\s+"ui",\s+"opfs",\s+"net",\s+"embed"/)
     expect(srcDoc).toContain(
-      'runner(consoleProxy, runme, tour, opfs, net, embed, notebooks'
+      'runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks'
     )
   })
 
@@ -719,6 +751,58 @@ describe('SandboxJSKernel', () => {
 
     expect(bridgeCall).toHaveBeenCalledWith('app.getSessionID', [])
     expect(stdout).toContain('session-test')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports rendered Markdown UI helpers through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'ui.prepareRenderedComment') {
+        return { opened: true, action: 'comment-selection' }
+      }
+      if (method === 'ui.clearSelection') {
+        return { cleared: true, rangeCount: 0 }
+      }
+      return null
+    })
+    const kernel = new TestableSandboxJSKernel(new MockSandboxPort('ui'), {
+      bridge: { call: bridgeCall },
+      hooks: {
+        onStdout: (data) => {
+          stdout += data
+        },
+        onStderr: (data) => {
+          stderr += data
+        },
+        onExit: (code) => {
+          exitCode = code
+        },
+      },
+    })
+
+    await kernel.run(`
+      const prepared = await ui.prepareRenderedComment({
+        target: { uri: "local://fixture.ipynb" },
+        cellId: "cell-1",
+        selector: { type: "TextQuoteSelector", exact: "guide" },
+      });
+      console.log(JSON.stringify(prepared));
+      console.log(JSON.stringify(await ui.clearSelection()));
+    `)
+
+    expect(bridgeCall).toHaveBeenCalledWith('ui.prepareRenderedComment', [
+      {
+        target: { uri: 'local://fixture.ipynb' },
+        cellId: 'cell-1',
+        selector: { type: 'TextQuoteSelector', exact: 'guide' },
+      },
+    ])
+    expect(bridgeCall).toHaveBeenCalledWith('ui.clearSelection', [])
+    expect(stdout).toContain('"action":"comment-selection"')
+    expect(stdout).toContain('"cleared":true')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
   })

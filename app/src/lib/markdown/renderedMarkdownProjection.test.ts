@@ -95,6 +95,81 @@ describe('rendered Markdown projection', () => {
     )
   })
 
+  it('rejects selection endpoints inside a grapheme cluster', () => {
+    const source = 'A👍🏽B'
+    const projection = buildRenderedMarkdownProjection(source)
+    const root = document.createElement('div')
+    root.innerHTML = `<span data-runme-projection-start="0" data-runme-projection-end="4">${source}</span>`
+    document.body.append(root)
+    const text = root.querySelector('span')!.firstChild!
+    const range = document.createRange()
+    range.setStart(text, 1)
+    range.setEnd(text, 3)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    expect(
+      captureRenderedMarkdownSelection({
+        root,
+        selection,
+        cellId: 'cell-1',
+        source,
+        projection,
+      })
+    ).toBeNull()
+
+    range.setEnd(text, 5)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    expect(
+      captureRenderedMarkdownSelection({
+        root,
+        selection,
+        cellId: 'cell-1',
+        source,
+        projection,
+      })
+    ).toMatchObject({
+      selectors: [
+        { type: 'TextPositionSelector', start: 1, end: 3 },
+        { type: 'TextQuoteSelector', exact: '👍🏽' },
+      ],
+    })
+  })
+
+  it('captures selections in large rendered cells without quadratic work', () => {
+    const source = 'a'.repeat(20_000)
+    const projection = buildRenderedMarkdownProjection(source)
+    const root = document.createElement('div')
+    root.innerHTML = `<span data-runme-projection-start="0" data-runme-projection-end="${source.length}">${source}</span>`
+    document.body.append(root)
+    const text = root.querySelector('span')!.firstChild!
+    const range = document.createRange()
+    range.setStart(text, source.length - 20)
+    range.setEnd(text, source.length - 10)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    const started = performance.now()
+    const target = captureRenderedMarkdownSelection({
+      root,
+      selection,
+      cellId: 'cell-1',
+      source,
+      projection,
+    })
+    const elapsedMs = performance.now() - started
+
+    expect(target?.selectors[0]).toEqual({
+      type: 'TextPositionSelector',
+      start: source.length - 20,
+      end: source.length - 10,
+    })
+    expect(elapsedMs).toBeLessThan(500)
+  })
+
   it('maps element-container boundaries to annotated child spans', () => {
     const source = 'one two'
     const projection = buildRenderedMarkdownProjection(source)

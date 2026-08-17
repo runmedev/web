@@ -81,6 +81,7 @@ import type {
 } from './appKernelLowLevelApis'
 import { getJupyterManager } from './jupyterManager'
 import { createNotebookCommentsRuntimeApi } from './notebookCommentsRuntime'
+import { createRenderedMarkdownUiApi } from './renderedMarkdownUi'
 import {
   type NotebookDataLike,
   type NotebookTarget,
@@ -380,6 +381,9 @@ export function createAppJsGlobals({
   networkApi?: AppKernelNetworkApi
   signal?: AbortSignal
 }) {
+  const renderedMarkdownUi = createRenderedMarkdownUiApi({
+    getCurrentNotebook: () => runme.getCurrentNotebook(),
+  })
   const getWorkspaceItems = () =>
     workspace?.getItems?.() ?? appState.getWorkspaceItems()
   const addWorkspaceItem = (uri: string) => {
@@ -449,6 +453,7 @@ export function createAppJsGlobals({
     resolveNotebook: resolveNotebook ?? (() => runme.getCurrentNotebook()),
     resolveLocalNotebooks: () => appState.localNotebooks,
     resolveDriveNotebookStore: () => appState.driveNotebookStore,
+    resolveLocalComments: () => appState.localComments,
   })
   const commentsHelpers = {
     ...commentsApi,
@@ -1123,6 +1128,7 @@ export function createAppJsGlobals({
 
   return {
     runme: runmeApi,
+    ui: renderedMarkdownUi,
     tour: {
       show: (request: TourStepRequest) => showTourStep(request),
       dismiss: () => dismissTour(),

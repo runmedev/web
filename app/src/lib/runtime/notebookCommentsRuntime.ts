@@ -2,6 +2,7 @@ import type { parser_pb } from '../../runme/client'
 import type { DriveNotebookStore } from '../../storage/drive'
 import { isDriveItemUri } from '../../storage/drive'
 import type { LocalNotebooks } from '../../storage/local'
+import type { LocalComments } from '../../storage/localComments'
 import {
   buildRenderedMarkdownProjection,
   sourceRangesForProjectionRange,
@@ -35,6 +36,10 @@ export type AgentAnnotation = {
   id: string | null
   content: string
   resolved: boolean
+  sync: {
+    status: 'pending' | 'syncing' | 'uncertain' | 'synced' | 'failed'
+    error?: string
+  }
   replies: unknown[]
   anchor: CommentAnchor | null
   originalTarget: {
@@ -83,6 +88,7 @@ type NotebookCommentsRuntimeDependencies = {
   resolveNotebook: (target?: unknown) => NotebookDataLike | null
   resolveLocalNotebooks: () => LocalNotebooks | null
   resolveDriveNotebookStore: () => DriveNotebookStore | null
+  resolveLocalComments?: () => LocalComments | null
 }
 
 async function resolveCommentsContext(
@@ -92,6 +98,8 @@ async function resolveCommentsContext(
   notebookData: NotebookDataLike
   driveNotebookStore: DriveNotebookStore
   remoteUri: string
+  notebookUri: string
+  localComments: LocalComments | null
 }> {
   const notebookData = dependencies.resolveNotebook(target)
   if (!notebookData) {
@@ -112,6 +120,8 @@ async function resolveCommentsContext(
     notebookData,
     driveNotebookStore,
     remoteUri,
+    notebookUri: notebookData.getUri(),
+    localComments: dependencies.resolveLocalComments?.() ?? null,
   }
 }
 
@@ -119,9 +129,14 @@ export async function listNotebookComments(
   dependencies: NotebookCommentsRuntimeDependencies,
   input: ListNotebookCommentsInput = {}
 ): Promise<AgentAnnotation[]> {
-  const { notebookData, driveNotebookStore, remoteUri } =
+  const { notebookData, driveNotebookStore, remoteUri, localComments } =
     await resolveCommentsContext(dependencies, input.target)
-  const comments = await driveNotebookStore.listComments(remoteUri)
+  const comments = localComments
+    ? await localComments.list(remoteUri)
+    : await driveNotebookStore.listComments(remoteUri)
+  if (localComments) {
+    void localComments.reconcile(remoteUri).catch(() => undefined)
+  }
   const notebook = notebookData.getNotebook()
   const identities = notebook.cells.map((cell) => ({
     refId: cell.refId,
@@ -158,6 +173,12 @@ export async function listNotebookComments(
         id: thread.comment.id ?? null,
         content: thread.comment.content ?? '',
         resolved: Boolean(thread.comment.resolved),
+        sync: {
+          status: thread.comment.runmeSyncStatus ?? 'synced',
+          ...(thread.comment.runmeSyncError
+            ? { error: thread.comment.runmeSyncError }
+            : {}),
+        },
         replies: thread.comment.replies ?? [],
         anchor,
         originalTarget: anchor
@@ -234,10 +255,18 @@ export function createNotebookCommentsRuntimeApi(
     resolveAnchor: (args: { anchor: string; source: string }) =>
       resolveCommentAnchor(args),
     reply: async (input: CommentReplyInput) => {
-      const { driveNotebookStore, remoteUri } = await resolveCommentsContext(
-        dependencies,
-        input.target
-      )
+      const { driveNotebookStore, remoteUri, notebookUri, localComments } =
+        await resolveCommentsContext(dependencies, input.target)
+      if (localComments) {
+        const operation = await localComments.saveDesiredReply({
+          notebookUri,
+          remoteUri,
+          commentId: input.commentId,
+          content: input.content,
+        })
+        void localComments.reconcile(remoteUri)
+        return operation
+      }
       return driveNotebookStore.replyToComment(
         remoteUri,
         input.commentId,
@@ -245,17 +274,37 @@ export function createNotebookCommentsRuntimeApi(
       )
     },
     resolve: async (input: CommentMutationInput) => {
-      const { driveNotebookStore, remoteUri } = await resolveCommentsContext(
-        dependencies,
-        input.target
-      )
+      const { driveNotebookStore, remoteUri, notebookUri, localComments } =
+        await resolveCommentsContext(dependencies, input.target)
+      if (localComments) {
+        const operation = await localComments.setThreadIntent(
+          {
+            notebookUri,
+            remoteUri,
+            commentId: input.commentId,
+          },
+          true
+        )
+        void localComments.reconcile(remoteUri)
+        return operation
+      }
       return driveNotebookStore.resolveComment(remoteUri, input.commentId)
     },
     reopen: async (input: CommentMutationInput) => {
-      const { driveNotebookStore, remoteUri } = await resolveCommentsContext(
-        dependencies,
-        input.target
-      )
+      const { driveNotebookStore, remoteUri, notebookUri, localComments } =
+        await resolveCommentsContext(dependencies, input.target)
+      if (localComments) {
+        const operation = await localComments.setThreadIntent(
+          {
+            notebookUri,
+            remoteUri,
+            commentId: input.commentId,
+          },
+          false
+        )
+        void localComments.reconcile(remoteUri)
+        return operation
+      }
       return driveNotebookStore.reopenComment(remoteUri, input.commentId)
     },
     help: () =>
@@ -266,6 +315,7 @@ export function createNotebookCommentsRuntimeApi(
         'await comments.reply({ target?, commentId, content })',
         'await comments.resolve({ target?, commentId })',
         'await comments.reopen({ target?, commentId })',
+        'comments.list includes sync.status; mutations return after local persistence and reconcile asynchronously; Drive replies include a visible Runme identity footer',
       ].join('\n'),
   }
 }

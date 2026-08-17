@@ -179,6 +179,15 @@
   /* Context menu item (button or link) */
   .ctx-menu-item {
     @apply block w-full px-4 py-2 text-left text-sm hover:bg-nb-surface-2;
+
+    &:disabled {
+      cursor: not-allowed;
+      color: var(--nb-text-faint);
+    }
+
+    &:disabled:hover {
+      background-color: transparent;
+    }
   }
 
   /* Icon-only button (toolbar, sidebar) */
