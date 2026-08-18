@@ -249,6 +249,44 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     )
   })
 
+  it('attaches linked resources through the shared notebooks API', async () => {
+    const notebook = new FakeNotebookData(
+      'local://file/current',
+      'Current.json'
+    )
+    const sendOutput = vi.fn()
+    const globals = createAppJsGlobals({
+      runme: createRunme(notebook),
+      resolveNotebook: () => notebook,
+      sendOutput,
+    })
+
+    const result = await globals.notebooks.attach(
+      { kind: 'url', uri: 'https://example.com/demo.webm' },
+      {
+        target: { uri: notebook.getUri() },
+        mode: 'video',
+        title: 'Demo video',
+      }
+    )
+
+    expect(result.cell.languageId).toBe('runme-resource')
+    expect(result.resource).toMatchObject({
+      source: {
+        provider: 'https',
+        uri: 'https://example.com/demo.webm',
+      },
+      presentation: { mode: 'video', title: 'Demo video' },
+    })
+    expect(notebook.getNotebook().cells).toHaveLength(1)
+    await expect(globals.notebooks.help('attach')).resolves.toContain(
+      'notebooks.attach'
+    )
+    expect(sendOutput).toHaveBeenCalledWith(
+      'Attached resource https://example.com/demo.webm.\r\n'
+    )
+  })
+
   it('exposes notebook write access requests through the App Console globals', async () => {
     const notebook = new FakeNotebookData(
       'local://file/current',

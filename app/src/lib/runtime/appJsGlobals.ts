@@ -50,6 +50,11 @@ import {
   embedImageInNotebook,
 } from '../imageEmbedding'
 import {
+  type AttachResourceOptions,
+  type AttachResourceSource,
+  attachResourceToNotebook,
+} from '../linkedResourceAttachments'
+import {
   deserializeMarkdownToNotebook,
   getImportedFileBytes,
   getImportedFileName,
@@ -949,6 +954,34 @@ export function createAppJsGlobals({
     return result
   }
 
+  const attachResourceForRuntime = async (
+    source: AttachResourceSource,
+    options?: Omit<AttachResourceOptions, 'target'> & {
+      target?: { uri: string }
+    }
+  ) => {
+    if (!source || typeof source !== 'object') {
+      throw new Error(
+        'Usage: notebooks.attach({ kind: "drive" | "url" | "file", ... }, { target: { uri }, ... })'
+      )
+    }
+    const target = resolveNotebookTargetUri(options?.target)
+    if (!target) {
+      throw new Error('notebooks.attach requires target: { uri }')
+    }
+    const notebook = resolveNotebook?.(target)
+    if (!notebook) {
+      throw new Error(`Target notebook is not open: ${target}`)
+    }
+    const result = await attachResourceToNotebook(notebook, source, {
+      ...options,
+      target: { uri: target },
+      signal: options?.signal ?? signal,
+    })
+    emitLine(sendOutput, `Attached resource ${result.resource.source.uri}.`)
+    return result
+  }
+
   const notebooksHelpers = {
     ...notebooksApi,
     help: async (topic?: string) => {
@@ -960,6 +993,9 @@ export function createAppJsGlobals({
       }
       if (topic === 'embed') {
         return 'notebooks.embed(source, options?: { target?, alt?, name? }): Promise<{ uri, cell }>. Embeds image bytes from a URL, absolute local development path, data URL, File, or Blob in an HTML cell.'
+      }
+      if (topic === 'attach') {
+        return 'notebooks.attach(source, options: { target: { uri }, folderUri?, mode?, title?, altText?, expectedRevision?, operationId? }): Promise<{ uri, cell, resource, uploadedResource? }>. Attaches a Drive file, HTTPS URL, or browser File/Blob as a linked-resource cell.'
       }
       if (topic === 'resolve') {
         return 'notebooks.resolve(reference?): Promise<NotebookReferenceInfo>. Accepts a local URI, Drive URL, Runme share URL, Markdown link, or notebook target and returns title, localUri, remoteUri, shareUrl, and markdownLink.'
@@ -982,6 +1018,7 @@ export function createAppJsGlobals({
         '- notebooks.createLocal(name, options?)',
         '- notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? })',
         '- notebooks.embed(source, options?)',
+        '- notebooks.attach(source, { target, folderUri?, mode?, title?, altText?, expectedRevision?, operationId? })',
         '- notebooks.resolve(reference?)',
         '- notebooks.show(reference?)',
         '- notebooks.shareUrl(reference?)',
@@ -1028,6 +1065,7 @@ export function createAppJsGlobals({
       })
     },
     embed: embedImageForRuntime,
+    attach: attachResourceForRuntime,
     resolve: resolveNotebookReference,
     show: showNotebookReference,
     shareUrl: async (reference?: unknown) => {

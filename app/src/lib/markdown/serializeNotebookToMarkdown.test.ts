@@ -95,6 +95,29 @@ describe('serializeNotebookToMarkdown', () => {
     )
   })
 
+  it('degrades linked resources to portable Markdown links', () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          kind: parser_pb.CellKind.CODE,
+          languageId: 'runme-resource',
+          value: JSON.stringify({
+            version: 1,
+            source: {
+              provider: 'google-drive',
+              uri: 'https://drive.google.com/file/d/demo-file/view',
+            },
+            presentation: { mode: 'video', title: 'Demo recording' },
+          }),
+        }),
+      ],
+    })
+
+    expect(serializeNotebookToMarkdown(notebook)).toBe(
+      '[Demo recording](https://drive.google.com/file/d/demo-file/view)\n'
+    )
+  })
+
   it('skips binary and internal output payloads', () => {
     const notebook = create(parser_pb.NotebookSchema, {
       cells: [

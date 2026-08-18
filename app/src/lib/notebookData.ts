@@ -21,6 +21,7 @@ import {
   IOPUB_MIME_TYPE,
   maybeParseIPykernelMessage,
 } from './ipykernel'
+import { isLinkedResourceLanguageId } from './linkedResource'
 import { appLogger } from './logging/runtime'
 import { markOnboardingTaskComplete } from './onboarding'
 import { buildExecuteRequest } from './runme'
@@ -939,8 +940,11 @@ export class NotebookData {
     }
 
     const normalizedLanguage = (cell.languageId ?? '').trim().toLowerCase()
-    if (isHtmlLanguageId(normalizedLanguage)) {
-      console.warn('Cannot run HTML content cell', cell.refId)
+    if (
+      isHtmlLanguageId(normalizedLanguage) ||
+      isLinkedResourceLanguageId(normalizedLanguage)
+    ) {
+      console.warn('Cannot run non-executable content cell', cell.refId)
       return ''
     }
     const requestedRunnerName =
@@ -1414,6 +1418,8 @@ export class NotebookData {
             | { target?: unknown; alt?: string; name?: string }
             | undefined) ?? undefined
         )
+      case 'notebooks.attach':
+        return (appGlobals.notebooks as any).attach(args[0], args[1])
       case 'documents.get':
         return appGlobals.documents.get(String(args[0] ?? ''))
       case 'documents.update':

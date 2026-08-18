@@ -18,6 +18,7 @@ import {
   ChatBubbleLeftIcon,
   LinkIcon,
   LockClosedIcon,
+  PaperClipIcon,
   PhotoIcon,
   XMarkIcon,
 } from '@heroicons/react/20/solid'
@@ -33,6 +34,7 @@ import CellConsole, { fontSettings } from './CellConsole'
 import Editor from './Editor'
 import HtmlCell from './HtmlCell'
 import MarkdownCell from './MarkdownCell'
+import ResourceCell from './ResourceCell'
 import { appLogger } from '../../lib/logging/runtime'
 import {
   createNotebookActiveCellState,
@@ -53,6 +55,7 @@ import {
 } from '../../lib/shareLinks'
 import { detectNotebookFileFormat } from '../../lib/notebookFormat'
 import { isHtmlLanguageId, isMarkdownLanguageId } from '../../lib/cellContent'
+import { isLinkedResourceCell } from '../../lib/linkedResource'
 import { PlayIcon, PlusIcon, SpinnerIcon, TrashIcon } from './icons'
 import { useCurrentDoc } from '../../contexts/CurrentDocContext'
 import { useRunners } from '../../contexts/RunnersContext'
@@ -102,9 +105,12 @@ import { NotebookStoreItemType } from '../../storage/notebook'
 import { showToast } from '../../lib/toast'
 import {
   embedImageInNotebook,
-  isSupportedImageFile,
   pickImageFromLocalFilesystem,
 } from '../../lib/imageEmbedding'
+import {
+  attachResourceToNotebook,
+  pickResourceFromLocalFilesystem,
+} from '../../lib/linkedResourceAttachments'
 import { appState } from '../../lib/runtime/AppState'
 import {
   createCellCommentAnchor,
@@ -131,6 +137,7 @@ import React from 'react'
 import ExcalidrawDocument from '../Excalidraw/ExcalidrawDocument'
 import RemoteMarkdownDocument from '../Documentation/RemoteMarkdownDocument'
 import OnboardingDocument from '../Onboarding/OnboardingDocument'
+import { useDriveResourcePicker } from '../Workspace/useDriveResourcePicker'
 
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
   'data-state'?: 'active' | 'inactive'
@@ -1385,6 +1392,7 @@ export function Action({
       cell.kind === parser_pb.CellKind.CODE && isHtmlLanguageId(cell.languageId)
     )
   }, [cell])
+  const isResourceCell = useMemo(() => isLinkedResourceCell(cell), [cell])
 
   if (!cell) {
     return null
@@ -1404,6 +1412,93 @@ export function Action({
     ? 'Copy link to cell'
     : 'Copy local link to cell'
   const canCopyCellLink = Boolean(shareTargetUri && cell.refId.trim())
+
+  if (isResourceCell) {
+    return (
+      <div
+        id={`resource-action-${cell.refId}`}
+        className={`group/cell relative flex min-w-0 ${deepLinkTargetClass}`}
+        onContextMenu={handleContextMenu}
+        onFocusCapture={handleFocusCapture}
+        data-testid="resource-action"
+        data-cell-ref-id={cell.refId}
+      >
+        <div className="flex w-7 shrink-0 flex-col items-center justify-between py-1">
+          <button
+            type="button"
+            aria-label="Add cell above"
+            className="cell-add-btn h-5 w-5"
+            disabled={readOnly}
+            onClick={handleAddCellBefore}
+          >
+            <PlusIcon width={10} height={10} />
+          </button>
+          <button
+            type="button"
+            aria-label="Add cell below"
+            className="cell-add-btn h-5 w-5"
+            disabled={readOnly}
+            onClick={handleAddCellAfter}
+          >
+            <PlusIcon width={10} height={10} />
+          </button>
+        </div>
+        <div className="relative min-w-0 flex-1">
+          <ResourceCell cell={cell} />
+          {canCopyCellLink && (
+            <CellLinkButton
+              onClick={() => void handleCopyShareLink()}
+              className={`absolute right-10 top-2 h-6 w-6 ${cellLinkVisibilityClass}`}
+            />
+          )}
+          <button
+            type="button"
+            aria-label="Delete linked resource cell"
+            title="Remove cell (the Drive file is kept)"
+            className="icon-btn absolute right-2 top-2 h-6 w-6 opacity-0 transition-opacity duration-150 group-hover/cell:opacity-100"
+            disabled={readOnly}
+            onClick={handleRemoveCell}
+          >
+            <TrashIcon />
+          </button>
+        </div>
+        {adjustedContextMenu && (
+          <div
+            className="ctx-menu"
+            style={{
+              top: adjustedContextMenu.y,
+              left: adjustedContextMenu.x,
+            }}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            {canCopyCellLink && (
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleCopyShareLink()
+                }}
+              >
+                {contextMenuLinkLabel}
+              </button>
+            )}
+            <button
+              type="button"
+              className="ctx-menu-item text-red-600"
+              disabled={readOnly}
+              onClick={(event) => {
+                event.stopPropagation()
+                handleRemoveCell()
+              }}
+            >
+              Remove Cell (keep Drive file)
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
 
   // Render markdown cells with in-place rendering (Jupyter-style)
   // No run button, no output area - just the markdown rendered in-place
@@ -2012,7 +2107,12 @@ function NotebookTabContent({
     string | null
   >(null)
   const [embeddingImage, setEmbeddingImage] = useState(false)
+  const [attachingResource, setAttachingResource] = useState(false)
+  const [resourceUploadProgress, setResourceUploadProgress] = useState<
+    number | null
+  >(null)
   const [imageDragActive, setImageDragActive] = useState(false)
+  const { pickDriveFile, pickDriveFolder } = useDriveResourcePicker()
   const syncState = useNotebookSyncState(docUri)
   const releasePending = Boolean(
     entry.releasePending || notebookSnapshot?.releasePending
@@ -2166,6 +2266,98 @@ function NotebookTabContent({
     }
   }, [embedImageFiles])
 
+  const attachFiles = useCallback(
+    async (files: File[]) => {
+      if (readOnly || !notebookData || files.length === 0) {
+        return
+      }
+      setAttachingResource(true)
+      setResourceUploadProgress(null)
+      try {
+        let folderUri: string | undefined
+        if (!isDriveBacked) {
+          const folder = await pickDriveFolder()
+          if (!folder) {
+            return
+          }
+          folderUri = folder.uri
+        }
+        for (const file of files) {
+          await attachResourceToNotebook(
+            notebookData,
+            { kind: 'file', value: file, name: file.name },
+            {
+              target: { uri: docUri },
+              folderUri,
+              onProgress: (uploaded, total) => {
+                setResourceUploadProgress(total > 0 ? uploaded / total : null)
+              },
+            }
+          )
+        }
+        showToast({
+          message:
+            files.length === 1
+              ? `Attached ${files[0]?.name || 'file'}. People need access to both this notebook and its Drive assets folder.`
+              : `Attached ${files.length} files. People need access to both this notebook and its Drive assets folder.`,
+          tone: 'success',
+        })
+      } catch (error) {
+        showToast({
+          message: `Failed to attach resource: ${error instanceof Error ? error.message : String(error)}`,
+          tone: 'error',
+        })
+      } finally {
+        setAttachingResource(false)
+        setResourceUploadProgress(null)
+      }
+    },
+    [docUri, isDriveBacked, notebookData, pickDriveFolder, readOnly]
+  )
+
+  const handleAttachFile = useCallback(async () => {
+    try {
+      const file = await pickResourceFromLocalFilesystem()
+      if (file) {
+        await attachFiles([file])
+      }
+    } catch (error) {
+      showToast({
+        message: `Failed to select attachment: ${String(error)}`,
+        tone: 'error',
+      })
+    }
+  }, [attachFiles])
+
+  const handleAttachDriveFile = useCallback(async () => {
+    if (readOnly || !notebookData) {
+      return
+    }
+    setAttachingResource(true)
+    try {
+      const picked = await pickDriveFile()
+      if (!picked) {
+        return
+      }
+      await attachResourceToNotebook(
+        notebookData,
+        { kind: 'drive', uri: picked.uri },
+        { target: { uri: docUri }, title: picked.name }
+      )
+      showToast({
+        message: `Attached ${picked.name} from Google Drive.`,
+        tone: 'success',
+      })
+    } catch (error) {
+      showToast({
+        message: `Failed to attach Drive file: ${error instanceof Error ? error.message : String(error)}`,
+        tone: 'error',
+      })
+    } finally {
+      setAttachingResource(false)
+    }
+  }, [docUri, notebookData, pickDriveFile, readOnly])
+
   const handleImageDragOver = useCallback(
     (event: ReactDragEvent<HTMLDivElement>) => {
       const hasFile = Array.from(event.dataTransfer.items).some(
@@ -2209,19 +2401,9 @@ function NotebookTabContent({
       if (readOnly) {
         return
       }
-      const images = files.filter(isSupportedImageFile)
-      if (images.length === 0) {
-        if (files.length > 0) {
-          showToast({
-            message: 'Only supported image files can be embedded.',
-            tone: 'error',
-          })
-        }
-        return
-      }
-      void embedImageFiles(images)
+      void attachFiles(files)
     },
-    [embedImageFiles, readOnly]
+    [attachFiles, readOnly]
   )
 
   const loadLocalComments = useCallback(async () => {
@@ -2906,9 +3088,9 @@ function NotebookTabContent({
       {imageDragActive && (
         <div
           className="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-nb-md border-2 border-dashed border-nb-accent bg-nb-accent-muted/90 text-sm font-medium text-nb-accent"
-          data-testid="image-drop-target"
+          data-testid="resource-drop-target"
         >
-          Drop image to embed
+          Drop file to attach from Google Drive
         </div>
       )}
       <ScrollArea
@@ -3003,6 +3185,32 @@ function NotebookTabContent({
                   <button
                     type="button"
                     className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted disabled:cursor-wait disabled:opacity-60"
+                    aria-label="Attach file as first cell"
+                    disabled={attachingResource}
+                    onClick={() => void handleAttachFile()}
+                  >
+                    <PaperClipIcon className="h-3.5 w-3.5" />
+                    <span>
+                      {attachingResource
+                        ? resourceUploadProgress === null
+                          ? 'Attaching…'
+                          : `Uploading ${Math.round(resourceUploadProgress * 100)}%`
+                        : 'Attach'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted disabled:cursor-wait disabled:opacity-60"
+                    aria-label="Attach Google Drive file as first cell"
+                    disabled={attachingResource}
+                    onClick={() => void handleAttachDriveFile()}
+                  >
+                    <LinkIcon className="h-3.5 w-3.5" />
+                    <span>Attach from Drive</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted disabled:cursor-wait disabled:opacity-60"
                     aria-label="Embed image as first cell"
                     disabled={embeddingImage}
                     onClick={() => void handleEmbedImage()}
@@ -3046,6 +3254,32 @@ function NotebookTabContent({
                   >
                     <PlusIcon width={10} height={10} />
                     <span>Add cell</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted disabled:cursor-wait disabled:opacity-60"
+                    aria-label="Attach file at end"
+                    disabled={attachingResource}
+                    onClick={() => void handleAttachFile()}
+                  >
+                    <PaperClipIcon className="h-3.5 w-3.5" />
+                    <span>
+                      {attachingResource
+                        ? resourceUploadProgress === null
+                          ? 'Attaching…'
+                          : `Uploading ${Math.round(resourceUploadProgress * 100)}%`
+                        : 'Attach'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 rounded-full border border-nb-border-strong bg-white px-3 py-1 text-xs text-nb-text-muted transition-colors duration-150 hover:border-nb-accent hover:text-nb-accent hover:bg-nb-accent-muted disabled:cursor-wait disabled:opacity-60"
+                    aria-label="Attach Google Drive file at end"
+                    disabled={attachingResource}
+                    onClick={() => void handleAttachDriveFile()}
+                  >
+                    <LinkIcon className="h-3.5 w-3.5" />
+                    <span>Attach from Drive</span>
                   </button>
                   <button
                     type="button"

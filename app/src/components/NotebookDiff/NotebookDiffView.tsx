@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Badge, Button, ScrollArea, Text } from '@radix-ui/themes'
 
 import { parser_pb } from '../../runme/client'
+import { isLinkedResourceCell } from '../../lib/linkedResource'
 import { useNotebookStore } from '../../contexts/NotebookStoreContext'
 import type {
   CellDiff,
@@ -27,6 +28,9 @@ import { showToast } from '../../lib/toast'
 function cellKindLabel(cell?: parser_pb.Cell): string {
   if (!cell) {
     return ''
+  }
+  if (isLinkedResourceCell(cell)) {
+    return 'Linked resource'
   }
   if (cell.kind === parser_pb.CellKind.MARKUP) {
     return 'Markdown'

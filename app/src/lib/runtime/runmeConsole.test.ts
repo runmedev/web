@@ -314,6 +314,22 @@ describe('createRunmeConsoleApi', () => {
     expect(model.getCell('cell-html')?.calls).toBe(0)
   })
 
+  it('skips linked-resource cells in runAll', () => {
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        codeCell('cell-a', 'echo a'),
+        codeCell('cell-resource', '{"version":1}', {
+          languageId: 'runme-resource',
+        }),
+      ],
+    })
+    const model = new FakeNotebookData('local://one', 'Notebook One', notebook)
+    const api = createRunmeConsoleApi({ resolveNotebook: () => model })
+
+    expect(api.runAll()).toContain('Started 1/1 code cell(s)')
+    expect(model.getCell('cell-resource')?.calls).toBe(0)
+  })
+
   it('reruns notebook by clearing outputs before running cells', () => {
     const output = create(parser_pb.CellOutputSchema, {
       items: [

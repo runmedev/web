@@ -22,6 +22,7 @@ const openNotebookMock = vi.fn(async (uri: string) => ({
 }))
 const setCurrentDocMock = vi.fn()
 const showDocumentMock = vi.fn()
+const clearLinkedResourceCacheMock = vi.fn(async () => 1536)
 const storeMock = {
   listFileSyncStatuses: listFileSyncStatusesMock,
   sync: syncMock,
@@ -78,6 +79,12 @@ vi.mock('../contexts/WorkspaceDocumentContext', () => ({
   }),
 }))
 
+vi.mock('../lib/linkedResourceCache', () => ({
+  getLinkedResourceCache: () => ({
+    clear: clearLinkedResourceCacheMock,
+  }),
+}))
+
 import { DriveSyncStatusTab } from './DriveSyncStatusTab'
 
 const rows: NotebookSyncStatusRow[] = [
@@ -121,6 +128,7 @@ describe('DriveSyncStatusTab', () => {
     openNotebookMock.mockClear()
     setCurrentDocMock.mockClear()
     showDocumentMock.mockClear()
+    clearLinkedResourceCacheMock.mockClear()
   })
 
   it('filters string columns by prefix', async () => {
@@ -342,5 +350,21 @@ describe('DriveSyncStatusTab', () => {
       })
     })
     expect(syncMock).not.toHaveBeenCalledWith('local://file/drive-pending')
+  })
+
+  it('clears downloaded linked-resource media without touching Drive', async () => {
+    render(<DriveSyncStatusTab />)
+
+    await waitForStatusLoad()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Clear downloaded media' })
+    )
+
+    await waitFor(() => {
+      expect(clearLinkedResourceCacheMock).toHaveBeenCalledOnce()
+      expect(
+        screen.getByTestId('linked-resource-cache-message').textContent
+      ).toBe('Cleared 1.5 KiB of downloaded media.')
+    })
   })
 })

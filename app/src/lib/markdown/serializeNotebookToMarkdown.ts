@@ -1,5 +1,10 @@
 import { MimeType, parser_pb } from '../../runme/client'
 import { isMarkdownLanguageId } from '../cellContent'
+import {
+  isLinkedResourceCell,
+  linkedResourceMarkdown,
+  parseLinkedResource,
+} from '../linkedResource'
 
 const IOPUB_MIME_TYPE = 'application/vnd.jupyter.iopub+json'
 
@@ -10,7 +15,9 @@ const INTERNAL_SKIP_MIMES = new Set<string>([
   MimeType.StatefulRunmeTerminal,
 ])
 
-function normalizeBinaryData(data?: Uint8Array | ArrayLike<number> | null): Uint8Array {
+function normalizeBinaryData(
+  data?: Uint8Array | ArrayLike<number> | null
+): Uint8Array {
   if (!data) {
     return new Uint8Array()
   }
@@ -32,6 +39,13 @@ export function serializeNotebookToMarkdown(
 }
 
 function serializeCell(cell: parser_pb.Cell): string {
+  if (isLinkedResourceCell(cell)) {
+    try {
+      return linkedResourceMarkdown(parseLinkedResource(cell.value))
+    } catch {
+      return renderFencedBlock(cell.value, cell.languageId)
+    }
+  }
   const body = isAuthoredContentCell(cell)
     ? normalizeContentCell(cell.value)
     : renderFencedBlock(cell.value, normalizeCodeFenceLanguage(cell.languageId))
@@ -151,7 +165,9 @@ function languageForOutputMime(mime: string): string {
   }
 }
 
-function decodeOutputText(data?: Uint8Array | ArrayLike<number> | null): string {
+function decodeOutputText(
+  data?: Uint8Array | ArrayLike<number> | null
+): string {
   const normalized = normalizeBinaryData(data)
   if (normalized.length === 0) {
     return ''

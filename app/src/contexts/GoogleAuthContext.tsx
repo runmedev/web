@@ -54,8 +54,9 @@ interface AccessTokenInfo {
   refreshToken?: string
 }
 
-interface EnsureAccessTokenOptions {
+export interface EnsureAccessTokenOptions {
   interactive?: boolean
+  forceRefresh?: boolean
 }
 
 export interface StartGoogleDriveOAuthOptions {
@@ -1406,8 +1407,12 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   const ensureAccessToken = useCallback(
     (options?: EnsureAccessTokenOptions) => {
       const interactive = options?.interactive ?? true
+      const forceRefresh = options?.forceRefresh ?? false
       const currentInfo = tokenInfoRef.current
-      if (currentInfo && canUseCachedToken(currentInfo)) {
+      if (forceRefresh && currentInfo) {
+        tokenInfoRef.current = { ...currentInfo, expiresAt: 0 }
+      }
+      if (!forceRefresh && currentInfo && canUseCachedToken(currentInfo)) {
         return Promise.resolve(currentInfo.token)
       }
 
