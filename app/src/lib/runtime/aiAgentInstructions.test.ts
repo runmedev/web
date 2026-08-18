@@ -61,6 +61,10 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain('documentation.get(name)')
     expect(instructions).toContain('await app.getSessionID()')
     expect(instructions).toContain('local://')
+    expect(instructions).toContain('notebooks.get({ uri: notebookUri })')
+    expect(instructions).toContain('doc.notebook.cells')
+    expect(instructions).toContain('There is no `notebooks.read` method')
+    expect(instructions).toContain('await notebooks.help()')
     expect(instructions).toContain('opaque canonical identifier')
     expect(instructions).toContain('IPYNB `cell.id`')
     expect(instructions).toContain(

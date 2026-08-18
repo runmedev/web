@@ -29,6 +29,7 @@ This Runme instance is served from ${runmeOrigin}.
 - Reuse a Runme tab whose URL begins with ${runmeOrigin}. A session URL has the form \`${sessionUrl}\`.
 - Claim the selected tab and use its page-provided WebMCP tools for notebook reads, edits, and execution.
 - Use the \`ExecuteCode\` WebMCP tool to run AppKernel JavaScript. Print values explicitly with \`console.log(...)\`.
+- Read notebooks with \`notebooks.get({ uri: notebookUri })\` and access cells through \`doc.notebook.cells\`. There is no \`notebooks.read\` method. Call \`await notebooks.help()\` before generating notebook code when the API is uncertain.
 - Use the \`comments\` library inside \`ExecuteCode\` for Drive comments and anchors. Runme does not expose a comment-specific WebMCP tool.
 - Use the \`ui\` library inside \`ExecuteCode\` to create rendered Markdown selections and open Runme's selection context menu. Do not invent CSS selectors or dispatch arbitrary DOM events.
 - Do not edit or execute notebook cells through DOM clicks, keyboard automation, or Computer Use. If WebMCP is unavailable, stop and tell the user what must be done manually.
