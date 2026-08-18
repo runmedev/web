@@ -220,4 +220,29 @@ describe('LinkedResourceCache', () => {
     await expect(cache.clear()).resolves.toBe(4)
     expect(await index.list()).toHaveLength(0)
   })
+
+  it('budgets linked media independently from unrelated origin storage', async () => {
+    const root = new MemoryDirectoryHandle()
+    const index = new MemoryLinkedResourceCacheIndex()
+    const storage = {
+      getDirectory: async () => root as unknown as FileSystemDirectoryHandle,
+      estimate: async () => ({ quota: 100, usage: 80 }),
+    } as unknown as StorageManager
+    const cache = new LinkedResourceCache({
+      index,
+      storage,
+      quotaFraction: 0.25,
+      randomId: () => 'download-10',
+    })
+    const store = makeStore()
+    vi.mocked(store.fetch).mockResolvedValue(
+      new Response(new Uint8Array(10), {
+        headers: { 'Content-Length': '10' },
+      })
+    )
+
+    await expect(
+      cache.load(store, { ...metadata, sizeBytes: 10 })
+    ).resolves.toMatchObject({ source: 'opfs' })
+  })
 })

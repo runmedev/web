@@ -304,6 +304,7 @@ Continue only when the returned document has \`summary.readOnly === false\`. The
 
 - Inspect \`await notebooks.help()\` when helper availability is uncertain.
 - Use \`notebooks.appendCell\` for a simple append. A Markdown cell uses \`kind: 'markup'\`, not \`kind: 'markdown'\`.
+- Use \`notebooks.attach(source, { target: { uri: notebookUri }, ... })\` for a linked Drive file or HTTPS resource. The target URI is required; use \`notebooks.embed\` only for small self-contained images.
 - Use \`notebooks.update\` for multi-cell or idempotent edits. Pass \`target: { uri: notebookUri }\` and \`expectedRevision: doc.handle.revision\` when a revision is available.
 - Prefer updating a stable named cell over blindly appending duplicate status or result cells.
 - Build large cell values as data (for example with \`JSON.stringify\`) instead of hand-escaping nested JavaScript.

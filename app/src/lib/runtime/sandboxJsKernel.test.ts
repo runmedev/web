@@ -26,6 +26,7 @@ type Scenario =
   | 'comments'
   | 'notebooksCreate'
   | 'notebooksEmbed'
+  | 'notebooksAttach'
   | 'notebooksWriteAccess'
   | 'notebooksUpdateError'
 
@@ -268,6 +269,22 @@ class MockSandboxPort {
           method: 'notebooks.embed',
           args: ['data:image/png;base64,AQID', undefined],
         })
+      } else if (this.scenario === 'notebooksAttach') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'notebooks.attach',
+          args: [
+            {
+              kind: 'drive',
+              uri: 'https://drive.google.com/file/d/resource-file/view',
+            },
+            {
+              target: { uri: 'local://file/demo' },
+              mode: 'video',
+            },
+          ],
+        })
       } else if (this.scenario === 'notebooksWriteAccess') {
         this.emit({
           type: 'host-call',
@@ -431,6 +448,14 @@ class MockSandboxPort {
         this.emit({
           type: 'stdout',
           data: `${JSON.stringify(this.hostResults.get(2) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+      if (this.scenario === 'notebooksAttach' && this.hostResults.has(1)) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
         })
         this.emit({ type: 'exit', exitCode: 0 })
         return
@@ -1444,6 +1469,53 @@ describe('SandboxJSKernel', () => {
       undefined,
     ])
     expect(stdout).toContain('image-cell')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports linked-resource attachment through the notebooks sandbox helper', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'notebooks.attach') {
+        return {
+          uri: 'local://file/demo',
+          cell: { refId: 'resource-cell', languageId: 'runme-resource' },
+        }
+      }
+      return null
+    })
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('notebooksAttach'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run(
+      "console.log(await notebooks.attach({ kind: 'drive', uri: 'https://drive.google.com/file/d/resource-file/view' }, { target: { uri: 'local://file/demo' }, mode: 'video' }));"
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith('notebooks.attach', [
+      {
+        kind: 'drive',
+        uri: 'https://drive.google.com/file/d/resource-file/view',
+      },
+      { target: { uri: 'local://file/demo' }, mode: 'video' },
+    ])
+    expect(stdout).toContain('resource-cell')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
   })

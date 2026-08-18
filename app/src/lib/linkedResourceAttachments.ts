@@ -54,7 +54,7 @@ export function pickResourceFromLocalFilesystem(): Promise<File | null> {
 export class ResourceInsertionConflictError extends LinkedResourceError {
   constructor(
     readonly uploadedResource: DriveResourceMetadata,
-    message = 'The notebook changed before the uploaded resource could be inserted'
+    message = `The notebook changed before the uploaded resource could be inserted. The uploaded Drive file remains at ${uploadedResource.uri}.`
   ) {
     super('RESOURCE_CHANGED', message)
     this.name = 'ResourceInsertionConflictError'
@@ -245,7 +245,18 @@ export async function attachResourceToNotebook(
   const cell = createLinkedResourceCell(resource)
   cell.refId = inserted.refId
   notebook.updateCell(cell)
-  await notebook.flushPendingPersist?.()
+  try {
+    await notebook.flushPendingPersist?.()
+  } catch (error) {
+    notebook.removeCell?.(cell.refId)
+    if (uploadedResource) {
+      throw new ResourceInsertionConflictError(
+        uploadedResource,
+        `The resource cell could not be saved. The uploaded Drive file remains at ${uploadedResource.uri}.`
+      )
+    }
+    throw error
+  }
   return {
     uri: notebookUri,
     cell,

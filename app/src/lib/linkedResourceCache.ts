@@ -469,11 +469,19 @@ export class LinkedResourceCache {
         'Resource exceeds the linked-media cache budget'
       )
     }
-    let required = usage + incomingBytes - budget
+    const records = await this.index.list()
+    const cacheUsage = records.reduce(
+      (total, record) => total + record.sizeBytes,
+      0
+    )
+    let required = Math.max(
+      cacheUsage + incomingBytes - budget,
+      usage + incomingBytes - quota
+    )
     if (required <= 0) {
       return
     }
-    const candidates = (await this.index.list())
+    const candidates = records
       .filter((record) => !this.pinned.has(record.key))
       .sort((left, right) =>
         left.lastAccessedAt.localeCompare(right.lastAccessedAt)

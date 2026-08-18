@@ -39,6 +39,12 @@ function fakeNotebook(uri = 'local://file/notebook'): NotebookDataLike & {
       notebook.cells.push(cell)
       return cell
     },
+    removeCell: (refId) => {
+      const index = notebook.cells.findIndex((cell) => cell.refId === refId)
+      if (index >= 0) {
+        notebook.cells.splice(index, 1)
+      }
+    },
     flushPendingPersist: vi.fn().mockResolvedValue(undefined),
   }
 }
@@ -138,5 +144,29 @@ describe('attachResourceToNotebook', () => {
     expect(error).toBeInstanceOf(ResourceInsertionConflictError)
     expect(error.uploadedResource.uri).toBe(metadata.uri)
     expect(notebook.getNotebook().cells).toHaveLength(1)
+  })
+
+  it('removes an unsaved cell and reports the uploaded file when persistence fails', async () => {
+    const notebook = fakeNotebook()
+    vi.mocked(notebook.flushPendingPersist!).mockRejectedValue(
+      new Error('disk full')
+    )
+    appState.setDriveNotebookStore({
+      getType: vi.fn().mockResolvedValue(NotebookStoreItemType.Folder),
+      uploadResource: vi.fn().mockResolvedValue(metadata),
+    } as unknown as DriveNotebookStore)
+
+    const error = await attachResourceToNotebook(
+      notebook,
+      { kind: 'file', value: new Blob(['video'], { type: 'video/webm' }) },
+      {
+        target: { uri: notebook.getUri() },
+        folderUri: 'https://drive.google.com/drive/folders/folder-123',
+      }
+    ).catch((caught) => caught)
+
+    expect(error).toBeInstanceOf(ResourceInsertionConflictError)
+    expect(error.message).toContain(metadata.uri)
+    expect(notebook.getNotebook().cells).toHaveLength(0)
   })
 })
