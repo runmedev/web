@@ -1124,7 +1124,10 @@ export function createAppJsGlobals({
           `Selected JSON file (${selection.name}) did not contain Google service account credentials.`
         )
       }
-      await ensureAccessToken?.({ interactive: false })
+      // Replacing service-account credentials must also replace any cached
+      // token minted for the previous account. Otherwise a credential switch
+      // can keep authorizing Drive calls as the old principal until expiry.
+      await ensureAccessToken?.({ interactive: false, forceRefresh: true })
       const message = `Loaded Google Drive service account credentials from ${selection.name}.`
       emitLine(sendOutput, message)
       return config
@@ -1137,7 +1140,7 @@ export function createAppJsGlobals({
           `Selected JSON file (${selection.name}) did not contain Google service account credentials.`
         )
       }
-      await ensureAccessToken?.({ interactive: false })
+      await ensureAccessToken?.({ interactive: false, forceRefresh: true })
       const message = `Loaded Google Drive service account credentials from ${keyPath}.`
       emitLine(sendOutput, message)
       return config

@@ -226,7 +226,12 @@ export default function ResourceCell({ cell }: { cell: parser_pb.Cell }) {
 
   if (state.status === 'error') {
     const authRequired = state.code === 'AUTH_REQUIRED'
-    const accessDenied = state.code === 'ACCESS_DENIED'
+    // Drive deliberately returns 404 for files that exist but are hidden from
+    // the current principal. We cannot distinguish that response from a truly
+    // deleted file, so keep the precise status message and still offer the
+    // Drive request-access flow for both cases.
+    const accessDenied =
+      state.code === 'ACCESS_DENIED' || state.code === 'NOT_FOUND'
     return (
       <LinkCard
         resource={resource}

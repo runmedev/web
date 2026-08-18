@@ -3,6 +3,7 @@ import { create } from '@bufbuild/protobuf'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { LinkedResourceError } from '../../lib/linkedResource'
 import { parser_pb } from '../../runme/client'
 
 const mocks = vi.hoisted(() => ({
@@ -117,6 +118,29 @@ describe('ResourceCell', () => {
       await screen.findByRole('link', { name: 'Demo resource' })
     ).toBeTruthy()
     expect(document.querySelector('script')).toBeNull()
+    expect(mocks.cacheLoad).not.toHaveBeenCalled()
+  })
+
+  it('offers request access when Drive hides an inaccessible file as not found', async () => {
+    mocks.driveStore.getResourceMetadata.mockRejectedValue(
+      new LinkedResourceError('NOT_FOUND', 'Google Drive file not found')
+    )
+
+    render(
+      <ResourceCell
+        cell={resourceCell(
+          'google-drive',
+          'https://drive.google.com/file/d/private-file/view'
+        )}
+      />
+    )
+
+    expect(
+      (
+        await screen.findByRole('link', { name: 'Request access' })
+      ).getAttribute('href')
+    ).toBe('https://drive.google.com/file/d/private-file/view')
+    expect(screen.getByText('Google Drive file not found')).toBeTruthy()
     expect(mocks.cacheLoad).not.toHaveBeenCalled()
   })
 
