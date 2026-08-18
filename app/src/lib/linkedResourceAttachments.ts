@@ -10,6 +10,7 @@ import {
   createLinkedResourceCell,
   parseLinkedResource,
 } from './linkedResource'
+import { recordLinkedResourceUploadFailure } from './linkedResourceMetrics'
 import type { DriveResourceMetadata } from './linkedResourceStore'
 import { ensurePersistentStorage } from './persistentStorage'
 import { appState } from './runtime/AppState'
@@ -204,22 +205,27 @@ export async function attachResourceToNotebook(
         source.name ||
         (source.value instanceof File ? source.value.name : '') ||
         'attachment'
-      uploadedResource = await driveStore.uploadResource(
-        folderUri,
-        name,
-        source.value,
-        {
-          mimeType: source.value.type || 'application/octet-stream',
-          operationId: options.operationId ?? randomOperationId(),
-          appProperties: driveNotebookUri
-            ? {
-                runmeNotebookFileId: parseDriveItem(driveNotebookUri).id,
-              }
-            : undefined,
-          onProgress: options.onProgress,
-          signal: options.signal,
-        }
-      )
+      try {
+        uploadedResource = await driveStore.uploadResource(
+          folderUri,
+          name,
+          source.value,
+          {
+            mimeType: source.value.type || 'application/octet-stream',
+            operationId: options.operationId ?? randomOperationId(),
+            appProperties: driveNotebookUri
+              ? {
+                  runmeNotebookFileId: parseDriveItem(driveNotebookUri).id,
+                }
+              : undefined,
+            onProgress: options.onProgress,
+            signal: options.signal,
+          }
+        )
+      } catch (error) {
+        recordLinkedResourceUploadFailure(error)
+        throw error
+      }
       await ensurePersistentStorage()
       resource = resourceFromDriveMetadata(uploadedResource, options)
     }

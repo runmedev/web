@@ -568,6 +568,69 @@ describe('Actions tabs', () => {
     expect(screen.queryByTestId('resource-drop-target')).toBeNull()
   })
 
+  it('offers to retry insertion without uploading the Drive file again', async () => {
+    const uri = 'local://file/retry-resource.json'
+    const notebookData = {
+      getCell: vi.fn(),
+      appendCell: vi.fn(),
+    }
+    const file = new File([new Uint8Array([1, 2, 3])], 'demo.webm', {
+      type: 'video/webm',
+    })
+    const uploadedUri = 'https://drive.google.com/file/d/uploaded-resource/view'
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'retry-resource.json', state: 'loaded' },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, { metadata: {}, cells: [] }),
+    })
+    contextMocks.getNotebookData.mockReturnValue(notebookData)
+    linkedResourceMocks.pickResourceFromLocalFilesystem.mockResolvedValue(file)
+    linkedResourceMocks.attachResourceToNotebook.mockRejectedValueOnce(
+      Object.assign(new Error('Notebook revision changed'), {
+        uploadedResource: {
+          uri: uploadedUri,
+          name: 'demo.webm',
+        },
+      })
+    )
+
+    render(<Actions />)
+    fireEvent.click(screen.getByLabelText('Attach file as first cell'))
+
+    const retry = await screen.findByRole('button', {
+      name: 'Retry insertion',
+    })
+    expect(
+      screen
+        .getByRole('link', { name: 'Open uploaded file' })
+        .getAttribute('href')
+    ).toBe(uploadedUri)
+
+    fireEvent.click(retry)
+
+    await waitFor(() => {
+      expect(
+        linkedResourceMocks.attachResourceToNotebook
+      ).toHaveBeenLastCalledWith(
+        notebookData,
+        { kind: 'drive', uri: uploadedUri },
+        {
+          target: { uri },
+          title: 'demo.webm',
+        }
+      )
+    })
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: 'Retry insertion' })
+      ).toBeNull()
+    })
+  })
+
   it('scrolls to and highlights the selected notebook cell named by the URL fragment', async () => {
     const uri = 'local://file/deep-link.runme.md'
     const cell = create(parser_pb.CellSchema, {

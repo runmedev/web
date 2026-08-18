@@ -139,6 +139,37 @@ import RemoteMarkdownDocument from '../Documentation/RemoteMarkdownDocument'
 import OnboardingDocument from '../Onboarding/OnboardingDocument'
 import { useDriveResourcePicker } from '../Workspace/useDriveResourcePicker'
 
+type ResourceInsertionRecovery = {
+  uri: string
+  name: string
+}
+
+function getResourceInsertionRecovery(
+  error: unknown
+): ResourceInsertionRecovery | null {
+  if (!error || typeof error !== 'object') {
+    return null
+  }
+  const uploadedResource = (
+    error as {
+      uploadedResource?: { uri?: unknown; name?: unknown }
+    }
+  ).uploadedResource
+  if (
+    typeof uploadedResource?.uri !== 'string' ||
+    !uploadedResource.uri.trim()
+  ) {
+    return null
+  }
+  return {
+    uri: uploadedResource.uri,
+    name:
+      typeof uploadedResource.name === 'string' && uploadedResource.name.trim()
+        ? uploadedResource.name
+        : 'uploaded Drive file',
+  }
+}
+
 type TabPanelProps = React.HTMLAttributes<HTMLDivElement> & {
   'data-state'?: 'active' | 'inactive'
   hidden?: boolean
@@ -2111,6 +2142,8 @@ function NotebookTabContent({
   const [resourceUploadProgress, setResourceUploadProgress] = useState<
     number | null
   >(null)
+  const [resourceInsertionRecovery, setResourceInsertionRecovery] =
+    useState<ResourceInsertionRecovery | null>(null)
   const [imageDragActive, setImageDragActive] = useState(false)
   const { pickDriveFile, pickDriveFolder } = useDriveResourcePicker()
   const syncState = useNotebookSyncState(docUri)
@@ -2302,7 +2335,12 @@ function NotebookTabContent({
               : `Attached ${files.length} files. People need access to both this notebook and its Drive assets folder.`,
           tone: 'success',
         })
+        setResourceInsertionRecovery(null)
       } catch (error) {
+        const recovery = getResourceInsertionRecovery(error)
+        if (recovery) {
+          setResourceInsertionRecovery(recovery)
+        }
         showToast({
           message: `Failed to attach resource: ${error instanceof Error ? error.message : String(error)}`,
           tone: 'error',
@@ -2314,6 +2352,35 @@ function NotebookTabContent({
     },
     [docUri, isDriveBacked, notebookData, pickDriveFolder, readOnly]
   )
+
+  const retryResourceInsertion = useCallback(async () => {
+    if (readOnly || !notebookData || !resourceInsertionRecovery) {
+      return
+    }
+    setAttachingResource(true)
+    try {
+      await attachResourceToNotebook(
+        notebookData,
+        { kind: 'drive', uri: resourceInsertionRecovery.uri },
+        {
+          target: { uri: docUri },
+          title: resourceInsertionRecovery.name,
+        }
+      )
+      setResourceInsertionRecovery(null)
+      showToast({
+        message: `Inserted ${resourceInsertionRecovery.name}.`,
+        tone: 'success',
+      })
+    } catch (error) {
+      showToast({
+        message: `Failed to retry resource insertion: ${error instanceof Error ? error.message : String(error)}`,
+        tone: 'error',
+      })
+    } finally {
+      setAttachingResource(false)
+    }
+  }, [docUri, notebookData, readOnly, resourceInsertionRecovery])
 
   const handleAttachFile = useCallback(async () => {
     try {
@@ -3158,6 +3225,35 @@ function NotebookTabContent({
                   {entry.writeAccessRequestState === 'pending'
                     ? 'Requesting...'
                     : 'Request write access'}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          {resourceInsertionRecovery ? (
+            <div
+              className="mx-3 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+              role="alert"
+            >
+              <span>
+                {resourceInsertionRecovery.name} was uploaded to Drive, but its
+                notebook cell was not saved.
+              </span>
+              <div className="flex items-center gap-2">
+                <a
+                  className="underline"
+                  href={resourceInsertionRecovery.uri}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  Open uploaded file
+                </a>
+                <Button
+                  size="1"
+                  variant="soft"
+                  disabled={attachingResource || readOnly}
+                  onClick={() => void retryResourceInsertion()}
+                >
+                  {attachingResource ? 'Retrying…' : 'Retry insertion'}
                 </Button>
               </div>
             </div>

@@ -1,6 +1,12 @@
 import Dexie, { type Table } from 'dexie'
 
 import { LinkedResourceError, parseGoogleDriveFileId } from './linkedResource'
+import {
+  recordLinkedResourceCacheHit,
+  recordLinkedResourceDownloadLatency,
+  recordLinkedResourceEviction,
+  recordLinkedResourceFallbackUse,
+} from './linkedResourceMetrics'
 import type {
   DriveResourceMetadata,
   DriveResourceStore,
@@ -259,6 +265,7 @@ export class LinkedResourceCache {
     )
 
     if (!this.storage?.getDirectory) {
+      recordLinkedResourceFallbackUse()
       return this.loadInMemory(store, metadata, principalKey, options)
     }
 
@@ -300,6 +307,7 @@ export class LinkedResourceCache {
         if (file.size === cached.sizeBytes) {
           cached.lastAccessedAt = this.now().toISOString()
           await this.index.put(cached)
+          recordLinkedResourceCacheHit()
           return {
             file: asTypedBlob(file, cached.mimeType),
             metadata,
@@ -333,6 +341,7 @@ export class LinkedResourceCache {
     })
     const handle = await directory.getFileHandle(fileName, { create: true })
     let writable: FileSystemWritableFileStream | null = null
+    const downloadStartedAt = Date.now()
     try {
       const response = await store.fetch(metadata.uri, {
         signal: options.signal,
@@ -391,6 +400,10 @@ export class LinkedResourceCache {
       }
       await this.index.put(record)
       await ensurePersistentStorage(this.storage)
+      recordLinkedResourceDownloadLatency(
+        Date.now() - downloadStartedAt,
+        'opfs'
+      )
       return {
         file: asTypedBlob(file, metadata.mimeType),
         metadata,
@@ -432,6 +445,7 @@ export class LinkedResourceCache {
         'This resource is too large to load without OPFS'
       )
     }
+    const downloadStartedAt = Date.now()
     const response = await store.fetch(metadata.uri, { signal: options.signal })
     const blob = await response.blob()
     if (blob.size > this.maxInMemoryBytes) {
@@ -441,6 +455,10 @@ export class LinkedResourceCache {
       )
     }
     options.onProgress?.(blob.size, blob.size)
+    recordLinkedResourceDownloadLatency(
+      Date.now() - downloadStartedAt,
+      'memory'
+    )
     return {
       file:
         blob.type === metadata.mimeType
@@ -486,13 +504,21 @@ export class LinkedResourceCache {
       .sort((left, right) =>
         left.lastAccessedAt.localeCompare(right.lastAccessedAt)
       )
+    let evictedBytes = 0
+    let evictedEntries = 0
     for (const record of candidates) {
       await removeFile(root, record.opfsPath).catch(() => {})
       await this.index.remove(record.key)
       required -= record.sizeBytes
+      evictedBytes += record.sizeBytes
+      evictedEntries += 1
       if (required <= 0) {
+        recordLinkedResourceEviction(evictedBytes, evictedEntries)
         return
       }
+    }
+    if (evictedEntries > 0) {
+      recordLinkedResourceEviction(evictedBytes, evictedEntries)
     }
     throw new LinkedResourceError(
       'STORAGE_QUOTA_EXCEEDED',
