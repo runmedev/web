@@ -19,11 +19,9 @@ type Scenario =
   | 'credentials'
   | 'drive'
   | 'driveSearch'
-  | 'driveSave'
   | 'documents'
   | 'documentation'
   | 'comments'
-  | 'notebooksEmbed'
   | 'notebooksWriteAccess'
   | 'notebooksGetError'
 
@@ -166,13 +164,6 @@ class MockSandboxPort {
             },
           ],
         })
-      } else if (this.scenario === 'driveSave') {
-        this.emit({
-          type: 'host-call',
-          callId: 1,
-          method: 'drive.saveAsCurrentNotebook',
-          args: ['root', 'Comments demo.ipynb'],
-        })
       } else if (this.scenario === 'documents') {
         this.emit({
           type: 'host-call',
@@ -185,16 +176,6 @@ class MockSandboxPort {
           callId: 2,
           method: 'documents.get',
           args: ['local://file/test4'],
-        })
-        this.emit({
-          type: 'host-call',
-          callId: 3,
-          method: 'documents.update',
-          args: [
-            'local://file/test4',
-            '{"type":"excalidraw","elements":[{"id":"label","type":"text","text":"Box A"}]}',
-            { mimeType: 'application/vnd.excalidraw+json' },
-          ],
         })
       } else if (this.scenario === 'documentation') {
         this.emit({
@@ -231,19 +212,6 @@ class MockSandboxPort {
               commentId: 'comment-1',
             },
           ],
-        })
-      } else if (this.scenario === 'notebooksEmbed') {
-        this.emit({
-          type: 'host-call',
-          callId: 1,
-          method: 'embed',
-          args: ['/tmp/screenshot.png', { alt: 'Screenshot' }],
-        })
-        this.emit({
-          type: 'host-call',
-          callId: 2,
-          method: 'notebooks.embed',
-          args: ['data:image/png;base64,AQID', undefined],
         })
       } else if (this.scenario === 'notebooksWriteAccess') {
         this.emit({
@@ -327,14 +295,6 @@ class MockSandboxPort {
         this.emit({ type: 'exit', exitCode: 0 })
         return
       }
-      if (this.scenario === 'driveSave' && this.hostResults.has(1)) {
-        this.emit({
-          type: 'stdout',
-          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
-        })
-        this.emit({ type: 'exit', exitCode: 0 })
-        return
-      }
       if (this.scenario === 'explorer' && this.hostResults.has(2)) {
         this.emit({
           type: 'stdout',
@@ -368,22 +328,6 @@ class MockSandboxPort {
         return
       }
       if (this.scenario === 'comments' && this.hostResults.has(2)) {
-        this.emit({
-          type: 'stdout',
-          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
-        })
-        this.emit({
-          type: 'stdout',
-          data: `${JSON.stringify(this.hostResults.get(2) ?? null)}\n`,
-        })
-        this.emit({ type: 'exit', exitCode: 0 })
-        return
-      }
-      if (
-        this.scenario === 'notebooksEmbed' &&
-        this.hostResults.has(1) &&
-        this.hostResults.has(2)
-      ) {
         this.emit({
           type: 'stdout',
           data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
@@ -1106,7 +1050,7 @@ describe('SandboxJSKernel', () => {
     expect(exitCode).toBe(0)
   })
 
-  it('supports raw document helpers through the sandbox bridge', async () => {
+  it('supports read-only document helpers through the sandbox bridge', async () => {
     let stdout = ''
     let stderr = ''
     let exitCode = -1
@@ -1125,14 +1069,6 @@ describe('SandboxJSKernel', () => {
           name: 'test4.excalidraw',
           mimeType: 'application/vnd.excalidraw+json',
           content: '{"type":"excalidraw","elements":[]}',
-        }
-      }
-      if (method === 'documents.update') {
-        return {
-          uri: args[0],
-          name: 'test4.excalidraw',
-          mimeType: (args[2] as { mimeType?: string } | undefined)?.mimeType,
-          syncStatus: 'local-only',
         }
       }
       return null
@@ -1160,20 +1096,13 @@ describe('SandboxJSKernel', () => {
       [
         'console.log(await documents.list());',
         "const doc = await documents.get('local://file/test4');",
-        'const scene = JSON.parse(doc.content);',
-        "scene.elements.push({ id: 'label', type: 'text', text: 'Box A' });",
-        'console.log(await documents.update(doc.uri, JSON.stringify(scene), { mimeType: doc.mimeType }));',
+        'console.log(doc);',
       ].join('\n')
     )
 
     expect(bridgeCall).toHaveBeenCalledWith('documents.list', [])
     expect(bridgeCall).toHaveBeenCalledWith('documents.get', [
       'local://file/test4',
-    ])
-    expect(bridgeCall).toHaveBeenCalledWith('documents.update', [
-      'local://file/test4',
-      '{"type":"excalidraw","elements":[{"id":"label","type":"text","text":"Box A"}]}',
-      { mimeType: 'application/vnd.excalidraw+json' },
     ])
     expect(stdout).toContain('test4.excalidraw')
     expect(stderr).toBe('')
@@ -1289,54 +1218,6 @@ describe('SandboxJSKernel', () => {
     expect(exitCode).toBe(0)
   })
 
-  it('supports saving the current notebook to Drive through the sandbox bridge', async () => {
-    let stdout = ''
-    let stderr = ''
-    let exitCode = -1
-    const bridgeCall = vi.fn(async (method: string) => {
-      if (method === 'drive.saveAsCurrentNotebook') {
-        return {
-          fileId: 'drive-file-1',
-          fileName: 'Comments demo.ipynb',
-          remoteUri: 'https://drive.google.com/file/d/drive-file-1/view',
-          localUri: 'local://drive-file-1',
-        }
-      }
-      return null
-    })
-
-    const kernel = new TestableSandboxJSKernel(
-      new MockSandboxPort('driveSave'),
-      {
-        bridge: { call: bridgeCall },
-        hooks: {
-          onStdout: (data) => {
-            stdout += data
-          },
-          onStderr: (data) => {
-            stderr += data
-          },
-          onExit: (code) => {
-            exitCode = code
-          },
-        },
-      }
-    )
-
-    await kernel.run(
-      "console.log(await drive.saveAsCurrentNotebook('root', 'Comments demo.ipynb'));"
-    )
-
-    expect(bridgeCall).toHaveBeenCalledWith('drive.saveAsCurrentNotebook', [
-      'root',
-      'Comments demo.ipynb',
-    ])
-    expect(stdout).toContain('"fileId":"drive-file-1"')
-    expect(stdout).toContain('Comments demo.ipynb')
-    expect(stderr).toBe('')
-    expect(exitCode).toBe(0)
-  })
-
   it.each([
     { name: 'default sandbox', allowedMethods: undefined },
     {
@@ -1344,15 +1225,24 @@ describe('SandboxJSKernel', () => {
       allowedMethods: CODE_MODE_SANDBOX_ALLOWED_METHODS,
     },
   ])(
-    'blocks notebook execution deputies in the $name before calling the host bridge',
+    'blocks notebook mutation and execution deputies in the $name before calling the host bridge',
     async ({ allowedMethods }) => {
       const blockedMethods = [
         'notebooks.update',
         'notebooks.execute',
         'notebooks.createLocal',
         'notebooks.appendCell',
+        'notebooks.delete',
+        'notebooks.embed',
         'runme.runAll',
         'runme.rerun',
+        'embed',
+        'documents.update',
+        'drive.create',
+        'drive.update',
+        'drive.saveAsCurrentNotebook',
+        'notebookDiff.restoreDeletedCell',
+        'notebookDiff.restoreAllDeletedCells',
       ]
 
       for (const method of blockedMethods) {
@@ -1383,54 +1273,6 @@ describe('SandboxJSKernel', () => {
       }
     }
   )
-
-  it('supports image embedding through top-level and notebooks sandbox helpers', async () => {
-    let stdout = ''
-    let stderr = ''
-    let exitCode = -1
-    const bridgeCall = vi.fn(async (method: string) => {
-      if (method === 'embed' || method === 'notebooks.embed') {
-        return {
-          uri: 'local://file/images',
-          cell: { refId: 'image-cell', languageId: 'html' },
-        }
-      }
-      return null
-    })
-    const kernel = new TestableSandboxJSKernel(
-      new MockSandboxPort('notebooksEmbed'),
-      {
-        bridge: { call: bridgeCall },
-        hooks: {
-          onStdout: (data) => {
-            stdout += data
-          },
-          onStderr: (data) => {
-            stderr += data
-          },
-          onExit: (code) => {
-            exitCode = code
-          },
-        },
-      }
-    )
-
-    await kernel.run(
-      "console.log(await embed('/tmp/screenshot.png', { alt: 'Screenshot' })); console.log(await notebooks.embed('data:image/png;base64,AQID'));"
-    )
-
-    expect(bridgeCall).toHaveBeenCalledWith('embed', [
-      '/tmp/screenshot.png',
-      { alt: 'Screenshot' },
-    ])
-    expect(bridgeCall).toHaveBeenCalledWith('notebooks.embed', [
-      'data:image/png;base64,AQID',
-      undefined,
-    ])
-    expect(stdout).toContain('image-cell')
-    expect(stderr).toBe('')
-    expect(exitCode).toBe(0)
-  })
 
   it('serializes structured host errors through the sandbox bridge', async () => {
     let stdout = ''

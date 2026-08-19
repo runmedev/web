@@ -308,8 +308,13 @@ The WebMCP \`ExecuteCode\` sandbox can inspect notebook state, resolve and show 
 - \`notebooks.execute\`
 - \`notebooks.createLocal\`
 - \`notebooks.appendCell\`
+- \`notebooks.delete\`
+- \`notebooks.embed\` and the top-level \`embed\` helper
 - \`runme.runAll\`
 - \`runme.rerun\`
+- \`documents.update\`
+- \`drive.create\`, \`drive.update\`, and \`drive.saveAsCurrentNotebook\`
+- \`notebookDiff.restoreDeletedCell\` and \`notebookDiff.restoreAllDeletedCells\`
 
 These methods fail with \`Sandbox method not allowed\` before the host bridge is invoked. Do not retry them or use another sandbox helper as an execution deputy. Use a trusted browser AppKernel cell or the normal Runme UI when the user intentionally wants to mutate or execute notebook cells.
 `

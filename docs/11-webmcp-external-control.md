@@ -359,8 +359,13 @@ The sandbox rejects these host calls before they reach the bridge:
 - `notebooks.execute`
 - `notebooks.createLocal`
 - `notebooks.appendCell`
+- `notebooks.delete`
+- `notebooks.embed` and the top-level `embed` helper
 - `runme.runAll`
 - `runme.rerun`
+- `documents.update`
+- `drive.create`, `drive.update`, and `drive.saveAsCurrentNotebook`
+- `notebookDiff.restoreDeletedCell` and `notebookDiff.restoreAllDeletedCells`
 
 Do not retry or route around a `Sandbox method not allowed` error. Use a
 trusted browser AppKernel cell or the normal Runme UI when notebook mutation or

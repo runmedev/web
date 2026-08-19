@@ -20,7 +20,6 @@ export const SANDBOX_NOTEBOOKS_API_METHODS = [
   'notebooks.help',
   'notebooks.list',
   'notebooks.get',
-  'notebooks.delete',
   'notebooks.requestWriteAccess',
   'notebooks.resolve',
   'notebooks.show',
