@@ -27,11 +27,11 @@ This Runme instance is served from ${runmeOrigin}.
 
 - Inspect existing in-app browser tabs before opening another tab.
 - Reuse a Runme tab whose URL begins with ${runmeOrigin}. A session URL has the form \`${sessionUrl}\`.
-- Claim the selected tab and use its page-provided WebMCP tools for notebook reads, edits, and execution.
+- Claim the selected tab and use its page-provided WebMCP tools for notebook reads, reference handling, and collaboration.
 - Use the \`ExecuteCode\` WebMCP tool to run AppKernel JavaScript. Print values explicitly with \`console.log(...)\`.
 - Use the \`comments\` library inside \`ExecuteCode\` for Drive comments and anchors. Runme does not expose a comment-specific WebMCP tool.
 - Use the \`ui\` library inside \`ExecuteCode\` to create rendered Markdown selections and open Runme's selection context menu. Do not invent CSS selectors or dispatch arbitrary DOM events.
-- Do not edit or execute notebook cells through DOM clicks, keyboard automation, or Computer Use. If WebMCP is unavailable, stop and tell the user what must be done manually.
+- WebMCP \`ExecuteCode\` cannot use the general-purpose notebook mutation or execution methods. Do not route around this boundary with DOM clicks, keyboard automation, or Computer Use. Tell the user to use a trusted browser AppKernel cell or the normal Runme UI for intentional cell mutation or execution.
 
 ## Handle ExecuteCode operations
 
@@ -285,7 +285,7 @@ Use \`comments.reopen({ target, commentId })\` only when the user asks to reopen
 
 ## Request write access when needed
 
-If \`doc.summary.readOnly\` is true because another Runme session owns the notebook, request a cooperative takeover before mutating it:
+If \`doc.summary.readOnly\` is true because another Runme session owns the notebook, request a cooperative takeover before a supported collaboration write:
 
 \`\`\`js
 const writable = await notebooks.requestWriteAccess({
@@ -300,26 +300,17 @@ console.log(JSON.stringify({
 
 Continue only when the returned document has \`summary.readOnly === false\`. The current owner saves pending changes before releasing its lock. Always pass the concrete notebook URI; do not request access to whichever notebook is currently selected.
 
-## Make safe notebook changes
+## Respect the sandbox execution boundary
 
-- Inspect \`await notebooks.help()\` when helper availability is uncertain.
-- Use \`notebooks.appendCell\` for a simple append. A Markdown cell uses \`kind: 'markup'\`, not \`kind: 'markdown'\`.
-- Use \`notebooks.update\` for multi-cell or idempotent edits. Pass \`target: { uri: notebookUri }\` and \`expectedRevision: doc.handle.revision\` when a revision is available.
-- Prefer updating a stable named cell over blindly appending duplicate status or result cells.
-- Build large cell values as data (for example with \`JSON.stringify\`) instead of hand-escaping nested JavaScript.
-- Catch and inspect \`NOTEBOOK_UPDATE_FAILED\`; a multi-operation update can partially succeed.
+The WebMCP \`ExecuteCode\` sandbox can inspect notebook state, resolve and show references, and use supported collaboration helpers. It cannot call:
 
-After every mutation, read the same URI again and verify the exact \`refId\`, \`languageId\`, value, and revision that matter to the request:
+- \`notebooks.update\`
+- \`notebooks.execute\`
+- \`notebooks.createLocal\`
+- \`notebooks.appendCell\`
+- \`runme.runAll\`
+- \`runme.rerun\`
 
-\`\`\`js
-const verified = await notebooks.get({ uri: notebookUri })
-console.log(JSON.stringify({
-  uri: verified.handle?.uri,
-  revision: verified.handle?.revision,
-  cells: verified.notebook?.cells,
-}))
-\`\`\`
-
-Treat the reread result—not the visible selection—as the source of truth.
+These methods fail with \`Sandbox method not allowed\` before the host bridge is invoked. Do not retry them or use another sandbox helper as an execution deputy. Use a trusted browser AppKernel cell or the normal Runme UI when the user intentionally wants to mutate or execute notebook cells.
 `
 }

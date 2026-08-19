@@ -66,8 +66,6 @@ function serializeHostError(error: unknown): string | SerializedHostError {
 const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'runme.clear',
   'runme.clearOutputs',
-  'runme.runAll',
-  'runme.rerun',
   'runme.getCurrentNotebook',
   'runme.help',
   'tour.show',
@@ -119,8 +117,6 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'comments.resolve',
   'comments.reopen',
   ...SANDBOX_NOTEBOOKS_API_METHODS,
-  'notebooks.createLocal',
-  'notebooks.appendCell',
   'notebooks.embed',
 ]
 

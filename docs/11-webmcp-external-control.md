@@ -280,7 +280,7 @@ the authenticated AppKernel and does not require another Drive integration.
 
 Runme exposes comments as a library in the `ExecuteCode` sandbox. It does not
 register a comment-specific WebMCP tool. This keeps comment workflows
-composable with notebook reads and updates in one JavaScript program.
+composable with notebook reads in one JavaScript program.
 
 Bind the notebook to a concrete URI, then list its open Drive comments:
 
@@ -347,73 +347,21 @@ Use `comments.help()` in App Console or `ExecuteCode` to inspect the current
 library surface. Do not scrape the comments panel or call the Drive API
 directly for these workflows.
 
-## Handling partial notebook update failures
+## Sandbox execution boundary
 
-Controllers that mutate notebooks through WebMCP should run JavaScript with
-`ExecuteCode` and catch `notebooks.update` failures inside that JavaScript.
-The tool returns merged stdout and stderr text, so structured failure details
-are visible only when the executed code catches the error and prints the fields
-it needs.
+WebMCP `ExecuteCode` runs in the reduced-privilege AppKernel sandbox. The
+sandbox can inspect notebook state and use reference and collaboration helpers,
+but it cannot use the general-purpose notebook mutation or execution methods.
 
-`notebooks.update` can apply multiple operations. If operation `K + 1` fails
-after the first `K` operations succeed, the promise rejects with an error whose
-`code` is `NOTEBOOK_UPDATE_FAILED`. Its `details` include:
+The sandbox rejects these host calls before they reach the bridge:
 
-- `appliedOperationCount`: number of operations completed before the failure
-- `failedOperationIndex`: zero-based index of the failed operation
-- `operationStatuses`: per-operation status values
-- `beforeHandle`: notebook handle before the update started
-- `afterHandle`: notebook handle after the failure
+- `notebooks.update`
+- `notebooks.execute`
+- `notebooks.createLocal`
+- `notebooks.appendCell`
+- `runme.runAll`
+- `runme.rerun`
 
-Use this pattern:
-
-```js
-const doc = await notebooks.get({ uri: 'local://file/demo.runme.md' })
-
-try {
-  const updated = await notebooks.update({
-    target: { handle: doc.handle },
-    operations: [
-      {
-        op: 'update',
-        refId: 'cell-a',
-        patch: { value: 'echo updated' },
-      },
-      {
-        op: 'update',
-        refId: 'missing-cell',
-        patch: { value: 'echo missing' },
-      },
-      {
-        op: 'remove',
-        refIds: ['cell-b'],
-      },
-    ],
-  })
-
-  console.log(JSON.stringify({ status: 'ok', handle: updated.handle }))
-} catch (error) {
-  if (error?.code === 'NOTEBOOK_UPDATE_FAILED') {
-    const current = await notebooks.get({
-      handle: error.details.afterHandle,
-    })
-
-    console.log(
-      JSON.stringify({
-        status: 'partial_failure',
-        appliedOperationCount: error.details.appliedOperationCount,
-        failedOperationIndex: error.details.failedOperationIndex,
-        operationStatuses: error.details.operationStatuses,
-        currentHandle: current.handle,
-      })
-    )
-  } else {
-    throw error
-  }
-}
-```
-
-The reread stays inside the `NOTEBOOK_UPDATE_FAILED` branch where `error` is in
-scope. Do not assume the whole update rolled back. `notebooks.update` reports
-which operations were applied; it does not make multi-operation updates fully
-transactional.
+Do not retry or route around a `Sandbox method not allowed` error. Use a
+trusted browser AppKernel cell or the normal Runme UI when notebook mutation or
+execution is intentional.
