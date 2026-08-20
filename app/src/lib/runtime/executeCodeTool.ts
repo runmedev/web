@@ -5,7 +5,7 @@ type JsonRecord = Record<string, unknown>
 export const EXECUTE_CODE_TOOL_NAME = 'ExecuteCode'
 export const EXECUTE_CODE_TOOL_TITLE = 'Runme Execute Code'
 export const EXECUTE_CODE_TOOL_DESCRIPTION =
-  'Start JavaScript in the Runme AppKernel sandbox and return a JSON operation snapshot. Fast work completes inline. Long work continues by default after timeoutMs and can be polled with GetExecuteCodeOperation. Every accepted request returns a Runme-assigned operationId.'
+  'Start JavaScript in the Runme AppKernel sandbox and return a JSON operation snapshot. Read notebooks with notebooks.get({ uri }) and access cells through doc.notebook.cells; notebooks.read is not an API. Call await notebooks.help() when uncertain. Fast work completes inline. Long work continues by default after timeoutMs and can be polled with GetExecuteCodeOperation. Every accepted request returns a Runme-assigned operationId.'
 
 export const GET_EXECUTE_CODE_OPERATION_TOOL_NAME = 'GetExecuteCodeOperation'
 export const GET_EXECUTE_CODE_OPERATION_TOOL_TITLE =
@@ -27,6 +27,8 @@ export function buildExecuteCodeInputSchema(): JsonRecord {
     properties: {
       code: {
         type: 'string',
+        description:
+          'AppKernel JavaScript. For notebook reads, use await notebooks.get({ uri }) and doc.notebook.cells. Do not call notebooks.read; it does not exist. Use await notebooks.help() to inspect the live API.',
       },
       timeoutMs: {
         type: 'integer',

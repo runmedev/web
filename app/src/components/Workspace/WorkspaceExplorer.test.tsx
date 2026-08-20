@@ -225,6 +225,173 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(mocks.setCurrentDoc).not.toHaveBeenCalledWith(null)
   })
 
+  it('shows a directly created Drive notebook in its mounted folder', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    let blockFolderLoad = false
+    let releaseFolderLoad!: () => void
+    const folderLoadGate = new Promise<void>((resolve) => {
+      releaseFolderLoad = resolve
+    })
+    const folderLoadStarted = vi.fn()
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        if (blockFolderLoad) {
+          folderLoadStarted()
+          await folderLoadGate
+        }
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: [],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/direct') {
+        return {
+          uri,
+          name: 'direct.ipynb',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/direct/view',
+          parents: ['local://folder/drive'],
+        }
+      }
+      if (uri === 'local://file/stale') {
+        return {
+          uri,
+          name: 'stale.ipynb',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/stale/view',
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+    await screen.findByText('Drive Root')
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('local-notebook-updated', {
+          detail: {
+            uri: 'local://file/stale',
+            parentUri: 'local://folder/drive',
+          },
+        })
+      )
+    })
+    await screen.findByText('stale.ipynb')
+
+    blockFolderLoad = true
+    act(() => {
+      mocks.treeProps.onToggle('local://folder/drive')
+    })
+    await waitFor(() => expect(folderLoadStarted).toHaveBeenCalled())
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('local-notebook-updated', {
+          detail: {
+            uri: 'local://file/direct',
+            parentUri: 'local://folder/drive',
+          },
+        })
+      )
+    })
+
+    await screen.findByText('direct.ipynb')
+    await act(async () => {
+      releaseFolderLoad()
+      await folderLoadGate
+    })
+    expect(screen.getByText('direct.ipynb')).toBeTruthy()
+    await waitFor(() => expect(screen.queryByText('stale.ipynb')).toBeNull())
+    expect(screen.queryByText('Folder is empty')).toBeNull()
+  })
+
+  it('does not resurrect a removed child when an older folder load finishes', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    let blockFolderLoad = false
+    let releaseFolderLoad!: () => void
+    const folderLoadGate = new Promise<void>((resolve) => {
+      releaseFolderLoad = resolve
+    })
+    const folderLoadStarted = vi.fn()
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        const children = blockFolderLoad ? ['local://file/direct'] : []
+        if (blockFolderLoad) {
+          folderLoadStarted()
+          await folderLoadGate
+        }
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children,
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/direct') {
+        return {
+          uri,
+          name: 'direct.ipynb',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/direct/view',
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+    mocks.store.moveToTrash.mockImplementation(async () => {
+      blockFolderLoad = false
+    })
+
+    render(<WorkspaceExplorer />)
+    await screen.findByText('Drive Root')
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('local-notebook-updated', {
+          detail: {
+            uri: 'local://file/direct',
+            parentUri: 'local://folder/drive',
+          },
+        })
+      )
+    })
+    await screen.findByText('direct.ipynb')
+    fireEvent.contextMenu(screen.getByText('direct.ipynb'))
+    const trashButton = await screen.findByRole('button', {
+      name: 'Move to Google Drive Trash',
+    })
+
+    blockFolderLoad = true
+    act(() => {
+      mocks.treeProps.onToggle('local://folder/drive')
+    })
+    await waitFor(() => expect(folderLoadStarted).toHaveBeenCalled())
+
+    fireEvent.click(trashButton)
+    await waitFor(() => {
+      expect(mocks.store.moveToTrash).toHaveBeenCalledWith(
+        'local://file/direct'
+      )
+    })
+    await waitFor(() => expect(screen.queryByText('direct.ipynb')).toBeNull())
+
+    await act(async () => {
+      releaseFolderLoad()
+      await folderLoadGate
+    })
+    expect(screen.queryByText('direct.ipynb')).toBeNull()
+  })
+
   it('creates a Google Drive folder inline from a Drive-backed folder context menu', async () => {
     mocks.workspaceItems = ['local://folder/drive']
     mocks.store.getMetadata.mockImplementation(async (uri: string) => {

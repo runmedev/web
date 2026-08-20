@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parser_pb } from '../../runme/client'
 import { appLogger } from '../logging/runtime'
 import { __resetTabIdForTests, getClaimedSessionId } from '../tabIdentity'
+import { appState } from './AppState'
 import {
   createCodeModeExecutor,
   getCodeModeErrorOutput,
@@ -28,6 +29,9 @@ describe('codeModeExecutor', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    appState.setDriveNotebookStore(null)
+    appState.setLocalNotebooks(null)
+    appState.setOpenNotebookHandler(null)
     __resetTabIdForTests()
     window.history.replaceState(null, '', '/')
   })

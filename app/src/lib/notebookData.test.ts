@@ -1,4 +1,5 @@
 import { create } from "@bufbuild/protobuf";
+import md5 from "md5";
 import { Code } from "@buf/googleapis_googleapis.bufbuild_es/google/rpc/code_pb";
 import { RunIntent, type StreamsLike } from "@runmedev/renderers";
 import { Subject } from "rxjs";
@@ -1455,6 +1456,7 @@ describe("NotebookData.runCodeCell", () => {
       value: [
         "console.log(typeof drive);",
         "console.log(typeof drive.create);",
+        "console.log(typeof drive.createNotebook);",
         "console.log(typeof drive.search);",
         "console.log(typeof drive.saveAsCurrentNotebook);",
         "console.log(typeof drive.listPendingSync);",
@@ -1535,17 +1537,30 @@ describe("NotebookData.runCodeCell", () => {
   });
 
   it("supports drive.saveAsCurrentNotebook in appkernel cells", async () => {
-    const createRemote = vi.fn().mockResolvedValue({
-      uri: "https://drive.google.com/file/d/saveas123/view",
-    });
-    const saveContent = vi.fn().mockResolvedValue(undefined);
+    let uploadedContent = "";
+    const createContent = vi.fn().mockImplementation(
+      async (_folder, _name, content) => {
+        uploadedContent = content;
+        return {
+          uri: "https://drive.google.com/file/d/saveas123/view",
+          name: "copy.json",
+        };
+      },
+    );
+    const getVersionMetadata = vi.fn().mockImplementation(async () => ({
+      md5Checksum: md5(uploadedContent),
+      headRevisionId: "drive-revision-1",
+    }));
     appState.setDriveNotebookStore({
-      create: createRemote,
-      saveContent,
+      createContent,
+      getVersionMetadata,
     } as any);
     const addFile = vi.fn().mockResolvedValue("local://file/saveas-copy");
-    const saveLocal = vi.fn().mockResolvedValue(undefined);
-    appState.setLocalNotebooks({ addFile, save: saveLocal } as any);
+    const initializeUploadedDriveNotebook = vi.fn().mockResolvedValue(true);
+    appState.setLocalNotebooks({
+      addFile,
+      initializeUploadedDriveNotebook,
+    } as any);
     const openNotebook = vi.fn().mockResolvedValue(undefined);
     appState.setOpenNotebookHandler(openNotebook);
 
@@ -1581,8 +1596,19 @@ describe("NotebookData.runCodeCell", () => {
     expect(addFile).toHaveBeenCalledWith(
       "https://drive.google.com/file/d/saveas123/view",
       "copy.json",
+      { mimeType: "application/json" },
     );
-    expect(saveLocal).toHaveBeenCalled();
+    expect(initializeUploadedDriveNotebook).toHaveBeenCalledWith(
+      "local://file/saveas-copy",
+      expect.objectContaining({
+        cells: [expect.objectContaining({ refId: "cell-appkernel-saveas" })],
+      }),
+      expect.any(String),
+      {
+        checksum: md5(uploadedContent),
+        revisionId: "drive-revision-1",
+      },
+    );
     expect(openNotebook).toHaveBeenCalledWith("local://file/saveas-copy");
 
     const updated = model.getCellSnapshot(cell.refId);

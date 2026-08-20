@@ -1,13 +1,18 @@
 /// <reference types="vitest" />
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearGoogleDriveRuntime,
   setGoogleDriveBaseUrl,
 } from "../lib/googleDriveRuntime";
+import {
+  DriveCreateNotCommittedError,
+  DriveFileCreatedError,
+  DriveNotebookStore,
+  isDriveItemUri,
+  parseDriveItem,
+} from "./drive";
 import { NotebookStoreItemType } from "./notebook";
-import { DriveNotebookStore, isDriveItemUri, parseDriveItem } from "./drive";
 
 afterEach(() => {
   clearGoogleDriveRuntime();
@@ -67,19 +72,35 @@ describe("parseDriveItem", () => {
 
 describe("isDriveItemUri", () => {
   it("accepts supported Drive URL forms", () => {
-    expect(isDriveItemUri("https://drive.google.com/file/d/file123/view")).toBe(true);
-    expect(isDriveItemUri("https://drive.google.com/drive/folders/folder123")).toBe(true);
-    expect(isDriveItemUri("https://drive.google.com/open?id=open123")).toBe(true);
-    expect(isDriveItemUri("https://drive.google.com/uc?export=download&id=download123")).toBe(true);
+    expect(isDriveItemUri("https://drive.google.com/file/d/file123/view")).toBe(
+      true,
+    );
+    expect(
+      isDriveItemUri("https://drive.google.com/drive/folders/folder123"),
+    ).toBe(true);
+    expect(isDriveItemUri("https://drive.google.com/open?id=open123")).toBe(
+      true,
+    );
+    expect(
+      isDriveItemUri(
+        "https://drive.google.com/uc?export=download&id=download123",
+      ),
+    ).toBe(true);
   });
 
   it("rejects local mirror, filesystem, contents, raw id, and generic URL inputs", () => {
     expect(isDriveItemUri("local://file/notebook123")).toBe(false);
-    expect(isDriveItemUri("fs://workspace/ws123/file/notebook.json")).toBe(false);
-    expect(isDriveItemUri("contents://localhost:9977/file/notebook.json")).toBe(false);
+    expect(isDriveItemUri("fs://workspace/ws123/file/notebook.json")).toBe(
+      false,
+    );
+    expect(isDriveItemUri("contents://localhost:9977/file/notebook.json")).toBe(
+      false,
+    );
     expect(isDriveItemUri("0BwwA4oUTeiV1UVNwOHItT0xfa2M")).toBe(false);
     expect(isDriveItemUri("https://example.com/not-drive")).toBe(false);
-    expect(isDriveItemUri("https://drive.google.com/not-a-drive-item")).toBe(false);
+    expect(isDriveItemUri("https://drive.google.com/not-a-drive-item")).toBe(
+      false,
+    );
   });
 });
 
@@ -291,16 +312,19 @@ describe("DriveNotebookStore", () => {
         if (url.pathname === "/drive/v3/files") {
           expect(init?.method).toBe("POST");
           expect(JSON.parse(String(init?.body))).toMatchObject({
+            id: "reserved-file123",
             name: "diagram.excalidraw",
             mimeType: "application/vnd.excalidraw+json",
             parents: ["folder123"],
             appProperties: {
               runmeCreateOperationId: "operation-123",
+              runmeCreateExpectedChecksum: "expected-checksum",
+              runmeCreateExpectedRequest: "expected-request",
             },
           });
           return new Response(
             JSON.stringify({
-              id: "file123",
+              id: "reserved-file123",
               name: "diagram.excalidraw",
               mimeType: "application/vnd.excalidraw+json",
               parents: ["folder123"],
@@ -311,7 +335,7 @@ describe("DriveNotebookStore", () => {
             },
           );
         }
-        if (url.pathname === "/upload/drive/v3/files/file123") {
+        if (url.pathname === "/upload/drive/v3/files/reserved-file123") {
           expect(init?.method).toBe("PATCH");
           expect(init?.headers).toMatchObject({
             "Content-Type": "application/vnd.excalidraw+json",
@@ -328,17 +352,281 @@ describe("DriveNotebookStore", () => {
       "diagram.excalidraw",
       '{"type":"excalidraw"}',
       "application/vnd.excalidraw+json",
-      { createOperationId: "operation-123" },
+      {
+        createOperationId: "operation-123",
+        expectedContentChecksum: "expected-checksum",
+        expectedRequestFingerprint: "expected-request",
+        fileId: "reserved-file123",
+      },
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({
-      uri: "https://drive.google.com/file/d/file123/view",
+      uri: "https://drive.google.com/file/d/reserved-file123/view",
       name: "diagram.excalidraw",
       type: NotebookStoreItemType.File,
-      remoteUri: "https://drive.google.com/file/d/file123/view",
+      remoteUri: "https://drive.google.com/file/d/reserved-file123/view",
       mimeType: "application/vnd.excalidraw+json",
     });
+  });
+
+  it("reserves a Drive file id before creating content", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ids: ["reserved-file123"] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const store = new DriveNotebookStore(async () => "access-token");
+
+    await expect(store.generateFileId()).resolves.toBe("reserved-file123");
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/drive/v3/files/generateIds?"),
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("does not use pre-generated file ids inside a Shared Drive", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ driveId: "shared-drive-1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    const store = new DriveNotebookStore(async () => "access-token");
+    const folderUri = "https://drive.google.com/drive/folders/folder123";
+
+    await expect(store.canUsePreGeneratedFileId(folderUri)).resolves.toBe(
+      false,
+    );
+    await expect(store.canUsePreGeneratedFileId(folderUri)).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for Drive search indexing before declaring an operation absent", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new DriveNotebookStore(async () => "access-token");
+      const indexed = {
+        uri: "https://drive.google.com/file/d/existing123/view",
+        name: "existing.json",
+        type: NotebookStoreItemType.File,
+        children: [],
+        parents: ["https://drive.google.com/drive/folders/folder123"],
+      };
+      vi.spyOn(store, "findByCreateOperation")
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue(indexed);
+
+      const pending = store.waitForCreateOperation(
+        "https://drive.google.com/drive/folders/folder123",
+        "operation-123",
+        100,
+      );
+      await vi.advanceTimersByTimeAsync(850);
+
+      await expect(pending).resolves.toEqual(indexed);
+      expect(store.findByCreateOperation).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("classifies a rejected metadata create as definitely not committed", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("Forbidden", { status: 403 }),
+    );
+
+    const store = new DriveNotebookStore(async () => "access-token");
+
+    await expect(
+      store.createContent(
+        "https://drive.google.com/drive/folders/folder123",
+        "notebook.ipynb",
+        "{}",
+        "application/x-ipynb+json",
+      ),
+    ).rejects.toBeInstanceOf(DriveCreateNotCommittedError);
+  });
+
+  it("reports the created file when its initial content upload fails", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/drive/v3/files") {
+        return new Response(
+          JSON.stringify({
+            id: "file123",
+            name: "notebook.ipynb",
+            headRevisionId: "metadata-revision",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (url.pathname === "/upload/drive/v3/files/file123") {
+        return new Response("Unavailable", { status: 503 });
+      }
+      throw new Error(`Unexpected Drive request: ${url.toString()}`);
+    });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    let failure: unknown;
+    try {
+      await store.createContent(
+        "https://drive.google.com/drive/folders/folder123",
+        "notebook.ipynb",
+        "{}",
+        "application/x-ipynb+json",
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(DriveFileCreatedError);
+    expect(failure).toMatchObject({
+      fileId: "file123",
+      fileName: "notebook.ipynb",
+      creationRevisionId: "metadata-revision",
+    });
+  });
+
+  it("marks an uploaded create operation complete without dropping its properties", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/drive/v3/files/file123");
+        if (init?.method === "GET") {
+          return new Response(
+            JSON.stringify({
+              appProperties: {
+                runmeCreateOperationId: "operation-123",
+                runmeCreateExpectedChecksum: "expected-checksum",
+              },
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        expect(init?.method).toBe("PATCH");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          appProperties: {
+            runmeCreateOperationId: "operation-123",
+            runmeCreateExpectedChecksum: "expected-checksum",
+            runmeCreateCompletedChecksum: "expected-checksum",
+          },
+        });
+        return new Response(JSON.stringify({ id: "file123" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    await store.markCreateOperationComplete(
+      "https://drive.google.com/file/d/file123/view",
+      "expected-checksum",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("repairs content only when the checked Drive version still matches", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        if (init?.method === "GET") {
+          expect(url.pathname).toBe("/drive/v3/files/file123");
+          return new Response(
+            JSON.stringify({
+              md5Checksum: "empty-checksum",
+              headRevisionId: "empty-revision",
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                ETag: '"drive-etag-1"',
+              },
+            },
+          );
+        }
+        expect(url.pathname).toBe("/upload/drive/v3/files/file123");
+        expect(init?.method).toBe("PATCH");
+        expect(init?.headers).toMatchObject({
+          "Content-Type": "application/json",
+          "If-Match": '"drive-etag-1"',
+        });
+        expect(init?.body).toBe('{"cells":[]}');
+        return new Response("", { status: 200 });
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    await expect(
+      store.saveContentIfVersion(
+        "https://drive.google.com/file/d/file123/view",
+        '{"cells":[]}',
+        "application/json",
+        { checksum: "empty-checksum", revisionId: "empty-revision" },
+      ),
+    ).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a repair when Drive changes during the conditional upload", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (_input, init) => {
+        if (init?.method === "GET") {
+          return new Response(
+            JSON.stringify({
+              md5Checksum: "empty-checksum",
+              headRevisionId: "empty-revision",
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                ETag: '"drive-etag-1"',
+              },
+            },
+          );
+        }
+        return new Response("precondition failed", { status: 412 });
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    await expect(
+      store.saveContentIfVersion(
+        "https://drive.google.com/file/d/file123/view",
+        '{"cells":[]}',
+        "application/json",
+        { checksum: "empty-checksum", revisionId: "empty-revision" },
+      ),
+    ).resolves.toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("loads arbitrary Drive file content as text", async () => {
@@ -706,7 +994,7 @@ describe("DriveNotebookStore", () => {
         expect(init?.method).toBe("POST");
         expect(JSON.parse(String(init?.body))).toEqual({
           content: "Please check this",
-          anchor: "{\"runme\":{\"kind\":\"cell\",\"cellId\":\"cell-1\"}}",
+          anchor: '{"runme":{"kind":"cell","cellId":"cell-1"}}',
         });
         return new Response(
           JSON.stringify({
@@ -724,7 +1012,7 @@ describe("DriveNotebookStore", () => {
     const comment = await store.createComment(
       "https://drive.google.com/file/d/file123/view",
       " Please check this ",
-      "{\"runme\":{\"kind\":\"cell\",\"cellId\":\"cell-1\"}}",
+      '{"runme":{"kind":"cell","cellId":"cell-1"}}',
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -783,10 +1071,13 @@ describe("DriveNotebookStore", () => {
         expect(JSON.parse(String(init?.body))).toEqual({
           action: "resolve",
         });
-        return new Response(JSON.stringify({ id: "reply-1", action: "resolve" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ id: "reply-1", action: "resolve" }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
       });
 
     const store = new DriveNotebookStore(async () => "access-token");

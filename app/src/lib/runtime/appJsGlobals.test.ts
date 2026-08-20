@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { create } from '@bufbuild/protobuf'
+import md5 from 'md5'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../../runme/client'
@@ -657,6 +658,66 @@ describe('createAppJsGlobals notebook reference helpers', () => {
       'https://drive.google.com/file/d/file123/view'
     )
     expect(output.join('')).toContain('Found 1 Drive item(s)')
+  })
+
+  it('creates and opens one Drive-backed notebook without a local-only source', async () => {
+    let uploadedContent = ''
+    const createContent = vi.fn(async (_folder, _name, content) => {
+      uploadedContent = content
+      return {
+        uri: 'https://drive.google.com/file/d/file123/view',
+        name: 'new.ipynb',
+      }
+    })
+    const getVersionMetadata = vi.fn(async () => ({
+      md5Checksum: md5(uploadedContent),
+      headRevisionId: 'drive-revision-1',
+    }))
+    const addFile = vi.fn(async () => 'local://file/drive-mirror')
+    const initializeUploadedDriveNotebook = vi.fn(async () => true)
+    const openNotebook = vi.fn(async () => undefined)
+    const output: string[] = []
+    appState.setDriveNotebookStore({
+      createContent,
+      getVersionMetadata,
+    } as any)
+    appState.setLocalNotebooks({
+      addFile,
+      initializeUploadedDriveNotebook,
+    } as any)
+    appState.setOpenNotebookHandler(openNotebook)
+    const globals = createAppJsGlobals({
+      runme: createRunme(),
+      sendOutput: (data) => output.push(data),
+    })
+
+    const result = await globals.drive.createNotebook(
+      'folder123',
+      'new.ipynb',
+      {
+        cells: [{ kind: 'markup', value: '# New notebook' }],
+      }
+    )
+
+    expect(result).toMatchObject({
+      fileId: 'file123',
+      remoteUri: 'https://drive.google.com/file/d/file123/view',
+      localUri: 'local://file/drive-mirror',
+    })
+    expect(addFile).toHaveBeenCalledTimes(1)
+    expect(initializeUploadedDriveNotebook).toHaveBeenCalledWith(
+      result.localUri,
+      expect.objectContaining({
+        cells: [expect.objectContaining({ value: '# New notebook' })],
+      }),
+      expect.any(String),
+      {
+        checksum: md5(uploadedContent),
+        revisionId: 'drive-revision-1',
+      }
+    )
+    expect(openNotebook).toHaveBeenCalledWith(result.localUri)
+    expect(output.join('')).toContain('Created Drive-backed notebook')
   })
 
   it('moves Google Drive files to trash from browser AppKernel drive globals', async () => {

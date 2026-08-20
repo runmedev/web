@@ -22,6 +22,10 @@ from `docs-dev/cujs/`.
   - configure Jupyter runner via Runme proxy,
   - run one Python cell,
   - verify expected stdout is rendered in the notebook.
+- `direct-drive-notebook-creation.md` — direct Drive-backed creation flow:
+  - create the authoritative file in a mounted Google Drive folder,
+  - initialize its editable local mirror,
+  - verify Explorer shows exactly one notebook entry.
 
 ## How CUJs are executed
 

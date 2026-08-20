@@ -66,8 +66,6 @@ function serializeHostError(error: unknown): string | SerializedHostError {
 const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'runme.clear',
   'runme.clearOutputs',
-  'runme.runAll',
-  'runme.rerun',
   'runme.getCurrentNotebook',
   'runme.help',
   'tour.show',
@@ -82,14 +80,11 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'ui.prepareRenderedComment',
   'ui.clearSelection',
   'ui.help',
-  'embed',
   'notebookDiff.listDriveRevisions',
   'notebookDiff.diffDriveRevision',
   'notebookDiff.openDiffTab',
   'notebookDiff.openConflictDiff',
   'notebookDiff.listConflictCells',
-  'notebookDiff.restoreDeletedCell',
-  'notebookDiff.restoreAllDeletedCells',
   'notebookDiff.help',
   'app.getSessionId',
   'app.getSessionID',
@@ -104,12 +99,8 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'drive.refreshAuth',
   'drive.list',
   'drive.search',
-  'drive.create',
-  'drive.update',
-  'drive.saveAsCurrentNotebook',
   'documents.list',
   'documents.get',
-  'documents.update',
   'documentation.list',
   'documentation.get',
   'comments.list',
@@ -119,9 +110,6 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'comments.resolve',
   'comments.reopen',
   ...SANDBOX_NOTEBOOKS_API_METHODS,
-  'notebooks.createLocal',
-  'notebooks.appendCell',
-  'notebooks.embed',
   'notebooks.attach',
 ]
 
@@ -456,6 +444,8 @@ export function buildSandboxSrcDoc(options: {
           list: (folder) => hostCall("drive.list", [folder]),
           search: (request) => hostCall("drive.search", [request]),
           create: (folder, name) => hostCall("drive.create", [folder, name]),
+          createNotebook: (folder, name, options) =>
+            hostCall("drive.createNotebook", [folder, name, options]),
           update: (idOrUri, bytes) => hostCall("drive.update", [idOrUri, bytes]),
           saveAsCurrentNotebook: (folder, name) =>
             hostCall("drive.saveAsCurrentNotebook", [folder, name]),
@@ -465,8 +455,9 @@ export function buildSandboxSrcDoc(options: {
             consoleProxy.log("drive.list(folderIdOrUri)");
             consoleProxy.log("drive.search(filesListRequest)");
             consoleProxy.log("drive.create(folderIdOrUri, name)");
+            consoleProxy.log("drive.createNotebook(folderIdOrUri, name, { cells? })");
             consoleProxy.log("drive.update(fileIdOrUri, bytes)");
-            consoleProxy.log("drive.saveAsCurrentNotebook(folderIdOrUri, name)");
+            consoleProxy.log("drive.saveAsCurrentNotebook(folderIdOrUri, name) // creates a copy and leaves the source unchanged");
           },
         };
 

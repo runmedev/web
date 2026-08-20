@@ -172,6 +172,47 @@ function setChildrenForFolder(
   return changed ? next : nodes;
 }
 
+function upsertChildForFolder(
+  nodes: TreeNode[],
+  folderUri: string,
+  child: TreeNode,
+): TreeNode[] {
+  let changed = false;
+  const next = nodes.map((node) => {
+    if (node.uri === folderUri) {
+      const children = (node.children ?? []).filter(
+        (candidate) => candidate.type !== "placeholder" && candidate.uri !== child.uri,
+      );
+      changed = true;
+      return { ...node, children: [...children, child] };
+    }
+    if (node.children?.length) {
+      const updated = upsertChildForFolder(node.children, folderUri, child);
+      if (updated !== node.children) {
+        changed = true;
+        return { ...node, children: updated };
+      }
+    }
+    return node;
+  });
+  return changed ? next : nodes;
+}
+
+function mergeLoadedChildrenWithAdditions(
+  loadedChildren: TreeNode[],
+  addedChildren: TreeNode[],
+): TreeNode[] {
+  let merged = [...loadedChildren];
+  for (const child of addedChildren) {
+    merged = merged.filter(
+      (candidate) =>
+        candidate.type !== "placeholder" && candidate.uri !== child.uri,
+    );
+    merged.push(child);
+  }
+  return merged;
+}
+
 function updateNodeMetadata(
   nodes: TreeNode[],
   targetUri: string,
@@ -324,6 +365,41 @@ export function WorkspaceExplorer() {
   const currentDoc = getCurrentDoc();
   const { ensureAccessToken } = useGoogleAuth();
   const handledDocRef = useRef<string | null>(null);
+  const folderMutationVersionsRef = useRef(new Map<string, number>());
+  const folderAddedChildrenRef = useRef(
+    new Map<string, Map<string, { version: number; node: TreeNode }>>(),
+  );
+  const folderRemovedChildrenRef = useRef(
+    new Map<string, Map<string, number>>(),
+  );
+
+  const recordFolderChildAddition = useCallback(
+    (folderUri: string, child: TreeNode) => {
+      const versions = folderMutationVersionsRef.current;
+      const version = (versions.get(folderUri) ?? 0) + 1;
+      versions.set(folderUri, version);
+      const additions = folderAddedChildrenRef.current;
+      const children = additions.get(folderUri) ?? new Map();
+      children.set(child.uri, { version, node: child });
+      additions.set(folderUri, children);
+      folderRemovedChildrenRef.current.get(folderUri)?.delete(child.uri);
+    },
+    [],
+  );
+
+  const recordFolderChildRemoval = useCallback(
+    (folderUri: string, childUri: string) => {
+      const versions = folderMutationVersionsRef.current;
+      const version = (versions.get(folderUri) ?? 0) + 1;
+      versions.set(folderUri, version);
+      const removals = folderRemovedChildrenRef.current;
+      const children = removals.get(folderUri) ?? new Map<string, number>();
+      children.set(childUri, version);
+      removals.set(folderUri, children);
+      folderAddedChildrenRef.current.get(folderUri)?.delete(childUri);
+    },
+    [],
+  );
 
   const treeRef = useRef<TreeApi<TreeNode> | undefined>(undefined);
   const { ref: containerRef, width = 0, height = 0 } = useResizeObserver<HTMLDivElement>();
@@ -606,23 +682,40 @@ export function WorkspaceExplorer() {
     }
 
     const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ uri?: string }>).detail;
+      const detail = (
+        event as CustomEvent<{ uri?: string; parentUri?: string }>
+      ).detail;
       if (!detail?.uri) {
         return;
       }
+      const eventUri = detail.uri;
+      const parentUri = detail.parentUri;
 
       void (async () => {
         try {
-          const metadata = await store.getMetadata(detail.uri);
+          const metadata = await store.getMetadata(eventUri);
           if (!metadata) {
             return;
           }
-          setTreeNodes((prev) =>
-            updateNodeMetadata(prev, detail.uri, {
+          if (parentUri) {
+            recordFolderChildAddition(
+              parentUri,
+              createFileNode(metadata, { parentUri }),
+            );
+          }
+          setTreeNodes((prev) => {
+            const updated = updateNodeMetadata(prev, eventUri, {
               name: metadata.name,
               remoteUri: metadata.remoteUri,
-            }),
-          );
+            });
+            return parentUri
+              ? upsertChildForFolder(
+                  updated,
+                  parentUri,
+                  createFileNode(metadata, { parentUri }),
+                )
+              : updated;
+          });
           if (getOnboardingState().recentNotebook?.uri === metadata.uri) {
             updateOnboardingNotebookMetadata({
               uri: metadata.uri,
@@ -643,7 +736,7 @@ export function WorkspaceExplorer() {
         handler as EventListener,
       );
     };
-  }, [store]);
+  }, [recordFolderChildAddition, store]);
 
   const fetchChildren = useCallback(
     async (uri: string) => {
@@ -651,6 +744,9 @@ export function WorkspaceExplorer() {
       if (!targetStore) {
         return;
       }
+
+      const mutationVersion =
+        folderMutationVersionsRef.current.get(uri) ?? 0;
 
       setTreeNodes((prev) =>
         setChildrenForFolder(prev, uri, [
@@ -710,9 +806,34 @@ export function WorkspaceExplorer() {
             ? childNodes
             : [createPlaceholderNode(uri, "Folder is empty")];
 
-        setTreeNodes((prev) => setChildrenForFolder(prev, uri, nodes));
+        setTreeNodes((prev) =>
+          (folderMutationVersionsRef.current.get(uri) ?? 0) === mutationVersion
+            ? setChildrenForFolder(prev, uri, nodes)
+            : setChildrenForFolder(
+                prev,
+                uri,
+                mergeLoadedChildrenWithAdditions(
+                  nodes.filter((node) => {
+                    const removedAt = folderRemovedChildrenRef.current
+                      .get(uri)
+                      ?.get(node.uri);
+                    return removedAt === undefined || removedAt <= mutationVersion;
+                  }),
+                  Array.from(
+                    folderAddedChildrenRef.current.get(uri)?.values() ?? [],
+                  )
+                    .filter((addition) => addition.version > mutationVersion)
+                    .map((addition) => addition.node),
+                ),
+              ),
+        );
       } catch (error) {
         console.error("Failed to list notebook store items", error);
+        if (
+          (folderMutationVersionsRef.current.get(uri) ?? 0) !== mutationVersion
+        ) {
+          return;
+        }
         setTreeNodes((prev) =>
           setChildrenForFolder(prev, uri, [
             createPlaceholderNode(uri, "Unable to load items"),
@@ -1110,6 +1231,13 @@ function formatShortTimestamp(date: Date): string {
       try {
         for (const node of movableNodes) {
           await store.move(node.data.uri, destinationUri);
+          if (node.data.parentUri) {
+            recordFolderChildRemoval(node.data.parentUri, node.data.uri);
+          }
+          recordFolderChildAddition(destinationUri, {
+            ...node.data,
+            parentUri: destinationUri,
+          });
         }
         treeRef.current?.open(destinationUri);
         setErrorMessage(null);
@@ -1143,7 +1271,12 @@ function formatShortTimestamp(date: Date): string {
         );
       }
     },
-    [fetchChildren, store],
+    [
+      fetchChildren,
+      recordFolderChildAddition,
+      recordFolderChildRemoval,
+      store,
+    ],
   );
 
   const handleOpenLocalFolder = useCallback(async () => {
@@ -1256,6 +1389,9 @@ function formatShortTimestamp(date: Date): string {
 
       try {
         await store.moveToTrash(menu.uri);
+        if (menu.parentUri) {
+          recordFolderChildRemoval(menu.parentUri, menu.uri);
+        }
         if (currentDoc === menu.uri) {
           setCurrentDoc(null);
         }
@@ -1286,7 +1422,14 @@ function formatShortTimestamp(date: Date): string {
         });
       }
     },
-    [currentDoc, fetchChildren, removeItem, setCurrentDoc, store],
+    [
+      currentDoc,
+      fetchChildren,
+      recordFolderChildRemoval,
+      removeItem,
+      setCurrentDoc,
+      store,
+    ],
   );
 
   if (!store) {
