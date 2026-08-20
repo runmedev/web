@@ -3,6 +3,7 @@ import md5 from 'md5'
 
 import { RunmeMetadataKey, parser_pb } from '../../runme/client'
 import { isHtmlLanguageId } from '../cellContent'
+import { isLinkedResourceLanguageId } from '../linkedResource'
 
 type CellRunnerLike = {
   run: () => void | Promise<void>
@@ -15,7 +16,10 @@ function isRunnableNotebookCodeCell(
   if (!cell || cell.kind !== parser_pb.CellKind.CODE) {
     return false
   }
-  return !isHtmlLanguageId(cell.languageId)
+  return (
+    !isHtmlLanguageId(cell.languageId) &&
+    !isLinkedResourceLanguageId(cell.languageId)
+  )
 }
 
 export type NotebookDataLike = {

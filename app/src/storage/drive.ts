@@ -3,6 +3,10 @@ import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
 import { getGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
 import { IPYNB_MIME_TYPE } from '../lib/ipynb'
 import {
+  LinkedResourceError,
+  canonicalGoogleDriveFileUrl,
+} from '../lib/linkedResource'
+import {
   createInitialNotebookFile,
   detectNotebookFileFormat,
 } from '../lib/notebookFormat'
@@ -62,6 +66,140 @@ export type DriveSearchResult = {
   files: DriveSearchFile[]
   nextPageToken?: string
   incompleteSearch?: boolean
+}
+
+export type BinaryBody = Blob | ArrayBuffer | Uint8Array
+
+export type DriveResourceMetadata = {
+  uri: string
+  name: string
+  mimeType: string
+  sizeBytes?: number
+  modifiedTime?: string
+  md5Checksum?: string
+  headRevisionId?: string
+  canDownload: boolean
+  webContentLink?: string
+  appProperties?: Record<string, string>
+  parents?: string[]
+}
+
+export type DriveResourceUploadOptions = {
+  mimeType: string
+  operationId: string
+  appProperties?: Record<string, string>
+  onProgress?: (uploadedBytes: number, totalBytes: number) => void
+  signal?: AbortSignal
+}
+
+export type DriveResourceFetchOptions = {
+  signal?: AbortSignal
+}
+
+const DRIVE_RESOURCE_FIELDS =
+  'id,name,mimeType,size,modifiedTime,md5Checksum,headRevisionId,capabilities(canDownload),webContentLink,appProperties,parents'
+const DRIVE_ASSET_FOLDER_PROPERTY = 'runmeAssetFolder'
+const DRIVE_ASSET_NOTEBOOK_PROPERTY = 'runmeNotebookFileId'
+const DRIVE_ASSET_PROPERTY = 'runmeAsset'
+const DRIVE_UPLOAD_OPERATION_PROPERTY = 'runmeUploadOperationId'
+export const DRIVE_RESUMABLE_CHUNK_BYTES = 8 * 1024 * 1024
+
+function driveApiBaseUrl(): string {
+  return getGoogleDriveBaseUrl() || 'https://www.googleapis.com'
+}
+
+function driveApiUrl(path: string, params?: Record<string, string>): string {
+  const url = new URL(path.replace(/^\//, ''), `${driveApiBaseUrl()}/`)
+  for (const [key, value] of Object.entries(params ?? {})) {
+    url.searchParams.set(key, value)
+  }
+  return url.toString()
+}
+
+function binaryBodyAsBlob(body: BinaryBody, mimeType: string): Blob {
+  if (body instanceof Blob) {
+    return body.type === mimeType ? body : body.slice(0, body.size, mimeType)
+  }
+  return new Blob([body], { type: mimeType })
+}
+
+function parseDriveSize(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+    return value
+  }
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    const parsed = Number(value)
+    return Number.isSafeInteger(parsed) ? parsed : undefined
+  }
+  return undefined
+}
+
+function normalizeDriveResourceMetadata(
+  value: Record<string, unknown>,
+  fallbackId?: string
+): DriveResourceMetadata {
+  const id = optionalString(value.id) ?? fallbackId
+  if (!id) {
+    throw new LinkedResourceError(
+      'PROVIDER_UNAVAILABLE',
+      'Google Drive did not return a file identifier'
+    )
+  }
+  const capabilities =
+    value.capabilities && typeof value.capabilities === 'object'
+      ? (value.capabilities as Record<string, unknown>)
+      : {}
+  const appProperties =
+    value.appProperties && typeof value.appProperties === 'object'
+      ? Object.fromEntries(
+          Object.entries(value.appProperties as Record<string, unknown>).filter(
+            (entry): entry is [string, string] => typeof entry[1] === 'string'
+          )
+        )
+      : undefined
+  const parents = Array.isArray(value.parents)
+    ? value.parents.filter(
+        (parent): parent is string => typeof parent === 'string'
+      )
+    : undefined
+  return {
+    uri: canonicalGoogleDriveFileUrl(id),
+    name: optionalString(value.name) ?? id,
+    mimeType: optionalString(value.mimeType) ?? 'application/octet-stream',
+    sizeBytes: parseDriveSize(value.size),
+    modifiedTime: optionalString(value.modifiedTime),
+    md5Checksum: optionalString(value.md5Checksum),
+    headRevisionId: optionalString(value.headRevisionId),
+    canDownload: capabilities.canDownload === true,
+    webContentLink: optionalString(value.webContentLink),
+    appProperties,
+    parents,
+  }
+}
+
+async function driveErrorFromResponse(
+  response: Response,
+  operation: 'download' | 'upload' | 'metadata'
+): Promise<LinkedResourceError> {
+  if (response.status === 401) {
+    return new LinkedResourceError(
+      'AUTH_REQUIRED',
+      'Google Drive authorization is required'
+    )
+  }
+  if (response.status === 403) {
+    return new LinkedResourceError(
+      operation === 'download' ? 'DOWNLOAD_RESTRICTED' : 'ACCESS_DENIED',
+      `Google Drive denied ${operation} access`
+    )
+  }
+  if (response.status === 404) {
+    return new LinkedResourceError('NOT_FOUND', 'Google Drive file not found')
+  }
+  return new LinkedResourceError(
+    'PROVIDER_UNAVAILABLE',
+    `Google Drive ${operation} failed (${response.status})`
+  )
 }
 
 type Drive = {
@@ -1438,13 +1576,382 @@ function escapeDriveQueryValue(value: string): string {
 
 export class DriveNotebookStore {
   // ensureAccessToken is injected because it comes from the GoogleAuthContext
-  constructor(private readonly ensureAccessToken: () => Promise<string>) {}
+  constructor(
+    private readonly ensureAccessToken: (options?: {
+      interactive?: boolean
+      forceRefresh?: boolean
+    }) => Promise<string>
+  ) {}
 
   private readonly lastReadVersion = new Map<string, string>()
 
+  getAccessToken(options?: {
+    interactive?: boolean
+    forceRefresh?: boolean
+  }): Promise<string> {
+    return this.ensureAccessToken(options)
+  }
+
   private async getFilesClient(): Promise<DriveFilesClient> {
-    const token = await this.ensureAccessToken()
+    const token = await this.ensureAccessToken({ interactive: false })
     return ensureDriveFilesClient(token)
+  }
+
+  private async getResourceAccessToken(forceRefresh = false): Promise<string> {
+    try {
+      return await this.ensureAccessToken({ interactive: false, forceRefresh })
+    } catch (error) {
+      throw new LinkedResourceError(
+        'AUTH_REQUIRED',
+        'Sign in to Google Drive to load this resource',
+        { cause: error }
+      )
+    }
+  }
+
+  private async resourceFetch(
+    input: string,
+    init: RequestInit = {}
+  ): Promise<Response> {
+    const configuredOrigin = new URL(driveApiBaseUrl()).origin
+    let requestOrigin: string
+    try {
+      requestOrigin = new URL(input).origin
+    } catch (error) {
+      throw new LinkedResourceError(
+        'PROVIDER_UNAVAILABLE',
+        'Google Drive request URL is invalid',
+        { cause: error }
+      )
+    }
+    if (requestOrigin !== configuredOrigin) {
+      throw new LinkedResourceError(
+        'PROVIDER_UNAVAILABLE',
+        'Google Drive refused to send credentials to an unexpected origin'
+      )
+    }
+    const request = async (forceRefresh: boolean) => {
+      const token = await this.getResourceAccessToken(forceRefresh)
+      return fetch(input, {
+        ...init,
+        headers: {
+          ...Object.fromEntries(new Headers(init.headers).entries()),
+          Authorization: `Bearer ${token}`,
+        },
+      })
+    }
+    let response = await request(false)
+    if (response.status === 401 && !init.signal?.aborted) {
+      response = await request(true)
+    }
+    return response
+  }
+
+  async getPrincipal(): Promise<{ permissionId: string }> {
+    const response = await this.resourceFetch(
+      driveApiUrl('/drive/v3/about', { fields: 'user(permissionId)' }),
+      {}
+    )
+    if (!response.ok) {
+      throw await driveErrorFromResponse(response, 'metadata')
+    }
+    const body = (await response.json()) as {
+      user?: { permissionId?: unknown }
+    }
+    const permissionId = optionalString(body.user?.permissionId)
+    if (!permissionId) {
+      throw new LinkedResourceError(
+        'PROVIDER_UNAVAILABLE',
+        'Google Drive did not return a principal identifier'
+      )
+    }
+    return { permissionId }
+  }
+
+  async getResourceMetadata(uri: string): Promise<DriveResourceMetadata> {
+    const { id, type } = parseDriveItem(uri)
+    if (type !== NotebookStoreItemType.File) {
+      throw new LinkedResourceError(
+        'UNSUPPORTED_MEDIA_TYPE',
+        'Linked Google Drive resources must reference a file'
+      )
+    }
+    const response = await this.resourceFetch(
+      driveApiUrl(`/drive/v3/files/${encodeURIComponent(id)}`, {
+        supportsAllDrives: 'true',
+        fields: DRIVE_RESOURCE_FIELDS,
+      }),
+      {}
+    )
+    if (!response.ok) {
+      throw await driveErrorFromResponse(response, 'metadata')
+    }
+    return normalizeDriveResourceMetadata(
+      (await response.json()) as Record<string, unknown>,
+      id
+    )
+  }
+
+  async fetchResource(
+    uri: string,
+    options: DriveResourceFetchOptions = {}
+  ): Promise<Response> {
+    const { id, type } = parseDriveItem(uri)
+    if (type !== NotebookStoreItemType.File) {
+      throw new LinkedResourceError(
+        'UNSUPPORTED_MEDIA_TYPE',
+        'Linked Google Drive resources must reference a file'
+      )
+    }
+    const response = await this.resourceFetch(
+      driveApiUrl(`/drive/v3/files/${encodeURIComponent(id)}`, {
+        supportsAllDrives: 'true',
+        alt: 'media',
+      }),
+      { signal: options.signal }
+    )
+    if (!response.ok) {
+      throw await driveErrorFromResponse(response, 'download')
+    }
+    return response
+  }
+
+  fetch(
+    uri: string,
+    options: DriveResourceFetchOptions = {}
+  ): Promise<Response> {
+    return this.fetchResource(uri, options)
+  }
+
+  private async findResourceByUploadOperation(
+    parentUri: string,
+    operationId: string
+  ): Promise<DriveResourceMetadata | null> {
+    const { id: parentId, type } = parseDriveItem(parentUri)
+    if (type !== NotebookStoreItemType.Folder) {
+      throw new Error('Drive resource upload requires a folder URI')
+    }
+    const result = await this.search({
+      q:
+        `'${escapeDriveQueryValue(parentId)}' in parents and trashed = false and ` +
+        `appProperties has { key='${DRIVE_UPLOAD_OPERATION_PROPERTY}' and ` +
+        `value='${escapeDriveQueryValue(operationId)}' }`,
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      orderBy: 'createdTime asc',
+      pageSize: 2,
+      fields: `files(${DRIVE_RESOURCE_FIELDS})`,
+    })
+    if (result.files.length > 1) {
+      throw new LinkedResourceError(
+        'RESOURCE_CHANGED',
+        `Multiple Drive files use upload operation ${operationId}`
+      )
+    }
+    const file = result.files[0]
+    return file
+      ? normalizeDriveResourceMetadata(file as Record<string, unknown>)
+      : null
+  }
+
+  async uploadResource(
+    parentUri: string,
+    name: string,
+    body: BinaryBody,
+    options: DriveResourceUploadOptions
+  ): Promise<DriveResourceMetadata> {
+    const { id: parentId, type } = parseDriveItem(parentUri)
+    if (type !== NotebookStoreItemType.Folder) {
+      throw new Error('Drive resource upload requires a folder URI')
+    }
+    const normalizedName = name.trim()
+    const normalizedOperationId = options.operationId.trim()
+    if (!normalizedName || !normalizedOperationId) {
+      throw new Error('Drive resource upload requires a name and operation ID')
+    }
+    const existing = await this.findResourceByUploadOperation(
+      parentUri,
+      normalizedOperationId
+    )
+    if (existing) {
+      options.onProgress?.(existing.sizeBytes ?? 0, existing.sizeBytes ?? 0)
+      return existing
+    }
+
+    const blob = binaryBodyAsBlob(
+      body,
+      options.mimeType || 'application/octet-stream'
+    )
+    const metadata = {
+      name: normalizedName,
+      mimeType: blob.type || 'application/octet-stream',
+      parents: [parentId],
+      appProperties: {
+        ...options.appProperties,
+        [DRIVE_ASSET_PROPERTY]: 'true',
+        [DRIVE_UPLOAD_OPERATION_PROPERTY]: normalizedOperationId,
+      },
+    }
+
+    let initiation: Response
+    try {
+      initiation = await this.resourceFetch(
+        driveApiUrl('/upload/drive/v3/files', {
+          uploadType: 'resumable',
+          supportsAllDrives: 'true',
+          fields: DRIVE_RESOURCE_FIELDS,
+        }),
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json; charset=UTF-8',
+            'X-Upload-Content-Type': blob.type || 'application/octet-stream',
+            'X-Upload-Content-Length': String(blob.size),
+          },
+          body: JSON.stringify(metadata),
+          signal: options.signal,
+        }
+      )
+    } catch (error) {
+      if (options.signal?.aborted) {
+        throw new LinkedResourceError(
+          'UPLOAD_INTERRUPTED',
+          'Upload cancelled',
+          {
+            cause: error,
+          }
+        )
+      }
+      const recovered = await this.findResourceByUploadOperation(
+        parentUri,
+        normalizedOperationId
+      ).catch(() => null)
+      if (recovered) {
+        return recovered
+      }
+      throw new LinkedResourceError(
+        'UPLOAD_INTERRUPTED',
+        'Google Drive upload could not be started',
+        { cause: error }
+      )
+    }
+    if (!initiation.ok) {
+      throw await driveErrorFromResponse(initiation, 'upload')
+    }
+    const location = initiation.headers.get('Location')
+    if (!location) {
+      throw new LinkedResourceError(
+        'PROVIDER_UNAVAILABLE',
+        'Google Drive did not return a resumable upload URL'
+      )
+    }
+
+    let uploadedBytes = 0
+    let finalMetadata: DriveResourceMetadata | null = null
+    do {
+      const endExclusive = Math.min(
+        blob.size,
+        uploadedBytes + DRIVE_RESUMABLE_CHUNK_BYTES
+      )
+      const chunk = blob.slice(uploadedBytes, endExclusive, blob.type)
+      const contentRange =
+        blob.size === 0
+          ? 'bytes */0'
+          : `bytes ${uploadedBytes}-${endExclusive - 1}/${blob.size}`
+      let response: Response
+      try {
+        response = await this.resourceFetch(location, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': blob.type || 'application/octet-stream',
+            'Content-Length': String(chunk.size),
+            'Content-Range': contentRange,
+          },
+          body: chunk,
+          signal: options.signal,
+        })
+      } catch (error) {
+        throw new LinkedResourceError(
+          'UPLOAD_INTERRUPTED',
+          options.signal?.aborted
+            ? 'Upload cancelled'
+            : 'Google Drive upload was interrupted',
+          { cause: error }
+        )
+      }
+      if (response.status === 308) {
+        uploadedBytes = endExclusive
+        options.onProgress?.(uploadedBytes, blob.size)
+        continue
+      }
+      if (!response.ok) {
+        throw await driveErrorFromResponse(response, 'upload')
+      }
+      uploadedBytes = blob.size
+      options.onProgress?.(uploadedBytes, blob.size)
+      finalMetadata = normalizeDriveResourceMetadata(
+        (await response.json()) as Record<string, unknown>
+      )
+    } while (!finalMetadata)
+
+    return finalMetadata
+  }
+
+  async resolveAssetFolder(
+    notebookUri: string,
+    notebookName: string
+  ): Promise<string> {
+    const notebook = await this.getResourceMetadata(notebookUri)
+    const notebookFileId = parseDriveItem(notebook.uri).id
+    const parentId = notebook.parents?.[0]
+    if (!parentId) {
+      throw new LinkedResourceError(
+        'ACCESS_DENIED',
+        'The notebook does not have a Drive parent folder'
+      )
+    }
+    const query =
+      `'${escapeDriveQueryValue(parentId)}' in parents and trashed = false and ` +
+      `mimeType = '${DRIVE_FOLDER_MIME_TYPE}' and ` +
+      `appProperties has { key='${DRIVE_ASSET_FOLDER_PROPERTY}' and value='true' } and ` +
+      `appProperties has { key='${DRIVE_ASSET_NOTEBOOK_PROPERTY}' and ` +
+      `value='${escapeDriveQueryValue(notebookFileId)}' }`
+    const result = await this.search({
+      q: query,
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      orderBy: 'createdTime asc',
+      pageSize: 2,
+      fields: 'files(id,name,mimeType,parents,appProperties)',
+    })
+    if (result.files.length > 1) {
+      throw new LinkedResourceError(
+        'RESOURCE_CHANGED',
+        'Multiple asset folders exist for this notebook'
+      )
+    }
+    const existingId = result.files[0]?.id
+    if (existingId) {
+      return driveFolderUrl(existingId)
+    }
+
+    const client = await this.getFilesClient()
+    const folder = await client.create({
+      name: `${notebookName}.assets`,
+      mimeType: DRIVE_FOLDER_MIME_TYPE,
+      parents: [parentId],
+      appProperties: {
+        [DRIVE_ASSET_FOLDER_PROPERTY]: 'true',
+        [DRIVE_ASSET_NOTEBOOK_PROPERTY]: notebookFileId,
+      },
+    })
+    if (!folder.id) {
+      throw new LinkedResourceError(
+        'PROVIDER_UNAVAILABLE',
+        'Google Drive did not create the asset folder'
+      )
+    }
+    return driveFolderUrl(folder.id)
   }
 
   /** Reserve a Drive file id so retries can target one stable identity. */
@@ -1460,7 +1967,9 @@ export class DriveNotebookStore {
         'DriveNotebookStore.canUsePreGeneratedFileId expects a folder URI'
       )
     }
-    const response = await (await this.getFilesClient()).get({
+    const response = await (
+      await this.getFilesClient()
+    ).get({
       fileId: id,
       supportsAllDrives: true,
       fields: 'driveId',

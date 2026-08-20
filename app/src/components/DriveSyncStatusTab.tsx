@@ -6,6 +6,7 @@ import { useGoogleAuth } from '../contexts/GoogleAuthContext'
 import { useNotebookContext } from '../contexts/NotebookContext'
 import { useNotebookStore } from '../contexts/NotebookStoreContext'
 import { useWorkspaceDocumentContext } from '../contexts/WorkspaceDocumentContext'
+import { getLinkedResourceCache } from '../lib/linkedResourceCache'
 import type {
   NotebookSyncStatus,
   NotebookSyncStatusRow,
@@ -83,6 +84,20 @@ const columnDescriptions: Record<SortKey, string> = {
 
 const refreshDescription =
   'Reloads the status table from local notebook sync metadata. It does not sync files.'
+
+function formatFreedBytes(value: number): string {
+  if (value < 1024) {
+    return `${value} B`
+  }
+  const units = ['KiB', 'MiB', 'GiB', 'TiB']
+  let amount = value / 1024
+  let unit = 0
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024
+    unit += 1
+  }
+  return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unit]}`
+}
 
 function isAutoSyncable(status: NotebookSyncStatus): boolean {
   return (
@@ -358,6 +373,8 @@ export function DriveSyncStatusTab() {
   const [rows, setRows] = useState<NotebookSyncStatusRow[]>([])
   const [loading, setLoading] = useState(false)
   const [syncingAll, setSyncingAll] = useState(false)
+  const [clearingMedia, setClearingMedia] = useState(false)
+  const [cacheMessage, setCacheMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [filters, setFilters] = useState<Filters>(emptyFilters)
   const [selectedSyncStatuses, setSelectedSyncStatuses] = useState<
@@ -482,6 +499,21 @@ export function DriveSyncStatusTab() {
     }
   }, [ensureAccessToken, refresh, rowsRequiringSync, store])
 
+  const handleClearDownloadedMedia = useCallback(async () => {
+    setClearingMedia(true)
+    setCacheMessage(null)
+    try {
+      const freedBytes = await getLinkedResourceCache().clear()
+      setCacheMessage(
+        `Cleared ${formatFreedBytes(freedBytes)} of downloaded media.`
+      )
+    } catch (clearError) {
+      setError(String(clearError))
+    } finally {
+      setClearingMedia(false)
+    }
+  }, [])
+
   const handleToggleSyncStatusFilter = useCallback(
     (status: NotebookSyncStatus) => {
       setSelectedSyncStatuses((current) =>
@@ -550,6 +582,15 @@ export function DriveSyncStatusTab() {
             </span>
             <Button
               type="button"
+              variant="soft"
+              onClick={() => void handleClearDownloadedMedia()}
+              disabled={clearingMedia}
+              title="Deletes downloaded linked-resource media from this browser. Drive files and notebook links are kept."
+            >
+              {clearingMedia ? 'Clearing media...' : 'Clear downloaded media'}
+            </Button>
+            <Button
+              type="button"
               onClick={() => void handleSyncAll()}
               disabled={!store || rowsRequiringSync.length === 0 || syncingAll}
             >
@@ -567,6 +608,17 @@ export function DriveSyncStatusTab() {
           >
             {error}
           </pre>
+        ) : null}
+
+        {cacheMessage ? (
+          <Text
+            size="2"
+            as="p"
+            className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-emerald-900"
+            data-testid="linked-resource-cache-message"
+          >
+            {cacheMessage}
+          </Text>
         ) : null}
 
         {!store ? (

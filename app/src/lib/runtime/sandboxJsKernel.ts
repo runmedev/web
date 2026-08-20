@@ -110,6 +110,7 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'comments.resolve',
   'comments.reopen',
   ...SANDBOX_NOTEBOOKS_API_METHODS,
+  'notebooks.attach',
 ]
 
 const LOW_LEVEL_SANDBOX_ALLOWED_METHODS = [
@@ -358,6 +359,7 @@ export function buildSandboxSrcDoc(options: {
           createLocal: (name, options) => callHost("notebooks.createLocal", [name, options]),
           appendCell: (args) => callHost("notebooks.appendCell", [args]),
           embed: (source, options) => callHost("notebooks.embed", [source, options]),
+          attach: (source, options) => callHost("notebooks.attach", [source, options]),
           resolve: (reference) => callHost("notebooks.resolve", [reference]),
           show: (reference) => callHost("notebooks.show", [reference]),
           shareUrl: (reference) => callHost("notebooks.shareUrl", [reference]),
@@ -489,6 +491,7 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebooks.createLocal(name, options?)");
           consoleProxy.log("- notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? })");
           consoleProxy.log("- notebooks.embed(source, { target?, alt?, name? })");
+          consoleProxy.log("- notebooks.attach(source, { target: { uri }, folderUri?, mode?, title?, altText?, expectedRevision?, operationId? })");
           consoleProxy.log("- notebooks.resolve([reference])");
           consoleProxy.log("- notebooks.show([reference])");
           consoleProxy.log("- notebooks.shareUrl([reference])");

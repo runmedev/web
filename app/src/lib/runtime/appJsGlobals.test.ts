@@ -250,6 +250,44 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     )
   })
 
+  it('attaches linked resources through the shared notebooks API', async () => {
+    const notebook = new FakeNotebookData(
+      'local://file/current',
+      'Current.json'
+    )
+    const sendOutput = vi.fn()
+    const globals = createAppJsGlobals({
+      runme: createRunme(notebook),
+      resolveNotebook: () => notebook,
+      sendOutput,
+    })
+
+    const result = await globals.notebooks.attach(
+      { kind: 'url', uri: 'https://example.com/demo.webm' },
+      {
+        target: { uri: notebook.getUri() },
+        mode: 'video',
+        title: 'Demo video',
+      }
+    )
+
+    expect(result.cell.languageId).toBe('runme-resource')
+    expect(result.resource).toMatchObject({
+      source: {
+        provider: 'https',
+        uri: 'https://example.com/demo.webm',
+      },
+      presentation: { mode: 'video', title: 'Demo video' },
+    })
+    expect(notebook.getNotebook().cells).toHaveLength(1)
+    await expect(globals.notebooks.help('attach')).resolves.toContain(
+      'notebooks.attach'
+    )
+    expect(sendOutput).toHaveBeenCalledWith(
+      'Attached resource https://example.com/demo.webm.\r\n'
+    )
+  })
+
   it('exposes notebook write access requests through the App Console globals', async () => {
     const notebook = new FakeNotebookData(
       'local://file/current',
@@ -754,6 +792,7 @@ describe('createAppJsGlobals notebook reference helpers', () => {
 
   it('loads Google service account credentials from a picked local JSON file', async () => {
     const sendOutput = vi.fn()
+    const ensureAccessToken = vi.fn(async () => 'service-account-token')
     const serviceAccountJson = JSON.stringify({
       type: 'service_account',
       client_email: 'runme-drive-test@example.iam.gserviceaccount.com',
@@ -774,6 +813,7 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     const globals = createAppJsGlobals({
       runme: createRunme(),
       sendOutput,
+      ensureAccessToken,
     })
 
     const config = await globals.credentials.google.setServiceAccountFromFile()
@@ -790,6 +830,10 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     })
     expect(globals.googleClientManager.get()).toMatchObject({
       authFlow: 'service_account',
+    })
+    expect(ensureAccessToken).toHaveBeenCalledWith({
+      interactive: false,
+      forceRefresh: true,
     })
     expect(sendOutput).toHaveBeenCalledWith(
       'Loaded Google Drive service account credentials from service-account.json.\r\n'
@@ -847,7 +891,10 @@ describe('createAppJsGlobals notebook reference helpers', () => {
       },
     })
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(ensureAccessToken).toHaveBeenCalledWith({ interactive: false })
+    expect(ensureAccessToken).toHaveBeenCalledWith({
+      interactive: false,
+      forceRefresh: true,
+    })
     expect(sendOutput).toHaveBeenCalledWith(
       `Loaded Google Drive service account credentials from ${keyPath}.\r\n`
     )

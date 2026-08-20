@@ -327,7 +327,7 @@ Continue only when the returned document has \`summary.readOnly === false\`. The
 
 ## Respect the sandbox execution boundary
 
-The WebMCP \`ExecuteCode\` sandbox can inspect notebook state, resolve and show references, and use supported collaboration helpers. It cannot call:
+The WebMCP \`ExecuteCode\` sandbox can inspect notebook state, resolve and show references, and use supported collaboration helpers. The narrow \`notebooks.attach(...)\` exception may attach an existing Google Drive file or HTTPS URL to an explicitly targeted notebook; WebMCP callers cannot send browser \`File\` or \`Blob\` values through it. The sandbox cannot call these other notebook mutation or execution methods:
 
 - \`notebooks.update\`
 - \`notebooks.execute\`
@@ -341,6 +341,6 @@ The WebMCP \`ExecuteCode\` sandbox can inspect notebook state, resolve and show 
 - \`drive.create\`, \`drive.createNotebook\`, \`drive.update\`, and \`drive.saveAsCurrentNotebook\`
 - \`notebookDiff.restoreDeletedCell\` and \`notebookDiff.restoreAllDeletedCells\`
 
-These methods fail with \`Sandbox method not allowed\` before the host bridge is invoked. Do not retry them or use another sandbox helper as an execution deputy. The narrow \`createDriveNotebook\` WebMCP tool is the supported exception for creating a complete new Drive-backed notebook. Use a trusted browser AppKernel cell or the normal Runme UI for other intentional notebook mutation or execution.
+These methods fail with \`Sandbox method not allowed\` before the host bridge is invoked. Do not retry them or use another sandbox helper as an execution deputy. The narrow \`createDriveNotebook\` WebMCP tool is the supported exception for creating a complete new Drive-backed notebook, and \`notebooks.attach(...)\` is the supported exception for attaching an existing Drive or HTTPS resource. Use a trusted browser AppKernel cell or the normal Runme UI for other intentional notebook mutation or execution.
 `
 }

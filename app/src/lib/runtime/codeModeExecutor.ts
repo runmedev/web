@@ -580,6 +580,9 @@ async function handleSandboxAppKernelBridgeCall({
       if (method === 'notebooks.embed') {
         return (globals.notebooks as any).embed(args[0], args[1])
       }
+      if (method === 'notebooks.attach') {
+        return (globals.notebooks as any).attach(args[0], args[1])
+      }
       if (method.startsWith('notebooks.')) {
         return notebooksApiBridgeServer.handleMessage({
           method,

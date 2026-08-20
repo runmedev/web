@@ -205,9 +205,7 @@ function NotebookStoreInitializer() {
 
     // Background Drive store operations should never force an OAuth redirect.
     // Interactive login is handled explicitly via UI actions (picker/status tab).
-    const driveStore = new DriveNotebookStore(() =>
-      ensureAccessToken({ interactive: false })
-    )
+    const driveStore = new DriveNotebookStore(ensureAccessToken)
     const localStore = new LocalNotebooks(driveStore)
     const localComments = new LocalComments(driveStore)
     localStore.setFilesystemStore(fsInstanceRef.current)

@@ -117,6 +117,27 @@ const imageEmbeddingMocks = vi.hoisted(() => ({
   ),
 }))
 
+const linkedResourceMocks = vi.hoisted(() => ({
+  attachResourceToNotebook: vi.fn(async () => ({
+    uri: 'local://file/images.json',
+    cell: { refId: 'resource-cell' },
+    resource: {
+      source: {
+        provider: 'google-drive',
+        uri: 'https://drive.google.com/file/d/resource-file/view',
+      },
+    },
+  })),
+  pickResourceFromLocalFilesystem: vi.fn(
+    async (): Promise<File | null> => null
+  ),
+  pickDriveFile: vi.fn(async () => null),
+  pickDriveFolder: vi.fn(async () => ({
+    uri: 'https://drive.google.com/drive/folders/assets-folder',
+    name: 'Assets',
+  })),
+}))
+
 const runnerContextMocks = vi.hoisted(() => ({
   runners: [] as Array<{
     name: string
@@ -213,6 +234,19 @@ vi.mock('../../lib/toast', () => ({
 }))
 
 vi.mock('../../lib/imageEmbedding', () => imageEmbeddingMocks)
+
+vi.mock('../../lib/linkedResourceAttachments', () => ({
+  attachResourceToNotebook: linkedResourceMocks.attachResourceToNotebook,
+  pickResourceFromLocalFilesystem:
+    linkedResourceMocks.pickResourceFromLocalFilesystem,
+}))
+
+vi.mock('../Workspace/useDriveResourcePicker', () => ({
+  useDriveResourcePicker: () => ({
+    pickDriveFile: linkedResourceMocks.pickDriveFile,
+    pickDriveFolder: linkedResourceMocks.pickDriveFolder,
+  }),
+}))
 
 vi.mock('../../lib/runtime/jupyterManager', () => ({
   DEFAULT_JUPYTER_KERNEL_ARGV: [
@@ -388,6 +422,16 @@ beforeEach(() => {
   imageEmbeddingMocks.pickImageFromLocalFilesystem.mockReset()
   imageEmbeddingMocks.pickImageFromLocalFilesystem.mockResolvedValue(null)
   imageEmbeddingMocks.isSupportedImageFile.mockClear()
+  linkedResourceMocks.attachResourceToNotebook.mockClear()
+  linkedResourceMocks.pickResourceFromLocalFilesystem.mockReset()
+  linkedResourceMocks.pickResourceFromLocalFilesystem.mockResolvedValue(null)
+  linkedResourceMocks.pickDriveFile.mockReset()
+  linkedResourceMocks.pickDriveFile.mockResolvedValue(null)
+  linkedResourceMocks.pickDriveFolder.mockReset()
+  linkedResourceMocks.pickDriveFolder.mockResolvedValue({
+    uri: 'https://drive.google.com/drive/folders/assets-folder',
+    name: 'Assets',
+  })
   runnerContextMocks.runners = []
   runnerContextMocks.defaultRunnerName = '<default>'
 })
@@ -429,7 +473,7 @@ describe('Actions tabs', () => {
     })
   })
 
-  it('embeds dropped image files and shows the drop target', async () => {
+  it('attaches dropped image files and shows the drop target', async () => {
     const uri = 'local://file/images.json'
     const notebookData = {
       getCell: vi.fn(),
@@ -457,21 +501,25 @@ describe('Actions tabs', () => {
     render(<Actions />)
     const notebookContent = screen.getByTestId('notebook-content')
     fireEvent.dragOver(notebookContent, { dataTransfer })
-    expect(screen.getByTestId('image-drop-target')).toBeTruthy()
+    expect(screen.getByTestId('resource-drop-target')).toBeTruthy()
     expect(dataTransfer.dropEffect).toBe('copy')
 
     fireEvent.drop(notebookContent, { dataTransfer })
 
     await waitFor(() => {
-      expect(imageEmbeddingMocks.embedImageInNotebook).toHaveBeenCalledWith(
+      expect(linkedResourceMocks.attachResourceToNotebook).toHaveBeenCalledWith(
         notebookData,
-        file
+        { kind: 'file', value: file, name: 'diagram.png' },
+        expect.objectContaining({
+          target: { uri },
+          folderUri: 'https://drive.google.com/drive/folders/assets-folder',
+        })
       )
     })
-    expect(screen.queryByTestId('image-drop-target')).toBeNull()
+    expect(screen.queryByTestId('resource-drop-target')).toBeNull()
   })
 
-  it('prevents browser navigation for unsupported file drags and drops', () => {
+  it('prevents browser navigation and attaches non-image file drops', async () => {
     const uri = 'local://file/images.json'
     const notebookData = {
       getCell: vi.fn(),
@@ -504,18 +552,83 @@ describe('Actions tabs', () => {
     fireEvent(notebookContent, dragOverEvent)
 
     expect(dragOverEvent.defaultPrevented).toBe(true)
-    expect(screen.getByTestId('image-drop-target')).toBeTruthy()
+    expect(screen.getByTestId('resource-drop-target')).toBeTruthy()
 
     const dropEvent = createEvent.drop(notebookContent, { dataTransfer })
     fireEvent(notebookContent, dropEvent)
 
     expect(dropEvent.defaultPrevented).toBe(true)
-    expect(imageEmbeddingMocks.embedImageInNotebook).not.toHaveBeenCalled()
-    expect(toastMocks.showToast).toHaveBeenCalledWith({
-      message: 'Only supported image files can be embedded.',
-      tone: 'error',
+    await waitFor(() => {
+      expect(linkedResourceMocks.attachResourceToNotebook).toHaveBeenCalledWith(
+        notebookData,
+        { kind: 'file', value: file, name: 'notes.txt' },
+        expect.objectContaining({ target: { uri } })
+      )
     })
-    expect(screen.queryByTestId('image-drop-target')).toBeNull()
+    expect(screen.queryByTestId('resource-drop-target')).toBeNull()
+  })
+
+  it('offers to retry insertion without uploading the Drive file again', async () => {
+    const uri = 'local://file/retry-resource.json'
+    const notebookData = {
+      getCell: vi.fn(),
+      appendCell: vi.fn(),
+    }
+    const file = new File([new Uint8Array([1, 2, 3])], 'demo.webm', {
+      type: 'video/webm',
+    })
+    const uploadedUri = 'https://drive.google.com/file/d/uploaded-resource/view'
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'retry-resource.json', state: 'loaded' },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, { metadata: {}, cells: [] }),
+    })
+    contextMocks.getNotebookData.mockReturnValue(notebookData)
+    linkedResourceMocks.pickResourceFromLocalFilesystem.mockResolvedValue(file)
+    linkedResourceMocks.attachResourceToNotebook.mockRejectedValueOnce(
+      Object.assign(new Error('Notebook revision changed'), {
+        uploadedResource: {
+          uri: uploadedUri,
+          name: 'demo.webm',
+        },
+      })
+    )
+
+    render(<Actions />)
+    fireEvent.click(screen.getByLabelText('Attach file as first cell'))
+
+    const retry = await screen.findByRole('button', {
+      name: 'Retry insertion',
+    })
+    expect(
+      screen
+        .getByRole('link', { name: 'Open uploaded file' })
+        .getAttribute('href')
+    ).toBe(uploadedUri)
+
+    fireEvent.click(retry)
+
+    await waitFor(() => {
+      expect(
+        linkedResourceMocks.attachResourceToNotebook
+      ).toHaveBeenLastCalledWith(
+        notebookData,
+        { kind: 'drive', uri: uploadedUri },
+        {
+          target: { uri },
+          title: 'demo.webm',
+        }
+      )
+    })
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: 'Retry insertion' })
+      ).toBeNull()
+    })
   })
 
   it('scrolls to and highlights the selected notebook cell named by the URL fragment', async () => {

@@ -14,6 +14,7 @@ import {
 import { ClientMessages } from "@runmedev/renderers";
 
 import { MimeType, RunmeMetadataKey, parser_pb } from "../../runme/client";
+import { isLinkedResourceLanguageId } from "../../lib/linkedResource";
 import { CellData } from "../../lib/notebookData";
 
 export const fontSettings = {
@@ -60,7 +61,10 @@ function buildMessagingBridge(
         if (!Number.isFinite(cols) || !Number.isFinite(rows)) {
           return;
         }
-        if (winsizeRef.current.cols === cols && winsizeRef.current.rows === rows) {
+        if (
+          winsizeRef.current.cols === cols &&
+          winsizeRef.current.rows === rows
+        ) {
           return;
         }
         winsizeRef.current = { cols, rows };
@@ -72,7 +76,8 @@ function buildMessagingBridge(
       }
 
       if (msg.type === ClientMessages.terminalStdin) {
-        const input = typeof msg.output?.input === "string" ? msg.output.input : "";
+        const input =
+          typeof msg.output?.input === "string" ? msg.output.input : "";
         const req = create(ExecuteRequestSchema, {
           inputData: textEncoder.encode(input),
         });
@@ -99,7 +104,10 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const consoleRef = useRef<any>(null);
   const pendingWrites = useRef<Uint8Array[]>([]);
-  const winsizeRef = useRef<{ cols: number; rows: number }>({ cols: 0, rows: 0 });
+  const winsizeRef = useRef<{ cols: number; rows: number }>({
+    cols: 0,
+    rows: 0,
+  });
   const wroteInitialForRun = useRef<string | null>(null);
   const [stdinValue, setStdinValue] = useState("");
   const [showStdinHelp, setShowStdinHelp] = useState(false);
@@ -113,7 +121,11 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
   const runID = cellData.getRunID();
   const stream = cellData.getStreams() as any;
 
-  if (!cell || cell.kind !== parser_pb.CellKind.CODE) {
+  if (
+    !cell ||
+    cell.kind !== parser_pb.CellKind.CODE ||
+    isLinkedResourceLanguageId(cell.languageId)
+  ) {
     return null;
   }
 
@@ -130,7 +142,7 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
       consoleEl = document.createElement("console-view") as any;
 
       const messaging = buildMessagingBridge(cellData, winsizeRef);
-      // Bridge console-view <-> stream messages the same way RunmeConsole does.      
+      // Bridge console-view <-> stream messages the same way RunmeConsole does.
       // This is what allows us to run interactive shells e.g. by typing "bash" in a code cell.
       // because it wires up the stdin/stdout handling.
       consoleEl.context = messaging;
@@ -157,7 +169,7 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
       containerRef.current.innerHTML = "";
       containerRef.current.appendChild(consoleEl);
     }
-    
+
     // Write any recovered output into the terminal once it is ready.
     consoleEl.initialContent = "";
 
@@ -189,7 +201,6 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
         .catch(() => {});
     }
 
-
     const writeToTerminal = (data: Uint8Array) => {
       const term = (consoleRef.current as any)?.terminal;
       if (term?.write) {
@@ -220,7 +231,7 @@ const CellConsole = ({ cellData, onExitCode, onPid }: CellConsoleProps) => {
       });
       disposers.push(() => exitSub.unsubscribe());
     }
-    
+
     return () => {
       disposers.forEach((fn) => fn());
     };
