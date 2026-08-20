@@ -251,6 +251,41 @@ This is cooperative lock transfer, not lock stealing. The request can time out
 or lose a race to another session; in those cases the call returns or throws
 with the same ownership outcome surfaced by the **Request write access** UI.
 
+## Create a Drive-backed notebook
+
+When the user asks for a new notebook in Google Drive, create it directly in
+the requested Drive folder with the direct `createDriveNotebook` WebMCP tool:
+
+```json
+{
+  "folderIdOrUri": "<folder ID or URI>",
+  "fileName": "notebook.ipynb",
+  "idempotencyKey": "<stable token for this intended notebook>",
+  "cells": [
+    {
+      "kind": "markup",
+      "value": "# Notebook title",
+      "metadata": { "name": "title" }
+    }
+  ]
+}
+```
+
+Reuse the same `idempotencyKey` if the call must be retried; use a new key for
+a distinct notebook. The returned `localUri` is the editable mirror of the new Drive file. It is not
+a separate standalone notebook. The direct tool accepts the complete initial
+cell list. Use `ExecuteCode` with `notebooks.get({ uri: localUri })` to verify
+the result; later cell mutation remains outside the `ExecuteCode` sandbox.
+Same-profile retries reuse a durably reserved Drive file ID. Do not issue the
+same create concurrently from unrelated browser profiles: Google Drive does
+not provide an atomic idempotency constraint for application properties, so
+cross-profile adoption through Drive search is best-effort.
+
+Do not stage a new Drive notebook with `notebooks.createLocal(...)` followed by
+`drive.saveAsCurrentNotebook(...)`. Those sandbox calls are blocked, and Save
+As leaves the local source unchanged. In a trusted AppKernel cell, reserve Save
+As for intentional copies or migrations of existing notebooks.
+
 ## Drive-backed notebook lookup
 
 When a user identifies a Drive-backed notebook by name or metadata rather than
@@ -364,9 +399,11 @@ The sandbox rejects these host calls before they reach the bridge:
 - `runme.runAll`
 - `runme.rerun`
 - `documents.update`
-- `drive.create`, `drive.update`, and `drive.saveAsCurrentNotebook`
+- `drive.create`, `drive.createNotebook`, `drive.update`, and
+  `drive.saveAsCurrentNotebook`
 - `notebookDiff.restoreDeletedCell` and `notebookDiff.restoreAllDeletedCells`
 
-Do not retry or route around a `Sandbox method not allowed` error. Use a
-trusted browser AppKernel cell or the normal Runme UI when notebook mutation or
-execution is intentional.
+Do not retry or route around a `Sandbox method not allowed` error. The narrow
+`createDriveNotebook` WebMCP tool is the supported exception for creating a
+complete new Drive-backed notebook. Use a trusted browser AppKernel cell or the
+normal Runme UI for other intentional notebook mutation or execution.

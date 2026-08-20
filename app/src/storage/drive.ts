@@ -17,12 +17,18 @@ const GAPI_SCRIPT_SRC = 'https://apis.google.com/js/api.js'
 
 // VERSION_FIELDS is the fields we want to return when fetching metadata to determine the file content version.
 // https://developers.google.com/workspace/drive/api/guides/fields-parameter
-const VERSION_FIELDS = 'md5Checksum,headRevisionId'
+const VERSION_FIELDS = 'md5Checksum,headRevisionId,appProperties'
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
 } as unknown as Parameters<typeof toJsonString>[2]
 const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder'
 const DRIVE_CREATE_OPERATION_PROPERTY = 'runmeCreateOperationId'
+export const DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY =
+  'runmeCreateExpectedChecksum'
+export const DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY =
+  'runmeCreateExpectedRequest'
+export const DRIVE_CREATE_COMPLETED_CHECKSUM_PROPERTY =
+  'runmeCreateCompletedChecksum'
 
 let gapiScriptPromise: Promise<void> | null = null
 let clientPromise: Promise<DriveFilesClient> | null = null
@@ -41,6 +47,7 @@ export type DriveDoc = {
   mimeType?: string
   parents?: string[]
   driveId?: string
+  headRevisionId?: string
   content?: string
   trashed?: boolean
   appProperties?: Record<string, string>
@@ -116,6 +123,7 @@ type DriveRevisionListResponse = {
 }
 
 interface DriveFilesClient {
+  generateFileId(): Promise<string>
   create(doc: DriveDoc): Promise<DriveDoc>
   update(doc: DriveDoc): Promise<DriveDoc>
   move(
@@ -126,6 +134,16 @@ interface DriveFilesClient {
   get(
     request: Record<string, unknown>
   ): Promise<{ body?: string; result?: unknown }>
+  getVersionMetadataWithEtag(fileId: string): Promise<{
+    metadata: DriveVersionMetadata | null
+    etag?: string
+  }>
+  setContentIfMatch(
+    fileId: string,
+    content: string,
+    mimeType: string,
+    etag: string
+  ): Promise<boolean>
   getDrive(request: Record<string, unknown>): Promise<DriveGetResponse>
   list(request: Record<string, unknown>): Promise<DriveListResponse>
   listRevisions(
@@ -155,6 +173,57 @@ interface DriveFilesClient {
     fields?: string
   }): Promise<{ result?: unknown }>
   ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc>
+}
+
+class DrivePreconditionFailedError extends Error {}
+
+class DriveRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message)
+  }
+}
+
+export class DriveCreateNotCommittedError extends Error {
+  readonly cause: unknown
+
+  constructor(message: string, cause?: unknown) {
+    super(message)
+    this.cause = cause
+  }
+}
+
+export class DriveFileCreatedError extends Error {
+  constructor(
+    readonly fileId: string,
+    readonly fileName: string | undefined,
+    readonly cause?: unknown,
+    readonly creationRevisionId?: string
+  ) {
+    super(`Google Drive file ${fileId} was created before its upload failed`)
+  }
+}
+
+function driveErrorStatus(error: unknown): number | undefined {
+  if (error instanceof DriveRequestError) {
+    return error.status
+  }
+  if (!error || typeof error !== 'object') {
+    return undefined
+  }
+  const candidate = error as {
+    status?: unknown
+    result?: { error?: { code?: unknown } }
+  }
+  const status = candidate.status ?? candidate.result?.error?.code
+  return typeof status === 'number' ? status : undefined
+}
+
+function isDefinitelyRejectedCreate(error: unknown): boolean {
+  const status = driveErrorStatus(error)
+  return status !== undefined && status >= 400 && status < 500 && status !== 408
 }
 
 export type DriveUser = {
@@ -242,8 +311,9 @@ class GapiDriveFilesClient implements DriveFilesClient {
       body?: string
       contentType?: string
       expectText?: boolean
+      headers?: Record<string, string>
     } = {}
-  ): Promise<{ body?: string; result?: unknown }> {
+  ): Promise<{ body?: string; result?: unknown; etag?: string }> {
     const token = this.gapi.client.getToken?.()?.access_token ?? ''
     if (!token) {
       throw new Error('Google Drive request requires an access token')
@@ -252,6 +322,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
+        ...options.headers,
         ...(options.body !== undefined
           ? {
               'Content-Type': options.contentType ?? 'application/json',
@@ -261,22 +332,37 @@ class GapiDriveFilesClient implements DriveFilesClient {
       body: options.body,
     })
 
+    if (response.status === 412) {
+      throw new DrivePreconditionFailedError(
+        'Google Drive write precondition failed'
+      )
+    }
     if (!response.ok) {
       const errorBody = await response.text().catch(() => '')
-      throw new Error(
-        `Drive request failed (${response.status} ${response.statusText}): ${errorBody}`
+      throw new DriveRequestError(
+        `Drive request failed (${response.status} ${response.statusText}): ${errorBody}`,
+        response.status
       )
     }
 
     if (options.expectText) {
-      return { body: await response.text() }
+      return {
+        body: await response.text(),
+        etag: response.headers.get('etag') ?? undefined,
+      }
     }
 
     const text = await response.text()
     if (!text) {
-      return { result: undefined }
+      return {
+        result: undefined,
+        etag: response.headers.get('etag') ?? undefined,
+      }
     }
-    return { result: JSON.parse(text) }
+    return {
+      result: JSON.parse(text),
+      etag: response.headers.get('etag') ?? undefined,
+    }
   }
 
   private getUtf8Media(
@@ -330,8 +416,14 @@ class GapiDriveFilesClient implements DriveFilesClient {
     }
   }
 
-  private buildResource(doc: DriveDoc): Record<string, unknown> {
+  private buildResource(
+    doc: DriveDoc,
+    includeId = false
+  ): Record<string, unknown> {
     const resource: Record<string, unknown> = {}
+    if (includeId && typeof doc.id === 'string') {
+      resource.id = doc.id
+    }
     if (typeof doc.name === 'string') {
       resource.name = doc.name
     }
@@ -350,17 +442,40 @@ class GapiDriveFilesClient implements DriveFilesClient {
     return resource
   }
 
+  async generateFileId(): Promise<string> {
+    const response = await this.request('GET', '/drive/v3/files/generateIds', {
+      params: { count: 1, space: 'drive', type: 'files' },
+    })
+    const id = (response.result as { ids?: unknown } | undefined)?.ids
+    if (!Array.isArray(id) || typeof id[0] !== 'string' || !id[0]) {
+      throw new Error('Google Drive did not return a generated file id')
+    }
+    return id[0]
+  }
+
   async create(doc: DriveDoc): Promise<DriveDoc> {
-    const resource = this.buildResource(doc)
+    const resource = this.buildResource(doc, true)
     const response = (await this.files.create({
       resource,
-      fields: 'id,name,mimeType,parents',
+      fields:
+        doc.content === undefined
+          ? 'id,name,mimeType,parents'
+          : 'id,name,mimeType,parents,headRevisionId',
       supportsAllDrives: true,
     } as Record<string, unknown>)) as DriveCreateResponse
     const file = response.result ?? {}
     if (file.id && doc.content !== undefined) {
       console.log(`Setting content for new Drive file ${file.id}`)
-      await this.setContent(file.id, doc.content, doc.mimeType)
+      try {
+        await this.setContent(file.id, doc.content, doc.mimeType)
+      } catch (error) {
+        throw new DriveFileCreatedError(
+          file.id,
+          file.name,
+          error,
+          file.headRevisionId
+        )
+      }
     }
     return file
   }
@@ -424,6 +539,49 @@ class GapiDriveFilesClient implements DriveFilesClient {
       body?: string
       result?: unknown
     }>
+  }
+
+  async getVersionMetadataWithEtag(fileId: string): Promise<{
+    metadata: DriveVersionMetadata | null
+    etag?: string
+  }> {
+    const response = await this.request(
+      'GET',
+      `/drive/v3/files/${encodeURIComponent(fileId)}`,
+      {
+        params: { supportsAllDrives: true, fields: VERSION_FIELDS },
+      }
+    )
+    return {
+      metadata: (response.result as DriveVersionMetadata | undefined) ?? null,
+      etag: response.etag,
+    }
+  }
+
+  async setContentIfMatch(
+    fileId: string,
+    content: string,
+    mimeType: string,
+    etag: string
+  ): Promise<boolean> {
+    try {
+      await this.request(
+        'PATCH',
+        `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
+        {
+          params: { uploadType: 'media', supportsAllDrives: true },
+          body: content,
+          contentType: mimeType,
+          headers: { 'If-Match': etag },
+        }
+      )
+      return true
+    } catch (error) {
+      if (error instanceof DrivePreconditionFailedError) {
+        return false
+      }
+      throw error
+    }
   }
 
   list(request: Record<string, unknown>): Promise<DriveListResponse> {
@@ -576,12 +734,14 @@ class FetchDriveFilesClient implements DriveFilesClient {
       body?: string
       contentType?: string
       expectText?: boolean
+      headers?: Record<string, string>
     } = {}
-  ): Promise<{ body?: string; result?: unknown }> {
+  ): Promise<{ body?: string; result?: unknown; etag?: string }> {
     const response = await fetch(this.buildUrl(path, options.params), {
       method,
       headers: {
         Authorization: `Bearer ${this.accessToken}`,
+        ...options.headers,
         ...(options.body !== undefined
           ? {
               'Content-Type': options.contentType ?? 'application/json',
@@ -591,26 +751,47 @@ class FetchDriveFilesClient implements DriveFilesClient {
       body: options.body,
     })
 
+    if (response.status === 412) {
+      throw new DrivePreconditionFailedError(
+        'Google Drive write precondition failed'
+      )
+    }
     if (!response.ok) {
       const errorBody = await response.text().catch(() => '')
-      throw new Error(
-        `Drive request failed (${response.status} ${response.statusText}): ${errorBody}`
+      throw new DriveRequestError(
+        `Drive request failed (${response.status} ${response.statusText}): ${errorBody}`,
+        response.status
       )
     }
 
     if (options.expectText) {
-      return { body: await response.text() }
+      return {
+        body: await response.text(),
+        etag: response.headers.get('etag') ?? undefined,
+      }
     }
 
     const text = await response.text()
     if (!text) {
-      return { result: undefined }
+      return {
+        result: undefined,
+        etag: response.headers.get('etag') ?? undefined,
+      }
     }
-    return { result: JSON.parse(text) }
+    return {
+      result: JSON.parse(text),
+      etag: response.headers.get('etag') ?? undefined,
+    }
   }
 
-  private buildResource(doc: DriveDoc): Record<string, unknown> {
+  private buildResource(
+    doc: DriveDoc,
+    includeId = false
+  ): Record<string, unknown> {
     const resource: Record<string, unknown> = {}
+    if (includeId && typeof doc.id === 'string') {
+      resource.id = doc.id
+    }
     if (typeof doc.name === 'string') {
       resource.name = doc.name
     }
@@ -627,6 +808,17 @@ class FetchDriveFilesClient implements DriveFilesClient {
       resource.appProperties = doc.appProperties
     }
     return resource
+  }
+
+  async generateFileId(): Promise<string> {
+    const response = await this.request('GET', '/drive/v3/files/generateIds', {
+      params: { count: 1, space: 'drive', type: 'files' },
+    })
+    const ids = (response.result as { ids?: unknown } | undefined)?.ids
+    if (!Array.isArray(ids) || typeof ids[0] !== 'string' || !ids[0]) {
+      throw new Error('Google Drive did not return a generated file id')
+    }
+    return ids[0]
   }
 
   private async setContent(
@@ -651,14 +843,26 @@ class FetchDriveFilesClient implements DriveFilesClient {
   async create(doc: DriveDoc): Promise<DriveDoc> {
     const response = await this.request('POST', '/drive/v3/files', {
       params: {
-        fields: 'id,name,mimeType,parents',
+        fields:
+          doc.content === undefined
+            ? 'id,name,mimeType,parents'
+            : 'id,name,mimeType,parents,headRevisionId',
         supportsAllDrives: 'true',
       },
-      body: JSON.stringify(this.buildResource(doc)),
+      body: JSON.stringify(this.buildResource(doc, true)),
     })
     const file = (response.result ?? {}) as DriveDoc
     if (file.id && doc.content !== undefined) {
-      await this.setContent(file.id, doc.content, doc.mimeType)
+      try {
+        await this.setContent(file.id, doc.content, doc.mimeType)
+      } catch (error) {
+        throw new DriveFileCreatedError(
+          file.id,
+          file.name,
+          error,
+          file.headRevisionId
+        )
+      }
     }
     return file
   }
@@ -723,6 +927,49 @@ class FetchDriveFilesClient implements DriveFilesClient {
         expectText: request.alt === 'media',
       }
     )
+  }
+
+  async getVersionMetadataWithEtag(fileId: string): Promise<{
+    metadata: DriveVersionMetadata | null
+    etag?: string
+  }> {
+    const response = await this.request(
+      'GET',
+      `/drive/v3/files/${encodeURIComponent(fileId)}`,
+      {
+        params: { supportsAllDrives: true, fields: VERSION_FIELDS },
+      }
+    )
+    return {
+      metadata: (response.result as DriveVersionMetadata | undefined) ?? null,
+      etag: response.etag,
+    }
+  }
+
+  async setContentIfMatch(
+    fileId: string,
+    content: string,
+    mimeType: string,
+    etag: string
+  ): Promise<boolean> {
+    try {
+      await this.request(
+        'PATCH',
+        `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
+        {
+          params: { uploadType: 'media', supportsAllDrives: true },
+          body: content,
+          contentType: mimeType,
+          headers: { 'If-Match': etag },
+        }
+      )
+      return true
+    } catch (error) {
+      if (error instanceof DrivePreconditionFailedError) {
+        return false
+      }
+      throw error
+    }
   }
 
   list(request: Record<string, unknown>): Promise<DriveListResponse> {
@@ -1016,6 +1263,7 @@ type DriveFileMetadata = {
 export interface DriveVersionMetadata {
   md5Checksum?: string
   headRevisionId?: string
+  appProperties?: Record<string, string>
 }
 
 export interface DriveRevision {
@@ -1179,6 +1427,9 @@ function extractBody(response: { body?: string; result?: unknown }): string {
 
 export interface DriveCreateOptions {
   createOperationId?: string
+  expectedContentChecksum?: string
+  expectedRequestFingerprint?: string
+  fileId?: string
 }
 
 function escapeDriveQueryValue(value: string): string {
@@ -1196,6 +1447,27 @@ export class DriveNotebookStore {
     return ensureDriveFilesClient(token)
   }
 
+  /** Reserve a Drive file id so retries can target one stable identity. */
+  async generateFileId(): Promise<string> {
+    return (await this.getFilesClient()).generateFileId()
+  }
+
+  /** Return whether Drive permits a pre-generated file ID in this parent. */
+  async canUsePreGeneratedFileId(parentUri: string): Promise<boolean> {
+    const { id, type } = parseDriveItem(parentUri)
+    if (type !== NotebookStoreItemType.Folder) {
+      throw new Error(
+        'DriveNotebookStore.canUsePreGeneratedFileId expects a folder URI'
+      )
+    }
+    const response = await (await this.getFilesClient()).get({
+      fileId: id,
+      supportsAllDrives: true,
+      fields: 'driveId',
+    })
+    return !(response.result as DriveDoc | undefined)?.driveId
+  }
+
   async create(
     parentUri: string,
     name: string,
@@ -1209,6 +1481,7 @@ export class DriveNotebookStore {
     const format = detectNotebookFileFormat(name)
     const mimeType = format === 'ipynb' ? IPYNB_MIME_TYPE : 'application/json'
     let file = await client.create({
+      id: options.fileId,
       name,
       mimeType,
       parents: [id],
@@ -1220,6 +1493,18 @@ export class DriveNotebookStore {
         ? {
             appProperties: {
               [DRIVE_CREATE_OPERATION_PROPERTY]: options.createOperationId,
+              ...(options.expectedContentChecksum
+                ? {
+                    [DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY]:
+                      options.expectedContentChecksum,
+                  }
+                : {}),
+              ...(options.expectedRequestFingerprint
+                ? {
+                    [DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY]:
+                      options.expectedRequestFingerprint,
+                  }
+                : {}),
             },
           }
         : {}),
@@ -1255,20 +1540,66 @@ export class DriveNotebookStore {
     if (type !== NotebookStoreItemType.Folder) {
       throw new Error('DriveNotebookStore.createContent expects a folder URI')
     }
-    const client = await this.getFilesClient()
-    let file = await client.create({
-      name,
-      mimeType,
-      parents: [id],
-      content,
-      ...(options.createOperationId
-        ? {
-            appProperties: {
-              [DRIVE_CREATE_OPERATION_PROPERTY]: options.createOperationId,
-            },
-          }
-        : {}),
-    })
+    let client: DriveFilesClient
+    try {
+      client = await this.getFilesClient()
+    } catch (error) {
+      throw new DriveCreateNotCommittedError(
+        'Google Drive create failed before a request was sent',
+        error
+      )
+    }
+    let file: DriveDoc
+    try {
+      file = await client.create({
+        id: options.fileId,
+        name,
+        mimeType,
+        parents: [id],
+        content,
+        ...(options.createOperationId
+          ? {
+              appProperties: {
+                [DRIVE_CREATE_OPERATION_PROPERTY]: options.createOperationId,
+                ...(options.expectedContentChecksum
+                  ? {
+                      [DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY]:
+                        options.expectedContentChecksum,
+                    }
+                  : {}),
+                ...(options.expectedRequestFingerprint
+                  ? {
+                      [DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY]:
+                        options.expectedRequestFingerprint,
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+      })
+    } catch (error) {
+      if (error instanceof DriveFileCreatedError) {
+        throw error
+      }
+      if (options.fileId && driveErrorStatus(error) === 409) {
+        const response = await client.get({
+          fileId: options.fileId,
+          supportsAllDrives: true,
+          fields: 'id,name,mimeType,parents',
+        })
+        file = {
+          id: options.fileId,
+          ...(response.result as DriveDoc | undefined),
+        }
+      } else if (isDefinitelyRejectedCreate(error)) {
+        throw new DriveCreateNotCommittedError(
+          'Google Drive rejected the create request before committing a file',
+          error
+        )
+      } else {
+        throw error
+      }
+    }
 
     if (!file.id) {
       throw new Error('Failed to create Google Drive file')
@@ -1341,6 +1672,72 @@ export class DriveNotebookStore {
       mimeType: file.mimeType,
       parents: [parentUri],
     }
+  }
+
+  /**
+   * Wait for Drive's search index to expose an idempotent create. Callers use
+   * this before consuming a new reserved ID so a create committed by another
+   * browser context has time to become visible.
+   */
+  async waitForCreateOperation(
+    parentUri: string,
+    createOperationId: string,
+    initialDelayMs: number = 0
+  ): Promise<NotebookStoreItem | null> {
+    for (const delayMs of [initialDelayMs, 250, 500, 1_000, 2_000]) {
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs))
+      }
+      const file = await this.findByCreateOperation(
+        parentUri,
+        createOperationId
+      )
+      if (file) {
+        return file
+      }
+    }
+    return null
+  }
+
+  /**
+   * Mark a two-step metadata/media creation as complete. The expected checksum
+   * remains in private app properties so a retry can distinguish an incomplete
+   * upload from a notebook that a user edited after creation completed.
+   */
+  async markCreateOperationComplete(
+    uri: string,
+    expectedChecksum: string
+  ): Promise<void> {
+    const { id, type } = parseDriveItem(uri)
+    if (type !== NotebookStoreItemType.File) {
+      throw new Error(
+        'DriveNotebookStore.markCreateOperationComplete expects a file URI'
+      )
+    }
+    const client = await this.getFilesClient()
+    const metadataResponse = await client.get({
+      fileId: id,
+      supportsAllDrives: true,
+      fields: 'appProperties',
+    })
+    const appProperties =
+      (metadataResponse.result as DriveVersionMetadata | undefined)
+        ?.appProperties ?? {}
+    const recordedExpected =
+      appProperties[DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY]
+    if (recordedExpected && recordedExpected !== expectedChecksum) {
+      throw new Error(
+        'IDEMPOTENCY_CONFLICT: Drive create operation was already used for different notebook content'
+      )
+    }
+    await client.update({
+      id,
+      appProperties: {
+        ...appProperties,
+        [DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY]: expectedChecksum,
+        [DRIVE_CREATE_COMPLETED_CHECKSUM_PROPERTY]: expectedChecksum,
+      },
+    })
   }
 
   async createFolder(
@@ -1880,6 +2277,42 @@ export class DriveNotebookStore {
     })
   }
 
+  /**
+   * Replace file content only while Drive still exposes the exact revision
+   * previously inspected by the caller. The metadata recheck closes the gap
+   * before the request, and If-Match closes the gap during the media upload.
+   */
+  async saveContentIfVersion(
+    uri: string,
+    content: string,
+    mimeType: string,
+    expected: { checksum?: string; revisionId?: string }
+  ): Promise<boolean> {
+    const { id, type } = parseDriveItem(uri)
+    if (type !== NotebookStoreItemType.File) {
+      throw new Error(
+        'DriveNotebookStore.saveContentIfVersion expects a file URI'
+      )
+    }
+    const client = await this.getFilesClient()
+    const { metadata, etag } = await client.getVersionMetadataWithEtag(id)
+    const actualChecksum = metadata?.md5Checksum ?? ''
+    const expectedChecksum = expected.checksum ?? ''
+    if (
+      actualChecksum !== expectedChecksum ||
+      (expected.revisionId !== undefined &&
+        metadata?.headRevisionId !== expected.revisionId)
+    ) {
+      return false
+    }
+    if (!etag) {
+      // Refuse an unconditional repair if the transport did not expose the
+      // validator needed to protect a collaborator's concurrent edit.
+      return false
+    }
+    return client.setContentIfMatch(id, content, mimeType, etag)
+  }
+
   async loadContent(uri: string): Promise<string> {
     const { id, type } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
@@ -1949,6 +2382,18 @@ export class DriveNotebookStore {
       remoteUri: uri,
       mimeType: result?.mimeType,
       parents: parentUris,
+    }
+  }
+
+  /** Return null only when Drive definitively reports that the item is absent. */
+  async getMetadataIfExists(uri: string): Promise<NotebookStoreItem | null> {
+    try {
+      return await this.getMetadata(uri)
+    } catch (error) {
+      if (driveErrorStatus(error) === 404) {
+        return null
+      }
+      throw error
     }
   }
 }

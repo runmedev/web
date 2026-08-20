@@ -36,6 +36,7 @@ const FILE_SHARE_MENU_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-
 const TAB_SHARE_MENU_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-05-tab-share-menu.png");
 const FOLDER_SHARE_MENU_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-06-folder-share-menu.png");
 const FOLDER_LOADED_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-07-folder-loaded.png");
+const DIRECT_CREATE_SCREENSHOT = join(OUTPUT_DIR, "scenario-open-shared-drive-link-08-direct-create.png");
 
 let passCount = 0;
 let failCount = 0;
@@ -290,6 +291,52 @@ function waitForToastMessage(timeoutMs = 4_000): string {
   return "";
 }
 
+function openAppConsoleDocument(): boolean {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const output = run(
+      `agent-browser eval "${escapeDoubleQuotes(`(() => {
+        const button = document.querySelector('button[aria-label="Open App Console"]');
+        if (!(button instanceof HTMLButtonElement)) return 'missing';
+        button.click();
+        return document.querySelector('textarea[aria-label="App Console input"]')
+          ? 'visible'
+          : 'clicked';
+      })()`)}"`,
+    ).stdout;
+    if (output.includes("visible")) {
+      return true;
+    }
+    run("agent-browser wait 350");
+  }
+  return false;
+}
+
+function runAppConsoleCommand(command: string, waitMs = 1_000): string {
+  run(
+    `agent-browser fill 'textarea[aria-label="App Console input"]' "${escapeDoubleQuotes(command)}"`,
+  );
+  run(
+    `agent-browser eval "${escapeDoubleQuotes(`(() => {
+      const runButton = document.querySelector(
+        '[data-testid="app-console-cell"][data-current="true"] [data-testid="app-console-cell-run"]',
+      );
+      if (!(runButton instanceof HTMLButtonElement)) return 'missing-run-button';
+      runButton.click();
+      return 'ok';
+    })()`)}"`,
+  );
+  run(`agent-browser wait ${waitMs}`);
+  return run(
+    `agent-browser eval "${escapeDoubleQuotes(`(() => {
+      const completed = Array.from(
+        document.querySelectorAll('[data-testid="app-console-cell"]'),
+      ).filter((cell) => cell.getAttribute('data-status') !== 'draft');
+      const last = completed[completed.length - 1];
+      return last ? (last.textContent || '') : '';
+    })()`)}"`,
+  ).stdout;
+}
+
 mkdirSync(OUTPUT_DIR, { recursive: true });
 for (const file of [
   "scenario-open-shared-drive-link-01-initial.txt",
@@ -299,6 +346,7 @@ for (const file of [
   "scenario-open-shared-drive-link-05-current-doc.txt",
   "scenario-open-shared-drive-link-06-folder-status.txt",
   "scenario-open-shared-drive-link-07-folder-explorer.txt",
+  "scenario-open-shared-drive-link-08-direct-create.txt",
 ]) {
   rmSync(join(OUTPUT_DIR, file), { force: true });
 }
@@ -311,6 +359,7 @@ for (const image of [
   TAB_SHARE_MENU_SCREENSHOT,
   FOLDER_SHARE_MENU_SCREENSHOT,
   FOLDER_LOADED_SCREENSHOT,
+  DIRECT_CREATE_SCREENSHOT,
 ]) {
   rmSync(image, { force: true });
 }
@@ -538,6 +587,35 @@ if (/Share link copied/i.test(folderShareToast)) {
   pass("Reported clipboard permission issue when copying folder share link");
 } else {
   fail("Folder share link copy did not show any expected toast");
+}
+
+if (openAppConsoleDocument()) {
+  pass("Opened App Console for direct Drive creation");
+  const directCreateOutput = runAppConsoleCommand(
+    `console.log(await drive.createNotebook("${SHARED_FOLDER_URL}", "direct-cuj.json", { idempotencyKey: "direct-drive-cuj", cells: [{ kind: "markup", value: "# Created directly in Drive" }] }))`,
+    10_000,
+  );
+  writeArtifact(
+    "scenario-open-shared-drive-link-08-direct-create.txt",
+    directCreateOutput,
+  );
+  if (/Created Drive-backed notebook direct-cuj\.json/i.test(directCreateOutput)) {
+    pass("Created a Drive-backed notebook directly through the runtime API");
+  } else {
+    fail(`Direct Drive notebook creation failed: ${directCreateOutput}`);
+  }
+
+  expandFolderInExplorer("Shared Drive Folder");
+  const directCreateExplorer = run("agent-browser get text '#workspace-explorer-box'").stdout;
+  const directCreateMatches = directCreateExplorer.match(/direct-cuj\.json/gi) ?? [];
+  if (directCreateMatches.length === 1) {
+    pass("Explorer shows the directly created Drive notebook once");
+  } else {
+    fail(`Explorer showed ${directCreateMatches.length} direct Drive notebook entries`);
+  }
+  takeScreenshot(DIRECT_CREATE_SCREENSHOT);
+} else {
+  fail("Could not open App Console for direct Drive creation");
 }
 
 run(

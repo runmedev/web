@@ -26,12 +26,16 @@ import {
   DriveNotebookStore,
   type DriveRevision,
   type DriveVersionMetadata,
+  driveFileUrl,
+  driveFolderUrl,
   isDriveItemUri,
+  parseDriveItem,
 } from './drive'
 import {
   type DriveSyncCoordinator,
   browserDriveSyncCoordinator,
 } from './driveSyncCoordinator'
+import { EXCALIDRAW_MIME_TYPE, isExcalidrawFileName } from './excalidraw'
 import type { FilesystemNotebookStore } from './fs'
 import {
   type IpynbPreservationState,
@@ -43,10 +47,6 @@ import {
   type RevisionDocStorage,
   createDefaultRevisionDocStorage,
 } from './revisionDocs'
-import {
-  EXCALIDRAW_MIME_TYPE,
-  isExcalidrawFileName,
-} from './excalidraw'
 
 // Local folder URI is a special folder that contains all notebooks which are local (i.e. not synced to Drive)
 export const LOCAL_FOLDER_URI = 'local://folder/local'
@@ -56,6 +56,11 @@ const NOTEBOOK_JSON_WRITE_OPTIONS = {
 } as unknown as Parameters<typeof toJsonString>[2]
 
 const NOTEBOOK_MIME_TYPE = 'application/json'
+
+// A Drive folder listing can briefly lag a successful file create. Preserve a
+// directly attached child long enough for that index to settle, but eventually
+// let authoritative listings remove files that were moved or trashed elsewhere.
+const PROVISIONAL_DRIVE_CHILD_TTL_MS = 60_000
 
 /**
  * LocalFileRecord captures the information needed to persist a notebook locally.
@@ -197,6 +202,13 @@ export interface LocalFolderRecord {
    * ordering stable and allows quick traversal when rendering the notebook tree.
    */
   children: string[]
+  /**
+   * Children attached by a direct Drive create but not yet observed in a Drive
+   * folder listing. A stale eventual-consistency response must not remove them.
+   */
+  provisionalChildren?: string[]
+  /** Creation time for each provisional attachment, used to bound retention. */
+  provisionalChildrenAttachedAt?: Record<string, number>
   /** ISO timestamp of the last successful sync with Drive (empty if never). */
   lastSynced: string
 }
@@ -358,6 +370,29 @@ export class LocalNotebooks extends Dexie {
       throw new Error('addFile requires a non-empty remote URI')
     }
 
+    return this.driveSyncCoordinator.runExclusive(
+      this.fileMirrorLockKey(remoteUri),
+      () => this.addFileInner(remoteUri, name, options)
+    )
+  }
+
+  private fileMirrorLockKey(remoteUri: string): string {
+    try {
+      const item = parseDriveItem(remoteUri)
+      if (item.type === NotebookStoreItemType.File) {
+        return `file-mirror:${driveFileUrl(item.id)}`
+      }
+    } catch {
+      // Non-Drive upstreams still receive deterministic in-process locking.
+    }
+    return `file-mirror:${remoteUri}`
+  }
+
+  private async addFileInner(
+    remoteUri: string,
+    name?: string,
+    options?: { mimeType?: string }
+  ): Promise<string> {
     const existing = await this.files
       .where('remoteId')
       .equals(remoteUri)
@@ -395,6 +430,135 @@ export class LocalNotebooks extends Dexie {
 
     await this.files.put(record)
     return id
+  }
+
+  /**
+   * Attach an already-created Drive mirror to every matching mounted folder.
+   * Folder membership uses a Drive-ID comparison so share-link query variants
+   * and canonical folder URLs resolve to the same Drive folder. Multiple local
+   * records can exist for equivalent mounts, and each visible tree must receive
+   * the new child and its update event.
+   */
+  async attachDriveFileToFolder(
+    remoteFolderUri: string,
+    localFileUri: string
+  ): Promise<string | null> {
+    const target = parseDriveItem(remoteFolderUri)
+    if (target.type !== NotebookStoreItemType.Folder) {
+      throw new Error('attachDriveFileToFolder requires a Drive folder URI')
+    }
+
+    return this.driveSyncCoordinator.runExclusive(
+      `file-parent:${localFileUri}`,
+      async () => {
+        const file = await this.files.get(localFileUri)
+        if (!file) {
+          throw new Error(`Local file record not found for ${localFileUri}`)
+        }
+        const currentParents = await this.folders
+          .filter((record) => record.children.includes(localFileUri))
+          .toArray()
+        for (const currentParent of currentParents) {
+          let isDifferentDriveFolder = false
+          try {
+            const candidate = parseDriveItem(currentParent.remoteId)
+            isDifferentDriveFolder =
+              candidate.type === NotebookStoreItemType.Folder &&
+              candidate.id !== target.id
+          } catch {
+            // Non-Drive folder membership is outside this reconciliation path.
+          }
+          if (isDifferentDriveFolder) {
+            await this.mutateFolderChildren(currentParent.id, (children) =>
+              children.filter((childUri) => childUri !== localFileUri)
+            )
+          }
+        }
+
+        return this.driveSyncCoordinator.runExclusive(
+          this.driveFolderMembershipLockKey(remoteFolderUri),
+          async () => {
+            let folders = await this.folders
+              .filter((record) => {
+                try {
+                  const candidate = parseDriveItem(record.remoteId)
+                  return (
+                    candidate.type === NotebookStoreItemType.Folder &&
+                    candidate.id === target.id
+                  )
+                } catch {
+                  return false
+                }
+              })
+              .toArray()
+            if (folders.length === 0) {
+              // Direct creation can overlap the first mount of this Drive folder.
+              // Materialize the local folder now so a stale first Drive listing
+              // cannot discard the new child's only parent association.
+              const canonicalRemoteUri = driveFolderUrl(target.id)
+              const provisionalFolder: LocalFolderRecord = {
+                id: this.generateLocalUri('folder'),
+                name:
+                  this.deriveDisplayNameFromUri(canonicalRemoteUri) ??
+                  'Untitled Folder',
+                remoteId: canonicalRemoteUri,
+                children: [],
+                lastSynced: '',
+              }
+              await this.folders.put(provisionalFolder)
+              folders = [provisionalFolder]
+            }
+
+            for (const folder of folders) {
+              const attachedAt = {
+                ...(folder.provisionalChildrenAttachedAt ?? {}),
+                [localFileUri]:
+                  folder.provisionalChildrenAttachedAt?.[localFileUri] ??
+                  Date.now(),
+              }
+              if (!folder.children.includes(localFileUri)) {
+                await this.folders.update(folder.id, {
+                  children: [...folder.children, localFileUri],
+                  provisionalChildren: [
+                    ...new Set([
+                      ...(folder.provisionalChildren ?? []),
+                      localFileUri,
+                    ]),
+                  ],
+                  provisionalChildrenAttachedAt: attachedAt,
+                  lastSynced: nowIsoString(),
+                })
+              } else if (
+                !(folder.provisionalChildren ?? []).includes(localFileUri) ||
+                folder.provisionalChildrenAttachedAt?.[localFileUri] ===
+                  undefined
+              ) {
+                await this.folders.update(folder.id, {
+                  provisionalChildren: [
+                    ...(folder.provisionalChildren ?? []),
+                    localFileUri,
+                  ],
+                  provisionalChildrenAttachedAt: attachedAt,
+                })
+              }
+              if (canDispatchWindowEvents()) {
+                window.dispatchEvent(
+                  new CustomEvent('local-notebook-updated', {
+                    detail: {
+                      uri: localFileUri,
+                      name: file.name,
+                      remoteUri: publicRemoteUri(file),
+                      parentUri: folder.id,
+                    },
+                  })
+                )
+              }
+            }
+            return folders[0].id
+          }
+        )
+      }
+    )
   }
 
   /**
@@ -484,6 +648,106 @@ export class LocalNotebooks extends Dexie {
   }
 
   /**
+   * Initialize the local mirror immediately after this client uploaded a new
+   * Drive notebook. Recording both the raw upstream fingerprint and the
+   * decoded notebook baseline prevents the first editor load from treating the
+   * two representations as concurrent edits.
+   */
+  async initializeUploadedDriveNotebook(
+    localUri: string,
+    notebook: parser_pb.Notebook,
+    upstreamContent: string,
+    upstreamVersion: UpstreamVersion = {}
+  ): Promise<boolean> {
+    return this.driveSyncCoordinator.runExclusive(localUri, async () => {
+      const record = await this.files.get(localUri)
+      if (!record) {
+        throw new Error(`Local notebook record not found for ${localUri}`)
+      }
+      if (!isDriveUri(record.remoteId)) {
+        throw new Error(
+          `Uploaded notebook mirror requires a Drive remote URI; got ${record.remoteId}`
+        )
+      }
+
+      // addFile returns an existing mirror for an already-known remote URI. An
+      // idempotent create retry must never reset that mirror because it may hold
+      // unsynced edits or an active conflict. The caller reconciles it through
+      // the normal Drive sync path instead.
+      if (!isUninitializedDriveMirror(record)) {
+        return false
+      }
+
+      const upstreamChecksum = upstreamVersion.checksum ?? md5(upstreamContent)
+      const decoded =
+        detectNotebookFileFormat(record.name) === 'ipynb'
+          ? await this.decodeUpstreamNotebook({
+              localUri,
+              record,
+              content: upstreamContent,
+              upstreamFingerprint: upstreamChecksum,
+            })
+          : { notebook, serialized: serializeNotebook(notebook) }
+      const localChecksum = checksumForSerializedNotebook(decoded.serialized)
+      let initialized = false
+
+      // The Web Lock serializes Drive sync work across tabs. The IndexedDB
+      // transaction also re-checks the record immediately before updating so a
+      // local edit that does not take that lock cannot be overwritten.
+      await this.transaction('rw', this.files, async () => {
+        const current = await this.files.get(localUri)
+        if (
+          !current ||
+          current.remoteId !== record.remoteId ||
+          current.name !== record.name ||
+          !isUninitializedDriveMirror(current)
+        ) {
+          return
+        }
+        await this.files.update(localUri, {
+          doc: decoded.serialized,
+          md5Checksum: localChecksum,
+          lastRemoteChecksum: upstreamChecksum,
+          lastUpstreamVersion: {
+            ...upstreamVersion,
+            checksum: upstreamChecksum,
+          },
+          lastSynced: nowIsoString(),
+          lastSyncError: undefined,
+          conflict: undefined,
+          ipynbPreservation: decoded.ipynbPreservation,
+        })
+        initialized = true
+      })
+
+      if (!initialized) {
+        const latest = await this.files.get(localUri)
+        const unusedShadow = decoded.ipynbPreservation?.shadowRef
+        if (
+          unusedShadow &&
+          latest?.ipynbPreservation?.shadowRef.path !== unusedShadow.path
+        ) {
+          await this.ipynbShadowStorage.delete(unusedShadow).catch(() => {})
+        }
+        return false
+      }
+
+      await this.deleteReplacedIpynbShadow(
+        record.ipynbPreservation,
+        decoded.ipynbPreservation
+      )
+      this.notifySync(localUri)
+      this.enqueueMarkdownSync(localUri)
+      return true
+    })
+  }
+
+  /** Reconcile an existing Drive mirror without discarding local edits. */
+  async reconcileDriveNotebook(localUri: string): Promise<void> {
+    await this.syncFile(localUri)
+  }
+
+  /**
    * Mirror the contents of a remote folder into IndexedDB. Every Drive file
    * discovered is guaranteed to have a local entry afterwards and the folder's
    * `children` array is updated to reflect the latest local URIs.
@@ -493,10 +757,80 @@ export class LocalNotebooks extends Dexie {
       throw new Error('updateFolder requires a non-empty remote URI')
     }
 
-    const existingFolder = await this.folders
+    return this.driveSyncCoordinator.runExclusive(
+      this.driveFolderMembershipLockKey(remoteUri),
+      () => this.updateFolderInner(remoteUri, name)
+    )
+  }
+
+  private driveFolderMembershipLockKey(remoteUri: string): string {
+    const item = parseDriveItem(remoteUri)
+    if (item.type !== NotebookStoreItemType.Folder) {
+      throw new Error('Drive folder membership requires a folder URI')
+    }
+    return `folder-membership:${driveFolderUrl(item.id)}`
+  }
+
+  private async mutateFolderChildren(
+    folderId: string,
+    mutate: (children: string[]) => string[]
+  ): Promise<void> {
+    const initial = await this.folders.get(folderId)
+    if (!initial) {
+      throw new Error(`Local folder record not found for ${folderId}`)
+    }
+    const lockKey = isDriveUri(initial.remoteId)
+      ? this.driveFolderMembershipLockKey(initial.remoteId)
+      : `folder-membership:${initial.id}`
+    await this.driveSyncCoordinator.runExclusive(lockKey, async () => {
+      const current = await this.folders.get(folderId)
+      if (!current) {
+        throw new Error(`Local folder record not found for ${folderId}`)
+      }
+      const nextChildren = mutate([...current.children])
+      const nextProvisionalChildren = (
+        current.provisionalChildren ?? []
+      ).filter((childUri) => nextChildren.includes(childUri))
+      const nextProvisionalChildrenAttachedAt = Object.fromEntries(
+        nextProvisionalChildren.map((childUri) => [
+          childUri,
+          current.provisionalChildrenAttachedAt?.[childUri] ?? Date.now(),
+        ])
+      )
+      await this.folders.update(folderId, {
+        children: nextChildren,
+        provisionalChildren: nextProvisionalChildren,
+        provisionalChildrenAttachedAt: nextProvisionalChildrenAttachedAt,
+        lastSynced: nowIsoString(),
+      })
+    })
+  }
+
+  private async updateFolderInner(
+    remoteUri: string,
+    name?: string
+  ): Promise<string> {
+    let existingFolder = await this.folders
       .where('remoteId')
       .equals(remoteUri)
       .first()
+    if (!existingFolder) {
+      const target = parseDriveItem(remoteUri)
+      existingFolder = await this.folders
+        .filter((record) => {
+          try {
+            const candidate = parseDriveItem(record.remoteId)
+            return (
+              target.type === NotebookStoreItemType.Folder &&
+              candidate.type === NotebookStoreItemType.Folder &&
+              candidate.id === target.id
+            )
+          } catch {
+            return false
+          }
+        })
+        .first()
+    }
 
     const folderId = existingFolder?.id ?? this.generateLocalUri('folder')
     const fallbackName =
@@ -571,9 +905,38 @@ export class LocalNotebooks extends Dexie {
       }
     }
 
+    // Drive folder listings can lag a successful create. Keep direct
+    // attachments until at least one listing confirms them, then clear the
+    // provisional marker so later refreshes reflect Drive normally.
+    const listedChildren = new Set(childUris)
+    const now = Date.now()
+    const provisionalChildren = (
+      existingFolder?.provisionalChildren ?? []
+    ).filter((childUri) => {
+      if (listedChildren.has(childUri)) {
+        return false
+      }
+      const attachedAt =
+        existingFolder?.provisionalChildrenAttachedAt?.[childUri] ?? now
+      return now - attachedAt < PROVISIONAL_DRIVE_CHILD_TTL_MS
+    })
+    const provisionalChildrenAttachedAt = Object.fromEntries(
+      provisionalChildren.map((childUri) => [
+        childUri,
+        existingFolder?.provisionalChildrenAttachedAt?.[childUri] ?? now,
+      ])
+    )
+    for (const childUri of provisionalChildren) {
+      if (!childUris.includes(childUri) && (await this.files.get(childUri))) {
+        childUris.push(childUri)
+      }
+    }
+
     await this.folders.update(folderId, {
       name: resolvedName,
       children: childUris,
+      provisionalChildren,
+      provisionalChildrenAttachedAt,
     })
 
     return folderId
@@ -656,8 +1019,8 @@ export class LocalNotebooks extends Dexie {
     )
     const upstreamChecksum =
       detectNotebookFileFormat(record.name) === 'ipynb'
-        ? record.ipynbPreservation?.baselineNotebookChecksum ?? ''
-        : record.lastRemoteChecksum ?? ''
+        ? (record.ipynbPreservation?.baselineNotebookChecksum ?? '')
+        : (record.lastRemoteChecksum ?? '')
     return syncStateForRecord(
       { ...record, md5Checksum: localChecksum },
       localChecksum === upstreamChecksum ? 'synced' : 'pending'
@@ -807,8 +1170,7 @@ export class LocalNotebooks extends Dexie {
             }
           )
         }
-        const upstreamFingerprint =
-          upstreamVersion.checksum ?? md5(content)
+        const upstreamFingerprint = upstreamVersion.checksum ?? md5(content)
         const decoded = await this.decodeUpstreamNotebook({
           localUri: uri,
           record,
@@ -840,14 +1202,17 @@ export class LocalNotebooks extends Dexie {
         await this.driveStore.getVersionMetadata(record.remoteId)
       )
     } catch (error) {
-      appLogger.warn('Failed to record version metadata for raw Drive content', {
-        attrs: {
-          scope: 'storage.drive.sync',
-          localUri: uri,
-          remoteUri: record.remoteId,
-          error: String(error),
-        },
-      })
+      appLogger.warn(
+        'Failed to record version metadata for raw Drive content',
+        {
+          attrs: {
+            scope: 'storage.drive.sync',
+            localUri: uri,
+            remoteUri: record.remoteId,
+            error: String(error),
+          },
+        }
+      )
     }
     await this.files.update(uri, {
       doc: content,
@@ -1332,10 +1697,9 @@ export class LocalNotebooks extends Dexie {
     }
     await this.files.put(record)
 
-    await this.folders.update(parentUri, {
-      children: [...parent.children, fileUri],
-      lastSynced: nowIsoString(),
-    })
+    await this.mutateFolderChildren(parentUri, (children) =>
+      children.includes(fileUri) ? children : [...children, fileUri]
+    )
 
     if (canDispatchWindowEvents()) {
       window.dispatchEvent(
@@ -1411,12 +1775,9 @@ export class LocalNotebooks extends Dexie {
     }
 
     await this.folders.put(folderRecord)
-    if (!parent.children.includes(folderUri)) {
-      await this.folders.update(parentUri, {
-        children: [...parent.children, folderUri],
-        lastSynced: nowIsoString(),
-      })
-    }
+    await this.mutateFolderChildren(parentUri, (children) =>
+      children.includes(folderUri) ? children : [...children, folderUri]
+    )
 
     if (canDispatchWindowEvents()) {
       window.dispatchEvent(
@@ -1638,38 +1999,35 @@ export class LocalNotebooks extends Dexie {
       await this.files.update(uri, { markdownUri: undefined })
     }
 
-    await this.folders.update(sourceParent.id, {
-      children: sourceParent.children.filter((childUri) => childUri !== uri),
-      lastSynced: nowIsoString(),
-    })
-    if (!destinationFolder.children.includes(uri)) {
-      await this.folders.update(destinationFolder.id, {
-        children: [...destinationFolder.children, uri],
-        lastSynced: nowIsoString(),
-      })
-    }
+    await this.mutateFolderChildren(sourceParent.id, (children) =>
+      children.filter((childUri) => childUri !== uri)
+    )
+    await this.mutateFolderChildren(destinationFolder.id, (children) =>
+      children.includes(uri) ? children : [...children, uri]
+    )
 
     if (clearMarkdownUri && file) {
       try {
         await this.syncMarkdownFile(uri)
       } catch (error) {
-        appLogger.warn('Failed to recreate notebook markdown sidecar after move', {
-          attrs: {
-            scope: 'storage.drive.move',
-            code: 'DRIVE_MARKDOWN_SIDECAR_RECREATE_FAILED',
-            localUri: uri,
-            error: String(error),
-          },
-        })
+        appLogger.warn(
+          'Failed to recreate notebook markdown sidecar after move',
+          {
+            attrs: {
+              scope: 'storage.drive.move',
+              code: 'DRIVE_MARKDOWN_SIDECAR_RECREATE_FAILED',
+              localUri: uri,
+              error: String(error),
+            },
+          }
+        )
       }
     }
 
     return {
       uri,
       name: item.name,
-      type: file
-        ? NotebookStoreItemType.File
-        : NotebookStoreItemType.Folder,
+      type: file ? NotebookStoreItemType.File : NotebookStoreItemType.Folder,
       children: folder ? [...folder.children] : [],
       remoteUri: item.remoteId,
       mimeType: file?.mimeType,
@@ -1687,19 +2045,16 @@ export class LocalNotebooks extends Dexie {
       throw new Error(`Local notebook record not found for ${uri}`)
     }
     if (!isDriveUri(record.remoteId)) {
-      throw new Error(
-        'LocalNotebooks.moveToTrash expects a Drive-backed file'
-      )
+      throw new Error('LocalNotebooks.moveToTrash expects a Drive-backed file')
     }
 
     await this.driveStore.moveToTrash(record.remoteId)
 
     const parentFolder = await this.findParentFolder(uri)
     if (parentFolder) {
-      await this.folders.update(parentFolder.id, {
-        children: parentFolder.children.filter((childUri) => childUri !== uri),
-        lastSynced: nowIsoString(),
-      })
+      await this.mutateFolderChildren(parentFolder.id, (children) =>
+        children.filter((childUri) => childUri !== uri)
+      )
     }
     await this.deleteConflictDoc(record.conflict)
     await this.files.delete(uri)
@@ -1809,7 +2164,9 @@ export class LocalNotebooks extends Dexie {
 
   /**
    * Return local URIs for Drive-backed files that currently have unapplied
-   * local changes relative to the last known remote checksum.
+   * local changes relative to the last known upstream notebook baseline. Raw
+   * IPYNB fingerprints and decoded notebook checksums use different domains,
+   * so IPYNB records compare against their decoded preservation baseline.
    *
    * For migrated records where `md5Checksum` is missing/empty but `doc` exists,
    * this method computes and persists the checksum lazily.
@@ -1836,8 +2193,11 @@ export class LocalNotebooks extends Dexie {
         record.id,
         record
       )
-      const lastRemoteChecksum = record.lastRemoteChecksum ?? ''
-      if (localChecksum !== lastRemoteChecksum) {
+      const upstreamNotebookChecksum =
+        detectNotebookFileFormat(record.name) === 'ipynb'
+          ? (record.ipynbPreservation?.baselineNotebookChecksum ?? '')
+          : (record.lastRemoteChecksum ?? '')
+      if (localChecksum !== upstreamNotebookChecksum) {
         pending.push(record.id)
       }
     }
@@ -2223,7 +2583,8 @@ export class LocalNotebooks extends Dexie {
     // a remote-only edit is not mistaken for a concurrent local edit.
     const lastReadNotebookChecksum =
       detectNotebookFileFormat(record.name) === 'ipynb'
-        ? record.ipynbPreservation?.baselineNotebookChecksum ?? lastReadChecksum
+        ? (record.ipynbPreservation?.baselineNotebookChecksum ??
+          lastReadChecksum)
         : lastReadChecksum
     const localDoc = record.doc ?? ''
     const localChecksum = await this.getOrBackfillLocalChecksum(
@@ -3204,6 +3565,16 @@ function publicRemoteUri(record: {
   return isLocalFileUpstream(record.remoteId, record.id)
     ? undefined
     : record.remoteId || undefined
+}
+
+/** Return whether a newly added Drive mirror is still safe to initialize. */
+function isUninitializedDriveMirror(record: LocalFileRecord): boolean {
+  return (
+    record.doc === '' &&
+    record.lastSynced === '' &&
+    !record.lastRemoteChecksum &&
+    !record.conflict
+  )
 }
 
 function resolveDocumentMimeType(

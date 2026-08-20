@@ -53,6 +53,14 @@ import {
   SHOW_TOUR_STEP_TOOL_NAME,
   SHOW_TOUR_STEP_TOOL_TITLE,
 } from '../../lib/runtime/tourGuideTool'
+import {
+  buildCreateDriveNotebookInputSchema,
+  CREATE_DRIVE_NOTEBOOK_TOOL_DESCRIPTION,
+  CREATE_DRIVE_NOTEBOOK_TOOL_NAME,
+  CREATE_DRIVE_NOTEBOOK_TOOL_TITLE,
+  executeCreateDriveNotebook,
+} from '../../lib/runtime/createDriveNotebookTool'
+import { appState } from '../../lib/runtime/AppState'
 
 type ModelContextClientLike = {
   requestUserInteraction?: (
@@ -93,6 +101,47 @@ function getModelContext(): ModelContextLike | null {
     return null
   }
   return modelContext as ModelContextLike
+}
+
+function isDriveAuthorizationRequired(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.startsWith('Google Drive authorization is required')
+  )
+}
+
+async function executeCreateDriveNotebookWithAuthorization(
+  input: Record<string, unknown>,
+  client: ModelContextClientLike
+): Promise<string> {
+  try {
+    // Preserve the no-UI path for cached tokens and service-account sessions.
+    return await executeCreateDriveNotebook(input)
+  } catch (error) {
+    if (
+      !isDriveAuthorizationRequired(error) ||
+      typeof client.requestUserInteraction !== 'function'
+    ) {
+      throw error
+    }
+
+    const result = await client.requestUserInteraction(async () => {
+      const authorization = await appState.startGoogleDriveOAuth({
+        mode: 'popup',
+      })
+      if (authorization.status !== 'authorized') {
+        throw new Error(
+          'Google Drive authorization opened in a new tab. Complete authorization, then retry createDriveNotebook with the same idempotencyKey.'
+        )
+      }
+      return executeCreateDriveNotebook(input)
+    })
+
+    if (typeof result !== 'string') {
+      throw new Error('createDriveNotebook returned an invalid result')
+    }
+    return result
+  }
 }
 
 export default function WebMcpToolRegistrationHost() {
@@ -329,6 +378,23 @@ export default function WebMcpToolRegistrationHost() {
           signal: registrationController.signal,
         }
       )
+      modelContext.registerTool(
+        {
+          name: CREATE_DRIVE_NOTEBOOK_TOOL_NAME,
+          title: CREATE_DRIVE_NOTEBOOK_TOOL_TITLE,
+          description: CREATE_DRIVE_NOTEBOOK_TOOL_DESCRIPTION,
+          inputSchema: buildCreateDriveNotebookInputSchema(),
+          annotations: {
+            readOnlyHint: false,
+            untrustedContentHint: false,
+          },
+          execute: (input, client) =>
+            executeCreateDriveNotebookWithAuthorization(input, client),
+        },
+        {
+          signal: registrationController.signal,
+        }
+      )
       appLogger.info('WebMCP tools registered', {
         attrs: {
           scope: 'webmcp',
@@ -341,6 +407,7 @@ export default function WebMcpToolRegistrationHost() {
             GET_DOCUMENTATION_TOOL_NAME,
             SHOW_TOUR_STEP_TOOL_NAME,
             DISMISS_TOUR_TOOL_NAME,
+            CREATE_DRIVE_NOTEBOOK_TOOL_NAME,
           ],
         },
       })
@@ -369,6 +436,7 @@ export default function WebMcpToolRegistrationHost() {
             GET_DOCUMENTATION_TOOL_NAME,
             SHOW_TOUR_STEP_TOOL_NAME,
             DISMISS_TOUR_TOOL_NAME,
+            CREATE_DRIVE_NOTEBOOK_TOOL_NAME,
           ],
         },
       })

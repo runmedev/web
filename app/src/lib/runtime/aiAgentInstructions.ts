@@ -30,6 +30,7 @@ This Runme instance is served from ${runmeOrigin}.
 - Claim the selected tab and use its page-provided WebMCP tools for notebook reads, reference handling, and collaboration.
 - Use the \`ExecuteCode\` WebMCP tool to run AppKernel JavaScript. Print values explicitly with \`console.log(...)\`.
 - Read notebooks with \`notebooks.get({ uri: notebookUri })\` and access cells through \`doc.notebook.cells\`. There is no \`notebooks.read\` method. Call \`await notebooks.help()\` before generating notebook code when the API is uncertain.
+- When the user explicitly requests a new notebook in Google Drive, call the direct \`createDriveNotebook\` WebMCP tool. It creates the Drive file and its Runme mirror as one retry-safe operation without a local staging notebook.
 - Use the \`comments\` library inside \`ExecuteCode\` for Drive comments and anchors. Runme does not expose a comment-specific WebMCP tool.
 - Use the \`ui\` library inside \`ExecuteCode\` to create rendered Markdown selections and open Runme's selection context menu. Do not invent CSS selectors or dispatch arbitrary DOM events.
 - WebMCP \`ExecuteCode\` cannot use the general-purpose notebook mutation or execution methods. Do not route around this boundary with DOM clicks, keyboard automation, or Computer Use. Tell the user to use a trusted browser AppKernel cell or the normal Runme UI for intentional cell mutation or execution.
@@ -185,6 +186,29 @@ console.log(await app.getSessionID())
 
 Continue only when the printed value matches the selected tab's \`session\` query parameter. If they differ, do not mutate a notebook in that tab.
 
+## Create notebooks in the requested storage
+
+Treat an explicit Google Drive destination as authoritative. Call the direct \`createDriveNotebook\` WebMCP tool, not \`ExecuteCode\`:
+
+\`\`\`json
+{
+  "folderIdOrUri": "<folder ID or URI>",
+  "fileName": "notebook.ipynb",
+  "idempotencyKey": "<stable token for this intended notebook>",
+  "cells": [
+    {
+      "kind": "markup",
+      "value": "# Notebook title",
+      "metadata": { "name": "title" }
+    }
+  ]
+}
+\`\`\`
+
+Reuse the same \`idempotencyKey\` if the tool call must be retried; use a new key for a distinct notebook. The returned \`localUri\` is the editable local mirror of the new Drive file, not a second standalone notebook. Use \`ExecuteCode\` with \`notebooks.get({ uri: localUri })\` to verify the created content. The direct tool accepts the complete initial cell list; later cell mutation remains outside the \`ExecuteCode\` sandbox boundary.
+
+Do not implement "create a notebook in Google Drive" by calling \`notebooks.createLocal(...)\` and then \`drive.saveAsCurrentNotebook(...)\`. Those sandbox calls are blocked, and Save As intentionally leaves its source notebook unchanged. In a trusted AppKernel cell, use \`drive.saveAsCurrentNotebook\` only when the user asks to copy or migrate an existing notebook.
+
 ## Bind the notebook before editing
 
 Resolve the requested notebook once, save its concrete \`local://...\` URI, and use that URI for every later operation. Do not keep targeting whichever notebook happens to be current because the user may switch tabs or notebooks while work is in progress.
@@ -314,9 +338,9 @@ The WebMCP \`ExecuteCode\` sandbox can inspect notebook state, resolve and show 
 - \`runme.runAll\`
 - \`runme.rerun\`
 - \`documents.update\`
-- \`drive.create\`, \`drive.update\`, and \`drive.saveAsCurrentNotebook\`
+- \`drive.create\`, \`drive.createNotebook\`, \`drive.update\`, and \`drive.saveAsCurrentNotebook\`
 - \`notebookDiff.restoreDeletedCell\` and \`notebookDiff.restoreAllDeletedCells\`
 
-These methods fail with \`Sandbox method not allowed\` before the host bridge is invoked. Do not retry them or use another sandbox helper as an execution deputy. Use a trusted browser AppKernel cell or the normal Runme UI when the user intentionally wants to mutate or execute notebook cells.
+These methods fail with \`Sandbox method not allowed\` before the host bridge is invoked. Do not retry them or use another sandbox helper as an execution deputy. The narrow \`createDriveNotebook\` WebMCP tool is the supported exception for creating a complete new Drive-backed notebook. Use a trusted browser AppKernel cell or the normal Runme UI for other intentional notebook mutation or execution.
 `
 }
