@@ -40,7 +40,8 @@ Current runner identities:
   `net`, `runme`, and `notebooks`.
 - "Browser JS" and "sandbox JS" are related but not interchangeable. The latter
   exists to tighten execution boundaries.
-- Trusted browser AppKernel cells can manipulate and execute notebooks.
-- Sandbox AppKernel and WebMCP `ExecuteCode` can inspect notebooks but cannot
-  use the general-purpose notebook mutation or execution methods. This prevents
-  sandboxed code from using the host as an execution deputy.
+- If the user wants fast local notebook manipulation without backend setup,
+  AppKernel is often the right first choice.
+- When calling `notebooks.update` through WebMCP `ExecuteCode`, catch
+  `NOTEBOOK_UPDATE_FAILED` inside the executed JavaScript and inspect the
+  structured `error.details` fields before retrying.
