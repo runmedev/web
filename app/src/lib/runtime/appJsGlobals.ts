@@ -38,6 +38,7 @@ import { driveLinkCoordinator } from '../driveLinkCoordinator'
 import {
   copyDriveNotebookFile,
   createDriveFile,
+  createDriveNotebook,
   listDriveFolderItems,
   moveDriveFileToTrash,
   saveNotebookAsDriveCopy,
@@ -1658,6 +1659,7 @@ export function createAppJsGlobals({
         '  await embed("/tmp/screenshot.png", { alt: "Screenshot" })',
         '  const diff = await notebookDiff.diffDriveRevision({ revisionId })',
         '  await drive.authorize()',
+        '  await drive.createNotebook("<folder-id>", "hello.ipynb", { cells: [] })',
         '  runmeRunners.ensure("openai-local", "ws://localhost:9988/ws", { setDefault: true })',
         '',
         'Type <namespace>.help() for detailed commands, e.g. explorer.help()',
@@ -1837,6 +1839,31 @@ export function createAppJsGlobals({
         emitLine(sendOutput, `Created Drive file ${id}`)
         return id
       },
+      createNotebook: async (
+        folder: string,
+        name: string,
+        options?: {
+          cells?: Array<{
+            kind: 'code' | 'markup'
+            languageId?: string
+            value?: string
+            metadata?: Record<string, string>
+          }>
+          idempotencyKey?: string
+        }
+      ) => {
+        if (!folder?.trim() || !name?.trim()) {
+          throw new Error(
+            'Usage: drive.createNotebook(folderIdOrUri, fileName, options?)'
+          )
+        }
+        const result = await createDriveNotebook(folder, name, options)
+        emitLine(
+          sendOutput,
+          `Created Drive-backed notebook ${result.fileName} (${result.fileId}) and opened ${result.localUri}`
+        )
+        return result
+      },
       update: async (idOrUri: string, bytes: Uint8Array) => {
         const id = await updateDriveFileBytes(idOrUri, bytes)
         emitLine(sendOutput, `Updated Drive file ${id}`)
@@ -1924,10 +1951,11 @@ export function createAppJsGlobals({
           'drive.authorize(options?)      - Start a fresh Google Drive OAuth flow; options: { mode?, prompt? }',
           'drive.refreshAuth(options?)    - Alias for drive.authorize(options?)',
           'drive.create(folder, name)     - Create a Drive file in folder; returns file id',
+          'drive.createNotebook(folder, fileName, options?: { cells?, idempotencyKey? }) - Create and open one new Drive-backed notebook; reuse idempotencyKey for retries',
           'drive.update(id, bytes)        - Write UTF-8 bytes to a Drive file id/URI',
           'drive.trash(idOrUri)           - Move a Drive file to Google Drive trash',
           'drive.moveToTrash(idOrUri)     - Alias for drive.trash(idOrUri)',
-          'drive.saveAsCurrentNotebook(folder, fileName) - Save current notebook to Drive and switch current doc',
+          'drive.saveAsCurrentNotebook(folder, fileName) - Create and open a Drive-backed copy; the source notebook is left unchanged',
           'drive.copyNotebook(source, targetFolder, fileName?) - Copy a notebook file to another Drive folder',
           'drive.listPendingSync()        - List Drive-backed local notebooks that currently need sync',
           'drive.requeuePendingSync()     - Requeue all Drive-backed local notebooks that need sync',

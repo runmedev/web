@@ -442,6 +442,8 @@ export function buildSandboxSrcDoc(options: {
           list: (folder) => hostCall("drive.list", [folder]),
           search: (request) => hostCall("drive.search", [request]),
           create: (folder, name) => hostCall("drive.create", [folder, name]),
+          createNotebook: (folder, name, options) =>
+            hostCall("drive.createNotebook", [folder, name, options]),
           update: (idOrUri, bytes) => hostCall("drive.update", [idOrUri, bytes]),
           saveAsCurrentNotebook: (folder, name) =>
             hostCall("drive.saveAsCurrentNotebook", [folder, name]),
@@ -451,8 +453,9 @@ export function buildSandboxSrcDoc(options: {
             consoleProxy.log("drive.list(folderIdOrUri)");
             consoleProxy.log("drive.search(filesListRequest)");
             consoleProxy.log("drive.create(folderIdOrUri, name)");
+            consoleProxy.log("drive.createNotebook(folderIdOrUri, name, { cells? })");
             consoleProxy.log("drive.update(fileIdOrUri, bytes)");
-            consoleProxy.log("drive.saveAsCurrentNotebook(folderIdOrUri, name)");
+            consoleProxy.log("drive.saveAsCurrentNotebook(folderIdOrUri, name) // creates a copy and leaves the source unchanged");
           },
         };
 

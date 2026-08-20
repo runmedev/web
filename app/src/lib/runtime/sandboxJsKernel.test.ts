@@ -1239,6 +1239,7 @@ describe('SandboxJSKernel', () => {
         'embed',
         'documents.update',
         'drive.create',
+        'drive.createNotebook',
         'drive.update',
         'drive.saveAsCurrentNotebook',
         'notebookDiff.restoreDeletedCell',

@@ -37,6 +37,7 @@ Benefits:
 - authenticate Drive access,
 - mount a Drive link or folder,
 - open a Drive notebook,
+- create a new Drive-backed notebook directly,
 - create or open an Excalidraw diagram in a Drive folder,
 - save the current notebook to Drive,
 - copy a notebook into another Drive folder,
@@ -152,12 +153,41 @@ await drive.refreshAuth()
 drive.list(folderIdOrUri)
 drive.search(filesListRequest)
 drive.create(folderIdOrUri, 'name.json')
+drive.createNotebook(folderIdOrUri, 'notebook.ipynb', {
+  cells: [{ kind: 'markup', value: '# Notebook title' }],
+})
 drive.trash(fileIdOrUri)
 drive.saveAsCurrentNotebook(folderIdOrUri, 'name.json')
 drive.copyNotebook(sourceIdOrUri, targetFolderIdOrUri, 'name.json')
 drive.listPendingSync()
 drive.requeuePendingSync()
 ```
+
+Use `drive.createNotebook(folderIdOrUri, fileName, options?)` when the intended
+result is a new notebook in Google Drive. Optional `cells` create its initial
+code and markup content in the same operation. The helper creates the Drive
+file, registers its editable local mirror, opens that mirror, and returns both
+`remoteUri` and `localUri`. The mirror and Drive file are one logical
+Drive-backed notebook.
+
+External AI agents use the direct `createDriveNotebook` WebMCP tool with
+`folderIdOrUri`, `fileName`, a stable `idempotencyKey`, and the optional
+complete `cells` list. Retries reuse the key so Runme adopts the existing Drive
+file instead of creating a duplicate. The direct tool calls the same
+implementation without exposing Drive writes through the general-purpose
+`ExecuteCode` sandbox.
+
+The browser profile keeps the reserved Drive file ID durably, which makes
+same-profile retries deterministic even after a lost response or tab crash.
+Before a new profile consumes a different reservation, Runme waits for Drive's
+shared search index to expose an earlier create with the same key. Google Drive
+does not provide an atomic idempotency header across unrelated browser
+profiles, so callers should not intentionally issue the same new create from
+multiple profiles at once.
+
+Use `drive.saveAsCurrentNotebook(...)` only to copy an existing notebook. It
+leaves the source notebook unchanged, so creating a local notebook solely to
+call Save As would leave an unwanted local-only source behind.
 
 ### Search Drive with native query syntax
 

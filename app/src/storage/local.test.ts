@@ -5,6 +5,7 @@ import md5 from 'md5'
 import { describe, expect, it, vi } from 'vitest'
 
 import { IPYNB_MIME_TYPE } from '../lib/ipynb'
+import { encodeIpynbNotebook, encodeRunmeNotebook } from '../lib/notebookFormat'
 import { MimeType, parser_pb } from '../runme/client'
 import { MemoryConflictDocStorage } from './conflictDocs'
 import type { DriveSyncCoordinator } from './driveSyncCoordinator'
@@ -123,6 +124,11 @@ function createTestStore(
   localStore.revisionDocStorage = new MemoryRevisionDocStorage()
   localStore.ipynbShadowStorage =
     options.ipynbShadowStorage ?? new MemoryIpynbShadowStorage()
+  localStore.transaction = async (
+    _mode: string,
+    _table: unknown,
+    operation: () => Promise<unknown>
+  ) => operation()
   return localStore as LocalNotebooks
 }
 
@@ -143,6 +149,170 @@ function notebookJson(value: string): string {
 }
 
 describe('LocalNotebooks pending Drive create', () => {
+  it('creates one local mirror across concurrent addFile calls', async () => {
+    const store = createTestStore({})
+    const remoteUri = 'https://drive.google.com/file/d/concurrent123/view'
+
+    const [first, second] = await Promise.all([
+      store.addFile(remoteUri, 'concurrent.json'),
+      store.addFile(remoteUri, 'concurrent.json'),
+    ])
+
+    expect(second).toBe(first)
+    const records = await store.files.toArray()
+    expect(records.filter((record) => record.remoteId === remoteUri)).toHaveLength(
+      1
+    )
+  })
+
+  it('initializes an uploaded Drive ipynb as a synced mirror', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/created123/view'
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'title-cell',
+          kind: parser_pb.CellKind.MARKUP,
+          languageId: 'markdown',
+          value: '# Created in Drive',
+        }),
+      ],
+    })
+    const upstreamContent = encodeIpynbNotebook(notebook).text
+    const store = createTestStore({})
+    const enqueueMarkdownSync = vi
+      .spyOn(store as any, 'enqueueMarkdownSync')
+      .mockImplementation(() => undefined)
+    const localUri = await store.addFile(remoteUri, 'created.ipynb')
+
+    await store.initializeUploadedDriveNotebook(
+      localUri,
+      notebook,
+      upstreamContent,
+      {
+        checksum: 'drive-checksum-1',
+        revisionId: 'drive-revision-1',
+      }
+    )
+
+    await expect(store.getSyncState(localUri)).resolves.toMatchObject({
+      status: 'synced',
+      remoteId: remoteUri,
+      lastUpstreamVersion: {
+        checksum: 'drive-checksum-1',
+        revisionId: 'drive-revision-1',
+      },
+    })
+    await expect(store.load(localUri)).resolves.toMatchObject({
+      cells: [
+        expect.objectContaining({
+          refId: 'title-cell',
+          value: '# Created in Drive',
+        }),
+      ],
+    })
+    await expect(store.files.get(localUri)).resolves.toMatchObject({
+      conflict: undefined,
+      lastRemoteChecksum: 'drive-checksum-1',
+      ipynbPreservation: {
+        upstreamFingerprint: 'drive-checksum-1',
+        baselineNotebookChecksum: expect.any(String),
+      },
+    })
+    await expect(store.listDriveBackedFilesNeedingSync()).resolves.toEqual([])
+    expect(enqueueMarkdownSync).toHaveBeenCalledWith(localUri)
+  })
+
+  it('preserves an existing edited mirror when create is retried', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/created123/view'
+    const initialNotebook = create(parser_pb.NotebookSchema, { cells: [] })
+    const retryNotebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          kind: parser_pb.CellKind.MARKUP,
+          value: '# Remote retry content',
+        }),
+      ],
+    })
+    const store = createTestStore({})
+    vi.spyOn(store as any, 'enqueueMarkdownSync').mockImplementation(
+      () => undefined
+    )
+    const localUri = await store.addFile(remoteUri, 'created.json')
+    await expect(
+      store.initializeUploadedDriveNotebook(
+        localUri,
+        initialNotebook,
+        encodeRunmeNotebook(initialNotebook),
+        { checksum: 'initial-remote-checksum' }
+      )
+    ).resolves.toBe(true)
+
+    const editedDoc = notebookJson('# Unsynced local edit')
+    await store.files.update(localUri, {
+      doc: editedDoc,
+      md5Checksum: md5(editedDoc),
+      conflict: {
+        detectedAt: '2026-08-19T00:00:00.000Z',
+        upstreamChecksum: 'other-remote-checksum',
+        localChecksumAtDetection: md5(editedDoc),
+      },
+    })
+
+    await expect(
+      store.initializeUploadedDriveNotebook(
+        localUri,
+        retryNotebook,
+        encodeRunmeNotebook(retryNotebook),
+        { checksum: 'retry-remote-checksum' }
+      )
+    ).resolves.toBe(false)
+
+    await expect(store.files.get(localUri)).resolves.toMatchObject({
+      doc: editedDoc,
+      md5Checksum: md5(editedDoc),
+      lastRemoteChecksum: 'initial-remote-checksum',
+      conflict: {
+        upstreamChecksum: 'other-remote-checksum',
+      },
+    })
+  })
+
+  it('does not overwrite a local edit committed during mirror initialization', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/created123/view'
+    const uploadedNotebook = create(parser_pb.NotebookSchema, { cells: [] })
+    const editedDoc = notebookJson('# Concurrent local edit')
+    const store = createTestStore({}) as any
+    vi.spyOn(store, 'enqueueMarkdownSync').mockImplementation(() => undefined)
+    const localUri = await store.addFile(remoteUri, 'created.json')
+    store.transaction = async (
+      _mode: string,
+      _table: unknown,
+      operation: () => Promise<unknown>
+    ) => {
+      await store.files.update(localUri, {
+        doc: editedDoc,
+        md5Checksum: md5(editedDoc),
+      })
+      return operation()
+    }
+
+    await expect(
+      store.initializeUploadedDriveNotebook(
+        localUri,
+        uploadedNotebook,
+        encodeRunmeNotebook(uploadedNotebook),
+        { checksum: 'uploaded-checksum' }
+      )
+    ).resolves.toBe(false)
+
+    await expect(store.files.get(localUri)).resolves.toMatchObject({
+      doc: editedDoc,
+      md5Checksum: md5(editedDoc),
+      lastRemoteChecksum: '',
+      lastSynced: '',
+    })
+  })
+
   it('upgrades a legacy Drive placeholder folder to the remote folder name', async () => {
     const parentRemoteUri = 'https://drive.google.com/drive/folders/folder123'
     const driveStore = {
@@ -168,12 +338,307 @@ describe('LocalNotebooks pending Drive create', () => {
     await store.updateFolder(parentRemoteUri)
 
     expect(driveStore.getMetadata).toHaveBeenCalledWith(parentRemoteUri)
-    await expect(store.folders.get('local://folder/drive')).resolves.toMatchObject(
-      {
-        name: 'runme testing',
-        remoteId: parentRemoteUri,
-      }
+    await expect(
+      store.folders.get('local://folder/drive')
+    ).resolves.toMatchObject({
+      name: 'runme testing',
+      remoteId: parentRemoteUri,
+    })
+  })
+
+  it('attaches a created Drive mirror to an equivalent mounted folder URI', async () => {
+    const store = createTestStore({})
+    await store.folders.put({
+      id: 'local://folder/drive-share-link',
+      name: 'Notebooks',
+      remoteId:
+        'https://drive.google.com/drive/folders/folder123?usp=drive_link',
+      children: [],
+      lastSynced: '',
+    })
+    await store.folders.put({
+      id: 'local://folder/drive-canonical',
+      name: 'Notebooks canonical',
+      remoteId: 'https://drive.google.com/drive/folders/folder123',
+      children: [],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: 'local://file/created',
+      name: 'created.json',
+      mimeType: 'application/json',
+      remoteId: 'https://drive.google.com/file/d/created123/view',
+      lastRemoteChecksum: 'checksum',
+      lastSynced: '2026-08-20T00:00:00.000Z',
+      doc: '{}',
+      md5Checksum: 'checksum',
+    })
+
+    await expect(
+      store.attachDriveFileToFolder(
+        'https://drive.google.com/drive/folders/folder123',
+        'local://file/created'
+      )
+    ).resolves.toBe('local://folder/drive-share-link')
+
+    await expect(
+      store.folders.get('local://folder/drive-share-link')
+    ).resolves.toMatchObject({
+      children: ['local://file/created'],
+      provisionalChildren: ['local://file/created'],
+    })
+    await expect(
+      store.folders.get('local://folder/drive-canonical')
+    ).resolves.toMatchObject({
+      children: ['local://file/created'],
+      provisionalChildren: ['local://file/created'],
+    })
+  })
+
+  it('preserves a direct attachment while its Drive folder is first mounted', async () => {
+    const folderUri = 'https://drive.google.com/drive/folders/folder123'
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({ name: 'Notebooks' })),
+      list: vi.fn(async () => []),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: 'local://file/created-before-mount',
+      name: 'created.json',
+      mimeType: 'application/json',
+      remoteId: 'https://drive.google.com/file/d/created123/view',
+      lastRemoteChecksum: 'checksum',
+      lastSynced: '2026-08-20T00:00:00.000Z',
+      doc: '{}',
+      md5Checksum: 'checksum',
+    })
+
+    const provisionalFolderUri = await store.attachDriveFileToFolder(
+      folderUri,
+      'local://file/created-before-mount'
     )
+    expect(provisionalFolderUri).toMatch(/^local:\/\/folder\//)
+
+    const mountedFolderUri = await store.updateFolder(
+      `${folderUri}?usp=drive_link`
+    )
+    expect(mountedFolderUri).toBe(provisionalFolderUri)
+    await expect(store.folders.toArray()).resolves.toHaveLength(1)
+    await expect(store.folders.get(mountedFolderUri)).resolves.toMatchObject({
+      name: 'Notebooks',
+      children: ['local://file/created-before-mount'],
+      provisionalChildren: ['local://file/created-before-mount'],
+    })
+  })
+
+  it('removes stale Drive folder membership before attaching a moved file', async () => {
+    const store = createTestStore({})
+    await store.files.put({
+      id: 'local://file/moved',
+      name: 'moved.json',
+      remoteId: 'https://drive.google.com/file/d/moved123/view',
+      lastRemoteChecksum: 'checksum',
+      lastSynced: '',
+      doc: '{}',
+      md5Checksum: 'checksum',
+    })
+    await store.folders.put({
+      id: 'local://folder/old',
+      name: 'Old',
+      remoteId: 'https://drive.google.com/drive/folders/old123',
+      children: ['local://file/moved'],
+      provisionalChildren: ['local://file/moved'],
+      lastSynced: '',
+    })
+    await store.folders.put({
+      id: 'local://folder/new',
+      name: 'New',
+      remoteId: 'https://drive.google.com/drive/folders/new123',
+      children: [],
+      lastSynced: '',
+    })
+
+    await store.attachDriveFileToFolder(
+      'https://drive.google.com/drive/folders/new123',
+      'local://file/moved'
+    )
+
+    await expect(store.folders.get('local://folder/old')).resolves.toMatchObject({
+      children: [],
+      provisionalChildren: [],
+    })
+    await expect(store.folders.get('local://folder/new')).resolves.toMatchObject({
+      children: ['local://file/moved'],
+    })
+  })
+
+  it('preserves a direct attachment until a Drive listing confirms it', async () => {
+    const folderUri = 'https://drive.google.com/drive/folders/folder123'
+    let listedItems: Array<Record<string, unknown>> = []
+    const driveStore = {
+      list: vi.fn(async () => listedItems),
+    }
+    const store = createTestStore(driveStore)
+    await store.folders.put({
+      id: 'local://folder/drive',
+      name: 'Notebooks',
+      remoteId: folderUri,
+      children: [],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: 'local://file/created',
+      name: 'created.json',
+      mimeType: 'application/json',
+      remoteId: 'https://drive.google.com/file/d/created123/view',
+      lastRemoteChecksum: 'checksum',
+      lastSynced: '2026-08-20T00:00:00.000Z',
+      doc: '{}',
+      md5Checksum: 'checksum',
+    })
+
+    await store.attachDriveFileToFolder(folderUri, 'local://file/created')
+    await store.updateFolder(folderUri, 'Notebooks')
+    await expect(
+      store.folders.get('local://folder/drive')
+    ).resolves.toMatchObject({
+      children: ['local://file/created'],
+      provisionalChildren: ['local://file/created'],
+    })
+
+    listedItems = [
+      {
+        uri: 'https://drive.google.com/file/d/created123/view',
+        name: 'created.json',
+        type: NotebookStoreItemType.File,
+        children: [],
+        remoteUri: 'https://drive.google.com/file/d/created123/view',
+        parents: [folderUri],
+      },
+    ]
+    await store.updateFolder(folderUri, 'Notebooks')
+    await expect(
+      store.folders.get('local://folder/drive')
+    ).resolves.toMatchObject({
+      children: ['local://file/created'],
+      provisionalChildren: [],
+    })
+  })
+
+  it('expires a provisional child that Drive never confirms', async () => {
+    const folderUri = 'https://drive.google.com/drive/folders/folder123'
+    const driveStore = {
+      list: vi.fn(async () => []),
+    }
+    const store = createTestStore(driveStore)
+    await store.folders.put({
+      id: 'local://folder/drive',
+      name: 'Notebooks',
+      remoteId: folderUri,
+      children: ['local://file/created'],
+      provisionalChildren: ['local://file/created'],
+      provisionalChildrenAttachedAt: {
+        'local://file/created': Date.now() - 120_000,
+      },
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: 'local://file/created',
+      name: 'created.json',
+      mimeType: 'application/json',
+      remoteId: 'https://drive.google.com/file/d/created123/view',
+      lastRemoteChecksum: 'checksum',
+      lastSynced: '2026-08-20T00:00:00.000Z',
+      doc: '{}',
+      md5Checksum: 'checksum',
+    })
+
+    await store.updateFolder(folderUri, 'Notebooks')
+
+    await expect(
+      store.folders.get('local://folder/drive')
+    ).resolves.toMatchObject({
+      children: [],
+      provisionalChildren: [],
+      provisionalChildrenAttachedAt: {},
+    })
+  })
+
+  it('preserves concurrent child additions in a mounted Drive folder', async () => {
+    const store = createTestStore({})
+    const folderUri = 'https://drive.google.com/drive/folders/folder123'
+    await store.folders.put({
+      id: 'local://folder/drive',
+      name: 'Notebooks',
+      remoteId: folderUri,
+      children: [],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: 'local://file/direct',
+      name: 'direct.json',
+      mimeType: 'application/json',
+      remoteId: 'https://drive.google.com/file/d/direct123/view',
+      lastRemoteChecksum: 'checksum',
+      lastSynced: '2026-08-20T00:00:00.000Z',
+      doc: '{}',
+      md5Checksum: 'checksum',
+    })
+
+    const [, localItem] = await Promise.all([
+      store.attachDriveFileToFolder(folderUri, 'local://file/direct'),
+      store.create('local://folder/drive', 'pending.json'),
+    ])
+
+    const folder = await store.folders.get('local://folder/drive')
+    expect(new Set(folder?.children)).toEqual(
+      new Set(['local://file/direct', localItem.uri])
+    )
+  })
+
+  it('serializes mounted-folder refresh and direct file attachment', async () => {
+    let releaseList!: () => void
+    const listGate = new Promise<void>((resolve) => {
+      releaseList = resolve
+    })
+    const driveStore = {
+      list: vi.fn(async () => {
+        await listGate
+        return []
+      }),
+    }
+    const store = createTestStore(driveStore)
+    const folderUri = 'https://drive.google.com/drive/folders/folder123'
+    await store.folders.put({
+      id: 'local://folder/drive',
+      name: 'Notebooks',
+      remoteId: folderUri,
+      children: [],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: 'local://file/created',
+      name: 'created.json',
+      mimeType: 'application/json',
+      remoteId: 'https://drive.google.com/file/d/created123/view',
+      lastRemoteChecksum: 'checksum',
+      lastSynced: '2026-08-20T00:00:00.000Z',
+      doc: '{}',
+      md5Checksum: 'checksum',
+    })
+
+    const refresh = store.updateFolder(folderUri, 'Notebooks')
+    await vi.waitFor(() => expect(driveStore.list).toHaveBeenCalledTimes(1))
+    const attach = store.attachDriveFileToFolder(
+      folderUri,
+      'local://file/created'
+    )
+    releaseList()
+    await Promise.all([refresh, attach])
+
+    await expect(
+      store.folders.get('local://folder/drive')
+    ).resolves.toMatchObject({ children: ['local://file/created'] })
   })
 
   it('creates a Drive-backed folder and attaches it locally', async () => {
@@ -218,8 +683,7 @@ describe('LocalNotebooks pending Drive create', () => {
   })
 
   it('moves a Drive-backed folder and updates the local folder tree', async () => {
-    const sourceRemoteUri =
-      'https://drive.google.com/drive/folders/source123'
+    const sourceRemoteUri = 'https://drive.google.com/drive/folders/source123'
     const destinationRemoteUri =
       'https://drive.google.com/drive/folders/destination123'
     const itemRemoteUri = 'https://drive.google.com/drive/folders/item123'
@@ -280,8 +744,7 @@ describe('LocalNotebooks pending Drive create', () => {
   })
 
   it('moves a notebook markdown sidecar with its Drive-backed file', async () => {
-    const sourceRemoteUri =
-      'https://drive.google.com/drive/folders/source123'
+    const sourceRemoteUri = 'https://drive.google.com/drive/folders/source123'
     const destinationRemoteUri =
       'https://drive.google.com/drive/folders/destination123'
     const itemRemoteUri = 'https://drive.google.com/file/d/item123/view'
@@ -327,8 +790,7 @@ describe('LocalNotebooks pending Drive create', () => {
   })
 
   it('recreates the markdown sidecar when its Drive move fails', async () => {
-    const sourceRemoteUri =
-      'https://drive.google.com/drive/folders/source123'
+    const sourceRemoteUri = 'https://drive.google.com/drive/folders/source123'
     const destinationRemoteUri =
       'https://drive.google.com/drive/folders/destination123'
     const itemRemoteUri = 'https://drive.google.com/file/d/item123/view'
@@ -398,8 +860,7 @@ describe('LocalNotebooks pending Drive create', () => {
   })
 
   it('preserves the local folder tree when a Drive move fails', async () => {
-    const sourceRemoteUri =
-      'https://drive.google.com/drive/folders/source123'
+    const sourceRemoteUri = 'https://drive.google.com/drive/folders/source123'
     const destinationRemoteUri =
       'https://drive.google.com/drive/folders/destination123'
     const itemRemoteUri = 'https://drive.google.com/file/d/item123/view'
@@ -706,7 +1167,7 @@ describe('LocalNotebooks pending Drive create', () => {
         .mockResolvedValueOnce({
           md5Checksum: 'remote-after-save',
           headRevisionId: 'revision-2',
-      }),
+        }),
       getMetadata: vi.fn(async () => ({
         uri: remoteUri,
         name: 'diagram.excalidraw',
@@ -744,13 +1205,13 @@ describe('LocalNotebooks pending Drive create', () => {
       content,
       EXCALIDRAW_MIME_TYPE
     )
-    await expect(store.files.get('local://file/excalidraw')).resolves.toMatchObject(
-      {
-        doc: content,
-        mimeType: EXCALIDRAW_MIME_TYPE,
-        lastRemoteChecksum: 'remote-after-save',
-      }
-    )
+    await expect(
+      store.files.get('local://file/excalidraw')
+    ).resolves.toMatchObject({
+      doc: content,
+      mimeType: EXCALIDRAW_MIME_TYPE,
+      lastRemoteChecksum: 'remote-after-save',
+    })
   })
 
   it('hydrates raw Excalidraw content from Drive into the local mirror', async () => {
@@ -779,12 +1240,12 @@ describe('LocalNotebooks pending Drive create', () => {
       content
     )
     expect(driveStore.loadContent).toHaveBeenCalledWith(remoteUri)
-    await expect(store.files.get('local://file/excalidraw')).resolves.toMatchObject(
-      {
-        doc: content,
-        lastRemoteChecksum: 'remote-content',
-      }
-    )
+    await expect(
+      store.files.get('local://file/excalidraw')
+    ).resolves.toMatchObject({
+      doc: content,
+      lastRemoteChecksum: 'remote-content',
+    })
   })
 
   it('serializes overlapping sync calls for the same pending Drive file', async () => {
@@ -1609,7 +2070,9 @@ describe('LocalNotebooks Drive conflict resolution', () => {
       md5Checksum: 'local-checksum',
     })
 
-    await expect(store.getDriveUpstreamDoc('local://file/drive')).resolves.toEqual({
+    await expect(
+      store.getDriveUpstreamDoc('local://file/drive')
+    ).resolves.toEqual({
       doc: toJsonString(
         parser_pb.NotebookSchema,
         upstreamNotebook,
