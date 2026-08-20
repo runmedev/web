@@ -27,13 +27,13 @@ This Runme instance is served from ${runmeOrigin}.
 
 - Inspect existing in-app browser tabs before opening another tab.
 - Reuse a Runme tab whose URL begins with ${runmeOrigin}. A session URL has the form \`${sessionUrl}\`.
-- Claim the selected tab and use its page-provided WebMCP tools for notebook reads, reference handling, and collaboration.
+- Claim the selected tab and use its page-provided WebMCP tools for notebook reads, edits, and execution.
 - Use the \`ExecuteCode\` WebMCP tool to run AppKernel JavaScript. Print values explicitly with \`console.log(...)\`.
 - Read notebooks with \`notebooks.get({ uri: notebookUri })\` and access cells through \`doc.notebook.cells\`. There is no \`notebooks.read\` method. Call \`await notebooks.help()\` before generating notebook code when the API is uncertain.
 - When the user explicitly requests a new notebook in Google Drive, call the direct \`createDriveNotebook\` WebMCP tool. It creates the Drive file and its Runme mirror as one retry-safe operation without a local staging notebook.
 - Use the \`comments\` library inside \`ExecuteCode\` for Drive comments and anchors. Runme does not expose a comment-specific WebMCP tool.
 - Use the \`ui\` library inside \`ExecuteCode\` to create rendered Markdown selections and open Runme's selection context menu. Do not invent CSS selectors or dispatch arbitrary DOM events.
-- WebMCP \`ExecuteCode\` cannot use the general-purpose notebook mutation or execution methods. Do not route around this boundary with DOM clicks, keyboard automation, or Computer Use. Tell the user to use a trusted browser AppKernel cell or the normal Runme UI for intentional cell mutation or execution.
+- Do not edit or execute notebook cells through DOM clicks, keyboard automation, or Computer Use. If WebMCP is unavailable, stop and tell the user what must be done manually.
 
 ## Handle ExecuteCode operations
 
@@ -205,9 +205,9 @@ Treat an explicit Google Drive destination as authoritative. Call the direct \`c
 }
 \`\`\`
 
-Reuse the same \`idempotencyKey\` if the tool call must be retried; use a new key for a distinct notebook. The returned \`localUri\` is the editable local mirror of the new Drive file, not a second standalone notebook. Use \`ExecuteCode\` with \`notebooks.get({ uri: localUri })\` to verify the created content. The direct tool accepts the complete initial cell list; later cell mutation remains outside the \`ExecuteCode\` sandbox boundary.
+Reuse the same \`idempotencyKey\` if the tool call must be retried; use a new key for a distinct notebook. The returned \`localUri\` is the editable local mirror of the new Drive file, not a second standalone notebook. Use \`ExecuteCode\` with \`notebooks.get({ uri: localUri })\` to verify the created content. The direct tool accepts the complete initial cell list; later cell mutations can use \`notebooks.appendCell\` or \`notebooks.update\` after binding the concrete \`localUri\` and revision as described below.
 
-Do not implement "create a notebook in Google Drive" by calling \`notebooks.createLocal(...)\` and then \`drive.saveAsCurrentNotebook(...)\`. Those sandbox calls are blocked, and Save As intentionally leaves its source notebook unchanged. In a trusted AppKernel cell, use \`drive.saveAsCurrentNotebook\` only when the user asks to copy or migrate an existing notebook.
+Do not implement "create a notebook in Google Drive" by calling \`notebooks.createLocal(...)\` and then \`drive.saveAsCurrentNotebook(...)\`. Although those sandbox methods are available, Save As intentionally leaves its source notebook unchanged and is the wrong primitive when Drive is the authoritative destination. Use \`drive.saveAsCurrentNotebook\` only when the user asks to copy or migrate an existing notebook.
 
 ## Bind the notebook before editing
 
@@ -310,7 +310,7 @@ Use \`comments.reopen({ target, commentId })\` only when the user asks to reopen
 
 ## Request write access when needed
 
-If \`doc.summary.readOnly\` is true because another Runme session owns the notebook, request a cooperative takeover before a supported collaboration write:
+If \`doc.summary.readOnly\` is true because another Runme session owns the notebook, request a cooperative takeover before mutating it:
 
 \`\`\`js
 const writable = await notebooks.requestWriteAccess({
@@ -325,22 +325,27 @@ console.log(JSON.stringify({
 
 Continue only when the returned document has \`summary.readOnly === false\`. The current owner saves pending changes before releasing its lock. Always pass the concrete notebook URI; do not request access to whichever notebook is currently selected.
 
-## Respect the sandbox execution boundary
+## Make safe notebook changes
 
-The WebMCP \`ExecuteCode\` sandbox can inspect notebook state, resolve and show references, and use supported collaboration helpers. The narrow \`notebooks.attach(...)\` exception may attach an existing Google Drive file or HTTPS URL to an explicitly targeted notebook; WebMCP callers cannot send browser \`File\` or \`Blob\` values through it. The sandbox cannot call these other notebook mutation or execution methods:
+- Inspect \`await notebooks.help()\` when helper availability is uncertain.
+- Use \`notebooks.appendCell\` for a simple append. A Markdown cell uses \`kind: 'markup'\`, not \`kind: 'markdown'\`.
+- Use \`notebooks.update\` for multi-cell or idempotent edits. Pass \`target: { uri: notebookUri }\` and \`expectedRevision: doc.handle.revision\` when a revision is available.
+- Use \`notebooks.attach\` to attach an existing Google Drive file or HTTPS URL to an explicitly targeted notebook. WebMCP callers cannot send browser \`File\` or \`Blob\` values through it.
+- Prefer updating a stable named cell over blindly appending duplicate status or result cells.
+- Build large cell values as data (for example with \`JSON.stringify\`) instead of hand-escaping nested JavaScript.
+- Catch and inspect \`NOTEBOOK_UPDATE_FAILED\`; a multi-operation update can partially succeed.
 
-- \`notebooks.update\`
-- \`notebooks.execute\`
-- \`notebooks.createLocal\`
-- \`notebooks.appendCell\`
-- \`notebooks.delete\`
-- \`notebooks.embed\` and the top-level \`embed\` helper
-- \`runme.runAll\`
-- \`runme.rerun\`
-- \`documents.update\`
-- \`drive.create\`, \`drive.createNotebook\`, \`drive.update\`, and \`drive.saveAsCurrentNotebook\`
-- \`notebookDiff.restoreDeletedCell\` and \`notebookDiff.restoreAllDeletedCells\`
+After every mutation, read the same URI again and verify the exact \`refId\`, \`languageId\`, value, and revision that matter to the request:
 
-These methods fail with \`Sandbox method not allowed\` before the host bridge is invoked. Do not retry them or use another sandbox helper as an execution deputy. The narrow \`createDriveNotebook\` WebMCP tool is the supported exception for creating a complete new Drive-backed notebook, and \`notebooks.attach(...)\` is the supported exception for attaching an existing Drive or HTTPS resource. Use a trusted browser AppKernel cell or the normal Runme UI for other intentional notebook mutation or execution.
+\`\`\`js
+const verified = await notebooks.get({ uri: notebookUri })
+console.log(JSON.stringify({
+  uri: verified.handle?.uri,
+  revision: verified.handle?.revision,
+  cells: verified.notebook?.cells,
+}))
+\`\`\`
+
+Treat the reread result—not the visible selection—as the source of truth.
 `
 }

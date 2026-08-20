@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
 
+import { NotebookUpdateError } from './runmeConsole'
 import {
   CODE_MODE_SANDBOX_ALLOWED_METHODS,
   SandboxJSKernel,
@@ -19,12 +20,15 @@ type Scenario =
   | 'credentials'
   | 'drive'
   | 'driveSearch'
+  | 'driveSave'
   | 'documents'
   | 'documentation'
   | 'comments'
   | 'notebooksAttach'
+  | 'notebooksCreate'
+  | 'notebooksEmbed'
   | 'notebooksWriteAccess'
-  | 'notebooksGetError'
+  | 'notebooksUpdateError'
 
 class MockSandboxPort {
   onmessage: ((event: MessageEvent<any>) => void) | null = null
@@ -165,6 +169,13 @@ class MockSandboxPort {
             },
           ],
         })
+      } else if (this.scenario === 'driveSave') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'drive.saveAsCurrentNotebook',
+          args: ['root', 'Comments demo.ipynb'],
+        })
       } else if (this.scenario === 'documents') {
         this.emit({
           type: 'host-call',
@@ -177,6 +188,16 @@ class MockSandboxPort {
           callId: 2,
           method: 'documents.get',
           args: ['local://file/test4'],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 3,
+          method: 'documents.update',
+          args: [
+            'local://file/test4',
+            '{"type":"excalidraw","elements":[{"id":"label","type":"text","text":"Box A"}]}',
+            { mimeType: 'application/vnd.excalidraw+json' },
+          ],
         })
       } else if (this.scenario === 'documentation') {
         this.emit({
@@ -230,6 +251,40 @@ class MockSandboxPort {
             },
           ],
         })
+      } else if (this.scenario === 'notebooksCreate') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'notebooks.createLocal',
+          args: ['Comments demo.ipynb', undefined],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 2,
+          method: 'notebooks.appendCell',
+          args: [
+            {
+              target: {
+                handle: { uri: 'local://file/comments-demo', revision: '1' },
+              },
+              kind: 'markup',
+              value: '# Comments demo',
+            },
+          ],
+        })
+      } else if (this.scenario === 'notebooksEmbed') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'embed',
+          args: ['/tmp/screenshot.png', { alt: 'Screenshot' }],
+        })
+        this.emit({
+          type: 'host-call',
+          callId: 2,
+          method: 'notebooks.embed',
+          args: ['data:image/png;base64,AQID', undefined],
+        })
       } else if (this.scenario === 'notebooksWriteAccess') {
         this.emit({
           type: 'host-call',
@@ -237,12 +292,17 @@ class MockSandboxPort {
           method: 'notebooks.requestWriteAccess',
           args: [{ target: { uri: 'local://file/demo' } }],
         })
-      } else if (this.scenario === 'notebooksGetError') {
+      } else if (this.scenario === 'notebooksUpdateError') {
         this.emit({
           type: 'host-call',
           callId: 1,
-          method: 'notebooks.get',
-          args: [{ uri: 'local://file/demo' }],
+          method: 'notebooks.update',
+          args: [
+            {
+              target: { uri: 'local://file/demo' },
+              operations: [],
+            },
+          ],
         })
       } else if (this.scenario === 'hang') {
         this.emit({ type: 'stdout', data: 'started\n' })
@@ -312,6 +372,14 @@ class MockSandboxPort {
         this.emit({ type: 'exit', exitCode: 0 })
         return
       }
+      if (this.scenario === 'driveSave' && this.hostResults.has(1)) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
       if (this.scenario === 'explorer' && this.hostResults.has(2)) {
         this.emit({
           type: 'stdout',
@@ -364,6 +432,34 @@ class MockSandboxPort {
         this.emit({ type: 'exit', exitCode: 0 })
         return
       }
+      if (
+        this.scenario === 'notebooksCreate' &&
+        this.hostResults.has(1) &&
+        this.hostResults.has(2)
+      ) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(2) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+      if (
+        this.scenario === 'notebooksEmbed' &&
+        this.hostResults.has(1) &&
+        this.hostResults.has(2)
+      ) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
+        })
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(2) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
       if (this.scenario === 'notebooksWriteAccess' && this.hostResults.has(1)) {
         this.emit({
           type: 'stdout',
@@ -412,7 +508,7 @@ class MockSandboxPort {
     }
 
     if (type === 'host-error') {
-      if (this.scenario === 'notebooksGetError') {
+      if (this.scenario === 'notebooksUpdateError') {
         this.emit({
           type: 'stdout',
           data: `${JSON.stringify(message.error ?? null)}\n`,
@@ -437,45 +533,9 @@ class MockSandboxPort {
   }
 }
 
-class SingleHostCallSandboxPort {
-  onmessage: ((event: MessageEvent<any>) => void) | null = null
-
-  constructor(private readonly method: string) {}
-
-  postMessage(message: Record<string, unknown>) {
-    const type = String(message.type ?? '')
-    if (type === 'run') {
-      this.emit({
-        type: 'host-call',
-        callId: 1,
-        method: this.method,
-        args: [],
-      })
-      return
-    }
-    if (type === 'host-error') {
-      this.emit({ type: 'stderr', data: String(message.error ?? '') + '\n' })
-      this.emit({ type: 'exit', exitCode: 1 })
-      return
-    }
-    if (type === 'host-result') {
-      this.emit({ type: 'exit', exitCode: 0 })
-    }
-  }
-
-  start() {}
-  close() {}
-  addEventListener() {}
-  removeEventListener() {}
-
-  private emit(data: unknown) {
-    this.onmessage?.({ data } as MessageEvent)
-  }
-}
-
 class TestableSandboxJSKernel extends SandboxJSKernel {
   constructor(
-    private readonly port: MockSandboxPort | SingleHostCallSandboxPort,
+    private readonly port: MockSandboxPort,
     options: ConstructorParameters<typeof SandboxJSKernel>[0],
     private readonly disposeSession = () => {}
   ) {
@@ -1075,7 +1135,7 @@ describe('SandboxJSKernel', () => {
     expect(exitCode).toBe(0)
   })
 
-  it('supports read-only document helpers through the sandbox bridge', async () => {
+  it('supports raw document helpers through the sandbox bridge', async () => {
     let stdout = ''
     let stderr = ''
     let exitCode = -1
@@ -1094,6 +1154,14 @@ describe('SandboxJSKernel', () => {
           name: 'test4.excalidraw',
           mimeType: 'application/vnd.excalidraw+json',
           content: '{"type":"excalidraw","elements":[]}',
+        }
+      }
+      if (method === 'documents.update') {
+        return {
+          uri: args[0],
+          name: 'test4.excalidraw',
+          mimeType: (args[2] as { mimeType?: string } | undefined)?.mimeType,
+          syncStatus: 'local-only',
         }
       }
       return null
@@ -1121,13 +1189,20 @@ describe('SandboxJSKernel', () => {
       [
         'console.log(await documents.list());',
         "const doc = await documents.get('local://file/test4');",
-        'console.log(doc);',
+        'const scene = JSON.parse(doc.content);',
+        "scene.elements.push({ id: 'label', type: 'text', text: 'Box A' });",
+        'console.log(await documents.update(doc.uri, JSON.stringify(scene), { mimeType: doc.mimeType }));',
       ].join('\n')
     )
 
     expect(bridgeCall).toHaveBeenCalledWith('documents.list', [])
     expect(bridgeCall).toHaveBeenCalledWith('documents.get', [
       'local://file/test4',
+    ])
+    expect(bridgeCall).toHaveBeenCalledWith('documents.update', [
+      'local://file/test4',
+      '{"type":"excalidraw","elements":[{"id":"label","type":"text","text":"Box A"}]}',
+      { mimeType: 'application/vnd.excalidraw+json' },
     ])
     expect(stdout).toContain('test4.excalidraw')
     expect(stderr).toBe('')
@@ -1243,63 +1318,6 @@ describe('SandboxJSKernel', () => {
     expect(exitCode).toBe(0)
   })
 
-  it.each([
-    { name: 'default sandbox', allowedMethods: undefined },
-    {
-      name: 'code-mode sandbox',
-      allowedMethods: CODE_MODE_SANDBOX_ALLOWED_METHODS,
-    },
-  ])(
-    'blocks notebook mutation and execution deputies in the $name before calling the host bridge',
-    async ({ allowedMethods }) => {
-      const blockedMethods = [
-        'notebooks.update',
-        'notebooks.execute',
-        'notebooks.createLocal',
-        'notebooks.appendCell',
-        'notebooks.delete',
-        'notebooks.embed',
-        'runme.runAll',
-        'runme.rerun',
-        'embed',
-        'documents.update',
-        'drive.create',
-        'drive.createNotebook',
-        'drive.update',
-        'drive.saveAsCurrentNotebook',
-        'notebookDiff.restoreDeletedCell',
-        'notebookDiff.restoreAllDeletedCells',
-      ]
-
-      for (const method of blockedMethods) {
-        let stderr = ''
-        let exitCode = -1
-        const bridgeCall = vi.fn(async () => 'unexpected')
-        const kernel = new TestableSandboxJSKernel(
-          new SingleHostCallSandboxPort(method),
-          {
-            bridge: { call: bridgeCall },
-            ...(allowedMethods ? { allowedMethods } : {}),
-            hooks: {
-              onStderr: (data) => {
-                stderr += data
-              },
-              onExit: (code) => {
-                exitCode = code
-              },
-            },
-          }
-        )
-
-        await kernel.run('console.log("sandbox boundary test");')
-
-        expect(bridgeCall).not.toHaveBeenCalled()
-        expect(stderr).toContain(`Sandbox method not allowed: ${method}`)
-        expect(exitCode).toBe(1)
-      }
-    }
-  )
-
   it('supports linked-resource attachment through the notebooks sandbox helper', async () => {
     let stdout = ''
     let stderr = ''
@@ -1347,22 +1365,24 @@ describe('SandboxJSKernel', () => {
     expect(exitCode).toBe(0)
   })
 
-  it('serializes structured host errors through the sandbox bridge', async () => {
+  it('supports saving the current notebook to Drive through the sandbox bridge', async () => {
     let stdout = ''
     let stderr = ''
     let exitCode = -1
-    const bridgeCall = vi.fn(async () => {
-      throw Object.assign(new Error('Notebook lookup failed'), {
-        name: 'NotebookLookupError',
-        code: 'NOTEBOOK_LOOKUP_FAILED',
-        details: {
-          uri: 'local://file/demo',
-        },
-      })
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'drive.saveAsCurrentNotebook') {
+        return {
+          fileId: 'drive-file-1',
+          fileName: 'Comments demo.ipynb',
+          remoteUri: 'https://drive.google.com/file/d/drive-file-1/view',
+          localUri: 'local://drive-file-1',
+        }
+      }
+      return null
     })
 
     const kernel = new TestableSandboxJSKernel(
-      new MockSandboxPort('notebooksGetError'),
+      new MockSandboxPort('driveSave'),
       {
         bridge: { call: bridgeCall },
         hooks: {
@@ -1379,19 +1399,199 @@ describe('SandboxJSKernel', () => {
       }
     )
 
-    await kernel.run("await notebooks.get({ uri: 'local://file/demo' });")
+    await kernel.run(
+      "console.log(await drive.saveAsCurrentNotebook('root', 'Comments demo.ipynb'));"
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith('drive.saveAsCurrentNotebook', [
+      'root',
+      'Comments demo.ipynb',
+    ])
+    expect(stdout).toContain('"fileId":"drive-file-1"')
+    expect(stdout).toContain('Comments demo.ipynb')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports local notebook creation helpers through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'notebooks.createLocal') {
+        return {
+          handle: { uri: 'local://file/comments-demo', revision: '1' },
+        }
+      }
+      if (method === 'notebooks.appendCell') {
+        return {
+          handle: { uri: 'local://file/comments-demo', revision: '2' },
+          cell: { refId: 'cell-comments-demo', value: '# Comments demo' },
+        }
+      }
+      return null
+    })
+
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('notebooksCreate'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run(
+      "const created = await notebooks.createLocal('Comments demo.ipynb'); console.log(await notebooks.appendCell({ target: { handle: created.handle }, kind: 'markup', value: '# Comments demo' }));"
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith('notebooks.createLocal', [
+      'Comments demo.ipynb',
+      undefined,
+    ])
+    expect(bridgeCall).toHaveBeenCalledWith('notebooks.appendCell', [
+      {
+        target: {
+          handle: { uri: 'local://file/comments-demo', revision: '1' },
+        },
+        kind: 'markup',
+        value: '# Comments demo',
+      },
+    ])
+    expect(stdout).toContain('cell-comments-demo')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports image embedding through top-level and notebooks sandbox helpers', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'embed' || method === 'notebooks.embed') {
+        return {
+          uri: 'local://file/images',
+          cell: { refId: 'image-cell', languageId: 'html' },
+        }
+      }
+      return null
+    })
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('notebooksEmbed'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run(
+      "console.log(await embed('/tmp/screenshot.png', { alt: 'Screenshot' })); console.log(await notebooks.embed('data:image/png;base64,AQID'));"
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith('embed', [
+      '/tmp/screenshot.png',
+      { alt: 'Screenshot' },
+    ])
+    expect(bridgeCall).toHaveBeenCalledWith('notebooks.embed', [
+      'data:image/png;base64,AQID',
+      undefined,
+    ])
+    expect(stdout).toContain('image-cell')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('serializes structured notebook update errors through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async () => {
+      throw new NotebookUpdateError({
+        method: 'notebooks.update',
+        code: 'NOTEBOOK_UPDATE_FAILED',
+        failedOperationIndex: 1,
+        failedOperation: {
+          op: 'update',
+          refId: 'missing-cell',
+          patch: { value: 'echo missing' },
+        },
+        failedOperationError: 'Cell not found: missing-cell',
+        appliedOperationCount: 1,
+        operationStatuses: [
+          { index: 0, status: 'applied' },
+          {
+            index: 1,
+            status: 'failed',
+            error: 'Cell not found: missing-cell',
+          },
+        ],
+        beforeHandle: { uri: 'local://file/demo', revision: 'before' },
+        afterHandle: { uri: 'local://file/demo', revision: 'after' },
+      })
+    })
+
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('notebooksUpdateError'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run('await notebooks.update({ operations: [] });')
 
     const serialized = JSON.parse(stdout)
-    expect(bridgeCall).toHaveBeenCalledWith('notebooks.get', [
-      { uri: 'local://file/demo' },
+    expect(bridgeCall).toHaveBeenCalledWith('notebooks.update', [
+      {
+        target: { uri: 'local://file/demo' },
+        operations: [],
+      },
     ])
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
     expect(serialized).toMatchObject({
-      name: 'NotebookLookupError',
-      code: 'NOTEBOOK_LOOKUP_FAILED',
+      name: 'NotebookUpdateError',
+      code: 'NOTEBOOK_UPDATE_FAILED',
       details: {
-        uri: 'local://file/demo',
+        failedOperationIndex: 1,
+        appliedOperationCount: 1,
+        operationStatuses: [
+          { index: 0, status: 'applied' },
+          {
+            index: 1,
+            status: 'failed',
+            error: 'Cell not found: missing-cell',
+          },
+        ],
       },
     })
   })
