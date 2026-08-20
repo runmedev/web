@@ -275,16 +275,18 @@ Reuse the same `idempotencyKey` if the call must be retried; use a new key for
 a distinct notebook. The returned `localUri` is the editable mirror of the new Drive file. It is not
 a separate standalone notebook. The direct tool accepts the complete initial
 cell list. Use `ExecuteCode` with `notebooks.get({ uri: localUri })` to verify
-the result; later cell mutation remains outside the `ExecuteCode` sandbox.
+the result. Later cell mutations can use `notebooks.appendCell` or
+`notebooks.update` after binding the concrete `localUri` and revision.
 Same-profile retries reuse a durably reserved Drive file ID. Do not issue the
 same create concurrently from unrelated browser profiles: Google Drive does
 not provide an atomic idempotency constraint for application properties, so
 cross-profile adoption through Drive search is best-effort.
 
 Do not stage a new Drive notebook with `notebooks.createLocal(...)` followed by
-`drive.saveAsCurrentNotebook(...)`. Those sandbox calls are blocked, and Save
-As leaves the local source unchanged. In a trusted AppKernel cell, reserve Save
-As for intentional copies or migrations of existing notebooks.
+`drive.saveAsCurrentNotebook(...)`. Although those sandbox methods are
+available, Save As leaves the local source unchanged and is the wrong primitive
+when Drive is the authoritative destination. Reserve Save As for intentional
+copies or migrations of existing notebooks.
 
 ## Drive-backed notebook lookup
 

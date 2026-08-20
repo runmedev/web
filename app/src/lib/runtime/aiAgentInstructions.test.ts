@@ -68,6 +68,10 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain(
       'editable local mirror of the new Drive file'
     )
+    expect(instructions).toContain(
+      'later cell mutations can use `notebooks.appendCell` or `notebooks.update`'
+    )
+    expect(instructions).not.toContain('Those sandbox calls are blocked')
     expect(instructions).toContain('leaves its source notebook unchanged')
     expect(instructions).toContain('copy or migrate an existing notebook')
     expect(instructions).toContain('local://')

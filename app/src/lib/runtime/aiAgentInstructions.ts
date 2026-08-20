@@ -205,9 +205,9 @@ Treat an explicit Google Drive destination as authoritative. Call the direct \`c
 }
 \`\`\`
 
-Reuse the same \`idempotencyKey\` if the tool call must be retried; use a new key for a distinct notebook. The returned \`localUri\` is the editable local mirror of the new Drive file, not a second standalone notebook. Use \`ExecuteCode\` with \`notebooks.get({ uri: localUri })\` to verify the created content. The direct tool accepts the complete initial cell list; later cell mutation remains outside the \`ExecuteCode\` sandbox boundary.
+Reuse the same \`idempotencyKey\` if the tool call must be retried; use a new key for a distinct notebook. The returned \`localUri\` is the editable local mirror of the new Drive file, not a second standalone notebook. Use \`ExecuteCode\` with \`notebooks.get({ uri: localUri })\` to verify the created content. The direct tool accepts the complete initial cell list; later cell mutations can use \`notebooks.appendCell\` or \`notebooks.update\` after binding the concrete \`localUri\` and revision as described below.
 
-Do not implement "create a notebook in Google Drive" by calling \`notebooks.createLocal(...)\` and then \`drive.saveAsCurrentNotebook(...)\`. Those sandbox calls are blocked, and Save As intentionally leaves its source notebook unchanged. In a trusted AppKernel cell, use \`drive.saveAsCurrentNotebook\` only when the user asks to copy or migrate an existing notebook.
+Do not implement "create a notebook in Google Drive" by calling \`notebooks.createLocal(...)\` and then \`drive.saveAsCurrentNotebook(...)\`. Although those sandbox methods are available, Save As intentionally leaves its source notebook unchanged and is the wrong primitive when Drive is the authoritative destination. Use \`drive.saveAsCurrentNotebook\` only when the user asks to copy or migrate an existing notebook.
 
 ## Bind the notebook before editing
 
