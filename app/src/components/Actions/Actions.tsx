@@ -2177,6 +2177,20 @@ function NotebookTabContent({
       focusCommentCell(target.cellId)
       const range = target.range
       setActiveCommentRange(range ? { cellId: target.cellId, ...range } : null)
+
+      const scrollCellIntoView = () => {
+        const element = findCellElement(target.cellId)
+        if (!element) {
+          return false
+        }
+        element.scrollIntoView({
+          block: 'center',
+          inline: 'nearest',
+          behavior: 'smooth',
+        })
+        return true
+      }
+
       const scrollToTarget = () => {
         const element = findCellElement(target.cellId)
         if (!element) {
@@ -2194,20 +2208,30 @@ function NotebookTabContent({
           }
           return false
         }
-        element.scrollIntoView({
-          block: 'center',
-          inline: 'nearest',
-          behavior: 'smooth',
-        })
-        return true
+        return scrollCellIntoView()
       }
 
-      if (!scrollToTarget() && typeof requestAnimationFrame === 'function') {
-        requestAnimationFrame(scrollToTarget)
+      if (scrollToTarget()) {
+        return
+      }
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => {
+          if (!scrollToTarget()) {
+            scrollCellIntoView()
+          }
+        })
+      } else {
+        scrollCellIntoView()
       }
     },
     [findCellElement, focusCommentCell]
   )
+
+  useEffect(() => {
+    if (!commentsPanelOpen) {
+      setActiveCommentRange(null)
+    }
+  }, [commentsPanelOpen])
 
   const embedImageFiles = useCallback(
     async (files: File[]) => {

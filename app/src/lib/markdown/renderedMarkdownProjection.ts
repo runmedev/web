@@ -374,6 +374,47 @@ export function renderedMarkdownDomRange(
   return range.collapsed ? null : range
 }
 
+function nearestScrollableAncestor(
+  element: HTMLElement,
+  axis: 'horizontal' | 'vertical'
+): HTMLElement | null {
+  const view = element.ownerDocument.defaultView
+  for (
+    let parent = element.parentElement;
+    parent;
+    parent = parent.parentElement
+  ) {
+    const style = view?.getComputedStyle(parent)
+    const overflow =
+      axis === 'vertical'
+        ? `${style?.overflowY ?? ''} ${style?.overflow ?? ''}`
+        : `${style?.overflowX ?? ''} ${style?.overflow ?? ''}`
+    const canScroll = /(?:auto|overlay|scroll)/.test(overflow)
+    const hasOverflow =
+      axis === 'vertical'
+        ? parent.scrollHeight > parent.clientHeight
+        : parent.scrollWidth > parent.clientWidth
+    if (canScroll && hasOverflow) {
+      return parent
+    }
+  }
+  return null
+}
+
+function scrollElementBy(
+  element: HTMLElement,
+  left: number,
+  top: number,
+  behavior: ScrollBehavior
+) {
+  if (typeof element.scrollBy === 'function') {
+    element.scrollBy({ left, top, behavior })
+    return
+  }
+  element.scrollLeft += left
+  element.scrollTop += top
+}
+
 export function scrollRenderedMarkdownRangeIntoView(
   root: HTMLElement,
   start: number,
@@ -388,6 +429,33 @@ export function scrollRenderedMarkdownRangeIntoView(
   if (!projectionSpan) {
     return false
   }
+
+  const verticalScroller = nearestScrollableAncestor(root, 'vertical')
+  if (verticalScroller && typeof range?.getBoundingClientRect === 'function') {
+    const rangeRect = range.getBoundingClientRect()
+    const scrollerRect = verticalScroller.getBoundingClientRect()
+    const top =
+      rangeRect.top -
+      scrollerRect.top -
+      (verticalScroller.clientHeight - rangeRect.height) / 2
+    scrollElementBy(verticalScroller, 0, top, behavior)
+
+    const horizontalScroller = nearestScrollableAncestor(root, 'horizontal')
+    if (horizontalScroller) {
+      const horizontalRect = horizontalScroller.getBoundingClientRect()
+      const left =
+        rangeRect.left < horizontalRect.left
+          ? rangeRect.left - horizontalRect.left
+          : rangeRect.right > horizontalRect.right
+            ? rangeRect.right - horizontalRect.right
+            : 0
+      if (left !== 0) {
+        scrollElementBy(horizontalScroller, left, 0, behavior)
+      }
+    }
+    return true
+  }
+
   projectionSpan.scrollIntoView({
     block: 'center',
     inline: 'nearest',
