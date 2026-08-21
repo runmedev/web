@@ -281,7 +281,7 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     ).toBeNull()
   })
 
-  it('starts service-account PKCE in a new tab without persisting a human token', async () => {
+  it('starts implicit service-account auth in a new tab without persisting a human token', async () => {
     const openSpy = vi
       .spyOn(window, 'open')
       .mockReturnValue(window as unknown as Window)
@@ -309,10 +309,100 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     expect(transaction).not.toContain('access_token')
     expect(transaction).not.toContain('refresh_token')
     const authUrl = new URL(String(openSpy.mock.calls[0]?.[0]))
-    expect(authUrl.searchParams.get('response_type')).toBe('code')
+    expect(authUrl.searchParams.get('response_type')).toBe('token')
     expect(authUrl.searchParams.get('access_type')).toBe('online')
+    expect(authUrl.searchParams.get('code_challenge')).toBeNull()
     expect(authUrl.searchParams.get('login_hint')).toBe('jeremy@lewi.us')
     expect(authUrl.searchParams.get('scope')).toContain('cloud-platform')
+  })
+
+  it('uses PKCE for service-account auth when the code flow is configured', async () => {
+    googleClientManager.setOAuthClient({
+      authFlow: 'pkce',
+      authUxMode: 'new_tab',
+    })
+    const openSpy = vi
+      .spyOn(window, 'open')
+      .mockReturnValue(window as unknown as Window)
+    const auth = await renderWithGoogleAuthProvider()
+
+    await auth.getServiceAccountCredentials(
+      'runme@example.iam.gserviceaccount.com',
+      {
+        humanAccount: 'jeremy@lewi.us',
+        targets: ['drive'],
+        mode: 'new_tab',
+      }
+    )
+
+    const authUrl = new URL(String(openSpy.mock.calls[0]?.[0]))
+    expect(authUrl.searchParams.get('response_type')).toBe('code')
+    expect(authUrl.searchParams.get('code_challenge')).toBeTruthy()
+    expect(authUrl.searchParams.get('code_challenge_method')).toBe('S256')
+  })
+
+  it('consumes an implicit human token from the callback without persisting it', async () => {
+    saveAppLoginConfiguration({
+      ...DEFAULT_APP_LOGIN_CONFIGURATION,
+      mode: 'service_account',
+      humanAccount: 'jeremy@lewi.us',
+      serviceAccount: 'runme@example.iam.gserviceaccount.com',
+    })
+    window.localStorage.setItem(
+      IMPERSONATION_TRANSACTION_KEY,
+      JSON.stringify({
+        version: 2,
+        state: 'impersonation-state',
+        responseType: 'token',
+        createdAt: Date.now(),
+        returnTo: '/',
+        mode: 'redirect',
+        serviceAccount: 'runme@example.iam.gserviceaccount.com',
+        humanAccount: 'jeremy@lewi.us',
+        targets: ['drive'],
+        driveScopes: DRIVE_SCOPES,
+        appAudience: '',
+        authorizationLeaseSeconds: 86_400,
+      })
+    )
+    window.history.replaceState(
+      null,
+      '',
+      '/gdrive/callback#access_token=human-callback-token&expires_in=3600&state=impersonation-state'
+    )
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.includes('/userinfo')) {
+        return new Response(JSON.stringify({ email: 'jeremy@lewi.us' }), {
+          status: 200,
+        })
+      }
+      if (url.endsWith(':generateAccessToken')) {
+        return new Response(
+          JSON.stringify({
+            accessToken: 'service-account-drive-token',
+            expireTime: new Date(Date.now() + 3_600_000).toISOString(),
+          }),
+          { status: 200 }
+        )
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+
+    await renderWithGoogleAuthProvider()
+
+    await waitFor(() => {
+      const persisted = window.localStorage.getItem(
+        IMPERSONATED_SERVICE_ACCOUNT_CREDENTIAL_STORAGE_KEY
+      )
+      expect(persisted).toContain('service-account-drive-token')
+      expect(persisted).not.toContain('human-callback-token')
+      expect(window.location.hash).toBe('')
+    })
+    expect(globalThis.fetch).not.toHaveBeenCalledWith(
+      'https://oauth2.googleapis.com/token',
+      expect.anything()
+    )
   })
 
   it('hydrates a persisted Drive service-account credential after reload', async () => {

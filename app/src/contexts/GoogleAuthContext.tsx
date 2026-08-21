@@ -138,9 +138,10 @@ type GoogleRedirectUxMode = Extract<
 type GoogleOAuthPrompt = 'none' | 'consent' | 'select_account'
 
 type ImpersonationRedirectTransaction = {
-  version: 1
+  version: 2
   state: string
-  codeVerifier: string
+  responseType: 'code' | 'token'
+  codeVerifier?: string
   createdAt: number
   returnTo: string
   mode: GoogleRedirectUxMode
@@ -181,9 +182,11 @@ function readImpersonationTransaction(): ImpersonationRedirectTransaction | null
     }
     const parsed = JSON.parse(raw) as Partial<ImpersonationRedirectTransaction>
     if (
-      parsed.version !== 1 ||
+      parsed.version !== 2 ||
       typeof parsed.state !== 'string' ||
-      typeof parsed.codeVerifier !== 'string' ||
+      (parsed.responseType !== 'code' && parsed.responseType !== 'token') ||
+      (parsed.responseType === 'code' &&
+        typeof parsed.codeVerifier !== 'string') ||
       typeof parsed.createdAt !== 'number' ||
       Date.now() - parsed.createdAt > 10 * 60 * 1000 ||
       typeof parsed.returnTo !== 'string' ||
@@ -1035,13 +1038,17 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       mode: GoogleRedirectUxMode
     ) => {
       const authOperation = captureAuthOperation()
-      const { clientId } = googleClientManager.getOAuthClient()
+      const { clientId, authFlow } = googleClientManager.getOAuthClient()
       if (!clientId?.trim()) {
         throw new Error('Google OAuth client is not configured.')
       }
 
-      const { code_verifier: codeVerifier, code_challenge: codeChallenge } =
-        await pkceChallenge()
+      // Google web clients require a client secret at the token endpoint. For
+      // the configured implicit flow, receive the human token in the callback
+      // fragment instead and consume it only in callback memory. PKCE remains
+      // available when the user explicitly configures the code flow.
+      const responseType = authFlow === 'implicit' ? 'token' : 'code'
+      const pkce = responseType === 'code' ? await pkceChallenge() : null
       assertAuthOperationCurrent(authOperation)
       const state = globalThis.crypto?.randomUUID
         ? globalThis.crypto.randomUUID()
@@ -1051,9 +1058,10 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       )
       const targets = options.targets ?? ['drive', 'app']
       const transaction: ImpersonationRedirectTransaction = {
-        version: 1,
+        version: 2,
         state,
-        codeVerifier,
+        responseType,
+        ...(pkce ? { codeVerifier: pkce.code_verifier } : {}),
         createdAt: Date.now(),
         returnTo: getAppPath(APP_ROUTE_PATHS.home),
         mode,
@@ -1077,14 +1085,16 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
       authUrl.searchParams.set('client_id', clientId)
       authUrl.searchParams.set('redirect_uri', getGoogleDriveOAuthCallbackUrl())
-      authUrl.searchParams.set('response_type', 'code')
+      authUrl.searchParams.set('response_type', responseType)
       authUrl.searchParams.set(
         'scope',
         GOOGLE_SERVICE_ACCOUNT_IMPERSONATION_SCOPES.join(' ')
       )
       authUrl.searchParams.set('state', state)
-      authUrl.searchParams.set('code_challenge', codeChallenge)
-      authUrl.searchParams.set('code_challenge_method', 'S256')
+      if (pkce) {
+        authUrl.searchParams.set('code_challenge', pkce.code_challenge)
+        authUrl.searchParams.set('code_challenge_method', 'S256')
+      }
       authUrl.searchParams.set('include_granted_scopes', 'true')
       authUrl.searchParams.set('access_type', 'online')
       if (options.prompt) {
@@ -1107,16 +1117,19 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     const authOperation = captureAuthOperation()
 
     const params = new URLSearchParams(window.location.search)
+    const implicitToken = readImplicitRedirectTokenFromHash()
     const impersonationTransaction = readImpersonationTransaction()
     if (impersonationTransaction) {
       const returnTo = impersonationTransaction.returnTo
-      const oauthError = params.get('error')
-      const callbackState = params.get('state')
+      const oauthError = params.get('error') ?? implicitToken?.error
+      const callbackState = params.get('state') ?? implicitToken?.state
       const code = params.get('code')
+      const implicitAccessToken = implicitToken?.accessToken
       try {
         if (oauthError) {
           throw new Error(
             params.get('error_description') ??
+              implicitToken?.errorDescription ??
               `Google OAuth failed: ${oauthError}`
           )
         }
@@ -1128,30 +1141,51 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
             'Google service-account OAuth callback state mismatch.'
           )
         }
-        if (!code) {
+        if (
+          impersonationTransaction.responseType === 'token' &&
+          !implicitAccessToken
+        ) {
           throw new Error(
-            'Google service-account OAuth callback did not include a code.'
+            'Google service-account OAuth callback did not include an access token.'
+          )
+        }
+        if (
+          impersonationTransaction.responseType === 'code' &&
+          (!code || !impersonationTransaction.codeVerifier)
+        ) {
+          throw new Error(
+            'Google service-account OAuth callback did not include required PKCE state.'
           )
         }
 
-        // Consume the transaction before exchanging the one-time code. The
-        // human token only exists in this callback's memory and is never
-        // written to browser storage.
+        // Consume the transaction before using the one-time credential. For
+        // implicit OAuth, clear the fragment immediately so the human token is
+        // no longer present in browser history. It is never written to storage.
         window.localStorage.removeItem(IMPERSONATION_TRANSACTION_KEY)
-        const tokenResponse = await exchangeAuthorizationCode(
-          code,
-          impersonationTransaction.codeVerifier
-        )
-        assertAuthOperationCurrent(authOperation)
-        if (tokenResponse.error || !tokenResponse.access_token) {
-          throw new Error(
-            tokenResponse.error_description ??
-              tokenResponse.error ??
-              'Failed to obtain a human Google access token.'
+        let humanAccessToken = implicitAccessToken
+        if (humanAccessToken) {
+          window.history.replaceState(
+            null,
+            '',
+            `${window.location.pathname}${window.location.search}`
           )
+        } else {
+          const tokenResponse = await exchangeAuthorizationCode(
+            code!,
+            impersonationTransaction.codeVerifier!
+          )
+          assertAuthOperationCurrent(authOperation)
+          if (tokenResponse.error || !tokenResponse.access_token) {
+            throw new Error(
+              tokenResponse.error_description ??
+                tokenResponse.error ??
+                'Failed to obtain a human Google access token.'
+            )
+          }
+          humanAccessToken = tokenResponse.access_token
         }
         const result = await completeServiceAccountImpersonation(
-          tokenResponse.access_token,
+          humanAccessToken,
           impersonationTransaction.serviceAccount,
           {
             humanAccount: impersonationTransaction.humanAccount,
@@ -1197,7 +1231,6 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    const implicitToken = readImplicitRedirectTokenFromHash()
     const oauthError = params.get('error') ?? implicitToken?.error
     if (oauthError) {
       const attemptedPromptMode = window.localStorage.getItem(
