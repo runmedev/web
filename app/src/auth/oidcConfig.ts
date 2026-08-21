@@ -48,6 +48,15 @@ export class OidcConfigManager {
     return this.config;
   }
 
+  getConfigForEditing(): OidcConfig {
+    return {
+      ...this.config,
+      extraAuthParams: this.config.extraAuthParams
+        ? { ...this.config.extraAuthParams }
+        : undefined,
+    };
+  }
+
   getRedirectURI(): string {
     this.assertRequired(this.config);
     return this.config.redirectUri;

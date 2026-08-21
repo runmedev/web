@@ -82,6 +82,7 @@ export interface StartGoogleDriveOAuthResult {
 }
 
 interface GoogleAuthContextType {
+  driveAccount: string | null
   ensureAccessToken: (options?: EnsureAccessTokenOptions) => Promise<string>
   getServiceAccountCredentials: (
     serviceAccount: string,
@@ -91,6 +92,7 @@ interface GoogleAuthContextType {
   startGoogleDriveOAuth: (
     options?: StartGoogleDriveOAuthOptions
   ) => Promise<StartGoogleDriveOAuthResult>
+  setDriveAccount: (account: string | null) => void
   setAccessToken: (token: string, expiresIn?: number) => void
   isDriveSyncing: boolean
 }
@@ -293,6 +295,9 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     loadStoredToken
   )
   const [nowMs, setNowMs] = useState(() => Date.now())
+  const [driveAccount, setDriveAccountState] = useState<string | null>(
+    loadStoredDriveAccount
+  )
 
   // The remaining mutable pieces do not participate in rendering, so they are
   // stored in refs instead of state. This keeps React from re-rendering whenever
@@ -302,7 +307,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   const tokenClientRef = useRef<TokenClient | null>(null)
   const oauthClientIdRef = useRef<string | null>(null)
   const oauthLoginHintRef = useRef<string | null>(null)
-  const storedDriveAccountRef = useRef<string | null>(loadStoredDriveAccount())
+  const storedDriveAccountRef = useRef<string | null>(driveAccount)
   const handlersRef = useRef<PendingHandlers | null>(null)
   const impersonationHandlersRef = useRef<PendingHandlers | null>(null)
   const impersonationTokenClientRef = useRef<TokenClient | null>(null)
@@ -454,6 +459,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   const persistStoredDriveAccount = useCallback((account: string | null) => {
     const normalizedAccount = account?.trim() || null
     storedDriveAccountRef.current = normalizedAccount
+    setDriveAccountState(normalizedAccount)
     tokenClientRef.current = null
     oauthClientIdRef.current = null
     oauthLoginHintRef.current = null
@@ -1822,18 +1828,22 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   // rerenders in deep trees that subscribe to the context.
   const value = useMemo(
     () => ({
+      driveAccount,
       ensureAccessToken,
       getServiceAccountCredentials,
       isDriveSyncing,
       logoutGoogleDrive,
+      setDriveAccount: persistStoredDriveAccount,
       startGoogleDriveOAuth,
       setAccessToken,
     }),
     [
+      driveAccount,
       ensureAccessToken,
       getServiceAccountCredentials,
       isDriveSyncing,
       logoutGoogleDrive,
+      persistStoredDriveAccount,
       startGoogleDriveOAuth,
       setAccessToken,
     ]

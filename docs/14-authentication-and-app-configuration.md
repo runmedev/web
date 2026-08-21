@@ -35,11 +35,16 @@ oidc.getStatus()
 
 ## Application login UI
 
-The account button in the left navigation uses the saved application login
-mode. Left-click it to sign in or out. Right-click it, or focus it and press
-Shift+F10, to open **Configure login…**.
+Open **Authentication Settings** from the key icon in the left navigation. The
+panel groups the settings and actions for:
 
-The login dialog supports:
+- Runme account identity,
+- Google Drive account identity,
+- Google Drive OAuth flow and browser interaction mode,
+- Google Drive OAuth client, and
+- Runme OIDC client, discovery URL, and scopes.
+
+The Runme account section supports:
 
 - **Direct principal** — run the normal OIDC flow and authenticate as the
   selected human principal.
@@ -47,9 +52,10 @@ The login dialog supports:
   short-lived Drive and Runme credentials for the configured service-account
   email.
 
-Runme remembers only the selected mode and service-account email. Generated
-service-account credentials remain in memory and are not written to browser
-storage.
+The account icon remains a simple sign-in/sign-out action and uses the identity
+mode saved in Authentication Settings. Runme remembers only the selected mode
+and service-account email. Generated service-account credentials remain in
+memory and are not written to browser storage.
 
 ## Google Drive OAuth helpers
 
