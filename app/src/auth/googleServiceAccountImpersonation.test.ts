@@ -151,6 +151,11 @@ describe('Google service-account impersonation', () => {
     expect(() => normalizeServiceAccountEmail('jeremy@lewi.us')).toThrow(
       'valid Google service-account email'
     )
+    expect(() =>
+      normalizeServiceAccountEmail(
+        'jlewi-runme@runme-lewi.dev.iam.gserviceaccount.com'
+      )
+    ).toThrow('not a dotted DNS name')
     expect(() => resolveAuthorizationLeaseSeconds(604_801)).toThrow(
       'between 1 and 604800'
     )

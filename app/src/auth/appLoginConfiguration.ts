@@ -102,5 +102,11 @@ export function resolveDriveLoginConfiguration(
 }
 
 export function isGoogleServiceAccountEmail(value: string): boolean {
-  return /^[^@\s]+@[^@\s]+\.iam\.gserviceaccount\.com$/i.test(value.trim())
+  // The host segment is the immutable Google Cloud project ID, not a DNS
+  // name. Project IDs are 6-30 lowercase letters, digits, or hyphens; they
+  // start with a letter and end with a letter or digit. Rejecting dots here
+  // prevents a confusing IAM Credentials `Gaia id not found` response.
+  return /^[^@\s]+@[a-z][a-z0-9-]{4,28}[a-z0-9]\.iam\.gserviceaccount\.com$/.test(
+    value.trim()
+  )
 }

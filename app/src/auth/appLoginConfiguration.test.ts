@@ -88,5 +88,15 @@ describe('app login configuration', () => {
       isGoogleServiceAccountEmail('runme@example.iam.gserviceaccount.com')
     ).toBe(true)
     expect(isGoogleServiceAccountEmail('human@example.com')).toBe(false)
+    expect(
+      isGoogleServiceAccountEmail(
+        'jlewi-runme@runme-lewi.dev.iam.gserviceaccount.com'
+      )
+    ).toBe(false)
+    expect(
+      isGoogleServiceAccountEmail(
+        'jlewi-runme@runme-lewi-dev.iam.gserviceaccount.com'
+      )
+    ).toBe(true)
   })
 })

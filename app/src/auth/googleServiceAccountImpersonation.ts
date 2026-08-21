@@ -1,5 +1,7 @@
 import { jwtDecode } from 'jwt-decode'
 
+import { isGoogleServiceAccountEmail } from './appLoginConfiguration'
+
 export const GOOGLE_SERVICE_ACCOUNT_IMPERSONATION_SCOPES = [
   'openid',
   'https://www.googleapis.com/auth/userinfo.email',
@@ -93,11 +95,10 @@ export type MintedImpersonatedServiceAccountCredentials = {
  */
 export function normalizeServiceAccountEmail(serviceAccount: string): string {
   const normalized = serviceAccount.trim()
-  if (
-    !normalized ||
-    !/^[^\s/@]+@[^\s/@]+\.iam\.gserviceaccount\.com$/.test(normalized)
-  ) {
-    throw new Error('A valid Google service-account email is required.')
+  if (!isGoogleServiceAccountEmail(normalized)) {
+    throw new Error(
+      'A valid Google service-account email is required. Use the Google Cloud project ID (for example, project-name), not a dotted DNS name.'
+    )
   }
   return normalized
 }
