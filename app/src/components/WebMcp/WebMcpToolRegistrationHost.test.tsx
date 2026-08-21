@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, render, waitFor } from '@testing-library/react'
 
 const {
   executeMock,
@@ -141,15 +141,17 @@ describe('WebMcpToolRegistrationHost', () => {
     appLoggerMock.debug.mockReset()
     appLoggerMock.info.mockReset()
     appLoggerMock.error.mockReset()
+    delete (document as Document & { modelContext?: unknown }).modelContext
     delete (navigator as Navigator & { modelContext?: unknown }).modelContext
   })
 
   afterEach(() => {
     cleanup()
+    delete (document as Document & { modelContext?: unknown }).modelContext
     delete (navigator as Navigator & { modelContext?: unknown }).modelContext
   })
 
-  it('skips registration when navigator.modelContext is unavailable', () => {
+  it('skips registration when modelContext is unavailable', () => {
     render(<WebMcpToolRegistrationHost />)
 
     expect(appLoggerMock.debug).toHaveBeenCalledWith(
@@ -160,6 +162,60 @@ describe('WebMcpToolRegistrationHost', () => {
         }),
       })
     )
+  })
+
+  it('falls back to the legacy navigator.modelContext API', () => {
+    const registerTool = vi.fn()
+    Object.defineProperty(navigator, 'modelContext', {
+      configurable: true,
+      value: { registerTool },
+    })
+
+    render(<WebMcpToolRegistrationHost />)
+
+    expect(registerTool).toHaveBeenCalledTimes(9)
+  })
+
+  it('prefers the current document.modelContext API', () => {
+    const documentRegisterTool = vi.fn()
+    const navigatorRegisterTool = vi.fn()
+    Object.defineProperty(document, 'modelContext', {
+      configurable: true,
+      value: { registerTool: documentRegisterTool },
+    })
+    Object.defineProperty(navigator, 'modelContext', {
+      configurable: true,
+      value: { registerTool: navigatorRegisterTool },
+    })
+
+    render(<WebMcpToolRegistrationHost />)
+
+    expect(documentRegisterTool).toHaveBeenCalledTimes(9)
+    expect(navigatorRegisterTool).not.toHaveBeenCalled()
+  })
+
+  it('reports asynchronous registration failures', async () => {
+    const registerTool = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException('not allowed', 'NotAllowedError'))
+    Object.defineProperty(document, 'modelContext', {
+      configurable: true,
+      value: { registerTool },
+    })
+
+    render(<WebMcpToolRegistrationHost />)
+
+    await waitFor(() => {
+      expect(appLoggerMock.error).toHaveBeenCalledWith(
+        'Failed to register WebMCP tools',
+        expect.objectContaining({
+          attrs: expect.objectContaining({
+            scope: 'webmcp',
+            error: 'NotAllowedError: not allowed',
+          }),
+        })
+      )
+    })
   })
 
   it('registers WebMCP tools and unregisters them on cleanup', async () => {
@@ -183,7 +239,7 @@ describe('WebMcpToolRegistrationHost', () => {
         signal: options?.signal,
       })
     })
-    Object.defineProperty(navigator, 'modelContext', {
+    Object.defineProperty(document, 'modelContext', {
       configurable: true,
       value: {
         registerTool,
@@ -409,9 +465,7 @@ describe('WebMcpToolRegistrationHost', () => {
     const createDriveNotebook = registered.find(
       ({ tool }) => tool.name === 'createDriveNotebook'
     )
-    expect(createDriveNotebook?.tool.title).toBe(
-      'Create Google Drive Notebook'
-    )
+    expect(createDriveNotebook?.tool.title).toBe('Create Google Drive Notebook')
     expect(createDriveNotebook?.tool.annotations).toEqual({
       readOnlyHint: false,
       untrustedContentHint: false,
@@ -434,14 +488,10 @@ describe('WebMcpToolRegistrationHost', () => {
         cells: [{ kind: 'markup', value: '# Demo' }],
       })
     ).resolves.toContain('"fileId":"drive-file-1"')
-    expect(createDriveNotebookMock).toHaveBeenCalledWith(
-      'root',
-      'demo.ipynb',
-      {
-        idempotencyKey: 'create-demo-notebook',
-        cells: [{ kind: 'markup', value: '# Demo' }],
-      }
-    )
+    expect(createDriveNotebookMock).toHaveBeenCalledWith('root', 'demo.ipynb', {
+      idempotencyKey: 'create-demo-notebook',
+      cells: [{ kind: 'markup', value: '# Demo' }],
+    })
 
     expect(
       registered.some(({ tool }) => tool.name === 'startTourWorkflow')
@@ -461,7 +511,7 @@ describe('WebMcpToolRegistrationHost', () => {
 
   it('does not create an AppConsole cell when ExecuteCode is rejected before acceptance', async () => {
     startOperationMock.mockRejectedValueOnce(new Error('boom'))
-    Object.defineProperty(navigator, 'modelContext', {
+    Object.defineProperty(document, 'modelContext', {
       configurable: true,
       value: {
         registerTool: vi.fn(),
@@ -470,7 +520,7 @@ describe('WebMcpToolRegistrationHost', () => {
 
     render(<WebMcpToolRegistrationHost />)
     const registerTool = (
-      navigator as Navigator & {
+      document as Document & {
         modelContext?: { registerTool: ReturnType<typeof vi.fn> }
       }
     ).modelContext?.registerTool
@@ -500,7 +550,7 @@ describe('WebMcpToolRegistrationHost', () => {
         localUri: 'local://file/drive-file-1',
       })
     const registerTool = vi.fn()
-    Object.defineProperty(navigator, 'modelContext', {
+    Object.defineProperty(document, 'modelContext', {
       configurable: true,
       value: { registerTool },
     })
@@ -555,7 +605,7 @@ describe('WebMcpToolRegistrationHost', () => {
       input.onSettled?.(operation)
       return operation
     })
-    Object.defineProperty(navigator, 'modelContext', {
+    Object.defineProperty(document, 'modelContext', {
       configurable: true,
       value: {
         registerTool: vi.fn(),
@@ -564,7 +614,7 @@ describe('WebMcpToolRegistrationHost', () => {
 
     render(<WebMcpToolRegistrationHost />)
     const registerTool = (
-      navigator as Navigator & {
+      document as Document & {
         modelContext?: { registerTool: ReturnType<typeof vi.fn> }
       }
     ).modelContext?.registerTool
