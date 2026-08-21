@@ -62,7 +62,9 @@ import {
 } from '../../lib/runtime/createDriveNotebookTool'
 import { appState } from '../../lib/runtime/AppState'
 
-type ModelContextClientLike = {
+type ToolExecuteOptionsLike = {
+  signal?: AbortSignal
+  // Legacy host extension. This is not part of the current WebMCP specification.
   requestUserInteraction?: (
     callback: () => Promise<unknown> | unknown
   ) => Promise<unknown>
@@ -81,26 +83,40 @@ type ModelContextLike = {
       }
       execute: (
         input: Record<string, unknown>,
-        client: ModelContextClientLike
+        options: ToolExecuteOptionsLike
       ) => Promise<string> | string
     },
     options?: { signal?: AbortSignal }
-  ) => void
+  ) => Promise<undefined> | undefined
 }
 
 function getModelContext(): ModelContextLike | null {
-  if (typeof navigator === 'undefined') {
-    return null
+  const documentModelContext =
+    typeof document === 'undefined'
+      ? undefined
+      : (
+          document as Document & {
+            modelContext?: Partial<ModelContextLike>
+          }
+        ).modelContext
+  if (typeof documentModelContext?.registerTool === 'function') {
+    return documentModelContext as ModelContextLike
   }
-  const modelContext = (
-    navigator as Navigator & {
-      modelContext?: Partial<ModelContextLike>
-    }
-  ).modelContext
-  if (!modelContext || typeof modelContext.registerTool !== 'function') {
-    return null
+
+  // Compatibility fallback for implementations of the earlier WebMCP draft.
+  const navigatorModelContext =
+    typeof navigator === 'undefined'
+      ? undefined
+      : (
+          navigator as Navigator & {
+            modelContext?: Partial<ModelContextLike>
+          }
+        ).modelContext
+  if (typeof navigatorModelContext?.registerTool === 'function') {
+    return navigatorModelContext as ModelContextLike
   }
-  return modelContext as ModelContextLike
+
+  return null
 }
 
 function isDriveAuthorizationRequired(error: unknown): boolean {
@@ -112,7 +128,7 @@ function isDriveAuthorizationRequired(error: unknown): boolean {
 
 async function executeCreateDriveNotebookWithAuthorization(
   input: Record<string, unknown>,
-  client: ModelContextClientLike
+  options: ToolExecuteOptionsLike
 ): Promise<string> {
   try {
     // Preserve the no-UI path for cached tokens and service-account sessions.
@@ -120,12 +136,12 @@ async function executeCreateDriveNotebookWithAuthorization(
   } catch (error) {
     if (
       !isDriveAuthorizationRequired(error) ||
-      typeof client.requestUserInteraction !== 'function'
+      typeof options.requestUserInteraction !== 'function'
     ) {
       throw error
     }
 
-    const result = await client.requestUserInteraction(async () => {
+    const result = await options.requestUserInteraction(async () => {
       const authorization = await appState.startGoogleDriveOAuth({
         mode: 'popup',
       })
@@ -161,9 +177,17 @@ export default function WebMcpToolRegistrationHost() {
     }
 
     const registrationController = new AbortController()
+    const registrationPromises: Promise<undefined>[] = []
+
+    const registerTool: ModelContextLike['registerTool'] = (tool, options) => {
+      const result = modelContext.registerTool(tool, options)
+      const registration = Promise.resolve(result)
+      registrationPromises.push(registration)
+      return registration
+    }
 
     try {
-      modelContext.registerTool(
+      registerTool(
         {
           name: EXECUTE_CODE_TOOL_NAME,
           title: EXECUTE_CODE_TOOL_TITLE,
@@ -173,17 +197,60 @@ export default function WebMcpToolRegistrationHost() {
             readOnlyHint: false,
             untrustedContentHint: true,
           },
-          execute: async (input) => {
+          execute: async (input, options) => {
             const code =
               typeof input?.code === 'string'
                 ? input.code
                 : String(input?.code ?? '')
-            await appConsoleData.hydrate()
+            const signal = options?.signal
+            if (signal?.aborted) {
+              throw (
+                signal.reason ??
+                new DOMException('ExecuteCode was cancelled.', 'AbortError')
+              )
+            }
             const executionState: {
               current: ReturnType<typeof appConsoleData.startExternalExecution>
             } = { current: null }
+            let acceptedOperationId: string | null = null
+            let cancellationPromise: Promise<unknown> | null = null
+
+            // WebMCP cancellation can arrive before the registry assigns an
+            // operation ID. Once accepted, schedule cancellation after the
+            // registry has installed its live control handle.
+            const cancelAcceptedOperation = () => {
+              if (!acceptedOperationId || cancellationPromise) {
+                return
+              }
+              const operationId = acceptedOperationId
+              cancellationPromise = codeOperationRegistry
+                .cancel({ operationId })
+                .catch((error) => {
+                  appLogger.error(
+                    'Failed to cancel WebMCP ExecuteCode operation',
+                    {
+                      attrs: {
+                        scope: 'webmcp.execute_code',
+                        operationId,
+                        error: String(error),
+                      },
+                    }
+                  )
+                })
+            }
+            const handleAbort = () => {
+              queueMicrotask(cancelAcceptedOperation)
+            }
+            signal?.addEventListener('abort', handleAbort, { once: true })
 
             try {
+              await appConsoleData.hydrate()
+              if (signal?.aborted) {
+                throw (
+                  signal.reason ??
+                  new DOMException('ExecuteCode was cancelled.', 'AbortError')
+                )
+              }
               const result = await codeOperationRegistry.start({
                 code,
                 ...(typeof input?.timeoutMs === 'number'
@@ -199,9 +266,13 @@ export default function WebMcpToolRegistrationHost() {
                 ...(typeof input?.idempotencyKey === 'string'
                   ? { idempotencyKey: input.idempotencyKey }
                   : {}),
-                onAccepted: () => {
+                onAccepted: (operationId) => {
+                  acceptedOperationId = operationId
                   executionState.current =
                     appConsoleData.startExternalExecution(code)
+                  if (signal?.aborted) {
+                    queueMicrotask(cancelAcceptedOperation)
+                  }
                 },
                 hooks: {
                   onStdout: (chunk) => {
@@ -236,6 +307,11 @@ export default function WebMcpToolRegistrationHost() {
                   })
                 },
               })
+              if (signal?.aborted) {
+                acceptedOperationId ??= result.operationId
+                cancelAcceptedOperation()
+                await cancellationPromise
+              }
               return JSON.stringify(result)
             } catch (error) {
               const execution = executionState.current
@@ -246,6 +322,8 @@ export default function WebMcpToolRegistrationHost() {
                 })
               }
               throw error
+            } finally {
+              signal?.removeEventListener('abort', handleAbort)
             }
           },
         },
@@ -253,7 +331,7 @@ export default function WebMcpToolRegistrationHost() {
           signal: registrationController.signal,
         }
       )
-      modelContext.registerTool(
+      registerTool(
         {
           name: GET_EXECUTE_CODE_OPERATION_TOOL_NAME,
           title: GET_EXECUTE_CODE_OPERATION_TOOL_TITLE,
@@ -274,7 +352,7 @@ export default function WebMcpToolRegistrationHost() {
           signal: registrationController.signal,
         }
       )
-      modelContext.registerTool(
+      registerTool(
         {
           name: CANCEL_EXECUTE_CODE_OPERATION_TOOL_NAME,
           title: CANCEL_EXECUTE_CODE_OPERATION_TOOL_TITLE,
@@ -295,7 +373,7 @@ export default function WebMcpToolRegistrationHost() {
           signal: registrationController.signal,
         }
       )
-      modelContext.registerTool(
+      registerTool(
         {
           name: READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
           title: READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_TITLE,
@@ -311,7 +389,7 @@ export default function WebMcpToolRegistrationHost() {
           signal: registrationController.signal,
         }
       )
-      modelContext.registerTool(
+      registerTool(
         {
           name: LIST_DOCUMENTATION_TOOL_NAME,
           title: LIST_DOCUMENTATION_TOOL_TITLE,
@@ -327,7 +405,7 @@ export default function WebMcpToolRegistrationHost() {
           signal: registrationController.signal,
         }
       )
-      modelContext.registerTool(
+      registerTool(
         {
           name: GET_DOCUMENTATION_TOOL_NAME,
           title: GET_DOCUMENTATION_TOOL_TITLE,
@@ -346,7 +424,7 @@ export default function WebMcpToolRegistrationHost() {
           signal: registrationController.signal,
         }
       )
-      modelContext.registerTool(
+      registerTool(
         {
           name: SHOW_TOUR_STEP_TOOL_NAME,
           title: SHOW_TOUR_STEP_TOOL_TITLE,
@@ -362,7 +440,7 @@ export default function WebMcpToolRegistrationHost() {
           signal: registrationController.signal,
         }
       )
-      modelContext.registerTool(
+      registerTool(
         {
           name: DISMISS_TOUR_TOOL_NAME,
           title: DISMISS_TOUR_TOOL_TITLE,
@@ -378,7 +456,7 @@ export default function WebMcpToolRegistrationHost() {
           signal: registrationController.signal,
         }
       )
-      modelContext.registerTool(
+      registerTool(
         {
           name: CREATE_DRIVE_NOTEBOOK_TOOL_NAME,
           title: CREATE_DRIVE_NOTEBOOK_TOOL_TITLE,
@@ -388,32 +466,50 @@ export default function WebMcpToolRegistrationHost() {
             readOnlyHint: false,
             untrustedContentHint: false,
           },
-          execute: (input, client) =>
-            executeCreateDriveNotebookWithAuthorization(input, client),
+          execute: (input, options) =>
+            executeCreateDriveNotebookWithAuthorization(input, options),
         },
         {
           signal: registrationController.signal,
         }
       )
-      appLogger.info('WebMCP tools registered', {
-        attrs: {
-          scope: 'webmcp',
-          toolNames: [
-            EXECUTE_CODE_TOOL_NAME,
-            GET_EXECUTE_CODE_OPERATION_TOOL_NAME,
-            CANCEL_EXECUTE_CODE_OPERATION_TOOL_NAME,
-            READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
-            LIST_DOCUMENTATION_TOOL_NAME,
-            GET_DOCUMENTATION_TOOL_NAME,
-            SHOW_TOUR_STEP_TOOL_NAME,
-            DISMISS_TOUR_TOOL_NAME,
-            CREATE_DRIVE_NOTEBOOK_TOOL_NAME,
-          ],
-        },
-      })
+      void Promise.all(registrationPromises)
+        .then(() => {
+          if (registrationController.signal.aborted) {
+            return
+          }
+          appLogger.info('WebMCP tools registered', {
+            attrs: {
+              scope: 'webmcp',
+              toolNames: [
+                EXECUTE_CODE_TOOL_NAME,
+                GET_EXECUTE_CODE_OPERATION_TOOL_NAME,
+                CANCEL_EXECUTE_CODE_OPERATION_TOOL_NAME,
+                READ_INSTRUCTIONS_FOR_AI_AGENTS_TOOL_NAME,
+                LIST_DOCUMENTATION_TOOL_NAME,
+                GET_DOCUMENTATION_TOOL_NAME,
+                SHOW_TOUR_STEP_TOOL_NAME,
+                DISMISS_TOUR_TOOL_NAME,
+                CREATE_DRIVE_NOTEBOOK_TOOL_NAME,
+              ],
+            },
+          })
+        })
+        .catch((error) => {
+          if (registrationController.signal.aborted) {
+            return
+          }
+          registrationController.abort(error)
+          appLogger.error('Failed to register WebMCP tools', {
+            attrs: {
+              scope: 'webmcp',
+              error: String(error),
+            },
+          })
+        })
     } catch (error) {
       registrationController.abort()
-      appLogger.error('Failed to register WebMCP tool', {
+      appLogger.error('Failed to register WebMCP tools', {
         attrs: {
           scope: 'webmcp',
           error: String(error),
