@@ -51,6 +51,12 @@ import {
   isLogsUri,
   LOGS_DOCUMENT_URI,
 } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
+import {
+  readAppLoginConfiguration,
+  saveAppLoginConfiguration,
+  type AppLoginConfiguration,
+} from '../../auth/appLoginConfiguration'
+import LoginConfigurationDialog from '../AuthStatus/LoginConfigurationDialog'
 
 const sideButtonBase = 'group side-btn'
 
@@ -229,14 +235,29 @@ export function SidePanelToolbar() {
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const authData = useBrowserAuthData()
   const browserAdapter = getBrowserAdapter()
-  const { isDriveSyncing, logoutGoogleDrive, startGoogleDriveOAuth } =
-    useGoogleAuth()
+  const {
+    getServiceAccountCredentials,
+    isDriveSyncing,
+    logoutGoogleDrive,
+    startGoogleDriveOAuth,
+  } = useGoogleAuth()
   const { listRunners } = useRunners()
   const [driveContextMenu, setDriveContextMenu] = useState<{
     x: number
     y: number
   } | null>(null)
   const driveContextMenuItemRef = useRef<HTMLButtonElement | null>(null)
+  const [accountContextMenu, setAccountContextMenu] = useState<{
+    x: number
+    y: number
+  } | null>(null)
+  const accountContextMenuItemRef = useRef<HTMLButtonElement | null>(null)
+  const [loginConfiguration, setLoginConfiguration] = useState(
+    readAppLoginConfiguration
+  )
+  const [loginConfigurationOpen, setLoginConfigurationOpen] = useState(false)
+  const [loginBusy, setLoginBusy] = useState(false)
+  const [loginError, setLoginError] = useState<string | null>(null)
 
   const driveStatus = isDriveSyncing ? 'Syncing' : 'Not syncing'
   const versionInfoSelected = getCurrentDoc() === VERSION_INFO_DOCUMENT_URI
@@ -266,6 +287,25 @@ export function SidePanelToolbar() {
       document.removeEventListener('keydown', handleKeyDown)
     }
   }, [driveContextMenu])
+
+  useEffect(() => {
+    if (!accountContextMenu) {
+      return
+    }
+    accountContextMenuItemRef.current?.focus()
+    const handlePointerDown = () => setAccountContextMenu(null)
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setAccountContextMenu(null)
+      }
+    }
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [accountContextMenu])
 
   const handleOpenDriveSyncStatus = useCallback(() => {
     showDocument(DRIVE_SYNC_STATUS_DOCUMENT_URI, {
@@ -324,6 +364,102 @@ export function SidePanelToolbar() {
       openDriveContextMenu(rect.left + rect.width / 2, rect.bottom + 4)
     },
     [openDriveContextMenu]
+  )
+
+  const performConfiguredLogin = useCallback(
+    async (configuration: AppLoginConfiguration) => {
+      if (configuration.mode === 'principal') {
+        await browserAdapter.loginWithRedirect()
+        return
+      }
+      await getServiceAccountCredentials(configuration.serviceAccount, {
+        prompt: 'select_account',
+        authorizationLeaseSeconds: 24 * 60 * 60,
+        accessTokenLifetimeSeconds: 60 * 60,
+      })
+    },
+    [browserAdapter, getServiceAccountCredentials]
+  )
+
+  const handleLoginFailure = useCallback((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error)
+    setLoginError(message)
+    setLoginConfigurationOpen(true)
+  }, [])
+
+  const handleAccountClick = useCallback(() => {
+    setAccountContextMenu(null)
+    if (authData) {
+      browserAdapter.logout()
+      return
+    }
+    setLoginError(null)
+    setLoginBusy(true)
+    void performConfiguredLogin(loginConfiguration)
+      .catch(handleLoginFailure)
+      .finally(() => setLoginBusy(false))
+  }, [
+    authData,
+    browserAdapter,
+    handleLoginFailure,
+    loginConfiguration,
+    performConfiguredLogin,
+  ])
+
+  const handleSaveLoginConfiguration = useCallback(
+    (configuration: AppLoginConfiguration, login: boolean) => {
+      const saved = saveAppLoginConfiguration(configuration)
+      setLoginConfiguration(saved)
+      setLoginError(null)
+      if (!login) {
+        setLoginConfigurationOpen(false)
+        return
+      }
+      setLoginBusy(true)
+      void performConfiguredLogin(saved)
+        .then(() => setLoginConfigurationOpen(false))
+        .catch(handleLoginFailure)
+        .finally(() => setLoginBusy(false))
+    },
+    [handleLoginFailure, performConfiguredLogin]
+  )
+
+  const openAccountContextMenu = useCallback((x: number, y: number) => {
+    const menuWidth = 190
+    const menuHeight = 48
+    const maxX =
+      typeof window === 'undefined' ? x : window.innerWidth - menuWidth
+    const maxY =
+      typeof window === 'undefined' ? y : window.innerHeight - menuHeight
+    setAccountContextMenu({
+      x: Math.max(0, Math.min(x, maxX)),
+      y: Math.max(0, Math.min(y, maxY)),
+    })
+  }, [])
+
+  const handleAccountContextMenu = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault()
+      openAccountContextMenu(event.clientX, event.clientY)
+    },
+    [openAccountContextMenu]
+  )
+
+  const handleAccountKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      if (
+        !(
+          event.key === 'ContextMenu' ||
+          (event.shiftKey && event.key === 'F10')
+        )
+      ) {
+        return
+      }
+      event.preventDefault()
+      const rect = event.currentTarget.getBoundingClientRect()
+      openAccountContextMenu(rect.left + rect.width / 2, rect.bottom + 4)
+    },
+    [openAccountContextMenu]
   )
 
   const handleVersionInfoClick = useCallback(() => {
@@ -530,15 +666,42 @@ export function SidePanelToolbar() {
           data-tour-id="left-nav.account"
           className={`${sideButtonBase} ${sideButtonInactive}`}
           aria-label={authData ? 'Logout' : 'Login'}
-          onClick={() =>
-            authData
-              ? browserAdapter.logout()
-              : browserAdapter.loginWithRedirect()
-          }
+          aria-haspopup="menu"
+          aria-expanded={Boolean(accountContextMenu)}
+          onClick={handleAccountClick}
+          onContextMenu={handleAccountContextMenu}
+          onKeyDown={handleAccountKeyDown}
         >
           <UserCircleIcon className="h-5 w-5" />
           <span className={tooltipBase}>{authData ? 'Logout' : 'Login'}</span>
         </button>
+        {accountContextMenu ? (
+          <div
+            role="menu"
+            aria-label="Application login actions"
+            className="fixed z-50 min-w-48 rounded-nb-sm border border-nb-border bg-white py-1 text-sm shadow-nb-md"
+            style={{
+              top: accountContextMenu.y,
+              left: accountContextMenu.x,
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <button
+              ref={accountContextMenuItemRef}
+              type="button"
+              role="menuitem"
+              className="block w-full px-3 py-1.5 text-left text-nb-text hover:bg-nb-surface-2"
+              onClick={() => {
+                setAccountContextMenu(null)
+                setLoginError(null)
+                setLoginConfigurationOpen(true)
+              }}
+            >
+              Configure login…
+            </button>
+          </div>
+        ) : null}
         <button
           type="button"
           data-tour-id="left-nav.documentation"
@@ -568,6 +731,18 @@ export function SidePanelToolbar() {
           <span className={tooltipBase}>Version Information</span>
         </button>
       </div>
+      <LoginConfigurationDialog
+        configuration={loginConfiguration}
+        open={loginConfigurationOpen}
+        busy={loginBusy}
+        errorMessage={loginError}
+        onOpenChange={(open) => {
+          if (!loginBusy) {
+            setLoginConfigurationOpen(open)
+          }
+        }}
+        onSave={handleSaveLoginConfiguration}
+      />
     </div>
   )
 }

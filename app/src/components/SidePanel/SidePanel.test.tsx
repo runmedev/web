@@ -39,6 +39,13 @@ const startGoogleDriveOAuthMock = vi.fn(async () => ({
   mode: 'popup',
 }))
 const logoutGoogleDriveMock = vi.fn(async () => {})
+const getServiceAccountCredentialsMock = vi.fn(async () => ({
+  humanPrincipal: 'human@example.com',
+  serviceAccount: 'runme@example.iam.gserviceaccount.com',
+  authorizationLeaseExpiresAt: '2026-08-22T00:00:00.000Z',
+  drive: { scopes: [], expiresAt: '2026-08-21T02:00:00.000Z' },
+  app: { audience: 'runme', expiresAt: '2026-08-21T02:00:00.000Z' },
+}))
 const loginWithRedirectMock = vi.fn()
 const logoutMock = vi.fn()
 const togglePanelMock = vi.fn()
@@ -87,6 +94,7 @@ vi.mock('../../contexts/CurrentDocContext', () => ({
 vi.mock('../../contexts/GoogleAuthContext', () => ({
   useGoogleAuth: () => ({
     ensureAccessToken: ensureAccessTokenMock,
+    getServiceAccountCredentials: getServiceAccountCredentialsMock,
     logoutGoogleDrive: logoutGoogleDriveMock,
     startGoogleDriveOAuth: startGoogleDriveOAuthMock,
     isDriveSyncing,
@@ -132,7 +140,9 @@ describe('SidePanelToolbar drive status button', () => {
     openDocumentsState = []
     runnersState = []
     notebookSnapshotState = null
+    window.localStorage.clear()
     ensureAccessTokenMock.mockClear()
+    getServiceAccountCredentialsMock.mockClear()
     startGoogleDriveOAuthMock.mockClear()
     logoutGoogleDriveMock.mockClear()
     loginWithRedirectMock.mockClear()
@@ -165,6 +175,76 @@ describe('SidePanelToolbar drive status button', () => {
     expect(ensureAccessTokenMock).not.toHaveBeenCalled()
     expect(showDocumentMock).not.toHaveBeenCalled()
     expect(setCurrentDocMock).not.toHaveBeenCalled()
+  })
+
+  it('logs in directly as the principal by default', async () => {
+    render(<SidePanelToolbar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Login' }))
+
+    await waitFor(() => expect(loginWithRedirectMock).toHaveBeenCalledTimes(1))
+    expect(getServiceAccountCredentialsMock).not.toHaveBeenCalled()
+  })
+
+  it('configures and signs in as a service account from the account context menu', async () => {
+    render(<SidePanelToolbar />)
+
+    const loginButton = screen.getByRole('button', { name: 'Login' })
+    fireEvent.contextMenu(loginButton, { clientX: 20, clientY: 40 })
+
+    expect(loginButton.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Configure login…' }))
+
+    expect(
+      screen.getByRole('dialog', { name: 'Configure application login' })
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('radio', { name: /Service account/ }))
+    fireEvent.change(screen.getByLabelText('Service-account email'), {
+      target: {
+        value: 'runme-web-test@aisre-gdrive-oai-test.iam.gserviceaccount.com',
+      },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save and sign in' }))
+
+    await waitFor(() =>
+      expect(getServiceAccountCredentialsMock).toHaveBeenCalledWith(
+        'runme-web-test@aisre-gdrive-oai-test.iam.gserviceaccount.com',
+        {
+          prompt: 'select_account',
+          authorizationLeaseSeconds: 86_400,
+          accessTokenLifetimeSeconds: 3_600,
+        }
+      )
+    )
+    expect(loginWithRedirectMock).not.toHaveBeenCalled()
+    expect(
+      JSON.parse(
+        window.localStorage.getItem('runme/app-login-configuration') ?? '{}'
+      )
+    ).toEqual({
+      mode: 'service_account',
+      serviceAccount:
+        'runme-web-test@aisre-gdrive-oai-test.iam.gserviceaccount.com',
+    })
+  })
+
+  it('uses a remembered service-account mode on normal Login click', async () => {
+    window.localStorage.setItem(
+      'runme/app-login-configuration',
+      JSON.stringify({
+        mode: 'service_account',
+        serviceAccount:
+          'runme-web-test@aisre-gdrive-oai-test.iam.gserviceaccount.com',
+      })
+    )
+    render(<SidePanelToolbar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Login' }))
+
+    await waitFor(() =>
+      expect(getServiceAccountCredentialsMock).toHaveBeenCalledTimes(1)
+    )
+    expect(loginWithRedirectMock).not.toHaveBeenCalled()
   })
 
   it('opens sync status from the Drive status context menu', () => {

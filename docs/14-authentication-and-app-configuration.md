@@ -33,6 +33,24 @@ oidc.setDiscoveryURL('...')
 oidc.getStatus()
 ```
 
+## Application login UI
+
+The account button in the left navigation uses the saved application login
+mode. Left-click it to sign in or out. Right-click it, or focus it and press
+Shift+F10, to open **Configure login…**.
+
+The login dialog supports:
+
+- **Direct principal** — run the normal OIDC flow and authenticate as the
+  selected human principal.
+- **Service account** — select a human principal interactively, then mint
+  short-lived Drive and Runme credentials for the configured service-account
+  email.
+
+Runme remembers only the selected mode and service-account email. Generated
+service-account credentials remain in memory and are not written to browser
+storage.
+
 ## Google Drive OAuth helpers
 
 ```js
