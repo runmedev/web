@@ -87,7 +87,7 @@ type ModelContextLike = {
       ) => Promise<string> | string
     },
     options?: { signal?: AbortSignal }
-  ) => Promise<void> | void
+  ) => Promise<undefined> | undefined
 }
 
 function getModelContext(): ModelContextLike | null {
@@ -177,7 +177,7 @@ export default function WebMcpToolRegistrationHost() {
     }
 
     const registrationController = new AbortController()
-    const registrationPromises: Promise<void>[] = []
+    const registrationPromises: Promise<undefined>[] = []
 
     const registerTool: ModelContextLike['registerTool'] = (tool, options) => {
       const result = modelContext.registerTool(tool, options)
