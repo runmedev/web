@@ -52,7 +52,10 @@ import {
   isLogsUri,
   LOGS_DOCUMENT_URI,
 } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
-import { readAppLoginConfiguration } from '../../auth/appLoginConfiguration'
+import {
+  readAppLoginConfiguration,
+  resolveDriveLoginConfiguration,
+} from '../../auth/appLoginConfiguration'
 import AuthenticationSettingsPanel from '../AuthenticationSettings/AuthenticationSettingsPanel'
 import { showToast } from '../../lib/toast'
 
@@ -286,11 +289,32 @@ export function SidePanelToolbar() {
   const handleDriveStatusClick = useCallback(async () => {
     setDriveContextMenu(null)
     try {
-      await startGoogleDriveOAuth()
-    } catch {
-      // Users can cancel the interactive credential refresh.
+      const configuration = readAppLoginConfiguration()
+      const usesSharedIdentity = configuration.identitySharing === 'shared'
+      const driveConfiguration = resolveDriveLoginConfiguration(configuration)
+      if (driveConfiguration.mode === 'service_account') {
+        await getServiceAccountCredentials(driveConfiguration.serviceAccount, {
+          ...(driveConfiguration.humanAccount
+            ? { humanAccount: driveConfiguration.humanAccount }
+            : {}),
+          prompt: driveConfiguration.humanAccount ? '' : 'select_account',
+          targets: usesSharedIdentity ? ['drive', 'app'] : ['drive'],
+          authorizationLeaseSeconds: 24 * 60 * 60,
+          accessTokenLifetimeSeconds: 60 * 60,
+        })
+      } else {
+        await startGoogleDriveOAuth()
+      }
+    } catch (error) {
+      showToast({
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Google Drive authorization failed.',
+        tone: 'error',
+      })
     }
-  }, [startGoogleDriveOAuth])
+  }, [getServiceAccountCredentials, startGoogleDriveOAuth])
 
   const handleDriveLogout = useCallback(async () => {
     setDriveContextMenu(null)
@@ -344,11 +368,20 @@ export function SidePanelToolbar() {
     const loginPromise =
       configuration.mode === 'service_account'
         ? getServiceAccountCredentials(configuration.serviceAccount, {
+            ...(configuration.humanAccount
+              ? { humanAccount: configuration.humanAccount }
+              : {}),
             prompt: 'select_account',
+            targets:
+              configuration.identitySharing === 'shared'
+                ? ['drive', 'app']
+                : ['app'],
             authorizationLeaseSeconds: 24 * 60 * 60,
             accessTokenLifetimeSeconds: 60 * 60,
           })
-        : browserAdapter.loginWithRedirect()
+        : browserAdapter.loginWithRedirect({
+            loginHint: configuration.humanAccount || undefined,
+          })
     void loginPromise.catch((error) => {
       showToast({
         message: error instanceof Error ? error.message : String(error),
@@ -558,6 +591,16 @@ export function SidePanelToolbar() {
         ) : null}
         <button
           type="button"
+          data-tour-id="left-nav.account"
+          className={`${sideButtonBase} ${sideButtonInactive}`}
+          aria-label={authData ? 'Logout' : 'Login'}
+          onClick={handleAccountClick}
+        >
+          <UserCircleIcon className="h-5 w-5" />
+          <span className={tooltipBase}>{authData ? 'Logout' : 'Login'}</span>
+        </button>
+        <button
+          type="button"
           data-tour-id="left-nav.authentication-settings"
           className={`${sideButtonBase} ${
             authenticationSettingsSelected
@@ -570,16 +613,6 @@ export function SidePanelToolbar() {
         >
           <KeyIcon className="h-5 w-5" />
           <span className={tooltipBase}>Authentication Settings</span>
-        </button>
-        <button
-          type="button"
-          data-tour-id="left-nav.account"
-          className={`${sideButtonBase} ${sideButtonInactive}`}
-          aria-label={authData ? 'Logout' : 'Login'}
-          onClick={handleAccountClick}
-        >
-          <UserCircleIcon className="h-5 w-5" />
-          <span className={tooltipBase}>{authData ? 'Logout' : 'Login'}</span>
         </button>
         <button
           type="button"

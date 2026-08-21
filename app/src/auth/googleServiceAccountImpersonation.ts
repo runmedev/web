@@ -38,23 +38,35 @@ type GoogleUserInfoResponse = {
 export type GetServiceAccountCredentialsOptions = {
   driveScopes?: string[]
   appAudience?: string
+  humanAccount?: string
+  mode?: 'popup' | 'redirect' | 'new_tab'
   authorizationLeaseSeconds?: number
   accessTokenLifetimeSeconds?: number
-  prompt?: 'none' | 'consent' | 'select_account'
+  prompt?: '' | 'none' | 'consent' | 'select_account'
+  targets?: ServiceAccountCredentialTarget[]
 }
 
+export type ServiceAccountCredentialTarget = 'drive' | 'app'
+
 export type ServiceAccountCredentialStatus = {
+  status: 'started' | 'authorized' | 'partial'
   humanPrincipal: string
   serviceAccount: string
   authorizationLeaseExpiresAt: string
-  drive: {
+  drive?: {
     scopes: string[]
     expiresAt: string
   }
-  app: {
+  app?: {
     audience: string
     expiresAt: string
   }
+  errors?: ServiceAccountCredentialTargetError[]
+}
+
+export type ServiceAccountCredentialTargetError = {
+  target: ServiceAccountCredentialTarget
+  message: string
 }
 
 export type MintImpersonatedServiceAccountCredentialsRequest = {
@@ -62,14 +74,16 @@ export type MintImpersonatedServiceAccountCredentialsRequest = {
   serviceAccount: string
   driveScopes: string[]
   appAudience: string
+  targets?: ServiceAccountCredentialTarget[]
   accessTokenLifetimeSeconds?: number
 }
 
 export type MintedImpersonatedServiceAccountCredentials = {
-  driveAccessToken: string
-  driveAccessTokenExpiresAt: string
-  appIdToken: string
-  appIdTokenExpiresAt: string
+  driveAccessToken?: string
+  driveAccessTokenExpiresAt?: string
+  appIdToken?: string
+  appIdTokenExpiresAt?: string
+  errors: ServiceAccountCredentialTargetError[]
 }
 
 /**
@@ -182,56 +196,118 @@ export async function mintImpersonatedServiceAccountCredentials(
     throw new Error('A human Google OAuth access token is required.')
   }
   const serviceAccount = normalizeServiceAccountEmail(request.serviceAccount)
+  const targets = new Set(request.targets ?? ['drive', 'app'])
+  if (targets.size === 0) {
+    throw new Error(
+      'At least one service-account credential target is required.'
+    )
+  }
   const driveScopes = request.driveScopes
     .map((scope) => scope.trim())
     .filter(Boolean)
-  if (driveScopes.length === 0) {
+  if (targets.has('drive') && driveScopes.length === 0) {
     throw new Error('At least one Google Drive scope is required.')
   }
   const appAudience = request.appAudience.trim()
-  if (!appAudience) {
+  if (targets.has('app') && !appAudience) {
     throw new Error('A Runme application audience is required.')
   }
   const lifetimeSeconds = resolveAccessTokenLifetimeSeconds(
     request.accessTokenLifetimeSeconds
   )
 
-  const [driveResponse, idResponse] = await Promise.all([
-    postIamCredentials<GenerateAccessTokenResponse>(
-      humanAccessToken,
-      serviceAccount,
-      'generateAccessToken',
-      {
-        scope: driveScopes,
-        lifetime: `${lifetimeSeconds}s`,
-      }
-    ),
-    postIamCredentials<GenerateIdTokenResponse>(
-      humanAccessToken,
-      serviceAccount,
-      'generateIdToken',
-      {
-        audience: appAudience,
-        includeEmail: true,
-      }
-    ),
+  const [driveResult, idResult] = await Promise.allSettled([
+    targets.has('drive')
+      ? postIamCredentials<GenerateAccessTokenResponse>(
+          humanAccessToken,
+          serviceAccount,
+          'generateAccessToken',
+          {
+            scope: driveScopes,
+            lifetime: `${lifetimeSeconds}s`,
+          }
+        )
+      : undefined,
+    targets.has('app')
+      ? postIamCredentials<GenerateIdTokenResponse>(
+          humanAccessToken,
+          serviceAccount,
+          'generateIdToken',
+          {
+            audience: appAudience,
+            includeEmail: true,
+          }
+        )
+      : undefined,
   ])
 
-  if (!driveResponse.accessToken || !driveResponse.expireTime) {
-    throw new Error('Google IAM access-token response was incomplete.')
+  const errors: ServiceAccountCredentialTargetError[] = []
+  const driveResponse =
+    driveResult.status === 'fulfilled' ? driveResult.value : undefined
+  const idResponse =
+    idResult.status === 'fulfilled' ? idResult.value : undefined
+  if (driveResult.status === 'rejected') {
+    errors.push({
+      target: 'drive',
+      message:
+        driveResult.reason instanceof Error
+          ? driveResult.reason.message
+          : String(driveResult.reason),
+    })
   }
-  if (!idResponse.token) {
-    throw new Error('Google IAM ID-token response was incomplete.')
+  if (idResult.status === 'rejected') {
+    errors.push({
+      target: 'app',
+      message:
+        idResult.reason instanceof Error
+          ? idResult.reason.message
+          : String(idResult.reason),
+    })
   }
-  const decoded = jwtDecode<{ exp?: number }>(idResponse.token)
-  if (!decoded.exp) {
-    throw new Error('Google IAM ID token did not contain an expiration time.')
+
+  if (
+    driveResponse &&
+    (!driveResponse.accessToken || !driveResponse.expireTime)
+  ) {
+    errors.push({
+      target: 'drive',
+      message: 'Google IAM access-token response was incomplete.',
+    })
+  }
+  if (idResponse && !idResponse.token) {
+    errors.push({
+      target: 'app',
+      message: 'Google IAM ID-token response was incomplete.',
+    })
+  }
+  let appIdTokenExpiresAt: string | undefined
+  if (idResponse?.token) {
+    try {
+      const decoded = jwtDecode<{ exp?: number }>(idResponse.token)
+      if (!decoded.exp) {
+        throw new Error(
+          'Google IAM ID token did not contain an expiration time.'
+        )
+      }
+      appIdTokenExpiresAt = new Date(decoded.exp * 1000).toISOString()
+    } catch (error) {
+      errors.push({
+        target: 'app',
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
 
   return {
-    driveAccessToken: driveResponse.accessToken,
-    driveAccessTokenExpiresAt: driveResponse.expireTime,
-    appIdToken: idResponse.token,
-    appIdTokenExpiresAt: new Date(decoded.exp * 1000).toISOString(),
+    ...(driveResponse?.accessToken && driveResponse.expireTime
+      ? {
+          driveAccessToken: driveResponse.accessToken,
+          driveAccessTokenExpiresAt: driveResponse.expireTime,
+        }
+      : {}),
+    ...(idResponse?.token && appIdTokenExpiresAt
+      ? { appIdToken: idResponse.token, appIdTokenExpiresAt }
+      : {}),
+    errors,
   }
 }

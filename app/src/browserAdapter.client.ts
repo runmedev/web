@@ -1,93 +1,102 @@
-import { useEffect, useState } from "react";
-import pkceChallenge from "pkce-challenge";
-import * as oauth from "oauth4webapi";
+import { useEffect, useState } from 'react'
 
-import { getOidcConfig } from "./auth/oidcConfig";
-import { appLogger } from "./lib/logging/runtime";
+import * as oauth from 'oauth4webapi'
+import pkceChallenge from 'pkce-challenge'
+
+import {
+  IMPERSONATED_SERVICE_ACCOUNT_CREDENTIAL_CHANGED_EVENT,
+  IMPERSONATED_SERVICE_ACCOUNT_CREDENTIAL_STORAGE_KEY,
+  clearImpersonatedServiceAccountCredential,
+  readImpersonatedServiceAccountCredential,
+} from './auth/impersonatedServiceAccountCredentialStore'
+import { readAppLoginConfiguration } from './auth/appLoginConfiguration'
+import { getOidcConfig } from './auth/oidcConfig'
 import type {
   OAuthTokenEndpointResponse,
   SimpleAuthJSONWithHelpers,
   StoredTokenResponse,
-} from "./auth/types";
+} from './auth/types'
+import { appLogger } from './lib/logging/runtime'
 
-const STORAGE_KEY = "oidc-auth";
-const PKCE_STATE_KEY = "oidc_pkce_state";
-const PKCE_CODE_VERIFIER_KEY = "oidc_pkce_code_verifier";
-const PKCE_NONCE_KEY = "oidc_pkce_nonce";
+const STORAGE_KEY = 'oidc-auth'
+const PKCE_STATE_KEY = 'oidc_pkce_state'
+const PKCE_CODE_VERIFIER_KEY = 'oidc_pkce_code_verifier'
+const PKCE_NONCE_KEY = 'oidc_pkce_nonce'
 
 type DiscoveryDocument = {
-  authorization_endpoint: string;
-  token_endpoint: string;
-  issuer?: string;
-};
+  authorization_endpoint: string
+  token_endpoint: string
+  issuer?: string
+}
 
-type AuthListener = (authData: SimpleAuthJSONWithHelpers | null) => void;
+type AuthListener = (authData: SimpleAuthJSONWithHelpers | null) => void
 
 function redactIdentifier(value: string): string {
-  const trimmed = value.trim();
+  const trimmed = value.trim()
   if (!trimmed) {
-    return "";
+    return ''
   }
   if (trimmed.length <= 10) {
-    return `${trimmed.slice(0, 2)}...${trimmed.slice(-2)}`;
+    return `${trimmed.slice(0, 2)}...${trimmed.slice(-2)}`
   }
-  return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
+  return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`
 }
 
 function sanitizeUrl(value: string): string {
   try {
-    const parsed = new URL(value);
-    parsed.search = "";
-    parsed.hash = "";
-    return parsed.toString();
+    const parsed = new URL(value)
+    parsed.search = ''
+    parsed.hash = ''
+    return parsed.toString()
   } catch {
-    return value;
+    return value
   }
 }
 
 function summarizeScope(scope: string): string[] {
   return scope
-    .split(" ")
+    .split(' ')
     .map((item) => item.trim())
-    .filter((item) => item.length > 0);
+    .filter((item) => item.length > 0)
 }
 
 function hasClientSecret(clientSecret?: string): boolean {
-  return Boolean(clientSecret && clientSecret.trim().length > 0);
+  return Boolean(clientSecret && clientSecret.trim().length > 0)
 }
 
 async function readOAuthErrorResponse(response: Response): Promise<{
-  error?: string;
-  errorDescription?: string;
-  errorUri?: string;
-  rawBody?: string;
+  error?: string
+  errorDescription?: string
+  errorUri?: string
+  rawBody?: string
 }> {
   try {
-    const body = (await response.clone().text()).trim();
+    const body = (await response.clone().text()).trim()
     if (!body) {
-      return {};
+      return {}
     }
     try {
-      const parsed = JSON.parse(body) as Record<string, unknown>;
-      const error =
-        typeof parsed.error === "string" ? parsed.error : undefined;
+      const parsed = JSON.parse(body) as Record<string, unknown>
+      const error = typeof parsed.error === 'string' ? parsed.error : undefined
       const errorDescription =
-        typeof parsed.error_description === "string"
+        typeof parsed.error_description === 'string'
           ? parsed.error_description
-          : undefined;
+          : undefined
       const errorUri =
-        typeof parsed.error_uri === "string" ? parsed.error_uri : undefined;
-      return { error, errorDescription, errorUri };
+        typeof parsed.error_uri === 'string' ? parsed.error_uri : undefined
+      return { error, errorDescription, errorUri }
     } catch {
-      return { rawBody: body.slice(0, 500) };
+      return { rawBody: body.slice(0, 500) }
     }
   } catch (error) {
-    return { rawBody: `Failed to read error response: ${String(error)}` };
+    return { rawBody: `Failed to read error response: ${String(error)}` }
   }
 }
 
-function buildSimpleAuth(token: StoredTokenResponse): SimpleAuthJSONWithHelpers {
-  const expiresAt = token.expires_at;
+function buildSimpleAuth(
+  token: StoredTokenResponse
+): SimpleAuthJSONWithHelpers {
+  const expiresAt = token.expires_at
   return {
     accessToken: token.access_token,
     idToken: token.id_token,
@@ -96,227 +105,228 @@ function buildSimpleAuth(token: StoredTokenResponse): SimpleAuthJSONWithHelpers 
     scope: token.scope,
     expiresAt,
     isExpired: () =>
-      typeof expiresAt === "number" ? Date.now() >= expiresAt : false,
+      typeof expiresAt === 'number' ? Date.now() >= expiresAt : false,
     willExpireSoon: (thresholdSeconds = 60) =>
-      typeof expiresAt === "number"
+      typeof expiresAt === 'number'
         ? Date.now() >= expiresAt - thresholdSeconds * 1000
         : false,
-  };
+  }
 }
 
 function buildClient(config: ReturnType<typeof getOidcConfig>): oauth.Client {
-  const client: oauth.Client = { client_id: config.clientId };
+  const client: oauth.Client = { client_id: config.clientId }
   if (config.clientSecret && config.clientSecret.trim().length > 0) {
-    client.client_secret = config.clientSecret;
+    client.client_secret = config.clientSecret
   } else {
-    client.token_endpoint_auth_method = "none";
+    client.token_endpoint_auth_method = 'none'
   }
-  return client;
+  return client
 }
 
 function normalizeTokenResponse(
   token: OAuthTokenEndpointResponse,
-  existing?: StoredTokenResponse | null,
+  existing?: StoredTokenResponse | null
 ): StoredTokenResponse {
   const expiresAt =
-    typeof token.expires_in === "number"
+    typeof token.expires_in === 'number'
       ? Date.now() + token.expires_in * 1000
-      : existing?.expires_at;
+      : existing?.expires_at
   return {
     ...existing,
     ...token,
     expires_at: expiresAt,
     refresh_token: token.refresh_token ?? existing?.refresh_token,
-  };
+  }
 }
 
-let discoveryPromise: Promise<DiscoveryDocument> | null = null;
+let discoveryPromise: Promise<DiscoveryDocument> | null = null
 
 async function loadDiscovery(): Promise<DiscoveryDocument> {
   if (!discoveryPromise) {
     discoveryPromise = (async () => {
-      const config = getOidcConfig();
-      appLogger.info("Loading OIDC discovery document", {
+      const config = getOidcConfig()
+      appLogger.info('Loading OIDC discovery document', {
         attrs: {
-          scope: "auth.oidc",
-          code: "OIDC_DISCOVERY_LOAD_START",
+          scope: 'auth.oidc',
+          code: 'OIDC_DISCOVERY_LOAD_START',
           discoveryUrl: sanitizeUrl(config.discoveryUrl),
           clientIdHint: redactIdentifier(config.clientId),
           redirectUri: sanitizeUrl(config.redirectUri),
         },
-      });
-      const response = await fetch(config.discoveryUrl);
+      })
+      const response = await fetch(config.discoveryUrl)
       if (!response.ok) {
-        appLogger.error("Failed to load OIDC discovery document", {
+        appLogger.error('Failed to load OIDC discovery document', {
           attrs: {
-            scope: "auth.oidc",
-            code: "OIDC_DISCOVERY_LOAD_FAILED",
+            scope: 'auth.oidc',
+            code: 'OIDC_DISCOVERY_LOAD_FAILED',
             discoveryUrl: sanitizeUrl(config.discoveryUrl),
             status: response.status,
             statusText: response.statusText,
           },
-        });
+        })
         throw new Error(
-          `Failed to load OIDC discovery document: ${response.status}`,
-        );
+          `Failed to load OIDC discovery document: ${response.status}`
+        )
       }
-      const json = (await response.json()) as DiscoveryDocument;
+      const json = (await response.json()) as DiscoveryDocument
       if (!json.authorization_endpoint || !json.token_endpoint) {
-        appLogger.error("OIDC discovery document missing endpoints", {
+        appLogger.error('OIDC discovery document missing endpoints', {
           attrs: {
-            scope: "auth.oidc",
-            code: "OIDC_DISCOVERY_MISSING_ENDPOINTS",
+            scope: 'auth.oidc',
+            code: 'OIDC_DISCOVERY_MISSING_ENDPOINTS',
             discoveryUrl: sanitizeUrl(config.discoveryUrl),
             hasAuthorizationEndpoint: Boolean(json.authorization_endpoint),
             hasTokenEndpoint: Boolean(json.token_endpoint),
           },
-        });
-        throw new Error("Discovery document missing required endpoints.");
+        })
+        throw new Error('Discovery document missing required endpoints.')
       }
-      appLogger.info("Loaded OIDC discovery document", {
+      appLogger.info('Loaded OIDC discovery document', {
         attrs: {
-          scope: "auth.oidc",
-          code: "OIDC_DISCOVERY_LOAD_SUCCESS",
+          scope: 'auth.oidc',
+          code: 'OIDC_DISCOVERY_LOAD_SUCCESS',
           discoveryUrl: sanitizeUrl(config.discoveryUrl),
           authorizationEndpoint: sanitizeUrl(json.authorization_endpoint),
           tokenEndpoint: sanitizeUrl(json.token_endpoint),
         },
-      });
-      return json;
-    })();
+      })
+      return json
+    })()
   }
-  return discoveryPromise;
+  return discoveryPromise
 }
 
 export class BrowserAuthAdapter {
-  private readonly listeners = new Set<AuthListener>();
-  // Impersonated service-account ID tokens are intentionally memory-only. The
-  // browser must never persist them or silently fall back to a human identity
-  // when the effective service-account token expires.
-  private ephemeralTokenResponse: StoredTokenResponse | null = null;
+  private readonly listeners = new Set<AuthListener>()
+  // The adapter keeps a current-tab copy for immediate subscribers. The
+  // canonical, short-lived service-account token is stored in the versioned
+  // impersonated-credential bundle; human OAuth credentials are never copied
+  // into that bundle.
+  private ephemeralTokenResponse: StoredTokenResponse | null = null
 
   /**
    * Handles the OAuth callback by exchanging the authorization code for tokens,
    * removing PKCE state from localStorage, and persisting the token response.
    */
   handleCallback = async () => {
-    const callbackUrl = new URL(window.location.href);
-    const callbackParams = callbackUrl.searchParams;
-    const codeVerifier = window.localStorage.getItem(PKCE_CODE_VERIFIER_KEY);
-    const storedState = window.localStorage.getItem(PKCE_STATE_KEY);
-    const storedNonce = window.localStorage.getItem(PKCE_NONCE_KEY);
+    const callbackUrl = new URL(window.location.href)
+    const callbackParams = callbackUrl.searchParams
+    const codeVerifier = window.localStorage.getItem(PKCE_CODE_VERIFIER_KEY)
+    const storedState = window.localStorage.getItem(PKCE_STATE_KEY)
+    const storedNonce = window.localStorage.getItem(PKCE_NONCE_KEY)
 
-    appLogger.info("Handling OIDC callback", {
+    appLogger.info('Handling OIDC callback', {
       attrs: {
-        scope: "auth.oidc",
-        code: "OIDC_CALLBACK_START",
+        scope: 'auth.oidc',
+        code: 'OIDC_CALLBACK_START',
         callbackPath: callbackUrl.pathname,
         callbackOrigin: callbackUrl.origin,
-        hasAuthCode: callbackParams.has("code"),
-        authCodeLength: callbackParams.get("code")?.length ?? 0,
-        hasState: callbackParams.has("state"),
-        hasScope: callbackParams.has("scope"),
-        callbackError: callbackParams.get("error") ?? null,
+        hasAuthCode: callbackParams.has('code'),
+        authCodeLength: callbackParams.get('code')?.length ?? 0,
+        hasState: callbackParams.has('state'),
+        hasScope: callbackParams.has('scope'),
+        callbackError: callbackParams.get('error') ?? null,
         callbackErrorDescription:
-          callbackParams.get("error_description") ?? null,
-        callbackAuthUser: callbackParams.get("authuser") ?? null,
-        callbackHostedDomain: callbackParams.get("hd") ?? null,
+          callbackParams.get('error_description') ?? null,
+        callbackAuthUser: callbackParams.get('authuser') ?? null,
+        callbackHostedDomain: callbackParams.get('hd') ?? null,
         hasStoredCodeVerifier: Boolean(codeVerifier),
         hasStoredState: Boolean(storedState),
         hasStoredNonce: Boolean(storedNonce),
       },
-    });
+    })
 
     if (!codeVerifier || !storedState) {
-      appLogger.error("OIDC callback missing PKCE verifier or state", {
+      appLogger.error('OIDC callback missing PKCE verifier or state', {
         attrs: {
-          scope: "auth.oidc",
-          code: "OIDC_CALLBACK_MISSING_PKCE_STATE",
+          scope: 'auth.oidc',
+          code: 'OIDC_CALLBACK_MISSING_PKCE_STATE',
           hasStoredCodeVerifier: Boolean(codeVerifier),
           hasStoredState: Boolean(storedState),
         },
-      });
-      throw new Error("No code verifier or state found");
+      })
+      throw new Error('No code verifier or state found')
     }
     if (!storedNonce) {
-      appLogger.error("OIDC callback missing nonce", {
+      appLogger.error('OIDC callback missing nonce', {
         attrs: {
-          scope: "auth.oidc",
-          code: "OIDC_CALLBACK_MISSING_NONCE",
+          scope: 'auth.oidc',
+          code: 'OIDC_CALLBACK_MISSING_NONCE',
         },
-      });
-      throw new Error("No nonce found");
+      })
+      throw new Error('No nonce found')
     }
-    window.localStorage.removeItem(PKCE_CODE_VERIFIER_KEY);
-    window.localStorage.removeItem(PKCE_STATE_KEY);
-    window.localStorage.removeItem(PKCE_NONCE_KEY);
+    window.localStorage.removeItem(PKCE_CODE_VERIFIER_KEY)
+    window.localStorage.removeItem(PKCE_STATE_KEY)
+    window.localStorage.removeItem(PKCE_NONCE_KEY)
 
-    const config = getOidcConfig();
-    const discovery = await loadDiscovery();
-    const authServer = discovery as oauth.AuthorizationServer;
-    const client = buildClient(config);
-    appLogger.info("OIDC callback configuration resolved", {
+    const config = getOidcConfig()
+    const discovery = await loadDiscovery()
+    const authServer = discovery as oauth.AuthorizationServer
+    const client = buildClient(config)
+    appLogger.info('OIDC callback configuration resolved', {
       attrs: {
-        scope: "auth.oidc",
-        code: "OIDC_CALLBACK_CONFIG",
+        scope: 'auth.oidc',
+        code: 'OIDC_CALLBACK_CONFIG',
         discoveryUrl: sanitizeUrl(config.discoveryUrl),
         redirectUri: sanitizeUrl(config.redirectUri),
         clientIdHint: redactIdentifier(config.clientId),
         hasClientSecret: hasClientSecret(config.clientSecret),
         tokenEndpointAuthMethod:
-          client.token_endpoint_auth_method ?? "client_secret_basic(default)",
+          client.token_endpoint_auth_method ?? 'client_secret_basic(default)',
       },
-    });
+    })
     const params = oauth.validateAuthResponse(
       authServer,
       client,
       callbackUrl,
-      storedState,
-    );
+      storedState
+    )
     if (oauth.isOAuth2Error(params)) {
-      appLogger.error("OIDC callback response validation failed", {
+      appLogger.error('OIDC callback response validation failed', {
         attrs: {
-          scope: "auth.oidc",
-          code: "OIDC_CALLBACK_VALIDATE_FAILED",
+          scope: 'auth.oidc',
+          code: 'OIDC_CALLBACK_VALIDATE_FAILED',
           oauthError: params.error,
           oauthErrorDescription: params.error_description,
           oauthErrorUri: params.error_uri,
         },
-      });
-      throw new Error(params.error_description ?? params.error);
+      })
+      throw new Error(params.error_description ?? params.error)
     }
-    appLogger.info("OIDC callback response validated", {
+    appLogger.info('OIDC callback response validated', {
       attrs: {
-        scope: "auth.oidc",
-        code: "OIDC_CALLBACK_VALIDATE_SUCCESS",
+        scope: 'auth.oidc',
+        code: 'OIDC_CALLBACK_VALIDATE_SUCCESS',
         redirectUri: sanitizeUrl(config.redirectUri),
       },
-    });
+    })
 
-    appLogger.info("Requesting OIDC token exchange", {
+    appLogger.info('Requesting OIDC token exchange', {
       attrs: {
-        scope: "auth.oidc",
-        code: "OIDC_TOKEN_EXCHANGE_START",
+        scope: 'auth.oidc',
+        code: 'OIDC_TOKEN_EXCHANGE_START',
         tokenEndpoint: sanitizeUrl(discovery.token_endpoint),
         redirectUri: sanitizeUrl(config.redirectUri),
         codeVerifierLength: codeVerifier.length,
         clientIdHint: redactIdentifier(config.clientId),
         hasClientSecret: hasClientSecret(config.clientSecret),
       },
-    });
+    })
     const response = await oauth.authorizationCodeGrantRequest(
       authServer,
       client,
       params,
       config.redirectUri,
-      codeVerifier,
-    );
+      codeVerifier
+    )
     if (!response.ok) {
-      const oauthErrorResponse = await readOAuthErrorResponse(response);
-      appLogger.error("OIDC token endpoint returned non-success response", {
+      const oauthErrorResponse = await readOAuthErrorResponse(response)
+      appLogger.error('OIDC token endpoint returned non-success response', {
         attrs: {
-          scope: "auth.oidc",
-          code: "OIDC_TOKEN_EXCHANGE_HTTP_ERROR",
+          scope: 'auth.oidc',
+          code: 'OIDC_TOKEN_EXCHANGE_HTTP_ERROR',
           status: response.status,
           statusText: response.statusText,
           tokenEndpoint: sanitizeUrl(discovery.token_endpoint),
@@ -325,91 +335,95 @@ export class BrowserAuthAdapter {
           oauthErrorUri: oauthErrorResponse.errorUri,
           rawBody: oauthErrorResponse.rawBody,
         },
-      });
+      })
     } else {
-      appLogger.info("OIDC token endpoint responded", {
+      appLogger.info('OIDC token endpoint responded', {
         attrs: {
-          scope: "auth.oidc",
-          code: "OIDC_TOKEN_EXCHANGE_HTTP_OK",
+          scope: 'auth.oidc',
+          code: 'OIDC_TOKEN_EXCHANGE_HTTP_OK',
           status: response.status,
           tokenEndpoint: sanitizeUrl(discovery.token_endpoint),
         },
-      });
+      })
     }
 
     const result = (await oauth.processAuthorizationCodeOpenIDResponse(
       authServer,
       client,
       response,
-      storedNonce,
-    )) as OAuthTokenEndpointResponse | oauth.OAuth2Error;
+      storedNonce
+    )) as OAuthTokenEndpointResponse | oauth.OAuth2Error
 
     if (oauth.isOAuth2Error(result)) {
-      appLogger.error("OIDC token exchange failed", {
+      appLogger.error('OIDC token exchange failed', {
         attrs: {
-          scope: "auth.oidc",
-          code: "OIDC_TOKEN_EXCHANGE_FAILED",
+          scope: 'auth.oidc',
+          code: 'OIDC_TOKEN_EXCHANGE_FAILED',
           tokenEndpoint: sanitizeUrl(discovery.token_endpoint),
           oauthError: result.error,
           oauthErrorDescription: result.error_description,
           oauthErrorUri: result.error_uri,
         },
-      });
-      throw new Error(result.error_description ?? result.error);
+      })
+      throw new Error(result.error_description ?? result.error)
     }
 
-    appLogger.info("OIDC token exchange succeeded", {
+    appLogger.info('OIDC token exchange succeeded', {
       attrs: {
-        scope: "auth.oidc",
-        code: "OIDC_TOKEN_EXCHANGE_SUCCESS",
+        scope: 'auth.oidc',
+        code: 'OIDC_TOKEN_EXCHANGE_SUCCESS',
         hasAccessToken: Boolean(result.access_token),
         hasIDToken: Boolean(result.id_token),
         hasRefreshToken: Boolean(result.refresh_token),
         tokenType: result.token_type ?? null,
         expiresIn: result.expires_in ?? null,
-        scopeCount: summarizeScope(result.scope ?? "").length,
+        scopeCount: summarizeScope(result.scope ?? '').length,
       },
-    });
-    this.persist(result);
-  };
+    })
+    this.persist(result)
+  }
 
   /**
    * Initiates the OAuth login flow by redirecting the browser to the authorization URL.
    * Stores PKCE code verifier and state in localStorage.
    */
-  loginWithRedirect = async () => {
-    const config = getOidcConfig();
-    const discovery = await loadDiscovery();
-    const { code_verifier, code_challenge } = await pkceChallenge();
-    const state = crypto.randomUUID();
-    const nonce = crypto.randomUUID();
-    const hasRefreshToken = Boolean(this.getTokenResponse()?.refresh_token);
+  loginWithRedirect = async (options?: { loginHint?: string }) => {
+    const config = getOidcConfig()
+    const discovery = await loadDiscovery()
+    const { code_verifier, code_challenge } = await pkceChallenge()
+    const state = crypto.randomUUID()
+    const nonce = crypto.randomUUID()
+    const hasRefreshToken = Boolean(this.getTokenResponse()?.refresh_token)
 
-    window.localStorage.setItem(PKCE_CODE_VERIFIER_KEY, code_verifier);
-    window.localStorage.setItem(PKCE_STATE_KEY, state);
-    window.localStorage.setItem(PKCE_NONCE_KEY, nonce);
+    window.localStorage.setItem(PKCE_CODE_VERIFIER_KEY, code_verifier)
+    window.localStorage.setItem(PKCE_STATE_KEY, state)
+    window.localStorage.setItem(PKCE_NONCE_KEY, nonce)
 
-    const url = new URL(discovery.authorization_endpoint);
-    url.searchParams.set("client_id", config.clientId);
-    url.searchParams.set("redirect_uri", config.redirectUri);
-    url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", config.scope);
-    url.searchParams.set("state", state);
-    url.searchParams.set("code_challenge", code_challenge);
-    url.searchParams.set("code_challenge_method", "S256");
-    url.searchParams.set("nonce", nonce);
+    const url = new URL(discovery.authorization_endpoint)
+    url.searchParams.set('client_id', config.clientId)
+    url.searchParams.set('redirect_uri', config.redirectUri)
+    url.searchParams.set('response_type', 'code')
+    url.searchParams.set('scope', config.scope)
+    url.searchParams.set('state', state)
+    url.searchParams.set('code_challenge', code_challenge)
+    url.searchParams.set('code_challenge_method', 'S256')
+    url.searchParams.set('nonce', nonce)
     if (config.extraAuthParams) {
       Object.entries(config.extraAuthParams).forEach(([key, value]) => {
-        if (key === "prompt" && value === "consent" && hasRefreshToken) {
-          return;
+        if (key === 'prompt' && value === 'consent' && hasRefreshToken) {
+          return
         }
-        url.searchParams.set(key, value);
-      });
+        url.searchParams.set(key, value)
+      })
     }
-    appLogger.info("Initiating OIDC login redirect", {
+    const loginHint = options?.loginHint?.trim()
+    if (loginHint) {
+      url.searchParams.set('login_hint', loginHint)
+    }
+    appLogger.info('Initiating OIDC login redirect', {
       attrs: {
-        scope: "auth.oidc",
-        code: "OIDC_LOGIN_REDIRECT",
+        scope: 'auth.oidc',
+        code: 'OIDC_LOGIN_REDIRECT',
         authorizationEndpoint: sanitizeUrl(discovery.authorization_endpoint),
         tokenEndpoint: sanitizeUrl(discovery.token_endpoint),
         redirectUri: sanitizeUrl(config.redirectUri),
@@ -421,74 +435,77 @@ export class BrowserAuthAdapter {
         codeVerifierLength: code_verifier.length,
         codeChallengeLength: code_challenge.length,
       },
-    });
+    })
 
-    window.location.href = url.toString();
-  };
+    window.location.href = url.toString()
+  }
 
   /**
    * Logs out the user by removing the token from localStorage and notifying listeners.
    */
   logout = () => {
-    this.ephemeralTokenResponse = null;
-    window.localStorage.removeItem(STORAGE_KEY);
-    this.listeners.forEach((listener) => listener(null));
-  };
+    this.ephemeralTokenResponse = null
+    window.localStorage.removeItem(STORAGE_KEY)
+    clearImpersonatedServiceAccountCredential(['app'])
+    this.listeners.forEach((listener) => listener(null))
+  }
 
   /**
    * Installs an audience-bound service-account ID token for Runme Agent calls.
-   * The token remains in memory and is cleared by logout or a new OIDC login.
+   * GoogleAuthContext persists the short-lived token in the versioned
+   * impersonated-credential bundle before calling this method. This in-memory
+   * copy notifies current-tab subscribers immediately.
    */
   installEphemeralServiceAccountIdToken = (
     idToken: string,
-    expiresAt: string,
+    expiresAt: string
   ) => {
-    const normalizedToken = idToken.trim();
-    const expiresAtMs = Date.parse(expiresAt);
+    const normalizedToken = idToken.trim()
+    const expiresAtMs = Date.parse(expiresAt)
     if (!normalizedToken) {
-      throw new Error("A service-account ID token is required.");
+      throw new Error('A service-account ID token is required.')
     }
     if (!Number.isFinite(expiresAtMs)) {
       throw new Error(
-        "A valid service-account ID token expiration is required.",
-      );
+        'A valid service-account ID token expiration is required.'
+      )
     }
     // Switching effective identity must also remove any persisted human OIDC
     // refresh token so expiry cannot silently fall back to the human account.
-    window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.removeItem(STORAGE_KEY)
     this.ephemeralTokenResponse = {
       access_token: normalizedToken,
       id_token: normalizedToken,
-      token_type: "Bearer",
+      token_type: 'Bearer',
       expires_in: Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000)),
       expires_at: expiresAtMs,
-    };
-    const simpleAuth = this.simpleAuth;
-    appLogger.info("Installed ephemeral service-account authentication", {
+    }
+    const simpleAuth = this.simpleAuth
+    appLogger.info('Installed ephemeral service-account authentication', {
       attrs: {
-        scope: "auth.oidc",
-        code: "OIDC_EPHEMERAL_SERVICE_ACCOUNT_INSTALLED",
+        scope: 'auth.oidc',
+        code: 'OIDC_EPHEMERAL_SERVICE_ACCOUNT_INSTALLED',
         expiresAt: expiresAtMs,
       },
-    });
-    this.listeners.forEach((listener) => listener(simpleAuth));
-  };
+    })
+    this.listeners.forEach((listener) => listener(simpleAuth))
+  }
 
   /**
    * Initializes the adapter, refreshing tokens if they are about to expire.
    */
   init = async () => {
     if (this.simpleAuth?.willExpireSoon()) {
-      await this.refresh();
+      await this.refresh()
     }
-  };
+  }
 
   /**
    * Returns the current authentication state, or null if not authenticated.
    */
   get simpleAuth(): SimpleAuthJSONWithHelpers | null {
-    const tokenResponse = this.getTokenResponse();
-    return tokenResponse ? buildSimpleAuth(tokenResponse) : null;
+    const tokenResponse = this.getTokenResponse()
+    return tokenResponse ? buildSimpleAuth(tokenResponse) : null
   }
 
   /**
@@ -496,41 +513,44 @@ export class BrowserAuthAdapter {
    * the new token response.
    */
   refresh = async () => {
-    const tokenResponse = this.getTokenResponse();
+    const tokenResponse = this.getTokenResponse()
     if (!tokenResponse?.refresh_token) {
-      appLogger.warn("OIDC refresh skipped because no refresh token is available", {
-        attrs: {
-          scope: "auth.oidc",
-          code: "OIDC_REFRESH_SKIPPED_NO_REFRESH_TOKEN",
-        },
-      });
-      return;
+      appLogger.warn(
+        'OIDC refresh skipped because no refresh token is available',
+        {
+          attrs: {
+            scope: 'auth.oidc',
+            code: 'OIDC_REFRESH_SKIPPED_NO_REFRESH_TOKEN',
+          },
+        }
+      )
+      return
     }
-    const config = getOidcConfig();
-    const discovery = await loadDiscovery();
-    const authServer = discovery as oauth.AuthorizationServer;
-    const client = buildClient(config);
+    const config = getOidcConfig()
+    const discovery = await loadDiscovery()
+    const authServer = discovery as oauth.AuthorizationServer
+    const client = buildClient(config)
 
-    appLogger.info("Refreshing OIDC token", {
+    appLogger.info('Refreshing OIDC token', {
       attrs: {
-        scope: "auth.oidc",
-        code: "OIDC_REFRESH_START",
+        scope: 'auth.oidc',
+        code: 'OIDC_REFRESH_START',
         tokenEndpoint: sanitizeUrl(discovery.token_endpoint),
         clientIdHint: redactIdentifier(config.clientId),
         hasClientSecret: hasClientSecret(config.clientSecret),
       },
-    });
+    })
     const response = await oauth.refreshTokenGrantRequest(
       authServer,
       client,
-      tokenResponse.refresh_token,
-    );
+      tokenResponse.refresh_token
+    )
     if (!response.ok) {
-      const oauthErrorResponse = await readOAuthErrorResponse(response);
-      appLogger.warn("OIDC refresh request returned non-success response", {
+      const oauthErrorResponse = await readOAuthErrorResponse(response)
+      appLogger.warn('OIDC refresh request returned non-success response', {
         attrs: {
-          scope: "auth.oidc",
-          code: "OIDC_REFRESH_HTTP_ERROR",
+          scope: 'auth.oidc',
+          code: 'OIDC_REFRESH_HTTP_ERROR',
           status: response.status,
           statusText: response.statusText,
           tokenEndpoint: sanitizeUrl(discovery.token_endpoint),
@@ -539,107 +559,146 @@ export class BrowserAuthAdapter {
           oauthErrorUri: oauthErrorResponse.errorUri,
           rawBody: oauthErrorResponse.rawBody,
         },
-      });
+      })
     }
     const result = (await oauth.processRefreshTokenResponse(
       authServer,
       client,
-      response,
-    )) as OAuthTokenEndpointResponse | oauth.OAuth2Error;
+      response
+    )) as OAuthTokenEndpointResponse | oauth.OAuth2Error
     if (oauth.isOAuth2Error(result)) {
-      appLogger.warn("OIDC refresh failed", {
+      appLogger.warn('OIDC refresh failed', {
         attrs: {
-          scope: "auth.oidc",
-          code: "OIDC_REFRESH_FAILED",
+          scope: 'auth.oidc',
+          code: 'OIDC_REFRESH_FAILED',
           oauthError: result.error,
           oauthErrorDescription: result.error_description,
           oauthErrorUri: result.error_uri,
         },
-      });
+      })
       if (this.simpleAuth?.isExpired()) {
-        this.logout();
+        this.logout()
       }
-      return;
+      return
     }
-    appLogger.info("OIDC refresh succeeded", {
+    appLogger.info('OIDC refresh succeeded', {
       attrs: {
-        scope: "auth.oidc",
-        code: "OIDC_REFRESH_SUCCESS",
+        scope: 'auth.oidc',
+        code: 'OIDC_REFRESH_SUCCESS',
         hasAccessToken: Boolean(result.access_token),
         hasIDToken: Boolean(result.id_token),
         hasRefreshToken: Boolean(result.refresh_token),
         tokenType: result.token_type ?? null,
         expiresIn: result.expires_in ?? null,
       },
-    });
-    this.persist(result);
-  };
+    })
+    this.persist(result)
+  }
 
   /**
    * Registers a callback to be invoked whenever the authentication state changes.
    */
   onAuthChange = (callback: AuthListener) => {
-    const controller = new AbortController();
-    this.listeners.add(callback);
+    const controller = new AbortController()
+    const handleImpersonatedCredentialChange = () => {
+      this.ephemeralTokenResponse = null
+      callback(this.simpleAuth)
+    }
+    this.listeners.add(callback)
     window.addEventListener(
-      "storage",
+      'storage',
       (event) => {
         if (event.key === STORAGE_KEY) {
           callback(
-            event.newValue ? buildSimpleAuth(JSON.parse(event.newValue)) : null,
-          );
+            event.newValue ? buildSimpleAuth(JSON.parse(event.newValue)) : null
+          )
+          return
+        }
+        if (event.key === IMPERSONATED_SERVICE_ACCOUNT_CREDENTIAL_STORAGE_KEY) {
+          this.ephemeralTokenResponse = null
+          callback(this.simpleAuth)
         }
       },
-      { signal: controller.signal },
-    );
+      { signal: controller.signal }
+    )
+    window.addEventListener(
+      IMPERSONATED_SERVICE_ACCOUNT_CREDENTIAL_CHANGED_EVENT,
+      handleImpersonatedCredentialChange
+    )
     return () => {
-      this.listeners.delete(callback);
-      controller.abort();
-    };
-  };
+      this.listeners.delete(callback)
+      controller.abort()
+      window.removeEventListener(
+        IMPERSONATED_SERVICE_ACCOUNT_CREDENTIAL_CHANGED_EVENT,
+        handleImpersonatedCredentialChange
+      )
+    }
+  }
 
   private getTokenResponse(): StoredTokenResponse | null {
     if (this.ephemeralTokenResponse) {
-      return this.ephemeralTokenResponse;
+      return this.ephemeralTokenResponse
     }
-    return this.getPersistedTokenResponse();
+    const configuredIdentity = readAppLoginConfiguration()
+    const persistedIdentity = readImpersonatedServiceAccountCredential()
+    const serviceAccountCredential = persistedIdentity?.app
+    const configuredServiceAccountMatches = Boolean(
+      configuredIdentity.mode === 'service_account' &&
+        persistedIdentity &&
+        persistedIdentity.serviceAccount.toLowerCase() ===
+          configuredIdentity.serviceAccount.trim().toLowerCase() &&
+        (!configuredIdentity.humanAccount.trim() ||
+          persistedIdentity.humanPrincipal.toLowerCase() ===
+            configuredIdentity.humanAccount.trim().toLowerCase())
+    )
+    if (serviceAccountCredential && configuredServiceAccountMatches) {
+      const expiresAtMs = Date.parse(serviceAccountCredential.expiresAt)
+      return {
+        access_token: serviceAccountCredential.idToken,
+        id_token: serviceAccountCredential.idToken,
+        token_type: 'Bearer',
+        expires_in: Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000)),
+        expires_at: expiresAtMs,
+      }
+    }
+    return this.getPersistedTokenResponse()
   }
 
   private getPersistedTokenResponse(): StoredTokenResponse | null {
-    const authData = window.localStorage.getItem(STORAGE_KEY);
-    return authData ? (JSON.parse(authData) as StoredTokenResponse) : null;
+    const authData = window.localStorage.getItem(STORAGE_KEY)
+    return authData ? (JSON.parse(authData) as StoredTokenResponse) : null
   }
 
   private persist(tokenResponse: OAuthTokenEndpointResponse) {
-    this.ephemeralTokenResponse = null;
+    this.ephemeralTokenResponse = null
     const stored = normalizeTokenResponse(
       tokenResponse,
-      this.getPersistedTokenResponse(),
-    );
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
-    const simpleAuth = this.simpleAuth;
-    appLogger.info("Persisted OIDC auth state", {
+      this.getPersistedTokenResponse()
+    )
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stored))
+    const simpleAuth = this.simpleAuth
+    appLogger.info('Persisted OIDC auth state', {
       attrs: {
-        scope: "auth.oidc",
-        code: "OIDC_PERSIST_AUTH",
+        scope: 'auth.oidc',
+        code: 'OIDC_PERSIST_AUTH',
         hasAccessToken: Boolean(stored.access_token),
         hasIDToken: Boolean(stored.id_token),
         hasRefreshToken: Boolean(stored.refresh_token),
         tokenType: stored.token_type ?? null,
-        scopeCount: summarizeScope(stored.scope ?? "").length,
+        scopeCount: summarizeScope(stored.scope ?? '').length,
         expiresAt: stored.expires_at ?? null,
       },
-    });
-    this.listeners.forEach((listener) => listener(simpleAuth));
+    })
+    this.listeners.forEach((listener) => listener(simpleAuth))
   }
 }
 
 // This must be awaited in the client app initialization code
 // (can't do it below because top-level await fails in our build)
-const browserAdapter = new BrowserAuthAdapter();
+const browserAdapter = new BrowserAuthAdapter()
 
 export function getBrowserAdapter(): BrowserAuthAdapter {
-  return browserAdapter;
+  return browserAdapter
 }
 
 /**
@@ -647,13 +706,11 @@ export function getBrowserAdapter(): BrowserAuthAdapter {
  * user's login state changes.
  */
 export function useBrowserAuthData() {
-  const [authData, setAuthData] = useState(
-    () => getBrowserAdapter().simpleAuth,
-  );
+  const [authData, setAuthData] = useState(() => getBrowserAdapter().simpleAuth)
 
   useEffect(() => {
-    return getBrowserAdapter().onAuthChange(setAuthData);
-  }, []);
+    return getBrowserAdapter().onAuthChange(setAuthData)
+  }, [])
 
-  return authData;
+  return authData
 }

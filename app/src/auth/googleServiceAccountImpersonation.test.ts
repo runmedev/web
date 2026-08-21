@@ -52,6 +52,7 @@ describe('Google service-account impersonation', () => {
       driveAccessTokenExpiresAt: '2027-01-15T08:00:00Z',
       appIdToken: idToken,
       appIdTokenExpiresAt: new Date(1_800_000_000 * 1000).toISOString(),
+      errors: [],
     })
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
@@ -92,6 +93,60 @@ describe('Google service-account impersonation', () => {
     )
   })
 
+  it('mints only the requested credential target', async () => {
+    const driveFetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          accessToken: 'drive-only-token',
+          expireTime: '2027-01-15T08:00:00Z',
+        }),
+        { status: 200 }
+      )
+    )
+
+    await expect(
+      mintImpersonatedServiceAccountCredentials({
+        humanAccessToken: 'human-token',
+        serviceAccount: 'drive@example.iam.gserviceaccount.com',
+        driveScopes: ['drive-scope'],
+        appAudience: '',
+        targets: ['drive'],
+      })
+    ).resolves.toEqual({
+      driveAccessToken: 'drive-only-token',
+      driveAccessTokenExpiresAt: '2027-01-15T08:00:00Z',
+      errors: [],
+    })
+    expect(String(driveFetch.mock.calls[0]?.[0])).toContain(
+      ':generateAccessToken'
+    )
+    expect(driveFetch).toHaveBeenCalledTimes(1)
+
+    driveFetch.mockRestore()
+    const idToken = makeUnsignedJwt({ exp: 1_800_000_000 })
+    const appFetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(JSON.stringify({ token: idToken }), { status: 200 })
+      )
+
+    await expect(
+      mintImpersonatedServiceAccountCredentials({
+        humanAccessToken: 'human-token',
+        serviceAccount: 'runme@example.iam.gserviceaccount.com',
+        driveScopes: [],
+        appAudience: 'runme-audience',
+        targets: ['app'],
+      })
+    ).resolves.toEqual({
+      appIdToken: idToken,
+      appIdTokenExpiresAt: new Date(1_800_000_000 * 1000).toISOString(),
+      errors: [],
+    })
+    expect(String(appFetch.mock.calls[0]?.[0])).toContain(':generateIdToken')
+    expect(appFetch).toHaveBeenCalledTimes(1)
+  })
+
   it('rejects invalid service accounts and leases longer than seven days', () => {
     expect(() => normalizeServiceAccountEmail('jeremy@lewi.us')).toThrow(
       'valid Google service-account email'
@@ -120,15 +175,20 @@ describe('Google service-account impersonation', () => {
         })
       )
 
-    await expect(
-      mintImpersonatedServiceAccountCredentials({
-        humanAccessToken: 'do-not-print-this-token',
-        serviceAccount: 'runme@example.iam.gserviceaccount.com',
-        driveScopes: ['drive-scope'],
-        appAudience: 'runme-audience',
-      })
-    ).rejects.toThrow(
-      'Google IAM generateAccessToken failed (403): Permission denied'
-    )
+    const result = await mintImpersonatedServiceAccountCredentials({
+      humanAccessToken: 'do-not-print-this-token',
+      serviceAccount: 'runme@example.iam.gserviceaccount.com',
+      driveScopes: ['drive-scope'],
+      appAudience: 'runme-audience',
+    })
+    expect(result.errors).toEqual([
+      {
+        target: 'drive',
+        message:
+          'Google IAM generateAccessToken failed (403): Permission denied',
+      },
+    ])
+    expect(JSON.stringify(result)).not.toContain('do-not-print-this-token')
+    expect(result.appIdToken).toBeTruthy()
   })
 })

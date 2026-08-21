@@ -186,6 +186,43 @@ describe('SidePanelToolbar drive status button', () => {
     expect(setCurrentDocMock).not.toHaveBeenCalled()
   })
 
+  it('uses the configured impersonated service account from the Drive status button', async () => {
+    window.localStorage.setItem(
+      'runme/app-login-configuration',
+      JSON.stringify({
+        identitySharing: 'shared',
+        mode: 'service_account',
+        humanAccount: 'jeremy@lewi.us',
+        serviceAccount: 'runme-drive@example.iam.gserviceaccount.com',
+        driveMode: 'principal',
+        driveHumanAccount: '',
+        driveServiceAccount: '',
+      })
+    )
+    render(<SidePanelToolbar />)
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Google Drive status: Not syncing',
+        })
+      )
+      await Promise.resolve()
+    })
+
+    expect(getServiceAccountCredentialsMock).toHaveBeenCalledWith(
+      'runme-drive@example.iam.gserviceaccount.com',
+      {
+        humanAccount: 'jeremy@lewi.us',
+        prompt: '',
+        targets: ['drive', 'app'],
+        authorizationLeaseSeconds: 86_400,
+        accessTokenLifetimeSeconds: 3_600,
+      }
+    )
+    expect(startGoogleDriveOAuthMock).not.toHaveBeenCalled()
+  })
+
   it('logs in directly as the principal by default', async () => {
     render(<SidePanelToolbar />)
 
@@ -313,11 +350,14 @@ describe('SidePanelToolbar drive status button', () => {
   it('opens Authentication Settings from its dedicated toolbar button', () => {
     render(<SidePanelToolbar />)
 
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Toggle Authentication Settings panel',
-      })
-    )
+    const loginButton = screen.getByRole('button', { name: 'Login' })
+    const authenticationSettingsButton = screen.getByRole('button', {
+      name: 'Toggle Authentication Settings panel',
+    })
+
+    expect(loginButton.nextElementSibling).toBe(authenticationSettingsButton)
+
+    fireEvent.click(authenticationSettingsButton)
 
     expect(togglePanelMock).toHaveBeenCalledWith('authentication')
   })

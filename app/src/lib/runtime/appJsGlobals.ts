@@ -1151,9 +1151,12 @@ export function createAppJsGlobals({
       options?: {
         driveScopes?: string[]
         appAudience?: string
+        humanAccount?: string
+        mode?: 'popup' | 'redirect' | 'new_tab'
         authorizationLeaseSeconds?: number
         accessTokenLifetimeSeconds?: number
-        prompt?: 'none' | 'consent' | 'select_account'
+        prompt?: '' | 'none' | 'consent' | 'select_account'
+        targets?: Array<'drive' | 'app'>
       }
     ) => {
       const status = await appState.getServiceAccountCredentials(

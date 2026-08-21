@@ -11,8 +11,18 @@ import type { ButtonHTMLAttributes, ElementType, HTMLAttributes } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { NotebookSyncStatusRow } from '../storage/local'
+import type { GoogleDriveCredentialStatus } from '../contexts/GoogleAuthContext'
 
 let isDriveSyncing = false
+let driveCredentialStatus: GoogleDriveCredentialStatus = {
+  connected: true,
+  authFlow: 'impersonated_service_account' as const,
+  effectivePrincipal: 'runme-drive@example.iam.gserviceaccount.com',
+  authorizingPrincipal: 'jeremy@lewi.us',
+  expiresAt: '2026-08-21T23:00:00.000Z',
+  renewal: 'interactive' as const,
+  lastError: null as string | null,
+}
 const ensureAccessTokenMock = vi.fn(async () => 'token')
 const listFileSyncStatusesMock = vi.fn<() => Promise<NotebookSyncStatusRow[]>>()
 const syncMock = vi.fn(async (_uri: string) => undefined)
@@ -50,6 +60,7 @@ vi.mock('@radix-ui/themes', () => ({
 
 vi.mock('../contexts/GoogleAuthContext', () => ({
   useGoogleAuth: () => ({
+    driveCredentialStatus,
     ensureAccessToken: ensureAccessTokenMock,
     isDriveSyncing,
   }),
@@ -120,7 +131,17 @@ async function waitForStatusLoad(): Promise<void> {
 
 describe('DriveSyncStatusTab', () => {
   beforeEach(() => {
+    window.localStorage.clear()
     isDriveSyncing = true
+    driveCredentialStatus = {
+      connected: true,
+      authFlow: 'impersonated_service_account',
+      effectivePrincipal: 'runme-drive@example.iam.gserviceaccount.com',
+      authorizingPrincipal: 'jeremy@lewi.us',
+      expiresAt: '2026-08-21T23:00:00.000Z',
+      renewal: 'interactive',
+      lastError: null,
+    }
     ensureAccessTokenMock.mockClear()
     listFileSyncStatusesMock.mockReset()
     listFileSyncStatusesMock.mockResolvedValue(rows)
@@ -158,6 +179,96 @@ describe('DriveSyncStatusTab', () => {
 
     fireEvent.mouseEnter(screen.getByRole('button', { name: 'About Refresh' }))
     expect(screen.getByRole('tooltip').textContent).toBe(description)
+  })
+
+  it('shows the active Drive credential identity and expiration', async () => {
+    window.localStorage.setItem(
+      'runme/app-login-configuration',
+      JSON.stringify({
+        identitySharing: 'shared',
+        mode: 'service_account',
+        humanAccount: 'jeremy@lewi.us',
+        serviceAccount: 'runme-drive@example.iam.gserviceaccount.com',
+      })
+    )
+    render(<DriveSyncStatusTab />)
+
+    await waitForStatusLoad()
+    const status = screen.getByTestId('drive-credential-status')
+    const configured = within(status).getByLabelText(
+      'Configured Google Drive identity'
+    )
+    expect(
+      within(configured).getByText('Impersonated Google service account')
+    ).toBeTruthy()
+    expect(
+      within(configured).getByText(
+        'runme-drive@example.iam.gserviceaccount.com'
+      )
+    ).toBeTruthy()
+    expect(within(configured).getByText('jeremy@lewi.us')).toBeTruthy()
+    const active = within(status).getByLabelText(
+      'Active Google Drive credential'
+    )
+    expect(
+      within(active).getByText('Impersonated service-account access token')
+    ).toBeTruthy()
+    expect(
+      within(active).getByText('runme-drive@example.iam.gserviceaccount.com')
+    ).toBeTruthy()
+    expect(within(active).getByText('jeremy@lewi.us')).toBeTruthy()
+    expect(status.querySelector('time')?.getAttribute('dateTime')).toBe(
+      '2026-08-21T23:00:00.000Z'
+    )
+    expect(
+      within(status).getByText('Interactive authorization required')
+    ).toBeTruthy()
+  })
+
+  it('distinguishes configured impersonation from a disconnected credential', async () => {
+    window.localStorage.setItem(
+      'runme/app-login-configuration',
+      JSON.stringify({
+        identitySharing: 'shared',
+        mode: 'service_account',
+        humanAccount: 'jeremy@lewi.us',
+        serviceAccount: 'runme-drive@example.iam.gserviceaccount.com',
+      })
+    )
+    isDriveSyncing = false
+    driveCredentialStatus = {
+      connected: false,
+      authFlow: null,
+      effectivePrincipal: null,
+      authorizingPrincipal: null,
+      expiresAt: null,
+      renewal: null,
+      lastError: null,
+    }
+
+    render(<DriveSyncStatusTab />)
+
+    await waitForStatusLoad()
+    const status = screen.getByTestId('drive-credential-status')
+    const configured = within(status).getByLabelText(
+      'Configured Google Drive identity'
+    )
+    expect(
+      within(configured).getByText('Impersonated Google service account')
+    ).toBeTruthy()
+    expect(
+      within(configured).getByText(
+        'runme-drive@example.iam.gserviceaccount.com'
+      )
+    ).toBeTruthy()
+    expect(within(configured).getByText('jeremy@lewi.us')).toBeTruthy()
+
+    const active = within(status).getByLabelText(
+      'Active Google Drive credential'
+    )
+    expect(within(active).getByText('Disconnected')).toBeTruthy()
+    expect(within(active).getByText('None')).toBeTruthy()
+    expect(within(active).getAllByText('Not available')).toHaveLength(2)
   })
 
   it('filters sync status by selected values', async () => {

@@ -71,6 +71,47 @@ export const TOUR_TARGETS: readonly TourTarget[] = [
     description: 'Sign in to or sign out of the Runme web application.',
   },
   {
+    id: 'left-nav.authentication-settings',
+    label: 'Authentication Settings',
+    description:
+      'Configure the identities and OAuth clients used by Runme and Google Drive.',
+  },
+  {
+    id: 'authentication.identity-sharing',
+    label: 'Identity Relationship',
+    description:
+      'Choose whether Runme and Google Drive use the same identity or separate identities.',
+  },
+  {
+    id: 'authentication.runme-login-identity',
+    label: 'Runme Login Identity',
+    description:
+      'Choose whether Runme authenticates as a human principal or a scoped service account.',
+  },
+  {
+    id: 'authentication.service-account-email',
+    label: 'Service Account Email',
+    description:
+      'Enter the Google service account used as the effective Runme and Drive identity.',
+  },
+  {
+    id: 'authentication.authorizing-human-account',
+    label: 'Authorizing Human Account',
+    description:
+      'Choose the human Google account used to authorize service-account impersonation.',
+  },
+  {
+    id: 'authentication.google-drive-connect',
+    label: 'Connect Google Drive',
+    description:
+      'Authorize or refresh Google Drive access using the selected identity.',
+  },
+  {
+    id: 'authentication.save',
+    label: 'Save Authentication Settings',
+    description: 'Save the configured authentication identities and clients.',
+  },
+  {
     id: 'explorer.add-google-drive-folder',
     label: 'Add Google Drive Folder',
     description: 'Choose a Google Drive folder and add it to the Explorer.',

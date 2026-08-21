@@ -7,6 +7,7 @@ import {
   readAppLoginConfiguration,
   saveAppLoginConfiguration,
   type AppLoginMode,
+  type IdentitySharingMode,
 } from '../../auth/appLoginConfiguration'
 import { oidcConfigManager } from '../../auth/oidcConfig'
 import {
@@ -63,6 +64,95 @@ function SettingsSection({
   )
 }
 
+function IdentityFields({
+  ariaPrefix,
+  busy,
+  humanAccount,
+  labelPrefix,
+  mode,
+  onHumanAccountChange,
+  onModeChange,
+  onServiceAccountChange,
+  serviceAccount,
+  tourTargets,
+}: {
+  ariaPrefix: string
+  busy: boolean
+  humanAccount: string
+  labelPrefix?: string
+  mode: AppLoginMode
+  onHumanAccountChange: (value: string) => void
+  onModeChange: (mode: AppLoginMode) => void
+  onServiceAccountChange: (value: string) => void
+  serviceAccount: string
+  tourTargets?: {
+    human?: string
+    mode?: string
+    serviceAccount?: string
+  }
+}) {
+  const prefix = labelPrefix ? `${labelPrefix} ` : ''
+  return (
+    <>
+      <label className={labelClass}>
+        {prefix}login identity
+        <select
+          {...(tourTargets?.mode ? { 'data-tour-id': tourTargets.mode } : {})}
+          aria-label={`${ariaPrefix} login identity`}
+          className={`${inputClass} mt-1`}
+          value={mode}
+          disabled={busy}
+          onChange={(event) => onModeChange(event.target.value as AppLoginMode)}
+        >
+          <option value="principal">Direct human principal</option>
+          <option value="service_account">
+            Impersonated Google service account
+          </option>
+        </select>
+      </label>
+      <label className={labelClass}>
+        {prefix}human identity
+        <input
+          {...(tourTargets?.human ? { 'data-tour-id': tourTargets.human } : {})}
+          aria-label={`${ariaPrefix} human identity`}
+          className={`${inputClass} mt-1`}
+          type="email"
+          value={humanAccount}
+          disabled={busy}
+          required={mode === 'service_account'}
+          onChange={(event) => onHumanAccountChange(event.target.value)}
+          onInput={(event) => onHumanAccountChange(event.currentTarget.value)}
+          placeholder="you@example.com"
+        />
+        <span className={helpClass}>
+          Used as Google’s login hint. For impersonation, this human must be
+          allowed to use the OAuth client and have Service Account Token Creator
+          on the GSA.
+        </span>
+      </label>
+      {mode === 'service_account' ? (
+        <label className={labelClass}>
+          {prefix}Google service account identity
+          <input
+            {...(tourTargets?.serviceAccount
+              ? { 'data-tour-id': tourTargets.serviceAccount }
+              : {})}
+            aria-label={`${ariaPrefix} Google service account identity`}
+            className={`${inputClass} mt-1`}
+            value={serviceAccount}
+            disabled={busy}
+            onChange={(event) => onServiceAccountChange(event.target.value)}
+            placeholder="name@project.iam.gserviceaccount.com"
+          />
+          <span className={helpClass}>
+            Short-lived tokens are minted in memory; no JSON key is stored.
+          </span>
+        </label>
+      ) : null}
+    </>
+  )
+}
+
 export default function AuthenticationSettingsPanel() {
   const authData = useBrowserAuthData()
   const browserAdapter = getBrowserAdapter()
@@ -82,12 +172,24 @@ export default function AuthenticationSettingsPanel() {
   )
   const initialOidc = useMemo(() => oidcConfigManager.getConfigForEditing(), [])
 
+  const [identitySharing, setIdentitySharing] = useState<IdentitySharingMode>(
+    initialLogin.identitySharing
+  )
   const [loginMode, setLoginMode] = useState<AppLoginMode>(initialLogin.mode)
+  const [humanAccount, setHumanAccount] = useState(
+    initialLogin.humanAccount || driveAccount || ''
+  )
   const [serviceAccount, setServiceAccount] = useState(
     initialLogin.serviceAccount
   )
-  const [preferredDriveAccount, setPreferredDriveAccount] = useState(
-    driveAccount ?? ''
+  const [driveLoginMode, setDriveLoginMode] = useState<AppLoginMode>(
+    initialLogin.driveMode
+  )
+  const [driveHumanAccount, setDriveHumanAccount] = useState(
+    initialLogin.driveHumanAccount || driveAccount || ''
+  )
+  const [driveServiceAccount, setDriveServiceAccount] = useState(
+    initialLogin.driveServiceAccount
   )
   const [driveAuthFlow, setDriveAuthFlow] = useState<GoogleDriveAuthFlow>(
     initialDriveOAuth.authFlow
@@ -113,37 +215,70 @@ export default function AuthenticationSettingsPanel() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const runmeAccount = currentRunmeAccount(authData?.idToken)
+  const effectiveDriveMode =
+    identitySharing === 'shared' ? loginMode : driveLoginMode
+  const effectiveDriveHumanAccount =
+    identitySharing === 'shared' ? humanAccount : driveHumanAccount
+  const effectiveDriveServiceAccount =
+    identitySharing === 'shared' ? serviceAccount : driveServiceAccount
   const effectiveDriveAccount =
-    loginMode === 'service_account' && isDriveSyncing
-      ? serviceAccount
+    effectiveDriveMode === 'service_account' && isDriveSyncing
+      ? effectiveDriveServiceAccount
       : driveAccount
-  const serviceAccountValid =
+  const runmeServiceAccountValid =
     loginMode === 'principal' || isGoogleServiceAccountEmail(serviceAccount)
+  const driveServiceAccountValid =
+    effectiveDriveMode === 'principal' ||
+    isGoogleServiceAccountEmail(effectiveDriveServiceAccount)
+  const runmeHumanIdentityValid =
+    loginMode === 'principal' || Boolean(humanAccount.trim())
+  const driveHumanIdentityValid =
+    effectiveDriveMode === 'principal' ||
+    Boolean(effectiveDriveHumanAccount.trim())
+  const driveClientIdValid = driveClientId
+    .trim()
+    .endsWith('.apps.googleusercontent.com')
   const requiredFieldsPresent = Boolean(
-    driveClientId.trim() &&
+    driveClientIdValid &&
       runmeDiscoveryUrl.trim() &&
       runmeClientId.trim() &&
       runmeScope.trim()
   )
-  const settingsValid = serviceAccountValid && requiredFieldsPresent
+  const settingsValid =
+    runmeServiceAccountValid &&
+    driveServiceAccountValid &&
+    runmeHumanIdentityValid &&
+    driveHumanIdentityValid &&
+    requiredFieldsPresent
 
   const saveSettings = useCallback((): boolean => {
-    if (!serviceAccountValid) {
-      setErrorMessage('Enter a valid Google service-account email.')
+    if (!runmeServiceAccountValid || !driveServiceAccountValid) {
+      setErrorMessage('Enter a valid Google service-account identity.')
+      return false
+    }
+    if (!runmeHumanIdentityValid || !driveHumanIdentityValid) {
+      setErrorMessage(
+        'Enter the human identity that is allowed to impersonate the Google service account.'
+      )
       return false
     }
     if (!requiredFieldsPresent) {
       setErrorMessage(
-        'Google Drive client ID and all required Runme OAuth fields are required.'
+        'Enter a Google Web application client ID ending in .apps.googleusercontent.com and all required Runme OAuth fields.'
       )
       return false
     }
     try {
       saveAppLoginConfiguration({
+        identitySharing,
         mode: loginMode,
+        humanAccount,
         serviceAccount,
+        driveMode: driveLoginMode,
+        driveHumanAccount,
+        driveServiceAccount,
       })
-      setDriveAccount(preferredDriveAccount)
+      setDriveAccount(effectiveDriveHumanAccount)
       googleClientManager.setOAuthClient({
         clientId: driveClientId.trim(),
         clientSecret: driveClientSecret.trim() || undefined,
@@ -167,25 +302,42 @@ export default function AuthenticationSettingsPanel() {
     driveAuthUxMode,
     driveClientId,
     driveClientSecret,
+    driveHumanAccount,
+    driveLoginMode,
+    driveServiceAccount,
+    driveServiceAccountValid,
+    driveHumanIdentityValid,
+    effectiveDriveHumanAccount,
+    humanAccount,
+    identitySharing,
     loginMode,
-    preferredDriveAccount,
     requiredFieldsPresent,
     runmeClientId,
     runmeClientSecret,
     runmeDiscoveryUrl,
+    runmeHumanIdentityValid,
     runmeScope,
     serviceAccount,
-    serviceAccountValid,
+    runmeServiceAccountValid,
     setDriveAccount,
   ])
 
-  const authorizeServiceAccount = useCallback(async () => {
-    await getServiceAccountCredentials(serviceAccount.trim(), {
-      prompt: 'select_account',
-      authorizationLeaseSeconds: 24 * 60 * 60,
-      accessTokenLifetimeSeconds: 60 * 60,
-    })
-  }, [getServiceAccountCredentials, serviceAccount])
+  const authorizeServiceAccount = useCallback(
+    async (
+      selectedServiceAccount: string,
+      selectedHumanAccount: string,
+      targets: Array<'drive' | 'app'>
+    ) => {
+      await getServiceAccountCredentials(selectedServiceAccount.trim(), {
+        humanAccount: selectedHumanAccount.trim() || undefined,
+        prompt: selectedHumanAccount.trim() ? '' : 'select_account',
+        targets,
+        authorizationLeaseSeconds: 24 * 60 * 60,
+        accessTokenLifetimeSeconds: 60 * 60,
+      })
+    },
+    [getServiceAccountCredentials]
+  )
 
   const handleSave = useCallback(() => {
     setBusyAction('save')
@@ -207,9 +359,15 @@ export default function AuthenticationSettingsPanel() {
     setErrorMessage(null)
     try {
       if (loginMode === 'service_account') {
-        await authorizeServiceAccount()
+        await authorizeServiceAccount(
+          serviceAccount,
+          humanAccount,
+          identitySharing === 'shared' ? ['drive', 'app'] : ['app']
+        )
       } else {
-        await browserAdapter.loginWithRedirect()
+        await browserAdapter.loginWithRedirect({
+          loginHint: humanAccount.trim() || undefined,
+        })
       }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -220,8 +378,11 @@ export default function AuthenticationSettingsPanel() {
     authData,
     authorizeServiceAccount,
     browserAdapter,
+    humanAccount,
+    identitySharing,
     loginMode,
     saveSettings,
+    serviceAccount,
   ])
 
   const handleDriveAuth = useCallback(async () => {
@@ -231,8 +392,12 @@ export default function AuthenticationSettingsPanel() {
     setBusyAction('drive')
     setErrorMessage(null)
     try {
-      if (loginMode === 'service_account') {
-        await authorizeServiceAccount()
+      if (effectiveDriveMode === 'service_account') {
+        await authorizeServiceAccount(
+          effectiveDriveServiceAccount,
+          effectiveDriveHumanAccount,
+          identitySharing === 'shared' ? ['drive', 'app'] : ['drive']
+        )
       } else {
         await startGoogleDriveOAuth({ prompt: 'select_account' })
       }
@@ -241,7 +406,15 @@ export default function AuthenticationSettingsPanel() {
     } finally {
       setBusyAction(null)
     }
-  }, [authorizeServiceAccount, loginMode, saveSettings, startGoogleDriveOAuth])
+  }, [
+    authorizeServiceAccount,
+    effectiveDriveHumanAccount,
+    effectiveDriveMode,
+    effectiveDriveServiceAccount,
+    identitySharing,
+    saveSettings,
+    startGoogleDriveOAuth,
+  ])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-nb-surface">
@@ -257,109 +430,182 @@ export default function AuthenticationSettingsPanel() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <SettingsSection
-          title="Runme account"
-          description="Choose the effective identity used for Runme Agent requests. A scoped service account is also used for Drive."
+          title="Identity usage"
+          description="Decide whether Runme and Google Drive use one effective identity or are configured independently."
         >
-          <div className="rounded-nb-sm border border-nb-border bg-white px-3 py-2 text-xs">
-            <span className="font-semibold text-nb-text">Current: </span>
-            <span className="break-all text-nb-text-muted">
-              {runmeAccount ?? 'Not signed in'}
-            </span>
-          </div>
           <label className={labelClass}>
-            Login identity
+            Identity relationship
             <select
-              aria-label="Runme login identity"
+              data-tour-id="authentication.identity-sharing"
+              aria-label="Runme and Google Drive identity relationship"
               className={`${inputClass} mt-1`}
-              value={loginMode}
+              value={identitySharing}
               disabled={busyAction !== null}
               onChange={(event) =>
-                setLoginMode(event.target.value as AppLoginMode)
+                setIdentitySharing(event.target.value as IdentitySharingMode)
               }
             >
-              <option value="principal">Direct human principal</option>
-              <option value="service_account">Scoped service account</option>
+              <option value="shared">
+                Use the same identity for Runme and Drive
+              </option>
+              <option value="separate">
+                Configure Runme and Drive separately
+              </option>
             </select>
           </label>
-          {loginMode === 'service_account' ? (
-            <label className={labelClass}>
-              Service-account email
-              <input
-                aria-label="Runme service-account email"
-                className={`${inputClass} mt-1`}
-                value={serviceAccount}
-                disabled={busyAction !== null}
-                onChange={(event) => setServiceAccount(event.target.value)}
-                placeholder="name@project.iam.gserviceaccount.com"
-              />
-              <span className={helpClass}>
-                The selected human must have Service Account Token Creator on
-                this account. Tokens remain memory-only.
-              </span>
-            </label>
-          ) : null}
-          <button
-            type="button"
-            className="rounded-nb-sm bg-nb-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-            disabled={busyAction !== null || (!authData && !settingsValid)}
-            onClick={() => void handleRunmeAuth()}
-          >
-            {authData
-              ? 'Sign out of Runme'
-              : busyAction === 'runme'
-                ? 'Signing in…'
-                : 'Sign in to Runme'}
-          </button>
         </SettingsSection>
 
-        <SettingsSection
-          title="Google Drive account"
-          description="Choose the preferred human account for Drive OAuth and inspect the effective Drive identity."
-        >
-          <div className="rounded-nb-sm border border-nb-border bg-white px-3 py-2 text-xs">
-            <span className="font-semibold text-nb-text">Current: </span>
-            <span className="break-all text-nb-text-muted">
-              {effectiveDriveAccount ??
-                (isDriveSyncing ? 'Connected' : 'Not connected')}
-            </span>
-          </div>
-          <label className={labelClass}>
-            Preferred human account
-            <input
-              aria-label="Preferred Google Drive account"
-              className={`${inputClass} mt-1`}
-              type="email"
-              value={preferredDriveAccount}
-              disabled={busyAction !== null || loginMode === 'service_account'}
-              onChange={(event) => setPreferredDriveAccount(event.target.value)}
-              placeholder="you@example.com"
+        {identitySharing === 'shared' ? (
+          <SettingsSection
+            title="Runme and Google Drive identity"
+            description="Enter the identity once; both Runme and Drive will use it."
+          >
+            <div className="rounded-nb-sm border border-nb-border bg-white px-3 py-2 text-xs leading-5">
+              <div>
+                <span className="font-semibold text-nb-text">Runme: </span>
+                <span className="break-all text-nb-text-muted">
+                  {runmeAccount ?? 'Not signed in'}
+                </span>
+              </div>
+              <div>
+                <span className="font-semibold text-nb-text">Drive: </span>
+                <span className="break-all text-nb-text-muted">
+                  {effectiveDriveAccount ??
+                    (isDriveSyncing ? 'Connected' : 'Not connected')}
+                </span>
+              </div>
+            </div>
+            <IdentityFields
+              ariaPrefix="Shared"
+              busy={busyAction !== null}
+              humanAccount={humanAccount}
+              mode={loginMode}
+              onHumanAccountChange={setHumanAccount}
+              onModeChange={setLoginMode}
+              onServiceAccountChange={setServiceAccount}
+              serviceAccount={serviceAccount}
+              tourTargets={{
+                mode: 'authentication.runme-login-identity',
+                human: 'authentication.authorizing-human-account',
+                serviceAccount: 'authentication.service-account-email',
+              }}
             />
-            <span className={helpClass}>
-              Used as Google’s login hint. The account chooser remains
-              available. Service-account mode overrides the effective Drive
-              identity.
-            </span>
-          </label>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="inline-flex items-center gap-1.5 rounded-nb-sm bg-nb-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-              disabled={busyAction !== null || !settingsValid}
-              onClick={() => void handleDriveAuth()}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="rounded-nb-sm bg-nb-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+                disabled={busyAction !== null || (!authData && !settingsValid)}
+                onClick={() => void handleRunmeAuth()}
+              >
+                {authData
+                  ? 'Sign out of Runme'
+                  : busyAction === 'runme'
+                    ? 'Signing in…'
+                    : 'Sign in to Runme'}
+              </button>
+              <button
+                type="button"
+                data-tour-id="authentication.google-drive-connect"
+                className="inline-flex items-center gap-1.5 rounded-nb-sm bg-nb-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+                disabled={busyAction !== null || !settingsValid}
+                onClick={() => void handleDriveAuth()}
+              >
+                <ArrowPathIcon className="h-4 w-4" />
+                {busyAction === 'drive' ? 'Connecting…' : 'Connect or refresh'}
+              </button>
+              <button
+                type="button"
+                className="rounded-nb-sm border border-nb-border bg-white px-3 py-2 text-sm font-medium text-nb-text disabled:opacity-50"
+                disabled={busyAction !== null || !isDriveSyncing}
+                onClick={() => void logoutGoogleDrive()}
+              >
+                Disconnect Drive
+              </button>
+            </div>
+          </SettingsSection>
+        ) : (
+          <>
+            <SettingsSection
+              title="Runme identity"
+              description="Configure the effective identity used for Runme Agent requests."
             >
-              <ArrowPathIcon className="h-4 w-4" />
-              {busyAction === 'drive' ? 'Connecting…' : 'Connect or refresh'}
-            </button>
-            <button
-              type="button"
-              className="rounded-nb-sm border border-nb-border bg-white px-3 py-2 text-sm font-medium text-nb-text disabled:opacity-50"
-              disabled={busyAction !== null || !isDriveSyncing}
-              onClick={() => void logoutGoogleDrive()}
+              <div className="rounded-nb-sm border border-nb-border bg-white px-3 py-2 text-xs">
+                <span className="font-semibold text-nb-text">Current: </span>
+                <span className="break-all text-nb-text-muted">
+                  {runmeAccount ?? 'Not signed in'}
+                </span>
+              </div>
+              <IdentityFields
+                ariaPrefix="Runme"
+                busy={busyAction !== null}
+                humanAccount={humanAccount}
+                labelPrefix="Runme"
+                mode={loginMode}
+                onHumanAccountChange={setHumanAccount}
+                onModeChange={setLoginMode}
+                onServiceAccountChange={setServiceAccount}
+                serviceAccount={serviceAccount}
+              />
+              <button
+                type="button"
+                className="rounded-nb-sm bg-nb-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+                disabled={busyAction !== null || (!authData && !settingsValid)}
+                onClick={() => void handleRunmeAuth()}
+              >
+                {authData
+                  ? 'Sign out of Runme'
+                  : busyAction === 'runme'
+                    ? 'Signing in…'
+                    : 'Sign in to Runme'}
+              </button>
+            </SettingsSection>
+            <SettingsSection
+              title="Google Drive identity"
+              description="Configure the effective identity used for Google Drive."
             >
-              Disconnect
-            </button>
-          </div>
-        </SettingsSection>
+              <div className="rounded-nb-sm border border-nb-border bg-white px-3 py-2 text-xs">
+                <span className="font-semibold text-nb-text">Current: </span>
+                <span className="break-all text-nb-text-muted">
+                  {effectiveDriveAccount ??
+                    (isDriveSyncing ? 'Connected' : 'Not connected')}
+                </span>
+              </div>
+              <IdentityFields
+                ariaPrefix="Google Drive"
+                busy={busyAction !== null}
+                humanAccount={driveHumanAccount}
+                labelPrefix="Drive"
+                mode={driveLoginMode}
+                onHumanAccountChange={setDriveHumanAccount}
+                onModeChange={setDriveLoginMode}
+                onServiceAccountChange={setDriveServiceAccount}
+                serviceAccount={driveServiceAccount}
+              />
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-tour-id="authentication.google-drive-connect"
+                  className="inline-flex items-center gap-1.5 rounded-nb-sm bg-nb-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+                  disabled={busyAction !== null || !settingsValid}
+                  onClick={() => void handleDriveAuth()}
+                >
+                  <ArrowPathIcon className="h-4 w-4" />
+                  {busyAction === 'drive'
+                    ? 'Connecting…'
+                    : 'Connect or refresh'}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-nb-sm border border-nb-border bg-white px-3 py-2 text-sm font-medium text-nb-text disabled:opacity-50"
+                  disabled={busyAction !== null || !isDriveSyncing}
+                  onClick={() => void logoutGoogleDrive()}
+                >
+                  Disconnect
+                </button>
+              </div>
+            </SettingsSection>
+          </>
+        )}
 
         <SettingsSection
           title="Google Drive OAuth flow"
@@ -511,6 +757,7 @@ export default function AuthenticationSettingsPanel() {
         ) : null}
         <button
           type="button"
+          data-tour-id="authentication.save"
           className="w-full rounded-nb-sm bg-nb-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
           disabled={busyAction !== null || !settingsValid}
           onClick={handleSave}

@@ -3,6 +3,14 @@ import { useEffect } from 'react'
 import { act, render, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getBrowserAdapter } from '../browserAdapter.client'
+import {
+  DEFAULT_APP_LOGIN_CONFIGURATION,
+  saveAppLoginConfiguration,
+} from '../auth/appLoginConfiguration'
+import {
+  IMPERSONATED_SERVICE_ACCOUNT_CREDENTIAL_STORAGE_KEY,
+  mergeImpersonatedServiceAccountCredential,
+} from '../auth/impersonatedServiceAccountCredentialStore'
 import { googleClientManager } from '../lib/googleClientManager'
 import {
   DRIVE_SCOPES,
@@ -19,6 +27,8 @@ const AUTH_HANDOFF_MODE_KEY = 'runme/google-auth/handoff-mode'
 const SELECT_ACCOUNT_NEXT_KEY = 'runme/google-auth/select-account-next'
 const STORAGE_KEY = 'runme/google-auth/token'
 const STORED_DRIVE_ACCOUNT_KEY = 'runme/google-auth/drive-account'
+const IMPERSONATION_TRANSACTION_KEY =
+  'runme/google-auth/impersonation-transaction'
 const DRIVE_ABOUT_URL =
   'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)'
 
@@ -140,24 +150,33 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
   })
 
   it('authorizes keyless service-account credentials for Drive and Runme', async () => {
+    saveAppLoginConfiguration({
+      ...DEFAULT_APP_LOGIN_CONFIGURATION,
+      identitySharing: 'shared',
+      mode: 'service_account',
+      humanAccount: 'jeremy@lewi.us',
+      serviceAccount: 'runme@example.iam.gserviceaccount.com',
+    })
     const idToken = makeUnsignedJwt({
       exp: Math.floor(Date.now() / 1000) + 3600,
       email: 'runme@example.iam.gserviceaccount.com',
     })
     let tokenCallback: ((response: { access_token?: string }) => void) | null =
       null
+    const requestAccessToken = vi.fn(() => {
+      tokenCallback?.({ access_token: 'human-iam-token' })
+    })
+    const initTokenClient = vi.fn((options) => {
+      tokenCallback = options.callback
+      return {
+        callback: options.callback,
+        requestAccessToken,
+      }
+    })
     window.google = {
       accounts: {
         oauth2: {
-          initTokenClient: (options) => {
-            tokenCallback = options.callback
-            return {
-              callback: options.callback,
-              requestAccessToken: () => {
-                tokenCallback?.({ access_token: 'human-iam-token' })
-              },
-            }
-          },
+          initTokenClient,
         },
       },
     }
@@ -190,16 +209,25 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
         'runme@example.iam.gserviceaccount.com',
         {
           appAudience: 'runme-client.apps.googleusercontent.com',
+          humanAccount: 'jeremy@lewi.us',
           authorizationLeaseSeconds: 86_400,
         }
       )
     })
 
     expect(status!).toMatchObject({
+      status: 'authorized',
       humanPrincipal: 'jeremy@lewi.us',
       serviceAccount: 'runme@example.iam.gserviceaccount.com',
       drive: { scopes: expect.arrayContaining(DRIVE_SCOPES) },
       app: { audience: 'runme-client.apps.googleusercontent.com' },
+    })
+    expect(initTokenClient).toHaveBeenCalledWith(
+      expect.objectContaining({ login_hint: 'jeremy@lewi.us' })
+    )
+    expect(requestAccessToken).toHaveBeenCalledWith({
+      prompt: '',
+      login_hint: 'jeremy@lewi.us',
     })
     expect(status!).not.toHaveProperty('drive.accessToken')
     expect(status!).not.toHaveProperty('app.idToken')
@@ -209,6 +237,113 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     expect(getBrowserAdapter().simpleAuth?.idToken).toBe(idToken)
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull()
     expect(window.localStorage.getItem('oidc-auth')).toBeNull()
+  })
+
+  it('rejects a Google account that does not match the configured human', async () => {
+    const tokenClient = {
+      callback: vi.fn(),
+      requestAccessToken: vi.fn(),
+    }
+    tokenClient.requestAccessToken.mockImplementation(() => {
+      tokenClient.callback({ access_token: 'wrong-human-token' })
+    })
+    window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient: vi.fn((options) => {
+            tokenClient.callback = options.callback
+            return tokenClient
+          }),
+        },
+      },
+    }
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ email: 'jlewi@openai.com' }), {
+        status: 200,
+      })
+    )
+    const auth = await renderWithGoogleAuthProvider()
+
+    await expect(
+      auth.getServiceAccountCredentials(
+        'runme@example.iam.gserviceaccount.com',
+        { humanAccount: 'jeremy@lewi.us', mode: 'popup' }
+      )
+    ).rejects.toThrow(
+      'Google authorized jlewi@openai.com, but jeremy@lewi.us is required'
+    )
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull()
+    expect(
+      window.localStorage.getItem(
+        IMPERSONATED_SERVICE_ACCOUNT_CREDENTIAL_STORAGE_KEY
+      )
+    ).toBeNull()
+  })
+
+  it('starts service-account PKCE in a new tab without persisting a human token', async () => {
+    const openSpy = vi
+      .spyOn(window, 'open')
+      .mockReturnValue(window as unknown as Window)
+    const auth = await renderWithGoogleAuthProvider()
+
+    await expect(
+      auth.getServiceAccountCredentials(
+        'runme@example.iam.gserviceaccount.com',
+        {
+          humanAccount: 'jeremy@lewi.us',
+          targets: ['drive'],
+          mode: 'new_tab',
+        }
+      )
+    ).resolves.toMatchObject({
+      status: 'started',
+      humanPrincipal: 'jeremy@lewi.us',
+      serviceAccount: 'runme@example.iam.gserviceaccount.com',
+    })
+
+    const transaction = window.localStorage.getItem(
+      IMPERSONATION_TRANSACTION_KEY
+    )
+    expect(transaction).toBeTruthy()
+    expect(transaction).not.toContain('access_token')
+    expect(transaction).not.toContain('refresh_token')
+    const authUrl = new URL(String(openSpy.mock.calls[0]?.[0]))
+    expect(authUrl.searchParams.get('response_type')).toBe('code')
+    expect(authUrl.searchParams.get('access_type')).toBe('online')
+    expect(authUrl.searchParams.get('login_hint')).toBe('jeremy@lewi.us')
+    expect(authUrl.searchParams.get('scope')).toContain('cloud-platform')
+  })
+
+  it('hydrates a persisted Drive service-account credential after reload', async () => {
+    saveAppLoginConfiguration({
+      ...DEFAULT_APP_LOGIN_CONFIGURATION,
+      mode: 'service_account',
+      humanAccount: 'jeremy@lewi.us',
+      serviceAccount: 'runme@example.iam.gserviceaccount.com',
+    })
+    mergeImpersonatedServiceAccountCredential({
+      serviceAccount: 'runme@example.iam.gserviceaccount.com',
+      humanPrincipal: 'jeremy@lewi.us',
+      authorizationLeaseExpiresAt: new Date(
+        Date.now() + 86_400_000
+      ).toISOString(),
+      drive: {
+        accessToken: 'persisted-service-account-drive-token',
+        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        scopes: DRIVE_SCOPES,
+      },
+    })
+    const auth = await renderWithGoogleAuthProvider()
+
+    await expect(auth.ensureAccessToken()).resolves.toBe(
+      'persisted-service-account-drive-token'
+    )
+    expect(auth.driveCredentialStatus).toMatchObject({
+      authFlow: 'impersonated_service_account',
+      effectivePrincipal: 'runme@example.iam.gserviceaccount.com',
+      authorizingPrincipal: 'jeremy@lewi.us',
+    })
   })
 
   it('starts implicit auth in a new tab when authUxMode=new_tab', async () => {
@@ -460,7 +595,7 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
 
     expect(initTokenClient).toHaveBeenCalledWith(
       expect.objectContaining({
-        hint: 'jlewi@openai.com',
+        login_hint: 'jlewi@openai.com',
       })
     )
     expect(tokenClient.requestAccessToken).toHaveBeenCalledWith({
@@ -513,9 +648,9 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
       prompt: 'consent',
     })
     expect(initTokenClient.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ hint: 'jlewi@openai.com' })
+      expect.objectContaining({ login_hint: 'jlewi@openai.com' })
     )
-    expect(initTokenClient.mock.calls[1]?.[0]).not.toHaveProperty('hint')
+    expect(initTokenClient.mock.calls[1]?.[0]).not.toHaveProperty('login_hint')
     expect(window.localStorage.getItem(STORED_DRIVE_ACCOUNT_KEY)).toBe(
       'jlewi@openai.com'
     )
@@ -571,9 +706,9 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
       prompt: 'consent',
     })
     expect(initTokenClient.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ hint: 'jlewi@openai.com' })
+      expect.objectContaining({ login_hint: 'jlewi@openai.com' })
     )
-    expect(initTokenClient.mock.calls[1]?.[0]).not.toHaveProperty('hint')
+    expect(initTokenClient.mock.calls[1]?.[0]).not.toHaveProperty('login_hint')
   })
 
   it('adopts a remembered Drive account changed by another tab', async () => {
@@ -618,7 +753,7 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
 
     expect(initTokenClient).toHaveBeenCalledWith(
       expect.objectContaining({
-        hint: 'new-account@example.com',
+        login_hint: 'new-account@example.com',
       })
     )
   })

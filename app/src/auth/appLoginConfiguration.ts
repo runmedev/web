@@ -1,15 +1,44 @@
 export type AppLoginMode = 'principal' | 'service_account'
+export type IdentitySharingMode = 'shared' | 'separate'
 
 export interface AppLoginConfiguration {
+  identitySharing: IdentitySharingMode
   mode: AppLoginMode
+  humanAccount: string
+  serviceAccount: string
+  driveMode: AppLoginMode
+  driveHumanAccount: string
+  driveServiceAccount: string
+}
+
+export const APP_LOGIN_CONFIGURATION_STORAGE_KEY =
+  'runme/app-login-configuration'
+export const APP_LOGIN_CONFIGURATION_CHANGED_EVENT =
+  'runme-app-login-configuration-changed'
+const STORAGE_KEY = APP_LOGIN_CONFIGURATION_STORAGE_KEY
+
+export interface EffectiveDriveLoginConfiguration {
+  mode: AppLoginMode
+  humanAccount: string
   serviceAccount: string
 }
 
-const STORAGE_KEY = 'runme/app-login-configuration'
-
 export const DEFAULT_APP_LOGIN_CONFIGURATION: AppLoginConfiguration = {
+  identitySharing: 'shared',
   mode: 'principal',
+  humanAccount: '',
   serviceAccount: '',
+  driveMode: 'principal',
+  driveHumanAccount: '',
+  driveServiceAccount: '',
+}
+
+function readMode(value: unknown): AppLoginMode {
+  return value === 'service_account' ? 'service_account' : 'principal'
+}
+
+function readText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 export function readAppLoginConfiguration(): AppLoginConfiguration {
@@ -24,11 +53,14 @@ export function readAppLoginConfiguration(): AppLoginConfiguration {
     }
     const parsed = JSON.parse(stored) as Partial<AppLoginConfiguration>
     return {
-      mode: parsed.mode === 'service_account' ? 'service_account' : 'principal',
-      serviceAccount:
-        typeof parsed.serviceAccount === 'string'
-          ? parsed.serviceAccount.trim()
-          : '',
+      identitySharing:
+        parsed.identitySharing === 'separate' ? 'separate' : 'shared',
+      mode: readMode(parsed.mode),
+      humanAccount: readText(parsed.humanAccount),
+      serviceAccount: readText(parsed.serviceAccount),
+      driveMode: readMode(parsed.driveMode),
+      driveHumanAccount: readText(parsed.driveHumanAccount),
+      driveServiceAccount: readText(parsed.driveServiceAccount),
     }
   } catch {
     return DEFAULT_APP_LOGIN_CONFIGURATION
@@ -38,12 +70,35 @@ export function readAppLoginConfiguration(): AppLoginConfiguration {
 export function saveAppLoginConfiguration(
   configuration: AppLoginConfiguration
 ): AppLoginConfiguration {
-  const normalized = {
+  const normalized: AppLoginConfiguration = {
+    identitySharing: configuration.identitySharing,
     mode: configuration.mode,
+    humanAccount: configuration.humanAccount.trim(),
     serviceAccount: configuration.serviceAccount.trim(),
+    driveMode: configuration.driveMode,
+    driveHumanAccount: configuration.driveHumanAccount.trim(),
+    driveServiceAccount: configuration.driveServiceAccount.trim(),
   }
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized))
+  window.dispatchEvent(new Event(APP_LOGIN_CONFIGURATION_CHANGED_EVENT))
   return normalized
+}
+
+export function resolveDriveLoginConfiguration(
+  configuration: AppLoginConfiguration
+): EffectiveDriveLoginConfiguration {
+  if (configuration.identitySharing === 'shared') {
+    return {
+      mode: configuration.mode,
+      humanAccount: configuration.humanAccount,
+      serviceAccount: configuration.serviceAccount,
+    }
+  }
+  return {
+    mode: configuration.driveMode,
+    humanAccount: configuration.driveHumanAccount,
+    serviceAccount: configuration.driveServiceAccount,
+  }
 }
 
 export function isGoogleServiceAccountEmail(value: string): boolean {

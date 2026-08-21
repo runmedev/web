@@ -72,6 +72,17 @@ describe('tourGuide', () => {
         expect.objectContaining({ id: 'left-nav.explorer' }),
         expect.objectContaining({ id: 'left-nav.google-drive' }),
         expect.objectContaining({ id: 'left-nav.account' }),
+        expect.objectContaining({ id: 'left-nav.authentication-settings' }),
+        expect.objectContaining({ id: 'authentication.identity-sharing' }),
+        expect.objectContaining({
+          id: 'authentication.runme-login-identity',
+        }),
+        expect.objectContaining({ id: 'authentication.service-account-email' }),
+        expect.objectContaining({
+          id: 'authentication.authorizing-human-account',
+        }),
+        expect.objectContaining({ id: 'authentication.google-drive-connect' }),
+        expect.objectContaining({ id: 'authentication.save' }),
       ])
     )
   })

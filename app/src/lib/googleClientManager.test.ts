@@ -111,6 +111,31 @@ describe('GoogleClientManager', () => {
     })
   })
 
+  it('does not replace a Web OAuth client with a service-account client ID', () => {
+    const manager = createManager()
+    manager.setOAuthClient({
+      clientId: '554943104515-example.apps.googleusercontent.com',
+    })
+
+    manager.setOAuthClientFromJson(
+      JSON.stringify({
+        type: 'service_account',
+        client_id: '105590327376962406009',
+        client_email: 'runme-drive-test@example.iam.gserviceaccount.com',
+        private_key:
+          '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
+      })
+    )
+
+    expect(manager.getOAuthClient()).toMatchObject({
+      clientId: '554943104515-example.apps.googleusercontent.com',
+      authFlow: 'service_account',
+      serviceAccount: {
+        clientEmail: 'runme-drive-test@example.iam.gserviceaccount.com',
+      },
+    })
+  })
+
   it('persists and restores service account credentials from local storage', () => {
     const manager = createManager()
 
