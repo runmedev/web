@@ -190,6 +190,10 @@ async function loadDiscovery(): Promise<DiscoveryDocument> {
 
 export class BrowserAuthAdapter {
   private readonly listeners = new Set<AuthListener>();
+  // Impersonated service-account ID tokens are intentionally memory-only. The
+  // browser must never persist them or silently fall back to a human identity
+  // when the effective service-account token expires.
+  private ephemeralTokenResponse: StoredTokenResponse | null = null;
 
   /**
    * Handles the OAuth callback by exchanging the authorization code for tokens,
@@ -426,8 +430,48 @@ export class BrowserAuthAdapter {
    * Logs out the user by removing the token from localStorage and notifying listeners.
    */
   logout = () => {
+    this.ephemeralTokenResponse = null;
     window.localStorage.removeItem(STORAGE_KEY);
     this.listeners.forEach((listener) => listener(null));
+  };
+
+  /**
+   * Installs an audience-bound service-account ID token for Runme Agent calls.
+   * The token remains in memory and is cleared by logout or a new OIDC login.
+   */
+  installEphemeralServiceAccountIdToken = (
+    idToken: string,
+    expiresAt: string,
+  ) => {
+    const normalizedToken = idToken.trim();
+    const expiresAtMs = Date.parse(expiresAt);
+    if (!normalizedToken) {
+      throw new Error("A service-account ID token is required.");
+    }
+    if (!Number.isFinite(expiresAtMs)) {
+      throw new Error(
+        "A valid service-account ID token expiration is required.",
+      );
+    }
+    // Switching effective identity must also remove any persisted human OIDC
+    // refresh token so expiry cannot silently fall back to the human account.
+    window.localStorage.removeItem(STORAGE_KEY);
+    this.ephemeralTokenResponse = {
+      access_token: normalizedToken,
+      id_token: normalizedToken,
+      token_type: "Bearer",
+      expires_in: Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000)),
+      expires_at: expiresAtMs,
+    };
+    const simpleAuth = this.simpleAuth;
+    appLogger.info("Installed ephemeral service-account authentication", {
+      attrs: {
+        scope: "auth.oidc",
+        code: "OIDC_EPHEMERAL_SERVICE_ACCOUNT_INSTALLED",
+        expiresAt: expiresAtMs,
+      },
+    });
+    this.listeners.forEach((listener) => listener(simpleAuth));
   };
 
   /**
@@ -555,12 +599,23 @@ export class BrowserAuthAdapter {
   };
 
   private getTokenResponse(): StoredTokenResponse | null {
+    if (this.ephemeralTokenResponse) {
+      return this.ephemeralTokenResponse;
+    }
+    return this.getPersistedTokenResponse();
+  }
+
+  private getPersistedTokenResponse(): StoredTokenResponse | null {
     const authData = window.localStorage.getItem(STORAGE_KEY);
     return authData ? (JSON.parse(authData) as StoredTokenResponse) : null;
   }
 
   private persist(tokenResponse: OAuthTokenEndpointResponse) {
-    const stored = normalizeTokenResponse(tokenResponse, this.getTokenResponse());
+    this.ephemeralTokenResponse = null;
+    const stored = normalizeTokenResponse(
+      tokenResponse,
+      this.getPersistedTokenResponse(),
+    );
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
     const simpleAuth = this.simpleAuth;
     appLogger.info("Persisted OIDC auth state", {

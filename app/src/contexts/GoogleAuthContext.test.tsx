@@ -2,8 +2,13 @@
 import { useEffect } from 'react'
 import { act, render, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { getBrowserAdapter } from '../browserAdapter.client'
 import { googleClientManager } from '../lib/googleClientManager'
-import { GoogleAuthProvider, useGoogleAuth } from './GoogleAuthContext'
+import {
+  DRIVE_SCOPES,
+  GoogleAuthProvider,
+  useGoogleAuth,
+} from './GoogleAuthContext'
 
 const PKCE_STATE_KEY = 'runme/google-auth/pkce-state'
 const PKCE_CODE_VERIFIER_KEY = 'runme/google-auth/pkce-code-verifier'
@@ -53,6 +58,16 @@ function bytesToBase64(bytes: Uint8Array): string {
   return globalThis.btoa(binary)
 }
 
+function makeUnsignedJwt(payload: Record<string, unknown>): string {
+  const encode = (value: Record<string, unknown>) =>
+    globalThis
+      .btoa(JSON.stringify(value))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '')
+  return `${encode({ alg: 'none' })}.${encode(payload)}.`
+}
+
 async function generatePrivateKeyPem(): Promise<string> {
   const keyPair = await globalThis.crypto.subtle.generateKey(
     {
@@ -82,6 +97,7 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
     window.localStorage.clear()
+    getBrowserAdapter().logout()
     window.sessionStorage.clear()
     window.history.replaceState(null, '', '/')
     googleClientManager.setOAuthClient({
@@ -121,6 +137,78 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     expect(window.localStorage.getItem(IMPLICIT_PROMPT_MODE_KEY)).toBe('none')
     // Implicit redirect should not mint a PKCE verifier.
     expect(window.localStorage.getItem(PKCE_CODE_VERIFIER_KEY)).toBeNull()
+  })
+
+  it('authorizes keyless service-account credentials for Drive and Runme', async () => {
+    const idToken = makeUnsignedJwt({
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      email: 'runme@example.iam.gserviceaccount.com',
+    })
+    let tokenCallback: ((response: { access_token?: string }) => void) | null =
+      null
+    window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient: (options) => {
+            tokenCallback = options.callback
+            return {
+              callback: options.callback,
+              requestAccessToken: () => {
+                tokenCallback?.({ access_token: 'human-iam-token' })
+              },
+            }
+          },
+        },
+      },
+    }
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.includes('/userinfo')) {
+        return new Response(JSON.stringify({ email: 'jeremy@lewi.us' }), {
+          status: 200,
+        })
+      }
+      if (url.endsWith(':generateAccessToken')) {
+        return new Response(
+          JSON.stringify({
+            accessToken: 'service-account-drive-token',
+            expireTime: new Date(Date.now() + 3600_000).toISOString(),
+          }),
+          { status: 200 }
+        )
+      }
+      if (url.endsWith(':generateIdToken')) {
+        return new Response(JSON.stringify({ token: idToken }), { status: 200 })
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const auth = await renderWithGoogleAuthProvider()
+
+    let status: Awaited<ReturnType<typeof auth.getServiceAccountCredentials>>
+    await act(async () => {
+      status = await auth.getServiceAccountCredentials(
+        'runme@example.iam.gserviceaccount.com',
+        {
+          appAudience: 'runme-client.apps.googleusercontent.com',
+          authorizationLeaseSeconds: 86_400,
+        }
+      )
+    })
+
+    expect(status!).toMatchObject({
+      humanPrincipal: 'jeremy@lewi.us',
+      serviceAccount: 'runme@example.iam.gserviceaccount.com',
+      drive: { scopes: expect.arrayContaining(DRIVE_SCOPES) },
+      app: { audience: 'runme-client.apps.googleusercontent.com' },
+    })
+    expect(status!).not.toHaveProperty('drive.accessToken')
+    expect(status!).not.toHaveProperty('app.idToken')
+    await expect(auth.ensureAccessToken()).resolves.toBe(
+      'service-account-drive-token'
+    )
+    expect(getBrowserAdapter().simpleAuth?.idToken).toBe(idToken)
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull()
+    expect(window.localStorage.getItem('oidc-auth')).toBeNull()
   })
 
   it('starts implicit auth in a new tab when authUxMode=new_tab', async () => {

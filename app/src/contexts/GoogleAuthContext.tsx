@@ -10,6 +10,16 @@ import {
 } from 'react'
 import pkceChallenge from 'pkce-challenge'
 import { mintGoogleServiceAccountAccessToken } from '../auth/googleServiceAccount'
+import {
+  GOOGLE_SERVICE_ACCOUNT_IMPERSONATION_SCOPES,
+  getGoogleHumanPrincipal,
+  mintImpersonatedServiceAccountCredentials,
+  resolveAuthorizationLeaseSeconds,
+  type GetServiceAccountCredentialsOptions,
+  type ServiceAccountCredentialStatus,
+} from '../auth/googleServiceAccountImpersonation'
+import { getBrowserAdapter } from '../browserAdapter.client'
+import { oidcConfigManager } from '../auth/oidcConfig'
 import { googleClientManager } from '../lib/googleClientManager'
 import {
   APP_ROUTE_PATHS,
@@ -50,7 +60,7 @@ const DRIVE_ABOUT_URL =
 interface AccessTokenInfo {
   token: string
   expiresAt: number
-  authFlow?: GoogleDriveAuthFlow
+  authFlow?: GoogleDriveAuthFlow | 'impersonated_service_account'
   refreshToken?: string
 }
 
@@ -73,6 +83,10 @@ export interface StartGoogleDriveOAuthResult {
 
 interface GoogleAuthContextType {
   ensureAccessToken: (options?: EnsureAccessTokenOptions) => Promise<string>
+  getServiceAccountCredentials: (
+    serviceAccount: string,
+    options?: GetServiceAccountCredentialsOptions
+  ) => Promise<ServiceAccountCredentialStatus>
   logoutGoogleDrive: () => Promise<void>
   startGoogleDriveOAuth: (
     options?: StartGoogleDriveOAuthOptions
@@ -290,6 +304,9 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   const oauthLoginHintRef = useRef<string | null>(null)
   const storedDriveAccountRef = useRef<string | null>(loadStoredDriveAccount())
   const handlersRef = useRef<PendingHandlers | null>(null)
+  const impersonationHandlersRef = useRef<PendingHandlers | null>(null)
+  const impersonationTokenClientRef = useRef<TokenClient | null>(null)
+  const impersonationClientIdRef = useRef<string | null>(null)
   const pendingPromiseRef = useRef<Promise<string> | null>(null)
   const scriptPromiseRef = useRef<Promise<void> | null>(null)
   const callbackPromiseRef = useRef<Promise<void> | null>(null)
@@ -331,17 +348,24 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   const invalidatePendingAuth = useCallback((message: string) => {
     const hadPendingAuth = Boolean(
       handlersRef.current ||
+        impersonationHandlersRef.current ||
         pendingPromiseRef.current ||
         callbackPromiseRef.current
     )
     authGenerationRef.current += 1
     handlersRef.current?.reject(new StaleGoogleAuthOperationError())
+    impersonationHandlersRef.current?.reject(
+      new StaleGoogleAuthOperationError()
+    )
     handlersRef.current = null
+    impersonationHandlersRef.current = null
     pendingPromiseRef.current = null
     callbackPromiseRef.current = null
     tokenClientRef.current = null
     oauthClientIdRef.current = null
     oauthLoginHintRef.current = null
+    impersonationTokenClientRef.current = null
+    impersonationClientIdRef.current = null
     if (hadPendingAuth) {
       appLogger.info(message, {
         attrs: {
@@ -378,7 +402,11 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     (
       token: string,
       expiresIn = 3600,
-      options?: { refreshToken?: string | null }
+      options?: {
+        refreshToken?: string | null
+        authFlow?: AccessTokenInfo['authFlow']
+        persist?: boolean
+      }
     ) => {
       if (!token) {
         setTokenInfo(null)
@@ -400,13 +428,18 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       const info: AccessTokenInfo = {
         token,
         expiresAt,
-        authFlow: googleClientManager.getOAuthClient().authFlow,
+        authFlow:
+          options?.authFlow ?? googleClientManager.getOAuthClient().authFlow,
         ...(refreshToken ? { refreshToken } : {}),
       }
       setTokenInfo(info)
       tokenInfoRef.current = info
       try {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(info))
+        if (options?.persist === false) {
+          window.localStorage.removeItem(STORAGE_KEY)
+        } else {
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(info))
+        }
         window.localStorage.removeItem(LEGACY_STORAGE_KEY)
       } catch (error) {
         console.error('Failed to persist Google auth token', error)
@@ -1020,6 +1053,9 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     if (!info?.token || info.expiresAt <= Date.now() + REFRESH_MARGIN_MS) {
       return false
     }
+    if (info.authFlow === 'impersonated_service_account') {
+      return true
+    }
     const authFlow = googleClientManager.getOAuthClient().authFlow
     if (authFlow === 'service_account') {
       return info.authFlow === 'service_account'
@@ -1196,6 +1232,137 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     captureAuthOperation,
     ensureScriptLoaded,
   ])
+
+  // IAM impersonation uses a dedicated GIS token client because its human
+  // authorization scopes must never be confused with the service account's
+  // eventual Drive scopes.
+  const ensureImpersonationTokenClient = useCallback(async () => {
+    const { clientId } = googleClientManager.getOAuthClient()
+    if (!clientId?.trim()) {
+      throw new Error('Google OAuth client is not configured.')
+    }
+    if (
+      impersonationTokenClientRef.current &&
+      impersonationClientIdRef.current === clientId
+    ) {
+      return impersonationTokenClientRef.current
+    }
+
+    await ensureScriptLoaded()
+    const oauth = window.google?.accounts?.oauth2
+    if (!oauth?.initTokenClient) {
+      throw new Error('Google OAuth client is not available.')
+    }
+
+    const client = oauth.initTokenClient({
+      client_id: clientId,
+      scope: GOOGLE_SERVICE_ACCOUNT_IMPERSONATION_SCOPES.join(' '),
+      callback: (response: AccessTokenResponse) => {
+        const pending = impersonationHandlersRef.current
+        if (!pending) {
+          return
+        }
+        impersonationHandlersRef.current = null
+        if (response.error || !response.access_token) {
+          pending.reject(
+            new Error(
+              response.error_description ??
+                response.error ??
+                'Failed to authorize Google service-account impersonation.'
+            )
+          )
+          return
+        }
+        pending.resolve(response.access_token)
+      },
+    })
+    impersonationTokenClientRef.current = client
+    impersonationClientIdRef.current = clientId
+    return client
+  }, [ensureScriptLoaded])
+
+  /**
+   * Interactively authorizes a human and installs two keyless credentials for
+   * the selected service account: a Drive access token and a Runme ID token.
+   */
+  const getServiceAccountCredentials = useCallback(
+    async (
+      serviceAccount: string,
+      options?: GetServiceAccountCredentialsOptions
+    ): Promise<ServiceAccountCredentialStatus> => {
+      impersonationHandlersRef.current?.reject(
+        new Error('Google service-account authorization restarted.')
+      )
+      impersonationHandlersRef.current = null
+
+      const client = await ensureImpersonationTokenClient()
+      const humanAccessToken = await new Promise<string>((resolve, reject) => {
+        impersonationHandlersRef.current = { resolve, reject }
+        try {
+          client.requestAccessToken({
+            prompt: options?.prompt ?? 'select_account',
+          })
+        } catch (error) {
+          impersonationHandlersRef.current = null
+          reject(error)
+        }
+      })
+
+      const appAudience =
+        options?.appAudience?.trim() || oidcConfigManager.getConfig().clientId
+      const driveScopes = options?.driveScopes ?? DRIVE_SCOPES
+      const authorizationLeaseSeconds = resolveAuthorizationLeaseSeconds(
+        options?.authorizationLeaseSeconds
+      )
+      const [humanPrincipal, credentials] = await Promise.all([
+        getGoogleHumanPrincipal(humanAccessToken),
+        mintImpersonatedServiceAccountCredentials({
+          humanAccessToken,
+          serviceAccount,
+          driveScopes,
+          appAudience,
+          accessTokenLifetimeSeconds: options?.accessTokenLifetimeSeconds,
+        }),
+      ])
+
+      const driveExpiresAtMs = Date.parse(credentials.driveAccessTokenExpiresAt)
+      if (!Number.isFinite(driveExpiresAtMs)) {
+        throw new Error(
+          'Google IAM returned an invalid Drive token expiration.'
+        )
+      }
+      const driveExpiresIn = Math.max(
+        1,
+        Math.floor((driveExpiresAtMs - Date.now()) / 1000)
+      )
+      setAccessToken(credentials.driveAccessToken, driveExpiresIn, {
+        authFlow: 'impersonated_service_account',
+        persist: false,
+        refreshToken: null,
+      })
+      getBrowserAdapter().installEphemeralServiceAccountIdToken(
+        credentials.appIdToken,
+        credentials.appIdTokenExpiresAt
+      )
+
+      return {
+        humanPrincipal,
+        serviceAccount: serviceAccount.trim(),
+        authorizationLeaseExpiresAt: new Date(
+          Date.now() + authorizationLeaseSeconds * 1000
+        ).toISOString(),
+        drive: {
+          scopes: driveScopes,
+          expiresAt: credentials.driveAccessTokenExpiresAt,
+        },
+        app: {
+          audience: appAudience,
+          expiresAt: credentials.appIdTokenExpiresAt,
+        },
+      }
+    },
+    [ensureImpersonationTokenClient, setAccessToken]
+  )
 
   const logoutGoogleDrive = useCallback(async () => {
     const oauthClient = googleClientManager.getOAuthClient()
@@ -1401,6 +1568,13 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       appState.setGoogleDriveOAuthHandler(null)
     }
   }, [startGoogleDriveOAuth])
+
+  useEffect(() => {
+    appState.setServiceAccountCredentialsHandler(getServiceAccountCredentials)
+    return () => {
+      appState.setServiceAccountCredentialsHandler(null)
+    }
+  }, [getServiceAccountCredentials])
 
   // Public entry point: fetch (or reuse) an access token. The callback contains
   // all of the state orchestration so Callers can simply `await`.
@@ -1649,6 +1823,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       ensureAccessToken,
+      getServiceAccountCredentials,
       isDriveSyncing,
       logoutGoogleDrive,
       startGoogleDriveOAuth,
@@ -1656,6 +1831,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     }),
     [
       ensureAccessToken,
+      getServiceAccountCredentials,
       isDriveSyncing,
       logoutGoogleDrive,
       startGoogleDriveOAuth,

@@ -18,6 +18,7 @@ type Scenario =
   | 'tour'
   | 'explorer'
   | 'credentials'
+  | 'credentialsImpersonation'
   | 'drive'
   | 'driveSearch'
   | 'driveSave'
@@ -149,6 +150,16 @@ class MockSandboxPort {
           callId: 1,
           method: 'credentials.google.setServiceAccountFromFilePath',
           args: ['/tmp/service-account.json'],
+        })
+      } else if (this.scenario === 'credentialsImpersonation') {
+        this.emit({
+          type: 'host-call',
+          callId: 1,
+          method: 'credentials.google.getServiceAccountCredentials',
+          args: [
+            'runme@example.iam.gserviceaccount.com',
+            { authorizationLeaseSeconds: 86_400 },
+          ],
         })
       } else if (this.scenario === 'drive') {
         this.emit({
@@ -469,6 +480,17 @@ class MockSandboxPort {
         return
       }
       if (this.scenario === 'credentials' && this.hostResults.has(1)) {
+        this.emit({
+          type: 'stdout',
+          data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
+        })
+        this.emit({ type: 'exit', exitCode: 0 })
+        return
+      }
+      if (
+        this.scenario === 'credentialsImpersonation' &&
+        this.hostResults.has(1)
+      ) {
         this.emit({
           type: 'stdout',
           data: `${JSON.stringify(this.hostResults.get(1) ?? null)}\n`,
@@ -1131,6 +1153,54 @@ describe('SandboxJSKernel', () => {
     )
     expect(stdout).toContain('"authFlow":"service_account"')
     expect(stdout).toContain('runme-drive-test@example.iam.gserviceaccount.com')
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('supports keyless service account impersonation through the sandbox bridge', async () => {
+    let stdout = ''
+    let stderr = ''
+    let exitCode = -1
+    const bridgeCall = vi.fn(async (method: string) => {
+      if (method === 'credentials.google.getServiceAccountCredentials') {
+        return {
+          humanPrincipal: 'jeremy@lewi.us',
+          serviceAccount: 'runme@example.iam.gserviceaccount.com',
+        }
+      }
+      return null
+    })
+    const kernel = new TestableSandboxJSKernel(
+      new MockSandboxPort('credentialsImpersonation'),
+      {
+        bridge: { call: bridgeCall },
+        hooks: {
+          onStdout: (data) => {
+            stdout += data
+          },
+          onStderr: (data) => {
+            stderr += data
+          },
+          onExit: (code) => {
+            exitCode = code
+          },
+        },
+      }
+    )
+
+    await kernel.run(
+      "console.log(await credentials.google.getServiceAccountCredentials('runme@example.iam.gserviceaccount.com', { authorizationLeaseSeconds: 86400 }));"
+    )
+
+    expect(bridgeCall).toHaveBeenCalledWith(
+      'credentials.google.getServiceAccountCredentials',
+      [
+        'runme@example.iam.gserviceaccount.com',
+        { authorizationLeaseSeconds: 86_400 },
+      ]
+    )
+    expect(stdout).toContain('runme@example.iam.gserviceaccount.com')
+    expect(stdout).not.toContain('accessToken')
     expect(stderr).toBe('')
     expect(exitCode).toBe(0)
   })

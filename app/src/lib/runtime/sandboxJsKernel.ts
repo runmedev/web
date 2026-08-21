@@ -99,6 +99,7 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'explorer.editName',
   'explorer.renameFolder',
   'explorer.listFolders',
+  'credentials.google.getServiceAccountCredentials',
   'credentials.google.setServiceAccountFromFilePath',
   'drive.authorize',
   'drive.refreshAuth',
@@ -446,6 +447,8 @@ export function buildSandboxSrcDoc(options: {
         };
         const credentials = {
           google: {
+            getServiceAccountCredentials: (serviceAccount, options) =>
+              hostCall("credentials.google.getServiceAccountCredentials", [serviceAccount, options]),
             setServiceAccountFromFilePath: (path) =>
               hostCall("credentials.google.setServiceAccountFromFilePath", [path]),
           },
@@ -534,6 +537,7 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- await explorer.editName(uri)");
           consoleProxy.log("- await explorer.renameFolder(uri, name)");
           consoleProxy.log("- await explorer.listFolders()");
+          consoleProxy.log("- await credentials.google.getServiceAccountCredentials(serviceAccount, options)");
           consoleProxy.log("- await credentials.google.setServiceAccountFromFilePath(path)");
           consoleProxy.log("- await drive.authorize({ mode?, prompt? })");
           consoleProxy.log("- await drive.saveAsCurrentNotebook(folderIdOrUri, fileName)");

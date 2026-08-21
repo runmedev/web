@@ -1146,6 +1146,26 @@ export function createAppJsGlobals({
       emitLine(sendOutput, message)
       return config
     },
+    getServiceAccountCredentials: async (
+      serviceAccount: string,
+      options?: {
+        driveScopes?: string[]
+        appAudience?: string
+        authorizationLeaseSeconds?: number
+        accessTokenLifetimeSeconds?: number
+        prompt?: 'none' | 'consent' | 'select_account'
+      }
+    ) => {
+      const status = await appState.getServiceAccountCredentials(
+        serviceAccount,
+        options
+      )
+      emitLine(
+        sendOutput,
+        `Authorized ${status.serviceAccount} for Drive and Runme.`
+      )
+      return status
+    },
     getDrivePickerConfig: () => googleClientManager.getDrivePickerConfig(),
     setDrivePickerConfig: (
       config: Partial<
@@ -1162,6 +1182,7 @@ export function createAppJsGlobals({
         'googleClientManager.setFromJson(jsonText)         - Load OAuth or service account JSON text',
         'await googleClientManager.setServiceAccountFromFile() - Pick a local service account JSON key file',
         'await googleClientManager.setServiceAccountFromFilePath(path) - Load a service account JSON key path from the dev server',
+        'await credentials.google.getServiceAccountCredentials(serviceAccount, options?) - Authorize keyless service-account impersonation',
       ].join('\n')
       emitLine(sendOutput, message)
       return message
