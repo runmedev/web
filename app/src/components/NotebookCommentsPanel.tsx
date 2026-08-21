@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type {
   CellCommentThread,
   CommentDraftTarget,
+  CommentNavigationTarget,
 } from '../lib/notebookComments'
 
 type CommentsStatus = 'loading' | 'available' | 'unavailable' | 'error'
@@ -37,7 +38,7 @@ export function NotebookCommentsPanel({
   onRefresh,
   onRetryFailed,
   onHide,
-  onSelectCell,
+  onSelectTarget,
 }: {
   status: CommentsStatus
   errorMessage?: string
@@ -62,7 +63,7 @@ export function NotebookCommentsPanel({
   onRefresh: () => void
   onRetryFailed: () => void
   onHide: () => void
-  onSelectCell: (cellId: string) => void
+  onSelectTarget: (target: CommentNavigationTarget) => void
 }) {
   const [filter, setFilter] = useState<CommentsFilter>('open')
   const [draft, setDraft] = useState(draftContent)
@@ -345,8 +346,9 @@ export function NotebookCommentsPanel({
                   }`}
                   onClick={() => {
                     setActiveThreadKey(item.key)
-                    if (item.cellId && !item.orphaned) {
-                      onSelectCell(item.cellId)
+                    const target = navigationTargetForItem(item)
+                    if (target) {
+                      onSelectTarget(target)
                     }
                   }}
                   onKeyDown={(event) => {
@@ -358,8 +360,9 @@ export function NotebookCommentsPanel({
                     }
                     event.preventDefault()
                     setActiveThreadKey(item.key)
-                    if (item.cellId && !item.orphaned) {
-                      onSelectCell(item.cellId)
+                    const target = navigationTargetForItem(item)
+                    if (target) {
+                      onSelectTarget(target)
                     }
                   }}
                 >
@@ -373,9 +376,10 @@ export function NotebookCommentsPanel({
                       cellLabels={cellLabels}
                       isActiveCell={isActiveCell}
                       onSelectCell={() => {
-                        if (item.cellId && !item.orphaned) {
+                        const target = navigationTargetForItem(item)
+                        if (target) {
                           setActiveThreadKey(item.key)
-                          onSelectCell(item.cellId)
+                          onSelectTarget(target)
                         }
                       }}
                     />
@@ -841,6 +845,37 @@ function getThreadKey(thread: CellCommentThread): string {
       thread.comment.content ?? '',
     ].join(':')
   )
+}
+
+function navigationTargetForItem(
+  item: CommentsPanelItem
+): CommentNavigationTarget | null {
+  if (!item.cellId || item.orphaned) {
+    return null
+  }
+  if (item.draftTarget?.type === 'cell-text') {
+    const { start, end } = item.draftTarget.selectors[0]
+    return { cellId: item.cellId, range: { start, end } }
+  }
+  const rangeThread = item.threads.find(
+    (thread) =>
+      thread.anchor?.type === 'cell-text' &&
+      (thread.location?.status === 'exact' ||
+        thread.location?.status === 'moved')
+  )
+  if (
+    rangeThread?.location?.status === 'exact' ||
+    rangeThread?.location?.status === 'moved'
+  ) {
+    return {
+      cellId: item.cellId,
+      range: {
+        start: rangeThread.location.start,
+        end: rangeThread.location.end,
+      },
+    }
+  }
+  return { cellId: item.cellId }
 }
 
 function findReplyTargetCommentId(threads: CellCommentThread[]): string | null {

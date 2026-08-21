@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   buildRenderedMarkdownProjection,
   captureRenderedMarkdownSelection,
+  renderedMarkdownDomRange,
+  scrollRenderedMarkdownRangeIntoView,
   sliceByCodePoint,
   sourceRangesForProjectionRange,
   utf16OffsetToCodePointOffset,
@@ -83,6 +85,107 @@ describe('rendered Markdown projection', () => {
         { start: 12, end: 27 },
       ],
     })
+  })
+
+  it('maps projection offsets back to an exact DOM range', () => {
+    const root = document.createElement('div')
+    root.innerHTML = [
+      '<span data-runme-projection-start="0" data-runme-projection-end="7">before </span>',
+      '<strong><span data-runme-projection-start="7" data-runme-projection-end="14">A😀B end</span></strong>',
+    ].join('')
+
+    const range = renderedMarkdownDomRange(root, 8, 11)
+
+    expect(range?.toString()).toBe('😀B ')
+    expect(range?.startContainer.parentElement?.dataset).toMatchObject({
+      runmeProjectionStart: '7',
+    })
+    expect(renderedMarkdownDomRange(root, 11, 8)).toBeNull()
+  })
+
+  it('scrolls the exact projection span rather than the whole cell', () => {
+    const root = document.createElement('div')
+    root.innerHTML = [
+      '<span data-runme-projection-start="0" data-runme-projection-end="7">before </span>',
+      '<span data-runme-projection-start="7" data-runme-projection-end="13">target</span>',
+    ].join('')
+    const spans = root.querySelectorAll('span')
+    spans[0]!.scrollIntoView = vi.fn()
+    spans[1]!.scrollIntoView = vi.fn()
+    root.scrollIntoView = vi.fn()
+
+    expect(scrollRenderedMarkdownRangeIntoView(root, 7, 13)).toBe(true)
+    expect(spans[1]!.scrollIntoView).toHaveBeenCalledWith({
+      block: 'center',
+      inline: 'nearest',
+      behavior: 'auto',
+    })
+    expect(spans[0]!.scrollIntoView).not.toHaveBeenCalled()
+    expect(root.scrollIntoView).not.toHaveBeenCalled()
+  })
+
+  it('centers the exact range inside a scrollable notebook viewport', () => {
+    const viewport = document.createElement('div')
+    viewport.style.overflowY = 'auto'
+    const root = document.createElement('div')
+    root.innerHTML =
+      '<span data-runme-projection-start="0" data-runme-projection-end="18">before exact target</span>'
+    viewport.append(root)
+    document.body.append(viewport)
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 1200 },
+    })
+    Object.defineProperty(viewport, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        bottom: 300,
+        height: 200,
+        left: 0,
+        right: 400,
+        top: 100,
+        width: 400,
+        x: 0,
+        y: 100,
+        toJSON: () => ({}),
+      }),
+    })
+    viewport.scrollBy = vi.fn()
+    root.querySelector<HTMLElement>('span')!.scrollIntoView = vi.fn()
+    const createRange = vi.spyOn(document, 'createRange')
+    const nativeCreateRange = createRange.getMockImplementation()
+    createRange.mockImplementation(() => {
+      const range = nativeCreateRange
+        ? nativeCreateRange()
+        : Document.prototype.createRange.call(document)
+      Object.defineProperty(range, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({
+          bottom: 720,
+          height: 20,
+          left: 40,
+          right: 120,
+          top: 700,
+          width: 80,
+          x: 40,
+          y: 700,
+          toJSON: () => ({}),
+        }),
+      })
+      return range
+    })
+
+    expect(scrollRenderedMarkdownRangeIntoView(root, 7, 12)).toBe(true)
+    expect(viewport.scrollBy).toHaveBeenCalledWith({
+      behavior: 'auto',
+      left: 0,
+      top: 510,
+    })
+    expect(
+      root.querySelector<HTMLElement>('span')!.scrollIntoView
+    ).not.toHaveBeenCalled()
+
+    createRange.mockRestore()
   })
 
   it('uses Unicode code points for selector positions', () => {

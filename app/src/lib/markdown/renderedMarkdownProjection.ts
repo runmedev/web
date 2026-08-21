@@ -302,6 +302,168 @@ function mappedText(span: HTMLElement): Text | null {
   return walker.nextNode() as Text | null
 }
 
+function codePointOffsetToUtf16Offset(
+  value: string,
+  codePointOffset: number
+): number | null {
+  if (!Number.isInteger(codePointOffset) || codePointOffset < 0) {
+    return null
+  }
+  const prefix = codePoints(value).slice(0, codePointOffset).join('')
+  return codePoints(prefix).length === codePointOffset ? prefix.length : null
+}
+
+function domBoundaryForProjectionOffset(
+  root: HTMLElement,
+  offset: number,
+  direction: 'start' | 'end'
+): { node: Text; offset: number } | null {
+  const spans = Array.from(
+    root.querySelectorAll<HTMLElement>('[data-runme-projection-start]')
+  )
+  const span = spans.find((candidate) => {
+    const start = Number(candidate.dataset.runmeProjectionStart)
+    const end = Number(candidate.dataset.runmeProjectionEnd)
+    if (!Number.isInteger(start) || !Number.isInteger(end)) {
+      return false
+    }
+    return direction === 'start'
+      ? start <= offset && offset < end
+      : start < offset && offset <= end
+  })
+  if (!span) {
+    return null
+  }
+  const node = mappedText(span)
+  const projectionStart = Number(span.dataset.runmeProjectionStart)
+  if (!node || !Number.isInteger(projectionStart)) {
+    return null
+  }
+  const utf16Offset = codePointOffsetToUtf16Offset(
+    node.data,
+    offset - projectionStart
+  )
+  return utf16Offset === null ? null : { node, offset: utf16Offset }
+}
+
+/**
+ * Resolve projection offsets back to the precise DOM range rendered by the
+ * projection plugin. This is the inverse of captureRenderedMarkdownRange and
+ * is used for comment highlighting and navigation.
+ */
+export function renderedMarkdownDomRange(
+  root: HTMLElement,
+  start: number,
+  end: number
+): Range | null {
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start >= end) {
+    return null
+  }
+  const startBoundary = domBoundaryForProjectionOffset(root, start, 'start')
+  const endBoundary = domBoundaryForProjectionOffset(root, end, 'end')
+  if (!startBoundary || !endBoundary) {
+    return null
+  }
+  const range = root.ownerDocument.createRange()
+  try {
+    range.setStart(startBoundary.node, startBoundary.offset)
+    range.setEnd(endBoundary.node, endBoundary.offset)
+  } catch {
+    return null
+  }
+  return range.collapsed ? null : range
+}
+
+function nearestScrollableAncestor(
+  element: HTMLElement,
+  axis: 'horizontal' | 'vertical'
+): HTMLElement | null {
+  const view = element.ownerDocument.defaultView
+  for (
+    let parent = element.parentElement;
+    parent;
+    parent = parent.parentElement
+  ) {
+    const style = view?.getComputedStyle(parent)
+    const overflow =
+      axis === 'vertical'
+        ? `${style?.overflowY ?? ''} ${style?.overflow ?? ''}`
+        : `${style?.overflowX ?? ''} ${style?.overflow ?? ''}`
+    const canScroll = /(?:auto|overlay|scroll)/.test(overflow)
+    const hasOverflow =
+      axis === 'vertical'
+        ? parent.scrollHeight > parent.clientHeight
+        : parent.scrollWidth > parent.clientWidth
+    if (canScroll && hasOverflow) {
+      return parent
+    }
+  }
+  return null
+}
+
+function scrollElementBy(
+  element: HTMLElement,
+  left: number,
+  top: number,
+  behavior: ScrollBehavior
+) {
+  if (typeof element.scrollBy === 'function') {
+    element.scrollBy({ left, top, behavior })
+    return
+  }
+  element.scrollLeft += left
+  element.scrollTop += top
+}
+
+export function scrollRenderedMarkdownRangeIntoView(
+  root: HTMLElement,
+  start: number,
+  end: number,
+  behavior: ScrollBehavior = 'auto'
+): boolean {
+  const range = renderedMarkdownDomRange(root, start, end)
+  const projectionSpan =
+    range?.startContainer.parentElement?.closest<HTMLElement>(
+      '[data-runme-projection-start]'
+    ) ?? null
+  if (!projectionSpan) {
+    return false
+  }
+
+  const verticalScroller = nearestScrollableAncestor(root, 'vertical')
+  if (verticalScroller && typeof range?.getBoundingClientRect === 'function') {
+    const rangeRect = range.getBoundingClientRect()
+    const scrollerRect = verticalScroller.getBoundingClientRect()
+    const top =
+      rangeRect.top -
+      scrollerRect.top -
+      (verticalScroller.clientHeight - rangeRect.height) / 2
+    scrollElementBy(verticalScroller, 0, top, behavior)
+
+    const horizontalScroller = nearestScrollableAncestor(root, 'horizontal')
+    if (horizontalScroller) {
+      const horizontalRect = horizontalScroller.getBoundingClientRect()
+      const left =
+        rangeRect.left < horizontalRect.left
+          ? rangeRect.left - horizontalRect.left
+          : rangeRect.right > horizontalRect.right
+            ? rangeRect.right - horizontalRect.right
+            : 0
+      if (left !== 0) {
+        scrollElementBy(horizontalScroller, left, 0, behavior)
+      }
+    }
+    return true
+  }
+
+  projectionSpan.scrollIntoView({
+    block: 'center',
+    inline: 'nearest',
+    behavior,
+  })
+  return true
+}
+
 function boundarySpan(
   container: Node,
   offset: number,

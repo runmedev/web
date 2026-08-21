@@ -600,4 +600,68 @@ describe("MarkdownCell", () => {
       }),
     );
   });
+
+  it("keeps resolved comment ranges highlighted after selection collapses", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-comment-highlight",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "Read **the [migration guide](https://example.com)** today.",
+    });
+
+    renderMarkdownCell(new StubCellData(cell) as unknown as CellData, {
+      commentRanges: [{ start: 9, end: 24, active: true }],
+    });
+
+    const rendered = screen.getByTestId("markdown-rendered");
+    expect(rendered.dataset.runmeCommentRangeCount).toBe("1");
+    expect(screen.getByText("migration guide").dataset).toMatchObject({
+      runmeCommentHighlight: "active",
+    });
+    expect(
+      screen.getByText("1 commented text range in this cell."),
+    ).toBeTruthy();
+
+    window.getSelection()?.removeAllRanges();
+    expect(screen.getByText("migration guide").dataset).toMatchObject({
+      runmeCommentHighlight: "active",
+    });
+  });
+
+  it("registers comment ranges that arrive after the rendered cell mounts", () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: "md-comment-highlight-sync",
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: "markdown",
+      outputs: [],
+      metadata: {},
+      value: "Read **the [migration guide](https://example.com)** today.",
+    });
+    const stub = new StubCellData(cell);
+    const baseProps = {
+      cellData: stub as unknown as CellData,
+      selectedLanguage: "markdown",
+      languageSelectId: "lang-md-comment-highlight-sync",
+      languageOptions: [{ label: "Markdown", value: "markdown" }],
+      onLanguageChange: () => {},
+    };
+    const { rerender } = render(<MarkdownCell {...baseProps} />);
+
+    expect(screen.getByText("migration guide").dataset).not.toHaveProperty(
+      "runmeCommentHighlight",
+    );
+
+    rerender(
+      <MarkdownCell
+        {...baseProps}
+        commentRanges={[{ start: 9, end: 24, active: true }]}
+      />,
+    );
+
+    expect(screen.getByText("migration guide").dataset).toMatchObject({
+      runmeCommentHighlight: "active",
+    });
+  });
 });
