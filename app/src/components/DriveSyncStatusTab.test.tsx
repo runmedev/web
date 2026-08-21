@@ -271,6 +271,29 @@ describe('DriveSyncStatusTab', () => {
     expect(within(active).getAllByText('Not available')).toHaveLength(2)
   })
 
+  it('links to Google Cloud settings from an actionable auth error', async () => {
+    driveCredentialStatus = {
+      connected: false,
+      authFlow: null,
+      effectivePrincipal: null,
+      authorizingPrincipal: null,
+      expiresAt: null,
+      renewal: null,
+      lastError:
+        'IAM Service Account Credentials API is not enabled. Enable it, then retry: https://console.cloud.google.com/apis/library/iamcredentials.googleapis.com?project=554943104515',
+    }
+
+    render(<DriveSyncStatusTab />)
+
+    await waitForStatusLoad()
+    const link = screen.getByRole('link', {
+      name: 'Open Google Cloud API settings',
+    })
+    expect(link.getAttribute('href')).toBe(
+      'https://console.cloud.google.com/apis/library/iamcredentials.googleapis.com?project=554943104515'
+    )
+  })
+
   it('filters sync status by selected values', async () => {
     render(<DriveSyncStatusTab />)
 

@@ -217,7 +217,7 @@ describe('SidePanelToolbar drive status button', () => {
         prompt: '',
         targets: ['drive', 'app'],
         authorizationLeaseSeconds: 86_400,
-        accessTokenLifetimeSeconds: 3_600,
+        accessTokenLifetimeSeconds: 43_200,
       }
     )
     expect(startGoogleDriveOAuthMock).not.toHaveBeenCalled()

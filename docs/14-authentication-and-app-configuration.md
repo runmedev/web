@@ -53,9 +53,10 @@ The Runme account section supports:
   email.
 
 The account icon remains a simple sign-in/sign-out action and uses the identity
-mode saved in Authentication Settings. Runme remembers only the selected mode
-and service-account email. Generated service-account credentials remain in
-memory and are not written to browser storage.
+mode saved in Authentication Settings. Runme remembers the selected mode,
+service-account email, and generated short-lived service-account credentials.
+The human OAuth access token used to authorize impersonation remains in memory
+and is never written to browser storage.
 
 ## Google Drive OAuth helpers
 
@@ -75,7 +76,7 @@ await credentials.google.getServiceAccountCredentials(
   '<service-account>@<project>.iam.gserviceaccount.com',
   {
     authorizationLeaseSeconds: 24 * 60 * 60,
-    accessTokenLifetimeSeconds: 60 * 60,
+    accessTokenLifetimeSeconds: 12 * 60 * 60,
   }
 )
 ```
@@ -101,8 +102,9 @@ const status = await credentials.google.getServiceAccountCredentials(
     appAudience: '<runme-oidc-audience>',
     // Product authorization window; maximum seven days.
     authorizationLeaseSeconds: 7 * 24 * 60 * 60,
-    // Google access tokens default to one hour.
-    accessTokenLifetimeSeconds: 60 * 60,
+    // Runme requests 12 hours. Google requires the credential lifetime
+    // extension organization policy for lifetimes above one hour.
+    accessTokenLifetimeSeconds: 12 * 60 * 60,
     prompt: 'select_account',
   }
 )
@@ -115,10 +117,17 @@ OAuth token, then uses the IAM Service Account Credentials API to mint:
 - a Drive-scoped OAuth access token; and
 - an audience-bound OIDC ID token for the Runme Agent.
 
-Both tokens represent the same service-account email. They are held in memory,
-and the returned status contains only identities, scopes, audiences, and
-expiration times. Switching to the service account clears persisted human
-Drive and OIDC credentials so expiry cannot silently fall back to the human.
+Both tokens represent the same service-account email. The short-lived
+service-account credentials are persisted locally so they survive the OAuth
+redirect and reloads; the human OAuth token is not persisted. Switching to the
+service account clears persisted human Drive and OIDC credentials so expiry
+cannot silently fall back to the human.
+
+Google limits impersonated access tokens to one hour unless the target service
+account is allowed by the
+`constraints/iam.allowServiceAccountCredentialLifetimeExtension` organization
+policy. Runme requests 12 hours by default and surfaces an actionable error if
+that policy is not configured.
 
 `authorizationLeaseSeconds` records the intended reauthorization window but is
 not a security boundary by itself. Enforce a one-to-seven-day privilege window

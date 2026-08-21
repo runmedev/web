@@ -147,6 +147,31 @@ describe('Google service-account impersonation', () => {
     expect(appFetch).toHaveBeenCalledTimes(1)
   })
 
+  it('requests a 12-hour Drive token by default', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          accessToken: 'drive-token',
+          expireTime: '2027-01-15T20:00:00Z',
+        }),
+        { status: 200 }
+      )
+    )
+
+    await mintImpersonatedServiceAccountCredentials({
+      humanAccessToken: 'human-token',
+      serviceAccount: 'drive@example.iam.gserviceaccount.com',
+      driveScopes: ['drive-scope'],
+      appAudience: '',
+      targets: ['drive'],
+    })
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      scope: ['drive-scope'],
+      lifetime: '43200s',
+    })
+  })
+
   it('rejects invalid service accounts and leases longer than seven days', () => {
     expect(() => normalizeServiceAccountEmail('jeremy@lewi.us')).toThrow(
       'valid Google service-account email'
@@ -195,5 +220,74 @@ describe('Google service-account impersonation', () => {
     ])
     expect(JSON.stringify(result)).not.toContain('do-not-print-this-token')
     expect(result.appIdToken).toBeTruthy()
+  })
+
+  it('explains how to enable a disabled IAM Credentials API', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            status: 'PERMISSION_DENIED',
+            message:
+              'IAM Service Account Credentials API has not been used in project 554943104515 before or it is disabled.',
+            details: [
+              {
+                reason: 'SERVICE_DISABLED',
+                metadata: {
+                  consumer: 'projects/554943104515',
+                  service: 'iamcredentials.googleapis.com',
+                },
+              },
+            ],
+          },
+        }),
+        { status: 403, statusText: 'Forbidden' }
+      )
+    )
+
+    const result = await mintImpersonatedServiceAccountCredentials({
+      humanAccessToken: 'human-token',
+      serviceAccount: 'drive@example.iam.gserviceaccount.com',
+      driveScopes: ['drive-scope'],
+      appAudience: '',
+      targets: ['drive'],
+    })
+
+    expect(result.errors[0]?.message).toContain(
+      'IAM Service Account Credentials API is not enabled for OAuth client/quota project 554943104515'
+    )
+    expect(result.errors[0]?.message).toContain(
+      'https://console.cloud.google.com/apis/library/iamcredentials.googleapis.com?project=554943104515'
+    )
+    expect(result.errors[0]?.message).toContain('wait a few minutes')
+  })
+
+  it('explains the organization policy needed for a 12-hour token', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            message:
+              'The specified credential lifetime of 43200s exceeds the max allowed lifetime of 3600s. Configure constraints/iam.allowServiceAccountCredentialLifetimeExtension.',
+          },
+        }),
+        { status: 400, statusText: 'Bad Request' }
+      )
+    )
+
+    const result = await mintImpersonatedServiceAccountCredentials({
+      humanAccessToken: 'human-token',
+      serviceAccount: 'drive@example.iam.gserviceaccount.com',
+      driveScopes: ['drive-scope'],
+      appAudience: '',
+      targets: ['drive'],
+    })
+
+    expect(result.errors[0]?.message).toContain(
+      'Google rejected the requested 12-hour service-account token'
+    )
+    expect(result.errors[0]?.message).toContain(
+      'constraints/iam.allowServiceAccountCredentialLifetimeExtension'
+    )
   })
 })

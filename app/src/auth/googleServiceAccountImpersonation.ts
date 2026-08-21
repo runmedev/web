@@ -11,7 +11,7 @@ export const GOOGLE_SERVICE_ACCOUNT_IMPERSONATION_SCOPES = [
 const IAM_CREDENTIALS_BASE_URL =
   'https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts'
 const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo'
-const DEFAULT_ACCESS_TOKEN_LIFETIME_SECONDS = 3600
+export const DEFAULT_IMPERSONATED_ACCESS_TOKEN_LIFETIME_SECONDS = 12 * 60 * 60
 const MAX_ACCESS_TOKEN_LIFETIME_SECONDS = 43200
 const DEFAULT_AUTHORIZATION_LEASE_SECONDS = 24 * 60 * 60
 const MAX_AUTHORIZATION_LEASE_SECONDS = 7 * 24 * 60 * 60
@@ -21,7 +21,17 @@ type GoogleApiError = {
     code?: number
     message?: string
     status?: string
+    details?: Array<{
+      reason?: string
+      metadata?: Record<string, string>
+    }>
   }
+}
+
+type ParsedGoogleApiError = {
+  message: string
+  reason?: string
+  metadata?: Record<string, string>
 }
 
 type GenerateAccessTokenResponse = {
@@ -117,7 +127,8 @@ export function resolveAuthorizationLeaseSeconds(value?: number): number {
 }
 
 function resolveAccessTokenLifetimeSeconds(value?: number): number {
-  const resolved = value ?? DEFAULT_ACCESS_TOKEN_LIFETIME_SECONDS
+  const resolved =
+    value ?? DEFAULT_IMPERSONATED_ACCESS_TOKEN_LIFETIME_SECONDS
   if (
     !Number.isInteger(resolved) ||
     resolved < 1 ||
@@ -128,13 +139,69 @@ function resolveAccessTokenLifetimeSeconds(value?: number): number {
   return resolved
 }
 
-async function readGoogleApiError(response: Response): Promise<string> {
+async function readGoogleApiError(
+  response: Response
+): Promise<ParsedGoogleApiError> {
   try {
     const body = (await response.json()) as GoogleApiError
-    return body.error?.message ?? body.error?.status ?? response.statusText
+    const errorInfo =
+      body.error?.details?.find(
+        (detail) => detail.reason === 'SERVICE_DISABLED'
+      ) ??
+      body.error?.details?.find((detail) => detail.reason || detail.metadata)
+    return {
+      message:
+        body.error?.message ?? body.error?.status ?? response.statusText,
+      reason: errorInfo?.reason,
+      metadata: errorInfo?.metadata,
+    }
   } catch {
-    return response.statusText
+    return { message: response.statusText }
   }
+}
+
+function formatIamCredentialsError(
+  method: 'generateAccessToken' | 'generateIdToken',
+  status: number,
+  detail: ParsedGoogleApiError
+): string {
+  const service = detail.metadata?.service
+  const isIamCredentialsDisabled =
+    detail.reason === 'SERVICE_DISABLED' &&
+    (!service || service === 'iamcredentials.googleapis.com')
+  const disabledProjectFromMessage = detail.message.match(
+    /(?:used in|for) project ([a-z0-9-]+)/i
+  )?.[1]
+
+  if (
+    isIamCredentialsDisabled ||
+    /IAM Service Account Credentials API.*(?:disabled|not been used)/i.test(
+      detail.message
+    )
+  ) {
+    const consumer = detail.metadata?.consumer?.replace(/^projects\//, '')
+    const project = consumer || disabledProjectFromMessage
+    const projectDescription = project ? ` ${project}` : ''
+    const activationUrl = new URL(
+      'https://console.cloud.google.com/apis/library/iamcredentials.googleapis.com'
+    )
+    if (project) {
+      activationUrl.searchParams.set('project', project)
+    }
+    return `Google IAM ${method} failed (${status}): IAM Service Account Credentials API is not enabled for OAuth client/quota project${projectDescription}. Enable it, wait a few minutes for the change to propagate, then retry: ${activationUrl.toString()}`
+  }
+
+  if (
+    method === 'generateAccessToken' &&
+    (/allowServiceAccountCredentialLifetimeExtension/.test(detail.message) ||
+      /credential lifetime.*(?:exceeds|maximum|max allowed)/i.test(
+        detail.message
+      ))
+  ) {
+    return `Google IAM ${method} failed (${status}): Google rejected the requested 12-hour service-account token. Add this service account to an organization policy for constraints/iam.allowServiceAccountCredentialLifetimeExtension, or request a token lifetime of 3600 seconds. ${detail.message}`
+  }
+
+  return `Google IAM ${method} failed (${status}): ${detail.message}`
 }
 
 async function postIamCredentials<T>(
@@ -157,9 +224,7 @@ async function postIamCredentials<T>(
 
   if (!response.ok) {
     const detail = await readGoogleApiError(response)
-    throw new Error(
-      `Google IAM ${method} failed (${response.status}): ${detail}`
-    )
+    throw new Error(formatIamCredentialsError(method, response.status, detail))
   }
   return (await response.json()) as T
 }
@@ -172,8 +237,9 @@ export async function getGoogleHumanPrincipal(
     headers: { Authorization: `Bearer ${humanAccessToken}` },
   })
   if (!response.ok) {
+    const detail = await readGoogleApiError(response)
     throw new Error(
-      `Google userinfo request failed (${response.status}): ${await readGoogleApiError(response)}`
+      `Google userinfo request failed (${response.status}): ${detail.message}`
     )
   }
   const body = (await response.json()) as GoogleUserInfoResponse

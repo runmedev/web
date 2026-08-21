@@ -145,7 +145,8 @@ function IdentityFields({
             placeholder="name@project.iam.gserviceaccount.com"
           />
           <span className={helpClass}>
-            Short-lived tokens are minted in memory; no JSON key is stored.
+            The human OAuth token stays in memory. Short-lived service-account
+            credentials are stored locally; no JSON key is stored.
           </span>
         </label>
       ) : null}
@@ -333,7 +334,7 @@ export default function AuthenticationSettingsPanel() {
         prompt: selectedHumanAccount.trim() ? '' : 'select_account',
         targets,
         authorizationLeaseSeconds: 24 * 60 * 60,
-        accessTokenLifetimeSeconds: 60 * 60,
+        accessTokenLifetimeSeconds: 12 * 60 * 60,
       })
     },
     [getServiceAccountCredentials]

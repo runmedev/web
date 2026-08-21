@@ -300,7 +300,7 @@ export function SidePanelToolbar() {
           prompt: driveConfiguration.humanAccount ? '' : 'select_account',
           targets: usesSharedIdentity ? ['drive', 'app'] : ['drive'],
           authorizationLeaseSeconds: 24 * 60 * 60,
-          accessTokenLifetimeSeconds: 60 * 60,
+          accessTokenLifetimeSeconds: 12 * 60 * 60,
         })
       } else {
         await startGoogleDriveOAuth()
@@ -377,7 +377,7 @@ export function SidePanelToolbar() {
                 ? ['drive', 'app']
                 : ['app'],
             authorizationLeaseSeconds: 24 * 60 * 60,
-            accessTokenLifetimeSeconds: 60 * 60,
+            accessTokenLifetimeSeconds: 12 * 60 * 60,
           })
         : browserAdapter.loginWithRedirect({
             loginHint: configuration.humanAccount || undefined,

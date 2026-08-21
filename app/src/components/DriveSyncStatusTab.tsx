@@ -128,6 +128,10 @@ function formatDate(value: string | undefined): string {
   return date.toLocaleString()
 }
 
+function findHttpsUrl(value: string): string | null {
+  return value.match(/https:\/\/[^\s]+/)?.[0] ?? null
+}
+
 function credentialTypeLabel(
   authFlow: GoogleDriveCredentialAuthFlow | null
 ): string {
@@ -418,6 +422,9 @@ export function DriveSyncStatusTab() {
   const { store } = useNotebookStore()
   const { driveCredentialStatus, ensureAccessToken, isDriveSyncing } =
     useGoogleAuth()
+  const credentialErrorUrl = driveCredentialStatus.lastError
+    ? findHttpsUrl(driveCredentialStatus.lastError)
+    : null
   const [configuredDriveIdentity, setConfiguredDriveIdentity] =
     useState<EffectiveDriveLoginConfiguration>(() =>
       resolveDriveLoginConfiguration(readAppLoginConfiguration())
@@ -806,7 +813,22 @@ export function DriveSyncStatusTab() {
               data-testid="drive-credential-error"
             >
               <strong>Last authorization error:</strong>{' '}
-              {driveCredentialStatus.lastError}
+              {credentialErrorUrl
+                ? driveCredentialStatus.lastError.replace(
+                    credentialErrorUrl,
+                    ''
+                  )
+                : driveCredentialStatus.lastError}
+              {credentialErrorUrl ? (
+                <a
+                  className="font-medium text-nb-accent underline"
+                  href={credentialErrorUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  Open Google Cloud API settings
+                </a>
+              ) : null}
             </Text>
           ) : null}
         </section>
