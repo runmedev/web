@@ -112,11 +112,14 @@ import {
   groupCommentsByCell,
   toCellCommentThreads,
   type CommentDraftTarget,
+  type CommentNavigationTarget,
 } from '../../lib/notebookComments'
 import {
   buildRenderedMarkdownProjection,
+  scrollRenderedMarkdownRangeIntoView,
   type RenderedMarkdownSelectionDraft,
 } from '../../lib/markdown/renderedMarkdownProjection'
+import type { RenderedMarkdownCommentRange } from '../../lib/markdown/renderedMarkdownCommentHighlights'
 import DriveLinkStatusTab from '../DriveLinkStatusTab'
 import DriveSyncStatusTab from '../DriveSyncStatusTab'
 import RunnerStatusTab from '../RunnerStatusTab'
@@ -590,6 +593,7 @@ export function Action({
   readOnly = false,
   commentsAvailable = false,
   commentCount = 0,
+  commentRanges = [],
   onStartComment,
   isDeepLinkTarget = false,
 }: {
@@ -604,6 +608,7 @@ export function Action({
   readOnly?: boolean
   commentsAvailable?: boolean
   commentCount?: number
+  commentRanges?: readonly RenderedMarkdownCommentRange[]
   onStartComment?: (target: CommentDraftTarget) => void
   isDeepLinkTarget?: boolean
 }) {
@@ -1458,6 +1463,7 @@ export function Action({
               onFocusRoleChange={handleMarkdownFocusRoleChange}
               onLinkClick={handleMarkdownLinkClick}
               commentsAvailable={commentsAvailable}
+              commentRanges={commentRanges}
               onRenderedSelectionContextMenu={
                 handleRenderedSelectionContextMenu
               }
@@ -2059,6 +2065,11 @@ function NotebookTabContent({
   const [draftTarget, setDraftTarget] = useState<CommentDraftTarget | null>(
     null
   )
+  const [activeCommentRange, setActiveCommentRange] = useState<{
+    cellId: string
+    start: number
+    end: number
+  } | null>(null)
   const [draftContent, setDraftContent] = useState('')
   const commentsSyncInFlightRef = useRef<Promise<void> | null>(null)
   const commentsSyncRerunRequestedRef = useRef(false)
@@ -2095,6 +2106,45 @@ function NotebookTabContent({
     () => toCellCommentThreads(comments, commentCellIdentities),
     [commentCellIdentities, comments]
   )
+  const commentRangesByCell = useMemo(() => {
+    const ranges = new Map<string, RenderedMarkdownCommentRange[]>()
+    const addRange = (cellId: string, start: number, end: number) => {
+      const values = ranges.get(cellId) ?? []
+      const active =
+        activeCommentRange?.cellId === cellId &&
+        activeCommentRange.start === start &&
+        activeCommentRange.end === end
+      const existing = values.find(
+        (value) => value.start === start && value.end === end
+      )
+      if (existing) {
+        existing.active ||= active
+      } else {
+        values.push({
+          start,
+          end,
+          active,
+        })
+        ranges.set(cellId, values)
+      }
+    }
+    commentThreads.forEach((thread) => {
+      if (
+        thread.comment.resolved ||
+        !thread.cellId ||
+        (thread.location?.status !== 'exact' &&
+          thread.location?.status !== 'moved')
+      ) {
+        return
+      }
+      addRange(thread.cellId, thread.location.start, thread.location.end)
+    })
+    if (draftTarget?.type === 'cell-text') {
+      const { start, end } = draftTarget.selectors[0]
+      addRange(draftTarget.cellId, start, end)
+    }
+    return ranges
+  }, [activeCommentRange, commentThreads, draftTarget])
 
   const findCellElement = useCallback((cellId: string) => {
     const elements =
@@ -2108,7 +2158,7 @@ function NotebookTabContent({
     )
   }, [])
 
-  const selectCommentCell = useCallback(
+  const focusCommentCell = useCallback(
     (cellId: string) => {
       const element = findCellElement(cellId)
       const focusRole = element?.id.startsWith('markdown-action-')
@@ -2118,9 +2168,45 @@ function NotebookTabContent({
       if (nextState) {
         onCellFocus(docUri, nextState)
       }
-      element?.scrollIntoView({ block: 'center', behavior: 'smooth' })
     },
     [docUri, findCellElement, onCellFocus]
+  )
+
+  const selectCommentTarget = useCallback(
+    (target: CommentNavigationTarget) => {
+      focusCommentCell(target.cellId)
+      const range = target.range
+      setActiveCommentRange(range ? { cellId: target.cellId, ...range } : null)
+      const scrollToTarget = () => {
+        const element = findCellElement(target.cellId)
+        if (!element) {
+          return false
+        }
+        if (range) {
+          const root = element.querySelector<HTMLElement>(
+            '[data-runme-surface="rendered-markdown"]'
+          )
+          if (
+            root &&
+            scrollRenderedMarkdownRangeIntoView(root, range.start, range.end)
+          ) {
+            return true
+          }
+          return false
+        }
+        element.scrollIntoView({
+          block: 'center',
+          inline: 'nearest',
+          behavior: 'smooth',
+        })
+        return true
+      }
+
+      if (!scrollToTarget() && typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(scrollToTarget)
+      }
+    },
+    [findCellElement, focusCommentCell]
   )
 
   const embedImageFiles = useCallback(
@@ -2408,6 +2494,7 @@ function NotebookTabContent({
     let cancelled = false
     setDraftTarget(null)
     setDraftContent('')
+    setActiveCommentRange(null)
     setCommentsErrorMessage(undefined)
 
     void (async () => {
@@ -2491,6 +2578,11 @@ function NotebookTabContent({
       }
       setDraftTarget(draft.target)
       setDraftContent(draft.content)
+      setActiveCommentRange(
+        draft.target.type === 'cell-text'
+          ? { cellId: draft.target.cellId, ...draft.target.selectors[0] }
+          : null
+      )
       openCommentsPanel()
     })
     return () => {
@@ -2513,7 +2605,12 @@ function NotebookTabContent({
       openCommentsPanel()
       setDraftTarget(target)
       setDraftContent('')
-      selectCommentCell(target.cellId)
+      focusCommentCell(target.cellId)
+      setActiveCommentRange(
+        target.type === 'cell-text'
+          ? { cellId: target.cellId, ...target.selectors[0] }
+          : null
+      )
       if (commentsRemoteUri) {
         void appState.localComments
           ?.saveDraft({
@@ -2529,7 +2626,7 @@ function NotebookTabContent({
           })
       }
     },
-    [commentsRemoteUri, docUri, openCommentsPanel, selectCommentCell]
+    [commentsRemoteUri, docUri, focusCommentCell, openCommentsPanel]
   )
 
   const handleDraftContentChange = useCallback(
@@ -2561,6 +2658,7 @@ function NotebookTabContent({
   const handleCancelCommentDraft = useCallback(() => {
     setDraftTarget(null)
     setDraftContent('')
+    setActiveCommentRange(null)
     void appState.localComments?.deleteDraft(docUri).catch((error) => {
       setCommentsSyncErrorMessage(
         `Could not discard the saved comment draft: ${String(error)}`
@@ -3032,6 +3130,7 @@ function NotebookTabContent({
                     readOnly={readOnly}
                     commentsAvailable={Boolean(commentsRemoteUri)}
                     commentCount={commentsByCell.get(refId)?.length ?? 0}
+                    commentRanges={commentRangesByCell.get(refId) ?? []}
                     onStartComment={startCommentDraft}
                   />
                 )
@@ -3084,8 +3183,11 @@ function NotebookTabContent({
           onReopen={handleReopenComment}
           onRefresh={refreshComments}
           onRetryFailed={handleRetryFailedComments}
-          onHide={() => setCommentsPanelOpen(false)}
-          onSelectCell={selectCommentCell}
+          onHide={() => {
+            setActiveCommentRange(null)
+            setCommentsPanelOpen(false)
+          }}
+          onSelectTarget={selectCommentTarget}
         />
       )}
     </div>

@@ -302,6 +302,100 @@ function mappedText(span: HTMLElement): Text | null {
   return walker.nextNode() as Text | null
 }
 
+function codePointOffsetToUtf16Offset(
+  value: string,
+  codePointOffset: number
+): number | null {
+  if (!Number.isInteger(codePointOffset) || codePointOffset < 0) {
+    return null
+  }
+  const prefix = codePoints(value).slice(0, codePointOffset).join('')
+  return codePoints(prefix).length === codePointOffset ? prefix.length : null
+}
+
+function domBoundaryForProjectionOffset(
+  root: HTMLElement,
+  offset: number,
+  direction: 'start' | 'end'
+): { node: Text; offset: number } | null {
+  const spans = Array.from(
+    root.querySelectorAll<HTMLElement>('[data-runme-projection-start]')
+  )
+  const span = spans.find((candidate) => {
+    const start = Number(candidate.dataset.runmeProjectionStart)
+    const end = Number(candidate.dataset.runmeProjectionEnd)
+    if (!Number.isInteger(start) || !Number.isInteger(end)) {
+      return false
+    }
+    return direction === 'start'
+      ? start <= offset && offset < end
+      : start < offset && offset <= end
+  })
+  if (!span) {
+    return null
+  }
+  const node = mappedText(span)
+  const projectionStart = Number(span.dataset.runmeProjectionStart)
+  if (!node || !Number.isInteger(projectionStart)) {
+    return null
+  }
+  const utf16Offset = codePointOffsetToUtf16Offset(
+    node.data,
+    offset - projectionStart
+  )
+  return utf16Offset === null ? null : { node, offset: utf16Offset }
+}
+
+/**
+ * Resolve projection offsets back to the precise DOM range rendered by the
+ * projection plugin. This is the inverse of captureRenderedMarkdownRange and
+ * is used for comment highlighting and navigation.
+ */
+export function renderedMarkdownDomRange(
+  root: HTMLElement,
+  start: number,
+  end: number
+): Range | null {
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start >= end) {
+    return null
+  }
+  const startBoundary = domBoundaryForProjectionOffset(root, start, 'start')
+  const endBoundary = domBoundaryForProjectionOffset(root, end, 'end')
+  if (!startBoundary || !endBoundary) {
+    return null
+  }
+  const range = root.ownerDocument.createRange()
+  try {
+    range.setStart(startBoundary.node, startBoundary.offset)
+    range.setEnd(endBoundary.node, endBoundary.offset)
+  } catch {
+    return null
+  }
+  return range.collapsed ? null : range
+}
+
+export function scrollRenderedMarkdownRangeIntoView(
+  root: HTMLElement,
+  start: number,
+  end: number,
+  behavior: ScrollBehavior = 'auto'
+): boolean {
+  const range = renderedMarkdownDomRange(root, start, end)
+  const projectionSpan =
+    range?.startContainer.parentElement?.closest<HTMLElement>(
+      '[data-runme-projection-start]'
+    ) ?? null
+  if (!projectionSpan) {
+    return false
+  }
+  projectionSpan.scrollIntoView({
+    block: 'center',
+    inline: 'nearest',
+    behavior,
+  })
+  return true
+}
+
 function boundarySpan(
   container: Node,
   offset: number,

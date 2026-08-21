@@ -45,6 +45,11 @@ export type CommentDraftTarget =
   | { type: 'cell'; cellId: string }
   | RenderedMarkdownSelectionDraft
 
+export type CommentNavigationTarget = {
+  cellId: string
+  range?: TextRange
+}
+
 export type CommentCellIdentity = {
   refId: string
   value?: string

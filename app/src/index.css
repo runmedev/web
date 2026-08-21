@@ -46,6 +46,8 @@
   --nb-success: #16a34a;
   --nb-error: #dc2626;
   --nb-warning: #d97706;
+  --nb-comment-highlight: rgba(250, 204, 21, 0.34);
+  --nb-comment-highlight-active: rgba(245, 158, 11, 0.52);
 
   /* ── Radius ───────────────────────────────────────────────────── */
   --nb-r-xs: 4px;
@@ -66,6 +68,26 @@
   --vscode-terminal-background: #ffffff;
   --vscode-terminal-foreground: #0f172a;
   --vscode-terminal-border: #b0bac5;
+}
+
+::highlight(runme-comment-range) {
+  background-color: var(--nb-comment-highlight);
+}
+
+::highlight(runme-comment-range-active) {
+  background-color: var(--nb-comment-highlight-active);
+  text-decoration: underline 2px var(--nb-warning);
+  text-underline-offset: 2px;
+}
+
+[data-runme-comment-highlight="true"] {
+  background-color: var(--nb-comment-highlight);
+}
+
+[data-runme-comment-highlight="active"] {
+  background-color: var(--nb-comment-highlight-active);
+  text-decoration: underline 2px var(--nb-warning);
+  text-underline-offset: 2px;
 }
 
 /* ═══════════════════════════════════════════════════════════════════

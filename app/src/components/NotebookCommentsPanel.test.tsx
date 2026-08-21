@@ -38,7 +38,7 @@ function renderPanel(overrides = {}) {
     onRefresh: noop,
     onRetryFailed: noop,
     onHide: noop,
-    onSelectCell: noop,
+    onSelectTarget: noop,
     ...overrides,
   }
 
@@ -265,21 +265,21 @@ describe('NotebookCommentsPanel', () => {
   })
 
   it('selects the owning cell when a comment thread is clicked', () => {
-    const onSelectCell = vi.fn()
+    const onSelectTarget = vi.fn()
 
     renderPanel({
       threads: [thread('cell one thread', 'cell-1', { id: 'comment-1' })],
       cellLabels: new Map([['cell-1', 'Cell 1']]),
-      onSelectCell,
+      onSelectTarget,
     })
 
     fireEvent.click(screen.getByText('cell one thread').closest('article')!)
 
-    expect(onSelectCell).toHaveBeenCalledWith('cell-1')
+    expect(onSelectTarget).toHaveBeenCalledWith({ cellId: 'cell-1' })
   })
 
   it('does not treat textarea space key presses as thread selection', () => {
-    const onSelectCell = vi.fn()
+    const onSelectTarget = vi.fn()
     const threads: CellCommentThread[] = [
       thread('active thread', 'cell-1', { id: 'comment-1' }),
     ]
@@ -288,28 +288,28 @@ describe('NotebookCommentsPanel', () => {
       threads,
       activeCellId: 'cell-1',
       cellLabels: new Map([['cell-1', 'Cell 1']]),
-      onSelectCell,
+      onSelectTarget,
     })
 
     const textarea = screen.getByPlaceholderText('Reply or add others with @')
     fireEvent.keyDown(textarea, { key: ' ' })
 
-    expect(onSelectCell).not.toHaveBeenCalled()
+    expect(onSelectTarget).not.toHaveBeenCalled()
   })
 
   it('shows missing comment targets as deleted cells without selecting them', () => {
-    const onSelectCell = vi.fn()
+    const onSelectTarget = vi.fn()
     const orphaned = thread('orphaned comment', 'markup_intro', {
       id: 'comment-orphaned',
     })
     orphaned.orphaned = true
 
-    renderPanel({ threads: [orphaned], onSelectCell })
+    renderPanel({ threads: [orphaned], onSelectTarget })
 
     expect(screen.getByText('Deleted cell')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Cell' })).toBeNull()
     fireEvent.click(screen.getByText('orphaned comment').closest('article')!)
-    expect(onSelectCell).not.toHaveBeenCalled()
+    expect(onSelectTarget).not.toHaveBeenCalled()
   })
 
   it('shows a rendered selection draft as its own quoted thread', () => {
@@ -345,6 +345,7 @@ describe('NotebookCommentsPanel', () => {
   })
 
   it('keeps only the selected range thread active within one cell', async () => {
+    const onSelectTarget = vi.fn()
     renderPanel({
       threads: [
         rangeThread('first range', 'comment-range-1', 5, 8),
@@ -352,11 +353,17 @@ describe('NotebookCommentsPanel', () => {
       ],
       activeCellId: 'cell-1',
       cellLabels: new Map([['cell-1', 'Cell 1']]),
+      onSelectTarget,
     })
 
     const first = screen.getByText('first range').closest('article')!
     const second = screen.getByText('second range').closest('article')!
     fireEvent.click(second)
+
+    expect(onSelectTarget).toHaveBeenCalledWith({
+      cellId: 'cell-1',
+      range: { start: 12, end: 18 },
+    })
 
     await waitFor(() => {
       expect(first.getAttribute('aria-current')).toBeNull()

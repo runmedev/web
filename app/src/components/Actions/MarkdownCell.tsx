@@ -22,6 +22,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -45,6 +46,10 @@ import {
   type RenderedMarkdownProjection,
   type RenderedMarkdownSelectionDraft,
 } from '../../lib/markdown/renderedMarkdownProjection'
+import {
+  registerRenderedMarkdownCommentHighlights,
+  type RenderedMarkdownCommentRange,
+} from '../../lib/markdown/renderedMarkdownCommentHighlights'
 import Editor from './Editor'
 import { fontSettings } from './CellConsole'
 
@@ -183,12 +188,33 @@ interface MarkdownCellProps {
   readOnly?: boolean
   /** Whether the current Drive-backed notebook can accept comments. */
   commentsAvailable?: boolean
+  /** Resolved open-comment ranges to keep visible in rendered Markdown. */
+  commentRanges?: readonly RenderedMarkdownCommentRange[]
   /** Open the cell context menu with a lazily captured rendered selection. */
   onRenderedSelectionContextMenu?: (request: {
     x: number
     y: number
     captureSelection: () => RenderedMarkdownSelectionDraft | null
   }) => void
+}
+
+function sameCommentRanges(
+  left: readonly RenderedMarkdownCommentRange[] | undefined,
+  right: readonly RenderedMarkdownCommentRange[] | undefined
+): boolean {
+  const leftRanges = left ?? []
+  const rightRanges = right ?? []
+  return (
+    leftRanges.length === rightRanges.length &&
+    leftRanges.every((range, index) => {
+      const other = rightRanges[index]
+      return (
+        range.start === other?.start &&
+        range.end === other?.end &&
+        Boolean(range.active) === Boolean(other?.active)
+      )
+    })
+  )
 }
 
 /**
@@ -215,6 +241,7 @@ const MarkdownCell = memo(
     onLinkClick,
     readOnly = false,
     commentsAvailable = false,
+    commentRanges = [],
     onRenderedSelectionContextMenu,
   }: MarkdownCellProps) => {
     // Subscribe to cell data changes using useSyncExternalStore for tearing-safe reads
@@ -241,6 +268,7 @@ const MarkdownCell = memo(
     })
     const renderedRef = useRef<HTMLDivElement | null>(null)
     const projectionRef = useRef<RenderedMarkdownProjection | null>(null)
+    const commentHighlightOwnerRef = useRef<object>({})
     const previousShouldOwnFocusRef = useRef(false)
     const [editorFocusIntent, setEditorFocusIntent] = useState(false)
     const [renderedFocusIntent, setRenderedFocusIntent] = useState(false)
@@ -277,7 +305,7 @@ const MarkdownCell = memo(
       if (!renderedFocusIntent || !rendered) {
         return
       }
-      renderedRef.current?.focus()
+      renderedRef.current?.focus({ preventScroll: true })
       setRenderedFocusIntent(false)
     }, [rendered, renderedFocusIntent])
 
@@ -295,14 +323,14 @@ const MarkdownCell = memo(
         return
       }
       setRendered(true)
-      renderedRef.current?.focus()
+      renderedRef.current?.focus({ preventScroll: true })
     }, [activeFocusRole, canOpenSource, readOnly, shouldOwnFocus, value])
 
     useEffect(() => {
       if (!shouldOwnFocus || activeFocusRole !== 'rendered' || !rendered) {
         return
       }
-      renderedRef.current?.focus()
+      renderedRef.current?.focus({ preventScroll: true })
     }, [activeFocusRole, rendered, shouldOwnFocus])
 
     useEffect(() => {
@@ -503,6 +531,18 @@ const MarkdownCell = memo(
       )
     }, [projectionPlugin, readOnly, renderedMarkdownComponents, value])
 
+    useLayoutEffect(() => {
+      const root = renderedRef.current
+      if (!rendered || !root || commentRanges.length === 0) {
+        return
+      }
+      return registerRenderedMarkdownCommentHighlights(
+        commentHighlightOwnerRef.current,
+        root,
+        commentRanges
+      )
+    }, [commentRanges, rendered, value])
+
     if (!cell) {
       return null
     }
@@ -535,10 +575,25 @@ const MarkdownCell = memo(
             data-runme-cell-id={cell.refId}
             data-runme-surface="rendered-markdown"
             data-runme-projection={`${RENDERED_MARKDOWN_PROJECTION_NAME}@${RENDERED_MARKDOWN_PROJECTION_VERSION}`}
+            data-runme-comment-range-count={commentRanges.length || undefined}
             data-cell-focus-role="rendered"
+            aria-describedby={
+              commentRanges.length > 0
+                ? `markdown-comment-ranges-${cell.refId}`
+                : undefined
+            }
             onFocus={() => onFocusRoleChange?.('rendered')}
             onContextMenu={handleRenderedContextMenu}
           >
+            {commentRanges.length > 0 && (
+              <span
+                id={`markdown-comment-ranges-${cell.refId}`}
+                className="sr-only"
+              >
+                {commentRanges.length} commented text{' '}
+                {commentRanges.length === 1 ? 'range' : 'ranges'} in this cell.
+              </span>
+            )}
             {renderedMarkdown}
           </div>
         ) : (
@@ -606,6 +661,7 @@ const MarkdownCell = memo(
       prevProps.onLinkClick === nextProps.onLinkClick &&
       prevProps.readOnly === nextProps.readOnly &&
       prevProps.commentsAvailable === nextProps.commentsAvailable &&
+      sameCommentRanges(prevProps.commentRanges, nextProps.commentRanges) &&
       prevProps.onRenderedSelectionContextMenu ===
         nextProps.onRenderedSelectionContextMenu
     )
