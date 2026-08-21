@@ -29,6 +29,7 @@ const STORAGE_KEY = 'runme/google-auth/token'
 const STORED_DRIVE_ACCOUNT_KEY = 'runme/google-auth/drive-account'
 const IMPERSONATION_TRANSACTION_KEY =
   'runme/google-auth/impersonation-transaction'
+const IMPERSONATION_RESULT_KEY = 'runme/google-auth/impersonation-result'
 const DRIVE_ABOUT_URL =
   'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)'
 
@@ -434,6 +435,30 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
       effectivePrincipal: 'runme@example.iam.gserviceaccount.com',
       authorizingPrincipal: 'jeremy@lewi.us',
     })
+  })
+
+  it('retains the last impersonation error for status diagnostics', async () => {
+    window.localStorage.setItem(
+      IMPERSONATION_RESULT_KEY,
+      JSON.stringify({
+        state: 'failed-impersonation',
+        status: 'error',
+        serviceAccount: 'runme@example.iam.gserviceaccount.com',
+        message: 'IAM Credentials API is disabled.',
+        completedAt: Date.now(),
+      })
+    )
+
+    const auth = await renderWithGoogleAuthProvider()
+
+    await waitFor(() => {
+      expect(auth.driveCredentialStatus.lastError).toBe(
+        'IAM Credentials API is disabled.'
+      )
+    })
+    expect(window.localStorage.getItem(IMPERSONATION_RESULT_KEY)).toContain(
+      'IAM Credentials API is disabled.'
+    )
   })
 
   it('starts implicit auth in a new tab when authUxMode=new_tab', async () => {

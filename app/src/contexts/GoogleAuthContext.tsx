@@ -470,7 +470,6 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
     setCredentialError(
       result.status === 'authorized' ? null : (result.message ?? null)
     )
-    window.localStorage.removeItem(IMPERSONATION_RESULT_KEY)
   }, [])
 
   // The remaining mutable pieces do not participate in rendering, so they are
@@ -1653,7 +1652,6 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
           setCredentialError(
             result.status === 'authorized' ? null : (result.message ?? null)
           )
-          window.localStorage.removeItem(IMPERSONATION_RESULT_KEY)
         }
         return
       }
