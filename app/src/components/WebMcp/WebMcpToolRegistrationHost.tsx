@@ -197,17 +197,60 @@ export default function WebMcpToolRegistrationHost() {
             readOnlyHint: false,
             untrustedContentHint: true,
           },
-          execute: async (input) => {
+          execute: async (input, options) => {
             const code =
               typeof input?.code === 'string'
                 ? input.code
                 : String(input?.code ?? '')
-            await appConsoleData.hydrate()
+            const signal = options?.signal
+            if (signal?.aborted) {
+              throw (
+                signal.reason ??
+                new DOMException('ExecuteCode was cancelled.', 'AbortError')
+              )
+            }
             const executionState: {
               current: ReturnType<typeof appConsoleData.startExternalExecution>
             } = { current: null }
+            let acceptedOperationId: string | null = null
+            let cancellationPromise: Promise<unknown> | null = null
+
+            // WebMCP cancellation can arrive before the registry assigns an
+            // operation ID. Once accepted, schedule cancellation after the
+            // registry has installed its live control handle.
+            const cancelAcceptedOperation = () => {
+              if (!acceptedOperationId || cancellationPromise) {
+                return
+              }
+              const operationId = acceptedOperationId
+              cancellationPromise = codeOperationRegistry
+                .cancel({ operationId })
+                .catch((error) => {
+                  appLogger.error(
+                    'Failed to cancel WebMCP ExecuteCode operation',
+                    {
+                      attrs: {
+                        scope: 'webmcp.execute_code',
+                        operationId,
+                        error: String(error),
+                      },
+                    }
+                  )
+                })
+            }
+            const handleAbort = () => {
+              queueMicrotask(cancelAcceptedOperation)
+            }
+            signal?.addEventListener('abort', handleAbort, { once: true })
 
             try {
+              await appConsoleData.hydrate()
+              if (signal?.aborted) {
+                throw (
+                  signal.reason ??
+                  new DOMException('ExecuteCode was cancelled.', 'AbortError')
+                )
+              }
               const result = await codeOperationRegistry.start({
                 code,
                 ...(typeof input?.timeoutMs === 'number'
@@ -223,9 +266,13 @@ export default function WebMcpToolRegistrationHost() {
                 ...(typeof input?.idempotencyKey === 'string'
                   ? { idempotencyKey: input.idempotencyKey }
                   : {}),
-                onAccepted: () => {
+                onAccepted: (operationId) => {
+                  acceptedOperationId = operationId
                   executionState.current =
                     appConsoleData.startExternalExecution(code)
+                  if (signal?.aborted) {
+                    queueMicrotask(cancelAcceptedOperation)
+                  }
                 },
                 hooks: {
                   onStdout: (chunk) => {
@@ -260,6 +307,11 @@ export default function WebMcpToolRegistrationHost() {
                   })
                 },
               })
+              if (signal?.aborted) {
+                acceptedOperationId ??= result.operationId
+                cancelAcceptedOperation()
+                await cancellationPromise
+              }
               return JSON.stringify(result)
             } catch (error) {
               const execution = executionState.current
@@ -270,6 +322,8 @@ export default function WebMcpToolRegistrationHost() {
                 })
               }
               throw error
+            } finally {
+              signal?.removeEventListener('abort', handleAbort)
             }
           },
         },

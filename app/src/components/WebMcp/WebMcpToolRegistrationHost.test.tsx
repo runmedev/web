@@ -229,7 +229,10 @@ describe('WebMcpToolRegistrationHost', () => {
           readOnlyHint: boolean
           untrustedContentHint: boolean
         }
-        execute: (input: Record<string, unknown>) => Promise<string> | string
+        execute: (
+          input: Record<string, unknown>,
+          options?: { signal?: AbortSignal }
+        ) => Promise<string> | string
       }
       signal?: AbortSignal
     }> = []
@@ -507,6 +510,52 @@ describe('WebMcpToolRegistrationHost', () => {
     expect(registered.every(({ signal }) => signal?.aborted === true)).toBe(
       true
     )
+  })
+
+  it('cancels an accepted ExecuteCode operation when WebMCP aborts', async () => {
+    let resolveStart:
+      | ((operation: { operationId: string; status: string }) => void)
+      | undefined
+    startOperationMock.mockImplementationOnce(
+      (input) =>
+        new Promise((resolve) => {
+          resolveStart = resolve
+          input.onAccepted?.('exec-aborted')
+        })
+    )
+    cancelOperationMock.mockImplementationOnce(async () => {
+      const operation = {
+        operationId: 'exec-aborted',
+        status: 'cancelled',
+      }
+      resolveStart?.(operation)
+      return operation
+    })
+    const registerTool = vi.fn()
+    Object.defineProperty(document, 'modelContext', {
+      configurable: true,
+      value: { registerTool },
+    })
+
+    render(<WebMcpToolRegistrationHost />)
+    const executeCode = registerTool.mock.calls
+      .map((call) => call[0])
+      .find((tool) => tool.name === 'ExecuteCode')
+    const controller = new AbortController()
+    const execution = executeCode.execute(
+      { code: 'await new Promise(() => {})' },
+      { signal: controller.signal }
+    )
+
+    await waitFor(() => expect(startOperationMock).toHaveBeenCalledTimes(1))
+    controller.abort(new DOMException('Cancelled', 'AbortError'))
+
+    await waitFor(() => {
+      expect(cancelOperationMock).toHaveBeenCalledWith({
+        operationId: 'exec-aborted',
+      })
+    })
+    await expect(execution).resolves.toContain('"status":"cancelled"')
   })
 
   it('does not create an AppConsole cell when ExecuteCode is rejected before acceptance', async () => {
