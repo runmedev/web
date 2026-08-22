@@ -252,6 +252,11 @@ export async function searchGoogleDriveResources(
       `name contains '${escapeDriveQueryLiteral(normalizedQuery)}'`,
       'trashed = false',
     ]
+    if (mode === 'folder') {
+      clauses.push(
+        `(mimeType = '${GOOGLE_DRIVE_FOLDER_MIME_TYPE}' or mimeType = '${GOOGLE_DRIVE_SHORTCUT_MIME_TYPE}')`
+      )
+    }
     url.searchParams.set('q', clauses.join(' and '))
     url.searchParams.set('pageSize', '100')
     url.searchParams.set(

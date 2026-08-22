@@ -203,7 +203,9 @@ describe('googleDriveBrowser', () => {
     const url = new URL(fetchImpl.mock.calls[0]?.[0] as string)
     expect(url.searchParams.get('corpora')).toBe('allDrives')
     expect(url.searchParams.get('q')).toBe(
-      "name contains 'Bob\\'s \\\\ Plans' and trashed = false"
+      "name contains 'Bob\\'s \\\\ Plans' and trashed = false and " +
+        "(mimeType = 'application/vnd.google-apps.folder' or " +
+        "mimeType = 'application/vnd.google-apps.shortcut')"
     )
   })
 
@@ -246,6 +248,11 @@ describe('googleDriveBrowser', () => {
         driveId: undefined,
       },
     ])
+
+    const url = new URL(fetchImpl.mock.calls[0]?.[0] as string)
+    expect(url.searchParams.get('q')).toContain(
+      "mimeType = 'application/vnd.google-apps.shortcut'"
+    )
   })
 
   it('rejects incomplete all-Drive search results instead of presenting them as exhaustive', async () => {
