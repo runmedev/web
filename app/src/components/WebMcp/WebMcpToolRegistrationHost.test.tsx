@@ -713,6 +713,58 @@ describe('WebMcpToolRegistrationHost', () => {
     )
   })
 
+  it('preserves the Drive authorization error when interaction is unavailable', async () => {
+    searchDriveFilesMock.mockRejectedValueOnce(
+      new Error('Google Drive authorization is required.')
+    )
+    const registerTool = vi.fn()
+    Object.defineProperty(document, 'modelContext', {
+      configurable: true,
+      value: { registerTool },
+    })
+
+    render(<WebMcpToolRegistrationHost />)
+    const searchDriveItems = registerTool.mock.calls
+      .map((call) => call[0])
+      .find((tool) => tool.name === 'searchDriveItems')
+
+    await expect(
+      searchDriveItems.execute({ name: 'notebooks', itemType: 'folder' })
+    ).rejects.toThrow('Google Drive authorization is required.')
+  })
+
+  it('keeps idempotency guidance when Drive authorization is incomplete', async () => {
+    createDriveNotebookMock.mockRejectedValueOnce(
+      new Error('Google Drive authorization is required.')
+    )
+    startGoogleDriveOAuthMock.mockResolvedValueOnce({
+      status: 'pending',
+      authFlow: 'implicit',
+      mode: 'popup',
+    })
+    const registerTool = vi.fn()
+    Object.defineProperty(document, 'modelContext', {
+      configurable: true,
+      value: { registerTool },
+    })
+
+    render(<WebMcpToolRegistrationHost />)
+    const createDriveNotebook = registerTool.mock.calls
+      .map((call) => call[0])
+      .find((tool) => tool.name === 'createDriveNotebook')
+
+    await expect(
+      createDriveNotebook.execute(
+        {
+          folderIdOrUri: 'root',
+          fileName: 'demo.ipynb',
+          idempotencyKey: 'create-demo-notebook',
+        },
+        { requestUserInteraction: async (callback) => callback() }
+      )
+    ).rejects.toThrow('retry createDriveNotebook with the same idempotencyKey')
+  })
+
   it('marks the AppConsole cell failed when the operation settles unsuccessfully', async () => {
     startOperationMock.mockImplementationOnce(async (input) => {
       input.onAccepted?.('exec-2')

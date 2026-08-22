@@ -147,7 +147,8 @@ async function executeDriveToolWithAuthorization(
   toolName: string,
   execute: (input: Record<string, unknown>) => Promise<string>,
   input: Record<string, unknown>,
-  options: ToolExecuteOptionsLike
+  options?: ToolExecuteOptionsLike,
+  retryInstruction = toolName
 ): Promise<string> {
   try {
     // Preserve the no-UI path for cached tokens and service-account sessions.
@@ -155,7 +156,7 @@ async function executeDriveToolWithAuthorization(
   } catch (error) {
     if (
       !isDriveAuthorizationRequired(error) ||
-      typeof options.requestUserInteraction !== 'function'
+      typeof options?.requestUserInteraction !== 'function'
     ) {
       throw error
     }
@@ -166,7 +167,7 @@ async function executeDriveToolWithAuthorization(
       })
       if (authorization.status !== 'authorized') {
         throw new Error(
-          `Google Drive authorization opened in a new tab. Complete authorization, then retry ${toolName}.`
+          `Google Drive authorization opened in a new tab. Complete authorization, then retry ${retryInstruction}.`
         )
       }
       return execute(input)
@@ -556,7 +557,8 @@ export default function WebMcpToolRegistrationHost() {
               CREATE_DRIVE_NOTEBOOK_TOOL_NAME,
               executeCreateDriveNotebook,
               input,
-              options
+              options,
+              'createDriveNotebook with the same idempotencyKey'
             ),
         },
         {
