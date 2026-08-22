@@ -196,7 +196,6 @@ export async function mountDriveFolder(
 ): Promise<MountDriveFolderResult> {
   const remoteUri = canonicalDriveFolderRef(folder, 'drive.mountFolder')
   const { id: folderId } = parseDriveItem(remoteUri)
-  const localStore = ensureLocalStore()
 
   appLogger.info('Mounting Google Drive folder', {
     attrs: {
@@ -206,7 +205,20 @@ export async function mountDriveFolder(
   })
 
   try {
-    const localUri = await localStore.updateFolder(remoteUri)
+    // Raw Drive IDs do not encode whether they identify a file or a folder.
+    // Verify the provider metadata before creating any local mirror state.
+    const remoteMetadata = await ensureDriveStore().getMetadata(remoteUri)
+    if (remoteMetadata?.type !== NotebookStoreItemType.Folder) {
+      throw new Error(
+        'drive.mountFolder requires a Google Drive folder URI or folder id'
+      )
+    }
+
+    const localStore = ensureLocalStore()
+    const localUri = await localStore.updateFolder(
+      remoteUri,
+      remoteMetadata.name
+    )
     const metadata = await localStore.getMetadata(localUri)
     const workspaceItems = appState.getWorkspaceItems()
     const alreadyMounted =
