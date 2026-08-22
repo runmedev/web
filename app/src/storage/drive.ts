@@ -299,30 +299,36 @@ interface DriveFilesClient {
     headers?: Record<string, string>
   ): Promise<DriveListResponse>
   listRevisions(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers?: Record<string, string>
   ): Promise<DriveRevisionListResponse>
   getRevision(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers?: Record<string, string>
   ): Promise<{ body?: string; result?: unknown }>
   listComments(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers?: Record<string, string>
   ): Promise<DriveCommentListResponse>
   createComment(request: {
     fileId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }>
   updateComment(request: {
     fileId: string
     commentId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }>
   createReply(request: {
     fileId: string
     commentId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }>
   ensureParent(
     file: DriveDoc,
@@ -878,22 +884,42 @@ class GapiDriveFilesClient implements DriveFilesClient {
   }
 
   listRevisions(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
   ): Promise<DriveRevisionListResponse> {
+    if (Object.keys(headers).length > 0) {
+      const fileId = String(request.fileId ?? '')
+      const params = { ...request }
+      delete params.fileId
+      return this.request(
+        'GET',
+        `/drive/v3/files/${encodeURIComponent(fileId)}/revisions`,
+        { params, headers }
+      ) as Promise<DriveRevisionListResponse>
+    }
     return this.revisions.list(
       request as any
     ) as Promise<DriveRevisionListResponse>
   }
 
   getRevision(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
   ): Promise<{ body?: string; result?: unknown }> {
-    if (request.alt === 'media') {
+    if (request.alt === 'media' || Object.keys(headers).length > 0) {
       const fileId = String(request.fileId ?? '')
       const revisionId = String(request.revisionId ?? '')
-      return this.getUtf8Media(
+      const params = { ...request }
+      delete params.fileId
+      delete params.revisionId
+      return this.request(
+        'GET',
         `/drive/v3/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revisionId)}`,
-        request
+        {
+          params,
+          expectText: request.alt === 'media',
+          headers,
+        }
       )
     }
     return this.revisions.get(request as any) as Promise<{
@@ -903,7 +929,8 @@ class GapiDriveFilesClient implements DriveFilesClient {
   }
 
   listComments(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
   ): Promise<DriveCommentListResponse> {
     const fileId = String(request.fileId ?? '')
     const params = { ...request }
@@ -911,7 +938,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
     return this.request(
       'GET',
       `/drive/v3/files/${encodeURIComponent(fileId)}/comments`,
-      { params }
+      { params, headers }
     ) as Promise<DriveCommentListResponse>
   }
 
@@ -919,6 +946,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
     fileId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }> {
     return this.request(
       'POST',
@@ -929,6 +957,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
           supportsAllDrives: 'true',
         },
         body: JSON.stringify(request.resource),
+        headers: request.headers,
       }
     )
   }
@@ -938,6 +967,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
     commentId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }> {
     return this.request(
       'PATCH',
@@ -948,6 +978,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
           supportsAllDrives: 'true',
         },
         body: JSON.stringify(request.resource),
+        headers: request.headers,
       }
     )
   }
@@ -957,6 +988,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
     commentId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }> {
     return this.request(
       'POST',
@@ -969,6 +1001,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
           supportsAllDrives: 'true',
         },
         body: JSON.stringify(request.resource),
+        headers: request.headers,
       }
     )
   }
@@ -1318,18 +1351,20 @@ class FetchDriveFilesClient implements DriveFilesClient {
   }
 
   listRevisions(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
   ): Promise<DriveRevisionListResponse> {
     const fileId = String(request.fileId ?? '')
     return this.request(
       'GET',
       `/drive/v3/files/${encodeURIComponent(fileId)}/revisions`,
-      { params: request }
+      { params: request, headers }
     ) as Promise<DriveRevisionListResponse>
   }
 
   getRevision(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
   ): Promise<{ body?: string; result?: unknown }> {
     const fileId = String(request.fileId ?? '')
     const revisionId = String(request.revisionId ?? '')
@@ -1339,12 +1374,14 @@ class FetchDriveFilesClient implements DriveFilesClient {
       {
         params: request,
         expectText: request.alt === 'media',
+        headers,
       }
     )
   }
 
   listComments(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
   ): Promise<DriveCommentListResponse> {
     const fileId = String(request.fileId ?? '')
     const params = { ...request }
@@ -1352,7 +1389,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
     return this.request(
       'GET',
       `/drive/v3/files/${encodeURIComponent(fileId)}/comments`,
-      { params }
+      { params, headers }
     ) as Promise<DriveCommentListResponse>
   }
 
@@ -1360,6 +1397,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
     fileId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }> {
     return this.request(
       'POST',
@@ -1370,6 +1408,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
           supportsAllDrives: 'true',
         },
         body: JSON.stringify(request.resource),
+        headers: request.headers,
       }
     )
   }
@@ -1379,6 +1418,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
     commentId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }> {
     return this.request(
       'PATCH',
@@ -1389,6 +1429,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
           supportsAllDrives: 'true',
         },
         body: JSON.stringify(request.resource),
+        headers: request.headers,
       }
     )
   }
@@ -1398,6 +1439,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
     commentId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }> {
     return this.request(
       'POST',
@@ -1410,6 +1452,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
           supportsAllDrives: 'true',
         },
         body: JSON.stringify(request.resource),
+        headers: request.headers,
       }
     )
   }
@@ -2738,22 +2781,26 @@ export class DriveNotebookStore {
   }
 
   async listComments(uri: string): Promise<DriveComment[]> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.listComments expects a file URI')
     }
     const client = await this.getFilesClient()
+    const headers = driveResourceKeyHeaders(item)
     const comments: DriveComment[] = []
     let pageToken: string | undefined
 
     do {
-      const response = await client.listComments({
-        fileId: id,
-        supportsAllDrives: true,
-        includeDeleted: true,
-        fields: DRIVE_COMMENT_LIST_FIELDS,
-        ...(pageToken ? { pageToken } : {}),
-      })
+      const response = await client.listComments(
+        {
+          fileId: item.id,
+          supportsAllDrives: true,
+          includeDeleted: true,
+          fields: DRIVE_COMMENT_LIST_FIELDS,
+          ...(pageToken ? { pageToken } : {}),
+        },
+        headers
+      )
       comments.push(...(response.result?.comments ?? []))
       pageToken = optionalString(response.result?.nextPageToken)
     } while (pageToken)
@@ -2771,8 +2818,8 @@ export class DriveNotebookStore {
           quotedFileContent?: { mimeType: 'text/plain'; value: string }
         }
   ): Promise<DriveComment> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.createComment expects a file URI')
     }
     const trimmedContent = content.trim()
@@ -2784,13 +2831,14 @@ export class DriveNotebookStore {
       typeof options === 'string' ? undefined : options?.quotedFileContent
     const client = await this.getFilesClient()
     const response = await client.createComment({
-      fileId: id,
+      fileId: item.id,
       resource: {
         content: trimmedContent,
         ...(anchor ? { anchor } : {}),
         ...(quotedFileContent ? { quotedFileContent } : {}),
       },
       fields: DRIVE_COMMENT_FIELDS,
+      headers: driveResourceKeyHeaders(item),
     })
     return (response.result ?? {}) as DriveComment
   }
@@ -2800,8 +2848,8 @@ export class DriveNotebookStore {
     commentId: string,
     content: string
   ): Promise<DriveReply> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.replyToComment expects a file URI')
     }
     const trimmedContent = content.trim()
@@ -2813,18 +2861,19 @@ export class DriveNotebookStore {
     }
     const client = await this.getFilesClient()
     const response = await client.createReply({
-      fileId: id,
+      fileId: item.id,
       commentId: commentId.trim(),
       resource: {
         content: trimmedContent,
       },
+      headers: driveResourceKeyHeaders(item),
     })
     return (response.result ?? {}) as DriveReply
   }
 
   async resolveComment(uri: string, commentId: string): Promise<DriveReply> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.resolveComment expects a file URI')
     }
     if (!commentId.trim()) {
@@ -2832,18 +2881,19 @@ export class DriveNotebookStore {
     }
     const client = await this.getFilesClient()
     const response = await client.createReply({
-      fileId: id,
+      fileId: item.id,
       commentId: commentId.trim(),
       resource: {
         action: 'resolve',
       },
+      headers: driveResourceKeyHeaders(item),
     })
     return (response.result ?? {}) as DriveReply
   }
 
   async reopenComment(uri: string, commentId: string): Promise<DriveReply> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.reopenComment expects a file URI')
     }
     if (!commentId.trim()) {
@@ -2851,11 +2901,12 @@ export class DriveNotebookStore {
     }
     const client = await this.getFilesClient()
     const response = await client.createReply({
-      fileId: id,
+      fileId: item.id,
       commentId: commentId.trim(),
       resource: {
         action: 'reopen',
       },
+      headers: driveResourceKeyHeaders(item),
     })
     return (response.result ?? {}) as DriveReply
   }
@@ -2892,8 +2943,8 @@ export class DriveNotebookStore {
   }
 
   async listRevisions(uri: string): Promise<DriveRevision[]> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.listRevisions expects a file URI')
     }
     const client = await this.getFilesClient()
@@ -2901,13 +2952,16 @@ export class DriveNotebookStore {
     let pageToken: string | undefined
 
     do {
-      const response = await client.listRevisions({
-        fileId: id,
-        supportsAllDrives: true,
-        fields:
-          'nextPageToken,revisions(id,mimeType,modifiedTime,md5Checksum,size,keepForever,lastModifyingUser(displayName,emailAddress))',
-        ...(pageToken ? { pageToken } : {}),
-      })
+      const response = await client.listRevisions(
+        {
+          fileId: item.id,
+          supportsAllDrives: true,
+          fields:
+            'nextPageToken,revisions(id,mimeType,modifiedTime,md5Checksum,size,keepForever,lastModifyingUser(displayName,emailAddress))',
+          ...(pageToken ? { pageToken } : {}),
+        },
+        driveResourceKeyHeaders(item)
+      )
       revisions.push(...(response.result?.revisions ?? []))
       pageToken = optionalString(response.result?.nextPageToken)
     } while (pageToken)
@@ -2919,20 +2973,23 @@ export class DriveNotebookStore {
     uri: string,
     revisionId: string
   ): Promise<parser_pb.Notebook> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.loadRevision expects a file URI')
     }
     if (!revisionId?.trim()) {
       throw new Error('DriveNotebookStore.loadRevision requires a revision id')
     }
     const client = await this.getFilesClient()
-    const response = await client.getRevision({
-      fileId: id,
-      revisionId: revisionId.trim(),
-      supportsAllDrives: true,
-      alt: 'media',
-    })
+    const response = await client.getRevision(
+      {
+        fileId: item.id,
+        revisionId: revisionId.trim(),
+        supportsAllDrives: true,
+        alt: 'media',
+      },
+      driveResourceKeyHeaders(item)
+    )
     const body = extractBody(response)
     return fromJsonString(parser_pb.NotebookSchema, body, {
       ignoreUnknownFields: true,
@@ -2940,8 +2997,8 @@ export class DriveNotebookStore {
   }
 
   async loadRevisionContent(uri: string, revisionId: string): Promise<string> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error(
         'DriveNotebookStore.loadRevisionContent expects a file URI'
       )
@@ -2952,12 +3009,15 @@ export class DriveNotebookStore {
       )
     }
     const client = await this.getFilesClient()
-    const response = await client.getRevision({
-      fileId: id,
-      revisionId: revisionId.trim(),
-      supportsAllDrives: true,
-      alt: 'media',
-    })
+    const response = await client.getRevision(
+      {
+        fileId: item.id,
+        revisionId: revisionId.trim(),
+        supportsAllDrives: true,
+        alt: 'media',
+      },
+      driveResourceKeyHeaders(item)
+    )
     return extractBody(response)
   }
 

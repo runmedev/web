@@ -52,7 +52,7 @@ describe('GAPI Drive media downloads', () => {
     ).resolves.toBe('{"text":"👍🏽"}')
     await expect(
       store.loadRevisionContent(
-        'https://drive.google.com/file/d/file123/view',
+        'https://drive.google.com/file/d/file123/view?resourcekey=file-key',
         'revision456'
       )
     ).resolves.toBe('{"text":"👍🏽"}')
@@ -71,6 +71,7 @@ describe('GAPI Drive media downloads', () => {
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: 'Bearer access-token',
+          'X-Goog-Drive-Resource-Keys': 'file123/file-key',
         }),
       })
     )
