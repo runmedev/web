@@ -2,6 +2,8 @@ import { getGoogleDriveBaseUrl } from '../../lib/googleDriveRuntime'
 
 export const GOOGLE_DRIVE_FOLDER_MIME_TYPE =
   'application/vnd.google-apps.folder'
+export const GOOGLE_DRIVE_SHORTCUT_MIME_TYPE =
+  'application/vnd.google-apps.shortcut'
 
 export type GoogleDriveLocation = {
   id: string
@@ -18,18 +20,68 @@ type DriveListResponse = {
   nextPageToken?: string
 }
 
+type DriveApiResource = Partial<GoogleDriveResource> & {
+  shortcutDetails?: {
+    targetId?: string
+    targetMimeType?: string
+  }
+}
+
 type FileListResponse = {
-  files?: Array<Partial<GoogleDriveResource>>
+  files?: DriveApiResource[]
   incompleteSearch?: boolean
   nextPageToken?: string
 }
 
+/**
+ * Signals that Drive returned only a partial all-Drive result set. Callers
+ * must not present collected matches as exhaustive and should ask the user to
+ * narrow the query before retrying.
+ */
 export class IncompleteGoogleDriveSearchError extends Error {
   constructor() {
     super(
       'Google Drive could not search every accessible Drive. Narrow the search and retry.'
     )
     this.name = 'IncompleteGoogleDriveSearchError'
+  }
+}
+
+/**
+ * Converts one Drive API file into a navigable picker resource. Folder
+ * shortcuts use their target id and MIME type; their source drive id is
+ * intentionally discarded because a shortcut can target another Drive.
+ */
+function normalizeGoogleDriveResource(
+  file: DriveApiResource,
+  parentDriveId?: string
+): GoogleDriveResource | null {
+  if (
+    typeof file.id !== 'string' ||
+    typeof file.name !== 'string' ||
+    typeof file.mimeType !== 'string'
+  ) {
+    return null
+  }
+
+  if (
+    file.mimeType === GOOGLE_DRIVE_SHORTCUT_MIME_TYPE &&
+    typeof file.shortcutDetails?.targetId === 'string' &&
+    typeof file.shortcutDetails.targetMimeType === 'string'
+  ) {
+    return {
+      id: file.shortcutDetails.targetId,
+      name: file.name,
+      mimeType: file.shortcutDetails.targetMimeType,
+      driveId: undefined,
+    }
+  }
+
+  return {
+    id: file.id,
+    name: file.name,
+    mimeType: file.mimeType,
+    driveId: file.driveId ?? parentDriveId,
   }
 }
 
@@ -116,7 +168,7 @@ export async function listGoogleDriveChildren(
     url.searchParams.set('pageSize', '100')
     url.searchParams.set(
       'fields',
-      'nextPageToken,files(id,name,mimeType,driveId)'
+      'nextPageToken,files(id,name,mimeType,driveId,shortcutDetails(targetId,targetMimeType))'
     )
     url.searchParams.set(
       'q',
@@ -141,17 +193,9 @@ export async function listGoogleDriveChildren(
       fetchImpl
     )
     for (const file of page.files ?? []) {
-      if (
-        typeof file.id === 'string' &&
-        typeof file.name === 'string' &&
-        typeof file.mimeType === 'string'
-      ) {
-        resources.push({
-          id: file.id,
-          name: file.name,
-          mimeType: file.mimeType,
-          driveId: file.driveId ?? parent.driveId,
-        })
+      const resource = normalizeGoogleDriveResource(file, parent.driveId)
+      if (resource) {
+        resources.push(resource)
       }
     }
     pageToken = page.nextPageToken
@@ -184,14 +228,11 @@ export async function searchGoogleDriveResources(
       `name contains '${escapeDriveQueryLiteral(normalizedQuery)}'`,
       'trashed = false',
     ]
-    if (mode === 'folder') {
-      clauses.push(`mimeType = '${GOOGLE_DRIVE_FOLDER_MIME_TYPE}'`)
-    }
     url.searchParams.set('q', clauses.join(' and '))
     url.searchParams.set('pageSize', '100')
     url.searchParams.set(
       'fields',
-      'nextPageToken,incompleteSearch,files(id,name,mimeType,driveId)'
+      'nextPageToken,incompleteSearch,files(id,name,mimeType,driveId,shortcutDetails(targetId,targetMimeType))'
     )
     url.searchParams.set('spaces', 'drive')
     url.searchParams.set('corpora', 'allDrives')
@@ -209,17 +250,9 @@ export async function searchGoogleDriveResources(
       fetchImpl
     )
     for (const file of page.files ?? []) {
-      if (
-        typeof file.id === 'string' &&
-        typeof file.name === 'string' &&
-        typeof file.mimeType === 'string'
-      ) {
-        resources.push({
-          id: file.id,
-          name: file.name,
-          mimeType: file.mimeType,
-          driveId: file.driveId,
-        })
+      const resource = normalizeGoogleDriveResource(file)
+      if (resource) {
+        resources.push(resource)
       }
     }
     incompleteSearch ||= page.incompleteSearch === true
@@ -230,5 +263,9 @@ export async function searchGoogleDriveResources(
     throw new IncompleteGoogleDriveSearchError()
   }
 
-  return resources
+  return mode === 'folder'
+    ? resources.filter(
+        (resource) => resource.mimeType === GOOGLE_DRIVE_FOLDER_MIME_TYPE
+      )
+    : resources
 }

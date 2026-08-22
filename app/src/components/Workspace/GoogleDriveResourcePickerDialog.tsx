@@ -32,6 +32,15 @@ type GoogleDriveResourcePickerDialogProps = {
 const ROOT_LIST_ERROR =
   "Runme could not list Google Drive locations. Verify that the Google Drive API is enabled for this credential's project and that the effective Drive identity can list Shared Drives."
 
+const FOCUSABLE_SELECTOR = [
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  'a[href]',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',')
+
 /**
  * Browses My Drive and Shared Drives using the active Runme credential. The
  * breadcrumb stack is component state so navigation never changes auth state.
@@ -192,14 +201,53 @@ export function GoogleDriveResourcePickerDialog({
   }, [loadRoots])
 
   useEffect(() => {
-    dialogRef.current?.focus()
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null
+    const dialog = dialogRef.current
+    dialog?.focus()
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         onCancel()
+        return
+      }
+      if (event.key !== 'Tab' || !dialog) {
+        return
+      }
+
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)
+      ).filter(
+        (element) =>
+          !element.hasAttribute('hidden') &&
+          element.getAttribute('aria-hidden') !== 'true'
+      )
+      const first = focusable.at(0)
+      const last = focusable.at(-1)
+      if (!first || !last) {
+        event.preventDefault()
+        dialog.focus()
+        return
+      }
+
+      const active = document.activeElement
+      if (
+        event.shiftKey &&
+        (active === first || active === dialog || !dialog.contains(active))
+      ) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault()
+        first.focus()
       }
     }
     document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      previouslyFocused?.focus()
+    }
   }, [onCancel])
 
   const visibleResources = resources.filter(
@@ -446,7 +494,10 @@ export function GoogleDriveResourcePickerDialog({
                   ? `Search results for “${activeSearch}”`
                   : 'Choose a location to continue.'}
           </p>
-          <div className="flex shrink-0 gap-2">
+          <div
+            id="google-drive-resource-picker-footer-actions"
+            className="flex shrink-0 gap-2"
+          >
             <button type="button" className="btn" onClick={onCancel}>
               Cancel
             </button>

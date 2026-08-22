@@ -261,6 +261,8 @@ file mode. Its free-form search uses Drive's `allDrives` corpus, so matching
 folders or files can be found across every Drive visible to the effective
 credential. All list, search, and selection steps use the same identity as the
 later Drive operation.
+Folder shortcuts are resolved to their target folders so they remain navigable
+in both browsing and search results.
 
 The custom browser is required because Google Picker treats a Shared Drive root
 as a navigation container: double-clicking it opens the drive, but Picker leaves

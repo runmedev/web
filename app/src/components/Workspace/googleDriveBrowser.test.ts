@@ -91,6 +91,48 @@ describe('googleDriveBrowser', () => {
     )
   })
 
+  it('resolves folder shortcuts into navigable target resources', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          files: [
+            {
+              id: 'shortcut-1',
+              name: 'Designs shortcut',
+              mimeType: 'application/vnd.google-apps.shortcut',
+              driveId: 'source-drive',
+              shortcutDetails: {
+                targetId: 'folder-target',
+                targetMimeType: 'application/vnd.google-apps.folder',
+              },
+            },
+          ],
+        }),
+        { status: 200 }
+      )
+    )
+
+    await expect(
+      listGoogleDriveChildren(
+        'token',
+        { id: 'drive-1', name: 'notebooks', driveId: 'drive-1' },
+        fetchImpl
+      )
+    ).resolves.toEqual([
+      {
+        id: 'folder-target',
+        name: 'Designs shortcut',
+        mimeType: 'application/vnd.google-apps.folder',
+        driveId: undefined,
+      },
+    ])
+
+    const url = new URL(fetchImpl.mock.calls[0]?.[0] as string)
+    expect(url.searchParams.get('fields')).toContain(
+      'shortcutDetails(targetId,targetMimeType)'
+    )
+  })
+
   it('does not leak the token in Drive API errors', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
@@ -140,8 +182,49 @@ describe('googleDriveBrowser', () => {
     const url = new URL(fetchImpl.mock.calls[0]?.[0] as string)
     expect(url.searchParams.get('corpora')).toBe('allDrives')
     expect(url.searchParams.get('q')).toBe(
-      "name contains 'Bob\\'s \\\\ Plans' and trashed = false and mimeType = 'application/vnd.google-apps.folder'"
+      "name contains 'Bob\\'s \\\\ Plans' and trashed = false"
     )
+  })
+
+  it('keeps folder shortcuts in folder search results while filtering file targets', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          files: [
+            {
+              id: 'folder-shortcut',
+              name: 'Designs',
+              mimeType: 'application/vnd.google-apps.shortcut',
+              shortcutDetails: {
+                targetId: 'folder-target',
+                targetMimeType: 'application/vnd.google-apps.folder',
+              },
+            },
+            {
+              id: 'file-shortcut',
+              name: 'Design notes',
+              mimeType: 'application/vnd.google-apps.shortcut',
+              shortcutDetails: {
+                targetId: 'file-target',
+                targetMimeType: 'text/plain',
+              },
+            },
+          ],
+        }),
+        { status: 200 }
+      )
+    )
+
+    await expect(
+      searchGoogleDriveResources('token', 'design', 'folder', fetchImpl)
+    ).resolves.toEqual([
+      {
+        id: 'folder-target',
+        name: 'Designs',
+        mimeType: 'application/vnd.google-apps.folder',
+        driveId: undefined,
+      },
+    ])
   })
 
   it('rejects incomplete all-Drive search results instead of presenting them as exhaustive', async () => {

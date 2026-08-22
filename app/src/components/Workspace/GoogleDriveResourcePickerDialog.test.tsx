@@ -232,4 +232,36 @@ describe('GoogleDriveResourcePickerDialog', () => {
       'Narrow the search text and retry'
     )
   })
+
+  it('contains keyboard focus and restores it when the dialog unmounts', async () => {
+    const trigger = document.createElement('button')
+    trigger.textContent = 'Open picker'
+    document.body.appendChild(trigger)
+    trigger.focus()
+
+    const { unmount } = render(
+      <GoogleDriveResourcePickerDialog
+        accessToken="token"
+        mode="folder"
+        onCancel={vi.fn()}
+        onSelect={vi.fn()}
+      />
+    )
+    const searchInput = await screen.findByRole('searchbox', {
+      name: 'Search Google Drive',
+    })
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+
+    cancel.focus()
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(document.activeElement).toBe(searchInput)
+
+    searchInput.focus()
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(cancel)
+
+    unmount()
+    expect(document.activeElement).toBe(trigger)
+    trigger.remove()
+  })
 })
