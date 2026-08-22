@@ -30,6 +30,7 @@ This Runme instance is served from ${runmeOrigin}.
 - Claim the selected tab and use its page-provided WebMCP tools for notebook reads, edits, and execution.
 - Use the \`ExecuteCode\` WebMCP tool to run AppKernel JavaScript. Print values explicitly with \`console.log(...)\`.
 - Read notebooks with \`notebooks.get({ uri: notebookUri })\` and access cells through \`doc.notebook.cells\`. There is no \`notebooks.read\` method. Call \`await notebooks.help()\` before generating notebook code when the API is uncertain.
+- When the user identifies a Google Drive folder by name, call the direct read-only \`searchDriveItems\` tool with \`itemType: "folder"\`. If exactly one intended result remains, pass its ID or URI to \`mountDriveFolder\`; do not guess among duplicate names. Use \`listDriveFolder\` to inspect a known candidate without mounting it.
 - When the user explicitly requests a new notebook in Google Drive, call the direct \`createDriveNotebook\` WebMCP tool. It creates the Drive file and its Runme mirror as one retry-safe operation without a local staging notebook.
 - Use the \`comments\` library inside \`ExecuteCode\` for Drive comments and anchors. Runme does not expose a comment-specific WebMCP tool.
 - Use the \`ui\` library inside \`ExecuteCode\` to create rendered Markdown selections and open Runme's selection context menu. Do not invent CSS selectors or dispatch arbitrary DOM events.

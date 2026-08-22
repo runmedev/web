@@ -178,6 +178,75 @@ export async function searchDriveFiles(
   }
 }
 
+export type MountDriveFolderResult = {
+  folderId: string
+  name: string
+  remoteUri: string
+  localUri: string
+  alreadyMounted: boolean
+}
+
+/**
+ * Validate, mirror, and mount a Google Drive folder in the workspace explorer.
+ * Mirroring before registration means callers only receive success after the
+ * authenticated Drive request has proved that the folder is accessible.
+ */
+export async function mountDriveFolder(
+  folder: string
+): Promise<MountDriveFolderResult> {
+  const remoteUri = canonicalDriveFolderRef(folder, 'drive.mountFolder')
+  const { id: folderId } = parseDriveItem(remoteUri)
+  const localStore = ensureLocalStore()
+
+  appLogger.info('Mounting Google Drive folder', {
+    attrs: {
+      scope: 'drive.transfer',
+      folderId,
+    },
+  })
+
+  try {
+    const localUri = await localStore.updateFolder(remoteUri)
+    const metadata = await localStore.getMetadata(localUri)
+    const workspaceItems = appState.getWorkspaceItems()
+    const alreadyMounted =
+      workspaceItems.includes(localUri) || workspaceItems.includes(remoteUri)
+    if (workspaceItems.includes(remoteUri) && remoteUri !== localUri) {
+      // Older flows could register the remote URL before its local mirror was
+      // available. Replace that transient representation with the stable URI.
+      appState.removeWorkspaceItem(remoteUri)
+    }
+    appState.addWorkspaceItem(localUri)
+    const name = metadata?.name?.trim() || folderId
+
+    appLogger.info('Mounted Google Drive folder', {
+      attrs: {
+        scope: 'drive.transfer',
+        folderId,
+        localUri,
+        alreadyMounted,
+      },
+    })
+
+    return {
+      folderId,
+      name,
+      remoteUri,
+      localUri,
+      alreadyMounted,
+    }
+  } catch (error) {
+    appLogger.error('Failed to mount Google Drive folder', {
+      attrs: {
+        scope: 'drive.transfer',
+        folderId,
+        error: String(error),
+      },
+    })
+    throw error
+  }
+}
+
 export async function updateDriveFileBytes(
   idOrUri: string,
   bytes: Uint8Array | ArrayBuffer | ArrayLike<number>,
@@ -315,7 +384,8 @@ function readDriveCreateAttempt(key: string): {
       typeof parsed.fileName !== 'string' ||
       typeof parsed.expectedChecksum !== 'string' ||
       typeof parsed.createdAtMs !== 'number' ||
-      (parsed.remoteUri !== undefined && typeof parsed.remoteUri !== 'string') ||
+      (parsed.remoteUri !== undefined &&
+        typeof parsed.remoteUri !== 'string') ||
       (parsed.creationRevisionId !== undefined &&
         typeof parsed.creationRevisionId !== 'string')
     ) {

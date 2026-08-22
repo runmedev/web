@@ -60,6 +60,23 @@ import {
   CREATE_DRIVE_NOTEBOOK_TOOL_TITLE,
   executeCreateDriveNotebook,
 } from '../../lib/runtime/createDriveNotebookTool'
+import {
+  buildListDriveFolderInputSchema,
+  buildMountDriveFolderInputSchema,
+  buildSearchDriveItemsInputSchema,
+  executeListDriveFolder,
+  executeMountDriveFolder,
+  executeSearchDriveItems,
+  LIST_DRIVE_FOLDER_TOOL_DESCRIPTION,
+  LIST_DRIVE_FOLDER_TOOL_NAME,
+  LIST_DRIVE_FOLDER_TOOL_TITLE,
+  MOUNT_DRIVE_FOLDER_TOOL_DESCRIPTION,
+  MOUNT_DRIVE_FOLDER_TOOL_NAME,
+  MOUNT_DRIVE_FOLDER_TOOL_TITLE,
+  SEARCH_DRIVE_ITEMS_TOOL_DESCRIPTION,
+  SEARCH_DRIVE_ITEMS_TOOL_NAME,
+  SEARCH_DRIVE_ITEMS_TOOL_TITLE,
+} from '../../lib/runtime/driveWorkspaceTools'
 import { appState } from '../../lib/runtime/AppState'
 
 type ToolExecuteOptionsLike = {
@@ -126,13 +143,15 @@ function isDriveAuthorizationRequired(error: unknown): boolean {
   )
 }
 
-async function executeCreateDriveNotebookWithAuthorization(
+async function executeDriveToolWithAuthorization(
+  toolName: string,
+  execute: (input: Record<string, unknown>) => Promise<string>,
   input: Record<string, unknown>,
   options: ToolExecuteOptionsLike
 ): Promise<string> {
   try {
     // Preserve the no-UI path for cached tokens and service-account sessions.
-    return await executeCreateDriveNotebook(input)
+    return await execute(input)
   } catch (error) {
     if (
       !isDriveAuthorizationRequired(error) ||
@@ -147,14 +166,14 @@ async function executeCreateDriveNotebookWithAuthorization(
       })
       if (authorization.status !== 'authorized') {
         throw new Error(
-          'Google Drive authorization opened in a new tab. Complete authorization, then retry createDriveNotebook with the same idempotencyKey.'
+          `Google Drive authorization opened in a new tab. Complete authorization, then retry ${toolName}.`
         )
       }
-      return executeCreateDriveNotebook(input)
+      return execute(input)
     })
 
     if (typeof result !== 'string') {
-      throw new Error('createDriveNotebook returned an invalid result')
+      throw new Error(`${toolName} returned an invalid result`)
     }
     return result
   }
@@ -458,6 +477,72 @@ export default function WebMcpToolRegistrationHost() {
       )
       registerTool(
         {
+          name: SEARCH_DRIVE_ITEMS_TOOL_NAME,
+          title: SEARCH_DRIVE_ITEMS_TOOL_TITLE,
+          description: SEARCH_DRIVE_ITEMS_TOOL_DESCRIPTION,
+          inputSchema: buildSearchDriveItemsInputSchema(),
+          annotations: {
+            readOnlyHint: true,
+            untrustedContentHint: true,
+          },
+          execute: (input, options) =>
+            executeDriveToolWithAuthorization(
+              SEARCH_DRIVE_ITEMS_TOOL_NAME,
+              executeSearchDriveItems,
+              input,
+              options
+            ),
+        },
+        {
+          signal: registrationController.signal,
+        }
+      )
+      registerTool(
+        {
+          name: LIST_DRIVE_FOLDER_TOOL_NAME,
+          title: LIST_DRIVE_FOLDER_TOOL_TITLE,
+          description: LIST_DRIVE_FOLDER_TOOL_DESCRIPTION,
+          inputSchema: buildListDriveFolderInputSchema(),
+          annotations: {
+            readOnlyHint: true,
+            untrustedContentHint: true,
+          },
+          execute: (input, options) =>
+            executeDriveToolWithAuthorization(
+              LIST_DRIVE_FOLDER_TOOL_NAME,
+              executeListDriveFolder,
+              input,
+              options
+            ),
+        },
+        {
+          signal: registrationController.signal,
+        }
+      )
+      registerTool(
+        {
+          name: MOUNT_DRIVE_FOLDER_TOOL_NAME,
+          title: MOUNT_DRIVE_FOLDER_TOOL_TITLE,
+          description: MOUNT_DRIVE_FOLDER_TOOL_DESCRIPTION,
+          inputSchema: buildMountDriveFolderInputSchema(),
+          annotations: {
+            readOnlyHint: false,
+            untrustedContentHint: true,
+          },
+          execute: (input, options) =>
+            executeDriveToolWithAuthorization(
+              MOUNT_DRIVE_FOLDER_TOOL_NAME,
+              executeMountDriveFolder,
+              input,
+              options
+            ),
+        },
+        {
+          signal: registrationController.signal,
+        }
+      )
+      registerTool(
+        {
           name: CREATE_DRIVE_NOTEBOOK_TOOL_NAME,
           title: CREATE_DRIVE_NOTEBOOK_TOOL_TITLE,
           description: CREATE_DRIVE_NOTEBOOK_TOOL_DESCRIPTION,
@@ -467,7 +552,12 @@ export default function WebMcpToolRegistrationHost() {
             untrustedContentHint: false,
           },
           execute: (input, options) =>
-            executeCreateDriveNotebookWithAuthorization(input, options),
+            executeDriveToolWithAuthorization(
+              CREATE_DRIVE_NOTEBOOK_TOOL_NAME,
+              executeCreateDriveNotebook,
+              input,
+              options
+            ),
         },
         {
           signal: registrationController.signal,
@@ -490,6 +580,9 @@ export default function WebMcpToolRegistrationHost() {
                 GET_DOCUMENTATION_TOOL_NAME,
                 SHOW_TOUR_STEP_TOOL_NAME,
                 DISMISS_TOUR_TOOL_NAME,
+                SEARCH_DRIVE_ITEMS_TOOL_NAME,
+                LIST_DRIVE_FOLDER_TOOL_NAME,
+                MOUNT_DRIVE_FOLDER_TOOL_NAME,
                 CREATE_DRIVE_NOTEBOOK_TOOL_NAME,
               ],
             },
@@ -532,6 +625,9 @@ export default function WebMcpToolRegistrationHost() {
             GET_DOCUMENTATION_TOOL_NAME,
             SHOW_TOUR_STEP_TOOL_NAME,
             DISMISS_TOUR_TOOL_NAME,
+            SEARCH_DRIVE_ITEMS_TOOL_NAME,
+            LIST_DRIVE_FOLDER_TOOL_NAME,
+            MOUNT_DRIVE_FOLDER_TOOL_NAME,
             CREATE_DRIVE_NOTEBOOK_TOOL_NAME,
           ],
         },
