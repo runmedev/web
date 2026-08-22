@@ -334,7 +334,6 @@ export default function AuthenticationSettingsPanel() {
         prompt: selectedHumanAccount.trim() ? '' : 'select_account',
         targets,
         authorizationLeaseSeconds: 24 * 60 * 60,
-        accessTokenLifetimeSeconds: 12 * 60 * 60,
       })
     },
     [getServiceAccountCredentials]

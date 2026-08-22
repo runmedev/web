@@ -236,7 +236,6 @@ describe('AuthenticationSettingsPanel', () => {
           prompt: '',
           targets: ['drive', 'app'],
           authorizationLeaseSeconds: 86_400,
-          accessTokenLifetimeSeconds: 43_200,
         }
       )
     )

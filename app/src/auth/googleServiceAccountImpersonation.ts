@@ -11,7 +11,7 @@ export const GOOGLE_SERVICE_ACCOUNT_IMPERSONATION_SCOPES = [
 const IAM_CREDENTIALS_BASE_URL =
   'https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts'
 const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo'
-export const DEFAULT_IMPERSONATED_ACCESS_TOKEN_LIFETIME_SECONDS = 12 * 60 * 60
+export const DEFAULT_IMPERSONATED_ACCESS_TOKEN_LIFETIME_SECONDS = 60 * 60
 const MAX_ACCESS_TOKEN_LIFETIME_SECONDS = 43200
 const DEFAULT_AUTHORIZATION_LEASE_SECONDS = 24 * 60 * 60
 const MAX_AUTHORIZATION_LEASE_SECONDS = 7 * 24 * 60 * 60
@@ -198,7 +198,7 @@ function formatIamCredentialsError(
         detail.message
       ))
   ) {
-    return `Google IAM ${method} failed (${status}): Google rejected the requested 12-hour service-account token. Add this service account to an organization policy for constraints/iam.allowServiceAccountCredentialLifetimeExtension, or request a token lifetime of 3600 seconds. ${detail.message}`
+    return `Google IAM ${method} failed (${status}): Google rejected the requested service-account token lifetime above one hour. Add this service account to an organization policy for constraints/iam.allowServiceAccountCredentialLifetimeExtension, or omit accessTokenLifetimeSeconds to use the 3600-second default. ${detail.message}`
   }
 
   return `Google IAM ${method} failed (${status}): ${detail.message}`

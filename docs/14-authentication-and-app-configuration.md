@@ -76,7 +76,6 @@ await credentials.google.getServiceAccountCredentials(
   '<service-account>@<project>.iam.gserviceaccount.com',
   {
     authorizationLeaseSeconds: 24 * 60 * 60,
-    accessTokenLifetimeSeconds: 12 * 60 * 60,
   }
 )
 ```
@@ -102,9 +101,9 @@ const status = await credentials.google.getServiceAccountCredentials(
     appAudience: '<runme-oidc-audience>',
     // Product authorization window; maximum seven days.
     authorizationLeaseSeconds: 7 * 24 * 60 * 60,
-    // Runme requests 12 hours. Google requires the credential lifetime
-    // extension organization policy for lifetimes above one hour.
-    accessTokenLifetimeSeconds: 12 * 60 * 60,
+    // Optional. Defaults to one hour. Values above one hour require the
+    // credential lifetime extension organization policy.
+    accessTokenLifetimeSeconds: 60 * 60,
     prompt: 'select_account',
   }
 )
@@ -123,11 +122,11 @@ redirect and reloads; the human OAuth token is not persisted. Switching to the
 service account clears persisted human Drive and OIDC credentials so expiry
 cannot silently fall back to the human.
 
-Google limits impersonated access tokens to one hour unless the target service
-account is allowed by the
-`constraints/iam.allowServiceAccountCredentialLifetimeExtension` organization
-policy. Runme requests 12 hours by default and surfaces an actionable error if
-that policy is not configured.
+Runme requests a one-hour impersonated access token by default. Callers may
+explicitly request up to 12 hours when the target service account is allowed by
+the `constraints/iam.allowServiceAccountCredentialLifetimeExtension`
+organization policy. Runme surfaces an actionable error when Google rejects an
+extended lifetime.
 
 `authorizationLeaseSeconds` records the intended reauthorization window but is
 not a security boundary by itself. Enforce a one-to-seven-day privilege window

@@ -147,7 +147,7 @@ describe('Google service-account impersonation', () => {
     expect(appFetch).toHaveBeenCalledTimes(1)
   })
 
-  it('requests a 12-hour Drive token by default', async () => {
+  it('requests a one-hour Drive token by default', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -168,7 +168,7 @@ describe('Google service-account impersonation', () => {
 
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
       scope: ['drive-scope'],
-      lifetime: '43200s',
+      lifetime: '3600s',
     })
   })
 
@@ -262,7 +262,7 @@ describe('Google service-account impersonation', () => {
     expect(result.errors[0]?.message).toContain('wait a few minutes')
   })
 
-  it('explains the organization policy needed for a 12-hour token', async () => {
+  it('explains the organization policy needed above one hour', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -284,7 +284,7 @@ describe('Google service-account impersonation', () => {
     })
 
     expect(result.errors[0]?.message).toContain(
-      'Google rejected the requested 12-hour service-account token'
+      'Google rejected the requested service-account token lifetime above one hour'
     )
     expect(result.errors[0]?.message).toContain(
       'constraints/iam.allowServiceAccountCredentialLifetimeExtension'
