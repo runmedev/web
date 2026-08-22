@@ -8,6 +8,8 @@ const {
   getOperationMock,
   cancelOperationMock,
   createDriveNotebookMock,
+  searchDriveFilesMock,
+  mountDriveFolderMock,
   startGoogleDriveOAuthMock,
   appConsoleDataMock,
   appLoggerMock,
@@ -17,6 +19,8 @@ const {
   getOperationMock: vi.fn(),
   cancelOperationMock: vi.fn(),
   createDriveNotebookMock: vi.fn(),
+  searchDriveFilesMock: vi.fn(),
+  mountDriveFolderMock: vi.fn(),
   startGoogleDriveOAuthMock: vi.fn(),
   appConsoleDataMock: {
     hydrate: vi.fn(),
@@ -53,6 +57,8 @@ vi.mock('../../lib/appConsole/appConsoleController', () => ({
 
 vi.mock('../../lib/driveTransfer', () => ({
   createDriveNotebook: createDriveNotebookMock,
+  searchDriveFiles: searchDriveFilesMock,
+  mountDriveFolder: mountDriveFolderMock,
 }))
 
 vi.mock('../../lib/logging/runtime', () => ({
@@ -120,6 +126,25 @@ describe('WebMcpToolRegistrationHost', () => {
       remoteUri: 'https://drive.google.com/file/d/drive-file-1/view',
       localUri: 'local://file/drive-file-1',
     })
+    searchDriveFilesMock.mockReset()
+    searchDriveFilesMock.mockResolvedValue({
+      files: [
+        {
+          id: 'drive-folder-1',
+          name: 'notebooks',
+          mimeType: 'application/vnd.google-apps.folder',
+          uri: 'https://drive.google.com/drive/folders/drive-folder-1',
+        },
+      ],
+    })
+    mountDriveFolderMock.mockReset()
+    mountDriveFolderMock.mockResolvedValue({
+      folderId: 'drive-folder-1',
+      name: 'notebooks',
+      remoteUri: 'https://drive.google.com/drive/folders/drive-folder-1',
+      localUri: 'local://folder/drive-folder-1',
+      alreadyMounted: false,
+    })
     startGoogleDriveOAuthMock.mockReset()
     startGoogleDriveOAuthMock.mockResolvedValue({
       status: 'authorized',
@@ -173,7 +198,7 @@ describe('WebMcpToolRegistrationHost', () => {
 
     render(<WebMcpToolRegistrationHost />)
 
-    expect(registerTool).toHaveBeenCalledTimes(9)
+    expect(registerTool).toHaveBeenCalledTimes(12)
   })
 
   it('prefers the current document.modelContext API', () => {
@@ -190,7 +215,7 @@ describe('WebMcpToolRegistrationHost', () => {
 
     render(<WebMcpToolRegistrationHost />)
 
-    expect(documentRegisterTool).toHaveBeenCalledTimes(9)
+    expect(documentRegisterTool).toHaveBeenCalledTimes(12)
     expect(navigatorRegisterTool).not.toHaveBeenCalled()
   })
 
@@ -251,7 +276,7 @@ describe('WebMcpToolRegistrationHost', () => {
 
     const rendered = render(<WebMcpToolRegistrationHost />)
 
-    expect(registerTool).toHaveBeenCalledTimes(9)
+    expect(registerTool).toHaveBeenCalledTimes(12)
     expect(
       registered.some(({ tool }) => tool.name === 'listNotebookComments')
     ).toBe(false)
@@ -465,6 +490,64 @@ describe('WebMcpToolRegistrationHost', () => {
       dismissed: true,
     })
 
+    const searchDriveItems = registered.find(
+      ({ tool }) => tool.name === 'searchDriveItems'
+    )
+    expect(searchDriveItems?.tool.title).toBe('Search Google Drive Items')
+    expect(searchDriveItems?.tool.annotations).toEqual({
+      readOnlyHint: true,
+      untrustedContentHint: true,
+    })
+    expect(searchDriveItems?.tool.inputSchema).toMatchObject({
+      additionalProperties: false,
+      required: ['name'],
+      properties: {
+        itemType: { enum: ['any', 'file', 'folder'] },
+        pageSize: { minimum: 1, maximum: 100 },
+      },
+    })
+    await expect(
+      searchDriveItems?.tool.execute({
+        name: 'notebooks',
+        itemType: 'folder',
+        exactName: true,
+      })
+    ).resolves.toContain('"name":"notebooks"')
+    expect(searchDriveFilesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        q: expect.stringContaining("name = 'notebooks'"),
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+      })
+    )
+
+    const listDriveFolder = registered.find(
+      ({ tool }) => tool.name === 'listDriveFolder'
+    )
+    expect(listDriveFolder?.tool.annotations).toEqual({
+      readOnlyHint: true,
+      untrustedContentHint: true,
+    })
+    await expect(
+      listDriveFolder?.tool.execute({ folderIdOrUri: 'drive-folder-1' })
+    ).resolves.toContain(
+      '"folderUri":"https://drive.google.com/drive/folders/drive-folder-1"'
+    )
+
+    const mountDriveFolder = registered.find(
+      ({ tool }) => tool.name === 'mountDriveFolder'
+    )
+    expect(mountDriveFolder?.tool.annotations).toEqual({
+      readOnlyHint: false,
+      untrustedContentHint: true,
+    })
+    await expect(
+      mountDriveFolder?.tool.execute({ folderIdOrUri: 'drive-folder-1' })
+    ).resolves.toContain('"localUri":"local://folder/drive-folder-1"')
+    expect(mountDriveFolderMock).toHaveBeenCalledWith(
+      'https://drive.google.com/drive/folders/drive-folder-1'
+    )
+
     const createDriveNotebook = registered.find(
       ({ tool }) => tool.name === 'createDriveNotebook'
     )
@@ -628,6 +711,58 @@ describe('WebMcpToolRegistrationHost', () => {
       'demo.ipynb',
       { idempotencyKey: 'create-demo-notebook' }
     )
+  })
+
+  it('preserves the Drive authorization error when interaction is unavailable', async () => {
+    searchDriveFilesMock.mockRejectedValueOnce(
+      new Error('Google Drive authorization is required.')
+    )
+    const registerTool = vi.fn()
+    Object.defineProperty(document, 'modelContext', {
+      configurable: true,
+      value: { registerTool },
+    })
+
+    render(<WebMcpToolRegistrationHost />)
+    const searchDriveItems = registerTool.mock.calls
+      .map((call) => call[0])
+      .find((tool) => tool.name === 'searchDriveItems')
+
+    await expect(
+      searchDriveItems.execute({ name: 'notebooks', itemType: 'folder' })
+    ).rejects.toThrow('Google Drive authorization is required.')
+  })
+
+  it('keeps idempotency guidance when Drive authorization is incomplete', async () => {
+    createDriveNotebookMock.mockRejectedValueOnce(
+      new Error('Google Drive authorization is required.')
+    )
+    startGoogleDriveOAuthMock.mockResolvedValueOnce({
+      status: 'pending',
+      authFlow: 'implicit',
+      mode: 'popup',
+    })
+    const registerTool = vi.fn()
+    Object.defineProperty(document, 'modelContext', {
+      configurable: true,
+      value: { registerTool },
+    })
+
+    render(<WebMcpToolRegistrationHost />)
+    const createDriveNotebook = registerTool.mock.calls
+      .map((call) => call[0])
+      .find((tool) => tool.name === 'createDriveNotebook')
+
+    await expect(
+      createDriveNotebook.execute(
+        {
+          folderIdOrUri: 'root',
+          fileName: 'demo.ipynb',
+          idempotencyKey: 'create-demo-notebook',
+        },
+        { requestUserInteraction: async (callback) => callback() }
+      )
+    ).rejects.toThrow('retry createDriveNotebook with the same idempotencyKey')
   })
 
   it('marks the AppConsole cell failed when the operation settles unsuccessfully', async () => {

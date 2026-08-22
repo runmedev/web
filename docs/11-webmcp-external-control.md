@@ -288,10 +288,45 @@ available, Save As leaves the local source unchanged and is the wrong primitive
 when Drive is the authoritative destination. Reserve Save As for intentional
 copies or migrations of existing notebooks.
 
+## Discover and mount a Drive folder
+
+When the user identifies a Drive folder by name instead of an ID or URL, use
+the direct read-only `searchDriveItems` WebMCP tool:
+
+```json
+{
+  "name": "notebooks",
+  "itemType": "folder",
+  "exactName": true,
+  "pageSize": 25
+}
+```
+
+Search includes accessible My Drive and Shared drive content. Names are not
+unique in Google Drive. If the result contains multiple plausible folders,
+return the candidates for disambiguation or inspect a known candidate with
+the read-only `listDriveFolder` tool. Do not choose a duplicate by result
+position.
+
+After resolving one folder, mount that specific ID or URI:
+
+```json
+{
+  "folderIdOrUri": "<resolved folder ID or URI>"
+}
+```
+
+The `mountDriveFolder` tool validates Drive access, mirrors the folder into
+Runme's local index, and adds the mirror to the workspace explorer before it
+returns. Repeating the call for the same folder is safe; the response reports
+`alreadyMounted: true` when the local mirror was already in the workspace.
+
 ## Drive-backed notebook lookup
 
 When a user identifies a Drive-backed notebook by name or metadata rather than
-by URL, use Runme's AppKernel Drive API instead of searching the rendered page:
+by URL, prefer the direct `searchDriveItems` tool for simple name searches.
+Use Runme's AppKernel Drive API when the lookup needs the complete Google Drive
+query grammar or must compose search with other notebook operations:
 
 ```js
 const result = await drive.search({

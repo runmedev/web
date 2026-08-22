@@ -1,33 +1,35 @@
-import { create } from "@bufbuild/protobuf";
-import md5 from "md5";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { create } from '@bufbuild/protobuf'
+import md5 from 'md5'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { parser_pb } from "../runme/client";
+import { parser_pb } from '../runme/client'
 import {
   DriveCreateNotCommittedError,
   DriveFileCreatedError,
-} from "../storage/drive";
-import { NotebookStoreItemType } from "../storage/notebook";
+} from '../storage/drive'
+import { NotebookStoreItemType } from '../storage/notebook'
 import {
   copyDriveNotebookFile,
   createDriveFile,
   createDriveNotebook,
   listDriveFolderItems,
+  mountDriveFolder,
   saveNotebookAsDriveCopy,
   searchDriveFiles,
   updateDriveFileBytes,
-} from "./driveTransfer";
-import { encodeRunmeNotebook } from "./notebookFormat";
-import { appState } from "./runtime/AppState";
+} from './driveTransfer'
+import { encodeRunmeNotebook } from './notebookFormat'
+import { appState } from './runtime/AppState'
 
 afterEach(() => {
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-  appState.setDriveNotebookStore(null);
-  appState.setLocalNotebooks(null);
-  appState.setOpenNotebookHandler(null);
-});
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+  appState.setDriveNotebookStore(null)
+  appState.setLocalNotebooks(null)
+  appState.setOpenNotebookHandler(null)
+  appState.setWorkspaceHandlers(null)
+})
 
 describe('driveTransfer', () => {
   it('creates a drive file and returns parsed id', async () => {
@@ -115,6 +117,117 @@ describe('driveTransfer', () => {
     ).rejects.toThrow(
       'drive.search requires a Google Drive files.list request object'
     )
+  })
+
+  it('mirrors and mounts an accessible Drive folder', async () => {
+    const remoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const getRemoteMetadata = vi.fn().mockResolvedValue({
+      name: 'notebooks',
+      type: NotebookStoreItemType.Folder,
+    })
+    appState.setDriveNotebookStore({
+      getMetadata: getRemoteMetadata,
+    } as any)
+    const updateFolder = vi.fn().mockResolvedValue('local://folder/folder123')
+    const getMetadata = vi.fn().mockResolvedValue({ name: 'notebooks' })
+    appState.setLocalNotebooks({ updateFolder, getMetadata } as any)
+
+    let workspaceItems: string[] = []
+    const addItem = vi.fn((uri: string) => {
+      workspaceItems = [...workspaceItems, uri]
+    })
+    appState.setWorkspaceHandlers({
+      getItems: () => workspaceItems,
+      addItem,
+      removeItem: vi.fn(),
+    })
+
+    const result = await mountDriveFolder('folder123')
+
+    expect(getRemoteMetadata).toHaveBeenCalledWith(remoteUri)
+    expect(updateFolder).toHaveBeenCalledWith(remoteUri, 'notebooks')
+    expect(addItem).toHaveBeenCalledWith('local://folder/folder123')
+    expect(result).toEqual({
+      folderId: 'folder123',
+      name: 'notebooks',
+      remoteUri,
+      localUri: 'local://folder/folder123',
+      alreadyMounted: false,
+    })
+  })
+
+  it('reports an already-mounted Drive folder without duplicating workspace state', async () => {
+    const remoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const localUri = 'local://folder/folder123'
+    appState.setDriveNotebookStore({
+      getMetadata: vi.fn().mockResolvedValue({
+        name: 'notebooks',
+        type: NotebookStoreItemType.Folder,
+      }),
+    } as any)
+    appState.setLocalNotebooks({
+      updateFolder: vi.fn().mockResolvedValue(localUri),
+      getMetadata: vi.fn().mockResolvedValue({ name: 'notebooks' }),
+    } as any)
+    const addItem = vi.fn()
+    appState.setWorkspaceHandlers({
+      getItems: () => [localUri],
+      addItem,
+      removeItem: vi.fn(),
+    })
+
+    const result = await mountDriveFolder(remoteUri)
+
+    expect(result.alreadyMounted).toBe(true)
+    expect(addItem).toHaveBeenCalledWith(localUri)
+  })
+
+  it('normalizes a remote workspace entry to its local Drive mirror', async () => {
+    const remoteUri = 'https://drive.google.com/drive/folders/folder123'
+    const localUri = 'local://folder/folder123'
+    appState.setDriveNotebookStore({
+      getMetadata: vi.fn().mockResolvedValue({
+        name: 'notebooks',
+        type: NotebookStoreItemType.Folder,
+      }),
+    } as any)
+    appState.setLocalNotebooks({
+      updateFolder: vi.fn().mockResolvedValue(localUri),
+      getMetadata: vi.fn().mockResolvedValue({ name: 'notebooks' }),
+    } as any)
+    const addItem = vi.fn()
+    const removeItem = vi.fn()
+    appState.setWorkspaceHandlers({
+      getItems: () => [remoteUri],
+      addItem,
+      removeItem,
+    })
+
+    const result = await mountDriveFolder(remoteUri)
+
+    expect(result.alreadyMounted).toBe(true)
+    expect(removeItem).toHaveBeenCalledWith(remoteUri)
+    expect(addItem).toHaveBeenCalledWith(localUri)
+  })
+
+  it('rejects a raw Drive file id before creating local folder state', async () => {
+    const remoteUri = 'https://drive.google.com/drive/folders/file123'
+    const getRemoteMetadata = vi.fn().mockResolvedValue({
+      name: 'notes.json',
+      type: NotebookStoreItemType.File,
+    })
+    appState.setDriveNotebookStore({
+      getMetadata: getRemoteMetadata,
+    } as any)
+    const updateFolder = vi.fn()
+    appState.setLocalNotebooks({ updateFolder } as any)
+
+    await expect(mountDriveFolder('file123')).rejects.toThrow(
+      'drive.mountFolder requires a Google Drive folder URI or folder id'
+    )
+
+    expect(getRemoteMetadata).toHaveBeenCalledWith(remoteUri)
+    expect(updateFolder).not.toHaveBeenCalled()
   })
 
   it('copies a notebook file to another drive folder', async () => {
@@ -281,7 +394,9 @@ describe('driveTransfer', () => {
     const initializeUploadedDriveNotebook = vi.fn().mockResolvedValue(true)
     appState.setLocalNotebooks({
       addFile: vi.fn().mockResolvedValue('local://file/committed'),
-      attachDriveFileToFolder: vi.fn().mockResolvedValue('local://folder/drive'),
+      attachDriveFileToFolder: vi
+        .fn()
+        .mockResolvedValue('local://folder/drive'),
       initializeUploadedDriveNotebook,
     } as any)
     appState.setOpenNotebookHandler(vi.fn().mockResolvedValue(undefined))
@@ -426,17 +541,19 @@ describe('driveTransfer', () => {
     })
     let uploadedContent = ''
     const generateFileId = vi.fn()
-    const createContent = vi.fn().mockImplementation(
-      async (_folder, _name, content, _mimeType, options) => {
-        uploadedContent = content
-        expect(options.fileId).toBeUndefined()
-        return {
-          uri: 'https://drive.google.com/file/d/shared123/view',
-          name: 'shared.json',
-          parents: ['https://drive.google.com/drive/folders/folder123'],
+    const createContent = vi
+      .fn()
+      .mockImplementation(
+        async (_folder, _name, content, _mimeType, options) => {
+          uploadedContent = content
+          expect(options.fileId).toBeUndefined()
+          return {
+            uri: 'https://drive.google.com/file/d/shared123/view',
+            name: 'shared.json',
+            parents: ['https://drive.google.com/drive/folders/folder123'],
+          }
         }
-      }
-    )
+      )
     appState.setDriveNotebookStore({
       canUsePreGeneratedFileId: vi.fn().mockResolvedValue(false),
       generateFileId,
@@ -453,7 +570,9 @@ describe('driveTransfer', () => {
     } as any)
     appState.setLocalNotebooks({
       addFile: vi.fn().mockResolvedValue('local://file/shared'),
-      attachDriveFileToFolder: vi.fn().mockResolvedValue('local://folder/shared'),
+      attachDriveFileToFolder: vi
+        .fn()
+        .mockResolvedValue('local://folder/shared'),
       initializeUploadedDriveNotebook: vi.fn().mockResolvedValue(true),
     } as any)
     appState.setOpenNotebookHandler(vi.fn().mockResolvedValue(undefined))
