@@ -83,6 +83,30 @@ describe('attachResourceToNotebook', () => {
     expect(result.cell.value).not.toContain('access-token')
   })
 
+  it('persists the resource key for an attached protected Drive file', async () => {
+    const protectedMetadata = {
+      ...metadata,
+      uri: `${metadata.uri}?resourcekey=key_123`,
+    }
+    const getResourceMetadata = vi.fn().mockResolvedValue(protectedMetadata)
+    appState.setDriveNotebookStore({
+      getResourceMetadata,
+    } as unknown as DriveNotebookStore)
+    const notebook = fakeNotebook()
+
+    const result = await attachResourceToNotebook(
+      notebook,
+      { kind: 'drive', uri: protectedMetadata.uri },
+      { target: { uri: notebook.getUri() }, mode: 'video' }
+    )
+
+    expect(result.resource.source.uri).toBe(protectedMetadata.uri)
+    expect(JSON.parse(result.cell.value).source.uri).toBe(protectedMetadata.uri)
+    expect(notebook.getNotebook().cells[0]?.value).toContain(
+      'resourcekey=key_123'
+    )
+  })
+
   it('attaches an HTTPS link without requiring Drive', async () => {
     const notebook = fakeNotebook()
     const result = await attachResourceToNotebook(

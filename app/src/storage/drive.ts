@@ -2,10 +2,7 @@ import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
 
 import { getGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
 import { IPYNB_MIME_TYPE } from '../lib/ipynb'
-import {
-  LinkedResourceError,
-  canonicalGoogleDriveFileUrl,
-} from '../lib/linkedResource'
+import { LinkedResourceError } from '../lib/linkedResource'
 import {
   createInitialNotebookFile,
   detectNotebookFileFormat,
@@ -49,6 +46,7 @@ export type DriveDoc = {
   id?: string
   name?: string
   mimeType?: string
+  resourceKey?: string
   parents?: string[]
   driveId?: string
   headRevisionId?: string
@@ -97,7 +95,7 @@ export type DriveResourceFetchOptions = {
 }
 
 const DRIVE_RESOURCE_FIELDS =
-  'id,name,mimeType,size,modifiedTime,md5Checksum,headRevisionId,capabilities(canDownload),webContentLink,appProperties,parents'
+  'id,name,mimeType,resourceKey,size,modifiedTime,md5Checksum,headRevisionId,capabilities(canDownload),webContentLink,appProperties,parents'
 const DRIVE_ASSET_FOLDER_PROPERTY = 'runmeAssetFolder'
 const DRIVE_ASSET_NOTEBOOK_PROPERTY = 'runmeNotebookFileId'
 const DRIVE_ASSET_PROPERTY = 'runmeAsset'
@@ -163,7 +161,7 @@ function normalizeDriveResourceMetadata(
       )
     : undefined
   return {
-    uri: canonicalGoogleDriveFileUrl(id),
+    uri: driveFileUrl(id, optionalString(value.resourceKey)),
     name: optionalString(value.name) ?? id,
     mimeType: optionalString(value.mimeType) ?? 'application/octet-stream',
     sizeBytes: parseDriveSize(value.size),
@@ -266,17 +264,25 @@ type DriveRevisionListResponse = {
 
 interface DriveFilesClient {
   generateFileId(): Promise<string>
-  create(doc: DriveDoc): Promise<DriveDoc>
+  create(
+    doc: DriveDoc,
+    resourceKeyHeaders?: Record<string, string>
+  ): Promise<DriveDoc>
   update(doc: DriveDoc): Promise<DriveDoc>
   move(
     fileId: string,
     sourceParentId: string,
-    destinationParentId: string
+    destinationParentId: string,
+    resourceKey?: string,
+    resourceKeyHeaders?: Record<string, string>
   ): Promise<DriveDoc>
   get(
     request: Record<string, unknown>
   ): Promise<{ body?: string; result?: unknown }>
-  getVersionMetadataWithEtag(fileId: string): Promise<{
+  getVersionMetadataWithEtag(
+    fileId: string,
+    resourceKey?: string
+  ): Promise<{
     metadata: DriveVersionMetadata | null
     etag?: string
   }>
@@ -284,37 +290,51 @@ interface DriveFilesClient {
     fileId: string,
     content: string,
     mimeType: string,
-    etag: string
+    etag: string,
+    resourceKey?: string
   ): Promise<boolean>
   getDrive(request: Record<string, unknown>): Promise<DriveGetResponse>
-  list(request: Record<string, unknown>): Promise<DriveListResponse>
+  list(
+    request: Record<string, unknown>,
+    headers?: Record<string, string>
+  ): Promise<DriveListResponse>
   listRevisions(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers?: Record<string, string>
   ): Promise<DriveRevisionListResponse>
   getRevision(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers?: Record<string, string>
   ): Promise<{ body?: string; result?: unknown }>
   listComments(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers?: Record<string, string>
   ): Promise<DriveCommentListResponse>
   createComment(request: {
     fileId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }>
   updateComment(request: {
     fileId: string
     commentId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }>
   createReply(request: {
     fileId: string
     commentId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }>
-  ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc>
+  ensureParent(
+    file: DriveDoc,
+    parentId?: string,
+    resourceKeyHeaders?: Record<string, string>
+  ): Promise<DriveDoc>
 }
 
 class DrivePreconditionFailedError extends Error {}
@@ -423,10 +443,11 @@ function serviceAccountStorageQuotaErrorMessage(
 
 async function createDriveItem(
   client: DriveFilesClient,
-  doc: DriveDoc
+  doc: DriveDoc,
+  resourceKeyHeaders: Record<string, string> = {}
 ): Promise<DriveDoc> {
   try {
-    return await client.create(doc)
+    return await client.create(doc, resourceKeyHeaders)
   } catch (error) {
     const message = serviceAccountStorageQuotaErrorMessage(error)
     if (message) {
@@ -604,7 +625,8 @@ class GapiDriveFilesClient implements DriveFilesClient {
   private async setContent(
     fileId: string,
     content: string,
-    mimeType?: string
+    mimeType?: string,
+    resourceKey?: string
   ): Promise<void> {
     const token = this.gapi.client.getToken?.()?.access_token ?? ''
     if (!token) {
@@ -615,6 +637,9 @@ class GapiDriveFilesClient implements DriveFilesClient {
     )
     url.searchParams.set('uploadType', 'media')
     url.searchParams.set('supportsAllDrives', 'true')
+    if (resourceKey) {
+      url.searchParams.set('resourceKey', resourceKey)
+    }
     const response = await fetch(url.toString(), {
       method: 'PATCH',
       headers: {
@@ -668,16 +693,27 @@ class GapiDriveFilesClient implements DriveFilesClient {
     return id[0]
   }
 
-  async create(doc: DriveDoc): Promise<DriveDoc> {
+  async create(
+    doc: DriveDoc,
+    resourceKeyHeaders: Record<string, string> = {}
+  ): Promise<DriveDoc> {
     const resource = this.buildResource(doc, true)
-    const response = (await this.files.create({
-      resource,
-      fields:
-        doc.content === undefined
-          ? 'id,name,mimeType,parents'
-          : 'id,name,mimeType,parents,headRevisionId',
-      supportsAllDrives: true,
-    } as Record<string, unknown>)) as DriveCreateResponse
+    const fields =
+      doc.content === undefined
+        ? 'id,name,mimeType,parents'
+        : 'id,name,mimeType,parents,headRevisionId'
+    const response =
+      Object.keys(resourceKeyHeaders).length > 0
+        ? ((await this.request('POST', '/drive/v3/files', {
+            params: { fields, supportsAllDrives: true },
+            body: JSON.stringify(resource),
+            headers: resourceKeyHeaders,
+          })) as DriveCreateResponse)
+        : ((await this.files.create({
+            resource,
+            fields,
+            supportsAllDrives: true,
+          } as Record<string, unknown>)) as DriveCreateResponse)
     const file = response.result ?? {}
     if (file.id && doc.content !== undefined) {
       console.log(`Setting content for new Drive file ${file.id}`)
@@ -707,6 +743,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
         resource,
         fields: 'id,name,mimeType,parents',
         supportsAllDrives: true,
+        resourceKey: doc.resourceKey,
       } as Record<string, unknown>)) as DriveUpdateResponse
       file = response.result ?? { id: doc.id }
     } else {
@@ -719,7 +756,12 @@ class GapiDriveFilesClient implements DriveFilesClient {
     }
 
     if (doc.content !== undefined && file.id) {
-      await this.setContent(file.id, doc.content, doc.mimeType)
+      await this.setContent(
+        file.id,
+        doc.content,
+        doc.mimeType,
+        doc.resourceKey
+      )
     }
 
     return file
@@ -728,15 +770,28 @@ class GapiDriveFilesClient implements DriveFilesClient {
   async move(
     fileId: string,
     sourceParentId: string,
-    destinationParentId: string
+    destinationParentId: string,
+    resourceKey?: string,
+    resourceKeyHeaders: Record<string, string> = {}
   ): Promise<DriveDoc> {
-    const response = (await this.files.update({
-      fileId,
+    const params = {
       addParents: destinationParentId,
       removeParents: sourceParentId,
       supportsAllDrives: true,
       fields: 'id,name,mimeType,parents',
-    } as Record<string, unknown>)) as DriveUpdateResponse
+      resourceKey,
+    }
+    const response =
+      Object.keys(resourceKeyHeaders).length > 0
+        ? ((await this.request(
+            'PATCH',
+            `/drive/v3/files/${encodeURIComponent(fileId)}`,
+            { params, headers: resourceKeyHeaders }
+          )) as DriveUpdateResponse)
+        : ((await this.files.update({
+            fileId,
+            ...params,
+          } as Record<string, unknown>)) as DriveUpdateResponse)
     return response.result ?? { id: fileId }
   }
 
@@ -756,7 +811,10 @@ class GapiDriveFilesClient implements DriveFilesClient {
     }>
   }
 
-  async getVersionMetadataWithEtag(fileId: string): Promise<{
+  async getVersionMetadataWithEtag(
+    fileId: string,
+    resourceKey?: string
+  ): Promise<{
     metadata: DriveVersionMetadata | null
     etag?: string
   }> {
@@ -764,7 +822,11 @@ class GapiDriveFilesClient implements DriveFilesClient {
       'GET',
       `/drive/v3/files/${encodeURIComponent(fileId)}`,
       {
-        params: { supportsAllDrives: true, fields: VERSION_FIELDS },
+        params: {
+          supportsAllDrives: true,
+          fields: VERSION_FIELDS,
+          resourceKey,
+        },
       }
     )
     return {
@@ -777,14 +839,19 @@ class GapiDriveFilesClient implements DriveFilesClient {
     fileId: string,
     content: string,
     mimeType: string,
-    etag: string
+    etag: string,
+    resourceKey?: string
   ): Promise<boolean> {
     try {
       await this.request(
         'PATCH',
         `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
         {
-          params: { uploadType: 'media', supportsAllDrives: true },
+          params: {
+            uploadType: 'media',
+            supportsAllDrives: true,
+            resourceKey,
+          },
           body: content,
           contentType: mimeType,
           headers: { 'If-Match': etag },
@@ -799,7 +866,16 @@ class GapiDriveFilesClient implements DriveFilesClient {
     }
   }
 
-  list(request: Record<string, unknown>): Promise<DriveListResponse> {
+  list(
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
+  ): Promise<DriveListResponse> {
+    if (Object.keys(headers).length > 0) {
+      return this.request('GET', '/drive/v3/files', {
+        params: request,
+        headers,
+      }) as Promise<DriveListResponse>
+    }
     return this.files.list(request as any) as Promise<DriveListResponse>
   }
 
@@ -808,22 +884,42 @@ class GapiDriveFilesClient implements DriveFilesClient {
   }
 
   listRevisions(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
   ): Promise<DriveRevisionListResponse> {
+    if (Object.keys(headers).length > 0) {
+      const fileId = String(request.fileId ?? '')
+      const params = { ...request }
+      delete params.fileId
+      return this.request(
+        'GET',
+        `/drive/v3/files/${encodeURIComponent(fileId)}/revisions`,
+        { params, headers }
+      ) as Promise<DriveRevisionListResponse>
+    }
     return this.revisions.list(
       request as any
     ) as Promise<DriveRevisionListResponse>
   }
 
   getRevision(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
   ): Promise<{ body?: string; result?: unknown }> {
-    if (request.alt === 'media') {
+    if (request.alt === 'media' || Object.keys(headers).length > 0) {
       const fileId = String(request.fileId ?? '')
       const revisionId = String(request.revisionId ?? '')
-      return this.getUtf8Media(
+      const params = { ...request }
+      delete params.fileId
+      delete params.revisionId
+      return this.request(
+        'GET',
         `/drive/v3/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revisionId)}`,
-        request
+        {
+          params,
+          expectText: request.alt === 'media',
+          headers,
+        }
       )
     }
     return this.revisions.get(request as any) as Promise<{
@@ -833,7 +929,8 @@ class GapiDriveFilesClient implements DriveFilesClient {
   }
 
   listComments(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
   ): Promise<DriveCommentListResponse> {
     const fileId = String(request.fileId ?? '')
     const params = { ...request }
@@ -841,7 +938,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
     return this.request(
       'GET',
       `/drive/v3/files/${encodeURIComponent(fileId)}/comments`,
-      { params }
+      { params, headers }
     ) as Promise<DriveCommentListResponse>
   }
 
@@ -849,6 +946,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
     fileId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }> {
     return this.request(
       'POST',
@@ -859,6 +957,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
           supportsAllDrives: 'true',
         },
         body: JSON.stringify(request.resource),
+        headers: request.headers,
       }
     )
   }
@@ -868,6 +967,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
     commentId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }> {
     return this.request(
       'PATCH',
@@ -878,6 +978,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
           supportsAllDrives: 'true',
         },
         body: JSON.stringify(request.resource),
+        headers: request.headers,
       }
     )
   }
@@ -887,6 +988,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
     commentId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }> {
     return this.request(
       'POST',
@@ -899,11 +1001,16 @@ class GapiDriveFilesClient implements DriveFilesClient {
           supportsAllDrives: 'true',
         },
         body: JSON.stringify(request.resource),
+        headers: request.headers,
       }
     )
   }
 
-  async ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc> {
+  async ensureParent(
+    file: DriveDoc,
+    parentId?: string,
+    resourceKeyHeaders: Record<string, string> = {}
+  ): Promise<DriveDoc> {
     if (!file.id || !parentId) {
       return file
     }
@@ -919,7 +1026,16 @@ class GapiDriveFilesClient implements DriveFilesClient {
     if ((file.parents ?? []).includes('root')) {
       request.removeParents = 'root'
     }
-    const response = (await this.files.update(request)) as DriveUpdateResponse
+    const rawParams = { ...request }
+    delete rawParams.fileId
+    const response =
+      Object.keys(resourceKeyHeaders).length > 0
+        ? ((await this.request(
+            'PATCH',
+            `/drive/v3/files/${encodeURIComponent(file.id)}`,
+            { params: rawParams, headers: resourceKeyHeaders }
+          )) as DriveUpdateResponse)
+        : ((await this.files.update(request)) as DriveUpdateResponse)
     return response.result ?? file
   }
 }
@@ -1039,7 +1155,8 @@ class FetchDriveFilesClient implements DriveFilesClient {
   private async setContent(
     fileId: string,
     content: string,
-    mimeType?: string
+    mimeType?: string,
+    resourceKey?: string
   ): Promise<void> {
     await this.request(
       'PATCH',
@@ -1048,6 +1165,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
         params: {
           uploadType: 'media',
           supportsAllDrives: 'true',
+          resourceKey,
         },
         body: content,
         contentType: mimeType ?? 'application/octet-stream',
@@ -1055,7 +1173,10 @@ class FetchDriveFilesClient implements DriveFilesClient {
     )
   }
 
-  async create(doc: DriveDoc): Promise<DriveDoc> {
+  async create(
+    doc: DriveDoc,
+    resourceKeyHeaders: Record<string, string> = {}
+  ): Promise<DriveDoc> {
     const response = await this.request('POST', '/drive/v3/files', {
       params: {
         fields:
@@ -1065,6 +1186,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
         supportsAllDrives: 'true',
       },
       body: JSON.stringify(this.buildResource(doc, true)),
+      headers: resourceKeyHeaders,
     })
     const file = (response.result ?? {}) as DriveDoc
     if (file.id && doc.content !== undefined) {
@@ -1096,6 +1218,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
           params: {
             fields: 'id,name,mimeType,parents',
             supportsAllDrives: 'true',
+            resourceKey: doc.resourceKey,
           },
           body: JSON.stringify(resource),
         }
@@ -1104,7 +1227,12 @@ class FetchDriveFilesClient implements DriveFilesClient {
     }
 
     if (doc.content !== undefined) {
-      await this.setContent(doc.id, doc.content, doc.mimeType)
+      await this.setContent(
+        doc.id,
+        doc.content,
+        doc.mimeType,
+        doc.resourceKey
+      )
     }
 
     return file.id ? file : { ...doc }
@@ -1113,7 +1241,9 @@ class FetchDriveFilesClient implements DriveFilesClient {
   async move(
     fileId: string,
     sourceParentId: string,
-    destinationParentId: string
+    destinationParentId: string,
+    resourceKey?: string,
+    resourceKeyHeaders: Record<string, string> = {}
   ): Promise<DriveDoc> {
     const response = await this.request(
       'PATCH',
@@ -1124,7 +1254,9 @@ class FetchDriveFilesClient implements DriveFilesClient {
           removeParents: sourceParentId,
           supportsAllDrives: 'true',
           fields: 'id,name,mimeType,parents',
+          resourceKey,
         },
+        headers: resourceKeyHeaders,
       }
     )
     return (response.result ?? { id: fileId }) as DriveDoc
@@ -1144,7 +1276,10 @@ class FetchDriveFilesClient implements DriveFilesClient {
     )
   }
 
-  async getVersionMetadataWithEtag(fileId: string): Promise<{
+  async getVersionMetadataWithEtag(
+    fileId: string,
+    resourceKey?: string
+  ): Promise<{
     metadata: DriveVersionMetadata | null
     etag?: string
   }> {
@@ -1152,7 +1287,11 @@ class FetchDriveFilesClient implements DriveFilesClient {
       'GET',
       `/drive/v3/files/${encodeURIComponent(fileId)}`,
       {
-        params: { supportsAllDrives: true, fields: VERSION_FIELDS },
+        params: {
+          supportsAllDrives: true,
+          fields: VERSION_FIELDS,
+          resourceKey,
+        },
       }
     )
     return {
@@ -1165,14 +1304,19 @@ class FetchDriveFilesClient implements DriveFilesClient {
     fileId: string,
     content: string,
     mimeType: string,
-    etag: string
+    etag: string,
+    resourceKey?: string
   ): Promise<boolean> {
     try {
       await this.request(
         'PATCH',
         `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
         {
-          params: { uploadType: 'media', supportsAllDrives: true },
+          params: {
+            uploadType: 'media',
+            supportsAllDrives: true,
+            resourceKey,
+          },
           body: content,
           contentType: mimeType,
           headers: { 'If-Match': etag },
@@ -1187,9 +1331,13 @@ class FetchDriveFilesClient implements DriveFilesClient {
     }
   }
 
-  list(request: Record<string, unknown>): Promise<DriveListResponse> {
+  list(
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
+  ): Promise<DriveListResponse> {
     return this.request('GET', '/drive/v3/files', {
       params: request,
+      headers,
     }) as Promise<DriveListResponse>
   }
 
@@ -1203,18 +1351,20 @@ class FetchDriveFilesClient implements DriveFilesClient {
   }
 
   listRevisions(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
   ): Promise<DriveRevisionListResponse> {
     const fileId = String(request.fileId ?? '')
     return this.request(
       'GET',
       `/drive/v3/files/${encodeURIComponent(fileId)}/revisions`,
-      { params: request }
+      { params: request, headers }
     ) as Promise<DriveRevisionListResponse>
   }
 
   getRevision(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
   ): Promise<{ body?: string; result?: unknown }> {
     const fileId = String(request.fileId ?? '')
     const revisionId = String(request.revisionId ?? '')
@@ -1224,12 +1374,14 @@ class FetchDriveFilesClient implements DriveFilesClient {
       {
         params: request,
         expectText: request.alt === 'media',
+        headers,
       }
     )
   }
 
   listComments(
-    request: Record<string, unknown>
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
   ): Promise<DriveCommentListResponse> {
     const fileId = String(request.fileId ?? '')
     const params = { ...request }
@@ -1237,7 +1389,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
     return this.request(
       'GET',
       `/drive/v3/files/${encodeURIComponent(fileId)}/comments`,
-      { params }
+      { params, headers }
     ) as Promise<DriveCommentListResponse>
   }
 
@@ -1245,6 +1397,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
     fileId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }> {
     return this.request(
       'POST',
@@ -1255,6 +1408,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
           supportsAllDrives: 'true',
         },
         body: JSON.stringify(request.resource),
+        headers: request.headers,
       }
     )
   }
@@ -1264,6 +1418,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
     commentId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }> {
     return this.request(
       'PATCH',
@@ -1274,6 +1429,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
           supportsAllDrives: 'true',
         },
         body: JSON.stringify(request.resource),
+        headers: request.headers,
       }
     )
   }
@@ -1283,6 +1439,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
     commentId: string
     resource: Record<string, unknown>
     fields?: string
+    headers?: Record<string, string>
   }): Promise<{ result?: unknown }> {
     return this.request(
       'POST',
@@ -1295,11 +1452,16 @@ class FetchDriveFilesClient implements DriveFilesClient {
           supportsAllDrives: 'true',
         },
         body: JSON.stringify(request.resource),
+        headers: request.headers,
       }
     )
   }
 
-  async ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc> {
+  async ensureParent(
+    file: DriveDoc,
+    parentId?: string,
+    resourceKeyHeaders: Record<string, string> = {}
+  ): Promise<DriveDoc> {
     if (!file.id || !parentId) {
       return file
     }
@@ -1319,6 +1481,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
             ? { removeParents: 'root' }
             : {}),
         },
+        headers: resourceKeyHeaders,
       }
     )
 
@@ -1455,17 +1618,63 @@ function validateDriveId(id: string | null | undefined): string {
   return trimmed
 }
 
-export function driveFileUrl(id: string): string {
-  return `https://drive.google.com/file/d/${encodeURIComponent(id)}/view`
+/** Returns a canonical Drive file URL, preserving a required resource key. */
+export function driveFileUrl(id: string, resourceKey?: string): string {
+  const url = new URL(
+    `https://drive.google.com/file/d/${encodeURIComponent(id)}/view`
+  )
+  if (resourceKey) {
+    url.searchParams.set('resourcekey', resourceKey)
+  }
+  return url.toString()
 }
 
-export function driveFolderUrl(id: string): string {
-  return `https://drive.google.com/drive/folders/${encodeURIComponent(id)}`
+/** Returns a canonical Drive folder URL, preserving a required resource key. */
+export function driveFolderUrl(id: string, resourceKey?: string): string {
+  const url = new URL(
+    `https://drive.google.com/drive/folders/${encodeURIComponent(id)}`
+  )
+  if (resourceKey) {
+    url.searchParams.set('resourcekey', resourceKey)
+  }
+  return url.toString()
 }
 
 export interface DriveItem {
   id: string
   type: NotebookStoreItemType
+  resourceKey?: string
+}
+
+/** Creates the Drive header required to dereference resource-key URLs. */
+function driveResourceKeysHeaders(
+  items: Array<Pick<DriveItem, 'id' | 'resourceKey'>>
+): Record<string, string> {
+  const keyedItems = new Map<string, string>()
+  for (const item of items) {
+    if (!item.resourceKey) {
+      continue
+    }
+    if (!/^[A-Za-z0-9_-]+$/.test(item.resourceKey)) {
+      throw new Error('Google Drive resource key contains invalid characters')
+    }
+    keyedItems.set(item.id, item.resourceKey)
+  }
+  if (keyedItems.size === 0) {
+    return {}
+  }
+  return {
+    'X-Goog-Drive-Resource-Keys': [...keyedItems]
+      .map(([id, resourceKey]) => `${id}/${resourceKey}`)
+      .join(','),
+  }
+}
+
+/** Creates the Drive header required to dereference one resource-key URL. */
+function driveResourceKeyHeaders(
+  item: Pick<DriveItem, 'id' | 'resourceKey'>
+): Record<string, string> {
+  return driveResourceKeysHeaders([item])
 }
 
 type DriveFileMetadata = {
@@ -1573,7 +1782,14 @@ export function parseDriveItem(uri: string): DriveItem {
   }
 
   id = validateDriveId(id)
-  return { id, type }
+  let resourceKey: string | undefined
+  try {
+    const url = new URL(trimmed)
+    resourceKey = url.searchParams.get('resourcekey') ?? undefined
+  } catch {
+    // Raw Drive identifiers do not carry resource keys.
+  }
+  return resourceKey ? { id, type, resourceKey } : { id, type }
 }
 
 export function isDriveItemUri(uri: string | undefined): boolean {
@@ -1746,7 +1962,7 @@ export class DriveNotebookStore {
   }
 
   async getResourceMetadata(uri: string): Promise<DriveResourceMetadata> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new LinkedResourceError(
         'UNSUPPORTED_MEDIA_TYPE',
@@ -1757,6 +1973,7 @@ export class DriveNotebookStore {
       driveApiUrl(`/drive/v3/files/${encodeURIComponent(id)}`, {
         supportsAllDrives: 'true',
         fields: DRIVE_RESOURCE_FIELDS,
+        ...(resourceKey ? { resourceKey } : {}),
       }),
       {}
     )
@@ -1773,7 +1990,7 @@ export class DriveNotebookStore {
     uri: string,
     options: DriveResourceFetchOptions = {}
   ): Promise<Response> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new LinkedResourceError(
         'UNSUPPORTED_MEDIA_TYPE',
@@ -1784,6 +2001,7 @@ export class DriveNotebookStore {
       driveApiUrl(`/drive/v3/files/${encodeURIComponent(id)}`, {
         supportsAllDrives: 'true',
         alt: 'media',
+        ...(resourceKey ? { resourceKey } : {}),
       }),
       { signal: options.signal }
     )
@@ -1804,21 +2022,24 @@ export class DriveNotebookStore {
     parentUri: string,
     operationId: string
   ): Promise<DriveResourceMetadata | null> {
-    const { id: parentId, type } = parseDriveItem(parentUri)
-    if (type !== NotebookStoreItemType.Folder) {
+    const parent = parseDriveItem(parentUri)
+    if (parent.type !== NotebookStoreItemType.Folder) {
       throw new Error('Drive resource upload requires a folder URI')
     }
-    const result = await this.search({
-      q:
-        `'${escapeDriveQueryValue(parentId)}' in parents and trashed = false and ` +
-        `appProperties has { key='${DRIVE_UPLOAD_OPERATION_PROPERTY}' and ` +
-        `value='${escapeDriveQueryValue(operationId)}' }`,
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true,
-      orderBy: 'createdTime asc',
-      pageSize: 2,
-      fields: `files(${DRIVE_RESOURCE_FIELDS})`,
-    })
+    const result = await this.search(
+      {
+        q:
+          `'${escapeDriveQueryValue(parent.id)}' in parents and trashed = false and ` +
+          `appProperties has { key='${DRIVE_UPLOAD_OPERATION_PROPERTY}' and ` +
+          `value='${escapeDriveQueryValue(operationId)}' }`,
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+        orderBy: 'createdTime asc',
+        pageSize: 2,
+        fields: `files(${DRIVE_RESOURCE_FIELDS})`,
+      },
+      driveResourceKeyHeaders(parent)
+    )
     if (result.files.length > 1) {
       throw new LinkedResourceError(
         'RESOURCE_CHANGED',
@@ -1837,8 +2058,8 @@ export class DriveNotebookStore {
     body: BinaryBody,
     options: DriveResourceUploadOptions
   ): Promise<DriveResourceMetadata> {
-    const { id: parentId, type } = parseDriveItem(parentUri)
-    if (type !== NotebookStoreItemType.Folder) {
+    const parent = parseDriveItem(parentUri)
+    if (parent.type !== NotebookStoreItemType.Folder) {
       throw new Error('Drive resource upload requires a folder URI')
     }
     const normalizedName = name.trim()
@@ -1862,7 +2083,7 @@ export class DriveNotebookStore {
     const metadata = {
       name: normalizedName,
       mimeType: blob.type || 'application/octet-stream',
-      parents: [parentId],
+      parents: [parent.id],
       appProperties: {
         ...options.appProperties,
         [DRIVE_ASSET_PROPERTY]: 'true',
@@ -1884,6 +2105,7 @@ export class DriveNotebookStore {
             'Content-Type': 'application/json; charset=UTF-8',
             'X-Upload-Content-Type': blob.type || 'application/octet-stream',
             'X-Upload-Content-Length': String(blob.size),
+            ...driveResourceKeyHeaders(parent),
           },
           body: JSON.stringify(metadata),
           signal: options.signal,
@@ -2038,8 +2260,8 @@ export class DriveNotebookStore {
 
   /** Return whether Drive permits a pre-generated file ID in this parent. */
   async canUsePreGeneratedFileId(parentUri: string): Promise<boolean> {
-    const { id, type } = parseDriveItem(parentUri)
-    if (type !== NotebookStoreItemType.Folder) {
+    const parent = parseDriveItem(parentUri)
+    if (parent.type !== NotebookStoreItemType.Folder) {
       throw new Error(
         'DriveNotebookStore.canUsePreGeneratedFileId expects a folder URI'
       )
@@ -2047,9 +2269,10 @@ export class DriveNotebookStore {
     const response = await (
       await this.getFilesClient()
     ).get({
-      fileId: id,
+      fileId: parent.id,
       supportsAllDrives: true,
       fields: 'driveId',
+      resourceKey: parent.resourceKey,
     })
     return !(response.result as DriveDoc | undefined)?.driveId
   }
@@ -2059,48 +2282,53 @@ export class DriveNotebookStore {
     name: string,
     options: DriveCreateOptions = {}
   ): Promise<NotebookStoreItem> {
-    const { id, type } = parseDriveItem(parentUri)
-    if (type !== NotebookStoreItemType.Folder) {
+    const parent = parseDriveItem(parentUri)
+    if (parent.type !== NotebookStoreItemType.Folder) {
       throw new Error('DriveNotebookStore.create expects a folder URI')
     }
     const client = await this.getFilesClient()
     const format = detectNotebookFileFormat(name)
     const mimeType = format === 'ipynb' ? IPYNB_MIME_TYPE : 'application/json'
-    let file = await createDriveItem(client, {
-      id: options.fileId,
-      name,
-      mimeType,
-      parents: [id],
-      content:
-        format === 'ipynb'
-          ? createInitialNotebookFile(name)
-          : createInitialNotebookJson(),
-      ...(options.createOperationId
-        ? {
-            appProperties: {
-              [DRIVE_CREATE_OPERATION_PROPERTY]: options.createOperationId,
-              ...(options.expectedContentChecksum
-                ? {
-                    [DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY]:
-                      options.expectedContentChecksum,
-                  }
-                : {}),
-              ...(options.expectedRequestFingerprint
-                ? {
-                    [DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY]:
-                      options.expectedRequestFingerprint,
-                  }
-                : {}),
-            },
-          }
-        : {}),
-    })
+    const parentHeaders = driveResourceKeyHeaders(parent)
+    let file = await createDriveItem(
+      client,
+      {
+        id: options.fileId,
+        name,
+        mimeType,
+        parents: [parent.id],
+        content:
+          format === 'ipynb'
+            ? createInitialNotebookFile(name)
+            : createInitialNotebookJson(),
+        ...(options.createOperationId
+          ? {
+              appProperties: {
+                [DRIVE_CREATE_OPERATION_PROPERTY]: options.createOperationId,
+                ...(options.expectedContentChecksum
+                  ? {
+                      [DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY]:
+                        options.expectedContentChecksum,
+                    }
+                  : {}),
+                ...(options.expectedRequestFingerprint
+                  ? {
+                      [DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY]:
+                        options.expectedRequestFingerprint,
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+      },
+      parentHeaders
+    )
 
     if (!file.id) {
       throw new Error('Failed to create Google Drive notebook file')
     }
     const fileId = file.id
-    file = await client.ensureParent(file, id)
+    file = await client.ensureParent(file, parent.id, parentHeaders)
     const isFolder = file.mimeType === DRIVE_FOLDER_MIME_TYPE
     return {
       uri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
@@ -2122,8 +2350,8 @@ export class DriveNotebookStore {
     mimeType: string = 'application/octet-stream',
     options: DriveCreateOptions = {}
   ): Promise<NotebookStoreItem> {
-    const { id, type } = parseDriveItem(parentUri)
-    if (type !== NotebookStoreItemType.Folder) {
+    const parent = parseDriveItem(parentUri)
+    if (parent.type !== NotebookStoreItemType.Folder) {
       throw new Error('DriveNotebookStore.createContent expects a folder URI')
     }
     let client: DriveFilesClient
@@ -2136,33 +2364,37 @@ export class DriveNotebookStore {
       )
     }
     let file: DriveDoc
+    const parentHeaders = driveResourceKeyHeaders(parent)
     try {
-      file = await client.create({
-        id: options.fileId,
-        name,
-        mimeType,
-        parents: [id],
-        content,
-        ...(options.createOperationId
-          ? {
-              appProperties: {
-                [DRIVE_CREATE_OPERATION_PROPERTY]: options.createOperationId,
-                ...(options.expectedContentChecksum
-                  ? {
-                      [DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY]:
-                        options.expectedContentChecksum,
-                    }
-                  : {}),
-                ...(options.expectedRequestFingerprint
-                  ? {
-                      [DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY]:
-                        options.expectedRequestFingerprint,
-                    }
-                  : {}),
-              },
-            }
-          : {}),
-      })
+      file = await client.create(
+        {
+          id: options.fileId,
+          name,
+          mimeType,
+          parents: [parent.id],
+          content,
+          ...(options.createOperationId
+            ? {
+                appProperties: {
+                  [DRIVE_CREATE_OPERATION_PROPERTY]: options.createOperationId,
+                  ...(options.expectedContentChecksum
+                    ? {
+                        [DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY]:
+                          options.expectedContentChecksum,
+                      }
+                    : {}),
+                  ...(options.expectedRequestFingerprint
+                    ? {
+                        [DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY]:
+                          options.expectedRequestFingerprint,
+                      }
+                    : {}),
+                },
+              }
+            : {}),
+        },
+        parentHeaders
+      )
     } catch (error) {
       if (error instanceof DriveFileCreatedError) {
         throw error
@@ -2196,7 +2428,7 @@ export class DriveNotebookStore {
       throw new Error('Failed to create Google Drive file')
     }
     const fileId = file.id
-    file = await client.ensureParent(file, id)
+    file = await client.ensureParent(file, parent.id, parentHeaders)
     const isFolder = file.mimeType === DRIVE_FOLDER_MIME_TYPE
     return {
       uri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
@@ -2215,8 +2447,8 @@ export class DriveNotebookStore {
     parentUri: string,
     createOperationId: string
   ): Promise<NotebookStoreItem | null> {
-    const { id, type } = parseDriveItem(parentUri)
-    if (type !== NotebookStoreItemType.Folder) {
+    const parent = parseDriveItem(parentUri)
+    if (parent.type !== NotebookStoreItemType.Folder) {
       throw new Error(
         'DriveNotebookStore.findByCreateOperation expects a folder URI'
       )
@@ -2227,19 +2459,22 @@ export class DriveNotebookStore {
       )
     }
 
-    const escapedParentId = escapeDriveQueryValue(id)
+    const escapedParentId = escapeDriveQueryValue(parent.id)
     const escapedOperationId = escapeDriveQueryValue(createOperationId)
-    const result = await this.search({
-      q:
-        `'${escapedParentId}' in parents and trashed = false and ` +
-        `appProperties has { key='${DRIVE_CREATE_OPERATION_PROPERTY}' and ` +
-        `value='${escapedOperationId}' }`,
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true,
-      orderBy: 'createdTime asc',
-      pageSize: 2,
-      fields: 'files(id,name,mimeType,parents,createdTime,appProperties)',
-    })
+    const result = await this.search(
+      {
+        q:
+          `'${escapedParentId}' in parents and trashed = false and ` +
+          `appProperties has { key='${DRIVE_CREATE_OPERATION_PROPERTY}' and ` +
+          `value='${escapedOperationId}' }`,
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+        orderBy: 'createdTime asc',
+        pageSize: 2,
+        fields: 'files(id,name,mimeType,parents,createdTime,appProperties)',
+      },
+      driveResourceKeyHeaders(parent)
+    )
 
     if (result.files.length > 1) {
       throw new Error(
@@ -2335,22 +2570,27 @@ export class DriveNotebookStore {
     parentUri: string,
     name: string
   ): Promise<NotebookStoreItem> {
-    const { id, type } = parseDriveItem(parentUri)
-    if (type !== NotebookStoreItemType.Folder) {
+    const parent = parseDriveItem(parentUri)
+    if (parent.type !== NotebookStoreItemType.Folder) {
       throw new Error('DriveNotebookStore.createFolder expects a folder URI')
     }
     const client = await this.getFilesClient()
-    let folder = await createDriveItem(client, {
-      name,
-      mimeType: DRIVE_FOLDER_MIME_TYPE,
-      parents: [id],
-    })
+    const parentHeaders = driveResourceKeyHeaders(parent)
+    let folder = await createDriveItem(
+      client,
+      {
+        name,
+        mimeType: DRIVE_FOLDER_MIME_TYPE,
+        parents: [parent.id],
+      },
+      parentHeaders
+    )
 
     if (!folder.id) {
       throw new Error('Failed to create Google Drive folder')
     }
     const folderId = folder.id
-    folder = await client.ensureParent(folder, id)
+    folder = await client.ensureParent(folder, parent.id, parentHeaders)
     const folderUri = driveFolderUrl(folderId)
     return {
       uri: folderUri,
@@ -2367,7 +2607,7 @@ export class DriveNotebookStore {
     uri: string,
     notebook: parser_pb.Notebook
   ): Promise<ConflictResult> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.save expects a file URI')
     }
@@ -2377,6 +2617,7 @@ export class DriveNotebookStore {
       supportsAllDrives: true,
       //fields: "md5Checksum",
       fields: VERSION_FIELDS,
+      resourceKey,
     })
     const remoteMd5 =
       (metadataResponse.result as { md5Checksum?: string } | undefined)
@@ -2403,11 +2644,13 @@ export class DriveNotebookStore {
       id,
       mimeType: 'application/json',
       content: json,
+      resourceKey,
     })
     const updatedMetadataResponse = await client.get({
       fileId: id,
       supportsAllDrives: true,
       fields: VERSION_FIELDS,
+      resourceKey,
     })
     const updatedMd5 =
       (updatedMetadataResponse.result as { md5Checksum?: string } | undefined)
@@ -2421,7 +2664,7 @@ export class DriveNotebookStore {
   }
 
   async load(uri: string): Promise<parser_pb.Notebook> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.load expects a file URI')
     }
@@ -2430,6 +2673,7 @@ export class DriveNotebookStore {
       fileId: id,
       supportsAllDrives: true,
       fields: VERSION_FIELDS,
+      resourceKey,
     })
     const md5 =
       (metadataResponse.result as { md5Checksum?: string } | undefined)
@@ -2443,6 +2687,7 @@ export class DriveNotebookStore {
       fileId: id,
       supportsAllDrives: true,
       alt: 'media',
+      resourceKey,
     })
 
     const body = extractBody(response)
@@ -2453,7 +2698,8 @@ export class DriveNotebookStore {
   }
 
   async list(uri: string): Promise<NotebookStoreItem[]> {
-    const { id, type } = parseDriveItem(uri)
+    const item = parseDriveItem(uri)
+    const { id, type } = item
     if (type !== NotebookStoreItemType.Folder) {
       throw new Error(
         'Google Drive URI must reference a folder to list contents'
@@ -2463,15 +2709,18 @@ export class DriveNotebookStore {
     let pageToken: string | undefined
 
     do {
-      const response = await this.search({
-        q: `'${id}' in parents and trashed = false`,
-        includeItemsFromAllDrives: true,
-        supportsAllDrives: true,
-        orderBy: 'name',
-        pageSize: 1000,
-        pageToken,
-        fields: 'nextPageToken,files(id,name,mimeType)',
-      })
+      const response = await this.search(
+        {
+          q: `'${id}' in parents and trashed = false`,
+          includeItemsFromAllDrives: true,
+          supportsAllDrives: true,
+          orderBy: 'name',
+          pageSize: 1000,
+          pageToken,
+          fields: 'nextPageToken,files(id,name,mimeType,resourceKey)',
+        },
+        driveResourceKeyHeaders(item)
+      )
       files.push(...response.files)
       pageToken = response.nextPageToken
     } while (pageToken)
@@ -2483,13 +2732,17 @@ export class DriveNotebookStore {
     return validFiles.map((file) => {
       const isFolder = file.mimeType === DRIVE_FOLDER_MIME_TYPE
       return {
-        uri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
+        uri: isFolder
+          ? driveFolderUrl(file.id, file.resourceKey)
+          : driveFileUrl(file.id, file.resourceKey),
         name: file.name ?? 'Untitled item',
         type: isFolder
           ? NotebookStoreItemType.Folder
           : NotebookStoreItemType.File,
         children: [],
-        remoteUri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
+        remoteUri: isFolder
+          ? driveFolderUrl(file.id, file.resourceKey)
+          : driveFileUrl(file.id, file.resourceKey),
         mimeType: file.mimeType,
         parents: [],
       }
@@ -2499,12 +2752,16 @@ export class DriveNotebookStore {
   /**
    * Runs a Google Drive files.list request without narrowing its query surface.
    * The request is forwarded as-is so callers can use the complete Drive `q`
-   * grammar and list parameters. Returned files retain their Drive metadata and
-   * gain a Runme-compatible URI when the response includes an id and MIME type.
+   * grammar and list parameters. Optional headers support resource-key folder
+   * traversal. Returned files retain their Drive metadata and gain a
+   * Runme-compatible URI when the response includes an id and MIME type.
    */
-  async search(request: Record<string, unknown>): Promise<DriveSearchResult> {
+  async search(
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
+  ): Promise<DriveSearchResult> {
     const client = await this.getFilesClient()
-    const response = await client.list(request)
+    const response = await client.list(request, headers)
     const result = response.result ?? {}
     return {
       ...result,
@@ -2515,29 +2772,35 @@ export class DriveNotebookStore {
         const isFolder = file.mimeType === DRIVE_FOLDER_MIME_TYPE
         return {
           ...file,
-          uri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
+          uri: isFolder
+            ? driveFolderUrl(file.id, file.resourceKey)
+            : driveFileUrl(file.id, file.resourceKey),
         }
       }),
     }
   }
 
   async listComments(uri: string): Promise<DriveComment[]> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.listComments expects a file URI')
     }
     const client = await this.getFilesClient()
+    const headers = driveResourceKeyHeaders(item)
     const comments: DriveComment[] = []
     let pageToken: string | undefined
 
     do {
-      const response = await client.listComments({
-        fileId: id,
-        supportsAllDrives: true,
-        includeDeleted: true,
-        fields: DRIVE_COMMENT_LIST_FIELDS,
-        ...(pageToken ? { pageToken } : {}),
-      })
+      const response = await client.listComments(
+        {
+          fileId: item.id,
+          supportsAllDrives: true,
+          includeDeleted: true,
+          fields: DRIVE_COMMENT_LIST_FIELDS,
+          ...(pageToken ? { pageToken } : {}),
+        },
+        headers
+      )
       comments.push(...(response.result?.comments ?? []))
       pageToken = optionalString(response.result?.nextPageToken)
     } while (pageToken)
@@ -2555,8 +2818,8 @@ export class DriveNotebookStore {
           quotedFileContent?: { mimeType: 'text/plain'; value: string }
         }
   ): Promise<DriveComment> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.createComment expects a file URI')
     }
     const trimmedContent = content.trim()
@@ -2568,13 +2831,14 @@ export class DriveNotebookStore {
       typeof options === 'string' ? undefined : options?.quotedFileContent
     const client = await this.getFilesClient()
     const response = await client.createComment({
-      fileId: id,
+      fileId: item.id,
       resource: {
         content: trimmedContent,
         ...(anchor ? { anchor } : {}),
         ...(quotedFileContent ? { quotedFileContent } : {}),
       },
       fields: DRIVE_COMMENT_FIELDS,
+      headers: driveResourceKeyHeaders(item),
     })
     return (response.result ?? {}) as DriveComment
   }
@@ -2584,8 +2848,8 @@ export class DriveNotebookStore {
     commentId: string,
     content: string
   ): Promise<DriveReply> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.replyToComment expects a file URI')
     }
     const trimmedContent = content.trim()
@@ -2597,18 +2861,19 @@ export class DriveNotebookStore {
     }
     const client = await this.getFilesClient()
     const response = await client.createReply({
-      fileId: id,
+      fileId: item.id,
       commentId: commentId.trim(),
       resource: {
         content: trimmedContent,
       },
+      headers: driveResourceKeyHeaders(item),
     })
     return (response.result ?? {}) as DriveReply
   }
 
   async resolveComment(uri: string, commentId: string): Promise<DriveReply> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.resolveComment expects a file URI')
     }
     if (!commentId.trim()) {
@@ -2616,18 +2881,19 @@ export class DriveNotebookStore {
     }
     const client = await this.getFilesClient()
     const response = await client.createReply({
-      fileId: id,
+      fileId: item.id,
       commentId: commentId.trim(),
       resource: {
         action: 'resolve',
       },
+      headers: driveResourceKeyHeaders(item),
     })
     return (response.result ?? {}) as DriveReply
   }
 
   async reopenComment(uri: string, commentId: string): Promise<DriveReply> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.reopenComment expects a file URI')
     }
     if (!commentId.trim()) {
@@ -2635,11 +2901,12 @@ export class DriveNotebookStore {
     }
     const client = await this.getFilesClient()
     const response = await client.createReply({
-      fileId: id,
+      fileId: item.id,
       commentId: commentId.trim(),
       resource: {
         action: 'reopen',
       },
+      headers: driveResourceKeyHeaders(item),
     })
     return (response.result ?? {}) as DriveReply
   }
@@ -2653,7 +2920,7 @@ export class DriveNotebookStore {
   }
 
   async getVersionMetadata(uri: string): Promise<DriveVersionMetadata | null> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error(
         'DriveNotebookStore.getVersionMetadata expects a file URI'
@@ -2664,6 +2931,7 @@ export class DriveNotebookStore {
       fileId: id,
       supportsAllDrives: true,
       fields: VERSION_FIELDS,
+      resourceKey,
     })
     const result = metadataResponse.result as DriveVersionMetadata | undefined
     if (result?.md5Checksum) {
@@ -2675,8 +2943,8 @@ export class DriveNotebookStore {
   }
 
   async listRevisions(uri: string): Promise<DriveRevision[]> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.listRevisions expects a file URI')
     }
     const client = await this.getFilesClient()
@@ -2684,13 +2952,16 @@ export class DriveNotebookStore {
     let pageToken: string | undefined
 
     do {
-      const response = await client.listRevisions({
-        fileId: id,
-        supportsAllDrives: true,
-        fields:
-          'nextPageToken,revisions(id,mimeType,modifiedTime,md5Checksum,size,keepForever,lastModifyingUser(displayName,emailAddress))',
-        ...(pageToken ? { pageToken } : {}),
-      })
+      const response = await client.listRevisions(
+        {
+          fileId: item.id,
+          supportsAllDrives: true,
+          fields:
+            'nextPageToken,revisions(id,mimeType,modifiedTime,md5Checksum,size,keepForever,lastModifyingUser(displayName,emailAddress))',
+          ...(pageToken ? { pageToken } : {}),
+        },
+        driveResourceKeyHeaders(item)
+      )
       revisions.push(...(response.result?.revisions ?? []))
       pageToken = optionalString(response.result?.nextPageToken)
     } while (pageToken)
@@ -2702,20 +2973,23 @@ export class DriveNotebookStore {
     uri: string,
     revisionId: string
   ): Promise<parser_pb.Notebook> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.loadRevision expects a file URI')
     }
     if (!revisionId?.trim()) {
       throw new Error('DriveNotebookStore.loadRevision requires a revision id')
     }
     const client = await this.getFilesClient()
-    const response = await client.getRevision({
-      fileId: id,
-      revisionId: revisionId.trim(),
-      supportsAllDrives: true,
-      alt: 'media',
-    })
+    const response = await client.getRevision(
+      {
+        fileId: item.id,
+        revisionId: revisionId.trim(),
+        supportsAllDrives: true,
+        alt: 'media',
+      },
+      driveResourceKeyHeaders(item)
+    )
     const body = extractBody(response)
     return fromJsonString(parser_pb.NotebookSchema, body, {
       ignoreUnknownFields: true,
@@ -2723,8 +2997,8 @@ export class DriveNotebookStore {
   }
 
   async loadRevisionContent(uri: string, revisionId: string): Promise<string> {
-    const { id, type } = parseDriveItem(uri)
-    if (type !== NotebookStoreItemType.File) {
+    const item = parseDriveItem(uri)
+    if (item.type !== NotebookStoreItemType.File) {
       throw new Error(
         'DriveNotebookStore.loadRevisionContent expects a file URI'
       )
@@ -2735,17 +3009,20 @@ export class DriveNotebookStore {
       )
     }
     const client = await this.getFilesClient()
-    const response = await client.getRevision({
-      fileId: id,
-      revisionId: revisionId.trim(),
-      supportsAllDrives: true,
-      alt: 'media',
-    })
+    const response = await client.getRevision(
+      {
+        fileId: item.id,
+        revisionId: revisionId.trim(),
+        supportsAllDrives: true,
+        alt: 'media',
+      },
+      driveResourceKeyHeaders(item)
+    )
     return extractBody(response)
   }
 
   async rename(uri: string, name: string): Promise<NotebookStoreItem> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (
       type !== NotebookStoreItemType.File &&
       type !== NotebookStoreItemType.Folder
@@ -2756,19 +3033,23 @@ export class DriveNotebookStore {
     const file = await client.update({
       id,
       name,
+      resourceKey,
     })
 
     const fileId = file.id ?? id
     const mimeType = file.mimeType
     const isFolder = mimeType === DRIVE_FOLDER_MIME_TYPE
+    const itemUri = isFolder
+      ? driveFolderUrl(fileId, resourceKey)
+      : driveFileUrl(fileId, resourceKey)
     return {
-      uri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
+      uri: itemUri,
       name: file.name ?? name,
       type: isFolder
         ? NotebookStoreItemType.Folder
         : NotebookStoreItemType.File,
       children: [],
-      remoteUri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
+      remoteUri: itemUri,
       mimeType,
       parents: [],
     }
@@ -2804,13 +3085,17 @@ export class DriveNotebookStore {
     const file = await client.move(
       item.id,
       sourceParent.id,
-      destinationParent.id
+      destinationParent.id,
+      item.resourceKey,
+      driveResourceKeysHeaders([sourceParent, destinationParent])
     )
     const fileId = file.id ?? item.id
     const isFolder =
       file.mimeType === DRIVE_FOLDER_MIME_TYPE ||
       item.type === NotebookStoreItemType.Folder
-    const itemUri = isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId)
+    const itemUri = isFolder
+      ? driveFolderUrl(fileId, item.resourceKey)
+      : driveFileUrl(fileId, item.resourceKey)
     return {
       uri: itemUri,
       name: file.name ?? uri,
@@ -2825,7 +3110,7 @@ export class DriveNotebookStore {
   }
 
   async moveToTrash(uri: string): Promise<NotebookStoreItem> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.moveToTrash expects a file URI')
     }
@@ -2833,15 +3118,16 @@ export class DriveNotebookStore {
     const file = await client.update({
       id,
       trashed: true,
+      resourceKey,
     })
 
     const fileId = file.id ?? id
     return {
-      uri: driveFileUrl(fileId),
+      uri: driveFileUrl(fileId, resourceKey),
       name: file.name ?? uri,
       type: NotebookStoreItemType.File,
       children: [],
-      remoteUri: driveFileUrl(fileId),
+      remoteUri: driveFileUrl(fileId, resourceKey),
       mimeType: file.mimeType,
       parents: [],
     }
@@ -2856,7 +3142,7 @@ export class DriveNotebookStore {
     content: string,
     mimeType: string = 'application/octet-stream'
   ): Promise<void> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.saveContent expects a file URI')
     }
@@ -2865,6 +3151,7 @@ export class DriveNotebookStore {
       id,
       mimeType,
       content,
+      resourceKey,
     })
   }
 
@@ -2879,14 +3166,17 @@ export class DriveNotebookStore {
     mimeType: string,
     expected: { checksum?: string; revisionId?: string }
   ): Promise<boolean> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error(
         'DriveNotebookStore.saveContentIfVersion expects a file URI'
       )
     }
     const client = await this.getFilesClient()
-    const { metadata, etag } = await client.getVersionMetadataWithEtag(id)
+    const { metadata, etag } = await client.getVersionMetadataWithEtag(
+      id,
+      resourceKey
+    )
     const actualChecksum = metadata?.md5Checksum ?? ''
     const expectedChecksum = expected.checksum ?? ''
     if (
@@ -2901,11 +3191,11 @@ export class DriveNotebookStore {
       // validator needed to protect a collaborator's concurrent edit.
       return false
     }
-    return client.setContentIfMatch(id, content, mimeType, etag)
+    return client.setContentIfMatch(id, content, mimeType, etag, resourceKey)
   }
 
   async loadContent(uri: string): Promise<string> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.loadContent expects a file URI')
     }
@@ -2914,12 +3204,13 @@ export class DriveNotebookStore {
       fileId: id,
       supportsAllDrives: true,
       alt: 'media',
+      resourceKey,
     })
     return extractBody(response)
   }
 
   async getMetadata(uri: string): Promise<NotebookStoreItem | null> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (
       type !== NotebookStoreItemType.File &&
       type !== NotebookStoreItemType.Folder
@@ -2930,13 +3221,15 @@ export class DriveNotebookStore {
     const response = await client.get({
       fileId: id,
       supportsAllDrives: true,
-      fields: 'id,name,mimeType,parents,driveId',
+      fields: 'id,name,mimeType,parents,driveId,resourceKey',
+      resourceKey,
     })
     const result = response.result as {
       name?: string
       mimeType?: string
       parents?: string[]
       driveId?: string
+      resourceKey?: string
     }
     const isFolder = result?.mimeType === DRIVE_FOLDER_MIME_TYPE
     let displayName = result?.name

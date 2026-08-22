@@ -2151,7 +2151,8 @@ function NotebookTabContent({
   const [resourceInsertionRecovery, setResourceInsertionRecovery] =
     useState<ResourceInsertionRecovery | null>(null)
   const [imageDragActive, setImageDragActive] = useState(false)
-  const { pickDriveFile, pickDriveFolder } = useDriveResourcePicker()
+  const { pickDriveFile, pickDriveFolder, driveResourcePickerDialog } =
+    useDriveResourcePicker()
   const syncState = useNotebookSyncState(docUri)
   const releasePending = Boolean(
     entry.releasePending || notebookSnapshot?.releasePending
@@ -3544,6 +3545,7 @@ function NotebookTabContent({
           onSelectTarget={selectCommentTarget}
         />
       )}
+      {driveResourcePickerDialog}
     </div>
   )
 }

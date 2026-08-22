@@ -37,6 +37,24 @@ describe('linked resources', () => {
     expect(canonicalGoogleDriveFileUrl('file_123')).toBe(parsed.source.uri)
   })
 
+  it('preserves a Drive resource key while removing unrelated share params', () => {
+    const parsed = parseLinkedResource(
+      JSON.stringify({
+        ...driveResource,
+        source: {
+          provider: 'google-drive',
+          uri: 'https://drive.google.com/file/d/file_123/view?usp=sharing&resourcekey=key_123',
+        },
+      })
+    )
+    expect(parsed.source.uri).toBe(
+      'https://drive.google.com/file/d/file_123/view?resourcekey=key_123'
+    )
+    expect(canonicalGoogleDriveFileUrl('file_123', 'key_123')).toBe(
+      parsed.source.uri
+    )
+  })
+
   it('rejects unknown versions and unsafe URI schemes', () => {
     expect(() =>
       parseLinkedResource(JSON.stringify({ ...driveResource, version: 2 }))
