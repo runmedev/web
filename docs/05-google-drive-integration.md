@@ -254,23 +254,27 @@ const result = await drive.search({
 folder. Use `drive.search` when the caller needs Drive query expressions,
 pagination, ordering, shared-drive scoping, or additional file metadata.
 
-The Explorer's **Add Google Drive folder** flow first lists Shared Drives using
-the Drive API. Choose one of those entries to mount the Shared Drive root, or
-choose **Browse folders…** to open Google Picker for My Drive and folders inside
-a Shared Drive.
+Runme uses its own focused Drive browser for folder and file selection. The
+browser lists **My Drive** and Shared Drive roots, navigates child folders with
+breadcrumbs, selects the current folder in folder mode, and selects one file in
+file mode. Its free-form search uses Drive's `allDrives` corpus, so matching
+folders or files can be found across every Drive visible to the effective
+credential. All list, search, and selection steps use the same identity as the
+later Drive operation.
 
-This extra Shared Drive root chooser is required because Google Picker treats a
-Shared Drive root as a navigation container: double-clicking it opens the drive,
-but Picker leaves **Select** disabled. Picker does not emit a callback for that
-navigation action. The Drive API defines the Shared Drive ID as its top-level
-folder ID, so Runme can safely mount the selected root using the ID returned by
-`drives.list`.
+The custom browser is required because Google Picker treats a Shared Drive root
+as a navigation container: double-clicking it opens the drive, but Picker leaves
+**Select** disabled and does not report the navigated Drive ID. The Drive API
+defines the Shared Drive ID as its top-level folder ID, so Runme can select and
+mount that root directly.
 
-If Shared Drives cannot be listed, Runme records a
-`SHARED_DRIVE_LIST_FAILED` diagnostic and shows an actionable error. Verify
-that the Google Drive API is enabled for the credential's project and that the
-credential can list the Shared Drive. The dialog still allows browsing My
-Drive and nested Shared Drive folders in Picker.
+If Drive locations or folder contents cannot be listed, the dialog stays open
+and shows **Retry** with actionable guidance. Verify that the Google Drive API
+is enabled for the credential's project and that the effective credential can
+list the target My Drive or Shared Drive resources. Diagnostics use stable
+`DRIVE_PICKER_ROOT_LIST_FAILED` or `DRIVE_PICKER_CHILD_LIST_FAILED` codes and
+never contain the bearer token. Search failures use
+`DRIVE_PICKER_SEARCH_FAILED` and keep the query available for retry.
 
 `drive.authorize()` starts a fresh Google Drive OAuth flow. It first clears any
 locally stored Drive OAuth handoff state from a previous redirect or new-tab
