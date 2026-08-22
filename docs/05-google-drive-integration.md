@@ -263,6 +263,9 @@ credential. All list, search, and selection steps use the same identity as the
 later Drive operation.
 Folder shortcuts are resolved to their target folders so they remain navigable
 in both browsing and search results.
+Before My Drive can be selected, Runme resolves Drive's credential-relative
+`root` alias to its immutable folder ID. Existing mounts therefore cannot
+silently switch accounts after Drive logout and reauthorization.
 
 The custom browser is required because Google Picker treats a Shared Drive root
 as a navigation container: double-clicking it opens the drive, but Picker leaves

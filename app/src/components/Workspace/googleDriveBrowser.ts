@@ -85,15 +85,24 @@ function normalizeGoogleDriveResource(
   }
 }
 
+/**
+ * Builds a Drive v3 URL against the configured runtime endpoint. The trailing
+ * slash keeps relative API paths stable for production and test base URLs.
+ */
 function driveApiUrl(path: string): URL {
   const baseUrl = getGoogleDriveBaseUrl() || 'https://www.googleapis.com'
   return new URL(path, `${baseUrl}/`)
 }
 
+/** Escapes backslashes and quotes before text is embedded in a Drive query. */
 function escapeDriveQueryLiteral(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
 }
 
+/**
+ * Performs one authenticated Drive request and returns its JSON body. Errors
+ * expose only the operation and status code, never the bearer token or body.
+ */
 async function getJson<T>(
   url: URL,
   accessToken: string,
@@ -112,14 +121,29 @@ async function getJson<T>(
 }
 
 /**
- * Lists the roots the active Drive identity can browse. My Drive uses Drive's
- * stable `root` alias; Shared Drive ids are also their top-level folder ids.
+ * Lists the roots the active Drive identity can browse. My Drive's `root`
+ * alias is resolved to its immutable id before selection; Shared Drive ids are
+ * already their top-level folder ids.
  */
 export async function listGoogleDriveRoots(
   accessToken: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<GoogleDriveLocation[]> {
-  const roots: GoogleDriveLocation[] = [{ id: 'root', name: 'My Drive' }]
+  const myDriveUrl = driveApiUrl('drive/v3/files/root')
+  myDriveUrl.searchParams.set('fields', 'id')
+  const myDrive = await getJson<Partial<GoogleDriveLocation>>(
+    myDriveUrl,
+    accessToken,
+    'resolve the My Drive root',
+    fetchImpl
+  )
+  if (typeof myDrive.id !== 'string') {
+    throw new Error('Google Drive API returned an invalid My Drive root.')
+  }
+
+  const roots: GoogleDriveLocation[] = [
+    { id: myDrive.id, name: 'My Drive' },
+  ]
   let pageToken: string | undefined
 
   do {

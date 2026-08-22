@@ -19,6 +19,11 @@ describe('googleDriveBrowser', () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 'my-drive-root-id' }), {
+          status: 200,
+        })
+      )
+      .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
             drives: [{ id: 'z-drive', name: 'Zeta' }],
@@ -37,18 +42,34 @@ describe('googleDriveBrowser', () => {
     await expect(
       listGoogleDriveRoots('secret-token', fetchImpl)
     ).resolves.toEqual([
-      { id: 'root', name: 'My Drive' },
+      { id: 'my-drive-root-id', name: 'My Drive' },
       { id: 'a-drive', name: 'Alpha', driveId: 'a-drive' },
       { id: 'z-drive', name: 'Zeta', driveId: 'z-drive' },
     ])
 
-    const firstUrl = new URL(fetchImpl.mock.calls[0]?.[0] as string)
-    const secondUrl = new URL(fetchImpl.mock.calls[1]?.[0] as string)
-    expect(firstUrl.origin).toBe('https://drive.example.test')
-    expect(secondUrl.searchParams.get('pageToken')).toBe('page-2')
+    const rootUrl = new URL(fetchImpl.mock.calls[0]?.[0] as string)
+    const firstDrivesUrl = new URL(fetchImpl.mock.calls[1]?.[0] as string)
+    const secondDrivesUrl = new URL(fetchImpl.mock.calls[2]?.[0] as string)
+    expect(rootUrl.origin).toBe('https://drive.example.test')
+    expect(rootUrl.pathname).toBe('/drive/v3/files/root')
+    expect(firstDrivesUrl.pathname).toBe('/drive/v3/drives')
+    expect(secondDrivesUrl.searchParams.get('pageToken')).toBe('page-2')
     expect(fetchImpl.mock.calls[0]?.[1]).toEqual({
       headers: { Authorization: 'Bearer secret-token' },
     })
+  })
+
+  it('rejects an invalid My Drive root before listing selectable locations', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ name: 'missing id' }), { status: 200 })
+      )
+
+    await expect(
+      listGoogleDriveRoots('token', fetchImpl)
+    ).rejects.toThrow('invalid My Drive root')
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
   it('lists Shared Drive children with the drive corpus', async () => {

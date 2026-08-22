@@ -27,7 +27,7 @@ describe('GoogleDriveResourcePickerDialog', () => {
   beforeEach(() => {
     mocks.listRoots.mockReset()
     mocks.listRoots.mockResolvedValue([
-      { id: 'root', name: 'My Drive' },
+      { id: 'my-drive-root-id', name: 'My Drive' },
       { id: 'drive-1', name: 'notebooks', driveId: 'drive-1' },
     ])
     mocks.listChildren.mockReset()
@@ -118,7 +118,9 @@ describe('GoogleDriveResourcePickerDialog', () => {
   it('keeps an actionable error open and retries root listing', async () => {
     mocks.listRoots
       .mockRejectedValueOnce(new Error('Drive API disabled'))
-      .mockResolvedValueOnce([{ id: 'root', name: 'My Drive' }])
+      .mockResolvedValueOnce([
+        { id: 'my-drive-root-id', name: 'My Drive' },
+      ])
     render(
       <GoogleDriveResourcePickerDialog
         accessToken="token"

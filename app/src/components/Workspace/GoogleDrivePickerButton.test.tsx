@@ -66,7 +66,7 @@ describe('GoogleDrivePickerButton', () => {
     mocks.getItems.mockReturnValue([])
     mocks.listRoots.mockReset()
     mocks.listRoots.mockResolvedValue([
-      { id: 'root', name: 'My Drive' },
+      { id: 'my-drive-root-id', name: 'My Drive' },
       { id: 'shared-drive-id', name: 'notebooks', driveId: 'shared-drive-id' },
     ])
     mocks.listChildren.mockReset()
