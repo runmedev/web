@@ -372,9 +372,11 @@ export function SidePanelToolbar() {
       return
     }
     const configuration = readAppLoginConfiguration()
-    const loginPromise =
-      configuration.mode === 'service_account'
-        ? getServiceAccountCredentials(configuration.serviceAccount, {
+    void (async () => {
+      if (configuration.mode === 'service_account') {
+        const status = await getServiceAccountCredentials(
+          configuration.serviceAccount,
+          {
             ...(configuration.humanAccount
               ? { humanAccount: configuration.humanAccount }
               : {}),
@@ -384,11 +386,18 @@ export function SidePanelToolbar() {
                 ? ['drive', 'app']
                 : ['app'],
             authorizationLeaseSeconds: 24 * 60 * 60,
-          })
-        : browserAdapter.loginWithRedirect({
-            loginHint: configuration.humanAccount || undefined,
-          })
-    void loginPromise.catch((error) => {
+          }
+        )
+        const error = getServiceAccountCredentialStatusError(status)
+        if (error) {
+          throw new Error(error)
+        }
+        return
+      }
+      await browserAdapter.loginWithRedirect({
+        loginHint: configuration.humanAccount || undefined,
+      })
+    })().catch((error) => {
       showToast({
         message: error instanceof Error ? error.message : String(error),
         tone: 'error',
