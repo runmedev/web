@@ -1,4 +1,4 @@
-import { ReactNode, useCallback } from "react";
+import { ReactNode, useCallback, useState } from "react";
 import { useGoogleAuth } from "../../contexts/GoogleAuthContext";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
@@ -7,7 +7,10 @@ import { googleClientManager } from "../../lib/googleClientManager";
 import { markOnboardingTaskComplete } from "../../lib/onboarding";
 import { tourUiController } from "../../lib/tourUiController";
 import { appLogger } from "../../lib/logging/runtime";
+import { GoogleDriveFolderChooserDialog } from "./GoogleDriveFolderChooserDialog";
 import { openGoogleDrivePicker } from "./googleDrivePickerViews";
+import { listGoogleSharedDrives } from "./googleSharedDrives";
+import type { GoogleSharedDrive } from "./googleSharedDrives";
 
 interface GoogleDrivePickerButtonProps {
   label?: string;
@@ -25,6 +28,11 @@ export function GoogleDrivePickerButton({
   const { ensureAccessToken } = useGoogleAuth();
   const { addItem, getItems } = useWorkspace();
   const { store } = useNotebookStore();
+  const [sharedDrives, setSharedDrives] = useState<GoogleSharedDrive[] | null>(
+    null,
+  );
+  const [pickerAccessToken, setPickerAccessToken] = useState("");
+  const [sharedDriveListError, setSharedDriveListError] = useState("");
 
   const getPickerConfig = useCallback(() => {
     const { clientId, developerKey, appId } =
@@ -39,27 +47,52 @@ export function GoogleDrivePickerButton({
     };
   }, []);
 
-  const handleOpenPicker = useCallback(() => {
-    const pickerConfig = getPickerConfig();
-    if (!pickerConfig) {
-      console.error(
-        "Missing Google Drive client ID. Set it with googleClientManager.setClientId(...).",
-      );
-      return;
-    }
+  const mountFolder = useCallback(
+    async (folderId: string, folderName: string) => {
+      if (!store) {
+        appLogger.error("Notebook store is unavailable for a Drive folder", {
+          attrs: {
+            scope: "storage.drive.picker",
+            code: "DRIVE_FOLDER_STORE_UNAVAILABLE",
+          },
+        });
+        return;
+      }
 
-    void (async () => {
-      let accessToken = "";
       try {
-        accessToken = await ensureAccessToken({ interactive: true });
+        const localUri = await store.updateFolder(
+          driveFolderUrl(folderId),
+          folderName,
+        );
+        if (!getItems().includes(localUri)) {
+          addItem(localUri);
+        }
+        markOnboardingTaskComplete("add-drive-folder");
+        tourUiController.recordGoogleDriveFolderAdded();
       } catch (error) {
-        console.error("Failed to authorize Google Drive picker", error);
+        appLogger.error("Failed to mirror Drive folder", {
+          attrs: {
+            scope: "storage.drive.picker",
+            code: "DRIVE_FOLDER_MIRROR_FAILED",
+            error: String(error),
+          },
+        });
+        setPickerAccessToken(accessToken);
+        setSharedDriveListError(
+          "Runme could not list Shared Drives. Verify that the Google Drive API is enabled for this credential's project and that it can list the Shared Drive. You can still browse My Drive or nested folders.",
+        );
+        setSharedDrives([]);
         return;
       }
-      if (!accessToken) {
-        return;
-      }
+    },
+    [addItem, getItems, store],
+  );
 
+  const openFolderPicker = useCallback(
+    async (
+      accessToken: string,
+      pickerConfig: NonNullable<ReturnType<typeof getPickerConfig>>,
+    ) => {
       try {
         await openGoogleDrivePicker({
           token: accessToken,
@@ -67,51 +100,27 @@ export function GoogleDrivePickerButton({
           developerKey: pickerConfig.developerKey,
           kind: "folder",
           callback: (data) => {
-            if (data.action !== "picked" || !data.docs?.length) {
+            const primaryDoc =
+              data.action === "picked" ? data.docs?.[0] : undefined;
+            if (!primaryDoc?.id) {
               return;
             }
-
-            const [primaryDoc] = data.docs;
-            if (!primaryDoc) {
+            if (
+              primaryDoc.mimeType &&
+              primaryDoc.mimeType !== "application/vnd.google-apps.folder"
+            ) {
+              appLogger.error("Selected Drive item is not a folder", {
+                attrs: {
+                  scope: "storage.drive.picker",
+                  code: "DRIVE_PICKER_DOCUMENT_NOT_FOLDER",
+                },
+              });
               return;
             }
-            void (async () => {
-              if (!primaryDoc.id) {
-                console.error("Selected document is missing an identifier.");
-                return;
-              }
-
-              if (
-                primaryDoc.mimeType &&
-                primaryDoc.mimeType !== "application/vnd.google-apps.folder"
-              ) {
-                console.error("Selected item is not a Google Drive folder.");
-                return;
-              }
-
-              if (!store) {
-                console.error(
-                  "Notebook store is not available; cannot mirror folder.",
-                );
-                return;
-              }
-
-              const remoteUri = driveFolderUrl(primaryDoc.id);
-              try {
-                const localUri = await store.updateFolder(
-                  remoteUri,
-                  primaryDoc.name ?? primaryDoc.id,
-                );
-                const workspaceUris = getItems();
-                if (!workspaceUris.includes(localUri)) {
-                  addItem(localUri);
-                }
-                markOnboardingTaskComplete("add-drive-folder");
-                tourUiController.recordGoogleDriveFolderAdded();
-              } catch (error) {
-                console.error("Failed to mirror Drive folder", error);
-              }
-            })();
+            void mountFolder(
+              primaryDoc.id,
+              primaryDoc.name ?? primaryDoc.id,
+            );
           },
         });
       } catch (error) {
@@ -123,29 +132,111 @@ export function GoogleDrivePickerButton({
           },
         });
       }
+    },
+    [mountFolder],
+  );
+
+  const handleOpenPicker = useCallback(() => {
+    const pickerConfig = getPickerConfig();
+    if (!pickerConfig) {
+      appLogger.error("Google Drive picker is not configured", {
+        attrs: {
+          scope: "storage.drive.picker",
+          code: "DRIVE_PICKER_CLIENT_ID_MISSING",
+        },
+      });
+      return;
+    }
+
+    void (async () => {
+      let accessToken = "";
+      try {
+        accessToken = await ensureAccessToken({ interactive: true });
+      } catch (error) {
+        appLogger.error("Failed to authorize Google Drive picker", {
+          attrs: {
+            scope: "storage.drive.picker",
+            code: "DRIVE_PICKER_AUTH_FAILED",
+            error: String(error),
+          },
+        });
+        return;
+      }
+      if (!accessToken) {
+        return;
+      }
+
+      try {
+        const drives = await listGoogleSharedDrives(accessToken);
+        if (drives.length > 0) {
+          setPickerAccessToken(accessToken);
+          setSharedDrives(drives);
+          return;
+        }
+      } catch (error) {
+        appLogger.warn("Failed to list Shared Drives before opening Picker", {
+          attrs: {
+            scope: "storage.drive.picker",
+            code: "SHARED_DRIVE_LIST_FAILED",
+            error: String(error),
+          },
+        });
+        setPickerAccessToken(accessToken);
+        setSharedDriveListError(
+          "Runme could not list Shared Drives. Verify that the Google Drive API is enabled for this credential's project and that it can list the Shared Drive. You can still browse My Drive or nested folders.",
+        );
+        setSharedDrives([]);
+        return;
+      }
+
+      await openFolderPicker(accessToken, pickerConfig);
     })();
+  }, [ensureAccessToken, getPickerConfig, openFolderPicker]);
+
+  const closeSharedDriveChooser = useCallback(() => {
+    setSharedDrives(null);
+    setPickerAccessToken("");
+    setSharedDriveListError("");
+  }, []);
+
+  const handleBrowseFolders = useCallback(() => {
+    const pickerConfig = getPickerConfig();
+    const accessToken = pickerAccessToken;
+    closeSharedDriveChooser();
+    if (!pickerConfig || !accessToken) {
+      return;
+    }
+    void openFolderPicker(accessToken, pickerConfig);
   }, [
-    addItem,
-    ensureAccessToken,
-    getItems,
+    closeSharedDriveChooser,
     getPickerConfig,
-    store,
+    openFolderPicker,
+    pickerAccessToken,
   ]);
 
+  const handleSelectSharedDrive = useCallback(
+    (drive: GoogleSharedDrive) => {
+      closeSharedDriveChooser();
+      void mountFolder(drive.id, drive.name);
+    },
+    [closeSharedDriveChooser, mountFolder],
+  );
+
   return (
-    <button
-      type="button"
-      data-tour-id="explorer.add-google-drive-folder"
-      className={`btn flex items-center gap-2 ${className ?? ""}`}
-      onClick={handleOpenPicker}
-      aria-label={label}
-      title={title ?? label}
-    >
-      {children ? (
-        children
-      ) : (
-        <>
-          <svg
+    <>
+      <button
+        type="button"
+        data-tour-id="explorer.add-google-drive-folder"
+        className={`btn flex items-center gap-2 ${className ?? ""}`}
+        onClick={handleOpenPicker}
+        aria-label={label}
+        title={title ?? label}
+      >
+        {children ? (
+          children
+        ) : (
+          <>
+            <svg
             aria-hidden="true"
             width="20"
             height="20"
@@ -177,11 +268,21 @@ export function GoogleDrivePickerButton({
               d="M24 26.3H5.6l-1.62 5.02a1.51 1.51 0 0 0 .5 1.67L22.9 44.84c.73.5 1.68.01 1.68-.84V26.3Z"
               fill="#EA4335"
             />
-          </svg>
-          <span>{label}</span>
-        </>
-      )}
-    </button>
+            </svg>
+            <span>{label}</span>
+          </>
+        )}
+      </button>
+      {sharedDrives ? (
+        <GoogleDriveFolderChooserDialog
+          drives={sharedDrives}
+          errorMessage={sharedDriveListError || undefined}
+          onBrowseFolders={handleBrowseFolders}
+          onCancel={closeSharedDriveChooser}
+          onSelectSharedDrive={handleSelectSharedDrive}
+        />
+      ) : null}
+    </>
   );
 }
 

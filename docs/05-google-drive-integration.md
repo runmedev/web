@@ -254,12 +254,23 @@ const result = await drive.search({
 folder. Use `drive.search` when the caller needs Drive query expressions,
 pagination, ordering, shared-drive scoping, or additional file metadata.
 
-The Explorer's **Add Google Drive folder** picker presents separate views for
-folders in My Drive and folders in Shared drives. Google Picker's deprecated
-`Feature.SUPPORT_DRIVES` flag is not sufficient to expose Shared drives. The
-Shared drives view must be a `DocsView` configured with
-`setEnableDrives(true)`. Selecting a Shared drive or a folder within it mounts
-that location in the Explorer using the same Drive mirror as a My Drive folder.
+The Explorer's **Add Google Drive folder** flow first lists Shared Drives using
+the Drive API. Choose one of those entries to mount the Shared Drive root, or
+choose **Browse folders…** to open Google Picker for My Drive and folders inside
+a Shared Drive.
+
+This extra Shared Drive root chooser is required because Google Picker treats a
+Shared Drive root as a navigation container: double-clicking it opens the drive,
+but Picker leaves **Select** disabled. Picker does not emit a callback for that
+navigation action. The Drive API defines the Shared Drive ID as its top-level
+folder ID, so Runme can safely mount the selected root using the ID returned by
+`drives.list`.
+
+If Shared Drives cannot be listed, Runme records a
+`SHARED_DRIVE_LIST_FAILED` diagnostic and shows an actionable error. Verify
+that the Google Drive API is enabled for the credential's project and that the
+credential can list the Shared Drive. The dialog still allows browsing My
+Drive and nested Shared Drive folders in Picker.
 
 `drive.authorize()` starts a fresh Google Drive OAuth flow. It first clears any
 locally stored Drive OAuth handoff state from a previous redirect or new-tab

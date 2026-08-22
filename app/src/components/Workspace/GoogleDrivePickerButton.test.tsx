@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   ensureAccessToken: vi.fn(),
   getItems: vi.fn(),
   getDrivePickerConfig: vi.fn(),
+  listSharedDrives: vi.fn(),
   openPicker: vi.fn(),
   startGoogleDriveOAuth: vi.fn(),
   updateFolder: vi.fn(),
@@ -55,6 +56,10 @@ vi.mock("./googleDrivePickerViews", () => ({
   openGoogleDrivePicker: mocks.openPicker,
 }));
 
+vi.mock("./googleSharedDrives", () => ({
+  listGoogleSharedDrives: mocks.listSharedDrives,
+}));
+
 describe("GoogleDrivePickerButton", () => {
   beforeEach(() => {
     tourUiController.resetForTests();
@@ -69,6 +74,8 @@ describe("GoogleDrivePickerButton", () => {
       clientId: "drive-client-id",
       developerKey: "drive-developer-key",
     });
+    mocks.listSharedDrives.mockReset();
+    mocks.listSharedDrives.mockResolvedValue([]);
     mocks.openPicker.mockReset();
     mocks.startGoogleDriveOAuth.mockReset();
     mocks.updateFolder.mockReset();
@@ -139,5 +146,68 @@ describe("GoogleDrivePickerButton", () => {
       ),
     );
     expect(mocks.addItem).toHaveBeenCalledWith("local://folder/selected");
+  });
+
+  it("mounts a Shared Drive root without relying on Picker selection", async () => {
+    mocks.listSharedDrives.mockResolvedValue([
+      { id: "shared-drive-id", name: "notebooks" },
+    ]);
+    mocks.updateFolder.mockResolvedValue("local://folder/shared-drive");
+
+    render(<GoogleDrivePickerButton />);
+    fireEvent.click(screen.getByRole("button", { name: "Choose Folder" }));
+
+    const sharedDriveButton = await screen.findByRole("button", {
+      name: "Select notebooks Shared Drive root",
+    });
+    expect(mocks.openPicker).not.toHaveBeenCalled();
+
+    fireEvent.click(sharedDriveButton);
+
+    await waitFor(() =>
+      expect(mocks.updateFolder).toHaveBeenCalledWith(
+        "https://drive.google.com/drive/folders/shared-drive-id",
+        "notebooks",
+      ),
+    );
+    expect(mocks.addItem).toHaveBeenCalledWith(
+      "local://folder/shared-drive",
+    );
+  });
+
+  it("opens Picker from the Shared Drive root chooser for nested folders", async () => {
+    mocks.listSharedDrives.mockResolvedValue([
+      { id: "shared-drive-id", name: "notebooks" },
+    ]);
+
+    render(<GoogleDrivePickerButton />);
+    fireEvent.click(screen.getByRole("button", { name: "Choose Folder" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Browse folders…" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.openPicker).toHaveBeenCalledWith(
+        expect.objectContaining({ token: "cached-access-token" }),
+      ),
+    );
+    expect(
+      screen.queryByRole("dialog", { name: "Choose a Google Drive folder" }),
+    ).toBeNull();
+  });
+
+  it("shows actionable guidance when Shared Drives cannot be listed", async () => {
+    mocks.listSharedDrives.mockRejectedValue(new Error("Drive API disabled"));
+
+    render(<GoogleDrivePickerButton />);
+    fireEvent.click(screen.getByRole("button", { name: "Choose Folder" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Verify that the Google Drive API is enabled for this credential's project",
+    );
+    expect(mocks.openPicker).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Browse folders…" }));
+    await waitFor(() => expect(mocks.openPicker).toHaveBeenCalledTimes(1));
   });
 });
