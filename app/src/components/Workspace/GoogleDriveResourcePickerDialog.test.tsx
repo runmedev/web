@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { GoogleDriveResourcePickerDialog } from './GoogleDriveResourcePickerDialog'
+import { IncompleteGoogleDriveSearchError } from './googleDriveBrowser'
 
 const mocks = vi.hoisted(() => ({
   listChildren: vi.fn(),
@@ -206,5 +207,29 @@ describe('GoogleDriveResourcePickerDialog', () => {
       driveId: 'drive-1',
     })
     expect(screen.getByRole('button', { name: 'Design docs' })).toBeTruthy()
+  })
+
+  it('shows actionable guidance for an incomplete all-Drive search', async () => {
+    mocks.searchResources.mockRejectedValue(
+      new IncompleteGoogleDriveSearchError()
+    )
+    render(
+      <GoogleDriveResourcePickerDialog
+        accessToken="token"
+        mode="folder"
+        onCancel={vi.fn()}
+        onSelect={vi.fn()}
+      />
+    )
+
+    const searchInput = await screen.findByRole('searchbox', {
+      name: 'Search Google Drive',
+    })
+    fireEvent.change(searchInput, { target: { value: 'design' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'Narrow the search text and retry'
+    )
   })
 })

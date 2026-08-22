@@ -5,6 +5,7 @@ import {
   setGoogleDriveBaseUrl,
 } from '../../lib/googleDriveRuntime'
 import {
+  IncompleteGoogleDriveSearchError,
   listGoogleDriveChildren,
   listGoogleDriveRoots,
   searchGoogleDriveResources,
@@ -141,5 +142,27 @@ describe('googleDriveBrowser', () => {
     expect(url.searchParams.get('q')).toBe(
       "name contains 'Bob\\'s \\\\ Plans' and trashed = false and mimeType = 'application/vnd.google-apps.folder'"
     )
+  })
+
+  it('rejects incomplete all-Drive search results instead of presenting them as exhaustive', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          incompleteSearch: true,
+          files: [
+            {
+              id: 'partial-result',
+              name: 'Partial result',
+              mimeType: 'application/vnd.google-apps.folder',
+            },
+          ],
+        }),
+        { status: 200 }
+      )
+    )
+
+    await expect(
+      searchGoogleDriveResources('token', 'design', 'folder', fetchImpl)
+    ).rejects.toBeInstanceOf(IncompleteGoogleDriveSearchError)
   })
 })

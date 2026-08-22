@@ -275,6 +275,8 @@ list the target My Drive or Shared Drive resources. Diagnostics use stable
 `DRIVE_PICKER_ROOT_LIST_FAILED` or `DRIVE_PICKER_CHILD_LIST_FAILED` codes and
 never contain the bearer token. Search failures use
 `DRIVE_PICKER_SEARCH_FAILED` and keep the query available for retry.
+If Drive reports `incompleteSearch`, Runme does not present partial matches as
+exhaustive; it asks the user to narrow the search text and retry.
 
 `drive.authorize()` starts a fresh Google Drive OAuth flow. It first clears any
 locally stored Drive OAuth handoff state from a previous redirect or new-tab

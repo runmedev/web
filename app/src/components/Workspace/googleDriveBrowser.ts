@@ -24,6 +24,15 @@ type FileListResponse = {
   nextPageToken?: string
 }
 
+export class IncompleteGoogleDriveSearchError extends Error {
+  constructor() {
+    super(
+      'Google Drive could not search every accessible Drive. Narrow the search and retry.'
+    )
+    this.name = 'IncompleteGoogleDriveSearchError'
+  }
+}
+
 function driveApiUrl(path: string): URL {
   const baseUrl = getGoogleDriveBaseUrl() || 'https://www.googleapis.com'
   return new URL(path, `${baseUrl}/`)
@@ -167,6 +176,7 @@ export async function searchGoogleDriveResources(
   }
 
   const resources: GoogleDriveResource[] = []
+  let incompleteSearch = false
   let pageToken: string | undefined
   do {
     const url = driveApiUrl('drive/v3/files')
@@ -212,8 +222,13 @@ export async function searchGoogleDriveResources(
         })
       }
     }
+    incompleteSearch ||= page.incompleteSearch === true
     pageToken = page.nextPageToken
   } while (pageToken)
+
+  if (incompleteSearch) {
+    throw new IncompleteGoogleDriveSearchError()
+  }
 
   return resources
 }

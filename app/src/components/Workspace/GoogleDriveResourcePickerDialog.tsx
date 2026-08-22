@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { appLogger } from '../../lib/logging/runtime'
 import {
   GOOGLE_DRIVE_FOLDER_MIME_TYPE,
+  IncompleteGoogleDriveSearchError,
   listGoogleDriveChildren,
   listGoogleDriveRoots,
   searchGoogleDriveResources,
@@ -170,7 +171,9 @@ export function GoogleDriveResourcePickerDialog({
           },
         })
         setErrorMessage(
-          `Runme could not search Google Drive for “${query}”. Verify that the Google Drive API is enabled and the effective Drive identity can list resources, then retry.`
+          error instanceof IncompleteGoogleDriveSearchError
+            ? 'Google Drive could not search every accessible Drive. Narrow the search text and retry.'
+            : `Runme could not search Google Drive for “${query}”. Verify that the Google Drive API is enabled and the effective Drive identity can list resources, then retry.`
         )
       } finally {
         if (requestId === requestIdRef.current) {
