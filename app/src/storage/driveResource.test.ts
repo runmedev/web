@@ -5,6 +5,7 @@ import { DRIVE_RESUMABLE_CHUNK_BYTES, DriveNotebookStore } from './drive'
 
 const fileUri = 'https://drive.google.com/file/d/file-123/view'
 const folderUri = 'https://drive.google.com/drive/folders/folder-123'
+const protectedFolderUri = `${folderUri}?resourcekey=folder-key`
 
 describe('DriveNotebookStore linked resources', () => {
   afterEach(() => {
@@ -142,12 +143,18 @@ describe('DriveNotebookStore linked resources', () => {
     const body = new Uint8Array(DRIVE_RESUMABLE_CHUNK_BYTES + 1)
 
     await expect(
-      store.uploadResource(folderUri, 'demo.webm', body, {
+      store.uploadResource(protectedFolderUri, 'demo.webm', body, {
         mimeType: 'video/webm',
         operationId: 'operation-123',
         onProgress: progress,
       })
     ).resolves.toMatchObject({ uri: fileUri, sizeBytes: body.byteLength })
+
+    expect(
+      new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get(
+        'X-Goog-Drive-Resource-Keys'
+      )
+    ).toBe('folder-123/folder-key')
 
     expect(fetchMock.mock.calls[1]?.[1]).toEqual(
       expect.objectContaining({

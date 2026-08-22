@@ -264,13 +264,17 @@ type DriveRevisionListResponse = {
 
 interface DriveFilesClient {
   generateFileId(): Promise<string>
-  create(doc: DriveDoc): Promise<DriveDoc>
+  create(
+    doc: DriveDoc,
+    resourceKeyHeaders?: Record<string, string>
+  ): Promise<DriveDoc>
   update(doc: DriveDoc): Promise<DriveDoc>
   move(
     fileId: string,
     sourceParentId: string,
     destinationParentId: string,
-    resourceKey?: string
+    resourceKey?: string,
+    resourceKeyHeaders?: Record<string, string>
   ): Promise<DriveDoc>
   get(
     request: Record<string, unknown>
@@ -320,7 +324,11 @@ interface DriveFilesClient {
     resource: Record<string, unknown>
     fields?: string
   }): Promise<{ result?: unknown }>
-  ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc>
+  ensureParent(
+    file: DriveDoc,
+    parentId?: string,
+    resourceKeyHeaders?: Record<string, string>
+  ): Promise<DriveDoc>
 }
 
 class DrivePreconditionFailedError extends Error {}
@@ -429,10 +437,11 @@ function serviceAccountStorageQuotaErrorMessage(
 
 async function createDriveItem(
   client: DriveFilesClient,
-  doc: DriveDoc
+  doc: DriveDoc,
+  resourceKeyHeaders: Record<string, string> = {}
 ): Promise<DriveDoc> {
   try {
-    return await client.create(doc)
+    return await client.create(doc, resourceKeyHeaders)
   } catch (error) {
     const message = serviceAccountStorageQuotaErrorMessage(error)
     if (message) {
@@ -678,16 +687,27 @@ class GapiDriveFilesClient implements DriveFilesClient {
     return id[0]
   }
 
-  async create(doc: DriveDoc): Promise<DriveDoc> {
+  async create(
+    doc: DriveDoc,
+    resourceKeyHeaders: Record<string, string> = {}
+  ): Promise<DriveDoc> {
     const resource = this.buildResource(doc, true)
-    const response = (await this.files.create({
-      resource,
-      fields:
-        doc.content === undefined
-          ? 'id,name,mimeType,parents'
-          : 'id,name,mimeType,parents,headRevisionId',
-      supportsAllDrives: true,
-    } as Record<string, unknown>)) as DriveCreateResponse
+    const fields =
+      doc.content === undefined
+        ? 'id,name,mimeType,parents'
+        : 'id,name,mimeType,parents,headRevisionId'
+    const response =
+      Object.keys(resourceKeyHeaders).length > 0
+        ? ((await this.request('POST', '/drive/v3/files', {
+            params: { fields, supportsAllDrives: true },
+            body: JSON.stringify(resource),
+            headers: resourceKeyHeaders,
+          })) as DriveCreateResponse)
+        : ((await this.files.create({
+            resource,
+            fields,
+            supportsAllDrives: true,
+          } as Record<string, unknown>)) as DriveCreateResponse)
     const file = response.result ?? {}
     if (file.id && doc.content !== undefined) {
       console.log(`Setting content for new Drive file ${file.id}`)
@@ -745,16 +765,27 @@ class GapiDriveFilesClient implements DriveFilesClient {
     fileId: string,
     sourceParentId: string,
     destinationParentId: string,
-    resourceKey?: string
+    resourceKey?: string,
+    resourceKeyHeaders: Record<string, string> = {}
   ): Promise<DriveDoc> {
-    const response = (await this.files.update({
-      fileId,
+    const params = {
       addParents: destinationParentId,
       removeParents: sourceParentId,
       supportsAllDrives: true,
       fields: 'id,name,mimeType,parents',
       resourceKey,
-    } as Record<string, unknown>)) as DriveUpdateResponse
+    }
+    const response =
+      Object.keys(resourceKeyHeaders).length > 0
+        ? ((await this.request(
+            'PATCH',
+            `/drive/v3/files/${encodeURIComponent(fileId)}`,
+            { params, headers: resourceKeyHeaders }
+          )) as DriveUpdateResponse)
+        : ((await this.files.update({
+            fileId,
+            ...params,
+          } as Record<string, unknown>)) as DriveUpdateResponse)
     return response.result ?? { id: fileId }
   }
 
@@ -942,7 +973,11 @@ class GapiDriveFilesClient implements DriveFilesClient {
     )
   }
 
-  async ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc> {
+  async ensureParent(
+    file: DriveDoc,
+    parentId?: string,
+    resourceKeyHeaders: Record<string, string> = {}
+  ): Promise<DriveDoc> {
     if (!file.id || !parentId) {
       return file
     }
@@ -958,7 +993,16 @@ class GapiDriveFilesClient implements DriveFilesClient {
     if ((file.parents ?? []).includes('root')) {
       request.removeParents = 'root'
     }
-    const response = (await this.files.update(request)) as DriveUpdateResponse
+    const rawParams = { ...request }
+    delete rawParams.fileId
+    const response =
+      Object.keys(resourceKeyHeaders).length > 0
+        ? ((await this.request(
+            'PATCH',
+            `/drive/v3/files/${encodeURIComponent(file.id)}`,
+            { params: rawParams, headers: resourceKeyHeaders }
+          )) as DriveUpdateResponse)
+        : ((await this.files.update(request)) as DriveUpdateResponse)
     return response.result ?? file
   }
 }
@@ -1096,7 +1140,10 @@ class FetchDriveFilesClient implements DriveFilesClient {
     )
   }
 
-  async create(doc: DriveDoc): Promise<DriveDoc> {
+  async create(
+    doc: DriveDoc,
+    resourceKeyHeaders: Record<string, string> = {}
+  ): Promise<DriveDoc> {
     const response = await this.request('POST', '/drive/v3/files', {
       params: {
         fields:
@@ -1106,6 +1153,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
         supportsAllDrives: 'true',
       },
       body: JSON.stringify(this.buildResource(doc, true)),
+      headers: resourceKeyHeaders,
     })
     const file = (response.result ?? {}) as DriveDoc
     if (file.id && doc.content !== undefined) {
@@ -1161,7 +1209,8 @@ class FetchDriveFilesClient implements DriveFilesClient {
     fileId: string,
     sourceParentId: string,
     destinationParentId: string,
-    resourceKey?: string
+    resourceKey?: string,
+    resourceKeyHeaders: Record<string, string> = {}
   ): Promise<DriveDoc> {
     const response = await this.request(
       'PATCH',
@@ -1174,6 +1223,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
           fields: 'id,name,mimeType,parents',
           resourceKey,
         },
+        headers: resourceKeyHeaders,
       }
     )
     return (response.result ?? { id: fileId }) as DriveDoc
@@ -1364,7 +1414,11 @@ class FetchDriveFilesClient implements DriveFilesClient {
     )
   }
 
-  async ensureParent(file: DriveDoc, parentId?: string): Promise<DriveDoc> {
+  async ensureParent(
+    file: DriveDoc,
+    parentId?: string,
+    resourceKeyHeaders: Record<string, string> = {}
+  ): Promise<DriveDoc> {
     if (!file.id || !parentId) {
       return file
     }
@@ -1384,6 +1438,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
             ? { removeParents: 'root' }
             : {}),
         },
+        headers: resourceKeyHeaders,
       }
     )
 
@@ -1548,19 +1603,35 @@ export interface DriveItem {
   resourceKey?: string
 }
 
-/** Creates the Drive header required to dereference a resource-key URL. */
+/** Creates the Drive header required to dereference resource-key URLs. */
+function driveResourceKeysHeaders(
+  items: Array<Pick<DriveItem, 'id' | 'resourceKey'>>
+): Record<string, string> {
+  const keyedItems = new Map<string, string>()
+  for (const item of items) {
+    if (!item.resourceKey) {
+      continue
+    }
+    if (!/^[A-Za-z0-9_-]+$/.test(item.resourceKey)) {
+      throw new Error('Google Drive resource key contains invalid characters')
+    }
+    keyedItems.set(item.id, item.resourceKey)
+  }
+  if (keyedItems.size === 0) {
+    return {}
+  }
+  return {
+    'X-Goog-Drive-Resource-Keys': [...keyedItems]
+      .map(([id, resourceKey]) => `${id}/${resourceKey}`)
+      .join(','),
+  }
+}
+
+/** Creates the Drive header required to dereference one resource-key URL. */
 function driveResourceKeyHeaders(
   item: Pick<DriveItem, 'id' | 'resourceKey'>
 ): Record<string, string> {
-  if (!item.resourceKey) {
-    return {}
-  }
-  if (!/^[A-Za-z0-9_-]+$/.test(item.resourceKey)) {
-    throw new Error('Google Drive resource key contains invalid characters')
-  }
-  return {
-    'X-Goog-Drive-Resource-Keys': `${item.id}/${item.resourceKey}`,
-  }
+  return driveResourceKeysHeaders([item])
 }
 
 type DriveFileMetadata = {
@@ -1908,21 +1979,24 @@ export class DriveNotebookStore {
     parentUri: string,
     operationId: string
   ): Promise<DriveResourceMetadata | null> {
-    const { id: parentId, type } = parseDriveItem(parentUri)
-    if (type !== NotebookStoreItemType.Folder) {
+    const parent = parseDriveItem(parentUri)
+    if (parent.type !== NotebookStoreItemType.Folder) {
       throw new Error('Drive resource upload requires a folder URI')
     }
-    const result = await this.search({
-      q:
-        `'${escapeDriveQueryValue(parentId)}' in parents and trashed = false and ` +
-        `appProperties has { key='${DRIVE_UPLOAD_OPERATION_PROPERTY}' and ` +
-        `value='${escapeDriveQueryValue(operationId)}' }`,
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true,
-      orderBy: 'createdTime asc',
-      pageSize: 2,
-      fields: `files(${DRIVE_RESOURCE_FIELDS})`,
-    })
+    const result = await this.search(
+      {
+        q:
+          `'${escapeDriveQueryValue(parent.id)}' in parents and trashed = false and ` +
+          `appProperties has { key='${DRIVE_UPLOAD_OPERATION_PROPERTY}' and ` +
+          `value='${escapeDriveQueryValue(operationId)}' }`,
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+        orderBy: 'createdTime asc',
+        pageSize: 2,
+        fields: `files(${DRIVE_RESOURCE_FIELDS})`,
+      },
+      driveResourceKeyHeaders(parent)
+    )
     if (result.files.length > 1) {
       throw new LinkedResourceError(
         'RESOURCE_CHANGED',
@@ -1941,8 +2015,8 @@ export class DriveNotebookStore {
     body: BinaryBody,
     options: DriveResourceUploadOptions
   ): Promise<DriveResourceMetadata> {
-    const { id: parentId, type } = parseDriveItem(parentUri)
-    if (type !== NotebookStoreItemType.Folder) {
+    const parent = parseDriveItem(parentUri)
+    if (parent.type !== NotebookStoreItemType.Folder) {
       throw new Error('Drive resource upload requires a folder URI')
     }
     const normalizedName = name.trim()
@@ -1966,7 +2040,7 @@ export class DriveNotebookStore {
     const metadata = {
       name: normalizedName,
       mimeType: blob.type || 'application/octet-stream',
-      parents: [parentId],
+      parents: [parent.id],
       appProperties: {
         ...options.appProperties,
         [DRIVE_ASSET_PROPERTY]: 'true',
@@ -1988,6 +2062,7 @@ export class DriveNotebookStore {
             'Content-Type': 'application/json; charset=UTF-8',
             'X-Upload-Content-Type': blob.type || 'application/octet-stream',
             'X-Upload-Content-Length': String(blob.size),
+            ...driveResourceKeyHeaders(parent),
           },
           body: JSON.stringify(metadata),
           signal: options.signal,
@@ -2142,8 +2217,8 @@ export class DriveNotebookStore {
 
   /** Return whether Drive permits a pre-generated file ID in this parent. */
   async canUsePreGeneratedFileId(parentUri: string): Promise<boolean> {
-    const { id, type } = parseDriveItem(parentUri)
-    if (type !== NotebookStoreItemType.Folder) {
+    const parent = parseDriveItem(parentUri)
+    if (parent.type !== NotebookStoreItemType.Folder) {
       throw new Error(
         'DriveNotebookStore.canUsePreGeneratedFileId expects a folder URI'
       )
@@ -2151,9 +2226,10 @@ export class DriveNotebookStore {
     const response = await (
       await this.getFilesClient()
     ).get({
-      fileId: id,
+      fileId: parent.id,
       supportsAllDrives: true,
       fields: 'driveId',
+      resourceKey: parent.resourceKey,
     })
     return !(response.result as DriveDoc | undefined)?.driveId
   }
@@ -2163,48 +2239,53 @@ export class DriveNotebookStore {
     name: string,
     options: DriveCreateOptions = {}
   ): Promise<NotebookStoreItem> {
-    const { id, type } = parseDriveItem(parentUri)
-    if (type !== NotebookStoreItemType.Folder) {
+    const parent = parseDriveItem(parentUri)
+    if (parent.type !== NotebookStoreItemType.Folder) {
       throw new Error('DriveNotebookStore.create expects a folder URI')
     }
     const client = await this.getFilesClient()
     const format = detectNotebookFileFormat(name)
     const mimeType = format === 'ipynb' ? IPYNB_MIME_TYPE : 'application/json'
-    let file = await createDriveItem(client, {
-      id: options.fileId,
-      name,
-      mimeType,
-      parents: [id],
-      content:
-        format === 'ipynb'
-          ? createInitialNotebookFile(name)
-          : createInitialNotebookJson(),
-      ...(options.createOperationId
-        ? {
-            appProperties: {
-              [DRIVE_CREATE_OPERATION_PROPERTY]: options.createOperationId,
-              ...(options.expectedContentChecksum
-                ? {
-                    [DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY]:
-                      options.expectedContentChecksum,
-                  }
-                : {}),
-              ...(options.expectedRequestFingerprint
-                ? {
-                    [DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY]:
-                      options.expectedRequestFingerprint,
-                  }
-                : {}),
-            },
-          }
-        : {}),
-    })
+    const parentHeaders = driveResourceKeyHeaders(parent)
+    let file = await createDriveItem(
+      client,
+      {
+        id: options.fileId,
+        name,
+        mimeType,
+        parents: [parent.id],
+        content:
+          format === 'ipynb'
+            ? createInitialNotebookFile(name)
+            : createInitialNotebookJson(),
+        ...(options.createOperationId
+          ? {
+              appProperties: {
+                [DRIVE_CREATE_OPERATION_PROPERTY]: options.createOperationId,
+                ...(options.expectedContentChecksum
+                  ? {
+                      [DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY]:
+                        options.expectedContentChecksum,
+                    }
+                  : {}),
+                ...(options.expectedRequestFingerprint
+                  ? {
+                      [DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY]:
+                        options.expectedRequestFingerprint,
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+      },
+      parentHeaders
+    )
 
     if (!file.id) {
       throw new Error('Failed to create Google Drive notebook file')
     }
     const fileId = file.id
-    file = await client.ensureParent(file, id)
+    file = await client.ensureParent(file, parent.id, parentHeaders)
     const isFolder = file.mimeType === DRIVE_FOLDER_MIME_TYPE
     return {
       uri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
@@ -2226,8 +2307,8 @@ export class DriveNotebookStore {
     mimeType: string = 'application/octet-stream',
     options: DriveCreateOptions = {}
   ): Promise<NotebookStoreItem> {
-    const { id, type } = parseDriveItem(parentUri)
-    if (type !== NotebookStoreItemType.Folder) {
+    const parent = parseDriveItem(parentUri)
+    if (parent.type !== NotebookStoreItemType.Folder) {
       throw new Error('DriveNotebookStore.createContent expects a folder URI')
     }
     let client: DriveFilesClient
@@ -2240,33 +2321,37 @@ export class DriveNotebookStore {
       )
     }
     let file: DriveDoc
+    const parentHeaders = driveResourceKeyHeaders(parent)
     try {
-      file = await client.create({
-        id: options.fileId,
-        name,
-        mimeType,
-        parents: [id],
-        content,
-        ...(options.createOperationId
-          ? {
-              appProperties: {
-                [DRIVE_CREATE_OPERATION_PROPERTY]: options.createOperationId,
-                ...(options.expectedContentChecksum
-                  ? {
-                      [DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY]:
-                        options.expectedContentChecksum,
-                    }
-                  : {}),
-                ...(options.expectedRequestFingerprint
-                  ? {
-                      [DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY]:
-                        options.expectedRequestFingerprint,
-                    }
-                  : {}),
-              },
-            }
-          : {}),
-      })
+      file = await client.create(
+        {
+          id: options.fileId,
+          name,
+          mimeType,
+          parents: [parent.id],
+          content,
+          ...(options.createOperationId
+            ? {
+                appProperties: {
+                  [DRIVE_CREATE_OPERATION_PROPERTY]: options.createOperationId,
+                  ...(options.expectedContentChecksum
+                    ? {
+                        [DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY]:
+                          options.expectedContentChecksum,
+                      }
+                    : {}),
+                  ...(options.expectedRequestFingerprint
+                    ? {
+                        [DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY]:
+                          options.expectedRequestFingerprint,
+                      }
+                    : {}),
+                },
+              }
+            : {}),
+        },
+        parentHeaders
+      )
     } catch (error) {
       if (error instanceof DriveFileCreatedError) {
         throw error
@@ -2300,7 +2385,7 @@ export class DriveNotebookStore {
       throw new Error('Failed to create Google Drive file')
     }
     const fileId = file.id
-    file = await client.ensureParent(file, id)
+    file = await client.ensureParent(file, parent.id, parentHeaders)
     const isFolder = file.mimeType === DRIVE_FOLDER_MIME_TYPE
     return {
       uri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
@@ -2319,8 +2404,8 @@ export class DriveNotebookStore {
     parentUri: string,
     createOperationId: string
   ): Promise<NotebookStoreItem | null> {
-    const { id, type } = parseDriveItem(parentUri)
-    if (type !== NotebookStoreItemType.Folder) {
+    const parent = parseDriveItem(parentUri)
+    if (parent.type !== NotebookStoreItemType.Folder) {
       throw new Error(
         'DriveNotebookStore.findByCreateOperation expects a folder URI'
       )
@@ -2331,19 +2416,22 @@ export class DriveNotebookStore {
       )
     }
 
-    const escapedParentId = escapeDriveQueryValue(id)
+    const escapedParentId = escapeDriveQueryValue(parent.id)
     const escapedOperationId = escapeDriveQueryValue(createOperationId)
-    const result = await this.search({
-      q:
-        `'${escapedParentId}' in parents and trashed = false and ` +
-        `appProperties has { key='${DRIVE_CREATE_OPERATION_PROPERTY}' and ` +
-        `value='${escapedOperationId}' }`,
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true,
-      orderBy: 'createdTime asc',
-      pageSize: 2,
-      fields: 'files(id,name,mimeType,parents,createdTime,appProperties)',
-    })
+    const result = await this.search(
+      {
+        q:
+          `'${escapedParentId}' in parents and trashed = false and ` +
+          `appProperties has { key='${DRIVE_CREATE_OPERATION_PROPERTY}' and ` +
+          `value='${escapedOperationId}' }`,
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+        orderBy: 'createdTime asc',
+        pageSize: 2,
+        fields: 'files(id,name,mimeType,parents,createdTime,appProperties)',
+      },
+      driveResourceKeyHeaders(parent)
+    )
 
     if (result.files.length > 1) {
       throw new Error(
@@ -2439,22 +2527,27 @@ export class DriveNotebookStore {
     parentUri: string,
     name: string
   ): Promise<NotebookStoreItem> {
-    const { id, type } = parseDriveItem(parentUri)
-    if (type !== NotebookStoreItemType.Folder) {
+    const parent = parseDriveItem(parentUri)
+    if (parent.type !== NotebookStoreItemType.Folder) {
       throw new Error('DriveNotebookStore.createFolder expects a folder URI')
     }
     const client = await this.getFilesClient()
-    let folder = await createDriveItem(client, {
-      name,
-      mimeType: DRIVE_FOLDER_MIME_TYPE,
-      parents: [id],
-    })
+    const parentHeaders = driveResourceKeyHeaders(parent)
+    let folder = await createDriveItem(
+      client,
+      {
+        name,
+        mimeType: DRIVE_FOLDER_MIME_TYPE,
+        parents: [parent.id],
+      },
+      parentHeaders
+    )
 
     if (!folder.id) {
       throw new Error('Failed to create Google Drive folder')
     }
     const folderId = folder.id
-    folder = await client.ensureParent(folder, id)
+    folder = await client.ensureParent(folder, parent.id, parentHeaders)
     const folderUri = driveFolderUrl(folderId)
     return {
       uri: folderUri,
@@ -2933,7 +3026,8 @@ export class DriveNotebookStore {
       item.id,
       sourceParent.id,
       destinationParent.id,
-      item.resourceKey
+      item.resourceKey,
+      driveResourceKeysHeaders([sourceParent, destinationParent])
     )
     const fileId = file.id ?? item.id
     const isFolder =

@@ -75,4 +75,76 @@ describe('GAPI Drive media downloads', () => {
       })
     )
   })
+
+  it('authorizes protected parents for create and move requests', async () => {
+    window.gapi = {
+      load: (_name, options) => options.callback(),
+      client: {
+        load: vi.fn().mockResolvedValue(undefined),
+        setToken: vi.fn(),
+        getToken: () => ({ access_token: 'access-token' }),
+        drive: {
+          files: {
+            create: vi.fn(),
+            update: vi.fn(),
+            get: vi.fn(),
+            list: vi.fn(),
+          },
+          drives: { get: vi.fn() },
+          revisions: { get: vi.fn(), list: vi.fn() },
+        },
+        request: vi.fn(),
+      },
+    }
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input))
+        const headers = new Headers(init?.headers)
+        expect(headers.get('Authorization')).toBe('Bearer access-token')
+
+        if (init?.method === 'POST') {
+          expect(url.pathname).toBe('/drive/v3/files')
+          expect(headers.get('X-Goog-Drive-Resource-Keys')).toBe(
+            'parent123/parent-key'
+          )
+          return new Response(
+            JSON.stringify({
+              id: 'folder123',
+              name: 'Reports',
+              mimeType: 'application/vnd.google-apps.folder',
+              parents: ['parent123'],
+            })
+          )
+        }
+
+        expect(init?.method).toBe('PATCH')
+        expect(url.pathname).toBe('/drive/v3/files/file123')
+        expect(headers.get('X-Goog-Drive-Resource-Keys')).toBe(
+          'source123/source-key,destination123/destination-key'
+        )
+        expect(url.searchParams.get('resourceKey')).toBe('file-key')
+        return new Response(
+          JSON.stringify({
+            id: 'file123',
+            name: 'notebook.json',
+            mimeType: 'application/json',
+            parents: ['destination123'],
+          })
+        )
+      })
+
+    const store = new DriveNotebookStore(async () => 'access-token')
+    await store.createFolder(
+      'https://drive.google.com/drive/folders/parent123?resourcekey=parent-key',
+      'Reports'
+    )
+    await store.move(
+      'https://drive.google.com/file/d/file123/view?resourcekey=file-key',
+      'https://drive.google.com/drive/folders/source123?resourcekey=source-key',
+      'https://drive.google.com/drive/folders/destination123?resourcekey=destination-key'
+    )
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
 })
