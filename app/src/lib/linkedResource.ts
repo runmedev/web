@@ -167,7 +167,8 @@ function normalizeHttpsUri(uri: unknown, provider: LinkedResourceProvider) {
   }
   if (provider === 'google-drive') {
     const fileId = parseGoogleDriveFileId(parsed.toString())
-    return canonicalGoogleDriveFileUrl(fileId)
+    const resourceKey = parsed.searchParams.get('resourcekey') ?? undefined
+    return canonicalGoogleDriveFileUrl(fileId, resourceKey)
   }
   return parsed.toString()
 }
@@ -204,14 +205,28 @@ export function parseGoogleDriveFileId(uri: string): string {
   return fileId
 }
 
-export function canonicalGoogleDriveFileUrl(fileId: string): string {
+/** Builds a stable Drive file URL while retaining its access resource key. */
+export function canonicalGoogleDriveFileUrl(
+  fileId: string,
+  resourceKey?: string
+): string {
   if (!/^[A-Za-z0-9_-]+$/.test(fileId)) {
     throw new LinkedResourceError(
       'UNSUPPORTED_MEDIA_TYPE',
       'Google Drive file ID is invalid'
     )
   }
-  return `https://drive.google.com/file/d/${fileId}/view`
+  if (resourceKey && !/^[A-Za-z0-9_-]+$/.test(resourceKey)) {
+    throw new LinkedResourceError(
+      'UNSUPPORTED_MEDIA_TYPE',
+      'Google Drive resource key is invalid'
+    )
+  }
+  const url = new URL(`https://drive.google.com/file/d/${fileId}/view`)
+  if (resourceKey) {
+    url.searchParams.set('resourcekey', resourceKey)
+  }
+  return url.toString()
 }
 
 export function parseLinkedResource(value: string): LinkedResourceV1 {

@@ -525,6 +525,7 @@ export function GoogleDriveResourcePickerDialog({
   )
 }
 
+/** Renders the folder resource-type icon used by the Drive browser. */
 function FolderIcon() {
   return (
     <svg
@@ -537,6 +538,7 @@ function FolderIcon() {
   )
 }
 
+/** Renders the file resource-type icon used by the Drive browser. */
 function FileIcon() {
   return (
     <svg
