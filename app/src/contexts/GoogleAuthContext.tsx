@@ -803,6 +803,30 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
           )
         } catch (error) {
           hasDriveCredential = false
+          const cachedCredential =
+            readImpersonatedServiceAccountCredential()
+          const cachedIdentityMatches = Boolean(
+            cachedCredential &&
+              cachedCredential.serviceAccount.toLowerCase() ===
+                serviceAccount.trim().toLowerCase() &&
+              cachedCredential.humanPrincipal.toLowerCase() ===
+                humanPrincipal.toLowerCase()
+          )
+          // A failed preflight must invalidate the previous Drive target for
+          // the same identity. Otherwise the merge below can retain and later
+          // reinstall a credential that Drive has already rejected.
+          if (cachedIdentityMatches) {
+            clearImpersonatedServiceAccountCredential(['drive'])
+          }
+          if (
+            tokenInfoRef.current?.authFlow ===
+              'impersonated_service_account' &&
+            tokenInfoRef.current.effectivePrincipal?.toLowerCase() ===
+              serviceAccount.trim().toLowerCase()
+          ) {
+            setAccessToken('')
+            window.gapi?.client?.setToken(null)
+          }
           errors.push({
             target: 'drive',
             message: error instanceof Error ? error.message : String(error),

@@ -305,7 +305,23 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
       }
       throw new Error(`Unexpected request: ${url}`)
     })
+    mergeImpersonatedServiceAccountCredential({
+      serviceAccount: 'runme@runme-lewi-dev.iam.gserviceaccount.com',
+      humanPrincipal: 'jeremy@lewi.us',
+      authorizationLeaseExpiresAt: new Date(
+        Date.now() + 86_400_000
+      ).toISOString(),
+      drive: {
+        accessToken: 'previously-cached-drive-token',
+        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        scopes: DRIVE_SCOPES,
+      },
+    })
     const auth = await renderWithGoogleAuthProvider()
+
+    await expect(auth.ensureAccessToken({ interactive: false })).resolves.toBe(
+      'previously-cached-drive-token'
+    )
 
     let authorizationError: unknown
     await act(async () => {

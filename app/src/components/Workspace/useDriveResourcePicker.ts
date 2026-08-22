@@ -1,22 +1,9 @@
 import { useCallback } from 'react'
-import useDrivePicker from 'react-google-drive-picker'
 
-import { DRIVE_SCOPES } from '../../contexts/GoogleAuthContext'
 import { googleClientManager } from '../../lib/googleClientManager'
 import { appState } from '../../lib/runtime/AppState'
 import { driveFileUrl, driveFolderUrl } from '../../storage/drive'
-import { getGoogleDrivePickerViews } from './googleDrivePickerViews'
-
-type PickerDocument = {
-  id: string
-  name?: string
-  mimeType?: string
-}
-
-type PickerCallbackData = {
-  action: string
-  docs?: PickerDocument[]
-}
+import { openGoogleDrivePicker } from './googleDrivePickerViews'
 
 export type PickedDriveResource = {
   uri: string
@@ -25,8 +12,6 @@ export type PickedDriveResource = {
 }
 
 export function useDriveResourcePicker() {
-  const [openPicker] = useDrivePicker()
-
   const pick = useCallback(
     async (kind: 'file' | 'folder'): Promise<PickedDriveResource | null> => {
       const { clientId, developerKey, appId } =
@@ -41,21 +26,13 @@ export function useDriveResourcePicker() {
         throw new Error('Google Drive storage is not initialized.')
       }
       const token = await driveStore.getAccessToken({ interactive: true })
-      const customViews = await getGoogleDrivePickerViews(kind)
-      return new Promise((resolve) => {
-        openPicker({
+      return new Promise((resolve, reject) => {
+        void openGoogleDrivePicker({
           token,
           appId,
-          clientId,
           developerKey,
-          viewId: kind === 'folder' ? 'FOLDERS' : 'DOCS',
-          disableDefaultView: true,
-          customViews,
-          customScopes: DRIVE_SCOPES,
-          showUploadView: false,
-          showUploadFolders: false,
-          multiselect: false,
-          callbackFunction: (data: PickerCallbackData) => {
+          kind,
+          callback: (data) => {
             const selected = data.action === 'picked' ? data.docs?.[0] : null
             if (!selected?.id) {
               resolve(null)
@@ -70,10 +47,10 @@ export function useDriveResourcePicker() {
               mimeType: selected.mimeType,
             })
           },
-        })
+        }).catch(reject)
       })
     },
-    [openPicker]
+    []
   )
 
   return {
