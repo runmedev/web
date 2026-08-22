@@ -162,11 +162,16 @@ describe('GoogleDriveResourcePickerDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
 
     await screen.findByText('This folder is empty.')
-    expect(mocks.listChildren).toHaveBeenNthCalledWith(2, 'token', {
-      id: 'drive-1',
-      name: 'notebooks',
-      driveId: 'drive-1',
-    })
+    expect(mocks.listChildren).toHaveBeenNthCalledWith(
+      2,
+      'token',
+      {
+        id: 'drive-1',
+        name: 'notebooks',
+        driveId: 'drive-1',
+      },
+      'folder'
+    )
   })
 
   it('searches across Drive and navigates into a matching folder', async () => {
@@ -202,12 +207,16 @@ describe('GoogleDriveResourcePickerDialog', () => {
       'design',
       'folder'
     )
-    expect(mocks.listChildren).toHaveBeenCalledWith('token', {
-      id: 'folder-1',
-      name: 'Design docs',
-      mimeType: 'application/vnd.google-apps.folder',
-      driveId: 'drive-1',
-    })
+    expect(mocks.listChildren).toHaveBeenCalledWith(
+      'token',
+      {
+        id: 'folder-1',
+        name: 'Design docs',
+        mimeType: 'application/vnd.google-apps.folder',
+        driveId: 'drive-1',
+      },
+      'folder'
+    )
     expect(screen.getByRole('button', { name: 'Design docs' })).toBeTruthy()
   })
 

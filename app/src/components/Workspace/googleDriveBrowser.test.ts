@@ -92,6 +92,7 @@ describe('googleDriveBrowser', () => {
       listGoogleDriveChildren(
         'token',
         { id: 'drive-1', name: 'notebooks', driveId: 'drive-1' },
+        'file',
         fetchImpl
       )
     ).resolves.toEqual([
@@ -143,6 +144,7 @@ describe('googleDriveBrowser', () => {
           driveId: 'drive-1',
           resourceKey: 'parent-key',
         },
+        'folder',
         fetchImpl
       )
     ).resolves.toEqual([
@@ -158,6 +160,11 @@ describe('googleDriveBrowser', () => {
     const url = new URL(fetchImpl.mock.calls[0]?.[0] as string)
     expect(url.searchParams.get('fields')).toContain(
       'shortcutDetails(targetId,targetMimeType,targetResourceKey)'
+    )
+    expect(url.searchParams.get('q')).toBe(
+      "'drive-1' in parents and trashed = false and " +
+        "(mimeType = 'application/vnd.google-apps.folder' or " +
+        "mimeType = 'application/vnd.google-apps.shortcut')"
     )
     expect(fetchImpl.mock.calls[0]?.[1]).toEqual({
       headers: {

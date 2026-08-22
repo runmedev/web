@@ -199,6 +199,7 @@ export async function listGoogleDriveRoots(
 export async function listGoogleDriveChildren(
   accessToken: string,
   parent: GoogleDriveLocation,
+  mode: 'file' | 'folder',
   fetchImpl: typeof fetch = fetch
 ): Promise<GoogleDriveResource[]> {
   const resources: GoogleDriveResource[] = []
@@ -211,10 +212,16 @@ export async function listGoogleDriveChildren(
       'fields',
       'nextPageToken,files(id,name,mimeType,driveId,resourceKey,shortcutDetails(targetId,targetMimeType,targetResourceKey))'
     )
-    url.searchParams.set(
-      'q',
-      `'${escapeDriveQueryLiteral(parent.id)}' in parents and trashed = false`
-    )
+    const queryClauses = [
+      `'${escapeDriveQueryLiteral(parent.id)}' in parents`,
+      'trashed = false',
+    ]
+    if (mode === 'folder') {
+      queryClauses.push(
+        `(mimeType = '${GOOGLE_DRIVE_FOLDER_MIME_TYPE}' or mimeType = '${GOOGLE_DRIVE_SHORTCUT_MIME_TYPE}')`
+      )
+    }
+    url.searchParams.set('q', queryClauses.join(' and '))
     url.searchParams.set('spaces', 'drive')
     url.searchParams.set('supportsAllDrives', 'true')
     url.searchParams.set('includeItemsFromAllDrives', 'true')

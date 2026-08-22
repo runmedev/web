@@ -638,6 +638,7 @@ describe("DriveNotebookStore", () => {
       .spyOn(globalThis, "fetch")
       .mockImplementation(async (input, init) => {
         const url = new URL(String(input));
+        expect(url.searchParams.get("resourceKey")).toBe("file-key");
         if (init?.method === "GET") {
           expect(url.pathname).toBe("/drive/v3/files/file123");
           return new Response(
@@ -667,7 +668,7 @@ describe("DriveNotebookStore", () => {
     const store = new DriveNotebookStore(async () => "access-token");
     await expect(
       store.saveContentIfVersion(
-        "https://drive.google.com/file/d/file123/view",
+        "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
         '{"cells":[]}',
         "application/json",
         { checksum: "empty-checksum", revisionId: "empty-revision" },

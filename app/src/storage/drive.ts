@@ -274,7 +274,10 @@ interface DriveFilesClient {
   get(
     request: Record<string, unknown>
   ): Promise<{ body?: string; result?: unknown }>
-  getVersionMetadataWithEtag(fileId: string): Promise<{
+  getVersionMetadataWithEtag(
+    fileId: string,
+    resourceKey?: string
+  ): Promise<{
     metadata: DriveVersionMetadata | null
     etag?: string
   }>
@@ -282,7 +285,8 @@ interface DriveFilesClient {
     fileId: string,
     content: string,
     mimeType: string,
-    etag: string
+    etag: string,
+    resourceKey?: string
   ): Promise<boolean>
   getDrive(request: Record<string, unknown>): Promise<DriveGetResponse>
   list(
@@ -767,7 +771,10 @@ class GapiDriveFilesClient implements DriveFilesClient {
     }>
   }
 
-  async getVersionMetadataWithEtag(fileId: string): Promise<{
+  async getVersionMetadataWithEtag(
+    fileId: string,
+    resourceKey?: string
+  ): Promise<{
     metadata: DriveVersionMetadata | null
     etag?: string
   }> {
@@ -775,7 +782,11 @@ class GapiDriveFilesClient implements DriveFilesClient {
       'GET',
       `/drive/v3/files/${encodeURIComponent(fileId)}`,
       {
-        params: { supportsAllDrives: true, fields: VERSION_FIELDS },
+        params: {
+          supportsAllDrives: true,
+          fields: VERSION_FIELDS,
+          resourceKey,
+        },
       }
     )
     return {
@@ -788,14 +799,19 @@ class GapiDriveFilesClient implements DriveFilesClient {
     fileId: string,
     content: string,
     mimeType: string,
-    etag: string
+    etag: string,
+    resourceKey?: string
   ): Promise<boolean> {
     try {
       await this.request(
         'PATCH',
         `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
         {
-          params: { uploadType: 'media', supportsAllDrives: true },
+          params: {
+            uploadType: 'media',
+            supportsAllDrives: true,
+            resourceKey,
+          },
           body: content,
           contentType: mimeType,
           headers: { 'If-Match': etag },
@@ -1172,7 +1188,10 @@ class FetchDriveFilesClient implements DriveFilesClient {
     )
   }
 
-  async getVersionMetadataWithEtag(fileId: string): Promise<{
+  async getVersionMetadataWithEtag(
+    fileId: string,
+    resourceKey?: string
+  ): Promise<{
     metadata: DriveVersionMetadata | null
     etag?: string
   }> {
@@ -1180,7 +1199,11 @@ class FetchDriveFilesClient implements DriveFilesClient {
       'GET',
       `/drive/v3/files/${encodeURIComponent(fileId)}`,
       {
-        params: { supportsAllDrives: true, fields: VERSION_FIELDS },
+        params: {
+          supportsAllDrives: true,
+          fields: VERSION_FIELDS,
+          resourceKey,
+        },
       }
     )
     return {
@@ -1193,14 +1216,19 @@ class FetchDriveFilesClient implements DriveFilesClient {
     fileId: string,
     content: string,
     mimeType: string,
-    etag: string
+    etag: string,
+    resourceKey?: string
   ): Promise<boolean> {
     try {
       await this.request(
         'PATCH',
         `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
         {
-          params: { uploadType: 'media', supportsAllDrives: true },
+          params: {
+            uploadType: 'media',
+            supportsAllDrives: true,
+            resourceKey,
+          },
           body: content,
           contentType: mimeType,
           headers: { 'If-Match': etag },
@@ -2743,7 +2771,7 @@ export class DriveNotebookStore {
   }
 
   async getVersionMetadata(uri: string): Promise<DriveVersionMetadata | null> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error(
         'DriveNotebookStore.getVersionMetadata expects a file URI'
@@ -2754,6 +2782,7 @@ export class DriveNotebookStore {
       fileId: id,
       supportsAllDrives: true,
       fields: VERSION_FIELDS,
+      resourceKey,
     })
     const result = metadataResponse.result as DriveVersionMetadata | undefined
     if (result?.md5Checksum) {
@@ -2946,7 +2975,7 @@ export class DriveNotebookStore {
     content: string,
     mimeType: string = 'application/octet-stream'
   ): Promise<void> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.saveContent expects a file URI')
     }
@@ -2955,6 +2984,7 @@ export class DriveNotebookStore {
       id,
       mimeType,
       content,
+      resourceKey,
     })
   }
 
@@ -2969,14 +2999,17 @@ export class DriveNotebookStore {
     mimeType: string,
     expected: { checksum?: string; revisionId?: string }
   ): Promise<boolean> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error(
         'DriveNotebookStore.saveContentIfVersion expects a file URI'
       )
     }
     const client = await this.getFilesClient()
-    const { metadata, etag } = await client.getVersionMetadataWithEtag(id)
+    const { metadata, etag } = await client.getVersionMetadataWithEtag(
+      id,
+      resourceKey
+    )
     const actualChecksum = metadata?.md5Checksum ?? ''
     const expectedChecksum = expected.checksum ?? ''
     if (
@@ -2991,7 +3024,7 @@ export class DriveNotebookStore {
       // validator needed to protect a collaborator's concurrent edit.
       return false
     }
-    return client.setContentIfMatch(id, content, mimeType, etag)
+    return client.setContentIfMatch(id, content, mimeType, etag, resourceKey)
   }
 
   async loadContent(uri: string): Promise<string> {

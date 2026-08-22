@@ -4,10 +4,15 @@ import { create, toJsonString } from '@bufbuild/protobuf'
 import md5 from 'md5'
 import { describe, expect, it, vi } from 'vitest'
 
+import {
+  clearGoogleDriveRuntime,
+  setGoogleDriveBaseUrl,
+} from '../lib/googleDriveRuntime'
 import { IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { encodeIpynbNotebook, encodeRunmeNotebook } from '../lib/notebookFormat'
 import { MimeType, parser_pb } from '../runme/client'
 import { MemoryConflictDocStorage } from './conflictDocs'
+import { DriveNotebookStore } from './drive'
 import type { DriveSyncCoordinator } from './driveSyncCoordinator'
 import {
   EXCALIDRAW_MIME_TYPE,
@@ -1212,6 +1217,101 @@ describe('LocalNotebooks pending Drive create', () => {
       mimeType: EXCALIDRAW_MIME_TYPE,
       lastRemoteChecksum: 'remote-after-save',
     })
+  })
+
+  it('preserves a protected file resource key through the real Drive sync path', async () => {
+    setGoogleDriveBaseUrl('https://drive.example.test')
+    const remoteUri =
+      'https://drive.google.com/file/d/file123/view?resourcekey=file-key'
+    const content = createInitialExcalidrawDocumentJson()
+    let versionRequests = 0
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input))
+        expect(url.searchParams.get('resourceKey')).toBe('file-key')
+
+        if (init?.method === 'GET') {
+          const fields = url.searchParams.get('fields') ?? ''
+          if (fields.includes('md5Checksum')) {
+            versionRequests += 1
+            return new Response(
+              JSON.stringify({
+                id: 'file123',
+                name: 'diagram.excalidraw',
+                mimeType: EXCALIDRAW_MIME_TYPE,
+                md5Checksum:
+                  versionRequests === 1
+                    ? 'remote-before-save'
+                    : 'remote-after-save',
+                headRevisionId: `revision-${versionRequests}`,
+              }),
+              {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }
+            )
+          }
+          return new Response(
+            JSON.stringify({
+              id: 'file123',
+              name: 'diagram.excalidraw',
+              mimeType: EXCALIDRAW_MIME_TYPE,
+            }),
+            {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            }
+          )
+        }
+
+        expect(init?.method).toBe('PATCH')
+        if (url.pathname === '/drive/v3/files/file123') {
+          return new Response(
+            JSON.stringify({
+              id: 'file123',
+              name: 'diagram.excalidraw',
+              mimeType: EXCALIDRAW_MIME_TYPE,
+            }),
+            {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            }
+          )
+        }
+        expect(url.pathname).toBe('/upload/drive/v3/files/file123')
+        expect(init?.body).toBe(content)
+        return new Response('', { status: 200 })
+      })
+
+    try {
+      const store = createTestStore(
+        new DriveNotebookStore(async () => 'access-token')
+      )
+      await store.files.put({
+        id: 'local://file/protected-excalidraw',
+        name: 'diagram.excalidraw',
+        mimeType: EXCALIDRAW_MIME_TYPE,
+        remoteId: remoteUri,
+        lastRemoteChecksum: 'remote-before-save',
+        lastSynced: '',
+        doc: content,
+        md5Checksum: '',
+      })
+
+      await store.sync('local://file/protected-excalidraw')
+
+      expect(fetchMock).toHaveBeenCalledTimes(5)
+      await expect(
+        store.files.get('local://file/protected-excalidraw')
+      ).resolves.toMatchObject({
+        remoteId: remoteUri,
+        lastRemoteChecksum: 'remote-after-save',
+      })
+    } finally {
+      fetchMock.mockRestore()
+      clearGoogleDriveRuntime()
+    }
   })
 
   it('hydrates raw Excalidraw content from Drive into the local mirror', async () => {

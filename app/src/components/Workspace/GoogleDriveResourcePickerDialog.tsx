@@ -117,7 +117,8 @@ export function GoogleDriveResourcePickerDialog({
       try {
         const nextResources = await listGoogleDriveChildren(
           accessToken,
-          location
+          location,
+          mode
         )
         if (requestId === requestIdRef.current) {
           setResources(nextResources)
@@ -143,7 +144,7 @@ export function GoogleDriveResourcePickerDialog({
         }
       }
     },
-    [accessToken]
+    [accessToken, mode]
   )
 
   const search = useCallback(
