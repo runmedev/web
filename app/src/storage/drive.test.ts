@@ -1,10 +1,12 @@
 /// <reference types="vitest" />
+import { create } from "@bufbuild/protobuf";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearGoogleDriveRuntime,
   setGoogleDriveBaseUrl,
 } from "../lib/googleDriveRuntime";
+import { parser_pb } from "../runme/client";
 import {
   DriveCreateNotCommittedError,
   DriveFileCreatedError,
@@ -728,6 +730,50 @@ describe("DriveNotebookStore", () => {
         "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
       ),
     ).resolves.toBe('{"type":"excalidraw"}');
+  });
+
+  it("propagates a resource key through protected notebook saves", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        expect(url.searchParams.get("resourceKey")).toBe("file-key");
+        if (init?.method === "GET") {
+          return new Response(
+            JSON.stringify({
+              md5Checksum:
+                fetchMock.mock.calls.length === 1
+                  ? "original-checksum"
+                  : "updated-checksum",
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        if (url.pathname === "/drive/v3/files/file123") {
+          expect(init?.method).toBe("PATCH");
+          return new Response(JSON.stringify({ id: "file123" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        expect(url.pathname).toBe("/upload/drive/v3/files/file123");
+        expect(init?.method).toBe("PATCH");
+        return new Response("", { status: 200 });
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const notebook = create(parser_pb.NotebookSchema, { cells: [] });
+    await expect(
+      store.save(
+        "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
+        notebook,
+      ),
+    ).resolves.toEqual({ conflicted: false });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("uses shared drive name for shared drive root folder metadata", async () => {

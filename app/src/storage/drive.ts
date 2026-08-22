@@ -605,7 +605,8 @@ class GapiDriveFilesClient implements DriveFilesClient {
   private async setContent(
     fileId: string,
     content: string,
-    mimeType?: string
+    mimeType?: string,
+    resourceKey?: string
   ): Promise<void> {
     const token = this.gapi.client.getToken?.()?.access_token ?? ''
     if (!token) {
@@ -616,6 +617,9 @@ class GapiDriveFilesClient implements DriveFilesClient {
     )
     url.searchParams.set('uploadType', 'media')
     url.searchParams.set('supportsAllDrives', 'true')
+    if (resourceKey) {
+      url.searchParams.set('resourceKey', resourceKey)
+    }
     const response = await fetch(url.toString(), {
       method: 'PATCH',
       headers: {
@@ -708,6 +712,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
         resource,
         fields: 'id,name,mimeType,parents',
         supportsAllDrives: true,
+        resourceKey: doc.resourceKey,
       } as Record<string, unknown>)) as DriveUpdateResponse
       file = response.result ?? { id: doc.id }
     } else {
@@ -720,7 +725,12 @@ class GapiDriveFilesClient implements DriveFilesClient {
     }
 
     if (doc.content !== undefined && file.id) {
-      await this.setContent(file.id, doc.content, doc.mimeType)
+      await this.setContent(
+        file.id,
+        doc.content,
+        doc.mimeType,
+        doc.resourceKey
+      )
     }
 
     return file
@@ -1049,7 +1059,8 @@ class FetchDriveFilesClient implements DriveFilesClient {
   private async setContent(
     fileId: string,
     content: string,
-    mimeType?: string
+    mimeType?: string,
+    resourceKey?: string
   ): Promise<void> {
     await this.request(
       'PATCH',
@@ -1058,6 +1069,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
         params: {
           uploadType: 'media',
           supportsAllDrives: 'true',
+          resourceKey,
         },
         body: content,
         contentType: mimeType ?? 'application/octet-stream',
@@ -1106,6 +1118,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
           params: {
             fields: 'id,name,mimeType,parents',
             supportsAllDrives: 'true',
+            resourceKey: doc.resourceKey,
           },
           body: JSON.stringify(resource),
         }
@@ -1114,7 +1127,12 @@ class FetchDriveFilesClient implements DriveFilesClient {
     }
 
     if (doc.content !== undefined) {
-      await this.setContent(doc.id, doc.content, doc.mimeType)
+      await this.setContent(
+        doc.id,
+        doc.content,
+        doc.mimeType,
+        doc.resourceKey
+      )
     }
 
     return file.id ? file : { ...doc }
@@ -2420,7 +2438,7 @@ export class DriveNotebookStore {
     uri: string,
     notebook: parser_pb.Notebook
   ): Promise<ConflictResult> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.save expects a file URI')
     }
@@ -2430,6 +2448,7 @@ export class DriveNotebookStore {
       supportsAllDrives: true,
       //fields: "md5Checksum",
       fields: VERSION_FIELDS,
+      resourceKey,
     })
     const remoteMd5 =
       (metadataResponse.result as { md5Checksum?: string } | undefined)
@@ -2456,11 +2475,13 @@ export class DriveNotebookStore {
       id,
       mimeType: 'application/json',
       content: json,
+      resourceKey,
     })
     const updatedMetadataResponse = await client.get({
       fileId: id,
       supportsAllDrives: true,
       fields: VERSION_FIELDS,
+      resourceKey,
     })
     const updatedMd5 =
       (updatedMetadataResponse.result as { md5Checksum?: string } | undefined)
