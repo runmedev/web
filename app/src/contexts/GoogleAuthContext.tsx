@@ -15,6 +15,7 @@ import {
   getGoogleHumanPrincipal,
   mintImpersonatedServiceAccountCredentials,
   resolveAuthorizationLeaseSeconds,
+  validateImpersonatedGoogleDriveAccessToken,
   type GetServiceAccountCredentialsOptions,
   type ServiceAccountCredentialStatus,
   type ServiceAccountCredentialTarget,
@@ -787,15 +788,30 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       const driveExpiresAtMs = credentials.driveAccessTokenExpiresAt
         ? Date.parse(credentials.driveAccessTokenExpiresAt)
         : Number.NaN
-      const hasDriveCredential = Boolean(
+      let hasDriveCredential = Boolean(
         credentials.driveAccessToken && Number.isFinite(driveExpiresAtMs)
       )
       const hasAppCredential = Boolean(
         credentials.appIdToken && credentials.appIdTokenExpiresAt
       )
+      const errors = [...credentials.errors]
+      if (hasDriveCredential) {
+        try {
+          await validateImpersonatedGoogleDriveAccessToken(
+            credentials.driveAccessToken!,
+            serviceAccount
+          )
+        } catch (error) {
+          hasDriveCredential = false
+          errors.push({
+            target: 'drive',
+            message: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
       if (!hasDriveCredential && !hasAppCredential) {
         throw new Error(
-          credentials.errors.map((error) => error.message).join('; ') ||
+          errors.map((error) => error.message).join('; ') ||
             'Google IAM did not mint any requested service-account credentials.'
         )
       }
@@ -844,10 +860,16 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
           credentials.appIdTokenExpiresAt!
         )
       }
-      setCredentialError(null)
+      setCredentialError(
+        errors.length > 0
+          ? errors
+              .map((error) => `${error.target}: ${error.message}`)
+              .join('; ')
+          : null
+      )
 
       return {
-        status: credentials.errors.length > 0 ? 'partial' : 'authorized',
+        status: errors.length > 0 ? 'partial' : 'authorized',
         humanPrincipal,
         serviceAccount: serviceAccount.trim(),
         authorizationLeaseExpiresAt,
@@ -867,9 +889,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
               },
             }
           : {}),
-        ...(credentials.errors.length > 0
-          ? { errors: credentials.errors }
-          : {}),
+        ...(errors.length > 0 ? { errors } : {}),
       }
     },
     [setAccessToken]

@@ -5,6 +5,7 @@ import { DRIVE_SCOPES } from '../../contexts/GoogleAuthContext'
 import { googleClientManager } from '../../lib/googleClientManager'
 import { appState } from '../../lib/runtime/AppState'
 import { driveFileUrl, driveFolderUrl } from '../../storage/drive'
+import { getGoogleDrivePickerViews } from './googleDrivePickerViews'
 
 type PickerDocument = {
   id: string
@@ -40,6 +41,7 @@ export function useDriveResourcePicker() {
         throw new Error('Google Drive storage is not initialized.')
       }
       const token = await driveStore.getAccessToken({ interactive: true })
+      const customViews = await getGoogleDrivePickerViews(kind)
       return new Promise((resolve) => {
         openPicker({
           token,
@@ -47,13 +49,12 @@ export function useDriveResourcePicker() {
           clientId,
           developerKey,
           viewId: kind === 'folder' ? 'FOLDERS' : 'DOCS',
+          disableDefaultView: true,
+          customViews,
           customScopes: DRIVE_SCOPES,
           showUploadView: false,
           showUploadFolders: false,
-          supportDrives: true,
           multiselect: false,
-          setIncludeFolders: kind === 'folder',
-          setSelectFolderEnabled: kind === 'folder',
           callbackFunction: (data: PickerCallbackData) => {
             const selected = data.action === 'picked' ? data.docs?.[0] : null
             if (!selected?.id) {

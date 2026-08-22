@@ -11,6 +11,8 @@ export const GOOGLE_SERVICE_ACCOUNT_IMPERSONATION_SCOPES = [
 const IAM_CREDENTIALS_BASE_URL =
   'https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts'
 const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo'
+const GOOGLE_DRIVE_ABOUT_URL =
+  'https://www.googleapis.com/drive/v3/about?fields=user(permissionId)'
 export const DEFAULT_IMPERSONATED_ACCESS_TOKEN_LIFETIME_SECONDS = 60 * 60
 const MAX_ACCESS_TOKEN_LIFETIME_SECONDS = 43200
 const DEFAULT_AUTHORIZATION_LEASE_SECONDS = 24 * 60 * 60
@@ -79,6 +81,19 @@ export type ServiceAccountCredentialStatus = {
 export type ServiceAccountCredentialTargetError = {
   target: ServiceAccountCredentialTarget
   message: string
+}
+
+export function getServiceAccountCredentialStatusError(
+  status: ServiceAccountCredentialStatus
+): string | null {
+  if (status.status !== 'partial') {
+    return null
+  }
+  return (
+    status.errors
+      ?.map((error) => `${error.target}: ${error.message}`)
+      .join('; ') || 'Service-account authorization completed only partially.'
+  )
 }
 
 export type MintImpersonatedServiceAccountCredentialsRequest = {
@@ -202,6 +217,59 @@ function formatIamCredentialsError(
   }
 
   return `Google IAM ${method} failed (${status}): ${detail.message}`
+}
+
+function serviceAccountProjectId(serviceAccount: string): string | undefined {
+  return serviceAccount.match(/@([^.]+)\.iam\.gserviceaccount\.com$/)?.[1]
+}
+
+function formatDriveCredentialError(
+  status: number,
+  detail: ParsedGoogleApiError,
+  serviceAccount: string
+): string {
+  const service = detail.metadata?.service
+  const isDriveApiDisabled =
+    detail.reason === 'SERVICE_DISABLED' &&
+    (!service || service === 'drive.googleapis.com')
+  if (
+    isDriveApiDisabled ||
+    /Drive API.*(?:disabled|not been used)/i.test(detail.message)
+  ) {
+    const consumer = detail.metadata?.consumer?.replace(/^projects\//, '')
+    const project = consumer || serviceAccountProjectId(serviceAccount)
+    const projectDescription = project ? ` ${project}` : ''
+    const activationUrl = new URL(
+      'https://console.cloud.google.com/apis/library/drive.googleapis.com'
+    )
+    if (project) {
+      activationUrl.searchParams.set('project', project)
+    }
+    return `Google Drive credential validation failed (${status}): Google Drive API is not enabled for service-account project${projectDescription}. Enable it, wait a few minutes for the change to propagate, then reconnect Drive: ${activationUrl.toString()}`
+  }
+
+  return `Google Drive credential validation failed (${status}): ${detail.message}`
+}
+
+/**
+ * Verifies a newly minted service-account token against Drive before the app
+ * publishes it as a syncing credential. IAM can mint a token even when the
+ * Drive API is disabled for the service-account project.
+ */
+export async function validateImpersonatedGoogleDriveAccessToken(
+  accessToken: string,
+  serviceAccount: string
+): Promise<void> {
+  const response = await fetch(GOOGLE_DRIVE_ABOUT_URL, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+  if (response.ok) {
+    return
+  }
+  const detail = await readGoogleApiError(response)
+  throw new Error(
+    formatDriveCredentialError(response.status, detail, serviceAccount)
+  )
 }
 
 async function postIamCredentials<T>(

@@ -9,6 +9,7 @@ import {
   type AppLoginMode,
   type IdentitySharingMode,
 } from '../../auth/appLoginConfiguration'
+import { getServiceAccountCredentialStatusError } from '../../auth/googleServiceAccountImpersonation'
 import { oidcConfigManager } from '../../auth/oidcConfig'
 import {
   getBrowserAdapter,
@@ -329,12 +330,19 @@ export default function AuthenticationSettingsPanel() {
       selectedHumanAccount: string,
       targets: Array<'drive' | 'app'>
     ) => {
-      await getServiceAccountCredentials(selectedServiceAccount.trim(), {
-        humanAccount: selectedHumanAccount.trim() || undefined,
-        prompt: selectedHumanAccount.trim() ? '' : 'select_account',
-        targets,
-        authorizationLeaseSeconds: 24 * 60 * 60,
-      })
+      const status = await getServiceAccountCredentials(
+        selectedServiceAccount.trim(),
+        {
+          humanAccount: selectedHumanAccount.trim() || undefined,
+          prompt: selectedHumanAccount.trim() ? '' : 'select_account',
+          targets,
+          authorizationLeaseSeconds: 24 * 60 * 60,
+        }
+      )
+      const error = getServiceAccountCredentialStatusError(status)
+      if (error) {
+        throw new Error(error)
+      }
     },
     [getServiceAccountCredentials]
   )

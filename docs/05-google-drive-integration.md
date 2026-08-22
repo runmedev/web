@@ -254,6 +254,13 @@ const result = await drive.search({
 folder. Use `drive.search` when the caller needs Drive query expressions,
 pagination, ordering, shared-drive scoping, or additional file metadata.
 
+The Explorer's **Add Google Drive folder** picker presents separate views for
+folders in My Drive and folders in Shared drives. Google Picker's deprecated
+`Feature.SUPPORT_DRIVES` flag is not sufficient to expose Shared drives. The
+Shared drives view must be a `DocsView` configured with
+`setEnableDrives(true)`. Selecting a Shared drive or a folder within it mounts
+that location in the Explorer using the same Drive mirror as a My Drive folder.
+
 `drive.authorize()` starts a fresh Google Drive OAuth flow. It first clears any
 locally stored Drive OAuth handoff state from a previous redirect or new-tab
 attempt, then starts the flow configured by `googleDrive.authFlow` and

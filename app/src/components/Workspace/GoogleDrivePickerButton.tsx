@@ -7,6 +7,7 @@ import { driveFolderUrl } from "../../storage/drive";
 import { googleClientManager } from "../../lib/googleClientManager";
 import { markOnboardingTaskComplete } from "../../lib/onboarding";
 import { tourUiController } from "../../lib/tourUiController";
+import { getGoogleDrivePickerViews } from "./googleDrivePickerViews";
 
 type PickerAction = "picked" | "cancel";
 
@@ -75,19 +76,26 @@ export function GoogleDrivePickerButton({
         return;
       }
 
+      let customViews;
+      try {
+        customViews = await getGoogleDrivePickerViews("folder");
+      } catch (error) {
+        console.error("Failed to load Google Drive picker views", error);
+        return;
+      }
+
       openPicker({
         token: accessToken,
         appId: pickerConfig.appId,
         clientId: pickerConfig.clientId,
         developerKey: pickerConfig.developerKey,
         viewId: "FOLDERS",
+        disableDefaultView: true,
+        customViews,
         customScopes: DRIVE_SCOPES,
         showUploadView: false,
         showUploadFolders: false,
-        supportDrives: true,
         multiselect: false,
-        setIncludeFolders: true,
-        setSelectFolderEnabled: true,
         callbackFunction: (data: PickerCallbackData) => {
           if (data.action !== "picked" || !data.docs?.length) {
             return;

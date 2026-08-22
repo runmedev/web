@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   getItems: vi.fn(),
   getDrivePickerConfig: vi.fn(),
   openPicker: vi.fn(),
+  pickerViews: [{ scope: "my-drive" }, { scope: "shared-drives" }],
   startGoogleDriveOAuth: vi.fn(),
   updateFolder: vi.fn(),
 }));
@@ -55,6 +56,10 @@ vi.mock("../../lib/onboarding", () => ({
   markOnboardingTaskComplete: vi.fn(),
 }));
 
+vi.mock("./googleDrivePickerViews", () => ({
+  getGoogleDrivePickerViews: vi.fn(async () => mocks.pickerViews),
+}));
+
 describe("GoogleDrivePickerButton", () => {
   beforeEach(() => {
     tourUiController.resetForTests();
@@ -91,6 +96,8 @@ describe("GoogleDrivePickerButton", () => {
           developerKey: "drive-developer-key",
           token: "cached-access-token",
           viewId: "FOLDERS",
+          disableDefaultView: true,
+          customViews: mocks.pickerViews,
         }),
       );
     });

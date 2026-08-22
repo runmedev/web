@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { NotebookStoreItemType } from '../../storage/notebook'
+import { DriveCreateNotCommittedError } from '../../storage/drive'
 import { WorkspaceExplorer } from './WorkspaceExplorer'
 
 const mocks = vi.hoisted(() => ({
@@ -127,6 +128,7 @@ vi.mock('../../contexts/WorkspaceDocumentContext', () => ({
 }))
 
 vi.mock('../../storage/drive', () => ({
+  DriveCreateNotCommittedError: class extends Error {},
   fetchDriveItemWithParents: mocks.fetchDriveItemWithParents,
   isDriveItemUri: mocks.isDriveItemUri,
   parseDriveItem: mocks.parseDriveItem,
@@ -476,6 +478,39 @@ describe('WorkspaceExplorer current document handling', () => {
     await waitFor(() => {
       expect(mocks.treeEdit).toHaveBeenCalledWith('local://file/ipynb')
     })
+  })
+
+  it('shows Shared drive guidance when a service account cannot create a notebook', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: [],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      return null
+    })
+    const message =
+      "Google Drive cannot create this file because service accounts do not have storage quota. Choose a folder in a Shared drive. A folder shared from a user's My Drive is not a Shared drive."
+    mocks.store.create.mockRejectedValueOnce(
+      new DriveCreateNotCommittedError(message)
+    )
+
+    render(<WorkspaceExplorer />)
+
+    fireEvent.contextMenu(await screen.findByText('Drive Root'))
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'New Jupyter Notebook (.ipynb)',
+      })
+    )
+
+    expect(await screen.findByText(message)).toBeTruthy()
   })
 
   it('starts inline rename from a Drive-backed folder context menu', async () => {

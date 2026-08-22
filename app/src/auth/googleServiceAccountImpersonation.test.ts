@@ -5,6 +5,7 @@ import {
   mintImpersonatedServiceAccountCredentials,
   normalizeServiceAccountEmail,
   resolveAuthorizationLeaseSeconds,
+  validateImpersonatedGoogleDriveAccessToken,
 } from './googleServiceAccountImpersonation'
 
 function makeUnsignedJwt(payload: Record<string, unknown>): string {
@@ -260,6 +261,43 @@ describe('Google service-account impersonation', () => {
       'https://console.cloud.google.com/apis/library/iamcredentials.googleapis.com?project=554943104515'
     )
     expect(result.errors[0]?.message).toContain('wait a few minutes')
+  })
+
+  it('explains how to enable a disabled Drive API before installing the token', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            status: 'PERMISSION_DENIED',
+            message:
+              'Google Drive API has not been used in project 123456 before or it is disabled.',
+            details: [
+              {
+                reason: 'SERVICE_DISABLED',
+                metadata: {
+                  consumer: 'projects/123456',
+                  service: 'drive.googleapis.com',
+                },
+              },
+            ],
+          },
+        }),
+        { status: 403, statusText: 'Forbidden' }
+      )
+    )
+
+    await expect(
+      validateImpersonatedGoogleDriveAccessToken(
+        'do-not-print-this-token',
+        'runme@runme-lewi-dev.iam.gserviceaccount.com'
+      )
+    ).rejects.toThrow(
+      /Google Drive API is not enabled for service-account project 123456.*https:\/\/console\.cloud\.google\.com\/apis\/library\/drive\.googleapis\.com\?project=123456/
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://www.googleapis.com/drive/v3/about?fields=user(permissionId)',
+      { headers: { Authorization: 'Bearer do-not-print-this-token' } }
+    )
   })
 
   it('explains the organization policy needed above one hour', async () => {
