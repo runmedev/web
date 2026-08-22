@@ -269,7 +269,8 @@ interface DriveFilesClient {
   move(
     fileId: string,
     sourceParentId: string,
-    destinationParentId: string
+    destinationParentId: string,
+    resourceKey?: string
   ): Promise<DriveDoc>
   get(
     request: Record<string, unknown>
@@ -743,7 +744,8 @@ class GapiDriveFilesClient implements DriveFilesClient {
   async move(
     fileId: string,
     sourceParentId: string,
-    destinationParentId: string
+    destinationParentId: string,
+    resourceKey?: string
   ): Promise<DriveDoc> {
     const response = (await this.files.update({
       fileId,
@@ -751,6 +753,7 @@ class GapiDriveFilesClient implements DriveFilesClient {
       removeParents: sourceParentId,
       supportsAllDrives: true,
       fields: 'id,name,mimeType,parents',
+      resourceKey,
     } as Record<string, unknown>)) as DriveUpdateResponse
     return response.result ?? { id: fileId }
   }
@@ -1157,7 +1160,8 @@ class FetchDriveFilesClient implements DriveFilesClient {
   async move(
     fileId: string,
     sourceParentId: string,
-    destinationParentId: string
+    destinationParentId: string,
+    resourceKey?: string
   ): Promise<DriveDoc> {
     const response = await this.request(
       'PATCH',
@@ -1168,6 +1172,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
           removeParents: sourceParentId,
           supportsAllDrives: 'true',
           fields: 'id,name,mimeType,parents',
+          resourceKey,
         },
       }
     )
@@ -2864,7 +2869,7 @@ export class DriveNotebookStore {
   }
 
   async rename(uri: string, name: string): Promise<NotebookStoreItem> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (
       type !== NotebookStoreItemType.File &&
       type !== NotebookStoreItemType.Folder
@@ -2875,19 +2880,23 @@ export class DriveNotebookStore {
     const file = await client.update({
       id,
       name,
+      resourceKey,
     })
 
     const fileId = file.id ?? id
     const mimeType = file.mimeType
     const isFolder = mimeType === DRIVE_FOLDER_MIME_TYPE
+    const itemUri = isFolder
+      ? driveFolderUrl(fileId, resourceKey)
+      : driveFileUrl(fileId, resourceKey)
     return {
-      uri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
+      uri: itemUri,
       name: file.name ?? name,
       type: isFolder
         ? NotebookStoreItemType.Folder
         : NotebookStoreItemType.File,
       children: [],
-      remoteUri: isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId),
+      remoteUri: itemUri,
       mimeType,
       parents: [],
     }
@@ -2923,13 +2932,16 @@ export class DriveNotebookStore {
     const file = await client.move(
       item.id,
       sourceParent.id,
-      destinationParent.id
+      destinationParent.id,
+      item.resourceKey
     )
     const fileId = file.id ?? item.id
     const isFolder =
       file.mimeType === DRIVE_FOLDER_MIME_TYPE ||
       item.type === NotebookStoreItemType.Folder
-    const itemUri = isFolder ? driveFolderUrl(fileId) : driveFileUrl(fileId)
+    const itemUri = isFolder
+      ? driveFolderUrl(fileId, item.resourceKey)
+      : driveFileUrl(fileId, item.resourceKey)
     return {
       uri: itemUri,
       name: file.name ?? uri,
@@ -2944,7 +2956,7 @@ export class DriveNotebookStore {
   }
 
   async moveToTrash(uri: string): Promise<NotebookStoreItem> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.moveToTrash expects a file URI')
     }
@@ -2952,15 +2964,16 @@ export class DriveNotebookStore {
     const file = await client.update({
       id,
       trashed: true,
+      resourceKey,
     })
 
     const fileId = file.id ?? id
     return {
-      uri: driveFileUrl(fileId),
+      uri: driveFileUrl(fileId, resourceKey),
       name: file.name ?? uri,
       type: NotebookStoreItemType.File,
       children: [],
-      remoteUri: driveFileUrl(fileId),
+      remoteUri: driveFileUrl(fileId, resourceKey),
       mimeType: file.mimeType,
       parents: [],
     }

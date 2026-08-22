@@ -886,6 +886,7 @@ describe("DriveNotebookStore", () => {
         const url = new URL(String(input));
         expect(url.pathname).toBe("/drive/v3/files/file123");
         expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+        expect(url.searchParams.get("resourceKey")).toBe("file-key");
         expect(init?.method).toBe("PATCH");
         expect(JSON.parse(String(init?.body))).toEqual({
           name: "renamed.json",
@@ -905,16 +906,17 @@ describe("DriveNotebookStore", () => {
 
     const store = new DriveNotebookStore(async () => "access-token");
     const result = await store.rename(
-      "https://drive.google.com/file/d/file123/view",
+      "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
       "renamed.json",
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
-      uri: "https://drive.google.com/file/d/file123/view",
+      uri: "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
       name: "renamed.json",
       type: NotebookStoreItemType.File,
-      remoteUri: "https://drive.google.com/file/d/file123/view",
+      remoteUri:
+        "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
     });
   });
 
@@ -968,6 +970,7 @@ describe("DriveNotebookStore", () => {
         expect(url.searchParams.get("addParents")).toBe("destination123");
         expect(url.searchParams.get("removeParents")).toBe("source123");
         expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+        expect(url.searchParams.get("resourceKey")).toBe("file-key");
         expect(init?.method).toBe("PATCH");
         expect(init?.body).toBeUndefined();
         return new Response(
@@ -986,18 +989,19 @@ describe("DriveNotebookStore", () => {
 
     const store = new DriveNotebookStore(async () => "access-token");
     const result = await store.move(
-      "https://drive.google.com/file/d/file123/view",
+      "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
       "https://drive.google.com/drive/folders/source123",
       "https://drive.google.com/drive/folders/destination123",
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
-      uri: "https://drive.google.com/file/d/file123/view",
+      uri: "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
       name: "notebook.json",
       type: NotebookStoreItemType.File,
       children: [],
-      remoteUri: "https://drive.google.com/file/d/file123/view",
+      remoteUri:
+        "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
       mimeType: "application/json",
       parents: ["https://drive.google.com/drive/folders/destination123"],
     });
@@ -1011,6 +1015,7 @@ describe("DriveNotebookStore", () => {
         const url = new URL(String(input));
         expect(url.pathname).toBe("/drive/v3/files/file123");
         expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+        expect(url.searchParams.get("resourceKey")).toBe("file-key");
         expect(init?.method).toBe("PATCH");
         expect(JSON.parse(String(init?.body))).toEqual({
           trashed: true,
@@ -1030,15 +1035,16 @@ describe("DriveNotebookStore", () => {
 
     const store = new DriveNotebookStore(async () => "access-token");
     const result = await store.moveToTrash(
-      "https://drive.google.com/file/d/file123/view",
+      "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
-      uri: "https://drive.google.com/file/d/file123/view",
+      uri: "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
       name: "untitled.json",
       type: NotebookStoreItemType.File,
-      remoteUri: "https://drive.google.com/file/d/file123/view",
+      remoteUri:
+        "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
     });
   });
 
