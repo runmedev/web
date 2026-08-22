@@ -9,6 +9,8 @@ import {
   DriveCreateNotCommittedError,
   DriveFileCreatedError,
   DriveNotebookStore,
+  driveFileUrl,
+  driveFolderUrl,
   isDriveItemUri,
   parseDriveItem,
 } from "./drive";
@@ -52,6 +54,27 @@ describe("parseDriveItem", () => {
       id: "1YlKFwhD_rRg4Md5Hm5C6kKgjdiXTfjVx",
       type: NotebookStoreItemType.Folder,
     });
+  });
+
+  it("preserves a Drive resource key from a shared link", () => {
+    expect(
+      parseDriveItem(
+        "https://drive.google.com/drive/folders/folder123?resourcekey=key_123",
+      ),
+    ).toEqual({
+      id: "folder123",
+      type: NotebookStoreItemType.Folder,
+      resourceKey: "key_123",
+    });
+  });
+
+  it("adds resource keys to canonical Drive URLs", () => {
+    expect(driveFolderUrl("folder123", "folder_key")).toBe(
+      "https://drive.google.com/drive/folders/folder123?resourcekey=folder_key",
+    );
+    expect(driveFileUrl("file123", "file_key")).toBe(
+      "https://drive.google.com/file/d/file123/view?resourcekey=file_key",
+    );
   });
 
   it("returns the id when raw id provided", () => {
@@ -251,7 +274,7 @@ describe("DriveNotebookStore", () => {
     }));
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
-      .mockImplementation(async (input) => {
+      .mockImplementation(async (input, init) => {
         const url = new URL(String(input));
         expect(url.pathname).toBe("/drive/v3/files");
         expect(url.searchParams.get("q")).toBe(
@@ -262,8 +285,11 @@ describe("DriveNotebookStore", () => {
         expect(url.searchParams.get("orderBy")).toBe("name");
         expect(url.searchParams.get("pageSize")).toBe("1000");
         expect(url.searchParams.get("fields")).toBe(
-          "nextPageToken,files(id,name,mimeType)",
+          "nextPageToken,files(id,name,mimeType,resourceKey)",
         );
+        expect(
+          new Headers(init?.headers).get("X-Goog-Drive-Resource-Keys"),
+        ).toBe("folder123/folder-key");
 
         const pageToken = url.searchParams.get("pageToken");
         const body = pageToken
@@ -273,6 +299,7 @@ describe("DriveNotebookStore", () => {
                   id: "oncall-guide",
                   name: "oncall_guide.json",
                   mimeType: "application/json",
+                  resourceKey: "file-key",
                 },
               ],
             }
@@ -285,7 +312,7 @@ describe("DriveNotebookStore", () => {
 
     const store = new DriveNotebookStore(async () => "access-token");
     const result = await store.list(
-      "https://drive.google.com/drive/folders/folder123",
+      "https://drive.google.com/drive/folders/folder123?resourcekey=folder-key",
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -297,7 +324,7 @@ describe("DriveNotebookStore", () => {
     ).toBe("page-2");
     expect(result).toHaveLength(101);
     expect(result.at(-1)).toMatchObject({
-      uri: "https://drive.google.com/file/d/oncall-guide/view",
+      uri: "https://drive.google.com/file/d/oncall-guide/view?resourcekey=file-key",
       name: "oncall_guide.json",
       type: NotebookStoreItemType.File,
     });
@@ -688,6 +715,7 @@ describe("DriveNotebookStore", () => {
       const url = new URL(String(input));
       expect(url.pathname).toBe("/drive/v3/files/file123");
       expect(url.searchParams.get("alt")).toBe("media");
+      expect(url.searchParams.get("resourceKey")).toBe("file-key");
       return new Response('{"type":"excalidraw"}', {
         status: 200,
         headers: { "Content-Type": "application/vnd.excalidraw+json" },
@@ -696,7 +724,9 @@ describe("DriveNotebookStore", () => {
 
     const store = new DriveNotebookStore(async () => "access-token");
     await expect(
-      store.loadContent("https://drive.google.com/file/d/file123/view"),
+      store.loadContent(
+        "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
+      ),
     ).resolves.toBe('{"type":"excalidraw"}');
   });
 
@@ -709,7 +739,7 @@ describe("DriveNotebookStore", () => {
         if (url.pathname === "/drive/v3/files/drive123") {
           expect(url.searchParams.get("supportsAllDrives")).toBe("true");
           expect(url.searchParams.get("fields")).toBe(
-            "id,name,mimeType,parents,driveId",
+            "id,name,mimeType,parents,driveId,resourceKey",
           );
           return new Response(
             JSON.stringify({

@@ -20,6 +20,7 @@ export type PickedGoogleDriveResource = {
   id: string
   name: string
   mimeType?: string
+  resourceKey?: string
 }
 
 type GoogleDriveResourcePickerDialogProps = {
@@ -273,6 +274,9 @@ export function GoogleDriveResourcePickerDialog({
         id: currentLocation.id,
         name: currentLocation.name,
         mimeType: GOOGLE_DRIVE_FOLDER_MIME_TYPE,
+        ...(currentLocation.resourceKey
+          ? { resourceKey: currentLocation.resourceKey }
+          : {}),
       })
       return
     }

@@ -62,8 +62,8 @@ export function useDriveResourcePicker(): {
       current.resolve({
         uri:
           current.mode === 'folder'
-            ? driveFolderUrl(resource.id)
-            : driveFileUrl(resource.id),
+            ? driveFolderUrl(resource.id, resource.resourceKey)
+            : driveFileUrl(resource.id, resource.resourceKey),
         name: resource.name,
         mimeType: resource.mimeType,
       })

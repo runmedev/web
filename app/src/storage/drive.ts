@@ -2,10 +2,7 @@ import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
 
 import { getGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
 import { IPYNB_MIME_TYPE } from '../lib/ipynb'
-import {
-  LinkedResourceError,
-  canonicalGoogleDriveFileUrl,
-} from '../lib/linkedResource'
+import { LinkedResourceError } from '../lib/linkedResource'
 import {
   createInitialNotebookFile,
   detectNotebookFileFormat,
@@ -49,6 +46,7 @@ export type DriveDoc = {
   id?: string
   name?: string
   mimeType?: string
+  resourceKey?: string
   parents?: string[]
   driveId?: string
   headRevisionId?: string
@@ -97,7 +95,7 @@ export type DriveResourceFetchOptions = {
 }
 
 const DRIVE_RESOURCE_FIELDS =
-  'id,name,mimeType,size,modifiedTime,md5Checksum,headRevisionId,capabilities(canDownload),webContentLink,appProperties,parents'
+  'id,name,mimeType,resourceKey,size,modifiedTime,md5Checksum,headRevisionId,capabilities(canDownload),webContentLink,appProperties,parents'
 const DRIVE_ASSET_FOLDER_PROPERTY = 'runmeAssetFolder'
 const DRIVE_ASSET_NOTEBOOK_PROPERTY = 'runmeNotebookFileId'
 const DRIVE_ASSET_PROPERTY = 'runmeAsset'
@@ -163,7 +161,7 @@ function normalizeDriveResourceMetadata(
       )
     : undefined
   return {
-    uri: canonicalGoogleDriveFileUrl(id),
+    uri: driveFileUrl(id, optionalString(value.resourceKey)),
     name: optionalString(value.name) ?? id,
     mimeType: optionalString(value.mimeType) ?? 'application/octet-stream',
     sizeBytes: parseDriveSize(value.size),
@@ -287,7 +285,10 @@ interface DriveFilesClient {
     etag: string
   ): Promise<boolean>
   getDrive(request: Record<string, unknown>): Promise<DriveGetResponse>
-  list(request: Record<string, unknown>): Promise<DriveListResponse>
+  list(
+    request: Record<string, unknown>,
+    headers?: Record<string, string>
+  ): Promise<DriveListResponse>
   listRevisions(
     request: Record<string, unknown>
   ): Promise<DriveRevisionListResponse>
@@ -799,7 +800,16 @@ class GapiDriveFilesClient implements DriveFilesClient {
     }
   }
 
-  list(request: Record<string, unknown>): Promise<DriveListResponse> {
+  list(
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
+  ): Promise<DriveListResponse> {
+    if (Object.keys(headers).length > 0) {
+      return this.request('GET', '/drive/v3/files', {
+        params: request,
+        headers,
+      }) as Promise<DriveListResponse>
+    }
     return this.files.list(request as any) as Promise<DriveListResponse>
   }
 
@@ -1187,9 +1197,13 @@ class FetchDriveFilesClient implements DriveFilesClient {
     }
   }
 
-  list(request: Record<string, unknown>): Promise<DriveListResponse> {
+  list(
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
+  ): Promise<DriveListResponse> {
     return this.request('GET', '/drive/v3/files', {
       params: request,
+      headers,
     }) as Promise<DriveListResponse>
   }
 
@@ -1455,17 +1469,47 @@ function validateDriveId(id: string | null | undefined): string {
   return trimmed
 }
 
-export function driveFileUrl(id: string): string {
-  return `https://drive.google.com/file/d/${encodeURIComponent(id)}/view`
+/** Returns a canonical Drive file URL, preserving a required resource key. */
+export function driveFileUrl(id: string, resourceKey?: string): string {
+  const url = new URL(
+    `https://drive.google.com/file/d/${encodeURIComponent(id)}/view`
+  )
+  if (resourceKey) {
+    url.searchParams.set('resourcekey', resourceKey)
+  }
+  return url.toString()
 }
 
-export function driveFolderUrl(id: string): string {
-  return `https://drive.google.com/drive/folders/${encodeURIComponent(id)}`
+/** Returns a canonical Drive folder URL, preserving a required resource key. */
+export function driveFolderUrl(id: string, resourceKey?: string): string {
+  const url = new URL(
+    `https://drive.google.com/drive/folders/${encodeURIComponent(id)}`
+  )
+  if (resourceKey) {
+    url.searchParams.set('resourcekey', resourceKey)
+  }
+  return url.toString()
 }
 
 export interface DriveItem {
   id: string
   type: NotebookStoreItemType
+  resourceKey?: string
+}
+
+/** Creates the Drive header required to dereference a resource-key URL. */
+function driveResourceKeyHeaders(
+  item: Pick<DriveItem, 'id' | 'resourceKey'>
+): Record<string, string> {
+  if (!item.resourceKey) {
+    return {}
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(item.resourceKey)) {
+    throw new Error('Google Drive resource key contains invalid characters')
+  }
+  return {
+    'X-Goog-Drive-Resource-Keys': `${item.id}/${item.resourceKey}`,
+  }
 }
 
 type DriveFileMetadata = {
@@ -1573,7 +1617,14 @@ export function parseDriveItem(uri: string): DriveItem {
   }
 
   id = validateDriveId(id)
-  return { id, type }
+  let resourceKey: string | undefined
+  try {
+    const url = new URL(trimmed)
+    resourceKey = url.searchParams.get('resourcekey') ?? undefined
+  } catch {
+    // Raw Drive identifiers do not carry resource keys.
+  }
+  return resourceKey ? { id, type, resourceKey } : { id, type }
 }
 
 export function isDriveItemUri(uri: string | undefined): boolean {
@@ -1746,7 +1797,7 @@ export class DriveNotebookStore {
   }
 
   async getResourceMetadata(uri: string): Promise<DriveResourceMetadata> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new LinkedResourceError(
         'UNSUPPORTED_MEDIA_TYPE',
@@ -1757,6 +1808,7 @@ export class DriveNotebookStore {
       driveApiUrl(`/drive/v3/files/${encodeURIComponent(id)}`, {
         supportsAllDrives: 'true',
         fields: DRIVE_RESOURCE_FIELDS,
+        ...(resourceKey ? { resourceKey } : {}),
       }),
       {}
     )
@@ -1773,7 +1825,7 @@ export class DriveNotebookStore {
     uri: string,
     options: DriveResourceFetchOptions = {}
   ): Promise<Response> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new LinkedResourceError(
         'UNSUPPORTED_MEDIA_TYPE',
@@ -1784,6 +1836,7 @@ export class DriveNotebookStore {
       driveApiUrl(`/drive/v3/files/${encodeURIComponent(id)}`, {
         supportsAllDrives: 'true',
         alt: 'media',
+        ...(resourceKey ? { resourceKey } : {}),
       }),
       { signal: options.signal }
     )
@@ -2421,7 +2474,7 @@ export class DriveNotebookStore {
   }
 
   async load(uri: string): Promise<parser_pb.Notebook> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.load expects a file URI')
     }
@@ -2430,6 +2483,7 @@ export class DriveNotebookStore {
       fileId: id,
       supportsAllDrives: true,
       fields: VERSION_FIELDS,
+      resourceKey,
     })
     const md5 =
       (metadataResponse.result as { md5Checksum?: string } | undefined)
@@ -2443,6 +2497,7 @@ export class DriveNotebookStore {
       fileId: id,
       supportsAllDrives: true,
       alt: 'media',
+      resourceKey,
     })
 
     const body = extractBody(response)
@@ -2453,7 +2508,8 @@ export class DriveNotebookStore {
   }
 
   async list(uri: string): Promise<NotebookStoreItem[]> {
-    const { id, type } = parseDriveItem(uri)
+    const item = parseDriveItem(uri)
+    const { id, type } = item
     if (type !== NotebookStoreItemType.Folder) {
       throw new Error(
         'Google Drive URI must reference a folder to list contents'
@@ -2463,15 +2519,18 @@ export class DriveNotebookStore {
     let pageToken: string | undefined
 
     do {
-      const response = await this.search({
-        q: `'${id}' in parents and trashed = false`,
-        includeItemsFromAllDrives: true,
-        supportsAllDrives: true,
-        orderBy: 'name',
-        pageSize: 1000,
-        pageToken,
-        fields: 'nextPageToken,files(id,name,mimeType)',
-      })
+      const response = await this.search(
+        {
+          q: `'${id}' in parents and trashed = false`,
+          includeItemsFromAllDrives: true,
+          supportsAllDrives: true,
+          orderBy: 'name',
+          pageSize: 1000,
+          pageToken,
+          fields: 'nextPageToken,files(id,name,mimeType,resourceKey)',
+        },
+        driveResourceKeyHeaders(item)
+      )
       files.push(...response.files)
       pageToken = response.nextPageToken
     } while (pageToken)
@@ -2483,13 +2542,17 @@ export class DriveNotebookStore {
     return validFiles.map((file) => {
       const isFolder = file.mimeType === DRIVE_FOLDER_MIME_TYPE
       return {
-        uri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
+        uri: isFolder
+          ? driveFolderUrl(file.id, file.resourceKey)
+          : driveFileUrl(file.id, file.resourceKey),
         name: file.name ?? 'Untitled item',
         type: isFolder
           ? NotebookStoreItemType.Folder
           : NotebookStoreItemType.File,
         children: [],
-        remoteUri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
+        remoteUri: isFolder
+          ? driveFolderUrl(file.id, file.resourceKey)
+          : driveFileUrl(file.id, file.resourceKey),
         mimeType: file.mimeType,
         parents: [],
       }
@@ -2499,12 +2562,16 @@ export class DriveNotebookStore {
   /**
    * Runs a Google Drive files.list request without narrowing its query surface.
    * The request is forwarded as-is so callers can use the complete Drive `q`
-   * grammar and list parameters. Returned files retain their Drive metadata and
-   * gain a Runme-compatible URI when the response includes an id and MIME type.
+   * grammar and list parameters. Optional headers support resource-key folder
+   * traversal. Returned files retain their Drive metadata and gain a
+   * Runme-compatible URI when the response includes an id and MIME type.
    */
-  async search(request: Record<string, unknown>): Promise<DriveSearchResult> {
+  async search(
+    request: Record<string, unknown>,
+    headers: Record<string, string> = {}
+  ): Promise<DriveSearchResult> {
     const client = await this.getFilesClient()
-    const response = await client.list(request)
+    const response = await client.list(request, headers)
     const result = response.result ?? {}
     return {
       ...result,
@@ -2515,7 +2582,9 @@ export class DriveNotebookStore {
         const isFolder = file.mimeType === DRIVE_FOLDER_MIME_TYPE
         return {
           ...file,
-          uri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
+          uri: isFolder
+            ? driveFolderUrl(file.id, file.resourceKey)
+            : driveFileUrl(file.id, file.resourceKey),
         }
       }),
     }
@@ -2905,7 +2974,7 @@ export class DriveNotebookStore {
   }
 
   async loadContent(uri: string): Promise<string> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error('DriveNotebookStore.loadContent expects a file URI')
     }
@@ -2914,12 +2983,13 @@ export class DriveNotebookStore {
       fileId: id,
       supportsAllDrives: true,
       alt: 'media',
+      resourceKey,
     })
     return extractBody(response)
   }
 
   async getMetadata(uri: string): Promise<NotebookStoreItem | null> {
-    const { id, type } = parseDriveItem(uri)
+    const { id, type, resourceKey } = parseDriveItem(uri)
     if (
       type !== NotebookStoreItemType.File &&
       type !== NotebookStoreItemType.Folder
@@ -2930,13 +3000,15 @@ export class DriveNotebookStore {
     const response = await client.get({
       fileId: id,
       supportsAllDrives: true,
-      fields: 'id,name,mimeType,parents,driveId',
+      fields: 'id,name,mimeType,parents,driveId,resourceKey',
+      resourceKey,
     })
     const result = response.result as {
       name?: string
       mimeType?: string
       parents?: string[]
       driveId?: string
+      resourceKey?: string
     }
     const isFolder = result?.mimeType === DRIVE_FOLDER_MIME_TYPE
     let displayName = result?.name

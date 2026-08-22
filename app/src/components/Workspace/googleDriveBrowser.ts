@@ -9,6 +9,7 @@ export type GoogleDriveLocation = {
   id: string
   name: string
   driveId?: string
+  resourceKey?: string
 }
 
 export type GoogleDriveResource = GoogleDriveLocation & {
@@ -24,6 +25,7 @@ type DriveApiResource = Partial<GoogleDriveResource> & {
   shortcutDetails?: {
     targetId?: string
     targetMimeType?: string
+    targetResourceKey?: string
   }
 }
 
@@ -74,6 +76,9 @@ function normalizeGoogleDriveResource(
       name: file.name,
       mimeType: file.shortcutDetails.targetMimeType,
       driveId: undefined,
+      ...(file.shortcutDetails.targetResourceKey
+        ? { resourceKey: file.shortcutDetails.targetResourceKey }
+        : {}),
     }
   }
 
@@ -82,6 +87,19 @@ function normalizeGoogleDriveResource(
     name: file.name,
     mimeType: file.mimeType,
     driveId: file.driveId ?? parentDriveId,
+    ...(file.resourceKey ? { resourceKey: file.resourceKey } : {}),
+  }
+}
+
+/** Builds Drive's resource-key header for a protected item when available. */
+function driveResourceKeyHeader(
+  location: Pick<GoogleDriveLocation, 'id' | 'resourceKey'>
+): Record<string, string> {
+  if (!location.resourceKey) {
+    return {}
+  }
+  return {
+    'X-Goog-Drive-Resource-Keys': `${location.id}/${location.resourceKey}`,
   }
 }
 
@@ -107,10 +125,11 @@ async function getJson<T>(
   url: URL,
   accessToken: string,
   operation: string,
-  fetchImpl: typeof fetch
+  fetchImpl: typeof fetch,
+  headers: Record<string, string> = {}
 ): Promise<T> {
   const response = await fetchImpl(url, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: { Authorization: `Bearer ${accessToken}`, ...headers },
   })
   if (!response.ok) {
     throw new Error(
@@ -141,9 +160,7 @@ export async function listGoogleDriveRoots(
     throw new Error('Google Drive API returned an invalid My Drive root.')
   }
 
-  const roots: GoogleDriveLocation[] = [
-    { id: myDrive.id, name: 'My Drive' },
-  ]
+  const roots: GoogleDriveLocation[] = [{ id: myDrive.id, name: 'My Drive' }]
   let pageToken: string | undefined
 
   do {
@@ -192,7 +209,7 @@ export async function listGoogleDriveChildren(
     url.searchParams.set('pageSize', '100')
     url.searchParams.set(
       'fields',
-      'nextPageToken,files(id,name,mimeType,driveId,shortcutDetails(targetId,targetMimeType))'
+      'nextPageToken,files(id,name,mimeType,driveId,resourceKey,shortcutDetails(targetId,targetMimeType,targetResourceKey))'
     )
     url.searchParams.set(
       'q',
@@ -214,7 +231,8 @@ export async function listGoogleDriveChildren(
       url,
       accessToken,
       `list items in ${parent.name}`,
-      fetchImpl
+      fetchImpl,
+      driveResourceKeyHeader(parent)
     )
     for (const file of page.files ?? []) {
       const resource = normalizeGoogleDriveResource(file, parent.driveId)
@@ -261,7 +279,7 @@ export async function searchGoogleDriveResources(
     url.searchParams.set('pageSize', '100')
     url.searchParams.set(
       'fields',
-      'nextPageToken,incompleteSearch,files(id,name,mimeType,driveId,shortcutDetails(targetId,targetMimeType))'
+      'nextPageToken,incompleteSearch,files(id,name,mimeType,driveId,resourceKey,shortcutDetails(targetId,targetMimeType,targetResourceKey))'
     )
     url.searchParams.set('spaces', 'drive')
     url.searchParams.set('corpora', 'allDrives')

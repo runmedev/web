@@ -34,7 +34,7 @@ export function GoogleDrivePickerButton({
   const [mountError, setMountError] = useState('')
 
   const mountFolder = useCallback(
-    async (folderId: string, folderName: string) => {
+    async (folderId: string, folderName: string, resourceKey?: string) => {
       if (!store) {
         appLogger.error('Notebook store is unavailable for a Drive folder', {
           attrs: {
@@ -48,7 +48,7 @@ export function GoogleDrivePickerButton({
 
       try {
         const localUri = await store.updateFolder(
-          driveFolderUrl(folderId),
+          driveFolderUrl(folderId, resourceKey),
           folderName
         )
         if (!getItems().includes(localUri)) {
@@ -102,7 +102,7 @@ export function GoogleDrivePickerButton({
   const handleSelect = useCallback(
     (resource: PickedGoogleDriveResource) => {
       closePicker()
-      void mountFolder(resource.id, resource.name)
+      void mountFolder(resource.id, resource.name, resource.resourceKey)
     },
     [closePicker, mountFolder]
   )

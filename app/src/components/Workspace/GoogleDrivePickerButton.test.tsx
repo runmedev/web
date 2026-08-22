@@ -127,6 +127,33 @@ describe('GoogleDrivePickerButton', () => {
     )
   })
 
+  it('preserves a resource key when mounting a protected folder', async () => {
+    mocks.listRoots.mockResolvedValue([
+      {
+        id: 'protected-folder',
+        name: 'Protected folder',
+        resourceKey: 'folder-key',
+      },
+    ])
+    mocks.updateFolder.mockResolvedValue('local://folder/protected')
+
+    render(<GoogleDrivePickerButton />)
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Folder' }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Open Protected folder' })
+    )
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select this folder' })
+    )
+
+    await waitFor(() =>
+      expect(mocks.updateFolder).toHaveBeenCalledWith(
+        'https://drive.google.com/drive/folders/protected-folder?resourcekey=folder-key',
+        'Protected folder'
+      )
+    )
+  })
+
   it('shows actionable authorization failures', async () => {
     mocks.ensureAccessToken.mockRejectedValue(new Error('invalid credential'))
     render(<GoogleDrivePickerButton />)

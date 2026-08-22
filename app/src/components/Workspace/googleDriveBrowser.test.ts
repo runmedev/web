@@ -66,9 +66,9 @@ describe('googleDriveBrowser', () => {
         new Response(JSON.stringify({ name: 'missing id' }), { status: 200 })
       )
 
-    await expect(
-      listGoogleDriveRoots('token', fetchImpl)
-    ).rejects.toThrow('invalid My Drive root')
+    await expect(listGoogleDriveRoots('token', fetchImpl)).rejects.toThrow(
+      'invalid My Drive root'
+    )
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
@@ -125,6 +125,7 @@ describe('googleDriveBrowser', () => {
               shortcutDetails: {
                 targetId: 'folder-target',
                 targetMimeType: 'application/vnd.google-apps.folder',
+                targetResourceKey: 'target-key',
               },
             },
           ],
@@ -136,7 +137,12 @@ describe('googleDriveBrowser', () => {
     await expect(
       listGoogleDriveChildren(
         'token',
-        { id: 'drive-1', name: 'notebooks', driveId: 'drive-1' },
+        {
+          id: 'drive-1',
+          name: 'notebooks',
+          driveId: 'drive-1',
+          resourceKey: 'parent-key',
+        },
         fetchImpl
       )
     ).resolves.toEqual([
@@ -145,13 +151,20 @@ describe('googleDriveBrowser', () => {
         name: 'Designs shortcut',
         mimeType: 'application/vnd.google-apps.folder',
         driveId: undefined,
+        resourceKey: 'target-key',
       },
     ])
 
     const url = new URL(fetchImpl.mock.calls[0]?.[0] as string)
     expect(url.searchParams.get('fields')).toContain(
-      'shortcutDetails(targetId,targetMimeType)'
+      'shortcutDetails(targetId,targetMimeType,targetResourceKey)'
     )
+    expect(fetchImpl.mock.calls[0]?.[1]).toEqual({
+      headers: {
+        Authorization: 'Bearer token',
+        'X-Goog-Drive-Resource-Keys': 'drive-1/parent-key',
+      },
+    })
   })
 
   it('does not leak the token in Drive API errors', async () => {
