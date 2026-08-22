@@ -318,4 +318,35 @@ describe('AuthenticationSettingsPanel', () => {
       )
     )
   })
+
+  it('shows an actionable Drive error when service-account authorization is partial', async () => {
+    mocks.getServiceAccountCredentials.mockResolvedValueOnce({
+      status: 'partial',
+      errors: [
+        {
+          target: 'drive',
+          message:
+            'Google Drive API is not enabled. Enable it at https://console.cloud.google.com/apis/library/drive.googleapis.com?project=runme-lewi-dev',
+        },
+      ],
+    })
+    render(<AuthenticationSettingsPanel />)
+
+    fireEvent.change(screen.getByLabelText('Shared login identity'), {
+      target: { value: 'service_account' },
+    })
+    fireEvent.change(
+      screen.getByLabelText('Shared Google service account identity'),
+      {
+        target: { value: 'runme-web-test@project.iam.gserviceaccount.com' },
+      }
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Connect or refresh' }))
+
+    expect(
+      (await screen.findByText(/Google Drive API is not enabled/)).textContent
+    ).toContain(
+      'https://console.cloud.google.com/apis/library/drive.googleapis.com?project=runme-lewi-dev'
+    )
+  })
 })

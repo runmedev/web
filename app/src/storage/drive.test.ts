@@ -462,6 +462,59 @@ describe("DriveNotebookStore", () => {
     ).rejects.toBeInstanceOf(DriveCreateNotCommittedError);
   });
 
+  it.each([
+    ["notebook create", "create"],
+    ["arbitrary content create", "createContent"],
+    ["folder create", "createFolder"],
+  ] as const)(
+    "explains the Shared drive requirement after a service-account %s failure",
+    async (_description, method) => {
+      setGoogleDriveBaseUrl("https://drive.example.test");
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 403,
+              message: "Service Accounts do not have storage quota.",
+              errors: [
+                {
+                  reason: "storageQuotaExceeded",
+                  message: "Service Accounts do not have storage quota.",
+                },
+              ],
+            },
+          }),
+          {
+            status: 403,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
+
+      const store = new DriveNotebookStore(async () => "access-token");
+      const parent = "https://drive.google.com/drive/folders/folder123";
+      const create =
+        method === "create"
+          ? store.create(parent, "notebook.ipynb")
+          : method === "createContent"
+            ? store.createContent(
+                parent,
+                "notebook.ipynb",
+                "{}",
+                "application/x-ipynb+json",
+              )
+            : store.createFolder(parent, "new-folder");
+
+      await expect(create).rejects.toThrow(
+        "service accounts do not have storage quota",
+      );
+      await expect(create).rejects.toThrow("Choose a folder in a Shared drive");
+      await expect(create).rejects.toThrow(
+        "A folder shared from a user's My Drive is not a Shared drive",
+      );
+    },
+  );
+
   it("reports the created file when its initial content upload fails", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {

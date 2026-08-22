@@ -1,27 +1,13 @@
 import { ReactNode, useCallback } from "react";
-import useDrivePicker from "react-google-drive-picker";
-import { useGoogleAuth, DRIVE_SCOPES } from "../../contexts/GoogleAuthContext";
+import { useGoogleAuth } from "../../contexts/GoogleAuthContext";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { useNotebookStore } from "../../contexts/NotebookStoreContext";
 import { driveFolderUrl } from "../../storage/drive";
 import { googleClientManager } from "../../lib/googleClientManager";
 import { markOnboardingTaskComplete } from "../../lib/onboarding";
 import { tourUiController } from "../../lib/tourUiController";
-
-type PickerAction = "picked" | "cancel";
-
-type PickerDocument = {
-  id: string;
-  name?: string;
-  mimeType?: string;
-  url?: string;
-  [key: string]: unknown;
-};
-
-type PickerCallbackData = {
-  action: PickerAction;
-  docs?: PickerDocument[];
-};
+import { appLogger } from "../../lib/logging/runtime";
+import { openGoogleDrivePicker } from "./googleDrivePickerViews";
 
 interface GoogleDrivePickerButtonProps {
   label?: string;
@@ -36,7 +22,6 @@ export function GoogleDrivePickerButton({
   className,
   children,
 }: GoogleDrivePickerButtonProps) {
-  const [openPicker] = useDrivePicker();
   const { ensureAccessToken } = useGoogleAuth();
   const { addItem, getItems } = useWorkspace();
   const { store } = useNotebookStore();
@@ -75,74 +60,75 @@ export function GoogleDrivePickerButton({
         return;
       }
 
-      openPicker({
-        token: accessToken,
-        appId: pickerConfig.appId,
-        clientId: pickerConfig.clientId,
-        developerKey: pickerConfig.developerKey,
-        viewId: "FOLDERS",
-        customScopes: DRIVE_SCOPES,
-        showUploadView: false,
-        showUploadFolders: false,
-        supportDrives: true,
-        multiselect: false,
-        setIncludeFolders: true,
-        setSelectFolderEnabled: true,
-        callbackFunction: (data: PickerCallbackData) => {
-          if (data.action !== "picked" || !data.docs?.length) {
-            return;
-          }
-
-          const [primaryDoc] = data.docs;
-          if (!primaryDoc) {
-            return;
-          }
-          void (async () => {
-            if (!primaryDoc.id) {
-              console.error("Selected document is missing an identifier.");
+      try {
+        await openGoogleDrivePicker({
+          token: accessToken,
+          appId: pickerConfig.appId,
+          developerKey: pickerConfig.developerKey,
+          kind: "folder",
+          callback: (data) => {
+            if (data.action !== "picked" || !data.docs?.length) {
               return;
             }
 
-            if (
-              primaryDoc.mimeType &&
-              primaryDoc.mimeType !== "application/vnd.google-apps.folder"
-            ) {
-              console.error("Selected item is not a Google Drive folder.");
+            const [primaryDoc] = data.docs;
+            if (!primaryDoc) {
               return;
             }
-
-            if (!store) {
-              console.error(
-                "Notebook store is not available; cannot mirror folder.",
-              );
-              return;
-            }
-
-            const remoteUri = driveFolderUrl(primaryDoc.id);
-            try {
-              const localUri = await store.updateFolder(
-                remoteUri,
-                primaryDoc.name ?? primaryDoc.id,
-              );
-              const workspaceUris = getItems();
-              if (!workspaceUris.includes(localUri)) {
-                addItem(localUri);
+            void (async () => {
+              if (!primaryDoc.id) {
+                console.error("Selected document is missing an identifier.");
+                return;
               }
-              markOnboardingTaskComplete("add-drive-folder");
-              tourUiController.recordGoogleDriveFolderAdded();
-            } catch (error) {
-              console.error("Failed to mirror Drive folder", error);
-            }
-          })();
-        },
-      });
+
+              if (
+                primaryDoc.mimeType &&
+                primaryDoc.mimeType !== "application/vnd.google-apps.folder"
+              ) {
+                console.error("Selected item is not a Google Drive folder.");
+                return;
+              }
+
+              if (!store) {
+                console.error(
+                  "Notebook store is not available; cannot mirror folder.",
+                );
+                return;
+              }
+
+              const remoteUri = driveFolderUrl(primaryDoc.id);
+              try {
+                const localUri = await store.updateFolder(
+                  remoteUri,
+                  primaryDoc.name ?? primaryDoc.id,
+                );
+                const workspaceUris = getItems();
+                if (!workspaceUris.includes(localUri)) {
+                  addItem(localUri);
+                }
+                markOnboardingTaskComplete("add-drive-folder");
+                tourUiController.recordGoogleDriveFolderAdded();
+              } catch (error) {
+                console.error("Failed to mirror Drive folder", error);
+              }
+            })();
+          },
+        });
+      } catch (error) {
+        appLogger.error("Failed to open Google Drive picker", {
+          attrs: {
+            scope: "storage.drive.picker",
+            code: "DRIVE_PICKER_OPEN_FAILED",
+            error: String(error),
+          },
+        });
+      }
     })();
   }, [
     addItem,
     ensureAccessToken,
     getItems,
     getPickerConfig,
-    openPicker,
     store,
   ]);
 

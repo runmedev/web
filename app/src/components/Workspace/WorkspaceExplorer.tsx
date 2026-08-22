@@ -42,6 +42,7 @@ import {
 import type { StorageBrowser } from "../../storage/browser";
 import { isFileSystemAccessSupported } from "../../storage/fs";
 import {
+  DriveCreateNotCommittedError,
   fetchDriveItemWithParents,
   isDriveItemUri,
   parseDriveItem,
@@ -94,6 +95,12 @@ function createPlaceholderNode(uri: string, label: string): TreeNode {
     name: label,
     type: "placeholder",
   };
+}
+
+function driveCreateErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof DriveCreateNotCommittedError
+    ? error.message
+    : fallback;
 }
 
 function createFolderNode(
@@ -925,7 +932,10 @@ export function WorkspaceExplorer() {
       } catch (error) {
         console.error("Failed to create Excalidraw diagram", error);
         setErrorMessage(
-          "Unable to create an Excalidraw diagram. Please try again.",
+          driveCreateErrorMessage(
+            error,
+            "Unable to create an Excalidraw diagram. Please try again.",
+          ),
         );
         showToast({
           message: "Could not create Excalidraw diagram",
@@ -967,7 +977,12 @@ export function WorkspaceExplorer() {
         setErrorMessage(null);
       } catch (error) {
         console.error('Failed to create notebook', error)
-        setErrorMessage('Unable to create a new notebook. Please try again.')
+        setErrorMessage(
+          driveCreateErrorMessage(
+            error,
+            'Unable to create a new notebook. Please try again.'
+          )
+        )
       }
     },
     [fetchChildren, fsStore, store],
@@ -991,7 +1006,12 @@ export function WorkspaceExplorer() {
         showToast({ message: "Google Drive folder created", tone: "success" });
       } catch (error) {
         console.error("Failed to create Google Drive folder", error);
-        setErrorMessage("Unable to create Google Drive folder. Please try again.");
+        setErrorMessage(
+          driveCreateErrorMessage(
+            error,
+            "Unable to create Google Drive folder. Please try again.",
+          ),
+        );
         showToast({
           message: "Could not create Google Drive folder",
           tone: "error",

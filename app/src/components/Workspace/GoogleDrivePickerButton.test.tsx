@@ -15,10 +15,6 @@ const mocks = vi.hoisted(() => ({
   updateFolder: vi.fn(),
 }));
 
-vi.mock("react-google-drive-picker", () => ({
-  default: () => [mocks.openPicker],
-}));
-
 vi.mock("../../contexts/GoogleAuthContext", async () => {
   const actual = await vi.importActual<
     typeof import("../../contexts/GoogleAuthContext")
@@ -55,6 +51,10 @@ vi.mock("../../lib/onboarding", () => ({
   markOnboardingTaskComplete: vi.fn(),
 }));
 
+vi.mock("./googleDrivePickerViews", () => ({
+  openGoogleDrivePicker: mocks.openPicker,
+}));
+
 describe("GoogleDrivePickerButton", () => {
   beforeEach(() => {
     tourUiController.resetForTests();
@@ -87,10 +87,10 @@ describe("GoogleDrivePickerButton", () => {
       expect(mocks.openPicker).toHaveBeenCalledWith(
         expect.objectContaining({
           appId: "drive-app-id",
-          clientId: "drive-client-id",
           developerKey: "drive-developer-key",
           token: "cached-access-token",
-          viewId: "FOLDERS",
+          kind: "folder",
+          callback: expect.any(Function),
         }),
       );
     });
@@ -122,7 +122,7 @@ describe("GoogleDrivePickerButton", () => {
     );
 
     const pickerConfig = mocks.openPicker.mock.calls[0]?.[0];
-    pickerConfig.callbackFunction({
+    pickerConfig.callback({
       action: "picked",
       docs: [
         {

@@ -188,9 +188,13 @@ async function driveErrorFromResponse(
     )
   }
   if (response.status === 403) {
+    const responseText = await response.text().catch(() => '')
+    const serviceAccountMessage = serviceAccountStorageQuotaErrorMessage(
+      new DriveRequestError(responseText, response.status)
+    )
     return new LinkedResourceError(
       operation === 'download' ? 'DOWNLOAD_RESTRICTED' : 'ACCESS_DENIED',
-      `Google Drive denied ${operation} access`
+      serviceAccountMessage ?? `Google Drive denied ${operation} access`
     )
   }
   if (response.status === 404) {
@@ -357,6 +361,79 @@ function driveErrorStatus(error: unknown): number | undefined {
   }
   const status = candidate.status ?? candidate.result?.error?.code
   return typeof status === 'number' ? status : undefined
+}
+
+function driveErrorText(error: unknown): string {
+  const messages: string[] = []
+  if (error instanceof Error && error.message) {
+    messages.push(error.message)
+  }
+  if (error && typeof error === 'object') {
+    const candidate = error as {
+      body?: unknown
+      message?: unknown
+      result?: {
+        error?: {
+          message?: unknown
+          errors?: Array<{ message?: unknown; reason?: unknown }>
+        }
+      }
+    }
+    if (typeof candidate.message === 'string') {
+      messages.push(candidate.message)
+    }
+    if (typeof candidate.body === 'string') {
+      messages.push(candidate.body)
+    }
+    const resultError = candidate.result?.error
+    if (typeof resultError?.message === 'string') {
+      messages.push(resultError.message)
+    }
+    for (const detail of resultError?.errors ?? []) {
+      if (typeof detail.reason === 'string') {
+        messages.push(detail.reason)
+      }
+      if (typeof detail.message === 'string') {
+        messages.push(detail.message)
+      }
+    }
+  }
+  return messages.join(' ')
+}
+
+function serviceAccountStorageQuotaErrorMessage(
+  error: unknown
+): string | undefined {
+  const errorText = driveErrorText(error).toLowerCase()
+  const isStorageQuotaError =
+    errorText.includes('storagequotaexceeded') ||
+    errorText.includes('storage quota')
+  if (!isStorageQuotaError || !errorText.includes('service account')) {
+    return undefined
+  }
+  return (
+    'Google Drive cannot create this file because service accounts do not ' +
+    "have storage quota and cannot own files in a user's My Drive. Choose " +
+    'a folder in a Shared drive, add the service account as a Contributor ' +
+    '(or Content manager for move and delete operations), and try again. ' +
+    "A folder shared from a user's My Drive is not a Shared drive. " +
+    'Alternatively, authenticate as a human user.'
+  )
+}
+
+async function createDriveItem(
+  client: DriveFilesClient,
+  doc: DriveDoc
+): Promise<DriveDoc> {
+  try {
+    return await client.create(doc)
+  } catch (error) {
+    const message = serviceAccountStorageQuotaErrorMessage(error)
+    if (message) {
+      throw new DriveCreateNotCommittedError(message, error)
+    }
+    throw error
+  }
 }
 
 function isDefinitelyRejectedCreate(error: unknown): boolean {
@@ -1936,7 +2013,7 @@ export class DriveNotebookStore {
     }
 
     const client = await this.getFilesClient()
-    const folder = await client.create({
+    const folder = await createDriveItem(client, {
       name: `${notebookName}.assets`,
       mimeType: DRIVE_FOLDER_MIME_TYPE,
       parents: [parentId],
@@ -1989,7 +2066,7 @@ export class DriveNotebookStore {
     const client = await this.getFilesClient()
     const format = detectNotebookFileFormat(name)
     const mimeType = format === 'ipynb' ? IPYNB_MIME_TYPE : 'application/json'
-    let file = await client.create({
+    let file = await createDriveItem(client, {
       id: options.fileId,
       name,
       mimeType,
@@ -2089,6 +2166,11 @@ export class DriveNotebookStore {
     } catch (error) {
       if (error instanceof DriveFileCreatedError) {
         throw error
+      }
+      const serviceAccountMessage =
+        serviceAccountStorageQuotaErrorMessage(error)
+      if (serviceAccountMessage) {
+        throw new DriveCreateNotCommittedError(serviceAccountMessage, error)
       }
       if (options.fileId && driveErrorStatus(error) === 409) {
         const response = await client.get({
@@ -2258,7 +2340,7 @@ export class DriveNotebookStore {
       throw new Error('DriveNotebookStore.createFolder expects a folder URI')
     }
     const client = await this.getFilesClient()
-    let folder = await client.create({
+    let folder = await createDriveItem(client, {
       name,
       mimeType: DRIVE_FOLDER_MIME_TYPE,
       parents: [id],

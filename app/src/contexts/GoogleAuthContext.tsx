@@ -15,6 +15,7 @@ import {
   getGoogleHumanPrincipal,
   mintImpersonatedServiceAccountCredentials,
   resolveAuthorizationLeaseSeconds,
+  validateImpersonatedGoogleDriveAccessToken,
   type GetServiceAccountCredentialsOptions,
   type ServiceAccountCredentialStatus,
   type ServiceAccountCredentialTarget,
@@ -787,15 +788,54 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
       const driveExpiresAtMs = credentials.driveAccessTokenExpiresAt
         ? Date.parse(credentials.driveAccessTokenExpiresAt)
         : Number.NaN
-      const hasDriveCredential = Boolean(
+      let hasDriveCredential = Boolean(
         credentials.driveAccessToken && Number.isFinite(driveExpiresAtMs)
       )
       const hasAppCredential = Boolean(
         credentials.appIdToken && credentials.appIdTokenExpiresAt
       )
+      const errors = [...credentials.errors]
+      if (hasDriveCredential) {
+        try {
+          await validateImpersonatedGoogleDriveAccessToken(
+            credentials.driveAccessToken!,
+            serviceAccount
+          )
+        } catch (error) {
+          hasDriveCredential = false
+          const cachedCredential =
+            readImpersonatedServiceAccountCredential()
+          const cachedIdentityMatches = Boolean(
+            cachedCredential &&
+              cachedCredential.serviceAccount.toLowerCase() ===
+                serviceAccount.trim().toLowerCase() &&
+              cachedCredential.humanPrincipal.toLowerCase() ===
+                humanPrincipal.toLowerCase()
+          )
+          // A failed preflight must invalidate the previous Drive target for
+          // the same identity. Otherwise the merge below can retain and later
+          // reinstall a credential that Drive has already rejected.
+          if (cachedIdentityMatches) {
+            clearImpersonatedServiceAccountCredential(['drive'])
+          }
+          if (
+            tokenInfoRef.current?.authFlow ===
+              'impersonated_service_account' &&
+            tokenInfoRef.current.effectivePrincipal?.toLowerCase() ===
+              serviceAccount.trim().toLowerCase()
+          ) {
+            setAccessToken('')
+            window.gapi?.client?.setToken(null)
+          }
+          errors.push({
+            target: 'drive',
+            message: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
       if (!hasDriveCredential && !hasAppCredential) {
         throw new Error(
-          credentials.errors.map((error) => error.message).join('; ') ||
+          errors.map((error) => error.message).join('; ') ||
             'Google IAM did not mint any requested service-account credentials.'
         )
       }
@@ -844,10 +884,16 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
           credentials.appIdTokenExpiresAt!
         )
       }
-      setCredentialError(null)
+      setCredentialError(
+        errors.length > 0
+          ? errors
+              .map((error) => `${error.target}: ${error.message}`)
+              .join('; ')
+          : null
+      )
 
       return {
-        status: credentials.errors.length > 0 ? 'partial' : 'authorized',
+        status: errors.length > 0 ? 'partial' : 'authorized',
         humanPrincipal,
         serviceAccount: serviceAccount.trim(),
         authorizationLeaseExpiresAt,
@@ -867,9 +913,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
               },
             }
           : {}),
-        ...(credentials.errors.length > 0
-          ? { errors: credentials.errors }
-          : {}),
+        ...(errors.length > 0 ? { errors } : {}),
       }
     },
     [setAccessToken]

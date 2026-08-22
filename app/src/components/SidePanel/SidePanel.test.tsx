@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ServiceAccountCredentialStatus } from '../../auth/googleServiceAccountImpersonation'
+
+const { showToastMock } = vi.hoisted(() => ({
+  showToastMock: vi.fn(),
+}))
 
 type PanelKey =
   | 'explorer'
@@ -41,13 +46,16 @@ const startGoogleDriveOAuthMock = vi.fn(async () => ({
 }))
 const logoutGoogleDriveMock = vi.fn(async () => {})
 const setDriveAccountMock = vi.fn()
-const getServiceAccountCredentialsMock = vi.fn(async () => ({
-  humanPrincipal: 'human@example.com',
-  serviceAccount: 'runme@example.iam.gserviceaccount.com',
-  authorizationLeaseExpiresAt: '2026-08-22T00:00:00.000Z',
-  drive: { scopes: [], expiresAt: '2026-08-21T02:00:00.000Z' },
-  app: { audience: 'runme', expiresAt: '2026-08-21T02:00:00.000Z' },
-}))
+const getServiceAccountCredentialsMock = vi.fn(
+  async (): Promise<ServiceAccountCredentialStatus> => ({
+    status: 'authorized',
+    humanPrincipal: 'human@example.com',
+    serviceAccount: 'runme@example.iam.gserviceaccount.com',
+    authorizationLeaseExpiresAt: '2026-08-22T00:00:00.000Z',
+    drive: { scopes: [], expiresAt: '2026-08-21T02:00:00.000Z' },
+    app: { audience: 'runme', expiresAt: '2026-08-21T02:00:00.000Z' },
+  })
+)
 const loginWithRedirectMock = vi.fn(async () => {})
 const logoutMock = vi.fn()
 const togglePanelMock = vi.fn()
@@ -136,6 +144,10 @@ vi.mock('../AuthenticationSettings/AuthenticationSettingsPanel', () => ({
   default: () => <div data-testid="authentication-settings-panel-mock" />,
 }))
 
+vi.mock('../../lib/toast', () => ({
+  showToast: showToastMock,
+}))
+
 import { SidePanelContent, SidePanelToolbar } from './SidePanel'
 
 describe('SidePanelToolbar drive status button', () => {
@@ -161,6 +173,7 @@ describe('SidePanelToolbar drive status button', () => {
     setCurrentDocMock.mockClear()
     showDocumentMock.mockClear()
     closeWorkspaceDocumentMock.mockClear()
+    showToastMock.mockClear()
   })
 
   it('renders the Drive status button above Login and refreshes credentials', async () => {
@@ -246,6 +259,43 @@ describe('SidePanelToolbar drive status button', () => {
 
     await waitFor(() =>
       expect(getServiceAccountCredentialsMock).toHaveBeenCalledTimes(1)
+    )
+    expect(loginWithRedirectMock).not.toHaveBeenCalled()
+  })
+
+  it('shows an actionable error when shared Login is only partially authorized', async () => {
+    window.localStorage.setItem(
+      'runme/app-login-configuration',
+      JSON.stringify({
+        identitySharing: 'shared',
+        mode: 'service_account',
+        humanAccount: 'jeremy@lewi.us',
+        serviceAccount: 'runme@example.iam.gserviceaccount.com',
+      })
+    )
+    getServiceAccountCredentialsMock.mockResolvedValueOnce({
+      status: 'partial',
+      humanPrincipal: 'jeremy@lewi.us',
+      serviceAccount: 'runme@example.iam.gserviceaccount.com',
+      authorizationLeaseExpiresAt: '2026-08-22T00:00:00.000Z',
+      app: { audience: 'runme', expiresAt: '2026-08-21T02:00:00.000Z' },
+      errors: [
+        {
+          target: 'drive',
+          message: 'Enable the Google Drive API, then reconnect Drive.',
+        },
+      ],
+    })
+    render(<SidePanelToolbar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Login' }))
+
+    await waitFor(() =>
+      expect(showToastMock).toHaveBeenCalledWith({
+        message:
+          'drive: Enable the Google Drive API, then reconnect Drive.',
+        tone: 'error',
+      })
     )
     expect(loginWithRedirectMock).not.toHaveBeenCalled()
   })

@@ -56,6 +56,7 @@ import {
   readAppLoginConfiguration,
   resolveDriveLoginConfiguration,
 } from '../../auth/appLoginConfiguration'
+import { getServiceAccountCredentialStatusError } from '../../auth/googleServiceAccountImpersonation'
 import AuthenticationSettingsPanel from '../AuthenticationSettings/AuthenticationSettingsPanel'
 import { showToast } from '../../lib/toast'
 
@@ -293,14 +294,21 @@ export function SidePanelToolbar() {
       const usesSharedIdentity = configuration.identitySharing === 'shared'
       const driveConfiguration = resolveDriveLoginConfiguration(configuration)
       if (driveConfiguration.mode === 'service_account') {
-        await getServiceAccountCredentials(driveConfiguration.serviceAccount, {
-          ...(driveConfiguration.humanAccount
-            ? { humanAccount: driveConfiguration.humanAccount }
-            : {}),
-          prompt: driveConfiguration.humanAccount ? '' : 'select_account',
-          targets: usesSharedIdentity ? ['drive', 'app'] : ['drive'],
-          authorizationLeaseSeconds: 24 * 60 * 60,
-        })
+        const status = await getServiceAccountCredentials(
+          driveConfiguration.serviceAccount,
+          {
+            ...(driveConfiguration.humanAccount
+              ? { humanAccount: driveConfiguration.humanAccount }
+              : {}),
+            prompt: driveConfiguration.humanAccount ? '' : 'select_account',
+            targets: usesSharedIdentity ? ['drive', 'app'] : ['drive'],
+            authorizationLeaseSeconds: 24 * 60 * 60,
+          }
+        )
+        const error = getServiceAccountCredentialStatusError(status)
+        if (error) {
+          throw new Error(error)
+        }
       } else {
         await startGoogleDriveOAuth()
       }
@@ -364,9 +372,11 @@ export function SidePanelToolbar() {
       return
     }
     const configuration = readAppLoginConfiguration()
-    const loginPromise =
-      configuration.mode === 'service_account'
-        ? getServiceAccountCredentials(configuration.serviceAccount, {
+    void (async () => {
+      if (configuration.mode === 'service_account') {
+        const status = await getServiceAccountCredentials(
+          configuration.serviceAccount,
+          {
             ...(configuration.humanAccount
               ? { humanAccount: configuration.humanAccount }
               : {}),
@@ -376,11 +386,18 @@ export function SidePanelToolbar() {
                 ? ['drive', 'app']
                 : ['app'],
             authorizationLeaseSeconds: 24 * 60 * 60,
-          })
-        : browserAdapter.loginWithRedirect({
-            loginHint: configuration.humanAccount || undefined,
-          })
-    void loginPromise.catch((error) => {
+          }
+        )
+        const error = getServiceAccountCredentialStatusError(status)
+        if (error) {
+          throw new Error(error)
+        }
+        return
+      }
+      await browserAdapter.loginWithRedirect({
+        loginHint: configuration.humanAccount || undefined,
+      })
+    })().catch((error) => {
       showToast({
         message: error instanceof Error ? error.message : String(error),
         tone: 'error',

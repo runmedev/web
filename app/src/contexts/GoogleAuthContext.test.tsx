@@ -200,6 +200,12 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
       if (url.endsWith(':generateIdToken')) {
         return new Response(JSON.stringify({ token: idToken }), { status: 200 })
       }
+      if (url.includes('/drive/v3/about')) {
+        return new Response(
+          JSON.stringify({ user: { permissionId: 'service-account-id' } }),
+          { status: 200 }
+        )
+      }
       throw new Error(`Unexpected request: ${url}`)
     })
     const auth = await renderWithGoogleAuthProvider()
@@ -238,6 +244,112 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
     expect(getBrowserAdapter().simpleAuth?.idToken).toBe(idToken)
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull()
     expect(window.localStorage.getItem('oidc-auth')).toBeNull()
+  })
+
+  it('does not install an impersonated Drive token when the Drive API is disabled', async () => {
+    saveAppLoginConfiguration({
+      ...DEFAULT_APP_LOGIN_CONFIGURATION,
+      identitySharing: 'separate',
+      driveMode: 'service_account',
+      driveHumanAccount: 'jeremy@lewi.us',
+      driveServiceAccount: 'runme@runme-lewi-dev.iam.gserviceaccount.com',
+    })
+    let tokenCallback: ((response: { access_token?: string }) => void) | null =
+      null
+    window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient: vi.fn((options) => {
+            tokenCallback = options.callback
+            return {
+              callback: options.callback,
+              requestAccessToken: vi.fn(() => {
+                tokenCallback?.({ access_token: 'human-iam-token' })
+              }),
+            }
+          }),
+        },
+      },
+    }
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.includes('/userinfo')) {
+        return new Response(JSON.stringify({ email: 'jeremy@lewi.us' }), {
+          status: 200,
+        })
+      }
+      if (url.endsWith(':generateAccessToken')) {
+        return new Response(
+          JSON.stringify({
+            accessToken: 'unusable-drive-token',
+            expireTime: new Date(Date.now() + 3_600_000).toISOString(),
+          }),
+          { status: 200 }
+        )
+      }
+      if (url.includes('/drive/v3/about')) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: 'Google Drive API is disabled.',
+              details: [
+                {
+                  reason: 'SERVICE_DISABLED',
+                  metadata: { service: 'drive.googleapis.com' },
+                },
+              ],
+            },
+          }),
+          { status: 403, statusText: 'Forbidden' }
+        )
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    mergeImpersonatedServiceAccountCredential({
+      serviceAccount: 'runme@runme-lewi-dev.iam.gserviceaccount.com',
+      humanPrincipal: 'jeremy@lewi.us',
+      authorizationLeaseExpiresAt: new Date(
+        Date.now() + 86_400_000
+      ).toISOString(),
+      drive: {
+        accessToken: 'previously-cached-drive-token',
+        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        scopes: DRIVE_SCOPES,
+      },
+    })
+    const auth = await renderWithGoogleAuthProvider()
+
+    await expect(auth.ensureAccessToken({ interactive: false })).resolves.toBe(
+      'previously-cached-drive-token'
+    )
+
+    let authorizationError: unknown
+    await act(async () => {
+      try {
+        await auth.getServiceAccountCredentials(
+          'runme@runme-lewi-dev.iam.gserviceaccount.com',
+          {
+            humanAccount: 'jeremy@lewi.us',
+            mode: 'popup',
+            targets: ['drive'],
+          }
+        )
+      } catch (error) {
+        authorizationError = error
+      }
+    })
+    expect(authorizationError).toBeInstanceOf(Error)
+    expect((authorizationError as Error).message).toContain(
+      'Google Drive API is not enabled for service-account project runme-lewi-dev'
+    )
+    expect(
+      window.localStorage.getItem(
+        IMPERSONATED_SERVICE_ACCOUNT_CREDENTIAL_STORAGE_KEY
+      )
+    ).toBeNull()
+    await expect(
+      auth.ensureAccessToken({ interactive: false })
+    ).rejects.toThrow('Google Drive service-account authorization is required')
   })
 
   it('rejects a Google account that does not match the configured human', async () => {
@@ -384,6 +496,12 @@ describe('GoogleAuthProvider implicit redirect flow', () => {
             accessToken: 'service-account-drive-token',
             expireTime: new Date(Date.now() + 3_600_000).toISOString(),
           }),
+          { status: 200 }
+        )
+      }
+      if (url.includes('/drive/v3/about')) {
+        return new Response(
+          JSON.stringify({ user: { permissionId: 'service-account-id' } }),
           { status: 200 }
         )
       }

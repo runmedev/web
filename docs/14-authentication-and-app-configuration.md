@@ -116,6 +116,48 @@ OAuth token, then uses the IAM Service Account Credentials API to mint:
 - a Drive-scoped OAuth access token; and
 - an audience-bound OIDC ID token for the Runme Agent.
 
+Enable both APIs before connecting:
+
+- **IAM Service Account Credentials API** in the OAuth client or quota project;
+  and
+- **Google Drive API** (`drive.googleapis.com`) in the target service account's
+  Google Cloud project.
+
+Sharing a Drive folder with the service account does not enable the Drive API.
+IAM can still mint a correctly scoped access token while the Drive API is
+disabled, but every Drive operation then fails with `403 SERVICE_DISABLED`.
+Runme validates a newly minted Drive token before reporting Drive as syncing.
+If validation detects this configuration, Authentication Settings and the
+Drive status action show an error with a direct link to enable the API for the
+affected project. After enabling it, allow a few minutes for propagation and
+then use **Connect or refresh** to mint and validate a new credential.
+
+#### Service-account storage and Shared drives
+
+An impersonated service account is still the service-account principal; it is
+not a Google Workspace user acting through domain-wide delegation. Service
+accounts do not have Drive storage quota and cannot own files in a user's **My
+Drive**. Sharing a My Drive folder with the service account can permit reading,
+editing, or moving existing files, but it does not let the service account
+create files that it would need to own. Google reports this as
+`403 storageQuotaExceeded`, often with a message that service accounts do not
+have storage quota.
+
+To create notebooks with service-account credentials, select a folder in an
+actual **Shared drive**, where the organization owns the files. A folder shared
+from a user's My Drive is not a Shared drive. Add the service-account email as
+a Shared drive member with **Contributor** access to create files. Use **Content
+manager** or **Manager** when Runme also needs to move or delete items within
+the Shared drive. Workspace policies must allow the service account to be
+added, which can be governed as external membership.
+
+Runme sends the Shared drive parameters required by the Drive API. When Google
+returns the service-account `storageQuotaExceeded` response during creation,
+Runme explains the ownership limitation and directs the user to choose a Shared
+drive or authenticate as a human user. Normal user OAuth, or domain-wide
+delegation that truly impersonates a Workspace user, can create files in that
+user's My Drive because the human user owns the resulting files.
+
 Both tokens represent the same service-account email. The short-lived
 service-account credentials are persisted locally so they survive the OAuth
 redirect and reloads; the human OAuth token is not persisted. Switching to the
