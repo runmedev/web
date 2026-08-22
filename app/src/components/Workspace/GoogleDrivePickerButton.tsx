@@ -9,8 +9,6 @@ import { markOnboardingTaskComplete } from "../../lib/onboarding";
 import { tourUiController } from "../../lib/tourUiController";
 import { getGoogleDrivePickerViews } from "./googleDrivePickerViews";
 
-type PickerAction = "picked" | "cancel";
-
 type PickerDocument = {
   id: string;
   name?: string;
@@ -20,7 +18,7 @@ type PickerDocument = {
 };
 
 type PickerCallbackData = {
-  action: PickerAction;
+  action: string;
   docs?: PickerDocument[];
 };
 
