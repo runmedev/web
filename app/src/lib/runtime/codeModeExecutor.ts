@@ -457,6 +457,22 @@ async function handleSandboxAppKernelBridgeCall({
         ...(result.accessToken ? { accessToken: '<redacted>' } : {}),
       }
     }
+    case 'credentials.google.getServiceAccountCredentials':
+      return appState.getServiceAccountCredentials(
+        String(args[0] ?? ''),
+        args[1] as
+          | {
+              driveScopes?: string[]
+              appAudience?: string
+              humanAccount?: string
+              mode?: 'popup' | 'redirect' | 'new_tab'
+              authorizationLeaseSeconds?: number
+              accessTokenLifetimeSeconds?: number
+              prompt?: '' | 'none' | 'consent' | 'select_account'
+              targets?: Array<'drive' | 'app'>
+            }
+          | undefined
+      )
     case 'explorer.mountDrive':
       return globals.explorer.mountDrive(String(args[0] ?? ''))
     case 'explorer.removeFolder':

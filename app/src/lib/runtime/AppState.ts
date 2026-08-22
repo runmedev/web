@@ -1,4 +1,8 @@
 import type {
+  GetServiceAccountCredentialsOptions,
+  ServiceAccountCredentialStatus,
+} from "../../auth/googleServiceAccountImpersonation";
+import type {
   StartGoogleDriveOAuthOptions,
   StartGoogleDriveOAuthResult,
 } from "../../contexts/GoogleAuthContext";
@@ -37,6 +41,12 @@ export class AppState {
     | ((
         options?: StartGoogleDriveOAuthOptions,
       ) => Promise<StartGoogleDriveOAuthResult>)
+    | null = null;
+  private serviceAccountCredentialsHandler:
+    | ((
+        serviceAccount: string,
+        options?: GetServiceAccountCredentialsOptions,
+      ) => Promise<ServiceAccountCredentialStatus>)
     | null = null;
   private workspaceHandlers: WorkspaceHandlers | null = null;
   private workspaceRenameHandler: ((uri: string) => void) | null = null;
@@ -81,6 +91,18 @@ export class AppState {
       | null,
   ): void {
     this.googleDriveOAuthHandler = handler;
+  }
+
+  /** Registers the React-owned interactive service-account credential flow. */
+  setServiceAccountCredentialsHandler(
+    handler:
+      | ((
+          serviceAccount: string,
+          options?: GetServiceAccountCredentialsOptions,
+        ) => Promise<ServiceAccountCredentialStatus>)
+      | null,
+  ): void {
+    this.serviceAccountCredentialsHandler = handler;
   }
 
   setWorkspaceHandlers(handlers: WorkspaceHandlers | null): void {
@@ -140,6 +162,19 @@ export class AppState {
       throw new Error("Google Drive OAuth is not initialized");
     }
     return this.googleDriveOAuthHandler(options);
+  }
+
+  /** Starts keyless service-account impersonation through the active UI. */
+  async getServiceAccountCredentials(
+    serviceAccount: string,
+    options?: GetServiceAccountCredentialsOptions,
+  ): Promise<ServiceAccountCredentialStatus> {
+    if (!this.serviceAccountCredentialsHandler) {
+      throw new Error(
+        "Google service-account authorization is not initialized",
+      );
+    }
+    return this.serviceAccountCredentialsHandler(serviceAccount, options);
   }
 }
 

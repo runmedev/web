@@ -1,8 +1,18 @@
 import { Button, Text } from '@radix-ui/themes'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import {
+  APP_LOGIN_CONFIGURATION_CHANGED_EVENT,
+  APP_LOGIN_CONFIGURATION_STORAGE_KEY,
+  readAppLoginConfiguration,
+  resolveDriveLoginConfiguration,
+  type EffectiveDriveLoginConfiguration,
+} from '../auth/appLoginConfiguration'
 import { useCurrentDoc } from '../contexts/CurrentDocContext'
-import { useGoogleAuth } from '../contexts/GoogleAuthContext'
+import {
+  useGoogleAuth,
+  type GoogleDriveCredentialAuthFlow,
+} from '../contexts/GoogleAuthContext'
 import { useNotebookContext } from '../contexts/NotebookContext'
 import { useNotebookStore } from '../contexts/NotebookStoreContext'
 import { useWorkspaceDocumentContext } from '../contexts/WorkspaceDocumentContext'
@@ -116,6 +126,50 @@ function formatDate(value: string | undefined): string {
     return value
   }
   return date.toLocaleString()
+}
+
+function findHttpsUrl(value: string): string | null {
+  return value.match(/https:\/\/[^\s]+/)?.[0] ?? null
+}
+
+function credentialTypeLabel(
+  authFlow: GoogleDriveCredentialAuthFlow | null
+): string {
+  switch (authFlow) {
+    case 'implicit':
+      return 'Human OAuth access token (implicit)'
+    case 'pkce':
+      return 'Human OAuth access token (PKCE)'
+    case 'service_account':
+      return 'Service-account key access token'
+    case 'impersonated_service_account':
+      return 'Impersonated service-account access token'
+    default:
+      return 'None'
+  }
+}
+
+function renewalLabel(
+  renewal: 'interactive' | 'oauth_refresh_token' | 'service_account_key' | null
+): string {
+  switch (renewal) {
+    case 'interactive':
+      return 'Interactive authorization required'
+    case 'oauth_refresh_token':
+      return 'Automatic OAuth refresh'
+    case 'service_account_key':
+      return 'Automatic remint from configured key'
+    default:
+      return 'Not available'
+  }
+}
+
+function configuredModeLabel(
+  configuration: EffectiveDriveLoginConfiguration
+): string {
+  return configuration.mode === 'service_account'
+    ? 'Impersonated Google service account'
+    : 'Direct human principal'
 }
 
 function statusClassName(status: NotebookSyncStatus): string {
@@ -366,7 +420,15 @@ function SyncStatusFilter({
 
 export function DriveSyncStatusTab() {
   const { store } = useNotebookStore()
-  const { ensureAccessToken, isDriveSyncing } = useGoogleAuth()
+  const { driveCredentialStatus, ensureAccessToken, isDriveSyncing } =
+    useGoogleAuth()
+  const credentialErrorUrl = driveCredentialStatus.lastError
+    ? findHttpsUrl(driveCredentialStatus.lastError)
+    : null
+  const [configuredDriveIdentity, setConfiguredDriveIdentity] =
+    useState<EffectiveDriveLoginConfiguration>(() =>
+      resolveDriveLoginConfiguration(readAppLoginConfiguration())
+    )
   const { setCurrentDoc } = useCurrentDoc()
   const { openNotebook } = useNotebookContext()
   const { showDocument } = useWorkspaceDocumentContext()
@@ -382,6 +444,31 @@ export function DriveSyncStatusTab() {
   >([])
   const [sortKey, setSortKey] = useState<SortKey>('title')
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
+
+  useEffect(() => {
+    const refreshConfiguredIdentity = () => {
+      setConfiguredDriveIdentity(
+        resolveDriveLoginConfiguration(readAppLoginConfiguration())
+      )
+    }
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === APP_LOGIN_CONFIGURATION_STORAGE_KEY) {
+        refreshConfiguredIdentity()
+      }
+    }
+    window.addEventListener(
+      APP_LOGIN_CONFIGURATION_CHANGED_EVENT,
+      refreshConfiguredIdentity
+    )
+    window.addEventListener('storage', handleStorage)
+    return () => {
+      window.removeEventListener(
+        APP_LOGIN_CONFIGURATION_CHANGED_EVENT,
+        refreshConfiguredIdentity
+      )
+      window.removeEventListener('storage', handleStorage)
+    }
+  }, [])
 
   const refresh = useCallback(() => {
     if (!store) {
@@ -600,6 +687,151 @@ export function DriveSyncStatusTab() {
             </Button>
           </div>
         </div>
+
+        <section
+          className="rounded-lg border border-nb-border bg-white p-4"
+          aria-label="Google Drive credential status"
+          data-testid="drive-credential-status"
+        >
+          <Text size="3" weight="bold" as="p" className="text-nb-text">
+            Google Drive authentication
+          </Text>
+          <Text size="2" as="p" className="mt-1 text-nb-text-muted">
+            Configuration describes the intended identity. Active credential
+            describes the token currently available to Drive.
+          </Text>
+
+          <Text size="2" weight="bold" as="p" className="mt-4 text-nb-text">
+            Configured identity
+          </Text>
+          <dl
+            className="mt-2 grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3"
+            aria-label="Configured Google Drive identity"
+          >
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-nb-text-faint">
+                Authentication mode
+              </dt>
+              <dd className="mt-1 text-nb-text">
+                {configuredModeLabel(configuredDriveIdentity)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-nb-text-faint">
+                Intended Drive identity
+              </dt>
+              <dd className="mt-1 break-all font-mono text-xs text-nb-text">
+                {configuredDriveIdentity.mode === 'service_account'
+                  ? configuredDriveIdentity.serviceAccount || 'Not configured'
+                  : configuredDriveIdentity.humanAccount ||
+                    'Selected during OAuth'}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-nb-text-faint">
+                Human authorizer
+              </dt>
+              <dd className="mt-1 break-all font-mono text-xs text-nb-text">
+                {configuredDriveIdentity.humanAccount ||
+                  'Selected during OAuth'}
+              </dd>
+            </div>
+          </dl>
+
+          <Text
+            size="2"
+            weight="bold"
+            as="p"
+            className="mt-4 border-t border-nb-border pt-4 text-nb-text"
+          >
+            Active credential
+          </Text>
+          <dl
+            className="mt-2 grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3"
+            aria-label="Active Google Drive credential"
+          >
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-nb-text-faint">
+                Connection
+              </dt>
+              <dd className="mt-1 text-nb-text">
+                {driveCredentialStatus.connected ? 'Connected' : 'Disconnected'}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-nb-text-faint">
+                Credential type
+              </dt>
+              <dd className="mt-1 text-nb-text">
+                {credentialTypeLabel(driveCredentialStatus.authFlow)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-nb-text-faint">
+                Effective Drive identity
+              </dt>
+              <dd className="mt-1 break-all font-mono text-xs text-nb-text">
+                {driveCredentialStatus.effectivePrincipal ?? 'Unknown'}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-nb-text-faint">
+                Authorized by
+              </dt>
+              <dd className="mt-1 break-all font-mono text-xs text-nb-text">
+                {driveCredentialStatus.authorizingPrincipal ?? 'Not applicable'}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-nb-text-faint">
+                Credential expires
+              </dt>
+              <dd className="mt-1 text-nb-text">
+                {driveCredentialStatus.expiresAt ? (
+                  <time dateTime={driveCredentialStatus.expiresAt}>
+                    {formatDate(driveCredentialStatus.expiresAt)}
+                  </time>
+                ) : (
+                  'Not available'
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-nb-text-faint">
+                Renewal
+              </dt>
+              <dd className="mt-1 text-nb-text">
+                {renewalLabel(driveCredentialStatus.renewal)}
+              </dd>
+            </div>
+          </dl>
+          {driveCredentialStatus.lastError ? (
+            <Text
+              size="2"
+              as="p"
+              className="mt-4 whitespace-pre-wrap rounded-md border border-red-200 bg-red-50 p-3 text-red-900"
+              data-testid="drive-credential-error"
+            >
+              <strong>Last authorization error:</strong>{' '}
+              {credentialErrorUrl
+                ? driveCredentialStatus.lastError.replace(
+                    credentialErrorUrl,
+                    ''
+                  )
+                : driveCredentialStatus.lastError}
+              {credentialErrorUrl ? (
+                <a
+                  className="font-medium text-nb-accent underline"
+                  href={credentialErrorUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  Open Google Cloud API settings
+                </a>
+              ) : null}
+            </Text>
+          ) : null}
+        </section>
 
         {error ? (
           <pre

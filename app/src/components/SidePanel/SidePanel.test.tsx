@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 type PanelKey =
   | 'explorer'
   | 'documentation'
+  | 'authentication'
   | 'open-documents'
   | 'outline'
   | null
@@ -39,7 +40,15 @@ const startGoogleDriveOAuthMock = vi.fn(async () => ({
   mode: 'popup',
 }))
 const logoutGoogleDriveMock = vi.fn(async () => {})
-const loginWithRedirectMock = vi.fn()
+const setDriveAccountMock = vi.fn()
+const getServiceAccountCredentialsMock = vi.fn(async () => ({
+  humanPrincipal: 'human@example.com',
+  serviceAccount: 'runme@example.iam.gserviceaccount.com',
+  authorizationLeaseExpiresAt: '2026-08-22T00:00:00.000Z',
+  drive: { scopes: [], expiresAt: '2026-08-21T02:00:00.000Z' },
+  app: { audience: 'runme', expiresAt: '2026-08-21T02:00:00.000Z' },
+}))
+const loginWithRedirectMock = vi.fn(async () => {})
 const logoutMock = vi.fn()
 const togglePanelMock = vi.fn()
 const toggleCommentsPanelMock = vi.fn()
@@ -86,8 +95,11 @@ vi.mock('../../contexts/CurrentDocContext', () => ({
 
 vi.mock('../../contexts/GoogleAuthContext', () => ({
   useGoogleAuth: () => ({
+    driveAccount: null,
     ensureAccessToken: ensureAccessTokenMock,
+    getServiceAccountCredentials: getServiceAccountCredentialsMock,
     logoutGoogleDrive: logoutGoogleDriveMock,
+    setDriveAccount: setDriveAccountMock,
     startGoogleDriveOAuth: startGoogleDriveOAuthMock,
     isDriveSyncing,
   }),
@@ -120,6 +132,10 @@ vi.mock('../Documentation/DocumentationExplorer', () => ({
   default: () => <div data-testid="documentation-explorer-mock" />,
 }))
 
+vi.mock('../AuthenticationSettings/AuthenticationSettingsPanel', () => ({
+  default: () => <div data-testid="authentication-settings-panel-mock" />,
+}))
+
 import { SidePanelContent, SidePanelToolbar } from './SidePanel'
 
 describe('SidePanelToolbar drive status button', () => {
@@ -132,9 +148,12 @@ describe('SidePanelToolbar drive status button', () => {
     openDocumentsState = []
     runnersState = []
     notebookSnapshotState = null
+    window.localStorage.clear()
     ensureAccessTokenMock.mockClear()
+    getServiceAccountCredentialsMock.mockClear()
     startGoogleDriveOAuthMock.mockClear()
     logoutGoogleDriveMock.mockClear()
+    setDriveAccountMock.mockClear()
     loginWithRedirectMock.mockClear()
     logoutMock.mockClear()
     togglePanelMock.mockClear()
@@ -165,6 +184,70 @@ describe('SidePanelToolbar drive status button', () => {
     expect(ensureAccessTokenMock).not.toHaveBeenCalled()
     expect(showDocumentMock).not.toHaveBeenCalled()
     expect(setCurrentDocMock).not.toHaveBeenCalled()
+  })
+
+  it('uses the configured impersonated service account from the Drive status button', async () => {
+    window.localStorage.setItem(
+      'runme/app-login-configuration',
+      JSON.stringify({
+        identitySharing: 'shared',
+        mode: 'service_account',
+        humanAccount: 'jeremy@lewi.us',
+        serviceAccount: 'runme-drive@example.iam.gserviceaccount.com',
+        driveMode: 'principal',
+        driveHumanAccount: '',
+        driveServiceAccount: '',
+      })
+    )
+    render(<SidePanelToolbar />)
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Google Drive status: Not syncing',
+        })
+      )
+      await Promise.resolve()
+    })
+
+    expect(getServiceAccountCredentialsMock).toHaveBeenCalledWith(
+      'runme-drive@example.iam.gserviceaccount.com',
+      {
+        humanAccount: 'jeremy@lewi.us',
+        prompt: '',
+        targets: ['drive', 'app'],
+        authorizationLeaseSeconds: 86_400,
+      }
+    )
+    expect(startGoogleDriveOAuthMock).not.toHaveBeenCalled()
+  })
+
+  it('logs in directly as the principal by default', async () => {
+    render(<SidePanelToolbar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Login' }))
+
+    await waitFor(() => expect(loginWithRedirectMock).toHaveBeenCalledTimes(1))
+    expect(getServiceAccountCredentialsMock).not.toHaveBeenCalled()
+  })
+
+  it('uses a remembered service-account mode on normal Login click', async () => {
+    window.localStorage.setItem(
+      'runme/app-login-configuration',
+      JSON.stringify({
+        mode: 'service_account',
+        serviceAccount:
+          'runme-web-test@aisre-gdrive-oai-test.iam.gserviceaccount.com',
+      })
+    )
+    render(<SidePanelToolbar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Login' }))
+
+    await waitFor(() =>
+      expect(getServiceAccountCredentialsMock).toHaveBeenCalledTimes(1)
+    )
+    expect(loginWithRedirectMock).not.toHaveBeenCalled()
   })
 
   it('opens sync status from the Drive status context menu', () => {
@@ -261,6 +344,21 @@ describe('SidePanelToolbar drive status button', () => {
     )
 
     expect(togglePanelMock).toHaveBeenCalledWith('outline')
+  })
+
+  it('opens Authentication Settings from its dedicated toolbar button', () => {
+    render(<SidePanelToolbar />)
+
+    const loginButton = screen.getByRole('button', { name: 'Login' })
+    const authenticationSettingsButton = screen.getByRole('button', {
+      name: 'Toggle Authentication Settings panel',
+    })
+
+    expect(loginButton.nextElementSibling).toBe(authenticationSettingsButton)
+
+    fireEvent.click(authenticationSettingsButton)
+
+    expect(togglePanelMock).toHaveBeenCalledWith('authentication')
   })
 
   it('places the Documentation Explorer button directly above About', () => {
@@ -398,6 +496,16 @@ describe('SidePanelContent', () => {
     render(<SidePanelContent />)
 
     expect(screen.getByTestId('documentation-explorer-mock')).toBeTruthy()
+  })
+
+  it('renders the Authentication Settings panel', () => {
+    activePanelState = 'authentication'
+
+    render(<SidePanelContent />)
+
+    expect(
+      screen.getByTestId('authentication-settings-panel-mock')
+    ).toBeTruthy()
   })
 
   it('renders the Open Documents panel and routes document actions through shared context state', () => {

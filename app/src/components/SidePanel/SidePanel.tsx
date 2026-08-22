@@ -9,6 +9,7 @@ import {
   QueueListIcon,
   ServerStackIcon,
   UserCircleIcon,
+  KeyIcon,
 } from '@heroicons/react/24/outline'
 import { XMarkIcon } from '@heroicons/react/20/solid'
 import { CloudIcon as CloudSolidIcon } from '@heroicons/react/24/solid'
@@ -51,6 +52,12 @@ import {
   isLogsUri,
   LOGS_DOCUMENT_URI,
 } from '../../lib/workspaceDocuments/workspaceDocumentTypes'
+import {
+  readAppLoginConfiguration,
+  resolveDriveLoginConfiguration,
+} from '../../auth/appLoginConfiguration'
+import AuthenticationSettingsPanel from '../AuthenticationSettings/AuthenticationSettingsPanel'
+import { showToast } from '../../lib/toast'
 
 const sideButtonBase = 'group side-btn'
 
@@ -229,8 +236,12 @@ export function SidePanelToolbar() {
   const { getCurrentDoc, setCurrentDoc } = useCurrentDoc()
   const authData = useBrowserAuthData()
   const browserAdapter = getBrowserAdapter()
-  const { isDriveSyncing, logoutGoogleDrive, startGoogleDriveOAuth } =
-    useGoogleAuth()
+  const {
+    getServiceAccountCredentials,
+    isDriveSyncing,
+    logoutGoogleDrive,
+    startGoogleDriveOAuth,
+  } = useGoogleAuth()
   const { listRunners } = useRunners()
   const [driveContextMenu, setDriveContextMenu] = useState<{
     x: number
@@ -242,6 +253,7 @@ export function SidePanelToolbar() {
   const versionInfoSelected = getCurrentDoc() === VERSION_INFO_DOCUMENT_URI
   const appConsoleSelected = getCurrentDoc() === APP_CONSOLE_DOCUMENT_URI
   const logsSelected = getCurrentDoc() === LOGS_DOCUMENT_URI
+  const authenticationSettingsSelected = activePanel === 'authentication'
   const driveSyncStatusSelected =
     getCurrentDoc() === DRIVE_SYNC_STATUS_DOCUMENT_URI
   const hasAvailableRunner = listRunners().some((runner) =>
@@ -277,11 +289,31 @@ export function SidePanelToolbar() {
   const handleDriveStatusClick = useCallback(async () => {
     setDriveContextMenu(null)
     try {
-      await startGoogleDriveOAuth()
-    } catch {
-      // Users can cancel the interactive credential refresh.
+      const configuration = readAppLoginConfiguration()
+      const usesSharedIdentity = configuration.identitySharing === 'shared'
+      const driveConfiguration = resolveDriveLoginConfiguration(configuration)
+      if (driveConfiguration.mode === 'service_account') {
+        await getServiceAccountCredentials(driveConfiguration.serviceAccount, {
+          ...(driveConfiguration.humanAccount
+            ? { humanAccount: driveConfiguration.humanAccount }
+            : {}),
+          prompt: driveConfiguration.humanAccount ? '' : 'select_account',
+          targets: usesSharedIdentity ? ['drive', 'app'] : ['drive'],
+          authorizationLeaseSeconds: 24 * 60 * 60,
+        })
+      } else {
+        await startGoogleDriveOAuth()
+      }
+    } catch (error) {
+      showToast({
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Google Drive authorization failed.',
+        tone: 'error',
+      })
     }
-  }, [startGoogleDriveOAuth])
+  }, [getServiceAccountCredentials, startGoogleDriveOAuth])
 
   const handleDriveLogout = useCallback(async () => {
     setDriveContextMenu(null)
@@ -325,6 +357,36 @@ export function SidePanelToolbar() {
     },
     [openDriveContextMenu]
   )
+
+  const handleAccountClick = useCallback(() => {
+    if (authData) {
+      browserAdapter.logout()
+      return
+    }
+    const configuration = readAppLoginConfiguration()
+    const loginPromise =
+      configuration.mode === 'service_account'
+        ? getServiceAccountCredentials(configuration.serviceAccount, {
+            ...(configuration.humanAccount
+              ? { humanAccount: configuration.humanAccount }
+              : {}),
+            prompt: 'select_account',
+            targets:
+              configuration.identitySharing === 'shared'
+                ? ['drive', 'app']
+                : ['app'],
+            authorizationLeaseSeconds: 24 * 60 * 60,
+          })
+        : browserAdapter.loginWithRedirect({
+            loginHint: configuration.humanAccount || undefined,
+          })
+    void loginPromise.catch((error) => {
+      showToast({
+        message: error instanceof Error ? error.message : String(error),
+        tone: 'error',
+      })
+    })
+  }, [authData, browserAdapter, getServiceAccountCredentials])
 
   const handleVersionInfoClick = useCallback(() => {
     showDocument(VERSION_INFO_DOCUMENT_URI, {
@@ -530,14 +592,25 @@ export function SidePanelToolbar() {
           data-tour-id="left-nav.account"
           className={`${sideButtonBase} ${sideButtonInactive}`}
           aria-label={authData ? 'Logout' : 'Login'}
-          onClick={() =>
-            authData
-              ? browserAdapter.logout()
-              : browserAdapter.loginWithRedirect()
-          }
+          onClick={handleAccountClick}
         >
           <UserCircleIcon className="h-5 w-5" />
           <span className={tooltipBase}>{authData ? 'Logout' : 'Login'}</span>
+        </button>
+        <button
+          type="button"
+          data-tour-id="left-nav.authentication-settings"
+          className={`${sideButtonBase} ${
+            authenticationSettingsSelected
+              ? sideButtonActive
+              : sideButtonInactive
+          }`}
+          aria-pressed={authenticationSettingsSelected}
+          aria-label="Toggle Authentication Settings panel"
+          onClick={() => togglePanel('authentication')}
+        >
+          <KeyIcon className="h-5 w-5" />
+          <span className={tooltipBase}>Authentication Settings</span>
         </button>
         <button
           type="button"
@@ -588,6 +661,12 @@ export function SidePanelContent() {
         aria-hidden={activePanel !== 'documentation'}
       >
         <DocumentationExplorer />
+      </div>
+      <div
+        className={`h-full min-h-0 w-full ${activePanel === 'authentication' ? 'flex' : 'hidden'}`}
+        aria-hidden={activePanel !== 'authentication'}
+      >
+        <AuthenticationSettingsPanel />
       </div>
       <div
         className={`h-full min-h-0 w-full ${activePanel === 'open-documents' ? 'flex' : 'hidden'}`}

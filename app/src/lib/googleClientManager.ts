@@ -233,6 +233,7 @@ export class GoogleClientManager {
 
   setOAuthClientFromJson(raw: string): GoogleOAuthClientConfig {
     let parsed: {
+      type?: string
       client_id?: string
       clientId?: string
       client_secret?: string
@@ -259,6 +260,7 @@ export class GoogleClientManager {
     } | null = null
     try {
       parsed = JSON.parse(raw) as {
+        type?: string
         client_id?: string
         clientId?: string
         client_secret?: string
@@ -287,10 +289,26 @@ export class GoogleClientManager {
       throw new Error('Invalid JSON: unable to parse OAuth client config')
     }
 
-    const clientId = (parsed?.client_id ?? parsed?.clientId ?? '').trim()
+    const nestedServiceAccount =
+      parsed?.service_account ?? parsed?.serviceAccount
     const serviceAccount = parseServiceAccountCredentials(
-      parsed?.service_account ?? parsed?.serviceAccount ?? parsed
+      nestedServiceAccount ?? parsed
     )
+    const serviceAccountFromRoot =
+      Boolean(serviceAccount) && nestedServiceAccount === undefined
+    const parsedClientId = (parsed?.client_id ?? parsed?.clientId ?? '').trim()
+    // A service-account key's root-level client_id identifies the service
+    // account itself. It is not a browser OAuth client and has no registered
+    // JavaScript origins. Keep an existing Web OAuth client instead of
+    // replacing it with the service account's numeric client_id.
+    const existingWebClientId = this.config.oauth.clientId.endsWith(
+      '.apps.googleusercontent.com'
+    )
+      ? this.config.oauth.clientId
+      : ''
+    const clientId = serviceAccountFromRoot
+      ? existingWebClientId
+      : parsedClientId
     if (!clientId && !serviceAccount) {
       throw new Error('OAuth client config is missing client_id')
     }
