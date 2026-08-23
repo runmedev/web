@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 
+import { type SharedNotebookPreflight, parseDriveItem } from "../storage/drive";
+import { NotebookStoreItemType } from "../storage/notebook";
 import { appLogger } from "./logging/runtime";
 import {
-  fetchDriveItemWithParents,
-  parseDriveItem,
-} from "../storage/drive";
-import { NotebookStoreItemType } from "../storage/notebook";
+  type SharedNotebookTrustDecision,
+  evaluateSharedNotebookTrust,
+  rememberSharedNotebookTrust,
+} from "./sharedNotebookTrust";
 
 const STORAGE_KEY = "runme/drive-link-intents";
 const STATUS_TAB_URI = "status://drive-link";
@@ -13,12 +15,12 @@ const STATUS_TAB_URI = "status://drive-link";
 export type DriveLinkIntentStatus =
   | "pending"
   | "processing"
+  | "fetching_metadata"
+  | "awaiting_review"
   | "waiting_for_auth"
   | "failed";
 
-export type DriveLinkIntentAction =
-  | "open_shared_file"
-  | "mount_shared_folder";
+export type DriveLinkIntentAction = "open_shared_file" | "mount_shared_folder";
 
 export interface DriveLinkIntent {
   id: string;
@@ -30,6 +32,8 @@ export interface DriveLinkIntent {
   updatedAt: string;
   retryCount: number;
   lastErrorMessage?: string;
+  preflight?: SharedNotebookPreflight;
+  trustDecision?: SharedNotebookTrustDecision;
 }
 
 export interface DriveLinkCoordinatorSnapshot {
@@ -40,8 +44,29 @@ export interface DriveLinkCoordinatorSnapshot {
 
 type DriveLinkCoordinatorDeps = {
   ensureAccessToken: (options?: { interactive?: boolean }) => Promise<string>;
+  getEffectivePrincipal: () => string | null;
+  fetchPreflight: (remoteUri: string) => Promise<{
+    item: {
+      uri: string;
+      name: string;
+      mimeType?: string;
+    };
+    parents: Array<{
+      uri: string;
+      name: string;
+      type: NotebookStoreItemType;
+    }>;
+    preflight: SharedNotebookPreflight;
+  }>;
   updateFolder: (remoteUri: string, name?: string) => Promise<string>;
-  addFile: (remoteUri: string, name?: string) => Promise<string>;
+  importFile: (
+    remoteUri: string,
+    name: string,
+    options: {
+      mimeType?: string;
+      expected?: { checksum?: string; revisionId?: string; version?: string };
+    },
+  ) => Promise<string>;
   addWorkspaceItem: (localUri: string) => void;
   removeWorkspaceItem: (uri: string) => void;
   getWorkspaceItems: () => string[];
@@ -65,10 +90,7 @@ function nowIso(): string {
 }
 
 function isLocalUri(uri: string): boolean {
-  return (
-    uri.startsWith("local://") ||
-    uri.startsWith("fs://")
-  );
+  return uri.startsWith("local://") || uri.startsWith("fs://");
 }
 
 export function isDriveAuthError(error: unknown): boolean {
@@ -155,7 +177,11 @@ function loadIntents(): DriveLinkIntent[] {
         ...intent,
         // "processing" can be left behind in sessionStorage after reload/crash.
         // Treat it as pending so the coordinator can resume it.
-        status: intent.status === "processing" ? "pending" : intent.status,
+        status:
+          intent.status === "processing" ||
+          intent.status === "fetching_metadata"
+            ? "pending"
+            : intent.status,
       }));
   } catch {
     return [];
@@ -191,8 +217,31 @@ class DriveLinkCoordinatorRuntime {
 
   private processing = false;
 
+  private configuredPrincipal: string | null = null;
+
   configure(deps: DriveLinkCoordinatorDeps | null): void {
     this.deps = deps;
+    const nextPrincipal = deps?.getEffectivePrincipal()?.trim().toLowerCase() ?? null;
+    const principalChanged = nextPrincipal !== this.configuredPrincipal;
+    this.configuredPrincipal = nextPrincipal;
+
+    if (nextPrincipal && principalChanged) {
+      let changed = false;
+      this.intents = this.intents.map((intent) => {
+        if (intent.status !== "awaiting_review") {
+          return intent;
+        }
+        changed = true;
+        return {
+          ...intent,
+          status: "pending",
+          updatedAt: nowIso(),
+        };
+      });
+      if (changed) {
+        this.persistAndEmit();
+      }
+    }
   }
 
   getStatusTabUri(): string {
@@ -212,9 +261,8 @@ class DriveLinkCoordinatorRuntime {
       (intent) => intent.status === "waiting_for_auth",
     );
     const intentErrorMessage =
-      [...this.intents]
-        .reverse()
-        .find((intent) => intent.lastErrorMessage)?.lastErrorMessage ?? null;
+      [...this.intents].reverse().find((intent) => intent.lastErrorMessage)
+        ?.lastErrorMessage ?? null;
     return {
       intents: this.intents.map((intent) => ({ ...intent })),
       authBlocked,
@@ -232,8 +280,7 @@ class DriveLinkCoordinatorRuntime {
   ): Promise<void> {
     const action = this.resolveAction(remoteUri);
     const existing = this.intents.find(
-      (intent) =>
-        intent.remoteUri === remoteUri && intent.action === action,
+      (intent) => intent.remoteUri === remoteUri && intent.action === action,
     );
     if (existing) {
       return;
@@ -288,12 +335,15 @@ class DriveLinkCoordinatorRuntime {
     if (this.processing) {
       this.lastMessage =
         "Shared links are already being processed. Please wait for the current attempt to finish.";
-      appLogger.info("Retry requested while shared links are still processing", {
-        attrs: {
-          scope: "storage.drive.share",
-          code: "DRIVE_SHARED_LINK_RETRY_IGNORED_PROCESSING",
+      appLogger.info(
+        "Retry requested while shared links are still processing",
+        {
+          attrs: {
+            scope: "storage.drive.share",
+            code: "DRIVE_SHARED_LINK_RETRY_IGNORED_PROCESSING",
+          },
         },
-      });
+      );
       this.persistAndEmit();
       return;
     }
@@ -317,6 +367,38 @@ class DriveLinkCoordinatorRuntime {
     }));
     this.persistAndEmit();
     await this.processPending();
+  }
+
+  async trustAndOpen(intentId: string): Promise<void> {
+    const intent = this.intents.find((item) => item.id === intentId);
+    const principal = this.deps?.getEffectivePrincipal();
+    if (!intent?.preflight || intent.status !== "awaiting_review") {
+      return;
+    }
+    if (!principal) {
+      this.updateIntent(intentId, {
+        lastErrorMessage:
+          "Runme could not identify the active Google Drive account. Reconnect Drive and try again.",
+      });
+      return;
+    }
+
+    rememberSharedNotebookTrust(
+      intent.preflight,
+      principal,
+      "explicit_document",
+    );
+    this.updateIntent(intentId, {
+      status: "pending",
+      lastErrorMessage: undefined,
+    });
+    await this.processPending();
+  }
+
+  cancelIntent(intentId: string): void {
+    this.intents = this.intents.filter((intent) => intent.id !== intentId);
+    this.lastMessage = null;
+    this.persistAndEmit();
   }
 
   async loginToDriveAndProcess(): Promise<void> {
@@ -396,10 +478,39 @@ class DriveLinkCoordinatorRuntime {
         }
         deps.removeWorkspaceItem(intent.remoteUri);
       } else {
-        const { item, parents } = await fetchDriveItemWithParents(
+        this.updateIntent(intentId, { status: "fetching_metadata" });
+        const { item, parents, preflight } = await deps.fetchPreflight(
           intent.remoteUri,
-          deps.ensureAccessToken,
         );
+        const trustDecision = evaluateSharedNotebookTrust({
+          preflight,
+          effectivePrincipal: deps.getEffectivePrincipal(),
+        });
+        this.updateIntent(intentId, { preflight, trustDecision });
+
+        if (!preflight.canDownload) {
+          throw new Error(
+            "Google Drive does not allow this file to be downloaded.",
+          );
+        }
+        if (
+          !preflight.version &&
+          !preflight.headRevisionId &&
+          !preflight.md5Checksum
+        ) {
+          throw new Error(
+            "Google Drive did not provide a content version, so Runme cannot safely import this notebook.",
+          );
+        }
+        if (!trustDecision.trusted) {
+          this.lastMessage = null;
+          this.updateIntent(intentId, {
+            status: "awaiting_review",
+            lastErrorMessage: undefined,
+          });
+          return;
+        }
+
         const parentFolder = parents.find(
           (parent) => parent.type === NotebookStoreItemType.Folder,
         );
@@ -413,9 +524,24 @@ class DriveLinkCoordinatorRuntime {
           }
         }
 
-        const localFileUri = await deps.addFile(item.uri, item.name);
+        const localFileUri = await deps.importFile(item.uri, item.name, {
+          mimeType: item.mimeType,
+          expected: {
+            checksum: preflight.md5Checksum,
+            revisionId: preflight.headRevisionId,
+            version: preflight.version,
+          },
+        });
         deps.removeWorkspaceItem(intent.remoteUri);
         await deps.openNotebook(localFileUri);
+
+        if (trustDecision.basis && trustDecision.effectivePrincipal) {
+          rememberSharedNotebookTrust(
+            preflight,
+            trustDecision.effectivePrincipal,
+            trustDecision.basis,
+          );
+        }
       }
 
       this.lastMessage = null;
@@ -459,7 +585,12 @@ class DriveLinkCoordinatorRuntime {
 
   private updateIntent(
     intentId: string,
-    updates: Partial<Omit<DriveLinkIntent, "id" | "remoteUri" | "action" | "source" | "createdAt">>,
+    updates: Partial<
+      Omit<
+        DriveLinkIntent,
+        "id" | "remoteUri" | "action" | "source" | "createdAt"
+      >
+    >,
   ): void {
     this.intents = this.intents.map((intent) =>
       intent.id === intentId

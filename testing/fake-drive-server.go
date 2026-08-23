@@ -2,8 +2,12 @@ package main
 
 import (
 	"crypto/md5"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
@@ -29,11 +33,26 @@ type driveFile struct {
 	Name          string            `json:"name"`
 	MimeType      string            `json:"mimeType"`
 	Parents       []string          `json:"parents,omitempty"`
+	DriveID       string            `json:"driveId,omitempty"`
+	OwnedByMe     bool              `json:"ownedByMe"`
+	Owners        []driveUser       `json:"owners,omitempty"`
+	Capabilities  driveCapabilities `json:"capabilities"`
 	AppProperties map[string]string `json:"appProperties,omitempty"`
 	Content       string            `json:"-"`
-	Version       int               `json:"version"`
+	Version       int               `json:"version,string"`
 	HeadRev       string            `json:"headRevisionId"`
 	MD5Checksum   string            `json:"md5Checksum,omitempty"`
+}
+
+type driveUser struct {
+	DisplayName  string `json:"displayName,omitempty"`
+	EmailAddress string `json:"emailAddress,omitempty"`
+	PermissionID string `json:"permissionId,omitempty"`
+	Me           bool   `json:"me,omitempty"`
+}
+
+type driveCapabilities struct {
+	CanDownload bool `json:"canDownload"`
 }
 
 type driveStore struct {
@@ -49,21 +68,26 @@ func newDriveStore() *driveStore {
 	}
 
 	store.files[seedFolderID] = &driveFile{
-		ID:       seedFolderID,
-		Name:     "Shared Drive Folder",
-		MimeType: driveFolderMime,
-		Version:  1,
-		HeadRev:  "rev-1",
+		ID:           seedFolderID,
+		Name:         "Shared Drive Folder",
+		MimeType:     driveFolderMime,
+		OwnedByMe:    false,
+		Capabilities: driveCapabilities{CanDownload: true},
+		Version:      1,
+		HeadRev:      "rev-1",
 	}
 
 	store.files[seedFileID] = &driveFile{
-		ID:       seedFileID,
-		Name:     seedFileName,
-		MimeType: notebookJSONMime,
-		Parents:  []string{seedFolderID},
-		Content:  `{"cells":[{"refId":"cell_shared_drive","kind":"CODE","languageId":"bash","value":"echo \"shared drive\"","metadata":{"runner":"default"},"outputs":[]}],"metadata":{}}`,
-		Version:  1,
-		HeadRev:  "rev-1",
+		ID:           seedFileID,
+		Name:         seedFileName,
+		MimeType:     notebookJSONMime,
+		Parents:      []string{seedFolderID},
+		OwnedByMe:    false,
+		Owners:       []driveUser{{DisplayName: "Acme Notebook Owner", EmailAddress: "owner@acme.example", PermissionID: "owner-acme-1"}},
+		Capabilities: driveCapabilities{CanDownload: true},
+		Content:      `{"cells":[{"refId":"cell_shared_drive","kind":"CODE","languageId":"bash","value":"echo \"shared drive\"","metadata":{"runner":"default"},"outputs":[]}],"metadata":{}}`,
+		Version:      1,
+		HeadRev:      "rev-1",
 	}
 	store.refreshChecksum(seedFileID)
 
@@ -110,6 +134,9 @@ func (s *driveStore) create(resource map[string]any) (*driveFile, bool) {
 		MimeType:      stringValue(resource["mimeType"], notebookJSONMime),
 		Parents:       stringSlice(resource["parents"]),
 		AppProperties: stringMap(resource["appProperties"]),
+		OwnedByMe:     true,
+		Owners:        []driveUser{{DisplayName: "Fake Drive User", EmailAddress: "viewer@acme.example", PermissionID: "viewer-acme-1", Me: true}},
+		Capabilities:  driveCapabilities{CanDownload: true},
 		Version:       1,
 		HeadRev:       "rev-1",
 	}
@@ -202,6 +229,7 @@ func cloneFile(file *driveFile) *driveFile {
 		return nil
 	}
 	parents := append([]string(nil), file.Parents...)
+	owners := append([]driveUser(nil), file.Owners...)
 	appProperties := make(map[string]string, len(file.AppProperties))
 	for key, value := range file.AppProperties {
 		appProperties[key] = value
@@ -211,6 +239,10 @@ func cloneFile(file *driveFile) *driveFile {
 		Name:          file.Name,
 		MimeType:      file.MimeType,
 		Parents:       parents,
+		DriveID:       file.DriveID,
+		OwnedByMe:     file.OwnedByMe,
+		Owners:        owners,
+		Capabilities:  file.Capabilities,
 		AppProperties: appProperties,
 		Content:       file.Content,
 		Version:       file.Version,
@@ -275,6 +307,48 @@ func filterStrings(values []string, keep func(string) bool) []string {
 
 func newDriveHandler(store *driveStore) http.Handler {
 	mux := http.NewServeMux()
+	serviceAccountKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic(fmt.Sprintf("generate fake service-account key: %v", err))
+	}
+	serviceAccountKeyBytes, err := x509.MarshalPKCS8PrivateKey(serviceAccountKey)
+	if err != nil {
+		panic(fmt.Sprintf("marshal fake service-account key: %v", err))
+	}
+	serviceAccountPEM := string(pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: serviceAccountKeyBytes,
+	}))
+	mux.HandleFunc("/app-config.json", func(w http.ResponseWriter, r *http.Request) {
+		if allowCORS(w, r) {
+			return
+		}
+		writeJSON(w, map[string]any{
+			"googleDrive": map[string]any{
+				"baseUrl":  "http://127.0.0.1:9090",
+				"authFlow": "service_account",
+				"serviceAccount": map[string]any{
+					"clientEmail": "viewer@acme.example",
+					"privateKey":  serviceAccountPEM,
+					"tokenUri":    "http://127.0.0.1:9090/token",
+				},
+			},
+		})
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		if allowCORS(w, r) {
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"access_token": "fake-drive-access-token",
+			"token_type":   "Bearer",
+			"expires_in":   3600,
+		})
+	})
 	mux.HandleFunc("/drive/v3/files/generateIds", func(w http.ResponseWriter, r *http.Request) {
 		if allowCORS(w, r) {
 			return

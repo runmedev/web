@@ -1,6 +1,19 @@
 import { Button, ScrollArea, Text } from "@radix-ui/themes";
 
-import { useDriveLinkCoordinatorSnapshot } from "../lib/driveLinkCoordinator";
+import {
+  driveLinkCoordinator,
+  useDriveLinkCoordinatorSnapshot,
+} from "../lib/driveLinkCoordinator";
+
+function identityLabel(identity: {
+  displayName?: string;
+  emailAddress?: string;
+}): string {
+  if (identity.displayName && identity.emailAddress) {
+    return `${identity.displayName} (${identity.emailAddress})`;
+  }
+  return identity.emailAddress ?? identity.displayName ?? "Unknown owner";
+}
 
 export function DriveLinkStatusTab({
   onLogin,
@@ -10,6 +23,9 @@ export function DriveLinkStatusTab({
   onRetry: () => void | Promise<void>;
 }) {
   const snapshot = useDriveLinkCoordinatorSnapshot();
+  const awaitingReview = snapshot.intents.filter(
+    (intent) => intent.status === "awaiting_review",
+  );
 
   return (
     <ScrollArea
@@ -21,10 +37,14 @@ export function DriveLinkStatusTab({
       <div className="mx-auto flex h-full max-w-3xl flex-col gap-6 text-sm">
         <div className="space-y-2">
           <Text size="5" weight="bold" as="p" className="text-nb-text">
-            Loading Shared Notebook
+            {awaitingReview.length > 0
+              ? "Review Shared Notebook"
+              : "Loading Shared Notebook"}
           </Text>
           <Text size="2" as="p" className="text-nb-text-muted">
-            The app is resolving one or more shared Google Drive links.
+            {awaitingReview.length > 0
+              ? "Runme has only read Google Drive metadata. Notebook content will not be downloaded or rendered until you trust it."
+              : "The app is resolving one or more shared Google Drive links."}
           </Text>
         </div>
 
@@ -35,13 +55,19 @@ export function DriveLinkStatusTab({
           <Text
             size="2"
             as="p"
-            className={snapshot.authBlocked ? "mt-2 text-nb-error" : "mt-2 text-nb-text-muted"}
+            className={
+              snapshot.authBlocked
+                ? "mt-2 text-nb-error"
+                : "mt-2 text-nb-text-muted"
+            }
           >
             {snapshot.authBlocked
               ? "Google Drive authorization is required before shared links can be loaded. Click Login to Drive to continue."
-              : snapshot.intents.length === 0 && snapshot.lastErrorMessage
-                ? "No pending shared links. See the latest status message below."
-              : "Shared links are queued for processing."}
+              : awaitingReview.length > 0
+                ? "One or more notebooks are from an owner Runme could not automatically trust. Review the source before opening."
+                : snapshot.intents.length === 0 && snapshot.lastErrorMessage
+                  ? "No pending shared links. See the latest status message below."
+                  : "Shared links are queued for processing."}
           </Text>
           {snapshot.lastErrorMessage && (
             <pre
@@ -79,15 +105,84 @@ export function DriveLinkStatusTab({
                   <div className="text-xs font-semibold uppercase tracking-wide text-nb-text-faint">
                     {intent.status}
                   </div>
-                  <div className="mt-1 break-all text-sm text-nb-text">
-                    {intent.remoteUri}
-                  </div>
+                  {intent.preflight ? (
+                    <div className="mt-2 space-y-1 text-sm text-nb-text">
+                      <div>
+                        <span className="font-semibold">Name:</span>{" "}
+                        {intent.preflight.name}
+                      </div>
+                      <div>
+                        <span className="font-semibold">Owner:</span>{" "}
+                        {intent.preflight.owners.length > 0
+                          ? intent.preflight.owners
+                              .map(identityLabel)
+                              .join(", ")
+                          : "Google Drive did not provide owner information"}
+                      </div>
+                      <div>
+                        <span className="font-semibold">Location:</span>{" "}
+                        {intent.preflight.parents.length > 0
+                          ? intent.preflight.parents
+                              .map((parent) => parent.name)
+                              .join(", ")
+                          : "No parent folder reported"}
+                      </div>
+                      {intent.preflight.lastModifyingUser && (
+                        <div>
+                          <span className="font-semibold">
+                            Last modified by:
+                          </span>{" "}
+                          {identityLabel(intent.preflight.lastModifyingUser)}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="mt-1 break-all text-sm text-nb-text">
+                      {intent.remoteUri}
+                    </div>
+                  )}
                   <div className="mt-1 text-xs text-nb-text-muted">
                     action={intent.action} retries={intent.retryCount}
                   </div>
                   {intent.lastErrorMessage && (
                     <div className="mt-2 text-xs text-nb-error">
                       {intent.lastErrorMessage}
+                    </div>
+                  )}
+                  {intent.status === "awaiting_review" && (
+                    <div className="mt-3 space-y-3">
+                      <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-950">
+                        Opening a notebook can display active content and may
+                        expose data available to this browser session. Only
+                        continue if you recognize and trust its source.
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          data-testid="drive-link-trust-open"
+                          onClick={() =>
+                            void driveLinkCoordinator.trustAndOpen(intent.id)
+                          }
+                        >
+                          Trust This Document And Open
+                        </Button>
+                        <Button
+                          variant="soft"
+                          data-testid="drive-link-cancel"
+                          onClick={() =>
+                            driveLinkCoordinator.cancelIntent(intent.id)
+                          }
+                        >
+                          Cancel
+                        </Button>
+                        <a
+                          className="inline-flex items-center text-xs text-blue-700 underline"
+                          href={intent.remoteUri}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open In Google Drive
+                        </a>
+                      </div>
                     </div>
                   )}
                 </li>

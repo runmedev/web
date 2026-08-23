@@ -20,6 +20,7 @@ import {
 } from './excalidraw'
 import { MemoryIpynbShadowStorage } from './ipynbShadows'
 import LocalNotebooks, {
+  DriveSnapshotChangedError,
   type LocalFileRecord,
   type LocalFolderRecord,
   NotebookConflictChangedError,
@@ -153,6 +154,85 @@ function notebookJson(value: string): string {
   )
 }
 
+describe('LocalNotebooks trusted Drive snapshot import', () => {
+  it('initializes a new mirror only after the downloaded version stays stable', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/trusted123/view'
+    const version = {
+      md5Checksum: 'checksum-1',
+      headRevisionId: 'revision-1',
+      version: '7',
+    }
+    const driveStore = {
+      getVersionMetadata: vi.fn(async () => version),
+      loadContent: vi.fn(async () => notebookJson('trusted snapshot')),
+    }
+    const store = createTestStore(driveStore)
+
+    const localUri = await store.importTrustedDriveSnapshot(
+      remoteUri,
+      'trusted.json',
+      {
+        expected: {
+          checksum: 'checksum-1',
+          revisionId: 'revision-1',
+          version: '7',
+        },
+      }
+    )
+
+    const record = await store.files.get(localUri)
+    expect(driveStore.loadContent).toHaveBeenCalledTimes(1)
+    expect(driveStore.getVersionMetadata).toHaveBeenCalledTimes(2)
+    expect(record).toMatchObject({
+      remoteId: remoteUri,
+      lastRemoteChecksum: 'checksum-1',
+      lastUpstreamVersion: {
+        checksum: 'checksum-1',
+        revisionId: 'revision-1',
+      },
+    })
+    expect(record?.doc).toContain('trusted snapshot')
+  })
+
+  it('rejects a changed Drive snapshot without initializing candidate bytes', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/changing123/view'
+    const driveStore = {
+      getVersionMetadata: vi
+        .fn()
+        .mockResolvedValueOnce({
+          md5Checksum: 'checksum-1',
+          headRevisionId: 'revision-1',
+          version: '7',
+        })
+        .mockResolvedValueOnce({
+          md5Checksum: 'checksum-2',
+          headRevisionId: 'revision-2',
+          version: '8',
+        }),
+      loadContent: vi.fn(async () => notebookJson('changed snapshot')),
+    }
+    const store = createTestStore(driveStore)
+
+    await expect(
+      store.importTrustedDriveSnapshot(remoteUri, 'changing.json', {
+        expected: {
+          checksum: 'checksum-1',
+          revisionId: 'revision-1',
+          version: '7',
+        },
+      })
+    ).rejects.toBeInstanceOf(DriveSnapshotChangedError)
+
+    const [record] = await store.files.toArray()
+    expect(record).toMatchObject({
+      remoteId: remoteUri,
+      doc: '',
+      lastSynced: '',
+      lastRemoteChecksum: '',
+    })
+  })
+})
+
 describe('LocalNotebooks pending Drive create', () => {
   it('creates one local mirror across concurrent addFile calls', async () => {
     const store = createTestStore({})
@@ -165,9 +245,9 @@ describe('LocalNotebooks pending Drive create', () => {
 
     expect(second).toBe(first)
     const records = await store.files.toArray()
-    expect(records.filter((record) => record.remoteId === remoteUri)).toHaveLength(
-      1
-    )
+    expect(
+      records.filter((record) => record.remoteId === remoteUri)
+    ).toHaveLength(1)
   })
 
   it('initializes an uploaded Drive ipynb as a synced mirror', async () => {
@@ -468,11 +548,15 @@ describe('LocalNotebooks pending Drive create', () => {
       'local://file/moved'
     )
 
-    await expect(store.folders.get('local://folder/old')).resolves.toMatchObject({
+    await expect(
+      store.folders.get('local://folder/old')
+    ).resolves.toMatchObject({
       children: [],
       provisionalChildren: [],
     })
-    await expect(store.folders.get('local://folder/new')).resolves.toMatchObject({
+    await expect(
+      store.folders.get('local://folder/new')
+    ).resolves.toMatchObject({
       children: ['local://file/moved'],
     })
   })

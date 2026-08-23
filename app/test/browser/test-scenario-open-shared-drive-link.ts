@@ -10,7 +10,9 @@ const SHARED_FOLDER_URL = "https://drive.google.com/drive/folders/shared-folder-
 const SHARED_FILE_MARKDOWN = `[shared-drive-notebook](${FRONTEND_URL}/?doc=${encodeURIComponent(SHARED_FILE_URL)})`;
 const GOOGLE_CLIENT_STORAGE_KEY = "googleClientConfig";
 const GOOGLE_AUTH_STORAGE_KEY = "runme/google-auth/token";
+const GOOGLE_DRIVE_ACCOUNT_STORAGE_KEY = "runme/google-auth/drive-account";
 const GOOGLE_DRIVE_RUNTIME_STORAGE_KEY = "runme/google-drive/runtime";
+const SHARED_NOTEBOOK_TRUST_STORAGE_KEY = "runme/shared-notebook-trust/v1";
 const CURRENT_DOC_STORAGE_KEY = "runme/currentDoc";
 const WORKSPACE_STORAGE_KEY = "runme/workspace";
 
@@ -384,6 +386,8 @@ const seedRuntime = run(
     localStorage.setItem('${GOOGLE_DRIVE_RUNTIME_STORAGE_KEY}', JSON.stringify({ baseUrl: '${FAKE_DRIVE_URL}' }));
     localStorage.setItem('${GOOGLE_CLIENT_STORAGE_KEY}', JSON.stringify({}));
     localStorage.removeItem('${GOOGLE_AUTH_STORAGE_KEY}');
+    localStorage.setItem('${GOOGLE_DRIVE_ACCOUNT_STORAGE_KEY}', 'viewer@acme.example');
+    localStorage.removeItem('${SHARED_NOTEBOOK_TRUST_STORAGE_KEY}');
     sessionStorage.removeItem('${CURRENT_DOC_STORAGE_KEY}');
     localStorage.setItem('${WORKSPACE_STORAGE_KEY}', JSON.stringify({ items: [] }));
     return 'ok';
@@ -482,6 +486,15 @@ if (/shared-drive-notebook\.json/i.test(documentsText)) {
   pass("Opened the shared notebook tab");
 } else {
   fail("Shared notebook tab was not opened");
+}
+
+const trustRecordRaw = run(
+  `agent-browser eval "localStorage.getItem('${SHARED_NOTEBOOK_TRUST_STORAGE_KEY}') || ''"`,
+).stdout;
+if (trustRecordRaw.includes("shared-file-123") && trustRecordRaw.includes("same_domain")) {
+  pass("Persisted same-domain trust for the shared notebook");
+} else {
+  fail("Did not persist same-domain trust for the shared notebook");
 }
 takeScreenshot(FILE_LOADED_SCREENSHOT);
 

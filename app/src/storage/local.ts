@@ -184,6 +184,37 @@ export class NotebookConflictChangedError extends Error {
   }
 }
 
+export class DriveSnapshotChangedError extends Error {
+  constructor(readonly remoteUri: string) {
+    super(`Google Drive changed while importing ${remoteUri}. Please retry.`)
+    this.name = 'DriveSnapshotChangedError'
+  }
+}
+
+function driveVersionMatches(
+  actual: DriveVersionMetadata | null,
+  expected: { checksum?: string; revisionId?: string; version?: string }
+): boolean {
+  return (
+    (expected.checksum === undefined ||
+      actual?.md5Checksum === expected.checksum) &&
+    (expected.revisionId === undefined ||
+      actual?.headRevisionId === expected.revisionId) &&
+    (expected.version === undefined || actual?.version === expected.version)
+  )
+}
+
+function sameDriveVersion(
+  before: DriveVersionMetadata | null,
+  after: DriveVersionMetadata | null
+): boolean {
+  return (
+    before?.md5Checksum === after?.md5Checksum &&
+    before?.headRevisionId === after?.headRevisionId &&
+    before?.version === after?.version
+  )
+}
+
 /**
  * LocalFolderRecord represents a folder in the mirrored hierarchy.
  *
@@ -374,6 +405,60 @@ export class LocalNotebooks extends Dexie {
       this.fileMirrorLockKey(remoteUri),
       () => this.addFileInner(remoteUri, name, options)
     )
+  }
+
+  /**
+   * Import one stable Drive snapshot without exposing candidate bytes to the
+   * notebook UI. This is the shared-link boundary: metadata is checked before
+   * and after the download, and only a consistent snapshot initializes the
+   * local mirror that openNotebook can render.
+   */
+  async importTrustedDriveSnapshot(
+    remoteUri: string,
+    name: string,
+    options: {
+      mimeType?: string
+      expected?: { checksum?: string; revisionId?: string; version?: string }
+    } = {}
+  ): Promise<string> {
+    const localUri = await this.addFile(remoteUri, name, {
+      mimeType: options.mimeType,
+    })
+    const record = await this.files.get(localUri)
+    if (!record) {
+      throw new Error(`Local notebook record not found for ${localUri}`)
+    }
+
+    // Existing mirrors have already crossed a user- or policy-authorized
+    // import boundary. Preserve possible local edits and let normal sync and
+    // conflict handling own subsequent refreshes.
+    if (!isUninitializedDriveMirror(record)) {
+      return localUri
+    }
+
+    const expected = options.expected ?? {}
+    const before = await this.driveStore.getVersionMetadata(remoteUri)
+    if (!driveVersionMatches(before, expected)) {
+      throw new DriveSnapshotChangedError(remoteUri)
+    }
+
+    const content = await this.driveStore.loadContent(remoteUri)
+    const after = await this.driveStore.getVersionMetadata(remoteUri)
+    if (
+      !sameDriveVersion(before, after) ||
+      !driveVersionMatches(after, expected)
+    ) {
+      throw new DriveSnapshotChangedError(remoteUri)
+    }
+
+    const decoded = decodeNotebookFile(content, name)
+    await this.initializeUploadedDriveNotebook(
+      localUri,
+      decoded.notebook,
+      content,
+      driveMetadataToUpstreamVersion(after)
+    )
+    return localUri
   }
 
   private fileMirrorLockKey(remoteUri: string): string {
