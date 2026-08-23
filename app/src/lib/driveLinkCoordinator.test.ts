@@ -1,12 +1,62 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { NotebookStoreItemType } from "../storage/notebook";
 import {
   isDriveAuthError,
   isDriveMissingOrAccessDeniedError,
 } from "./driveLinkCoordinator";
 
 const STORAGE_KEY = "runme/drive-link-intents";
+
+function createPreflight(ownerEmail = "owner@acme.example") {
+  const remoteUri = "https://drive.google.com/file/d/file123/view";
+  return {
+    item: {
+      uri: remoteUri,
+      name: "design.ipynb",
+      mimeType: "application/x-ipynb+json",
+    },
+    parents: [
+      {
+        uri: "https://drive.google.com/drive/folders/parent123",
+        name: "Shared Notebooks",
+        type: NotebookStoreItemType.Folder,
+      },
+    ],
+    preflight: {
+      fileId: "file123",
+      uri: remoteUri,
+      name: "design.ipynb",
+      mimeType: "application/x-ipynb+json",
+      parents: [],
+      owners: [
+        {
+          emailAddress: ownerEmail,
+          permissionId: `owner-${ownerEmail}`,
+        },
+      ],
+      canDownload: true,
+      version: "7",
+      headRevisionId: "revision-1",
+      md5Checksum: "checksum-1",
+    },
+  };
+}
+
+function createCoordinatorDeps(ownerEmail = "owner@acme.example") {
+  return {
+    ensureAccessToken: vi.fn(async () => "token"),
+    getEffectivePrincipal: vi.fn(() => "viewer@acme.example"),
+    fetchPreflight: vi.fn(async () => createPreflight(ownerEmail)),
+    updateFolder: vi.fn(async () => "local://folder/parent123"),
+    importFile: vi.fn(async () => "local://file/file123"),
+    addWorkspaceItem: vi.fn(),
+    removeWorkspaceItem: vi.fn(),
+    getWorkspaceItems: vi.fn(() => [] as string[]),
+    openNotebook: vi.fn(async () => undefined),
+  };
+}
 
 function createStoredIntent(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -120,8 +170,10 @@ describe("driveLinkCoordinator intent storage", () => {
       ensureAccessToken: vi.fn(async () => {
         throw new Error("Google Drive authorization is required.");
       }),
+      getEffectivePrincipal: vi.fn(() => null),
+      fetchPreflight: vi.fn(),
       updateFolder: vi.fn(),
-      addFile: vi.fn(),
+      importFile: vi.fn(),
       addWorkspaceItem: vi.fn(),
       removeWorkspaceItem: vi.fn(),
       getWorkspaceItems: vi.fn(() => []),
@@ -142,5 +194,111 @@ describe("driveLinkCoordinator intent storage", () => {
       }),
     ]);
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it("automatically opens a notebook owned by the same Workspace domain", async () => {
+    const remoteUri = "https://drive.google.com/file/d/file123/view";
+    const { driveLinkCoordinator } = await import("./driveLinkCoordinator");
+    const deps = createCoordinatorDeps();
+    driveLinkCoordinator.configure(deps);
+
+    await driveLinkCoordinator.enqueue(remoteUri, "manual");
+
+    expect(deps.fetchPreflight).toHaveBeenCalledWith(remoteUri);
+    expect(deps.importFile).toHaveBeenCalledWith(
+      remoteUri,
+      "design.ipynb",
+      expect.objectContaining({
+        expected: {
+          checksum: "checksum-1",
+          revisionId: "revision-1",
+          version: "7",
+        },
+      }),
+    );
+    expect(deps.openNotebook).toHaveBeenCalledWith("local://file/file123");
+    expect(driveLinkCoordinator.getSnapshot().intents).toEqual([]);
+
+    const { loadSharedNotebookTrustRecords } = await import(
+      "./sharedNotebookTrust"
+    );
+    expect(loadSharedNotebookTrustRecords()).toEqual([
+      expect.objectContaining({
+        fileId: "file123",
+        effectivePrincipal: "viewer@acme.example",
+        basis: "same_domain",
+      }),
+    ]);
+  });
+
+  it("does not download an external notebook before review", async () => {
+    const remoteUri = "https://drive.google.com/file/d/file123/view";
+    const { driveLinkCoordinator } = await import("./driveLinkCoordinator");
+    const deps = createCoordinatorDeps("attacker@external.example");
+    driveLinkCoordinator.configure(deps);
+
+    await driveLinkCoordinator.enqueue(remoteUri, "manual");
+
+    expect(deps.importFile).not.toHaveBeenCalled();
+    expect(deps.openNotebook).not.toHaveBeenCalled();
+    expect(driveLinkCoordinator.getSnapshot().intents).toEqual([
+      expect.objectContaining({
+        remoteUri,
+        status: "awaiting_review",
+        preflight: expect.objectContaining({ name: "design.ipynb" }),
+        trustDecision: expect.objectContaining({ trusted: false }),
+      }),
+    ]);
+  });
+
+  it("persists explicit document trust before opening a reviewed notebook", async () => {
+    const remoteUri = "https://drive.google.com/file/d/file123/view";
+    const { driveLinkCoordinator } = await import("./driveLinkCoordinator");
+    const deps = createCoordinatorDeps("partner@external.example");
+    driveLinkCoordinator.configure(deps);
+
+    await driveLinkCoordinator.enqueue(remoteUri, "manual");
+    const intent = driveLinkCoordinator.getSnapshot().intents[0];
+    expect(intent?.status).toBe("awaiting_review");
+
+    await driveLinkCoordinator.trustAndOpen(intent.id);
+
+    expect(deps.importFile).toHaveBeenCalledTimes(1);
+    expect(deps.openNotebook).toHaveBeenCalledTimes(1);
+    expect(driveLinkCoordinator.getSnapshot().intents).toEqual([]);
+    const { loadSharedNotebookTrustRecords } = await import(
+      "./sharedNotebookTrust"
+    );
+    expect(loadSharedNotebookTrustRecords()).toEqual([
+      expect.objectContaining({
+        fileId: "file123",
+        basis: "explicit_document",
+      }),
+    ]);
+  });
+
+  it("re-evaluates a metadata-only review when authorization identifies the principal", async () => {
+    const remoteUri = "https://drive.google.com/file/d/file123/view";
+    const { driveLinkCoordinator } = await import("./driveLinkCoordinator");
+    let principal: string | null = null;
+    const deps = {
+      ...createCoordinatorDeps(),
+      getEffectivePrincipal: vi.fn(() => principal),
+    };
+    driveLinkCoordinator.configure(deps);
+
+    await driveLinkCoordinator.enqueue(remoteUri, "manual");
+    expect(driveLinkCoordinator.getSnapshot().intents[0]?.status).toBe(
+      "awaiting_review",
+    );
+    expect(deps.importFile).not.toHaveBeenCalled();
+
+    principal = "viewer@acme.example";
+    driveLinkCoordinator.configure(deps);
+    await driveLinkCoordinator.processPending();
+
+    expect(deps.importFile).toHaveBeenCalledTimes(1);
+    expect(deps.openNotebook).toHaveBeenCalledTimes(1);
+    expect(driveLinkCoordinator.getSnapshot().intents).toEqual([]);
   });
 });

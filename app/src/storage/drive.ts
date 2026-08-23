@@ -18,7 +18,7 @@ const GAPI_SCRIPT_SRC = 'https://apis.google.com/js/api.js'
 
 // VERSION_FIELDS is the fields we want to return when fetching metadata to determine the file content version.
 // https://developers.google.com/workspace/drive/api/guides/fields-parameter
-const VERSION_FIELDS = 'md5Checksum,headRevisionId,appProperties'
+const VERSION_FIELDS = 'md5Checksum,headRevisionId,version,appProperties'
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
 } as unknown as Parameters<typeof toJsonString>[2]
@@ -1682,11 +1682,51 @@ type DriveFileMetadata = {
   name?: string
   mimeType?: string
   parents?: string[]
+  driveId?: string
+  ownedByMe?: boolean
+  modifiedTime?: string
+  version?: string
+  headRevisionId?: string
+  md5Checksum?: string
+  size?: string
+  owners?: DriveIdentity[]
+  sharingUser?: DriveIdentity
+  lastModifyingUser?: DriveIdentity
+  capabilities?: {
+    canDownload?: boolean
+  }
+}
+
+export interface DriveIdentity {
+  displayName?: string
+  emailAddress?: string
+  permissionId?: string
+  me?: boolean
+}
+
+export interface SharedNotebookPreflight {
+  fileId: string
+  uri: string
+  name: string
+  mimeType: string
+  parents: NotebookStoreItem[]
+  driveId?: string
+  ownedByMe?: boolean
+  modifiedTime?: string
+  version?: string
+  headRevisionId?: string
+  md5Checksum?: string
+  sizeBytes?: number
+  owners: DriveIdentity[]
+  sharingUser?: DriveIdentity
+  lastModifyingUser?: DriveIdentity
+  canDownload: boolean
 }
 
 export interface DriveVersionMetadata {
   md5Checksum?: string
   headRevisionId?: string
+  version?: string
   appProperties?: Record<string, string>
 }
 
@@ -3282,10 +3322,14 @@ export class DriveNotebookStore {
   }
 }
 
-export async function fetchDriveItemWithParents(
+export async function fetchSharedNotebookPreflight(
   uri: string,
   ensureAccessToken: () => Promise<string>
-): Promise<{ item: NotebookStoreItem; parents: NotebookStoreItem[] }> {
+): Promise<{
+  item: NotebookStoreItem
+  parents: NotebookStoreItem[]
+  preflight: SharedNotebookPreflight
+}> {
   const { id, type } = parseDriveItem(uri)
   if (
     type !== NotebookStoreItemType.File &&
@@ -3299,7 +3343,13 @@ export async function fetchDriveItemWithParents(
   const metadataResponse = await client.get({
     fileId: id,
     supportsAllDrives: true,
-    fields: 'id,name,mimeType,parents',
+    fields:
+      'id,name,mimeType,parents,driveId,ownedByMe,modifiedTime,version,' +
+      'headRevisionId,md5Checksum,size,' +
+      'owners(displayName,emailAddress,permissionId,me),' +
+      'sharingUser(displayName,emailAddress,permissionId,me),' +
+      'lastModifyingUser(displayName,emailAddress,permissionId,me),' +
+      'capabilities(canDownload)',
   })
 
   const meta = (metadataResponse.result ?? {}) as DriveFileMetadata
@@ -3358,5 +3408,40 @@ export async function fetchDriveItemWithParents(
     }
   }
 
+  const parsedSize = meta.size ? Number(meta.size) : undefined
+  const preflight: SharedNotebookPreflight = {
+    fileId: meta.id,
+    uri: item.uri,
+    name: item.name,
+    mimeType: meta.mimeType ?? '',
+    parents,
+    owners: Array.isArray(meta.owners) ? meta.owners : [],
+    canDownload: meta.capabilities?.canDownload !== false,
+    ...(meta.driveId ? { driveId: meta.driveId } : {}),
+    ...(typeof meta.ownedByMe === 'boolean'
+      ? { ownedByMe: meta.ownedByMe }
+      : {}),
+    ...(meta.modifiedTime ? { modifiedTime: meta.modifiedTime } : {}),
+    ...(meta.version ? { version: String(meta.version) } : {}),
+    ...(meta.headRevisionId ? { headRevisionId: meta.headRevisionId } : {}),
+    ...(meta.md5Checksum ? { md5Checksum: meta.md5Checksum } : {}),
+    ...(Number.isFinite(parsedSize) ? { sizeBytes: parsedSize } : {}),
+    ...(meta.sharingUser ? { sharingUser: meta.sharingUser } : {}),
+    ...(meta.lastModifyingUser
+      ? { lastModifyingUser: meta.lastModifyingUser }
+      : {}),
+  }
+
+  return { item, parents, preflight }
+}
+
+export async function fetchDriveItemWithParents(
+  uri: string,
+  ensureAccessToken: () => Promise<string>
+): Promise<{ item: NotebookStoreItem; parents: NotebookStoreItem[] }> {
+  const { item, parents } = await fetchSharedNotebookPreflight(
+    uri,
+    ensureAccessToken
+  )
   return { item, parents }
 }

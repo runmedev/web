@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useLocation } from "react-router-dom";
 
 import { useGoogleAuth } from "../contexts/GoogleAuthContext";
@@ -8,10 +8,17 @@ import { useCurrentDoc } from "../contexts/CurrentDocContext";
 import { useNotebookContext } from "../contexts/NotebookContext";
 import { useWorkspaceDocumentContext } from "../contexts/WorkspaceDocumentContext";
 import { driveLinkCoordinator } from "../lib/driveLinkCoordinator";
+import { fetchSharedNotebookPreflight } from "../storage/drive";
 
 export function DriveLinkCoordinatorHost() {
   const location = useLocation();
-  const { ensureAccessToken } = useGoogleAuth();
+  const { driveAccount, driveCredentialStatus, ensureAccessToken } =
+    useGoogleAuth();
+  const drivePrincipalRef = useRef<string | null>(
+    driveCredentialStatus.effectivePrincipal ?? driveAccount,
+  );
+  drivePrincipalRef.current =
+    driveCredentialStatus.effectivePrincipal ?? driveAccount;
   const { store } = useNotebookStore();
   const { addItem, getItems, removeItem } = useWorkspace();
   const { setCurrentDoc } = useCurrentDoc();
@@ -26,10 +33,15 @@ export function DriveLinkCoordinatorHost() {
 
     driveLinkCoordinator.configure({
       ensureAccessToken,
+      getEffectivePrincipal: () => drivePrincipalRef.current,
+      fetchPreflight: (remoteUri: string) =>
+        fetchSharedNotebookPreflight(remoteUri, () =>
+          ensureAccessToken({ interactive: false }),
+        ),
       updateFolder: (remoteUri: string, name?: string) =>
         store.updateFolder(remoteUri, name),
-      addFile: (remoteUri: string, name?: string) =>
-        store.addFile(remoteUri, name),
+      importFile: (remoteUri, name, options) =>
+        store.importTrustedDriveSnapshot(remoteUri, name, options),
       addWorkspaceItem: addItem,
       removeWorkspaceItem: removeItem,
       getWorkspaceItems: getItems,
@@ -61,6 +73,8 @@ export function DriveLinkCoordinatorHost() {
     };
   }, [
     addItem,
+    driveAccount,
+    driveCredentialStatus.effectivePrincipal,
     ensureAccessToken,
     getItems,
     openNotebook,

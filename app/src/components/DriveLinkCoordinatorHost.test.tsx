@@ -18,13 +18,17 @@ const mocks = vi.hoisted(() => ({
   setCurrentDoc: vi.fn(),
   showDocument: vi.fn(),
   store: {
-    addFile: vi.fn(),
+    importTrustedDriveSnapshot: vi.fn(),
     updateFolder: vi.fn(),
   },
 }));
 
 vi.mock("../contexts/GoogleAuthContext", () => ({
   useGoogleAuth: () => ({
+    driveAccount: "viewer@acme.example",
+    driveCredentialStatus: {
+      effectivePrincipal: "viewer@acme.example",
+    },
     ensureAccessToken: mocks.ensureAccessToken,
   }),
 }));
@@ -93,7 +97,7 @@ describe("DriveLinkCoordinatorHost", () => {
     mocks.removeItem.mockReset();
     mocks.setCurrentDoc.mockReset();
     mocks.showDocument.mockReset();
-    mocks.store.addFile.mockReset();
+    mocks.store.importTrustedDriveSnapshot.mockReset();
     mocks.store.updateFolder.mockReset();
   });
 
@@ -111,7 +115,8 @@ describe("DriveLinkCoordinatorHost", () => {
     await waitFor(() => {
       expect(mocks.consumeUrlIntentFromLocation).toHaveBeenCalledTimes(2);
     });
-    const callsAfterFirstUrl = mocks.consumeUrlIntentFromLocation.mock.calls.length;
+    const callsAfterFirstUrl =
+      mocks.consumeUrlIntentFromLocation.mock.calls.length;
 
     rendered.rerender(
       <MemoryRouter initialEntries={[firstUrl]}>
@@ -120,9 +125,9 @@ describe("DriveLinkCoordinatorHost", () => {
     );
 
     await waitFor(() => {
-      expect(mocks.consumeUrlIntentFromLocation.mock.calls.length).toBeGreaterThan(
-        callsAfterFirstUrl,
-      );
+      expect(
+        mocks.consumeUrlIntentFromLocation.mock.calls.length,
+      ).toBeGreaterThan(callsAfterFirstUrl);
     });
   });
 });
