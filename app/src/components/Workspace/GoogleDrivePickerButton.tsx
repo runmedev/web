@@ -5,6 +5,7 @@ import { useNotebookStore } from '../../contexts/NotebookStoreContext'
 import { useWorkspace } from '../../contexts/WorkspaceContext'
 import { appLogger } from '../../lib/logging/runtime'
 import { markOnboardingTaskComplete } from '../../lib/onboarding'
+import { showToast } from '../../lib/toast'
 import { tourUiController } from '../../lib/tourUiController'
 import { driveFolderUrl } from '../../storage/drive'
 import { GoogleDriveResourcePickerDialog } from './GoogleDriveResourcePickerDialog'
@@ -51,11 +52,18 @@ export function GoogleDrivePickerButton({
           driveFolderUrl(folderId, resourceKey),
           folderName
         )
-        if (!getItems().includes(localUri)) {
+        const alreadyMounted = getItems().includes(localUri)
+        if (!alreadyMounted) {
           addItem(localUri)
         }
         markOnboardingTaskComplete('add-drive-folder')
         tourUiController.recordGoogleDriveFolderAdded()
+        showToast({
+          message: alreadyMounted
+            ? `"${folderName}" is already in Explorer`
+            : `Added "${folderName}" to Explorer`,
+          tone: 'success',
+        })
       } catch (error) {
         appLogger.error('Failed to mirror Drive folder', {
           attrs: {
@@ -64,9 +72,10 @@ export function GoogleDrivePickerButton({
             error: String(error),
           },
         })
-        setMountError(
+        const message =
           'Runme could not add this folder. Verify that the effective Drive identity can read it, then retry.'
-        )
+        setMountError(message)
+        showToast({ message, tone: 'error' })
       }
     },
     [addItem, getItems, store]
@@ -88,9 +97,10 @@ export function GoogleDrivePickerButton({
             error: String(error),
           },
         })
-        setMountError(
+        const message =
           'Runme could not authorize Google Drive. Check the configured credential and retry.'
-        )
+        setMountError(message)
+        showToast({ message, tone: 'error' })
       }
     })()
   }, [ensureAccessToken])

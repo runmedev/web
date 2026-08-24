@@ -35,6 +35,9 @@ type FileListResponse = {
   nextPageToken?: string
 }
 
+const FUZZY_SEARCH_MAX_PAGES = 3
+const FUZZY_SEARCH_MIN_QUERY_LENGTH = 6
+
 /**
  * Signals that Drive returned only a partial all-Drive result set. Callers
  * must not present collected matches as exhaustive and should ask the user to
@@ -115,6 +118,66 @@ function driveApiUrl(path: string): URL {
 /** Escapes backslashes and quotes before text is embedded in a Drive query. */
 function escapeDriveQueryLiteral(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+}
+
+/** Normalizes names before local relevance and edit-distance comparisons. */
+function normalizeSearchName(value: string): string {
+  return value.normalize('NFKC').trim().toLocaleLowerCase()
+}
+
+/**
+ * Returns a narrow Drive-supported prefix for collecting fuzzy candidates.
+ * Drive only supports prefix matching for `name contains`, so Runme asks for
+ * a stable leading token (or half of a single token) and ranks that bounded
+ * candidate set locally.
+ */
+function fuzzyCandidatePrefix(query: string): string | null {
+  if (query.length < FUZZY_SEARCH_MIN_QUERY_LENGTH) {
+    return null
+  }
+
+  const separator = query.search(/[\s._-]/)
+  const prefixLength =
+    separator >= 3 ? separator : Math.max(3, Math.floor(query.length / 2))
+  if (prefixLength >= query.length) {
+    return null
+  }
+  return query.slice(0, prefixLength)
+}
+
+/** Calculates Levenshtein edit distance with O(min(a, b)) memory. */
+function editDistance(left: string, right: string): number {
+  if (left === right) {
+    return 0
+  }
+  if (left.length > right.length) {
+    return editDistance(right, left)
+  }
+
+  let previous = Array.from({ length: left.length + 1 }, (_, index) => index)
+  for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+    const current = [rightIndex]
+    for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+      current[leftIndex] = Math.min(
+        (current[leftIndex - 1] ?? 0) + 1,
+        (previous[leftIndex] ?? 0) + 1,
+        (previous[leftIndex - 1] ?? 0) +
+          (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1)
+      )
+    }
+    previous = current
+  }
+  return previous[left.length] ?? right.length
+}
+
+function fuzzySearchDistanceLimit(queryLength: number): number {
+  if (queryLength < FUZZY_SEARCH_MIN_QUERY_LENGTH) {
+    return 0
+  }
+  if (queryLength < 10) {
+    return 1
+  }
+  return Math.min(3, Math.ceil(queryLength * 0.12))
 }
 
 /**
@@ -268,58 +331,103 @@ export async function searchGoogleDriveResources(
     return []
   }
 
-  const resources: GoogleDriveResource[] = []
-  let incompleteSearch = false
-  let pageToken: string | undefined
-  do {
-    const url = driveApiUrl('drive/v3/files')
-    const clauses = [
-      `name contains '${escapeDriveQueryLiteral(normalizedQuery)}'`,
-      'trashed = false',
-    ]
-    if (mode === 'folder') {
-      clauses.push(
-        `(mimeType = '${GOOGLE_DRIVE_FOLDER_MIME_TYPE}' or mimeType = '${GOOGLE_DRIVE_SHORTCUT_MIME_TYPE}')`
-      )
-    }
-    url.searchParams.set('q', clauses.join(' and '))
-    url.searchParams.set('pageSize', '100')
-    url.searchParams.set(
-      'fields',
-      'nextPageToken,incompleteSearch,files(id,name,mimeType,driveId,resourceKey,shortcutDetails(targetId,targetMimeType,targetResourceKey))'
-    )
-    url.searchParams.set('spaces', 'drive')
-    url.searchParams.set('corpora', 'allDrives')
-    url.searchParams.set('supportsAllDrives', 'true')
-    url.searchParams.set('includeItemsFromAllDrives', 'true')
-    url.searchParams.set('orderBy', 'folder,name_natural')
-    if (pageToken) {
-      url.searchParams.set('pageToken', pageToken)
-    }
-
-    const page = await getJson<FileListResponse>(
-      url,
-      accessToken,
-      `search Drive for ${normalizedQuery}`,
-      fetchImpl
-    )
-    for (const file of page.files ?? []) {
-      const resource = normalizeGoogleDriveResource(file)
-      if (resource) {
-        resources.push(resource)
+  const searchPrefix = async (
+    prefix: string,
+    maxPages = Number.POSITIVE_INFINITY
+  ): Promise<GoogleDriveResource[]> => {
+    const matches: GoogleDriveResource[] = []
+    let pageCount = 0
+    let pageToken: string | undefined
+    do {
+      const url = driveApiUrl('drive/v3/files')
+      const clauses = [
+        `name contains '${escapeDriveQueryLiteral(prefix)}'`,
+        'trashed = false',
+      ]
+      if (mode === 'folder') {
+        clauses.push(
+          `(mimeType = '${GOOGLE_DRIVE_FOLDER_MIME_TYPE}' or mimeType = '${GOOGLE_DRIVE_SHORTCUT_MIME_TYPE}')`
+        )
       }
-    }
-    incompleteSearch ||= page.incompleteSearch === true
-    pageToken = page.nextPageToken
-  } while (pageToken)
+      url.searchParams.set('q', clauses.join(' and '))
+      url.searchParams.set('pageSize', '100')
+      url.searchParams.set(
+        'fields',
+        'nextPageToken,incompleteSearch,files(id,name,mimeType,driveId,resourceKey,shortcutDetails(targetId,targetMimeType,targetResourceKey))'
+      )
+      url.searchParams.set('spaces', 'drive')
+      url.searchParams.set('corpora', 'allDrives')
+      url.searchParams.set('supportsAllDrives', 'true')
+      url.searchParams.set('includeItemsFromAllDrives', 'true')
+      url.searchParams.set('orderBy', 'folder,name_natural')
+      if (pageToken) {
+        url.searchParams.set('pageToken', pageToken)
+      }
 
-  if (incompleteSearch) {
-    throw new IncompleteGoogleDriveSearchError()
+      const page = await getJson<FileListResponse>(
+        url,
+        accessToken,
+        `search Drive for ${normalizedQuery}`,
+        fetchImpl
+      )
+      if (page.incompleteSearch === true) {
+        throw new IncompleteGoogleDriveSearchError()
+      }
+      for (const file of page.files ?? []) {
+        const resource = normalizeGoogleDriveResource(file)
+        if (resource) {
+          matches.push(resource)
+        }
+      }
+      pageToken = page.nextPageToken
+      pageCount += 1
+    } while (pageToken && pageCount < maxPages)
+
+    return mode === 'folder'
+      ? matches.filter(
+          (resource) => resource.mimeType === GOOGLE_DRIVE_FOLDER_MIME_TYPE
+        )
+      : matches
   }
 
-  return mode === 'folder'
-    ? resources.filter(
-        (resource) => resource.mimeType === GOOGLE_DRIVE_FOLDER_MIME_TYPE
-      )
-    : resources
+  const resources = await searchPrefix(normalizedQuery)
+  const comparableQuery = normalizeSearchName(normalizedQuery)
+  const distanceLimit = fuzzySearchDistanceLimit(comparableQuery.length)
+  if (
+    resources.some(
+      (resource) =>
+        editDistance(comparableQuery, normalizeSearchName(resource.name)) <=
+        distanceLimit
+    )
+  ) {
+    return resources
+  }
+
+  const candidatePrefix = fuzzyCandidatePrefix(normalizedQuery)
+  if (!candidatePrefix) {
+    return resources
+  }
+
+  const fuzzyMatches = (
+    await searchPrefix(candidatePrefix, FUZZY_SEARCH_MAX_PAGES)
+  ).filter(
+    (resource) =>
+      editDistance(comparableQuery, normalizeSearchName(resource.name)) <=
+      distanceLimit
+  )
+  const combined = new Map(
+    [...resources, ...fuzzyMatches].map((resource) => [resource.id, resource])
+  )
+
+  return [...combined.values()].sort((left, right) => {
+    const leftDistance = editDistance(
+      comparableQuery,
+      normalizeSearchName(left.name)
+    )
+    const rightDistance = editDistance(
+      comparableQuery,
+      normalizeSearchName(right.name)
+    )
+    return leftDistance - rightDistance || left.name.localeCompare(right.name)
+  })
 }

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   getItems: vi.fn(),
   listChildren: vi.fn(),
   listRoots: vi.fn(),
+  showToast: vi.fn(),
   startGoogleDriveOAuth: vi.fn(),
   updateFolder: vi.fn(),
 }))
@@ -45,6 +46,10 @@ vi.mock('../../lib/onboarding', () => ({
   markOnboardingTaskComplete: vi.fn(),
 }))
 
+vi.mock('../../lib/toast', () => ({
+  showToast: mocks.showToast,
+}))
+
 vi.mock('./googleDriveBrowser', async () => {
   const actual = await vi.importActual<typeof import('./googleDriveBrowser')>(
     './googleDriveBrowser'
@@ -71,6 +76,7 @@ describe('GoogleDrivePickerButton', () => {
     ])
     mocks.listChildren.mockReset()
     mocks.listChildren.mockResolvedValue([])
+    mocks.showToast.mockReset()
     mocks.startGoogleDriveOAuth.mockReset()
     mocks.updateFolder.mockReset()
   })
@@ -122,9 +128,35 @@ describe('GoogleDrivePickerButton', () => {
       )
     )
     expect(mocks.addItem).toHaveBeenCalledWith('local://folder/shared-drive')
+    expect(mocks.showToast).toHaveBeenCalledWith({
+      message: 'Added "notebooks" to Explorer',
+      tone: 'success',
+    })
     expect(tourUiController.getSnapshot().googleDriveFolderAddedCount).toBe(
       initialCount + 1
     )
+  })
+
+  it('reports an already-mounted folder instead of silently closing', async () => {
+    mocks.updateFolder.mockResolvedValue('local://folder/shared-drive')
+    mocks.getItems.mockReturnValue(['local://folder/shared-drive'])
+
+    render(<GoogleDrivePickerButton />)
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Folder' }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Open notebooks' })
+    )
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select this folder' })
+    )
+
+    await waitFor(() =>
+      expect(mocks.showToast).toHaveBeenCalledWith({
+        message: '"notebooks" is already in Explorer',
+        tone: 'success',
+      })
+    )
+    expect(mocks.addItem).not.toHaveBeenCalled()
   })
 
   it('preserves a resource key when mounting a protected folder', async () => {
@@ -163,6 +195,9 @@ describe('GoogleDrivePickerButton', () => {
     expect((await screen.findByRole('alert')).textContent).toContain(
       'could not authorize Google Drive'
     )
+    expect(mocks.showToast).toHaveBeenCalledWith(
+      expect.objectContaining({ tone: 'error' })
+    )
   })
 
   it('shows actionable mount failures', async () => {
@@ -179,6 +214,9 @@ describe('GoogleDrivePickerButton', () => {
 
     expect((await screen.findByRole('alert')).textContent).toContain(
       'effective Drive identity can read it'
+    )
+    expect(mocks.showToast).toHaveBeenCalledWith(
+      expect.objectContaining({ tone: 'error' })
     )
   })
 })

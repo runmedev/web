@@ -227,6 +227,56 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(mocks.setCurrentDoc).not.toHaveBeenCalledWith(null)
   })
 
+  it('keeps an explicitly mounted nested folder visible as a root', async () => {
+    mocks.workspaceItems = [
+      'local://folder/local',
+      'local://folder/root',
+      'local://folder/nested',
+    ]
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/local') {
+        return {
+          uri,
+          name: 'Local Notebooks',
+          type: NotebookStoreItemType.Folder,
+          children: [],
+          parents: [],
+        }
+      }
+      if (uri === 'local://folder/root') {
+        return {
+          uri,
+          name: 'Mounted root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://folder/nested'],
+          parents: [],
+        }
+      }
+      if (uri === 'local://folder/nested') {
+        return {
+          uri,
+          name: 'Nested mount',
+          type: NotebookStoreItemType.Folder,
+          children: [],
+          parents: ['local://folder/root'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Mounted root')
+    await screen.findByText('Nested mount')
+    expect(screen.getAllByText('Nested mount')).toHaveLength(1)
+
+    act(() => {
+      mocks.treeProps.onToggle('local://folder/root')
+    })
+    await screen.findByText('Mounted folders are shown as roots')
+    expect(screen.getAllByText('Nested mount')).toHaveLength(1)
+  })
+
   it('shows a directly created Drive notebook in its mounted folder', async () => {
     mocks.workspaceItems = ['local://folder/drive']
     let blockFolderLoad = false
