@@ -35,6 +35,11 @@ export function detectNotebookFileFormat(
   return null
 }
 
+/**
+ * Rejects rename requests that change notebook format or use an unsupported
+ * extension. Extensionless names remain valid so each storage implementation
+ * can normalize them by appending the current notebook's extension.
+ */
 export function validateNotebookRenameFormat(
   currentName: string,
   nextName: string

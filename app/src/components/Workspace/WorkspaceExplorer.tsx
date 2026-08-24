@@ -104,6 +104,12 @@ function driveCreateErrorMessage(error: unknown, fallback: string): string {
     : fallback;
 }
 
+/**
+ * Preserves actionable authorization and filename-validation errors while
+ * hiding unexpected storage failures behind a stable user-facing fallback.
+ * The recognized prefixes mirror upstream error contracts, so wording changes
+ * there must update this mapping and its tests together.
+ */
 function renameErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message.trim() : "";
   if (
