@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   showDocument: vi.fn(),
   addItem: vi.fn(),
   removeItem: vi.fn(),
+  ensureAccessToken: vi.fn(),
   store: {
     getMetadata: vi.fn(),
     create: vi.fn(),
@@ -23,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     createFolder: vi.fn(),
     move: vi.fn(),
     moveToTrash: vi.fn(),
+    rename: vi.fn(),
     sync: vi.fn(),
   },
   openNotebookUpstreamDiff: vi.fn(),
@@ -104,7 +106,7 @@ vi.mock('../../contexts/FilesystemStoreContext', () => ({
 
 vi.mock('../../contexts/GoogleAuthContext', () => ({
   useGoogleAuth: () => ({
-    ensureAccessToken: vi.fn(),
+    ensureAccessToken: mocks.ensureAccessToken,
   }),
 }))
 
@@ -161,6 +163,8 @@ describe('WorkspaceExplorer current document handling', () => {
     mocks.showDocument.mockReset()
     mocks.addItem.mockReset()
     mocks.removeItem.mockReset()
+    mocks.ensureAccessToken.mockReset()
+    mocks.ensureAccessToken.mockResolvedValue('access-token')
     mocks.workspaceItems = []
     mocks.store.getMetadata.mockReset()
     mocks.store.getMetadata.mockResolvedValue({
@@ -203,6 +207,14 @@ describe('WorkspaceExplorer current document handling', () => {
     mocks.store.moveToTrash.mockResolvedValue(undefined)
     mocks.store.move.mockReset()
     mocks.store.move.mockResolvedValue(undefined)
+    mocks.store.rename.mockReset()
+    mocks.store.rename.mockResolvedValue({
+      uri: 'local://file/renamed',
+      name: 'renamed.json',
+      type: NotebookStoreItemType.File,
+      children: [],
+      parents: [],
+    })
     mocks.store.sync.mockReset()
     mocks.openNotebookUpstreamDiff.mockReset()
     mocks.dragHandle.mockReset()
@@ -542,6 +554,102 @@ describe('WorkspaceExplorer current document handling', () => {
     await waitFor(() => {
       expect(mocks.treeEdit).toHaveBeenCalledWith('local://folder/drive')
     })
+  })
+
+  it('authorizes interactively before renaming a Drive-backed notebook', async () => {
+    mocks.currentDoc = 'local://file/current'
+    mocks.isDriveItemUri.mockReturnValue(true)
+
+    render(<WorkspaceExplorer />)
+
+    await waitFor(() => expect(mocks.treeProps).toBeTruthy())
+    await act(async () => {
+      await mocks.treeProps.onRename({
+        id: 'local://file/drive',
+        name: 'renamed.json',
+        node: {
+          data: {
+            uri: 'local://file/drive',
+            name: 'original.json',
+            type: NotebookStoreItemType.File,
+            remoteUri: 'https://drive.google.com/file/d/file123/view',
+          },
+          parent: null,
+          reset: vi.fn(),
+        },
+      })
+    })
+
+    expect(mocks.ensureAccessToken).toHaveBeenCalledWith({ interactive: true })
+    expect(mocks.store.rename).toHaveBeenCalledWith(
+      'local://file/drive',
+      'renamed.json'
+    )
+  })
+
+  it('surfaces Drive authorization errors instead of silently resetting rename', async () => {
+    const authorizationError =
+      'Google Drive service-account authorization is required.'
+    mocks.currentDoc = 'local://file/current'
+    mocks.isDriveItemUri.mockReturnValue(true)
+    mocks.ensureAccessToken.mockRejectedValueOnce(new Error(authorizationError))
+    const reset = vi.fn()
+
+    render(<WorkspaceExplorer />)
+
+    await waitFor(() => expect(mocks.treeProps).toBeTruthy())
+    await act(async () => {
+      await mocks.treeProps.onRename({
+        id: 'local://file/drive',
+        name: 'renamed.json',
+        node: {
+          data: {
+            uri: 'local://file/drive',
+            name: 'original.json',
+            type: NotebookStoreItemType.File,
+            remoteUri: 'https://drive.google.com/file/d/file123/view',
+          },
+          parent: null,
+          reset,
+        },
+      })
+    })
+
+    expect(mocks.store.rename).not.toHaveBeenCalled()
+    expect(reset).toHaveBeenCalled()
+    expect(
+      await screen.findByText(
+        `${authorizationError} Complete Google Drive authorization, then retry the rename.`
+      )
+    ).toBeTruthy()
+  })
+
+  it('renames a local notebook without requesting Drive authorization', async () => {
+    mocks.currentDoc = 'local://file/current'
+    render(<WorkspaceExplorer />)
+
+    await waitFor(() => expect(mocks.treeProps).toBeTruthy())
+    await act(async () => {
+      await mocks.treeProps.onRename({
+        id: 'local://file/local',
+        name: 'renamed.json',
+        node: {
+          data: {
+            uri: 'local://file/local',
+            name: 'original.json',
+            type: NotebookStoreItemType.File,
+          },
+          parent: null,
+          reset: vi.fn(),
+        },
+      })
+    })
+
+    expect(mocks.ensureAccessToken).not.toHaveBeenCalled()
+    expect(mocks.store.rename).toHaveBeenCalledWith(
+      'local://file/local',
+      'renamed.json'
+    )
   })
 
   it('creates an Excalidraw diagram through the local mirror before Drive sync', async () => {
