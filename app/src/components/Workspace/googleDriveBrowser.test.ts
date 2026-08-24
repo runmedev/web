@@ -188,7 +188,7 @@ describe('googleDriveBrowser', () => {
   })
 
   it('searches all visible Drives and filters folder mode server-side', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () =>
       new Response(
         JSON.stringify({
           files: [
@@ -230,7 +230,7 @@ describe('googleDriveBrowser', () => {
   })
 
   it('keeps folder shortcuts in folder search results while filtering file targets', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () =>
       new Response(
         JSON.stringify({
           files: [
@@ -273,6 +273,113 @@ describe('googleDriveBrowser', () => {
     expect(url.searchParams.get('q')).toContain(
       "mimeType = 'application/vnd.google-apps.shortcut'"
     )
+  })
+
+  it('finds and prioritizes a close typo match from a bounded prefix search', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            files: [
+              {
+                id: 'close-folder',
+                name: 'olympus-runbook',
+                mimeType: 'application/vnd.google-apps.folder',
+              },
+              {
+                id: 'renamed-folder',
+                name: 'olympus-runbooks-jlewi',
+                mimeType: 'application/vnd.google-apps.folder',
+              },
+            ],
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            files: [
+              {
+                id: 'typo-folder',
+                name: 'olympus-runboooks',
+                mimeType: 'application/vnd.google-apps.folder',
+              },
+              {
+                id: 'unrelated-folder',
+                name: 'olympus-archive',
+                mimeType: 'application/vnd.google-apps.folder',
+              },
+            ],
+          }),
+          { status: 200 }
+        )
+      )
+
+    await expect(
+      searchGoogleDriveResources(
+        'token',
+        'olympus-runbooks',
+        'folder',
+        fetchImpl
+      )
+    ).resolves.toEqual([
+      {
+        id: 'close-folder',
+        name: 'olympus-runbook',
+        mimeType: 'application/vnd.google-apps.folder',
+        driveId: undefined,
+      },
+      {
+        id: 'typo-folder',
+        name: 'olympus-runboooks',
+        mimeType: 'application/vnd.google-apps.folder',
+        driveId: undefined,
+      },
+      {
+        id: 'renamed-folder',
+        name: 'olympus-runbooks-jlewi',
+        mimeType: 'application/vnd.google-apps.folder',
+        driveId: undefined,
+      },
+    ])
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    const exactUrl = new URL(fetchImpl.mock.calls[0]?.[0] as string)
+    const candidateUrl = new URL(fetchImpl.mock.calls[1]?.[0] as string)
+    expect(exactUrl.searchParams.get('q')).toContain(
+      "name contains 'olympus-runbooks'"
+    )
+    expect(candidateUrl.searchParams.get('q')).toContain(
+      "name contains 'olympus'"
+    )
+  })
+
+  it('does not issue a fuzzy fallback when Drive returns an exact name', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          files: [
+            {
+              id: 'exact-folder',
+              name: 'olympus-runbooks',
+              mimeType: 'application/vnd.google-apps.folder',
+            },
+          ],
+        }),
+        { status: 200 }
+      )
+    )
+
+    await searchGoogleDriveResources(
+      'token',
+      'olympus-runbooks',
+      'folder',
+      fetchImpl
+    )
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
   it('rejects incomplete all-Drive search results instead of presenting them as exhaustive', async () => {

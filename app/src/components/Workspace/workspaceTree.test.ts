@@ -1,68 +1,46 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  type WorkspaceFolderCandidate,
-  filterNestedWorkspaceFolders,
-} from "./workspaceTree";
+import { NotebookStoreItemType } from "../../storage/notebook";
+import { filterMountedWorkspaceFolderChildren } from "./workspaceTree";
 
-function candidate(
-  uri: string,
-  parentUris: string[] = [],
-): WorkspaceFolderCandidate {
-  return {
-    uri,
-    name: uri,
-    parentUris,
-  };
-}
-
-describe("filterNestedWorkspaceFolders", () => {
-  it("keeps only the mounted ancestor when nested folders are also mounted", async () => {
-    const folders = [
-      candidate("local://folder/root"),
-      candidate("local://folder/root/child", ["local://folder/root"]),
-      candidate("local://folder/root/child/grandchild", [
-        "local://folder/root/child",
-      ]),
-      candidate("local://folder/other"),
+describe("filterMountedWorkspaceFolderChildren", () => {
+  it("omits folders that are also explicit workspace roots", () => {
+    const children = [
+      {
+        uri: "local://folder/nested",
+        type: NotebookStoreItemType.Folder,
+      },
+      {
+        uri: "local://folder/ordinary",
+        type: NotebookStoreItemType.Folder,
+      },
+      {
+        uri: "local://file/notebook",
+        type: NotebookStoreItemType.File,
+      },
     ];
+    const mountedUris = new Set(["local://folder/nested"]);
 
-    const visible = await filterNestedWorkspaceFolders(folders, async () => []);
-
-    expect(visible.map((folder) => folder.uri)).toEqual([
-      "local://folder/root",
-      "local://folder/other",
-    ]);
+    expect(
+      filterMountedWorkspaceFolderChildren(children, mountedUris).map(
+        (child) => child.uri
+      )
+    ).toEqual(["local://folder/ordinary", "local://file/notebook"]);
   });
 
-  it("walks parent metadata to find non-immediate mounted ancestors", async () => {
-    const folders = [
-      candidate("local://folder/root"),
-      candidate("local://folder/root/child/grandchild", [
-        "local://folder/root/child",
-      ]),
-    ];
-    const parents = new Map([
-      ["local://folder/root/child", ["local://folder/root"]],
-    ]);
-
-    const visible = await filterNestedWorkspaceFolders(
-      folders,
-      async (uri) => parents.get(uri) ?? [],
-    );
-
-    expect(visible.map((folder) => folder.uri)).toEqual(["local://folder/root"]);
-  });
-
-  it("does not hide a workspace root that reports itself as its parent", async () => {
-    const folders = [
-      candidate("fs://workspace/demo/dir/", ["fs://workspace/demo/dir/"]),
+  it("does not hide a file whose URI is registered directly", () => {
+    const children = [
+      {
+        uri: "local://file/notebook",
+        type: NotebookStoreItemType.File,
+      },
     ];
 
-    const visible = await filterNestedWorkspaceFolders(folders, async () => []);
-
-    expect(visible.map((folder) => folder.uri)).toEqual([
-      "fs://workspace/demo/dir/",
-    ]);
+    expect(
+      filterMountedWorkspaceFolderChildren(
+        children,
+        new Set(["local://file/notebook"])
+      )
+    ).toEqual(children);
   });
 });

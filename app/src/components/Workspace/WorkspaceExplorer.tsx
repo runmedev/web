@@ -19,7 +19,7 @@ import useResizeObserver from "use-resize-observer";
 
 import { GoogleDrivePickerButton } from "./GoogleDrivePickerButton";
 import {
-  filterNestedWorkspaceFolders,
+  filterMountedWorkspaceFolderChildren,
   type WorkspaceFolderCandidate,
 } from "./workspaceTree";
 import { useWorkspace } from "../../contexts/WorkspaceContext";
@@ -459,7 +459,6 @@ export function WorkspaceExplorer() {
             folderCandidates.push({
               uri,
               name,
-              parentUris: metadata?.parents ?? [],
             });
           } catch (error) {
             console.error("Failed to load fs workspace metadata", uri, error);
@@ -503,27 +502,10 @@ export function WorkspaceExplorer() {
           uri: localUri,
           name,
           remoteUri: metadata?.remoteUri,
-          parentUris: metadata?.parents ?? [],
         });
       }
 
-      const visibleFolders = await filterNestedWorkspaceFolders(
-        folderCandidates,
-        async (parentUri) => {
-          const targetStore = storeForUri(parentUri, store, fsStore);
-          if (!targetStore) {
-            return [];
-          }
-          try {
-            const metadata = await targetStore.getMetadata(parentUri);
-            return metadata?.parents ?? [];
-          } catch {
-            return [];
-          }
-        },
-      );
-
-      const folderNodes = visibleFolders.map((folder) =>
+      const folderNodes = folderCandidates.map((folder) =>
         createFolderNode(folder.uri, folder.name, {
           remoteUri: folder.remoteUri,
         }),
@@ -808,10 +790,21 @@ export function WorkspaceExplorer() {
           }
         }
 
+        const visibleChildNodes = filterMountedWorkspaceFolderChildren(
+          childNodes,
+          new Set(workspaceUris),
+        );
         const nodes =
-          childNodes.length > 0
-            ? childNodes
-            : [createPlaceholderNode(uri, "Folder is empty")];
+          visibleChildNodes.length > 0
+            ? visibleChildNodes
+            : [
+                createPlaceholderNode(
+                  uri,
+                  childNodes.length > 0
+                    ? "Mounted folders are shown as roots"
+                    : "Folder is empty",
+                ),
+              ];
 
         setTreeNodes((prev) =>
           (folderMutationVersionsRef.current.get(uri) ?? 0) === mutationVersion
@@ -848,7 +841,7 @@ export function WorkspaceExplorer() {
         );
       }
     },
-    [fsStore, store],
+    [fsStore, store, workspaceUris],
   );
 
   const handleFileOpen = useCallback(
