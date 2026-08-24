@@ -29,6 +29,7 @@ import { appLogger } from "../../lib/logging/runtime";
 import {
   type NotebookFileFormat,
   isNotebookFileName,
+  validateNotebookRenameFormat,
 } from '../../lib/notebookFormat'
 import {
   copyNotebookMarkdownLink,
@@ -101,6 +102,31 @@ function driveCreateErrorMessage(error: unknown, fallback: string): string {
   return error instanceof DriveCreateNotCommittedError
     ? error.message
     : fallback;
+}
+
+/**
+ * Preserves actionable authorization and filename-validation errors while
+ * hiding unexpected storage failures behind a stable user-facing fallback.
+ * The recognized prefixes mirror upstream error contracts, so wording changes
+ * there must update this mapping and its tests together.
+ */
+function renameErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message.trim() : "";
+  if (
+    message.startsWith("Google Drive authorization is required") ||
+    message.startsWith("Google Drive service-account authorization is required") ||
+    message.startsWith("Google service-account authorization opened in a new tab") ||
+    message.startsWith("Redirecting to Google OAuth for Drive authorization")
+  ) {
+    return `${message} Complete Google Drive authorization, then retry the rename.`;
+  }
+  if (
+    message.startsWith("Changing notebook formats by rename") ||
+    message.startsWith("Unsupported notebook file extension")
+  ) {
+    return message;
+  }
+  return "Unable to rename item. Please try again.";
 }
 
 function createFolderNode(
@@ -1187,6 +1213,12 @@ function formatShortTimestamp(date: Date): string {
             : "untitled.json"
           : trimmed;
       try {
+        if (target.type === NotebookStoreItemType.File) {
+          validateNotebookRenameFormat(target.name, nextName);
+        }
+        if (target.remoteUri && isDriveItemUri(target.remoteUri)) {
+          await ensureAccessToken({ interactive: true });
+        }
         await targetStore.rename(target.uri, nextName);
         const parentUri = node.parent?.data.uri;
         if (parentUri) {
@@ -1199,12 +1231,22 @@ function formatShortTimestamp(date: Date): string {
         setErrorMessage(null);
         setPendingEditId(null);
       } catch (error) {
-        console.error("Failed to rename workspace item", error);
-        setErrorMessage("Unable to rename item. Please try again.");
+        const message = renameErrorMessage(error);
+        appLogger.error("Failed to rename workspace item", {
+          attrs: {
+            scope: "storage.rename",
+            code: "EXPLORER_RENAME_FAILED",
+            uri: target.uri,
+            remoteUri: target.remoteUri,
+            error: String(error),
+          },
+        });
+        setErrorMessage(message);
+        showToast({ message, tone: "error" });
         node.reset();
       }
     },
-    [fetchChildren, fsStore, store],
+    [ensureAccessToken, fetchChildren, fsStore, store],
   );
 
   const handleMove = useCallback(

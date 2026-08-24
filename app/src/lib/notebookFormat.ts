@@ -35,6 +35,35 @@ export function detectNotebookFileFormat(
   return null
 }
 
+/**
+ * Rejects rename requests that change notebook format or use an unsupported
+ * extension. Extensionless names remain valid so each storage implementation
+ * can normalize them by appending the current notebook's extension.
+ */
+export function validateNotebookRenameFormat(
+  currentName: string,
+  nextName: string
+): void {
+  const currentFormat = detectNotebookFileFormat(currentName)
+  const requestedFormat = detectNotebookFileFormat(nextName)
+  if (
+    currentFormat &&
+    requestedFormat &&
+    currentFormat !== requestedFormat
+  ) {
+    throw new Error(
+      'Changing notebook formats by rename is not supported. Use Save as instead.'
+    )
+  }
+  if (
+    currentFormat &&
+    !requestedFormat &&
+    /\.[^/]+$/.test(nextName.trim())
+  ) {
+    throw new Error(`Unsupported notebook file extension: ${nextName}`)
+  }
+}
+
 export function isNotebookFileName(fileName: string): boolean {
   return detectNotebookFileFormat(fileName) !== null
 }
