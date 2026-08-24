@@ -739,13 +739,22 @@ class GapiDriveFilesClient implements DriveFilesClient {
     const resource = this.buildResource(doc)
     let file: DriveDoc = { id: doc.id }
     if (Object.keys(resource).length > 0) {
-      const response = (await this.files.update({
-        fileId: doc.id,
-        resource,
-        fields: 'id,name,mimeType,parents',
-        supportsAllDrives: true,
-        resourceKey: doc.resourceKey,
-      } as Record<string, unknown>)) as DriveUpdateResponse
+      // Use the REST request path for metadata updates. The discovery client's
+      // files.update method can acknowledge a request while dropping its
+      // resource body, which makes renames appear successful but leaves the
+      // Drive item unchanged.
+      const response = (await this.request(
+        'PATCH',
+        `/drive/v3/files/${encodeURIComponent(doc.id)}`,
+        {
+          params: {
+            fields: 'id,name,mimeType,parents',
+            supportsAllDrives: true,
+            resourceKey: doc.resourceKey,
+          },
+          body: JSON.stringify(resource),
+        }
+      )) as DriveUpdateResponse
       file = response.result ?? { id: doc.id }
     } else {
       file = {
@@ -3086,6 +3095,11 @@ export class DriveNotebookStore {
       name,
       resourceKey,
     })
+    if (file.name !== name) {
+      throw new Error(
+        `Google Drive returned success without applying the requested rename to "${name}".`
+      )
+    }
     appLogger.info('Drive rename completed', {
       attrs: {
         scope: 'storage.rename',
