@@ -3,6 +3,7 @@ import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
 import { getGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
 import { IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { LinkedResourceError } from '../lib/linkedResource'
+import { appLogger } from '../lib/logging/runtime'
 import {
   createInitialNotebookFile,
   detectNotebookFileFormat,
@@ -3070,10 +3071,31 @@ export class DriveNotebookStore {
       throw new Error('DriveNotebookStore.rename expects a file or folder URI')
     }
     const client = await this.getFilesClient()
+    appLogger.info('Dispatching Drive rename', {
+      attrs: {
+        scope: 'storage.rename',
+        code: 'DRIVE_RENAME_REQUESTED',
+        uri,
+        fileId: id,
+        requestedName: name,
+        itemType: type,
+      },
+    })
     const file = await client.update({
       id,
       name,
       resourceKey,
+    })
+    appLogger.info('Drive rename completed', {
+      attrs: {
+        scope: 'storage.rename',
+        code: 'DRIVE_RENAME_COMPLETED',
+        uri,
+        fileId: file.id ?? id,
+        requestedName: name,
+        returnedName: file.name,
+        returnedMimeType: file.mimeType,
+      },
     })
 
     const fileId = file.id ?? id

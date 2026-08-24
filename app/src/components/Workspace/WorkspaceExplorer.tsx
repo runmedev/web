@@ -1219,6 +1219,7 @@ function formatShortTimestamp(date: Date): string {
         if (target.remoteUri && isDriveItemUri(target.remoteUri)) {
           await ensureAccessToken({ interactive: true });
         }
+        let renamedItem: NotebookStoreItem;
         if (
           targetStore === store &&
           target.remoteUri &&
@@ -1227,10 +1228,25 @@ function formatShortTimestamp(date: Date): string {
           // The Explorer already has the resolved upstream identity. Pass it
           // through so a stale local mirror cannot silently downgrade a Drive
           // rename into a local-only metadata update.
-          await store.rename(target.uri, nextName, target.remoteUri);
+          renamedItem = await store.rename(
+            target.uri,
+            nextName,
+            target.remoteUri,
+          );
         } else {
-          await targetStore.rename(target.uri, nextName);
+          renamedItem = await targetStore.rename(target.uri, nextName);
         }
+        appLogger.info("Renamed workspace item", {
+          attrs: {
+            scope: "storage.rename",
+            code: "EXPLORER_RENAME_SUCCEEDED",
+            uri: target.uri,
+            remoteUri: target.remoteUri,
+            requestedName: nextName,
+            renamedName: renamedItem.name,
+            renamedRemoteUri: renamedItem.remoteUri,
+          },
+        });
         const parentUri = node.parent?.data.uri;
         if (parentUri) {
           await fetchChildren(parentUri);

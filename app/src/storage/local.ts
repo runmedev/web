@@ -1915,6 +1915,17 @@ export class LocalNotebooks extends Dexie {
           ? record.remoteId
           : undefined
 
+      appLogger.info('Resolved folder rename destination', {
+        attrs: {
+          scope: 'storage.rename',
+          code: 'LOCAL_FOLDER_RENAME_DESTINATION_RESOLVED',
+          uri,
+          recordRemoteUri: record.remoteId,
+          remoteUriOverride,
+          remoteUri,
+        },
+      })
+
       if (remoteUri) {
         const remoteItem = await this.driveStore.rename(remoteUri, name)
         nextName = remoteItem.name || name
@@ -1982,6 +1993,18 @@ export class LocalNotebooks extends Dexie {
       : isDriveUri(record.remoteId)
         ? record.remoteId
         : undefined
+
+    appLogger.info('Resolved notebook rename destination', {
+      attrs: {
+        scope: 'storage.rename',
+        code: 'LOCAL_FILE_RENAME_DESTINATION_RESOLVED',
+        uri,
+        recordRemoteUri: record.remoteId,
+        remoteUriOverride,
+        remoteUri,
+        requestedName: nextName,
+      },
+    })
 
     if (remoteUri) {
       const remoteItem = await this.driveStore.rename(remoteUri, nextName)
