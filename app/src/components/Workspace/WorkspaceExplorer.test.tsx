@@ -633,7 +633,8 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(mocks.ensureAccessToken).toHaveBeenCalledWith({ interactive: true })
     expect(mocks.store.rename).toHaveBeenCalledWith(
       'local://file/drive',
-      'renamed.json'
+      'renamed.json',
+      'https://drive.google.com/file/d/file123/view'
     )
   })
 
