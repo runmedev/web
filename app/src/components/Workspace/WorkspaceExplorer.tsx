@@ -122,7 +122,8 @@ function renameErrorMessage(error: unknown): string {
   }
   if (
     message.startsWith("Changing notebook formats by rename") ||
-    message.startsWith("Unsupported notebook file extension")
+    message.startsWith("Unsupported notebook file extension") ||
+    message.startsWith("Google Drive returned success without applying")
   ) {
     return message;
   }

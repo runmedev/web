@@ -675,6 +675,38 @@ describe('WorkspaceExplorer current document handling', () => {
     ).toBeTruthy()
   })
 
+  it('surfaces a Drive rename response that did not apply the requested name', async () => {
+    const renameError =
+      'Google Drive returned success without applying the requested rename to "renamed.json".'
+    mocks.currentDoc = 'local://file/current'
+    mocks.isDriveItemUri.mockReturnValue(true)
+    mocks.store.rename.mockRejectedValueOnce(new Error(renameError))
+    const reset = vi.fn()
+
+    render(<WorkspaceExplorer />)
+
+    await waitFor(() => expect(mocks.treeProps).toBeTruthy())
+    await act(async () => {
+      await mocks.treeProps.onRename({
+        id: 'local://file/drive',
+        name: 'renamed.json',
+        node: {
+          data: {
+            uri: 'local://file/drive',
+            name: 'original.json',
+            type: NotebookStoreItemType.File,
+            remoteUri: 'https://drive.google.com/file/d/file123/view',
+          },
+          parent: null,
+          reset,
+        },
+      })
+    })
+
+    expect(reset).toHaveBeenCalled()
+    expect(await screen.findByText(renameError)).toBeTruthy()
+  })
+
   it('validates a Drive rename before requesting authorization', async () => {
     mocks.currentDoc = 'local://file/current'
     mocks.isDriveItemUri.mockReturnValue(true)

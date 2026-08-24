@@ -12,7 +12,107 @@ afterEach(() => {
   window.gapi = originalGapi
 })
 
-describe('GAPI Drive media downloads', () => {
+/** Installs an authenticated mock GAPI Drive client for one browser test. */
+function installGapi(filesUpdate = vi.fn()) {
+  window.gapi = {
+    load: (_name, options) => options.callback(),
+    client: {
+      load: vi.fn().mockResolvedValue(undefined),
+      setToken: vi.fn(),
+      getToken: () => ({ access_token: 'access-token' }),
+      drive: {
+        files: {
+          create: vi.fn(),
+          update: filesUpdate,
+          get: vi.fn(),
+          list: vi.fn(),
+        },
+        drives: { get: vi.fn() },
+        revisions: { get: vi.fn(), list: vi.fn() },
+      },
+      request: vi.fn(),
+    },
+  }
+}
+
+describe('GAPI Drive client', () => {
+  it('sends rename metadata through the REST request path', async () => {
+    const filesUpdate = vi.fn().mockResolvedValue({
+      result: {
+        id: 'file123',
+        name: 'original.json',
+        mimeType: 'application/json',
+      },
+    })
+
+    installGapi(filesUpdate)
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input))
+        expect(url.pathname).toBe('/drive/v3/files/file123')
+        expect(url.searchParams.get('supportsAllDrives')).toBe('true')
+        expect(init?.method).toBe('PATCH')
+        expect(JSON.parse(String(init?.body))).toEqual({
+          name: 'renamed.json',
+        })
+        return new Response(
+          JSON.stringify({
+            id: 'file123',
+            name: 'renamed.json',
+            mimeType: 'application/json',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      })
+
+    const store = new DriveNotebookStore(async () => 'access-token')
+    await expect(
+      store.rename(
+        'https://drive.google.com/file/d/file123/view',
+        'renamed.json'
+      )
+    ).resolves.toMatchObject({
+      uri: 'https://drive.google.com/file/d/file123/view',
+      name: 'renamed.json',
+      remoteUri: 'https://drive.google.com/file/d/file123/view',
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(filesUpdate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a rename response that kept the old name', async () => {
+    installGapi()
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 'file123',
+          name: 'original.json',
+          mimeType: 'application/json',
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    )
+
+    const store = new DriveNotebookStore(async () => 'access-token')
+    await expect(
+      store.rename(
+        'https://drive.google.com/file/d/file123/view',
+        'renamed.json'
+      )
+    ).rejects.toThrow(
+      'Google Drive returned success without applying the requested rename to "renamed.json".'
+    )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('decodes UTF-8 file and revision content without emoji mojibake', async () => {
     const mojibake = '{"text":"ðð½"}'
     const filesGet = vi.fn().mockResolvedValue({ body: mojibake })
