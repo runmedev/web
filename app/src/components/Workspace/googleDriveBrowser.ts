@@ -396,8 +396,7 @@ export async function searchGoogleDriveResources(
   if (
     resources.some(
       (resource) =>
-        editDistance(comparableQuery, normalizeSearchName(resource.name)) <=
-        distanceLimit
+        normalizeSearchName(resource.name) === comparableQuery
     )
   ) {
     return resources

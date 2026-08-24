@@ -188,7 +188,7 @@ describe('googleDriveBrowser', () => {
   })
 
   it('searches all visible Drives and filters folder mode server-side', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () =>
       new Response(
         JSON.stringify({
           files: [
@@ -230,7 +230,7 @@ describe('googleDriveBrowser', () => {
   })
 
   it('keeps folder shortcuts in folder search results while filtering file targets', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () =>
       new Response(
         JSON.stringify({
           files: [
@@ -283,6 +283,11 @@ describe('googleDriveBrowser', () => {
           JSON.stringify({
             files: [
               {
+                id: 'close-folder',
+                name: 'olympus-runbook',
+                mimeType: 'application/vnd.google-apps.folder',
+              },
+              {
                 id: 'renamed-folder',
                 name: 'olympus-runbooks-jlewi',
                 mimeType: 'application/vnd.google-apps.folder',
@@ -320,6 +325,12 @@ describe('googleDriveBrowser', () => {
         fetchImpl
       )
     ).resolves.toEqual([
+      {
+        id: 'close-folder',
+        name: 'olympus-runbook',
+        mimeType: 'application/vnd.google-apps.folder',
+        driveId: undefined,
+      },
       {
         id: 'typo-folder',
         name: 'olympus-runboooks',

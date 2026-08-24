@@ -43,7 +43,10 @@ export function GoogleDrivePickerButton({
             code: 'DRIVE_FOLDER_STORE_UNAVAILABLE',
           },
         })
-        setMountError('Runme storage is not ready. Reload the page and retry.')
+        const message =
+          'Runme storage is not ready. Reload the page and retry.'
+        setMountError(message)
+        showToast({ message, tone: 'error' })
         return
       }
 
@@ -88,6 +91,8 @@ export function GoogleDrivePickerButton({
         const accessToken = await ensureAccessToken({ interactive: true })
         if (accessToken) {
           setPickerAccessToken(accessToken)
+        } else {
+          throw new Error('Google Drive authorization returned no access token')
         }
       } catch (error) {
         appLogger.error('Failed to authorize Google Drive browser', {

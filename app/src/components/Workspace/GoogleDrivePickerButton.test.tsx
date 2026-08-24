@@ -8,6 +8,7 @@ import { GoogleDrivePickerButton } from './GoogleDrivePickerButton'
 const mocks = vi.hoisted(() => ({
   addItem: vi.fn(),
   ensureAccessToken: vi.fn(),
+  getNotebookStore: vi.fn(),
   getItems: vi.fn(),
   listChildren: vi.fn(),
   listRoots: vi.fn(),
@@ -38,7 +39,7 @@ vi.mock('../../contexts/WorkspaceContext', () => ({
 
 vi.mock('../../contexts/NotebookStoreContext', () => ({
   useNotebookStore: () => ({
-    store: { updateFolder: mocks.updateFolder },
+    store: mocks.getNotebookStore(),
   }),
 }))
 
@@ -67,6 +68,10 @@ describe('GoogleDrivePickerButton', () => {
     mocks.addItem.mockReset()
     mocks.ensureAccessToken.mockReset()
     mocks.ensureAccessToken.mockResolvedValue('cached-access-token')
+    mocks.getNotebookStore.mockReset()
+    mocks.getNotebookStore.mockReturnValue({
+      updateFolder: mocks.updateFolder,
+    })
     mocks.getItems.mockReset()
     mocks.getItems.mockReturnValue([])
     mocks.listRoots.mockReset()
@@ -194,6 +199,40 @@ describe('GoogleDrivePickerButton', () => {
 
     expect((await screen.findByRole('alert')).textContent).toContain(
       'could not authorize Google Drive'
+    )
+    expect(mocks.showToast).toHaveBeenCalledWith(
+      expect.objectContaining({ tone: 'error' })
+    )
+  })
+
+  it('shows an authorization failure when no access token is returned', async () => {
+    mocks.ensureAccessToken.mockResolvedValue('')
+    render(<GoogleDrivePickerButton />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Folder' }))
+
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'could not authorize Google Drive'
+    )
+    expect(mocks.showToast).toHaveBeenCalledWith(
+      expect.objectContaining({ tone: 'error' })
+    )
+  })
+
+  it('shows an error when storage becomes unavailable before mounting', async () => {
+    mocks.getNotebookStore.mockReturnValue(null)
+    render(<GoogleDrivePickerButton />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Folder' }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Open notebooks' })
+    )
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Select this folder' })
+    )
+
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'storage is not ready'
     )
     expect(mocks.showToast).toHaveBeenCalledWith(
       expect.objectContaining({ tone: 'error' })
