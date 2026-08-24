@@ -29,6 +29,7 @@ import { appLogger } from "../../lib/logging/runtime";
 import {
   type NotebookFileFormat,
   isNotebookFileName,
+  validateNotebookRenameFormat,
 } from '../../lib/notebookFormat'
 import {
   copyNotebookMarkdownLink,
@@ -1213,6 +1214,9 @@ function formatShortTimestamp(date: Date): string {
             : "untitled.json"
           : trimmed;
       try {
+        if (target.type === NotebookStoreItemType.File) {
+          validateNotebookRenameFormat(target.name, nextName);
+        }
         if (target.remoteUri && isDriveItemUri(target.remoteUri)) {
           await ensureAccessToken({ interactive: true });
         }

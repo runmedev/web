@@ -624,6 +624,39 @@ describe('WorkspaceExplorer current document handling', () => {
     ).toBeTruthy()
   })
 
+  it('validates a Drive rename before requesting authorization', async () => {
+    mocks.currentDoc = 'local://file/current'
+    mocks.isDriveItemUri.mockReturnValue(true)
+
+    render(<WorkspaceExplorer />)
+
+    await waitFor(() => expect(mocks.treeProps).toBeTruthy())
+    await act(async () => {
+      await mocks.treeProps.onRename({
+        id: 'local://file/drive',
+        name: 'renamed.ipynb',
+        node: {
+          data: {
+            uri: 'local://file/drive',
+            name: 'original.json',
+            type: NotebookStoreItemType.File,
+            remoteUri: 'https://drive.google.com/file/d/file123/view',
+          },
+          parent: null,
+          reset: vi.fn(),
+        },
+      })
+    })
+
+    expect(mocks.ensureAccessToken).not.toHaveBeenCalled()
+    expect(mocks.store.rename).not.toHaveBeenCalled()
+    expect(
+      await screen.findByText(
+        'Changing notebook formats by rename is not supported. Use Save as instead.'
+      )
+    ).toBeTruthy()
+  })
+
   it('renames a local notebook without requesting Drive authorization', async () => {
     mocks.currentDoc = 'local://file/current'
     render(<WorkspaceExplorer />)

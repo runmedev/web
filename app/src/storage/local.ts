@@ -14,6 +14,7 @@ import {
   detectNotebookFileFormat,
   encodeIpynbNotebook,
   isNotebookFileName,
+  validateNotebookRenameFormat,
 } from '../lib/notebookFormat'
 import { appState } from '../lib/runtime/AppState'
 import { parser_pb } from '../runme/client'
@@ -1951,14 +1952,7 @@ export class LocalNotebooks extends Dexie {
 
     const currentFormat = detectNotebookFileFormat(record.name)
     const requestedFormat = detectNotebookFileFormat(name)
-    if (currentFormat && requestedFormat && currentFormat !== requestedFormat) {
-      throw new Error(
-        'Changing notebook formats by rename is not supported. Use Save as instead.'
-      )
-    }
-    if (currentFormat && !requestedFormat && /\.[^/]+$/.test(name.trim())) {
-      throw new Error(`Unsupported notebook file extension: ${name}`)
-    }
+    validateNotebookRenameFormat(record.name, name)
     let nextName =
       currentFormat && !requestedFormat
         ? `${name.trim()}${currentFormat === 'ipynb' ? '.ipynb' : '.json'}`

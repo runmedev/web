@@ -9,6 +9,7 @@ import {
   encodeIpynbNotebook,
   encodeRunmeNotebook,
   isNotebookFileName,
+  validateNotebookRenameFormat,
 } from '../lib/notebookFormat'
 import { parser_pb } from '../runme/client'
 import { FsDatabase, WorkspaceRecord } from './fsdb'
@@ -146,17 +147,10 @@ function notebookNameForRename(oldName: string, name: string): string {
     throw new Error(`Unsupported notebook file extension: ${oldName}`)
   }
   const trimmed = name.trim()
+  validateNotebookRenameFormat(oldName, trimmed)
   const nextFormat = detectNotebookFileFormat(trimmed)
-  if (nextFormat && nextFormat !== oldFormat) {
-    throw new Error(
-      'Changing notebook formats by rename is not supported. Use Save as instead.'
-    )
-  }
   if (nextFormat) {
     return trimmed
-  }
-  if (/\.[^/]+$/.test(trimmed)) {
-    throw new Error(`Unsupported notebook file extension: ${name}`)
   }
   return `${trimmed}${oldFormat === 'ipynb' ? '.ipynb' : '.json'}`
 }
