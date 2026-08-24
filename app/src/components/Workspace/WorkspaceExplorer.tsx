@@ -1219,7 +1219,18 @@ function formatShortTimestamp(date: Date): string {
         if (target.remoteUri && isDriveItemUri(target.remoteUri)) {
           await ensureAccessToken({ interactive: true });
         }
-        await targetStore.rename(target.uri, nextName);
+        if (
+          targetStore === store &&
+          target.remoteUri &&
+          isDriveItemUri(target.remoteUri)
+        ) {
+          // The Explorer already has the resolved upstream identity. Pass it
+          // through so a stale local mirror cannot silently downgrade a Drive
+          // rename into a local-only metadata update.
+          await store.rename(target.uri, nextName, target.remoteUri);
+        } else {
+          await targetStore.rename(target.uri, nextName);
+        }
         const parentUri = node.parent?.data.uri;
         if (parentUri) {
           await fetchChildren(parentUri);

@@ -2088,6 +2088,46 @@ describe('LocalNotebooks rename', () => {
     )
   })
 
+  it('uses a resolved Drive URI when the local mirror upstream metadata is stale', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const driveStore = {
+      rename: vi.fn(async () => ({
+        uri: remoteUri,
+        name: 'renamed.json',
+        type: NotebookStoreItemType.File,
+        children: [],
+        remoteUri,
+        parents: [],
+      })),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: 'local://file/drive',
+      name: 'original.json',
+      remoteId: '',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    const result = await store.rename(
+      'local://file/drive',
+      'renamed.json',
+      remoteUri
+    )
+
+    expect(driveStore.rename).toHaveBeenCalledWith(remoteUri, 'renamed.json')
+    expect(result).toMatchObject({
+      uri: 'local://file/drive',
+      name: 'renamed.json',
+      remoteUri,
+    })
+    expect((await store.files.get('local://file/drive'))?.remoteId).toBe(
+      remoteUri
+    )
+  })
+
   it('renames Drive-backed folders upstream before updating the local mirror', async () => {
     const remoteUri = 'https://drive.google.com/drive/folders/folder123'
     const renamedRemoteUri = 'https://drive.google.com/drive/folders/folder123'

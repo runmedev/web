@@ -1887,7 +1887,19 @@ export class LocalNotebooks extends Dexie {
     }
   }
 
-  async rename(uri: string, name: string): Promise<NotebookStoreItem> {
+  /**
+   * Rename a local mirror and, when known, its upstream Drive item first.
+   *
+   * `remoteUriOverride` lets callers that already resolved the visible Drive
+   * item preserve that upstream identity when an older or partially repaired
+   * local mirror has stale `remoteId` metadata. The override is accepted only
+   * for a canonical Drive item URI; local-only renames remain local-only.
+   */
+  async rename(
+    uri: string,
+    name: string,
+    remoteUriOverride?: string
+  ): Promise<NotebookStoreItem> {
     if (uri.startsWith('local://folder/')) {
       const record = await this.folders.get(uri)
       if (!record) {
@@ -1897,8 +1909,14 @@ export class LocalNotebooks extends Dexie {
       let nextName = name
       let nextRemoteId = record.remoteId
 
-      if (isDriveUri(record.remoteId)) {
-        const remoteItem = await this.driveStore.rename(record.remoteId, name)
+      const remoteUri = isDriveUri(remoteUriOverride)
+        ? remoteUriOverride
+        : isDriveUri(record.remoteId)
+          ? record.remoteId
+          : undefined
+
+      if (remoteUri) {
+        const remoteItem = await this.driveStore.rename(remoteUri, name)
         nextName = remoteItem.name || name
         nextRemoteId = remoteItem.remoteUri ?? remoteItem.uri ?? record.remoteId
       }
@@ -1959,8 +1977,14 @@ export class LocalNotebooks extends Dexie {
         : name
     let nextRemoteId = record.remoteId
 
-    if (isDriveUri(record.remoteId)) {
-      const remoteItem = await this.driveStore.rename(record.remoteId, nextName)
+    const remoteUri = isDriveUri(remoteUriOverride)
+      ? remoteUriOverride
+      : isDriveUri(record.remoteId)
+        ? record.remoteId
+        : undefined
+
+    if (remoteUri) {
+      const remoteItem = await this.driveStore.rename(remoteUri, nextName)
       nextName = remoteItem.name || nextName
       nextRemoteId = remoteItem.remoteUri ?? remoteItem.uri ?? record.remoteId
     }
