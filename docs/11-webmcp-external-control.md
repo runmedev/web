@@ -339,7 +339,7 @@ const result = await drive.search({
 if (result.files.length !== 1) {
   throw new Error(`Expected one notebook, found ${result.files.length}`)
 }
-await notebooks.show(result.files[0].uri)
+await notebooks.open(result.files[0].uri)
 ```
 
 `drive.search` accepts a Google Drive v3 `files.list` request, including its

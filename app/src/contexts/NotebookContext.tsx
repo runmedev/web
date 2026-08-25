@@ -36,12 +36,16 @@ type NotebookContextValue = {
   removeNotebook: (uri: string) => string | null;
 };
 
-const NotebookContext = createContext<NotebookContextValue | undefined>(undefined);
+const NotebookContext = createContext<NotebookContextValue | undefined>(
+  undefined,
+);
 
 export function useNotebookContext() {
   const ctx = useContext(NotebookContext);
   if (!ctx) {
-    throw new Error("useNotebookContext must be used within a NotebookProvider");
+    throw new Error(
+      "useNotebookContext must be used within a NotebookProvider",
+    );
   }
   return ctx;
 }
@@ -127,10 +131,27 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     appState.setOpenNotebookHandler(async (uri: string) => {
       await openAndSelectNotebook(uri);
     });
+    appState.setLoadNotebookHandler(async (uri: string) => {
+      const result = await controller.openNotebook(uri);
+      return result.localUri;
+    });
+    appState.setFocusNotebookHandler(async (uri: string) => {
+      const localUri = uri.trim();
+      if (
+        !controller.getOpenNotebooks().some((item) => item.uri === localUri)
+      ) {
+        throw new Error(
+          `Notebook ${localUri} is not open. Call notebooks.open(reference) before notebooks.focus(reference).`,
+        );
+      }
+      setCurrentDoc(localUri);
+    });
     return () => {
       appState.setOpenNotebookHandler(null);
+      appState.setLoadNotebookHandler(null);
+      appState.setFocusNotebookHandler(null);
     };
-  }, [openAndSelectNotebook]);
+  }, [controller, openAndSelectNotebook, setCurrentDoc]);
 
   useEffect(() => {
     const openNotebooks = controller.getOpenNotebooks();
@@ -177,5 +198,9 @@ export function NotebookProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  return <NotebookContext.Provider value={value}>{children}</NotebookContext.Provider>;
+  return (
+    <NotebookContext.Provider value={value}>
+      {children}
+    </NotebookContext.Provider>
+  );
 }

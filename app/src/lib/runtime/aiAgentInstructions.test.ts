@@ -79,6 +79,14 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain('doc.notebook.cells')
     expect(instructions).toContain('There is no `notebooks.read` method')
     expect(instructions).toContain('await notebooks.help()')
+    expect(instructions).toContain('notebooks.open(reference)')
+    expect(instructions).toContain('notebooks.focus(opened.localUri')
+    expect(instructions).toContain(
+      'without changing the notebook the user is viewing'
+    )
+    expect(instructions).toContain(
+      '`notebooks.show(reference)` is a compatibility helper'
+    )
     expect(instructions).toContain('opaque canonical identifier')
     expect(instructions).toContain('IPYNB `cell.id`')
     expect(instructions).toContain(

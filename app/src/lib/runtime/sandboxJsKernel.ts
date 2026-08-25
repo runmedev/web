@@ -374,6 +374,8 @@ export function buildSandboxSrcDoc(options: {
           embed: (source, options) => callHost("notebooks.embed", [source, options]),
           attach: (source, options) => callHost("notebooks.attach", [source, options]),
           resolve: (reference) => callHost("notebooks.resolve", [reference]),
+          open: (reference) => callHost("notebooks.open", [reference]),
+          focus: (reference) => callHost("notebooks.focus", [reference]),
           show: (reference) => callHost("notebooks.show", [reference]),
           shareUrl: (reference) => callHost("notebooks.shareUrl", [reference]),
           markdownLink: (reference) => callHost("notebooks.markdownLink", [reference]),
@@ -509,6 +511,8 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebooks.attach(source, { target: { uri }, folderUri?, mode?, title?, altText?, expectedRevision?, operationId? })");
           consoleProxy.log("- notebooks.resolve([reference])");
           consoleProxy.log("- notebooks.show([reference])");
+          consoleProxy.log("- notebooks.open([reference])");
+          consoleProxy.log("- notebooks.focus([reference])");
           consoleProxy.log("- notebooks.shareUrl([reference])");
           consoleProxy.log("- notebooks.markdownLink([reference])");
           consoleProxy.log("- documents.list()");

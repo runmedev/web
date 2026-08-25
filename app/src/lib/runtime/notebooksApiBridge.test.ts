@@ -198,8 +198,12 @@ describe('createNotebooksApiBridgeServer', () => {
       uri: 'local://file/demo',
       title: 'demo',
     }))
+    const open = vi.fn(async () => ({ opened: 'local://file/demo' }))
+    const focus = vi.fn(async () => ({ focused: 'local://file/demo' }))
     const bridgeServer = createBridgeServer({
       resolve,
+      open,
+      focus,
     } as Partial<NotebooksApi>)
 
     await expect(
@@ -212,6 +216,21 @@ describe('createNotebooksApiBridgeServer', () => {
       title: 'demo',
     })
     expect(resolve).toHaveBeenCalledWith('local://file/demo')
+
+    await expect(
+      bridgeServer.handleMessage({
+        method: 'notebooks.open',
+        args: ['local://file/demo'],
+      })
+    ).resolves.toEqual({ opened: 'local://file/demo' })
+    await expect(
+      bridgeServer.handleMessage({
+        method: 'notebooks.focus',
+        args: ['local://file/demo'],
+      })
+    ).resolves.toEqual({ focused: 'local://file/demo' })
+    expect(open).toHaveBeenCalledWith('local://file/demo')
+    expect(focus).toHaveBeenCalledWith('local://file/demo')
   })
 
   it('delegates write access requests to the host notebook API', async () => {

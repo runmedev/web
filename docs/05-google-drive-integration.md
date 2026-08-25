@@ -216,7 +216,7 @@ notebook APIs without constructing a Drive URL:
 if (result.files.length !== 1) {
   throw new Error(`Expected one notebook, found ${result.files.length}`)
 }
-await notebooks.show(result.files[0].uri)
+await notebooks.open(result.files[0].uri)
 ```
 
 Use `nextPageToken` to retrieve every matching file:

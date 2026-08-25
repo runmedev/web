@@ -27,6 +27,8 @@ export interface DriveLinkIntent {
   remoteUri: string;
   action: DriveLinkIntentAction;
   source: "url" | "manual";
+  /** Whether the imported notebook should become the visible document. */
+  focus: boolean;
   status: DriveLinkIntentStatus;
   createdAt: string;
   updatedAt: string;
@@ -70,7 +72,10 @@ type DriveLinkCoordinatorDeps = {
   addWorkspaceItem: (localUri: string) => void;
   removeWorkspaceItem: (uri: string) => void;
   getWorkspaceItems: () => string[];
-  openNotebook: (localUri: string) => Promise<void> | void;
+  openNotebook: (
+    localUri: string,
+    options?: { focus?: boolean },
+  ) => Promise<void> | void;
 };
 
 function createIntentId(): string {
@@ -175,6 +180,8 @@ function loadIntents(): DriveLinkIntent[] {
       )
       .map((intent) => ({
         ...intent,
+        // Intents written by older builds always focused the imported file.
+        focus: intent.focus !== false,
         // "processing" can be left behind in sessionStorage after reload/crash.
         // Treat it as pending so the coordinator can resume it.
         status:
@@ -221,7 +228,8 @@ class DriveLinkCoordinatorRuntime {
 
   configure(deps: DriveLinkCoordinatorDeps | null): void {
     this.deps = deps;
-    const nextPrincipal = deps?.getEffectivePrincipal()?.trim().toLowerCase() ?? null;
+    const nextPrincipal =
+      deps?.getEffectivePrincipal()?.trim().toLowerCase() ?? null;
     const principalChanged = nextPrincipal !== this.configuredPrincipal;
     this.configuredPrincipal = nextPrincipal;
 
@@ -277,12 +285,17 @@ class DriveLinkCoordinatorRuntime {
   async enqueue(
     remoteUri: string,
     source: "url" | "manual" = "manual",
+    options: { focus?: boolean } = {},
   ): Promise<void> {
     const action = this.resolveAction(remoteUri);
+    const focus = options.focus !== false;
     const existing = this.intents.find(
       (intent) => intent.remoteUri === remoteUri && intent.action === action,
     );
     if (existing) {
+      if (focus && !existing.focus) {
+        this.updateIntent(existing.id, { focus: true });
+      }
       return;
     }
 
@@ -294,6 +307,7 @@ class DriveLinkCoordinatorRuntime {
         remoteUri,
         action,
         source,
+        focus,
         status: "pending",
         createdAt: nowIso(),
         updatedAt: nowIso(),
@@ -390,6 +404,8 @@ class DriveLinkCoordinatorRuntime {
     );
     this.updateIntent(intentId, {
       status: "pending",
+      // The user explicitly chose the "Trust This Document And Open" action.
+      focus: true,
       lastErrorMessage: undefined,
     });
     await this.processPending();
@@ -533,7 +549,7 @@ class DriveLinkCoordinatorRuntime {
           },
         });
         deps.removeWorkspaceItem(intent.remoteUri);
-        await deps.openNotebook(localFileUri);
+        await deps.openNotebook(localFileUri, { focus: intent.focus });
 
         if (trustDecision.basis && trustDecision.effectivePrincipal) {
           rememberSharedNotebookTrust(

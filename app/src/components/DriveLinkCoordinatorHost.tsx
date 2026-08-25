@@ -45,12 +45,14 @@ export function DriveLinkCoordinatorHost() {
       addWorkspaceItem: addItem,
       removeWorkspaceItem: removeItem,
       getWorkspaceItems: getItems,
-      openNotebook: async (localUri: string) => {
+      openNotebook: async (localUri: string, options?: { focus?: boolean }) => {
         const result = await openNotebook(localUri);
-        showDocument(result.localUri, {
-          title: result.entry.name,
-        });
-        setCurrentDoc(result.localUri);
+        if (options?.focus !== false) {
+          showDocument(result.localUri, {
+            title: result.entry.name,
+          });
+          setCurrentDoc(result.localUri);
+        }
       },
     });
 

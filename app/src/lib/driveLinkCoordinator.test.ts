@@ -64,6 +64,7 @@ function createStoredIntent(overrides: Partial<Record<string, unknown>> = {}) {
     remoteUri: "https://drive.google.com/file/d/file123/view",
     action: "open_shared_file",
     source: "url",
+    focus: true,
     status: "pending",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
@@ -91,9 +92,7 @@ describe("isDriveAuthError", () => {
 
   it("treats explicit authorization-required failures as auth errors", () => {
     expect(
-      isDriveAuthError(
-        new Error("Google Drive authorization is required."),
-      ),
+      isDriveAuthError(new Error("Google Drive authorization is required.")),
     ).toBe(true);
   });
 });
@@ -110,7 +109,9 @@ describe("isDriveMissingOrAccessDeniedError", () => {
   it("treats 403 drive API failures as terminal", () => {
     expect(
       isDriveMissingOrAccessDeniedError(
-        new Error("Drive request failed (403 Forbidden): insufficientFilePermissions"),
+        new Error(
+          "Drive request failed (403 Forbidden): insufficientFilePermissions",
+        ),
       ),
     ).toBe(true);
   });
@@ -216,7 +217,9 @@ describe("driveLinkCoordinator intent storage", () => {
         },
       }),
     );
-    expect(deps.openNotebook).toHaveBeenCalledWith("local://file/file123");
+    expect(deps.openNotebook).toHaveBeenCalledWith("local://file/file123", {
+      focus: true,
+    });
     expect(driveLinkCoordinator.getSnapshot().intents).toEqual([]);
 
     const { loadSharedNotebookTrustRecords } = await import(
@@ -229,6 +232,19 @@ describe("driveLinkCoordinator intent storage", () => {
         basis: "same_domain",
       }),
     ]);
+  });
+
+  it("imports a Drive notebook in the background when focus is disabled", async () => {
+    const remoteUri = "https://drive.google.com/file/d/file123/view";
+    const { driveLinkCoordinator } = await import("./driveLinkCoordinator");
+    const deps = createCoordinatorDeps();
+    driveLinkCoordinator.configure(deps);
+
+    await driveLinkCoordinator.enqueue(remoteUri, "manual", { focus: false });
+
+    expect(deps.openNotebook).toHaveBeenCalledWith("local://file/file123", {
+      focus: false,
+    });
   });
 
   it("does not download an external notebook before review", async () => {
@@ -264,7 +280,9 @@ describe("driveLinkCoordinator intent storage", () => {
     await driveLinkCoordinator.trustAndOpen(intent.id);
 
     expect(deps.importFile).toHaveBeenCalledTimes(1);
-    expect(deps.openNotebook).toHaveBeenCalledTimes(1);
+    expect(deps.openNotebook).toHaveBeenCalledWith("local://file/file123", {
+      focus: true,
+    });
     expect(driveLinkCoordinator.getSnapshot().intents).toEqual([]);
     const { loadSharedNotebookTrustRecords } = await import(
       "./sharedNotebookTrust"

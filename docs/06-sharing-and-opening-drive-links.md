@@ -71,17 +71,20 @@ It returns the display title, `localUri`, `remoteUri`, `shareTarget`,
 Runme share links: the Drive URL when the local notebook has a remote backing
 file, otherwise the local URI.
 
-To open a reference, run:
+To open a reference without changing the notebook the user is viewing, run:
 
 ```js
-await notebooks.show(
+const opened = await notebooks.open(
   'https://runme.gateway.unified-0.internal.api.openai.org/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2F149JKKTgljRiwszwb06Ms74GOYhCOPMNg%2Fview'
 )
 ```
 
 Local references open directly in a notebook tab. Drive references are queued
 through the shared-link coordinator, which handles auth, local mirroring, and
-opening the resulting local notebook.
+opening the resulting local notebook. Neither path changes visible focus. When
+the user wants to switch to the opened notebook, call
+`await notebooks.focus(opened.localUri || opened.opened)`. The legacy
+`notebooks.show(reference)` helper performs both operations.
 
 ## Key facts
 

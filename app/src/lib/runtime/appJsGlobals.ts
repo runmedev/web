@@ -363,6 +363,7 @@ export function createAppJsGlobals({
   ensureFilesystemStore = defaultEnsureFilesystemStore,
   workspace,
   openNotebook,
+  focusNotebook,
   runnerSync,
   resolveNotebook,
   listNotebooks,
@@ -377,7 +378,8 @@ export function createAppJsGlobals({
   resolveNotebookStore?: () => RuntimeNotebookStore | null
   ensureFilesystemStore?: () => FilesystemNotebookStore | null
   workspace?: WorkspaceApi
-  openNotebook?: (uri: string) => void | Promise<void>
+  openNotebook?: (uri: string) => string | void | Promise<string | void>
+  focusNotebook?: (uri: string) => void | Promise<void>
   runnerSync?: RunnerSync
   resolveNotebook?: (target?: unknown) => NotebookDataLike | null
   listNotebooks?: () => NotebookDataLike[]
@@ -410,12 +412,19 @@ export function createAppJsGlobals({
     appState.startWorkspaceItemRename(uri)
   }
   const resolveStore = () => resolveNotebookStore?.() ?? appState.localNotebooks
-  const openNotebookForRuntime = async (uri: string) => {
+  const openNotebookForRuntime = async (uri: string): Promise<string> => {
     if (openNotebook) {
-      await openNotebook(uri)
+      const openedUri = await openNotebook(uri)
+      return typeof openedUri === 'string' ? openedUri : uri
+    }
+    return await appState.loadNotebook(uri)
+  }
+  const focusNotebookForRuntime = async (uri: string) => {
+    if (focusNotebook) {
+      await focusNotebook(uri)
       return
     }
-    await appState.openNotebook(uri)
+    await appState.focusNotebook(uri)
   }
   const resolveLocalMirrorStore = () => {
     if (!appState.localNotebooks) {
@@ -900,17 +909,27 @@ export function createAppJsGlobals({
     }
   }
 
-  const showNotebookReference = async (reference?: unknown) => {
+  const openNotebookReference = async (
+    reference?: unknown,
+    options: { focus: boolean } = { focus: false }
+  ) => {
     const info = await resolveNotebookReference(reference)
     if (info.localUri?.startsWith('local://file/')) {
-      await openNotebookForRuntime(info.localUri)
+      const opened = await openNotebookForRuntime(info.localUri)
+      if (options.focus) {
+        await focusNotebookForRuntime(opened)
+      }
       return {
         ...info,
-        opened: info.localUri,
+        localUri: opened,
+        opened,
+        ...(options.focus ? { focused: opened } : {}),
       }
     }
     if (info.remoteUri && isDriveItemUri(info.remoteUri)) {
-      await driveLinkCoordinator.enqueue(info.remoteUri, 'manual')
+      await driveLinkCoordinator.enqueue(info.remoteUri, 'manual', {
+        focus: options.focus,
+      })
       return {
         ...info,
         opened: info.remoteUri,
@@ -921,6 +940,23 @@ export function createAppJsGlobals({
       `Unable to show notebook reference ${info.uri}. Expected a local file URI or Drive file URL.`
     )
   }
+
+  const focusNotebookReference = async (reference?: unknown) => {
+    const info = await resolveNotebookReference(reference)
+    if (!info.localUri?.startsWith('local://file/')) {
+      throw new Error(
+        `Unable to focus notebook reference ${info.uri}. Call notebooks.open(reference) first and wait for any Drive import to finish.`
+      )
+    }
+    await focusNotebookForRuntime(info.localUri)
+    return {
+      ...info,
+      focused: info.localUri,
+    }
+  }
+
+  const showNotebookReference = async (reference?: unknown) =>
+    openNotebookReference(reference, { focus: true })
 
   const embedImageForRuntime = async (
     source: EmbeddedImageSource,
@@ -987,7 +1023,7 @@ export function createAppJsGlobals({
     ...notebooksApi,
     help: async (topic?: string) => {
       if (topic === 'createLocal') {
-        return 'notebooks.createLocal(name, options?: { folderUri?: string }): Promise<NotebookDocument>. Creates a new local notebook, opens it in the UI, and returns the notebook document.'
+        return 'notebooks.createLocal(name, options?: { folderUri?: string }): Promise<NotebookDocument>. Creates a new local notebook, adds it to the open notebook list without changing focus, and returns the notebook document.'
       }
       if (topic === 'appendCell') {
         return 'notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? }): Promise<{ handle, cell }>. Inserts a cell into the current or targeted notebook. kind must be "code" or "markup".'
@@ -1002,7 +1038,13 @@ export function createAppJsGlobals({
         return 'notebooks.resolve(reference?): Promise<NotebookReferenceInfo>. Accepts a local URI, Drive URL, Runme share URL, Markdown link, or notebook target and returns title, localUri, remoteUri, shareUrl, and markdownLink.'
       }
       if (topic === 'show') {
-        return 'notebooks.show(reference?): Promise<NotebookReferenceInfo & { opened | status }>. Opens local notebook references directly and queues Drive references through shared-link coordination.'
+        return 'notebooks.show(reference?): Promise<NotebookReferenceInfo & { opened | focused | status }>. Compatibility helper that opens and focuses a notebook. Prefer notebooks.open(reference), then notebooks.focus(reference) only when the user wants visible focus to change.'
+      }
+      if (topic === 'open') {
+        return 'notebooks.open(reference?): Promise<NotebookReferenceInfo & { opened | status }>. Opens or imports a notebook without changing the visible notebook focus.'
+      }
+      if (topic === 'focus') {
+        return 'notebooks.focus(reference?): Promise<NotebookReferenceInfo & { focused }>. Focuses an already-open notebook without loading it. Call notebooks.open(reference) first.'
       }
       if (topic === 'shareUrl') {
         return 'notebooks.shareUrl(reference?): Promise<string>. Returns the Runme share URL for a local, Drive, share, or Markdown notebook reference.'
@@ -1021,6 +1063,8 @@ export function createAppJsGlobals({
         '- notebooks.embed(source, options?)',
         '- notebooks.attach(source, { target, folderUri?, mode?, title?, altText?, expectedRevision?, operationId? })',
         '- notebooks.resolve(reference?)',
+        '- notebooks.open(reference?)',
+        '- notebooks.focus(reference?)',
         '- notebooks.show(reference?)',
         '- notebooks.shareUrl(reference?)',
         '- notebooks.markdownLink(reference?)',
@@ -1068,6 +1112,8 @@ export function createAppJsGlobals({
     embed: embedImageForRuntime,
     attach: attachResourceForRuntime,
     resolve: resolveNotebookReference,
+    open: openNotebookReference,
+    focus: focusNotebookReference,
     show: showNotebookReference,
     shareUrl: async (reference?: unknown) => {
       const info = await resolveNotebookReference(reference)
@@ -1649,6 +1695,14 @@ export function createAppJsGlobals({
         }
         await openNotebookForRuntime(uri)
         emitLine(sendOutput, `Opened notebook ${uri}`)
+        return uri
+      },
+      focusNotebook: async (uri: string) => {
+        if (!uri?.trim()) {
+          throw new Error('Usage: app.focusNotebook(localUri)')
+        }
+        await focusNotebookForRuntime(uri)
+        emitLine(sendOutput, `Focused notebook ${uri}`)
         return uri
       },
       startGoogleDriveOAuth: startGoogleDriveOAuthForRuntime,

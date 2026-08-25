@@ -187,6 +187,20 @@ console.log(await app.getSessionID())
 
 Continue only when the printed value matches the selected tab's \`session\` query parameter. If they differ, do not mutate a notebook in that tab.
 
+## Open notebooks without stealing focus
+
+- Use \`await notebooks.open(reference)\` to load a notebook or start a Drive import. This adds the notebook to Runme without changing the notebook the user is viewing.
+- Change the visible notebook only when the user asks or the task genuinely requires it. First open the notebook, then call \`await notebooks.focus(opened.localUri || opened.opened)\`.
+- \`notebooks.focus(reference)\` selects an already-open local notebook and does not load it. A Drive reference must finish importing before it can be focused.
+- \`notebooks.show(reference)\` is a compatibility helper that both opens and focuses. Avoid it for background reads, edits, and execution because the user may be interacting with another notebook.
+
+\`\`\`js
+const opened = await notebooks.open(notebookUri)
+
+// Only when visible focus should move:
+await notebooks.focus(opened.localUri || opened.opened)
+\`\`\`
+
 ## Create notebooks in the requested storage
 
 Treat an explicit Google Drive destination as authoritative. Call the direct \`createDriveNotebook\` WebMCP tool, not \`ExecuteCode\`:
