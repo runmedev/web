@@ -267,6 +267,8 @@ afterEach(async () => {
   appState.setDriveNotebookStore(null);
   appState.setLocalNotebooks(null);
   appState.setOpenNotebookHandler(null);
+  appState.setLoadNotebookHandler(null);
+  appState.setFocusNotebookHandler(null);
   runnerStore.clear();
   defaultRunnerName = null;
   tokenMocks.getAuthData.mockReset().mockResolvedValue(null);
@@ -1676,10 +1678,8 @@ describe("NotebookData.runCodeCell", () => {
         notebooksByUri.set(uri, createdModel);
       });
     appState.setLocalNotebooks({ create: createLocal, save: saveLocal } as any);
-    const openNotebook = vi.fn().mockImplementation(async (uri: string) => {
-      activeUri = uri;
-    });
-    appState.setOpenNotebookHandler(openNotebook);
+    const loadNotebook = vi.fn(async (uri: string) => uri);
+    appState.setLoadNotebookHandler(loadNotebook);
 
     const cell = create(parser_pb.CellSchema, {
       refId: "cell-appkernel-notebook-create-helpers",
@@ -1733,7 +1733,8 @@ describe("NotebookData.runCodeCell", () => {
 
     expect(createLocal).toHaveBeenCalledWith(LOCAL_FOLDER_URI, "helloworld");
     expect(saveLocal).toHaveBeenCalled();
-    expect(openNotebook).toHaveBeenCalledWith("local://file/helloworld");
+    expect(loadNotebook).toHaveBeenCalledWith("local://file/helloworld");
+    expect(activeUri).toBe("nb://seed");
 
     const createdModel = notebooksByUri.get("local://file/helloworld");
     expect(createdModel).toBeTruthy();

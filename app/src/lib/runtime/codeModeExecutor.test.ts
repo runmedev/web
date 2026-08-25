@@ -32,6 +32,8 @@ describe('codeModeExecutor', () => {
     appState.setDriveNotebookStore(null)
     appState.setLocalNotebooks(null)
     appState.setOpenNotebookHandler(null)
+    appState.setLoadNotebookHandler(null)
+    appState.setFocusNotebookHandler(null)
     __resetTabIdForTests()
     window.history.replaceState(null, '', '/')
   })
@@ -215,6 +217,55 @@ describe('codeModeExecutor', () => {
           uri: 'local://test.runme.md',
         }),
       })
+    )
+  })
+
+  it('opens notebooks without focus and focuses them only when requested', async () => {
+    const notebook = createNotebook()
+    const loadNotebook = vi.fn(async (uri: string) => uri)
+    const focusNotebook = vi.fn(async () => undefined)
+    let focusCallsAfterOpen = -1
+    let openedResult: unknown
+    let focusedResult: unknown
+    appState.setLoadNotebookHandler(loadNotebook)
+    appState.setFocusNotebookHandler(focusNotebook)
+    vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(
+      async function (this: SandboxJSKernel) {
+        const bridge = (
+          this as unknown as {
+            bridge: {
+              call: (method: string, args: unknown[]) => Promise<unknown>
+            }
+          }
+        ).bridge
+        openedResult = await bridge.call('notebooks.open', [
+          'local://file/background',
+        ])
+        focusCallsAfterOpen = focusNotebook.mock.calls.length
+        focusedResult = await bridge.call('notebooks.focus', [
+          'local://file/background',
+        ])
+      }
+    )
+    const executor = createCodeModeExecutor({
+      mode: 'sandbox',
+      resolveNotebook: () => notebook,
+      listNotebooks: () => [notebook],
+    })
+
+    await executor.execute({
+      source: 'webmcp',
+      code: "const opened = await notebooks.open('local://file/background'); await notebooks.focus(opened.opened);",
+    })
+
+    expect(loadNotebook).toHaveBeenCalledWith('local://file/background')
+    expect(focusCallsAfterOpen).toBe(0)
+    expect(focusNotebook).toHaveBeenCalledWith('local://file/background')
+    expect(openedResult).toEqual(
+      expect.objectContaining({ opened: 'local://file/background' })
+    )
+    expect(focusedResult).toEqual(
+      expect.objectContaining({ focused: 'local://file/background' })
     )
   })
 

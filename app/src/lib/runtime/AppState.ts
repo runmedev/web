@@ -37,6 +37,11 @@ export class AppState {
   localComments: LocalComments | null = null;
   private openNotebookHandler: ((uri: string) => void | Promise<void>) | null =
     null;
+  private loadNotebookHandler:
+    | ((uri: string) => string | Promise<string>)
+    | null = null;
+  private focusNotebookHandler: ((uri: string) => void | Promise<void>) | null =
+    null;
   private googleDriveOAuthHandler:
     | ((
         options?: StartGoogleDriveOAuthOptions,
@@ -81,6 +86,20 @@ export class AppState {
     handler: ((uri: string) => void | Promise<void>) | null,
   ): void {
     this.openNotebookHandler = handler;
+  }
+
+  /** Registers notebook loading without changing the visible document. */
+  setLoadNotebookHandler(
+    handler: ((uri: string) => string | Promise<string>) | null,
+  ): void {
+    this.loadNotebookHandler = handler;
+  }
+
+  /** Registers selection of an already-open notebook. */
+  setFocusNotebookHandler(
+    handler: ((uri: string) => void | Promise<void>) | null,
+  ): void {
+    this.focusNotebookHandler = handler;
   }
 
   setGoogleDriveOAuthHandler(
@@ -153,6 +172,20 @@ export class AppState {
       throw new Error("Notebook navigation is not initialized");
     }
     await this.openNotebookHandler(uri);
+  }
+
+  async loadNotebook(uri: string): Promise<string> {
+    if (!this.loadNotebookHandler) {
+      throw new Error("Notebook loading is not initialized");
+    }
+    return await this.loadNotebookHandler(uri);
+  }
+
+  async focusNotebook(uri: string): Promise<void> {
+    if (!this.focusNotebookHandler) {
+      throw new Error("Notebook focus is not initialized");
+    }
+    await this.focusNotebookHandler(uri);
   }
 
   async startGoogleDriveOAuth(

@@ -25,6 +25,8 @@ export const SANDBOX_NOTEBOOKS_API_METHODS = [
   'notebooks.execute',
   'notebooks.requestWriteAccess',
   'notebooks.resolve',
+  'notebooks.open',
+  'notebooks.focus',
   'notebooks.show',
   'notebooks.shareUrl',
   'notebooks.markdownLink',
@@ -33,6 +35,8 @@ export const SANDBOX_NOTEBOOKS_API_METHODS = [
 
 type NotebookReferenceApi = {
   resolve?: (reference?: unknown) => Promise<unknown>
+  open?: (reference?: unknown) => Promise<unknown>
+  focus?: (reference?: unknown) => Promise<unknown>
   show?: (reference?: unknown) => Promise<unknown>
   shareUrl?: (reference?: unknown) => Promise<string>
   markdownLink?: (reference?: unknown) => Promise<string>
@@ -127,6 +131,14 @@ export function createNotebooksApiBridgeServer({
         case 'notebooks.resolve':
           return callJsonSafe(() =>
             requireReferenceMethod(notebooksApi, 'resolve')(args[0])
+          )
+        case 'notebooks.open':
+          return callJsonSafe(() =>
+            requireReferenceMethod(notebooksApi, 'open')(args[0])
+          )
+        case 'notebooks.focus':
+          return callJsonSafe(() =>
+            requireReferenceMethod(notebooksApi, 'focus')(args[0])
           )
         case 'notebooks.show':
           return callJsonSafe(() =>

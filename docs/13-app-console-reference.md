@@ -78,19 +78,22 @@ await notebooks.appendCell({
 })
 ```
 
-Resolve and open notebook references:
+Resolve and open notebook references without changing the visible notebook:
 
 ```js
 await notebooks.resolve('local://file/cb1c8a9f-6dad-4e1a-9cbc-467ddebc3018')
 await notebooks.markdownLink(
   'local://file/cb1c8a9f-6dad-4e1a-9cbc-467ddebc3018'
 )
-await notebooks.show(
+const opened = await notebooks.open(
   'https://runme.gateway.unified-0.internal.api.openai.org/?doc=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2F149JKKTgljRiwszwb06Ms74GOYhCOPMNg%2Fview'
 )
-await notebooks.show(
+await notebooks.open(
   '[Notebook](https://drive.google.com/file/d/149JKKTgljRiwszwb06Ms74GOYhCOPMNg/view)'
 )
+
+// Only move visible focus when the user asks for it.
+await notebooks.focus(opened.localUri || opened.opened)
 ```
 
 Request write access when another Runme session owns a notebook:
@@ -304,7 +307,7 @@ const result = await drive.search({
     'nextPageToken,incompleteSearch,files(id,name,mimeType,parents,modifiedTime)',
 })
 console.table(result.files)
-await notebooks.show(result.files[0].uri)
+await notebooks.open(result.files[0].uri)
 ```
 
 The request is passed through unchanged, so use Google Drive's native `q`,
@@ -333,8 +336,10 @@ app.setConfig(app.getDefaultConfigUrl())
 - Use `notebooks.resolve(reference)` to turn local URIs, Runme share URLs,
   Drive URLs, and Markdown links into a title, `localUri`, `remoteUri`,
   `shareUrl`, and replacement-ready `markdownLink`.
-- Use `notebooks.show(reference)` when automation needs one command that opens a
-  local notebook tab or hands a Drive reference to shared-link coordination.
+- Use `notebooks.open(reference)` by default. It opens a local notebook tab or
+  hands a Drive reference to shared-link coordination without changing focus.
+- Use `notebooks.focus(reference)` only when the visible notebook should change.
+  `notebooks.show(reference)` remains as an open-and-focus compatibility helper.
 - Prefer `drive.search(...)` over DOM inspection when automation knows a Drive file
   name or can express the intended file with the Drive query grammar. Resolve a
-  unique result, then pass its `uri` to `notebooks.show(...)`.
+  unique result, then pass its `uri` to `notebooks.open(...)`.

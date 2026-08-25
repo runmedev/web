@@ -31,11 +31,13 @@ These notebooks are a first-class backend, not just a temporary cache.
 In App Console, the fastest way to create a local notebook is:
 
 ```js
-await notebooks.createLocal('helloworld')
+const created = await notebooks.createLocal('helloworld')
 ```
 
-That creates a browser-local notebook, opens it in the UI, and returns the
-new notebook document.
+That creates a browser-local notebook, adds it to the open notebook list without
+changing the visible notebook, and returns the new notebook document. Call
+`await notebooks.focus(created.handle.uri)` only when the visible notebook
+should change.
 
 ## Sync states
 

@@ -426,10 +426,19 @@ export default function AppConsole({
       },
       openNotebook: async (uri) => {
         const result = await openNotebook(uri)
-        showDocument(result.localUri, {
-          title: result.entry.name,
+        return result.localUri
+      },
+      focusNotebook: async (uri) => {
+        const notebook = getNotebookData(uri)
+        if (!notebook) {
+          throw new Error(
+            `Notebook ${uri} is not open. Call notebooks.open(reference) before notebooks.focus(reference).`
+          )
+        }
+        showDocument(uri, {
+          title: notebook.getName(),
         })
-        setCurrentDoc(result.localUri)
+        setCurrentDoc(uri)
       },
       resolveNotebook: resolveNotebookData,
       requestNotebookWriteAccess: requestWriteAccess,

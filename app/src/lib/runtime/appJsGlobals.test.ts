@@ -99,6 +99,8 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     appState.setDriveNotebookStore(null)
     appState.setLocalNotebooks(null)
     appState.setOpenNotebookHandler(null)
+    appState.setLoadNotebookHandler(null)
+    appState.setFocusNotebookHandler(null)
     appState.setGoogleDriveOAuthHandler(null)
     appState.setWorkspaceRenameHandler(null)
     window.localStorage.clear()
@@ -193,19 +195,57 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     await expect(waiting).resolves.toMatchObject({ timedOut: false })
   })
 
-  it('opens a local URI from a Runme share URL', async () => {
-    const opened = vi.fn()
-    appState.setOpenNotebookHandler(opened)
+  it('opens a local URI from a Runme share URL without changing focus', async () => {
+    const opened = vi.fn(async (uri: string) => uri)
+    const focused = vi.fn()
     const globals = createAppJsGlobals({
       runme: createRunme(),
+      openNotebook: opened,
+      focusNotebook: focused,
     })
 
-    const info = await globals.notebooks.show(
+    const info = await globals.notebooks.open(
       'https://runme.example/?doc=local%3A%2F%2Ffile%2Fopened'
     )
 
     expect(opened).toHaveBeenCalledWith('local://file/opened')
+    expect(focused).not.toHaveBeenCalled()
     expect(info.opened).toBe('local://file/opened')
+  })
+
+  it('focuses an already-open notebook separately from opening it', async () => {
+    const opened = vi.fn(async (uri: string) => uri)
+    const focused = vi.fn()
+    const globals = createAppJsGlobals({
+      runme: createRunme(),
+      openNotebook: opened,
+      focusNotebook: focused,
+    })
+
+    const info = await globals.notebooks.focus('local://file/opened')
+
+    expect(opened).not.toHaveBeenCalled()
+    expect(focused).toHaveBeenCalledWith('local://file/opened')
+    expect(info.focused).toBe('local://file/opened')
+  })
+
+  it('keeps notebooks.show as an open-and-focus compatibility helper', async () => {
+    const opened = vi.fn(async (uri: string) => uri)
+    const focused = vi.fn()
+    const globals = createAppJsGlobals({
+      runme: createRunme(),
+      openNotebook: opened,
+      focusNotebook: focused,
+    })
+
+    const info = await globals.notebooks.show('local://file/opened')
+
+    expect(opened).toHaveBeenCalledWith('local://file/opened')
+    expect(focused).toHaveBeenCalledWith('local://file/opened')
+    expect(info).toMatchObject({
+      opened: 'local://file/opened',
+      focused: 'local://file/opened',
+    })
   })
 
   it('uses the current notebook when no reference is passed', async () => {
