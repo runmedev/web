@@ -703,6 +703,7 @@ export function Action({
   const [contextMenu, setContextMenu] = useState<{
     x: number
     y: number
+    selectedText?: string
     captureRenderedSelection?: () => RenderedMarkdownSelectionDraft | null
   } | null>(null)
   const [shareTarget, setShareTarget] = useState<{
@@ -808,7 +809,9 @@ export function Action({
     }
 
     const menuWidth = 200
-    const menuHeight = shareTargetUri && cell?.refId.trim() ? 164 : 88
+    const menuHeight =
+      (shareTargetUri && cell?.refId.trim() ? 164 : 88) +
+      (contextMenu.captureRenderedSelection ? 38 : 0)
     const left = Math.max(
       0,
       Math.min(contextMenu.x, window.innerWidth - menuWidth)
@@ -840,11 +843,13 @@ export function Action({
     (request: {
       x: number
       y: number
+      selectedText: string
       captureSelection: () => RenderedMarkdownSelectionDraft | null
     }) => {
       setContextMenu({
         x: request.x,
         y: request.y,
+        selectedText: request.selectedText,
         captureRenderedSelection: request.captureSelection,
       })
     },
@@ -1063,6 +1068,35 @@ export function Action({
     onStartComment(target)
     setContextMenu(null)
   }, [contextMenu, handleStartComment, onStartComment])
+
+  const handleCopySelectedText = useCallback(async () => {
+    const selectedText = contextMenu?.selectedText
+    if (selectedText === undefined) {
+      setContextMenu(null)
+      return
+    }
+
+    try {
+      await window.navigator.clipboard.writeText(selectedText)
+      showToast({ message: 'Selected text copied', tone: 'success' })
+    } catch (error) {
+      appLogger.error('Failed to copy selected Markdown text', {
+        attrs: {
+          scope: 'notebook.markdown-selection',
+          code: 'MARKDOWN_SELECTION_COPY_FAILED',
+          cellRefId: cell?.refId,
+          error: String(error),
+        },
+      })
+      showToast({
+        message:
+          'Could not copy the selected text. Check clipboard permissions and try again.',
+        tone: 'error',
+      })
+    } finally {
+      setContextMenu(null)
+    }
+  }, [cell?.refId, contextMenu?.selectedText])
 
   const sequenceLabel = useMemo(() => {
     if (!cell) {
@@ -1588,7 +1622,6 @@ export function Action({
               isWindowFocused={isWindowFocused}
               onFocusRoleChange={handleMarkdownFocusRoleChange}
               onLinkClick={handleMarkdownLinkClick}
-              commentsAvailable={commentsAvailable}
               commentRanges={commentRanges}
               onRenderedSelectionContextMenu={
                 handleRenderedSelectionContextMenu
@@ -1633,6 +1666,19 @@ export function Action({
             }}
             onContextMenu={(event) => event.preventDefault()}
           >
+            {contextMenu?.captureRenderedSelection && (
+              <button
+                type="button"
+                className="ctx-menu-item"
+                data-runme-context-menu-action="copy-selection"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleCopySelectedText()
+                }}
+              >
+                Copy
+              </button>
+            )}
             {canCopyCellLink && (
               <>
                 <button

@@ -2653,6 +2653,58 @@ describe('Action component', () => {
     selection.removeAllRanges()
   })
 
+  it('copies rendered selected text when comments are unavailable', async () => {
+    const cell = create(parser_pb.CellSchema, {
+      refId: 'cell-md-selection-context-copy',
+      kind: parser_pb.CellKind.MARKUP,
+      languageId: 'markdown',
+      outputs: [],
+      metadata: {},
+      value: 'Copy **this selected text** please.',
+    })
+    const stub = new StubCellData(cell)
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+
+    render(
+      <Action cellData={stub as unknown as CellData} isFirst={false} readOnly />
+    )
+
+    const selectedSpan = screen.getByText('this selected text')
+    const range = document.createRange()
+    range.selectNodeContents(selectedSpan)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    fireEvent.contextMenu(screen.getByTestId('markdown-rendered'), {
+      clientX: 40,
+      clientY: 20,
+    })
+    const copySelection = screen.getByRole('button', { name: 'Copy' })
+    expect(copySelection.dataset.runmeContextMenuAction).toBe('copy-selection')
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', {
+        name: 'Comment on selected text',
+      }).disabled
+    ).toBe(true)
+
+    fireEvent.click(copySelection)
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('this selected text')
+    })
+    expect(toastMocks.showToast).toHaveBeenCalledWith({
+      message: 'Selected text copied',
+      tone: 'success',
+    })
+    expect(screen.queryByRole('button', { name: 'Copy' })).toBeNull()
+    selection.removeAllRanges()
+  })
+
   it('keeps the cell comment button independent of a selection menu', () => {
     const cell = create(parser_pb.CellSchema, {
       refId: 'cell-md-independent-comment',

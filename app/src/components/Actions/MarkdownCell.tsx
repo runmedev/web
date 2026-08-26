@@ -186,14 +186,13 @@ interface MarkdownCellProps {
   onLinkClick?: (href: string) => boolean
   /** Allow source inspection, but prevent content and metadata changes. */
   readOnly?: boolean
-  /** Whether the current Drive-backed notebook can accept comments. */
-  commentsAvailable?: boolean
   /** Resolved open-comment ranges to keep visible in rendered Markdown. */
   commentRanges?: readonly RenderedMarkdownCommentRange[]
   /** Open the cell context menu with a lazily captured rendered selection. */
   onRenderedSelectionContextMenu?: (request: {
     x: number
     y: number
+    selectedText: string
     captureSelection: () => RenderedMarkdownSelectionDraft | null
   }) => void
 }
@@ -240,7 +239,6 @@ const MarkdownCell = memo(
     onFocusRoleChange,
     onLinkClick,
     readOnly = false,
-    commentsAvailable = false,
     commentRanges = [],
     onRenderedSelectionContextMenu,
   }: MarkdownCellProps) => {
@@ -362,7 +360,6 @@ const MarkdownCell = memo(
           !projection ||
           !selection ||
           !cell?.refId ||
-          !commentsAvailable ||
           !onRenderedSelectionContextMenu ||
           selection.rangeCount !== 1 ||
           selection.isCollapsed
@@ -387,6 +384,7 @@ const MarkdownCell = memo(
         onRenderedSelectionContextMenu({
           x: hasPointerPosition ? event.clientX : (rangeRect?.left ?? 0),
           y: hasPointerPosition ? event.clientY : (rangeRect?.bottom ?? 0),
+          selectedText: selection.toString(),
           captureSelection: () =>
             captureRenderedMarkdownRange({
               root,
@@ -397,7 +395,7 @@ const MarkdownCell = memo(
             }),
         })
       },
-      [cell?.refId, commentsAvailable, onRenderedSelectionContextMenu, value]
+      [cell?.refId, onRenderedSelectionContextMenu, value]
     )
 
     /**
@@ -660,7 +658,6 @@ const MarkdownCell = memo(
       prevProps.onFocusRoleChange === nextProps.onFocusRoleChange &&
       prevProps.onLinkClick === nextProps.onLinkClick &&
       prevProps.readOnly === nextProps.readOnly &&
-      prevProps.commentsAvailable === nextProps.commentsAvailable &&
       sameCommentRanges(prevProps.commentRanges, nextProps.commentRanges) &&
       prevProps.onRenderedSelectionContextMenu ===
         nextProps.onRenderedSelectionContextMenu

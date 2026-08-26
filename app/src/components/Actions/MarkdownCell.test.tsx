@@ -545,7 +545,6 @@ describe("MarkdownCell", () => {
     const onRenderedSelectionContextMenu = vi.fn();
 
     renderMarkdownCell(new StubCellData(cell) as unknown as CellData, {
-      commentsAvailable: true,
       onRenderedSelectionContextMenu,
     });
 
@@ -583,7 +582,11 @@ describe("MarkdownCell", () => {
 
     expect(onRenderedSelectionContextMenu).toHaveBeenCalledOnce();
     const request = onRenderedSelectionContextMenu.mock.calls[0][0];
-    expect(request).toMatchObject({ x: 40, y: 20 });
+    expect(request).toMatchObject({
+      x: 40,
+      y: 20,
+      selectedText: "migration guide",
+    });
 
     selection.removeAllRanges();
     expect(request.captureSelection()).toEqual(
