@@ -1,0 +1,35 @@
+[
+  {
+    "id": "google-drive-first-cell",
+    "description": "Read the first cell of the Runme notebook already open in the browser.",
+    "notebook_url": "https://drive.google.com/file/d/1c7p47TDdZT8VS-NRmCx5lamMzp4xj65h/view",
+    "prompt": "Use [@Browser](plugin://browser@openai-bundled) and the Runme site tools to read the first cell of the notebook already open in Runme.",
+    "expected_answer_contains": [
+      "Notebook For Read Test",
+      "This is a notebook used for evaling read operations."
+    ]
+  },
+  {
+    "id": "open-google-drive-notebook-by-name",
+    "description": "Find and open a different Google Drive-backed Runme notebook by name.",
+    "notebook_url": "https://drive.google.com/file/d/1iTN_c0h93BQS0WnAJiAT88JZHhhmnNRI/view",
+    "prompt": "Use [@Browser](plugin://browser@openai-bundled) and the Runme site tools to find and open the Google Drive-backed Runme notebook named eval_read. Report its first heading after it is open.",
+    "expected_answer_contains": [
+      "eval_read",
+      "Notebook For Read Test"
+    ],
+    "expected_page_contains": "Notebook For Read Test"
+  },
+  {
+    "id": "add-markdown-cell",
+    "copy_notebook": true,
+    "copy_name_prefix": "eval_write",
+    "description": "Append a Markdown cell to an isolated per-trial copy of a Drive notebook.",
+    "notebook_url": "https://drive.google.com/file/d/1iTN_c0h93BQS0WnAJiAT88JZHhhmnNRI/view",
+    "prompt": "Use [@Browser](plugin://browser@openai-bundled) and the Runme site tools to add a Markdown cell with the contents 'this is a new cell' to the current notebook. Confirm the exact cell contents after the edit.",
+    "expected_answer_contains": [
+      "this is a new cell"
+    ],
+    "expected_page_contains": "this is a new cell"
+  }
+]
