@@ -43,4 +43,4 @@ The harness starts Codex from the supplied checkout with:
 pnpm run app --flavor agent --playwright ...
 ```
 
-The remaining arguments point at isolated metadata, Codex home, SQLite, and browser-profile directories created for the run. Pass `--attach-cdp-url` to exercise the cases against an Agent build that is already running instead.
+The remaining arguments point at isolated Codex home, SQLite, and browser-profile directories created for the run. The harness uses the checkout's normal dev-app metadata path and refuses to launch if that worktree already has a live Codex app. Pass `--attach-cdp-url` to exercise the cases against an Agent build that is already running instead.

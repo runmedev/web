@@ -5,6 +5,7 @@ from pathlib import Path
 
 from run import (
     DEFAULT_CASES,
+    CodexRuntime,
     drive_file_id,
     load_cases,
     missing_answer_evidence,
@@ -13,6 +14,44 @@ from run import (
 
 
 class EvalCaseTest(unittest.TestCase):
+    def test_runtime_root_must_be_new_or_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "keep.txt").write_text("caller-owned", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "new or empty"):
+                CodexRuntime(
+                    apps_root=root,
+                    auth_file=root / "auth.json",
+                    attach_cdp_url=None,
+                    keep_runtime=False,
+                    runtime_root=root,
+                    timeout_seconds=1,
+                )
+
+            self.assertEqual(
+                (root / "keep.txt").read_text(encoding="utf-8"), "caller-owned"
+            )
+
+    def test_runtime_cleanup_preserves_files_added_by_the_caller(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = CodexRuntime(
+                apps_root=root,
+                auth_file=root / "auth.json",
+                attach_cdp_url=None,
+                keep_runtime=False,
+                runtime_root=root,
+                timeout_seconds=1,
+            )
+            (root / "caller-created.txt").write_text("keep", encoding="utf-8")
+
+            runtime.close(succeeded=True)
+
+            self.assertEqual(
+                (root / "caller-created.txt").read_text(encoding="utf-8"), "keep"
+            )
+
     def test_ported_cases_are_complete_and_secret_free(self) -> None:
         cases = load_cases(DEFAULT_CASES)
 

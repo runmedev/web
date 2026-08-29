@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -26,6 +27,7 @@ from google.oauth2 import service_account
 DEFAULT_CASES = Path(__file__).with_name("cases.json")
 DEFAULT_STARTING_URL = "https://web.runme.dev/robots.txt"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
+RUNTIME_ARTIFACT_NAMES = ("codex-agent.log", "codex-home", "user-data")
 
 
 @dataclass(frozen=True)
@@ -58,13 +60,27 @@ class CodexRuntime:
         runtime_root: Path | None,
         timeout_seconds: float,
     ) -> None:
-        self.apps_root = apps_root
+        self.apps_root = apps_root.resolve()
         self.auth_file = auth_file
         self.attach_cdp_url = attach_cdp_url
         self.keep_runtime = keep_runtime
-        self.runtime_root = runtime_root or Path(
-            tempfile.mkdtemp(prefix="runme-codex-evals-")
-        )
+        self.owns_runtime_root = runtime_root is None
+        if runtime_root is None:
+            self.runtime_root = Path(tempfile.mkdtemp(prefix="runme-codex-evals-"))
+        else:
+            self.runtime_root = runtime_root.resolve()
+            if self.runtime_root.exists():
+                if not self.runtime_root.is_dir():
+                    raise RuntimeError(
+                        f"Runtime root is not a directory: {self.runtime_root}"
+                    )
+                if any(self.runtime_root.iterdir()):
+                    raise RuntimeError(
+                        f"--runtime-root must be a new or empty directory: {self.runtime_root}"
+                    )
+            else:
+                self.runtime_root.mkdir(parents=True)
+        self.metadata_path = self._default_metadata_path()
         self.timeout_seconds = timeout_seconds
         self.process: subprocess.Popen[str] | None = None
         self.log_file: Any = None
@@ -95,13 +111,13 @@ class CodexRuntime:
             json.dumps(state), encoding="utf-8"
         )
 
-        metadata_path = self.runtime_root / "metadata.json"
         self.log_file = (self.runtime_root / "codex-agent.log").open(
             "w", encoding="utf-8"
         )
         environment = os.environ.copy()
         environment.pop("BUILDKITE", None)
         environment.pop("CI", None)
+        environment.pop("CODEX_ELECTRON_METADATA_PATH", None)
         environment.update(
             {
                 "CODEX_ELECTRON_DESKTOP_FEATURE_OVERRIDES": json.dumps(
@@ -126,13 +142,11 @@ class CodexRuntime:
             }
         )
         command = [
-            "pnpm",
+            *resolve_command("pnpm"),
             "run",
             "app",
             "--flavor",
             "agent",
-            "--metadata-path",
-            str(metadata_path),
             "--codex-home",
             str(codex_home),
             "--disable-quit-confirmation",
@@ -143,6 +157,11 @@ class CodexRuntime:
             "--user-data-path",
             str(user_data),
         ]
+        if metadata_tracks_live_app(self.metadata_path):
+            raise RuntimeError(
+                "A Codex dev app is already running in this worktree; stop it "
+                f"before running evals ({self.metadata_path})"
+            )
         self.process = subprocess.Popen(
             command,
             cwd=self.apps_root,
@@ -160,7 +179,7 @@ class CodexRuntime:
                     f"Codex Agent exited during startup; see {self.runtime_root / 'codex-agent.log'}"
                 )
             try:
-                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                metadata = json.loads(self.metadata_path.read_text(encoding="utf-8"))
             except (FileNotFoundError, json.JSONDecodeError):
                 time.sleep(0.25)
                 continue
@@ -194,10 +213,32 @@ class CodexRuntime:
         if self.log_file is not None:
             self.log_file.close()
         (self.runtime_root / "codex-home" / "auth.json").unlink(missing_ok=True)
-        if succeeded and not self.keep_runtime and not self.attach_cdp_url:
+        if (
+            succeeded
+            and not self.keep_runtime
+            and not self.attach_cdp_url
+            and self.owns_runtime_root
+        ):
             shutil.rmtree(self.runtime_root)
+        elif succeeded and not self.keep_runtime and not self.attach_cdp_url:
+            for name in RUNTIME_ARTIFACT_NAMES:
+                child = self.runtime_root / name
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child)
+                elif child.exists() or child.is_symlink():
+                    child.unlink()
         elif not self.attach_cdp_url:
             print(f"Runtime artifacts: {self.runtime_root}")
+
+    def _default_metadata_path(self) -> Path:
+        worktree_hash = hashlib.sha1(
+            str(self.apps_root).encode("utf-8"), usedforsecurity=False
+        ).hexdigest()[:12]
+        return (
+            Path(tempfile.gettempdir())
+            / "codex-electron-dev"
+            / f"{self.apps_root.name}-{worktree_hash}.json"
+        )
 
 
 class RunmeEvals:
@@ -724,6 +765,52 @@ def required_string(value: dict[str, Any], key: str) -> str:
     if not isinstance(result, str) or not result:
         raise ValueError(f"Expected non-empty {key}: {value!r}")
     return result
+
+
+def resolve_command(name: str) -> list[str]:
+    environment_name = "npm_execpath" if name == "pnpm" else "npm_node_execpath"
+    environment_path = os.environ.get(environment_name)
+    if environment_path:
+        executable = Path(environment_path).resolve()
+        if executable.is_file():
+            if name == "pnpm" and executable.suffix in {".cjs", ".js"}:
+                node_path = os.environ.get("npm_node_execpath")
+                if node_path:
+                    return [str(Path(node_path).resolve()), str(executable)]
+            return [str(executable)]
+
+    resolved = shutil.which(name)
+    if resolved is None:
+        raise RuntimeError(f"Unable to resolve required executable: {name}")
+    executable = Path(resolved).resolve()
+    if os.name == "nt" and executable.suffix.lower() in {".bat", ".cmd"}:
+        command_shell = os.environ.get("COMSPEC")
+        if not command_shell:
+            raise RuntimeError("COMSPEC is required to launch Windows command shims")
+        return [str(Path(command_shell).resolve()), "/d", "/s", "/c", str(executable)]
+    return [str(executable)]
+
+
+def metadata_tracks_live_app(metadata_path: Path) -> bool:
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return False
+    if metadata.get("status") == "exited":
+        return False
+    pids = [
+        metadata.get(key)
+        for key in ("parentPid", "webviewPid", "electronPid")
+        if isinstance(metadata.get(key), int)
+    ]
+    if not pids:
+        return False
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+    return True
 
 
 def missing_answer_evidence(answer: str, expected: tuple[str, ...]) -> list[str]:
