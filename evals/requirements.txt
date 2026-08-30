@@ -1,0 +1,2 @@
+google-auth[requests]>=2.40,<3
+websocket-client>=1.8,<2
