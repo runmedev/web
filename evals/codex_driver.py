@@ -172,13 +172,16 @@ class CodexEvalControl:
         self.cdp_url = cdp_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
 
-    def dispatch(self, action: dict[str, Any]) -> dict[str, Any]:
+    def dispatch(
+        self, action: dict[str, Any], *, timeout_seconds: float | None = None
+    ) -> dict[str, Any]:
+        timeout = timeout_seconds or self.timeout_seconds
         expression = (
             f"({_DISPATCHER_SOURCE})"
             f"({json.dumps(action, separators=(',', ':'))},"
-            f"{int(self.timeout_seconds * 1000)})"
+            f"{int(timeout * 1000)})"
         )
-        evaluated = self._evaluate(expression)
+        evaluated = self._evaluate(expression, timeout_seconds=timeout)
         if not isinstance(evaluated, dict):
             raise EvalControlError(f"Invalid eval-control response: {evaluated!r}")
         if evaluated.get("ok") is not True:
@@ -206,7 +209,18 @@ class CodexEvalControl:
                 time.sleep(0.25)
         raise EvalControlError(f"Codex CDP target was not ready: {last_error}")
 
-    def _evaluate(self, expression: str) -> Any:
+    def _evaluate(
+        self, expression: str, timeout_seconds: float | None = None
+    ) -> Any:
+        try:
+            return self._evaluate_transport(expression, timeout_seconds)
+        except (OSError, ValueError, websocket.WebSocketException) as error:
+            raise EvalControlError(f"Codex CDP transport failed: {error}") from error
+
+    def _evaluate_transport(
+        self, expression: str, timeout_seconds: float | None = None
+    ) -> Any:
+        timeout = timeout_seconds or self.timeout_seconds
         target = self._app_target()
         request = {
             "id": 1,
@@ -215,12 +229,12 @@ class CodexEvalControl:
                 "expression": expression,
                 "awaitPromise": True,
                 "returnByValue": True,
-                "timeout": int(self.timeout_seconds * 1000),
+                "timeout": int(timeout * 1000),
             },
         }
         socket = websocket.create_connection(
             target.websocket_url,
-            timeout=self.timeout_seconds + 5,
+            timeout=timeout + 5,
             suppress_origin=True,
         )
         try:
