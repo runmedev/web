@@ -243,25 +243,33 @@ class CodexRuntime:
         )
 
     def close(self, succeeded: bool) -> None:
-        if self.process is not None and self.process.poll() is None:
-            if os.name == "nt":
-                subprocess.run(
-                    ["taskkill", "/PID", str(self.process.pid), "/T", "/F"],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-            else:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            try:
-                self.process.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                if os.name != "nt":
-                    os.killpg(self.process.pid, signal.SIGKILL)
-                self.process.wait(timeout=10)
-        if self.log_file is not None:
-            self.log_file.close()
-        (self.runtime_root / "codex-home" / "auth.json").unlink(missing_ok=True)
+        try:
+            if self.process is not None and self.process.poll() is None:
+                if os.name == "nt":
+                    subprocess.run(
+                        ["taskkill", "/PID", str(self.process.pid), "/T", "/F"],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                else:
+                    os.killpg(self.process.pid, signal.SIGTERM)
+                try:
+                    self.process.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    if os.name != "nt":
+                        os.killpg(self.process.pid, signal.SIGKILL)
+                    self.process.wait(timeout=10)
+        finally:
+            if self.log_file is not None:
+                self.log_file.close()
+            (self.runtime_root / "codex-home" / "auth.json").unlink(missing_ok=True)
+            if not self.attach_cdp_url:
+                user_data = self.runtime_root / "user-data"
+                if user_data.is_dir() and not user_data.is_symlink():
+                    remove_runtime_tree(user_data)
+                elif user_data.exists() or user_data.is_symlink():
+                    user_data.unlink()
         if (
             succeeded
             and not self.keep_runtime
@@ -333,9 +341,7 @@ class RunmeEvals:
         last_error: EvalControlError | None = None
         for attempt in range(1, attempts + 1):
             try:
-                return self.control.dispatch(
-                    action, timeout_seconds=timeout_seconds
-                )
+                return self.control.dispatch(action, timeout_seconds=timeout_seconds)
             except EvalControlError as error:
                 last_error = error
                 if attempt == attempts:
@@ -1259,11 +1265,13 @@ def notebook_output_text(cell: dict[str, Any]) -> str:
                 isinstance(value, int) and 0 <= value <= 255 for value in data
             ):
                 raw = bytes(data)
-            elif isinstance(data, dict) and data and all(
-                str(key).isdigit()
-                and isinstance(value, int)
-                and 0 <= value <= 255
-                for key, value in data.items()
+            elif (
+                isinstance(data, dict)
+                and data
+                and all(
+                    str(key).isdigit() and isinstance(value, int) and 0 <= value <= 255
+                    for key, value in data.items()
+                )
             ):
                 raw = bytes(
                     value
@@ -1504,9 +1512,7 @@ def tool_evidence_from_turn_items(items: list[Any]) -> tuple[int, str]:
         }
         for item in command_calls
     ] + [tool_call_evidence(item) for item in completed_mcp_calls]
-    return node_repl_call_count, json.dumps(
-        evidence, sort_keys=True, default=str
-    )
+    return node_repl_call_count, json.dumps(evidence, sort_keys=True, default=str)
 
 
 def category_counts(cases: list[EvalCase]) -> dict[str, int]:
@@ -1580,8 +1586,7 @@ def build_summary(
     retryable_setup_ids = {
         str(failure["case"])
         for failure in failures
-        if isinstance(failure.get("case"), str)
-        and retryable_setup_failure(failure)
+        if isinstance(failure.get("case"), str) and retryable_setup_failure(failure)
     }
     observed_cases = [
         case
@@ -1634,7 +1639,9 @@ def load_results_checkpoint(
     expected_ids = {case.case_id for case in cases}
     unknown = set(case_ids) - expected_ids
     if unknown:
-        raise ValueError(f"Results checkpoint contains unknown cases: {sorted(unknown)}")
+        raise ValueError(
+            f"Results checkpoint contains unknown cases: {sorted(unknown)}"
+        )
     return results, failures
 
 
@@ -1801,13 +1808,9 @@ def main() -> int:
                 flush=True,
             )
             failures = [
-                failure
-                for failure in failures
-                if not retryable_setup_failure(failure)
+                failure for failure in failures if not retryable_setup_failure(failure)
             ]
-    completed_case_ids = {
-        str(record["case"]) for record in [*results, *failures]
-    }
+    completed_case_ids = {str(record["case"]) for record in [*results, *failures]}
     pending_cases = [case for case in cases if case.case_id not in completed_case_ids]
     initial_summary = build_summary(cases, results, failures)
     if args.results_file is not None:

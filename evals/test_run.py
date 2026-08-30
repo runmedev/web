@@ -124,6 +124,32 @@ class EvalCaseTest(unittest.TestCase):
                 (root / "caller-created.txt").read_text(encoding="utf-8"), "keep"
             )
 
+    def test_failed_runtime_cleanup_removes_credentialed_browser_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = CodexRuntime(
+                apps_root=root,
+                auth_file=root / "auth.json",
+                attach_cdp_url=None,
+                keep_runtime=True,
+                runtime_root=root,
+                timeout_seconds=1,
+            )
+            user_data = root / "user-data"
+            user_data.mkdir()
+            (user_data / "retained-service-account-key").write_text(
+                "secret", encoding="utf-8"
+            )
+            (root / "codex-agent.log").write_text("diagnostics", encoding="utf-8")
+
+            runtime.close(succeeded=False)
+
+            self.assertFalse(user_data.exists())
+            self.assertEqual(
+                (root / "codex-agent.log").read_text(encoding="utf-8"),
+                "diagnostics",
+            )
+
     def test_runtime_environment_uses_isolated_profile_and_home(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -169,7 +195,9 @@ class EvalCaseTest(unittest.TestCase):
 
             self.assertFalse(root.exists())
 
-    def test_isolated_environment_reuses_only_the_toolchain_artifact_cache(self) -> None:
+    def test_isolated_environment_reuses_only_the_toolchain_artifact_cache(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base_home = Path(directory) / "caller"
             dotslash = base_home / "Library" / "Caches" / "dotslash"
@@ -240,9 +268,7 @@ class EvalCaseTest(unittest.TestCase):
         sandbox = next(
             case for case in cases if case.case_id == "choose-sandbox-kernel-001"
         )
-        self.assertEqual(
-            sandbox.expected_notebook_runner_name, "appkernel-js-sandbox"
-        )
+        self.assertEqual(sandbox.expected_notebook_runner_name, "appkernel-js-sandbox")
         self.assertIn(
             "RUNME-EVAL-CHOOSE-SANDBOX-KERNEL-001",
             sandbox.expected_notebook_cell_contains or "",
@@ -302,11 +328,7 @@ class EvalCaseTest(unittest.TestCase):
                         "runme.dev/exitCode": "0",
                     },
                     "outputs": [
-                        {
-                            "items": [
-                                {"data": list((token or "").encode("utf-8"))}
-                            ]
-                        }
+                        {"items": [{"data": list((token or "").encode("utf-8"))}]}
                     ],
                 }
             ]
@@ -486,9 +508,7 @@ class EvalCaseTest(unittest.TestCase):
 
     def test_setup_failures_are_retryable_across_checkpoint_formats(self) -> None:
         self.assertTrue(retryable_setup_failure({"failureMode": "setup_error"}))
-        self.assertTrue(
-            retryable_setup_failure({"failureMode": "transient_timeout"})
-        )
+        self.assertTrue(retryable_setup_failure({"failureMode": "transient_timeout"}))
         self.assertTrue(
             retryable_setup_failure(
                 {
@@ -670,9 +690,14 @@ class EvalCaseTest(unittest.TestCase):
             timeout_seconds=1,
         )
 
-        with patch.object(
-            runner, "_wait_for_page_origin", side_effect=RuntimeError("setup failed")
-        ), self.assertRaisesRegex(RuntimeError, "setup failed"):
+        with (
+            patch.object(
+                runner,
+                "_wait_for_page_origin",
+                side_effect=RuntimeError("setup failed"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "setup failed"),
+        ):
             runner._open_runme_tab("thread-1", "https://example.com/notebook")
 
         self.assertIn(

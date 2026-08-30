@@ -209,9 +209,7 @@ class CodexEvalControl:
                 time.sleep(0.25)
         raise EvalControlError(f"Codex CDP target was not ready: {last_error}")
 
-    def _evaluate(
-        self, expression: str, timeout_seconds: float | None = None
-    ) -> Any:
+    def _evaluate(self, expression: str, timeout_seconds: float | None = None) -> Any:
         try:
             return self._evaluate_transport(expression, timeout_seconds)
         except (OSError, ValueError, websocket.WebSocketException) as error:
