@@ -85,7 +85,7 @@ describe('readInstructionsForAIAgents', () => {
       'without changing the notebook the user is viewing'
     )
     expect(instructions).toContain(
-      '`notebooks.show(reference)` is a compatibility helper'
+      '`notebooks.show(reference)` is the one-step visible-open helper'
     )
     expect(instructions).toContain('opaque canonical identifier')
     expect(instructions).toContain('IPYNB `cell.id`')
@@ -143,6 +143,55 @@ describe('readInstructionsForAIAgents', () => {
       "never treat the user's acknowledgement alone as proof of completion"
     )
     expect(instructions).toContain('Do not use a fixed delay')
+  })
+
+  it('opens supplied notebook URLs directly in the existing Runme tab', () => {
+    const instructions = readInstructionsForAIAgents('https://runme.example')
+
+    expect(instructions).toContain('Runme gateway URL')
+    expect(instructions).toContain('Google Drive URL')
+    expect(instructions).toContain('Markdown-linked notebook URL')
+    expect(instructions).toContain(
+      'directly to `notebooks.open(reference)` for background work or `notebooks.show(reference)`'
+    )
+    expect(instructions).toContain('Reuse the existing outer Runme Browser tab')
+    expect(instructions).toContain(
+      'Never create or navigate an extra browser tab, Google Drive tab, or hidden browser context'
+    )
+    expect(instructions).toContain('Keep that outer Runme page in place')
+    expect(instructions).toContain(
+      'pass the supplied reference to the Runme notebook API'
+    )
+    expect(instructions).toContain('do not search for the notebook by name')
+    expect(instructions).toContain(
+      'The words **open**, **show**, **view**, **display**, and **focus** are explicit requests'
+    )
+    expect(instructions).toContain(
+      'call `await notebooks.show(reference)`'
+    )
+    expect(instructions).toContain(
+      'Navigating the outer Browser tab to a Runme gateway URL does not prove'
+    )
+    expect(instructions).toContain(
+      'Do not focus a notebook for background reads, edits, or execution'
+    )
+    expect(instructions).toContain('await notebooks.show(notebookUri)')
+  })
+
+  it('enumerates runners through ExecuteCode instead of the DOM', () => {
+    const instructions = readInstructionsForAIAgents('https://runme.example')
+
+    expect(instructions).toContain('Enumerate runners through ExecuteCode')
+    expect(instructions).toContain('console.log(await runmeRunners.get())')
+    expect(instructions).toContain(
+      'console.log(await runmeRunners.getDefault())'
+    )
+    expect(instructions).toContain(
+      'Use the returned values as the source of truth'
+    )
+    expect(instructions).toContain(
+      'Do not scrape runner names or selection state from the rendered DOM'
+    )
   })
 
   it('does not include deployment-specific plugin instructions', () => {

@@ -584,6 +584,14 @@ describe('SandboxJSKernel', () => {
     expect(srcDoc).toContain(
       'runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks'
     )
+    expect(srcDoc).toContain('const runmeRunners = {')
+    expect(srcDoc).toContain(
+      'notebookDiff, app, runmeRunners, explorer, credentials, drive, help'
+    )
+    expect(CODE_MODE_SANDBOX_ALLOWED_METHODS).toContain('runmeRunners.get')
+    expect(CODE_MODE_SANDBOX_ALLOWED_METHODS).toContain(
+      'runmeRunners.getDefault'
+    )
   })
 
   it('runs javascript and resolves runme host calls through the bridge', async () => {

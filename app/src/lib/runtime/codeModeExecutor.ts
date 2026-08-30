@@ -432,6 +432,27 @@ async function handleSandboxAppKernelBridgeCall({
       return getClaimedSessionId()
     case 'app.getSessionID':
       return getClaimedSessionId()
+    case 'runmeRunners.get':
+      return globals.runmeRunners.get()
+    case 'runmeRunners.update':
+      return globals.runmeRunners.update(
+        String(args[0] ?? ''),
+        String(args[1] ?? '')
+      )
+    case 'runmeRunners.delete':
+      return globals.runmeRunners.delete(String(args[0] ?? ''))
+    case 'runmeRunners.getDefault':
+      return globals.runmeRunners.getDefault()
+    case 'runmeRunners.setDefault':
+      return globals.runmeRunners.setDefault(String(args[0] ?? ''))
+    case 'runmeRunners.help':
+      return globals.runmeRunners.help()
+    case 'runmeRunners.ensure':
+      return globals.runmeRunners.ensure(
+        String(args[0] ?? ''),
+        String(args[1] ?? ''),
+        (args[2] as { setDefault?: boolean } | undefined) ?? undefined
+      )
     case 'embed':
       return globals.embed(
         args[0] as Parameters<typeof globals.embed>[0],
