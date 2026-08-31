@@ -103,16 +103,8 @@ function decodeDriveRevision(
     return decodeNotebookFile(body, fileName).notebook
   }
 
-  try {
-    return fromJsonString(parser_pb.NotebookSchema, body, {
-      ignoreUnknownFields: true,
-    })
-  } catch (error) {
-    const ipynbShape = inspectIpynbRevisionShape(body)
-    if (!ipynbShape) {
-      throw error
-    }
-
+  const ipynbShape = inspectIpynbRevisionShape(body)
+  if (ipynbShape) {
     const notebook = decodeNotebookFile(body, 'revision.ipynb').notebook
     appLogger.warn('Recovered Drive revision with IPYNB shape fallback', {
       attrs: {
@@ -124,6 +116,10 @@ function decodeDriveRevision(
     })
     return notebook
   }
+
+  return fromJsonString(parser_pb.NotebookSchema, body, {
+    ignoreUnknownFields: true,
+  })
 }
 
 let gapiScriptPromise: Promise<void> | null = null
