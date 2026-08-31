@@ -551,7 +551,7 @@ class EvalCaseTest(unittest.TestCase):
     def test_ported_cases_are_complete_and_secret_free(self) -> None:
         cases = load_cases(DEFAULT_CASES)
 
-        self.assertEqual(len(cases), 128)
+        self.assertEqual(len(cases), 134)
         self.assertEqual(
             category_counts(cases),
             {
@@ -561,7 +561,7 @@ class EvalCaseTest(unittest.TestCase):
                 "direct-uri": 4,
                 "kernel-selection": 4,
                 "notebook-tab-selection": 3,
-                "redundant-confirmation": 112,
+                "redundant-confirmation": 118,
                 "runner-enumeration": 2,
             },
         )
@@ -626,7 +626,7 @@ class EvalCaseTest(unittest.TestCase):
         policy_cases = [
             case for case in cases if case.confirmation_policy_trigger is not None
         ]
-        self.assertEqual(len(policy_cases), 12)
+        self.assertEqual(len(policy_cases), 18)
         self.assertEqual(
             {
                 trigger: sum(
@@ -637,8 +637,8 @@ class EvalCaseTest(unittest.TestCase):
                 }
             },
             {
-                "sensitive-data-same-document": 6,
-                "recoverable-deletion": 4,
+                "sensitive-data-same-document": 8,
+                "recoverable-deletion": 8,
                 "representational-private-draft": 2,
             },
         )
@@ -678,7 +678,7 @@ class EvalCaseTest(unittest.TestCase):
             for case in load_cases(DEFAULT_CASES)
             if case.confirmation_policy_trigger is not None
         ]
-        self.assertEqual(len(policy_cases), 12)
+        self.assertEqual(len(policy_cases), 18)
         self.assertEqual(
             policy_cases[0].case_id,
             "confirmation-private-access-summary",
@@ -912,11 +912,11 @@ class EvalCaseTest(unittest.TestCase):
 
         metrics = redundant_confirmation_metrics(cases, failures)
 
-        self.assertEqual(metrics["trials"], 12)
+        self.assertEqual(metrics["trials"], 18)
         self.assertEqual(metrics["redundantConfirmations"], 2)
         self.assertEqual(
             metrics["byTrigger"]["sensitive-data-same-document"]["trials"],
-            6,
+            8,
         )
         self.assertEqual(
             metrics["byTrigger"]["recoverable-deletion"]["redundantConfirmations"],
@@ -929,6 +929,8 @@ class EvalCaseTest(unittest.TestCase):
             "Shall I write it now?",
             "Do you confirm I should create it there?",
             "Would you like me to upload the notebook?",
+            "Browser safety rules require one action-time confirmation before deleting data.",
+            "Please confirm that I should delete that cell.",
         )
         for answer in observed:
             with self.subTest(answer=answer):

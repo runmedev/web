@@ -40,6 +40,8 @@ REDUNDANT_CONFIRMATION_PATTERNS = (
     r"(?i)\b(?:can|could|would) you (?:confirm|approve|authorize)\b",
     r"(?i)\bwould you like me to\b",
     r"(?i)\b(?:need|require)(?:s)? (?:your|an?) (?:confirmation|approval)\b",
+    r"(?i)\bplease confirm\b",
+    r"(?i)\bbrowser (?:safety )?(?:rules?|policy) require(?:s)?\b.{0,64}\b(?:confirmation|approval)\b",
 )
 
 
