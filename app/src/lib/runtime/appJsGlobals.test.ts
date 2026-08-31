@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { parser_pb } from '../../runme/client'
 import { GoogleClientManager } from '../googleClientManager'
+import { driveLinkCoordinator } from '../driveLinkCoordinator'
 import { dismissTour, tourGuideStore } from '../tourGuide'
 import { tourUiController } from '../tourUiController'
 import { appState } from './AppState'
@@ -95,6 +96,7 @@ function createRunme(current: NotebookDataLike | null = null): RunmeConsoleApi {
 
 describe('createAppJsGlobals notebook reference helpers', () => {
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
     appState.setDriveNotebookStore(null)
     appState.setLocalNotebooks(null)
@@ -211,6 +213,76 @@ describe('createAppJsGlobals notebook reference helpers', () => {
     expect(opened).toHaveBeenCalledWith('local://file/opened')
     expect(focused).not.toHaveBeenCalled()
     expect(info.opened).toBe('local://file/opened')
+  })
+
+  it('returns the imported local URI after opening a Drive reference', async () => {
+    const first = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({
+        id: 'local://file/imported',
+        name: 'Eval Write.json',
+      })
+    appState.setLocalNotebooks({
+      files: {
+        where: vi.fn(() => ({
+          equals: vi.fn(() => ({ first })),
+        })),
+      },
+    } as any)
+    const enqueue = vi
+      .spyOn(driveLinkCoordinator, 'enqueue')
+      .mockResolvedValue(undefined)
+    const focused = vi.fn()
+    const globals = createAppJsGlobals({
+      runme: createRunme(),
+      focusNotebook: focused,
+    })
+    const remoteUri =
+      'https://drive.google.com/file/d/1iTN_c0h93BQS0WnAJiAT88JZHhhmnNRI/view'
+
+    const info = await globals.notebooks.open(remoteUri)
+
+    expect(enqueue).toHaveBeenCalledWith(remoteUri, 'manual', { focus: false })
+    expect(focused).not.toHaveBeenCalled()
+    expect(info).toMatchObject({
+      localUri: 'local://file/imported',
+      opened: 'local://file/imported',
+      remoteUri,
+    })
+  })
+
+  it('focuses an imported Drive reference when showing it', async () => {
+    const first = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({
+        id: 'local://file/imported',
+        name: 'Eval Write.json',
+      })
+    appState.setLocalNotebooks({
+      files: {
+        where: vi.fn(() => ({
+          equals: vi.fn(() => ({ first })),
+        })),
+      },
+    } as any)
+    vi.spyOn(driveLinkCoordinator, 'enqueue').mockResolvedValue(undefined)
+    const focused = vi.fn()
+    const globals = createAppJsGlobals({
+      runme: createRunme(),
+      focusNotebook: focused,
+    })
+    const remoteUri =
+      'https://drive.google.com/file/d/1iTN_c0h93BQS0WnAJiAT88JZHhhmnNRI/view'
+
+    const info = await globals.notebooks.show(remoteUri)
+
+    expect(focused).toHaveBeenCalledWith('local://file/imported')
+    expect(info).toMatchObject({
+      opened: 'local://file/imported',
+      focused: 'local://file/imported',
+    })
   })
 
   it('focuses an already-open notebook separately from opening it', async () => {

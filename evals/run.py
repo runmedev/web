@@ -30,7 +30,7 @@ from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 
 DEFAULT_CASES = Path(__file__).with_name("cases.json")
-DEFAULT_STARTING_URL = "https://web.runme.dev/robots.txt"
+DEFAULT_RUNME_ORIGIN = "https://web.runme.dev"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 DRIVE_REFRESH_SKEW_MS = 5 * 60 * 1000
 RUNTIME_ARTIFACT_NAMES = ("codex-agent.log", "codex-home", "home", "user-data")
@@ -41,6 +41,24 @@ REDUNDANT_CONFIRMATION_PATTERNS = (
     r"(?i)\bwould you like me to\b",
     r"(?i)\b(?:need|require)(?:s)? (?:your|an?) (?:confirmation|approval)\b",
 )
+
+
+def write_initial_codex_settings(codex_home: Path) -> None:
+    """Seed deterministic settings required by the isolated eval profile."""
+    state = {
+        "electron-persisted-atom-state": {
+            "electron:onboarding-projectless-completed": True
+        }
+    }
+    (codex_home / ".codex-global-state.json").write_text(
+        json.dumps(state), encoding="utf-8"
+    )
+    # Browser-client fails closed when this preference cannot be read. Make
+    # the eval's WebMCP dependency explicit instead of relying on a fresh
+    # profile's default while Codex is still initializing its config.
+    browser_config = codex_home / "browser" / "config.toml"
+    browser_config.parent.mkdir(parents=True, exist_ok=True)
+    browser_config.write_text("webmcp_enabled = true\n", encoding="utf-8")
 
 
 @dataclass(frozen=True)
@@ -113,7 +131,14 @@ class CodexRuntime:
         self.keep_runtime = keep_runtime
         self.owns_runtime_root = runtime_root is None
         if runtime_root is None:
-            self.runtime_root = Path(tempfile.mkdtemp(prefix="runme-codex-evals-"))
+            # macOS returns /var/... here even though /var is a symlink to
+            # /private/var. The trusted Node REPL config bridge rejects TOML
+            # paths that traverse symlinks, which otherwise makes Browser's
+            # WebMCP preference read fail closed. Canonicalize the generated
+            # root before deriving CODEX_HOME and browser config paths.
+            self.runtime_root = Path(
+                tempfile.mkdtemp(prefix="runme-codex-evals-")
+            ).resolve()
         else:
             self.runtime_root = runtime_root.resolve()
             if self.runtime_root.exists():
@@ -149,14 +174,7 @@ class CodexRuntime:
         for directory in (codex_home, user_data, sqlite_home):
             directory.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(self.auth_file, codex_home / "auth.json")
-        state = {
-            "electron-persisted-atom-state": {
-                "electron:onboarding-projectless-completed": True
-            }
-        }
-        (codex_home / ".codex-global-state.json").write_text(
-            json.dumps(state), encoding="utf-8"
-        )
+        write_initial_codex_settings(codex_home)
 
         self.log_file = (self.runtime_root / "codex-agent.log").open(
             "w", encoding="utf-8"
@@ -305,10 +323,12 @@ class RunmeEvals:
         control: CodexEvalControl,
         drive: DriveSession,
         timeout_seconds: float,
+        runme_origin: str = DEFAULT_RUNME_ORIGIN,
     ) -> None:
         self.control = control
         self.drive = drive
         self.timeout_seconds = timeout_seconds
+        self.runme_origin = parse_runme_origin(runme_origin)
 
     def configure_plugins(self) -> None:
         self._configure_dispatch(
@@ -400,14 +420,21 @@ class RunmeEvals:
             browser_tab_ids = {
                 required_string(browser, "browserTabId") for browser in browsers
             }
+            browser_tab_ids_by_guest = prepared_tab_ids_by_guest(browsers)
+            browser_tab_ids_by_page_key = prepared_tab_ids_by_page_key(browsers)
             primary_tab_id = required_string(primary, "browserTabId")
             primary_lease_id = required_string(primary, "leaseId")
-            self._assert_exact_tabs(before, browser_tab_ids)
+            self._assert_exact_tabs(
+                before,
+                browser_tab_ids,
+                browser_tab_ids_by_guest,
+                browser_tab_ids_by_page_key,
+            )
             submitted = self.control.dispatch(
                 {
                     "type": "threads.send_message",
                     "threadId": thread_id,
-                    "prompt": case.prompt,
+                    "prompt": rewrite_runme_urls(case.prompt, self.runme_origin),
                     "includeBrowserContext": True,
                 }
             )
@@ -419,17 +446,29 @@ class RunmeEvals:
                     "The prompt did not include every prepared browser tab"
                 )
 
-            completed = self._wait_for_thread(thread_id, browser_tab_ids)
+            completed = self._wait_for_thread(
+                thread_id,
+                browser_tab_ids,
+                browser_tab_ids_by_guest,
+                browser_tab_ids_by_page_key,
+            )
             after = self._browser_snapshot(
                 thread_id, after_event_sequence=before["latestEventSequence"]
             )
-            self._assert_exact_tabs(after, browser_tab_ids)
-            unexpected = sorted(
-                {
-                    event.get("browserTabId")
-                    for event in after["events"]
-                    if event.get("browserTabId") not in {None, *browser_tab_ids}
-                }
+            browser_tab_ids_by_alias = completed["browserTabIdsByAlias"]
+            self._assert_exact_tabs(
+                after,
+                browser_tab_ids,
+                browser_tab_ids_by_guest,
+                browser_tab_ids_by_page_key,
+                browser_tab_ids_by_alias,
+            )
+            unexpected = unexpected_browser_event_tab_ids(
+                after["events"],
+                browser_tab_ids,
+                browser_tab_ids_by_guest,
+                browser_tab_ids_by_page_key,
+                browser_tab_ids_by_alias,
             )
             if unexpected:
                 raise RuntimeError(
@@ -513,12 +552,14 @@ class RunmeEvals:
 
             page_evidence = None
             if case.expected_page_contains:
-                page_evidence = self._page_contains(
+                page_evidence = self._wait_for_page_evidence(
                     primary_lease_id, case.expected_page_contains
                 )
                 if not page_evidence:
+                    page_state = self._page_evidence_state(primary_lease_id)
                     raise EvalAssertionError(
-                        f"Runme page did not contain {case.expected_page_contains!r}",
+                        "Runme page did not contain "
+                        f"{case.expected_page_contains!r}: {page_state!r}",
                         failure_mode="missing_page_evidence",
                     )
             notebook_evidence = None
@@ -580,14 +621,14 @@ class RunmeEvals:
             {
                 "type": "browser.open",
                 "conversationId": thread_id,
-                "startingUrl": DEFAULT_STARTING_URL,
+                "startingUrl": f"{self.runme_origin}/robots.txt",
             }
         )
         lease_id = required_string(browser, "leaseId")
         try:
-            self._wait_for_page_origin(lease_id, "https://web.runme.dev")
+            self._wait_for_page_origin(lease_id, self.runme_origin)
             self._configure_runme_auth(lease_id)
-            target_url = "https://web.runme.dev/?doc=" + urllib.parse.quote(
+            target_url = f"{self.runme_origin}/?doc=" + urllib.parse.quote(
                 notebook_url, safe=""
             )
             readiness: dict[str, Any] | None = None
@@ -757,19 +798,29 @@ class RunmeEvals:
         raise RuntimeError("Runme WebMCP ExecuteCode did not become available")
 
     def _wait_for_thread(
-        self, thread_id: str, browser_tab_ids: set[str]
+        self,
+        thread_id: str,
+        browser_tab_ids: set[str],
+        browser_tab_ids_by_guest: dict[int, str],
+        browser_tab_ids_by_page_key: dict[str, str],
     ) -> dict[str, Any]:
         deadline = time.monotonic() + self.timeout_seconds
         claimed_tab_ids: set[str] = set()
+        active_tab_records: list[dict[str, Any]] = []
         while time.monotonic() < deadline:
             snapshot = self._browser_snapshot(thread_id)
-            claimed_tab_ids.update(
-                str(tab["browserTabId"])
-                for tab in snapshot["tabs"]
-                if isinstance(tab, dict)
-                and tab.get("browserTabId") in browser_tab_ids
-                and tab.get("isBrowserUseActive") is True
-            )
+            for tab in snapshot["tabs"]:
+                if (
+                    not isinstance(tab, dict)
+                    or tab.get("isBrowserUseActive") is not True
+                ):
+                    continue
+                active_tab_records.append(dict(tab))
+                tab_id = canonical_browser_tab_id(
+                    tab, browser_tab_ids_by_guest, browser_tab_ids_by_page_key
+                )
+                if tab_id in browser_tab_ids:
+                    claimed_tab_ids.add(tab_id)
             result = self.control.dispatch(
                 {
                     "type": "threads.read",
@@ -806,6 +857,18 @@ class RunmeEvals:
             node_repl_call_count, tool_evidence = tool_evidence_from_turn_items(
                 items or []
             )
+            browser_tab_ids_by_alias = browser_tab_aliases_from_turn_items(
+                items or [], browser_tab_ids
+            )
+            for tab in active_tab_records:
+                tab_id = canonical_browser_tab_id(
+                    tab,
+                    browser_tab_ids_by_guest,
+                    browser_tab_ids_by_page_key,
+                    browser_tab_ids_by_alias,
+                )
+                if tab_id in browser_tab_ids:
+                    claimed_tab_ids.add(tab_id)
             if not answers:
                 raise RuntimeError("Codex completed without an assistant answer")
             if not node_repl_call_count:
@@ -817,6 +880,7 @@ class RunmeEvals:
                 "claimedTabIds": claimed_tab_ids,
                 "nodeReplCallCount": node_repl_call_count,
                 "toolEvidence": tool_evidence,
+                "browserTabIdsByAlias": browser_tab_ids_by_alias,
             }
         raise CodexTaskTimeoutError(f"Timed out waiting for Codex task {thread_id}")
 
@@ -839,10 +903,34 @@ class RunmeEvals:
         return result
 
     @staticmethod
-    def _assert_exact_tabs(snapshot: dict[str, Any], expected: set[str]) -> None:
-        actual = {
-            tab.get("browserTabId") for tab in snapshot["tabs"] if isinstance(tab, dict)
-        }
+    def _assert_exact_tabs(
+        snapshot: dict[str, Any],
+        expected: set[str],
+        expected_by_guest: dict[int, str] | None = None,
+        expected_by_page_key: dict[str, str] | None = None,
+        expected_by_alias: dict[str, str] | None = None,
+    ) -> None:
+        actual: set[str] = set()
+        invalid_tabs: list[dict[str, Any]] = []
+        for tab in snapshot["tabs"]:
+            if not isinstance(tab, dict):
+                continue
+            tab_id = canonical_browser_tab_id(
+                tab,
+                expected_by_guest or {},
+                expected_by_page_key or {},
+                expected_by_alias or {},
+            )
+            if tab_id is None:
+                invalid_tabs.append(tab)
+            else:
+                actual.add(tab_id)
+        if invalid_tabs:
+            raise EvalAssertionError(
+                "Browser snapshot contained tabs without stable identities: "
+                f"{invalid_tabs!r}",
+                failure_mode="unexpected_tab",
+            )
         if actual != expected:
             raise EvalAssertionError(
                 f"Browser tabs differ from prepared leases: expected {sorted(expected)}, "
@@ -874,6 +962,27 @@ class RunmeEvals:
             f"document.body.innerText.includes({json.dumps(expected)})",
         )
         return value is True
+
+    def _wait_for_page_evidence(self, lease_id: str, expected: str) -> bool:
+        """Wait for React to render a notebook selected through the runtime API."""
+        deadline = time.monotonic() + min(self.timeout_seconds, 30)
+        while time.monotonic() < deadline:
+            if self._page_contains(lease_id, expected):
+                return True
+            time.sleep(0.5)
+        return self._page_contains(lease_id, expected)
+
+    def _page_evidence_state(self, lease_id: str) -> Any:
+        return self._evaluate_browser(
+            lease_id,
+            """(() => ({
+              currentDoc: sessionStorage.getItem("runme/currentDoc"),
+              documentIds: [...document.querySelectorAll("[data-document-id]")]
+                .map((element) => element.getAttribute("data-document-id")),
+              visibleText: (document.body.innerText || "").slice(0, 1_000),
+              href: location.href,
+            }))()""",
+        )
 
     def _wait_for_notebook_evidence(
         self, file_id: str, case: EvalCase
@@ -1332,6 +1441,119 @@ def required_string(value: dict[str, Any], key: str) -> str:
     return result
 
 
+def parse_runme_origin(value: str) -> str:
+    """Validate and normalize the HTTP(S) origin hosting Runme Web."""
+    if any(character.isspace() for character in value):
+        raise argparse.ArgumentTypeError("Runme origin must not contain whitespace")
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+        raise argparse.ArgumentTypeError(
+            "Runme origin must be an absolute HTTP(S) origin"
+        )
+    if parsed.username is not None or parsed.password is not None:
+        raise argparse.ArgumentTypeError("Runme origin must not contain credentials")
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        raise argparse.ArgumentTypeError(
+            "Runme origin must not contain a path, query, or fragment"
+        )
+    try:
+        _ = parsed.port
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"Invalid Runme origin: {error}") from error
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def rewrite_runme_urls(text: str, runme_origin: str) -> str:
+    """Point production Runme links in an eval prompt at the selected origin."""
+    return text.replace(DEFAULT_RUNME_ORIGIN, runme_origin)
+
+
+def prepared_tab_ids_by_guest(browsers: list[dict[str, Any]]) -> dict[int, str]:
+    """Map stable guest page identities to their prepared eval tab IDs."""
+    result: dict[int, str] = {}
+    for browser in browsers:
+        guest_id = browser.get("guestWebContentsId")
+        if not isinstance(guest_id, int) or isinstance(guest_id, bool):
+            continue
+        browser_tab_id = required_string(browser, "browserTabId")
+        prior = result.get(guest_id)
+        if prior is not None and prior != browser_tab_id:
+            raise RuntimeError(
+                "Prepared browser leases unexpectedly share guest page identity "
+                f"{guest_id}: {prior!r} and {browser_tab_id!r}"
+            )
+        result[guest_id] = browser_tab_id
+    return result
+
+
+def prepared_tab_ids_by_page_key(browsers: list[dict[str, Any]]) -> dict[str, str]:
+    """Map stable Browser page keys to their prepared eval tab IDs."""
+    result: dict[str, str] = {}
+    for browser in browsers:
+        page_key = browser.get("pageKey")
+        if not isinstance(page_key, str) or not page_key:
+            continue
+        browser_tab_id = required_string(browser, "browserTabId")
+        prior = result.get(page_key)
+        if prior is not None and prior != browser_tab_id:
+            raise RuntimeError(
+                "Prepared browser leases unexpectedly share page key "
+                f"{page_key!r}: {prior!r} and {browser_tab_id!r}"
+            )
+        result[page_key] = browser_tab_id
+    return result
+
+
+def canonical_browser_tab_id(
+    record: dict[str, Any],
+    expected_by_guest: dict[int, str],
+    expected_by_page_key: dict[str, str] | None = None,
+    expected_by_alias: dict[str, str] | None = None,
+) -> str | None:
+    """Resolve a snapshot/event tab alias to its prepared logical tab ID."""
+    guest_id = record.get("guestWebContentsId")
+    if isinstance(guest_id, int) and not isinstance(guest_id, bool):
+        prepared_id = expected_by_guest.get(guest_id)
+        if prepared_id is not None:
+            return prepared_id
+    page_key = record.get("pageKey")
+    if isinstance(page_key, str):
+        prepared_id = (expected_by_page_key or {}).get(page_key)
+        if prepared_id is not None:
+            return prepared_id
+    browser_tab_id = record.get("browserTabId")
+    if isinstance(browser_tab_id, str):
+        prepared_id = (expected_by_alias or {}).get(browser_tab_id)
+        if prepared_id is not None:
+            return prepared_id
+    return (
+        browser_tab_id if isinstance(browser_tab_id, str) and browser_tab_id else None
+    )
+
+
+def unexpected_browser_event_tab_ids(
+    events: list[Any],
+    expected: set[str],
+    expected_by_guest: dict[int, str],
+    expected_by_page_key: dict[str, str] | None = None,
+    expected_by_alias: dict[str, str] | None = None,
+) -> list[str]:
+    """Return event tab IDs that do not resolve to prepared logical tabs."""
+    unexpected: set[str] = set()
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        browser_tab_id = canonical_browser_tab_id(
+            event,
+            expected_by_guest,
+            expected_by_page_key,
+            expected_by_alias,
+        )
+        if browser_tab_id is not None and browser_tab_id not in expected:
+            unexpected.add(browser_tab_id)
+    return sorted(unexpected)
+
+
 def isolated_runtime_environment(
     base: os._Environ[str] | dict[str, str], runtime_root: Path, codex_home: Path
 ) -> dict[str, str]:
@@ -1513,6 +1735,60 @@ def tool_evidence_from_turn_items(items: list[Any]) -> tuple[int, str]:
         for item in command_calls
     ] + [tool_call_evidence(item) for item in completed_mcp_calls]
     return node_repl_call_count, json.dumps(evidence, sort_keys=True, default=str)
+
+
+def browser_tab_aliases_from_turn_items(
+    items: list[Any], expected_browser_tab_ids: set[str]
+) -> dict[str, str]:
+    """Extract unambiguous Browser tab ID to provider-tab ID mappings."""
+    candidates: dict[str, set[str]] = {}
+
+    def record(alias: Any, provider: Any) -> None:
+        if (
+            isinstance(alias, str)
+            and alias
+            and isinstance(provider, str)
+            and provider in expected_browser_tab_ids
+        ):
+            candidates.setdefault(alias, set()).add(provider)
+
+    def inspect(value: Any) -> None:
+        if isinstance(value, dict):
+            record(value.get("id"), value.get("providerTabId"))
+            for child in value.values():
+                inspect(child)
+            return
+        if isinstance(value, list):
+            for child in value:
+                inspect(child)
+            return
+        if not isinstance(value, str):
+            return
+        for block in re.findall(r"\{[^{}]{0,2000}\}", value, flags=re.DOTALL):
+            alias_match = re.search(r"""["']?id["']?\s*:\s*["']([^"']+)["']""", block)
+            provider_match = re.search(
+                r"""["']?providerTabId["']?\s*:\s*["']([^"']+)["']""",
+                block,
+            )
+            if alias_match is not None and provider_match is not None:
+                record(alias_match.group(1), provider_match.group(1))
+
+    for item in items:
+        if (
+            not isinstance(item, dict)
+            or item.get("type") != "mcpToolCall"
+            or item.get("status") != "completed"
+            or item.get("server") != "node_repl"
+            or item.get("tool") != "js"
+        ):
+            continue
+        inspect(item.get("output"))
+
+    return {
+        alias: next(iter(providers))
+        for alias, providers in candidates.items()
+        if len(providers) == 1
+    }
 
 
 def category_counts(cases: list[EvalCase]) -> dict[str, int]:
@@ -1721,6 +1997,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--codex-auth-file", type=Path, default=Path.home() / ".codex/auth.json"
     )
+    parser.add_argument(
+        "--runme-origin",
+        type=parse_runme_origin,
+        default=DEFAULT_RUNME_ORIGIN,
+        help="HTTP(S) origin hosting Runme Web (default: %(default)s)",
+    )
     parser.add_argument("--service-account-file", type=Path)
     parser.add_argument("--attach-cdp-url")
     parser.add_argument("--fail-fast", action="store_true")
@@ -1834,6 +2116,7 @@ def main() -> int:
             control=control,
             drive=load_drive_session(args.service_account_file.expanduser().resolve()),
             timeout_seconds=args.timeout_seconds,
+            runme_origin=args.runme_origin,
         )
         runner.configure_plugins()
         for case in pending_cases:

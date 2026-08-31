@@ -187,19 +187,38 @@ console.log(await app.getSessionID())
 
 Continue only when the printed value matches the selected tab's \`session\` query parameter. If they differ, do not mutate a notebook in that tab.
 
-## Open notebooks without stealing focus
+## Open or focus notebooks deliberately
 
+- Treat a supplied Runme gateway URL, Google Drive URL, or Markdown-linked notebook URL as a direct notebook reference. Pass it directly to \`notebooks.open(reference)\` for background work or \`notebooks.show(reference)\` for a visible-open request; do not search for the notebook by name.
+- Reuse the existing outer Runme Browser tab and its WebMCP capability. Never create or navigate an extra browser tab, Google Drive tab, or hidden browser context to follow a supplied notebook reference.
+- Keep that outer Runme page in place. Do not navigate it to the notebook URL; pass the supplied reference to the Runme notebook API inside \`ExecuteCode\`.
 - Use \`await notebooks.open(reference)\` to load a notebook or start a Drive import. This adds the notebook to Runme without changing the notebook the user is viewing.
-- Change the visible notebook only when the user asks or the task genuinely requires it. First open the notebook, then call \`await notebooks.focus(opened.localUri || opened.opened)\`.
+- The words **open**, **show**, **view**, **display**, and **focus** are explicit requests to change the visible notebook. For every such request, call \`await notebooks.show(reference)\`; it opens or imports the reference and visibly focuses the resulting local notebook before returning.
+- Navigating the outer Browser tab to a Runme gateway URL does not prove that its inner notebook is visibly focused. Use \`notebooks.focus(...)\` and do not infer focus from the URL, a successful import, or a successful background read.
+- Do not focus a notebook for background reads, edits, or execution when the user did not ask to see or open it.
 - \`notebooks.focus(reference)\` selects an already-open local notebook and does not load it. A Drive reference must finish importing before it can be focused.
-- \`notebooks.show(reference)\` is a compatibility helper that both opens and focuses. Avoid it for background reads, edits, and execution because the user may be interacting with another notebook.
+- \`notebooks.show(reference)\` is the one-step visible-open helper. Avoid it for background reads, edits, and execution because the user may be interacting with another notebook.
 
 \`\`\`js
 const opened = await notebooks.open(notebookUri)
 
-// Only when visible focus should move:
+// Equivalent two-step form when visible focus should move:
 await notebooks.focus(opened.localUri || opened.opened)
+
+// Preferred one-step form for an explicit open/show/view request:
+await notebooks.show(notebookUri)
 \`\`\`
+
+## Enumerate runners through ExecuteCode
+
+When the user asks which runners exist, which runner is selected, or for runner configuration, use the existing Runme tab's \`ExecuteCode\` WebMCP tool. Print both runner APIs explicitly:
+
+\`\`\`js
+console.log(await runmeRunners.get())
+console.log(await runmeRunners.getDefault())
+\`\`\`
+
+Use the returned values as the source of truth. Do not scrape runner names or selection state from the rendered DOM, menus, or other visible UI.
 
 ## Create notebooks in the requested storage
 

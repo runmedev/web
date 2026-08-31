@@ -930,6 +930,17 @@ export function createAppJsGlobals({
       await driveLinkCoordinator.enqueue(info.remoteUri, 'manual', {
         focus: options.focus,
       })
+      const imported = await resolveNotebookReference(info.remoteUri)
+      if (imported.localUri?.startsWith('local://file/')) {
+        if (options.focus) {
+          await focusNotebookForRuntime(imported.localUri)
+        }
+        return {
+          ...imported,
+          opened: imported.localUri,
+          ...(options.focus ? { focused: imported.localUri } : {}),
+        }
+      }
       return {
         ...info,
         opened: info.remoteUri,

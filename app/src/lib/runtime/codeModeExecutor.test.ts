@@ -134,6 +134,38 @@ describe('codeModeExecutor', () => {
     expect(result.output).not.toContain('code-mode-session')
   })
 
+  it('bridges configured runner enumeration in sandbox mode', async () => {
+    const notebook = createNotebook()
+    let configured: unknown
+    let defaultRunner: unknown
+    vi.spyOn(SandboxJSKernel.prototype, 'run').mockImplementation(
+      async function (this: SandboxJSKernel) {
+        const bridge = (
+          this as unknown as {
+            bridge: {
+              call: (method: string, args: unknown[]) => Promise<unknown>
+            }
+          }
+        ).bridge
+        configured = await bridge.call('runmeRunners.get', [])
+        defaultRunner = await bridge.call('runmeRunners.getDefault', [])
+      }
+    )
+    const executor = createCodeModeExecutor({
+      mode: 'sandbox',
+      resolveNotebook: () => notebook,
+      listNotebooks: () => [notebook],
+    })
+
+    await executor.execute({
+      source: 'webmcp',
+      code: 'console.log(await runmeRunners.get()); console.log(await runmeRunners.getDefault());',
+    })
+
+    expect(configured).toEqual(expect.any(String))
+    expect(defaultRunner).toEqual(expect.any(String))
+  })
+
   it('bridges named documentation discovery and retrieval in sandbox mode', async () => {
     const notebook = createNotebook()
     const fetchMock = vi.fn(async () => ({

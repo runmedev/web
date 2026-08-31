@@ -94,6 +94,13 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'app.getSessionId',
   'app.getSessionID',
   'app.startGoogleDriveOAuth',
+  'runmeRunners.get',
+  'runmeRunners.update',
+  'runmeRunners.delete',
+  'runmeRunners.getDefault',
+  'runmeRunners.setDefault',
+  'runmeRunners.help',
+  'runmeRunners.ensure',
   'explorer.mountDrive',
   'explorer.removeFolder',
   'explorer.editName',
@@ -433,6 +440,16 @@ export function buildSandboxSrcDoc(options: {
           getSessionID: () => hostCall("app.getSessionID", []),
           startGoogleDriveOAuth: (options) => hostCall("app.startGoogleDriveOAuth", [options]),
         };
+        const runmeRunners = {
+          get: () => hostCall("runmeRunners.get", []),
+          update: (name, endpoint) => hostCall("runmeRunners.update", [name, endpoint]),
+          delete: (name) => hostCall("runmeRunners.delete", [name]),
+          getDefault: () => hostCall("runmeRunners.getDefault", []),
+          setDefault: (name) => hostCall("runmeRunners.setDefault", [name]),
+          help: () => hostCall("runmeRunners.help", []),
+          ensure: (name, endpoint, options) =>
+            hostCall("runmeRunners.ensure", [name, endpoint, options]),
+        };
         const explorer = {
           mountDrive: (driveUrl) => hostCall("explorer.mountDrive", [driveUrl]),
           removeFolder: (uri) => hostCall("explorer.removeFolder", [uri]),
@@ -537,6 +554,8 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- await app.getSessionId()");
           consoleProxy.log("- await app.getSessionID()");
           consoleProxy.log("- await app.startGoogleDriveOAuth({ mode?, prompt? })");
+          consoleProxy.log("- await runmeRunners.get()");
+          consoleProxy.log("- await runmeRunners.getDefault()");
           consoleProxy.log("- await explorer.mountDrive(driveUrl)");
           consoleProxy.log("- await explorer.editName(uri)");
           consoleProxy.log("- await explorer.renameFolder(uri, name)");
@@ -565,13 +584,14 @@ export function buildSandboxSrcDoc(options: {
               "comments",
               "notebookDiff",
               "app",
+              "runmeRunners",
               "explorer",
               "credentials",
               "drive",
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, notebookDiff, app, explorer, credentials, drive, help);
+            await runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, notebookDiff, app, runmeRunners, explorer, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });

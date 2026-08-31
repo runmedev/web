@@ -1,3 +1,4 @@
+import argparse
 import json
 import tempfile
 import time
@@ -10,11 +11,15 @@ import websocket
 from codex_driver import CodexEvalControl, EvalControlError
 from run import (
     DEFAULT_CASES,
+    DEFAULT_RUNME_ORIGIN,
     REDUNDANT_CONFIRMATION_PATTERNS,
     CodexRuntime,
     DriveSession,
+    EvalAssertionError,
     RunmeEvals,
+    browser_tab_aliases_from_turn_items,
     build_summary,
+    canonical_browser_tab_id,
     category_counts,
     drive_file_id,
     drive_import_failure_message,
@@ -25,19 +30,307 @@ from run import (
     load_results_checkpoint,
     missing_answer_evidence,
     notebook_output_text,
+    parse_runme_origin,
     plugin_marketplace,
+    prepared_tab_ids_by_guest,
+    prepared_tab_ids_by_page_key,
     present_evidence,
     present_regex_evidence,
     redundant_confirmation_metrics,
     remove_runtime_tree,
     retryable_setup_failure,
+    rewrite_runme_urls,
     tool_call_evidence,
     tool_evidence_from_turn_items,
+    unexpected_browser_event_tab_ids,
     wilson_interval,
+    write_initial_codex_settings,
 )
 
 
 class EvalCaseTest(unittest.TestCase):
+    def test_runme_origin_accepts_only_http_origins(self) -> None:
+        self.assertEqual(
+            parse_runme_origin("http://localhost:5173/"), "http://localhost:5173"
+        )
+        self.assertEqual(
+            parse_runme_origin("https://runme.example.test"),
+            "https://runme.example.test",
+        )
+        for invalid in (
+            "localhost:5173",
+            "ftp://localhost:5173",
+            "http://localhost:5173/notebooks",
+            "http://localhost:5173?debug=true",
+            "http://user:secret@localhost:5173",
+            " http://localhost:5173",
+            "http://local host:5173",
+        ):
+            with (
+                self.subTest(invalid=invalid),
+                self.assertRaises(argparse.ArgumentTypeError),
+            ):
+                parse_runme_origin(invalid)
+
+    def test_runme_prompt_urls_are_rewritten_for_selected_origin(self) -> None:
+        prompt = f"Open {DEFAULT_RUNME_ORIGIN}/?doc=drive-url then report it."
+
+        self.assertEqual(
+            rewrite_runme_urls(prompt, "http://localhost:5173"),
+            "Open http://localhost:5173/?doc=drive-url then report it.",
+        )
+
+    def test_open_runme_tab_uses_selected_origin_for_start_and_target(self) -> None:
+        class FakeControl:
+            def __init__(self) -> None:
+                self.actions: list[dict[str, object]] = []
+
+            def dispatch(
+                self, action: dict[str, object], **_kwargs: object
+            ) -> dict[str, object]:
+                self.actions.append(action)
+                if action["type"] == "browser.open":
+                    return {
+                        "leaseId": "lease-1",
+                        "browserTabId": "tab-1",
+                        "guestWebContentsId": 41,
+                    }
+                return {}
+
+        control = FakeControl()
+        runner = RunmeEvals(
+            control=control,  # type: ignore[arg-type]
+            drive=DriveSession("token", 10**15, {"client_email": "eval@example.com"}),
+            timeout_seconds=1,
+            runme_origin="http://localhost:5173/",
+        )
+        with (
+            patch.object(runner, "_wait_for_page_origin") as wait_for_origin,
+            patch.object(runner, "_configure_runme_auth"),
+            patch.object(runner, "_wait_for_runme", return_value={"ready": True}),
+            patch.object(runner, "_wait_for_webmcp", return_value=["ExecuteCode"]),
+        ):
+            runner._open_runme_tab(
+                "thread-1", "https://drive.google.com/file/d/notebook/view"
+            )
+
+        self.assertEqual(
+            control.actions[0],
+            {
+                "type": "browser.open",
+                "conversationId": "thread-1",
+                "startingUrl": "http://localhost:5173/robots.txt",
+            },
+        )
+        wait_for_origin.assert_called_once_with("lease-1", "http://localhost:5173")
+        navigate = next(
+            action for action in control.actions if action["type"] == "browser.cdp"
+        )
+        self.assertEqual(
+            navigate["params"],
+            {
+                "url": "http://localhost:5173/?doc="
+                "https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2Fnotebook%2Fview"
+            },
+        )
+
+    def test_tab_aliases_on_same_guest_are_canonicalized(self) -> None:
+        prepared = [
+            {"browserTabId": "eval:primary", "guestWebContentsId": 41},
+        ]
+        by_guest = prepared_tab_ids_by_guest(prepared)
+        snapshot = {
+            "tabs": [
+                {"browserTabId": "eval:primary", "guestWebContentsId": 41},
+                {"browserTabId": "browser-use:alias", "guestWebContentsId": 41},
+            ]
+        }
+
+        RunmeEvals._assert_exact_tabs(snapshot, {"eval:primary"}, by_guest)
+        self.assertEqual(
+            canonical_browser_tab_id(snapshot["tabs"][1], by_guest),
+            "eval:primary",
+        )
+        self.assertEqual(
+            unexpected_browser_event_tab_ids(
+                [
+                    {
+                        "browserTabId": "browser-use:alias",
+                        "guestWebContentsId": 41,
+                    }
+                ],
+                {"eval:primary"},
+                by_guest,
+            ),
+            [],
+        )
+
+    def test_true_extra_tab_and_event_still_fail_exact_tab_grading(self) -> None:
+        by_guest = {41: "eval:primary"}
+        snapshot = {
+            "tabs": [
+                {"browserTabId": "eval:primary", "guestWebContentsId": 41},
+                {"browserTabId": "unexpected", "guestWebContentsId": 42},
+            ]
+        }
+
+        with self.assertRaises(EvalAssertionError) as raised:
+            RunmeEvals._assert_exact_tabs(snapshot, {"eval:primary"}, by_guest)
+        self.assertEqual(raised.exception.failure_mode, "unexpected_tab")
+        self.assertEqual(
+            unexpected_browser_event_tab_ids(
+                [
+                    {"browserTabId": "alias", "guestWebContentsId": 41},
+                    {"browserTabId": "unexpected", "guestWebContentsId": 42},
+                ],
+                {"eval:primary"},
+                by_guest,
+            ),
+            ["unexpected"],
+        )
+
+    def test_page_key_canonicalizes_recreated_guest_page(self) -> None:
+        prepared = [
+            {
+                "browserTabId": "eval:primary",
+                "guestWebContentsId": 41,
+                "pageKey": "window:thread:eval:primary",
+            }
+        ]
+        snapshot = {
+            "tabs": [
+                {
+                    "browserTabId": "restored-alias",
+                    "guestWebContentsId": 99,
+                    "pageKey": "window:thread:eval:primary",
+                }
+            ]
+        }
+
+        RunmeEvals._assert_exact_tabs(
+            snapshot,
+            {"eval:primary"},
+            prepared_tab_ids_by_guest(prepared),
+            prepared_tab_ids_by_page_key(prepared),
+        )
+
+    def test_explicit_browser_provider_alias_collapses_presentation_tab(
+        self,
+    ) -> None:
+        items = [
+            {
+                "type": "mcpToolCall",
+                "status": "completed",
+                "server": "node_repl",
+                "tool": "js",
+                "output": """[
+                  {
+                    id: '1',
+                    providerTabId: 'eval:primary',
+                    title: 'runme notebook',
+                    url: 'http://localhost:5173/?session=test'
+                  },
+                  {
+                    id: '2',
+                    providerTabId: 'eval:distractor',
+                    title: 'google.com/robots.txt',
+                    url: 'https://www.google.com/robots.txt'
+                  }
+                ]""",
+            }
+        ]
+        aliases = browser_tab_aliases_from_turn_items(
+            items, {"eval:primary", "eval:distractor"}
+        )
+        snapshot = {
+            "tabs": [
+                {"browserTabId": "eval:primary", "guestWebContentsId": 41},
+                {"browserTabId": "eval:distractor", "guestWebContentsId": 42},
+                {
+                    "browserTabId": "1",
+                    "guestWebContentsId": 99,
+                    "pageKey": "window:thread:1",
+                    "title": "",
+                    "url": "about:blank",
+                },
+            ]
+        }
+
+        self.assertEqual(aliases, {"1": "eval:primary", "2": "eval:distractor"})
+        RunmeEvals._assert_exact_tabs(
+            snapshot,
+            {"eval:primary", "eval:distractor"},
+            {41: "eval:primary", 42: "eval:distractor"},
+            {},
+            aliases,
+        )
+        self.assertEqual(
+            unexpected_browser_event_tab_ids(
+                [{"browserTabId": "1", "guestWebContentsId": 99}],
+                {"eval:primary", "eval:distractor"},
+                {41: "eval:primary", 42: "eval:distractor"},
+                {},
+                aliases,
+            ),
+            [],
+        )
+
+        active_alias = snapshot["tabs"][2]
+        self.assertEqual(
+            canonical_browser_tab_id(
+                active_alias,
+                {41: "eval:primary", 42: "eval:distractor"},
+                {},
+                aliases,
+            ),
+            "eval:primary",
+        )
+
+    def test_ambiguous_provider_alias_and_same_url_extra_tab_are_not_collapsed(
+        self,
+    ) -> None:
+        items = [
+            {
+                "type": "mcpToolCall",
+                "status": "completed",
+                "server": "node_repl",
+                "tool": "js",
+                "output": [
+                    {"id": "1", "providerTabId": "eval:primary"},
+                    {"id": "1", "providerTabId": "eval:distractor"},
+                ],
+            }
+        ]
+        aliases = browser_tab_aliases_from_turn_items(
+            items, {"eval:primary", "eval:distractor"}
+        )
+        snapshot = {
+            "tabs": [
+                {
+                    "browserTabId": "eval:primary",
+                    "guestWebContentsId": 41,
+                    "title": "runme notebook",
+                    "url": "http://localhost:5173/?session=test",
+                },
+                {
+                    "browserTabId": "genuine-extra",
+                    "guestWebContentsId": 99,
+                    "title": "runme notebook",
+                    "url": "http://localhost:5173/?session=test",
+                },
+            ]
+        }
+
+        self.assertEqual(aliases, {})
+        with self.assertRaises(EvalAssertionError):
+            RunmeEvals._assert_exact_tabs(
+                snapshot,
+                {"eval:primary"},
+                {41: "eval:primary"},
+                {},
+                aliases,
+            )
+
     def test_plugin_configuration_retries_transient_control_failure(self) -> None:
         control = MagicMock()
         control.dispatch.side_effect = [
@@ -103,6 +396,23 @@ class EvalCaseTest(unittest.TestCase):
 
             self.assertEqual(
                 (root / "keep.txt").read_text(encoding="utf-8"), "caller-owned"
+            )
+
+    def test_generated_runtime_root_is_canonical(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            apps_root = Path(directory)
+            with patch("run.tempfile.mkdtemp", return_value="/var/tmp/runme-evals"):
+                runtime = CodexRuntime(
+                    apps_root=apps_root,
+                    auth_file=apps_root / "auth.json",
+                    attach_cdp_url=None,
+                    keep_runtime=False,
+                    runtime_root=None,
+                    timeout_seconds=1,
+                )
+
+            self.assertEqual(
+                runtime.runtime_root, Path("/var/tmp/runme-evals").resolve()
             )
 
     def test_runtime_cleanup_preserves_files_added_by_the_caller(self) -> None:
@@ -181,6 +491,26 @@ class EvalCaseTest(unittest.TestCase):
             self.assertTrue((isolated_home / ".config").is_dir())
             self.assertTrue((isolated_home / ".cache").is_dir())
 
+    def test_initial_codex_settings_enable_webmcp_in_browser_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory) / "codex-home"
+            codex_home.mkdir()
+
+            write_initial_codex_settings(codex_home)
+
+            self.assertEqual(
+                (codex_home / "browser" / "config.toml").read_text(encoding="utf-8"),
+                "webmcp_enabled = true\n",
+            )
+            state = json.loads(
+                (codex_home / ".codex-global-state.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue(
+                state["electron-persisted-atom-state"][
+                    "electron:onboarding-projectless-completed"
+                ]
+            )
+
     def test_runtime_cleanup_removes_read_only_profile_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "runtime"
@@ -247,6 +577,20 @@ class EvalCaseTest(unittest.TestCase):
         self.assertNotIn("private_key", source)
         self.assertNotIn("service_account_file", source)
 
+        focused_categories = {
+            "direct-uri",
+            "notebook-tab-selection",
+            "runner-enumeration",
+        }
+        for case in cases:
+            if case.category in focused_categories:
+                self.assertIn(
+                    "do not navigate it or create another browser tab",
+                    case.prompt,
+                )
+                if case.category != "runner-enumeration":
+                    self.assertIn("notebooks.show(reference)", case.prompt)
+
         embedded_link = next(
             case for case in cases if case.case_id == "uri-link-inside-notebook"
         )
@@ -260,6 +604,7 @@ class EvalCaseTest(unittest.TestCase):
             case for case in cases if case.case_id == "show-notebook-not-open"
         )
         self.assertIn("1iTN_c0h93BQS0WnAJiAT88JZHhhmnNRI", not_open.notebook_url)
+        self.assertIn("exact filename is eval_read.json", not_open.prompt)
         background = next(
             case for case in cases if case.case_id == "show-notebook-background-tab"
         )
@@ -307,6 +652,21 @@ class EvalCaseTest(unittest.TestCase):
         }
 
         self.assertEqual(notebook_output_text(cell), "ok\n\ndone\ndG9rZW4=\ntoken")
+
+    def test_page_evidence_waits_for_runtime_focus_to_render(self) -> None:
+        evaluator = object.__new__(RunmeEvals)
+        evaluator.timeout_seconds = 30
+        evaluator._page_contains = MagicMock(side_effect=[False, False, True])
+
+        with (
+            patch("run.time.monotonic", side_effect=[0, 0, 1, 2]),
+            patch("run.time.sleep") as sleep,
+        ):
+            found = evaluator._wait_for_page_evidence("lease-1", "Eval Write")
+
+        self.assertTrue(found)
+        self.assertEqual(evaluator._page_contains.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
 
     def test_persisted_notebook_evidence_checks_runner_and_output(self) -> None:
         case = next(
