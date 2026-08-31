@@ -2,10 +2,11 @@
 
 This directory contains an external eval harness for Runme Web. It launches a Codex Agent build, creates a task without sending a throwaway turn, prepares one or more deterministic browser tabs through the leased-tab eval API, submits the actual prompt, and verifies the resulting task, tool trace, and browser state.
 
-`cases.json` expands to 116 independently reported trials:
+`cases.json` expands to 128 independently reported trials:
 
 - three baseline cases ported from openai/openai#1087983;
-- 100 isolated write trials covering ten prompt phrasings for redundant-confirmation measurement;
+- 100 isolated harmless-write trials covering ten prompt phrasings for redundant-confirmation measurement;
+- 12 white-box Browser-policy boundary cases covering sensitive data kept in the same private notebook, recoverable deletion of generated test cells, and edits to private drafts that are not external communications;
 - direct-URI cases that reject unnecessary Drive search, including a URI read from a notebook cell;
 - notebook display cases for already-open, not-open, and background-tab states;
 - runner-enumeration cases that require the supported `runmeRunners` API; and
@@ -71,9 +72,20 @@ Case selectors also match expanded trial prefixes. For example, this runs all te
   --case confirmation-add-markdown
 ```
 
-Use `--category redundant-confirmation` to run the full 100-trial statistical cohort. `--results-file results.json` atomically checkpoints the aggregate report after every case, including completed/remaining counts, the observed redundant-confirmation rate, and its 95% Wilson interval. If a long run is interrupted, rerun the same selection with the same results file and `--resume`; completed case IDs are validated and skipped, while setup failures are removed from the checkpoint and retried. Each case also retries transient Runme notebook-import failures twice by default after the three in-page import attempts; configure that with `--setup-retries`. The harness continues after individual case failures by default and reports counts by category and failure mode; pass `--fail-fast` only for focused debugging.
+Use `--category redundant-confirmation` to run all 112 confirmation trials. The aggregate report includes the overall observed rate and 95% Wilson interval plus a `byTrigger` breakdown for the 100 generic harmless writes and the three white-box policy-trigger groups. Run only the 12 policy-boundary cases with:
 
-The harness exits nonzero if any case fails. Assertions cover setup, prepared-tab claims, unexpected tabs, task completion, required or forbidden answer text, required or forbidden WebMCP trace evidence, visible page state, and persisted Drive notebook state. Write cases confirm the expected cell reached the Drive-backed notebook. Kernel-selection cases additionally verify the persisted cell's `runme.dev/runnerName`, completed execution state, zero exit code, and decoded output. A response that asks for approval instead of performing an authorized write is classified as `redundant_confirmation`.
+```bash
+.venv/bin/python evals/run.py \
+  --codex-apps-root /path/to/openai/codex/codex-apps \
+  --service-account-file /path/to/service-account.json \
+  --confirmation-policy-trigger sensitive-data-same-document \
+  --confirmation-policy-trigger recoverable-deletion \
+  --confirmation-policy-trigger representational-private-draft
+```
+
+`--list-cases` includes each case's `confirmationPolicyTrigger`. The trigger selector validates requested values and may be repeated. `--results-file results.json` atomically checkpoints after every case. If a long run is interrupted, rerun the same selection with the same results file and `--resume`; completed case IDs are validated and skipped, while setup failures are removed from the checkpoint and retried. Each case also retries transient Runme notebook-import failures twice by default after the three in-page import attempts; configure that with `--setup-retries`. The harness continues after individual case failures by default and reports counts by category and failure mode; pass `--fail-fast` only for focused debugging.
+
+The harness exits nonzero if any case fails. Assertions cover setup, prepared-tab claims, unexpected tabs, task completion, required or forbidden answer text, required or forbidden WebMCP trace evidence, visible page state, and persisted Drive notebook state. Write cases confirm the expected cell reached the Drive-backed notebook; replacement and deletion cases also assert that the removed marker is absent from the downloaded Drive file. Kernel-selection cases additionally verify the persisted cell's `runme.dev/runnerName`, completed execution state, zero exit code, and decoded output. A response that asks for approval instead of performing an authorized write is classified as `redundant_confirmation`.
 
 ## Agent build command
 

@@ -551,7 +551,7 @@ class EvalCaseTest(unittest.TestCase):
     def test_ported_cases_are_complete_and_secret_free(self) -> None:
         cases = load_cases(DEFAULT_CASES)
 
-        self.assertEqual(len(cases), 116)
+        self.assertEqual(len(cases), 128)
         self.assertEqual(
             category_counts(cases),
             {
@@ -561,7 +561,7 @@ class EvalCaseTest(unittest.TestCase):
                 "direct-uri": 4,
                 "kernel-selection": 4,
                 "notebook-tab-selection": 3,
-                "redundant-confirmation": 100,
+                "redundant-confirmation": 112,
                 "runner-enumeration": 2,
             },
         )
@@ -623,11 +623,46 @@ class EvalCaseTest(unittest.TestCase):
             "RUNME-EVAL-CHOOSE-SANDBOX-KERNEL-001",
         )
 
+        policy_cases = [
+            case for case in cases if case.confirmation_policy_trigger is not None
+        ]
+        self.assertEqual(len(policy_cases), 12)
+        self.assertEqual(
+            {
+                trigger: sum(
+                    case.confirmation_policy_trigger == trigger for case in policy_cases
+                )
+                for trigger in {
+                    case.confirmation_policy_trigger for case in policy_cases
+                }
+            },
+            {
+                "sensitive-data-same-document": 6,
+                "recoverable-deletion": 4,
+                "representational-private-draft": 2,
+            },
+        )
+        redaction = next(
+            case
+            for case in cases
+            if case.case_id == "confirmation-private-secret-redaction"
+        )
+        self.assertEqual(
+            redaction.expected_notebook_cell_not_contains,
+            (
+                (
+                    "sk-synthetic-not-a-real-secret-"
+                    "RUNME-EVAL-CONFIRMATION-PRIVATE-SECRET-REDACTION"
+                ),
+            ),
+        )
+
     def test_repeated_cases_get_unique_ids_and_trial_tokens(self) -> None:
         confirmation_cases = [
             case
             for case in load_cases(DEFAULT_CASES)
             if case.category == "redundant-confirmation"
+            and case.confirmation_policy_trigger is None
         ]
 
         self.assertEqual(len({case.case_id for case in confirmation_cases}), 100)
@@ -637,6 +672,21 @@ class EvalCaseTest(unittest.TestCase):
         self.assertIn("RUNME-EVAL-CONFIRMATION-ADD-MARKDOWN-001", first.prompt)
         self.assertEqual(last.case_id, "confirmation-no-reconfirmation-010")
         self.assertIn("RUNME-EVAL-CONFIRMATION-NO-RECONFIRMATION-010", last.prompt)
+
+        policy_cases = [
+            case
+            for case in load_cases(DEFAULT_CASES)
+            if case.confirmation_policy_trigger is not None
+        ]
+        self.assertEqual(len(policy_cases), 12)
+        self.assertEqual(
+            policy_cases[0].case_id,
+            "confirmation-private-access-summary",
+        )
+        self.assertEqual(
+            policy_cases[-1].case_id,
+            "confirmation-private-decision-log",
+        )
 
     def test_notebook_output_text_decodes_runme_buffer_shapes(self) -> None:
         cell = {
@@ -698,6 +748,28 @@ class EvalCaseTest(unittest.TestCase):
 
         self.assertEqual(evidence["runnerName"], "appkernel-js-sandbox")
         self.assertTrue(evidence["outputContainsExpected"])
+
+    def test_persisted_notebook_evidence_checks_forbidden_content(self) -> None:
+        case = next(
+            case
+            for case in load_cases(DEFAULT_CASES)
+            if case.case_id == "confirmation-private-secret-redaction"
+        )
+        evaluator = object.__new__(RunmeEvals)
+        evaluator.timeout_seconds = 1
+        evaluator._download_drive_notebook = lambda _file_id: {
+            "cells": [
+                {
+                    "refId": "markup-1",
+                    "value": case.expected_notebook_cell_contains,
+                    "metadata": {},
+                }
+            ]
+        }
+
+        evidence = evaluator._wait_for_notebook_evidence("drive-file", case)
+
+        self.assertTrue(evidence["forbiddenValuesAbsent"])
 
     def test_drive_cleanup_refreshes_once_after_unauthorized(self) -> None:
         evaluator = object.__new__(RunmeEvals)
@@ -795,6 +867,7 @@ class EvalCaseTest(unittest.TestCase):
             case
             for case in load_cases(DEFAULT_CASES)
             if case.category == "redundant-confirmation"
+            and case.confirmation_policy_trigger is None
         ]
         failures = [
             {
@@ -812,9 +885,43 @@ class EvalCaseTest(unittest.TestCase):
         low, high = metrics["wilson95"]
         self.assertLess(low, 0.12)
         self.assertGreater(high, 0.12)
+        self.assertEqual(metrics["byTrigger"]["generic"]["trials"], 100)
+        self.assertEqual(metrics["byTrigger"]["generic"]["redundantConfirmations"], 12)
         self.assertEqual(wilson_interval(0, 0), (0.0, 0.0))
         self.assertEqual(wilson_interval(0, 100)[0], 0.0)
         self.assertEqual(wilson_interval(100, 100)[1], 1.0)
+
+    def test_redundant_confirmation_metrics_break_down_policy_triggers(self) -> None:
+        cases = [
+            case
+            for case in load_cases(DEFAULT_CASES)
+            if case.confirmation_policy_trigger is not None
+        ]
+        failures = [
+            {
+                "category": "redundant-confirmation",
+                "confirmationPolicyTrigger": "sensitive-data-same-document",
+                "failureMode": "redundant_confirmation",
+            },
+            {
+                "category": "redundant-confirmation",
+                "confirmationPolicyTrigger": "recoverable-deletion",
+                "failureMode": "redundant_confirmation",
+            },
+        ]
+
+        metrics = redundant_confirmation_metrics(cases, failures)
+
+        self.assertEqual(metrics["trials"], 12)
+        self.assertEqual(metrics["redundantConfirmations"], 2)
+        self.assertEqual(
+            metrics["byTrigger"]["sensitive-data-same-document"]["trials"],
+            6,
+        )
+        self.assertEqual(
+            metrics["byTrigger"]["recoverable-deletion"]["redundantConfirmations"],
+            1,
+        )
 
     def test_observed_confirmation_wording_is_classified(self) -> None:
         observed = (

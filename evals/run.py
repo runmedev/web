@@ -74,6 +74,7 @@ class EvalCase:
     expected_tool_not_contains: tuple[str, ...] = ()
     expected_tool_not_regex: tuple[str, ...] = ()
     expected_notebook_cell_contains: str | None = None
+    expected_notebook_cell_not_contains: tuple[str, ...] = ()
     expected_notebook_runner_name: str | None = None
     expected_notebook_output_contains: str | None = None
     distractor_urls: tuple[str, ...] = ()
@@ -81,6 +82,7 @@ class EvalCase:
     expected_claimed_primary_tab: bool = False
     expected_claimed_only_primary_tab: bool = False
     category: str = "uncategorized"
+    confirmation_policy_trigger: str | None = None
     forbidden_answer_failure_mode: str = "forbidden_answer"
     copy_notebook: bool = False
     copy_name_prefix: str = "runme-eval"
@@ -563,13 +565,17 @@ class RunmeEvals:
                         failure_mode="missing_page_evidence",
                     )
             notebook_evidence = None
-            if copied_notebook is not None and case.expected_notebook_cell_contains:
+            if copied_notebook is not None and (
+                case.expected_notebook_cell_contains
+                or case.expected_notebook_cell_not_contains
+            ):
                 notebook_evidence = self._wait_for_notebook_evidence(
                     copied_notebook["id"], case
                 )
             return {
                 "case": case.case_id,
                 "category": case.category,
+                "confirmationPolicyTrigger": case.confirmation_policy_trigger,
                 "passed": True,
                 "threadId": thread_id,
                 "answer": answer,
@@ -988,29 +994,54 @@ class RunmeEvals:
         self, file_id: str, case: EvalCase
     ) -> dict[str, Any]:
         expected_value = case.expected_notebook_cell_contains
-        if not expected_value:
-            raise ValueError("Notebook evidence requires expected cell content")
+        forbidden_values = case.expected_notebook_cell_not_contains
+        if not expected_value and not forbidden_values:
+            raise ValueError("Notebook evidence requires expected or forbidden content")
         deadline = time.monotonic() + min(self.timeout_seconds, 60)
         last_failure_mode = "missing_notebook_evidence"
-        last_message = f"No persisted cell contained {expected_value!r}"
+        last_message = (
+            f"No persisted cell contained {expected_value!r}"
+            if expected_value
+            else "Persisted notebook still contained forbidden content"
+        )
         while time.monotonic() < deadline:
             try:
                 notebook = self._download_drive_notebook(file_id)
                 cells = notebook.get("cells")
                 if not isinstance(cells, list):
                     raise TypeError("Drive notebook does not contain a cells array")
-                matches = [
-                    cell
-                    for cell in cells
-                    if isinstance(cell, dict)
-                    and expected_value in str(cell.get("value") or "")
-                ]
-                if not matches:
+                matches = (
+                    [
+                        cell
+                        for cell in cells
+                        if isinstance(cell, dict)
+                        and expected_value in str(cell.get("value") or "")
+                    ]
+                    if expected_value
+                    else []
+                )
+                if expected_value and not matches:
                     last_failure_mode = "missing_notebook_evidence"
                     last_message = f"No persisted cell contained {expected_value!r}"
                     time.sleep(1)
                     continue
-                cell = matches[-1]
+                present_forbidden = [
+                    value
+                    for value in forbidden_values
+                    if any(
+                        isinstance(cell, dict) and value in str(cell.get("value") or "")
+                        for cell in cells
+                    )
+                ]
+                if present_forbidden:
+                    last_failure_mode = "unexpected_notebook_evidence"
+                    last_message = (
+                        "Persisted notebook still contained forbidden values "
+                        f"{present_forbidden!r}"
+                    )
+                    time.sleep(1)
+                    continue
+                cell = matches[-1] if matches else {}
                 metadata = cell.get("metadata")
                 if not isinstance(metadata, dict):
                     metadata = {}
@@ -1060,6 +1091,7 @@ class RunmeEvals:
                         if case.expected_notebook_output_contains
                         else None
                     ),
+                    "forbiddenValuesAbsent": not present_forbidden,
                 }
             except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
                 last_failure_mode = "missing_notebook_evidence"
@@ -1273,6 +1305,15 @@ def load_cases(path: Path) -> list[EvalCase]:
                         if value.get("expected_notebook_cell_contains")
                         else None
                     ),
+                    expected_notebook_cell_not_contains=tuple(
+                        render(item)
+                        for item in string_list(
+                            value,
+                            "expected_notebook_cell_not_contains",
+                            base_case_id,
+                            required=False,
+                        )
+                    ),
                     expected_notebook_runner_name=(
                         render(str(value["expected_notebook_runner_name"]))
                         if value.get("expected_notebook_runner_name")
@@ -1308,6 +1349,11 @@ def load_cases(path: Path) -> list[EvalCase]:
                         value.get("expected_claimed_only_primary_tab") is True
                     ),
                     category=str(value.get("category") or "uncategorized"),
+                    confirmation_policy_trigger=(
+                        render(str(value["confirmation_policy_trigger"]))
+                        if value.get("confirmation_policy_trigger")
+                        else None
+                    ),
                     forbidden_answer_failure_mode=str(
                         value.get("forbidden_answer_failure_mode") or "forbidden_answer"
                     ),
@@ -1841,11 +1887,47 @@ def redundant_confirmation_metrics(
         for failure in failures
     )
     low, high = wilson_interval(failure_count, trials)
+    triggers = sorted(
+        {
+            case.confirmation_policy_trigger or "generic"
+            for case in cases
+            if case.category == "redundant-confirmation"
+        }
+    )
+    by_trigger: dict[str, Any] = {}
+    for trigger in triggers:
+        trigger_trials = sum(
+            case.category == "redundant-confirmation"
+            and (case.confirmation_policy_trigger or "generic") == trigger
+            for case in cases
+        )
+        trigger_failures = sum(
+            failure.get("category") == "redundant-confirmation"
+            and (failure.get("confirmationPolicyTrigger") or "generic") == trigger
+            and (
+                failure.get("failureMode") == "redundant_confirmation"
+                or bool(
+                    present_regex_evidence(
+                        str(failure.get("answer") or ""),
+                        REDUNDANT_CONFIRMATION_PATTERNS,
+                    )
+                )
+            )
+            for failure in failures
+        )
+        trigger_low, trigger_high = wilson_interval(trigger_failures, trigger_trials)
+        by_trigger[trigger] = {
+            "trials": trigger_trials,
+            "redundantConfirmations": trigger_failures,
+            "rate": trigger_failures / trigger_trials if trigger_trials else 0.0,
+            "wilson95": [trigger_low, trigger_high],
+        }
     return {
         "trials": trials,
         "redundantConfirmations": failure_count,
         "rate": failure_count / trials if trials else 0.0,
         "wilson95": [low, high],
+        "byTrigger": by_trigger,
     }
 
 
@@ -1992,6 +2074,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--case", action="append", dest="case_ids")
     parser.add_argument("--category", action="append", dest="categories")
+    parser.add_argument(
+        "--confirmation-policy-trigger",
+        action="append",
+        dest="confirmation_policy_triggers",
+        help=(
+            "Select redundant-confirmation cases by their white-box Browser "
+            "policy trigger; repeat for multiple triggers"
+        ),
+    )
     parser.add_argument("--list-cases", action="store_true")
     parser.add_argument("--codex-apps-root", type=Path)
     parser.add_argument(
@@ -2045,6 +2136,25 @@ def main() -> int:
         if unknown_categories:
             raise SystemExit(f"Unknown eval categories: {sorted(unknown_categories)}")
         cases = [case for case in cases if case.category in selected_categories]
+    if args.confirmation_policy_triggers:
+        selected_triggers = set(args.confirmation_policy_triggers)
+        available_triggers = {
+            case.confirmation_policy_trigger
+            for case in cases
+            if case.confirmation_policy_trigger is not None
+        }
+        unknown_triggers = selected_triggers - available_triggers
+        if unknown_triggers:
+            raise SystemExit(
+                "Unknown confirmation policy triggers: "
+                f"{sorted(unknown_triggers)}; available: "
+                f"{sorted(available_triggers)}"
+            )
+        cases = [
+            case
+            for case in cases
+            if case.confirmation_policy_trigger in selected_triggers
+        ]
     if args.list_cases:
         print(
             json.dumps(
@@ -2055,6 +2165,9 @@ def main() -> int:
                         {
                             "id": case.case_id,
                             "category": case.category,
+                            "confirmationPolicyTrigger": (
+                                case.confirmation_policy_trigger
+                            ),
                             "description": case.description,
                         }
                         for case in cases
@@ -2143,6 +2256,7 @@ def main() -> int:
                     failure = {
                         "case": case.case_id,
                         "category": case.category,
+                        "confirmationPolicyTrigger": (case.confirmation_policy_trigger),
                         "passed": False,
                         "elapsedSeconds": round(time.monotonic() - started, 3),
                         "errorType": type(error).__name__,
