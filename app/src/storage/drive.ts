@@ -43,6 +43,31 @@ type RunmeRevisionShape = {
   cellCount: number
 }
 
+const RUNME_NOTEBOOK_REVISION_FIELDS = new Set([
+  'cells',
+  'metadata',
+  'frontmatter',
+])
+const RUNME_CELL_REVISION_FIELDS = new Set([
+  'kind',
+  'value',
+  'languageId',
+  'language_id',
+  'metadata',
+  'textRange',
+  'text_range',
+  'outputs',
+  'executionSummary',
+  'execution_summary',
+  'refId',
+  'ref_id',
+  'role',
+  'callId',
+  'call_id',
+  'docResults',
+  'doc_results',
+])
+
 /**
  * Returns privacy-safe shape information when a revision body is a Jupyter
  * notebook. The structured `metadata.runme` envelope is valid IPYNB metadata,
@@ -96,9 +121,9 @@ function inspectIpynbRevisionShape(body: string): IpynbRevisionShape | null {
 
 /**
  * Recognizes protobuf JSON emitted for a Runme notebook without treating an
- * arbitrary object with a `cells` array as valid. `frontmatter` is a
- * notebook-level Runme field; non-empty notebooks also expose cell fields that
- * do not occur in Jupyter's cell schema.
+ * arbitrary object with a `cells` array as valid. Protobuf JSON may omit every
+ * default-valued field, so recognition is based on the complete set of allowed
+ * notebook and cell field names rather than requiring a populated field.
  */
 function inspectRunmeRevisionShape(body: string): RunmeRevisionShape | null {
   let parsed: unknown
@@ -117,7 +142,7 @@ function inspectRunmeRevisionShape(body: string): RunmeRevisionShape | null {
   }
   const notebookKeys = Object.keys(notebook)
   const hasOnlyRunmeNotebookFields = notebookKeys.every((key) =>
-    ['cells', 'metadata', 'frontmatter'].includes(key)
+    RUNME_NOTEBOOK_REVISION_FIELDS.has(key)
   )
   if (notebook.cells === undefined) {
     return hasOnlyRunmeNotebookFields ? { cellCount: 0 } : null
@@ -125,20 +150,14 @@ function inspectRunmeRevisionShape(body: string): RunmeRevisionShape | null {
   if (!Array.isArray(notebook.cells)) {
     return null
   }
-  if (notebook.cells.length === 0 && hasOnlyRunmeNotebookFields) {
-    return { cellCount: 0 }
-  }
-  const hasRunmeNotebookField = 'frontmatter' in notebook
-  const cellsHaveRunmeFields =
-    notebook.cells.length > 0 &&
-    notebook.cells.every(
-      (cell) =>
-        !!cell &&
-        typeof cell === 'object' &&
-        !Array.isArray(cell) &&
-        ('kind' in cell || 'value' in cell || 'refId' in cell)
-    )
-  if (!hasRunmeNotebookField && !cellsHaveRunmeFields) {
+  const cellsHaveOnlyRunmeFields = notebook.cells.every(
+    (cell) =>
+      !!cell &&
+      typeof cell === 'object' &&
+      !Array.isArray(cell) &&
+      Object.keys(cell).every((key) => RUNME_CELL_REVISION_FIELDS.has(key))
+  )
+  if (!hasOnlyRunmeNotebookFields || !cellsHaveOnlyRunmeFields) {
     return null
   }
 

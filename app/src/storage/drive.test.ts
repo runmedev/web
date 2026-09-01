@@ -1585,6 +1585,40 @@ describe("DriveNotebookStore", () => {
     },
   );
 
+  it("recognizes default-only Runme cells under the current IPYNB filename", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response('{"cells":[{"value":"echo hi"},{}]}', {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const warn = vi
+      .spyOn(appLogger, "warn")
+      .mockImplementation(() => null as never);
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const loaded = await store.loadRevision(
+      "https://drive.google.com/file/d/file123/view",
+      "revision-1",
+      "notebook.ipynb",
+    );
+
+    expect(loaded.cells).toHaveLength(2);
+    expect(loaded.cells[0]?.value).toBe("echo hi");
+    expect(warn).toHaveBeenCalledWith(
+      "Recovered Drive revision with Runme JSON shape fallback",
+      {
+        attrs: {
+          scope: "storage.drive.revision",
+          code: "DRIVE_REVISION_RUNME_JSON_DECODE_FALLBACK",
+          initialFormat: "ipynb",
+          cellCount: 2,
+        },
+      },
+    );
+  });
+
   it("does not reinterpret invalid Runme JSON as IPYNB", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     vi.spyOn(globalThis, "fetch").mockResolvedValue(

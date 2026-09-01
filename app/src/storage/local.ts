@@ -1606,23 +1606,13 @@ export class LocalNotebooks extends Dexie {
       // the exact Drive revision and storing it in OPFS for future diffs.
     }
 
-    const revisionDoc =
-      detectNotebookFileFormat(record.name) === 'ipynb'
-        ? serializeNotebook(
-            decodeNotebookFile(
-              await this.driveStore.loadRevisionContent(
-                record.remoteId,
-                normalizedRevisionId
-              ),
-              record.name
-            ).notebook
-          )
-        : serializeNotebook(
-            await this.driveStore.loadRevision(
-              record.remoteId,
-              normalizedRevisionId
-            )
-          )
+    const revisionDoc = serializeNotebook(
+      await this.driveStore.loadRevision(
+        record.remoteId,
+        normalizedRevisionId,
+        record.name
+      )
+    )
     await this.getRevisionDocStorage().write(
       localUri,
       normalizedRevisionId,
