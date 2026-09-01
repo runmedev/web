@@ -182,7 +182,7 @@ describe('createNotebookDiffRuntimeApi', () => {
     const localNotebooks = {
       getMetadata: vi.fn().mockResolvedValue({
         uri: 'local://file/one',
-        name: 'Notebook',
+        name: 'Notebook.ipynb',
         type: NotebookStoreItemType.File,
         children: [],
         remoteUri: 'https://drive.google.com/file/d/drive-file/view',
@@ -205,7 +205,8 @@ describe('createNotebookDiffRuntimeApi', () => {
 
     expect(driveStore.loadRevision).toHaveBeenCalledWith(
       'https://drive.google.com/file/d/drive-file/view',
-      'revision-1'
+      'revision-1',
+      'Notebook.ipynb'
     )
     expect(doc.base.revisionId).toBe('revision-1')
     expect(doc.compare.revisionId).toBe('local-revision')

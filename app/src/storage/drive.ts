@@ -6,6 +6,7 @@ import { LinkedResourceError } from '../lib/linkedResource'
 import { appLogger } from '../lib/logging/runtime'
 import {
   createInitialNotebookFile,
+  decodeNotebookFile,
   detectNotebookFileFormat,
 } from '../lib/notebookFormat'
 import { parser_pb } from '../runme/client'
@@ -31,6 +32,191 @@ export const DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY =
   'runmeCreateExpectedRequest'
 export const DRIVE_CREATE_COMPLETED_CHECKSUM_PROPERTY =
   'runmeCreateCompletedChecksum'
+
+type IpynbRevisionShape = {
+  cellCount: number
+  cellsWithObjectRunmeMetadata: number
+  notebookRunmeMetadataType: string
+}
+
+type RunmeRevisionShape = {
+  cellCount: number
+}
+
+const RUNME_NOTEBOOK_REVISION_FIELDS = new Set([
+  'cells',
+  'metadata',
+  'frontmatter',
+])
+const RUNME_CELL_REVISION_FIELDS = new Set([
+  'kind',
+  'value',
+  'languageId',
+  'language_id',
+  'metadata',
+  'textRange',
+  'text_range',
+  'outputs',
+  'executionSummary',
+  'execution_summary',
+  'refId',
+  'ref_id',
+  'role',
+  'callId',
+  'call_id',
+  'docResults',
+  'doc_results',
+])
+
+/**
+ * Returns privacy-safe shape information when a revision body is a Jupyter
+ * notebook. The structured `metadata.runme` envelope is valid IPYNB metadata,
+ * but it cannot be decoded as the Runme proto's `map<string, string>` metadata.
+ */
+function inspectIpynbRevisionShape(body: string): IpynbRevisionShape | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return null
+  }
+
+  const notebook = parsed as Record<string, unknown>
+  if (notebook.nbformat !== 4 || !Array.isArray(notebook.cells)) {
+    return null
+  }
+  const notebookMetadata =
+    notebook.metadata &&
+    typeof notebook.metadata === 'object' &&
+    !Array.isArray(notebook.metadata)
+      ? (notebook.metadata as Record<string, unknown>)
+      : {}
+  const notebookRunmeMetadata = notebookMetadata.runme
+  const notebookRunmeMetadataType = Array.isArray(notebookRunmeMetadata)
+    ? 'array'
+    : notebookRunmeMetadata === null
+      ? 'null'
+      : typeof notebookRunmeMetadata
+  const cellsWithObjectRunmeMetadata = notebook.cells.filter((cell) => {
+    if (!cell || typeof cell !== 'object' || Array.isArray(cell)) {
+      return false
+    }
+    const metadata = (cell as Record<string, unknown>).metadata
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return false
+    }
+    const runme = (metadata as Record<string, unknown>).runme
+    return !!runme && typeof runme === 'object' && !Array.isArray(runme)
+  }).length
+
+  return {
+    cellCount: notebook.cells.length,
+    cellsWithObjectRunmeMetadata,
+    notebookRunmeMetadataType,
+  }
+}
+
+/**
+ * Recognizes protobuf JSON emitted for a Runme notebook without treating an
+ * arbitrary object with a `cells` array as valid. Protobuf JSON may omit every
+ * default-valued field, so recognition is based on the complete set of allowed
+ * notebook and cell field names rather than requiring a populated field.
+ */
+function inspectRunmeRevisionShape(body: string): RunmeRevisionShape | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return null
+  }
+
+  const notebook = parsed as Record<string, unknown>
+  if ('nbformat' in notebook) {
+    return null
+  }
+  const notebookKeys = Object.keys(notebook)
+  const hasOnlyRunmeNotebookFields = notebookKeys.every((key) =>
+    RUNME_NOTEBOOK_REVISION_FIELDS.has(key)
+  )
+  if (notebook.cells === undefined) {
+    return hasOnlyRunmeNotebookFields ? { cellCount: 0 } : null
+  }
+  if (!Array.isArray(notebook.cells)) {
+    return null
+  }
+  const cellsHaveOnlyRunmeFields = notebook.cells.every(
+    (cell) =>
+      !!cell &&
+      typeof cell === 'object' &&
+      !Array.isArray(cell) &&
+      Object.keys(cell).every((key) => RUNME_CELL_REVISION_FIELDS.has(key))
+  )
+  if (!hasOnlyRunmeNotebookFields || !cellsHaveOnlyRunmeFields) {
+    return null
+  }
+
+  return { cellCount: notebook.cells.length }
+}
+
+/**
+ * Decodes a Drive revision using the filename-selected notebook format. Older
+ * callers may omit the filename, so an IPYNB shape fallback preserves access
+ * while emitting a structured warning that identifies the ambiguous path.
+ */
+function decodeDriveRevision(
+  body: string,
+  fileName?: string
+): parser_pb.Notebook {
+  const fileFormat = fileName ? detectNotebookFileFormat(fileName) : null
+  const ipynbShape = inspectIpynbRevisionShape(body)
+  if (ipynbShape) {
+    const notebook = decodeNotebookFile(body, 'revision.ipynb').notebook
+    if (fileFormat !== 'ipynb') {
+      appLogger.warn('Recovered Drive revision with IPYNB shape fallback', {
+        attrs: {
+          scope: 'storage.drive.revision',
+          code: 'DRIVE_REVISION_IPYNB_DECODE_FALLBACK',
+          initialFormat: fileFormat ?? 'runme-json',
+          ...ipynbShape,
+        },
+      })
+    }
+    return notebook
+  }
+
+  if (fileFormat === 'ipynb') {
+    const runmeShape = inspectRunmeRevisionShape(body)
+    if (runmeShape) {
+      const notebook = decodeNotebookFile(body, 'revision.json').notebook
+      appLogger.warn(
+        'Recovered Drive revision with Runme JSON shape fallback',
+        {
+          attrs: {
+            scope: 'storage.drive.revision',
+            code: 'DRIVE_REVISION_RUNME_JSON_DECODE_FALLBACK',
+            initialFormat: 'ipynb',
+            ...runmeShape,
+          },
+        }
+      )
+      return notebook
+    }
+  }
+
+  if (fileName && fileFormat) {
+    return decodeNotebookFile(body, fileName).notebook
+  }
+
+  return fromJsonString(parser_pb.NotebookSchema, body, {
+    ignoreUnknownFields: true,
+  })
+}
 
 let gapiScriptPromise: Promise<void> | null = null
 let clientPromise: Promise<DriveFilesClient> | null = null
@@ -3021,7 +3207,8 @@ export class DriveNotebookStore {
 
   async loadRevision(
     uri: string,
-    revisionId: string
+    revisionId: string,
+    fileName?: string
   ): Promise<parser_pb.Notebook> {
     const item = parseDriveItem(uri)
     if (item.type !== NotebookStoreItemType.File) {
@@ -3041,9 +3228,7 @@ export class DriveNotebookStore {
       driveResourceKeyHeaders(item)
     )
     const body = extractBody(response)
-    return fromJsonString(parser_pb.NotebookSchema, body, {
-      ignoreUnknownFields: true,
-    })
+    return decodeDriveRevision(body, fileName)
   }
 
   async loadRevisionContent(uri: string, revisionId: string): Promise<string> {

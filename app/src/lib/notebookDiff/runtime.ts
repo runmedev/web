@@ -170,7 +170,7 @@ export function createNotebookDiffRuntimeApi({
         `Notebook ${doc.handle.uri} is not backed by a Google Drive file.`
       )
     }
-    return { doc, remoteUri }
+    return { doc, remoteUri, fileName: metadata.name }
   }
 
   const requireDriveStore = () => {
@@ -290,11 +290,14 @@ export function createNotebookDiffRuntimeApi({
       if (!args?.revisionId?.trim()) {
         throw new Error('notebookDiff.diffDriveRevision requires revisionId.')
       }
-      const { doc, remoteUri } = await resolveDriveRemoteUri(args.target)
+      const { doc, remoteUri, fileName } = await resolveDriveRemoteUri(
+        args.target
+      )
       const driveStore = requireDriveStore()
       const baseNotebook = await driveStore.loadRevision(
         remoteUri,
-        args.revisionId
+        args.revisionId,
+        fileName
       )
       const diff = computeNotebookDiff(baseNotebook, doc.notebook, {
         includeOutputs: args.includeOutputs ?? true,

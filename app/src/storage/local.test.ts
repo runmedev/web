@@ -2353,8 +2353,45 @@ describe('LocalNotebooks Drive conflict resolution', () => {
     expect(driveStore.loadRevision).toHaveBeenCalledTimes(1)
     expect(driveStore.loadRevision).toHaveBeenCalledWith(
       remoteUri,
-      'revision-1'
+      'revision-1',
+      'notebook.json'
     )
+  })
+
+  it('routes cached IPYNB revision diffs through format-aware loading', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/file123/view'
+    const revisionNotebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          kind: parser_pb.CellKind.CODE,
+          value: 'echo historical runme json',
+        }),
+      ],
+    })
+    const driveStore = {
+      loadRevision: vi.fn(async () => revisionNotebook),
+      loadRevisionContent: vi.fn(),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: 'local://file/drive',
+      name: 'notebook.ipynb',
+      remoteId: remoteUri,
+      lastRemoteChecksum: 'base-checksum',
+      lastSynced: '2026-05-01T00:00:00.000Z',
+      doc: notebookJson("print('local')"),
+      md5Checksum: 'local-checksum',
+    })
+
+    await expect(
+      store.getDriveRevisionDoc('local://file/drive', 'revision-1')
+    ).resolves.toContain('echo historical runme json')
+    expect(driveStore.loadRevision).toHaveBeenCalledWith(
+      remoteUri,
+      'revision-1',
+      'notebook.ipynb'
+    )
+    expect(driveStore.loadRevisionContent).not.toHaveBeenCalled()
   })
 
   it('records a conflict instead of creating a timestamped Drive copy', async () => {
