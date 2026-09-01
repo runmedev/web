@@ -99,22 +99,25 @@ function decodeDriveRevision(
   body: string,
   fileName?: string
 ): parser_pb.Notebook {
-  if (fileName && detectNotebookFileFormat(fileName)) {
-    return decodeNotebookFile(body, fileName).notebook
-  }
-
+  const fileFormat = fileName ? detectNotebookFileFormat(fileName) : null
   const ipynbShape = inspectIpynbRevisionShape(body)
   if (ipynbShape) {
     const notebook = decodeNotebookFile(body, 'revision.ipynb').notebook
-    appLogger.warn('Recovered Drive revision with IPYNB shape fallback', {
-      attrs: {
-        scope: 'storage.drive.revision',
-        code: 'DRIVE_REVISION_IPYNB_DECODE_FALLBACK',
-        initialFormat: 'runme-json',
-        ...ipynbShape,
-      },
-    })
+    if (fileFormat !== 'ipynb') {
+      appLogger.warn('Recovered Drive revision with IPYNB shape fallback', {
+        attrs: {
+          scope: 'storage.drive.revision',
+          code: 'DRIVE_REVISION_IPYNB_DECODE_FALLBACK',
+          initialFormat: fileFormat ?? 'runme-json',
+          ...ipynbShape,
+        },
+      })
+    }
     return notebook
+  }
+
+  if (fileName && fileFormat) {
+    return decodeNotebookFile(body, fileName).notebook
   }
 
   return fromJsonString(parser_pb.NotebookSchema, body, {
