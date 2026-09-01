@@ -112,8 +112,21 @@ function inspectRunmeRevisionShape(body: string): RunmeRevisionShape | null {
   }
 
   const notebook = parsed as Record<string, unknown>
-  if ('nbformat' in notebook || !Array.isArray(notebook.cells)) {
+  if ('nbformat' in notebook) {
     return null
+  }
+  const notebookKeys = Object.keys(notebook)
+  const hasOnlyRunmeNotebookFields = notebookKeys.every((key) =>
+    ['cells', 'metadata', 'frontmatter'].includes(key)
+  )
+  if (notebook.cells === undefined) {
+    return hasOnlyRunmeNotebookFields ? { cellCount: 0 } : null
+  }
+  if (!Array.isArray(notebook.cells)) {
+    return null
+  }
+  if (notebook.cells.length === 0 && hasOnlyRunmeNotebookFields) {
+    return { cellCount: 0 }
   }
   const hasRunmeNotebookField = 'frontmatter' in notebook
   const cellsHaveRunmeFields =
