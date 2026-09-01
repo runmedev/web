@@ -7,7 +7,10 @@ import {
   setGoogleDriveBaseUrl,
 } from "../lib/googleDriveRuntime";
 import { appLogger } from "../lib/logging/runtime";
-import { encodeIpynbNotebook } from "../lib/notebookFormat";
+import {
+  encodeIpynbNotebook,
+  encodeRunmeNotebook,
+} from "../lib/notebookFormat";
 import { parser_pb } from "../runme/client";
 import {
   DriveCreateNotCommittedError,
@@ -1496,6 +1499,51 @@ describe("DriveNotebookStore", () => {
           cellCount: 1,
           cellsWithObjectRunmeMetadata: 0,
           notebookRunmeMetadataType: "undefined",
+        },
+      },
+    );
+  });
+
+  it("prefers revision Runme JSON shape over the current IPYNB filename", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const source = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: "cell-1",
+          kind: parser_pb.CellKind.CODE,
+          languageId: "bash",
+          value: "echo hello",
+          metadata: { name: "hello" },
+        }),
+      ],
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(encodeRunmeNotebook(source), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const warn = vi
+      .spyOn(appLogger, "warn")
+      .mockImplementation(() => null as never);
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const loaded = await store.loadRevision(
+      "https://drive.google.com/file/d/file123/view",
+      "revision-1",
+      "notebook.ipynb",
+    );
+
+    expect(loaded.cells).toHaveLength(1);
+    expect(loaded.cells[0]?.value).toBe("echo hello");
+    expect(warn).toHaveBeenCalledWith(
+      "Recovered Drive revision with Runme JSON shape fallback",
+      {
+        attrs: {
+          scope: "storage.drive.revision",
+          code: "DRIVE_REVISION_RUNME_JSON_DECODE_FALLBACK",
+          initialFormat: "ipynb",
+          cellCount: 1,
         },
       },
     );

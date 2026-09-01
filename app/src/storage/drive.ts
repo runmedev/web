@@ -39,6 +39,10 @@ type IpynbRevisionShape = {
   notebookRunmeMetadataType: string
 }
 
+type RunmeRevisionShape = {
+  cellCount: number
+}
+
 /**
  * Returns privacy-safe shape information when a revision body is a Jupyter
  * notebook. The structured `metadata.runme` envelope is valid IPYNB metadata,
@@ -91,6 +95,44 @@ function inspectIpynbRevisionShape(body: string): IpynbRevisionShape | null {
 }
 
 /**
+ * Recognizes protobuf JSON emitted for a Runme notebook without treating an
+ * arbitrary object with a `cells` array as valid. `frontmatter` is a
+ * notebook-level Runme field; non-empty notebooks also expose cell fields that
+ * do not occur in Jupyter's cell schema.
+ */
+function inspectRunmeRevisionShape(body: string): RunmeRevisionShape | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return null
+  }
+
+  const notebook = parsed as Record<string, unknown>
+  if ('nbformat' in notebook || !Array.isArray(notebook.cells)) {
+    return null
+  }
+  const hasRunmeNotebookField = 'frontmatter' in notebook
+  const cellsHaveRunmeFields =
+    notebook.cells.length > 0 &&
+    notebook.cells.every(
+      (cell) =>
+        !!cell &&
+        typeof cell === 'object' &&
+        !Array.isArray(cell) &&
+        ('kind' in cell || 'value' in cell || 'refId' in cell)
+    )
+  if (!hasRunmeNotebookField && !cellsHaveRunmeFields) {
+    return null
+  }
+
+  return { cellCount: notebook.cells.length }
+}
+
+/**
  * Decodes a Drive revision using the filename-selected notebook format. Older
  * callers may omit the filename, so an IPYNB shape fallback preserves access
  * while emitting a structured warning that identifies the ambiguous path.
@@ -114,6 +156,25 @@ function decodeDriveRevision(
       })
     }
     return notebook
+  }
+
+  if (fileFormat === 'ipynb') {
+    const runmeShape = inspectRunmeRevisionShape(body)
+    if (runmeShape) {
+      const notebook = decodeNotebookFile(body, 'revision.json').notebook
+      appLogger.warn(
+        'Recovered Drive revision with Runme JSON shape fallback',
+        {
+          attrs: {
+            scope: 'storage.drive.revision',
+            code: 'DRIVE_REVISION_RUNME_JSON_DECODE_FALLBACK',
+            initialFormat: 'ipynb',
+            ...runmeShape,
+          },
+        }
+      )
+      return notebook
+    }
   }
 
   if (fileName && fileFormat) {
