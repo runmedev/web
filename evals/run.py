@@ -40,6 +40,10 @@ REDUNDANT_CONFIRMATION_PATTERNS = (
     r"(?i)\b(?:can|could|would) you (?:confirm|approve|authorize)\b",
     r"(?i)\bwould you like me to\b",
     r"(?i)\b(?:need|require)(?:s)? (?:your|an?) (?:confirmation|approval)\b",
+    r"(?i)\bplease confirm\b",
+    r"(?i)\bbrowser (?:safety )?(?:rules?|policy) require(?:s)?\b.{0,64}\b(?:confirmation|approval)\b",
+    r"(?i)\b(?:deleting|deletion|browser safety|browser policy)\b.{0,80}\brequire(?:s)?\b.{0,48}\b(?:confirmation|approval)\b",
+    r"(?i)\bmay i (?:now )?(?:delete|remove)\b",
 )
 
 
@@ -74,13 +78,19 @@ class EvalCase:
     expected_tool_not_contains: tuple[str, ...] = ()
     expected_tool_not_regex: tuple[str, ...] = ()
     expected_notebook_cell_contains: str | None = None
+    expected_notebook_cell_not_contains: tuple[str, ...] = ()
     expected_notebook_runner_name: str | None = None
     expected_notebook_output_contains: str | None = None
+    expected_created_notebook_name: str | None = None
+    expected_created_notebook_parent: str | None = None
+    expected_created_notebook_contains: tuple[str, ...] = ()
+    expected_created_notebook_unexecuted: bool = False
     distractor_urls: tuple[str, ...] = ()
     setup_markdown_cells: tuple[str, ...] = ()
     expected_claimed_primary_tab: bool = False
     expected_claimed_only_primary_tab: bool = False
     category: str = "uncategorized"
+    confirmation_policy_trigger: str | None = None
     forbidden_answer_failure_mode: str = "forbidden_answer"
     copy_notebook: bool = False
     copy_name_prefix: str = "runme-eval"
@@ -563,13 +573,20 @@ class RunmeEvals:
                         failure_mode="missing_page_evidence",
                     )
             notebook_evidence = None
-            if copied_notebook is not None and case.expected_notebook_cell_contains:
+            if copied_notebook is not None and (
+                case.expected_notebook_cell_contains
+                or case.expected_notebook_cell_not_contains
+            ):
                 notebook_evidence = self._wait_for_notebook_evidence(
                     copied_notebook["id"], case
                 )
+            created_notebook = None
+            if case.expected_created_notebook_name:
+                created_notebook = self._wait_for_created_notebook_evidence(case)
             return {
                 "case": case.case_id,
                 "category": case.category,
+                "confirmationPolicyTrigger": case.confirmation_policy_trigger,
                 "passed": True,
                 "threadId": thread_id,
                 "answer": answer,
@@ -578,6 +595,7 @@ class RunmeEvals:
                 "claimedTabIds": sorted(completed["claimedTabIds"]),
                 "pageEvidence": page_evidence,
                 "notebookEvidence": notebook_evidence,
+                "createdNotebook": created_notebook,
                 "readiness": readiness,
                 "webMcpToolNames": tool_names,
                 "nodeReplCallCount": completed["nodeReplCallCount"],
@@ -988,29 +1006,54 @@ class RunmeEvals:
         self, file_id: str, case: EvalCase
     ) -> dict[str, Any]:
         expected_value = case.expected_notebook_cell_contains
-        if not expected_value:
-            raise ValueError("Notebook evidence requires expected cell content")
+        forbidden_values = case.expected_notebook_cell_not_contains
+        if not expected_value and not forbidden_values:
+            raise ValueError("Notebook evidence requires expected or forbidden content")
         deadline = time.monotonic() + min(self.timeout_seconds, 60)
         last_failure_mode = "missing_notebook_evidence"
-        last_message = f"No persisted cell contained {expected_value!r}"
+        last_message = (
+            f"No persisted cell contained {expected_value!r}"
+            if expected_value
+            else "Persisted notebook still contained forbidden content"
+        )
         while time.monotonic() < deadline:
             try:
                 notebook = self._download_drive_notebook(file_id)
                 cells = notebook.get("cells")
                 if not isinstance(cells, list):
                     raise TypeError("Drive notebook does not contain a cells array")
-                matches = [
-                    cell
-                    for cell in cells
-                    if isinstance(cell, dict)
-                    and expected_value in str(cell.get("value") or "")
-                ]
-                if not matches:
+                matches = (
+                    [
+                        cell
+                        for cell in cells
+                        if isinstance(cell, dict)
+                        and expected_value in notebook_cell_text(cell)
+                    ]
+                    if expected_value
+                    else []
+                )
+                if expected_value and not matches:
                     last_failure_mode = "missing_notebook_evidence"
                     last_message = f"No persisted cell contained {expected_value!r}"
                     time.sleep(1)
                     continue
-                cell = matches[-1]
+                present_forbidden = [
+                    value
+                    for value in forbidden_values
+                    if any(
+                        isinstance(cell, dict) and value in notebook_cell_text(cell)
+                        for cell in cells
+                    )
+                ]
+                if present_forbidden:
+                    last_failure_mode = "unexpected_notebook_evidence"
+                    last_message = (
+                        "Persisted notebook still contained forbidden values "
+                        f"{present_forbidden!r}"
+                    )
+                    time.sleep(1)
+                    continue
+                cell = matches[-1] if matches else {}
                 metadata = cell.get("metadata")
                 if not isinstance(metadata, dict):
                     metadata = {}
@@ -1060,6 +1103,7 @@ class RunmeEvals:
                         if case.expected_notebook_output_contains
                         else None
                     ),
+                    "forbiddenValuesAbsent": not present_forbidden,
                 }
             except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
                 last_failure_mode = "missing_notebook_evidence"
@@ -1079,6 +1123,109 @@ class RunmeEvals:
         if not isinstance(notebook, dict):
             raise TypeError("Drive notebook content must be a JSON object")
         return notebook
+
+    def _find_drive_files(self, name: str, parent_id: str) -> list[dict[str, Any]]:
+        self._refresh_drive_session()
+        escaped_name = name.replace("\\", "\\\\").replace("'", "\\'")
+        escaped_parent = parent_id.replace("\\", "\\\\").replace("'", "\\'")
+        query = (
+            f"name = '{escaped_name}' and '{escaped_parent}' in parents "
+            "and trashed = false"
+        )
+        params = urllib.parse.urlencode(
+            {
+                "q": query,
+                "pageSize": "10",
+                "includeItemsFromAllDrives": "true",
+                "supportsAllDrives": "true",
+                "fields": "files(id,name,mimeType,parents,webViewLink)",
+            }
+        )
+        request = urllib.request.Request(
+            f"https://www.googleapis.com/drive/v3/files?{params}",
+            headers={"Authorization": f"Bearer {self.drive.access_token}"},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.load(response)
+        files = payload.get("files")
+        if not isinstance(files, list):
+            raise TypeError("Drive file search response must contain a files array")
+        return [item for item in files if isinstance(item, dict)]
+
+    def _wait_for_created_notebook_evidence(self, case: EvalCase) -> dict[str, Any]:
+        name = case.expected_created_notebook_name
+        parent_id = case.expected_created_notebook_parent
+        if not name or not parent_id:
+            raise ValueError("Created-notebook evidence requires a name and parent")
+        required_values = case.expected_created_notebook_contains
+        deadline = time.monotonic() + min(self.timeout_seconds, 60)
+        last_failure_mode = "missing_created_notebook"
+        last_message = f"No Drive notebook named {name!r} appeared in {parent_id!r}"
+        while time.monotonic() < deadline:
+            try:
+                matches = self._find_drive_files(name, parent_id)
+                if not matches:
+                    time.sleep(1)
+                    continue
+                if len(matches) != 1:
+                    raise EvalAssertionError(
+                        f"Expected one Drive notebook named {name!r}, found {len(matches)}",
+                        failure_mode="ambiguous_created_notebook",
+                    )
+                created = matches[0]
+                file_id = required_string(created, "id")
+                notebook = self._download_drive_notebook(file_id)
+                cells = notebook.get("cells")
+                if not isinstance(cells, list):
+                    raise TypeError(
+                        "Created Drive notebook does not contain a cells array"
+                    )
+                notebook_text = "\n".join(
+                    notebook_cell_text(cell) for cell in cells if isinstance(cell, dict)
+                )
+                missing = [
+                    value for value in required_values if value not in notebook_text
+                ]
+                if missing:
+                    last_failure_mode = "missing_created_notebook_evidence"
+                    last_message = (
+                        f"Created notebook {name!r} omitted required values {missing!r}"
+                    )
+                    time.sleep(1)
+                    continue
+                executed_cells = [
+                    cell.get("refId")
+                    for cell in cells
+                    if isinstance(cell, dict)
+                    and (
+                        isinstance(cell.get("metadata"), dict)
+                        and cell["metadata"].get("runme.dev/executionState") is not None
+                        or bool(cell.get("outputs"))
+                    )
+                ]
+                if case.expected_created_notebook_unexecuted and executed_cells:
+                    raise EvalAssertionError(
+                        f"Created notebook executed cells {executed_cells!r}",
+                        failure_mode="unexpected_notebook_execution",
+                    )
+                return {
+                    "id": file_id,
+                    "name": str(created.get("name") or name),
+                    "webViewLink": str(
+                        created.get("webViewLink")
+                        or f"https://drive.google.com/file/d/{file_id}/view"
+                    ),
+                    "parentId": parent_id,
+                    "requiredValuesPresent": True,
+                    "unexecuted": not executed_cells,
+                }
+            except EvalAssertionError:
+                raise
+            except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
+                last_failure_mode = "missing_created_notebook"
+                last_message = f"Could not read the created Drive notebook: {error}"
+                time.sleep(1)
+        raise EvalAssertionError(last_message, failure_mode=last_failure_mode)
 
     def _copy_notebook(self, case: EvalCase) -> dict[str, str]:
         self._refresh_drive_session()
@@ -1273,6 +1420,15 @@ def load_cases(path: Path) -> list[EvalCase]:
                         if value.get("expected_notebook_cell_contains")
                         else None
                     ),
+                    expected_notebook_cell_not_contains=tuple(
+                        render(item)
+                        for item in string_list(
+                            value,
+                            "expected_notebook_cell_not_contains",
+                            base_case_id,
+                            required=False,
+                        )
+                    ),
                     expected_notebook_runner_name=(
                         render(str(value["expected_notebook_runner_name"]))
                         if value.get("expected_notebook_runner_name")
@@ -1282,6 +1438,28 @@ def load_cases(path: Path) -> list[EvalCase]:
                         render(str(value["expected_notebook_output_contains"]))
                         if value.get("expected_notebook_output_contains")
                         else None
+                    ),
+                    expected_created_notebook_name=(
+                        render(str(value["expected_created_notebook_name"]))
+                        if value.get("expected_created_notebook_name")
+                        else None
+                    ),
+                    expected_created_notebook_parent=(
+                        render(str(value["expected_created_notebook_parent"]))
+                        if value.get("expected_created_notebook_parent")
+                        else None
+                    ),
+                    expected_created_notebook_contains=tuple(
+                        render(item)
+                        for item in string_list(
+                            value,
+                            "expected_created_notebook_contains",
+                            base_case_id,
+                            required=False,
+                        )
+                    ),
+                    expected_created_notebook_unexecuted=(
+                        value.get("expected_created_notebook_unexecuted") is True
                     ),
                     distractor_urls=tuple(
                         render(item)
@@ -1308,6 +1486,11 @@ def load_cases(path: Path) -> list[EvalCase]:
                         value.get("expected_claimed_only_primary_tab") is True
                     ),
                     category=str(value.get("category") or "uncategorized"),
+                    confirmation_policy_trigger=(
+                        render(str(value["confirmation_policy_trigger"]))
+                        if value.get("confirmation_policy_trigger")
+                        else None
+                    ),
                     forbidden_answer_failure_mode=str(
                         value.get("forbidden_answer_failure_mode") or "forbidden_answer"
                     ),
@@ -1389,6 +1572,19 @@ def notebook_output_text(cell: dict[str, Any]) -> str:
             if raw is not None:
                 chunks.append(raw.decode("utf-8", errors="replace"))
     return "\n".join(chunks)
+
+
+def notebook_cell_text(cell: dict[str, Any]) -> str:
+    """Return cell source text from Runme JSON or nbformat/IPYNB shapes."""
+    value = cell.get("value")
+    if isinstance(value, str):
+        return value
+    source = cell.get("source")
+    if isinstance(source, str):
+        return source
+    if isinstance(source, list):
+        return "".join(str(part) for part in source)
+    return ""
 
 
 def refresh_drive_session(account: dict[str, Any]) -> DriveSession:
@@ -1841,11 +2037,47 @@ def redundant_confirmation_metrics(
         for failure in failures
     )
     low, high = wilson_interval(failure_count, trials)
+    triggers = sorted(
+        {
+            case.confirmation_policy_trigger or "generic"
+            for case in cases
+            if case.category == "redundant-confirmation"
+        }
+    )
+    by_trigger: dict[str, Any] = {}
+    for trigger in triggers:
+        trigger_trials = sum(
+            case.category == "redundant-confirmation"
+            and (case.confirmation_policy_trigger or "generic") == trigger
+            for case in cases
+        )
+        trigger_failures = sum(
+            failure.get("category") == "redundant-confirmation"
+            and (failure.get("confirmationPolicyTrigger") or "generic") == trigger
+            and (
+                failure.get("failureMode") == "redundant_confirmation"
+                or bool(
+                    present_regex_evidence(
+                        str(failure.get("answer") or ""),
+                        REDUNDANT_CONFIRMATION_PATTERNS,
+                    )
+                )
+            )
+            for failure in failures
+        )
+        trigger_low, trigger_high = wilson_interval(trigger_failures, trigger_trials)
+        by_trigger[trigger] = {
+            "trials": trigger_trials,
+            "redundantConfirmations": trigger_failures,
+            "rate": trigger_failures / trigger_trials if trigger_trials else 0.0,
+            "wilson95": [trigger_low, trigger_high],
+        }
     return {
         "trials": trials,
         "redundantConfirmations": failure_count,
         "rate": failure_count / trials if trials else 0.0,
         "wilson95": [low, high],
+        "byTrigger": by_trigger,
     }
 
 
@@ -1992,6 +2224,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--case", action="append", dest="case_ids")
     parser.add_argument("--category", action="append", dest="categories")
+    parser.add_argument(
+        "--confirmation-policy-trigger",
+        action="append",
+        dest="confirmation_policy_triggers",
+        help=(
+            "Select redundant-confirmation cases by their white-box Browser "
+            "policy trigger; repeat for multiple triggers"
+        ),
+    )
     parser.add_argument("--list-cases", action="store_true")
     parser.add_argument("--codex-apps-root", type=Path)
     parser.add_argument(
@@ -2045,6 +2286,25 @@ def main() -> int:
         if unknown_categories:
             raise SystemExit(f"Unknown eval categories: {sorted(unknown_categories)}")
         cases = [case for case in cases if case.category in selected_categories]
+    if args.confirmation_policy_triggers:
+        selected_triggers = set(args.confirmation_policy_triggers)
+        available_triggers = {
+            case.confirmation_policy_trigger
+            for case in cases
+            if case.confirmation_policy_trigger is not None
+        }
+        unknown_triggers = selected_triggers - available_triggers
+        if unknown_triggers:
+            raise SystemExit(
+                "Unknown confirmation policy triggers: "
+                f"{sorted(unknown_triggers)}; available: "
+                f"{sorted(available_triggers)}"
+            )
+        cases = [
+            case
+            for case in cases
+            if case.confirmation_policy_trigger in selected_triggers
+        ]
     if args.list_cases:
         print(
             json.dumps(
@@ -2055,6 +2315,9 @@ def main() -> int:
                         {
                             "id": case.case_id,
                             "category": case.category,
+                            "confirmationPolicyTrigger": (
+                                case.confirmation_policy_trigger
+                            ),
                             "description": case.description,
                         }
                         for case in cases
@@ -2143,6 +2406,7 @@ def main() -> int:
                     failure = {
                         "case": case.case_id,
                         "category": case.category,
+                        "confirmationPolicyTrigger": (case.confirmation_policy_trigger),
                         "passed": False,
                         "elapsedSeconds": round(time.monotonic() - started, 3),
                         "errorType": type(error).__name__,
