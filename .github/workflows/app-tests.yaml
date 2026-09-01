@@ -186,6 +186,7 @@ jobs:
           CUJ_CMD_TIMEOUT_MS: "120000"
           CUJ_SCENARIO_TIMEOUT_MS: "240000"
           CUJ_SCENARIO_CMD_TIMEOUT_MS: "30000"
+          CUJ_SCENARIO_CMD_LOG_CHARS: "20000"
           CUJ_MOVIE_WAIT_TIMEOUT_MS: "30000"
           CUJ_RUNME_AGENT_BIN: ${{ github.workspace }}/bin/runme
         run: |
