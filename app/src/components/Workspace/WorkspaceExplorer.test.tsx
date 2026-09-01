@@ -2,6 +2,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { appLogger } from '../../lib/logging/runtime'
 import { NotebookStoreItemType } from '../../storage/notebook'
 import { DriveCreateNotCommittedError } from '../../storage/drive'
 import { WorkspaceExplorer } from './WorkspaceExplorer'
@@ -287,6 +288,53 @@ describe('WorkspaceExplorer current document handling', () => {
     })
     await screen.findByText('Mounted folders are shown as roots')
     expect(screen.getAllByText('Nested mount')).toHaveLength(1)
+  })
+
+  it('removes and logs workspace roots whose local metadata is missing', async () => {
+    const staleUris = ['local://folder/stale-one', 'local://folder/stale-two']
+    const errorLog = vi.spyOn(appLogger, 'error')
+    mocks.workspaceItems = [
+      'local://folder/local',
+      'local://folder/valid',
+      ...staleUris,
+    ]
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (staleUris.includes(uri)) {
+        return null
+      }
+      return {
+        uri,
+        name: uri === 'local://folder/local' ? 'Local Notebooks' : 'Valid root',
+        type: NotebookStoreItemType.Folder,
+        children: [],
+        parents: [],
+      }
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Valid root')
+    await waitFor(() => {
+      for (const staleUri of staleUris) {
+        expect(mocks.removeItem).toHaveBeenCalledWith(staleUri)
+      }
+    })
+    expect(errorLog).toHaveBeenCalledTimes(staleUris.length)
+    for (const staleUri of staleUris) {
+      expect(screen.queryByText(staleUri)).toBeNull()
+      expect(errorLog).toHaveBeenCalledWith(
+        'Removing workspace entry with missing local metadata',
+        {
+          attrs: {
+            scope: 'storage.workspace',
+            code: 'WORKSPACE_LOCAL_METADATA_MISSING',
+            uri: staleUri,
+          },
+        }
+      )
+    }
+
+    errorLog.mockRestore()
   })
 
   it('shows a directly created Drive notebook in its mounted folder', async () => {
