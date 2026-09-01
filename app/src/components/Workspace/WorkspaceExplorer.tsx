@@ -168,6 +168,20 @@ function isVisibleDocumentFile(name: string): boolean {
   return isNotebookFileName(name) || isExcalidrawFileName(name)
 }
 
+/**
+ * Record that a workspace root outlived its separately persisted local
+ * metadata. The local URI is opaque and safe to include in diagnostics.
+ */
+function logMissingWorkspaceMetadata(uri: string): void {
+  appLogger.error("Removing workspace entry with missing local metadata", {
+    attrs: {
+      scope: "storage.workspace",
+      code: "WORKSPACE_LOCAL_METADATA_MISSING",
+      uri,
+    },
+  });
+}
+
 function isMovableDriveNode(data: TreeNode): boolean {
   return (
     Boolean(data.remoteUri) &&
@@ -512,16 +526,30 @@ export function WorkspaceExplorer() {
         }
 
         let metadata = await store.getMetadata(localUri);
-        if (metadata?.remoteUri && metadata.name === "Drive") {
+        if (!metadata) {
+          // Workspace roots and local notebook metadata are persisted separately.
+          // If the IndexedDB record is gone, retaining the root would expose the
+          // opaque local URI in the explorer and keep restoring it on every load.
+          logMissingWorkspaceMetadata(localUri);
+          removeItem(localUri);
+          continue;
+        }
+        if (metadata.remoteUri && metadata.name === "Drive") {
           try {
             await store.updateFolder(metadata.remoteUri);
-            metadata = await store.getMetadata(localUri);
+            const refreshedMetadata = await store.getMetadata(localUri);
+            if (!refreshedMetadata) {
+              logMissingWorkspaceMetadata(localUri);
+              removeItem(localUri);
+              continue;
+            }
+            metadata = refreshedMetadata;
           } catch (error) {
             console.error("Failed to refresh Drive folder name", error);
           }
         }
-        const name = metadata?.name ?? localUri;
-        const type = metadata?.type ?? NotebookStoreItemType.Folder;
+        const name = metadata.name;
+        const type = metadata.type;
         if (type !== NotebookStoreItemType.Folder) {
           continue;
         }
