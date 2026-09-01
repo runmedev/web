@@ -29,6 +29,7 @@ from run import (
     load_cases,
     load_results_checkpoint,
     missing_answer_evidence,
+    notebook_cell_text,
     notebook_output_text,
     parse_runme_origin,
     plugin_marketplace,
@@ -551,7 +552,7 @@ class EvalCaseTest(unittest.TestCase):
     def test_ported_cases_are_complete_and_secret_free(self) -> None:
         cases = load_cases(DEFAULT_CASES)
 
-        self.assertEqual(len(cases), 134)
+        self.assertEqual(len(cases), 138)
         self.assertEqual(
             category_counts(cases),
             {
@@ -561,7 +562,7 @@ class EvalCaseTest(unittest.TestCase):
                 "direct-uri": 4,
                 "kernel-selection": 4,
                 "notebook-tab-selection": 3,
-                "redundant-confirmation": 118,
+                "redundant-confirmation": 122,
                 "runner-enumeration": 2,
             },
         )
@@ -626,7 +627,7 @@ class EvalCaseTest(unittest.TestCase):
         policy_cases = [
             case for case in cases if case.confirmation_policy_trigger is not None
         ]
-        self.assertEqual(len(policy_cases), 18)
+        self.assertEqual(len(policy_cases), 22)
         self.assertEqual(
             {
                 trigger: sum(
@@ -638,6 +639,8 @@ class EvalCaseTest(unittest.TestCase):
             },
             {
                 "sensitive-data-same-document": 8,
+                "sensitive-data-cross-document": 3,
+                "sensitive-data-conversation-to-document": 1,
                 "recoverable-deletion": 8,
                 "representational-private-draft": 2,
             },
@@ -656,6 +659,20 @@ class EvalCaseTest(unittest.TestCase):
                 ),
             ),
         )
+        raindrops = next(
+            case
+            for case in cases
+            if case.case_id == "confirmation-raindrops-create-push-runbook"
+        )
+        self.assertEqual(
+            raindrops.expected_created_notebook_parent,
+            "1jkUAQRyjQAdNuzQy3iqax-LopuAHvlvZ",
+        )
+        self.assertIn(
+            "RUNME-EVAL-CONFIRMATION-RAINDROPS-CREATE-PUSH-RUNBOOK",
+            raindrops.expected_created_notebook_name or "",
+        )
+        self.assertTrue(raindrops.expected_created_notebook_unexecuted)
 
     def test_repeated_cases_get_unique_ids_and_trial_tokens(self) -> None:
         confirmation_cases = [
@@ -678,14 +695,14 @@ class EvalCaseTest(unittest.TestCase):
             for case in load_cases(DEFAULT_CASES)
             if case.confirmation_policy_trigger is not None
         ]
-        self.assertEqual(len(policy_cases), 18)
+        self.assertEqual(len(policy_cases), 22)
         self.assertEqual(
             policy_cases[0].case_id,
             "confirmation-private-access-summary",
         )
         self.assertEqual(
             policy_cases[-1].case_id,
-            "confirmation-private-decision-log",
+            "confirmation-raindrops-create-ranking-design-confidential-context",
         )
 
     def test_notebook_output_text_decodes_runme_buffer_shapes(self) -> None:
@@ -702,6 +719,14 @@ class EvalCaseTest(unittest.TestCase):
         }
 
         self.assertEqual(notebook_output_text(cell), "ok\n\ndone\ndG9rZW4=\ntoken")
+
+    def test_notebook_cell_text_reads_runme_json_and_ipynb(self) -> None:
+        self.assertEqual(notebook_cell_text({"value": "runme"}), "runme")
+        self.assertEqual(notebook_cell_text({"source": "ipynb"}), "ipynb")
+        self.assertEqual(
+            notebook_cell_text({"source": ["line one\n", "line two"]}),
+            "line one\nline two",
+        )
 
     def test_page_evidence_waits_for_runtime_focus_to_render(self) -> None:
         evaluator = object.__new__(RunmeEvals)
@@ -770,6 +795,41 @@ class EvalCaseTest(unittest.TestCase):
         evidence = evaluator._wait_for_notebook_evidence("drive-file", case)
 
         self.assertTrue(evidence["forbiddenValuesAbsent"])
+
+    def test_created_notebook_evidence_checks_parent_content_and_execution(
+        self,
+    ) -> None:
+        case = next(
+            case
+            for case in load_cases(DEFAULT_CASES)
+            if case.case_id == "confirmation-raindrops-create-push-runbook"
+        )
+        evaluator = object.__new__(RunmeEvals)
+        evaluator.timeout_seconds = 1
+        evaluator._find_drive_files = lambda name, parent: [
+            {
+                "id": "created-drive-file",
+                "name": name,
+                "parents": [parent],
+                "webViewLink": "https://drive.google.com/file/d/created-drive-file/view",
+            }
+        ]
+        evaluator._download_drive_notebook = lambda _file_id: {
+            "cells": [
+                {
+                    "refId": "markup-1",
+                    "value": "\n".join(case.expected_created_notebook_contains),
+                    "metadata": {},
+                }
+            ]
+        }
+
+        evidence = evaluator._wait_for_created_notebook_evidence(case)
+
+        self.assertEqual(evidence["id"], "created-drive-file")
+        self.assertEqual(evidence["parentId"], case.expected_created_notebook_parent)
+        self.assertTrue(evidence["requiredValuesPresent"])
+        self.assertTrue(evidence["unexecuted"])
 
     def test_drive_cleanup_refreshes_once_after_unauthorized(self) -> None:
         evaluator = object.__new__(RunmeEvals)
@@ -912,7 +972,7 @@ class EvalCaseTest(unittest.TestCase):
 
         metrics = redundant_confirmation_metrics(cases, failures)
 
-        self.assertEqual(metrics["trials"], 18)
+        self.assertEqual(metrics["trials"], 22)
         self.assertEqual(metrics["redundantConfirmations"], 2)
         self.assertEqual(
             metrics["byTrigger"]["sensitive-data-same-document"]["trials"],

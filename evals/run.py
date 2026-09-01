@@ -81,6 +81,10 @@ class EvalCase:
     expected_notebook_cell_not_contains: tuple[str, ...] = ()
     expected_notebook_runner_name: str | None = None
     expected_notebook_output_contains: str | None = None
+    expected_created_notebook_name: str | None = None
+    expected_created_notebook_parent: str | None = None
+    expected_created_notebook_contains: tuple[str, ...] = ()
+    expected_created_notebook_unexecuted: bool = False
     distractor_urls: tuple[str, ...] = ()
     setup_markdown_cells: tuple[str, ...] = ()
     expected_claimed_primary_tab: bool = False
@@ -576,6 +580,9 @@ class RunmeEvals:
                 notebook_evidence = self._wait_for_notebook_evidence(
                     copied_notebook["id"], case
                 )
+            created_notebook = None
+            if case.expected_created_notebook_name:
+                created_notebook = self._wait_for_created_notebook_evidence(case)
             return {
                 "case": case.case_id,
                 "category": case.category,
@@ -588,6 +595,7 @@ class RunmeEvals:
                 "claimedTabIds": sorted(completed["claimedTabIds"]),
                 "pageEvidence": page_evidence,
                 "notebookEvidence": notebook_evidence,
+                "createdNotebook": created_notebook,
                 "readiness": readiness,
                 "webMcpToolNames": tool_names,
                 "nodeReplCallCount": completed["nodeReplCallCount"],
@@ -1019,7 +1027,7 @@ class RunmeEvals:
                         cell
                         for cell in cells
                         if isinstance(cell, dict)
-                        and expected_value in str(cell.get("value") or "")
+                        and expected_value in notebook_cell_text(cell)
                     ]
                     if expected_value
                     else []
@@ -1033,7 +1041,7 @@ class RunmeEvals:
                     value
                     for value in forbidden_values
                     if any(
-                        isinstance(cell, dict) and value in str(cell.get("value") or "")
+                        isinstance(cell, dict) and value in notebook_cell_text(cell)
                         for cell in cells
                     )
                 ]
@@ -1115,6 +1123,109 @@ class RunmeEvals:
         if not isinstance(notebook, dict):
             raise TypeError("Drive notebook content must be a JSON object")
         return notebook
+
+    def _find_drive_files(self, name: str, parent_id: str) -> list[dict[str, Any]]:
+        self._refresh_drive_session()
+        escaped_name = name.replace("\\", "\\\\").replace("'", "\\'")
+        escaped_parent = parent_id.replace("\\", "\\\\").replace("'", "\\'")
+        query = (
+            f"name = '{escaped_name}' and '{escaped_parent}' in parents "
+            "and trashed = false"
+        )
+        params = urllib.parse.urlencode(
+            {
+                "q": query,
+                "pageSize": "10",
+                "includeItemsFromAllDrives": "true",
+                "supportsAllDrives": "true",
+                "fields": "files(id,name,mimeType,parents,webViewLink)",
+            }
+        )
+        request = urllib.request.Request(
+            f"https://www.googleapis.com/drive/v3/files?{params}",
+            headers={"Authorization": f"Bearer {self.drive.access_token}"},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.load(response)
+        files = payload.get("files")
+        if not isinstance(files, list):
+            raise TypeError("Drive file search response must contain a files array")
+        return [item for item in files if isinstance(item, dict)]
+
+    def _wait_for_created_notebook_evidence(self, case: EvalCase) -> dict[str, Any]:
+        name = case.expected_created_notebook_name
+        parent_id = case.expected_created_notebook_parent
+        if not name or not parent_id:
+            raise ValueError("Created-notebook evidence requires a name and parent")
+        required_values = case.expected_created_notebook_contains
+        deadline = time.monotonic() + min(self.timeout_seconds, 60)
+        last_failure_mode = "missing_created_notebook"
+        last_message = f"No Drive notebook named {name!r} appeared in {parent_id!r}"
+        while time.monotonic() < deadline:
+            try:
+                matches = self._find_drive_files(name, parent_id)
+                if not matches:
+                    time.sleep(1)
+                    continue
+                if len(matches) != 1:
+                    raise EvalAssertionError(
+                        f"Expected one Drive notebook named {name!r}, found {len(matches)}",
+                        failure_mode="ambiguous_created_notebook",
+                    )
+                created = matches[0]
+                file_id = required_string(created, "id")
+                notebook = self._download_drive_notebook(file_id)
+                cells = notebook.get("cells")
+                if not isinstance(cells, list):
+                    raise TypeError(
+                        "Created Drive notebook does not contain a cells array"
+                    )
+                notebook_text = "\n".join(
+                    notebook_cell_text(cell) for cell in cells if isinstance(cell, dict)
+                )
+                missing = [
+                    value for value in required_values if value not in notebook_text
+                ]
+                if missing:
+                    last_failure_mode = "missing_created_notebook_evidence"
+                    last_message = (
+                        f"Created notebook {name!r} omitted required values {missing!r}"
+                    )
+                    time.sleep(1)
+                    continue
+                executed_cells = [
+                    cell.get("refId")
+                    for cell in cells
+                    if isinstance(cell, dict)
+                    and (
+                        isinstance(cell.get("metadata"), dict)
+                        and cell["metadata"].get("runme.dev/executionState") is not None
+                        or bool(cell.get("outputs"))
+                    )
+                ]
+                if case.expected_created_notebook_unexecuted and executed_cells:
+                    raise EvalAssertionError(
+                        f"Created notebook executed cells {executed_cells!r}",
+                        failure_mode="unexpected_notebook_execution",
+                    )
+                return {
+                    "id": file_id,
+                    "name": str(created.get("name") or name),
+                    "webViewLink": str(
+                        created.get("webViewLink")
+                        or f"https://drive.google.com/file/d/{file_id}/view"
+                    ),
+                    "parentId": parent_id,
+                    "requiredValuesPresent": True,
+                    "unexecuted": not executed_cells,
+                }
+            except EvalAssertionError:
+                raise
+            except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
+                last_failure_mode = "missing_created_notebook"
+                last_message = f"Could not read the created Drive notebook: {error}"
+                time.sleep(1)
+        raise EvalAssertionError(last_message, failure_mode=last_failure_mode)
 
     def _copy_notebook(self, case: EvalCase) -> dict[str, str]:
         self._refresh_drive_session()
@@ -1328,6 +1439,28 @@ def load_cases(path: Path) -> list[EvalCase]:
                         if value.get("expected_notebook_output_contains")
                         else None
                     ),
+                    expected_created_notebook_name=(
+                        render(str(value["expected_created_notebook_name"]))
+                        if value.get("expected_created_notebook_name")
+                        else None
+                    ),
+                    expected_created_notebook_parent=(
+                        render(str(value["expected_created_notebook_parent"]))
+                        if value.get("expected_created_notebook_parent")
+                        else None
+                    ),
+                    expected_created_notebook_contains=tuple(
+                        render(item)
+                        for item in string_list(
+                            value,
+                            "expected_created_notebook_contains",
+                            base_case_id,
+                            required=False,
+                        )
+                    ),
+                    expected_created_notebook_unexecuted=(
+                        value.get("expected_created_notebook_unexecuted") is True
+                    ),
                     distractor_urls=tuple(
                         render(item)
                         for item in string_list(
@@ -1439,6 +1572,19 @@ def notebook_output_text(cell: dict[str, Any]) -> str:
             if raw is not None:
                 chunks.append(raw.decode("utf-8", errors="replace"))
     return "\n".join(chunks)
+
+
+def notebook_cell_text(cell: dict[str, Any]) -> str:
+    """Return cell source text from Runme JSON or nbformat/IPYNB shapes."""
+    value = cell.get("value")
+    if isinstance(value, str):
+        return value
+    source = cell.get("source")
+    if isinstance(source, str):
+        return source
+    if isinstance(source, list):
+        return "".join(str(part) for part in source)
+    return ""
 
 
 def refresh_drive_session(account: dict[str, Any]) -> DriveSession:
