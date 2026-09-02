@@ -1,13 +1,16 @@
 import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
 
 import { getGoogleDriveBaseUrl } from '../lib/googleDriveRuntime'
-import { IPYNB_MIME_TYPE } from '../lib/ipynb'
+import { type DecodedIpynb, IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { LinkedResourceError } from '../lib/linkedResource'
 import { appLogger } from '../lib/logging/runtime'
 import {
   createInitialNotebookFile,
   decodeNotebookFile,
   detectNotebookFileFormat,
+  encodeIpynbNotebook,
+  encodeRunmeNotebook,
+  inspectRunmeNotebookJsonShape,
 } from '../lib/notebookFormat'
 import { parser_pb } from '../runme/client'
 import {
@@ -38,35 +41,6 @@ type IpynbRevisionShape = {
   cellsWithObjectRunmeMetadata: number
   notebookRunmeMetadataType: string
 }
-
-type RunmeRevisionShape = {
-  cellCount: number
-}
-
-const RUNME_NOTEBOOK_REVISION_FIELDS = new Set([
-  'cells',
-  'metadata',
-  'frontmatter',
-])
-const RUNME_CELL_REVISION_FIELDS = new Set([
-  'kind',
-  'value',
-  'languageId',
-  'language_id',
-  'metadata',
-  'textRange',
-  'text_range',
-  'outputs',
-  'executionSummary',
-  'execution_summary',
-  'refId',
-  'ref_id',
-  'role',
-  'callId',
-  'call_id',
-  'docResults',
-  'doc_results',
-])
 
 /**
  * Returns privacy-safe shape information when a revision body is a Jupyter
@@ -120,51 +94,6 @@ function inspectIpynbRevisionShape(body: string): IpynbRevisionShape | null {
 }
 
 /**
- * Recognizes protobuf JSON emitted for a Runme notebook without treating an
- * arbitrary object with a `cells` array as valid. Protobuf JSON may omit every
- * default-valued field, so recognition is based on the complete set of allowed
- * notebook and cell field names rather than requiring a populated field.
- */
-function inspectRunmeRevisionShape(body: string): RunmeRevisionShape | null {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(body)
-  } catch {
-    return null
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return null
-  }
-
-  const notebook = parsed as Record<string, unknown>
-  if ('nbformat' in notebook) {
-    return null
-  }
-  const notebookKeys = Object.keys(notebook)
-  const hasOnlyRunmeNotebookFields = notebookKeys.every((key) =>
-    RUNME_NOTEBOOK_REVISION_FIELDS.has(key)
-  )
-  if (notebook.cells === undefined) {
-    return hasOnlyRunmeNotebookFields ? { cellCount: 0 } : null
-  }
-  if (!Array.isArray(notebook.cells)) {
-    return null
-  }
-  const cellsHaveOnlyRunmeFields = notebook.cells.every(
-    (cell) =>
-      !!cell &&
-      typeof cell === 'object' &&
-      !Array.isArray(cell) &&
-      Object.keys(cell).every((key) => RUNME_CELL_REVISION_FIELDS.has(key))
-  )
-  if (!hasOnlyRunmeNotebookFields || !cellsHaveOnlyRunmeFields) {
-    return null
-  }
-
-  return { cellCount: notebook.cells.length }
-}
-
-/**
  * Decodes a Drive revision using the filename-selected notebook format. Older
  * callers may omit the filename, so an IPYNB shape fallback preserves access
  * while emitting a structured warning that identifies the ambiguous path.
@@ -191,7 +120,7 @@ function decodeDriveRevision(
   }
 
   if (fileFormat === 'ipynb') {
-    const runmeShape = inspectRunmeRevisionShape(body)
+    const runmeShape = inspectRunmeNotebookJsonShape(body)
     if (runmeShape) {
       const notebook = decodeNotebookFile(body, 'revision.json').notebook
       appLogger.warn(
@@ -201,7 +130,7 @@ function decodeDriveRevision(
             scope: 'storage.drive.revision',
             code: 'DRIVE_REVISION_RUNME_JSON_DECODE_FALLBACK',
             initialFormat: 'ipynb',
-            ...runmeShape,
+            cellCount: runmeShape.cellCount,
           },
         }
       )
@@ -237,6 +166,7 @@ export type DriveDoc = {
   parents?: string[]
   driveId?: string
   headRevisionId?: string
+  md5Checksum?: string
   content?: string
   trashed?: boolean
   appProperties?: Record<string, string>
@@ -2113,6 +2043,14 @@ export class DriveNotebookStore {
   ) {}
 
   private readonly lastReadVersion = new Map<string, string>()
+  private readonly ipynbState = new Map<
+    string,
+    {
+      shadowText: string
+      state: DecodedIpynb
+      sourceChecksum: string | null
+    }
+  >()
 
   getAccessToken(options?: {
     interactive?: boolean
@@ -2851,13 +2789,11 @@ export class DriveNotebookStore {
     const metadataResponse = await client.get({
       fileId: id,
       supportsAllDrives: true,
-      //fields: "md5Checksum",
-      fields: VERSION_FIELDS,
+      fields: `${VERSION_FIELDS},name,mimeType`,
       resourceKey,
     })
-    const remoteMd5 =
-      (metadataResponse.result as { md5Checksum?: string } | undefined)
-        ?.md5Checksum ?? null
+    const remoteFile = (metadataResponse.result ?? {}) as DriveDoc
+    const remoteMd5 = remoteFile.md5Checksum ?? null
     const lastRead = this.lastReadVersion.get(uri) ?? null
     if (lastRead && remoteMd5 && remoteMd5 !== lastRead) {
       console.error(
@@ -2870,16 +2806,59 @@ export class DriveNotebookStore {
       )
       return { conflicted: true }
     }
-    const json = toJsonString(
-      parser_pb.NotebookSchema,
-      notebook,
-      NOTEBOOK_JSON_WRITE_OPTIONS
-    )
+    const isIpynb =
+      detectNotebookFileFormat(remoteFile.name ?? '') === 'ipynb' ||
+      (!remoteFile.name && remoteFile.mimeType === IPYNB_MIME_TYPE)
+    let content: string
+    let mimeType: string
+    let nextIpynbState: { shadowText: string; state: DecodedIpynb } | undefined
+    if (isIpynb) {
+      let preservation = this.ipynbState.get(uri)
+      if (preservation && preservation.sourceChecksum !== remoteMd5) {
+        this.ipynbState.delete(uri)
+        preservation = undefined
+      }
+      if (!preservation) {
+        const response = await client.get({
+          fileId: id,
+          supportsAllDrives: true,
+          alt: 'media',
+          resourceKey,
+        })
+        const decoded = decodeNotebookFile(
+          extractBody(response),
+          remoteFile.name ?? 'notebook.ipynb'
+        )
+        if (!decoded.ipynb) {
+          throw new Error('Expected IPYNB preservation state')
+        }
+        preservation = {
+          shadowText: decoded.ipynb.shadowText,
+          state: decoded.ipynb,
+          sourceChecksum: remoteMd5,
+        }
+      }
+      const encoded = encodeIpynbNotebook(
+        notebook,
+        preservation.shadowText,
+        preservation.state
+      )
+      content = encoded.text
+      mimeType = IPYNB_MIME_TYPE
+      const state = decodeNotebookFile(content, 'notebook.ipynb').ipynb
+      if (!state) {
+        throw new Error('Failed to establish IPYNB preservation state')
+      }
+      nextIpynbState = { shadowText: state.shadowText, state }
+    } else {
+      content = encodeRunmeNotebook(notebook)
+      mimeType = 'application/json'
+    }
 
     await client.update({
       id,
-      mimeType: 'application/json',
-      content: json,
+      mimeType,
+      content,
       resourceKey,
     })
     const updatedMetadataResponse = await client.get({
@@ -2896,6 +2875,14 @@ export class DriveNotebookStore {
     } else {
       this.lastReadVersion.delete(uri)
     }
+    if (nextIpynbState) {
+      this.ipynbState.set(uri, {
+        ...nextIpynbState,
+        sourceChecksum: updatedMd5,
+      })
+    } else {
+      this.ipynbState.delete(uri)
+    }
     return { conflicted: false }
   }
 
@@ -2908,12 +2895,11 @@ export class DriveNotebookStore {
     const metadataResponse = await client.get({
       fileId: id,
       supportsAllDrives: true,
-      fields: VERSION_FIELDS,
+      fields: `${VERSION_FIELDS},name,mimeType`,
       resourceKey,
     })
-    const md5 =
-      (metadataResponse.result as { md5Checksum?: string } | undefined)
-        ?.md5Checksum ?? null
+    const remoteFile = (metadataResponse.result ?? {}) as DriveDoc
+    const md5 = remoteFile.md5Checksum ?? null
     if (md5) {
       this.lastReadVersion.set(uri, md5)
     } else {
@@ -2927,10 +2913,25 @@ export class DriveNotebookStore {
     })
 
     const body = extractBody(response)
-
-    return fromJsonString(parser_pb.NotebookSchema, body, {
-      ignoreUnknownFields: true,
-    })
+    const fileName =
+      remoteFile.name ??
+      (remoteFile.mimeType === IPYNB_MIME_TYPE ? 'notebook.ipynb' : '')
+    if (!detectNotebookFileFormat(fileName)) {
+      return fromJsonString(parser_pb.NotebookSchema, body, {
+        ignoreUnknownFields: true,
+      })
+    }
+    const decoded = decodeNotebookFile(body, fileName)
+    if (decoded.ipynb) {
+      this.ipynbState.set(uri, {
+        shadowText: decoded.ipynb.shadowText,
+        state: decoded.ipynb,
+        sourceChecksum: md5,
+      })
+    } else {
+      this.ipynbState.delete(uri)
+    }
+    return decoded.notebook
   }
 
   async list(uri: string): Promise<NotebookStoreItem[]> {
@@ -3170,8 +3171,13 @@ export class DriveNotebookStore {
       resourceKey,
     })
     const result = metadataResponse.result as DriveVersionMetadata | undefined
-    if (result?.md5Checksum) {
-      this.lastReadVersion.set(uri, result.md5Checksum)
+    const checksum = result?.md5Checksum ?? null
+    const preservation = this.ipynbState.get(uri)
+    if (preservation && preservation.sourceChecksum !== checksum) {
+      this.ipynbState.delete(uri)
+    }
+    if (checksum) {
+      this.lastReadVersion.set(uri, checksum)
     } else {
       this.lastReadVersion.delete(uri)
     }
@@ -3414,6 +3420,7 @@ export class DriveNotebookStore {
       content,
       resourceKey,
     })
+    this.ipynbState.delete(uri)
   }
 
   /**
@@ -3452,7 +3459,17 @@ export class DriveNotebookStore {
       // validator needed to protect a collaborator's concurrent edit.
       return false
     }
-    return client.setContentIfMatch(id, content, mimeType, etag, resourceKey)
+    const saved = await client.setContentIfMatch(
+      id,
+      content,
+      mimeType,
+      etag,
+      resourceKey
+    )
+    if (saved) {
+      this.ipynbState.delete(uri)
+    }
+    return saved
   }
 
   async loadContent(uri: string): Promise<string> {

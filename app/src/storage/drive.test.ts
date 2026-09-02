@@ -736,9 +736,11 @@ describe("DriveNotebookStore", () => {
       });
 
     const store = new DriveNotebookStore(async () => "access-token");
+    const uri =
+      "https://drive.google.com/file/d/file123/view?resourcekey=file-key";
     await expect(
       store.saveContentIfVersion(
-        "https://drive.google.com/file/d/file123/view?resourcekey=file-key",
+        uri,
         '{"cells":[]}',
         "application/json",
         { checksum: "empty-checksum", revisionId: "empty-revision" },
@@ -771,9 +773,10 @@ describe("DriveNotebookStore", () => {
       });
 
     const store = new DriveNotebookStore(async () => "access-token");
+    const uri = "https://drive.google.com/file/d/file123/view";
     await expect(
       store.saveContentIfVersion(
-        "https://drive.google.com/file/d/file123/view",
+        uri,
         '{"cells":[]}',
         "application/json",
         { checksum: "empty-checksum", revisionId: "empty-revision" },
@@ -846,6 +849,237 @@ describe("DriveNotebookStore", () => {
     ).resolves.toEqual({ conflicted: false });
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
+
+  it("repairs Runme JSON content when saving an IPYNB file", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const source = create(parser_pb.NotebookSchema, {
+      metadata: { "runme.dev/ipynb": "true" },
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: "intro",
+          kind: parser_pb.CellKind.MARKUP,
+          languageId: "markdown",
+          value: "# Recovered",
+          metadata: { name: "intro" },
+        }),
+      ],
+    });
+    const malformedIpynb = encodeRunmeNotebook(source);
+    let metadataReads = 0;
+    let uploadedContent = "";
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/drive/v3/files/file123") {
+          if (init?.method === "PATCH") {
+            expect(JSON.parse(String(init.body))).toMatchObject({
+              mimeType: "application/x-ipynb+json",
+            });
+            return new Response(
+              JSON.stringify({
+                id: "file123",
+                name: "codex_instructions.ipynb",
+                mimeType: "application/x-ipynb+json",
+              }),
+              {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              },
+            );
+          }
+          if (url.searchParams.get("alt") === "media") {
+            return new Response(malformedIpynb, {
+              status: 200,
+              headers: { "Content-Type": "application/x-ipynb+json" },
+            });
+          }
+          metadataReads += 1;
+          return new Response(
+            JSON.stringify({
+              name: "codex_instructions.ipynb",
+              mimeType: "application/x-ipynb+json",
+              md5Checksum:
+                metadataReads === 1
+                  ? "malformed-checksum"
+                  : "repaired-checksum",
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        if (url.pathname === "/upload/drive/v3/files/file123") {
+          expect(init?.method).toBe("PATCH");
+          expect(new Headers(init?.headers).get("Content-Type")).toBe(
+            "application/x-ipynb+json",
+          );
+          uploadedContent = String(init?.body);
+          return new Response("", { status: 200 });
+        }
+        throw new Error(`Unexpected Drive request: ${url.toString()}`);
+      });
+    vi.spyOn(appLogger, "warn").mockImplementation(() => null as never);
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const result = await store.save(
+      "https://drive.google.com/file/d/file123/view",
+      source,
+    );
+
+    expect(result).toEqual({ conflicted: false });
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    const repaired = JSON.parse(uploadedContent);
+    expect(repaired).toMatchObject({ nbformat: 4, nbformat_minor: 5 });
+    expect(repaired.cells).toHaveLength(1);
+    expect(repaired.cells[0]).toMatchObject({
+      cell_type: "markdown",
+      id: "intro",
+      source: "# Recovered",
+    });
+    expect(repaired.cells[0]).not.toHaveProperty("kind");
+  });
+
+  it("loads current IPYNB files through the Jupyter codec", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/drive/v3/files/file123");
+        if (url.searchParams.get("alt") === "media") {
+          return new Response(plainIpynb(), {
+            status: 200,
+            headers: { "Content-Type": "application/x-ipynb+json" },
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            name: "notebook.ipynb",
+            mimeType: "application/x-ipynb+json",
+            md5Checksum: "ipynb-checksum",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const loaded = await store.load(
+      "https://drive.google.com/file/d/file123/view",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(loaded.cells).toHaveLength(1);
+    expect(loaded.cells[0]).toMatchObject({
+      refId: "plain-cell",
+      kind: parser_pb.CellKind.CODE,
+      value: "print('hello')",
+    });
+  });
+
+  it.each([
+    "saveContent",
+    "saveContentIfVersion",
+    "externalEdit",
+  ] as const)(
+    "reloads IPYNB preservation state after %s",
+    async (writeMethod) => {
+      setGoogleDriveBaseUrl("https://drive.example.test");
+      const uri = "https://drive.google.com/file/d/file123/view";
+      const rawDocument = JSON.parse(plainIpynb());
+      rawDocument.metadata.after_raw_write = { keep: true };
+      const rawContent = JSON.stringify(rawDocument);
+      let remoteContent = plainIpynb();
+      let checksum = "initial-checksum";
+      let mediaReads = 0;
+      const uploads: string[] = [];
+
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        if (init?.method === "GET") {
+          if (url.searchParams.get("alt") === "media") {
+            mediaReads += 1;
+            return new Response(remoteContent, {
+              status: 200,
+              headers: { "Content-Type": "application/x-ipynb+json" },
+            });
+          }
+          return new Response(
+            JSON.stringify({
+              name: "notebook.ipynb",
+              mimeType: "application/x-ipynb+json",
+              md5Checksum: checksum,
+              headRevisionId: "revision-1",
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                ETag: '"drive-etag-1"',
+              },
+            },
+          );
+        }
+        if (url.pathname === "/drive/v3/files/file123") {
+          expect(init?.method).toBe("PATCH");
+          return new Response(
+            JSON.stringify({
+              id: "file123",
+              name: "notebook.ipynb",
+              mimeType: "application/x-ipynb+json",
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        expect(url.pathname).toBe("/upload/drive/v3/files/file123");
+        expect(init?.method).toBe("PATCH");
+        remoteContent = String(init?.body);
+        uploads.push(remoteContent);
+        checksum = `checksum-${uploads.length}`;
+        return new Response("", { status: 200 });
+      });
+
+      const store = new DriveNotebookStore(async () => "access-token");
+      const notebook = await store.load(uri);
+      if (writeMethod === "saveContent") {
+        await store.saveContent(
+          uri,
+          rawContent,
+          "application/x-ipynb+json",
+        );
+      } else if (writeMethod === "saveContentIfVersion") {
+        await expect(
+          store.saveContentIfVersion(
+            uri,
+            rawContent,
+            "application/x-ipynb+json",
+            { checksum: "initial-checksum", revisionId: "revision-1" },
+          ),
+        ).resolves.toBe(true);
+      } else {
+        remoteContent = rawContent;
+        checksum = "external-checksum";
+      }
+      await store.getVersionMetadata(uri);
+      notebook.cells[0]!.value = "print('edited')";
+      await expect(store.save(uri, notebook)).resolves.toEqual({
+        conflicted: false,
+      });
+
+      expect(mediaReads).toBe(2);
+      expect(uploads).toHaveLength(writeMethod === "externalEdit" ? 1 : 2);
+      const saved = JSON.parse(uploads.at(-1)!);
+      expect(saved.metadata.after_raw_write).toEqual({ keep: true });
+      expect(saved.cells[0].source).toBe("print('edited')");
+    },
+  );
 
   it("uses shared drive name for shared drive root folder metadata", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
