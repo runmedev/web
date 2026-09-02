@@ -552,6 +552,15 @@ describe('WebMcpToolRegistrationHost', () => {
       ({ tool }) => tool.name === 'createDriveNotebook'
     )
     expect(createDriveNotebook?.tool.title).toBe('Create Google Drive Notebook')
+    expect(createDriveNotebook?.tool.description).toContain(
+      'does not publish the notebook, add collaborators, or change Drive sharing permissions'
+    )
+    expect(createDriveNotebook?.tool.description).toContain(
+      "persistence within that user's storage boundary"
+    )
+    expect(createDriveNotebook?.tool.description).toContain(
+      'Browser-policy requirement that independently applies'
+    )
     expect(createDriveNotebook?.tool.annotations).toEqual({
       readOnlyHint: false,
       untrustedContentHint: false,
