@@ -1,6 +1,10 @@
 import { driveFolderUrl, parseDriveItem } from '../../storage/drive'
 import { NotebookStoreItemType } from '../../storage/notebook'
-import { mountDriveFolder, searchDriveFiles } from '../driveTransfer'
+import {
+  inspectDriveItemAccess,
+  mountDriveFolder,
+  searchDriveFiles,
+} from '../driveTransfer'
 
 type JsonRecord = Record<string, unknown>
 
@@ -19,6 +23,12 @@ export const LIST_DRIVE_FOLDER_TOOL_NAME = 'listDriveFolder'
 export const LIST_DRIVE_FOLDER_TOOL_TITLE = 'List Google Drive Folder'
 export const LIST_DRIVE_FOLDER_TOOL_DESCRIPTION =
   'List one bounded page of children in an accessible Google Drive folder. Use this to inspect a known folder or disambiguate search results without mounting it.'
+
+export const INSPECT_DRIVE_ITEM_ACCESS_TOOL_NAME = 'inspectDriveItemAccess'
+export const INSPECT_DRIVE_ITEM_ACCESS_TOOL_TITLE =
+  'Inspect Google Drive Item Access'
+export const INSPECT_DRIVE_ITEM_ACCESS_TOOL_DESCRIPTION =
+  'Read aggregate sharing and capability facts for a Google Drive file or folder without returning collaborator names, emails, or domains. Before copying sensitive-looking content into a Drive notebook, inspect the destination folder. A result with visibility "private", publiclyAccessible false, and domainAccessible false is evidence that Runme is persisting within the signed-in user\'s restricted storage boundary; it does not change permissions or independently override Browser policy.'
 
 export const MOUNT_DRIVE_FOLDER_TOOL_NAME = 'mountDriveFolder'
 export const MOUNT_DRIVE_FOLDER_TOOL_TITLE = 'Mount Google Drive Folder'
@@ -148,6 +158,29 @@ export function buildListDriveFolderInputSchema(): JsonRecord {
   }
 }
 
+/** Describe aggregate access inspection for a known Drive item. */
+export function buildInspectDriveItemAccessInputSchema(): JsonRecord {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      itemIdOrUri: {
+        type: 'string',
+        minLength: 1,
+        description: 'Google Drive file/folder ID or URI.',
+      },
+      itemType: {
+        type: 'string',
+        enum: ['file', 'folder'],
+        default: 'folder',
+        description:
+          'How to interpret a raw ID. A full Drive URI determines its own type.',
+      },
+    },
+    required: ['itemIdOrUri'],
+  }
+}
+
 /** Describe the explicit state-changing step after Drive discovery. */
 export function buildMountDriveFolderInputSchema(): JsonRecord {
   return {
@@ -235,6 +268,30 @@ export async function executeListDriveFolder(
     ...(pageToken ? { pageToken } : {}),
   })
   return JSON.stringify({ folderUri: folder.uri, ...result })
+}
+
+/** Return privacy-preserving Drive sharing facts for policy context. */
+export async function executeInspectDriveItemAccess(
+  input: JsonRecord
+): Promise<string> {
+  const item =
+    typeof input.itemIdOrUri === 'string' ? input.itemIdOrUri.trim() : ''
+  if (!item) {
+    throw new Error('inspectDriveItemAccess requires a Drive item ID or URI')
+  }
+  if (
+    input.itemType !== undefined &&
+    input.itemType !== 'file' &&
+    input.itemType !== 'folder'
+  ) {
+    throw new Error('inspectDriveItemAccess itemType must be file or folder')
+  }
+  return JSON.stringify(
+    await inspectDriveItemAccess(
+      item,
+      input.itemType === 'file' ? 'file' : 'folder'
+    )
+  )
 }
 
 /** Execute the explicit, idempotent mount after a folder has been resolved. */

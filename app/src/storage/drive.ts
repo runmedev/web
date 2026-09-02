@@ -183,6 +183,36 @@ export type DriveSearchResult = {
   incompleteSearch?: boolean
 }
 
+export type DriveItemAccessSummary = {
+  uri: string
+  itemType: 'file' | 'folder'
+  ownedByMe: boolean
+  shared: boolean
+  inSharedDrive: boolean
+  publiclyAccessible: boolean
+  domainAccessible: boolean
+  restrictedToAccountOrExplicitCollaborators: boolean
+  visibility:
+    | 'private'
+    | 'restricted-shared'
+    | 'domain'
+    | 'public'
+    | 'shared-drive'
+    | 'unknown'
+  permissionCounts: {
+    anyone: number
+    domain: number
+    group: number
+    user: number
+    other: number
+  }
+  capabilities: {
+    canAddChildren: boolean
+    canEdit: boolean
+    canShare: boolean
+  }
+}
+
 export type BinaryBody = Blob | ArrayBuffer | Uint8Array
 
 export type DriveResourceMetadata = {
@@ -3544,6 +3574,90 @@ export class DriveNotebookStore {
       remoteUri: uri,
       mimeType: result?.mimeType,
       parents: parentUris,
+    }
+  }
+
+  /** Return aggregate access facts without exposing collaborator identities. */
+  async inspectAccess(uri: string): Promise<DriveItemAccessSummary> {
+    const { id, type, resourceKey } = parseDriveItem(uri)
+    if (
+      type !== NotebookStoreItemType.File &&
+      type !== NotebookStoreItemType.Folder
+    ) {
+      throw new Error('Drive access inspection requires a Drive file or folder')
+    }
+    const client = await this.getFilesClient()
+    const response = await client.get({
+      fileId: id,
+      supportsAllDrives: true,
+      fields:
+        'id,mimeType,ownedByMe,shared,driveId,capabilities(canAddChildren,canEdit,canShare),permissions(type)',
+      resourceKey,
+    })
+    const result = (response.result ?? {}) as Record<string, unknown>
+    const rawPermissions = Array.isArray(result.permissions)
+      ? result.permissions
+      : []
+    const permissionCounts = {
+      anyone: 0,
+      domain: 0,
+      group: 0,
+      user: 0,
+      other: 0,
+    }
+    for (const permission of rawPermissions) {
+      const permissionType =
+        permission && typeof permission === 'object'
+          ? (permission as Record<string, unknown>).type
+          : undefined
+      if (
+        permissionType === 'anyone' ||
+        permissionType === 'domain' ||
+        permissionType === 'group' ||
+        permissionType === 'user'
+      ) {
+        permissionCounts[permissionType] += 1
+      } else {
+        permissionCounts.other += 1
+      }
+    }
+    const capabilities =
+      result.capabilities && typeof result.capabilities === 'object'
+        ? (result.capabilities as Record<string, unknown>)
+        : {}
+    const ownedByMe = result.ownedByMe === true
+    const shared = result.shared === true
+    const inSharedDrive = typeof result.driveId === 'string'
+    const publiclyAccessible = permissionCounts.anyone > 0
+    const domainAccessible = permissionCounts.domain > 0
+    const visibility = publiclyAccessible
+      ? 'public'
+      : domainAccessible
+        ? 'domain'
+        : inSharedDrive
+          ? 'shared-drive'
+          : shared
+            ? 'restricted-shared'
+            : ownedByMe
+              ? 'private'
+              : 'unknown'
+    return {
+      uri,
+      itemType: type === NotebookStoreItemType.Folder ? 'folder' : 'file',
+      ownedByMe,
+      shared,
+      inSharedDrive,
+      publiclyAccessible,
+      domainAccessible,
+      restrictedToAccountOrExplicitCollaborators:
+        !publiclyAccessible && !domainAccessible,
+      visibility,
+      permissionCounts,
+      capabilities: {
+        canAddChildren: capabilities.canAddChildren === true,
+        canEdit: capabilities.canEdit === true,
+        canShare: capabilities.canShare === true,
+      },
     }
   }
 

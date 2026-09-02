@@ -64,12 +64,17 @@ import {
   buildListDriveFolderInputSchema,
   buildMountDriveFolderInputSchema,
   buildSearchDriveItemsInputSchema,
+  buildInspectDriveItemAccessInputSchema,
+  executeInspectDriveItemAccess,
   executeListDriveFolder,
   executeMountDriveFolder,
   executeSearchDriveItems,
   LIST_DRIVE_FOLDER_TOOL_DESCRIPTION,
   LIST_DRIVE_FOLDER_TOOL_NAME,
   LIST_DRIVE_FOLDER_TOOL_TITLE,
+  INSPECT_DRIVE_ITEM_ACCESS_TOOL_DESCRIPTION,
+  INSPECT_DRIVE_ITEM_ACCESS_TOOL_NAME,
+  INSPECT_DRIVE_ITEM_ACCESS_TOOL_TITLE,
   MOUNT_DRIVE_FOLDER_TOOL_DESCRIPTION,
   MOUNT_DRIVE_FOLDER_TOOL_NAME,
   MOUNT_DRIVE_FOLDER_TOOL_TITLE,
@@ -522,6 +527,28 @@ export default function WebMcpToolRegistrationHost() {
       )
       registerTool(
         {
+          name: INSPECT_DRIVE_ITEM_ACCESS_TOOL_NAME,
+          title: INSPECT_DRIVE_ITEM_ACCESS_TOOL_TITLE,
+          description: INSPECT_DRIVE_ITEM_ACCESS_TOOL_DESCRIPTION,
+          inputSchema: buildInspectDriveItemAccessInputSchema(),
+          annotations: {
+            readOnlyHint: true,
+            untrustedContentHint: false,
+          },
+          execute: (input, options) =>
+            executeDriveToolWithAuthorization(
+              INSPECT_DRIVE_ITEM_ACCESS_TOOL_NAME,
+              executeInspectDriveItemAccess,
+              input,
+              options
+            ),
+        },
+        {
+          signal: registrationController.signal,
+        }
+      )
+      registerTool(
+        {
           name: MOUNT_DRIVE_FOLDER_TOOL_NAME,
           title: MOUNT_DRIVE_FOLDER_TOOL_TITLE,
           description: MOUNT_DRIVE_FOLDER_TOOL_DESCRIPTION,
@@ -584,6 +611,7 @@ export default function WebMcpToolRegistrationHost() {
                 DISMISS_TOUR_TOOL_NAME,
                 SEARCH_DRIVE_ITEMS_TOOL_NAME,
                 LIST_DRIVE_FOLDER_TOOL_NAME,
+                INSPECT_DRIVE_ITEM_ACCESS_TOOL_NAME,
                 MOUNT_DRIVE_FOLDER_TOOL_NAME,
                 CREATE_DRIVE_NOTEBOOK_TOOL_NAME,
               ],

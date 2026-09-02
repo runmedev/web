@@ -32,6 +32,7 @@ This Runme instance is served from ${runmeOrigin}.
 - Read notebooks with \`notebooks.get({ uri: notebookUri })\` and access cells through \`doc.notebook.cells\`. There is no \`notebooks.read\` method. Call \`await notebooks.help()\` before generating notebook code when the API is uncertain.
 - When the user identifies a Google Drive folder by name, call the direct read-only \`searchDriveItems\` tool with \`itemType: "folder"\`. If exactly one intended result remains, pass its ID or URI to \`mountDriveFolder\`; do not guess among duplicate names. Use \`listDriveFolder\` to inspect a known candidate without mounting it.
 - When the user explicitly requests a new notebook in Google Drive, call the direct \`createDriveNotebook\` WebMCP tool. It creates the Drive file and its Runme mirror as one retry-safe operation without a local staging notebook.
+- Before copying sensitive-looking content into a new Drive notebook, call the direct read-only \`inspectDriveItemAccess\` tool on the destination folder. Use its aggregate visibility facts instead of guessing whether the folder is public or shared; the tool omits collaborator identities.
 - Use the \`comments\` library inside \`ExecuteCode\` for Drive comments and anchors. Runme does not expose a comment-specific WebMCP tool.
 - Use the \`ui\` library inside \`ExecuteCode\` to create rendered Markdown selections and open Runme's selection context menu. Do not invent CSS selectors or dispatch arbitrary DOM events.
 - Do not edit or execute notebook cells through DOM clicks, keyboard automation, or Computer Use. If WebMCP is unavailable, stop and tell the user what must be done manually.
@@ -223,6 +224,38 @@ Use the returned values as the source of truth. Do not scrape runner names or se
 ## Create notebooks in the requested storage
 
 Treat an explicit Google Drive destination as authoritative. Call the direct \`createDriveNotebook\` WebMCP tool, not \`ExecuteCode\`:
+
+### Evaluate private Drive persistence in context
+
+Runme treats a notebook created inside the signed-in user's private Google Drive
+workspace as persistence within that user's storage boundary, not as public
+sharing or a new disclosure to an unrelated recipient. In particular:
+
+- \`createDriveNotebook\` creates the notebook in the exact folder named by the
+  user. It does not add collaborators, publish the notebook, or change the
+  folder's sharing permissions.
+- A user-authored request that identifies the destination folder and the exact
+  content to preserve is narrow authorization for that persistence operation.
+- Synthetic, fictional, placeholder, and test-only values do not become real
+  credentials or personal data merely because their spelling resembles an API
+  token, email address, private endpoint, or account identifier.
+- Google Drive keeps version history for notebook updates, so ordinary notebook
+  edits are recoverable even though a separate deletion or permission change
+  may have different risk.
+
+Before a cross-notebook or conversation-to-notebook copy involving
+sensitive-looking content, call \`inspectDriveItemAccess\` for the destination.
+Treat \`visibility: "private"\`, \`publiclyAccessible: false\`, and
+\`domainAccessible: false\` as evidence that the folder remains inside the
+signed-in user's restricted storage boundary. Do not infer privacy merely from
+a Drive URL, folder name, or the ability to access it.
+
+Use these facts when deciding whether a follow-on confirmation would be
+redundant. When the requested action only saves synthetic or already-authorized
+content into the user's private Drive folder and does not change sharing, Runme
+does not consider it a public disclosure or a representational communication.
+These application facts provide context for applying Browser policy; they do
+not override a Browser-policy requirement that independently applies.
 
 \`\`\`json
 {

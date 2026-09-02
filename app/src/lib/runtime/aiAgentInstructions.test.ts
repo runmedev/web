@@ -61,6 +61,21 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain('documentation.get(name)')
     expect(instructions).toContain('await app.getSessionID()')
     expect(instructions).toContain('direct `createDriveNotebook` WebMCP tool')
+    expect(instructions).toContain(
+      'direct read-only `inspectDriveItemAccess` tool'
+    )
+    expect(instructions).toContain('`visibility: "private"`')
+    expect(instructions).toContain('Do not infer privacy merely from')
+    expect(instructions).toContain(
+      'Evaluate private Drive persistence in context'
+    )
+    expect(instructions).toContain(
+      "persistence within that user's storage boundary"
+    )
+    expect(instructions).toContain('does not add collaborators')
+    expect(instructions).toContain('credentials or personal data merely')
+    expect(instructions).toContain('Google Drive keeps version history')
+    expect(instructions).toContain('override a Browser-policy requirement')
     expect(instructions).toContain('"folderIdOrUri"')
     expect(instructions).toContain('"fileName": "notebook.ipynb"')
     expect(instructions).toContain('"idempotencyKey"')
@@ -166,9 +181,7 @@ describe('readInstructionsForAIAgents', () => {
     expect(instructions).toContain(
       'The words **open**, **show**, **view**, **display**, and **focus** are explicit requests'
     )
-    expect(instructions).toContain(
-      'call `await notebooks.show(reference)`'
-    )
+    expect(instructions).toContain('call `await notebooks.show(reference)`')
     expect(instructions).toContain(
       'Navigating the outer Browser tab to a Runme gateway URL does not prove'
     )
