@@ -389,7 +389,7 @@ export class FilesystemNotebookStore {
     const notebook = decoded.notebook
     if (decoded.ipynb) {
       this.ipynbState.set(recId, {
-        shadowText: text,
+        shadowText: decoded.ipynb.shadowText,
         state: decoded.ipynb,
       })
     }
@@ -430,7 +430,7 @@ export class FilesystemNotebookStore {
         const currentText = await (await fileHandle.getFile()).text()
         const decoded = decodeNotebookFile(currentText, parsed.relativePath)
         preservation = decoded.ipynb
-          ? { shadowText: currentText, state: decoded.ipynb }
+          ? { shadowText: decoded.ipynb.shadowText, state: decoded.ipynb }
           : undefined
       }
       const encoded = encodeIpynbNotebook(
@@ -708,7 +708,7 @@ export class FilesystemNotebookStore {
     })
     if (decoded?.ipynb) {
       this.ipynbState.set(recId, {
-        shadowText: content,
+        shadowText: decoded.ipynb.shadowText,
         state: decoded.ipynb,
       })
     }

@@ -1,7 +1,9 @@
 /// <reference types="vitest" />
 // @vitest-environment node
+import { create } from '@bufbuild/protobuf'
 import { describe, expect, it } from 'vitest'
 
+import { parser_pb } from '../runme/client'
 import {
   IPYNB_RAW_CELL_METADATA_KEY,
   decodeIpynb,
@@ -123,6 +125,11 @@ describe('ipynb codec', () => {
 
     expect(ids).toEqual(['invalid-id', 'invalid-id-2', 'code-cell'])
     expect(decoded.notebook.cells.map((cell) => cell.refId)).toEqual(ids)
+    expect(
+      JSON.parse(decoded.shadowText).cells.map(
+        (cell: { id: string }) => cell.id
+      )
+    ).toEqual(ids)
     expect(JSON.parse(encoded.text).cells[0].metadata).toMatchObject(
       sourceNotebook.cells[0].metadata
     )
@@ -187,6 +194,84 @@ describe('ipynb codec', () => {
     expect(reopened.metadata['runme.dev/notebookSetting']).toBe('keep')
     expect(reopened.cells[2]?.languageId).toBe('bash')
     expect(reopened.cells[2]?.metadata['runme.dev/runnerName']).toBe('shell')
+  })
+
+  it('prefers externally changed Jupyter outputs over stale Runme execution details', () => {
+    const decoded = decodeIpynb(JSON.stringify(sourceNotebook))
+    const codeCell = decoded.notebook.cells[2]!
+    codeCell.outputs[0]!.processInfo = create(
+      parser_pb.CellOutputProcessInfoSchema,
+      { pid: 42n }
+    )
+    codeCell.executionSummary = create(
+      parser_pb.CellExecutionSummarySchema,
+      {
+        executionOrder: 7,
+        success: true,
+        timing: create(parser_pb.ExecutionSummaryTimingSchema, {
+          startTime: 100n,
+          endTime: 200n,
+        }),
+      }
+    )
+    const encoded = encodeIpynb(
+      decoded.notebook,
+      JSON.stringify(sourceNotebook),
+      decoded
+    )
+    const externallyEdited = JSON.parse(encoded.text)
+    externallyEdited.cells[2].outputs[0].text = 'changed externally\n'
+
+    const reopened = decodeIpynb(JSON.stringify(externallyEdited)).notebook
+      .cells[2]!
+
+    expect(
+      new TextDecoder().decode(reopened.outputs[0]?.items[0]?.data)
+    ).toBe('changed externally\n')
+    expect(reopened.outputs[0]?.processInfo).toBeUndefined()
+    expect(reopened.executionSummary).toMatchObject({ executionOrder: 7 })
+    expect(reopened.executionSummary?.success).toBeUndefined()
+    expect(reopened.executionSummary?.timing).toBeUndefined()
+  })
+
+  it('preserves Runme execution details when Jupyter output keys are reordered', () => {
+    const decoded = decodeIpynb(JSON.stringify(sourceNotebook))
+    const displayOutput = decoded.notebook.cells[2]!.outputs[1]!
+    displayOutput.processInfo = create(parser_pb.CellOutputProcessInfoSchema, {
+      pid: 42n,
+    })
+    const encoded = encodeIpynb(
+      decoded.notebook,
+      JSON.stringify(sourceNotebook),
+      decoded
+    )
+    const reordered = JSON.parse(encoded.text)
+    const output = reordered.cells[2].outputs[1]
+    output.data = {
+      'application/json': output.data['application/json'],
+      'text/plain': output.data['text/plain'],
+    }
+    const reopened = decodeIpynb(JSON.stringify(reordered)).notebook.cells[2]!
+
+    expect(reopened.outputs[1]?.processInfo?.pid).toBe(42n)
+  })
+
+  it('ignores malformed optional Runme output metadata', () => {
+    const decoded = decodeIpynb(JSON.stringify(sourceNotebook))
+    const encoded = encodeIpynb(
+      decoded.notebook,
+      JSON.stringify(sourceNotebook),
+      decoded
+    )
+    const malformed = JSON.parse(encoded.text)
+    malformed.cells[2].metadata.runme.cell.outputs[1].metadata[
+      'runme.dev/ipynbOutputMetadata'
+    ] = '{not-json'
+
+    expect(() => decodeIpynb(JSON.stringify(malformed))).not.toThrow()
+    const reopened = decodeIpynb(JSON.stringify(malformed)).notebook.cells[2]!
+    expect(reopened.outputs).toHaveLength(2)
+    expect(reopened.outputs[1]?.processInfo).toBeUndefined()
   })
 
   it('rejects unsupported nbformat major versions', () => {

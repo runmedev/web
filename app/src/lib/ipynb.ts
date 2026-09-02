@@ -48,6 +48,7 @@ export type IpynbOutput = JsonObject & {
 export interface DecodedIpynb {
   notebook: parser_pb.Notebook
   source: IpynbNotebook
+  shadowText: string
   jupyterIdByRunmeRefId: Record<string, string>
   baselineCellHashes: Record<string, string>
   baselineOutputHashes: Record<string, string>
@@ -76,6 +77,27 @@ function asObject(value: unknown, label: string): JsonObject {
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
+}
+
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalJson)
+  }
+  if (value && typeof value === 'object') {
+    const object = value as JsonObject
+    return Object.fromEntries(
+      Object.keys(object)
+        .sort()
+        .map((key) => [key, canonicalJson(object[key])])
+    )
+  }
+  return value
+}
+
+function jsonStructurallyEqual(left: unknown, right: unknown): boolean {
+  return (
+    JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right))
+  )
 }
 
 function optionalObject(value: unknown): JsonObject | undefined {
@@ -122,8 +144,6 @@ function runmeCellEnvelope(cell: parser_pb.Cell): JsonObject {
   ) as JsonObject
   delete json.kind
   delete json.value
-  delete json.outputs
-  delete json.executionSummary
   delete json.refId
   const metadata = optionalObject(json.metadata)
   if (metadata) {
@@ -320,6 +340,60 @@ function runmeOutputToIpynb(output: parser_pb.CellOutput): IpynbOutput {
   }
 }
 
+function outputsFromIpynb(
+  sourceCell: IpynbCell,
+  id: string,
+  preservedCell: parser_pb.Cell | undefined
+): { outputs: parser_pb.CellOutput[]; preserved: boolean } {
+  const sourceOutputs = Array.isArray(sourceCell.outputs)
+    ? sourceCell.outputs
+    : []
+  const converted = sourceOutputs.map((output) =>
+    ipynbOutputToRunme(
+      asObject(output, `Jupyter output in cell ${id}`) as IpynbOutput
+    )
+  )
+  if (!preservedCell) {
+    return { outputs: converted, preserved: false }
+  }
+
+  // The Jupyter projection is authoritative when another editor changed it.
+  // When it still matches the embedded projection, retain the complete Runme
+  // messages so process information and non-Jupyter fields survive reopening.
+  try {
+    const preservedProjection = preservedCell.outputs.map(runmeOutputToIpynb)
+    const sourceProjection = converted.map(runmeOutputToIpynb)
+    if (jsonStructurallyEqual(preservedProjection, sourceProjection)) {
+      return { outputs: preservedCell.outputs, preserved: true }
+    }
+  } catch {
+    // Opaque Runme metadata is optional. A malformed envelope must not make
+    // an otherwise valid Jupyter notebook unreadable.
+  }
+  return { outputs: converted, preserved: false }
+}
+
+function executionSummaryFromIpynb(
+  sourceCell: IpynbCell,
+  preservedCell: parser_pb.Cell | undefined,
+  outputsPreserved: boolean
+): parser_pb.CellExecutionSummary | undefined {
+  const executionOrder =
+    typeof sourceCell.execution_count === 'number'
+      ? sourceCell.execution_count
+      : undefined
+  if (
+    outputsPreserved &&
+    preservedCell?.executionSummary &&
+    preservedCell.executionSummary.executionOrder === executionOrder
+  ) {
+    return preservedCell.executionSummary
+  }
+  return executionOrder === undefined
+    ? undefined
+    : create(parser_pb.CellExecutionSummarySchema, { executionOrder })
+}
+
 function outputHash(cell: parser_pb.Cell): string {
   return md5(
     JSON.stringify(
@@ -420,6 +494,10 @@ export function decodeIpynb(text: string): DecodedIpynb {
     if (sourceCell.cell_type === 'raw') {
       metadata[IPYNB_RAW_CELL_METADATA_KEY] = 'true'
     }
+    const decodedOutputs =
+      sourceCell.cell_type === 'code'
+        ? outputsFromIpynb(sourceCell, id, preservedCell)
+        : { outputs: [], preserved: false }
     const cell = create(parser_pb.CellSchema, {
       kind,
       refId,
@@ -433,20 +511,14 @@ export function decodeIpynb(text: string): DecodedIpynb {
             : 'markdown'),
       metadata,
       textRange: preservedCell?.textRange,
-      outputs:
-        sourceCell.cell_type === 'code' && Array.isArray(sourceCell.outputs)
-          ? sourceCell.outputs.map((output) =>
-              ipynbOutputToRunme(
-                asObject(output, `Jupyter output in cell ${id}`) as IpynbOutput
-              )
-            )
-          : [],
+      outputs: decodedOutputs.outputs,
       executionSummary:
-        sourceCell.cell_type === 'code' &&
-        typeof sourceCell.execution_count === 'number'
-          ? create(parser_pb.CellExecutionSummarySchema, {
-              executionOrder: sourceCell.execution_count,
-            })
+        sourceCell.cell_type === 'code'
+          ? executionSummaryFromIpynb(
+              sourceCell,
+              preservedCell,
+              decodedOutputs.preserved
+            )
           : undefined,
       role: preservedCell?.role,
       callId: preservedCell?.callId,
@@ -468,6 +540,10 @@ export function decodeIpynb(text: string): DecodedIpynb {
       frontmatter: preservedNotebook?.frontmatter,
     }),
     source,
+    // Use the validated in-memory source as the merge baseline. decodeIpynb
+    // may repair invalid or duplicate cell IDs, so retaining the original
+    // bytes would make the next merge miss those cells and lose opaque fields.
+    shadowText: `${JSON.stringify(source, null, 2)}\n`,
     jupyterIdByRunmeRefId,
     baselineCellHashes,
     baselineOutputHashes,

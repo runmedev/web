@@ -9,6 +9,7 @@ import {
   setGoogleDriveBaseUrl,
 } from '../lib/googleDriveRuntime'
 import { IPYNB_MIME_TYPE } from '../lib/ipynb'
+import { appLogger } from '../lib/logging/runtime'
 import { encodeIpynbNotebook, encodeRunmeNotebook } from '../lib/notebookFormat'
 import { MimeType, parser_pb } from '../runme/client'
 import { MemoryConflictDocStorage } from './conflictDocs'
@@ -1645,6 +1646,69 @@ describe('LocalNotebooks pending Drive create', () => {
 })
 
 describe('LocalNotebooks ipynb conversion', () => {
+  it('recovers a Drive IPYNB containing Runme JSON instead of showing an empty notebook', async () => {
+    const localUri = 'local://file/recover-ipynb'
+    const remoteUri = 'https://drive.google.com/file/d/recover123/view'
+    const source = create(parser_pb.NotebookSchema, {
+      metadata: { 'runme.dev/ipynb': 'true' },
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'title',
+          kind: parser_pb.CellKind.MARKUP,
+          languageId: 'markdown',
+          value: '# Still here',
+        }),
+      ],
+    })
+    const malformedIpynb = encodeRunmeNotebook(source)
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: remoteUri,
+        name: 'codex_instructions.ipynb',
+        type: NotebookStoreItemType.File,
+        children: [],
+        mimeType: IPYNB_MIME_TYPE,
+        parents: [],
+      })),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: 'malformed-checksum',
+        headRevisionId: 'malformed-revision',
+      })),
+      loadContent: vi.fn(async () => malformedIpynb),
+    }
+    const shadowStorage = new MemoryIpynbShadowStorage()
+    const store = createTestStore(driveStore, {
+      ipynbShadowStorage: shadowStorage,
+    })
+    await store.files.put({
+      id: localUri,
+      name: 'codex_instructions.ipynb',
+      mimeType: IPYNB_MIME_TYPE,
+      remoteId: remoteUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+    vi.spyOn(appLogger, 'warn').mockImplementation(() => null as never)
+
+    const loaded = await store.load(localUri)
+
+    expect(loaded.cells).toHaveLength(1)
+    expect(loaded.cells[0]).toMatchObject({
+      refId: 'title',
+      kind: parser_pb.CellKind.MARKUP,
+      value: '# Still here',
+    })
+    const preservation = (await store.files.get(localUri))?.ipynbPreservation
+    expect(preservation).toBeDefined()
+    const repaired = JSON.parse(
+      await shadowStorage.read(preservation!.shadowRef)
+    )
+    expect(repaired).toMatchObject({ nbformat: 4, nbformat_minor: 5 })
+    expect(repaired.cells).toHaveLength(1)
+  })
+
   it('migrates cached kind-prefixed identities through the preservation map', async () => {
     const shadowStorage = new MemoryIpynbShadowStorage()
     const shadowText = JSON.stringify({
@@ -2643,6 +2707,70 @@ describe('LocalNotebooks Drive conflict resolution', () => {
     ).resolves.toMatchObject({
       status: 'synced',
     })
+  })
+
+  it('saves the local conflict winner as nbformat for an IPYNB file', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/ipynb123/view'
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'local-cell',
+          kind: parser_pb.CellKind.CODE,
+          languageId: 'python',
+          value: "print('local wins')",
+        }),
+      ],
+    })
+    const localDoc = encodeRunmeNotebook(notebook)
+    let savedContent = ''
+    const driveStore = {
+      getVersionMetadata: vi
+        .fn()
+        .mockResolvedValueOnce({ md5Checksum: 'upstream-checksum' })
+        .mockResolvedValueOnce({ md5Checksum: 'saved-checksum' }),
+      saveContent: vi.fn(
+        async (uri: string, content: string, mimeType: string) => {
+          expect(uri).toBe(remoteUri)
+          expect(mimeType).toBe(IPYNB_MIME_TYPE)
+          savedContent = content
+        }
+      ),
+    }
+    const store = createTestStore(driveStore)
+    await store.files.put({
+      id: 'local://file/ipynb-conflict',
+      name: 'notebook.ipynb',
+      mimeType: IPYNB_MIME_TYPE,
+      remoteId: remoteUri,
+      lastRemoteChecksum: 'base-checksum',
+      lastSynced: '',
+      doc: localDoc,
+      md5Checksum: 'local-checksum',
+      conflict: {
+        detectedAt: '2026-09-01T00:00:00.000Z',
+        upstreamChecksum: 'upstream-checksum',
+        upstreamDoc: encodeRunmeNotebook(
+          create(parser_pb.NotebookSchema, { cells: [] })
+        ),
+        localChecksumAtDetection: 'local-checksum',
+      },
+    })
+
+    await store.resolveConflictWithLocal('local://file/ipynb-conflict')
+
+    expect(driveStore.saveContent).toHaveBeenCalledWith(
+      remoteUri,
+      expect.any(String),
+      IPYNB_MIME_TYPE
+    )
+    const saved = JSON.parse(savedContent)
+    expect(saved).toMatchObject({ nbformat: 4, nbformat_minor: 5 })
+    expect(saved.cells[0]).toMatchObject({
+      cell_type: 'code',
+      id: 'local-cell',
+      source: "print('local wins')",
+    })
+    expect(saved.cells[0]).not.toHaveProperty('kind')
   })
 
   it('requires force when upstream changed again before saving local version', async () => {

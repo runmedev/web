@@ -1333,7 +1333,10 @@ export class LocalNotebooks extends Dexie {
         throw new Error(`Expected ipynb content for ${record.name}`)
       }
       const serialized = serializeNotebook(decoded.notebook)
-      const shadowRef = await this.ipynbShadowStorage.write(uri, content)
+      const shadowRef = await this.ipynbShadowStorage.write(
+        uri,
+        decoded.ipynb.shadowText
+      )
       const previousRef = record.ipynbPreservation?.shadowRef
       await this.files.update(uri, {
         doc: serialized,
@@ -1744,7 +1747,7 @@ export class LocalNotebooks extends Dexie {
       localContent = serializeNotebook(decoded.notebook)
       const shadowRef = await this.ipynbShadowStorage.write(
         fileUri,
-        initialIpynb
+        decoded.ipynb?.shadowText ?? initialIpynb
       )
       ipynbPreservation = {
         upstreamFingerprint: '',
@@ -2459,7 +2462,10 @@ export class LocalNotebooks extends Dexie {
     if (!decoded.ipynb) {
       return { notebook: decoded.notebook, serialized }
     }
-    const shadowRef = await this.ipynbShadowStorage.write(localUri, content)
+    const shadowRef = await this.ipynbShadowStorage.write(
+      localUri,
+      decoded.ipynb.shadowText
+    )
     return {
       notebook: decoded.notebook,
       serialized,
