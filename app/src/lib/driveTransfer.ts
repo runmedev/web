@@ -178,6 +178,22 @@ export async function searchDriveFiles(
   }
 }
 
+/** Inspect aggregate Drive access without returning collaborator identities. */
+export async function inspectDriveItemAccess(
+  item: string,
+  itemType: 'file' | 'folder' = 'folder'
+) {
+  if (!item?.trim()) {
+    throw new Error('drive.inspectAccess requires a Drive item URI or id')
+  }
+  const itemRef = item.includes('://')
+    ? item.trim()
+    : itemType === 'file'
+      ? driveFileUrl(item.trim())
+      : driveFolderUrl(item.trim())
+  return ensureDriveStore().inspectAccess(itemRef)
+}
+
 export type MountDriveFolderResult = {
   folderId: string
   name: string

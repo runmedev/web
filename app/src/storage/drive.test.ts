@@ -153,6 +153,60 @@ describe("isDriveItemUri", () => {
 });
 
 describe("DriveNotebookStore", () => {
+  it("summarizes access without exposing permission principals", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/drive/v3/files/folder123");
+        expect(url.searchParams.get("fields")).toBe(
+          "id,mimeType,ownedByMe,shared,driveId,capabilities(canAddChildren,canEdit,canShare),permissions(type)",
+        );
+        return new Response(
+          JSON.stringify({
+            id: "folder123",
+            mimeType: "application/vnd.google-apps.folder",
+            ownedByMe: true,
+            shared: false,
+            capabilities: {
+              canAddChildren: true,
+              canEdit: true,
+              canShare: true,
+            },
+            permissions: [
+              {
+                type: "user",
+                role: "owner",
+                emailAddress: "owner@example.invalid",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    const result = await store.inspectAccess(driveFolderUrl("folder123"));
+
+    expect(result).toMatchObject({
+      itemType: "folder",
+      visibility: "private",
+      ownedByMe: true,
+      shared: false,
+      publiclyAccessible: false,
+      domainAccessible: false,
+      restrictedToAccountOrExplicitCollaborators: true,
+      permissionCounts: { user: 1, anyone: 0, domain: 0 },
+      capabilities: { canAddChildren: true, canEdit: true, canShare: true },
+    });
+    expect(JSON.stringify(result)).not.toContain("owner@example.invalid");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("forwards native Drive files.list search parameters and returns paging metadata", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     const fetchMock = vi

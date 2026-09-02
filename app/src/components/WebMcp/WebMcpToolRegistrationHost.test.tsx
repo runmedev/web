@@ -8,6 +8,7 @@ const {
   getOperationMock,
   cancelOperationMock,
   createDriveNotebookMock,
+  inspectDriveItemAccessMock,
   searchDriveFilesMock,
   mountDriveFolderMock,
   startGoogleDriveOAuthMock,
@@ -19,6 +20,7 @@ const {
   getOperationMock: vi.fn(),
   cancelOperationMock: vi.fn(),
   createDriveNotebookMock: vi.fn(),
+  inspectDriveItemAccessMock: vi.fn(),
   searchDriveFilesMock: vi.fn(),
   mountDriveFolderMock: vi.fn(),
   startGoogleDriveOAuthMock: vi.fn(),
@@ -57,6 +59,7 @@ vi.mock('../../lib/appConsole/appConsoleController', () => ({
 
 vi.mock('../../lib/driveTransfer', () => ({
   createDriveNotebook: createDriveNotebookMock,
+  inspectDriveItemAccess: inspectDriveItemAccessMock,
   searchDriveFiles: searchDriveFilesMock,
   mountDriveFolder: mountDriveFolderMock,
 }))
@@ -125,6 +128,16 @@ describe('WebMcpToolRegistrationHost', () => {
       fileName: 'demo.ipynb',
       remoteUri: 'https://drive.google.com/file/d/drive-file-1/view',
       localUri: 'local://file/drive-file-1',
+    })
+    inspectDriveItemAccessMock.mockReset()
+    inspectDriveItemAccessMock.mockResolvedValue({
+      uri: 'https://drive.google.com/drive/folders/drive-folder-1',
+      itemType: 'folder',
+      visibility: 'private',
+      ownedByMe: true,
+      shared: false,
+      publiclyAccessible: false,
+      domainAccessible: false,
     })
     searchDriveFilesMock.mockReset()
     searchDriveFilesMock.mockResolvedValue({
@@ -198,7 +211,7 @@ describe('WebMcpToolRegistrationHost', () => {
 
     render(<WebMcpToolRegistrationHost />)
 
-    expect(registerTool).toHaveBeenCalledTimes(12)
+    expect(registerTool).toHaveBeenCalledTimes(13)
   })
 
   it('prefers the current document.modelContext API', () => {
@@ -215,7 +228,7 @@ describe('WebMcpToolRegistrationHost', () => {
 
     render(<WebMcpToolRegistrationHost />)
 
-    expect(documentRegisterTool).toHaveBeenCalledTimes(12)
+    expect(documentRegisterTool).toHaveBeenCalledTimes(13)
     expect(navigatorRegisterTool).not.toHaveBeenCalled()
   })
 
@@ -276,7 +289,7 @@ describe('WebMcpToolRegistrationHost', () => {
 
     const rendered = render(<WebMcpToolRegistrationHost />)
 
-    expect(registerTool).toHaveBeenCalledTimes(12)
+    expect(registerTool).toHaveBeenCalledTimes(13)
     expect(
       registered.some(({ tool }) => tool.name === 'listNotebookComments')
     ).toBe(false)
@@ -546,6 +559,24 @@ describe('WebMcpToolRegistrationHost', () => {
     ).resolves.toContain('"localUri":"local://folder/drive-folder-1"')
     expect(mountDriveFolderMock).toHaveBeenCalledWith(
       'https://drive.google.com/drive/folders/drive-folder-1'
+    )
+
+    const inspectDriveItemAccess = registered.find(
+      ({ tool }) => tool.name === 'inspectDriveItemAccess'
+    )
+    expect(inspectDriveItemAccess?.tool.annotations).toEqual({
+      readOnlyHint: true,
+      untrustedContentHint: false,
+    })
+    await expect(
+      inspectDriveItemAccess?.tool.execute({
+        itemIdOrUri: 'drive-folder-1',
+        itemType: 'folder',
+      })
+    ).resolves.toContain('"visibility":"private"')
+    expect(inspectDriveItemAccessMock).toHaveBeenCalledWith(
+      'drive-folder-1',
+      'folder'
     )
 
     const createDriveNotebook = registered.find(

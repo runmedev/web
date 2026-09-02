@@ -1,26 +1,40 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  buildInspectDriveItemAccessInputSchema,
   buildListDriveFolderInputSchema,
   buildMountDriveFolderInputSchema,
   buildSearchDriveItemsInputSchema,
+  executeInspectDriveItemAccess,
   executeListDriveFolder,
   executeMountDriveFolder,
   executeSearchDriveItems,
 } from './driveWorkspaceTools'
 
-const { mountDriveFolderMock, searchDriveFilesMock } = vi.hoisted(() => ({
+const {
+  inspectDriveItemAccessMock,
+  mountDriveFolderMock,
+  searchDriveFilesMock,
+} = vi.hoisted(() => ({
+  inspectDriveItemAccessMock: vi.fn(),
   mountDriveFolderMock: vi.fn(),
   searchDriveFilesMock: vi.fn(),
 }))
 
 vi.mock('../driveTransfer', () => ({
+  inspectDriveItemAccess: inspectDriveItemAccessMock,
   mountDriveFolder: mountDriveFolderMock,
   searchDriveFiles: searchDriveFilesMock,
 }))
 
 describe('driveWorkspaceTools', () => {
   beforeEach(() => {
+    inspectDriveItemAccessMock.mockReset()
+    inspectDriveItemAccessMock.mockResolvedValue({
+      visibility: 'private',
+      publiclyAccessible: false,
+      domainAccessible: false,
+    })
     mountDriveFolderMock.mockReset()
     searchDriveFilesMock.mockReset()
     searchDriveFilesMock.mockResolvedValue({ files: [] })
@@ -40,6 +54,13 @@ describe('driveWorkspaceTools', () => {
       required: ['folderIdOrUri'],
       properties: {
         pageSize: { minimum: 1, maximum: 100 },
+      },
+    })
+    expect(buildInspectDriveItemAccessInputSchema()).toMatchObject({
+      additionalProperties: false,
+      required: ['itemIdOrUri'],
+      properties: {
+        itemType: { enum: ['file', 'folder'] },
       },
     })
     expect(buildMountDriveFolderInputSchema()).toMatchObject({
@@ -128,6 +149,25 @@ describe('driveWorkspaceTools', () => {
     expect(result).toMatchObject({
       folderUri: 'https://drive.google.com/drive/folders/folder-123',
       nextPageToken: 'next-page',
+    })
+  })
+
+  it('inspects aggregate Drive access without collaborator identities', async () => {
+    const result = JSON.parse(
+      await executeInspectDriveItemAccess({
+        itemIdOrUri: 'folder-123',
+        itemType: 'folder',
+      })
+    )
+
+    expect(inspectDriveItemAccessMock).toHaveBeenCalledWith(
+      'folder-123',
+      'folder'
+    )
+    expect(result).toEqual({
+      visibility: 'private',
+      publiclyAccessible: false,
+      domainAccessible: false,
     })
   })
 
