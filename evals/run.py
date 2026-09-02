@@ -1337,7 +1337,7 @@ class RunmeEvals:
             self.drive = refresh_drive_session(self.drive.service_account)
 
 
-def load_cases(path: Path) -> list[EvalCase]:
+def load_cases(path: Path, trial_token_suffix: str | None = None) -> list[EvalCase]:
     raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, list) or not raw:
         raise ValueError("Eval cases must be a non-empty JSON array")
@@ -1356,6 +1356,15 @@ def load_cases(path: Path) -> list[EvalCase]:
                 raise ValueError(f"Duplicate eval case id: {case_id}")
             seen.add(case_id)
             trial_token = "RUNME-EVAL-" + re.sub(r"[^A-Za-z0-9-]", "-", case_id).upper()
+            if trial_token_suffix:
+                normalized_suffix = re.sub(
+                    r"[^A-Za-z0-9-]", "-", trial_token_suffix
+                ).strip("-")
+                if not normalized_suffix:
+                    raise ValueError(
+                        "Trial token suffix must contain an alphanumeric character"
+                    )
+                trial_token += f"-{normalized_suffix.upper()}"
 
             def render(
                 text: str,
@@ -2222,6 +2231,13 @@ def plugin_marketplace(catalog: dict[str, Any], plugin_name: str) -> str | None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
+    parser.add_argument(
+        "--trial-token-suffix",
+        help=(
+            "Append a sanitized suffix to {trial_token} expansions so repeated "
+            "experiment runs create distinct Drive artifacts"
+        ),
+    )
     parser.add_argument("--case", action="append", dest="case_ids")
     parser.add_argument("--category", action="append", dest="categories")
     parser.add_argument(
@@ -2258,7 +2274,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    cases = load_cases(args.cases)
+    cases = load_cases(args.cases, args.trial_token_suffix)
     if args.case_ids:
         selected = set(args.case_ids)
         matched = {

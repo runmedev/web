@@ -705,6 +705,23 @@ class EvalCaseTest(unittest.TestCase):
             "confirmation-raindrops-create-ranking-design-confidential-context",
         )
 
+    def test_trial_token_suffix_namespaces_drive_artifacts(self) -> None:
+        cases = load_cases(DEFAULT_CASES, "exp 2/tool-description")
+        case = next(
+            case
+            for case in cases
+            if case.case_id
+            == "confirmation-raindrops-create-ranking-design-confidential-context"
+        )
+
+        self.assertIn("-EXP-2-TOOL-DESCRIPTION", case.prompt)
+        self.assertIn(
+            "-EXP-2-TOOL-DESCRIPTION", case.expected_created_notebook_name or ""
+        )
+
+        with self.assertRaisesRegex(ValueError, "alphanumeric"):
+            load_cases(DEFAULT_CASES, "///")
+
     def test_notebook_output_text_decodes_runme_buffer_shapes(self) -> None:
         cell = {
             "outputs": [
