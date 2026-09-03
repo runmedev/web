@@ -4,10 +4,16 @@ import { describe, expect, it } from 'vitest'
 import {
   type RunmeOperation,
   buildOperationLogDiff,
+  cloneNotebook,
   materializeOperationLog,
+  materializedLogToNotebook,
   mergeOperationSets,
 } from '.'
-import { parser_pb } from '../../runme/client'
+import {
+  RunmeExecutionState,
+  RunmeMetadataKey,
+  parser_pb,
+} from '../../runme/client'
 
 function notebook(
   cells: Array<{ id: string; value: string }>
@@ -24,13 +30,13 @@ function notebook(
   })
 }
 
-function apply(
+async function apply(
   previous: parser_pb.Notebook,
   next: parser_pb.Notebook,
   observedOperations: RunmeOperation[],
   actorId: string,
   firstActorSequence = 1
-): RunmeOperation[] {
+): Promise<RunmeOperation[]> {
   return buildOperationLogDiff({
     previous,
     next,
@@ -42,18 +48,18 @@ function apply(
 }
 
 describe('editor operation-log journal', () => {
-  it('records cell creation, updates, deletion, and reordering', () => {
+  it('records cell creation, updates, deletion, and reordering', async () => {
     const empty = notebook([])
     const initial = notebook([
       { id: 'one', value: 'One' },
       { id: 'two', value: 'Two' },
     ])
-    const created = apply(empty, initial, [], 'actor_a')
+    const created = await apply(empty, initial, [], 'actor_a')
     const changed = notebook([
       { id: 'two', value: 'Two updated' },
       { id: 'three', value: 'Three' },
     ])
-    const updates = apply(initial, changed, created, 'actor_a', 3)
+    const updates = await apply(initial, changed, created, 'actor_a', 3)
     const kinds = updates.map((operation) => operation.kind)
     expect(kinds).toContain('cell.delete')
     expect(kinds).toContain('cell.update')
@@ -68,13 +74,13 @@ describe('editor operation-log journal', () => {
     ])
   })
 
-  it('merges concurrent insertions into the same observed gap', () => {
+  it('merges concurrent insertions into the same observed gap', async () => {
     const empty = notebook([])
     const anchors = notebook([
       { id: 'left', value: 'Left' },
       { id: 'right', value: 'Right' },
     ])
-    const seed = apply(empty, anchors, [], 'actor_seed')
+    const seed = await apply(empty, anchors, [], 'actor_seed')
     const aliceView = notebook([
       { id: 'left', value: 'Left' },
       { id: 'alice', value: 'Alice' },
@@ -85,12 +91,63 @@ describe('editor operation-log journal', () => {
       { id: 'bob', value: 'Bob' },
       { id: 'right', value: 'Right' },
     ])
-    const alice = apply(anchors, aliceView, seed, 'actor_alice')
-    const bob = apply(anchors, bobView, seed, 'actor_bob')
+    const alice = await apply(anchors, aliceView, seed, 'actor_alice')
+    const bob = await apply(anchors, bobView, seed, 'actor_bob')
     const merged = mergeOperationSets([...seed, ...alice], [...seed, ...bob])
 
     expect(
       materializeOperationLog(merged).notebook.cells.map((cell) => cell.cell_id)
     ).toEqual(['left', 'alice', 'bob', 'right'])
+  })
+
+  it('records execution start and finish with materialized outputs', async () => {
+    const initial = notebook([{ id: 'one', value: 'echo hello' }])
+    initial.cells[0]!.kind = parser_pb.CellKind.CODE
+    initial.cells[0]!.languageId = 'bash'
+    const seed = await apply(notebook([]), initial, [], 'actor_seed')
+    const running = cloneNotebook(initial)
+    running.cells[0]!.metadata = {
+      [RunmeMetadataKey.LastRunID]: 'run-1',
+      [RunmeMetadataKey.ExecutionState]: RunmeExecutionState.Running,
+    }
+    const started = await apply(initial, running, seed, 'actor_a')
+    const completed = cloneNotebook(running)
+    completed.cells[0]!.metadata[RunmeMetadataKey.ExecutionState] =
+      RunmeExecutionState.Completed
+    completed.cells[0]!.metadata[RunmeMetadataKey.ExitCode] = '0'
+    completed.cells[0]!.outputs = [
+      create(parser_pb.CellOutputSchema, {
+        items: [
+          create(parser_pb.CellOutputItemSchema, {
+            mime: 'text/plain',
+            data: new TextEncoder().encode('hello\n'),
+          }),
+        ],
+      }),
+    ]
+    const finished = await apply(
+      running,
+      completed,
+      [...seed, ...started],
+      'actor_a',
+      3
+    )
+
+    expect(started.map((operation) => operation.kind)).toContain(
+      'execution.start'
+    )
+    expect(finished.map((operation) => operation.kind)).toContain(
+      'execution.finish'
+    )
+    const materialized = materializeOperationLog([
+      ...seed,
+      ...started,
+      ...finished,
+    ])
+    expect(materialized.executions).toHaveLength(1)
+    expect(materialized.notebook.cells[0]?.outputs).toHaveLength(1)
+    expect(
+      materializedLogToNotebook(materialized).cells[0]?.outputs
+    ).toHaveLength(1)
   })
 })

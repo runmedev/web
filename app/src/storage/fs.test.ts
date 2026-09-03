@@ -851,6 +851,25 @@ describe("FilesystemNotebookStore", () => {
       );
     });
 
+    it('preserves the runme extension when an extensionless name is used', async () => {
+      const oldHandle = createMockFileHandle('old.runme', 'operation log')
+      rootEntries.set('old.runme', oldHandle)
+      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:old.runme`, {
+        id: `${WORKSPACE_ID}:old.runme`,
+        workspaceId: WORKSPACE_ID,
+        relativePath: 'old.runme',
+        kind: 'file',
+        handle: oldHandle,
+        lastKnownMtime: 0,
+        lastKnownSize: 0,
+      })
+      const oldUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('old.runme')}`
+
+      const result = await store.rename(oldUri, 'new')
+
+      expect(result.name).toBe('new.runme')
+    })
+
     it('removes old entry from DB', async () => {
       const nbJson = makeEmptyNotebookJson()
       const oldHandle = createMockFileHandle('old.json', nbJson)

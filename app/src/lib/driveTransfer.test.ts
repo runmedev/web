@@ -19,7 +19,7 @@ import {
   updateDriveFileBytes,
 } from './driveTransfer'
 import { encodeRunmeNotebook } from './notebookFormat'
-import { parseOperationLog } from './operationLog'
+import { parseOperationLog, serializeOperationLog } from './operationLog'
 import { appState } from './runtime/AppState'
 
 afterEach(() => {
@@ -300,6 +300,44 @@ describe('driveTransfer', () => {
       'source.ipynb',
       sourceText,
       'application/x-ipynb+json'
+    )
+  })
+
+  it('copies runme operation-log bytes without materializing a snapshot', async () => {
+    const sourceUri = 'https://drive.google.com/file/d/src123/view'
+    const destinationUri = 'https://drive.google.com/file/d/copied123/view'
+    const sourceText = serializeOperationLog(
+      {
+        record_type: 'runme.notebook',
+        format_version: 1,
+        notebook_id: 'notebook_source',
+        created_by: 'actor_source',
+        created_at: '2026-09-03T00:00:00Z',
+      },
+      []
+    )
+    const getMetadata = vi.fn().mockResolvedValue({
+      uri: sourceUri,
+      name: 'source.runme',
+      type: NotebookStoreItemType.File,
+      children: [],
+      parents: [],
+    })
+    const loadContent = vi.fn().mockResolvedValue(sourceText)
+    const createContent = vi.fn().mockResolvedValue({ uri: destinationUri })
+    appState.setDriveNotebookStore({
+      getMetadata,
+      loadContent,
+      createContent,
+    } as any)
+
+    await copyDriveNotebookFile('src123', 'folder999')
+
+    expect(createContent).toHaveBeenCalledWith(
+      'https://drive.google.com/drive/folders/folder999',
+      'source.runme',
+      sourceText,
+      'application/vnd.runme.notebook+jsonl'
     )
   })
 

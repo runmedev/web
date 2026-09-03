@@ -1,4 +1,4 @@
-import { create } from '@bufbuild/protobuf'
+import { create, fromJson } from '@bufbuild/protobuf'
 
 import { parser_pb } from '../../runme/client'
 import { canonicalJson } from './canonicalJson'
@@ -54,6 +54,9 @@ export function materializedLogToNotebook(
         languageId: cell.language_id,
         value: cell.value,
         metadata: stringRecord(cell.metadata),
+        outputs: cell.outputs.map((output) =>
+          fromJson(parser_pb.CellOutputSchema, output)
+        ),
       })
     ),
   })

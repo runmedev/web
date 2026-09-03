@@ -28,6 +28,17 @@ export const RUNME_OPERATION_LOG_MIME_TYPE =
 
 export type NotebookFileFormat = 'runme-json' | 'ipynb' | 'runme-operation-log'
 
+export function notebookFileExtension(format: NotebookFileFormat): string {
+  switch (format) {
+    case 'runme-json':
+      return '.json'
+    case 'ipynb':
+      return '.ipynb'
+    case 'runme-operation-log':
+      return '.runme'
+  }
+}
+
 export interface DecodedNotebookFile {
   format: NotebookFileFormat
   notebook: parser_pb.Notebook

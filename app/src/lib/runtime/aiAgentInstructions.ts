@@ -32,7 +32,7 @@ This Runme instance is served from ${runmeOrigin}.
 - Read notebooks with \`notebooks.get({ uri: notebookUri })\` and access cells through \`doc.notebook.cells\`. There is no \`notebooks.read\` method. Call \`await notebooks.help()\` before generating notebook code when the API is uncertain.
 - When the user identifies a Google Drive folder by name, call the direct read-only \`searchDriveItems\` tool with \`itemType: "folder"\`. If exactly one intended result remains, pass its ID or URI to \`mountDriveFolder\`; do not guess among duplicate names. Use \`listDriveFolder\` to inspect a known candidate without mounting it.
 - When the user explicitly requests a new notebook in Google Drive, call the direct \`createDriveNotebook\` WebMCP tool. It creates the Drive file and its Runme mirror as one retry-safe operation without a local staging notebook.
-- Use the \`comments\` library inside \`ExecuteCode\` for Drive comments and anchors. Runme does not expose a comment-specific WebMCP tool.
+- Use the \`comments\` library inside \`ExecuteCode\` for notebook comments and anchors. It writes \`.runme\` comments to the operation log and Drive-backed comments through Drive; Runme does not expose a comment-specific WebMCP tool.
 - Use the \`ui\` library inside \`ExecuteCode\` to create rendered Markdown selections and open Runme's selection context menu. Do not invent CSS selectors or dispatch arbitrary DOM events.
 - Do not edit or execute notebook cells through DOM clicks, keyboard automation, or Computer Use. If WebMCP is unavailable, stop and tell the user what must be done manually.
 
@@ -270,7 +270,7 @@ If the user's notebook reference is ambiguous, ask which notebook to use before 
 - Treat a cell's \`refId\` as an opaque canonical identifier. Do not infer the cell kind or storage format from prefixes such as \`code_\` or \`markup_\`.
 - Runme JSON \`Cell.refId\` and IPYNB \`cell.id\` are the same identity serialized under format-specific field names.
 - \`.runme\` notebooks use an append-only operation log in browser OPFS. Keep using the storage-neutral \`notebooks.*\` API; never manufacture actor IDs, operation IDs, dependencies, Lamport values, or PositionIds.
-- Multiple sessions may edit one \`.runme\` notebook concurrently. Each session keeps its displayed snapshot until an explicit refresh incorporates other sessions' operations.
+- Multiple sessions may edit one \`.runme\` notebook concurrently. Each session keeps its displayed snapshot until \`await notebooks.refresh({ target: { uri } })\` explicitly incorporates other sessions' operations.
 - Do not add, remove, or rewrite a cell ID unless the user explicitly requests an identity migration or the notebook API repairs invalid legacy data.
 - When updating or executing cells, reuse the exact \`refId\` returned by \`notebooks.get({ uri })\`.
 
@@ -311,7 +311,7 @@ physical-pointer test when browser input behavior itself matters.
 
 ## Work with notebook comments
 
-Use the \`comments\` sandbox library. Do not scrape the comments panel, call Google Drive directly, or infer the target from the comment body.
+Use the storage-neutral \`comments\` sandbox library. Do not scrape the comments panel, call Google Drive directly, or infer the target from the comment body.
 
 \`\`\`js
 const annotations = await comments.list({
@@ -340,7 +340,7 @@ await comments.reply({
 await comments.resolve({ target: { uri: notebookUri }, commentId })
 \`\`\`
 
-Comment mutations persist locally before returning and reconcile with Google Drive asynchronously. Top-level comments use an anchored client ID. Because Drive replies expose no writable metadata field, Runme adds a compact visible \`[runme:v1;reply=<clientReplyId>]\` footer in Drive and strips a valid terminal footer in Runme. Call \`comments.list\` again when remote completion matters. Do not describe a reply or resolution as synchronized while its \`sync.status\` is not \`synced\`.
+For \`.runme\`, comment mutations append directly to the operation log. Drive comment mutations persist locally before returning and reconcile asynchronously. Top-level Drive comments use an anchored client ID. Because Drive replies expose no writable metadata field, Runme adds a compact visible \`[runme:v1;reply=<clientReplyId>]\` footer in Drive and strips a valid terminal footer in Runme. Call \`comments.list\` again when remote completion matters. Do not describe a reply or resolution as synchronized while its \`sync.status\` is not \`synced\`.
 
 Use \`comments.reopen({ target, commentId })\` only when the user asks to reopen a resolved thread.
 

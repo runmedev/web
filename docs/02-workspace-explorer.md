@@ -60,3 +60,8 @@ explorer.removeFolder(uri)
 - The filename extension selects the notebook format: `.runme` for the
   append-only Runme operation log, `.json` for Runme JSON, and `.ipynb` for
   Jupyter.
+- Each open `.runme` tab keeps its own materialized snapshot. Use the notebook
+  banner or `notebooks.refresh({ target: { uri } })` to incorporate operations
+  appended by other sessions.
+- `.runme` cell edits, executions, and comment-thread lifecycle changes are
+  appended as operations; the editor and `comments.*` APIs materialize them.

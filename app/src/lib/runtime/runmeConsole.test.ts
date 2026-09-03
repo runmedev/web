@@ -1043,6 +1043,29 @@ describe('createNotebooksApi', () => {
     )
   })
 
+  it('refreshes an explicitly targeted operation-log notebook', async () => {
+    const before = create(parser_pb.NotebookSchema, {
+      cells: [codeCell('cell-a', 'before')],
+    })
+    const model = new FakeNotebookData('local://one', 'One.runme', before)
+    const refreshNotebook = vi.fn(async () => {
+      before.cells[0]!.value = 'after'
+    })
+    const api = createNotebooksApi({
+      resolveNotebook: () => model,
+      listNotebooks: () => [model],
+      refreshNotebook,
+    })
+
+    const document = await api.refresh({ target: { uri: 'local://one' } })
+
+    expect(refreshNotebook).toHaveBeenCalledWith('local://one')
+    expect(document.notebook.cells[0]?.value).toBe('after')
+    await expect(api.help('refresh')).resolves.toContain(
+      'notebooks.refresh({ target })'
+    )
+  })
+
   it('rejects write access requests without an explicit target', async () => {
     const notebook = create(parser_pb.NotebookSchema, { cells: [] })
     const model = new FakeNotebookData(

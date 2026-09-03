@@ -3,12 +3,14 @@ import { v4 as uuidv4 } from 'uuid'
 import { migrateNotebookCellIds } from '../lib/cellIdentity'
 import { IPYNB_MIME_TYPE, type IpynbMergeState } from '../lib/ipynb'
 import {
+  RUNME_OPERATION_LOG_MIME_TYPE,
   createInitialNotebookFile,
   decodeNotebookFile,
   detectNotebookFileFormat,
   encodeIpynbNotebook,
   encodeRunmeNotebook,
   isNotebookFileName,
+  notebookFileExtension,
   validateNotebookRenameFormat,
 } from '../lib/notebookFormat'
 import { parser_pb } from '../runme/client'
@@ -152,7 +154,7 @@ function notebookNameForRename(oldName: string, name: string): string {
   if (nextFormat) {
     return trimmed
   }
-  return `${trimmed}${oldFormat === 'ipynb' ? '.ipynb' : '.json'}`
+  return `${trimmed}${notebookFileExtension(oldFormat)}`
 }
 
 // ---------------------------------------------------------------------------
@@ -647,9 +649,11 @@ export class FilesystemNotebookStore {
       children: [],
       mimeType:
         type === NotebookStoreItemType.File
-          ? displayName.toLowerCase().endsWith('.ipynb')
+          ? detectNotebookFileFormat(displayName) === 'ipynb'
             ? IPYNB_MIME_TYPE
-            : 'application/json'
+            : detectNotebookFileFormat(displayName) === 'runme-operation-log'
+              ? RUNME_OPERATION_LOG_MIME_TYPE
+              : 'application/json'
           : undefined,
       parents: [parentUri],
     };

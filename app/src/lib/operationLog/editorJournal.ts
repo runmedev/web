@@ -1,6 +1,10 @@
-import { clone, toJsonString } from '@bufbuild/protobuf'
+import { clone, create, toJsonString } from '@bufbuild/protobuf'
 
-import { parser_pb } from '../../runme/client'
+import {
+  RunmeExecutionState,
+  RunmeMetadataKey,
+  parser_pb,
+} from '../../runme/client'
 import { materializeOperationLog } from './materialize'
 import { causalHeads, createRunmeOperation } from './mutations'
 import { allocatePositionBetween } from './positions'
@@ -59,15 +63,51 @@ function notebookUpdate(notebook: parser_pb.Notebook): NotebookUpdatePayload {
   }
 }
 
+function protobufJson<T>(schema: Parameters<typeof toJsonString>[0], value: T) {
+  return JSON.parse(
+    toJsonString(schema as never, value as never, JSON_OPTIONS)
+  ) as JsonValue
+}
+
+async function sha256(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(value)
+  )
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0')
+  ).join('')
+}
+
+function outputJson(cell: parser_pb.Cell): JsonValue[] {
+  return cell.outputs.map((output) => {
+    const normalized = create(parser_pb.CellOutputSchema, {
+      ...output,
+      items: output.items.map((item) =>
+        create(parser_pb.CellOutputItemSchema, {
+          ...item,
+          data:
+            item.data instanceof Uint8Array
+              ? item.data
+              : new Uint8Array(
+                  Object.values(item.data as unknown as Record<string, number>)
+                ),
+        })
+      ),
+    })
+    return protobufJson(parser_pb.CellOutputSchema, normalized)
+  })
+}
+
 /** Convert one debounced editor snapshot change into append-only operations. */
-export function buildOperationLogDiff({
+export async function buildOperationLogDiff({
   previous,
   next,
   observedOperations,
   actorId,
   firstActorSequence,
   createdAt = () => new Date().toISOString(),
-}: OperationLogDiffInput): RunmeOperation[] {
+}: OperationLogDiffInput): Promise<RunmeOperation[]> {
   const operations = [...observedOperations]
   const created: RunmeOperation[] = []
   let actorSequence = firstActorSequence
@@ -188,6 +228,95 @@ export function buildOperationLogDiff({
       position: position as unknown as JsonValue,
     })
     positions.set(cellId, position)
+  }
+
+  for (const cell of next.cells) {
+    const previousCell = previousCells.get(cell.refId)
+    const previousRunId = previousCell?.metadata?.[RunmeMetadataKey.LastRunID]
+    const persistedRunId = cell.metadata?.[RunmeMetadataKey.LastRunID]
+    const previousOutputs = previousCell ? outputJson(previousCell) : []
+    const nextOutputs = outputJson(cell)
+    const nextRunId =
+      persistedRunId ??
+      (!previousCell && nextOutputs.length > 0
+        ? `${actorId}:imported-execution:${actorSequence}`
+        : undefined)
+    const outputsChanged =
+      JSON.stringify(previousOutputs) !== JSON.stringify(nextOutputs)
+    if (
+      previousCell &&
+      !nextRunId &&
+      previousOutputs.length > 0 &&
+      nextOutputs.length === 0
+    ) {
+      append('cell.clear_outputs', {
+        cell_id: cell.refId,
+        reason: 'editor-cleared',
+      })
+      continue
+    }
+
+    const runChanged = Boolean(nextRunId && nextRunId !== previousRunId)
+    if (runChanged) {
+      const source = materializeOperationLog(operations).notebook.cells.find(
+        (candidate) => candidate.cell_id === cell.refId
+      )
+      const startedAt = createdAt()
+      append('execution.start', {
+        execution_id: nextRunId!,
+        cell_id: cell.refId,
+        source_op_id: source?.source_operation_id ?? dependencies[0] ?? '',
+        input: {
+          language_id: cell.languageId,
+          value: cell.value,
+          execution_metadata: { ...cell.metadata },
+        },
+        input_sha256: await sha256(`${cell.languageId}\u0000${cell.value}`),
+        runner: {
+          runner_id:
+            cell.metadata?.[RunmeMetadataKey.RunnerName] ?? 'runme-default',
+          runtime:
+            (cell.metadata?.[RunmeMetadataKey.JupyterKernelName] ??
+              cell.languageId) ||
+            'unknown',
+          runtime_version: 'unknown',
+          environment_digest: null,
+        },
+        started_at: startedAt,
+      })
+    }
+
+    const previousState =
+      previousCell?.metadata?.[RunmeMetadataKey.ExecutionState]
+    const nextState = cell.metadata?.[RunmeMetadataKey.ExecutionState]
+    const completed =
+      nextState === RunmeExecutionState.Completed ||
+      nextState === RunmeExecutionState.Unknown ||
+      (!previousCell && nextOutputs.length > 0)
+    if (
+      nextRunId &&
+      completed &&
+      (runChanged || previousState !== nextState || outputsChanged)
+    ) {
+      const exitCode = Number(cell.metadata?.[RunmeMetadataKey.ExitCode] ?? 0)
+      append('execution.finish', {
+        execution_id: nextRunId,
+        status:
+          nextState === RunmeExecutionState.Unknown
+            ? 'lost'
+            : exitCode === 0
+              ? 'succeeded'
+              : 'failed',
+        outputs: nextOutputs,
+        execution_summary: cell.executionSummary
+          ? (protobufJson(
+              parser_pb.CellExecutionSummarySchema,
+              cell.executionSummary
+            ) as Record<string, JsonValue>)
+          : {},
+        finished_at: createdAt(),
+      })
+    }
   }
 
   return created

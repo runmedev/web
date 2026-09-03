@@ -368,6 +368,7 @@ export function createAppJsGlobals({
   runnerSync,
   resolveNotebook,
   listNotebooks,
+  refreshNotebook,
   requestNotebookWriteAccess,
   ensureAccessToken,
   opfsApi,
@@ -384,6 +385,7 @@ export function createAppJsGlobals({
   runnerSync?: RunnerSync
   resolveNotebook?: (target?: unknown) => NotebookDataLike | null
   listNotebooks?: () => NotebookDataLike[]
+  refreshNotebook?: (uri: string) => Promise<unknown>
   requestNotebookWriteAccess?: (uri: string) => Promise<unknown>
   ensureAccessToken?: EnsureAccessToken
   opfsApi?: AppKernelOpfsApi
@@ -457,6 +459,7 @@ export function createAppJsGlobals({
   const notebooksApi = createNotebooksApi({
     resolveNotebook: resolveNotebook ?? (() => runme.getCurrentNotebook()),
     listNotebooks,
+    refreshNotebook,
     requestNotebookWriteAccess,
   })
   const notebookDiffApi = createNotebookDiffRuntimeApi({

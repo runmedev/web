@@ -274,6 +274,52 @@ describe('LocalNotebooks operation-log storage', () => {
     expect((await store.files.get(created.uri))?.doc).toBe('')
   })
 
+  it('stores comment threads and replies as append-only operations', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'comments.runme')
+    const anchor = JSON.stringify({
+      runme: { version: 2, type: 'cell', cellId: 'cell_one' },
+    })
+
+    const comment = await store.addOperationLogComment(created.uri, {
+      content: 'Please clarify this.',
+      anchor,
+      actorId: 'actor_comments',
+    })
+    await store.replyToOperationLogComment(
+      created.uri,
+      comment.id!,
+      'Clarified.',
+      { actorId: 'actor_comments' }
+    )
+    await store.setOperationLogCommentResolved(created.uri, comment.id!, true, {
+      actorId: 'actor_comments',
+    })
+
+    expect(await store.listOperationLogComments(created.uri)).toEqual([
+      expect.objectContaining({
+        id: comment.id,
+        content: 'Please clarify this.',
+        anchor,
+        resolved: true,
+        replies: [expect.objectContaining({ content: 'Clarified.' })],
+      }),
+    ])
+    expect(
+      parseOperationLog(await store.loadContent(created.uri)).operations.map(
+        (operation) => operation.kind
+      )
+    ).toEqual(['comment.add', 'comment.reply', 'thread.set_status'])
+  })
+
   it('unions concurrent local and Drive operations without storing log bytes in IndexedDB', async () => {
     const header: NotebookLogHeader = {
       record_type: 'runme.notebook',
@@ -362,6 +408,8 @@ describe('LocalNotebooks operation-log storage', () => {
       ),
     }
     const operationLogStorage = new MemoryOperationLogStorage()
+    const appendOperationLog = vi.spyOn(operationLogStorage, 'append')
+    const replaceOperationLog = vi.spyOn(operationLogStorage, 'replace')
     const local = await operationLogStorage.initialize(
       'local://file/shared',
       localDocument
@@ -390,6 +438,104 @@ describe('LocalNotebooks operation-log storage', () => {
     expect(remoteDocument).toBe(localAfter)
     expect(driveStore.saveContentIfVersion).toHaveBeenCalledTimes(1)
     expect((await store.files.get('local://file/shared'))?.doc).toBe('')
+    expect(appendOperationLog).toHaveBeenCalledTimes(1)
+    expect(replaceOperationLog).not.toHaveBeenCalled()
+  })
+
+  it('unions concurrent local and filesystem operation logs as raw bytes', async () => {
+    const header: NotebookLogHeader = {
+      record_type: 'runme.notebook',
+      format_version: 1,
+      notebook_id: 'notebook_filesystem',
+      created_by: 'actor_seed',
+      created_at: '2026-09-03T00:00:00Z',
+    }
+    const root = createRunmeOperation({
+      actorId: 'actor_seed',
+      actorSequence: 1,
+      dependencies: [],
+      knownOperations: [],
+      kind: 'notebook.update',
+      payload: { frontmatter: {}, metadata: {} },
+    })
+    const localOperation = createRunmeOperation({
+      actorId: 'actor_local',
+      actorSequence: 1,
+      dependencies: [root.op_id],
+      knownOperations: [root],
+      kind: 'cell.create',
+      payload: {
+        cell_id: 'cell_local',
+        position: [[100, 'actor_local', 1]],
+        cell: {
+          kind: 'markup',
+          language_id: 'markdown',
+          value: 'Local',
+          metadata: {},
+        },
+      },
+    })
+    const remoteOperation = createRunmeOperation({
+      actorId: 'actor_remote',
+      actorSequence: 1,
+      dependencies: [root.op_id],
+      knownOperations: [root],
+      kind: 'cell.create',
+      payload: {
+        cell_id: 'cell_remote',
+        position: [[100, 'actor_remote', 1]],
+        cell: {
+          kind: 'markup',
+          language_id: 'markdown',
+          value: 'Remote',
+          metadata: {},
+        },
+      },
+    })
+    const localDocument = serializeOperationLog(header, [root, localOperation])
+    let filesystemDocument = serializeOperationLog(header, [
+      root,
+      remoteOperation,
+    ])
+    const filesystemStore = {
+      loadContent: vi.fn(async () => filesystemDocument),
+      saveContent: vi.fn(async (_uri: string, content: string) => {
+        filesystemDocument = content
+      }),
+    }
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const appendOperationLog = vi.spyOn(operationLogStorage, 'append')
+    const replaceOperationLog = vi.spyOn(operationLogStorage, 'replace')
+    const local = await operationLogStorage.initialize(
+      'local://file/filesystem',
+      localDocument
+    )
+    const store = createTestStore({}, { operationLogStorage })
+    store.setFilesystemStore(filesystemStore as never)
+    await store.files.put({
+      id: 'local://file/filesystem',
+      name: 'shared.runme',
+      mimeType: 'application/vnd.runme.notebook+jsonl',
+      remoteId: 'fs://workspace/test/file/shared.runme',
+      lastRemoteChecksum: md5(filesystemDocument),
+      lastSynced: '',
+      doc: '',
+      md5Checksum: local.checksum,
+      operationLogRef: local.ref,
+    })
+
+    await store.sync('local://file/filesystem')
+
+    const localAfter = await store.loadContent('local://file/filesystem')
+    expect(
+      parseOperationLog(localAfter).operations.map(
+        (operation) => operation.op_id
+      )
+    ).toEqual([root.op_id, localOperation.op_id, remoteOperation.op_id])
+    expect(filesystemDocument).toBe(localAfter)
+    expect(filesystemStore.saveContent).toHaveBeenCalledTimes(1)
+    expect(appendOperationLog).toHaveBeenCalledTimes(1)
+    expect(replaceOperationLog).not.toHaveBeenCalled()
   })
 })
 
@@ -2346,6 +2492,26 @@ describe('LocalNotebooks ipynb conversion', () => {
 })
 
 describe('LocalNotebooks rename', () => {
+  it('preserves the runme extension when an extensionless name is used', async () => {
+    const store = createTestStore({})
+    await store.files.put({
+      id: 'local://file/runme',
+      name: 'original.runme',
+      remoteId: 'local://file/runme',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    const result = await store.rename('local://file/runme', 'renamed')
+
+    expect(result.name).toBe('renamed.runme')
+    expect((await store.files.get('local://file/runme'))?.name).toBe(
+      'renamed.runme'
+    )
+  })
+
   it('renames Drive-backed files upstream before updating the local mirror', async () => {
     const remoteUri = 'https://drive.google.com/file/d/file123/view'
     const driveStore = {

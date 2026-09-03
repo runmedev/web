@@ -511,6 +511,34 @@ async function hashCreateOperationId(value: string): Promise<string> {
   ).join('')
 }
 
+async function encodeOperationLogSnapshot(
+  notebook: parser_pb.Notebook,
+  stableIdentity?: string
+): Promise<string> {
+  const seed = stableIdentity
+    ? await hashCreateOperationId(`${stableIdentity}\u0000runme`)
+    : crypto.randomUUID().replace(/-/g, '')
+  const createdAt = stableIdentity
+    ? '1970-01-01T00:00:00.000Z'
+    : new Date().toISOString()
+  const header: NotebookLogHeader = {
+    record_type: 'runme.notebook',
+    format_version: 1,
+    notebook_id: `notebook_${seed}`,
+    created_by: `actor_${seed}`,
+    created_at: createdAt,
+  }
+  const operations = await buildOperationLogDiff({
+    previous: create(parser_pb.NotebookSchema, { cells: [] }),
+    next: notebook,
+    observedOperations: [],
+    actorId: header.created_by,
+    firstActorSequence: 1,
+    createdAt: () => createdAt,
+  })
+  return serializeOperationLog(header, operations)
+}
+
 export async function saveNotebookAsDriveCopy(
   notebook: parser_pb.Notebook,
   folder: string,
@@ -545,28 +573,7 @@ export async function saveNotebookAsDriveCopy(
   let notebookJson: string
   let mimeType: string
   if (format === 'runme-operation-log') {
-    const stableSeed = createOperationId
-      ? await hashCreateOperationId(`${createOperationId}\u0000runme`)
-      : crypto.randomUUID().replace(/-/g, '')
-    const createdAt = createOperationId
-      ? '1970-01-01T00:00:00.000Z'
-      : new Date().toISOString()
-    const header: NotebookLogHeader = {
-      record_type: 'runme.notebook',
-      format_version: 1,
-      notebook_id: `notebook_${stableSeed}`,
-      created_by: `actor_${stableSeed}`,
-      created_at: createdAt,
-    }
-    const operations = buildOperationLogDiff({
-      previous: create(parser_pb.NotebookSchema, { cells: [] }),
-      next: notebook,
-      observedOperations: [],
-      actorId: header.created_by,
-      firstActorSequence: 1,
-      createdAt: () => createdAt,
-    })
-    notebookJson = serializeOperationLog(header, operations)
+    notebookJson = await encodeOperationLogSnapshot(notebook, createOperationId)
     mimeType = RUNME_OPERATION_LOG_MIME_TYPE
   } else {
     notebookJson =
@@ -1146,22 +1153,39 @@ export async function copyDriveNotebookFile(
     const sourceFormat = detectNotebookFileFormat(metadata.name)
     const targetFormat = detectNotebookFileFormat(fileName)
     let sourceNotebook: parser_pb.Notebook
-    let sourceIpynb: string | undefined
-    if (sourceFormat === 'ipynb') {
-      sourceIpynb = await store.loadContent(sourceUri)
-      sourceNotebook = decodeNotebookFile(sourceIpynb, metadata.name).notebook
+    let sourceRawContent: string | undefined
+    if (sourceFormat === 'ipynb' || sourceFormat === 'runme-operation-log') {
+      sourceRawContent = await store.loadContent(sourceUri)
+      sourceNotebook = decodeNotebookFile(
+        sourceRawContent,
+        metadata.name
+      ).notebook
     } else {
       sourceNotebook = await store.load(sourceUri)
     }
 
     let created
     if (targetFormat === 'ipynb') {
-      const content = sourceIpynb ?? encodeIpynbNotebook(sourceNotebook).text
+      const content =
+        sourceFormat === 'ipynb' && sourceRawContent
+          ? sourceRawContent
+          : encodeIpynbNotebook(sourceNotebook).text
       created = await store.createContent(
         targetFolderRef,
         fileName,
         content,
         IPYNB_MIME_TYPE
+      )
+    } else if (targetFormat === 'runme-operation-log') {
+      const content =
+        sourceFormat === 'runme-operation-log' && sourceRawContent
+          ? sourceRawContent
+          : await encodeOperationLogSnapshot(sourceNotebook)
+      created = await store.createContent(
+        targetFolderRef,
+        fileName,
+        content,
+        RUNME_OPERATION_LOG_MIME_TYPE
       )
     } else {
       created = await store.create(targetFolderRef, fileName)
