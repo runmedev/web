@@ -3709,6 +3709,9 @@ function renderWorkspaceDocument({
       writeAccessErrorMessage: document.writeAccessErrorMessage,
       refreshErrorMessage: document.refreshErrorMessage,
       errorMessage: document.errorMessage,
+      operationLog:
+        detectNotebookFileFormat(document.title) === 'runme-operation-log' ||
+        undefined,
       ...(document.owner !== undefined ? { owner: document.owner } : {}),
     }
     return (
