@@ -62,6 +62,8 @@ const contextMocks = vi.hoisted(() => ({
     requestedUri: string
     name: string
     state: 'loading' | 'loaded' | 'blocked' | 'error'
+    operationLog?: boolean
+    refreshErrorMessage?: string
   }>,
   currentDoc: null as string | null,
   setCurrentDoc: vi.fn(),
@@ -1022,6 +1024,116 @@ describe('Actions tabs', () => {
     expect(screen.getByText('Loading notebook from Google Drive')).toBeTruthy()
     expect(screen.queryByText('This notebook has no cells yet.')).toBeNull()
     expect(screen.queryByLabelText('Add first cell')).toBeNull()
+  })
+
+  it('keeps local operation-log refresh separate from Drive sync', async () => {
+    const uri = 'local://file/shared-runme'
+    const remoteId = 'https://drive.google.com/file/d/file123/view'
+    const sync = vi.fn(async () => undefined)
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      {
+        uri,
+        title: 'shared.runme',
+        requestedUri: remoteId,
+        state: 'loaded',
+        refreshErrorMessage: 'Could not refresh operation log: OPFS unavailable',
+      },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, {
+        metadata: {},
+        cells: [],
+      }),
+    })
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(),
+      getSyncState: vi.fn(async () => ({
+        status: 'synced',
+        localUri: uri,
+        remoteId,
+      })),
+      rename: vi.fn(),
+      sync,
+      subscribeSync: vi.fn(() => () => {}),
+    }
+
+    render(<Actions />)
+
+    const refresh = await screen.findByRole('button', {
+      name: 'Refresh shared.runme from local operation log',
+    })
+    const driveSync = await screen.findByRole('button', {
+      name: 'Notebook is synced with Google Drive. Click to sync now.',
+    })
+
+    expect(
+      refresh.compareDocumentPosition(driveSync) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    fireEvent.click(refresh)
+    expect(contextMocks.refreshReadOnlyNotebook).toHaveBeenCalledWith(uri)
+    expect(sync).not.toHaveBeenCalled()
+
+    fireEvent.click(driveSync)
+    expect(sync).toHaveBeenCalledWith(uri)
+    expect(screen.queryByTestId('notebook-operation-log-banner')).toBeNull()
+    expect(
+      screen.getByTestId('notebook-operation-log-refresh-error').textContent
+    ).toContain('OPFS unavailable')
+  })
+
+  it('does not make non-Drive status indicators trigger upstream sync', async () => {
+    const localUri = 'local://file/local-runme'
+    const filesystemUri = 'local://file/filesystem-runme'
+    const sync = vi.fn(async () => undefined)
+    contextMocks.currentDoc = localUri
+    contextMocks.workspaceDocuments = [
+      { uri: localUri, title: 'local.runme', state: 'loaded' },
+      { uri: filesystemUri, title: 'filesystem.runme', state: 'loaded' },
+    ]
+    for (const uri of [localUri, filesystemUri]) {
+      contextMocks.notebookSnapshots.set(uri, {
+        uri,
+        loaded: true,
+        notebook: create(parser_pb.NotebookSchema, {
+          metadata: {},
+          cells: [],
+        }),
+      })
+    }
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(),
+      getSyncState: vi.fn(async (uri: string) =>
+        uri === localUri
+          ? { status: 'local-only', localUri: uri, remoteId: uri }
+          : {
+              status: 'synced',
+              localUri: uri,
+              remoteId: 'fs://workspace/shared.runme',
+            }
+      ),
+      rename: vi.fn(),
+      sync,
+      subscribeSync: vi.fn(() => () => {}),
+    }
+
+    render(<Actions />)
+
+    const localStatus = await screen.findByRole('button', {
+      name: 'Notebook is stored only in this browser',
+    })
+    const filesystemStatus = await screen.findByRole('button', {
+      name: 'Notebook is synced',
+    })
+    fireEvent.click(localStatus)
+    fireEvent.click(filesystemStatus)
+
+    expect(sync).not.toHaveBeenCalled()
+    expect(
+      screen.queryByLabelText(/Click to sync now/)
+    ).toBeNull()
   })
 
   it('defers rendering inactive read-only notebook cells', () => {

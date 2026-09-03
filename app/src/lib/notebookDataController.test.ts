@@ -90,6 +90,13 @@ function createFakeLocalNotebooks() {
       }
       return record.notebook
     }),
+    loadOperationLogSnapshot: vi.fn(async (uri: string) => {
+      const record = records.get(uri)
+      if (!record) {
+        throw new Error(`Local notebook record not found for ${uri}`)
+      }
+      return record.notebook
+    }),
     sync: vi.fn(async () => undefined),
     operationLogSupportsConcurrentWriters: vi.fn(() => true),
     save: vi.fn(),
@@ -245,7 +252,7 @@ describe('NotebookDataController', () => {
     expect(localStore.createOperationLogSaveStore).not.toHaveBeenCalled()
   })
 
-  it('forces upstream sync before refreshing a .runme snapshot', async () => {
+  it('refreshes a .runme snapshot from OPFS without syncing upstream', async () => {
     const uri = 'local://file/shared'
     const localStore = createFakeLocalNotebooks()
     localStore.records.set(uri, {
@@ -254,8 +261,9 @@ describe('NotebookDataController', () => {
       remoteId: 'https://drive.google.com/file/d/shared/view',
       notebook: createNotebook('before'),
     })
-    localStore.sync.mockImplementation(async () => {
+    localStore.loadOperationLogSnapshot.mockImplementation(async () => {
       localStore.records.get(uri)!.notebook = createNotebook('after')
+      return localStore.records.get(uri)!.notebook
     })
     const controller = getNotebookDataController()
     controller.configureOwnershipManager(createFakeOwnershipManager())
@@ -263,13 +271,20 @@ describe('NotebookDataController', () => {
       localNotebooks: localStore as unknown as LocalNotebooks,
     })
     await controller.openNotebook(uri)
+    const notebookData = controller.getNotebookData(uri)!
+    const flushPendingPersist = vi.spyOn(
+      notebookData,
+      'flushPendingPersist'
+    )
 
     await controller.refreshReadOnlyNotebook(uri)
 
-    expect(localStore.sync).toHaveBeenCalledWith(uri)
-    expect(localStore.load.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
-      localStore.sync.mock.invocationCallOrder.at(-1)!
-    )
+    expect(localStore.sync).not.toHaveBeenCalled()
+    expect(localStore.loadOperationLogSnapshot).toHaveBeenCalledWith(uri)
+    expect(flushPendingPersist).toHaveBeenCalledOnce()
+    expect(
+      localStore.loadOperationLogSnapshot.mock.invocationCallOrder.at(-1)
+    ).toBeGreaterThan(flushPendingPersist.mock.invocationCallOrder.at(-1)!)
     expect(controller.getNotebookData(uri)?.getNotebook().cells[0]?.value).toBe(
       'after'
     )
@@ -284,7 +299,9 @@ describe('NotebookDataController', () => {
       remoteId: 'https://drive.google.com/file/d/shared/view',
       notebook: createNotebook('current'),
     })
-    localStore.sync.mockRejectedValue(new Error('remote unavailable'))
+    localStore.loadOperationLogSnapshot.mockRejectedValue(
+      new Error('OPFS unavailable')
+    )
     const controller = getNotebookDataController()
     controller.configureOwnershipManager(createFakeOwnershipManager())
     controller.configureStores({
@@ -298,7 +315,39 @@ describe('NotebookDataController', () => {
       'current'
     )
     expect(controller.getOpenNotebooks()[0]?.refreshErrorMessage).toContain(
-      'remote unavailable'
+      'OPFS unavailable'
+    )
+    expect(localStore.sync).not.toHaveBeenCalled()
+  })
+
+  it('does not replace a .runme snapshot when pending persistence fails', async () => {
+    const uri = 'local://file/shared'
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'shared.runme',
+      remoteId: 'https://drive.google.com/file/d/shared/view',
+      notebook: createNotebook('current'),
+    })
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(createFakeOwnershipManager())
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    await controller.openNotebook(uri)
+    vi.spyOn(
+      controller.getNotebookData(uri)!,
+      'flushPendingPersist'
+    ).mockRejectedValue(new Error('OPFS write failed'))
+
+    await controller.refreshReadOnlyNotebook(uri)
+
+    expect(localStore.loadOperationLogSnapshot).not.toHaveBeenCalled()
+    expect(controller.getNotebookData(uri)?.getNotebook().cells[0]?.value).toBe(
+      'current'
+    )
+    expect(controller.getOpenNotebooks()[0]?.refreshErrorMessage).toContain(
+      'OPFS write failed'
     )
   })
 

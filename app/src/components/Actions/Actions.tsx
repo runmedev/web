@@ -15,6 +15,7 @@ import { create } from '@bufbuild/protobuf'
 import { Button, ScrollArea, Tabs, Text, Tooltip } from '@radix-ui/themes'
 
 import {
+  ArrowPathIcon,
   ChatBubbleLeftIcon,
   LinkIcon,
   LockClosedIcon,
@@ -349,11 +350,19 @@ function NotebookSyncIndicator({ docUri }: { docUri: string }) {
   const syncState = useNotebookSyncState(docUri)
 
   const presentation = syncIndicatorPresentation(syncState)
+  const canSyncDrive = isDriveItemUri(syncState?.remoteId)
+  const clickable =
+    presentation.clickable ||
+    (canSyncDrive && syncState?.status === 'synced')
+  const label =
+    syncState?.status === 'synced' && canSyncDrive
+      ? 'Notebook is synced with Google Drive. Click to sync now.'
+      : presentation.label
   const handleClick = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>) => {
       event.preventDefault()
       event.stopPropagation()
-      if (!store || !presentation.clickable) {
+      if (!store || !clickable) {
         return
       }
       if (syncState?.status === 'conflicted') {
@@ -382,7 +391,7 @@ function NotebookSyncIndicator({ docUri }: { docUri: string }) {
         })
       })
     },
-    [docUri, presentation.clickable, store, syncState?.status]
+    [clickable, docUri, store, syncState?.status]
   )
 
   if (!store || !docUri.startsWith('local://file/')) {
@@ -392,8 +401,8 @@ function NotebookSyncIndicator({ docUri }: { docUri: string }) {
   return (
     <button
       type="button"
-      aria-label={presentation.label}
-      title={presentation.label}
+      aria-label={label}
+      title={label}
       className="inline-flex h-5 w-5 items-center justify-center rounded-full"
       onClick={handleClick}
       onMouseDown={(event) => event.stopPropagation()}
@@ -401,6 +410,34 @@ function NotebookSyncIndicator({ docUri }: { docUri: string }) {
       <span
         className={`block h-2.5 w-2.5 rounded-full ${presentation.className}`}
       />
+    </button>
+  )
+}
+
+function OperationLogRefreshButton({
+  docUri,
+  displayName,
+}: {
+  docUri: string
+  displayName: string
+}) {
+  const { refreshReadOnlyNotebook } = useNotebookContext()
+  const label = `Refresh ${displayName} from local operation log`
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title="Refresh from local operation log"
+      className="inline-flex h-5 w-5 items-center justify-center rounded-nb-xs text-nb-text-faint transition-all duration-150 hover:bg-nb-surface-2 hover:text-nb-text"
+      onClick={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        void refreshReadOnlyNotebook(docUri)
+      }}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <ArrowPathIcon className="h-3.5 w-3.5" />
     </button>
   )
 }
@@ -3482,27 +3519,16 @@ function NotebookTabContent({
         {/* Full-width notebook column with horizontal padding for breathing room.
             Cells expand to fill the available width of the tab content area. */}
         <div id="notebook-column" className="w-full py-2 px-8">
-          {entry.operationLog && !readOnly && !releasePending ? (
+          {entry.operationLog &&
+          !readOnly &&
+          !releasePending &&
+          entry.refreshErrorMessage ? (
             <div
-              className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-nb-sm border border-nb-border bg-nb-surface-2 px-3 py-2 text-xs text-nb-text-muted"
-              data-testid="notebook-operation-log-banner"
+              className="mb-3 rounded-nb-sm border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600"
+              role="alert"
+              data-testid="notebook-operation-log-refresh-error"
             >
-              <span>
-                Concurrent changes are incorporated when you refresh this
-                operation-log notebook.
-              </span>
-              <Button
-                size="1"
-                variant="soft"
-                onClick={() => void refreshReadOnlyNotebook(docUri)}
-              >
-                Refresh
-              </Button>
-              {entry.refreshErrorMessage && (
-                <p className="w-full text-red-600">
-                  {entry.refreshErrorMessage}
-                </p>
-              )}
+              {entry.refreshErrorMessage}
             </div>
           ) : releasePending ? (
             <div
@@ -4692,6 +4718,14 @@ export default function Actions() {
                       </span>
                       {doc.readOnly && <ReadOnlyTabIndicator />}
                     </Tabs.Trigger>
+                    {isNotebook &&
+                      detectNotebookFileFormat(doc.title) ===
+                        'runme-operation-log' && (
+                        <OperationLogRefreshButton
+                          docUri={doc.uri}
+                          displayName={displayName}
+                        />
+                      )}
                     {isNotebook && <NotebookSyncIndicator docUri={doc.uri} />}
                     <button
                       type="button"

@@ -28,7 +28,8 @@ from `docs-dev/cujs/`.
   - verify Explorer shows exactly one notebook entry.
 - `runme-operation-log-concurrency.md` — concurrent `.runme` flow:
   - edit one Drive-backed notebook from two isolated sessions,
-  - explicitly refresh and verify deterministic convergence,
+  - explicitly Drive-sync, refresh each local OPFS view, and verify
+    deterministic convergence,
   - exercise operation-log comment lifecycle and durable reload.
 
 ## How CUJs are executed

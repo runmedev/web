@@ -1664,6 +1664,30 @@ export class LocalNotebooks extends Dexie {
     return content
   }
 
+  /** Materialize the current local .runme OPFS log without upstream I/O. */
+  async loadOperationLogSnapshot(uri: string): Promise<parser_pb.Notebook> {
+    if (!uri.startsWith('local://file/')) {
+      throw new Error(
+        'LocalNotebooks.loadOperationLogSnapshot expects a local://file/ URI; got ' +
+          uri
+      )
+    }
+    const record = await this.files.get(uri)
+    if (!record) {
+      throw new Error(`Local notebook record not found for ${uri}`)
+    }
+    if (detectNotebookFileFormat(record.name) !== 'runme-operation-log') {
+      throw new Error(`Notebook is not an operation log: ${uri}`)
+    }
+    if (!record.operationLogRef) {
+      throw new Error(`Operation-log reference missing for ${uri}`)
+    }
+    const content = (
+      await this.operationLogStorage.read(record.operationLogRef)
+    ).document
+    return decodeNotebookFile(content, record.name).notebook
+  }
+
   async saveContent(
     uri: string,
     content: string,
@@ -2062,13 +2086,7 @@ export class LocalNotebooks extends Dexie {
     }
 
     if (detectNotebookFileFormat(record.name) === 'runme-operation-log') {
-      if (!record.operationLogRef) {
-        throw new Error(`Operation-log reference missing for ${uri}`)
-      }
-      const content = (
-        await this.operationLogStorage.read(record.operationLogRef)
-      ).document
-      return decodeNotebookFile(content, record.name).notebook
+      return this.loadOperationLogSnapshot(uri)
     }
 
     if (!record.doc) {

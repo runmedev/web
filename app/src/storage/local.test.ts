@@ -306,6 +306,52 @@ describe('LocalNotebooks operation-log storage', () => {
     expect((await store.load(created.uri)).cells).toEqual([])
   })
 
+  it('materializes a .runme OPFS snapshot without reading from Drive', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const driveStore = {
+      loadContent: vi.fn(async () => {
+        throw new Error('Drive should not be read')
+      }),
+      getVersionMetadata: vi.fn(async () => {
+        throw new Error('Drive should not be read')
+      }),
+    }
+    const store = createTestStore(driveStore, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'shared.runme')
+    const saveStore = await store.createOperationLogSaveStore(created.uri, {
+      actorId: 'actor_test',
+    })
+    await saveStore.save(
+      created.uri,
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'cell_one',
+            kind: parser_pb.CellKind.MARKUP,
+            languageId: 'markdown',
+            value: 'Local OPFS value',
+          }),
+        ],
+      })
+    )
+    await store.files.update(created.uri, {
+      remoteId: 'https://drive.google.com/file/d/shared/view',
+    })
+
+    const snapshot = await store.loadOperationLogSnapshot(created.uri)
+
+    expect(snapshot.cells[0]?.value).toBe('Local OPFS value')
+    expect(driveStore.loadContent).not.toHaveBeenCalled()
+    expect(driveStore.getVersionMetadata).not.toHaveBeenCalled()
+  })
+
   it('adapts editor snapshots into appended cell operations', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
     const store = createTestStore({}, { operationLogStorage })
@@ -433,7 +479,7 @@ describe('LocalNotebooks operation-log storage', () => {
     ).toEqual(['comment.add', 'comment.reply', 'thread.set_status'])
   })
 
-  it('unions differently ordered local and Drive operations without leaving sync pending', async () => {
+  it('loads stale Drive-backed .runme data by merging local and remote operations', async () => {
     const header: NotebookLogHeader = {
       record_type: 'runme.notebook',
       format_version: 1,
@@ -543,9 +589,12 @@ describe('LocalNotebooks operation-log storage', () => {
       operationLogRef: local.ref,
     })
 
-    await store.reconcileDriveNotebook('local://file/shared')
+    const loaded = await store.load('local://file/shared')
 
     const localAfter = await store.loadContent('local://file/shared')
+    expect(new Set(loaded.cells.map((cell) => cell.value))).toEqual(
+      new Set(['Alice', 'Bob'])
+    )
     expect(
       new Set(
         parseOperationLog(localAfter).operations.map(
