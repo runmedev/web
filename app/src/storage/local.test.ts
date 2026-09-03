@@ -551,11 +551,16 @@ describe('LocalNotebooks operation-log storage', () => {
           _uri: string,
           content: string,
           _mimeType: string,
-          expected: { checksum?: string; revisionId?: string }
+          expected: {
+            checksum?: string
+            revisionId?: string
+            version?: string
+          }
         ) => {
           if (
             expected.checksum !== remoteVersion.md5Checksum ||
-            expected.revisionId !== remoteVersion.headRevisionId
+            expected.revisionId !== remoteVersion.headRevisionId ||
+            expected.version !== remoteVersion.version
           ) {
             return false
           }
@@ -617,6 +622,192 @@ describe('LocalNotebooks operation-log storage', () => {
     })
     expect(appendOperationLog).toHaveBeenCalledTimes(1)
     expect(replaceOperationLog).not.toHaveBeenCalled()
+  })
+
+  it('initializes an empty Drive file from the local .runme operation log', async () => {
+    const header: NotebookLogHeader = {
+      record_type: 'runme.notebook',
+      format_version: 1,
+      notebook_id: 'notebook_empty_drive',
+      created_by: 'actor_seed',
+      created_at: '2026-09-03T00:00:00Z',
+    }
+    const localDocument = serializeOperationLog(header, [])
+    let remoteDocument = ''
+    let remoteVersion = {
+      md5Checksum: md5(remoteDocument),
+      headRevisionId: 'revision-1',
+      version: '1',
+    }
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({ name: 'shared.runme' })),
+      getVersionMetadata: vi.fn(async () => remoteVersion),
+      loadContent: vi.fn(async () => remoteDocument),
+      saveContentIfVersion: vi.fn(
+        async (
+          _uri: string,
+          content: string,
+          _mimeType: string,
+          expected: {
+            checksum?: string
+            revisionId?: string
+            version?: string
+          }
+        ) => {
+          expect(expected).toEqual({
+            checksum: remoteVersion.md5Checksum,
+            revisionId: remoteVersion.headRevisionId,
+            version: remoteVersion.version,
+          })
+          remoteDocument = content
+          remoteVersion = {
+            md5Checksum: md5(content),
+            headRevisionId: 'revision-2',
+            version: '2',
+          }
+          return true
+        }
+      ),
+    }
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const local = await operationLogStorage.initialize(
+      'local://file/empty-drive',
+      localDocument
+    )
+    const store = createTestStore(driveStore, { operationLogStorage })
+    await store.files.put({
+      id: 'local://file/empty-drive',
+      name: 'shared.runme',
+      mimeType: 'application/vnd.runme.notebook+jsonl',
+      remoteId: 'https://drive.google.com/file/d/empty-drive/view',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: local.checksum,
+      operationLogRef: local.ref,
+    })
+
+    await store.reconcileDriveNotebook('local://file/empty-drive')
+
+    expect(remoteDocument).toBe(localDocument)
+    expect(driveStore.saveContentIfVersion).toHaveBeenCalledOnce()
+    expect(await store.files.get('local://file/empty-drive')).toMatchObject({
+      lastRemoteChecksum: md5(localDocument),
+      lastUpstreamVersion: {
+        checksum: md5(localDocument),
+        revisionId: 'revision-2',
+      },
+      lastSyncError: undefined,
+    })
+  })
+
+  it('creates an operation-log identity when a new Drive mirror is empty', async () => {
+    let remoteDocument = ''
+    let remoteVersion = {
+      md5Checksum: md5(remoteDocument),
+      headRevisionId: 'revision-1',
+      version: '1',
+    }
+    const driveStore = {
+      getVersionMetadata: vi.fn(async () => remoteVersion),
+      loadContent: vi.fn(async () => remoteDocument),
+      saveContentIfVersion: vi.fn(
+        async (
+          _uri: string,
+          content: string,
+          _mimeType: string,
+          expected: {
+            checksum?: string
+            revisionId?: string
+            version?: string
+          }
+        ) => {
+          expect(expected).toEqual({
+            checksum: remoteVersion.md5Checksum,
+            revisionId: remoteVersion.headRevisionId,
+            version: remoteVersion.version,
+          })
+          remoteDocument = content
+          remoteVersion = {
+            md5Checksum: md5(content),
+            headRevisionId: 'revision-2',
+            version: '2',
+          }
+          return true
+        }
+      ),
+    }
+    const store = createTestStore(driveStore)
+    const uri = 'local://file/new-empty-drive-mirror'
+    await store.files.put({
+      id: uri,
+      name: 'empty.runme',
+      mimeType: 'application/vnd.runme.notebook+jsonl',
+      remoteId: 'https://drive.google.com/file/d/new-empty/view',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    await store.reconcileDriveNotebook(uri)
+
+    expect(parseOperationLog(remoteDocument).operations).toEqual([])
+    expect(remoteDocument.endsWith('\n')).toBe(true)
+    expect(await store.loadContent(uri)).toBe(remoteDocument)
+    expect(await store.files.get(uri)).toMatchObject({
+      lastRemoteChecksum: md5(remoteDocument),
+      lastUpstreamVersion: {
+        checksum: md5(remoteDocument),
+        revisionId: 'revision-2',
+      },
+      lastSyncError: undefined,
+    })
+  })
+
+  it('does not overwrite a non-empty malformed Drive operation log', async () => {
+    const header: NotebookLogHeader = {
+      record_type: 'runme.notebook',
+      format_version: 1,
+      notebook_id: 'notebook_malformed_drive',
+      created_by: 'actor_seed',
+      created_at: '2026-09-03T00:00:00Z',
+    }
+    const localDocument = serializeOperationLog(header, [])
+    const remoteDocument = '{}'
+    const remoteVersion = {
+      md5Checksum: md5(remoteDocument),
+      headRevisionId: 'revision-1',
+      version: '1',
+    }
+    const driveStore = {
+      getVersionMetadata: vi.fn(async () => remoteVersion),
+      loadContent: vi.fn(async () => remoteDocument),
+      saveContentIfVersion: vi.fn(),
+    }
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const local = await operationLogStorage.initialize(
+      'local://file/malformed-drive',
+      localDocument
+    )
+    const store = createTestStore(driveStore, { operationLogStorage })
+    const uri = 'local://file/malformed-drive'
+    await store.files.put({
+      id: uri,
+      name: 'malformed.runme',
+      mimeType: 'application/vnd.runme.notebook+jsonl',
+      remoteId: 'https://drive.google.com/file/d/malformed/view',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: local.checksum,
+      operationLogRef: local.ref,
+    })
+
+    await expect(store.reconcileDriveNotebook(uri)).rejects.toThrow(
+      'Operation log must end with LF'
+    )
+    expect(driveStore.saveContentIfVersion).not.toHaveBeenCalled()
   })
 
   it('rejects stale bytes, then accepts a newer self-consistent Drive snapshot', async () => {
@@ -684,11 +875,16 @@ describe('LocalNotebooks operation-log storage', () => {
           _uri: string,
           content: string,
           _mimeType: string,
-          expected: { checksum?: string; revisionId?: string }
+          expected: {
+            checksum?: string
+            revisionId?: string
+            version?: string
+          }
         ) => {
           expect(expected).toEqual({
             checksum: remoteVersion.md5Checksum,
             revisionId: remoteVersion.headRevisionId,
+            version: remoteVersion.version,
           })
           remoteDocument = content
           remoteVersion = {
@@ -795,11 +991,16 @@ describe('LocalNotebooks operation-log storage', () => {
           _uri: string,
           content: string,
           _mimeType: string,
-          expected: { checksum?: string; revisionId?: string }
+          expected: {
+            checksum?: string
+            revisionId?: string
+            version?: string
+          }
         ) => {
           expect(expected).toEqual({
             checksum: remoteVersion.md5Checksum,
             revisionId: remoteVersion.headRevisionId,
+            version: remoteVersion.version,
           })
           collisions += 1
           if (collisions <= competingOperations.length) {
@@ -1102,6 +1303,146 @@ describe('LocalNotebooks trusted Drive snapshot import', () => {
       lastSynced: '',
       lastRemoteChecksum: '',
     })
+  })
+
+  it('initializes a trusted zero-byte .runme snapshot through Drive CAS', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/empty-trusted/view'
+    let remoteDocument = ''
+    let version = {
+      md5Checksum: md5(remoteDocument),
+      headRevisionId: 'revision-1',
+      version: '1',
+    }
+    const driveStore = {
+      getVersionMetadata: vi.fn(async () => version),
+      loadContent: vi.fn(async () => remoteDocument),
+      saveContentIfVersion: vi.fn(
+        async (
+          _uri: string,
+          content: string,
+          _mimeType: string,
+          expected: {
+            checksum?: string
+            revisionId?: string
+            version?: string
+          }
+        ) => {
+          expect(expected).toEqual({
+            checksum: version.md5Checksum,
+            revisionId: version.headRevisionId,
+            version: version.version,
+          })
+          remoteDocument = content
+          version = {
+            md5Checksum: md5(content),
+            headRevisionId: 'revision-2',
+            version: '2',
+          }
+          return true
+        }
+      ),
+    }
+    const store = createTestStore(driveStore)
+
+    const localUri = await store.importTrustedDriveSnapshot(
+      remoteUri,
+      'empty.runme',
+      {
+        expected: {
+          checksum: md5(''),
+          revisionId: 'revision-1',
+          version: '1',
+        },
+      }
+    )
+
+    expect(parseOperationLog(remoteDocument).operations).toEqual([])
+    expect(await store.loadContent(localUri)).toBe(remoteDocument)
+    expect(await store.files.get(localUri)).toMatchObject({
+      remoteId: remoteUri,
+      lastRemoteChecksum: md5(remoteDocument),
+      lastSyncError: undefined,
+    })
+  })
+
+  it('rejects an empty trusted .runme import if its validated revision changes', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/empty-racing/view'
+    const emptyVersion = {
+      md5Checksum: md5(''),
+      headRevisionId: 'revision-1',
+      version: '1',
+    }
+    const driveStore = {
+      getVersionMetadata: vi.fn(async () => emptyVersion),
+      loadContent: vi.fn(async () => ''),
+      saveContentIfVersion: vi.fn(async () => false),
+    }
+    const store = createTestStore(driveStore)
+
+    await expect(
+      store.importTrustedDriveSnapshot(remoteUri, 'empty.runme', {
+        expected: {
+          checksum: md5(''),
+          revisionId: 'revision-1',
+          version: '1',
+        },
+      })
+    ).rejects.toBeInstanceOf(DriveSnapshotChangedError)
+
+    expect(driveStore.saveContentIfVersion).toHaveBeenCalledWith(
+      remoteUri,
+      expect.stringMatching(/\n$/),
+      'application/vnd.runme.notebook+jsonl',
+      {
+        checksum: md5(''),
+        revisionId: 'revision-1',
+        version: '1',
+      }
+    )
+    const [record] = await store.files.toArray()
+    expect(record).toMatchObject({
+      remoteId: remoteUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+    })
+    expect(record?.operationLogRef).toBeUndefined()
+  })
+
+  it('rejects an empty trusted .runme import if its validated Drive version changes', async () => {
+    const remoteUri =
+      'https://drive.google.com/file/d/empty-version-racing/view'
+    let remoteVersion = '1'
+    const driveStore = {
+      getVersionMetadata: vi.fn(async () => ({ version: remoteVersion })),
+      loadContent: vi.fn(async () => ''),
+      saveContentIfVersion: vi.fn(
+        async (
+          _uri: string,
+          _content: string,
+          _mimeType: string,
+          expected: { version?: string }
+        ) => {
+          remoteVersion = '2'
+          return expected.version === remoteVersion
+        }
+      ),
+    }
+    const store = createTestStore(driveStore)
+
+    await expect(
+      store.importTrustedDriveSnapshot(remoteUri, 'empty.runme', {
+        expected: { version: '1' },
+      })
+    ).rejects.toBeInstanceOf(DriveSnapshotChangedError)
+
+    expect(driveStore.saveContentIfVersion).toHaveBeenCalledWith(
+      remoteUri,
+      expect.stringMatching(/\n$/),
+      'application/vnd.runme.notebook+jsonl',
+      { checksum: undefined, revisionId: undefined, version: '1' }
+    )
+    const [record] = await store.files.toArray()
+    expect(record?.operationLogRef).toBeUndefined()
   })
 })
 

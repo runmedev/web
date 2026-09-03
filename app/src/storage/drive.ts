@@ -3432,7 +3432,7 @@ export class DriveNotebookStore {
     uri: string,
     content: string,
     mimeType: string,
-    expected: { checksum?: string; revisionId?: string }
+    expected: { checksum?: string; revisionId?: string; version?: string }
   ): Promise<boolean> {
     const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
@@ -3450,7 +3450,8 @@ export class DriveNotebookStore {
     if (
       actualChecksum !== expectedChecksum ||
       (expected.revisionId !== undefined &&
-        metadata?.headRevisionId !== expected.revisionId)
+        metadata?.headRevisionId !== expected.revisionId) ||
+      (expected.version !== undefined && metadata?.version !== expected.version)
     ) {
       return false
     }
