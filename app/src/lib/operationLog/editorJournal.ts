@@ -30,12 +30,20 @@ export interface OperationLogDiffInput {
 }
 
 function operationCell(cell: parser_pb.Cell): OperationCell {
+  const protoCell = { ...cell, outputs: [] }
+  const protoJson = JSON.parse(
+    toJsonString(parser_pb.CellSchema, protoCell, JSON_OPTIONS)
+  ) as Record<string, JsonValue>
+  // Outputs have their own execution operations and must not be duplicated in
+  // the content register. All other protobuf fields round-trip losslessly.
+  delete protoJson.outputs
   return {
     kind:
       cell.kind === parser_pb.CellKind.MARKUP ? 'markup' : ('code' as const),
     language_id: cell.languageId,
     value: cell.value,
     metadata: { ...cell.metadata },
+    proto_json: protoJson,
   }
 }
 
@@ -143,6 +151,13 @@ export async function buildOperationLogDiff({
   const positions = new Map<string, PositionId>(
     materialized.notebook.cells.map((cell) => [cell.cell_id, cell.position])
   )
+  const createdCellIds = new Set(
+    observedOperations.flatMap((operation) => {
+      if (operation.kind !== 'cell.create') return []
+      const payload = operation.payload as unknown as { cell_id?: unknown }
+      return typeof payload.cell_id === 'string' ? [payload.cell_id] : []
+    })
+  )
   const previousCells = new Map(
     previous.cells.map((cell) => [cell.refId, cell] as const)
   )
@@ -180,11 +195,26 @@ export async function buildOperationLogDiff({
         actorId,
         actorSequence,
       })
-      append('cell.create', {
-        cell_id: cell.refId,
-        position: position as unknown as JsonValue,
-        cell: operationCell(cell) as unknown as JsonValue,
-      })
+      if (createdCellIds.has(cell.refId)) {
+        // Reappearing stable IDs are tombstoned cells (for example Undo after
+        // delete), not new identities. Restore visibility at the newly chosen
+        // position and publish the editor's current content separately.
+        append('cell.restore', {
+          cell_id: cell.refId,
+          position: position as unknown as JsonValue,
+        })
+        append('cell.update', {
+          cell_id: cell.refId,
+          cell: operationCell(cell) as unknown as JsonValue,
+        })
+      } else {
+        append('cell.create', {
+          cell_id: cell.refId,
+          position: position as unknown as JsonValue,
+          cell: operationCell(cell) as unknown as JsonValue,
+        })
+        createdCellIds.add(cell.refId)
+      }
       positions.set(cell.refId, position)
     } else {
       const previousCell = previousCells.get(cell.refId)

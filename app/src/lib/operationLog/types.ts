@@ -26,6 +26,8 @@ export interface OperationCell {
   language_id: string
   value: string
   metadata: Record<string, JsonValue>
+  /** Lossless protobuf JSON for fields outside the operation-log core. */
+  proto_json?: Record<string, JsonValue>
 }
 
 export interface CellCreatePayload {

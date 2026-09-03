@@ -26,6 +26,10 @@ from `docs-dev/cujs/`.
   - create the authoritative file in a mounted Google Drive folder,
   - initialize its editable local mirror,
   - verify Explorer shows exactly one notebook entry.
+- `runme-operation-log-concurrency.md` — concurrent `.runme` flow:
+  - edit one Drive-backed notebook from two isolated sessions,
+  - explicitly refresh and verify deterministic convergence,
+  - exercise operation-log comment lifecycle and durable reload.
 
 ## How CUJs are executed
 

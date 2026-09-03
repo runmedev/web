@@ -218,6 +218,12 @@ switch notebooks while an external controller is working.
 
 ## Requesting write access
 
+This ownership flow applies to snapshot formats such as Runme JSON and
+Jupyter. Append-only `.runme` notebooks do not take a lifetime ownership lock;
+they remain writable in multiple sessions and use a short lock only while an
+operation is appended. Use `notebooks.refresh({ target })` to fetch and
+materialize operations written by collaborators.
+
 `notebooks.get(...)` and `notebooks.list(...)` report `readOnly: true` when
 another Runme session currently owns the notebook's write lock. Before
 mutating that notebook, an external controller can request a cooperative

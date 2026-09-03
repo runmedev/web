@@ -29,7 +29,8 @@ It can show:
 - mount a Drive link,
 - import markdown as a notebook,
 - open a notebook,
-- create a new Runme JSON or Jupyter (`.ipynb`) notebook in a folder,
+- create a concurrent Runme (`.runme`), Runme JSON, or Jupyter (`.ipynb`)
+  notebook in a folder,
 - rename a notebook,
 - remove a mounted folder,
 - copy a notebook share link.

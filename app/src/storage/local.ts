@@ -23,6 +23,7 @@ import {
   type CommentReplyPayload,
   type JsonValue,
   type ParsedOperationLog,
+  type RunmeOperation,
   buildOperationLogDiff,
   canonicalJson,
   causalHeads,
@@ -1297,35 +1298,36 @@ export class LocalNotebooks extends Dexie {
         }
         const next = cloneNotebook(notebook)
         const operation = queue.then(async () => {
-          const current = await this.operationLogStorage.read(
-            record.operationLogRef!
+          let created: RunmeOperation[] = []
+          const stored = await this.operationLogStorage.appendTransaction(
+            record.operationLogRef!,
+            async (currentDocument) => {
+              const currentLog = parseOperationLog(currentDocument)
+              if (currentLog.header.notebook_id !== view.header.notebook_id) {
+                throw new Error(
+                  `Operation-log notebook identity changed for ${uri}`
+                )
+              }
+              created = await buildOperationLogDiff({
+                previous,
+                next,
+                observedOperations: view.operations,
+                actorId,
+                firstActorSequence:
+                  highestActorSequence(currentLog.operations, actorId) + 1,
+              })
+              return created.length === 0
+                ? ''
+                : `${created
+                    .map((item) => canonicalJson(item as unknown as JsonValue))
+                    .join('\n')}\n`
+            },
+            { validate: (document) => void parseOperationLog(document) }
           )
-          const currentLog = parseOperationLog(current.document)
-          if (currentLog.header.notebook_id !== view.header.notebook_id) {
-            throw new Error(
-              `Operation-log notebook identity changed for ${uri}`
-            )
-          }
-          const created = await buildOperationLogDiff({
-            previous,
-            next,
-            observedOperations: view.operations,
-            actorId,
-            firstActorSequence:
-              highestActorSequence(currentLog.operations, actorId) + 1,
-          })
           if (created.length === 0) {
             previous = next
             return
           }
-          const records = `${created
-            .map((item) => canonicalJson(item as unknown as JsonValue))
-            .join('\n')}\n`
-          const stored = await this.operationLogStorage.append(
-            record.operationLogRef!,
-            records,
-            { validate: (document) => void parseOperationLog(document) }
-          )
           view = {
             header: view.header,
             operations: [...view.operations, ...created],
@@ -1337,12 +1339,19 @@ export class LocalNotebooks extends Dexie {
             operationLogRef: stored.ref,
           })
           this.notifySync(uri)
-          if (!record.conflict) this.enqueueSync(uri)
+          if (!record.conflict) {
+            this.enqueueSync(uri)
+            this.enqueueMarkdownSync(uri)
+          }
         })
         queue = operation.catch(() => undefined)
         await operation
       },
     }
+  }
+
+  operationLogSupportsConcurrentWriters(): boolean {
+    return this.operationLogStorage.supportsConcurrentWriters()
   }
 
   async isOperationLogNotebook(uri: string): Promise<boolean> {
@@ -1520,20 +1529,21 @@ export class LocalNotebooks extends Dexie {
     if (!record?.operationLogRef) {
       throw new Error(`Operation-log reference missing for ${uri}`)
     }
-    const current = await this.operationLogStorage.read(record.operationLogRef)
-    const parsed = parseOperationLog(current.document)
     const actorId = suppliedActorId ?? (await getNotebookActorId(uri))
-    const operation = createRunmeOperation({
-      actorId,
-      actorSequence: highestActorSequence(parsed.operations, actorId) + 1,
-      dependencies: causalHeads(parsed.operations),
-      knownOperations: parsed.operations,
-      kind,
-      payload,
-    })
-    const stored = await this.operationLogStorage.append(
+    const stored = await this.operationLogStorage.appendTransaction(
       record.operationLogRef,
-      `${canonicalJson(operation as unknown as JsonValue)}\n`,
+      (currentDocument) => {
+        const parsed = parseOperationLog(currentDocument)
+        const operation = createRunmeOperation({
+          actorId,
+          actorSequence: highestActorSequence(parsed.operations, actorId) + 1,
+          dependencies: causalHeads(parsed.operations),
+          knownOperations: parsed.operations,
+          kind,
+          payload,
+        })
+        return `${canonicalJson(operation as unknown as JsonValue)}\n`
+      },
       { validate: (document) => void parseOperationLog(document) }
     )
     await this.files.update(uri, {
@@ -1542,7 +1552,10 @@ export class LocalNotebooks extends Dexie {
       operationLogRef: stored.ref,
     })
     this.notifySync(uri)
-    if (!record.conflict) this.enqueueSync(uri)
+    if (!record.conflict) {
+      this.enqueueSync(uri)
+      this.enqueueMarkdownSync(uri)
+    }
   }
 
   async loadContent(uri: string): Promise<string> {
@@ -2566,6 +2579,19 @@ export class LocalNotebooks extends Dexie {
     }
     await this.deleteConflictDoc(record.conflict)
     await this.files.delete(uri)
+    if (record.operationLogRef) {
+      await this.operationLogStorage
+        .delete(record.operationLogRef)
+        .catch((error) => {
+          appLogger.warn('Failed to delete trashed operation log from OPFS', {
+            attrs: {
+              scope: 'storage.local.operation-log',
+              localUri: uri,
+              error: String(error),
+            },
+          })
+        })
+    }
     if (record.ipynbPreservation) {
       await this.ipynbShadowStorage
         .delete(record.ipynbPreservation.shadowRef)
@@ -2644,7 +2670,14 @@ export class LocalNotebooks extends Dexie {
 
     let markdownContent: string
     try {
-      const notebook = deserializeNotebook(record.doc ?? '')
+      const notebook =
+        detectNotebookFileFormat(record.name) === 'runme-operation-log'
+          ? decodeNotebookFile(
+              (await this.operationLogStorage.read(record.operationLogRef!))
+                .document,
+              record.name
+            ).notebook
+          : deserializeNotebook(record.doc ?? '')
       markdownContent = serializeNotebookToMarkdown(notebook)
     } catch (error) {
       console.error('Failed to serialize notebook to markdown', error)
@@ -3528,15 +3561,25 @@ export class LocalNotebooks extends Dexie {
       const version = driveMetadataToUpstreamVersion(
         await this.driveStore.getVersionMetadata(record.remoteId)
       )
+      const latestLocal = await this.operationLogStorage.read(local.ref)
       await this.files.update(localUri, {
         doc: '',
-        operationLogRef: stored.ref,
-        md5Checksum: stored.checksum,
-        lastRemoteChecksum: version.checksum ?? md5(mergedDocument),
+        operationLogRef: latestLocal.ref,
+        md5Checksum: latestLocal.checksum,
+        // For operation logs this is the local byte snapshot whose operation
+        // set was uploaded. The upstream may use a different canonical record
+        // order while representing the same set.
+        lastRemoteChecksum: stored.checksum,
         lastUpstreamVersion: version,
         lastSynced: nowIsoString(),
         lastSyncError: undefined,
       })
+      if (latestLocal.checksum !== stored.checksum) {
+        // An append landed while the remote save was in flight. Preserve its
+        // pending status and schedule a follow-up sync instead of losing the
+        // only enqueue to the in-flight promise.
+        this.enqueueSync(localUri)
+      }
       return
     }
 
@@ -3758,15 +3801,19 @@ export class LocalNotebooks extends Dexie {
       await upstreamStore.saveContent(record.remoteId, mergedDocument)
     }
     const checksum = md5(mergedDocument)
+    const latestLocal = await this.operationLogStorage.read(local.ref)
     await this.files.update(localUri, {
       doc: '',
-      operationLogRef: stored.ref,
-      md5Checksum: stored.checksum,
-      lastRemoteChecksum: checksum,
+      operationLogRef: latestLocal.ref,
+      md5Checksum: latestLocal.checksum,
+      lastRemoteChecksum: stored.checksum,
       lastUpstreamVersion: { checksum },
       lastSynced: nowIsoString(),
       lastSyncError: undefined,
     })
+    if (latestLocal.checksum !== stored.checksum) {
+      this.enqueueSync(localUri)
+    }
   }
 
   private async syncSerializedNotebookUpstream(

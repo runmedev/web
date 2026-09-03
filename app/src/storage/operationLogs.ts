@@ -13,6 +13,7 @@ export interface OperationLogSnapshot {
 }
 
 export interface OperationLogStorage {
+  supportsConcurrentWriters(): boolean
   initialize(
     canonicalUri: string,
     document: string
@@ -21,6 +22,11 @@ export interface OperationLogStorage {
   append(
     ref: OperationLogRef,
     records: string,
+    options?: { validate?: (document: string) => void }
+  ): Promise<OperationLogSnapshot>
+  appendTransaction(
+    ref: OperationLogRef,
+    createRecords: (currentDocument: string) => string | Promise<string>,
     options?: { validate?: (document: string) => void }
   ): Promise<OperationLogSnapshot>
   replace(
@@ -163,6 +169,10 @@ export class OpfsOperationLogStorage implements OperationLogStorage {
     private readonly coordinator: OperationLogCoordinator = browserOperationLogCoordinator
   ) {}
 
+  supportsConcurrentWriters(): boolean {
+    return hasWebLocks()
+  }
+
   async initialize(
     canonicalUri: string,
     document: string
@@ -225,6 +235,27 @@ export class OpfsOperationLogStorage implements OperationLogStorage {
     })
   }
 
+  async appendTransaction(
+    ref: OperationLogRef,
+    createRecords: (currentDocument: string) => string | Promise<string>,
+    options: { validate?: (document: string) => void } = {}
+  ): Promise<OperationLogSnapshot> {
+    return this.coordinator.runExclusive(ref.path, async () => {
+      const handle = await getHandle(ref)
+      const file = await handle.getFile()
+      const current = await file.text()
+      const records = await createRecords(current)
+      if (!records) return snapshot(ref, current)
+      validateFraming(records, 'Appended operation-log records')
+      options.validate?.(`${current}${records}`)
+      const writable = await handle.createWritable({ keepExistingData: true })
+      await writable.seek(file.size)
+      await writable.write(records)
+      await writable.close()
+      return this.readUnchecked(ref)
+    })
+  }
+
   async replace(
     ref: OperationLogRef,
     document: string,
@@ -263,6 +294,10 @@ export class MemoryOperationLogStorage implements OperationLogStorage {
     private readonly documents = new Map<string, string>(),
     private readonly coordinator: OperationLogCoordinator = browserOperationLogCoordinator
   ) {}
+
+  supportsConcurrentWriters(): boolean {
+    return true
+  }
 
   async initialize(
     canonicalUri: string,
@@ -303,6 +338,26 @@ export class MemoryOperationLogStorage implements OperationLogStorage {
       if (current === undefined) {
         throw new Error(`Operation log not found: ${ref.path}`)
       }
+      const document = `${current}${records}`
+      options.validate?.(document)
+      this.documents.set(ref.path, document)
+      return snapshot(ref, document)
+    })
+  }
+
+  async appendTransaction(
+    ref: OperationLogRef,
+    createRecords: (currentDocument: string) => string | Promise<string>,
+    options: { validate?: (document: string) => void } = {}
+  ): Promise<OperationLogSnapshot> {
+    return this.coordinator.runExclusive(ref.path, async () => {
+      const current = this.documents.get(ref.path)
+      if (current === undefined) {
+        throw new Error(`Operation log not found: ${ref.path}`)
+      }
+      const records = await createRecords(current)
+      if (!records) return snapshot(ref, current)
+      validateFraming(records, 'Appended operation-log records')
       const document = `${current}${records}`
       options.validate?.(document)
       this.documents.set(ref.path, document)

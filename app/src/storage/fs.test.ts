@@ -3,7 +3,11 @@
 import { create } from '@bufbuild/protobuf'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { encodeRunmeNotebook } from '../lib/notebookFormat'
+import {
+  RUNME_OPERATION_LOG_MIME_TYPE,
+  encodeRunmeNotebook,
+} from '../lib/notebookFormat'
+import { parseOperationLog } from '../lib/operationLog'
 import { parser_pb } from '../runme/client'
 import { FilesystemNotebookStore, isFileSystemAccessSupported } from './fs'
 import type { FsDatabase, FsEntryRecord, WorkspaceRecord } from './fsdb'
@@ -361,6 +365,23 @@ describe("FilesystemNotebookStore", () => {
         expect.objectContaining({
           name: 'notebook.ipynb',
           mimeType: 'application/x-ipynb+json',
+          type: NotebookStoreItemType.File,
+        }),
+      ])
+    })
+
+    it('returns .runme files with the operation-log MIME type', async () => {
+      rootEntries.set(
+        'shared.runme',
+        createMockFileHandle('shared.runme', '{"record_type":"runme.notebook"}\n')
+      )
+
+      const items = await store.list(ROOT_URI)
+
+      expect(items).toEqual([
+        expect.objectContaining({
+          name: 'shared.runme',
+          mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
           type: NotebookStoreItemType.File,
         }),
       ])
@@ -731,6 +752,24 @@ describe("FilesystemNotebookStore", () => {
         metadata: {},
         nbformat: 4,
         nbformat_minor: 5,
+      })
+    })
+
+    it('creates a valid empty .runme operation log', async () => {
+      const item = await store.create(ROOT_URI, 'shared.runme')
+      const file = await rootEntries.get('shared.runme').getFile()
+      const document = await file.text()
+
+      expect(item).toMatchObject({
+        name: 'shared.runme',
+        mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
+      })
+      expect(parseOperationLog(document)).toMatchObject({
+        header: {
+          record_type: 'runme.notebook',
+          format_version: 1,
+        },
+        operations: [],
       })
     })
 

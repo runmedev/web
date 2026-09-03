@@ -203,6 +203,16 @@ export class NotebookDataController {
         readOnly: true,
       })
       if (!this.localNotebooks) return { localUri, entry }
+      if (!this.localNotebooks.operationLogSupportsConcurrentWriters()) {
+        entry = this.upsertOpenEntry({
+          ...entry,
+          state: 'error',
+          readOnly: true,
+          errorMessage:
+            'This browser does not support Web Locks, which are required for safe concurrent .runme writes.',
+        })
+        return { localUri, entry }
+      }
       try {
         const notebook = await this.localNotebooks.load(localUri)
         const store =
@@ -488,6 +498,9 @@ export class NotebookDataController {
       if (!handle) return
       try {
         await handle.data.flushPendingPersist()
+        // Refresh is an explicit request to incorporate operations written by
+        // other sessions, so bypass load()'s normal eight-hour sync throttle.
+        await this.localNotebooks.sync(localUri)
         const notebook = await this.localNotebooks.load(localUri)
         const store =
           await this.localNotebooks.createOperationLogSaveStore(localUri)
