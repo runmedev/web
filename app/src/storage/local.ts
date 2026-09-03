@@ -90,6 +90,11 @@ const NOTEBOOK_MIME_TYPE = 'application/json'
 // let authoritative listings remove files that were moved or trashed elsewhere.
 const PROVISIONAL_DRIVE_CHILD_TTL_MS = 60_000
 
+// A collaborator can win several Drive compare-and-swap races in a row while
+// both sessions are actively editing. Each attempt performs network I/O, so a
+// larger bounded budget improves convergence without creating a tight loop.
+const DRIVE_OPERATION_LOG_MERGE_ATTEMPTS = 8
+
 /**
  * LocalFileRecord captures the information needed to persist a notebook locally.
  *
@@ -3466,14 +3471,53 @@ export class LocalNotebooks extends Dexie {
     await this.driveStore.saveContent(remoteUri, localDoc, 'application/json')
   }
 
+  /** Download .runme bytes only when they match the observed Drive version. */
+  private async loadConsistentDriveOperationLogSnapshot(
+    remoteId: string
+  ): Promise<{
+    content: string
+    version: DriveVersionMetadata | null
+  } | null> {
+    const before = await this.driveStore.getVersionMetadata(remoteId)
+    const content = await this.driveStore.loadContent(remoteId)
+    const after = await this.driveStore.getVersionMetadata(remoteId)
+    if (after?.md5Checksum !== undefined) {
+      // When another tab saves between the first metadata read and the media
+      // download, the downloaded bytes can already be the newer complete
+      // revision. Accept that self-consistent snapshot instead of discarding
+      // it solely because `before` is stale.
+      if (md5(content) !== after.md5Checksum) return null
+    } else if (!sameDriveVersion(before, after)) {
+      return null
+    }
+    return { content, version: after }
+  }
+
   /** Merge a raw .runme operation set with Drive using bounded CAS retries. */
   private async syncOperationLogDrive(
     localUri: string,
     record: LocalFileRecord
   ): Promise<void> {
     if (!record.operationLogRef) {
-      const remoteContent = await this.driveStore.loadContent(record.remoteId)
-      const remote = parseOperationLog(remoteContent)
+      let snapshot: {
+        content: string
+        version: DriveVersionMetadata | null
+      } | null = null
+      for (
+        let attempt = 0;
+        attempt < DRIVE_OPERATION_LOG_MERGE_ATTEMPTS && !snapshot;
+        attempt += 1
+      ) {
+        snapshot = await this.loadConsistentDriveOperationLogSnapshot(
+          record.remoteId
+        )
+      }
+      if (!snapshot) {
+        throw new Error(
+          `Drive operation log changed during ${DRIVE_OPERATION_LOG_MERGE_ATTEMPTS} merge attempts for ${localUri}`
+        )
+      }
+      const remote = parseOperationLog(snapshot.content)
       const stored = await this.operationLogStorage.initialize(
         localUri,
         serializeOperationLog(remote.header, remote.operations, {
@@ -3481,13 +3525,13 @@ export class LocalNotebooks extends Dexie {
         })
       )
       const version = driveMetadataToUpstreamVersion(
-        await this.driveStore.getVersionMetadata(record.remoteId)
+        snapshot.version
       )
       await this.files.update(localUri, {
         doc: '',
         operationLogRef: stored.ref,
         md5Checksum: stored.checksum,
-        lastRemoteChecksum: version.checksum ?? md5(remoteContent),
+        lastRemoteChecksum: version.checksum ?? md5(snapshot.content),
         lastUpstreamVersion: version,
         lastSynced: nowIsoString(),
         lastSyncError: undefined,
@@ -3495,12 +3539,17 @@ export class LocalNotebooks extends Dexie {
       return
     }
 
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (
+      let attempt = 0;
+      attempt < DRIVE_OPERATION_LOG_MERGE_ATTEMPTS;
+      attempt += 1
+    ) {
       const local = await this.operationLogStorage.read(record.operationLogRef)
-      const before = await this.driveStore.getVersionMetadata(record.remoteId)
-      const remoteContent = await this.driveStore.loadContent(record.remoteId)
-      const after = await this.driveStore.getVersionMetadata(record.remoteId)
-      if (!sameDriveVersion(before, after)) continue
+      const snapshot = await this.loadConsistentDriveOperationLogSnapshot(
+        record.remoteId
+      )
+      if (!snapshot) continue
+      const remoteContent = snapshot.content
 
       const localLog = parseOperationLog(local.document)
       const remoteLog = parseOperationLog(remoteContent)
@@ -3552,8 +3601,8 @@ export class LocalNotebooks extends Dexie {
           mergedDocument,
           RUNME_OPERATION_LOG_MIME_TYPE,
           {
-            checksum: after?.md5Checksum,
-            revisionId: after?.headRevisionId,
+            checksum: snapshot.version?.md5Checksum,
+            revisionId: snapshot.version?.headRevisionId,
           }
         )
         if (!saved) continue
@@ -3584,7 +3633,7 @@ export class LocalNotebooks extends Dexie {
     }
 
     throw new Error(
-      `Drive operation log changed during three merge attempts for ${localUri}`
+      `Drive operation log changed during ${DRIVE_OPERATION_LOG_MERGE_ATTEMPTS} merge attempts for ${localUri}`
     )
   }
 

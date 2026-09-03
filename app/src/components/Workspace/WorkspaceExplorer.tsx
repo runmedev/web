@@ -996,7 +996,10 @@ export function WorkspaceExplorer() {
   );
 
   const handleCreateDocument = useCallback(
-    async (folderUri: string, format: NotebookFileFormat = 'runme-json') => {
+    async (
+      folderUri: string,
+      format: NotebookFileFormat = 'runme-operation-log'
+    ) => {
       const targetStore = storeForUri(folderUri, store, fsStore)
       if (!targetStore) {
         return;
@@ -1700,10 +1703,7 @@ function formatShortTimestamp(date: Date): string {
                   event.stopPropagation();
                   setContextMenu(null);
                   if (adjustedContextMenu.parentUri) {
-                    void handleCreateDocument(
-                      adjustedContextMenu.parentUri,
-                      'runme-json'
-                    )
+                    void handleCreateDocument(adjustedContextMenu.parentUri)
                   } else {
                     console.warn(
                       "Cannot create document: no parent folder for",
@@ -1712,24 +1712,7 @@ function formatShortTimestamp(date: Date): string {
                   }
                 }}
               >
-                New Runme Notebook (.json)
-              </button>
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  setContextMenu(null)
-                  if (adjustedContextMenu.parentUri) {
-                    void handleCreateDocument(
-                      adjustedContextMenu.parentUri,
-                      'runme-operation-log'
-                    )
-                  }
-                }}
-              >
-                New Concurrent Runme Notebook (.runme)
+                New Notebook (.runme)
               </button>
               <button
                 type="button"
@@ -1768,6 +1751,23 @@ function formatShortTimestamp(date: Date): string {
                 }}
               >
                 New Excalidraw Diagram
+              </button>
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setContextMenu(null)
+                  if (adjustedContextMenu.parentUri) {
+                    void handleCreateDocument(
+                      adjustedContextMenu.parentUri,
+                      'runme-json'
+                    )
+                  }
+                }}
+              >
+                Legacy Runme Notebook (.json)
               </button>
               {adjustedContextMenu.remoteUri && (
                 <button
@@ -1891,13 +1891,10 @@ function formatShortTimestamp(date: Date): string {
                 onClick={(event) => {
                   event.stopPropagation()
                   setContextMenu(null)
-                  void handleCreateDocument(
-                    adjustedContextMenu.uri,
-                    'runme-json'
-                  )
+                  void handleCreateDocument(adjustedContextMenu.uri)
                 }}
               >
-                New Runme Notebook (.json)
+                New Notebook (.runme)
               </button>
               <button
                 type="button"
@@ -1908,20 +1905,8 @@ function formatShortTimestamp(date: Date): string {
                   setContextMenu(null)
                   void handleCreateDocument(
                     adjustedContextMenu.uri,
-                    'runme-operation-log'
+                    'ipynb'
                   )
-                }}
-              >
-                New Concurrent Runme Notebook (.runme)
-              </button>
-              <button
-                type="button"
-                className="ctx-menu-item"
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  setContextMenu(null)
-                  void handleCreateDocument(adjustedContextMenu.uri, 'ipynb')
                 }}
               >
                 New Jupyter Notebook (.ipynb)
@@ -1956,6 +1941,21 @@ function formatShortTimestamp(date: Date): string {
                   New Google Drive Folder
                 </button>
               )}
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setContextMenu(null)
+                  void handleCreateDocument(
+                    adjustedContextMenu.uri,
+                    'runme-json'
+                  )
+                }}
+              >
+                Legacy Runme Notebook (.json)
+              </button>
               {adjustedContextMenu.remoteUri && (
                 <button
                   type="button"

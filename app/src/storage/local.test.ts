@@ -208,6 +208,76 @@ describe('LocalNotebooks operation-log storage', () => {
     })
   })
 
+  it('retries first-time Drive mirror hydration until bytes match metadata', async () => {
+    const header: NotebookLogHeader = {
+      record_type: 'runme.notebook',
+      format_version: 1,
+      notebook_id: 'notebook_first_hydration_race',
+      created_by: 'actor_seed',
+      created_at: '2026-09-03T00:00:00Z',
+    }
+    const remoteOperation = createRunmeOperation({
+      actorId: 'actor_remote',
+      actorSequence: 1,
+      dependencies: [],
+      knownOperations: [],
+      kind: 'notebook.update',
+      payload: { frontmatter: { remote: 'true' }, metadata: {} },
+    })
+    const staleDocument = serializeOperationLog(header, [])
+    const latestDocument = serializeOperationLog(header, [remoteOperation])
+    let remoteDocument = staleDocument
+    let remoteVersion = {
+      md5Checksum: md5(staleDocument),
+      headRevisionId: 'revision-1',
+      version: '1',
+    }
+    let loadCount = 0
+    const driveStore = {
+      getVersionMetadata: vi.fn(async () => remoteVersion),
+      loadContent: vi.fn(async () => {
+        loadCount += 1
+        if (loadCount === 1) {
+          remoteDocument = latestDocument
+          remoteVersion = {
+            md5Checksum: md5(latestDocument),
+            headRevisionId: 'revision-2',
+            version: '2',
+          }
+          return staleDocument
+        }
+        return remoteDocument
+      }),
+    }
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore(driveStore, { operationLogStorage })
+    const uri = 'local://file/first-hydration-race'
+    await store.files.put({
+      id: uri,
+      name: 'shared.runme',
+      mimeType: 'application/vnd.runme.notebook+jsonl',
+      remoteId: 'https://drive.google.com/file/d/first-hydration-race/view',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    await store.reconcileDriveNotebook(uri)
+
+    expect(driveStore.loadContent).toHaveBeenCalledTimes(2)
+    expect(await store.loadContent(uri)).toBe(latestDocument)
+    expect(await store.files.get(uri)).toMatchObject({
+      md5Checksum: md5(latestDocument),
+      lastRemoteChecksum: md5(latestDocument),
+      lastUpstreamVersion: {
+        checksum: md5(latestDocument),
+        revisionId: 'revision-2',
+      },
+      lastSyncError: undefined,
+    })
+  })
+
   it('keeps local .runme bytes in OPFS storage instead of IndexedDB', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
     const store = createTestStore({}, { operationLogStorage })
@@ -498,6 +568,316 @@ describe('LocalNotebooks operation-log storage', () => {
     })
     expect(appendOperationLog).toHaveBeenCalledTimes(1)
     expect(replaceOperationLog).not.toHaveBeenCalled()
+  })
+
+  it('rejects stale bytes, then accepts a newer self-consistent Drive snapshot', async () => {
+    const header: NotebookLogHeader = {
+      record_type: 'runme.notebook',
+      format_version: 1,
+      notebook_id: 'notebook_drive_race',
+      created_by: 'actor_seed',
+      created_at: '2026-09-03T00:00:00Z',
+    }
+    const localOperation = createRunmeOperation({
+      actorId: 'actor_local',
+      actorSequence: 1,
+      dependencies: [],
+      knownOperations: [],
+      kind: 'notebook.update',
+      payload: { frontmatter: { local: 'true' }, metadata: {} },
+    })
+    const remoteOperation = createRunmeOperation({
+      actorId: 'actor_remote',
+      actorSequence: 1,
+      dependencies: [],
+      knownOperations: [],
+      kind: 'notebook.update',
+      payload: { frontmatter: { remote: 'true' }, metadata: {} },
+    })
+    const laterRemoteOperation = createRunmeOperation({
+      actorId: 'actor_remote',
+      actorSequence: 2,
+      dependencies: [remoteOperation.op_id],
+      knownOperations: [remoteOperation],
+      kind: 'notebook.update',
+      payload: { frontmatter: { laterRemote: 'true' }, metadata: {} },
+    })
+    const localDocument = serializeOperationLog(header, [localOperation])
+    let remoteDocument = serializeOperationLog(header, [])
+    let remoteVersion = {
+      md5Checksum: md5(remoteDocument),
+      headRevisionId: 'revision-1',
+      version: '1',
+    }
+    let loadCount = 0
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({ name: 'shared.runme' })),
+      getVersionMetadata: vi.fn(async () => remoteVersion),
+      loadContent: vi.fn(async () => {
+        loadCount += 1
+        const downloaded = remoteDocument
+        const operations =
+          loadCount === 1
+            ? [remoteOperation]
+            : [remoteOperation, laterRemoteOperation]
+        // On the first attempt Drive returns stale bytes alongside newer
+        // metadata. On the second, the response bytes and newer metadata agree.
+        remoteDocument = serializeOperationLog(header, operations)
+        remoteVersion = {
+          md5Checksum: md5(remoteDocument),
+          headRevisionId: `revision-${loadCount + 1}`,
+          version: String(loadCount + 1),
+        }
+        return loadCount === 1 ? downloaded : remoteDocument
+      }),
+      saveContentIfVersion: vi.fn(
+        async (
+          _uri: string,
+          content: string,
+          _mimeType: string,
+          expected: { checksum?: string; revisionId?: string }
+        ) => {
+          expect(expected).toEqual({
+            checksum: remoteVersion.md5Checksum,
+            revisionId: remoteVersion.headRevisionId,
+          })
+          remoteDocument = content
+          remoteVersion = {
+            md5Checksum: md5(content),
+            headRevisionId: 'revision-4',
+            version: '4',
+          }
+          return true
+        }
+      ),
+    }
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const local = await operationLogStorage.initialize(
+      'local://file/drive-race',
+      localDocument
+    )
+    const store = createTestStore(driveStore, { operationLogStorage })
+    await store.files.put({
+      id: 'local://file/drive-race',
+      name: 'shared.runme',
+      mimeType: 'application/vnd.runme.notebook+jsonl',
+      remoteId: 'https://drive.google.com/file/d/drive-race/view',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: local.checksum,
+      operationLogRef: local.ref,
+    })
+
+    await store.reconcileDriveNotebook('local://file/drive-race')
+
+    const localAfter = await store.loadContent('local://file/drive-race')
+    const expectedOperationIds = new Set([
+      localOperation.op_id,
+      remoteOperation.op_id,
+      laterRemoteOperation.op_id,
+    ])
+    expect(driveStore.loadContent).toHaveBeenCalledTimes(2)
+    expect(driveStore.saveContentIfVersion).toHaveBeenCalledTimes(1)
+    expect(
+      new Set(
+        parseOperationLog(remoteDocument).operations.map(
+          (operation) => operation.op_id
+        )
+      )
+    ).toEqual(expectedOperationIds)
+    expect(
+      new Set(
+        parseOperationLog(localAfter).operations.map(
+          (operation) => operation.op_id
+        )
+      )
+    ).toEqual(expectedOperationIds)
+    expect(await store.files.get('local://file/drive-race')).toMatchObject({
+      md5Checksum: md5(localAfter),
+      lastRemoteChecksum: md5(localAfter),
+      lastSyncError: undefined,
+    })
+  })
+
+  it('merges every competing operation through the eighth Drive CAS attempt', async () => {
+    const header: NotebookLogHeader = {
+      record_type: 'runme.notebook',
+      format_version: 1,
+      notebook_id: 'notebook_drive_contention',
+      created_by: 'actor_seed',
+      created_at: '2026-09-03T00:00:00Z',
+    }
+    const localOperation = createRunmeOperation({
+      actorId: 'actor_local',
+      actorSequence: 1,
+      dependencies: [],
+      knownOperations: [],
+      kind: 'notebook.update',
+      payload: { frontmatter: { local: 'true' }, metadata: {} },
+    })
+    const competingOperations = Array.from({ length: 7 }, (_, index) =>
+      createRunmeOperation({
+        actorId: `actor_remote_${index + 1}`,
+        actorSequence: 1,
+        dependencies: [],
+        knownOperations: [],
+        kind: 'notebook.update',
+        payload: {
+          frontmatter: { [`remote_${index + 1}`]: 'true' },
+          metadata: {},
+        },
+      })
+    )
+    const localDocument = serializeOperationLog(header, [localOperation])
+    let remoteDocument = serializeOperationLog(header, [])
+    let remoteVersion = {
+      md5Checksum: md5(remoteDocument),
+      headRevisionId: 'revision-1',
+      version: '1',
+    }
+    let collisions = 0
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({ name: 'shared.runme' })),
+      getVersionMetadata: vi.fn(async () => remoteVersion),
+      loadContent: vi.fn(async () => remoteDocument),
+      saveContentIfVersion: vi.fn(
+        async (
+          _uri: string,
+          content: string,
+          _mimeType: string,
+          expected: { checksum?: string; revisionId?: string }
+        ) => {
+          expect(expected).toEqual({
+            checksum: remoteVersion.md5Checksum,
+            revisionId: remoteVersion.headRevisionId,
+          })
+          collisions += 1
+          if (collisions <= competingOperations.length) {
+            remoteDocument = serializeOperationLog(
+              header,
+              competingOperations.slice(0, collisions)
+            )
+            remoteVersion = {
+              md5Checksum: md5(remoteDocument),
+              headRevisionId: `revision-${collisions + 1}`,
+              version: String(collisions + 1),
+            }
+            return false
+          }
+          remoteDocument = content
+          remoteVersion = {
+            md5Checksum: md5(content),
+            headRevisionId: 'revision-9',
+            version: '9',
+          }
+          return true
+        }
+      ),
+    }
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const local = await operationLogStorage.initialize(
+      'local://file/drive-contention',
+      localDocument
+    )
+    const store = createTestStore(driveStore, { operationLogStorage })
+    await store.files.put({
+      id: 'local://file/drive-contention',
+      name: 'shared.runme',
+      mimeType: 'application/vnd.runme.notebook+jsonl',
+      remoteId: 'https://drive.google.com/file/d/drive-contention/view',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: local.checksum,
+      operationLogRef: local.ref,
+    })
+
+    await expect(
+      store.reconcileDriveNotebook('local://file/drive-contention')
+    ).resolves.toBeUndefined()
+
+    const localAfter = await store.loadContent('local://file/drive-contention')
+    const expectedOperationIds = new Set([
+      localOperation.op_id,
+      ...competingOperations.map((operation) => operation.op_id),
+    ])
+    expect(driveStore.loadContent).toHaveBeenCalledTimes(8)
+    expect(driveStore.saveContentIfVersion).toHaveBeenCalledTimes(8)
+    expect(
+      new Set(
+        parseOperationLog(remoteDocument).operations.map(
+          (operation) => operation.op_id
+        )
+      )
+    ).toEqual(expectedOperationIds)
+    expect(
+      new Set(
+        parseOperationLog(localAfter).operations.map(
+          (operation) => operation.op_id
+        )
+      )
+    ).toEqual(expectedOperationIds)
+  })
+
+  it('reports contention after all eight Drive CAS attempts are exhausted', async () => {
+    const header: NotebookLogHeader = {
+      record_type: 'runme.notebook',
+      format_version: 1,
+      notebook_id: 'notebook_drive_exhaustion',
+      created_by: 'actor_seed',
+      created_at: '2026-09-03T00:00:00Z',
+    }
+    const localOperation = createRunmeOperation({
+      actorId: 'actor_local',
+      actorSequence: 1,
+      dependencies: [],
+      knownOperations: [],
+      kind: 'notebook.update',
+      payload: { frontmatter: { local: 'true' }, metadata: {} },
+    })
+    const localDocument = serializeOperationLog(header, [localOperation])
+    const remoteDocument = serializeOperationLog(header, [])
+    let revision = 1
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({ name: 'shared.runme' })),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: md5(remoteDocument),
+        headRevisionId: `revision-${revision}`,
+        version: String(revision),
+      })),
+      loadContent: vi.fn(async () => remoteDocument),
+      saveContentIfVersion: vi.fn(async () => {
+        revision += 1
+        return false
+      }),
+    }
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const local = await operationLogStorage.initialize(
+      'local://file/drive-exhaustion',
+      localDocument
+    )
+    const store = createTestStore(driveStore, { operationLogStorage })
+    await store.files.put({
+      id: 'local://file/drive-exhaustion',
+      name: 'shared.runme',
+      mimeType: 'application/vnd.runme.notebook+jsonl',
+      remoteId: 'https://drive.google.com/file/d/drive-exhaustion/view',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: local.checksum,
+      operationLogRef: local.ref,
+    })
+
+    await expect(
+      store.reconcileDriveNotebook('local://file/drive-exhaustion')
+    ).rejects.toThrow(
+      'Drive operation log changed during 8 merge attempts for local://file/drive-exhaustion'
+    )
+
+    expect(driveStore.loadContent).toHaveBeenCalledTimes(8)
+    expect(driveStore.saveContentIfVersion).toHaveBeenCalledTimes(8)
   })
 
   it('unions concurrent local and filesystem operation logs as raw bytes', async () => {

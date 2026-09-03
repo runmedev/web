@@ -554,6 +554,119 @@ describe('WorkspaceExplorer current document handling', () => {
     })
   })
 
+  it('makes the operation-log notebook the first creation option', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: [],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    const driveRoot = await screen.findByText('Drive Root')
+    fireEvent.contextMenu(driveRoot)
+
+    const menuLabels = screen
+      .getAllByRole('button')
+      .filter((button) => button.classList.contains('ctx-menu-item'))
+      .map((button) => button.textContent?.trim())
+    expect(menuLabels.slice(0, 7)).toEqual([
+      'Sync',
+      'Rename',
+      'New Notebook (.runme)',
+      'New Jupyter Notebook (.ipynb)',
+      'New Excalidraw Diagram',
+      'New Google Drive Folder',
+      'Legacy Runme Notebook (.json)',
+    ])
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'New Notebook (.runme)' })
+    )
+    await waitFor(() => {
+      expect(mocks.store.create).toHaveBeenCalledWith(
+        'local://folder/drive',
+        expect.stringMatching(/^untitled-\d{8}-\d{4}\.runme$/)
+      )
+    })
+
+    fireEvent.contextMenu(driveRoot)
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Legacy Runme Notebook (.json)' })
+    )
+    await waitFor(() => {
+      expect(mocks.store.create).toHaveBeenLastCalledWith(
+        'local://folder/drive',
+        expect.stringMatching(/^untitled-\d{8}-\d{4}\.json$/)
+      )
+    })
+  })
+
+  it('uses the same creation order from a notebook context menu', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/notebook'],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/notebook') {
+        return {
+          uri,
+          name: 'notebook.runme',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/notebook/view',
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('notebook.runme'))
+
+    const menuLabels = screen
+      .getAllByRole('button')
+      .filter((button) => button.classList.contains('ctx-menu-item'))
+      .map((button) => button.textContent?.trim())
+    expect(menuLabels.slice(0, 6)).toEqual([
+      'Sync',
+      'Rename',
+      'New Notebook (.runme)',
+      'New Jupyter Notebook (.ipynb)',
+      'New Excalidraw Diagram',
+      'Legacy Runme Notebook (.json)',
+    ])
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'New Notebook (.runme)' })
+    )
+    await waitFor(() => {
+      expect(mocks.store.create).toHaveBeenCalledWith(
+        'local://folder/drive',
+        expect.stringMatching(/^untitled-\d{8}-\d{4}\.runme$/)
+      )
+    })
+  })
+
   it('creates a Jupyter notebook from a folder context menu', async () => {
     mocks.workspaceItems = ['local://folder/drive']
     mocks.store.getMetadata.mockImplementation(async (uri: string) => {
