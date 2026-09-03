@@ -18,6 +18,15 @@ import {
   validateNotebookRenameFormat,
 } from '../lib/notebookFormat'
 import {
+  type JsonValue,
+  type ParsedOperationLog,
+  buildOperationLogDiff,
+  canonicalJson,
+  cloneNotebook,
+  getNotebookActorId,
+  highestActorSequence,
+  materializeOperationLog,
+  materializedLogToNotebook,
   mergeOperationSets,
   parseOperationLog,
   serializeOperationLog,
@@ -1230,6 +1239,86 @@ export class LocalNotebooks extends Dexie {
     if (!record?.conflict) {
       this.enqueueSync(uri)
       this.enqueueMarkdownSync(uri)
+    }
+  }
+
+  /** Create a tab-local snapshot adapter that appends .runme operations. */
+  async createOperationLogSaveStore(
+    uri: string,
+    options: { actorId?: string } = {}
+  ): Promise<{
+    save(saveUri: string, notebook: parser_pb.Notebook): Promise<void>
+  }> {
+    const record = await this.files.get(uri)
+    if (!record || !record.operationLogRef) {
+      throw new Error(`Operation-log reference missing for ${uri}`)
+    }
+    if (detectNotebookFileFormat(record.name) !== 'runme-operation-log') {
+      throw new Error(`Notebook ${uri} is not a .runme operation log`)
+    }
+
+    const initial = await this.operationLogStorage.read(record.operationLogRef)
+    let view: ParsedOperationLog = parseOperationLog(initial.document)
+    let previous = materializedLogToNotebook(
+      materializeOperationLog(view.operations)
+    )
+    const actorId = options.actorId ?? (await getNotebookActorId(uri))
+    let queue = Promise.resolve()
+
+    return {
+      save: async (saveUri: string, notebook: parser_pb.Notebook) => {
+        if (saveUri !== uri) {
+          throw new Error(
+            `Operation-log save URI changed from ${uri} to ${saveUri}`
+          )
+        }
+        const next = cloneNotebook(notebook)
+        const operation = queue.then(async () => {
+          const current = await this.operationLogStorage.read(
+            record.operationLogRef!
+          )
+          const currentLog = parseOperationLog(current.document)
+          if (currentLog.header.notebook_id !== view.header.notebook_id) {
+            throw new Error(
+              `Operation-log notebook identity changed for ${uri}`
+            )
+          }
+          const created = buildOperationLogDiff({
+            previous,
+            next,
+            observedOperations: view.operations,
+            actorId,
+            firstActorSequence:
+              highestActorSequence(currentLog.operations, actorId) + 1,
+          })
+          if (created.length === 0) {
+            previous = next
+            return
+          }
+          const records = `${created
+            .map((item) => canonicalJson(item as unknown as JsonValue))
+            .join('\n')}\n`
+          const stored = await this.operationLogStorage.append(
+            record.operationLogRef!,
+            records,
+            { validate: (document) => void parseOperationLog(document) }
+          )
+          view = {
+            header: view.header,
+            operations: [...view.operations, ...created],
+          }
+          previous = next
+          await this.files.update(uri, {
+            doc: '',
+            md5Checksum: stored.checksum,
+            operationLogRef: stored.ref,
+          })
+          this.notifySync(uri)
+          if (!record.conflict) this.enqueueSync(uri)
+        })
+        queue = operation.catch(() => undefined)
+        await operation
+      },
     }
   }
 

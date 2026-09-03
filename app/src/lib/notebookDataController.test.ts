@@ -91,6 +91,7 @@ function createFakeLocalNotebooks() {
       return record.notebook
     }),
     save: vi.fn(),
+    createOperationLogSaveStore: vi.fn(async () => ({ save: vi.fn() })),
   }
 }
 
@@ -185,6 +186,34 @@ describe('NotebookDataController', () => {
         name: 'demo.json',
         loaded: true,
       })
+    )
+  })
+
+  it('opens .runme notebooks writable without acquiring a lifetime lease', async () => {
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set('local://file/shared', {
+      id: 'local://file/shared',
+      name: 'shared.runme',
+      remoteId: 'local://file/shared',
+      notebook: createNotebook('shared'),
+    })
+    const ownership = createFakeOwnershipManager()
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(ownership)
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+
+    const result = await controller.openNotebook('local://file/shared')
+
+    expect(result.entry).toMatchObject({
+      state: 'loaded',
+      readOnly: false,
+      operationLog: true,
+    })
+    expect(ownership.acquire).not.toHaveBeenCalled()
+    expect(localStore.createOperationLogSaveStore).toHaveBeenCalledWith(
+      'local://file/shared'
     )
   })
 

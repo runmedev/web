@@ -18,7 +18,11 @@ export interface OperationLogStorage {
     document: string
   ): Promise<OperationLogSnapshot>
   read(ref: OperationLogRef): Promise<OperationLogSnapshot>
-  append(ref: OperationLogRef, records: string): Promise<OperationLogSnapshot>
+  append(
+    ref: OperationLogRef,
+    records: string,
+    options?: { validate?: (document: string) => void }
+  ): Promise<OperationLogSnapshot>
   replace(
     ref: OperationLogRef,
     document: string,
@@ -204,12 +208,15 @@ export class OpfsOperationLogStorage implements OperationLogStorage {
 
   async append(
     ref: OperationLogRef,
-    records: string
+    records: string,
+    options: { validate?: (document: string) => void } = {}
   ): Promise<OperationLogSnapshot> {
     validateFraming(records, 'Appended operation-log records')
     return this.coordinator.runExclusive(ref.path, async () => {
       const handle = await getHandle(ref)
       const file = await handle.getFile()
+      const current = await file.text()
+      options.validate?.(`${current}${records}`)
       const writable = await handle.createWritable({ keepExistingData: true })
       await writable.seek(file.size)
       await writable.write(records)
@@ -287,7 +294,8 @@ export class MemoryOperationLogStorage implements OperationLogStorage {
 
   async append(
     ref: OperationLogRef,
-    records: string
+    records: string,
+    options: { validate?: (document: string) => void } = {}
   ): Promise<OperationLogSnapshot> {
     validateFraming(records, 'Appended operation-log records')
     return this.coordinator.runExclusive(ref.path, async () => {
@@ -296,6 +304,7 @@ export class MemoryOperationLogStorage implements OperationLogStorage {
         throw new Error(`Operation log not found: ${ref.path}`)
       }
       const document = `${current}${records}`
+      options.validate?.(document)
       this.documents.set(ref.path, document)
       return snapshot(ref, document)
     })

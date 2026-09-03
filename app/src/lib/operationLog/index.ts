@@ -1,6 +1,7 @@
 export * from './actorIdentity'
 export * from './canonicalJson'
 export * from './codec'
+export * from './editorJournal'
 export * from './materialize'
 export * from './mutations'
 export * from './notebook'

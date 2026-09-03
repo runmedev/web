@@ -3339,7 +3339,29 @@ function NotebookTabContent({
         {/* Full-width notebook column with horizontal padding for breathing room.
             Cells expand to fill the available width of the tab content area. */}
         <div id="notebook-column" className="w-full py-2 px-8">
-          {releasePending ? (
+          {entry.operationLog && !readOnly && !releasePending ? (
+            <div
+              className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-nb-sm border border-nb-border bg-nb-surface-2 px-3 py-2 text-xs text-nb-text-muted"
+              data-testid="notebook-operation-log-banner"
+            >
+              <span>
+                Concurrent changes are incorporated when you refresh this
+                operation-log notebook.
+              </span>
+              <Button
+                size="1"
+                variant="soft"
+                onClick={() => void refreshReadOnlyNotebook(docUri)}
+              >
+                Refresh
+              </Button>
+              {entry.refreshErrorMessage && (
+                <p className="w-full text-red-600">
+                  {entry.refreshErrorMessage}
+                </p>
+              )}
+            </div>
+          ) : releasePending ? (
             <div
               className="mb-3 flex items-center gap-2 rounded-nb-sm border border-nb-border bg-nb-surface-2 px-3 py-2 text-xs text-nb-text-muted"
               data-testid="notebook-owner-locked-banner"

@@ -195,6 +195,44 @@ describe('LocalNotebooks operation-log storage', () => {
     expect((await store.load(created.uri)).cells).toEqual([])
   })
 
+  it('adapts editor snapshots into appended cell operations', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'editable.runme')
+    const saveStore = await store.createOperationLogSaveStore(created.uri, {
+      actorId: 'actor_test',
+    })
+    const edited = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'cell_one',
+          kind: parser_pb.CellKind.MARKUP,
+          languageId: 'markdown',
+          value: 'Written through the editor',
+        }),
+      ],
+    })
+
+    await saveStore.save(created.uri, edited)
+
+    expect((await store.load(created.uri)).cells[0]).toMatchObject({
+      refId: 'cell_one',
+      value: 'Written through the editor',
+    })
+    const log = parseOperationLog(await store.loadContent(created.uri))
+    expect(log.operations.map((operation) => operation.kind)).toEqual([
+      'cell.create',
+    ])
+    expect((await store.files.get(created.uri))?.doc).toBe('')
+  })
+
   it('unions concurrent local and Drive operations without storing log bytes in IndexedDB', async () => {
     const header: NotebookLogHeader = {
       record_type: 'runme.notebook',
