@@ -498,10 +498,11 @@ export class NotebookDataController {
       if (!handle) return
       try {
         await handle.data.flushPendingPersist()
-        // Refresh is an explicit request to incorporate operations written by
-        // other sessions, so bypass load()'s normal eight-hour sync throttle.
-        await this.localNotebooks.sync(localUri)
-        const notebook = await this.localNotebooks.load(localUri)
+        // Refresh only materializes the shared OPFS journal. Upstream Drive
+        // synchronization is an independent action exposed by the tab status
+        // control.
+        const notebook =
+          await this.localNotebooks.loadOperationLogSnapshot(localUri)
         const store =
           await this.localNotebooks.createOperationLogSaveStore(localUri)
         handle.data.loadNotebook(notebook, { persist: false })

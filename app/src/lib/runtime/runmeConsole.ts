@@ -728,7 +728,7 @@ export function createNotebooksApi({
       return 'notebooks.execute({ target, refIds: string[] }): Promise<{ handle, cells }>. target is required.'
     }
     if (topic === 'refresh') {
-      return 'notebooks.refresh({ target }): Promise<NotebookDocument>. Explicitly incorporates newly observed operations into a .runme tab snapshot. target is required.'
+      return 'notebooks.refresh({ target }): Promise<NotebookDocument>. Materializes the local OPFS operation log into a .runme tab snapshot without upstream Drive I/O. target is required.'
     }
     if (topic === 'requestWriteAccess') {
       return 'notebooks.requestWriteAccess({ target }): Promise<NotebookDocument>. Cooperatively asks the current owner to save and release the notebook, then returns the refreshed document. target is required.'
