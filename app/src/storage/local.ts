@@ -9,6 +9,7 @@ import { IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { appLogger } from '../lib/logging/runtime'
 import { serializeNotebookToMarkdown } from '../lib/markdown/serializeNotebookToMarkdown'
 import {
+  RUNME_OPERATION_LOG_MIME_TYPE,
   createInitialNotebookFile,
   decodeNotebookFile,
   detectNotebookFileFormat,
@@ -16,6 +17,11 @@ import {
   isNotebookFileName,
   validateNotebookRenameFormat,
 } from '../lib/notebookFormat'
+import {
+  mergeOperationSets,
+  parseOperationLog,
+  serializeOperationLog,
+} from '../lib/operationLog'
 import { appState } from '../lib/runtime/AppState'
 import { parser_pb } from '../runme/client'
 import {
@@ -44,6 +50,11 @@ import {
   createDefaultIpynbShadowStorage,
 } from './ipynbShadows'
 import { NotebookStoreItem, NotebookStoreItemType } from './notebook'
+import {
+  type OperationLogRef,
+  type OperationLogStorage,
+  createDefaultOperationLogStorage,
+} from './operationLogs'
 import {
   type RevisionDocStorage,
   createDefaultRevisionDocStorage,
@@ -112,6 +123,8 @@ export interface LocalFileRecord {
   md5Checksum: string
   /** Lossless .ipynb merge metadata. The complete shadow lives in OPFS. */
   ipynbPreservation?: IpynbPreservationState
+  /** Authoritative .runme document location. IndexedDB never stores its bytes. */
+  operationLogRef?: OperationLogRef
 }
 
 export interface UpstreamVersion {
@@ -271,6 +284,7 @@ export class LocalNotebooks extends Dexie {
   private readonly conflictDocStorage: ConflictDocStorage
   private readonly revisionDocStorage: RevisionDocStorage
   private readonly ipynbShadowStorage: IpynbShadowStorage
+  private readonly operationLogStorage: OperationLogStorage
 
   private readonly syncSubjects = new Map<string, Subject<void>>()
   private readonly markdownSyncSubjects = new Map<string, Subject<void>>()
@@ -283,7 +297,8 @@ export class LocalNotebooks extends Dexie {
     conflictDocStorage: ConflictDocStorage = createDefaultConflictDocStorage(),
     revisionDocStorage: RevisionDocStorage = createDefaultRevisionDocStorage(),
     driveSyncCoordinator: DriveSyncCoordinator = browserDriveSyncCoordinator,
-    ipynbShadowStorage: IpynbShadowStorage = createDefaultIpynbShadowStorage()
+    ipynbShadowStorage: IpynbShadowStorage = createDefaultIpynbShadowStorage(),
+    operationLogStorage: OperationLogStorage = createDefaultOperationLogStorage()
   ) {
     super(databaseName)
 
@@ -380,6 +395,7 @@ export class LocalNotebooks extends Dexie {
     this.conflictDocStorage = conflictDocStorage
     this.revisionDocStorage = revisionDocStorage
     this.ipynbShadowStorage = ipynbShadowStorage
+    this.operationLogStorage = operationLogStorage
 
     void this.ensureFolderRecord(LOCAL_FOLDER_URI, 'Local Notebooks')
   }
@@ -1228,6 +1244,13 @@ export class LocalNotebooks extends Dexie {
     if (!record) {
       throw new Error(`Local file record not found for ${uri}`)
     }
+    if (detectNotebookFileFormat(record.name) === 'runme-operation-log') {
+      if (!record.operationLogRef) {
+        throw new Error(`Operation-log reference missing for ${uri}`)
+      }
+      return (await this.operationLogStorage.read(record.operationLogRef))
+        .document
+    }
     if (detectNotebookFileFormat(record.name) === 'ipynb') {
       if (isLocalFileUpstream(record.remoteId, uri)) {
         const preservation = await this.refreshLocalIpynbShadow(uri, record)
@@ -1327,7 +1350,25 @@ export class LocalNotebooks extends Dexie {
       throw new Error(`Local file record not found for ${uri}`)
     }
 
-    if (detectNotebookFileFormat(record.name) === 'ipynb') {
+    const format = detectNotebookFileFormat(record.name)
+    if (format === 'runme-operation-log') {
+      const decoded = decodeNotebookFile(content, record.name)
+      if (!decoded.operationLog) {
+        throw new Error(`Expected operation-log content for ${record.name}`)
+      }
+      const stored = record.operationLogRef
+        ? await this.operationLogStorage.replace(
+            record.operationLogRef,
+            content
+          )
+        : await this.operationLogStorage.initialize(uri, content)
+      await this.files.update(uri, {
+        doc: '',
+        md5Checksum: stored.checksum,
+        mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
+        operationLogRef: stored.ref,
+      })
+    } else if (format === 'ipynb') {
       const decoded = decodeNotebookFile(content, record.name)
       if (!decoded.ipynb) {
         throw new Error(`Expected ipynb content for ${record.name}`)
@@ -1634,6 +1675,11 @@ export class LocalNotebooks extends Dexie {
         `Local notebook record not found for ${uri}. Call addFile first.`
       )
     }
+    if (detectNotebookFileFormat(record.name) === 'runme-operation-log') {
+      throw new Error(
+        'Runme operation-log notebooks must persist mutations through their journal'
+      )
+    }
 
     migrateNotebookCellIds(notebook)
     const serialized = serializeNotebook(notebook)
@@ -1685,6 +1731,16 @@ export class LocalNotebooks extends Dexie {
       record = refreshed
     }
 
+    if (detectNotebookFileFormat(record.name) === 'runme-operation-log') {
+      if (!record.operationLogRef) {
+        throw new Error(`Operation-log reference missing for ${uri}`)
+      }
+      const content = (
+        await this.operationLogStorage.read(record.operationLogRef)
+      ).document
+      return decodeNotebookFile(content, record.name).notebook
+    }
+
     if (!record.doc) {
       return create(parser_pb.NotebookSchema, { cells: [] })
     }
@@ -1709,7 +1765,12 @@ export class LocalNotebooks extends Dexie {
   async create(parentUri: string, name: string): Promise<NotebookStoreItem> {
     const format = detectNotebookFileFormat(name)
     return this.createLocalFile(parentUri, name, {
-      mimeType: format === 'ipynb' ? IPYNB_MIME_TYPE : NOTEBOOK_MIME_TYPE,
+      mimeType:
+        format === 'ipynb'
+          ? IPYNB_MIME_TYPE
+          : format === 'runme-operation-log'
+            ? RUNME_OPERATION_LOG_MIME_TYPE
+            : NOTEBOOK_MIME_TYPE,
       content: '',
     })
   }
@@ -1741,7 +1802,18 @@ export class LocalNotebooks extends Dexie {
     const isDriveBackedParent = isDriveUri(parent.remoteId)
     let localContent = options.content
     let ipynbPreservation: IpynbPreservationState | undefined
-    if (detectNotebookFileFormat(name) === 'ipynb') {
+    let operationLogRef: OperationLogRef | undefined
+    const format = detectNotebookFileFormat(name)
+    if (format === 'runme-operation-log') {
+      const initialLog = options.content || createInitialNotebookFile(name)
+      decodeNotebookFile(initialLog, name)
+      const stored = await this.operationLogStorage.initialize(
+        fileUri,
+        initialLog
+      )
+      localContent = ''
+      operationLogRef = stored.ref
+    } else if (format === 'ipynb') {
       const initialIpynb = options.content || createInitialNotebookFile(name)
       const decoded = decodeNotebookFile(initialIpynb, name)
       localContent = serializeNotebook(decoded.notebook)
@@ -1758,7 +1830,11 @@ export class LocalNotebooks extends Dexie {
         baselineOutputHashes: decoded.ipynb?.baselineOutputHashes ?? {},
       }
     }
-    const checksum = localContent ? md5(localContent) : ''
+    const operationLogChecksum = operationLogRef
+      ? (await this.operationLogStorage.read(operationLogRef)).checksum
+      : undefined
+    const checksum =
+      operationLogChecksum ?? (localContent ? md5(localContent) : '')
     const record: LocalFileRecord = {
       id: fileUri,
       name,
@@ -1773,6 +1849,7 @@ export class LocalNotebooks extends Dexie {
       doc: localContent,
       md5Checksum: checksum,
       ipynbPreservation,
+      operationLogRef,
     }
     await this.files.put(record)
 
@@ -2668,6 +2745,11 @@ export class LocalNotebooks extends Dexie {
       )
     }
 
+    if (detectNotebookFileFormat(record.name) === 'runme-operation-log') {
+      await this.syncOperationLogDrive(localUri, record)
+      return
+    }
+
     const remoteUri = record.remoteId
 
     let remoteName: string | undefined
@@ -3035,6 +3117,99 @@ export class LocalNotebooks extends Dexie {
     await this.driveStore.saveContent(remoteUri, localDoc, 'application/json')
   }
 
+  /** Merge a raw .runme operation set with Drive using bounded CAS retries. */
+  private async syncOperationLogDrive(
+    localUri: string,
+    record: LocalFileRecord
+  ): Promise<void> {
+    if (!record.operationLogRef) {
+      const remoteContent = await this.driveStore.loadContent(record.remoteId)
+      const remote = parseOperationLog(remoteContent)
+      const stored = await this.operationLogStorage.initialize(
+        localUri,
+        serializeOperationLog(remote.header, remote.operations, {
+          canonicalOrder: true,
+        })
+      )
+      const version = driveMetadataToUpstreamVersion(
+        await this.driveStore.getVersionMetadata(record.remoteId)
+      )
+      await this.files.update(localUri, {
+        doc: '',
+        operationLogRef: stored.ref,
+        md5Checksum: stored.checksum,
+        lastRemoteChecksum: version.checksum ?? md5(remoteContent),
+        lastUpstreamVersion: version,
+        lastSynced: nowIsoString(),
+        lastSyncError: undefined,
+      })
+      return
+    }
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const local = await this.operationLogStorage.read(record.operationLogRef)
+      const before = await this.driveStore.getVersionMetadata(record.remoteId)
+      const remoteContent = await this.driveStore.loadContent(record.remoteId)
+      const after = await this.driveStore.getVersionMetadata(record.remoteId)
+      if (!sameDriveVersion(before, after)) continue
+
+      const localLog = parseOperationLog(local.document)
+      const remoteLog = parseOperationLog(remoteContent)
+      if (localLog.header.notebook_id !== remoteLog.header.notebook_id) {
+        throw new Error(
+          `Cannot merge different operation-log notebooks for ${localUri}`
+        )
+      }
+      const mergedDocument = serializeOperationLog(
+        localLog.header,
+        mergeOperationSets(localLog.operations, remoteLog.operations),
+        { canonicalOrder: true }
+      )
+      let stored = local
+      if (mergedDocument !== local.document) {
+        try {
+          stored = await this.operationLogStorage.replace(
+            local.ref,
+            mergedDocument,
+            { expectedChecksum: local.checksum }
+          )
+        } catch {
+          continue
+        }
+      }
+
+      if (mergedDocument !== remoteContent) {
+        const saved = await this.driveStore.saveContentIfVersion(
+          record.remoteId,
+          mergedDocument,
+          RUNME_OPERATION_LOG_MIME_TYPE,
+          {
+            checksum: after?.md5Checksum,
+            revisionId: after?.headRevisionId,
+          }
+        )
+        if (!saved) continue
+      }
+      const version = driveMetadataToUpstreamVersion(
+        await this.driveStore.getVersionMetadata(record.remoteId)
+      )
+      await this.files.update(localUri, {
+        doc: '',
+        operationLogRef: stored.ref,
+        md5Checksum: stored.checksum,
+        lastRemoteChecksum: version.checksum ?? md5(mergedDocument),
+        lastUpstreamVersion: version,
+        lastSynced: nowIsoString(),
+        lastSyncError: undefined,
+      })
+      return
+    }
+
+    throw new Error(
+      `Drive operation log changed during three merge attempts for ${localUri}`
+    )
+  }
+
   private async completePendingDriveCreate(
     localUri: string,
     record: LocalFileRecord
@@ -3060,7 +3235,22 @@ export class LocalNotebooks extends Dexie {
       createOperationId
     )
     let newFile = existingFile
-    if (!newFile && detectNotebookFileFormat(record.name) === 'ipynb') {
+    const format = detectNotebookFileFormat(record.name)
+    if (!newFile && format === 'runme-operation-log') {
+      if (!record.operationLogRef) {
+        throw new Error(`Operation-log reference missing for ${localUri}`)
+      }
+      const content = (
+        await this.operationLogStorage.read(record.operationLogRef)
+      ).document
+      newFile = await this.driveStore.createContent(
+        parentRemoteUri,
+        record.name,
+        content,
+        RUNME_OPERATION_LOG_MIME_TYPE,
+        { createOperationId }
+      )
+    } else if (!newFile && format === 'ipynb') {
       const shadow = record.ipynbPreservation
         ? await this.ipynbShadowStorage.read(record.ipynbPreservation.shadowRef)
         : createInitialNotebookFile(record.name)

@@ -6,10 +6,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MimeType, parser_pb } from '../runme/client'
 import { appLogger } from './logging/runtime'
 import {
+  createInitialNotebookFile,
   decodeNotebookFile,
+  detectNotebookFileFormat,
   encodeRunmeNotebook,
   inspectRunmeNotebookJsonShape,
 } from './notebookFormat'
+import {
+  type NotebookLogHeader,
+  createRunmeOperation,
+  serializeOperationLog,
+} from './operationLog'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -42,10 +49,10 @@ describe('notebook file format recovery', () => {
                   ],
                   processInfo: create(parser_pb.CellOutputProcessInfoSchema, {
                     pid: 4242n,
-                    exitReason: create(
-                      parser_pb.ProcessInfoExitReasonSchema,
-                      { type: 'exit', code: 0 }
-                    ),
+                    exitReason: create(parser_pb.ProcessInfoExitReasonSchema, {
+                      type: 'exit',
+                      code: 0,
+                    }),
                   }),
                 }),
               ]
@@ -160,5 +167,66 @@ describe('notebook file format recovery', () => {
     expect(() => decodeNotebookFile(mixed, 'mixed.ipynb')).toThrow(
       'Unsupported Jupyter nbformat major version: undefined'
     )
+  })
+})
+
+describe('Runme operation-log format', () => {
+  it('detects .runme independently from existing JSON and IPYNB formats', () => {
+    expect(detectNotebookFileFormat('notebook.runme')).toBe(
+      'runme-operation-log'
+    )
+    expect(detectNotebookFileFormat('notebook.json')).toBe('runme-json')
+    expect(detectNotebookFileFormat('notebook.ipynb')).toBe('ipynb')
+  })
+
+  it('creates a valid empty .runme document', () => {
+    const decoded = decodeNotebookFile(
+      createInitialNotebookFile('new.runme'),
+      'new.runme'
+    )
+    expect(decoded.format).toBe('runme-operation-log')
+    expect(decoded.operationLog?.operations).toEqual([])
+    expect(decoded.notebook.cells).toEqual([])
+  })
+
+  it('decodes materialized cells while retaining the operation log', () => {
+    const header: NotebookLogHeader = {
+      record_type: 'runme.notebook',
+      format_version: 1,
+      notebook_id: 'notebook_test',
+      created_by: 'actor_seed',
+      created_at: '2026-09-03T00:00:00Z',
+    }
+    const operation = createRunmeOperation({
+      actorId: 'actor_seed',
+      actorSequence: 1,
+      dependencies: [],
+      knownOperations: [],
+      kind: 'cell.create',
+      payload: {
+        cell_id: 'cell_one',
+        position: [[100, 'actor_seed', 1]],
+        cell: {
+          kind: 'code',
+          language_id: 'python',
+          value: 'print(42)',
+          metadata: { trusted: true },
+        },
+      },
+      createdAt: '2026-09-03T00:00:01Z',
+    })
+    const decoded = decodeNotebookFile(
+      serializeOperationLog(header, [operation]),
+      'example.runme'
+    )
+
+    expect(decoded.notebook.cells[0]).toMatchObject({
+      refId: 'cell_one',
+      kind: parser_pb.CellKind.CODE,
+      languageId: 'python',
+      value: 'print(42)',
+      metadata: { trusted: 'true' },
+    })
+    expect(decoded.operationLog?.operations).toEqual([operation])
   })
 })
