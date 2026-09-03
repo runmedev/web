@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   type JsonValue,
   type NotebookLogHeader,
+  type PositionId,
   type RunmeOperation,
   allocatePositionBetween,
   canonicalJson,
@@ -147,6 +148,20 @@ describe('dense positions', () => {
     expect(comparePositionIds(left, alice)).toBeLessThan(0)
     expect(comparePositionIds(alice, bob)).toBeLessThan(0)
     expect(comparePositionIds(bob, right)).toBeLessThan(0)
+  })
+
+  it('supports imported zero positions and repeated prepends', () => {
+    let first: PositionId = [[0, 'actor_seed', 1]]
+    for (let sequence = 1; sequence <= 40; sequence += 1) {
+      const prepended = allocatePositionBetween({
+        left: null,
+        right: first,
+        actorId: 'actor_prepend',
+        actorSequence: sequence,
+      })
+      expect(comparePositionIds(prepended, first)).toBeLessThan(0)
+      first = prepended
+    }
   })
 
   it('grows a path when adjacent digits leave no numeric interval', () => {

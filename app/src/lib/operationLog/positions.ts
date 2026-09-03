@@ -1,6 +1,7 @@
 import type { PositionComponent, PositionId } from './types'
 
-const MAX_DIGIT = 0xffffffff
+const MIN_DIGIT = Number.MIN_SAFE_INTEGER
+const MAX_DIGIT = Number.MAX_SAFE_INTEGER
 const textEncoder = new TextEncoder()
 
 function compareUtf8(left: string, right: string): number {
@@ -49,8 +50,8 @@ export function validatePositionId(position: PositionId): void {
     if (
       !Array.isArray(component) ||
       component.length !== 3 ||
-      !Number.isInteger(component[0]) ||
-      component[0] < 0 ||
+      !Number.isSafeInteger(component[0]) ||
+      component[0] < MIN_DIGIT ||
       component[0] > MAX_DIGIT ||
       typeof component[1] !== 'string' ||
       component[1].length === 0 ||
@@ -102,7 +103,7 @@ export function allocatePositionBetween({
   while (depth < 1024) {
     const leftComponent = left?.[depth]
     const rightComponent = rightSharesPrefix ? right?.[depth] : undefined
-    const lowerDigit = leftComponent?.[0] ?? 0
+    const lowerDigit = leftComponent?.[0] ?? MIN_DIGIT
     const upperDigit = rightComponent?.[0] ?? MAX_DIGIT
 
     if (upperDigit - lowerDigit > 1) {
@@ -141,7 +142,7 @@ export function allocatePositionBetween({
       continue
     }
 
-    if (rightComponent && rightComponent[0] > 0) {
+    if (rightComponent && rightComponent[0] > MIN_DIGIT) {
       const result: PositionId = [
         ...prefix,
         [rightComponent[0] - 1, actorId, actorSequence] as const,
