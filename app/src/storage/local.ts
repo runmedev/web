@@ -790,16 +790,32 @@ export class LocalNotebooks extends Dexie {
       }
 
       const upstreamChecksum = upstreamVersion.checksum ?? md5(upstreamContent)
+      const format = detectNotebookFileFormat(record.name)
+      let operationLogRef: OperationLogRef | undefined
       const decoded =
-        detectNotebookFileFormat(record.name) === 'ipynb'
+        format === 'ipynb'
           ? await this.decodeUpstreamNotebook({
               localUri,
               record,
               content: upstreamContent,
               upstreamFingerprint: upstreamChecksum,
             })
-          : { notebook, serialized: serializeNotebook(notebook) }
-      const localChecksum = checksumForSerializedNotebook(decoded.serialized)
+          : format === 'runme-operation-log'
+            ? {
+                notebook: decodeNotebookFile(upstreamContent, record.name)
+                  .notebook,
+                serialized: '',
+              }
+            : { notebook, serialized: serializeNotebook(notebook) }
+      if (format === 'runme-operation-log') {
+        operationLogRef = (
+          await this.operationLogStorage.initialize(localUri, upstreamContent)
+        ).ref
+      }
+      const localChecksum =
+        format === 'runme-operation-log'
+          ? md5(upstreamContent)
+          : checksumForSerializedNotebook(decoded.serialized)
       let initialized = false
 
       // The Web Lock serializes Drive sync work across tabs. The IndexedDB
@@ -827,6 +843,7 @@ export class LocalNotebooks extends Dexie {
           lastSyncError: undefined,
           conflict: undefined,
           ipynbPreservation: decoded.ipynbPreservation,
+          operationLogRef,
         })
         initialized = true
       })
@@ -3990,6 +4007,9 @@ function resolveDocumentMimeType(
   }
   if (detectNotebookFileFormat(name ?? '') === 'runme-json') {
     return NOTEBOOK_MIME_TYPE
+  }
+  if (detectNotebookFileFormat(name ?? '') === 'runme-operation-log') {
+    return RUNME_OPERATION_LOG_MIME_TYPE
   }
   const trimmedMimeType = mimeType?.trim()
   if (trimmedMimeType) {

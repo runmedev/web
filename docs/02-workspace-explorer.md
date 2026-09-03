@@ -57,5 +57,6 @@ explorer.removeFolder(uri)
 - Opening a file from the explorer is the safest way to make it the current document.
 - Removing a folder from the explorer does not necessarily delete its upstream source.
 - Explorer items may have local URIs and separate `remoteUri` values.
-- The filename extension selects the notebook format: `.json` for Runme JSON
-  and `.ipynb` for Jupyter.
+- The filename extension selects the notebook format: `.runme` for the
+  append-only Runme operation log, `.json` for Runme JSON, and `.ipynb` for
+  Jupyter.

@@ -19,11 +19,17 @@ import { NotebookStoreItemType } from '../storage/notebook'
 import { IPYNB_MIME_TYPE } from './ipynb'
 import { appLogger } from './logging/runtime'
 import {
+  RUNME_OPERATION_LOG_MIME_TYPE,
   decodeNotebookFile,
   detectNotebookFileFormat,
   encodeIpynbNotebook,
   encodeRunmeNotebook,
 } from './notebookFormat'
+import {
+  type NotebookLogHeader,
+  buildOperationLogDiff,
+  serializeOperationLog,
+} from './operationLog'
 import { appState } from './runtime/AppState'
 
 function ensureDriveStore() {
@@ -532,16 +538,44 @@ export async function saveNotebookAsDriveCopy(
   const format = detectNotebookFileFormat(name)
   if (!format) {
     throw new Error(
-      'drive.saveAsCurrentNotebook file name must end in .json or .ipynb'
+      'drive.saveAsCurrentNotebook file name must end in .json, .ipynb, or .runme'
     )
   }
-  const notebookJson =
-    format === 'ipynb'
-      ? encodeIpynbNotebook(notebook).text
-      : encodeRunmeNotebook(notebook)
-  const mimeType = format === 'ipynb' ? IPYNB_MIME_TYPE : 'application/json'
-  const uploadedChecksum = md5(notebookJson)
   const createOperationId = options.createOperationId?.trim()
+  let notebookJson: string
+  let mimeType: string
+  if (format === 'runme-operation-log') {
+    const stableSeed = createOperationId
+      ? await hashCreateOperationId(`${createOperationId}\u0000runme`)
+      : crypto.randomUUID().replace(/-/g, '')
+    const createdAt = createOperationId
+      ? '1970-01-01T00:00:00.000Z'
+      : new Date().toISOString()
+    const header: NotebookLogHeader = {
+      record_type: 'runme.notebook',
+      format_version: 1,
+      notebook_id: `notebook_${stableSeed}`,
+      created_by: `actor_${stableSeed}`,
+      created_at: createdAt,
+    }
+    const operations = buildOperationLogDiff({
+      previous: create(parser_pb.NotebookSchema, { cells: [] }),
+      next: notebook,
+      observedOperations: [],
+      actorId: header.created_by,
+      firstActorSequence: 1,
+      createdAt: () => createdAt,
+    })
+    notebookJson = serializeOperationLog(header, operations)
+    mimeType = RUNME_OPERATION_LOG_MIME_TYPE
+  } else {
+    notebookJson =
+      format === 'ipynb'
+        ? encodeIpynbNotebook(notebook).text
+        : encodeRunmeNotebook(notebook)
+    mimeType = format === 'ipynb' ? IPYNB_MIME_TYPE : 'application/json'
+  }
+  const uploadedChecksum = md5(notebookJson)
   const persistedCreateOperationIdPromise = createOperationId
     ? hashCreateOperationId(createOperationId)
     : Promise.resolve(undefined)
@@ -969,7 +1003,7 @@ export async function createDriveNotebook(
   }
   if (!detectNotebookFileFormat(name)) {
     throw new Error(
-      'drive.createNotebook file name must end in .json or .ipynb'
+      'drive.createNotebook file name must end in .json, .ipynb, or .runme'
     )
   }
   if (!options || typeof options !== 'object' || Array.isArray(options)) {

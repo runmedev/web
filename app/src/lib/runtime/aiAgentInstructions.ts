@@ -269,6 +269,8 @@ If the user's notebook reference is ambiguous, ask which notebook to use before 
 
 - Treat a cell's \`refId\` as an opaque canonical identifier. Do not infer the cell kind or storage format from prefixes such as \`code_\` or \`markup_\`.
 - Runme JSON \`Cell.refId\` and IPYNB \`cell.id\` are the same identity serialized under format-specific field names.
+- \`.runme\` notebooks use an append-only operation log in browser OPFS. Keep using the storage-neutral \`notebooks.*\` API; never manufacture actor IDs, operation IDs, dependencies, Lamport values, or PositionIds.
+- Multiple sessions may edit one \`.runme\` notebook concurrently. Each session keeps its displayed snapshot until an explicit refresh incorporates other sessions' operations.
 - Do not add, remove, or rewrite a cell ID unless the user explicitly requests an identity migration or the notebook API repairs invalid legacy data.
 - When updating or executing cells, reuse the exact \`refId\` returned by \`notebooks.get({ uri })\`.
 

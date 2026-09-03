@@ -19,6 +19,7 @@ import {
   updateDriveFileBytes,
 } from './driveTransfer'
 import { encodeRunmeNotebook } from './notebookFormat'
+import { parseOperationLog } from './operationLog'
 import { appState } from './runtime/AppState'
 
 afterEach(() => {
@@ -377,7 +378,7 @@ describe('driveTransfer', () => {
         'folder123',
         'hidden-notebook.md'
       )
-    ).rejects.toThrow('must end in .json or .ipynb')
+    ).rejects.toThrow('must end in .json, .ipynb, or .runme')
     expect(createContent).not.toHaveBeenCalled()
   })
 
@@ -531,6 +532,59 @@ describe('driveTransfer', () => {
       md5(uploadedContent)
     )
     expect(openNotebook).toHaveBeenCalledWith(result.localUri)
+  })
+
+  it('creates a Drive-backed .runme operation log with initial cells', async () => {
+    let uploadedContent = ''
+    const createContent = vi
+      .fn()
+      .mockImplementation(async (_folder, _name, content) => {
+        uploadedContent = content
+        return {
+          uri: 'https://drive.google.com/file/d/runme123/view',
+          name: 'shared.runme',
+        }
+      })
+    appState.setDriveNotebookStore({
+      createContent,
+      getVersionMetadata: vi.fn().mockImplementation(async () => ({
+        md5Checksum: md5(uploadedContent),
+        headRevisionId: 'runme-revision-1',
+      })),
+    } as any)
+    const initializeUploadedDriveNotebook = vi.fn().mockResolvedValue(true)
+    appState.setLocalNotebooks({
+      addFile: vi.fn().mockResolvedValue('local://file/runme-mirror'),
+      initializeUploadedDriveNotebook,
+    } as any)
+    appState.setOpenNotebookHandler(vi.fn().mockResolvedValue(undefined))
+
+    const result = await createDriveNotebook('folder123', 'shared.runme', {
+      cells: [{ kind: 'markup', value: '# Shared log' }],
+    })
+
+    const parsed = parseOperationLog(uploadedContent)
+    expect(parsed.operations.map((operation) => operation.kind)).toEqual([
+      'cell.create',
+    ])
+    expect(createContent).toHaveBeenCalledWith(
+      'https://drive.google.com/drive/folders/folder123',
+      'shared.runme',
+      uploadedContent,
+      'application/vnd.runme.notebook+jsonl',
+      {}
+    )
+    expect(initializeUploadedDriveNotebook).toHaveBeenCalledWith(
+      result.localUri,
+      expect.objectContaining({
+        cells: [expect.objectContaining({ value: '# Shared log' })],
+      }),
+      uploadedContent,
+      {
+        checksum: md5(uploadedContent),
+        revisionId: 'runme-revision-1',
+      }
+    )
   })
 
   it('creates directly in a Shared Drive without a pre-generated file id', async () => {
@@ -1283,7 +1337,7 @@ describe('driveTransfer', () => {
       createDriveNotebook('folder123', 'hidden-notebook', {
         idempotencyKey: 'unsupported-extension',
       })
-    ).rejects.toThrow('must end in .json or .ipynb')
+    ).rejects.toThrow('must end in .json, .ipynb, or .runme')
   })
 
   it('mirrors a concurrent Drive edit instead of assigning it to the uploaded baseline', async () => {

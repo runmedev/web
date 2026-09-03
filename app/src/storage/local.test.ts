@@ -167,6 +167,47 @@ function notebookJson(value: string): string {
 }
 
 describe('LocalNotebooks operation-log storage', () => {
+  it('initializes a Drive mirror with authoritative OPFS bytes', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    const uri = 'local://file/drive-runme'
+    const document = serializeOperationLog(
+      {
+        record_type: 'runme.notebook',
+        format_version: 1,
+        notebook_id: 'notebook_drive',
+        created_by: 'actor_seed',
+        created_at: '2026-09-03T00:00:00Z',
+      },
+      []
+    )
+    await store.files.put({
+      id: uri,
+      name: 'drive.runme',
+      remoteId: 'https://drive.google.com/file/d/drive-runme/view',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    await expect(
+      store.initializeUploadedDriveNotebook(
+        uri,
+        create(parser_pb.NotebookSchema, { cells: [] }),
+        document,
+        { checksum: md5(document), revisionId: 'revision-1' }
+      )
+    ).resolves.toBe(true)
+
+    expect(await store.loadContent(uri)).toBe(document)
+    expect(await store.files.get(uri)).toMatchObject({
+      doc: '',
+      md5Checksum: md5(document),
+      operationLogRef: { storage: 'opfs' },
+    })
+  })
+
   it('keeps local .runme bytes in OPFS storage instead of IndexedDB', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
     const store = createTestStore({}, { operationLogStorage })
