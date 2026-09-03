@@ -3,7 +3,11 @@
 import { create } from '@bufbuild/protobuf'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { encodeRunmeNotebook } from '../lib/notebookFormat'
+import {
+  RUNME_OPERATION_LOG_MIME_TYPE,
+  encodeRunmeNotebook,
+} from '../lib/notebookFormat'
+import { parseOperationLog } from '../lib/operationLog'
 import { parser_pb } from '../runme/client'
 import { FilesystemNotebookStore, isFileSystemAccessSupported } from './fs'
 import type { FsDatabase, FsEntryRecord, WorkspaceRecord } from './fsdb'
@@ -361,6 +365,23 @@ describe("FilesystemNotebookStore", () => {
         expect.objectContaining({
           name: 'notebook.ipynb',
           mimeType: 'application/x-ipynb+json',
+          type: NotebookStoreItemType.File,
+        }),
+      ])
+    })
+
+    it('returns .runme files with the operation-log MIME type', async () => {
+      rootEntries.set(
+        'shared.runme',
+        createMockFileHandle('shared.runme', '{"record_type":"runme.notebook"}\n')
+      )
+
+      const items = await store.list(ROOT_URI)
+
+      expect(items).toEqual([
+        expect.objectContaining({
+          name: 'shared.runme',
+          mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
           type: NotebookStoreItemType.File,
         }),
       ])
@@ -734,6 +755,24 @@ describe("FilesystemNotebookStore", () => {
       })
     })
 
+    it('creates a valid empty .runme operation log', async () => {
+      const item = await store.create(ROOT_URI, 'shared.runme')
+      const file = await rootEntries.get('shared.runme').getFile()
+      const document = await file.text()
+
+      expect(item).toMatchObject({
+        name: 'shared.runme',
+        mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
+      })
+      expect(parseOperationLog(document)).toMatchObject({
+        header: {
+          record_type: 'runme.notebook',
+          format_version: 1,
+        },
+        operations: [],
+      })
+    })
+
     it('calls getFileHandle with create: true', async () => {
       await store.create(ROOT_URI, 'new-notebook.json')
       expect(rootHandle.getFileHandle).toHaveBeenCalledWith(
@@ -850,6 +889,25 @@ describe("FilesystemNotebookStore", () => {
         `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent("new.json")}`,
       );
     });
+
+    it('preserves the runme extension when an extensionless name is used', async () => {
+      const oldHandle = createMockFileHandle('old.runme', 'operation log')
+      rootEntries.set('old.runme', oldHandle)
+      ;(db.entries as any)._store.set(`${WORKSPACE_ID}:old.runme`, {
+        id: `${WORKSPACE_ID}:old.runme`,
+        workspaceId: WORKSPACE_ID,
+        relativePath: 'old.runme',
+        kind: 'file',
+        handle: oldHandle,
+        lastKnownMtime: 0,
+        lastKnownSize: 0,
+      })
+      const oldUri = `fs://workspace/${WORKSPACE_ID}/file/${encodeURIComponent('old.runme')}`
+
+      const result = await store.rename(oldUri, 'new')
+
+      expect(result.name).toBe('new.runme')
+    })
 
     it('removes old entry from DB', async () => {
       const nbJson = makeEmptyNotebookJson()

@@ -129,4 +129,66 @@ describe('notebook comments runtime', () => {
     expect(resolveComment).toHaveBeenCalledWith(uri, 'comment-1')
     expect(reopenComment).toHaveBeenCalledWith(uri, 'comment-1')
   })
+
+  it('uses the local operation log for runme comment lifecycle operations', async () => {
+    const uri = 'local://file/comments-runme'
+    const anchor = JSON.stringify({
+      runme: { version: 2, type: 'cell', cellId: 'cell-1' },
+    })
+    const listOperationLogComments = vi.fn(async () => [
+      {
+        id: 'comment-1',
+        content: 'Clarify this.',
+        anchor,
+        resolved: false,
+        replies: [],
+      },
+    ])
+    const localNotebooks = {
+      isOperationLogNotebook: vi.fn(async () => true),
+      listOperationLogComments,
+      replyToOperationLogComment: vi.fn(async () => ({ id: 'comment-1' })),
+      setOperationLogCommentResolved: vi.fn(async () => ({
+        id: 'comment-1',
+      })),
+    }
+    const notebookData = {
+      getUri: () => uri,
+      getNotebook: () =>
+        create(parser_pb.NotebookSchema, {
+          cells: [
+            create(parser_pb.CellSchema, {
+              refId: 'cell-1',
+              kind: parser_pb.CellKind.MARKUP,
+              value: 'Text',
+            }),
+          ],
+        }),
+    } as unknown as NotebookDataLike
+    const comments = createNotebookCommentsRuntimeApi({
+      resolveNotebook: () => notebookData,
+      resolveLocalNotebooks: () => localNotebooks as never,
+      resolveDriveNotebookStore: () => null,
+    })
+
+    expect(await comments.list()).toEqual([
+      expect.objectContaining({ id: 'comment-1', content: 'Clarify this.' }),
+    ])
+    await comments.reply({ commentId: 'comment-1', content: 'Done.' })
+    await comments.resolve({ commentId: 'comment-1' })
+    await comments.reopen({ commentId: 'comment-1' })
+
+    expect(listOperationLogComments).toHaveBeenCalledWith(uri)
+    expect(localNotebooks.replyToOperationLogComment).toHaveBeenCalledWith(
+      uri,
+      'comment-1',
+      'Done.'
+    )
+    expect(
+      localNotebooks.setOperationLogCommentResolved
+    ).toHaveBeenNthCalledWith(1, uri, 'comment-1', true)
+    expect(
+      localNotebooks.setOperationLogCommentResolved
+    ).toHaveBeenNthCalledWith(2, uri, 'comment-1', false)
+  })
 })

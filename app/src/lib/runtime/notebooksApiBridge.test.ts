@@ -141,6 +141,9 @@ function createBridgeServer(
     execute: vi.fn(async () => {
       throw new Error('not implemented')
     }),
+    refresh: vi.fn(async () => {
+      throw new Error('not implemented')
+    }),
     requestWriteAccess: vi.fn(async () => {
       throw new Error('not implemented')
     }),
@@ -264,6 +267,29 @@ describe('createNotebooksApiBridgeServer', () => {
       })
     )
     expect(requestWriteAccess).toHaveBeenCalledWith({
+      target: { uri: 'local://file/demo' },
+    })
+  })
+
+  it('delegates explicit refresh requests to the host notebook API', async () => {
+    const refresh = vi.fn(async () => ({
+      summary: {
+        uri: 'local://file/demo',
+        name: 'demo.runme',
+        isOpen: true,
+        source: 'local' as const,
+      },
+      handle: { uri: 'local://file/demo', revision: 'refreshed' },
+      notebook: create(parser_pb.NotebookSchema, { cells: [] }),
+    }))
+    const bridgeServer = createBridgeServer({ refresh })
+
+    await bridgeServer.handleMessage({
+      method: 'notebooks.refresh',
+      args: [{ target: { uri: 'local://file/demo' } }],
+    })
+
+    expect(refresh).toHaveBeenCalledWith({
       target: { uri: 'local://file/demo' },
     })
   })

@@ -9,13 +9,34 @@ import { IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { appLogger } from '../lib/logging/runtime'
 import { serializeNotebookToMarkdown } from '../lib/markdown/serializeNotebookToMarkdown'
 import {
+  RUNME_OPERATION_LOG_MIME_TYPE,
   createInitialNotebookFile,
   decodeNotebookFile,
   detectNotebookFileFormat,
   encodeIpynbNotebook,
   isNotebookFileName,
+  notebookFileExtension,
   validateNotebookRenameFormat,
 } from '../lib/notebookFormat'
+import {
+  type CommentAddPayload,
+  type CommentReplyPayload,
+  type JsonValue,
+  type ParsedOperationLog,
+  type RunmeOperation,
+  buildOperationLogDiff,
+  canonicalJson,
+  causalHeads,
+  cloneNotebook,
+  createRunmeOperation,
+  getNotebookActorId,
+  highestActorSequence,
+  materializeOperationLog,
+  materializedLogToNotebook,
+  mergeOperationSets,
+  parseOperationLog,
+  serializeOperationLog,
+} from '../lib/operationLog'
 import { appState } from '../lib/runtime/AppState'
 import { parser_pb } from '../runme/client'
 import {
@@ -24,6 +45,7 @@ import {
   createDefaultConflictDocStorage,
 } from './conflictDocs'
 import {
+  type DriveComment,
   DriveNotebookStore,
   type DriveRevision,
   type DriveVersionMetadata,
@@ -44,6 +66,11 @@ import {
   createDefaultIpynbShadowStorage,
 } from './ipynbShadows'
 import { NotebookStoreItem, NotebookStoreItemType } from './notebook'
+import {
+  type OperationLogRef,
+  type OperationLogStorage,
+  createDefaultOperationLogStorage,
+} from './operationLogs'
 import {
   type RevisionDocStorage,
   createDefaultRevisionDocStorage,
@@ -112,6 +139,8 @@ export interface LocalFileRecord {
   md5Checksum: string
   /** Lossless .ipynb merge metadata. The complete shadow lives in OPFS. */
   ipynbPreservation?: IpynbPreservationState
+  /** Authoritative .runme document location. IndexedDB never stores its bytes. */
+  operationLogRef?: OperationLogRef
 }
 
 export interface UpstreamVersion {
@@ -271,6 +300,7 @@ export class LocalNotebooks extends Dexie {
   private readonly conflictDocStorage: ConflictDocStorage
   private readonly revisionDocStorage: RevisionDocStorage
   private readonly ipynbShadowStorage: IpynbShadowStorage
+  private readonly operationLogStorage: OperationLogStorage
 
   private readonly syncSubjects = new Map<string, Subject<void>>()
   private readonly markdownSyncSubjects = new Map<string, Subject<void>>()
@@ -283,7 +313,8 @@ export class LocalNotebooks extends Dexie {
     conflictDocStorage: ConflictDocStorage = createDefaultConflictDocStorage(),
     revisionDocStorage: RevisionDocStorage = createDefaultRevisionDocStorage(),
     driveSyncCoordinator: DriveSyncCoordinator = browserDriveSyncCoordinator,
-    ipynbShadowStorage: IpynbShadowStorage = createDefaultIpynbShadowStorage()
+    ipynbShadowStorage: IpynbShadowStorage = createDefaultIpynbShadowStorage(),
+    operationLogStorage: OperationLogStorage = createDefaultOperationLogStorage()
   ) {
     super(databaseName)
 
@@ -380,6 +411,7 @@ export class LocalNotebooks extends Dexie {
     this.conflictDocStorage = conflictDocStorage
     this.revisionDocStorage = revisionDocStorage
     this.ipynbShadowStorage = ipynbShadowStorage
+    this.operationLogStorage = operationLogStorage
 
     void this.ensureFolderRecord(LOCAL_FOLDER_URI, 'Local Notebooks')
   }
@@ -765,16 +797,32 @@ export class LocalNotebooks extends Dexie {
       }
 
       const upstreamChecksum = upstreamVersion.checksum ?? md5(upstreamContent)
+      const format = detectNotebookFileFormat(record.name)
+      let operationLogRef: OperationLogRef | undefined
       const decoded =
-        detectNotebookFileFormat(record.name) === 'ipynb'
+        format === 'ipynb'
           ? await this.decodeUpstreamNotebook({
               localUri,
               record,
               content: upstreamContent,
               upstreamFingerprint: upstreamChecksum,
             })
-          : { notebook, serialized: serializeNotebook(notebook) }
-      const localChecksum = checksumForSerializedNotebook(decoded.serialized)
+          : format === 'runme-operation-log'
+            ? {
+                notebook: decodeNotebookFile(upstreamContent, record.name)
+                  .notebook,
+                serialized: '',
+              }
+            : { notebook, serialized: serializeNotebook(notebook) }
+      if (format === 'runme-operation-log') {
+        operationLogRef = (
+          await this.operationLogStorage.initialize(localUri, upstreamContent)
+        ).ref
+      }
+      const localChecksum =
+        format === 'runme-operation-log'
+          ? md5(upstreamContent)
+          : checksumForSerializedNotebook(decoded.serialized)
       let initialized = false
 
       // The Web Lock serializes Drive sync work across tabs. The IndexedDB
@@ -802,6 +850,7 @@ export class LocalNotebooks extends Dexie {
           lastSyncError: undefined,
           conflict: undefined,
           ipynbPreservation: decoded.ipynbPreservation,
+          operationLogRef,
         })
         initialized = true
       })
@@ -1217,6 +1266,298 @@ export class LocalNotebooks extends Dexie {
     }
   }
 
+  /** Create a tab-local snapshot adapter that appends .runme operations. */
+  async createOperationLogSaveStore(
+    uri: string,
+    options: { actorId?: string } = {}
+  ): Promise<{
+    save(saveUri: string, notebook: parser_pb.Notebook): Promise<void>
+  }> {
+    const record = await this.files.get(uri)
+    if (!record || !record.operationLogRef) {
+      throw new Error(`Operation-log reference missing for ${uri}`)
+    }
+    if (detectNotebookFileFormat(record.name) !== 'runme-operation-log') {
+      throw new Error(`Notebook ${uri} is not a .runme operation log`)
+    }
+
+    const initial = await this.operationLogStorage.read(record.operationLogRef)
+    let view: ParsedOperationLog = parseOperationLog(initial.document)
+    let previous = materializedLogToNotebook(
+      materializeOperationLog(view.operations)
+    )
+    const actorId = options.actorId ?? (await getNotebookActorId(uri))
+    let queue = Promise.resolve()
+
+    return {
+      save: async (saveUri: string, notebook: parser_pb.Notebook) => {
+        if (saveUri !== uri) {
+          throw new Error(
+            `Operation-log save URI changed from ${uri} to ${saveUri}`
+          )
+        }
+        const next = cloneNotebook(notebook)
+        const operation = queue.then(async () => {
+          let created: RunmeOperation[] = []
+          const stored = await this.operationLogStorage.appendTransaction(
+            record.operationLogRef!,
+            async (currentDocument) => {
+              const currentLog = parseOperationLog(currentDocument)
+              if (currentLog.header.notebook_id !== view.header.notebook_id) {
+                throw new Error(
+                  `Operation-log notebook identity changed for ${uri}`
+                )
+              }
+              created = await buildOperationLogDiff({
+                previous,
+                next,
+                observedOperations: view.operations,
+                actorId,
+                firstActorSequence:
+                  highestActorSequence(currentLog.operations, actorId) + 1,
+              })
+              return created.length === 0
+                ? ''
+                : `${created
+                    .map((item) => canonicalJson(item as unknown as JsonValue))
+                    .join('\n')}\n`
+            },
+            { validate: (document) => void parseOperationLog(document) }
+          )
+          if (created.length === 0) {
+            previous = next
+            return
+          }
+          view = {
+            header: view.header,
+            operations: [...view.operations, ...created],
+          }
+          previous = next
+          await this.files.update(uri, {
+            doc: '',
+            md5Checksum: stored.checksum,
+            operationLogRef: stored.ref,
+          })
+          this.notifySync(uri)
+          if (!record.conflict) {
+            this.enqueueSync(uri)
+            this.enqueueMarkdownSync(uri)
+          }
+        })
+        queue = operation.catch(() => undefined)
+        await operation
+      },
+    }
+  }
+
+  operationLogSupportsConcurrentWriters(): boolean {
+    return this.operationLogStorage.supportsConcurrentWriters()
+  }
+
+  async isOperationLogNotebook(uri: string): Promise<boolean> {
+    const record = await this.files.get(uri)
+    return (
+      Boolean(record?.operationLogRef) &&
+      detectNotebookFileFormat(record?.name ?? '') === 'runme-operation-log'
+    )
+  }
+
+  async listOperationLogComments(uri: string): Promise<DriveComment[]> {
+    const { parsed, materialized } =
+      await this.readMaterializedOperationLog(uri)
+    const operations = new Map(
+      parsed.operations.map((operation) => [operation.op_id, operation])
+    )
+    const repliesByThread = new Map<string, DriveComment['replies']>()
+    for (const comment of materialized.comments) {
+      if (!comment.parent_comment_id) continue
+      const replies = repliesByThread.get(comment.thread_id) ?? []
+      const operation = operations.get(comment.operation_id)
+      replies.push({
+        id: comment.comment_id,
+        content: comment.payload.body.value,
+        createdTime: operation?.created_at,
+        modifiedTime: operation?.created_at,
+        author: {
+          displayName: comment.payload.author.display_name,
+          me: true,
+        },
+        runmeOperationId: comment.operation_id,
+      })
+      repliesByThread.set(comment.thread_id, replies)
+    }
+    return materialized.comments.flatMap((comment) => {
+      if (comment.parent_comment_id) return []
+      const operation = operations.get(comment.operation_id)
+      const target = comment.payload.annotation.targets[0]
+      const anchor =
+        target &&
+        typeof target === 'object' &&
+        !Array.isArray(target) &&
+        typeof target.anchor === 'string'
+          ? target.anchor
+          : undefined
+      return [
+        {
+          id: comment.comment_id,
+          content: comment.payload.body.value,
+          createdTime: operation?.created_at,
+          modifiedTime: operation?.created_at,
+          resolved: materialized.threadStatus[comment.thread_id] === 'resolved',
+          anchor,
+          author: {
+            displayName: comment.payload.author.display_name,
+            me: true,
+          },
+          replies: repliesByThread.get(comment.thread_id) ?? [],
+          runmeOperationId: comment.operation_id,
+        },
+      ]
+    })
+  }
+
+  async addOperationLogComment(
+    uri: string,
+    input: {
+      content: string
+      anchor: string
+      motivation?: CommentAddPayload['annotation']['motivation']
+      actorId?: string
+      commentId?: string
+    }
+  ): Promise<DriveComment> {
+    const actorId = input.actorId ?? (await getNotebookActorId(uri))
+    const commentId = input.commentId ?? crypto.randomUUID()
+    const payload: CommentAddPayload = {
+      comment_id: commentId,
+      thread_id: commentId,
+      author: { principal_id: actorId, display_name: 'This browser session' },
+      body: { format: 'text/markdown', value: input.content },
+      annotation: {
+        motivation: input.motivation ?? 'commenting',
+        targets: [{ anchor: input.anchor }],
+      },
+    }
+    await this.appendOperationLogMutation(
+      uri,
+      'comment.add',
+      payload as unknown as JsonValue,
+      actorId
+    )
+    return (await this.listOperationLogComments(uri)).find(
+      (comment) => comment.id === commentId
+    )!
+  }
+
+  async replyToOperationLogComment(
+    uri: string,
+    parentCommentId: string,
+    content: string,
+    options: { actorId?: string } = {}
+  ): Promise<DriveComment> {
+    const { materialized } = await this.readMaterializedOperationLog(uri)
+    const parent = materialized.comments.find(
+      (comment) => comment.comment_id === parentCommentId
+    )
+    if (!parent) {
+      throw new Error(`Operation-log comment ${parentCommentId} was not found`)
+    }
+    const actorId = options.actorId ?? (await getNotebookActorId(uri))
+    const payload: CommentReplyPayload = {
+      comment_id: crypto.randomUUID(),
+      thread_id: parent.thread_id,
+      parent_comment_id: parentCommentId,
+      author: { principal_id: actorId, display_name: 'This browser session' },
+      body: { format: 'text/markdown', value: content },
+      annotation: { motivation: 'commenting', targets: [] },
+    }
+    await this.appendOperationLogMutation(
+      uri,
+      'comment.reply',
+      payload as unknown as JsonValue,
+      actorId
+    )
+    return (await this.listOperationLogComments(uri)).find(
+      (comment) => comment.id === parent.thread_id
+    )!
+  }
+
+  async setOperationLogCommentResolved(
+    uri: string,
+    commentId: string,
+    resolved: boolean,
+    options: { actorId?: string } = {}
+  ): Promise<DriveComment> {
+    const { materialized } = await this.readMaterializedOperationLog(uri)
+    const comment = materialized.comments.find(
+      (candidate) => candidate.comment_id === commentId
+    )
+    if (!comment) {
+      throw new Error(`Operation-log comment ${commentId} was not found`)
+    }
+    await this.appendOperationLogMutation(
+      uri,
+      'thread.set_status',
+      {
+        thread_id: comment.thread_id,
+        status: resolved ? 'resolved' : 'open',
+      },
+      options.actorId
+    )
+    return (await this.listOperationLogComments(uri)).find(
+      (candidate) => candidate.id === comment.thread_id
+    )!
+  }
+
+  private async readMaterializedOperationLog(uri: string) {
+    const record = await this.files.get(uri)
+    if (!record?.operationLogRef) {
+      throw new Error(`Operation-log reference missing for ${uri}`)
+    }
+    const stored = await this.operationLogStorage.read(record.operationLogRef)
+    const parsed = parseOperationLog(stored.document)
+    return { parsed, materialized: materializeOperationLog(parsed.operations) }
+  }
+
+  private async appendOperationLogMutation(
+    uri: string,
+    kind: string,
+    payload: JsonValue,
+    suppliedActorId?: string
+  ): Promise<void> {
+    const record = await this.files.get(uri)
+    if (!record?.operationLogRef) {
+      throw new Error(`Operation-log reference missing for ${uri}`)
+    }
+    const actorId = suppliedActorId ?? (await getNotebookActorId(uri))
+    const stored = await this.operationLogStorage.appendTransaction(
+      record.operationLogRef,
+      (currentDocument) => {
+        const parsed = parseOperationLog(currentDocument)
+        const operation = createRunmeOperation({
+          actorId,
+          actorSequence: highestActorSequence(parsed.operations, actorId) + 1,
+          dependencies: causalHeads(parsed.operations),
+          knownOperations: parsed.operations,
+          kind,
+          payload,
+        })
+        return `${canonicalJson(operation as unknown as JsonValue)}\n`
+      },
+      { validate: (document) => void parseOperationLog(document) }
+    )
+    await this.files.update(uri, {
+      doc: '',
+      md5Checksum: stored.checksum,
+      operationLogRef: stored.ref,
+    })
+    this.notifySync(uri)
+    if (!record.conflict) {
+      this.enqueueSync(uri)
+      this.enqueueMarkdownSync(uri)
+    }
+  }
+
   async loadContent(uri: string): Promise<string> {
     if (!uri.startsWith('local://file/')) {
       throw new Error(
@@ -1227,6 +1568,13 @@ export class LocalNotebooks extends Dexie {
     const record = await this.files.get(uri)
     if (!record) {
       throw new Error(`Local file record not found for ${uri}`)
+    }
+    if (detectNotebookFileFormat(record.name) === 'runme-operation-log') {
+      if (!record.operationLogRef) {
+        throw new Error(`Operation-log reference missing for ${uri}`)
+      }
+      return (await this.operationLogStorage.read(record.operationLogRef))
+        .document
     }
     if (detectNotebookFileFormat(record.name) === 'ipynb') {
       if (isLocalFileUpstream(record.remoteId, uri)) {
@@ -1327,7 +1675,25 @@ export class LocalNotebooks extends Dexie {
       throw new Error(`Local file record not found for ${uri}`)
     }
 
-    if (detectNotebookFileFormat(record.name) === 'ipynb') {
+    const format = detectNotebookFileFormat(record.name)
+    if (format === 'runme-operation-log') {
+      const decoded = decodeNotebookFile(content, record.name)
+      if (!decoded.operationLog) {
+        throw new Error(`Expected operation-log content for ${record.name}`)
+      }
+      const stored = record.operationLogRef
+        ? await this.operationLogStorage.replace(
+            record.operationLogRef,
+            content
+          )
+        : await this.operationLogStorage.initialize(uri, content)
+      await this.files.update(uri, {
+        doc: '',
+        md5Checksum: stored.checksum,
+        mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
+        operationLogRef: stored.ref,
+      })
+    } else if (format === 'ipynb') {
       const decoded = decodeNotebookFile(content, record.name)
       if (!decoded.ipynb) {
         throw new Error(`Expected ipynb content for ${record.name}`)
@@ -1634,6 +2000,11 @@ export class LocalNotebooks extends Dexie {
         `Local notebook record not found for ${uri}. Call addFile first.`
       )
     }
+    if (detectNotebookFileFormat(record.name) === 'runme-operation-log') {
+      throw new Error(
+        'Runme operation-log notebooks must persist mutations through their journal'
+      )
+    }
 
     migrateNotebookCellIds(notebook)
     const serialized = serializeNotebook(notebook)
@@ -1685,6 +2056,16 @@ export class LocalNotebooks extends Dexie {
       record = refreshed
     }
 
+    if (detectNotebookFileFormat(record.name) === 'runme-operation-log') {
+      if (!record.operationLogRef) {
+        throw new Error(`Operation-log reference missing for ${uri}`)
+      }
+      const content = (
+        await this.operationLogStorage.read(record.operationLogRef)
+      ).document
+      return decodeNotebookFile(content, record.name).notebook
+    }
+
     if (!record.doc) {
       return create(parser_pb.NotebookSchema, { cells: [] })
     }
@@ -1709,7 +2090,12 @@ export class LocalNotebooks extends Dexie {
   async create(parentUri: string, name: string): Promise<NotebookStoreItem> {
     const format = detectNotebookFileFormat(name)
     return this.createLocalFile(parentUri, name, {
-      mimeType: format === 'ipynb' ? IPYNB_MIME_TYPE : NOTEBOOK_MIME_TYPE,
+      mimeType:
+        format === 'ipynb'
+          ? IPYNB_MIME_TYPE
+          : format === 'runme-operation-log'
+            ? RUNME_OPERATION_LOG_MIME_TYPE
+            : NOTEBOOK_MIME_TYPE,
       content: '',
     })
   }
@@ -1741,7 +2127,18 @@ export class LocalNotebooks extends Dexie {
     const isDriveBackedParent = isDriveUri(parent.remoteId)
     let localContent = options.content
     let ipynbPreservation: IpynbPreservationState | undefined
-    if (detectNotebookFileFormat(name) === 'ipynb') {
+    let operationLogRef: OperationLogRef | undefined
+    const format = detectNotebookFileFormat(name)
+    if (format === 'runme-operation-log') {
+      const initialLog = options.content || createInitialNotebookFile(name)
+      decodeNotebookFile(initialLog, name)
+      const stored = await this.operationLogStorage.initialize(
+        fileUri,
+        initialLog
+      )
+      localContent = ''
+      operationLogRef = stored.ref
+    } else if (format === 'ipynb') {
       const initialIpynb = options.content || createInitialNotebookFile(name)
       const decoded = decodeNotebookFile(initialIpynb, name)
       localContent = serializeNotebook(decoded.notebook)
@@ -1758,7 +2155,11 @@ export class LocalNotebooks extends Dexie {
         baselineOutputHashes: decoded.ipynb?.baselineOutputHashes ?? {},
       }
     }
-    const checksum = localContent ? md5(localContent) : ''
+    const operationLogChecksum = operationLogRef
+      ? (await this.operationLogStorage.read(operationLogRef)).checksum
+      : undefined
+    const checksum =
+      operationLogChecksum ?? (localContent ? md5(localContent) : '')
     const record: LocalFileRecord = {
       id: fileUri,
       name,
@@ -1773,6 +2174,7 @@ export class LocalNotebooks extends Dexie {
       doc: localContent,
       md5Checksum: checksum,
       ipynbPreservation,
+      operationLogRef,
     }
     await this.files.put(record)
 
@@ -1977,7 +2379,7 @@ export class LocalNotebooks extends Dexie {
     validateNotebookRenameFormat(record.name, name)
     let nextName =
       currentFormat && !requestedFormat
-        ? `${name.trim()}${currentFormat === 'ipynb' ? '.ipynb' : '.json'}`
+        ? `${name.trim()}${notebookFileExtension(currentFormat)}`
         : name
     let nextRemoteId = record.remoteId
 
@@ -2177,6 +2579,19 @@ export class LocalNotebooks extends Dexie {
     }
     await this.deleteConflictDoc(record.conflict)
     await this.files.delete(uri)
+    if (record.operationLogRef) {
+      await this.operationLogStorage
+        .delete(record.operationLogRef)
+        .catch((error) => {
+          appLogger.warn('Failed to delete trashed operation log from OPFS', {
+            attrs: {
+              scope: 'storage.local.operation-log',
+              localUri: uri,
+              error: String(error),
+            },
+          })
+        })
+    }
     if (record.ipynbPreservation) {
       await this.ipynbShadowStorage
         .delete(record.ipynbPreservation.shadowRef)
@@ -2255,7 +2670,14 @@ export class LocalNotebooks extends Dexie {
 
     let markdownContent: string
     try {
-      const notebook = deserializeNotebook(record.doc ?? '')
+      const notebook =
+        detectNotebookFileFormat(record.name) === 'runme-operation-log'
+          ? decodeNotebookFile(
+              (await this.operationLogStorage.read(record.operationLogRef!))
+                .document,
+              record.name
+            ).notebook
+          : deserializeNotebook(record.doc ?? '')
       markdownContent = serializeNotebookToMarkdown(notebook)
     } catch (error) {
       console.error('Failed to serialize notebook to markdown', error)
@@ -2658,6 +3080,10 @@ export class LocalNotebooks extends Dexie {
     }
 
     if (isFilesystemUri(record.remoteId)) {
+      if (detectNotebookFileFormat(record.name) === 'runme-operation-log') {
+        await this.syncOperationLogFilesystem(localUri, record)
+        return
+      }
       await this.syncSerializedNotebookUpstream(localUri, record)
       return
     }
@@ -2666,6 +3092,11 @@ export class LocalNotebooks extends Dexie {
       throw new Error(
         `Unsupported upstream URI ${record.remoteId} for local notebook ${localUri}`
       )
+    }
+
+    if (detectNotebookFileFormat(record.name) === 'runme-operation-log') {
+      await this.syncOperationLogDrive(localUri, record)
+      return
     }
 
     const remoteUri = record.remoteId
@@ -3035,6 +3466,128 @@ export class LocalNotebooks extends Dexie {
     await this.driveStore.saveContent(remoteUri, localDoc, 'application/json')
   }
 
+  /** Merge a raw .runme operation set with Drive using bounded CAS retries. */
+  private async syncOperationLogDrive(
+    localUri: string,
+    record: LocalFileRecord
+  ): Promise<void> {
+    if (!record.operationLogRef) {
+      const remoteContent = await this.driveStore.loadContent(record.remoteId)
+      const remote = parseOperationLog(remoteContent)
+      const stored = await this.operationLogStorage.initialize(
+        localUri,
+        serializeOperationLog(remote.header, remote.operations, {
+          canonicalOrder: true,
+        })
+      )
+      const version = driveMetadataToUpstreamVersion(
+        await this.driveStore.getVersionMetadata(record.remoteId)
+      )
+      await this.files.update(localUri, {
+        doc: '',
+        operationLogRef: stored.ref,
+        md5Checksum: stored.checksum,
+        lastRemoteChecksum: version.checksum ?? md5(remoteContent),
+        lastUpstreamVersion: version,
+        lastSynced: nowIsoString(),
+        lastSyncError: undefined,
+      })
+      return
+    }
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const local = await this.operationLogStorage.read(record.operationLogRef)
+      const before = await this.driveStore.getVersionMetadata(record.remoteId)
+      const remoteContent = await this.driveStore.loadContent(record.remoteId)
+      const after = await this.driveStore.getVersionMetadata(record.remoteId)
+      if (!sameDriveVersion(before, after)) continue
+
+      const localLog = parseOperationLog(local.document)
+      const remoteLog = parseOperationLog(remoteContent)
+      if (localLog.header.notebook_id !== remoteLog.header.notebook_id) {
+        throw new Error(
+          `Cannot merge different operation-log notebooks for ${localUri}`
+        )
+      }
+      const mergedOperations = mergeOperationSets(
+        localLog.operations,
+        remoteLog.operations
+      )
+      const localIds = new Set(
+        localLog.operations.map((operation) => operation.op_id)
+      )
+      const remoteIds = new Set(
+        remoteLog.operations.map((operation) => operation.op_id)
+      )
+      const missingLocally = mergedOperations.filter(
+        (operation) => !localIds.has(operation.op_id)
+      )
+      let stored = local
+      if (missingLocally.length > 0) {
+        try {
+          stored = await this.operationLogStorage.append(
+            local.ref,
+            `${missingLocally
+              .map((operation) =>
+                canonicalJson(operation as unknown as JsonValue)
+              )
+              .join('\n')}\n`,
+            { validate: (document) => void parseOperationLog(document) }
+          )
+        } catch {
+          continue
+        }
+      }
+
+      const mergedDocument = serializeOperationLog(
+        localLog.header,
+        mergedOperations,
+        { canonicalOrder: true }
+      )
+      if (
+        mergedOperations.some((operation) => !remoteIds.has(operation.op_id))
+      ) {
+        const saved = await this.driveStore.saveContentIfVersion(
+          record.remoteId,
+          mergedDocument,
+          RUNME_OPERATION_LOG_MIME_TYPE,
+          {
+            checksum: after?.md5Checksum,
+            revisionId: after?.headRevisionId,
+          }
+        )
+        if (!saved) continue
+      }
+      const version = driveMetadataToUpstreamVersion(
+        await this.driveStore.getVersionMetadata(record.remoteId)
+      )
+      const latestLocal = await this.operationLogStorage.read(local.ref)
+      await this.files.update(localUri, {
+        doc: '',
+        operationLogRef: latestLocal.ref,
+        md5Checksum: latestLocal.checksum,
+        // For operation logs this is the local byte snapshot whose operation
+        // set was uploaded. The upstream may use a different canonical record
+        // order while representing the same set.
+        lastRemoteChecksum: stored.checksum,
+        lastUpstreamVersion: version,
+        lastSynced: nowIsoString(),
+        lastSyncError: undefined,
+      })
+      if (latestLocal.checksum !== stored.checksum) {
+        // An append landed while the remote save was in flight. Preserve its
+        // pending status and schedule a follow-up sync instead of losing the
+        // only enqueue to the in-flight promise.
+        this.enqueueSync(localUri)
+      }
+      return
+    }
+
+    throw new Error(
+      `Drive operation log changed during three merge attempts for ${localUri}`
+    )
+  }
+
   private async completePendingDriveCreate(
     localUri: string,
     record: LocalFileRecord
@@ -3060,7 +3613,22 @@ export class LocalNotebooks extends Dexie {
       createOperationId
     )
     let newFile = existingFile
-    if (!newFile && detectNotebookFileFormat(record.name) === 'ipynb') {
+    const format = detectNotebookFileFormat(record.name)
+    if (!newFile && format === 'runme-operation-log') {
+      if (!record.operationLogRef) {
+        throw new Error(`Operation-log reference missing for ${localUri}`)
+      }
+      const content = (
+        await this.operationLogStorage.read(record.operationLogRef)
+      ).document
+      newFile = await this.driveStore.createContent(
+        parentRemoteUri,
+        record.name,
+        content,
+        RUNME_OPERATION_LOG_MIME_TYPE,
+        { createOperationId }
+      )
+    } else if (!newFile && format === 'ipynb') {
       const shadow = record.ipynbPreservation
         ? await this.ipynbShadowStorage.read(record.ipynbPreservation.shadowRef)
         : createInitialNotebookFile(record.name)
@@ -3157,6 +3725,95 @@ export class LocalNotebooks extends Dexie {
       return this.filesystemStore
     }
     return null
+  }
+
+  /** Merge the browser OPFS log with a filesystem-backed .runme file. */
+  private async syncOperationLogFilesystem(
+    localUri: string,
+    record: LocalFileRecord
+  ): Promise<void> {
+    const upstreamStore = this.resolveSerializedNotebookStore(record.remoteId)
+    if (!upstreamStore?.loadContent || !upstreamStore.saveContent) {
+      throw new Error('Filesystem store cannot synchronize raw .runme content')
+    }
+    if (!record.operationLogRef) {
+      const upstreamDocument = await upstreamStore.loadContent(record.remoteId)
+      const upstream = parseOperationLog(upstreamDocument)
+      const stored = await this.operationLogStorage.initialize(
+        localUri,
+        serializeOperationLog(upstream.header, upstream.operations, {
+          canonicalOrder: true,
+        })
+      )
+      const checksum = md5(upstreamDocument)
+      await this.files.update(localUri, {
+        doc: '',
+        operationLogRef: stored.ref,
+        md5Checksum: stored.checksum,
+        lastRemoteChecksum: checksum,
+        lastUpstreamVersion: { checksum },
+        lastSynced: nowIsoString(),
+        lastSyncError: undefined,
+      })
+      return
+    }
+
+    const local = await this.operationLogStorage.read(record.operationLogRef)
+    const upstreamDocument = await upstreamStore.loadContent(record.remoteId)
+    const localLog = parseOperationLog(local.document)
+    const upstreamLog = parseOperationLog(upstreamDocument)
+    if (localLog.header.notebook_id !== upstreamLog.header.notebook_id) {
+      throw new Error(
+        `Cannot merge different operation-log notebooks for ${localUri}`
+      )
+    }
+    const mergedOperations = mergeOperationSets(
+      localLog.operations,
+      upstreamLog.operations
+    )
+    const localIds = new Set(
+      localLog.operations.map((operation) => operation.op_id)
+    )
+    const upstreamIds = new Set(
+      upstreamLog.operations.map((operation) => operation.op_id)
+    )
+    const missingLocally = mergedOperations.filter(
+      (operation) => !localIds.has(operation.op_id)
+    )
+    let stored = local
+    if (missingLocally.length > 0) {
+      stored = await this.operationLogStorage.append(
+        local.ref,
+        `${missingLocally
+          .map((operation) => canonicalJson(operation as unknown as JsonValue))
+          .join('\n')}\n`,
+        { validate: (document) => void parseOperationLog(document) }
+      )
+    }
+    const mergedDocument = serializeOperationLog(
+      localLog.header,
+      mergedOperations,
+      { canonicalOrder: true }
+    )
+    if (
+      mergedOperations.some((operation) => !upstreamIds.has(operation.op_id))
+    ) {
+      await upstreamStore.saveContent(record.remoteId, mergedDocument)
+    }
+    const checksum = md5(mergedDocument)
+    const latestLocal = await this.operationLogStorage.read(local.ref)
+    await this.files.update(localUri, {
+      doc: '',
+      operationLogRef: latestLocal.ref,
+      md5Checksum: latestLocal.checksum,
+      lastRemoteChecksum: stored.checksum,
+      lastUpstreamVersion: { checksum },
+      lastSynced: nowIsoString(),
+      lastSyncError: undefined,
+    })
+    if (latestLocal.checksum !== stored.checksum) {
+      this.enqueueSync(localUri)
+    }
   }
 
   private async syncSerializedNotebookUpstream(
@@ -3711,6 +4368,9 @@ function resolveDocumentMimeType(
   }
   if (detectNotebookFileFormat(name ?? '') === 'runme-json') {
     return NOTEBOOK_MIME_TYPE
+  }
+  if (detectNotebookFileFormat(name ?? '') === 'runme-operation-log') {
+    return RUNME_OPERATION_LOG_MIME_TYPE
   }
   const trimmedMimeType = mimeType?.trim()
   if (trimmedMimeType) {

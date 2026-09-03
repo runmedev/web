@@ -29,7 +29,8 @@ It can show:
 - mount a Drive link,
 - import markdown as a notebook,
 - open a notebook,
-- create a new Runme JSON or Jupyter (`.ipynb`) notebook in a folder,
+- create a concurrent Runme (`.runme`), Runme JSON, or Jupyter (`.ipynb`)
+  notebook in a folder,
 - rename a notebook,
 - remove a mounted folder,
 - copy a notebook share link.
@@ -57,5 +58,11 @@ explorer.removeFolder(uri)
 - Opening a file from the explorer is the safest way to make it the current document.
 - Removing a folder from the explorer does not necessarily delete its upstream source.
 - Explorer items may have local URIs and separate `remoteUri` values.
-- The filename extension selects the notebook format: `.json` for Runme JSON
-  and `.ipynb` for Jupyter.
+- The filename extension selects the notebook format: `.runme` for the
+  append-only Runme operation log, `.json` for Runme JSON, and `.ipynb` for
+  Jupyter.
+- Each open `.runme` tab keeps its own materialized snapshot. Use the notebook
+  banner or `notebooks.refresh({ target: { uri } })` to incorporate operations
+  appended by other sessions.
+- `.runme` cell edits, executions, and comment-thread lifecycle changes are
+  appended as operations; the editor and `comments.*` APIs materialize them.

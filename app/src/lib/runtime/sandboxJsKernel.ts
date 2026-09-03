@@ -375,6 +375,7 @@ export function buildSandboxSrcDoc(options: {
           update: (args) => callHost("notebooks.update", [args]),
           delete: (target) => callHost("notebooks.delete", [target]),
           execute: (args) => callHost("notebooks.execute", [args]),
+          refresh: (args) => callHost("notebooks.refresh", [args]),
           requestWriteAccess: (args) => callHost("notebooks.requestWriteAccess", [args]),
           createLocal: (name, options) => callHost("notebooks.createLocal", [name, options]),
           appendCell: (args) => callHost("notebooks.appendCell", [args]),
@@ -422,7 +423,7 @@ export function buildSandboxSrcDoc(options: {
             consoleProxy.log("await comments.reply({ target?, commentId, content })");
             consoleProxy.log("await comments.resolve({ target?, commentId })");
             consoleProxy.log("await comments.reopen({ target?, commentId })");
-            consoleProxy.log("comments.list includes sync.status; writes persist locally before asynchronous Drive reconciliation; Drive replies include a visible Runme identity footer");
+            consoleProxy.log("comments.list includes sync.status; .runme writes append to the operation log, while Drive writes reconcile asynchronously");
           },
         };
         const notebookDiff = {
@@ -521,6 +522,7 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- notebooks.get([target]) # omitted target = current UI notebook");
           consoleProxy.log("- notebooks.update({ target, expectedRevision?, operations })");
           consoleProxy.log("- notebooks.execute({ target, refIds })");
+          consoleProxy.log("- notebooks.refresh({ target })");
           consoleProxy.log("- notebooks.requestWriteAccess({ target })");
           consoleProxy.log("- notebooks.createLocal(name, options?)");
           consoleProxy.log("- notebooks.appendCell({ target?, at?, kind, languageId?, value?, metadata?, execute?, reason? })");
@@ -543,7 +545,7 @@ export function buildSandboxSrcDoc(options: {
           consoleProxy.log("- await comments.reply({ target?, commentId, content })");
           consoleProxy.log("- await comments.resolve({ target?, commentId })");
           consoleProxy.log("- await comments.reopen({ target?, commentId })");
-          consoleProxy.log("- comments.list includes sync.status; writes persist locally before asynchronous Drive reconciliation; Drive replies include a visible Runme identity footer");
+          consoleProxy.log("- comments.list includes sync.status; .runme writes append to the operation log, while Drive writes reconcile asynchronously");
           consoleProxy.log("- notebookDiff.listDriveRevisions([target])");
           consoleProxy.log("- notebookDiff.diffDriveRevision({ target?, revisionId, includeOutputs?, includeMetadata? })");
           consoleProxy.log("- notebookDiff.openDiffTab(diff)");

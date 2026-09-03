@@ -11,6 +11,12 @@ import {
 import { IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { appLogger } from '../lib/logging/runtime'
 import { encodeIpynbNotebook, encodeRunmeNotebook } from '../lib/notebookFormat'
+import {
+  type NotebookLogHeader,
+  createRunmeOperation,
+  parseOperationLog,
+  serializeOperationLog,
+} from '../lib/operationLog'
 import { MimeType, parser_pb } from '../runme/client'
 import { MemoryConflictDocStorage } from './conflictDocs'
 import { DriveNotebookStore } from './drive'
@@ -22,11 +28,13 @@ import {
 import { MemoryIpynbShadowStorage } from './ipynbShadows'
 import LocalNotebooks, {
   DriveSnapshotChangedError,
+  LOCAL_FOLDER_URI,
   type LocalFileRecord,
   type LocalFolderRecord,
   NotebookConflictChangedError,
 } from './local'
 import { NotebookStoreItemType } from './notebook'
+import { MemoryOperationLogStorage } from './operationLogs'
 import { MemoryRevisionDocStorage } from './revisionDocs'
 
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
@@ -105,6 +113,7 @@ function createTestStore(
     folders?: MockTable<LocalFolderRecord>
     driveSyncCoordinator?: DriveSyncCoordinator
     ipynbShadowStorage?: MemoryIpynbShadowStorage
+    operationLogStorage?: MemoryOperationLogStorage
   } = {}
 ) {
   const localStore = Object.create(LocalNotebooks.prototype) as any
@@ -131,6 +140,8 @@ function createTestStore(
   localStore.revisionDocStorage = new MemoryRevisionDocStorage()
   localStore.ipynbShadowStorage =
     options.ipynbShadowStorage ?? new MemoryIpynbShadowStorage()
+  localStore.operationLogStorage =
+    options.operationLogStorage ?? new MemoryOperationLogStorage()
   localStore.transaction = async (
     _mode: string,
     _table: unknown,
@@ -154,6 +165,437 @@ function notebookJson(value: string): string {
     NOTEBOOK_JSON_WRITE_OPTIONS
   )
 }
+
+describe('LocalNotebooks operation-log storage', () => {
+  it('initializes a Drive mirror with authoritative OPFS bytes', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    const uri = 'local://file/drive-runme'
+    const document = serializeOperationLog(
+      {
+        record_type: 'runme.notebook',
+        format_version: 1,
+        notebook_id: 'notebook_drive',
+        created_by: 'actor_seed',
+        created_at: '2026-09-03T00:00:00Z',
+      },
+      []
+    )
+    await store.files.put({
+      id: uri,
+      name: 'drive.runme',
+      remoteId: 'https://drive.google.com/file/d/drive-runme/view',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    await expect(
+      store.initializeUploadedDriveNotebook(
+        uri,
+        create(parser_pb.NotebookSchema, { cells: [] }),
+        document,
+        { checksum: md5(document), revisionId: 'revision-1' }
+      )
+    ).resolves.toBe(true)
+
+    expect(await store.loadContent(uri)).toBe(document)
+    expect(await store.files.get(uri)).toMatchObject({
+      doc: '',
+      md5Checksum: md5(document),
+      operationLogRef: { storage: 'opfs' },
+    })
+  })
+
+  it('keeps local .runme bytes in OPFS storage instead of IndexedDB', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+
+    const created = await store.create(LOCAL_FOLDER_URI, 'shared.runme')
+    const record = await store.files.get(created.uri)
+
+    expect(record).toMatchObject({
+      name: 'shared.runme',
+      mimeType: 'application/vnd.runme.notebook+jsonl',
+      doc: '',
+      operationLogRef: {
+        storage: 'opfs',
+      },
+    })
+    expect(await store.loadContent(created.uri)).toContain(
+      '"record_type":"runme.notebook"'
+    )
+    expect((await store.load(created.uri)).cells).toEqual([])
+  })
+
+  it('adapts editor snapshots into appended cell operations', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'editable.runme')
+    const saveStore = await store.createOperationLogSaveStore(created.uri, {
+      actorId: 'actor_test',
+    })
+    const edited = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'cell_one',
+          kind: parser_pb.CellKind.MARKUP,
+          languageId: 'markdown',
+          value: 'Written through the editor',
+        }),
+      ],
+    })
+
+    await saveStore.save(created.uri, edited)
+
+    expect((await store.load(created.uri)).cells[0]).toMatchObject({
+      refId: 'cell_one',
+      value: 'Written through the editor',
+    })
+    const log = parseOperationLog(await store.loadContent(created.uri))
+    expect(log.operations.map((operation) => operation.kind)).toEqual([
+      'cell.create',
+    ])
+    expect((await store.files.get(created.uri))?.doc).toBe('')
+  })
+
+  it('allocates unique actor sequences for concurrent editor and comment writes', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'shared.runme')
+    const saveStore = await store.createOperationLogSaveStore(created.uri, {
+      actorId: 'actor_same_session',
+    })
+    const edited = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'cell_one',
+          kind: parser_pb.CellKind.MARKUP,
+          languageId: 'markdown',
+          value: 'Concurrent edit',
+        }),
+      ],
+    })
+
+    await Promise.all([
+      saveStore.save(created.uri, edited),
+      store.addOperationLogComment(created.uri, {
+        content: 'Concurrent comment',
+        anchor: '{}',
+        actorId: 'actor_same_session',
+      }),
+    ])
+
+    const operations = parseOperationLog(
+      await store.loadContent(created.uri)
+    ).operations
+    expect(operations.map((operation) => operation.op_id).sort()).toEqual([
+      'actor_same_session:1',
+      'actor_same_session:2',
+    ])
+  })
+
+  it('stores comment threads and replies as append-only operations', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'comments.runme')
+    const anchor = JSON.stringify({
+      runme: { version: 2, type: 'cell', cellId: 'cell_one' },
+    })
+
+    const comment = await store.addOperationLogComment(created.uri, {
+      content: 'Please clarify this.',
+      anchor,
+      actorId: 'actor_comments',
+    })
+    await store.replyToOperationLogComment(
+      created.uri,
+      comment.id!,
+      'Clarified.',
+      { actorId: 'actor_comments' }
+    )
+    await store.setOperationLogCommentResolved(created.uri, comment.id!, true, {
+      actorId: 'actor_comments',
+    })
+
+    expect(await store.listOperationLogComments(created.uri)).toEqual([
+      expect.objectContaining({
+        id: comment.id,
+        content: 'Please clarify this.',
+        anchor,
+        resolved: true,
+        replies: [expect.objectContaining({ content: 'Clarified.' })],
+      }),
+    ])
+    expect(
+      parseOperationLog(await store.loadContent(created.uri)).operations.map(
+        (operation) => operation.kind
+      )
+    ).toEqual(['comment.add', 'comment.reply', 'thread.set_status'])
+  })
+
+  it('unions differently ordered local and Drive operations without leaving sync pending', async () => {
+    const header: NotebookLogHeader = {
+      record_type: 'runme.notebook',
+      format_version: 1,
+      notebook_id: 'notebook_shared',
+      created_by: 'actor_seed',
+      created_at: '2026-09-03T00:00:00Z',
+    }
+    const root = createRunmeOperation({
+      actorId: 'actor_seed',
+      actorSequence: 1,
+      dependencies: [],
+      knownOperations: [],
+      kind: 'notebook.update',
+      payload: { frontmatter: {}, metadata: {} },
+      createdAt: '2026-09-03T00:00:01Z',
+    })
+    const alice = createRunmeOperation({
+      actorId: 'actor_alice',
+      actorSequence: 1,
+      dependencies: [root.op_id],
+      knownOperations: [root],
+      kind: 'cell.create',
+      payload: {
+        cell_id: 'cell_alice',
+        position: [[100, 'actor_alice', 1]],
+        cell: {
+          kind: 'markup',
+          language_id: 'markdown',
+          value: 'Alice',
+          metadata: {},
+        },
+      },
+      createdAt: '2026-09-03T00:00:02Z',
+    })
+    const bob = createRunmeOperation({
+      actorId: 'actor_bob',
+      actorSequence: 1,
+      dependencies: [root.op_id],
+      knownOperations: [root],
+      kind: 'cell.create',
+      payload: {
+        cell_id: 'cell_bob',
+        position: [[100, 'actor_bob', 1]],
+        cell: {
+          kind: 'markup',
+          language_id: 'markdown',
+          value: 'Bob',
+          metadata: {},
+        },
+      },
+      createdAt: '2026-09-03T00:00:02Z',
+    })
+    // The physical local append order is Bob then Alice, while canonical
+    // upstream order is Alice then Bob. They must converge semantically
+    // without requiring byte-identical files to report a completed sync.
+    const localDocument = serializeOperationLog(header, [root, bob])
+    let remoteDocument = serializeOperationLog(header, [root, alice])
+    let remoteVersion = {
+      md5Checksum: md5(remoteDocument),
+      headRevisionId: 'revision-1',
+      version: '1',
+    }
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({ name: 'shared.runme' })),
+      getVersionMetadata: vi.fn(async () => remoteVersion),
+      loadContent: vi.fn(async () => remoteDocument),
+      saveContentIfVersion: vi.fn(
+        async (
+          _uri: string,
+          content: string,
+          _mimeType: string,
+          expected: { checksum?: string; revisionId?: string }
+        ) => {
+          if (
+            expected.checksum !== remoteVersion.md5Checksum ||
+            expected.revisionId !== remoteVersion.headRevisionId
+          ) {
+            return false
+          }
+          remoteDocument = content
+          remoteVersion = {
+            md5Checksum: md5(content),
+            headRevisionId: 'revision-2',
+            version: '2',
+          }
+          return true
+        }
+      ),
+    }
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const appendOperationLog = vi.spyOn(operationLogStorage, 'append')
+    const replaceOperationLog = vi.spyOn(operationLogStorage, 'replace')
+    const local = await operationLogStorage.initialize(
+      'local://file/shared',
+      localDocument
+    )
+    const store = createTestStore(driveStore, { operationLogStorage })
+    await store.files.put({
+      id: 'local://file/shared',
+      name: 'shared.runme',
+      mimeType: 'application/vnd.runme.notebook+jsonl',
+      remoteId: 'https://drive.google.com/file/d/shared/view',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: local.checksum,
+      operationLogRef: local.ref,
+    })
+
+    await store.reconcileDriveNotebook('local://file/shared')
+
+    const localAfter = await store.loadContent('local://file/shared')
+    expect(
+      new Set(
+        parseOperationLog(localAfter).operations.map(
+          (operation) => operation.op_id
+        )
+      )
+    ).toEqual(new Set([root.op_id, alice.op_id, bob.op_id]))
+    expect(
+      new Set(
+        parseOperationLog(remoteDocument).operations.map(
+          (operation) => operation.op_id
+        )
+      )
+    ).toEqual(new Set([root.op_id, alice.op_id, bob.op_id]))
+    expect(driveStore.saveContentIfVersion).toHaveBeenCalledTimes(1)
+    expect((await store.files.get('local://file/shared'))?.doc).toBe('')
+    expect(await store.files.get('local://file/shared')).toMatchObject({
+      md5Checksum: md5(localAfter),
+      lastRemoteChecksum: md5(localAfter),
+    })
+    expect(appendOperationLog).toHaveBeenCalledTimes(1)
+    expect(replaceOperationLog).not.toHaveBeenCalled()
+  })
+
+  it('unions concurrent local and filesystem operation logs as raw bytes', async () => {
+    const header: NotebookLogHeader = {
+      record_type: 'runme.notebook',
+      format_version: 1,
+      notebook_id: 'notebook_filesystem',
+      created_by: 'actor_seed',
+      created_at: '2026-09-03T00:00:00Z',
+    }
+    const root = createRunmeOperation({
+      actorId: 'actor_seed',
+      actorSequence: 1,
+      dependencies: [],
+      knownOperations: [],
+      kind: 'notebook.update',
+      payload: { frontmatter: {}, metadata: {} },
+    })
+    const localOperation = createRunmeOperation({
+      actorId: 'actor_local',
+      actorSequence: 1,
+      dependencies: [root.op_id],
+      knownOperations: [root],
+      kind: 'cell.create',
+      payload: {
+        cell_id: 'cell_local',
+        position: [[100, 'actor_local', 1]],
+        cell: {
+          kind: 'markup',
+          language_id: 'markdown',
+          value: 'Local',
+          metadata: {},
+        },
+      },
+    })
+    const remoteOperation = createRunmeOperation({
+      actorId: 'actor_remote',
+      actorSequence: 1,
+      dependencies: [root.op_id],
+      knownOperations: [root],
+      kind: 'cell.create',
+      payload: {
+        cell_id: 'cell_remote',
+        position: [[100, 'actor_remote', 1]],
+        cell: {
+          kind: 'markup',
+          language_id: 'markdown',
+          value: 'Remote',
+          metadata: {},
+        },
+      },
+    })
+    const localDocument = serializeOperationLog(header, [root, localOperation])
+    let filesystemDocument = serializeOperationLog(header, [
+      root,
+      remoteOperation,
+    ])
+    const filesystemStore = {
+      loadContent: vi.fn(async () => filesystemDocument),
+      saveContent: vi.fn(async (_uri: string, content: string) => {
+        filesystemDocument = content
+      }),
+    }
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const appendOperationLog = vi.spyOn(operationLogStorage, 'append')
+    const replaceOperationLog = vi.spyOn(operationLogStorage, 'replace')
+    const local = await operationLogStorage.initialize(
+      'local://file/filesystem',
+      localDocument
+    )
+    const store = createTestStore({}, { operationLogStorage })
+    store.setFilesystemStore(filesystemStore as never)
+    await store.files.put({
+      id: 'local://file/filesystem',
+      name: 'shared.runme',
+      mimeType: 'application/vnd.runme.notebook+jsonl',
+      remoteId: 'fs://workspace/test/file/shared.runme',
+      lastRemoteChecksum: md5(filesystemDocument),
+      lastSynced: '',
+      doc: '',
+      md5Checksum: local.checksum,
+      operationLogRef: local.ref,
+    })
+
+    await store.sync('local://file/filesystem')
+
+    const localAfter = await store.loadContent('local://file/filesystem')
+    expect(
+      parseOperationLog(localAfter).operations.map(
+        (operation) => operation.op_id
+      )
+    ).toEqual([root.op_id, localOperation.op_id, remoteOperation.op_id])
+    expect(filesystemDocument).toBe(localAfter)
+    expect(filesystemStore.saveContent).toHaveBeenCalledTimes(1)
+    expect(appendOperationLog).toHaveBeenCalledTimes(1)
+    expect(replaceOperationLog).not.toHaveBeenCalled()
+  })
+})
 
 describe('LocalNotebooks trusted Drive snapshot import', () => {
   it('initializes a new mirror only after the downloaded version stays stable', async () => {
@@ -2108,6 +2550,26 @@ describe('LocalNotebooks ipynb conversion', () => {
 })
 
 describe('LocalNotebooks rename', () => {
+  it('preserves the runme extension when an extensionless name is used', async () => {
+    const store = createTestStore({})
+    await store.files.put({
+      id: 'local://file/runme',
+      name: 'original.runme',
+      remoteId: 'local://file/runme',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    const result = await store.rename('local://file/runme', 'renamed')
+
+    expect(result.name).toBe('renamed.runme')
+    expect((await store.files.get('local://file/runme'))?.name).toBe(
+      'renamed.runme'
+    )
+  })
+
   it('renames Drive-backed files upstream before updating the local mirror', async () => {
     const remoteUri = 'https://drive.google.com/file/d/file123/view'
     const driveStore = {
@@ -2324,6 +2786,44 @@ describe('LocalNotebooks moveToTrash', () => {
     ).not.toContain('local://file/drive')
     await expect(shadowStorage.read(shadowRef)).rejects.toThrow(
       'IPYNB shadow not found'
+    )
+  })
+
+  it('deletes a trashed .runme notebook from OPFS storage', async () => {
+    const remoteUri = 'https://drive.google.com/file/d/runme123/view'
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const stored = await operationLogStorage.initialize(
+      'local://file/shared',
+      serializeOperationLog(
+        {
+          record_type: 'runme.notebook',
+          format_version: 1,
+          notebook_id: 'notebook_shared',
+          created_by: 'actor_seed',
+          created_at: '2026-09-03T00:00:00Z',
+        },
+        []
+      )
+    )
+    const store = createTestStore(
+      { moveToTrash: vi.fn(async () => undefined) },
+      { operationLogStorage }
+    )
+    await store.files.put({
+      id: 'local://file/shared',
+      name: 'shared.runme',
+      remoteId: remoteUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: stored.checksum,
+      operationLogRef: stored.ref,
+    })
+
+    await store.moveToTrash('local://file/shared')
+
+    await expect(operationLogStorage.read(stored.ref)).rejects.toThrow(
+      'Operation log not found'
     )
   })
 })

@@ -96,22 +96,39 @@ async function resolveCommentsContext(
   target?: unknown
 ): Promise<{
   notebookData: NotebookDataLike
-  driveNotebookStore: DriveNotebookStore
-  remoteUri: string
+  driveNotebookStore: DriveNotebookStore | null
+  remoteUri: string | null
   notebookUri: string
   localComments: LocalComments | null
+  operationLog: boolean
 }> {
   const notebookData = dependencies.resolveNotebook(target)
   if (!notebookData) {
     throw new Error('The target notebook is not open.')
+  }
+  const notebookUri = notebookData.getUri()
+  const localNotebooks = dependencies.resolveLocalNotebooks()
+  if (
+    notebookUri.startsWith('local://') &&
+    localNotebooks &&
+    (await localNotebooks.isOperationLogNotebook(notebookUri))
+  ) {
+    return {
+      notebookData,
+      driveNotebookStore: null,
+      remoteUri: null,
+      notebookUri,
+      localComments: null,
+      operationLog: true,
+    }
   }
   const driveNotebookStore = dependencies.resolveDriveNotebookStore()
   if (!driveNotebookStore) {
     throw new Error('Google Drive comments are unavailable.')
   }
   const remoteUri = await remoteUriForNotebook({
-    uri: notebookData.getUri(),
-    localNotebooks: dependencies.resolveLocalNotebooks(),
+    uri: notebookUri,
+    localNotebooks,
   })
   if (!remoteUri) {
     throw new Error('Notebook is not backed by a Google Drive file.')
@@ -120,8 +137,9 @@ async function resolveCommentsContext(
     notebookData,
     driveNotebookStore,
     remoteUri,
-    notebookUri: notebookData.getUri(),
+    notebookUri,
     localComments: dependencies.resolveLocalComments?.() ?? null,
+    operationLog: false,
   }
 }
 
@@ -129,13 +147,23 @@ export async function listNotebookComments(
   dependencies: NotebookCommentsRuntimeDependencies,
   input: ListNotebookCommentsInput = {}
 ): Promise<AgentAnnotation[]> {
-  const { notebookData, driveNotebookStore, remoteUri, localComments } =
-    await resolveCommentsContext(dependencies, input.target)
-  const comments = localComments
-    ? await localComments.list(remoteUri)
-    : await driveNotebookStore.listComments(remoteUri)
-  if (localComments) {
-    void localComments.reconcile(remoteUri).catch(() => undefined)
+  const {
+    notebookData,
+    driveNotebookStore,
+    remoteUri,
+    localComments,
+    operationLog,
+    notebookUri,
+  } = await resolveCommentsContext(dependencies, input.target)
+  const comments = operationLog
+    ? await dependencies
+        .resolveLocalNotebooks()!
+        .listOperationLogComments(notebookUri)
+    : localComments
+      ? await localComments.list(remoteUri!)
+      : await driveNotebookStore!.listComments(remoteUri!)
+  if (!operationLog && localComments) {
+    void localComments.reconcile(remoteUri!).catch(() => undefined)
   }
   const notebook = notebookData.getNotebook()
   const identities = notebook.cells.map((cell) => ({
@@ -255,57 +283,91 @@ export function createNotebookCommentsRuntimeApi(
     resolveAnchor: (args: { anchor: string; source: string }) =>
       resolveCommentAnchor(args),
     reply: async (input: CommentReplyInput) => {
-      const { driveNotebookStore, remoteUri, notebookUri, localComments } =
-        await resolveCommentsContext(dependencies, input.target)
+      const {
+        driveNotebookStore,
+        remoteUri,
+        notebookUri,
+        localComments,
+        operationLog,
+      } = await resolveCommentsContext(dependencies, input.target)
+      if (operationLog) {
+        return dependencies
+          .resolveLocalNotebooks()!
+          .replyToOperationLogComment(
+            notebookUri,
+            input.commentId,
+            input.content
+          )
+      }
       if (localComments) {
         const operation = await localComments.saveDesiredReply({
           notebookUri,
-          remoteUri,
+          remoteUri: remoteUri!,
           commentId: input.commentId,
           content: input.content,
         })
-        void localComments.reconcile(remoteUri)
+        void localComments.reconcile(remoteUri!)
         return operation
       }
-      return driveNotebookStore.replyToComment(
-        remoteUri,
+      return driveNotebookStore!.replyToComment(
+        remoteUri!,
         input.commentId,
         input.content
       )
     },
     resolve: async (input: CommentMutationInput) => {
-      const { driveNotebookStore, remoteUri, notebookUri, localComments } =
-        await resolveCommentsContext(dependencies, input.target)
+      const {
+        driveNotebookStore,
+        remoteUri,
+        notebookUri,
+        localComments,
+        operationLog,
+      } = await resolveCommentsContext(dependencies, input.target)
+      if (operationLog) {
+        return dependencies
+          .resolveLocalNotebooks()!
+          .setOperationLogCommentResolved(notebookUri, input.commentId, true)
+      }
       if (localComments) {
         const operation = await localComments.setThreadIntent(
           {
             notebookUri,
-            remoteUri,
+            remoteUri: remoteUri!,
             commentId: input.commentId,
           },
           true
         )
-        void localComments.reconcile(remoteUri)
+        void localComments.reconcile(remoteUri!)
         return operation
       }
-      return driveNotebookStore.resolveComment(remoteUri, input.commentId)
+      return driveNotebookStore!.resolveComment(remoteUri!, input.commentId)
     },
     reopen: async (input: CommentMutationInput) => {
-      const { driveNotebookStore, remoteUri, notebookUri, localComments } =
-        await resolveCommentsContext(dependencies, input.target)
+      const {
+        driveNotebookStore,
+        remoteUri,
+        notebookUri,
+        localComments,
+        operationLog,
+      } = await resolveCommentsContext(dependencies, input.target)
+      if (operationLog) {
+        return dependencies
+          .resolveLocalNotebooks()!
+          .setOperationLogCommentResolved(notebookUri, input.commentId, false)
+      }
       if (localComments) {
         const operation = await localComments.setThreadIntent(
           {
             notebookUri,
-            remoteUri,
+            remoteUri: remoteUri!,
             commentId: input.commentId,
           },
           false
         )
-        void localComments.reconcile(remoteUri)
+        void localComments.reconcile(remoteUri!)
         return operation
       }
-      return driveNotebookStore.reopenComment(remoteUri, input.commentId)
+      return driveNotebookStore!.reopenComment(remoteUri!, input.commentId)
     },
     help: () =>
       [
@@ -315,7 +377,7 @@ export function createNotebookCommentsRuntimeApi(
         'await comments.reply({ target?, commentId, content })',
         'await comments.resolve({ target?, commentId })',
         'await comments.reopen({ target?, commentId })',
-        'comments.list includes sync.status; mutations return after local persistence and reconcile asynchronously; Drive replies include a visible Runme identity footer',
+        'comments.list includes sync.status; .runme mutations append to the operation log, while Drive mutations persist locally and reconcile asynchronously',
       ].join('\n'),
   }
 }

@@ -22,7 +22,7 @@ export function buildCreateDriveNotebookInputSchema(): JsonRecord {
         type: 'string',
         minLength: 1,
         description:
-          'Notebook file name. Use .ipynb for Jupyter or .json for Runme JSON.',
+          'Notebook file name. Use .runme for an append-only Runme operation log, .ipynb for Jupyter, or .json for Runme JSON.',
       },
       idempotencyKey: {
         type: 'string',

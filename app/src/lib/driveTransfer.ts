@@ -19,11 +19,17 @@ import { NotebookStoreItemType } from '../storage/notebook'
 import { IPYNB_MIME_TYPE } from './ipynb'
 import { appLogger } from './logging/runtime'
 import {
+  RUNME_OPERATION_LOG_MIME_TYPE,
   decodeNotebookFile,
   detectNotebookFileFormat,
   encodeIpynbNotebook,
   encodeRunmeNotebook,
 } from './notebookFormat'
+import {
+  type NotebookLogHeader,
+  buildOperationLogDiff,
+  serializeOperationLog,
+} from './operationLog'
 import { appState } from './runtime/AppState'
 
 function ensureDriveStore() {
@@ -505,6 +511,34 @@ async function hashCreateOperationId(value: string): Promise<string> {
   ).join('')
 }
 
+async function encodeOperationLogSnapshot(
+  notebook: parser_pb.Notebook,
+  stableIdentity?: string
+): Promise<string> {
+  const seed = stableIdentity
+    ? await hashCreateOperationId(`${stableIdentity}\u0000runme`)
+    : crypto.randomUUID().replace(/-/g, '')
+  const createdAt = stableIdentity
+    ? '1970-01-01T00:00:00.000Z'
+    : new Date().toISOString()
+  const header: NotebookLogHeader = {
+    record_type: 'runme.notebook',
+    format_version: 1,
+    notebook_id: `notebook_${seed}`,
+    created_by: `actor_${seed}`,
+    created_at: createdAt,
+  }
+  const operations = await buildOperationLogDiff({
+    previous: create(parser_pb.NotebookSchema, { cells: [] }),
+    next: notebook,
+    observedOperations: [],
+    actorId: header.created_by,
+    firstActorSequence: 1,
+    createdAt: () => createdAt,
+  })
+  return serializeOperationLog(header, operations)
+}
+
 export async function saveNotebookAsDriveCopy(
   notebook: parser_pb.Notebook,
   folder: string,
@@ -532,16 +566,23 @@ export async function saveNotebookAsDriveCopy(
   const format = detectNotebookFileFormat(name)
   if (!format) {
     throw new Error(
-      'drive.saveAsCurrentNotebook file name must end in .json or .ipynb'
+      'drive.saveAsCurrentNotebook file name must end in .json, .ipynb, or .runme'
     )
   }
-  const notebookJson =
-    format === 'ipynb'
-      ? encodeIpynbNotebook(notebook).text
-      : encodeRunmeNotebook(notebook)
-  const mimeType = format === 'ipynb' ? IPYNB_MIME_TYPE : 'application/json'
-  const uploadedChecksum = md5(notebookJson)
   const createOperationId = options.createOperationId?.trim()
+  let notebookJson: string
+  let mimeType: string
+  if (format === 'runme-operation-log') {
+    notebookJson = await encodeOperationLogSnapshot(notebook, createOperationId)
+    mimeType = RUNME_OPERATION_LOG_MIME_TYPE
+  } else {
+    notebookJson =
+      format === 'ipynb'
+        ? encodeIpynbNotebook(notebook).text
+        : encodeRunmeNotebook(notebook)
+    mimeType = format === 'ipynb' ? IPYNB_MIME_TYPE : 'application/json'
+  }
+  const uploadedChecksum = md5(notebookJson)
   const persistedCreateOperationIdPromise = createOperationId
     ? hashCreateOperationId(createOperationId)
     : Promise.resolve(undefined)
@@ -969,7 +1010,7 @@ export async function createDriveNotebook(
   }
   if (!detectNotebookFileFormat(name)) {
     throw new Error(
-      'drive.createNotebook file name must end in .json or .ipynb'
+      'drive.createNotebook file name must end in .json, .ipynb, or .runme'
     )
   }
   if (!options || typeof options !== 'object' || Array.isArray(options)) {
@@ -1112,22 +1153,39 @@ export async function copyDriveNotebookFile(
     const sourceFormat = detectNotebookFileFormat(metadata.name)
     const targetFormat = detectNotebookFileFormat(fileName)
     let sourceNotebook: parser_pb.Notebook
-    let sourceIpynb: string | undefined
-    if (sourceFormat === 'ipynb') {
-      sourceIpynb = await store.loadContent(sourceUri)
-      sourceNotebook = decodeNotebookFile(sourceIpynb, metadata.name).notebook
+    let sourceRawContent: string | undefined
+    if (sourceFormat === 'ipynb' || sourceFormat === 'runme-operation-log') {
+      sourceRawContent = await store.loadContent(sourceUri)
+      sourceNotebook = decodeNotebookFile(
+        sourceRawContent,
+        metadata.name
+      ).notebook
     } else {
       sourceNotebook = await store.load(sourceUri)
     }
 
     let created
     if (targetFormat === 'ipynb') {
-      const content = sourceIpynb ?? encodeIpynbNotebook(sourceNotebook).text
+      const content =
+        sourceFormat === 'ipynb' && sourceRawContent
+          ? sourceRawContent
+          : encodeIpynbNotebook(sourceNotebook).text
       created = await store.createContent(
         targetFolderRef,
         fileName,
         content,
         IPYNB_MIME_TYPE
+      )
+    } else if (targetFormat === 'runme-operation-log') {
+      const content =
+        sourceFormat === 'runme-operation-log' && sourceRawContent
+          ? sourceRawContent
+          : await encodeOperationLogSnapshot(sourceNotebook)
+      created = await store.createContent(
+        targetFolderRef,
+        fileName,
+        content,
+        RUNME_OPERATION_LOG_MIME_TYPE
       )
     } else {
       created = await store.create(targetFolderRef, fileName)

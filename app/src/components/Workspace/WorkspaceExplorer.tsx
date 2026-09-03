@@ -29,6 +29,7 @@ import { appLogger } from "../../lib/logging/runtime";
 import {
   type NotebookFileFormat,
   isNotebookFileName,
+  notebookFileExtension,
   validateNotebookRenameFormat,
 } from '../../lib/notebookFormat'
 import {
@@ -297,13 +298,13 @@ const DEFAULT_DRIVE_FOLDER_NAME = "New Folder";
 
 function getContextMenuItemCount(menu: ContextMenuState): number {
   if (menu.type === NotebookStoreItemType.File) {
-    return (menu.uri.startsWith('fs://') ? 0 : 1) + 3 + (menu.remoteUri ? 5 : 0)
+    return (menu.uri.startsWith('fs://') ? 0 : 1) + 4 + (menu.remoteUri ? 5 : 0)
   }
 
   if (menu.type === NotebookStoreItemType.Folder) {
     return (
       (menu.uri.startsWith('fs://') ? 0 : 1) +
-      2 +
+      3 +
       (menu.remoteUri ? 1 : 0) +
       (menu.remoteUri ? 2 : 0) +
       (menu.uri === LOCAL_FOLDER_URI ? 0 : 1)
@@ -1003,7 +1004,7 @@ export function WorkspaceExplorer() {
       try {
         treeRef.current?.open(folderUri)
         const timestamp = formatShortTimestamp(new Date())
-        const name = `untitled-${timestamp}.${format === 'ipynb' ? 'ipynb' : 'json'}`
+        const name = `untitled-${timestamp}${notebookFileExtension(format)}`
         const newItem = await targetStore.create(folderUri, name)
         markOnboardingNotebookCreated({
           uri: newItem.uri,
@@ -1723,6 +1724,23 @@ function formatShortTimestamp(date: Date): string {
                   if (adjustedContextMenu.parentUri) {
                     void handleCreateDocument(
                       adjustedContextMenu.parentUri,
+                      'runme-operation-log'
+                    )
+                  }
+                }}
+              >
+                New Concurrent Runme Notebook (.runme)
+              </button>
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setContextMenu(null)
+                  if (adjustedContextMenu.parentUri) {
+                    void handleCreateDocument(
+                      adjustedContextMenu.parentUri,
                       'ipynb'
                     )
                   }
@@ -1880,6 +1898,21 @@ function formatShortTimestamp(date: Date): string {
                 }}
               >
                 New Runme Notebook (.json)
+              </button>
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setContextMenu(null)
+                  void handleCreateDocument(
+                    adjustedContextMenu.uri,
+                    'runme-operation-log'
+                  )
+                }}
+              >
+                New Concurrent Runme Notebook (.runme)
               </button>
               <button
                 type="button"

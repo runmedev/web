@@ -115,6 +115,7 @@ import { appState } from '../../lib/runtime/AppState'
 import {
   createCellCommentAnchor,
   createCellTextCommentAnchor,
+  createPendingCellTextCommentAnchor,
   groupCommentsByCell,
   toCellCommentThreads,
   type CommentDraftTarget,
@@ -2207,6 +2208,9 @@ function NotebookTabContent({
     entry.readOnly || notebookSnapshot?.readOnly || releasePending
   )
   const isDriveBacked = isDriveBackedNotebook(entry, syncState)
+  const operationLogComments = Boolean(
+    entry.operationLog && docUri.startsWith('local://')
+  )
   const { commentsPanelOpen, openCommentsPanel, setCommentsPanelOpen } =
     useCommentsPanel()
   const shouldRenderCells = !readOnly || isSelected
@@ -2631,6 +2635,12 @@ function NotebookTabContent({
   )
 
   const loadLocalComments = useCallback(async () => {
+    if (operationLogComments && store) {
+      setComments(await store.listOperationLogComments(docUri))
+      setPendingCommentCount(0)
+      setFailedCommentCount(0)
+      return true
+    }
     const localComments = appState.localComments
     if (!commentsRemoteUri || !localComments) {
       return false
@@ -2652,9 +2662,12 @@ function NotebookTabContent({
       records.filter((record) => record.status === 'failed').length
     )
     return true
-  }, [commentsRemoteUri])
+  }, [commentsRemoteUri, docUri, operationLogComments, store])
 
   const preparePendingCommentCreates = useCallback(async () => {
+    if (operationLogComments) {
+      return
+    }
     const localComments = appState.localComments
     const driveStore = appState.driveNotebookStore
     if (
@@ -2748,9 +2761,12 @@ function NotebookTabContent({
         await localComments.markDesiredPreparationFailed(operation.id, error)
       }
     }
-  }, [commentsRemoteUri, docUri, notebookData, store])
+  }, [commentsRemoteUri, docUri, notebookData, operationLogComments, store])
 
   const syncPendingComments = useCallback(() => {
+    if (operationLogComments) {
+      return loadLocalComments().then(() => undefined)
+    }
     const localComments = appState.localComments
     if (!commentsRemoteUri || !localComments) {
       return Promise.resolve()
@@ -2779,9 +2795,25 @@ function NotebookTabContent({
       })
     commentsSyncInFlightRef.current = pending
     return pending
-  }, [commentsRemoteUri, loadLocalComments, preparePendingCommentCreates])
+  }, [
+    commentsRemoteUri,
+    loadLocalComments,
+    operationLogComments,
+    preparePendingCommentCreates,
+  ])
 
   const refreshComments = useCallback(async () => {
+    if (operationLogComments && store) {
+      setCommentsStatus('available')
+      setCommentsErrorMessage(undefined)
+      try {
+        await loadLocalComments()
+      } catch (error) {
+        setCommentsStatus('error')
+        setCommentsErrorMessage(String(error))
+      }
+      return
+    }
     const driveStore = appState.driveNotebookStore
     if (!commentsRemoteUri || !driveStore) {
       setComments([])
@@ -2808,7 +2840,13 @@ function NotebookTabContent({
     await loadLocalComments()
     setCommentsSyncErrorMessage(undefined)
     await syncPendingComments()
-  }, [commentsRemoteUri, loadLocalComments, syncPendingComments])
+  }, [
+    commentsRemoteUri,
+    loadLocalComments,
+    operationLogComments,
+    store,
+    syncPendingComments,
+  ])
 
   useEffect(() => {
     let cancelled = false
@@ -2822,6 +2860,14 @@ function NotebookTabContent({
         if (!cancelled) {
           setCommentsRemoteUri(null)
           setCommentsStatus('loading')
+        }
+        return
+      }
+
+      if (operationLogComments) {
+        if (!cancelled) {
+          setCommentsRemoteUri(docUri)
+          setCommentsStatus('available')
         }
         return
       }
@@ -2868,7 +2914,7 @@ function NotebookTabContent({
     return () => {
       cancelled = true
     }
-  }, [docUri, notebookSnapshot?.loaded, store])
+  }, [docUri, notebookSnapshot?.loaded, operationLogComments, store])
 
   const refreshCommentsRef = useRef(refreshComments)
   refreshCommentsRef.current = refreshComments
@@ -2878,17 +2924,17 @@ function NotebookTabContent({
 
   useEffect(() => {
     const localComments = appState.localComments
-    if (!commentsRemoteUri || !localComments) {
+    if (operationLogComments || !commentsRemoteUri || !localComments) {
       return
     }
     return localComments.subscribe(commentsRemoteUri, () => {
       void loadLocalComments()
     })
-  }, [commentsRemoteUri, loadLocalComments])
+  }, [commentsRemoteUri, loadLocalComments, operationLogComments])
 
   useEffect(() => {
     const localComments = appState.localComments
-    if (!commentsRemoteUri || !localComments) {
+    if (operationLogComments || !commentsRemoteUri || !localComments) {
       return
     }
     let cancelled = false
@@ -2908,7 +2954,7 @@ function NotebookTabContent({
     return () => {
       cancelled = true
     }
-  }, [commentsRemoteUri, docUri, openCommentsPanel])
+  }, [commentsRemoteUri, docUri, openCommentsPanel, operationLogComments])
 
   useEffect(() => {
     const sync = () => void syncPendingComments()
@@ -2931,7 +2977,7 @@ function NotebookTabContent({
           ? { cellId: target.cellId, ...target.selectors[0] }
           : null
       )
-      if (commentsRemoteUri) {
+      if (commentsRemoteUri && !operationLogComments) {
         void appState.localComments
           ?.saveDraft({
             notebookUri: docUri,
@@ -2946,13 +2992,19 @@ function NotebookTabContent({
           })
       }
     },
-    [commentsRemoteUri, docUri, focusCommentCell, openCommentsPanel]
+    [
+      commentsRemoteUri,
+      docUri,
+      focusCommentCell,
+      openCommentsPanel,
+      operationLogComments,
+    ]
   )
 
   const handleDraftContentChange = useCallback(
     (content: string) => {
       setDraftContent(content)
-      if (!commentsRemoteUri || !draftTarget) {
+      if (operationLogComments || !commentsRemoteUri || !draftTarget) {
         return
       }
       if (!content) {
@@ -2972,22 +3024,51 @@ function NotebookTabContent({
           )
         })
     },
-    [commentsRemoteUri, docUri, draftTarget]
+    [commentsRemoteUri, docUri, draftTarget, operationLogComments]
   )
 
   const handleCancelCommentDraft = useCallback(() => {
     setDraftTarget(null)
     setDraftContent('')
     setActiveCommentRange(null)
-    void appState.localComments?.deleteDraft(docUri).catch((error) => {
-      setCommentsSyncErrorMessage(
-        `Could not discard the saved comment draft: ${String(error)}`
-      )
-    })
-  }, [docUri])
+    if (!operationLogComments) {
+      void appState.localComments?.deleteDraft(docUri).catch((error) => {
+        setCommentsSyncErrorMessage(
+          `Could not discard the saved comment draft: ${String(error)}`
+        )
+      })
+    }
+  }, [docUri, operationLogComments])
 
   const handleCreateComment = useCallback(
     async (target: CommentDraftTarget, content: string) => {
+      if (operationLogComments && store) {
+        setCommentsBusy(true)
+        try {
+          const commentId = crypto.randomUUID()
+          const anchor =
+            target.type === 'cell'
+              ? createCellCommentAnchor(target.cellId, commentId)
+              : createPendingCellTextCommentAnchor(target, commentId)
+          await store.addOperationLogComment(docUri, {
+            content,
+            anchor,
+            commentId,
+          })
+          setDraftTarget(null)
+          setDraftContent('')
+          await loadLocalComments()
+          return
+        } catch (error) {
+          showToast({
+            tone: 'error',
+            message: `Failed to create comment: ${String(error)}`,
+          })
+          throw error
+        } finally {
+          setCommentsBusy(false)
+        }
+      }
       const localComments = appState.localComments
       if (!commentsRemoteUri || !localComments) {
         showToast({
@@ -3043,12 +3124,24 @@ function NotebookTabContent({
       commentsRemoteUri,
       docUri,
       loadLocalComments,
+      operationLogComments,
+      store,
       syncPendingComments,
     ]
   )
 
   const handleReplyToComment = useCallback(
     async (commentId: string, content: string) => {
+      if (operationLogComments && store) {
+        setCommentsBusy(true)
+        try {
+          await store.replyToOperationLogComment(docUri, commentId, content)
+          await loadLocalComments()
+        } finally {
+          setCommentsBusy(false)
+        }
+        return
+      }
       const localComments = appState.localComments
       if (!commentsRemoteUri || !localComments) {
         return
@@ -3073,11 +3166,28 @@ function NotebookTabContent({
         setCommentsBusy(false)
       }
     },
-    [commentsRemoteUri, docUri, loadLocalComments, syncPendingComments]
+    [
+      commentsRemoteUri,
+      docUri,
+      loadLocalComments,
+      operationLogComments,
+      store,
+      syncPendingComments,
+    ]
   )
 
   const handleResolveComment = useCallback(
     async (commentId: string) => {
+      if (operationLogComments && store) {
+        setCommentsBusy(true)
+        try {
+          await store.setOperationLogCommentResolved(docUri, commentId, true)
+          await loadLocalComments()
+        } finally {
+          setCommentsBusy(false)
+        }
+        return
+      }
       const localComments = appState.localComments
       if (!commentsRemoteUri || !localComments) {
         return
@@ -3104,11 +3214,28 @@ function NotebookTabContent({
         setCommentsBusy(false)
       }
     },
-    [commentsRemoteUri, docUri, loadLocalComments, syncPendingComments]
+    [
+      commentsRemoteUri,
+      docUri,
+      loadLocalComments,
+      operationLogComments,
+      store,
+      syncPendingComments,
+    ]
   )
 
   const handleReopenComment = useCallback(
     async (commentId: string) => {
+      if (operationLogComments && store) {
+        setCommentsBusy(true)
+        try {
+          await store.setOperationLogCommentResolved(docUri, commentId, false)
+          await loadLocalComments()
+        } finally {
+          setCommentsBusy(false)
+        }
+        return
+      }
       const localComments = appState.localComments
       if (!commentsRemoteUri || !localComments) {
         return
@@ -3135,10 +3262,21 @@ function NotebookTabContent({
         setCommentsBusy(false)
       }
     },
-    [commentsRemoteUri, docUri, loadLocalComments, syncPendingComments]
+    [
+      commentsRemoteUri,
+      docUri,
+      loadLocalComments,
+      operationLogComments,
+      store,
+      syncPendingComments,
+    ]
   )
 
   const handleRetryFailedComments = useCallback(() => {
+    if (operationLogComments) {
+      void loadLocalComments()
+      return
+    }
     const localComments = appState.localComments
     if (!commentsRemoteUri || !localComments) {
       return
@@ -3146,7 +3284,12 @@ function NotebookTabContent({
     void localComments
       .retryNeedsAttention(commentsRemoteUri)
       .then(() => syncPendingComments())
-  }, [commentsRemoteUri, syncPendingComments])
+  }, [
+    commentsRemoteUri,
+    loadLocalComments,
+    operationLogComments,
+    syncPendingComments,
+  ])
 
   useEffect(() => {
     if (!deepLinkCellId) {
@@ -3339,7 +3482,29 @@ function NotebookTabContent({
         {/* Full-width notebook column with horizontal padding for breathing room.
             Cells expand to fill the available width of the tab content area. */}
         <div id="notebook-column" className="w-full py-2 px-8">
-          {releasePending ? (
+          {entry.operationLog && !readOnly && !releasePending ? (
+            <div
+              className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-nb-sm border border-nb-border bg-nb-surface-2 px-3 py-2 text-xs text-nb-text-muted"
+              data-testid="notebook-operation-log-banner"
+            >
+              <span>
+                Concurrent changes are incorporated when you refresh this
+                operation-log notebook.
+              </span>
+              <Button
+                size="1"
+                variant="soft"
+                onClick={() => void refreshReadOnlyNotebook(docUri)}
+              >
+                Refresh
+              </Button>
+              {entry.refreshErrorMessage && (
+                <p className="w-full text-red-600">
+                  {entry.refreshErrorMessage}
+                </p>
+              )}
+            </div>
+          ) : releasePending ? (
             <div
               className="mb-3 flex items-center gap-2 rounded-nb-sm border border-nb-border bg-nb-surface-2 px-3 py-2 text-xs text-nb-text-muted"
               data-testid="notebook-owner-locked-banner"
@@ -3687,6 +3852,9 @@ function renderWorkspaceDocument({
       writeAccessErrorMessage: document.writeAccessErrorMessage,
       refreshErrorMessage: document.refreshErrorMessage,
       errorMessage: document.errorMessage,
+      operationLog:
+        detectNotebookFileFormat(document.title) === 'runme-operation-log' ||
+        undefined,
       ...(document.owner !== undefined ? { owner: document.owner } : {}),
     }
     return (

@@ -65,6 +65,7 @@ import {
   toImportedNotebookName,
 } from '../markdownImport'
 import { createNotebookDiffRuntimeApi } from '../notebookDiff/runtime'
+import { detectNotebookFileFormat } from '../notebookFormat'
 import type { Runner } from '../runner'
 import {
   buildNotebookMarkdownLink,
@@ -367,6 +368,7 @@ export function createAppJsGlobals({
   runnerSync,
   resolveNotebook,
   listNotebooks,
+  refreshNotebook,
   requestNotebookWriteAccess,
   ensureAccessToken,
   opfsApi,
@@ -383,6 +385,7 @@ export function createAppJsGlobals({
   runnerSync?: RunnerSync
   resolveNotebook?: (target?: unknown) => NotebookDataLike | null
   listNotebooks?: () => NotebookDataLike[]
+  refreshNotebook?: (uri: string) => Promise<unknown>
   requestNotebookWriteAccess?: (uri: string) => Promise<unknown>
   ensureAccessToken?: EnsureAccessToken
   opfsApi?: AppKernelOpfsApi
@@ -456,6 +459,7 @@ export function createAppJsGlobals({
   const notebooksApi = createNotebooksApi({
     resolveNotebook: resolveNotebook ?? (() => runme.getCurrentNotebook()),
     listNotebooks,
+    refreshNotebook,
     requestNotebookWriteAccess,
   })
   const notebookDiffApi = createNotebookDiffRuntimeApi({
@@ -562,7 +566,9 @@ export function createAppJsGlobals({
     }
 
     const created = await store.create(folderUri, trimmedName)
-    await store.save(created.uri, createEmptyNotebook())
+    if (detectNotebookFileFormat(trimmedName) !== 'runme-operation-log') {
+      await store.save(created.uri, createEmptyNotebook())
+    }
 
     if (!getWorkspaceItems().includes(folderUri)) {
       addWorkspaceItem(folderUri)

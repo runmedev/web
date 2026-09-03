@@ -10,17 +10,40 @@ import {
   encodeIpynb,
 } from './ipynb'
 import { appLogger } from './logging/runtime'
+import {
+  type NotebookLogHeader,
+  type ParsedOperationLog,
+  materializeOperationLog,
+  materializedLogToNotebook,
+  parseOperationLog,
+  serializeOperationLog,
+} from './operationLog'
 
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
 } as unknown as Parameters<typeof toJsonString>[2]
 
-export type NotebookFileFormat = 'runme-json' | 'ipynb'
+export const RUNME_OPERATION_LOG_MIME_TYPE =
+  'application/vnd.runme.notebook+jsonl'
+
+export type NotebookFileFormat = 'runme-json' | 'ipynb' | 'runme-operation-log'
+
+export function notebookFileExtension(format: NotebookFileFormat): string {
+  switch (format) {
+    case 'runme-json':
+      return '.json'
+    case 'ipynb':
+      return '.ipynb'
+    case 'runme-operation-log':
+      return '.runme'
+  }
+}
 
 export interface DecodedNotebookFile {
   format: NotebookFileFormat
   notebook: parser_pb.Notebook
   ipynb?: DecodedIpynb
+  operationLog?: ParsedOperationLog
   recovery?: NotebookFileRecovery
 }
 
@@ -153,6 +176,9 @@ export function detectNotebookFileFormat(
   if (normalized.endsWith('.json')) {
     return 'runme-json'
   }
+  if (normalized.endsWith('.runme')) {
+    return 'runme-operation-log'
+  }
   return null
 }
 
@@ -167,20 +193,12 @@ export function validateNotebookRenameFormat(
 ): void {
   const currentFormat = detectNotebookFileFormat(currentName)
   const requestedFormat = detectNotebookFileFormat(nextName)
-  if (
-    currentFormat &&
-    requestedFormat &&
-    currentFormat !== requestedFormat
-  ) {
+  if (currentFormat && requestedFormat && currentFormat !== requestedFormat) {
     throw new Error(
       'Changing notebook formats by rename is not supported. Use Save as instead.'
     )
   }
-  if (
-    currentFormat &&
-    !requestedFormat &&
-    /\.[^/]+$/.test(nextName.trim())
-  ) {
+  if (currentFormat && !requestedFormat && /\.[^/]+$/.test(nextName.trim())) {
     throw new Error(`Unsupported notebook file extension: ${nextName}`)
   }
 }
@@ -233,6 +251,16 @@ export function decodeNotebookFile(
       }
     }
   }
+  if (format === 'runme-operation-log') {
+    const operationLog = parseOperationLog(text)
+    return {
+      format,
+      notebook: materializedLogToNotebook(
+        materializeOperationLog(operationLog.operations)
+      ),
+      operationLog,
+    }
+  }
   return { format, notebook: decodeRunmeNotebook(text) }
 }
 
@@ -259,6 +287,17 @@ export function createInitialNotebookFile(fileName: string): string {
   }
   if (format === 'runme-json') {
     return encodeRunmeNotebook(create(parser_pb.NotebookSchema, { cells: [] }))
+  }
+  if (format === 'runme-operation-log') {
+    const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`
+    const header: NotebookLogHeader = {
+      record_type: 'runme.notebook',
+      format_version: 1,
+      notebook_id: `notebook_${id}`,
+      created_by: 'runme-web',
+      created_at: new Date().toISOString(),
+    }
+    return serializeOperationLog(header, [])
   }
   throw new Error(`Unsupported notebook file extension: ${fileName}`)
 }

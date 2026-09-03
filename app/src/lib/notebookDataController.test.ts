@@ -90,7 +90,10 @@ function createFakeLocalNotebooks() {
       }
       return record.notebook
     }),
+    sync: vi.fn(async () => undefined),
+    operationLogSupportsConcurrentWriters: vi.fn(() => true),
     save: vi.fn(),
+    createOperationLogSaveStore: vi.fn(async () => ({ save: vi.fn() })),
   }
 }
 
@@ -185,6 +188,117 @@ describe('NotebookDataController', () => {
         name: 'demo.json',
         loaded: true,
       })
+    )
+  })
+
+  it('opens .runme notebooks writable without acquiring a lifetime lease', async () => {
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set('local://file/shared', {
+      id: 'local://file/shared',
+      name: 'shared.runme',
+      remoteId: 'local://file/shared',
+      notebook: createNotebook('shared'),
+    })
+    const ownership = createFakeOwnershipManager()
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(ownership)
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+
+    const result = await controller.openNotebook('local://file/shared')
+
+    expect(result.entry).toMatchObject({
+      state: 'loaded',
+      readOnly: false,
+      operationLog: true,
+    })
+    expect(ownership.acquire).not.toHaveBeenCalled()
+    expect(localStore.createOperationLogSaveStore).toHaveBeenCalledWith(
+      'local://file/shared'
+    )
+  })
+
+  it('fails closed for .runme when Web Locks are unavailable', async () => {
+    const localStore = createFakeLocalNotebooks()
+    localStore.operationLogSupportsConcurrentWriters.mockReturnValue(false)
+    localStore.records.set('local://file/shared', {
+      id: 'local://file/shared',
+      name: 'shared.runme',
+      remoteId: 'local://file/shared',
+      notebook: createNotebook('shared'),
+    })
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(createFakeOwnershipManager())
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+
+    const result = await controller.openNotebook('local://file/shared')
+
+    expect(result.entry).toMatchObject({
+      state: 'error',
+      readOnly: true,
+      operationLog: true,
+    })
+    expect(result.entry.errorMessage).toContain('Web Locks')
+    expect(localStore.createOperationLogSaveStore).not.toHaveBeenCalled()
+  })
+
+  it('forces upstream sync before refreshing a .runme snapshot', async () => {
+    const uri = 'local://file/shared'
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'shared.runme',
+      remoteId: 'https://drive.google.com/file/d/shared/view',
+      notebook: createNotebook('before'),
+    })
+    localStore.sync.mockImplementation(async () => {
+      localStore.records.get(uri)!.notebook = createNotebook('after')
+    })
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(createFakeOwnershipManager())
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    await controller.openNotebook(uri)
+
+    await controller.refreshReadOnlyNotebook(uri)
+
+    expect(localStore.sync).toHaveBeenCalledWith(uri)
+    expect(localStore.load.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
+      localStore.sync.mock.invocationCallOrder.at(-1)!
+    )
+    expect(controller.getNotebookData(uri)?.getNotebook().cells[0]?.value).toBe(
+      'after'
+    )
+  })
+
+  it('keeps the current .runme snapshot and exposes refresh errors', async () => {
+    const uri = 'local://file/shared'
+    const localStore = createFakeLocalNotebooks()
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'shared.runme',
+      remoteId: 'https://drive.google.com/file/d/shared/view',
+      notebook: createNotebook('current'),
+    })
+    localStore.sync.mockRejectedValue(new Error('remote unavailable'))
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(createFakeOwnershipManager())
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    await controller.openNotebook(uri)
+
+    await controller.refreshReadOnlyNotebook(uri)
+
+    expect(controller.getNotebookData(uri)?.getNotebook().cells[0]?.value).toBe(
+      'current'
+    )
+    expect(controller.getOpenNotebooks()[0]?.refreshErrorMessage).toContain(
+      'remote unavailable'
     )
   })
 

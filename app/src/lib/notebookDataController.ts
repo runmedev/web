@@ -3,12 +3,13 @@ import { create } from '@bufbuild/protobuf'
 import { parser_pb } from '../contexts/CellContext'
 import type { LocalNotebooks } from '../storage/local'
 import {
+  type NotebookAnalyticsSource,
   classifyNotebookAnalyticsSource,
   googleAnalytics,
-  type NotebookAnalyticsSource,
 } from './googleAnalytics'
 import { appLogger } from './logging/runtime'
 import { NotebookData, type NotebookSnapshot } from './notebookData'
+import { detectNotebookFileFormat } from './notebookFormat'
 import { getNotebookSessionPersistence } from './notebookSessionPersistence'
 import type { NotebookDataLike } from './runtime/runmeConsole'
 import {
@@ -40,6 +41,7 @@ export interface OpenNotebookEntry {
   refreshErrorMessage?: string
   errorMessage?: string
   owner?: NotebookOwnershipRecord | null
+  operationLog?: boolean
 }
 
 export interface OpenNotebookResult {
@@ -116,6 +118,7 @@ export class NotebookDataController {
     string,
     Promise<OpenNotebookResult>
   >()
+  private readonly operationLogUris = new Set<string>()
   private unsubscribeOwnershipMessages: (() => void) | null = null
   private unregisterForceReleaseHandler: (() => void) | null = null
 
@@ -141,6 +144,7 @@ export class NotebookDataController {
     this.localNotebooks = options.localNotebooks
     for (const handle of this.notebooks.values()) {
       const uri = handle.data.getUri()
+      if (this.operationLogUris.has(uri)) continue
       handle.data.setNotebookStore(
         this.leases.has(uri) && !handle.data.isReadOnly()
           ? this.createOwnedNotebookStore(uri)
@@ -186,7 +190,55 @@ export class NotebookDataController {
       refreshErrorMessage: undefined,
       errorMessage: undefined,
       owner: undefined,
+      operationLog:
+        detectNotebookFileFormat(name) === 'runme-operation-log' || undefined,
     })
+
+    if (entry.operationLog) {
+      this.operationLogUris.add(localUri)
+      const handle = this.ensureNotebookData({
+        uri: localUri,
+        name,
+        loaded: false,
+        readOnly: true,
+      })
+      if (!this.localNotebooks) return { localUri, entry }
+      if (!this.localNotebooks.operationLogSupportsConcurrentWriters()) {
+        entry = this.upsertOpenEntry({
+          ...entry,
+          state: 'error',
+          readOnly: true,
+          errorMessage:
+            'This browser does not support Web Locks, which are required for safe concurrent .runme writes.',
+        })
+        return { localUri, entry }
+      }
+      try {
+        const notebook = await this.localNotebooks.load(localUri)
+        const store =
+          await this.localNotebooks.createOperationLogSaveStore(localUri)
+        handle.data.loadNotebook(notebook, { persist: false })
+        handle.data.setNotebookStore(store)
+        handle.data.setReadOnly(false)
+        handle.loaded = true
+        entry = this.upsertOpenEntry({
+          ...entry,
+          name: await this.resolveNotebookName(localUri, name),
+          state: 'loaded',
+          readOnly: false,
+          owner: undefined,
+          errorMessage: undefined,
+        })
+        this.trackNotebookOpened(entry, notebookSource)
+      } catch (error) {
+        entry = this.upsertOpenEntry({
+          ...entry,
+          state: 'error',
+          errorMessage: String(error),
+        })
+      }
+      return { localUri, entry }
+    }
 
     const acquireResult = await this.ownershipManager.acquire(localUri)
     if (acquireResult.status === 'unsupported') {
@@ -441,6 +493,35 @@ export class NotebookDataController {
 
   async refreshReadOnlyNotebook(localUri: string): Promise<void> {
     const entry = this.openNotebooks.find((item) => item.uri === localUri)
+    if (entry?.operationLog && this.localNotebooks) {
+      const handle = this.notebooks.get(localUri)
+      if (!handle) return
+      try {
+        await handle.data.flushPendingPersist()
+        // Refresh is an explicit request to incorporate operations written by
+        // other sessions, so bypass load()'s normal eight-hour sync throttle.
+        await this.localNotebooks.sync(localUri)
+        const notebook = await this.localNotebooks.load(localUri)
+        const store =
+          await this.localNotebooks.createOperationLogSaveStore(localUri)
+        handle.data.loadNotebook(notebook, { persist: false })
+        handle.data.setNotebookStore(store)
+        handle.data.setReadOnly(false)
+        handle.loaded = true
+        this.upsertOpenEntry({
+          ...entry,
+          state: 'loaded',
+          readOnly: false,
+          refreshErrorMessage: undefined,
+        })
+      } catch (error) {
+        this.upsertOpenEntry({
+          ...entry,
+          refreshErrorMessage: `Could not refresh operation log: ${String(error)}`,
+        })
+      }
+      return
+    }
     if (!entry?.readOnly) {
       return
     }
@@ -765,6 +846,7 @@ export class NotebookDataController {
     this.notebooks.delete(uri)
     this.analyticsOpenedNotebooks.delete(uri)
     this.openNotebooks = this.openNotebooks.filter((item) => item.uri !== uri)
+    this.operationLogUris.delete(uri)
     this.emit()
     this.persist()
   }
@@ -912,6 +994,7 @@ export class NotebookDataController {
     this.listeners.clear()
     this.releasingNotebooks.clear()
     this.writeAccessRequests.clear()
+    this.operationLogUris.clear()
     this.snapshot = { openNotebooks: [] }
     this.restored = false
     this.localNotebooks = null

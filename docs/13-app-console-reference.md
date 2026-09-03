@@ -96,7 +96,8 @@ await notebooks.open(
 await notebooks.focus(opened.localUri || opened.opened)
 ```
 
-Request write access when another Runme session owns a notebook:
+Request write access when another Runme session owns a snapshot-format
+notebook:
 
 ```js
 const doc = await notebooks.get()
@@ -110,6 +111,17 @@ The request uses the same cooperative takeover path as the
 **Request write access** button. The owner saves pending changes before
 releasing its lock. Continue mutating the notebook only when the returned
 document has `summary.readOnly === false`.
+
+Append-only `.runme` notebooks do not use lifetime ownership. Multiple
+sessions can edit them concurrently, and the short write lock is held only
+while appending an operation. Incorporate collaborators' operations explicitly:
+
+```js
+await notebooks.refresh({ target: { uri: 'local://file/shared' } })
+```
+
+Cell edits, executions, and `comments.reply/resolve/reopen` append operations
+to the same `.runme` log.
 
 Discover and read versioned Runme documentation:
 

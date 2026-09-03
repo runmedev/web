@@ -3,12 +3,14 @@ import { v4 as uuidv4 } from 'uuid'
 import { migrateNotebookCellIds } from '../lib/cellIdentity'
 import { IPYNB_MIME_TYPE, type IpynbMergeState } from '../lib/ipynb'
 import {
+  RUNME_OPERATION_LOG_MIME_TYPE,
   createInitialNotebookFile,
   decodeNotebookFile,
   detectNotebookFileFormat,
   encodeIpynbNotebook,
   encodeRunmeNotebook,
   isNotebookFileName,
+  notebookFileExtension,
   validateNotebookRenameFormat,
 } from '../lib/notebookFormat'
 import { parser_pb } from '../runme/client'
@@ -152,7 +154,7 @@ function notebookNameForRename(oldName: string, name: string): string {
   if (nextFormat) {
     return trimmed
   }
-  return `${trimmed}${oldFormat === 'ipynb' ? '.ipynb' : '.json'}`
+  return `${trimmed}${notebookFileExtension(oldFormat)}`
 }
 
 // ---------------------------------------------------------------------------
@@ -315,9 +317,12 @@ export class FilesystemNotebookStore {
           name,
           type: NotebookStoreItemType.File,
           children: [],
-          mimeType: name.toLowerCase().endsWith('.ipynb')
-            ? IPYNB_MIME_TYPE
-            : 'application/json',
+          mimeType:
+            detectNotebookFileFormat(name) === 'ipynb'
+              ? IPYNB_MIME_TYPE
+              : detectNotebookFileFormat(name) === 'runme-operation-log'
+                ? RUNME_OPERATION_LOG_MIME_TYPE
+                : 'application/json',
           parents: [uri],
         });
       } else if (handle.kind === "directory") {
@@ -516,9 +521,12 @@ export class FilesystemNotebookStore {
       name: safeName,
       type: NotebookStoreItemType.File,
       children: [],
-      mimeType: safeName.toLowerCase().endsWith('.ipynb')
-        ? IPYNB_MIME_TYPE
-        : 'application/json',
+      mimeType:
+        detectNotebookFileFormat(safeName) === 'ipynb'
+          ? IPYNB_MIME_TYPE
+          : detectNotebookFileFormat(safeName) === 'runme-operation-log'
+            ? RUNME_OPERATION_LOG_MIME_TYPE
+            : 'application/json',
       parents: [parentUri],
     };
   }
@@ -647,9 +655,11 @@ export class FilesystemNotebookStore {
       children: [],
       mimeType:
         type === NotebookStoreItemType.File
-          ? displayName.toLowerCase().endsWith('.ipynb')
+          ? detectNotebookFileFormat(displayName) === 'ipynb'
             ? IPYNB_MIME_TYPE
-            : 'application/json'
+            : detectNotebookFileFormat(displayName) === 'runme-operation-log'
+              ? RUNME_OPERATION_LOG_MIME_TYPE
+              : 'application/json'
           : undefined,
       parents: [parentUri],
     };
@@ -664,7 +674,16 @@ export class FilesystemNotebookStore {
       parsed.workspaceId,
       parsed.relativePath
     )
-    return (await handle.getFile()).text()
+    const file = await handle.getFile()
+    const recId = entryRecordId(parsed.workspaceId, parsed.relativePath)
+    // Raw operation-log sync uses loadContent followed by saveContent as a
+    // compare-and-swap pair. Capture the exact revision that was read so an
+    // external write during the merge is rejected without overwriting it.
+    this.baseRevisions.set(recId, {
+      lastModified: file.lastModified,
+      size: file.size,
+    })
+    return file.text()
   }
 
   async saveContent(uri: string, content: string): Promise<void> {
