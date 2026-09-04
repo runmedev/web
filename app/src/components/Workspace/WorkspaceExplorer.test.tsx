@@ -728,6 +728,57 @@ describe('WorkspaceExplorer current document handling', () => {
     })
   })
 
+  it('prompts for Drive auth when the legacy source create is pending', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.isDriveItemUri.mockImplementation((uri: string) =>
+      uri.startsWith('https://drive.google.com')
+    )
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/notebook'],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/notebook') {
+        return {
+          uri,
+          name: 'pending.json',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: undefined,
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('pending.json'))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.ensureAccessToken).toHaveBeenCalledWith({
+        interactive: true,
+      })
+      expect(mocks.store.convertLegacyNotebookToRunme).toHaveBeenCalledWith(
+        'local://file/notebook',
+        'local://folder/drive'
+      )
+    })
+  })
+
   it('does not offer conversion for an existing .runme notebook', async () => {
     mocks.workspaceItems = ['local://folder/drive']
     mocks.store.getMetadata.mockImplementation(async (uri: string) => {

@@ -173,6 +173,15 @@ function decodeRunmeNotebook(text: string): parser_pb.Notebook {
   return notebook
 }
 
+function decodeLegacyRunmeNotebookStrict(text: string): parser_pb.Notebook {
+  if (!inspectRunmeNotebookJsonShape(text)) {
+    throw new Error('Legacy .json file is not a Runme notebook')
+  }
+  const notebook = fromJsonString(parser_pb.NotebookSchema, text)
+  migrateNotebookCellIds(notebook)
+  return notebook
+}
+
 export function detectNotebookFileFormat(
   fileName: string
 ): NotebookFileFormat | null {
@@ -303,6 +312,13 @@ export async function convertLegacyNotebookFileToRunme(
   sourceFileName: string,
   options: { originalGoogleDriveId?: string } = {}
 ): Promise<ConvertedRunmeNotebookFile> {
+  if (detectNotebookFileFormat(sourceFileName) === 'runme-json') {
+    return convertLegacyNotebookToRunme(
+      decodeLegacyRunmeNotebookStrict(text),
+      sourceFileName,
+      options
+    )
+  }
   const decoded = decodeNotebookFile(text, sourceFileName)
   if (decoded.format === 'runme-operation-log') {
     throw new Error('Only .json and .ipynb notebooks can be converted')

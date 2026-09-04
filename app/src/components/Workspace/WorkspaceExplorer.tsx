@@ -1093,7 +1093,18 @@ export function WorkspaceExplorer() {
       }
 
       try {
-        if (menu.remoteUri && isDriveItemUri(menu.remoteUri)) {
+        const sourceRemoteUri = menu.remoteUri
+        let isDriveBacked = sourceRemoteUri
+          ? isDriveItemUri(sourceRemoteUri)
+          : false
+        if (!isDriveBacked && !menu.uri.startsWith('fs://') && store) {
+          const parent = await store.getMetadata(menu.parentUri)
+          const parentRemoteUri = parent?.remoteUri
+          isDriveBacked = parentRemoteUri
+            ? isDriveItemUri(parentRemoteUri)
+            : false
+        }
+        if (isDriveBacked) {
           await ensureAccessToken({ interactive: true })
         }
 

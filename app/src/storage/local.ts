@@ -116,6 +116,11 @@ export interface LocalFileRecord {
   parentRemoteIdWhenCreated?: string
   /** Stable idempotency key for creating the primary Drive file. */
   driveCreateOperationId?: string
+  /** Retry state retained only while a legacy-to-Runme Drive copy is pending. */
+  legacyConversionAttempt?: {
+    originalGoogleDriveId: string
+    sourceChecksum: string
+  }
   /** Remote Drive URI of the Markdown sidecar (e.g. *.index.md) if present. */
   markdownUri?: string
   /** Stable idempotency key for creating the Markdown sidecar. */
@@ -2165,9 +2170,16 @@ export class LocalNotebooks extends Dexie {
     parentUri: string,
     name: string,
     content: string,
-    mimeType: string
+    mimeType: string,
+    options: {
+      legacyConversionAttempt?: LocalFileRecord['legacyConversionAttempt']
+    } = {}
   ): Promise<NotebookStoreItem> {
-    return this.createLocalFile(parentUri, name, { mimeType, content })
+    return this.createLocalFile(parentUri, name, {
+      mimeType,
+      content,
+      legacyConversionAttempt: options.legacyConversionAttempt,
+    })
   }
 
   /**
@@ -2217,6 +2229,7 @@ export class LocalNotebooks extends Dexie {
       sourceRecord.name,
       { originalGoogleDriveId }
     )
+    const sourceChecksum = md5(sourceContent)
 
     let destinationParentUri = parentUri
     if (!destinationParentUri) {
@@ -2256,6 +2269,8 @@ export class LocalNotebooks extends Dexie {
         if (
           child?.name !== converted.fileName ||
           (!isPendingCreate && !isErroredDriveConversion) ||
+          child.legacyConversionAttempt?.originalGoogleDriveId !==
+            originalGoogleDriveId ||
           detectNotebookFileFormat(child.name) !== 'runme-operation-log'
         ) {
           continue
@@ -2272,7 +2287,24 @@ export class LocalNotebooks extends Dexie {
           continue
         }
 
+        if (child.legacyConversionAttempt.sourceChecksum !== sourceChecksum) {
+          await this.saveContent(
+            childUri,
+            converted.content,
+            RUNME_OPERATION_LOG_MIME_TYPE
+          )
+          await this.files.update(childUri, {
+            legacyConversionAttempt: {
+              originalGoogleDriveId,
+              sourceChecksum,
+            },
+          })
+        }
+
         await this.syncFile(childUri)
+        await this.files.update(childUri, {
+          legacyConversionAttempt: undefined,
+        })
         return (
           (await this.getMetadata(childUri)) ?? {
             uri: childUri,
@@ -2291,10 +2323,19 @@ export class LocalNotebooks extends Dexie {
       destinationParentUri,
       converted.fileName,
       converted.content,
-      RUNME_OPERATION_LOG_MIME_TYPE
+      RUNME_OPERATION_LOG_MIME_TYPE,
+      {
+        legacyConversionAttempt:
+          isDriveUri(destinationParent.remoteId) && originalGoogleDriveId
+            ? { originalGoogleDriveId, sourceChecksum }
+            : undefined,
+      }
     )
     if (isDriveUri(destinationParent.remoteId)) {
       await this.syncFile(created.uri)
+      await this.files.update(created.uri, {
+        legacyConversionAttempt: undefined,
+      })
     }
     return (await this.getMetadata(created.uri)) ?? created
   }
@@ -2302,7 +2343,11 @@ export class LocalNotebooks extends Dexie {
   private async createLocalFile(
     parentUri: string,
     name: string,
-    options: { mimeType: string; content: string }
+    options: {
+      mimeType: string
+      content: string
+      legacyConversionAttempt?: LocalFileRecord['legacyConversionAttempt']
+    }
   ): Promise<NotebookStoreItem> {
     if (!parentUri.startsWith('local://folder/')) {
       throw new Error('LocalNotebooks.create expects a folder parent URI')
@@ -2359,6 +2404,7 @@ export class LocalNotebooks extends Dexie {
         ? parent.remoteId
         : undefined,
       driveCreateOperationId: isDriveBackedParent ? uuidv4() : undefined,
+      legacyConversionAttempt: options.legacyConversionAttempt,
       lastRemoteChecksum: '',
       lastSynced: isDriveBackedParent ? '' : nowIsoString(),
       doc: localContent,

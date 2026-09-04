@@ -3567,8 +3567,9 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     const parentUri = 'local://folder/drive-retry'
     const parentRemoteUri = 'https://drive.google.com/drive/folders/drive-retry'
     const sourceDoc = notebookJson('echo retry')
+    const pendingSourceDoc = notebookJson('echo before retry')
     const pendingConversion = await convertLegacyNotebookFileToRunme(
-      sourceDoc,
+      pendingSourceDoc,
       'source.json',
       { originalGoogleDriveId: 'original-drive-retry' }
     )
@@ -3599,6 +3600,10 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       remoteId: '',
       parentRemoteIdWhenCreated: parentRemoteUri,
       driveCreateOperationId: 'stable-create-operation',
+      legacyConversionAttempt: {
+        originalGoogleDriveId: 'original-drive-retry',
+        sourceChecksum: md5(pendingSourceDoc),
+      },
       lastRemoteChecksum: '',
       lastSynced: '',
       doc: '',
@@ -3629,6 +3634,10 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       remoteUri: destinationRemoteUri,
     })
     expect(syncFile).toHaveBeenCalledWith(pendingUri)
+    expect((await store.load(pendingUri)).cells[0]?.value).toBe('echo retry')
+    expect(
+      (await store.files.get(pendingUri))?.legacyConversionAttempt
+    ).toBeUndefined()
     await expect(store.files.toArray()).resolves.toHaveLength(2)
   })
 
@@ -3678,6 +3687,10 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       lastRemoteChecksum: '',
       lastSynced: '',
       lastSyncError: 'post-create sync failed',
+      legacyConversionAttempt: {
+        originalGoogleDriveId: 'original-drive-post-create',
+        sourceChecksum: md5(sourceDoc),
+      },
       doc: '',
       md5Checksum: conversionSnapshot.checksum,
       operationLogRef: conversionSnapshot.ref,
@@ -3701,7 +3714,78 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       remoteUri: conversionRemoteUri,
     })
     expect(syncFile).toHaveBeenCalledWith(conversionUri)
+    expect(
+      (await store.files.get(conversionUri))?.legacyConversionAttempt
+    ).toBeUndefined()
     await expect(store.files.toArray()).resolves.toHaveLength(2)
+  })
+
+  it('does not reuse an older conversion with an unrelated sync error', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    const sourceUri = 'local://file/source-drive-new-attempt'
+    const oldConversionUri = 'local://file/old-drive-conversion'
+    const sourceRemoteUri =
+      'https://drive.google.com/file/d/original-drive-new-attempt/view'
+    const oldConversionRemoteUri =
+      'https://drive.google.com/file/d/old-drive-conversion/view'
+    const newConversionRemoteUri =
+      'https://drive.google.com/file/d/new-drive-conversion/view'
+    const parentUri = 'local://folder/drive-new-attempt'
+    const parentRemoteUri =
+      'https://drive.google.com/drive/folders/drive-new-attempt'
+    const sourceDoc = notebookJson('echo new attempt')
+    const oldConversion = await convertLegacyNotebookFileToRunme(
+      sourceDoc,
+      'source.json',
+      { originalGoogleDriveId: 'original-drive-new-attempt' }
+    )
+    const oldSnapshot = await operationLogStorage.initialize(
+      oldConversionUri,
+      oldConversion.content
+    )
+    await store.folders.put({
+      id: parentUri,
+      name: 'Drive new attempt',
+      remoteId: parentRemoteUri,
+      children: [sourceUri, oldConversionUri],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: sourceUri,
+      name: 'source.json',
+      remoteId: sourceRemoteUri,
+      lastRemoteChecksum: md5(sourceDoc),
+      lastSynced: new Date().toISOString(),
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+    await store.files.put({
+      id: oldConversionUri,
+      name: 'source.runme',
+      mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
+      remoteId: oldConversionRemoteUri,
+      lastRemoteChecksum: oldSnapshot.checksum,
+      lastSynced: new Date().toISOString(),
+      lastSyncError: 'unrelated later failure',
+      doc: '',
+      md5Checksum: oldSnapshot.checksum,
+      operationLogRef: oldSnapshot.ref,
+    })
+    vi.spyOn(store, 'syncFile').mockImplementation(async (uri: string) => {
+      if (uri !== sourceUri) {
+        await store.files.update(uri, { remoteId: newConversionRemoteUri })
+      }
+    })
+
+    const result = await store.convertLegacyNotebookToRunme(
+      sourceUri,
+      parentUri
+    )
+
+    expect(result.uri).not.toBe(oldConversionUri)
+    expect(result.remoteUri).toBe(newConversionRemoteUri)
+    await expect(store.files.toArray()).resolves.toHaveLength(3)
   })
 })
 

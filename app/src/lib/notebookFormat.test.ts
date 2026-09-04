@@ -257,6 +257,15 @@ describe('legacy notebook conversion', () => {
     expect(decoded.notebook.cells[0]?.value).toBe('# Legacy JSON')
   })
 
+  it('rejects valid JSON that is not a Runme notebook', async () => {
+    await expect(
+      convertLegacyNotebookFileToRunme(
+        JSON.stringify({ unrelated: 'document' }),
+        'unrelated.json'
+      )
+    ).rejects.toThrow('Legacy .json file is not a Runme notebook')
+  })
+
   it('creates a .runme operation log and preserves the source notebook', async () => {
     const source = create(parser_pb.NotebookSchema, {
       cells: [
