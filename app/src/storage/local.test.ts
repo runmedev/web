@@ -4167,7 +4167,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     await expect(store.files.toArray()).resolves.toHaveLength(2)
   })
 
-  it('resumes an uploaded Drive conversion before its completion marker is written', async () => {
+  it('resumes and renames an uploaded unfinished conversion after the source is renamed', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
     const sourceUri = 'local://file/source-drive-post-create'
     const conversionUri = 'local://file/conversion-drive-post-create'
@@ -4196,6 +4196,14 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       loadContent: vi.fn(async (uri: string) =>
         uri === sourceRemoteUri ? sourceDoc : remoteContent
       ),
+      rename: vi.fn(async () => ({
+        uri: conversionRemoteUri,
+        name: 'renamed.runme',
+        type: NotebookStoreItemType.File,
+        children: [],
+        remoteUri: conversionRemoteUri,
+        parents: [parentRemoteUri],
+      })),
       saveContentIfVersion: vi.fn(async (_uri: string, content: string) => {
         remoteContent = content
         remoteVersion = {
@@ -4220,7 +4228,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     })
     await store.files.put({
       id: sourceUri,
-      name: 'source.json',
+      name: 'renamed.json',
       remoteId: sourceRemoteUri,
       lastRemoteChecksum: md5(sourceDoc),
       lastSynced: new Date().toISOString(),
@@ -4257,9 +4265,13 @@ describe('LocalNotebooks legacy notebook conversion', () => {
 
     expect(result).toMatchObject({
       uri: conversionUri,
-      name: 'source.runme',
+      name: 'renamed.runme',
       remoteUri: conversionRemoteUri,
     })
+    expect(driveStore.rename).toHaveBeenCalledWith(
+      conversionRemoteUri,
+      'renamed.runme'
+    )
     expect(syncFile).toHaveBeenCalledWith(conversionUri)
     const refreshedLog = parseOperationLog(
       await store.loadContent(conversionUri)

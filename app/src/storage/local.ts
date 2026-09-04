@@ -2350,7 +2350,7 @@ export class LocalNotebooks extends Dexie {
         if (!childUri.startsWith('local://file/')) {
           continue
         }
-        const child = await this.files.get(childUri)
+        let child = await this.files.get(childUri)
         const attempt = child?.legacyConversionAttempt
         const completedDuringInvocation = Boolean(
           attempt?.completedAt && attempt.completedAt >= invokedAt
@@ -2359,10 +2359,11 @@ export class LocalNotebooks extends Dexie {
           attempt && !attempt.completedAt
         )
         if (
-          child?.name !== converted.fileName ||
+          !child ||
           (!isActiveConversionAttempt && !completedDuringInvocation) ||
           attempt?.originalGoogleDriveId !== originalGoogleDriveId ||
-          detectNotebookFileFormat(child.name) !== 'runme-operation-log'
+          detectNotebookFileFormat(child.name) !== 'runme-operation-log' ||
+          (child.name !== converted.fileName && !isActiveConversionAttempt)
         ) {
           continue
         }
@@ -2372,6 +2373,15 @@ export class LocalNotebooks extends Dexie {
           originalGoogleDriveId
         ) {
           continue
+        }
+
+        if (child.name !== converted.fileName) {
+          await this.rename(childUri, converted.fileName)
+          const renamedChild = await this.files.get(childUri)
+          if (!renamedChild) {
+            throw new Error(`Local notebook record not found for ${childUri}`)
+          }
+          child = renamedChild
         }
 
         if (attempt.sourceChecksum !== sourceChecksum) {
