@@ -2337,14 +2337,27 @@ export class LocalNotebooks extends Dexie {
     }
 
     if (!isDriveUri(destinationParent.remoteId)) {
-      for (const childUri of destinationParent.children) {
-        const child = childUri.startsWith('local://file/')
-          ? await this.files.get(childUri)
-          : undefined
-        if (child?.name === converted.fileName) {
-          throw new FilesystemEntryAlreadyExistsError(converted.fileName)
+      const targetLockKey = `legacy-conversion-target:${destinationParentUri}:${converted.fileName}`
+      return this.driveSyncCoordinator.runExclusive(targetLockKey, async () => {
+        const currentParent = await this.folders.get(destinationParentUri)
+        if (!currentParent) {
+          throw new Error(`Parent folder not found for ${destinationParentUri}`)
         }
-      }
+        for (const childUri of currentParent.children) {
+          const child = childUri.startsWith('local://file/')
+            ? await this.files.get(childUri)
+            : undefined
+          if (child?.name === converted.fileName) {
+            throw new FilesystemEntryAlreadyExistsError(converted.fileName)
+          }
+        }
+        return this.createContent(
+          destinationParentUri,
+          converted.fileName,
+          converted.content,
+          RUNME_OPERATION_LOG_MIME_TYPE
+        )
+      })
     }
 
     if (isDriveUri(destinationParent.remoteId) && originalGoogleDriveId) {
@@ -2429,10 +2442,10 @@ export class LocalNotebooks extends Dexie {
             }
             attempt = {
               originalGoogleDriveId,
-              // A fresh mirror cannot recover the checksum used by the
-              // original conversion. The empty sentinel deliberately sends
-              // it through the refresh path below.
-              sourceChecksum: '',
+              // The original conversion checksum is not embedded in the
+              // document. Treat the recovered copy as current so conversion
+              // never overwrites edits made only in the .runme target.
+              sourceChecksum,
               // Keep the recovered marker unfinished until the final target
               // sync succeeds, so any failure is reusable by the next retry.
               completedAt: undefined,

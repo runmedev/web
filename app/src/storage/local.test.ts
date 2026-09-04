@@ -3397,6 +3397,54 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     await expect(store.files.toArray()).resolves.toHaveLength(2)
   })
 
+  it('serializes concurrent local conversions that derive the same target name', async () => {
+    const store = createTestStore({})
+    const jsonSourceUri = 'local://file/concurrent-local-json'
+    const ipynbSourceUri = 'local://file/concurrent-local-ipynb'
+    const sourceDoc = notebookJson('echo concurrent local')
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [jsonSourceUri, ipynbSourceUri],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: jsonSourceUri,
+      name: 'report.json',
+      remoteId: jsonSourceUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+    await store.files.put({
+      id: ipynbSourceUri,
+      name: 'report.ipynb',
+      mimeType: IPYNB_MIME_TYPE,
+      remoteId: ipynbSourceUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+
+    const results = await Promise.allSettled([
+      store.convertLegacyNotebookToRunme(jsonSourceUri, LOCAL_FOLDER_URI),
+      store.convertLegacyNotebookToRunme(ipynbSourceUri, LOCAL_FOLDER_URI),
+    ])
+
+    expect(
+      results.filter((result) => result.status === 'fulfilled')
+    ).toHaveLength(1)
+    expect(
+      results.filter((result) => result.status === 'rejected')
+    ).toHaveLength(1)
+    const files = await store.files.toArray()
+    expect(files.filter((file) => file.name === 'report.runme')).toHaveLength(1)
+    expect(files).toHaveLength(3)
+  })
+
   it('rejects a malformed local source instead of creating an empty notebook', async () => {
     const store = createTestStore({})
     const sourceUri = 'local://file/malformed-json'
@@ -3585,7 +3633,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       'https://drive.google.com/drive/folders/fresh-profile'
     const sourceDoc = notebookJson('echo fresh profile')
     const conversion = await convertLegacyNotebookFileToRunme(
-      sourceDoc,
+      notebookJson('echo target-only edit'),
       'source.json',
       { originalGoogleDriveId: 'fresh-profile-source-id' }
     )
@@ -3649,6 +3697,9 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     )
 
     expect(result.uri).toBe(conversionUri)
+    expect((await store.load(conversionUri)).cells[0]?.value).toBe(
+      'echo target-only edit'
+    )
     await expect(store.files.get(conversionUri)).resolves.toMatchObject({
       legacyConversionAttempt: {
         originalGoogleDriveId: 'fresh-profile-source-id',
