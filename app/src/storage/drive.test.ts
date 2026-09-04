@@ -749,6 +749,33 @@ describe("DriveNotebookStore", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects a repair when the checked Drive version no longer matches", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (_input, init) => {
+        expect(init?.method).toBe("GET");
+        return new Response(JSON.stringify({ version: "2" }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            ETag: '"drive-etag-2"',
+          },
+        });
+      });
+
+    const store = new DriveNotebookStore(async () => "access-token");
+    await expect(
+      store.saveContentIfVersion(
+        "https://drive.google.com/file/d/file123/view",
+        '{"cells":[]}',
+        "application/json",
+        { version: "1" },
+      ),
+    ).resolves.toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a repair when Drive changes during the conditional upload", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     const fetchMock = vi

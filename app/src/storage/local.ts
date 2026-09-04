@@ -489,6 +489,43 @@ export class LocalNotebooks extends Dexie {
       throw new DriveSnapshotChangedError(remoteUri)
     }
 
+    if (
+      content === '' &&
+      detectNotebookFileFormat(record.name) === 'runme-operation-log'
+    ) {
+      // Preserve the validated trust boundary: claim exactly the Drive
+      // revision checked above rather than starting an unconstrained refresh.
+      const initialDocument = createInitialNotebookFile(record.name)
+      const saved = await this.driveStore.saveContentIfVersion(
+        remoteUri,
+        initialDocument,
+        RUNME_OPERATION_LOG_MIME_TYPE,
+        {
+          checksum: after?.md5Checksum,
+          revisionId: after?.headRevisionId,
+          version: after?.version,
+        }
+      )
+      if (!saved) {
+        throw new DriveSnapshotChangedError(remoteUri)
+      }
+      const initializedSnapshot =
+        await this.loadConsistentDriveOperationLogSnapshot(remoteUri)
+      if (
+        !initializedSnapshot ||
+        initializedSnapshot.content !== initialDocument
+      ) {
+        throw new DriveSnapshotChangedError(remoteUri)
+      }
+      await this.initializeUploadedDriveNotebook(
+        localUri,
+        create(parser_pb.NotebookSchema, { cells: [] }),
+        initialDocument,
+        driveMetadataToUpstreamVersion(initializedSnapshot.version)
+      )
+      return localUri
+    }
+
     const decoded = decodeNotebookFile(content, name)
     await this.initializeUploadedDriveNotebook(
       localUri,
@@ -3517,44 +3554,71 @@ export class LocalNotebooks extends Dexie {
     record: LocalFileRecord
   ): Promise<void> {
     if (!record.operationLogRef) {
-      let snapshot: {
-        content: string
-        version: DriveVersionMetadata | null
-      } | null = null
+      // An empty Drive file has no operation-log identity yet. Generate one
+      // seed once, then claim the empty revision with CAS so concurrent
+      // initializers cannot create competing notebook IDs.
+      const initialDocument = createInitialNotebookFile(record.name)
       for (
         let attempt = 0;
-        attempt < DRIVE_OPERATION_LOG_MERGE_ATTEMPTS && !snapshot;
+        attempt < DRIVE_OPERATION_LOG_MERGE_ATTEMPTS;
         attempt += 1
       ) {
-        snapshot = await this.loadConsistentDriveOperationLogSnapshot(
+        const snapshot = await this.loadConsistentDriveOperationLogSnapshot(
           record.remoteId
         )
-      }
-      if (!snapshot) {
-        throw new Error(
-          `Drive operation log changed during ${DRIVE_OPERATION_LOG_MERGE_ATTEMPTS} merge attempts for ${localUri}`
+        if (!snapshot) continue
+
+        let remoteContent = snapshot.content
+        let remoteVersion = snapshot.version
+        if (remoteContent === '') {
+          appLogger.info('Initializing zero-byte Drive operation log', {
+            attrs: {
+              scope: 'storage.drive.sync',
+              code: 'DRIVE_OPERATION_LOG_INITIALIZE_EMPTY',
+              localUri,
+              remoteUri: record.remoteId,
+              source: 'new-mirror',
+            },
+          })
+          const saved = await this.driveStore.saveContentIfVersion(
+            record.remoteId,
+            initialDocument,
+            RUNME_OPERATION_LOG_MIME_TYPE,
+            {
+              checksum: snapshot.version?.md5Checksum,
+              revisionId: snapshot.version?.headRevisionId,
+              version: snapshot.version?.version,
+            }
+          )
+          if (!saved) continue
+          remoteContent = initialDocument
+          remoteVersion = await this.driveStore.getVersionMetadata(
+            record.remoteId
+          )
+        }
+
+        const remote = parseOperationLog(remoteContent)
+        const stored = await this.operationLogStorage.initialize(
+          localUri,
+          serializeOperationLog(remote.header, remote.operations, {
+            canonicalOrder: true,
+          })
         )
-      }
-      const remote = parseOperationLog(snapshot.content)
-      const stored = await this.operationLogStorage.initialize(
-        localUri,
-        serializeOperationLog(remote.header, remote.operations, {
-          canonicalOrder: true,
+        const version = driveMetadataToUpstreamVersion(remoteVersion)
+        await this.files.update(localUri, {
+          doc: '',
+          operationLogRef: stored.ref,
+          md5Checksum: stored.checksum,
+          lastRemoteChecksum: version.checksum ?? md5(remoteContent),
+          lastUpstreamVersion: version,
+          lastSynced: nowIsoString(),
+          lastSyncError: undefined,
         })
+        return
+      }
+      throw new Error(
+        `Drive operation log changed during ${DRIVE_OPERATION_LOG_MERGE_ATTEMPTS} merge attempts for ${localUri}`
       )
-      const version = driveMetadataToUpstreamVersion(
-        snapshot.version
-      )
-      await this.files.update(localUri, {
-        doc: '',
-        operationLogRef: stored.ref,
-        md5Checksum: stored.checksum,
-        lastRemoteChecksum: version.checksum ?? md5(snapshot.content),
-        lastUpstreamVersion: version,
-        lastSynced: nowIsoString(),
-        lastSyncError: undefined,
-      })
-      return
     }
 
     for (
@@ -3570,7 +3634,24 @@ export class LocalNotebooks extends Dexie {
       const remoteContent = snapshot.content
 
       const localLog = parseOperationLog(local.document)
-      const remoteLog = parseOperationLog(remoteContent)
+      // A zero-byte Drive file is an uninitialized upstream, not a malformed
+      // operation log. Use the local header as its identity and force a CAS
+      // upload below. Non-empty malformed content remains a hard error.
+      const remoteWasEmpty = remoteContent === ''
+      const remoteLog: ParsedOperationLog = remoteWasEmpty
+        ? { header: localLog.header, operations: [] }
+        : parseOperationLog(remoteContent)
+      if (remoteWasEmpty) {
+        appLogger.info('Initializing zero-byte Drive operation log', {
+          attrs: {
+            scope: 'storage.drive.sync',
+            code: 'DRIVE_OPERATION_LOG_INITIALIZE_EMPTY',
+            localUri,
+            remoteUri: record.remoteId,
+            source: 'local-operation-log',
+          },
+        })
+      }
       if (localLog.header.notebook_id !== remoteLog.header.notebook_id) {
         throw new Error(
           `Cannot merge different operation-log notebooks for ${localUri}`
@@ -3612,6 +3693,7 @@ export class LocalNotebooks extends Dexie {
         { canonicalOrder: true }
       )
       if (
+        remoteWasEmpty ||
         mergedOperations.some((operation) => !remoteIds.has(operation.op_id))
       ) {
         const saved = await this.driveStore.saveContentIfVersion(
@@ -3621,6 +3703,7 @@ export class LocalNotebooks extends Dexie {
           {
             checksum: snapshot.version?.md5Checksum,
             revisionId: snapshot.version?.headRevisionId,
+            version: snapshot.version?.version,
           }
         )
         if (!saved) continue
