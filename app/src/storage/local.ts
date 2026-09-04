@@ -15,7 +15,6 @@ import {
   decodeNotebookFile,
   detectNotebookFileFormat,
   encodeIpynbNotebook,
-  encodeRunmeOperationLogSnapshotWithHeader,
   isNotebookFileName,
   notebookFileExtension,
   validateNotebookRenameFormat,
@@ -2221,6 +2220,11 @@ export class LocalNotebooks extends Dexie {
         )
       }
     }
+    if (sourceRecord.conflict) {
+      throw new Error(
+        `Resolve the sync conflict before converting ${sourceRecord.name}`
+      )
+    }
     const sourceContent = await this.loadContent(sourceUri)
     const originalGoogleDriveId = isDriveUri(sourceRecord.remoteId)
       ? parseDriveItem(sourceRecord.remoteId).id
@@ -2289,14 +2293,25 @@ export class LocalNotebooks extends Dexie {
         }
 
         if (child.legacyConversionAttempt.sourceChecksum !== sourceChecksum) {
-          const currentLog = parseOperationLog(
-            await this.loadContent(childUri)
+          const currentLog = parseOperationLog(await this.loadContent(childUri))
+          const currentNotebook = materializedLogToNotebook(
+            materializeOperationLog(currentLog.operations)
           )
-          const refreshedContent =
-            await encodeRunmeOperationLogSnapshotWithHeader(
-              converted.notebook,
-              currentLog.header
-            )
+          const appendedOperations = await buildOperationLogDiff({
+            previous: currentNotebook,
+            next: converted.notebook,
+            observedOperations: currentLog.operations,
+            actorId: currentLog.header.created_by,
+            firstActorSequence:
+              highestActorSequence(
+                currentLog.operations,
+                currentLog.header.created_by
+              ) + 1,
+          })
+          const refreshedContent = serializeOperationLog(currentLog.header, [
+            ...currentLog.operations,
+            ...appendedOperations,
+          ])
           await this.saveContent(
             childUri,
             refreshedContent,

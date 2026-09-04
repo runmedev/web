@@ -19,6 +19,8 @@ import {
 import {
   type NotebookLogHeader,
   createRunmeOperation,
+  materializeOperationLog,
+  materializedLogToNotebook,
   parseOperationLog,
   serializeOperationLog,
 } from '../lib/operationLog'
@@ -3386,6 +3388,60 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     await expect(store.files.toArray()).resolves.toHaveLength(1)
   })
 
+  it('rejects a conflicted Drive IPYNB instead of converting its stale shadow', async () => {
+    const sourceUri = 'local://file/conflicted-ipynb'
+    const sourceRemoteUri =
+      'https://drive.google.com/file/d/conflicted-ipynb/view'
+    const parentUri = 'local://folder/conflicted-ipynb'
+    const shadowStorage = new MemoryIpynbShadowStorage()
+    const staleNotebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'cell-1',
+          kind: parser_pb.CellKind.CODE,
+          languageId: 'python',
+          value: 'echo stale shadow',
+        }),
+      ],
+    })
+    const staleIpynb = encodeIpynbNotebook(staleNotebook)
+    const shadowRef = await shadowStorage.write(sourceUri, staleIpynb.text)
+    const localDoc = notebookJson('echo unsynced local edit')
+    const store = createTestStore({}, { ipynbShadowStorage: shadowStorage })
+    await store.folders.put({
+      id: parentUri,
+      name: 'Conflicted Drive folder',
+      remoteId: 'https://drive.google.com/drive/folders/conflicted-ipynb',
+      children: [sourceUri],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: sourceUri,
+      name: 'conflicted.ipynb',
+      mimeType: IPYNB_MIME_TYPE,
+      remoteId: sourceRemoteUri,
+      lastRemoteChecksum: md5(staleIpynb.text),
+      lastSynced: new Date().toISOString(),
+      conflict: {
+        detectedAt: new Date().toISOString(),
+        upstreamChecksum: 'upstream-conflict-checksum',
+        localChecksumAtDetection: md5(localDoc),
+      },
+      doc: localDoc,
+      md5Checksum: md5(localDoc),
+      ipynbPreservation: {
+        upstreamFingerprint: md5(staleIpynb.text),
+        shadowRef,
+        ...staleIpynb.state,
+      },
+    })
+
+    await expect(
+      store.convertLegacyNotebookToRunme(sourceUri, parentUri)
+    ).rejects.toThrow('Resolve the sync conflict before converting')
+    await expect(store.files.toArray()).resolves.toHaveLength(1)
+  })
+
   it('records the original Drive file ID and waits for the new file sync', async () => {
     const store = createTestStore({})
     const sourceUri = 'local://file/source-drive'
@@ -3643,7 +3699,6 @@ describe('LocalNotebooks legacy notebook conversion', () => {
 
   it('reuses a Drive conversion whose post-create sync failed', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
-    const store = createTestStore({}, { operationLogStorage })
     const sourceUri = 'local://file/source-drive-post-create'
     const conversionUri = 'local://file/conversion-drive-post-create'
     const sourceRemoteUri =
@@ -3660,6 +3715,26 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       'source.json',
       { originalGoogleDriveId: 'original-drive-post-create' }
     )
+    let remoteContent = conversion.content
+    let remoteVersion = {
+      md5Checksum: md5(remoteContent),
+      headRevisionId: 'conversion-revision-1',
+      version: '1',
+    }
+    const driveStore = {
+      getVersionMetadata: vi.fn(async () => remoteVersion),
+      loadContent: vi.fn(async () => remoteContent),
+      saveContentIfVersion: vi.fn(async (_uri: string, content: string) => {
+        remoteContent = content
+        remoteVersion = {
+          md5Checksum: md5(content),
+          headRevisionId: 'conversion-revision-2',
+          version: '2',
+        }
+        return true
+      }),
+    }
+    const store = createTestStore(driveStore, { operationLogStorage })
     const conversionSnapshot = await operationLogStorage.initialize(
       conversionUri,
       conversion.content
@@ -3696,12 +3771,12 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       md5Checksum: conversionSnapshot.checksum,
       operationLogRef: conversionSnapshot.ref,
     })
+    const syncFileImplementation = store.syncFile.bind(store)
     const syncFile = vi
       .spyOn(store, 'syncFile')
       .mockImplementation(async (uri: string) => {
-        if (uri === conversionUri) {
-          await store.files.update(uri, { lastSyncError: undefined })
-        }
+        if (uri === sourceUri) return
+        await syncFileImplementation(uri)
       })
 
     const result = await store.convertLegacyNotebookToRunme(
@@ -3721,6 +3796,20 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     expect(refreshedLog.header).toEqual(
       parseOperationLog(conversion.content).header
     )
+    const uploadedBefore = parseOperationLog(conversion.content)
+    const uploadedAfter = parseOperationLog(remoteContent)
+    expect(
+      uploadedAfter.operations.slice(0, uploadedBefore.operations.length)
+    ).toEqual(uploadedBefore.operations)
+    expect(
+      new Set(uploadedAfter.operations.map((operation) => operation.op_id)).size
+    ).toBe(uploadedAfter.operations.length)
+    expect(
+      materializedLogToNotebook(
+        materializeOperationLog(uploadedAfter.operations)
+      ).cells[0]?.value
+    ).toBe('echo after post create failure')
+    expect(driveStore.saveContentIfVersion).toHaveBeenCalledOnce()
     expect((await store.load(conversionUri)).cells[0]?.value).toBe(
       'echo after post create failure'
     )
