@@ -113,6 +113,20 @@ function driveCreateErrorMessage(error: unknown, fallback: string): string {
     : fallback;
 }
 
+/** Preserve conversion failures that tell the user how to unblock the action. */
+function legacyConversionErrorMessage(error: unknown): string {
+  const fallback =
+    'Unable to save this notebook as a .runme file. Please try again.'
+  const storageMessage = driveCreateErrorMessage(error, fallback)
+  if (storageMessage !== fallback) {
+    return storageMessage
+  }
+  const message = error instanceof Error ? error.message.trim() : ''
+  return message.startsWith('Resolve the sync conflict before converting')
+    ? message
+    : fallback
+}
+
 /**
  * Preserves actionable authorization and filename-validation errors while
  * hiding unexpected storage failures behind a stable user-facing fallback.
@@ -1150,10 +1164,7 @@ export function WorkspaceExplorer() {
             error: String(error),
           },
         })
-        const message = driveCreateErrorMessage(
-          error,
-          'Unable to save this notebook as a .runme file. Please try again.'
-        )
+        const message = legacyConversionErrorMessage(error)
         setErrorMessage(message)
         showToast({ message, tone: 'error' })
       }

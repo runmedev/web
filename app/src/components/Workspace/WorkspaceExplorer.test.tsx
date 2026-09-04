@@ -730,6 +730,56 @@ describe('WorkspaceExplorer current document handling', () => {
     })
   })
 
+  it('shows actionable conflict guidance when conversion is blocked', async () => {
+    const folderUri = 'local://folder/drive'
+    const fileUri = 'local://file/conflicted-notebook'
+    const message =
+      'Resolve the sync conflict before converting conflicted.ipynb'
+    mocks.workspaceItems = [folderUri]
+    mocks.isDriveItemUri.mockImplementation((uri: string) =>
+      uri.startsWith('https://drive.google.com')
+    )
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === folderUri) {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: [fileUri],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === fileUri) {
+        return {
+          uri,
+          name: 'conflicted.ipynb',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/conflicted/view',
+          parents: [folderUri],
+        }
+      }
+      return null
+    })
+    mocks.store.convertLegacyNotebookToRunme.mockRejectedValueOnce(
+      new Error(message)
+    )
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('conflicted.ipynb'))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    )
+
+    expect(await screen.findByText(message)).toBeTruthy()
+  })
+
   it('prompts for Drive auth when the legacy source create is pending', async () => {
     mocks.workspaceItems = ['local://folder/drive']
     mocks.isDriveItemUri.mockImplementation((uri: string) =>
