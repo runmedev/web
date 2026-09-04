@@ -3576,8 +3576,10 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     const targetSyncReleased = new Promise<void>((resolve) => {
       releaseTargetSync = resolve
     })
+    let targetSyncCalls = 0
     vi.spyOn(store, 'syncFile').mockImplementation(async (uri: string) => {
       if (uri === sourceUri) return
+      targetSyncCalls += 1
       expect(
         (await store.folders.get(parentUri))?.provisionalChildren
       ).toContain(uri)
@@ -3595,6 +3597,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
 
     expect(secondResult.uri).toBe(firstResult.uri)
     expect(secondResult.remoteUri).toBe(destinationRemoteUri)
+    expect(targetSyncCalls).toBe(2)
     await expect(store.files.toArray()).resolves.toHaveLength(2)
     await expect(store.folders.get(parentUri)).resolves.toMatchObject({
       children: [firstResult.uri],

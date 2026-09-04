@@ -266,6 +266,15 @@ describe('legacy notebook conversion', () => {
     ).rejects.toThrow('Legacy .json file is not a Runme notebook')
   })
 
+  it('classifies invalid protobuf values as invalid legacy notebooks', async () => {
+    await expect(
+      convertLegacyNotebookFileToRunme(
+        JSON.stringify({ cells: [{ kind: 'NOT_A_KIND' }] }),
+        'invalid.json'
+      )
+    ).rejects.toThrow('Legacy .json file is not a Runme notebook')
+  })
+
   it('creates a .runme operation log and preserves the source notebook', async () => {
     const source = create(parser_pb.NotebookSchema, {
       cells: [

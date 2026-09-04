@@ -177,9 +177,13 @@ function decodeLegacyRunmeNotebookStrict(text: string): parser_pb.Notebook {
   if (!inspectRunmeNotebookJsonShape(text)) {
     throw new Error('Legacy .json file is not a Runme notebook')
   }
-  const notebook = fromJsonString(parser_pb.NotebookSchema, text)
-  migrateNotebookCellIds(notebook)
-  return notebook
+  try {
+    const notebook = fromJsonString(parser_pb.NotebookSchema, text)
+    migrateNotebookCellIds(notebook)
+    return notebook
+  } catch {
+    throw new Error('Legacy .json file is not a Runme notebook')
+  }
 }
 
 export function detectNotebookFileFormat(

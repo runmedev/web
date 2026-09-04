@@ -2175,12 +2175,14 @@ export class LocalNotebooks extends Dexie {
     mimeType: string,
     options: {
       legacyConversionAttempt?: LocalFileRecord['legacyConversionAttempt']
+      autoSync?: boolean
     } = {}
   ): Promise<NotebookStoreItem> {
     return this.createLocalFile(parentUri, name, {
       mimeType,
       content,
       legacyConversionAttempt: options.legacyConversionAttempt,
+      autoSync: options.autoSync,
     })
   }
 
@@ -2453,6 +2455,7 @@ export class LocalNotebooks extends Dexie {
           isDriveUri(destinationParent.remoteId) && originalGoogleDriveId
             ? { originalGoogleDriveId, sourceChecksum }
             : undefined,
+        autoSync: false,
       }
     )
     if (isDriveUri(destinationParent.remoteId)) {
@@ -2481,6 +2484,7 @@ export class LocalNotebooks extends Dexie {
       mimeType: string
       content: string
       legacyConversionAttempt?: LocalFileRecord['legacyConversionAttempt']
+      autoSync?: boolean
     }
   ): Promise<NotebookStoreItem> {
     if (!parentUri.startsWith('local://folder/')) {
@@ -2560,7 +2564,7 @@ export class LocalNotebooks extends Dexie {
       )
     }
 
-    if (isDriveBackedParent) {
+    if (isDriveBackedParent && options.autoSync !== false) {
       void (async () => {
         try {
           await this.syncFile(fileUri)
