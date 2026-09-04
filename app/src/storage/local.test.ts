@@ -4728,6 +4728,88 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     expect(result.remoteUri).toBe(newConversionRemoteUri)
     await expect(store.files.toArray()).resolves.toHaveLength(3)
   })
+
+  it('preserves a user-renamed completed Drive conversion', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const sourceUri = 'local://file/source-drive-user-rename'
+    const customConversionUri = 'local://file/custom-drive-conversion'
+    const sourceRemoteUri =
+      'https://drive.google.com/file/d/original-drive-user-rename/view'
+    const customConversionRemoteUri =
+      'https://drive.google.com/file/d/custom-drive-conversion/view'
+    const newConversionRemoteUri =
+      'https://drive.google.com/file/d/new-drive-user-rename/view'
+    const parentUri = 'local://folder/drive-user-rename'
+    const parentRemoteUri =
+      'https://drive.google.com/drive/folders/drive-user-rename'
+    const sourceDoc = notebookJson('echo user rename')
+    const customConversion = await convertLegacyNotebookFileToRunme(
+      sourceDoc,
+      'source.json',
+      { originalGoogleDriveId: 'original-drive-user-rename' }
+    )
+    const customSnapshot = await operationLogStorage.initialize(
+      customConversionUri,
+      customConversion.content
+    )
+    const driveStore = {
+      loadContent: vi.fn(async () => sourceDoc),
+      rename: vi.fn(),
+    }
+    const store = createTestStore(driveStore, { operationLogStorage })
+    await store.folders.put({
+      id: parentUri,
+      name: 'Drive user rename',
+      remoteId: parentRemoteUri,
+      children: [sourceUri, customConversionUri],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: sourceUri,
+      name: 'source.json',
+      remoteId: sourceRemoteUri,
+      lastRemoteChecksum: md5(sourceDoc),
+      lastSynced: new Date().toISOString(),
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+    await store.files.put({
+      id: customConversionUri,
+      name: 'custom.runme',
+      mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
+      remoteId: customConversionRemoteUri,
+      lastRemoteChecksum: customSnapshot.checksum,
+      lastSynced: new Date().toISOString(),
+      legacyConversionAttempt: {
+        originalGoogleDriveId: 'original-drive-user-rename',
+        sourceChecksum: md5(sourceDoc),
+        completedAt: '2026-09-03T00:00:00.000Z',
+      },
+      doc: '',
+      md5Checksum: customSnapshot.checksum,
+      operationLogRef: customSnapshot.ref,
+    })
+    vi.spyOn(store, 'syncFile').mockImplementation(async (uri: string) => {
+      if (uri !== sourceUri) {
+        await store.files.update(uri, { remoteId: newConversionRemoteUri })
+      }
+    })
+
+    const result = await store.convertLegacyNotebookToRunme(
+      sourceUri,
+      parentUri
+    )
+
+    expect(result.uri).not.toBe(customConversionUri)
+    expect(result.name).toBe('source.runme')
+    expect(result.remoteUri).toBe(newConversionRemoteUri)
+    expect(driveStore.rename).not.toHaveBeenCalled()
+    await expect(store.files.get(customConversionUri)).resolves.toMatchObject({
+      name: 'custom.runme',
+      remoteId: customConversionRemoteUri,
+    })
+    await expect(store.files.toArray()).resolves.toHaveLength(3)
+  })
 })
 
 describe('LocalNotebooks rename', () => {

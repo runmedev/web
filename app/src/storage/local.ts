@@ -2389,7 +2389,10 @@ export class LocalNotebooks extends Dexie {
             !completedDuringInvocation &&
             !isCompletedMatchingConversion) ||
           attempt?.originalGoogleDriveId !== originalGoogleDriveId ||
-          detectNotebookFileFormat(child.name) !== 'runme-operation-log'
+          detectNotebookFileFormat(child.name) !== 'runme-operation-log' ||
+          (child.name !== converted.fileName &&
+            !isActiveConversionAttempt &&
+            !completedDuringInvocation)
         ) {
           continue
         }
