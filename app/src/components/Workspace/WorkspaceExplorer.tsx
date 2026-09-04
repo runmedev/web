@@ -205,6 +205,10 @@ function isVisibleDocumentFile(name: string): boolean {
   return isNotebookFileName(name) || isExcalidrawFileName(name)
 }
 
+function isConvertibleLegacyNotebookFileName(name: string): boolean {
+  return isLegacyNotebookFileName(name) && !isExcalidrawFileName(name)
+}
+
 /**
  * Record that a workspace root outlived its separately persisted local
  * metadata. The local URI is opaque and safe to include in diagnostics.
@@ -337,7 +341,7 @@ function getContextMenuItemCount(menu: ContextMenuState): number {
     return (
       (menu.uri.startsWith('fs://') ? 0 : 1) +
       4 +
-      (isLegacyNotebookFileName(menu.name) ? 1 : 0) +
+      (isConvertibleLegacyNotebookFileName(menu.name) ? 1 : 0) +
       (menu.remoteUri ? 5 : 0)
     )
   }
@@ -1116,7 +1120,7 @@ export function WorkspaceExplorer() {
 
   const handleConvertLegacyNotebook = useCallback(
     async (menu: ContextMenuState) => {
-      if (!menu.parentUri || !isLegacyNotebookFileName(menu.name)) {
+      if (!menu.parentUri || !isConvertibleLegacyNotebookFileName(menu.name)) {
         return
       }
 
@@ -1808,7 +1812,9 @@ function formatShortTimestamp(date: Date): string {
               >
                 Rename
               </button>
-              {isLegacyNotebookFileName(adjustedContextMenu.name) && (
+              {isConvertibleLegacyNotebookFileName(
+                adjustedContextMenu.name
+              ) && (
                 <button
                   type="button"
                   className="ctx-menu-item"
