@@ -780,6 +780,58 @@ describe('WorkspaceExplorer current document handling', () => {
     expect(await screen.findByText(message)).toBeTruthy()
   })
 
+  it.each([
+    'Invalid Jupyter notebook JSON: SyntaxError',
+    'Unsupported Jupyter nbformat major version: 3',
+    'Jupyter notebook cells must be an array',
+  ])('shows actionable IPYNB validation guidance: %s', async (message) => {
+    const folderUri = 'local://folder/drive'
+    const fileUri = 'local://file/invalid-notebook'
+    mocks.workspaceItems = [folderUri]
+    mocks.isDriveItemUri.mockImplementation((uri: string) =>
+      uri.startsWith('https://drive.google.com')
+    )
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === folderUri) {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: [fileUri],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === fileUri) {
+        return {
+          uri,
+          name: 'invalid.ipynb',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/invalid/view',
+          parents: [folderUri],
+        }
+      }
+      return null
+    })
+    mocks.store.convertLegacyNotebookToRunme.mockRejectedValueOnce(
+      new Error(message)
+    )
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('invalid.ipynb'))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    )
+
+    expect(await screen.findByText(message)).toBeTruthy()
+  })
+
   it('prompts for Drive auth when the legacy source create is pending', async () => {
     mocks.workspaceItems = ['local://folder/drive']
     mocks.isDriveItemUri.mockImplementation((uri: string) =>

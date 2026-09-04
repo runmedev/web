@@ -3986,6 +3986,19 @@ describe('LocalNotebooks legacy notebook conversion', () => {
         })
       })
 
+    const attachDriveFileToFolder = store.attachDriveFileToFolder.bind(store)
+    vi.spyOn(store, 'attachDriveFileToFolder')
+      .mockRejectedValueOnce(new Error('transient folder attachment failure'))
+      .mockImplementation(attachDriveFileToFolder)
+
+    await expect(
+      store.convertLegacyNotebookToRunme(sourceUri, parentUri)
+    ).rejects.toThrow('transient folder attachment failure')
+    expect(
+      (await store.files.get(pendingUri))?.legacyConversionAttempt
+        ?.completedAt
+    ).toBeUndefined()
+
     const result = await store.convertLegacyNotebookToRunme(
       sourceUri,
       parentUri

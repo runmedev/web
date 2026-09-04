@@ -125,6 +125,9 @@ function legacyConversionErrorMessage(error: unknown): string {
   const actionablePrefixes = [
     'Resolve the sync conflict before converting',
     'Legacy .json file is not a Runme notebook',
+    'Invalid Jupyter notebook JSON',
+    'Unsupported Jupyter ',
+    'Jupyter ',
   ]
   return actionablePrefixes.some((prefix) => message.startsWith(prefix))
     ? message
