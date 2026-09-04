@@ -2400,18 +2400,17 @@ export class LocalNotebooks extends Dexie {
           child.name === converted.fileName &&
           detectNotebookFileFormat(child.name) === 'runme-operation-log'
         ) {
-          try {
-            pendingNotebook = child.operationLogRef
-              ? await this.loadOperationLogSnapshot(childUri)
-              : isDriveUri(child.remoteId)
-                ? decodeNotebookFile(
-                    await this.driveStore.loadContent(child.remoteId),
-                    child.name
-                  ).notebook
-                : undefined
-          } catch {
-            pendingNotebook = undefined
-          }
+          // A read failure is not evidence that the same-named file is
+          // unrelated. Surface it so a retry can inspect the existing Drive
+          // file instead of falling through and creating a duplicate.
+          pendingNotebook = child.operationLogRef
+            ? await this.loadOperationLogSnapshot(childUri)
+            : isDriveUri(child.remoteId)
+              ? decodeNotebookFile(
+                  await this.driveStore.loadContent(child.remoteId),
+                  child.name
+                ).notebook
+              : undefined
           if (
             pendingNotebook?.metadata[
               RunmeMetadataKey.OriginalGoogleDriveID
@@ -2434,7 +2433,9 @@ export class LocalNotebooks extends Dexie {
               // original conversion. The empty sentinel deliberately sends
               // it through the refresh path below.
               sourceChecksum: '',
-              completedAt: nowIsoString(),
+              // Keep the recovered marker unfinished until the final target
+              // sync succeeds, so any failure is reusable by the next retry.
+              completedAt: undefined,
             }
             await this.files.update(childUri, {
               legacyConversionAttempt: attempt,
