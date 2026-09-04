@@ -2429,6 +2429,10 @@ export class LocalNotebooks extends Dexie {
             completedAt: nowIsoString(),
           },
         })
+        await this.attachDriveFileToFolder(
+          destinationParent.remoteId,
+          childUri
+        )
         return (
           (await this.getMetadata(childUri)) ?? {
             uri: childUri,

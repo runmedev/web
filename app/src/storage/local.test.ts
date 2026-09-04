@@ -3657,6 +3657,12 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     expect(secondResult.uri).toBe(firstResult.uri)
     expect(secondResult.remoteUri).toBe(destinationRemoteUri)
     await expect(files.toArray()).resolves.toHaveLength(3)
+    expect((await folders.get(firstParentUri))?.children).toContain(
+      firstResult.uri
+    )
+    expect((await folders.get(secondParentUri))?.children).toContain(
+      firstResult.uri
+    )
   })
 
   it('syncs a pending Drive source before recording its original file ID', async () => {

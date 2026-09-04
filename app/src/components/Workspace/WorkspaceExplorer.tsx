@@ -122,7 +122,11 @@ function legacyConversionErrorMessage(error: unknown): string {
     return storageMessage
   }
   const message = error instanceof Error ? error.message.trim() : ''
-  return message.startsWith('Resolve the sync conflict before converting')
+  const actionablePrefixes = [
+    'Resolve the sync conflict before converting',
+    'Legacy .json file is not a Runme notebook',
+  ]
+  return actionablePrefixes.some((prefix) => message.startsWith(prefix))
     ? message
     : fallback
 }

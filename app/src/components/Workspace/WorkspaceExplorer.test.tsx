@@ -871,6 +871,9 @@ describe('WorkspaceExplorer current document handling', () => {
       expect(mocks.fsStore.loadContent).toHaveBeenCalledWith(fileUri)
       expect(mocks.fsStore.createContent).not.toHaveBeenCalled()
     })
+    expect(
+      await screen.findByText('Legacy .json file is not a Runme notebook')
+    ).toBeTruthy()
   })
 
   it('does not offer conversion for an existing .runme notebook', async () => {
