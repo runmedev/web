@@ -2373,12 +2373,18 @@ export class LocalNotebooks extends Dexie {
         const isActiveConversionAttempt = Boolean(
           attempt && !attempt.completedAt
         )
+        const isCompletedMatchingConversion = Boolean(
+          attempt?.completedAt &&
+            attempt.sourceChecksum === sourceChecksum &&
+            !child?.lastSyncError
+        )
         if (
           !child ||
-          (!isActiveConversionAttempt && !completedDuringInvocation) ||
+          (!isActiveConversionAttempt &&
+            !completedDuringInvocation &&
+            !isCompletedMatchingConversion) ||
           attempt?.originalGoogleDriveId !== originalGoogleDriveId ||
-          detectNotebookFileFormat(child.name) !== 'runme-operation-log' ||
-          (child.name !== converted.fileName && !isActiveConversionAttempt)
+          detectNotebookFileFormat(child.name) !== 'runme-operation-log'
         ) {
           continue
         }
@@ -2511,6 +2517,10 @@ export class LocalNotebooks extends Dexie {
           childUri
         )
         await this.syncFile(childUri)
+        await this.attachDriveFileToFolder(
+          destinationParent.remoteId,
+          childUri
+        )
         await this.files.update(childUri, {
           legacyConversionAttempt: {
             originalGoogleDriveId,
@@ -2551,6 +2561,10 @@ export class LocalNotebooks extends Dexie {
         created.uri
       )
       await this.syncFile(created.uri)
+      await this.attachDriveFileToFolder(
+        destinationParent.remoteId,
+        created.uri
+      )
       await this.files.update(created.uri, {
         legacyConversionAttempt: originalGoogleDriveId
           ? {

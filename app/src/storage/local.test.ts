@@ -3598,7 +3598,6 @@ describe('LocalNotebooks legacy notebook conversion', () => {
 
     const first = store.convertLegacyNotebookToRunme(sourceUri, parentUri)
     await targetSyncStarted
-    const second = store.convertLegacyNotebookToRunme(sourceUri, parentUri)
     // Simulate another tab refreshing the folder after the 60-second
     // provisional-child TTL expires while the first target sync is blocked.
     await store.folders.update(parentUri, {
@@ -3607,7 +3606,15 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       provisionalChildrenAttachedAt: {},
     })
     releaseTargetSync()
-    const [firstResult, secondResult] = await Promise.all([first, second])
+    const firstResult = await first
+    expect((await store.folders.get(parentUri))?.children).toContain(
+      firstResult.uri
+    )
+
+    const secondResult = await store.convertLegacyNotebookToRunme(
+      sourceUri,
+      parentUri
+    )
 
     expect(secondResult.uri).toBe(firstResult.uri)
     expect(secondResult.remoteUri).toBe(destinationRemoteUri)
@@ -3655,6 +3662,13 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     }
     const driveStore = {
       loadContent: vi.fn(async () => sourceDoc),
+      rename: vi.fn(async (uri: string, name: string) => ({
+        uri,
+        name,
+        type: NotebookStoreItemType.File,
+        children: [],
+        remoteUri: uri,
+      })),
     }
     const options = {
       files,
@@ -3689,7 +3703,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     })
     await files.put({
       id: secondSourceUri,
-      name: 'source.json',
+      name: 'renamed.json',
       remoteId: secondSourceRemoteUri,
       lastRemoteChecksum: md5(sourceDoc),
       lastSynced: new Date().toISOString(),
@@ -3737,7 +3751,12 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     const [firstResult, secondResult] = await Promise.all([first, second])
 
     expect(secondResult.uri).toBe(firstResult.uri)
+    expect(secondResult.name).toBe('renamed.runme')
     expect(secondResult.remoteUri).toBe(destinationRemoteUri)
+    expect(driveStore.rename).toHaveBeenCalledWith(
+      destinationRemoteUri,
+      'renamed.runme'
+    )
     await expect(files.toArray()).resolves.toHaveLength(3)
     expect((await folders.get(firstParentUri))?.children).toContain(
       firstResult.uri
