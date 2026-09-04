@@ -154,7 +154,7 @@ describe("isDriveItemUri", () => {
 });
 
 describe("DriveNotebookStore", () => {
-  it("uses one Drive v2 ETag for the browser CAS read and write", async () => {
+  it("reads a Drive v2 ETag and applies it to the CORS-capable v3 upload", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(async (input, init) => {
@@ -183,7 +183,7 @@ describe("DriveNotebookStore", () => {
           );
         }
         expect(init?.method).toBe("PATCH");
-        expect(url.pathname).toBe("/upload/drive/v2/files/file123");
+        expect(url.pathname).toBe("/upload/drive/v3/files/file123");
         expect(url.searchParams.get("uploadType")).toBe("media");
         expect(url.searchParams.get("supportsAllDrives")).toBe("true");
         expect(init?.headers).toMatchObject({
