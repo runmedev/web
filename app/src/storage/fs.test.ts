@@ -838,6 +838,43 @@ describe("FilesystemNotebookStore", () => {
       expect(existing.createWritable).not.toHaveBeenCalled()
     })
 
+    it('serializes case aliases on a case-insensitive filesystem', async () => {
+      vi.mocked(rootHandle.getFileHandle).mockImplementation(
+        async (fileName: string, options?: FileSystemGetFileOptions) => {
+          const physicalName = fileName.normalize('NFC').toLowerCase()
+          if (rootEntries.has(physicalName)) {
+            return rootEntries.get(physicalName)
+          }
+          if (options?.create) {
+            const handle = createMockFileHandle(fileName, '')
+            rootEntries.set(physicalName, handle)
+            return handle
+          }
+          throw new DOMException('File not found', 'NotFoundError')
+        }
+      )
+      const upperContent = createInitialNotebookFile('Report.runme')
+      const lowerContent = createInitialNotebookFile('report.runme')
+
+      const results = await Promise.allSettled([
+        store.createContent(ROOT_URI, 'Report.runme', upperContent),
+        store.createContent(ROOT_URI, 'report.runme', lowerContent),
+      ])
+
+      expect(
+        results.filter((result) => result.status === 'fulfilled')
+      ).toHaveLength(1)
+      const rejection = results.find((result) => result.status === 'rejected')
+      expect(rejection).toMatchObject({
+        reason: expect.any(FilesystemEntryAlreadyExistsError),
+      })
+      const savedContent = await rootEntries
+        .get('report.runme')
+        .getFile()
+        .then((file) => file.text())
+      expect([upperContent, lowerContent]).toContain(savedContent)
+    })
+
     it('serializes concurrent creates through aliases of the same directory', async () => {
       const firstContent = createInitialNotebookFile('shared.runme')
       const secondContent = createInitialNotebookFile('shared.runme')

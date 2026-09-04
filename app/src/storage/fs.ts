@@ -128,6 +128,18 @@ function entryRecordId(workspaceId: string, relativePath: string): string {
   return `${workspaceId}:${relativePath}`;
 }
 
+/**
+ * Canonicalize only the coordination key, never the actual filesystem path.
+ * This safely over-serializes case-distinct creates on case-sensitive volumes
+ * while preventing overwrite races where the underlying volume ignores case.
+ */
+function physicalEntryLockId(
+  workspaceId: string,
+  relativePath: string
+): string {
+  return entryRecordId(workspaceId, relativePath.normalize('NFC').toLowerCase())
+}
+
 // ---------------------------------------------------------------------------
 // Notebook helpers
 // ---------------------------------------------------------------------------
@@ -639,14 +651,16 @@ export class FilesystemNotebookStore {
     relativePath: string
   ): Promise<string> {
     const workspace = await this.db.workspaces.get(workspaceId)
-    if (!workspace) return entryRecordId(workspaceId, relativePath)
+    if (!workspace) return physicalEntryLockId(workspaceId, relativePath)
 
-    const equivalentEntryIds = [entryRecordId(workspaceId, relativePath)]
+    const equivalentEntryIds = [physicalEntryLockId(workspaceId, relativePath)]
     for (const candidate of await this.db.workspaces.toArray()) {
       if (candidate.id === workspaceId) continue
       try {
         if (await workspace.rootHandle.isSameEntry(candidate.rootHandle)) {
-          equivalentEntryIds.push(entryRecordId(candidate.id, relativePath))
+          equivalentEntryIds.push(
+            physicalEntryLockId(candidate.id, relativePath)
+          )
           continue
         }
 
@@ -656,10 +670,10 @@ export class FilesystemNotebookStore {
         if (candidateBelowWorkspace) {
           const candidatePrefix = candidateBelowWorkspace.join('/')
           if (relativePath === candidatePrefix) {
-            equivalentEntryIds.push(entryRecordId(candidate.id, ''))
+            equivalentEntryIds.push(physicalEntryLockId(candidate.id, ''))
           } else if (relativePath.startsWith(`${candidatePrefix}/`)) {
             equivalentEntryIds.push(
-              entryRecordId(
+              physicalEntryLockId(
                 candidate.id,
                 relativePath.slice(candidatePrefix.length + 1)
               )
@@ -673,7 +687,7 @@ export class FilesystemNotebookStore {
         )
         if (workspaceBelowCandidate) {
           equivalentEntryIds.push(
-            entryRecordId(
+            physicalEntryLockId(
               candidate.id,
               [...workspaceBelowCandidate, relativePath]
                 .filter(Boolean)
