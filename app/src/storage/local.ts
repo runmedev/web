@@ -2390,6 +2390,25 @@ export class LocalNotebooks extends Dexie {
           continue
         }
 
+        const currentParent = await this.findParentFolder(childUri)
+        if (
+          !isDriveUri(child.remoteId) &&
+          child.parentRemoteIdWhenCreated &&
+          parseDriveItem(child.parentRemoteIdWhenCreated).id !==
+            destinationDriveFolder.id
+        ) {
+          // The original create may already have committed before the local
+          // remote ID was persisted. Reconcile it against the original parent
+          // before changing folders, otherwise the retry could create a second
+          // file in the destination folder.
+          await this.completePendingDriveCreate(childUri, child)
+          const recoveredChild = await this.files.get(childUri)
+          if (!recoveredChild) {
+            throw new Error(`Local notebook record not found for ${childUri}`)
+          }
+          child = recoveredChild
+        }
+
         if (child.name !== converted.fileName) {
           await this.rename(childUri, converted.fileName)
           const renamedChild = await this.files.get(childUri)
@@ -2399,7 +2418,6 @@ export class LocalNotebooks extends Dexie {
           child = renamedChild
         }
 
-        const currentParent = await this.findParentFolder(childUri)
         if (!isDriveUri(child.remoteId)) {
           if (
             child.parentRemoteIdWhenCreated !== destinationParent.remoteId
@@ -2412,13 +2430,35 @@ export class LocalNotebooks extends Dexie {
               parentRemoteIdWhenCreated: destinationParent.remoteId,
             }
           }
-        } else if (
-          currentParent &&
-          isDriveUri(currentParent.remoteId) &&
-          parseDriveItem(currentParent.remoteId).id !==
+        } else {
+          let currentRemoteParent =
+            currentParent && isDriveUri(currentParent.remoteId)
+              ? currentParent.remoteId
+              : undefined
+          if (!currentRemoteParent) {
+            currentRemoteParent = (
+              await this.driveStore.getMetadata(child.remoteId)
+            )?.parents?.[0]
+          }
+          if (!currentRemoteParent) {
+            throw new Error(
+              `Google Drive parent folder not found for ${child.remoteId}`
+            )
+          }
+          if (
+            parseDriveItem(currentRemoteParent).id !==
             destinationDriveFolder.id
-        ) {
-          await this.move(childUri, destinationParentUri)
+          ) {
+            if (currentParent) {
+              await this.move(childUri, destinationParentUri)
+            } else {
+              await this.driveStore.move(
+                child.remoteId,
+                currentRemoteParent,
+                destinationParent.remoteId
+              )
+            }
+          }
         }
 
         if (attempt.sourceChecksum !== sourceChecksum) {
