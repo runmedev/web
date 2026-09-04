@@ -10,7 +10,7 @@ import { appLogger } from '../lib/logging/runtime'
 import { serializeNotebookToMarkdown } from '../lib/markdown/serializeNotebookToMarkdown'
 import {
   RUNME_OPERATION_LOG_MIME_TYPE,
-  convertLegacyNotebookToRunme,
+  convertLegacyNotebookFileToRunme,
   createInitialNotebookFile,
   decodeNotebookFile,
   detectNotebookFileFormat,
@@ -39,7 +39,7 @@ import {
   serializeOperationLog,
 } from '../lib/operationLog'
 import { appState } from '../lib/runtime/AppState'
-import { parser_pb } from '../runme/client'
+import { RunmeMetadataKey, parser_pb } from '../runme/client'
 import {
   type ConflictDocStorage,
   type ConflictDocumentRef,
@@ -2196,12 +2196,12 @@ export class LocalNotebooks extends Dexie {
     if (isDriveUri(sourceRecord.remoteId)) {
       await this.syncFile(sourceUri)
     }
-    const sourceNotebook = await this.load(sourceUri)
+    const sourceContent = await this.loadContent(sourceUri)
     const originalGoogleDriveId = isDriveUri(sourceRecord.remoteId)
       ? parseDriveItem(sourceRecord.remoteId).id
       : undefined
-    const converted = await convertLegacyNotebookToRunme(
-      sourceNotebook,
+    const converted = await convertLegacyNotebookFileToRunme(
+      sourceContent,
       sourceRecord.name,
       { originalGoogleDriveId }
     )
@@ -2228,6 +2228,46 @@ export class LocalNotebooks extends Dexie {
     const destinationParent = await this.folders.get(destinationParentUri)
     if (!destinationParent) {
       throw new Error(`Parent folder not found for ${destinationParentUri}`)
+    }
+
+    if (isDriveUri(destinationParent.remoteId) && originalGoogleDriveId) {
+      for (const childUri of destinationParent.children) {
+        if (!childUri.startsWith('local://file/')) {
+          continue
+        }
+        const child = await this.files.get(childUri)
+        if (
+          child?.name !== converted.fileName ||
+          child.remoteId !== '' ||
+          child.parentRemoteIdWhenCreated !== destinationParent.remoteId ||
+          detectNotebookFileFormat(child.name) !== 'runme-operation-log'
+        ) {
+          continue
+        }
+        try {
+          const pendingNotebook = await this.loadOperationLogSnapshot(childUri)
+          if (
+            pendingNotebook.metadata[
+              RunmeMetadataKey.OriginalGoogleDriveID
+            ] !== originalGoogleDriveId
+          ) {
+            continue
+          }
+        } catch {
+          continue
+        }
+
+        await this.syncFile(childUri)
+        return (await this.getMetadata(childUri)) ?? {
+          uri: childUri,
+          name: child.name,
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: publicRemoteUri(child),
+          mimeType: child.mimeType,
+          parents: [destinationParentUri],
+        }
+      }
     }
 
     const created = await this.createContent(
