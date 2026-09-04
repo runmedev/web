@@ -2293,36 +2293,47 @@ export class LocalNotebooks extends Dexie {
         }
 
         if (child.legacyConversionAttempt.sourceChecksum !== sourceChecksum) {
-          const currentLog = parseOperationLog(await this.loadContent(childUri))
-          const currentNotebook = materializedLogToNotebook(
-            materializeOperationLog(currentLog.operations)
-          )
-          const appendedOperations = await buildOperationLogDiff({
-            previous: currentNotebook,
-            next: converted.notebook,
-            observedOperations: currentLog.operations,
-            actorId: currentLog.header.created_by,
-            firstActorSequence:
-              highestActorSequence(
-                currentLog.operations,
-                currentLog.header.created_by
-              ) + 1,
-          })
-          const refreshedContent = serializeOperationLog(currentLog.header, [
-            ...currentLog.operations,
-            ...appendedOperations,
-          ])
-          await this.saveContent(
-            childUri,
-            refreshedContent,
-            RUNME_OPERATION_LOG_MIME_TYPE
+          if (!child.operationLogRef) {
+            continue
+          }
+          const refreshed = await this.operationLogStorage.appendTransaction(
+            child.operationLogRef,
+            async (currentDocument) => {
+              const currentLog = parseOperationLog(currentDocument)
+              const currentNotebook = materializedLogToNotebook(
+                materializeOperationLog(currentLog.operations)
+              )
+              const appendedOperations = await buildOperationLogDiff({
+                previous: currentNotebook,
+                next: converted.notebook,
+                observedOperations: currentLog.operations,
+                actorId: currentLog.header.created_by,
+                firstActorSequence:
+                  highestActorSequence(
+                    currentLog.operations,
+                    currentLog.header.created_by
+                  ) + 1,
+              })
+              return appendedOperations.length === 0
+                ? ''
+                : `${appendedOperations
+                    .map((operation) =>
+                      canonicalJson(operation as unknown as JsonValue)
+                    )
+                    .join('\n')}\n`
+            },
+            { validate: (document) => void parseOperationLog(document) }
           )
           await this.files.update(childUri, {
+            doc: '',
+            md5Checksum: refreshed.checksum,
+            operationLogRef: refreshed.ref,
             legacyConversionAttempt: {
               originalGoogleDriveId,
               sourceChecksum,
             },
           })
+          this.notifySync(childUri)
         }
 
         await this.syncFile(childUri)
