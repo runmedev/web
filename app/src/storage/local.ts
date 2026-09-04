@@ -2199,8 +2199,13 @@ export class LocalNotebooks extends Dexie {
       )
     }
     const invokedAt = nowIsoString()
+    const sourceRecord = await this.files.get(sourceUri)
+    const sourceLockIdentity =
+      sourceRecord && isDriveUri(sourceRecord.remoteId)
+        ? `drive:${parseDriveItem(sourceRecord.remoteId).id}`
+        : sourceUri
     return this.driveSyncCoordinator.runExclusive(
-      `legacy-conversion:${sourceUri}`,
+      `legacy-conversion:${sourceLockIdentity}`,
       () =>
         this.convertLegacyNotebookToRunmeExclusive(
           sourceUri,
@@ -2300,7 +2305,24 @@ export class LocalNotebooks extends Dexie {
     }
 
     if (isDriveUri(destinationParent.remoteId) && originalGoogleDriveId) {
-      for (const childUri of destinationParent.children) {
+      const destinationDriveFolder = parseDriveItem(destinationParent.remoteId)
+      const equivalentDestinationParents = await this.folders
+        .filter((record) => {
+          try {
+            const candidate = parseDriveItem(record.remoteId)
+            return (
+              candidate.type === NotebookStoreItemType.Folder &&
+              candidate.id === destinationDriveFolder.id
+            )
+          } catch {
+            return false
+          }
+        })
+        .toArray()
+      const candidateChildUris = new Set(
+        equivalentDestinationParents.flatMap((record) => record.children)
+      )
+      for (const childUri of candidateChildUris) {
         if (!childUri.startsWith('local://file/')) {
           continue
         }

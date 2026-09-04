@@ -627,7 +627,13 @@ export class FilesystemNotebookStore {
     })
   }
 
-  /** Use the same create lock for workspace aliases of one physical root. */
+  /**
+   * Use the same create lock for every workspace path that names one physical
+   * entry. Besides identical root aliases, mounted roots can overlap (for
+   * example, one workspace may open a subdirectory of another workspace).
+   * Express the target relative to every registered ancestor/descendant root
+   * and choose the same stable key from that equivalent set.
+   */
   private async physicalEntryLockKey(
     workspaceId: string,
     relativePath: string
@@ -635,19 +641,52 @@ export class FilesystemNotebookStore {
     const workspace = await this.db.workspaces.get(workspaceId)
     if (!workspace) return entryRecordId(workspaceId, relativePath)
 
-    const equivalentIds = [workspaceId]
+    const equivalentEntryIds = [entryRecordId(workspaceId, relativePath)]
     for (const candidate of await this.db.workspaces.toArray()) {
       if (candidate.id === workspaceId) continue
       try {
         if (await workspace.rootHandle.isSameEntry(candidate.rootHandle)) {
-          equivalentIds.push(candidate.id)
+          equivalentEntryIds.push(entryRecordId(candidate.id, relativePath))
+          continue
+        }
+
+        const candidateBelowWorkspace = await workspace.rootHandle.resolve(
+          candidate.rootHandle
+        )
+        if (candidateBelowWorkspace) {
+          const candidatePrefix = candidateBelowWorkspace.join('/')
+          if (relativePath === candidatePrefix) {
+            equivalentEntryIds.push(entryRecordId(candidate.id, ''))
+          } else if (relativePath.startsWith(`${candidatePrefix}/`)) {
+            equivalentEntryIds.push(
+              entryRecordId(
+                candidate.id,
+                relativePath.slice(candidatePrefix.length + 1)
+              )
+            )
+          }
+          continue
+        }
+
+        const workspaceBelowCandidate = await candidate.rootHandle.resolve(
+          workspace.rootHandle
+        )
+        if (workspaceBelowCandidate) {
+          equivalentEntryIds.push(
+            entryRecordId(
+              candidate.id,
+              [...workspaceBelowCandidate, relativePath]
+                .filter(Boolean)
+                .join('/')
+            )
+          )
         }
       } catch {
-        // A stale or revoked alias cannot provide a reliable shared identity.
+        // A stale or revoked overlapping root cannot provide shared identity.
       }
     }
-    equivalentIds.sort()
-    return entryRecordId(equivalentIds[0], relativePath)
+    equivalentEntryIds.sort()
+    return equivalentEntryIds[0]
   }
 
   async rename(uri: string, name: string): Promise<NotebookStoreItem> {

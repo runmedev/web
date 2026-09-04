@@ -882,6 +882,65 @@ describe("FilesystemNotebookStore", () => {
       expect([firstContent, secondContent]).toContain(savedContent)
     })
 
+    it('serializes concurrent creates through overlapping workspace roots', async () => {
+      const firstContent = createInitialNotebookFile('shared.runme')
+      const secondContent = createInitialNotebookFile('shared.runme')
+      const nestedWorkspaceId = 'nested-workspace-id'
+      const nestedEntries = new Map<string, any>()
+      const nestedRootHandle = createMockDirectoryHandle(
+        'subdir',
+        nestedEntries
+      )
+      rootEntries.set('subdir', nestedRootHandle)
+      ;(rootHandle as any).isSameEntry = vi.fn(async () => false)
+      ;(nestedRootHandle as any).isSameEntry = vi.fn(async () => false)
+      ;(rootHandle as any).resolve = vi.fn(
+        async (other: FileSystemHandle) =>
+          other === nestedRootHandle ? ['subdir'] : null
+      )
+      ;(nestedRootHandle as any).resolve = vi.fn(async () => null)
+      ;(db.workspaces as any)._store.set(nestedWorkspaceId, {
+        id: nestedWorkspaceId,
+        name: 'subdir',
+        rootHandle: nestedRootHandle,
+        lastOpened: Date.now(),
+        permissionState: 'granted',
+      })
+      ;(db.entries as any)._store.set(`${nestedWorkspaceId}:`, {
+        id: `${nestedWorkspaceId}:`,
+        workspaceId: nestedWorkspaceId,
+        relativePath: '',
+        kind: 'directory',
+        handle: nestedRootHandle,
+        lastKnownMtime: 0,
+        lastKnownSize: 0,
+      })
+      const outerSubdirectoryUri = `fs://workspace/${WORKSPACE_ID}/dir/${encodeURIComponent('subdir')}`
+      const nestedRootUri = `fs://workspace/${nestedWorkspaceId}/dir/${encodeURIComponent('')}`
+
+      const results = await Promise.allSettled([
+        store.createContent(
+          outerSubdirectoryUri,
+          'shared.runme',
+          firstContent
+        ),
+        store.createContent(nestedRootUri, 'shared.runme', secondContent),
+      ])
+
+      expect(
+        results.filter((result) => result.status === 'fulfilled')
+      ).toHaveLength(1)
+      const rejection = results.find((result) => result.status === 'rejected')
+      expect(rejection).toMatchObject({
+        reason: expect.any(FilesystemEntryAlreadyExistsError),
+      })
+      const savedContent = await nestedEntries
+        .get('shared.runme')
+        .getFile()
+        .then((file) => file.text())
+      expect([firstContent, secondContent]).toContain(savedContent)
+    })
+
     it('calls getFileHandle with create: true', async () => {
       await store.create(ROOT_URI, 'new-notebook.json')
       expect(rootHandle.getFileHandle).toHaveBeenCalledWith(

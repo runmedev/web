@@ -3537,15 +3537,21 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     })
   })
 
-  it('deduplicates concurrent Drive conversion requests across stores', async () => {
-    const sourceUri = 'local://file/concurrent-drive-source'
-    const sourceRemoteUri =
+  it('deduplicates concurrent Drive conversions across equivalent source URLs and folder mounts', async () => {
+    const firstSourceUri = 'local://file/concurrent-drive-source-1'
+    const secondSourceUri = 'local://file/concurrent-drive-source-2'
+    const firstSourceRemoteUri =
       'https://drive.google.com/file/d/concurrent-drive-source/view'
+    const secondSourceRemoteUri =
+      'https://drive.google.com/open?id=concurrent-drive-source'
     const destinationRemoteUri =
       'https://drive.google.com/file/d/concurrent-drive-target/view'
-    const parentUri = 'local://folder/concurrent-drive'
-    const parentRemoteUri =
+    const firstParentUri = 'local://folder/concurrent-drive-1'
+    const secondParentUri = 'local://folder/concurrent-drive-2'
+    const firstParentRemoteUri =
       'https://drive.google.com/drive/folders/concurrent-drive'
+    const secondParentRemoteUri =
+      'https://drive.google.com/drive/folders/concurrent-drive?resourcekey=alias'
     const sourceDoc = notebookJson('echo concurrent')
     const files = createMockTable<LocalFileRecord>()
     const folders = createMockTable<LocalFolderRecord>()
@@ -3558,7 +3564,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     })
     const coordinator: DriveSyncCoordinator = {
       runExclusive: (key, operation) => {
-        if (key === `legacy-conversion:${sourceUri}`) {
+        if (key === 'legacy-conversion:drive:concurrent-drive-source') {
           legacyLockRequests += 1
           if (legacyLockRequests === 2) notifySecondLockRequest()
         }
@@ -3577,16 +3583,32 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     const firstStore = createTestStore(driveStore, options)
     const secondStore = createTestStore(driveStore, options)
     await folders.put({
-      id: parentUri,
-      name: 'Concurrent Drive',
-      remoteId: parentRemoteUri,
-      children: [sourceUri],
+      id: firstParentUri,
+      name: 'Concurrent Drive first mount',
+      remoteId: firstParentRemoteUri,
+      children: [firstSourceUri],
+      lastSynced: '',
+    })
+    await folders.put({
+      id: secondParentUri,
+      name: 'Concurrent Drive alias mount',
+      remoteId: secondParentRemoteUri,
+      children: [secondSourceUri],
       lastSynced: '',
     })
     await files.put({
-      id: sourceUri,
+      id: firstSourceUri,
       name: 'source.json',
-      remoteId: sourceRemoteUri,
+      remoteId: firstSourceRemoteUri,
+      lastRemoteChecksum: md5(sourceDoc),
+      lastSynced: new Date().toISOString(),
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+    await files.put({
+      id: secondSourceUri,
+      name: 'source.json',
+      remoteId: secondSourceRemoteUri,
       lastRemoteChecksum: md5(sourceDoc),
       lastSynced: new Date().toISOString(),
       doc: sourceDoc,
@@ -3601,7 +3623,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       notifyFirstTargetSync = resolve
     })
     vi.spyOn(firstStore, 'syncFile').mockImplementation(async (uri: string) => {
-      if (uri === sourceUri) return
+      if (uri === firstSourceUri || uri === secondSourceUri) return
       notifyFirstTargetSync()
       await firstTargetSyncReleased
       await files.update(uri, {
@@ -3611,7 +3633,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     })
     vi.spyOn(secondStore, 'syncFile').mockImplementation(
       async (uri: string) => {
-        if (uri === sourceUri) return
+        if (uri === firstSourceUri || uri === secondSourceUri) return
         await files.update(uri, {
           remoteId: destinationRemoteUri,
           parentRemoteIdWhenCreated: undefined,
@@ -3619,11 +3641,14 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       }
     )
 
-    const first = firstStore.convertLegacyNotebookToRunme(sourceUri, parentUri)
+    const first = firstStore.convertLegacyNotebookToRunme(
+      firstSourceUri,
+      firstParentUri
+    )
     await firstTargetSyncStarted
     const second = secondStore.convertLegacyNotebookToRunme(
-      sourceUri,
-      parentUri
+      secondSourceUri,
+      secondParentUri
     )
     await secondLockRequested
     releaseFirstTargetSync()
@@ -3631,7 +3656,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
 
     expect(secondResult.uri).toBe(firstResult.uri)
     expect(secondResult.remoteUri).toBe(destinationRemoteUri)
-    await expect(files.toArray()).resolves.toHaveLength(2)
+    await expect(files.toArray()).resolves.toHaveLength(3)
   })
 
   it('syncs a pending Drive source before recording its original file ID', async () => {
