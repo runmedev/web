@@ -3719,6 +3719,137 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     })
   })
 
+  it('keeps pending and assigned Drive source conversions under one lock', async () => {
+    const sourceUri = 'local://file/transitioning-drive-source'
+    const sourceRemoteUri =
+      'https://drive.google.com/file/d/transitioning-drive-source/view'
+    const destinationRemoteUri =
+      'https://drive.google.com/file/d/transitioning-drive-target/view'
+    const parentUri = 'local://folder/transitioning-drive'
+    const parentRemoteUri =
+      'https://drive.google.com/drive/folders/transitioning-drive'
+    const sourceDoc = notebookJson('echo transitioning source')
+    const files = createMockTable<LocalFileRecord>()
+    const folders = createMockTable<LocalFolderRecord>()
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const baseCoordinator = createTestDriveSyncCoordinator()
+    let canonicalLockRequests = 0
+    let notifyFirstRekeyRequested!: () => void
+    const firstRekeyRequested = new Promise<void>((resolve) => {
+      notifyFirstRekeyRequested = resolve
+    })
+    const coordinator: DriveSyncCoordinator = {
+      runExclusive: (key, operation) => {
+        if (
+          key ===
+          'legacy-conversion:drive:transitioning-drive-source'
+        ) {
+          canonicalLockRequests += 1
+          if (canonicalLockRequests === 2) notifyFirstRekeyRequested()
+        }
+        return baseCoordinator.runExclusive(key, operation)
+      },
+    }
+    const driveStore = {
+      loadContent: vi.fn(async () => sourceDoc),
+    }
+    const options = {
+      files,
+      folders,
+      driveSyncCoordinator: coordinator,
+      operationLogStorage,
+    }
+    const firstStore = createTestStore(driveStore, options)
+    const secondStore = createTestStore(driveStore, options)
+    await folders.put({
+      id: parentUri,
+      name: 'Transitioning Drive source',
+      remoteId: parentRemoteUri,
+      children: [sourceUri],
+      lastSynced: '',
+    })
+    await files.put({
+      id: sourceUri,
+      name: 'source.json',
+      remoteId: '',
+      parentRemoteIdWhenCreated: parentRemoteUri,
+      driveCreateOperationId: 'transitioning-source-create-operation',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+
+    let notifySourceAssigned!: () => void
+    const sourceAssigned = new Promise<void>((resolve) => {
+      notifySourceAssigned = resolve
+    })
+    let releaseFirstSourceSync!: () => void
+    const firstSourceSyncReleased = new Promise<void>((resolve) => {
+      releaseFirstSourceSync = resolve
+    })
+    vi.spyOn(firstStore, 'syncFile').mockImplementation(async (uri: string) => {
+      if (uri === sourceUri) {
+        await files.update(uri, {
+          remoteId: sourceRemoteUri,
+          parentRemoteIdWhenCreated: undefined,
+        })
+        notifySourceAssigned()
+        await firstSourceSyncReleased
+        return
+      }
+      await files.update(uri, { remoteId: destinationRemoteUri })
+    })
+    vi.spyOn(secondStore, 'syncFile').mockImplementation(
+      async (uri: string) => {
+        if (uri === sourceUri) return
+        await files.update(uri, { remoteId: destinationRemoteUri })
+      }
+    )
+
+    let notifySecondCreateStarted!: () => void
+    const secondCreateStarted = new Promise<void>((resolve) => {
+      notifySecondCreateStarted = resolve
+    })
+    let releaseSecondCreate!: () => void
+    const secondCreateReleased = new Promise<void>((resolve) => {
+      releaseSecondCreate = resolve
+    })
+    const secondCreateContent = secondStore.createContent.bind(secondStore)
+    vi.spyOn(secondStore, 'createContent').mockImplementation(
+      async (parent, name, content, mimeType, createOptions) => {
+        notifySecondCreateStarted()
+        await secondCreateReleased
+        return secondCreateContent(
+          parent,
+          name,
+          content,
+          mimeType,
+          createOptions
+        )
+      }
+    )
+
+    const first = firstStore.convertLegacyNotebookToRunme(
+      sourceUri,
+      parentUri
+    )
+    await sourceAssigned
+    const second = secondStore.convertLegacyNotebookToRunme(
+      sourceUri,
+      parentUri
+    )
+    await secondCreateStarted
+    releaseFirstSourceSync()
+    await firstRekeyRequested
+    releaseSecondCreate()
+    const [firstResult, secondResult] = await Promise.all([first, second])
+
+    expect(firstResult.uri).toBe(secondResult.uri)
+    expect(firstResult.remoteUri).toBe(destinationRemoteUri)
+    await expect(files.toArray()).resolves.toHaveLength(2)
+  })
+
   it('discovers the Drive parent when one is not supplied', async () => {
     const sourceUri = 'local://file/source-drive'
     const sourceRemoteUri =

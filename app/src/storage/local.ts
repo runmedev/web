@@ -2204,13 +2204,15 @@ export class LocalNotebooks extends Dexie {
       sourceRecord && isDriveUri(sourceRecord.remoteId)
         ? `drive:${parseDriveItem(sourceRecord.remoteId).id}`
         : sourceUri
+    const sourceLockKey = `legacy-conversion:${sourceLockIdentity}`
     return this.driveSyncCoordinator.runExclusive(
-      `legacy-conversion:${sourceLockIdentity}`,
+      sourceLockKey,
       () =>
         this.convertLegacyNotebookToRunmeExclusive(
           sourceUri,
           parentUri,
-          invokedAt
+          invokedAt,
+          sourceLockKey
         )
     )
   }
@@ -2218,7 +2220,9 @@ export class LocalNotebooks extends Dexie {
   private async convertLegacyNotebookToRunmeExclusive(
     sourceUri: string,
     parentUri: string | undefined,
-    invokedAt: string
+    invokedAt: string,
+    heldLockKey: string,
+    sourceAlreadySynced = false
   ): Promise<NotebookStoreItem> {
     let sourceRecord = await this.files.get(sourceUri)
     if (!sourceRecord) {
@@ -2245,8 +2249,9 @@ export class LocalNotebooks extends Dexie {
     }
 
     if (
-      isDriveUri(sourceRecord.remoteId) ||
-      isDriveUri(sourceRecord.parentRemoteIdWhenCreated)
+      !sourceAlreadySynced &&
+      (isDriveUri(sourceRecord.remoteId) ||
+        isDriveUri(sourceRecord.parentRemoteIdWhenCreated))
     ) {
       await this.syncFile(sourceUri)
       sourceRecord = await this.files.get(sourceUri)
@@ -2263,6 +2268,23 @@ export class LocalNotebooks extends Dexie {
       throw new Error(
         `Resolve the sync conflict before converting ${sourceRecord.name}`
       )
+    }
+    if (isDriveUri(sourceRecord.remoteId)) {
+      const canonicalLockKey = `legacy-conversion:drive:${parseDriveItem(sourceRecord.remoteId).id}`
+      if (canonicalLockKey !== heldLockKey) {
+        // A pending Drive create starts under its local URI. Retain that lock
+        // while joining the stable Drive-ID lock so callers arriving after the
+        // source upload cannot race destination-marker creation.
+        return this.driveSyncCoordinator.runExclusive(canonicalLockKey, () =>
+          this.convertLegacyNotebookToRunmeExclusive(
+            sourceUri,
+            parentUri,
+            invokedAt,
+            canonicalLockKey,
+            true
+          )
+        )
+      }
     }
     // DriveNotebookStore.load normalizes protobuf JSON with unknown fields
     // ignored. Read the raw bytes after sync rather than the normalized cache.
