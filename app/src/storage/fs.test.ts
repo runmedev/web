@@ -5,11 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   RUNME_OPERATION_LOG_MIME_TYPE,
+  createInitialNotebookFile,
   encodeRunmeNotebook,
 } from '../lib/notebookFormat'
 import { parseOperationLog } from '../lib/operationLog'
 import { parser_pb } from '../runme/client'
-import { FilesystemNotebookStore, isFileSystemAccessSupported } from './fs'
+import {
+  FilesystemEntryAlreadyExistsError,
+  FilesystemNotebookStore,
+  isFileSystemAccessSupported,
+} from './fs'
 import type { FsDatabase, FsEntryRecord, WorkspaceRecord } from './fsdb'
 import { NotebookStoreItemType } from './notebook'
 
@@ -131,6 +136,7 @@ function createMockTable<T extends { id?: string }>() {
     delete: vi.fn(async (id: string) => {
       store.delete(id);
     }),
+    toArray: vi.fn(async () => [...store.values()]),
     orderBy: vi.fn((field: string) => ({
       reverse: vi.fn(() => ({
         toArray: vi.fn(async () => {
@@ -771,6 +777,227 @@ describe("FilesystemNotebookStore", () => {
         },
         operations: [],
       })
+    })
+
+    it('creates a notebook with the supplied content in one operation', async () => {
+      const content = createInitialNotebookFile('converted.runme')
+
+      const item = await store.createContent(
+        ROOT_URI,
+        'converted.runme',
+        content
+      )
+
+      expect(item.name).toBe('converted.runme')
+      await expect(
+        rootEntries.get('converted.runme').getFile().then((file) => file.text())
+      ).resolves.toBe(content)
+    })
+
+    it('removes a newly created target when writing its content fails', async () => {
+      const failingHandle = createMockFileHandle('converted.runme', '')
+      vi.mocked(failingHandle.createWritable).mockResolvedValue({
+        write: vi.fn(async () => {
+          throw new Error('write failed')
+        }),
+        close: vi.fn(async () => {}),
+      } as FileSystemWritableFileStream)
+      vi.mocked(rootHandle.getFileHandle).mockImplementation(
+        async (fileName: string, options?: FileSystemGetFileOptions) => {
+          if (!options?.create) {
+            throw new DOMException('File not found', 'NotFoundError')
+          }
+          rootEntries.set(fileName, failingHandle)
+          return failingHandle
+        }
+      )
+
+      await expect(
+        store.createContent(
+          ROOT_URI,
+          'converted.runme',
+          createInitialNotebookFile('converted.runme')
+        )
+      ).rejects.toThrow('write failed')
+
+      expect(rootHandle.removeEntry).toHaveBeenCalledWith('converted.runme')
+      expect(rootEntries.has('converted.runme')).toBe(false)
+    })
+
+    it('refuses to overwrite an existing notebook', async () => {
+      const original = 'original runme content'
+      const existing = createMockFileHandle('shared.runme', original)
+      rootEntries.set('shared.runme', existing)
+
+      await expect(store.create(ROOT_URI, 'shared.runme')).rejects.toThrow(
+        'A file named "shared.runme" already exists in this folder.'
+      )
+      await expect(existing.getFile().then((file) => file.text())).resolves.toBe(
+        original
+      )
+      expect(existing.createWritable).not.toHaveBeenCalled()
+    })
+
+    it('refuses a file created externally between the probe and create', async () => {
+      const externalContent = 'content written by another process'
+      const external = createMockFileHandle('shared.runme', externalContent)
+      vi.mocked(rootHandle.getFileHandle).mockImplementation(
+        async (fileName: string, options?: FileSystemGetFileOptions) => {
+          if (!options?.create) {
+            throw new DOMException('File not found', 'NotFoundError')
+          }
+          rootEntries.set(fileName, external)
+          return external
+        }
+      )
+
+      await expect(store.create(ROOT_URI, 'shared.runme')).rejects.toThrow(
+        'A file named "shared.runme" already exists in this folder.'
+      )
+      const preserved = await external.getFile()
+      await expect(preserved.text()).resolves.toBe(externalContent)
+      expect(external.createWritable).not.toHaveBeenCalled()
+      expect(rootHandle.removeEntry).not.toHaveBeenCalled()
+    })
+
+    it('serializes case aliases on a case-insensitive filesystem', async () => {
+      vi.mocked(rootHandle.getFileHandle).mockImplementation(
+        async (fileName: string, options?: FileSystemGetFileOptions) => {
+          const physicalName = fileName.normalize('NFC').toLowerCase()
+          if (rootEntries.has(physicalName)) {
+            return rootEntries.get(physicalName)
+          }
+          if (options?.create) {
+            const handle = createMockFileHandle(fileName, '')
+            rootEntries.set(physicalName, handle)
+            return handle
+          }
+          throw new DOMException('File not found', 'NotFoundError')
+        }
+      )
+      const upperContent = createInitialNotebookFile('Report.runme')
+      const lowerContent = createInitialNotebookFile('report.runme')
+
+      const results = await Promise.allSettled([
+        store.createContent(ROOT_URI, 'Report.runme', upperContent),
+        store.createContent(ROOT_URI, 'report.runme', lowerContent),
+      ])
+
+      expect(
+        results.filter((result) => result.status === 'fulfilled')
+      ).toHaveLength(1)
+      const rejection = results.find((result) => result.status === 'rejected')
+      expect(rejection).toMatchObject({
+        reason: expect.any(FilesystemEntryAlreadyExistsError),
+      })
+      const savedContent = await rootEntries
+        .get('report.runme')
+        .getFile()
+        .then((file) => file.text())
+      expect([upperContent, lowerContent]).toContain(savedContent)
+    })
+
+    it('serializes concurrent creates through aliases of the same directory', async () => {
+      const firstContent = createInitialNotebookFile('shared.runme')
+      const secondContent = createInitialNotebookFile('shared.runme')
+      const aliasWorkspaceId = 'alias-workspace-id'
+      const aliasRootUri = `fs://workspace/${aliasWorkspaceId}/dir/${encodeURIComponent('')}`
+      ;(rootHandle as any).isSameEntry = vi.fn(
+        async (other: FileSystemHandle) => other === rootHandle
+      )
+      ;(db.workspaces as any)._store.set(aliasWorkspaceId, {
+        id: aliasWorkspaceId,
+        name: 'my-project-alias',
+        rootHandle,
+        lastOpened: Date.now(),
+        permissionState: 'granted',
+      })
+      ;(db.entries as any)._store.set(`${aliasWorkspaceId}:`, {
+        id: `${aliasWorkspaceId}:`,
+        workspaceId: aliasWorkspaceId,
+        relativePath: '',
+        kind: 'directory',
+        handle: rootHandle,
+        lastKnownMtime: 0,
+        lastKnownSize: 0,
+      })
+
+      const results = await Promise.allSettled([
+        store.createContent(ROOT_URI, 'shared.runme', firstContent),
+        store.createContent(aliasRootUri, 'shared.runme', secondContent),
+      ])
+
+      expect(
+        results.filter((result) => result.status === 'fulfilled')
+      ).toHaveLength(1)
+      const rejection = results.find((result) => result.status === 'rejected')
+      expect(rejection).toMatchObject({
+        reason: expect.any(FilesystemEntryAlreadyExistsError),
+      })
+      const savedContent = await rootEntries
+        .get('shared.runme')
+        .getFile()
+        .then((file) => file.text())
+      expect([firstContent, secondContent]).toContain(savedContent)
+    })
+
+    it('serializes concurrent creates through overlapping workspace roots', async () => {
+      const firstContent = createInitialNotebookFile('shared.runme')
+      const secondContent = createInitialNotebookFile('shared.runme')
+      const nestedWorkspaceId = 'nested-workspace-id'
+      const nestedEntries = new Map<string, any>()
+      const nestedRootHandle = createMockDirectoryHandle(
+        'subdir',
+        nestedEntries
+      )
+      rootEntries.set('subdir', nestedRootHandle)
+      ;(rootHandle as any).isSameEntry = vi.fn(async () => false)
+      ;(nestedRootHandle as any).isSameEntry = vi.fn(async () => false)
+      ;(rootHandle as any).resolve = vi.fn(
+        async (other: FileSystemHandle) =>
+          other === nestedRootHandle ? ['subdir'] : null
+      )
+      ;(nestedRootHandle as any).resolve = vi.fn(async () => null)
+      ;(db.workspaces as any)._store.set(nestedWorkspaceId, {
+        id: nestedWorkspaceId,
+        name: 'subdir',
+        rootHandle: nestedRootHandle,
+        lastOpened: Date.now(),
+        permissionState: 'granted',
+      })
+      ;(db.entries as any)._store.set(`${nestedWorkspaceId}:`, {
+        id: `${nestedWorkspaceId}:`,
+        workspaceId: nestedWorkspaceId,
+        relativePath: '',
+        kind: 'directory',
+        handle: nestedRootHandle,
+        lastKnownMtime: 0,
+        lastKnownSize: 0,
+      })
+      const outerSubdirectoryUri = `fs://workspace/${WORKSPACE_ID}/dir/${encodeURIComponent('subdir')}`
+      const nestedRootUri = `fs://workspace/${nestedWorkspaceId}/dir/${encodeURIComponent('')}`
+
+      const results = await Promise.allSettled([
+        store.createContent(
+          outerSubdirectoryUri,
+          'shared.runme',
+          firstContent
+        ),
+        store.createContent(nestedRootUri, 'shared.runme', secondContent),
+      ])
+
+      expect(
+        results.filter((result) => result.status === 'fulfilled')
+      ).toHaveLength(1)
+      const rejection = results.find((result) => result.status === 'rejected')
+      expect(rejection).toMatchObject({
+        reason: expect.any(FilesystemEntryAlreadyExistsError),
+      })
+      const savedContent = await nestedEntries
+        .get('shared.runme')
+        .getFile()
+        .then((file) => file.text())
+      expect([firstContent, secondContent]).toContain(savedContent)
     })
 
     it('calls getFileHandle with create: true', async () => {

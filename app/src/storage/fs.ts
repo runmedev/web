@@ -128,6 +128,18 @@ function entryRecordId(workspaceId: string, relativePath: string): string {
   return `${workspaceId}:${relativePath}`;
 }
 
+/**
+ * Canonicalize only the coordination key, never the actual filesystem path.
+ * This safely over-serializes case-distinct creates on case-sensitive volumes
+ * while preventing overwrite races where the underlying volume ignores case.
+ */
+function physicalEntryLockId(
+  workspaceId: string,
+  relativePath: string
+): string {
+  return entryRecordId(workspaceId, relativePath.normalize('NFC').toLowerCase())
+}
+
 // ---------------------------------------------------------------------------
 // Notebook helpers
 // ---------------------------------------------------------------------------
@@ -175,6 +187,55 @@ export function isFileSystemAccessSupported(): boolean {
     typeof window !== "undefined" &&
     typeof window.showDirectoryPicker === "function"
   );
+}
+
+export class FilesystemEntryAlreadyExistsError extends Error {
+  constructor(readonly fileName: string) {
+    super(`A file named "${fileName}" already exists in this folder.`)
+    this.name = 'FilesystemEntryAlreadyExistsError'
+  }
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'name' in error &&
+    error.name === 'NotFoundError'
+  )
+}
+
+const FILE_CREATE_LOCK_PREFIX = 'runme:filesystem-create:'
+const fallbackCreateTails = new Map<string, Promise<void>>()
+
+async function runFilesystemCreateExclusive<T>(
+  key: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  const lockName = `${FILE_CREATE_LOCK_PREFIX}${key}`
+  if (
+    typeof navigator !== 'undefined' &&
+    typeof navigator.locks?.request === 'function'
+  ) {
+    return navigator.locks.request(lockName, operation)
+  }
+
+  const previous = fallbackCreateTails.get(lockName) ?? Promise.resolve()
+  let release!: () => void
+  const current = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const tail = previous.then(() => current)
+  fallbackCreateTails.set(lockName, tail)
+  await previous
+  try {
+    return await operation()
+  } finally {
+    release()
+    if (fallbackCreateTails.get(lockName) === tail) {
+      fallbackCreateTails.delete(lockName)
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -471,64 +532,189 @@ export class FilesystemNotebookStore {
   }
 
   async create(parentUri: string, name: string): Promise<NotebookStoreItem> {
+    const safeName = notebookNameForCreate(name)
+    return this.createFileWithContent(
+      parentUri,
+      safeName,
+      createInitialNotebookFile(safeName),
+      'create'
+    )
+  }
+
+  async createContent(
+    parentUri: string,
+    name: string,
+    content: string
+  ): Promise<NotebookStoreItem> {
+    const safeName = notebookNameForCreate(name)
+    decodeNotebookFile(content, safeName)
+    return this.createFileWithContent(
+      parentUri,
+      safeName,
+      content,
+      'createContent'
+    )
+  }
+
+  private async createFileWithContent(
+    parentUri: string,
+    safeName: string,
+    content: string,
+    operation: 'create' | 'createContent'
+  ): Promise<NotebookStoreItem> {
     const parsed = parseFsUri(parentUri);
     if (parsed.kind !== "directory") {
       throw new Error(
-        "FilesystemNotebookStore.create expects a directory URI",
+        `FilesystemNotebookStore.${operation} expects a directory URI`,
       );
     }
-
-    const safeName = notebookNameForCreate(name)
-
-    const dirHandle = await this.resolveDirectoryHandle(
-      parsed.workspaceId,
-      parsed.relativePath,
-    );
-
-    const fileHandle = await dirHandle.getFileHandle(safeName, { create: true })
-
-    const json = createInitialNotebookFile(safeName)
-    const writable = await fileHandle.createWritable()
-    await writable.write(json)
-    await writable.close()
-
     const relPath = parsed.relativePath
       ? `${parsed.relativePath}/${safeName}`
-      : safeName;
-    const fileUri = buildFsUri(parsed.workspaceId, relPath, "file");
+      : safeName
+    const recId = entryRecordId(parsed.workspaceId, relPath)
+    const createLockKey = await this.physicalEntryLockKey(
+      parsed.workspaceId,
+      relPath
+    )
 
-    const file = await fileHandle.getFile();
-    const recId = entryRecordId(parsed.workspaceId, relPath);
+    return runFilesystemCreateExclusive(createLockKey, async () => {
+      const dirHandle = await this.resolveDirectoryHandle(
+        parsed.workspaceId,
+        parsed.relativePath,
+      );
 
-    await this.db.entries.put({
-      id: recId,
-      workspaceId: parsed.workspaceId,
-      relativePath: relPath,
-      kind: "file",
-      handle: fileHandle,
-      lastKnownMtime: file.lastModified,
-      lastKnownSize: file.size,
-      cachedDoc: json,
-    });
+      try {
+        await dirHandle.getFileHandle(safeName)
+        throw new FilesystemEntryAlreadyExistsError(safeName)
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error
+        }
+      }
 
-    this.baseRevisions.set(recId, {
-      lastModified: file.lastModified,
-      size: file.size,
-    });
+      const fileHandle = await dirHandle.getFileHandle(safeName, {
+        create: true,
+      })
+      // The File System Access API has no exclusive-create flag. A process
+      // outside this origin can therefore create the target after the probe
+      // above but before getFileHandle resolves. A newly created file is
+      // empty, so refuse a returned handle that already contains data rather
+      // than overwriting the external file.
+      const initialFile = await fileHandle.getFile()
+      if (initialFile.size !== 0) {
+        throw new FilesystemEntryAlreadyExistsError(safeName)
+      }
+      try {
+        const writable = await fileHandle.createWritable()
+        await writable.write(content)
+        await writable.close()
 
-    return {
-      uri: fileUri,
-      name: safeName,
-      type: NotebookStoreItemType.File,
-      children: [],
-      mimeType:
-        detectNotebookFileFormat(safeName) === 'ipynb'
-          ? IPYNB_MIME_TYPE
-          : detectNotebookFileFormat(safeName) === 'runme-operation-log'
-            ? RUNME_OPERATION_LOG_MIME_TYPE
-            : 'application/json',
-      parents: [parentUri],
-    };
+        const fileUri = buildFsUri(parsed.workspaceId, relPath, "file");
+        const file = await fileHandle.getFile();
+
+        await this.db.entries.put({
+          id: recId,
+          workspaceId: parsed.workspaceId,
+          relativePath: relPath,
+          kind: "file",
+          handle: fileHandle,
+          lastKnownMtime: file.lastModified,
+          lastKnownSize: file.size,
+          cachedDoc: content,
+        });
+
+        this.baseRevisions.set(recId, {
+          lastModified: file.lastModified,
+          size: file.size,
+        });
+
+        return {
+          uri: fileUri,
+          name: safeName,
+          type: NotebookStoreItemType.File,
+          children: [],
+          mimeType:
+            detectNotebookFileFormat(safeName) === 'ipynb'
+              ? IPYNB_MIME_TYPE
+              : detectNotebookFileFormat(safeName) === 'runme-operation-log'
+                ? RUNME_OPERATION_LOG_MIME_TYPE
+                : 'application/json',
+          parents: [parentUri],
+        };
+      } catch (error) {
+        // Only remove an empty target. A failed writer or another process may
+        // have populated the path after our check; deleting it would lose data.
+        const failedFile = await fileHandle.getFile().catch(() => undefined)
+        if (failedFile?.size === 0) {
+          await dirHandle.removeEntry(safeName).catch(() => {})
+        }
+        throw error
+      }
+    })
+  }
+
+  /**
+   * Use the same create lock for every workspace path that names one physical
+   * entry. Besides identical root aliases, mounted roots can overlap (for
+   * example, one workspace may open a subdirectory of another workspace).
+   * Express the target relative to every registered ancestor/descendant root
+   * and choose the same stable key from that equivalent set.
+   */
+  private async physicalEntryLockKey(
+    workspaceId: string,
+    relativePath: string
+  ): Promise<string> {
+    const workspace = await this.db.workspaces.get(workspaceId)
+    if (!workspace) return physicalEntryLockId(workspaceId, relativePath)
+
+    const equivalentEntryIds = [physicalEntryLockId(workspaceId, relativePath)]
+    for (const candidate of await this.db.workspaces.toArray()) {
+      if (candidate.id === workspaceId) continue
+      try {
+        if (await workspace.rootHandle.isSameEntry(candidate.rootHandle)) {
+          equivalentEntryIds.push(
+            physicalEntryLockId(candidate.id, relativePath)
+          )
+          continue
+        }
+
+        const candidateBelowWorkspace = await workspace.rootHandle.resolve(
+          candidate.rootHandle
+        )
+        if (candidateBelowWorkspace) {
+          const candidatePrefix = candidateBelowWorkspace.join('/')
+          if (relativePath === candidatePrefix) {
+            equivalentEntryIds.push(physicalEntryLockId(candidate.id, ''))
+          } else if (relativePath.startsWith(`${candidatePrefix}/`)) {
+            equivalentEntryIds.push(
+              physicalEntryLockId(
+                candidate.id,
+                relativePath.slice(candidatePrefix.length + 1)
+              )
+            )
+          }
+          continue
+        }
+
+        const workspaceBelowCandidate = await candidate.rootHandle.resolve(
+          workspace.rootHandle
+        )
+        if (workspaceBelowCandidate) {
+          equivalentEntryIds.push(
+            physicalEntryLockId(
+              candidate.id,
+              [...workspaceBelowCandidate, relativePath]
+                .filter(Boolean)
+                .join('/')
+            )
+          )
+        }
+      } catch {
+        // A stale or revoked overlapping root cannot provide shared identity.
+      }
+    }
+    equivalentEntryIds.sort()
+    return equivalentEntryIds[0]
   }
 
   async rename(uri: string, name: string): Promise<NotebookStoreItem> {

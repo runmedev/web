@@ -1,6 +1,6 @@
-import { create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
+import { clone, create, fromJsonString, toJsonString } from '@bufbuild/protobuf'
 
-import { parser_pb } from '../runme/client'
+import { RunmeMetadataKey, parser_pb } from '../runme/client'
 import { migrateNotebookCellIds } from './cellIdentity'
 import {
   type DecodedIpynb,
@@ -13,6 +13,7 @@ import { appLogger } from './logging/runtime'
 import {
   type NotebookLogHeader,
   type ParsedOperationLog,
+  buildOperationLogDiff,
   materializeOperationLog,
   materializedLogToNotebook,
   parseOperationLog,
@@ -27,6 +28,12 @@ export const RUNME_OPERATION_LOG_MIME_TYPE =
   'application/vnd.runme.notebook+jsonl'
 
 export type NotebookFileFormat = 'runme-json' | 'ipynb' | 'runme-operation-log'
+
+export interface ConvertedRunmeNotebookFile {
+  fileName: string
+  notebook: parser_pb.Notebook
+  content: string
+}
 
 export function notebookFileExtension(format: NotebookFileFormat): string {
   switch (format) {
@@ -166,6 +173,19 @@ function decodeRunmeNotebook(text: string): parser_pb.Notebook {
   return notebook
 }
 
+function decodeLegacyRunmeNotebookStrict(text: string): parser_pb.Notebook {
+  if (!inspectRunmeNotebookJsonShape(text)) {
+    throw new Error('Legacy .json file is not a Runme notebook')
+  }
+  try {
+    const notebook = fromJsonString(parser_pb.NotebookSchema, text)
+    migrateNotebookCellIds(notebook)
+    return notebook
+  } catch {
+    throw new Error('Legacy .json file is not a Runme notebook')
+  }
+}
+
 export function detectNotebookFileFormat(
   fileName: string
 ): NotebookFileFormat | null {
@@ -205,6 +225,109 @@ export function validateNotebookRenameFormat(
 
 export function isNotebookFileName(fileName: string): boolean {
   return detectNotebookFileFormat(fileName) !== null
+}
+
+export function isLegacyNotebookFileName(fileName: string): boolean {
+  const format = detectNotebookFileFormat(fileName)
+  return format === 'runme-json' || format === 'ipynb'
+}
+
+export function runmeFileNameForLegacyNotebook(fileName: string): string {
+  const trimmed = fileName.trim()
+  const format = detectNotebookFileFormat(trimmed)
+  if (format !== 'runme-json' && format !== 'ipynb') {
+    throw new Error(
+      `Legacy notebook file name must end in .json or .ipynb: ${fileName}`
+    )
+  }
+  const extension = notebookFileExtension(format)
+  const title = trimmed.slice(0, -extension.length)
+  if (!title) {
+    throw new Error('Legacy notebook file name must include a title')
+  }
+  return `${title}.runme`
+}
+
+async function hashOperationLogIdentity(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(value)
+  )
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0')
+  ).join('')
+}
+
+/** Encode a materialized notebook as a self-contained .runme operation log. */
+export async function encodeRunmeOperationLogSnapshot(
+  notebook: parser_pb.Notebook,
+  stableIdentity?: string
+): Promise<string> {
+  const seed = stableIdentity
+    ? await hashOperationLogIdentity(`${stableIdentity}\u0000runme`)
+    : globalThis.crypto.randomUUID().replace(/-/g, '')
+  const createdAt = stableIdentity
+    ? '1970-01-01T00:00:00.000Z'
+    : new Date().toISOString()
+  const header: NotebookLogHeader = {
+    record_type: 'runme.notebook',
+    format_version: 1,
+    notebook_id: `notebook_${seed}`,
+    created_by: `actor_${seed}`,
+    created_at: createdAt,
+  }
+  const operations = await buildOperationLogDiff({
+    previous: create(parser_pb.NotebookSchema, { cells: [] }),
+    next: notebook,
+    observedOperations: [],
+    actorId: header.created_by,
+    firstActorSequence: 1,
+    createdAt: () => header.created_at,
+  })
+  return serializeOperationLog(header, operations)
+}
+
+/**
+ * Convert a parsed legacy notebook into a new .runme document without
+ * carrying over external comments. The input notebook is never mutated.
+ */
+export async function convertLegacyNotebookToRunme(
+  notebook: parser_pb.Notebook,
+  sourceFileName: string,
+  options: { originalGoogleDriveId?: string } = {}
+): Promise<ConvertedRunmeNotebookFile> {
+  const converted = clone(parser_pb.NotebookSchema, notebook)
+  migrateNotebookCellIds(converted)
+  converted.metadata = { ...converted.metadata }
+  if (options.originalGoogleDriveId) {
+    converted.metadata[RunmeMetadataKey.OriginalGoogleDriveID] =
+      options.originalGoogleDriveId
+  }
+  return {
+    fileName: runmeFileNameForLegacyNotebook(sourceFileName),
+    notebook: converted,
+    content: await encodeRunmeOperationLogSnapshot(converted),
+  }
+}
+
+/** Convert raw legacy notebook bytes into a new .runme document. */
+export async function convertLegacyNotebookFileToRunme(
+  text: string,
+  sourceFileName: string,
+  options: { originalGoogleDriveId?: string } = {}
+): Promise<ConvertedRunmeNotebookFile> {
+  if (detectNotebookFileFormat(sourceFileName) === 'runme-json') {
+    return convertLegacyNotebookToRunme(
+      decodeLegacyRunmeNotebookStrict(text),
+      sourceFileName,
+      options
+    )
+  }
+  const decoded = decodeNotebookFile(text, sourceFileName)
+  if (decoded.format === 'runme-operation-log') {
+    throw new Error('Only .json and .ipynb notebooks can be converted')
+  }
+  return convertLegacyNotebookToRunme(decoded.notebook, sourceFileName, options)
 }
 
 export function decodeNotebookFile(

@@ -28,8 +28,11 @@ import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
 import { appLogger } from "../../lib/logging/runtime";
 import {
   type NotebookFileFormat,
+  convertLegacyNotebookFileToRunme,
+  isLegacyNotebookFileName,
   isNotebookFileName,
   notebookFileExtension,
+  runmeFileNameForLegacyNotebook,
   validateNotebookRenameFormat,
 } from '../../lib/notebookFormat'
 import {
@@ -42,7 +45,10 @@ import {
   NotebookStoreItemType,
 } from "../../storage/notebook";
 import type { StorageBrowser } from "../../storage/browser";
-import { isFileSystemAccessSupported } from "../../storage/fs";
+import {
+  FilesystemEntryAlreadyExistsError,
+  isFileSystemAccessSupported,
+} from "../../storage/fs";
 import {
   DriveCreateNotCommittedError,
   fetchDriveItemWithParents,
@@ -100,9 +106,45 @@ function createPlaceholderNode(uri: string, label: string): TreeNode {
 }
 
 function driveCreateErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof FilesystemEntryAlreadyExistsError) {
+    return error.message
+  }
   return error instanceof DriveCreateNotCommittedError
     ? error.message
     : fallback;
+}
+
+function isDriveAuthorizationMessage(message: string): boolean {
+  return [
+    'Google Drive authorization is required',
+    'Google Drive service-account authorization is required',
+    'Google service-account authorization opened in a new tab',
+    'Redirecting to Google OAuth for Drive authorization',
+  ].some((prefix) => message.startsWith(prefix))
+}
+
+/** Preserve conversion failures that tell the user how to unblock the action. */
+function legacyConversionErrorMessage(error: unknown): string {
+  const fallback =
+    'Unable to save this notebook as a .runme file. Please try again.'
+  const storageMessage = driveCreateErrorMessage(error, fallback)
+  if (storageMessage !== fallback) {
+    return storageMessage
+  }
+  const message = error instanceof Error ? error.message.trim() : ''
+  if (isDriveAuthorizationMessage(message)) {
+    return `${message} Complete Google Drive authorization, then retry the conversion.`
+  }
+  const actionablePrefixes = [
+    'Resolve the sync conflict before converting',
+    'Legacy .json file is not a Runme notebook',
+    'Invalid Jupyter notebook JSON',
+    'Unsupported Jupyter ',
+    'Jupyter ',
+  ]
+  return actionablePrefixes.some((prefix) => message.startsWith(prefix))
+    ? message
+    : fallback
 }
 
 /**
@@ -113,12 +155,7 @@ function driveCreateErrorMessage(error: unknown, fallback: string): string {
  */
 function renameErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message.trim() : "";
-  if (
-    message.startsWith("Google Drive authorization is required") ||
-    message.startsWith("Google Drive service-account authorization is required") ||
-    message.startsWith("Google service-account authorization opened in a new tab") ||
-    message.startsWith("Redirecting to Google OAuth for Drive authorization")
-  ) {
+  if (isDriveAuthorizationMessage(message)) {
     return `${message} Complete Google Drive authorization, then retry the rename.`;
   }
   if (
@@ -167,6 +204,18 @@ function createFileNode(
 
 function isVisibleDocumentFile(name: string): boolean {
   return isNotebookFileName(name) || isExcalidrawFileName(name)
+}
+
+function isConvertibleLegacyNotebookFileName(name: string): boolean {
+  if (!isLegacyNotebookFileName(name) || isExcalidrawFileName(name)) {
+    return false
+  }
+  try {
+    runmeFileNameForLegacyNotebook(name)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -298,7 +347,12 @@ const DEFAULT_DRIVE_FOLDER_NAME = "New Folder";
 
 function getContextMenuItemCount(menu: ContextMenuState): number {
   if (menu.type === NotebookStoreItemType.File) {
-    return (menu.uri.startsWith('fs://') ? 0 : 1) + 4 + (menu.remoteUri ? 5 : 0)
+    return (
+      (menu.uri.startsWith('fs://') ? 0 : 1) +
+      4 +
+      (isConvertibleLegacyNotebookFileName(menu.name) ? 1 : 0) +
+      (menu.remoteUri ? 5 : 0)
+    )
   }
 
   if (menu.type === NotebookStoreItemType.Folder) {
@@ -1073,6 +1127,78 @@ export function WorkspaceExplorer() {
     [fetchChildren, store],
   );
 
+  const handleConvertLegacyNotebook = useCallback(
+    async (menu: ContextMenuState) => {
+      if (!menu.parentUri || !isConvertibleLegacyNotebookFileName(menu.name)) {
+        return
+      }
+
+      try {
+        const sourceRemoteUri = menu.remoteUri
+        let isDriveBacked = sourceRemoteUri
+          ? isDriveItemUri(sourceRemoteUri)
+          : false
+        if (!isDriveBacked && !menu.uri.startsWith('fs://') && store) {
+          const parent = await store.getMetadata(menu.parentUri)
+          const parentRemoteUri = parent?.remoteUri
+          isDriveBacked = parentRemoteUri
+            ? isDriveItemUri(parentRemoteUri)
+            : false
+        }
+        if (isDriveBacked) {
+          await ensureAccessToken({ interactive: true })
+        }
+
+        let converted: NotebookStoreItem
+        if (menu.uri.startsWith('fs://')) {
+          if (!fsStore) {
+            throw new Error('Filesystem notebook storage is not initialized')
+          }
+          const content = await fsStore.loadContent(menu.uri)
+          const file = await convertLegacyNotebookFileToRunme(
+            content,
+            menu.name
+          )
+          converted = await fsStore.createContent(
+            menu.parentUri,
+            file.fileName,
+            file.content
+          )
+        } else {
+          if (!store) {
+            throw new Error('Notebook storage is not initialized')
+          }
+          converted = await store.convertLegacyNotebookToRunme(
+            menu.uri,
+            menu.parentUri
+          )
+        }
+
+        treeRef.current?.open(menu.parentUri)
+        await fetchChildren(menu.parentUri)
+        setErrorMessage(null)
+        showToast({
+          message: `Saved "${converted.name}"`,
+          tone: 'success',
+        })
+      } catch (error) {
+        appLogger.error('Failed to convert legacy notebook to .runme', {
+          attrs: {
+            scope: 'notebook.convert',
+            code: 'EXPLORER_LEGACY_NOTEBOOK_CONVERSION_FAILED',
+            uri: menu.uri,
+            remoteUri: menu.remoteUri,
+            error: String(error),
+          },
+        })
+        const message = legacyConversionErrorMessage(error)
+        setErrorMessage(message)
+        showToast({ message, tone: 'error' })
+      }
+    },
+    [ensureAccessToken, fetchChildren, fsStore, store]
+  )
+
   const handleStartRename = useCallback((uri: string) => {
     setContextMenu(null);
     setPendingEditId(uri);
@@ -1695,6 +1821,23 @@ function formatShortTimestamp(date: Date): string {
               >
                 Rename
               </button>
+              {isConvertibleLegacyNotebookFileName(
+                adjustedContextMenu.name
+              ) && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    const menu = adjustedContextMenu
+                    setContextMenu(null)
+                    void handleConvertLegacyNotebook(menu)
+                  }}
+                >
+                  Save as Runme Notebook (.runme)
+                </button>
+              )}
               <button
                 type="button"
                 className="ctx-menu-item"

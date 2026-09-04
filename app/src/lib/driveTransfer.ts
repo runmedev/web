@@ -24,12 +24,8 @@ import {
   detectNotebookFileFormat,
   encodeIpynbNotebook,
   encodeRunmeNotebook,
+  encodeRunmeOperationLogSnapshot,
 } from './notebookFormat'
-import {
-  type NotebookLogHeader,
-  buildOperationLogDiff,
-  serializeOperationLog,
-} from './operationLog'
 import { appState } from './runtime/AppState'
 
 function ensureDriveStore() {
@@ -511,34 +507,6 @@ async function hashCreateOperationId(value: string): Promise<string> {
   ).join('')
 }
 
-async function encodeOperationLogSnapshot(
-  notebook: parser_pb.Notebook,
-  stableIdentity?: string
-): Promise<string> {
-  const seed = stableIdentity
-    ? await hashCreateOperationId(`${stableIdentity}\u0000runme`)
-    : crypto.randomUUID().replace(/-/g, '')
-  const createdAt = stableIdentity
-    ? '1970-01-01T00:00:00.000Z'
-    : new Date().toISOString()
-  const header: NotebookLogHeader = {
-    record_type: 'runme.notebook',
-    format_version: 1,
-    notebook_id: `notebook_${seed}`,
-    created_by: `actor_${seed}`,
-    created_at: createdAt,
-  }
-  const operations = await buildOperationLogDiff({
-    previous: create(parser_pb.NotebookSchema, { cells: [] }),
-    next: notebook,
-    observedOperations: [],
-    actorId: header.created_by,
-    firstActorSequence: 1,
-    createdAt: () => createdAt,
-  })
-  return serializeOperationLog(header, operations)
-}
-
 export async function saveNotebookAsDriveCopy(
   notebook: parser_pb.Notebook,
   folder: string,
@@ -573,7 +541,10 @@ export async function saveNotebookAsDriveCopy(
   let notebookJson: string
   let mimeType: string
   if (format === 'runme-operation-log') {
-    notebookJson = await encodeOperationLogSnapshot(notebook, createOperationId)
+    notebookJson = await encodeRunmeOperationLogSnapshot(
+      notebook,
+      createOperationId
+    )
     mimeType = RUNME_OPERATION_LOG_MIME_TYPE
   } else {
     notebookJson =
@@ -1180,7 +1151,7 @@ export async function copyDriveNotebookFile(
       const content =
         sourceFormat === 'runme-operation-log' && sourceRawContent
           ? sourceRawContent
-          : await encodeOperationLogSnapshot(sourceNotebook)
+          : await encodeRunmeOperationLogSnapshot(sourceNotebook)
       created = await store.createContent(
         targetFolderRef,
         fileName,

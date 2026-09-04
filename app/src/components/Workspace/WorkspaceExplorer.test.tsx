@@ -18,11 +18,13 @@ const mocks = vi.hoisted(() => ({
   addItem: vi.fn(),
   removeItem: vi.fn(),
   ensureAccessToken: vi.fn(),
+  fsStore: null as any,
   store: {
     getMetadata: vi.fn(),
     create: vi.fn(),
     createContent: vi.fn(),
     createFolder: vi.fn(),
+    convertLegacyNotebookToRunme: vi.fn(),
     move: vi.fn(),
     moveToTrash: vi.fn(),
     rename: vi.fn(),
@@ -101,7 +103,7 @@ vi.mock('../../contexts/NotebookStoreContext', () => ({
 
 vi.mock('../../contexts/FilesystemStoreContext', () => ({
   useFilesystemStore: () => ({
-    fsStore: null,
+    fsStore: mocks.fsStore,
   }),
 }))
 
@@ -166,6 +168,7 @@ describe('WorkspaceExplorer current document handling', () => {
     mocks.removeItem.mockReset()
     mocks.ensureAccessToken.mockReset()
     mocks.ensureAccessToken.mockResolvedValue('access-token')
+    mocks.fsStore = null
     mocks.workspaceItems = []
     mocks.store.getMetadata.mockReset()
     mocks.store.getMetadata.mockResolvedValue({
@@ -202,6 +205,15 @@ describe('WorkspaceExplorer current document handling', () => {
       children: [],
       remoteUri: undefined,
       mimeType: 'application/vnd.excalidraw+json',
+      parents: ['local://folder/drive'],
+    })
+    mocks.store.convertLegacyNotebookToRunme.mockReset()
+    mocks.store.convertLegacyNotebookToRunme.mockResolvedValue({
+      uri: 'local://file/converted',
+      name: 'direct.runme',
+      type: NotebookStoreItemType.File,
+      children: [],
+      remoteUri: 'https://drive.google.com/file/d/converted/view',
       parents: ['local://folder/drive'],
     })
     mocks.store.moveToTrash.mockReset()
@@ -665,6 +677,427 @@ describe('WorkspaceExplorer current document handling', () => {
         expect.stringMatching(/^untitled-\d{8}-\d{4}\.runme$/)
       )
     })
+  })
+
+  it('saves a legacy Drive notebook as a sibling .runme file', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.isDriveItemUri.mockImplementation((uri: string) =>
+      uri.startsWith('https://drive.google.com')
+    )
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/notebook'],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/notebook') {
+        return {
+          uri,
+          name: 'direct.ipynb',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/direct/view',
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('direct.ipynb'))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.ensureAccessToken).toHaveBeenCalledWith({
+        interactive: true,
+      })
+      expect(mocks.store.convertLegacyNotebookToRunme).toHaveBeenCalledWith(
+        'local://file/notebook',
+        'local://folder/drive'
+      )
+    })
+  })
+
+  it('does not offer legacy notebook conversion for Excalidraw JSON files', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/diagram'],
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/diagram') {
+        return {
+          uri,
+          name: 'diagram.excalidraw.json',
+          type: NotebookStoreItemType.File,
+          children: [],
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('diagram.excalidraw.json'))
+
+    expect(
+      screen.queryByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    ).toBeNull()
+  })
+
+  it.each(['.json', '.ipynb'])(
+    'does not offer conversion for a titleless legacy file named %s',
+    async (name) => {
+      mocks.workspaceItems = ['local://folder/drive']
+      mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+        if (uri === 'local://folder/drive') {
+          return {
+            uri,
+            name: 'Drive Root',
+            type: NotebookStoreItemType.Folder,
+            children: ['local://file/titleless'],
+            parents: [],
+          }
+        }
+        if (uri === 'local://file/titleless') {
+          return {
+            uri,
+            name,
+            type: NotebookStoreItemType.File,
+            children: [],
+            parents: ['local://folder/drive'],
+          }
+        }
+        return null
+      })
+
+      render(<WorkspaceExplorer />)
+
+      await screen.findByText('Drive Root')
+      fireEvent.click(
+        screen.getAllByRole('button', { name: 'Collapse folder' })[0]
+      )
+      fireEvent.contextMenu(await screen.findByText(name))
+
+      expect(
+        screen.queryByRole('button', {
+          name: 'Save as Runme Notebook (.runme)',
+        })
+      ).toBeNull()
+    }
+  )
+
+  it.each([
+    'Google Drive authorization is required.',
+    'Google Drive service-account authorization is required.',
+    'Google service-account authorization opened in a new tab.',
+    'Redirecting to Google OAuth for Drive authorization.',
+  ])('shows actionable conversion authorization guidance: %s', async (message) => {
+    const folderUri = 'local://folder/drive'
+    const fileUri = 'local://file/notebook'
+    mocks.workspaceItems = [folderUri]
+    mocks.isDriveItemUri.mockImplementation((uri: string) =>
+      uri.startsWith('https://drive.google.com')
+    )
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === folderUri) {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: [fileUri],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === fileUri) {
+        return {
+          uri,
+          name: 'direct.ipynb',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/direct/view',
+          parents: [folderUri],
+        }
+      }
+      return null
+    })
+    mocks.ensureAccessToken.mockRejectedValueOnce(new Error(message))
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('direct.ipynb'))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    )
+
+    expect(mocks.store.convertLegacyNotebookToRunme).not.toHaveBeenCalled()
+    expect(
+      await screen.findByText(
+        `${message} Complete Google Drive authorization, then retry the conversion.`
+      )
+    ).toBeTruthy()
+  })
+
+  it('shows actionable conflict guidance when conversion is blocked', async () => {
+    const folderUri = 'local://folder/drive'
+    const fileUri = 'local://file/conflicted-notebook'
+    const message =
+      'Resolve the sync conflict before converting conflicted.ipynb'
+    mocks.workspaceItems = [folderUri]
+    mocks.isDriveItemUri.mockImplementation((uri: string) =>
+      uri.startsWith('https://drive.google.com')
+    )
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === folderUri) {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: [fileUri],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === fileUri) {
+        return {
+          uri,
+          name: 'conflicted.ipynb',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/conflicted/view',
+          parents: [folderUri],
+        }
+      }
+      return null
+    })
+    mocks.store.convertLegacyNotebookToRunme.mockRejectedValueOnce(
+      new Error(message)
+    )
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('conflicted.ipynb'))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    )
+
+    expect(await screen.findByText(message)).toBeTruthy()
+  })
+
+  it.each([
+    'Invalid Jupyter notebook JSON: SyntaxError',
+    'Unsupported Jupyter nbformat major version: 3',
+    'Jupyter notebook cells must be an array',
+  ])('shows actionable IPYNB validation guidance: %s', async (message) => {
+    const folderUri = 'local://folder/drive'
+    const fileUri = 'local://file/invalid-notebook'
+    mocks.workspaceItems = [folderUri]
+    mocks.isDriveItemUri.mockImplementation((uri: string) =>
+      uri.startsWith('https://drive.google.com')
+    )
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === folderUri) {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: [fileUri],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === fileUri) {
+        return {
+          uri,
+          name: 'invalid.ipynb',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/invalid/view',
+          parents: [folderUri],
+        }
+      }
+      return null
+    })
+    mocks.store.convertLegacyNotebookToRunme.mockRejectedValueOnce(
+      new Error(message)
+    )
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('invalid.ipynb'))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    )
+
+    expect(await screen.findByText(message)).toBeTruthy()
+  })
+
+  it('prompts for Drive auth when the legacy source create is pending', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.isDriveItemUri.mockImplementation((uri: string) =>
+      uri.startsWith('https://drive.google.com')
+    )
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/notebook'],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/notebook') {
+        return {
+          uri,
+          name: 'pending.json',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: undefined,
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('pending.json'))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.ensureAccessToken).toHaveBeenCalledWith({
+        interactive: true,
+      })
+      expect(mocks.store.convertLegacyNotebookToRunme).toHaveBeenCalledWith(
+        'local://file/notebook',
+        'local://folder/drive'
+      )
+    })
+  })
+
+  it('rejects a non-notebook JSON file from a filesystem workspace', async () => {
+    const rootUri = 'fs://workspace/test/dir/'
+    const fileUri = 'fs://workspace/test/file/unrelated.json'
+    mocks.workspaceItems = [rootUri]
+    mocks.fsStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: rootUri,
+        name: 'Filesystem Root',
+        type: NotebookStoreItemType.Folder,
+        children: [],
+        parents: [],
+      })),
+      list: vi.fn(async () => [
+        {
+          uri: fileUri,
+          name: 'unrelated.json',
+          type: NotebookStoreItemType.File,
+          children: [],
+          parents: [rootUri],
+        },
+      ]),
+      loadContent: vi.fn(async () => JSON.stringify({ unrelated: 'document' })),
+      createContent: vi.fn(),
+    }
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Filesystem Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('unrelated.json'))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.fsStore.loadContent).toHaveBeenCalledWith(fileUri)
+      expect(mocks.fsStore.createContent).not.toHaveBeenCalled()
+    })
+    expect(
+      await screen.findByText('Legacy .json file is not a Runme notebook')
+    ).toBeTruthy()
+  })
+
+  it('does not offer conversion for an existing .runme notebook', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/notebook'],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/notebook') {
+        return {
+          uri,
+          name: 'direct.runme',
+          type: NotebookStoreItemType.File,
+          children: [],
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('direct.runme'))
+    expect(
+      screen.queryByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    ).toBeNull()
   })
 
   it('creates a Jupyter notebook from a folder context menu', async () => {

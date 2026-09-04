@@ -10,6 +10,7 @@ import { appLogger } from '../lib/logging/runtime'
 import { serializeNotebookToMarkdown } from '../lib/markdown/serializeNotebookToMarkdown'
 import {
   RUNME_OPERATION_LOG_MIME_TYPE,
+  convertLegacyNotebookFileToRunme,
   createInitialNotebookFile,
   decodeNotebookFile,
   detectNotebookFileFormat,
@@ -38,7 +39,7 @@ import {
   serializeOperationLog,
 } from '../lib/operationLog'
 import { appState } from '../lib/runtime/AppState'
-import { parser_pb } from '../runme/client'
+import { RunmeMetadataKey, parser_pb } from '../runme/client'
 import {
   type ConflictDocStorage,
   type ConflictDocumentRef,
@@ -59,7 +60,10 @@ import {
   browserDriveSyncCoordinator,
 } from './driveSyncCoordinator'
 import { EXCALIDRAW_MIME_TYPE, isExcalidrawFileName } from './excalidraw'
-import type { FilesystemNotebookStore } from './fs'
+import {
+  FilesystemEntryAlreadyExistsError,
+  type FilesystemNotebookStore,
+} from './fs'
 import {
   type IpynbPreservationState,
   type IpynbShadowStorage,
@@ -115,6 +119,13 @@ export interface LocalFileRecord {
   parentRemoteIdWhenCreated?: string
   /** Stable idempotency key for creating the primary Drive file. */
   driveCreateOperationId?: string
+  /** Retry/deduplication state for a legacy-to-Runme Drive copy. */
+  legacyConversionAttempt?: {
+    originalGoogleDriveId: string
+    sourceChecksum: string
+    /** Set after sync so callers already waiting on the same lock reuse it. */
+    completedAt?: string
+  }
   /** Remote Drive URI of the Markdown sidecar (e.g. *.index.md) if present. */
   markdownUri?: string
   /** Stable idempotency key for creating the Markdown sidecar. */
@@ -601,7 +612,8 @@ export class LocalNotebooks extends Dexie {
    */
   async attachDriveFileToFolder(
     remoteFolderUri: string,
-    localFileUri: string
+    localFileUri: string,
+    options: { renewProvisionalAttachment?: boolean } = {}
   ): Promise<string | null> {
     const target = parseDriveItem(remoteFolderUri)
     if (target.type !== NotebookStoreItemType.Folder) {
@@ -672,9 +684,10 @@ export class LocalNotebooks extends Dexie {
             for (const folder of folders) {
               const attachedAt = {
                 ...(folder.provisionalChildrenAttachedAt ?? {}),
-                [localFileUri]:
-                  folder.provisionalChildrenAttachedAt?.[localFileUri] ??
-                  Date.now(),
+                [localFileUri]: options.renewProvisionalAttachment
+                  ? Date.now()
+                  : (folder.provisionalChildrenAttachedAt?.[localFileUri] ??
+                    Date.now()),
               }
               if (!folder.children.includes(localFileUri)) {
                 await this.folders.update(folder.id, {
@@ -689,14 +702,17 @@ export class LocalNotebooks extends Dexie {
                   lastSynced: nowIsoString(),
                 })
               } else if (
+                options.renewProvisionalAttachment ||
                 !(folder.provisionalChildren ?? []).includes(localFileUri) ||
                 folder.provisionalChildrenAttachedAt?.[localFileUri] ===
                   undefined
               ) {
                 await this.folders.update(folder.id, {
                   provisionalChildren: [
-                    ...(folder.provisionalChildren ?? []),
-                    localFileUri,
+                    ...new Set([
+                      ...(folder.provisionalChildren ?? []),
+                      localFileUri,
+                    ]),
                   ],
                   provisionalChildrenAttachedAt: attachedAt,
                 })
@@ -2164,15 +2180,509 @@ export class LocalNotebooks extends Dexie {
     parentUri: string,
     name: string,
     content: string,
-    mimeType: string
+    mimeType: string,
+    options: {
+      legacyConversionAttempt?: LocalFileRecord['legacyConversionAttempt']
+      autoSync?: boolean
+    } = {}
   ): Promise<NotebookStoreItem> {
-    return this.createLocalFile(parentUri, name, { mimeType, content })
+    return this.createLocalFile(parentUri, name, {
+      mimeType,
+      content,
+      legacyConversionAttempt: options.legacyConversionAttempt,
+      autoSync: options.autoSync,
+    })
+  }
+
+  /**
+   * Create a sibling .runme copy of a legacy .json or .ipynb notebook.
+   * Drive-backed sources produce a new Drive file and retain the source Drive
+   * file ID in notebook metadata. Comments remain attached to the source file.
+   */
+  async convertLegacyNotebookToRunme(
+    sourceUri: string,
+    parentUri?: string
+  ): Promise<NotebookStoreItem> {
+    if (!sourceUri.startsWith('local://file/')) {
+      throw new Error(
+        'LocalNotebooks.convertLegacyNotebookToRunme expects a local file URI'
+      )
+    }
+    const invokedAt = nowIsoString()
+    const sourceRecord = await this.files.get(sourceUri)
+    const sourceLockIdentity =
+      sourceRecord && isDriveUri(sourceRecord.remoteId)
+        ? `drive:${parseDriveItem(sourceRecord.remoteId).id}`
+        : sourceUri
+    const sourceLockKey = `legacy-conversion:${sourceLockIdentity}`
+    return this.driveSyncCoordinator.runExclusive(
+      sourceLockKey,
+      () =>
+        this.convertLegacyNotebookToRunmeExclusive(
+          sourceUri,
+          parentUri,
+          invokedAt,
+          sourceLockKey
+        )
+    )
+  }
+
+  private async convertLegacyNotebookToRunmeExclusive(
+    sourceUri: string,
+    parentUri: string | undefined,
+    invokedAt: string,
+    heldLockKey: string,
+    sourceAlreadySynced = false
+  ): Promise<NotebookStoreItem> {
+    let sourceRecord = await this.files.get(sourceUri)
+    if (!sourceRecord) {
+      throw new Error(`Local notebook record not found for ${sourceUri}`)
+    }
+    const sourceFormat = detectNotebookFileFormat(sourceRecord.name)
+    if (sourceFormat !== 'runme-json' && sourceFormat !== 'ipynb') {
+      throw new Error('Only .json and .ipynb notebooks can be converted')
+    }
+    if (sourceRecord.conflict) {
+      throw new Error(
+        `Resolve the sync conflict before converting ${sourceRecord.name}`
+      )
+    }
+
+    // Validate raw Drive JSON before normal synchronization can decode it into
+    // the protobuf model and discard unknown fields. Conversion below reads it
+    // again after sync so the produced copy still reflects the latest bytes.
+    if (sourceFormat === 'runme-json' && isDriveUri(sourceRecord.remoteId)) {
+      await convertLegacyNotebookFileToRunme(
+        await this.driveStore.loadContent(sourceRecord.remoteId),
+        sourceRecord.name
+      )
+    }
+
+    if (
+      !sourceAlreadySynced &&
+      (isDriveUri(sourceRecord.remoteId) ||
+        isDriveUri(sourceRecord.parentRemoteIdWhenCreated))
+    ) {
+      await this.syncFile(sourceUri)
+      sourceRecord = await this.files.get(sourceUri)
+      if (!sourceRecord) {
+        throw new Error(`Local notebook record not found for ${sourceUri}`)
+      }
+      if (!isDriveUri(sourceRecord.remoteId)) {
+        throw new Error(
+          `Google Drive source did not receive a remote ID after sync: ${sourceUri}`
+        )
+      }
+    }
+    if (sourceRecord.conflict) {
+      throw new Error(
+        `Resolve the sync conflict before converting ${sourceRecord.name}`
+      )
+    }
+    if (isDriveUri(sourceRecord.remoteId)) {
+      const canonicalLockKey = `legacy-conversion:drive:${parseDriveItem(sourceRecord.remoteId).id}`
+      if (canonicalLockKey !== heldLockKey) {
+        // A pending Drive create starts under its local URI. Retain that lock
+        // while joining the stable Drive-ID lock so callers arriving after the
+        // source upload cannot race destination-marker creation.
+        return this.driveSyncCoordinator.runExclusive(canonicalLockKey, () =>
+          this.convertLegacyNotebookToRunmeExclusive(
+            sourceUri,
+            parentUri,
+            invokedAt,
+            canonicalLockKey,
+            true
+          )
+        )
+      }
+    }
+    // DriveNotebookStore.load normalizes protobuf JSON with unknown fields
+    // ignored. Read the raw bytes after sync rather than the normalized cache.
+    const sourceContent =
+      sourceFormat === 'runme-json' && isDriveUri(sourceRecord.remoteId)
+        ? await this.driveStore.loadContent(sourceRecord.remoteId)
+        : await this.loadContent(sourceUri)
+    const originalGoogleDriveId = isDriveUri(sourceRecord.remoteId)
+      ? parseDriveItem(sourceRecord.remoteId).id
+      : undefined
+    const converted = await convertLegacyNotebookFileToRunme(
+      sourceContent,
+      sourceRecord.name,
+      { originalGoogleDriveId }
+    )
+    const sourceChecksum = md5(sourceContent)
+
+    let destinationParentUri = parentUri
+    if (!destinationParentUri) {
+      destinationParentUri = (await this.findParentFolder(sourceUri))?.id
+    }
+    if (!destinationParentUri && isDriveUri(sourceRecord.remoteId)) {
+      const sourceMetadata = await this.driveStore.getMetadata(
+        sourceRecord.remoteId
+      )
+      const remoteParentUri = sourceMetadata?.parents?.[0]
+      if (!remoteParentUri) {
+        throw new Error(
+          `Google Drive parent folder not found for ${sourceRecord.remoteId}`
+        )
+      }
+      destinationParentUri = await this.updateFolder(remoteParentUri)
+    }
+    if (!destinationParentUri) {
+      destinationParentUri = LOCAL_FOLDER_URI
+    }
+    const destinationParent = await this.folders.get(destinationParentUri)
+    if (!destinationParent) {
+      throw new Error(`Parent folder not found for ${destinationParentUri}`)
+    }
+
+    if (!isDriveUri(destinationParent.remoteId)) {
+      const targetLockKey = `legacy-conversion-target:${destinationParentUri}:${converted.fileName}`
+      return this.driveSyncCoordinator.runExclusive(targetLockKey, async () => {
+        const currentParent = await this.folders.get(destinationParentUri)
+        if (!currentParent) {
+          throw new Error(`Parent folder not found for ${destinationParentUri}`)
+        }
+        for (const childUri of currentParent.children) {
+          const child = childUri.startsWith('local://file/')
+            ? await this.files.get(childUri)
+            : undefined
+          if (child?.name === converted.fileName) {
+            throw new FilesystemEntryAlreadyExistsError(converted.fileName)
+          }
+        }
+        return this.createContent(
+          destinationParentUri,
+          converted.fileName,
+          converted.content,
+          RUNME_OPERATION_LOG_MIME_TYPE
+        )
+      })
+    }
+
+    if (isDriveUri(destinationParent.remoteId) && originalGoogleDriveId) {
+      const destinationDriveFolder = parseDriveItem(destinationParent.remoteId)
+      const equivalentDestinationParents = await this.folders
+        .filter((record) => {
+          try {
+            const candidate = parseDriveItem(record.remoteId)
+            return (
+              candidate.type === NotebookStoreItemType.Folder &&
+              candidate.id === destinationDriveFolder.id
+            )
+          } catch {
+            return false
+          }
+        })
+        .toArray()
+      const candidateChildUris = new Set(
+        equivalentDestinationParents.flatMap((record) => record.children)
+      )
+      const unfinishedAttempts = await this.files
+        .filter((record) => {
+          const attempt = record.legacyConversionAttempt
+          return Boolean(
+            attempt &&
+              (!attempt.completedAt || attempt.completedAt >= invokedAt) &&
+              attempt.originalGoogleDriveId === originalGoogleDriveId &&
+              detectNotebookFileFormat(record.name) ===
+                'runme-operation-log'
+          )
+        })
+        .toArray()
+      for (const attempt of unfinishedAttempts) {
+        candidateChildUris.add(attempt.id)
+      }
+      for (const childUri of candidateChildUris) {
+        if (!childUri.startsWith('local://file/')) {
+          continue
+        }
+        let child = await this.files.get(childUri)
+        let attempt = child?.legacyConversionAttempt
+        let pendingNotebook: parser_pb.Notebook | undefined
+        let recoveredFromNotebookMetadata = false
+
+        // Conversion provenance lives in the .runme document as well as the
+        // local retry marker. Reconstruct the marker when this Drive sibling
+        // was mirrored by a fresh browser profile or after IndexedDB was
+        // cleared, so retrying conversion does not upload a duplicate.
+        if (
+          child &&
+          !attempt &&
+          !child.lastSyncError &&
+          child.name === converted.fileName &&
+          detectNotebookFileFormat(child.name) === 'runme-operation-log'
+        ) {
+          // A read failure is not evidence that the same-named file is
+          // unrelated. Surface it so a retry can inspect the existing Drive
+          // file instead of falling through and creating a duplicate.
+          pendingNotebook = child.operationLogRef
+            ? await this.loadOperationLogSnapshot(childUri)
+            : isDriveUri(child.remoteId)
+              ? decodeNotebookFile(
+                  await this.driveStore.loadContent(child.remoteId),
+                  child.name
+                ).notebook
+              : undefined
+          if (
+            pendingNotebook?.metadata[
+              RunmeMetadataKey.OriginalGoogleDriveID
+            ] === originalGoogleDriveId
+          ) {
+            if (!child.operationLogRef) {
+              await this.syncFile(childUri)
+              const syncedChild = await this.files.get(childUri)
+              if (!syncedChild?.operationLogRef) {
+                throw new Error(
+                  `Operation-log reference missing for ${childUri} after sync`
+                )
+              }
+              child = syncedChild
+              pendingNotebook = await this.loadOperationLogSnapshot(childUri)
+            }
+            attempt = {
+              originalGoogleDriveId,
+              // The original conversion checksum is not embedded in the
+              // document. Treat the recovered copy as current so conversion
+              // never overwrites edits made only in the .runme target.
+              sourceChecksum,
+              // Keep the recovered marker unfinished until the final target
+              // sync succeeds, so any failure is reusable by the next retry.
+              completedAt: undefined,
+            }
+            await this.files.update(childUri, {
+              legacyConversionAttempt: attempt,
+            })
+            child = { ...child, legacyConversionAttempt: attempt }
+            recoveredFromNotebookMetadata = true
+          }
+        }
+        const completedDuringInvocation = Boolean(
+          attempt?.completedAt && attempt.completedAt >= invokedAt
+        )
+        const isActiveConversionAttempt = Boolean(
+          attempt && !attempt.completedAt
+        )
+        const isCompletedMatchingConversion = Boolean(
+          attempt?.completedAt &&
+            attempt.sourceChecksum === sourceChecksum &&
+            !child?.lastSyncError
+        )
+        if (
+          !child ||
+          (!isActiveConversionAttempt &&
+            !completedDuringInvocation &&
+            !isCompletedMatchingConversion &&
+            !recoveredFromNotebookMetadata) ||
+          attempt?.originalGoogleDriveId !== originalGoogleDriveId ||
+          detectNotebookFileFormat(child.name) !== 'runme-operation-log' ||
+          (child.name !== converted.fileName &&
+            !isActiveConversionAttempt &&
+            !completedDuringInvocation)
+        ) {
+          continue
+        }
+        pendingNotebook ??= await this.loadOperationLogSnapshot(childUri)
+        if (
+          pendingNotebook.metadata[RunmeMetadataKey.OriginalGoogleDriveID] !==
+          originalGoogleDriveId
+        ) {
+          continue
+        }
+
+        const currentParent = await this.findParentFolder(childUri)
+        if (
+          !isDriveUri(child.remoteId) &&
+          child.parentRemoteIdWhenCreated &&
+          parseDriveItem(child.parentRemoteIdWhenCreated).id !==
+            destinationDriveFolder.id
+        ) {
+          // The original create may already have committed before the local
+          // remote ID was persisted. Reconcile it against the original parent
+          // before changing folders, otherwise the retry could create a second
+          // file in the destination folder.
+          await this.completePendingDriveCreate(childUri, child)
+          const recoveredChild = await this.files.get(childUri)
+          if (!recoveredChild) {
+            throw new Error(`Local notebook record not found for ${childUri}`)
+          }
+          child = recoveredChild
+        }
+
+        if (child.name !== converted.fileName) {
+          await this.rename(childUri, converted.fileName)
+          const renamedChild = await this.files.get(childUri)
+          if (!renamedChild) {
+            throw new Error(`Local notebook record not found for ${childUri}`)
+          }
+          child = renamedChild
+        }
+
+        if (!isDriveUri(child.remoteId)) {
+          if (
+            child.parentRemoteIdWhenCreated !== destinationParent.remoteId
+          ) {
+            await this.files.update(childUri, {
+              parentRemoteIdWhenCreated: destinationParent.remoteId,
+            })
+            child = {
+              ...child,
+              parentRemoteIdWhenCreated: destinationParent.remoteId,
+            }
+          }
+        } else {
+          let currentRemoteParent =
+            currentParent && isDriveUri(currentParent.remoteId)
+              ? currentParent.remoteId
+              : undefined
+          if (!currentRemoteParent) {
+            currentRemoteParent = (
+              await this.driveStore.getMetadata(child.remoteId)
+            )?.parents?.[0]
+          }
+          if (!currentRemoteParent) {
+            throw new Error(
+              `Google Drive parent folder not found for ${child.remoteId}`
+            )
+          }
+          if (
+            parseDriveItem(currentRemoteParent).id !==
+            destinationDriveFolder.id
+          ) {
+            if (currentParent) {
+              await this.move(childUri, destinationParentUri)
+            } else {
+              await this.driveStore.move(
+                child.remoteId,
+                currentRemoteParent,
+                destinationParent.remoteId
+              )
+            }
+          }
+        }
+
+        if (attempt.sourceChecksum !== sourceChecksum) {
+          if (!child.operationLogRef) {
+            continue
+          }
+          const refreshed = await this.operationLogStorage.appendTransaction(
+            child.operationLogRef,
+            async (currentDocument) => {
+              const currentLog = parseOperationLog(currentDocument)
+              const currentNotebook = materializedLogToNotebook(
+                materializeOperationLog(currentLog.operations)
+              )
+              const appendedOperations = await buildOperationLogDiff({
+                previous: currentNotebook,
+                next: converted.notebook,
+                observedOperations: currentLog.operations,
+                actorId: currentLog.header.created_by,
+                firstActorSequence:
+                  highestActorSequence(
+                    currentLog.operations,
+                    currentLog.header.created_by
+                  ) + 1,
+              })
+              return appendedOperations.length === 0
+                ? ''
+                : `${appendedOperations
+                    .map((operation) =>
+                      canonicalJson(operation as unknown as JsonValue)
+                    )
+                    .join('\n')}\n`
+            },
+            { validate: (document) => void parseOperationLog(document) }
+          )
+          await this.files.update(childUri, {
+            doc: '',
+            md5Checksum: refreshed.checksum,
+            operationLogRef: refreshed.ref,
+            legacyConversionAttempt: {
+              originalGoogleDriveId,
+              sourceChecksum,
+              completedAt: undefined,
+            },
+          })
+          this.notifySync(childUri)
+        }
+
+        await this.attachDriveFileToFolder(
+          destinationParent.remoteId,
+          childUri
+        )
+        await this.syncFile(childUri)
+        await this.attachDriveFileToFolder(
+          destinationParent.remoteId,
+          childUri,
+          { renewProvisionalAttachment: true }
+        )
+        await this.files.update(childUri, {
+          legacyConversionAttempt: {
+            originalGoogleDriveId,
+            sourceChecksum,
+            completedAt: nowIsoString(),
+          },
+        })
+        return (
+          (await this.getMetadata(childUri)) ?? {
+            uri: childUri,
+            name: child.name,
+            type: NotebookStoreItemType.File,
+            children: [],
+            remoteUri: publicRemoteUri(child),
+            mimeType: child.mimeType,
+            parents: [destinationParentUri],
+          }
+        )
+      }
+    }
+
+    const created = await this.createContent(
+      destinationParentUri,
+      converted.fileName,
+      converted.content,
+      RUNME_OPERATION_LOG_MIME_TYPE,
+      {
+        legacyConversionAttempt:
+          isDriveUri(destinationParent.remoteId) && originalGoogleDriveId
+            ? { originalGoogleDriveId, sourceChecksum }
+            : undefined,
+        autoSync: false,
+      }
+    )
+    if (isDriveUri(destinationParent.remoteId)) {
+      await this.attachDriveFileToFolder(
+        destinationParent.remoteId,
+        created.uri
+      )
+      await this.syncFile(created.uri)
+      await this.attachDriveFileToFolder(
+        destinationParent.remoteId,
+        created.uri,
+        { renewProvisionalAttachment: true }
+      )
+      await this.files.update(created.uri, {
+        legacyConversionAttempt: originalGoogleDriveId
+          ? {
+              originalGoogleDriveId,
+              sourceChecksum,
+              completedAt: nowIsoString(),
+            }
+          : undefined,
+      })
+    }
+    return (await this.getMetadata(created.uri)) ?? created
   }
 
   private async createLocalFile(
     parentUri: string,
     name: string,
-    options: { mimeType: string; content: string }
+    options: {
+      mimeType: string
+      content: string
+      legacyConversionAttempt?: LocalFileRecord['legacyConversionAttempt']
+      autoSync?: boolean
+    }
   ): Promise<NotebookStoreItem> {
     if (!parentUri.startsWith('local://folder/')) {
       throw new Error('LocalNotebooks.create expects a folder parent URI')
@@ -2229,6 +2739,7 @@ export class LocalNotebooks extends Dexie {
         ? parent.remoteId
         : undefined,
       driveCreateOperationId: isDriveBackedParent ? uuidv4() : undefined,
+      legacyConversionAttempt: options.legacyConversionAttempt,
       lastRemoteChecksum: '',
       lastSynced: isDriveBackedParent ? '' : nowIsoString(),
       doc: localContent,
@@ -2250,7 +2761,7 @@ export class LocalNotebooks extends Dexie {
       )
     }
 
-    if (isDriveBackedParent) {
+    if (isDriveBackedParent && options.autoSync !== false) {
       void (async () => {
         try {
           await this.syncFile(fileUri)
