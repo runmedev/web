@@ -3598,15 +3598,17 @@ describe('LocalNotebooks legacy notebook conversion', () => {
 
     const first = store.convertLegacyNotebookToRunme(sourceUri, parentUri)
     await targetSyncStarted
-    // Simulate another tab refreshing the folder after the 60-second
-    // provisional-child TTL expires while the first target sync is blocked.
+    // Simulate a sync lasting beyond the provisional-child TTL without a
+    // folder refresh. The post-sync attachment must renew this timestamp.
     await store.folders.update(parentUri, {
-      children: [sourceUri],
-      provisionalChildren: [],
-      provisionalChildrenAttachedAt: {},
+      provisionalChildrenAttachedAt: {
+        [(await store.folders.get(parentUri))!.provisionalChildren![0]]:
+          Date.now() - 120_000,
+      },
     })
     releaseTargetSync()
     const firstResult = await first
+    await store.updateFolder(parentRemoteUri, 'Drive')
     expect((await store.folders.get(parentUri))?.children).toContain(
       firstResult.uri
     )

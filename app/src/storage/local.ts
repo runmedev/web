@@ -609,7 +609,8 @@ export class LocalNotebooks extends Dexie {
    */
   async attachDriveFileToFolder(
     remoteFolderUri: string,
-    localFileUri: string
+    localFileUri: string,
+    options: { renewProvisionalAttachment?: boolean } = {}
   ): Promise<string | null> {
     const target = parseDriveItem(remoteFolderUri)
     if (target.type !== NotebookStoreItemType.Folder) {
@@ -680,9 +681,10 @@ export class LocalNotebooks extends Dexie {
             for (const folder of folders) {
               const attachedAt = {
                 ...(folder.provisionalChildrenAttachedAt ?? {}),
-                [localFileUri]:
-                  folder.provisionalChildrenAttachedAt?.[localFileUri] ??
-                  Date.now(),
+                [localFileUri]: options.renewProvisionalAttachment
+                  ? Date.now()
+                  : (folder.provisionalChildrenAttachedAt?.[localFileUri] ??
+                    Date.now()),
               }
               if (!folder.children.includes(localFileUri)) {
                 await this.folders.update(folder.id, {
@@ -697,14 +699,17 @@ export class LocalNotebooks extends Dexie {
                   lastSynced: nowIsoString(),
                 })
               } else if (
+                options.renewProvisionalAttachment ||
                 !(folder.provisionalChildren ?? []).includes(localFileUri) ||
                 folder.provisionalChildrenAttachedAt?.[localFileUri] ===
                   undefined
               ) {
                 await this.folders.update(folder.id, {
                   provisionalChildren: [
-                    ...(folder.provisionalChildren ?? []),
-                    localFileUri,
+                    ...new Set([
+                      ...(folder.provisionalChildren ?? []),
+                      localFileUri,
+                    ]),
                   ],
                   provisionalChildrenAttachedAt: attachedAt,
                 })
@@ -2519,7 +2524,8 @@ export class LocalNotebooks extends Dexie {
         await this.syncFile(childUri)
         await this.attachDriveFileToFolder(
           destinationParent.remoteId,
-          childUri
+          childUri,
+          { renewProvisionalAttachment: true }
         )
         await this.files.update(childUri, {
           legacyConversionAttempt: {
@@ -2563,7 +2569,8 @@ export class LocalNotebooks extends Dexie {
       await this.syncFile(created.uri)
       await this.attachDriveFileToFolder(
         destinationParent.remoteId,
-        created.uri
+        created.uri,
+        { renewProvisionalAttachment: true }
       )
       await this.files.update(created.uri, {
         legacyConversionAttempt: originalGoogleDriveId
