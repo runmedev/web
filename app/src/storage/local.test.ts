@@ -3439,6 +3439,64 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     })
   })
 
+  it('syncs a pending Drive source before recording its original file ID', async () => {
+    const store = createTestStore({})
+    const sourceUri = 'local://file/pending-source-drive'
+    const sourceRemoteUri =
+      'https://drive.google.com/file/d/pending-source-drive-id/view'
+    const destinationRemoteUri =
+      'https://drive.google.com/file/d/pending-source-conversion-id/view'
+    const parentUri = 'local://folder/pending-source-drive'
+    const parentRemoteUri =
+      'https://drive.google.com/drive/folders/pending-source-drive'
+    const sourceDoc = notebookJson('echo pending source')
+    await store.folders.put({
+      id: parentUri,
+      name: 'Pending source Drive',
+      remoteId: parentRemoteUri,
+      children: [sourceUri],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: sourceUri,
+      name: 'source.json',
+      remoteId: '',
+      parentRemoteIdWhenCreated: parentRemoteUri,
+      driveCreateOperationId: 'pending-source-create-operation',
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+    const syncFile = vi
+      .spyOn(store, 'syncFile')
+      .mockImplementation(async (uri: string) => {
+        if (uri === sourceUri) {
+          await store.files.update(uri, {
+            remoteId: sourceRemoteUri,
+            parentRemoteIdWhenCreated: undefined,
+          })
+          return
+        }
+        await store.files.update(uri, { remoteId: destinationRemoteUri })
+      })
+
+    const result = await store.convertLegacyNotebookToRunme(
+      sourceUri,
+      parentUri
+    )
+
+    expect(syncFile).toHaveBeenNthCalledWith(1, sourceUri)
+    expect(result).toMatchObject({
+      name: 'source.runme',
+      remoteUri: destinationRemoteUri,
+    })
+    const converted = await store.load(result.uri)
+    expect(converted.metadata).toMatchObject({
+      [RunmeMetadataKey.OriginalGoogleDriveID]: 'pending-source-drive-id',
+    })
+  })
+
   it('discovers the Drive parent when one is not supplied', async () => {
     const sourceUri = 'local://file/source-drive'
     const sourceRemoteUri =

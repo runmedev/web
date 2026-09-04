@@ -2184,7 +2184,7 @@ export class LocalNotebooks extends Dexie {
         'LocalNotebooks.convertLegacyNotebookToRunme expects a local file URI'
       )
     }
-    const sourceRecord = await this.files.get(sourceUri)
+    let sourceRecord = await this.files.get(sourceUri)
     if (!sourceRecord) {
       throw new Error(`Local notebook record not found for ${sourceUri}`)
     }
@@ -2193,8 +2193,20 @@ export class LocalNotebooks extends Dexie {
       throw new Error('Only .json and .ipynb notebooks can be converted')
     }
 
-    if (isDriveUri(sourceRecord.remoteId)) {
+    if (
+      isDriveUri(sourceRecord.remoteId) ||
+      isDriveUri(sourceRecord.parentRemoteIdWhenCreated)
+    ) {
       await this.syncFile(sourceUri)
+      sourceRecord = await this.files.get(sourceUri)
+      if (!sourceRecord) {
+        throw new Error(`Local notebook record not found for ${sourceUri}`)
+      }
+      if (!isDriveUri(sourceRecord.remoteId)) {
+        throw new Error(
+          `Google Drive source did not receive a remote ID after sync: ${sourceUri}`
+        )
+      }
     }
     const sourceContent = await this.loadContent(sourceUri)
     const originalGoogleDriveId = isDriveUri(sourceRecord.remoteId)
