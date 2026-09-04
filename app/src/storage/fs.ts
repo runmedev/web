@@ -560,8 +560,12 @@ export class FilesystemNotebookStore {
       ? `${parsed.relativePath}/${safeName}`
       : safeName
     const recId = entryRecordId(parsed.workspaceId, relPath)
+    const createLockKey = await this.physicalEntryLockKey(
+      parsed.workspaceId,
+      relPath
+    )
 
-    return runFilesystemCreateExclusive(recId, async () => {
+    return runFilesystemCreateExclusive(createLockKey, async () => {
       const dirHandle = await this.resolveDirectoryHandle(
         parsed.workspaceId,
         parsed.relativePath,
@@ -621,6 +625,29 @@ export class FilesystemNotebookStore {
         throw error
       }
     })
+  }
+
+  /** Use the same create lock for workspace aliases of one physical root. */
+  private async physicalEntryLockKey(
+    workspaceId: string,
+    relativePath: string
+  ): Promise<string> {
+    const workspace = await this.db.workspaces.get(workspaceId)
+    if (!workspace) return entryRecordId(workspaceId, relativePath)
+
+    const equivalentIds = [workspaceId]
+    for (const candidate of await this.db.workspaces.toArray()) {
+      if (candidate.id === workspaceId) continue
+      try {
+        if (await workspace.rootHandle.isSameEntry(candidate.rootHandle)) {
+          equivalentIds.push(candidate.id)
+        }
+      } catch {
+        // A stale or revoked alias cannot provide a reliable shared identity.
+      }
+    }
+    equivalentIds.sort()
+    return entryRecordId(equivalentIds[0], relativePath)
   }
 
   async rename(uri: string, name: string): Promise<NotebookStoreItem> {

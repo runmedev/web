@@ -136,6 +136,7 @@ function createMockTable<T extends { id?: string }>() {
     delete: vi.fn(async (id: string) => {
       store.delete(id);
     }),
+    toArray: vi.fn(async () => [...store.values()]),
     orderBy: vi.fn((field: string) => ({
       reverse: vi.fn(() => ({
         toArray: vi.fn(async () => {
@@ -837,13 +838,34 @@ describe("FilesystemNotebookStore", () => {
       expect(existing.createWritable).not.toHaveBeenCalled()
     })
 
-    it('serializes concurrent creates for the same destination', async () => {
+    it('serializes concurrent creates through aliases of the same directory', async () => {
       const firstContent = createInitialNotebookFile('shared.runme')
       const secondContent = createInitialNotebookFile('shared.runme')
+      const aliasWorkspaceId = 'alias-workspace-id'
+      const aliasRootUri = `fs://workspace/${aliasWorkspaceId}/dir/${encodeURIComponent('')}`
+      ;(rootHandle as any).isSameEntry = vi.fn(
+        async (other: FileSystemHandle) => other === rootHandle
+      )
+      ;(db.workspaces as any)._store.set(aliasWorkspaceId, {
+        id: aliasWorkspaceId,
+        name: 'my-project-alias',
+        rootHandle,
+        lastOpened: Date.now(),
+        permissionState: 'granted',
+      })
+      ;(db.entries as any)._store.set(`${aliasWorkspaceId}:`, {
+        id: `${aliasWorkspaceId}:`,
+        workspaceId: aliasWorkspaceId,
+        relativePath: '',
+        kind: 'directory',
+        handle: rootHandle,
+        lastKnownMtime: 0,
+        lastKnownSize: 0,
+      })
 
       const results = await Promise.allSettled([
         store.createContent(ROOT_URI, 'shared.runme', firstContent),
-        store.createContent(ROOT_URI, 'shared.runme', secondContent),
+        store.createContent(aliasRootUri, 'shared.runme', secondContent),
       ])
 
       expect(

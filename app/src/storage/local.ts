@@ -2305,17 +2305,13 @@ export class LocalNotebooks extends Dexie {
           continue
         }
         const child = await this.files.get(childUri)
-        const isPendingCreate =
-          child?.remoteId === '' &&
-          child.parentRemoteIdWhenCreated === destinationParent.remoteId
-        const isErroredDriveConversion =
-          isDriveUri(child?.remoteId) && Boolean(child?.lastSyncError)
         const attempt = child?.legacyConversionAttempt
         const completedDuringInvocation = Boolean(
           attempt?.completedAt && attempt.completedAt >= invokedAt
         )
-        const isActiveConversionAttempt =
-          !attempt?.completedAt && (isPendingCreate || isErroredDriveConversion)
+        const isActiveConversionAttempt = Boolean(
+          attempt && !attempt.completedAt
+        )
         if (
           child?.name !== converted.fileName ||
           (!isActiveConversionAttempt && !completedDuringInvocation) ||

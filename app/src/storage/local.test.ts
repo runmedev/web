@@ -3846,7 +3846,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     await expect(store.files.toArray()).resolves.toHaveLength(2)
   })
 
-  it('reuses a Drive conversion whose post-create sync failed', async () => {
+  it('resumes an uploaded Drive conversion before its completion marker is written', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
     const sourceUri = 'local://file/source-drive-post-create'
     const conversionUri = 'local://file/conversion-drive-post-create'
@@ -3913,7 +3913,6 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       remoteId: conversionRemoteUri,
       lastRemoteChecksum: '',
       lastSynced: '',
-      lastSyncError: 'post-create sync failed',
       legacyConversionAttempt: {
         originalGoogleDriveId: 'original-drive-post-create',
         sourceChecksum: md5(conversionSourceDoc),
