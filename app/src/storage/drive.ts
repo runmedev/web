@@ -979,9 +979,15 @@ export class GapiDriveFilesClient implements DriveFilesClient {
     resourceKey?: string
   ): Promise<boolean> {
     try {
+      // Read the validator from Drive v2 because its JSON body exposes the
+      // ETag to browser JavaScript, but write through Drive v3. The v2 upload
+      // endpoint omits Access-Control-Allow-Origin from its actual response,
+      // so a successful preflight still ends as `TypeError: Failed to fetch`
+      // in browsers. Send the v2 file ETag back as the If-Match validator for
+      // the same file through Drive's current v3 media-update endpoint.
       await this.request(
         'PATCH',
-        `/upload/drive/v2/files/${encodeURIComponent(fileId)}`,
+        `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
         {
           params: {
             uploadType: 'media',
