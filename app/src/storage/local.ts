@@ -60,7 +60,10 @@ import {
   browserDriveSyncCoordinator,
 } from './driveSyncCoordinator'
 import { EXCALIDRAW_MIME_TYPE, isExcalidrawFileName } from './excalidraw'
-import type { FilesystemNotebookStore } from './fs'
+import {
+  FilesystemEntryAlreadyExistsError,
+  type FilesystemNotebookStore,
+} from './fs'
 import {
   type IpynbPreservationState,
   type IpynbShadowStorage,
@@ -2333,6 +2336,17 @@ export class LocalNotebooks extends Dexie {
       throw new Error(`Parent folder not found for ${destinationParentUri}`)
     }
 
+    if (!isDriveUri(destinationParent.remoteId)) {
+      for (const childUri of destinationParent.children) {
+        const child = childUri.startsWith('local://file/')
+          ? await this.files.get(childUri)
+          : undefined
+        if (child?.name === converted.fileName) {
+          throw new FilesystemEntryAlreadyExistsError(converted.fileName)
+        }
+      }
+    }
+
     if (isDriveUri(destinationParent.remoteId) && originalGoogleDriveId) {
       const destinationDriveFolder = parseDriveItem(destinationParent.remoteId)
       const equivalentDestinationParents = await this.folders
@@ -2371,7 +2385,64 @@ export class LocalNotebooks extends Dexie {
           continue
         }
         let child = await this.files.get(childUri)
-        const attempt = child?.legacyConversionAttempt
+        let attempt = child?.legacyConversionAttempt
+        let pendingNotebook: parser_pb.Notebook | undefined
+        let recoveredFromNotebookMetadata = false
+
+        // Conversion provenance lives in the .runme document as well as the
+        // local retry marker. Reconstruct the marker when this Drive sibling
+        // was mirrored by a fresh browser profile or after IndexedDB was
+        // cleared, so retrying conversion does not upload a duplicate.
+        if (
+          child &&
+          !attempt &&
+          !child.lastSyncError &&
+          child.name === converted.fileName &&
+          detectNotebookFileFormat(child.name) === 'runme-operation-log'
+        ) {
+          try {
+            pendingNotebook = child.operationLogRef
+              ? await this.loadOperationLogSnapshot(childUri)
+              : isDriveUri(child.remoteId)
+                ? decodeNotebookFile(
+                    await this.driveStore.loadContent(child.remoteId),
+                    child.name
+                  ).notebook
+                : undefined
+          } catch {
+            pendingNotebook = undefined
+          }
+          if (
+            pendingNotebook?.metadata[
+              RunmeMetadataKey.OriginalGoogleDriveID
+            ] === originalGoogleDriveId
+          ) {
+            if (!child.operationLogRef) {
+              await this.syncFile(childUri)
+              const syncedChild = await this.files.get(childUri)
+              if (!syncedChild?.operationLogRef) {
+                throw new Error(
+                  `Operation-log reference missing for ${childUri} after sync`
+                )
+              }
+              child = syncedChild
+              pendingNotebook = await this.loadOperationLogSnapshot(childUri)
+            }
+            attempt = {
+              originalGoogleDriveId,
+              // A fresh mirror cannot recover the checksum used by the
+              // original conversion. The empty sentinel deliberately sends
+              // it through the refresh path below.
+              sourceChecksum: '',
+              completedAt: nowIsoString(),
+            }
+            await this.files.update(childUri, {
+              legacyConversionAttempt: attempt,
+            })
+            child = { ...child, legacyConversionAttempt: attempt }
+            recoveredFromNotebookMetadata = true
+          }
+        }
         const completedDuringInvocation = Boolean(
           attempt?.completedAt && attempt.completedAt >= invokedAt
         )
@@ -2387,7 +2458,8 @@ export class LocalNotebooks extends Dexie {
           !child ||
           (!isActiveConversionAttempt &&
             !completedDuringInvocation &&
-            !isCompletedMatchingConversion) ||
+            !isCompletedMatchingConversion &&
+            !recoveredFromNotebookMetadata) ||
           attempt?.originalGoogleDriveId !== originalGoogleDriveId ||
           detectNotebookFileFormat(child.name) !== 'runme-operation-log' ||
           (child.name !== converted.fileName &&
@@ -2396,7 +2468,7 @@ export class LocalNotebooks extends Dexie {
         ) {
           continue
         }
-        const pendingNotebook = await this.loadOperationLogSnapshot(childUri)
+        pendingNotebook ??= await this.loadOperationLogSnapshot(childUri)
         if (
           pendingNotebook.metadata[RunmeMetadataKey.OriginalGoogleDriveID] !==
           originalGoogleDriveId

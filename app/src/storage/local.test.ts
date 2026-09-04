@@ -3362,6 +3362,41 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     ).toBeUndefined()
   })
 
+  it('rejects a repeated conversion in the browser-local folder', async () => {
+    const store = createTestStore({})
+    const sourceUri = 'local://file/repeated-local-source'
+    const sourceDoc = notebookJson('echo local once')
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [sourceUri],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: sourceUri,
+      name: 'repeated.json',
+      remoteId: sourceUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+
+    const first = await store.convertLegacyNotebookToRunme(
+      sourceUri,
+      LOCAL_FOLDER_URI
+    )
+
+    await expect(
+      store.convertLegacyNotebookToRunme(sourceUri, LOCAL_FOLDER_URI)
+    ).rejects.toThrow(
+      'A file named "repeated.runme" already exists in this folder.'
+    )
+    expect(first.name).toBe('repeated.runme')
+    await expect(store.files.toArray()).resolves.toHaveLength(2)
+  })
+
   it('rejects a malformed local source instead of creating an empty notebook', async () => {
     const store = createTestStore({})
     const sourceUri = 'local://file/malformed-json'
@@ -3535,6 +3570,93 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     expect(converted.metadata).toMatchObject({
       [RunmeMetadataKey.OriginalGoogleDriveID]: 'original-drive-id',
     })
+  })
+
+  it('reconstructs conversion retry state from embedded Drive provenance', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const sourceUri = 'local://file/fresh-profile-source'
+    const conversionUri = 'local://file/fresh-profile-conversion'
+    const sourceRemoteUri =
+      'https://drive.google.com/file/d/fresh-profile-source-id/view'
+    const conversionRemoteUri =
+      'https://drive.google.com/file/d/fresh-profile-conversion-id/view'
+    const parentUri = 'local://folder/fresh-profile'
+    const parentRemoteUri =
+      'https://drive.google.com/drive/folders/fresh-profile'
+    const sourceDoc = notebookJson('echo fresh profile')
+    const conversion = await convertLegacyNotebookFileToRunme(
+      sourceDoc,
+      'source.json',
+      { originalGoogleDriveId: 'fresh-profile-source-id' }
+    )
+    const store = createTestStore(
+      {
+        loadContent: vi.fn(async (remoteUri: string) =>
+          remoteUri === conversionRemoteUri ? conversion.content : sourceDoc
+        ),
+      },
+      { operationLogStorage }
+    )
+    await store.folders.put({
+      id: parentUri,
+      name: 'Fresh profile Drive folder',
+      remoteId: parentRemoteUri,
+      children: [sourceUri, conversionUri],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: sourceUri,
+      name: 'source.json',
+      remoteId: sourceRemoteUri,
+      lastRemoteChecksum: md5(sourceDoc),
+      lastSynced: new Date().toISOString(),
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+    await store.files.put({
+      id: conversionUri,
+      name: 'source.runme',
+      mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
+      remoteId: conversionRemoteUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+      // A fresh profile mirrors the Drive document without the IndexedDB-only
+      // retry marker written by the profile that originally converted it.
+      legacyConversionAttempt: undefined,
+    })
+    vi.spyOn(
+      store as unknown as { syncFile(uri: string): Promise<void> },
+      'syncFile'
+    ).mockImplementation(async (uri: string) => {
+      if (uri !== conversionUri) return
+      const snapshot = await operationLogStorage.initialize(
+        conversionUri,
+        conversion.content
+      )
+      await store.files.update(conversionUri, {
+        lastRemoteChecksum: snapshot.checksum,
+        lastSynced: new Date().toISOString(),
+        md5Checksum: snapshot.checksum,
+        operationLogRef: snapshot.ref,
+      })
+    })
+
+    const result = await store.convertLegacyNotebookToRunme(
+      sourceUri,
+      parentUri
+    )
+
+    expect(result.uri).toBe(conversionUri)
+    await expect(store.files.get(conversionUri)).resolves.toMatchObject({
+      legacyConversionAttempt: {
+        originalGoogleDriveId: 'fresh-profile-source-id',
+        sourceChecksum: md5(sourceDoc),
+        completedAt: expect.any(String),
+      },
+    })
+    await expect(store.files.toArray()).resolves.toHaveLength(2)
   })
 
   it('reattaches a fresh Drive conversion after provisional membership expires', async () => {

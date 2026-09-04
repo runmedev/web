@@ -767,6 +767,48 @@ describe('WorkspaceExplorer current document handling', () => {
     ).toBeNull()
   })
 
+  it.each(['.json', '.ipynb'])(
+    'does not offer conversion for a titleless legacy file named %s',
+    async (name) => {
+      mocks.workspaceItems = ['local://folder/drive']
+      mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+        if (uri === 'local://folder/drive') {
+          return {
+            uri,
+            name: 'Drive Root',
+            type: NotebookStoreItemType.Folder,
+            children: ['local://file/titleless'],
+            parents: [],
+          }
+        }
+        if (uri === 'local://file/titleless') {
+          return {
+            uri,
+            name,
+            type: NotebookStoreItemType.File,
+            children: [],
+            parents: ['local://folder/drive'],
+          }
+        }
+        return null
+      })
+
+      render(<WorkspaceExplorer />)
+
+      await screen.findByText('Drive Root')
+      fireEvent.click(
+        screen.getAllByRole('button', { name: 'Collapse folder' })[0]
+      )
+      fireEvent.contextMenu(await screen.findByText(name))
+
+      expect(
+        screen.queryByRole('button', {
+          name: 'Save as Runme Notebook (.runme)',
+        })
+      ).toBeNull()
+    }
+  )
+
   it.each([
     'Google Drive authorization is required.',
     'Google Drive service-account authorization is required.',

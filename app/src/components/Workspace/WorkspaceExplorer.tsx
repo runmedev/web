@@ -32,6 +32,7 @@ import {
   isLegacyNotebookFileName,
   isNotebookFileName,
   notebookFileExtension,
+  runmeFileNameForLegacyNotebook,
   validateNotebookRenameFormat,
 } from '../../lib/notebookFormat'
 import {
@@ -206,7 +207,15 @@ function isVisibleDocumentFile(name: string): boolean {
 }
 
 function isConvertibleLegacyNotebookFileName(name: string): boolean {
-  return isLegacyNotebookFileName(name) && !isExcalidrawFileName(name)
+  if (!isLegacyNotebookFileName(name) || isExcalidrawFileName(name)) {
+    return false
+  }
+  try {
+    runmeFileNameForLegacyNotebook(name)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**

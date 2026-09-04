@@ -838,6 +838,28 @@ describe("FilesystemNotebookStore", () => {
       expect(existing.createWritable).not.toHaveBeenCalled()
     })
 
+    it('refuses a file created externally between the probe and create', async () => {
+      const externalContent = 'content written by another process'
+      const external = createMockFileHandle('shared.runme', externalContent)
+      vi.mocked(rootHandle.getFileHandle).mockImplementation(
+        async (fileName: string, options?: FileSystemGetFileOptions) => {
+          if (!options?.create) {
+            throw new DOMException('File not found', 'NotFoundError')
+          }
+          rootEntries.set(fileName, external)
+          return external
+        }
+      )
+
+      await expect(store.create(ROOT_URI, 'shared.runme')).rejects.toThrow(
+        'A file named "shared.runme" already exists in this folder.'
+      )
+      const preserved = await external.getFile()
+      await expect(preserved.text()).resolves.toBe(externalContent)
+      expect(external.createWritable).not.toHaveBeenCalled()
+      expect(rootHandle.removeEntry).not.toHaveBeenCalled()
+    })
+
     it('serializes case aliases on a case-insensitive filesystem', async () => {
       vi.mocked(rootHandle.getFileHandle).mockImplementation(
         async (fileName: string, options?: FileSystemGetFileOptions) => {

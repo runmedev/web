@@ -595,6 +595,15 @@ export class FilesystemNotebookStore {
       const fileHandle = await dirHandle.getFileHandle(safeName, {
         create: true,
       })
+      // The File System Access API has no exclusive-create flag. A process
+      // outside this origin can therefore create the target after the probe
+      // above but before getFileHandle resolves. A newly created file is
+      // empty, so refuse a returned handle that already contains data rather
+      // than overwriting the external file.
+      const initialFile = await fileHandle.getFile()
+      if (initialFile.size !== 0) {
+        throw new FilesystemEntryAlreadyExistsError(safeName)
+      }
       try {
         const writable = await fileHandle.createWritable()
         await writable.write(content)
@@ -633,7 +642,12 @@ export class FilesystemNotebookStore {
           parents: [parentUri],
         };
       } catch (error) {
-        await dirHandle.removeEntry(safeName).catch(() => {})
+        // Only remove an empty target. A failed writer or another process may
+        // have populated the path after our check; deleting it would lose data.
+        const failedFile = await fileHandle.getFile().catch(() => undefined)
+        if (failedFile?.size === 0) {
+          await dirHandle.removeEntry(safeName).catch(() => {})
+        }
         throw error
       }
     })
