@@ -29,6 +29,7 @@ export enum RunmeMetadataKey {
   JupyterServerName = 'runme.dev/jupyterServerName',
   JupyterKernelName = 'runme.dev/jupyterKernelName',
   JupyterKernelID = 'runme.dev/jupyterKernelID',
+  OriginalGoogleDriveID = 'runme.dev/originalGoogleDriveID',
 }
 
 export enum RunmeExecutionState {

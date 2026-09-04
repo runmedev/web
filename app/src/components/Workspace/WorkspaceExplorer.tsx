@@ -28,6 +28,8 @@ import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
 import { appLogger } from "../../lib/logging/runtime";
 import {
   type NotebookFileFormat,
+  convertLegacyNotebookToRunme,
+  isLegacyNotebookFileName,
   isNotebookFileName,
   notebookFileExtension,
   validateNotebookRenameFormat,
@@ -298,7 +300,12 @@ const DEFAULT_DRIVE_FOLDER_NAME = "New Folder";
 
 function getContextMenuItemCount(menu: ContextMenuState): number {
   if (menu.type === NotebookStoreItemType.File) {
-    return (menu.uri.startsWith('fs://') ? 0 : 1) + 4 + (menu.remoteUri ? 5 : 0)
+    return (
+      (menu.uri.startsWith('fs://') ? 0 : 1) +
+      4 +
+      (isLegacyNotebookFileName(menu.name) ? 1 : 0) +
+      (menu.remoteUri ? 5 : 0)
+    )
   }
 
   if (menu.type === NotebookStoreItemType.Folder) {
@@ -1073,6 +1080,64 @@ export function WorkspaceExplorer() {
     [fetchChildren, store],
   );
 
+  const handleConvertLegacyNotebook = useCallback(
+    async (menu: ContextMenuState) => {
+      if (!menu.parentUri || !isLegacyNotebookFileName(menu.name)) {
+        return
+      }
+
+      try {
+        if (menu.remoteUri && isDriveItemUri(menu.remoteUri)) {
+          await ensureAccessToken({ interactive: true })
+        }
+
+        let converted: NotebookStoreItem
+        if (menu.uri.startsWith('fs://')) {
+          if (!fsStore) {
+            throw new Error('Filesystem notebook storage is not initialized')
+          }
+          const notebook = await fsStore.load(menu.uri)
+          const file = await convertLegacyNotebookToRunme(notebook, menu.name)
+          converted = await fsStore.create(menu.parentUri, file.fileName)
+          await fsStore.saveContent(converted.uri, file.content)
+        } else {
+          if (!store) {
+            throw new Error('Notebook storage is not initialized')
+          }
+          converted = await store.convertLegacyNotebookToRunme(
+            menu.uri,
+            menu.parentUri
+          )
+        }
+
+        treeRef.current?.open(menu.parentUri)
+        await fetchChildren(menu.parentUri)
+        setErrorMessage(null)
+        showToast({
+          message: `Saved "${converted.name}"`,
+          tone: 'success',
+        })
+      } catch (error) {
+        appLogger.error('Failed to convert legacy notebook to .runme', {
+          attrs: {
+            scope: 'notebook.convert',
+            code: 'EXPLORER_LEGACY_NOTEBOOK_CONVERSION_FAILED',
+            uri: menu.uri,
+            remoteUri: menu.remoteUri,
+            error: String(error),
+          },
+        })
+        const message = driveCreateErrorMessage(
+          error,
+          'Unable to save this notebook as a .runme file. Please try again.'
+        )
+        setErrorMessage(message)
+        showToast({ message, tone: 'error' })
+      }
+    },
+    [ensureAccessToken, fetchChildren, fsStore, store]
+  )
+
   const handleStartRename = useCallback((uri: string) => {
     setContextMenu(null);
     setPendingEditId(uri);
@@ -1695,6 +1760,21 @@ function formatShortTimestamp(date: Date): string {
               >
                 Rename
               </button>
+              {isLegacyNotebookFileName(adjustedContextMenu.name) && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    const menu = adjustedContextMenu
+                    setContextMenu(null)
+                    void handleConvertLegacyNotebook(menu)
+                  }}
+                >
+                  Save as Runme Notebook (.runme)
+                </button>
+              )}
               <button
                 type="button"
                 className="ctx-menu-item"

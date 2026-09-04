@@ -17,7 +17,7 @@ import {
   parseOperationLog,
   serializeOperationLog,
 } from '../lib/operationLog'
-import { MimeType, parser_pb } from '../runme/client'
+import { MimeType, RunmeMetadataKey, parser_pb } from '../runme/client'
 import { MemoryConflictDocStorage } from './conflictDocs'
 import { DriveNotebookStore } from './drive'
 import type { DriveSyncCoordinator } from './driveSyncCoordinator'
@@ -3316,6 +3316,154 @@ describe('LocalNotebooks ipynb conversion', () => {
     await expect(
       store.rename('local://file/ipynb', 'shared.json')
     ).rejects.toThrow('Changing notebook formats by rename')
+  })
+})
+
+describe('LocalNotebooks legacy notebook conversion', () => {
+  it('creates a local .runme sibling without modifying the source', async () => {
+    const store = createTestStore({})
+    const sourceUri = 'local://file/source-json'
+    const sourceDoc = notebookJson('echo source')
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: sourceUri,
+      name: 'migration.plan.json',
+      remoteId: sourceUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+
+    const result = await store.convertLegacyNotebookToRunme(
+      sourceUri,
+      LOCAL_FOLDER_URI
+    )
+
+    expect(result.name).toBe('migration.plan.runme')
+    expect((await store.files.get(sourceUri))?.doc).toBe(sourceDoc)
+    const converted = await store.load(result.uri)
+    expect(converted.cells[0]?.value).toBe('echo source')
+    expect(
+      converted.metadata[RunmeMetadataKey.OriginalGoogleDriveID]
+    ).toBeUndefined()
+  })
+
+  it('records the original Drive file ID and waits for the new file sync', async () => {
+    const store = createTestStore({})
+    const sourceUri = 'local://file/source-drive'
+    const sourceRemoteUri =
+      'https://drive.google.com/file/d/original-drive-id/view'
+    const destinationRemoteUri =
+      'https://drive.google.com/file/d/converted-drive-id/view'
+    const parentUri = 'local://folder/drive'
+    const sourceDoc = notebookJson('echo drive')
+    await store.folders.put({
+      id: parentUri,
+      name: 'Drive',
+      remoteId: 'https://drive.google.com/drive/folders/drive-root',
+      children: [sourceUri],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: sourceUri,
+      name: 'source.json',
+      remoteId: sourceRemoteUri,
+      lastRemoteChecksum: md5(sourceDoc),
+      lastSynced: new Date().toISOString(),
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+    const syncFile = vi
+      .spyOn(
+        store as unknown as { syncFile(uri: string): Promise<void> },
+        'syncFile'
+      )
+      .mockImplementation(async (uri: string) => {
+        if (uri !== sourceUri) {
+          await store.files.update(uri, { remoteId: destinationRemoteUri })
+        }
+      })
+
+    const result = await store.convertLegacyNotebookToRunme(
+      sourceUri,
+      parentUri
+    )
+
+    expect(result).toMatchObject({
+      name: 'source.runme',
+      remoteUri: destinationRemoteUri,
+    })
+    expect(syncFile).toHaveBeenCalledWith(sourceUri)
+    expect(syncFile).toHaveBeenCalledWith(result.uri)
+    const converted = await store.load(result.uri)
+    expect(converted.metadata).toMatchObject({
+      [RunmeMetadataKey.OriginalGoogleDriveID]: 'original-drive-id',
+    })
+  })
+
+  it('discovers the Drive parent when one is not supplied', async () => {
+    const sourceUri = 'local://file/source-drive'
+    const sourceRemoteUri =
+      'https://drive.google.com/file/d/original-drive-id/view'
+    const remoteParentUri =
+      'https://drive.google.com/drive/folders/drive-parent-id'
+    const parentUri = 'local://folder/drive-parent'
+    const destinationRemoteUri =
+      'https://drive.google.com/file/d/converted-drive-id/view'
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: sourceRemoteUri,
+        name: 'source.ipynb',
+        type: NotebookStoreItemType.File,
+        children: [],
+        parents: [remoteParentUri],
+      })),
+    }
+    const store = createTestStore(driveStore)
+    const sourceDoc = notebookJson('echo drive')
+    await store.files.put({
+      id: sourceUri,
+      name: 'source.json',
+      remoteId: sourceRemoteUri,
+      lastRemoteChecksum: md5(sourceDoc),
+      lastSynced: new Date().toISOString(),
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+    const updateFolder = vi
+      .spyOn(store, 'updateFolder')
+      .mockImplementation(async (remoteUri: string) => {
+        expect(remoteUri).toBe(remoteParentUri)
+        await store.folders.put({
+          id: parentUri,
+          name: 'Drive parent',
+          remoteId: remoteParentUri,
+          children: [sourceUri],
+          lastSynced: '',
+        })
+        return parentUri
+      })
+    vi.spyOn(store, 'syncFile').mockImplementation(async (uri: string) => {
+      if (uri !== sourceUri) {
+        await store.files.update(uri, { remoteId: destinationRemoteUri })
+      }
+    })
+
+    const result = await store.convertLegacyNotebookToRunme(sourceUri)
+
+    expect(driveStore.getMetadata).toHaveBeenCalledWith(sourceRemoteUri)
+    expect(updateFolder).toHaveBeenCalledWith(remoteParentUri)
+    expect(result).toMatchObject({
+      name: 'source.runme',
+      remoteUri: destinationRemoteUri,
+    })
   })
 })
 

@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
     create: vi.fn(),
     createContent: vi.fn(),
     createFolder: vi.fn(),
+    convertLegacyNotebookToRunme: vi.fn(),
     move: vi.fn(),
     moveToTrash: vi.fn(),
     rename: vi.fn(),
@@ -202,6 +203,15 @@ describe('WorkspaceExplorer current document handling', () => {
       children: [],
       remoteUri: undefined,
       mimeType: 'application/vnd.excalidraw+json',
+      parents: ['local://folder/drive'],
+    })
+    mocks.store.convertLegacyNotebookToRunme.mockReset()
+    mocks.store.convertLegacyNotebookToRunme.mockResolvedValue({
+      uri: 'local://file/converted',
+      name: 'direct.runme',
+      type: NotebookStoreItemType.File,
+      children: [],
+      remoteUri: 'https://drive.google.com/file/d/converted/view',
       parents: ['local://folder/drive'],
     })
     mocks.store.moveToTrash.mockReset()
@@ -665,6 +675,94 @@ describe('WorkspaceExplorer current document handling', () => {
         expect.stringMatching(/^untitled-\d{8}-\d{4}\.runme$/)
       )
     })
+  })
+
+  it('saves a legacy Drive notebook as a sibling .runme file', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.isDriveItemUri.mockImplementation((uri: string) =>
+      uri.startsWith('https://drive.google.com')
+    )
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/notebook'],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/notebook') {
+        return {
+          uri,
+          name: 'direct.ipynb',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/direct/view',
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('direct.ipynb'))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.ensureAccessToken).toHaveBeenCalledWith({
+        interactive: true,
+      })
+      expect(mocks.store.convertLegacyNotebookToRunme).toHaveBeenCalledWith(
+        'local://file/notebook',
+        'local://folder/drive'
+      )
+    })
+  })
+
+  it('does not offer conversion for an existing .runme notebook', async () => {
+    mocks.workspaceItems = ['local://folder/drive']
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === 'local://folder/drive') {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: ['local://file/notebook'],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === 'local://file/notebook') {
+        return {
+          uri,
+          name: 'direct.runme',
+          type: NotebookStoreItemType.File,
+          children: [],
+          parents: ['local://folder/drive'],
+        }
+      }
+      return null
+    })
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('direct.runme'))
+    expect(
+      screen.queryByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    ).toBeNull()
   })
 
   it('creates a Jupyter notebook from a folder context menu', async () => {

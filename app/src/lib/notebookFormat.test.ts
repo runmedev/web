@@ -3,14 +3,18 @@
 import { create } from '@bufbuild/protobuf'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { MimeType, parser_pb } from '../runme/client'
+import { MimeType, RunmeMetadataKey, parser_pb } from '../runme/client'
 import { appLogger } from './logging/runtime'
 import {
+  convertLegacyNotebookFileToRunme,
+  convertLegacyNotebookToRunme,
   createInitialNotebookFile,
   decodeNotebookFile,
   detectNotebookFileFormat,
   encodeRunmeNotebook,
   inspectRunmeNotebookJsonShape,
+  isLegacyNotebookFileName,
+  runmeFileNameForLegacyNotebook,
 } from './notebookFormat'
 import {
   type NotebookLogHeader,
@@ -228,5 +232,67 @@ describe('Runme operation-log format', () => {
       metadata: { trusted: 'true' },
     })
     expect(decoded.operationLog?.operations).toEqual([operation])
+  })
+})
+
+describe('legacy notebook conversion', () => {
+  it('converts legacy Runme JSON bytes into .runme bytes', async () => {
+    const source = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'cell-json',
+          kind: parser_pb.CellKind.MARKUP,
+          value: '# Legacy JSON',
+        }),
+      ],
+    })
+
+    const converted = await convertLegacyNotebookFileToRunme(
+      encodeRunmeNotebook(source),
+      'legacy.json'
+    )
+    const decoded = decodeNotebookFile(converted.content, converted.fileName)
+
+    expect(converted.fileName).toBe('legacy.runme')
+    expect(decoded.notebook.cells[0]?.value).toBe('# Legacy JSON')
+  })
+
+  it('creates a .runme operation log and preserves the source notebook', async () => {
+    const source = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          kind: parser_pb.CellKind.CODE,
+          languageId: 'python',
+          value: 'print(42)',
+        }),
+      ],
+      metadata: { owner: 'runme' },
+    })
+
+    const converted = await convertLegacyNotebookToRunme(source, 'demo.ipynb', {
+      originalGoogleDriveId: 'drive-source-123',
+    })
+    const decoded = decodeNotebookFile(converted.content, converted.fileName)
+
+    expect(converted.fileName).toBe('demo.runme')
+    expect(decoded.format).toBe('runme-operation-log')
+    expect(decoded.notebook.cells).toHaveLength(1)
+    expect(decoded.notebook.cells[0]?.value).toBe('print(42)')
+    expect(decoded.notebook.metadata).toMatchObject({
+      owner: 'runme',
+      [RunmeMetadataKey.OriginalGoogleDriveID]: 'drive-source-123',
+    })
+    expect(
+      source.metadata[RunmeMetadataKey.OriginalGoogleDriveID]
+    ).toBeUndefined()
+  })
+
+  it('recognizes both legacy extensions and replaces only the extension', () => {
+    expect(isLegacyNotebookFileName('report.json')).toBe(true)
+    expect(isLegacyNotebookFileName('report.ipynb')).toBe(true)
+    expect(isLegacyNotebookFileName('report.runme')).toBe(false)
+    expect(runmeFileNameForLegacyNotebook('report.v2.json')).toBe(
+      'report.v2.runme'
+    )
   })
 })

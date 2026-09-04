@@ -10,6 +10,7 @@ import { appLogger } from '../lib/logging/runtime'
 import { serializeNotebookToMarkdown } from '../lib/markdown/serializeNotebookToMarkdown'
 import {
   RUNME_OPERATION_LOG_MIME_TYPE,
+  convertLegacyNotebookToRunme,
   createInitialNotebookFile,
   decodeNotebookFile,
   detectNotebookFileFormat,
@@ -2167,6 +2168,78 @@ export class LocalNotebooks extends Dexie {
     mimeType: string
   ): Promise<NotebookStoreItem> {
     return this.createLocalFile(parentUri, name, { mimeType, content })
+  }
+
+  /**
+   * Create a sibling .runme copy of a legacy .json or .ipynb notebook.
+   * Drive-backed sources produce a new Drive file and retain the source Drive
+   * file ID in notebook metadata. Comments remain attached to the source file.
+   */
+  async convertLegacyNotebookToRunme(
+    sourceUri: string,
+    parentUri?: string
+  ): Promise<NotebookStoreItem> {
+    if (!sourceUri.startsWith('local://file/')) {
+      throw new Error(
+        'LocalNotebooks.convertLegacyNotebookToRunme expects a local file URI'
+      )
+    }
+    const sourceRecord = await this.files.get(sourceUri)
+    if (!sourceRecord) {
+      throw new Error(`Local notebook record not found for ${sourceUri}`)
+    }
+    const sourceFormat = detectNotebookFileFormat(sourceRecord.name)
+    if (sourceFormat !== 'runme-json' && sourceFormat !== 'ipynb') {
+      throw new Error('Only .json and .ipynb notebooks can be converted')
+    }
+
+    if (isDriveUri(sourceRecord.remoteId)) {
+      await this.syncFile(sourceUri)
+    }
+    const sourceNotebook = await this.load(sourceUri)
+    const originalGoogleDriveId = isDriveUri(sourceRecord.remoteId)
+      ? parseDriveItem(sourceRecord.remoteId).id
+      : undefined
+    const converted = await convertLegacyNotebookToRunme(
+      sourceNotebook,
+      sourceRecord.name,
+      { originalGoogleDriveId }
+    )
+
+    let destinationParentUri = parentUri
+    if (!destinationParentUri) {
+      destinationParentUri = (await this.findParentFolder(sourceUri))?.id
+    }
+    if (!destinationParentUri && isDriveUri(sourceRecord.remoteId)) {
+      const sourceMetadata = await this.driveStore.getMetadata(
+        sourceRecord.remoteId
+      )
+      const remoteParentUri = sourceMetadata?.parents?.[0]
+      if (!remoteParentUri) {
+        throw new Error(
+          `Google Drive parent folder not found for ${sourceRecord.remoteId}`
+        )
+      }
+      destinationParentUri = await this.updateFolder(remoteParentUri)
+    }
+    if (!destinationParentUri) {
+      destinationParentUri = LOCAL_FOLDER_URI
+    }
+    const destinationParent = await this.folders.get(destinationParentUri)
+    if (!destinationParent) {
+      throw new Error(`Parent folder not found for ${destinationParentUri}`)
+    }
+
+    const created = await this.createContent(
+      destinationParentUri,
+      converted.fileName,
+      converted.content,
+      RUNME_OPERATION_LOG_MIME_TYPE
+    )
+    if (isDriveUri(destinationParent.remoteId)) {
+      await this.syncFile(created.uri)
+    }
+    return (await this.getMetadata(created.uri)) ?? created
   }
 
   private async createLocalFile(
