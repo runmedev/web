@@ -2236,10 +2236,14 @@ export class LocalNotebooks extends Dexie {
           continue
         }
         const child = await this.files.get(childUri)
+        const isPendingCreate =
+          child?.remoteId === '' &&
+          child.parentRemoteIdWhenCreated === destinationParent.remoteId
+        const isErroredDriveConversion =
+          isDriveUri(child?.remoteId) && Boolean(child?.lastSyncError)
         if (
           child?.name !== converted.fileName ||
-          child.remoteId !== '' ||
-          child.parentRemoteIdWhenCreated !== destinationParent.remoteId ||
+          (!isPendingCreate && !isErroredDriveConversion) ||
           detectNotebookFileFormat(child.name) !== 'runme-operation-log'
         ) {
           continue
@@ -2247,9 +2251,8 @@ export class LocalNotebooks extends Dexie {
         try {
           const pendingNotebook = await this.loadOperationLogSnapshot(childUri)
           if (
-            pendingNotebook.metadata[
-              RunmeMetadataKey.OriginalGoogleDriveID
-            ] !== originalGoogleDriveId
+            pendingNotebook.metadata[RunmeMetadataKey.OriginalGoogleDriveID] !==
+            originalGoogleDriveId
           ) {
             continue
           }
@@ -2258,15 +2261,17 @@ export class LocalNotebooks extends Dexie {
         }
 
         await this.syncFile(childUri)
-        return (await this.getMetadata(childUri)) ?? {
-          uri: childUri,
-          name: child.name,
-          type: NotebookStoreItemType.File,
-          children: [],
-          remoteUri: publicRemoteUri(child),
-          mimeType: child.mimeType,
-          parents: [destinationParentUri],
-        }
+        return (
+          (await this.getMetadata(childUri)) ?? {
+            uri: childUri,
+            name: child.name,
+            type: NotebookStoreItemType.File,
+            children: [],
+            remoteUri: publicRemoteUri(child),
+            mimeType: child.mimeType,
+            parents: [destinationParentUri],
+          }
+        )
       }
     }
 
