@@ -2351,7 +2351,7 @@ export class LocalNotebooks extends Dexie {
           const attempt = record.legacyConversionAttempt
           return Boolean(
             attempt &&
-              !attempt.completedAt &&
+              (!attempt.completedAt || attempt.completedAt >= invokedAt) &&
               attempt.originalGoogleDriveId === originalGoogleDriveId &&
               detectNotebookFileFormat(record.name) ===
                 'runme-operation-log'

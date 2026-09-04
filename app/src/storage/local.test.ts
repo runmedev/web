@@ -3537,7 +3537,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     })
   })
 
-  it('preserves a fresh Drive conversion across a lagging folder listing', async () => {
+  it('reattaches a fresh Drive conversion after provisional membership expires', async () => {
     const sourceUri = 'local://file/source-drive-listing-race'
     const sourceRemoteUri =
       'https://drive.google.com/file/d/original-drive-listing-race/view'
@@ -3550,6 +3550,13 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     const store = createTestStore({
       loadContent: vi.fn(async () => sourceDoc),
       list: vi.fn(async () => []),
+      getMetadata: vi.fn(async () => ({
+        uri: destinationRemoteUri,
+        name: 'source.runme',
+        type: NotebookStoreItemType.File,
+        children: [],
+        parents: [parentRemoteUri],
+      })),
     })
     await store.folders.put({
       id: parentUri,
@@ -3592,6 +3599,13 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     const first = store.convertLegacyNotebookToRunme(sourceUri, parentUri)
     await targetSyncStarted
     const second = store.convertLegacyNotebookToRunme(sourceUri, parentUri)
+    // Simulate another tab refreshing the folder after the 60-second
+    // provisional-child TTL expires while the first target sync is blocked.
+    await store.folders.update(parentUri, {
+      children: [sourceUri],
+      provisionalChildren: [],
+      provisionalChildrenAttachedAt: {},
+    })
     releaseTargetSync()
     const [firstResult, secondResult] = await Promise.all([first, second])
 
