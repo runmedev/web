@@ -1104,8 +1104,11 @@ export function WorkspaceExplorer() {
           }
           const notebook = await fsStore.load(menu.uri)
           const file = await convertLegacyNotebookToRunme(notebook, menu.name)
-          converted = await fsStore.create(menu.parentUri, file.fileName)
-          await fsStore.saveContent(converted.uri, file.content)
+          converted = await fsStore.createContent(
+            menu.parentUri,
+            file.fileName,
+            file.content
+          )
         } else {
           if (!store) {
             throw new Error('Notebook storage is not initialized')

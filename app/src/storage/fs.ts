@@ -487,14 +487,42 @@ export class FilesystemNotebookStore {
   }
 
   async create(parentUri: string, name: string): Promise<NotebookStoreItem> {
+    const safeName = notebookNameForCreate(name)
+    return this.createFileWithContent(
+      parentUri,
+      safeName,
+      createInitialNotebookFile(safeName),
+      'create'
+    )
+  }
+
+  async createContent(
+    parentUri: string,
+    name: string,
+    content: string
+  ): Promise<NotebookStoreItem> {
+    const safeName = notebookNameForCreate(name)
+    decodeNotebookFile(content, safeName)
+    return this.createFileWithContent(
+      parentUri,
+      safeName,
+      content,
+      'createContent'
+    )
+  }
+
+  private async createFileWithContent(
+    parentUri: string,
+    safeName: string,
+    content: string,
+    operation: 'create' | 'createContent'
+  ): Promise<NotebookStoreItem> {
     const parsed = parseFsUri(parentUri);
     if (parsed.kind !== "directory") {
       throw new Error(
-        "FilesystemNotebookStore.create expects a directory URI",
+        `FilesystemNotebookStore.${operation} expects a directory URI`,
       );
     }
-
-    const safeName = notebookNameForCreate(name)
 
     const dirHandle = await this.resolveDirectoryHandle(
       parsed.workspaceId,
@@ -511,49 +539,52 @@ export class FilesystemNotebookStore {
     }
 
     const fileHandle = await dirHandle.getFileHandle(safeName, { create: true })
+    try {
+      const writable = await fileHandle.createWritable()
+      await writable.write(content)
+      await writable.close()
 
-    const json = createInitialNotebookFile(safeName)
-    const writable = await fileHandle.createWritable()
-    await writable.write(json)
-    await writable.close()
+      const relPath = parsed.relativePath
+        ? `${parsed.relativePath}/${safeName}`
+        : safeName;
+      const fileUri = buildFsUri(parsed.workspaceId, relPath, "file");
 
-    const relPath = parsed.relativePath
-      ? `${parsed.relativePath}/${safeName}`
-      : safeName;
-    const fileUri = buildFsUri(parsed.workspaceId, relPath, "file");
+      const file = await fileHandle.getFile();
+      const recId = entryRecordId(parsed.workspaceId, relPath);
 
-    const file = await fileHandle.getFile();
-    const recId = entryRecordId(parsed.workspaceId, relPath);
+      await this.db.entries.put({
+        id: recId,
+        workspaceId: parsed.workspaceId,
+        relativePath: relPath,
+        kind: "file",
+        handle: fileHandle,
+        lastKnownMtime: file.lastModified,
+        lastKnownSize: file.size,
+        cachedDoc: content,
+      });
 
-    await this.db.entries.put({
-      id: recId,
-      workspaceId: parsed.workspaceId,
-      relativePath: relPath,
-      kind: "file",
-      handle: fileHandle,
-      lastKnownMtime: file.lastModified,
-      lastKnownSize: file.size,
-      cachedDoc: json,
-    });
+      this.baseRevisions.set(recId, {
+        lastModified: file.lastModified,
+        size: file.size,
+      });
 
-    this.baseRevisions.set(recId, {
-      lastModified: file.lastModified,
-      size: file.size,
-    });
-
-    return {
-      uri: fileUri,
-      name: safeName,
-      type: NotebookStoreItemType.File,
-      children: [],
-      mimeType:
-        detectNotebookFileFormat(safeName) === 'ipynb'
-          ? IPYNB_MIME_TYPE
-          : detectNotebookFileFormat(safeName) === 'runme-operation-log'
-            ? RUNME_OPERATION_LOG_MIME_TYPE
-            : 'application/json',
-      parents: [parentUri],
-    };
+      return {
+        uri: fileUri,
+        name: safeName,
+        type: NotebookStoreItemType.File,
+        children: [],
+        mimeType:
+          detectNotebookFileFormat(safeName) === 'ipynb'
+            ? IPYNB_MIME_TYPE
+            : detectNotebookFileFormat(safeName) === 'runme-operation-log'
+              ? RUNME_OPERATION_LOG_MIME_TYPE
+              : 'application/json',
+        parents: [parentUri],
+      };
+    } catch (error) {
+      await dirHandle.removeEntry(safeName).catch(() => {})
+      throw error
+    }
   }
 
   async rename(uri: string, name: string): Promise<NotebookStoreItem> {

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   RUNME_OPERATION_LOG_MIME_TYPE,
+  createInitialNotebookFile,
   encodeRunmeNotebook,
 } from '../lib/notebookFormat'
 import { parseOperationLog } from '../lib/operationLog'
@@ -771,6 +772,51 @@ describe("FilesystemNotebookStore", () => {
         },
         operations: [],
       })
+    })
+
+    it('creates a notebook with the supplied content in one operation', async () => {
+      const content = createInitialNotebookFile('converted.runme')
+
+      const item = await store.createContent(
+        ROOT_URI,
+        'converted.runme',
+        content
+      )
+
+      expect(item.name).toBe('converted.runme')
+      await expect(
+        rootEntries.get('converted.runme').getFile().then((file) => file.text())
+      ).resolves.toBe(content)
+    })
+
+    it('removes a newly created target when writing its content fails', async () => {
+      const failingHandle = createMockFileHandle('converted.runme', '')
+      vi.mocked(failingHandle.createWritable).mockResolvedValue({
+        write: vi.fn(async () => {
+          throw new Error('write failed')
+        }),
+        close: vi.fn(async () => {}),
+      } as FileSystemWritableFileStream)
+      vi.mocked(rootHandle.getFileHandle).mockImplementation(
+        async (fileName: string, options?: FileSystemGetFileOptions) => {
+          if (!options?.create) {
+            throw new DOMException('File not found', 'NotFoundError')
+          }
+          rootEntries.set(fileName, failingHandle)
+          return failingHandle
+        }
+      )
+
+      await expect(
+        store.createContent(
+          ROOT_URI,
+          'converted.runme',
+          createInitialNotebookFile('converted.runme')
+        )
+      ).rejects.toThrow('write failed')
+
+      expect(rootHandle.removeEntry).toHaveBeenCalledWith('converted.runme')
+      expect(rootEntries.has('converted.runme')).toBe(false)
     })
 
     it('refuses to overwrite an existing notebook', async () => {
