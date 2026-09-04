@@ -3653,9 +3653,10 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     const parentUri = 'local://folder/drive-post-create'
     const parentRemoteUri =
       'https://drive.google.com/drive/folders/drive-post-create'
-    const sourceDoc = notebookJson('echo post create')
+    const sourceDoc = notebookJson('echo after post create failure')
+    const conversionSourceDoc = notebookJson('echo before post create failure')
     const conversion = await convertLegacyNotebookFileToRunme(
-      sourceDoc,
+      conversionSourceDoc,
       'source.json',
       { originalGoogleDriveId: 'original-drive-post-create' }
     )
@@ -3689,7 +3690,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       lastSyncError: 'post-create sync failed',
       legacyConversionAttempt: {
         originalGoogleDriveId: 'original-drive-post-create',
-        sourceChecksum: md5(sourceDoc),
+        sourceChecksum: md5(conversionSourceDoc),
       },
       doc: '',
       md5Checksum: conversionSnapshot.checksum,
@@ -3714,6 +3715,15 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       remoteUri: conversionRemoteUri,
     })
     expect(syncFile).toHaveBeenCalledWith(conversionUri)
+    const refreshedLog = parseOperationLog(
+      await store.loadContent(conversionUri)
+    )
+    expect(refreshedLog.header).toEqual(
+      parseOperationLog(conversion.content).header
+    )
+    expect((await store.load(conversionUri)).cells[0]?.value).toBe(
+      'echo after post create failure'
+    )
     expect(
       (await store.files.get(conversionUri))?.legacyConversionAttempt
     ).toBeUndefined()

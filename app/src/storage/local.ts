@@ -15,6 +15,7 @@ import {
   decodeNotebookFile,
   detectNotebookFileFormat,
   encodeIpynbNotebook,
+  encodeRunmeOperationLogSnapshotWithHeader,
   isNotebookFileName,
   notebookFileExtension,
   validateNotebookRenameFormat,
@@ -2288,9 +2289,17 @@ export class LocalNotebooks extends Dexie {
         }
 
         if (child.legacyConversionAttempt.sourceChecksum !== sourceChecksum) {
+          const currentLog = parseOperationLog(
+            await this.loadContent(childUri)
+          )
+          const refreshedContent =
+            await encodeRunmeOperationLogSnapshotWithHeader(
+              converted.notebook,
+              currentLog.header
+            )
           await this.saveContent(
             childUri,
-            converted.content,
+            refreshedContent,
             RUNME_OPERATION_LOG_MIME_TYPE
           )
           await this.files.update(childUri, {

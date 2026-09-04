@@ -28,7 +28,7 @@ import { useFilesystemStore } from "../../contexts/FilesystemStoreContext";
 import { appLogger } from "../../lib/logging/runtime";
 import {
   type NotebookFileFormat,
-  convertLegacyNotebookToRunme,
+  convertLegacyNotebookFileToRunme,
   isLegacyNotebookFileName,
   isNotebookFileName,
   notebookFileExtension,
@@ -1113,8 +1113,11 @@ export function WorkspaceExplorer() {
           if (!fsStore) {
             throw new Error('Filesystem notebook storage is not initialized')
           }
-          const notebook = await fsStore.load(menu.uri)
-          const file = await convertLegacyNotebookToRunme(notebook, menu.name)
+          const content = await fsStore.loadContent(menu.uri)
+          const file = await convertLegacyNotebookFileToRunme(
+            content,
+            menu.name
+          )
           converted = await fsStore.createContent(
             menu.parentUri,
             file.fileName,

@@ -272,13 +272,21 @@ export async function encodeRunmeOperationLogSnapshot(
     created_by: `actor_${seed}`,
     created_at: createdAt,
   }
+  return encodeRunmeOperationLogSnapshotWithHeader(notebook, header)
+}
+
+/** Rebuild a snapshot while retaining an existing .runme document identity. */
+export async function encodeRunmeOperationLogSnapshotWithHeader(
+  notebook: parser_pb.Notebook,
+  header: NotebookLogHeader
+): Promise<string> {
   const operations = await buildOperationLogDiff({
     previous: create(parser_pb.NotebookSchema, { cells: [] }),
     next: notebook,
     observedOperations: [],
     actorId: header.created_by,
     firstActorSequence: 1,
-    createdAt: () => createdAt,
+    createdAt: () => header.created_at,
   })
   return serializeOperationLog(header, operations)
 }

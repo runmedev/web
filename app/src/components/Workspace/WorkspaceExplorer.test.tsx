@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   addItem: vi.fn(),
   removeItem: vi.fn(),
   ensureAccessToken: vi.fn(),
+  fsStore: null as any,
   store: {
     getMetadata: vi.fn(),
     create: vi.fn(),
@@ -102,7 +103,7 @@ vi.mock('../../contexts/NotebookStoreContext', () => ({
 
 vi.mock('../../contexts/FilesystemStoreContext', () => ({
   useFilesystemStore: () => ({
-    fsStore: null,
+    fsStore: mocks.fsStore,
   }),
 }))
 
@@ -167,6 +168,7 @@ describe('WorkspaceExplorer current document handling', () => {
     mocks.removeItem.mockReset()
     mocks.ensureAccessToken.mockReset()
     mocks.ensureAccessToken.mockResolvedValue('access-token')
+    mocks.fsStore = null
     mocks.workspaceItems = []
     mocks.store.getMetadata.mockReset()
     mocks.store.getMetadata.mockResolvedValue({
@@ -776,6 +778,48 @@ describe('WorkspaceExplorer current document handling', () => {
         'local://file/notebook',
         'local://folder/drive'
       )
+    })
+  })
+
+  it('rejects a non-notebook JSON file from a filesystem workspace', async () => {
+    const rootUri = 'fs://workspace/test/dir/'
+    const fileUri = 'fs://workspace/test/file/unrelated.json'
+    mocks.workspaceItems = [rootUri]
+    mocks.fsStore = {
+      getMetadata: vi.fn(async () => ({
+        uri: rootUri,
+        name: 'Filesystem Root',
+        type: NotebookStoreItemType.Folder,
+        children: [],
+        parents: [],
+      })),
+      list: vi.fn(async () => [
+        {
+          uri: fileUri,
+          name: 'unrelated.json',
+          type: NotebookStoreItemType.File,
+          children: [],
+          parents: [rootUri],
+        },
+      ]),
+      loadContent: vi.fn(async () => JSON.stringify({ unrelated: 'document' })),
+      createContent: vi.fn(),
+    }
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Filesystem Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('unrelated.json'))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    )
+
+    await waitFor(() => {
+      expect(mocks.fsStore.loadContent).toHaveBeenCalledWith(fileUri)
+      expect(mocks.fsStore.createContent).not.toHaveBeenCalled()
     })
   })
 

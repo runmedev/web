@@ -10,7 +10,11 @@ import {
 } from '../lib/notebookFormat'
 import { parseOperationLog } from '../lib/operationLog'
 import { parser_pb } from '../runme/client'
-import { FilesystemNotebookStore, isFileSystemAccessSupported } from './fs'
+import {
+  FilesystemEntryAlreadyExistsError,
+  FilesystemNotebookStore,
+  isFileSystemAccessSupported,
+} from './fs'
 import type { FsDatabase, FsEntryRecord, WorkspaceRecord } from './fsdb'
 import { NotebookStoreItemType } from './notebook'
 
@@ -831,6 +835,29 @@ describe("FilesystemNotebookStore", () => {
         original
       )
       expect(existing.createWritable).not.toHaveBeenCalled()
+    })
+
+    it('serializes concurrent creates for the same destination', async () => {
+      const firstContent = createInitialNotebookFile('shared.runme')
+      const secondContent = createInitialNotebookFile('shared.runme')
+
+      const results = await Promise.allSettled([
+        store.createContent(ROOT_URI, 'shared.runme', firstContent),
+        store.createContent(ROOT_URI, 'shared.runme', secondContent),
+      ])
+
+      expect(
+        results.filter((result) => result.status === 'fulfilled')
+      ).toHaveLength(1)
+      const rejection = results.find((result) => result.status === 'rejected')
+      expect(rejection).toMatchObject({
+        reason: expect.any(FilesystemEntryAlreadyExistsError),
+      })
+      const savedContent = await rootEntries
+        .get('shared.runme')
+        .getFile()
+        .then((file) => file.text())
+      expect([firstContent, secondContent]).toContain(savedContent)
     })
 
     it('calls getFileHandle with create: true', async () => {

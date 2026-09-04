@@ -193,6 +193,39 @@ function isNotFoundError(error: unknown): boolean {
   )
 }
 
+const FILE_CREATE_LOCK_PREFIX = 'runme:filesystem-create:'
+const fallbackCreateTails = new Map<string, Promise<void>>()
+
+async function runFilesystemCreateExclusive<T>(
+  key: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  const lockName = `${FILE_CREATE_LOCK_PREFIX}${key}`
+  if (
+    typeof navigator !== 'undefined' &&
+    typeof navigator.locks?.request === 'function'
+  ) {
+    return navigator.locks.request(lockName, operation)
+  }
+
+  const previous = fallbackCreateTails.get(lockName) ?? Promise.resolve()
+  let release!: () => void
+  const current = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const tail = previous.then(() => current)
+  fallbackCreateTails.set(lockName, tail)
+  await previous
+  try {
+    return await operation()
+  } finally {
+    release()
+    if (fallbackCreateTails.get(lockName) === tail) {
+      fallbackCreateTails.delete(lockName)
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // FilesystemNotebookStore
 // ---------------------------------------------------------------------------
@@ -523,68 +556,71 @@ export class FilesystemNotebookStore {
         `FilesystemNotebookStore.${operation} expects a directory URI`,
       );
     }
+    const relPath = parsed.relativePath
+      ? `${parsed.relativePath}/${safeName}`
+      : safeName
+    const recId = entryRecordId(parsed.workspaceId, relPath)
 
-    const dirHandle = await this.resolveDirectoryHandle(
-      parsed.workspaceId,
-      parsed.relativePath,
-    );
+    return runFilesystemCreateExclusive(recId, async () => {
+      const dirHandle = await this.resolveDirectoryHandle(
+        parsed.workspaceId,
+        parsed.relativePath,
+      );
 
-    try {
-      await dirHandle.getFileHandle(safeName)
-      throw new FilesystemEntryAlreadyExistsError(safeName)
-    } catch (error) {
-      if (!isNotFoundError(error)) {
+      try {
+        await dirHandle.getFileHandle(safeName)
+        throw new FilesystemEntryAlreadyExistsError(safeName)
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error
+        }
+      }
+
+      const fileHandle = await dirHandle.getFileHandle(safeName, {
+        create: true,
+      })
+      try {
+        const writable = await fileHandle.createWritable()
+        await writable.write(content)
+        await writable.close()
+
+        const fileUri = buildFsUri(parsed.workspaceId, relPath, "file");
+        const file = await fileHandle.getFile();
+
+        await this.db.entries.put({
+          id: recId,
+          workspaceId: parsed.workspaceId,
+          relativePath: relPath,
+          kind: "file",
+          handle: fileHandle,
+          lastKnownMtime: file.lastModified,
+          lastKnownSize: file.size,
+          cachedDoc: content,
+        });
+
+        this.baseRevisions.set(recId, {
+          lastModified: file.lastModified,
+          size: file.size,
+        });
+
+        return {
+          uri: fileUri,
+          name: safeName,
+          type: NotebookStoreItemType.File,
+          children: [],
+          mimeType:
+            detectNotebookFileFormat(safeName) === 'ipynb'
+              ? IPYNB_MIME_TYPE
+              : detectNotebookFileFormat(safeName) === 'runme-operation-log'
+                ? RUNME_OPERATION_LOG_MIME_TYPE
+                : 'application/json',
+          parents: [parentUri],
+        };
+      } catch (error) {
+        await dirHandle.removeEntry(safeName).catch(() => {})
         throw error
       }
-    }
-
-    const fileHandle = await dirHandle.getFileHandle(safeName, { create: true })
-    try {
-      const writable = await fileHandle.createWritable()
-      await writable.write(content)
-      await writable.close()
-
-      const relPath = parsed.relativePath
-        ? `${parsed.relativePath}/${safeName}`
-        : safeName;
-      const fileUri = buildFsUri(parsed.workspaceId, relPath, "file");
-
-      const file = await fileHandle.getFile();
-      const recId = entryRecordId(parsed.workspaceId, relPath);
-
-      await this.db.entries.put({
-        id: recId,
-        workspaceId: parsed.workspaceId,
-        relativePath: relPath,
-        kind: "file",
-        handle: fileHandle,
-        lastKnownMtime: file.lastModified,
-        lastKnownSize: file.size,
-        cachedDoc: content,
-      });
-
-      this.baseRevisions.set(recId, {
-        lastModified: file.lastModified,
-        size: file.size,
-      });
-
-      return {
-        uri: fileUri,
-        name: safeName,
-        type: NotebookStoreItemType.File,
-        children: [],
-        mimeType:
-          detectNotebookFileFormat(safeName) === 'ipynb'
-            ? IPYNB_MIME_TYPE
-            : detectNotebookFileFormat(safeName) === 'runme-operation-log'
-              ? RUNME_OPERATION_LOG_MIME_TYPE
-              : 'application/json',
-        parents: [parentUri],
-      };
-    } catch (error) {
-      await dirHandle.removeEntry(safeName).catch(() => {})
-      throw error
-    }
+    })
   }
 
   async rename(uri: string, name: string): Promise<NotebookStoreItem> {
