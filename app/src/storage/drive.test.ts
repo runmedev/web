@@ -16,6 +16,7 @@ import {
   DriveCreateNotCommittedError,
   DriveFileCreatedError,
   DriveNotebookStore,
+  GapiDriveFilesClient,
   driveFileUrl,
   driveFolderUrl,
   isDriveItemUri,
@@ -153,6 +154,80 @@ describe("isDriveItemUri", () => {
 });
 
 describe("DriveNotebookStore", () => {
+  it("uses one Drive v2 ETag for the browser CAS read and write", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        if (init?.method === "GET") {
+          expect(url.pathname).toBe("/drive/v2/files/file123");
+          expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+          expect(url.searchParams.get("fields")).toBe(
+            "etag,md5Checksum,headRevisionId,version",
+          );
+          expect(init?.headers).toMatchObject({
+            Authorization: "Bearer access-token",
+            "X-Goog-Drive-Resource-Keys": "file123/file-key",
+          });
+          return new Response(
+            JSON.stringify({
+              etag: '\"drive-etag-1\"',
+              md5Checksum: "checksum-1",
+              headRevisionId: "revision-1",
+              version: "1",
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        expect(init?.method).toBe("PATCH");
+        expect(url.pathname).toBe("/upload/drive/v2/files/file123");
+        expect(url.searchParams.get("uploadType")).toBe("media");
+        expect(url.searchParams.get("supportsAllDrives")).toBe("true");
+        expect(init?.headers).toMatchObject({
+          Authorization: "Bearer access-token",
+          "X-Goog-Drive-Resource-Keys": "file123/file-key",
+          "If-Match": '\"drive-etag-1\"',
+          "Content-Type": "application/vnd.runme.notebook+jsonl",
+        });
+        expect(init?.body).toBe('{"record_type":"runme.notebook"}\n');
+        return new Response("", { status: 200 });
+      });
+    const gapi = {
+      client: {
+        getToken: () => ({ access_token: "access-token" }),
+        drive: { files: {}, drives: {}, revisions: {} },
+      },
+    };
+    const client = new GapiDriveFilesClient(gapi as never);
+
+    const version = await client.getVersionMetadataWithEtag(
+      "file123",
+      "file-key",
+    );
+    expect(version).toEqual({
+      metadata: {
+        etag: '\"drive-etag-1\"',
+        md5Checksum: "checksum-1",
+        headRevisionId: "revision-1",
+        version: "1",
+      },
+      etag: '\"drive-etag-1\"',
+    });
+    await expect(
+      client.setContentIfMatch(
+        "file123",
+        '{"record_type":"runme.notebook"}\n',
+        "application/vnd.runme.notebook+jsonl",
+        version.etag!,
+        "file-key",
+      ),
+    ).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("forwards native Drive files.list search parameters and returns paging metadata", async () => {
     setGoogleDriveBaseUrl("https://drive.example.test");
     const fetchMock = vi
