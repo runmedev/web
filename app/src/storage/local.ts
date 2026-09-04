@@ -2346,6 +2346,21 @@ export class LocalNotebooks extends Dexie {
       const candidateChildUris = new Set(
         equivalentDestinationParents.flatMap((record) => record.children)
       )
+      const unfinishedAttempts = await this.files
+        .filter((record) => {
+          const attempt = record.legacyConversionAttempt
+          return Boolean(
+            attempt &&
+              !attempt.completedAt &&
+              attempt.originalGoogleDriveId === originalGoogleDriveId &&
+              detectNotebookFileFormat(record.name) ===
+                'runme-operation-log'
+          )
+        })
+        .toArray()
+      for (const attempt of unfinishedAttempts) {
+        candidateChildUris.add(attempt.id)
+      }
       for (const childUri of candidateChildUris) {
         if (!childUri.startsWith('local://file/')) {
           continue
@@ -2382,6 +2397,28 @@ export class LocalNotebooks extends Dexie {
             throw new Error(`Local notebook record not found for ${childUri}`)
           }
           child = renamedChild
+        }
+
+        const currentParent = await this.findParentFolder(childUri)
+        if (!isDriveUri(child.remoteId)) {
+          if (
+            child.parentRemoteIdWhenCreated !== destinationParent.remoteId
+          ) {
+            await this.files.update(childUri, {
+              parentRemoteIdWhenCreated: destinationParent.remoteId,
+            })
+            child = {
+              ...child,
+              parentRemoteIdWhenCreated: destinationParent.remoteId,
+            }
+          }
+        } else if (
+          currentParent &&
+          isDriveUri(currentParent.remoteId) &&
+          parseDriveItem(currentParent.remoteId).id !==
+            destinationDriveFolder.id
+        ) {
+          await this.move(childUri, destinationParentUri)
         }
 
         if (attempt.sourceChecksum !== sourceChecksum) {

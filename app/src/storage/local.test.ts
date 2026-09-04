@@ -4306,6 +4306,106 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     await expect(store.files.toArray()).resolves.toHaveLength(2)
   })
 
+  it('moves an uploaded unfinished conversion after the source moves folders', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const sourceUri = 'local://file/source-drive-moved'
+    const conversionUri = 'local://file/conversion-drive-moved'
+    const sourceRemoteUri =
+      'https://drive.google.com/file/d/original-drive-moved/view'
+    const conversionRemoteUri =
+      'https://drive.google.com/file/d/conversion-drive-moved/view'
+    const oldParentUri = 'local://folder/drive-moved-old'
+    const oldParentRemoteUri =
+      'https://drive.google.com/drive/folders/drive-moved-old'
+    const newParentUri = 'local://folder/drive-moved-new'
+    const newParentRemoteUri =
+      'https://drive.google.com/drive/folders/drive-moved-new'
+    const sourceDoc = notebookJson('echo moved source')
+    const conversion = await convertLegacyNotebookFileToRunme(
+      sourceDoc,
+      'source.json',
+      { originalGoogleDriveId: 'original-drive-moved' }
+    )
+    const conversionSnapshot = await operationLogStorage.initialize(
+      conversionUri,
+      conversion.content
+    )
+    const driveStore = {
+      loadContent: vi.fn(async () => sourceDoc),
+      move: vi.fn(async () => ({
+        uri: conversionRemoteUri,
+        name: 'source.runme',
+        type: NotebookStoreItemType.File,
+        children: [],
+        remoteUri: conversionRemoteUri,
+        parents: [newParentRemoteUri],
+      })),
+    }
+    const store = createTestStore(driveStore, { operationLogStorage })
+    await store.folders.put({
+      id: oldParentUri,
+      name: 'Old Drive folder',
+      remoteId: oldParentRemoteUri,
+      children: [conversionUri],
+      lastSynced: '',
+    })
+    await store.folders.put({
+      id: newParentUri,
+      name: 'New Drive folder',
+      remoteId: newParentRemoteUri,
+      children: [sourceUri],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: sourceUri,
+      name: 'source.json',
+      remoteId: sourceRemoteUri,
+      lastRemoteChecksum: md5(sourceDoc),
+      lastSynced: new Date().toISOString(),
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+    await store.files.put({
+      id: conversionUri,
+      name: 'source.runme',
+      mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
+      remoteId: conversionRemoteUri,
+      lastRemoteChecksum: conversionSnapshot.checksum,
+      lastSynced: '',
+      legacyConversionAttempt: {
+        originalGoogleDriveId: 'original-drive-moved',
+        sourceChecksum: md5(sourceDoc),
+      },
+      doc: '',
+      md5Checksum: conversionSnapshot.checksum,
+      operationLogRef: conversionSnapshot.ref,
+    })
+    vi.spyOn(store, 'syncFile').mockResolvedValue()
+
+    const result = await store.convertLegacyNotebookToRunme(
+      sourceUri,
+      newParentUri
+    )
+
+    expect(result).toMatchObject({
+      uri: conversionUri,
+      name: 'source.runme',
+      remoteUri: conversionRemoteUri,
+      parents: [newParentUri],
+    })
+    expect(driveStore.move).toHaveBeenCalledWith(
+      conversionRemoteUri,
+      oldParentRemoteUri,
+      newParentRemoteUri
+    )
+    expect((await store.folders.get(oldParentUri))?.children).toEqual([])
+    expect((await store.folders.get(newParentUri))?.children).toEqual([
+      sourceUri,
+      conversionUri,
+    ])
+    await expect(store.files.toArray()).resolves.toHaveLength(2)
+  })
+
   it('does not reuse an older conversion with an unrelated sync error', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
     const sourceUri = 'local://file/source-drive-new-attempt'
