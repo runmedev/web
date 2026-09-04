@@ -24,6 +24,7 @@ const GAPI_SCRIPT_SRC = 'https://apis.google.com/js/api.js'
 // VERSION_FIELDS is the fields we want to return when fetching metadata to determine the file content version.
 // https://developers.google.com/workspace/drive/api/guides/fields-parameter
 const VERSION_FIELDS = 'md5Checksum,headRevisionId,version,appProperties'
+const DRIVE_V2_VERSION_FIELDS = 'etag,md5Checksum,headRevisionId,version'
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
 } as unknown as Parameters<typeof toJsonString>[2]
@@ -634,7 +635,7 @@ const DRIVE_COMMENT_FIELDS =
   'id,createdTime,modifiedTime,resolved,anchor,author(displayName,photoLink,me),deleted,htmlContent,content,quotedFileContent(mimeType,value),replies(id,createdTime,modifiedTime,action,author(displayName,photoLink,me),deleted,htmlContent,content)'
 const DRIVE_COMMENT_LIST_FIELDS = `nextPageToken,comments(${DRIVE_COMMENT_FIELDS})`
 
-class GapiDriveFilesClient implements DriveFilesClient {
+export class GapiDriveFilesClient implements DriveFilesClient {
   private readonly files: GapiDriveFileMethods
   private readonly drives: GapiDriveMethods
   private readonly revisions: GapiDriveRevisionMethods
@@ -944,20 +945,29 @@ class GapiDriveFilesClient implements DriveFilesClient {
     metadata: DriveVersionMetadata | null
     etag?: string
   }> {
+    // Drive v3 returns the ETag as an HTTP response header, but Google does
+    // not expose that header to cross-origin browser JavaScript. Drive v2
+    // exposes the same file validator in its JSON body, which lets browser
+    // clients keep using a real If-Match precondition instead of weakening
+    // the operation-log CAS.
     const response = await this.request(
       'GET',
-      `/drive/v3/files/${encodeURIComponent(fileId)}`,
+      `/drive/v2/files/${encodeURIComponent(fileId)}`,
       {
         params: {
           supportsAllDrives: true,
-          fields: VERSION_FIELDS,
-          resourceKey,
+          fields: DRIVE_V2_VERSION_FIELDS,
         },
+        headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
       }
     )
+    const metadata =
+      (response.result as
+        | (DriveVersionMetadata & { etag?: string })
+        | undefined) ?? null
     return {
-      metadata: (response.result as DriveVersionMetadata | undefined) ?? null,
-      etag: response.etag,
+      metadata,
+      etag: metadata?.etag ?? response.etag,
     }
   }
 
@@ -971,16 +981,18 @@ class GapiDriveFilesClient implements DriveFilesClient {
     try {
       await this.request(
         'PATCH',
-        `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
+        `/upload/drive/v2/files/${encodeURIComponent(fileId)}`,
         {
           params: {
             uploadType: 'media',
             supportsAllDrives: true,
-            resourceKey,
           },
           body: content,
           contentType: mimeType,
-          headers: { 'If-Match': etag },
+          headers: {
+            ...driveResourceKeyHeaders({ id: fileId, resourceKey }),
+            'If-Match': etag,
+          },
         }
       )
       return true
