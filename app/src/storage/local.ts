@@ -116,10 +116,12 @@ export interface LocalFileRecord {
   parentRemoteIdWhenCreated?: string
   /** Stable idempotency key for creating the primary Drive file. */
   driveCreateOperationId?: string
-  /** Retry state retained only while a legacy-to-Runme Drive copy is pending. */
+  /** Retry/deduplication state for a legacy-to-Runme Drive copy. */
   legacyConversionAttempt?: {
     originalGoogleDriveId: string
     sourceChecksum: string
+    /** Set after sync so callers already waiting on the same lock reuse it. */
+    completedAt?: string
   }
   /** Remote Drive URI of the Markdown sidecar (e.g. *.index.md) if present. */
   markdownUri?: string
@@ -2196,6 +2198,23 @@ export class LocalNotebooks extends Dexie {
         'LocalNotebooks.convertLegacyNotebookToRunme expects a local file URI'
       )
     }
+    const invokedAt = nowIsoString()
+    return this.driveSyncCoordinator.runExclusive(
+      `legacy-conversion:${sourceUri}`,
+      () =>
+        this.convertLegacyNotebookToRunmeExclusive(
+          sourceUri,
+          parentUri,
+          invokedAt
+        )
+    )
+  }
+
+  private async convertLegacyNotebookToRunmeExclusive(
+    sourceUri: string,
+    parentUri: string | undefined,
+    invokedAt: string
+  ): Promise<NotebookStoreItem> {
     let sourceRecord = await this.files.get(sourceUri)
     if (!sourceRecord) {
       throw new Error(`Local notebook record not found for ${sourceUri}`)
@@ -2203,6 +2222,21 @@ export class LocalNotebooks extends Dexie {
     const sourceFormat = detectNotebookFileFormat(sourceRecord.name)
     if (sourceFormat !== 'runme-json' && sourceFormat !== 'ipynb') {
       throw new Error('Only .json and .ipynb notebooks can be converted')
+    }
+    if (sourceRecord.conflict) {
+      throw new Error(
+        `Resolve the sync conflict before converting ${sourceRecord.name}`
+      )
+    }
+
+    // Validate raw Drive JSON before normal synchronization can decode it into
+    // the protobuf model and discard unknown fields. Conversion below reads it
+    // again after sync so the produced copy still reflects the latest bytes.
+    if (sourceFormat === 'runme-json' && isDriveUri(sourceRecord.remoteId)) {
+      await convertLegacyNotebookFileToRunme(
+        await this.driveStore.loadContent(sourceRecord.remoteId),
+        sourceRecord.name
+      )
     }
 
     if (
@@ -2225,7 +2259,12 @@ export class LocalNotebooks extends Dexie {
         `Resolve the sync conflict before converting ${sourceRecord.name}`
       )
     }
-    const sourceContent = await this.loadContent(sourceUri)
+    // DriveNotebookStore.load normalizes protobuf JSON with unknown fields
+    // ignored. Read the raw bytes after sync rather than the normalized cache.
+    const sourceContent =
+      sourceFormat === 'runme-json' && isDriveUri(sourceRecord.remoteId)
+        ? await this.driveStore.loadContent(sourceRecord.remoteId)
+        : await this.loadContent(sourceUri)
     const originalGoogleDriveId = isDriveUri(sourceRecord.remoteId)
       ? parseDriveItem(sourceRecord.remoteId).id
       : undefined
@@ -2271,11 +2310,16 @@ export class LocalNotebooks extends Dexie {
           child.parentRemoteIdWhenCreated === destinationParent.remoteId
         const isErroredDriveConversion =
           isDriveUri(child?.remoteId) && Boolean(child?.lastSyncError)
+        const attempt = child?.legacyConversionAttempt
+        const completedDuringInvocation = Boolean(
+          attempt?.completedAt && attempt.completedAt >= invokedAt
+        )
+        const isActiveConversionAttempt =
+          !attempt?.completedAt && (isPendingCreate || isErroredDriveConversion)
         if (
           child?.name !== converted.fileName ||
-          (!isPendingCreate && !isErroredDriveConversion) ||
-          child.legacyConversionAttempt?.originalGoogleDriveId !==
-            originalGoogleDriveId ||
+          (!isActiveConversionAttempt && !completedDuringInvocation) ||
+          attempt?.originalGoogleDriveId !== originalGoogleDriveId ||
           detectNotebookFileFormat(child.name) !== 'runme-operation-log'
         ) {
           continue
@@ -2292,7 +2336,7 @@ export class LocalNotebooks extends Dexie {
           continue
         }
 
-        if (child.legacyConversionAttempt.sourceChecksum !== sourceChecksum) {
+        if (attempt.sourceChecksum !== sourceChecksum) {
           if (!child.operationLogRef) {
             continue
           }
@@ -2331,6 +2375,7 @@ export class LocalNotebooks extends Dexie {
             legacyConversionAttempt: {
               originalGoogleDriveId,
               sourceChecksum,
+              completedAt: undefined,
             },
           })
           this.notifySync(childUri)
@@ -2338,7 +2383,11 @@ export class LocalNotebooks extends Dexie {
 
         await this.syncFile(childUri)
         await this.files.update(childUri, {
-          legacyConversionAttempt: undefined,
+          legacyConversionAttempt: {
+            originalGoogleDriveId,
+            sourceChecksum,
+            completedAt: nowIsoString(),
+          },
         })
         return (
           (await this.getMetadata(childUri)) ?? {
@@ -2369,7 +2418,13 @@ export class LocalNotebooks extends Dexie {
     if (isDriveUri(destinationParent.remoteId)) {
       await this.syncFile(created.uri)
       await this.files.update(created.uri, {
-        legacyConversionAttempt: undefined,
+        legacyConversionAttempt: originalGoogleDriveId
+          ? {
+              originalGoogleDriveId,
+              sourceChecksum,
+              completedAt: nowIsoString(),
+            }
+          : undefined,
       })
     }
     return (await this.getMetadata(created.uri)) ?? created

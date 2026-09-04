@@ -3388,6 +3388,46 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     await expect(store.files.toArray()).resolves.toHaveLength(1)
   })
 
+  it('strictly validates raw Drive JSON before normal synchronization', async () => {
+    const sourceUri = 'local://file/unrelated-drive-json'
+    const sourceRemoteUri =
+      'https://drive.google.com/file/d/unrelated-drive-json/view'
+    const parentUri = 'local://folder/unrelated-drive-json'
+    const rawSource = '{"unrelated":"document"}'
+    const driveStore = {
+      getMetadata: vi.fn(async () => ({ name: 'unrelated.json' })),
+      getVersionMetadata: vi.fn(async () => ({
+        md5Checksum: md5(rawSource),
+      })),
+      load: vi.fn(async () => create(parser_pb.NotebookSchema, { cells: [] })),
+      loadContent: vi.fn(async () => rawSource),
+    }
+    const store = createTestStore(driveStore)
+    await store.folders.put({
+      id: parentUri,
+      name: 'Drive folder',
+      remoteId: 'https://drive.google.com/drive/folders/unrelated-drive-json',
+      children: [sourceUri],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: sourceUri,
+      name: 'unrelated.json',
+      remoteId: sourceRemoteUri,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+      doc: '',
+      md5Checksum: '',
+    })
+
+    await expect(
+      store.convertLegacyNotebookToRunme(sourceUri, parentUri)
+    ).rejects.toThrow('Legacy .json file is not a Runme notebook')
+    expect(driveStore.load).not.toHaveBeenCalled()
+    expect(driveStore.loadContent).toHaveBeenCalledWith(sourceRemoteUri)
+    await expect(store.files.toArray()).resolves.toHaveLength(1)
+  })
+
   it('rejects a conflicted Drive IPYNB instead of converting its stale shadow', async () => {
     const sourceUri = 'local://file/conflicted-ipynb'
     const sourceRemoteUri =
@@ -3443,7 +3483,6 @@ describe('LocalNotebooks legacy notebook conversion', () => {
   })
 
   it('records the original Drive file ID and waits for the new file sync', async () => {
-    const store = createTestStore({})
     const sourceUri = 'local://file/source-drive'
     const sourceRemoteUri =
       'https://drive.google.com/file/d/original-drive-id/view'
@@ -3451,6 +3490,9 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       'https://drive.google.com/file/d/converted-drive-id/view'
     const parentUri = 'local://folder/drive'
     const sourceDoc = notebookJson('echo drive')
+    const store = createTestStore({
+      loadContent: vi.fn(async () => sourceDoc),
+    })
     await store.folders.put({
       id: parentUri,
       name: 'Drive',
@@ -3495,8 +3537,104 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     })
   })
 
+  it('deduplicates concurrent Drive conversion requests across stores', async () => {
+    const sourceUri = 'local://file/concurrent-drive-source'
+    const sourceRemoteUri =
+      'https://drive.google.com/file/d/concurrent-drive-source/view'
+    const destinationRemoteUri =
+      'https://drive.google.com/file/d/concurrent-drive-target/view'
+    const parentUri = 'local://folder/concurrent-drive'
+    const parentRemoteUri =
+      'https://drive.google.com/drive/folders/concurrent-drive'
+    const sourceDoc = notebookJson('echo concurrent')
+    const files = createMockTable<LocalFileRecord>()
+    const folders = createMockTable<LocalFolderRecord>()
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const baseCoordinator = createTestDriveSyncCoordinator()
+    let legacyLockRequests = 0
+    let notifySecondLockRequest!: () => void
+    const secondLockRequested = new Promise<void>((resolve) => {
+      notifySecondLockRequest = resolve
+    })
+    const coordinator: DriveSyncCoordinator = {
+      runExclusive: (key, operation) => {
+        if (key === `legacy-conversion:${sourceUri}`) {
+          legacyLockRequests += 1
+          if (legacyLockRequests === 2) notifySecondLockRequest()
+        }
+        return baseCoordinator.runExclusive(key, operation)
+      },
+    }
+    const driveStore = {
+      loadContent: vi.fn(async () => sourceDoc),
+    }
+    const options = {
+      files,
+      folders,
+      driveSyncCoordinator: coordinator,
+      operationLogStorage,
+    }
+    const firstStore = createTestStore(driveStore, options)
+    const secondStore = createTestStore(driveStore, options)
+    await folders.put({
+      id: parentUri,
+      name: 'Concurrent Drive',
+      remoteId: parentRemoteUri,
+      children: [sourceUri],
+      lastSynced: '',
+    })
+    await files.put({
+      id: sourceUri,
+      name: 'source.json',
+      remoteId: sourceRemoteUri,
+      lastRemoteChecksum: md5(sourceDoc),
+      lastSynced: new Date().toISOString(),
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+    let releaseFirstTargetSync!: () => void
+    const firstTargetSyncReleased = new Promise<void>((resolve) => {
+      releaseFirstTargetSync = resolve
+    })
+    let notifyFirstTargetSync!: () => void
+    const firstTargetSyncStarted = new Promise<void>((resolve) => {
+      notifyFirstTargetSync = resolve
+    })
+    vi.spyOn(firstStore, 'syncFile').mockImplementation(async (uri: string) => {
+      if (uri === sourceUri) return
+      notifyFirstTargetSync()
+      await firstTargetSyncReleased
+      await files.update(uri, {
+        remoteId: destinationRemoteUri,
+        parentRemoteIdWhenCreated: undefined,
+      })
+    })
+    vi.spyOn(secondStore, 'syncFile').mockImplementation(
+      async (uri: string) => {
+        if (uri === sourceUri) return
+        await files.update(uri, {
+          remoteId: destinationRemoteUri,
+          parentRemoteIdWhenCreated: undefined,
+        })
+      }
+    )
+
+    const first = firstStore.convertLegacyNotebookToRunme(sourceUri, parentUri)
+    await firstTargetSyncStarted
+    const second = secondStore.convertLegacyNotebookToRunme(
+      sourceUri,
+      parentUri
+    )
+    await secondLockRequested
+    releaseFirstTargetSync()
+    const [firstResult, secondResult] = await Promise.all([first, second])
+
+    expect(secondResult.uri).toBe(firstResult.uri)
+    expect(secondResult.remoteUri).toBe(destinationRemoteUri)
+    await expect(files.toArray()).resolves.toHaveLength(2)
+  })
+
   it('syncs a pending Drive source before recording its original file ID', async () => {
-    const store = createTestStore({})
     const sourceUri = 'local://file/pending-source-drive'
     const sourceRemoteUri =
       'https://drive.google.com/file/d/pending-source-drive-id/view'
@@ -3506,6 +3644,9 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     const parentRemoteUri =
       'https://drive.google.com/drive/folders/pending-source-drive'
     const sourceDoc = notebookJson('echo pending source')
+    const store = createTestStore({
+      loadContent: vi.fn(async () => sourceDoc),
+    })
     await store.folders.put({
       id: parentUri,
       name: 'Pending source Drive',
@@ -3570,6 +3711,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
         children: [],
         parents: [remoteParentUri],
       })),
+      loadContent: vi.fn(async () => sourceDoc),
     }
     const store = createTestStore(driveStore)
     const sourceDoc = notebookJson('echo drive')
@@ -3613,7 +3755,6 @@ describe('LocalNotebooks legacy notebook conversion', () => {
 
   it('reuses a pending Drive conversion after a transient sync failure', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
-    const store = createTestStore({}, { operationLogStorage })
     const sourceUri = 'local://file/source-drive-retry'
     const pendingUri = 'local://file/pending-drive-retry'
     const sourceRemoteUri =
@@ -3624,6 +3765,10 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     const parentRemoteUri = 'https://drive.google.com/drive/folders/drive-retry'
     const sourceDoc = notebookJson('echo retry')
     const pendingSourceDoc = notebookJson('echo before retry')
+    const store = createTestStore(
+      { loadContent: vi.fn(async () => sourceDoc) },
+      { operationLogStorage }
+    )
     const pendingConversion = await convertLegacyNotebookFileToRunme(
       pendingSourceDoc,
       'source.json',
@@ -3693,7 +3838,11 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     expect((await store.load(pendingUri)).cells[0]?.value).toBe('echo retry')
     expect(
       (await store.files.get(pendingUri))?.legacyConversionAttempt
-    ).toBeUndefined()
+    ).toMatchObject({
+      originalGoogleDriveId: 'original-drive-retry',
+      sourceChecksum: md5(sourceDoc),
+      completedAt: expect.any(String),
+    })
     await expect(store.files.toArray()).resolves.toHaveLength(2)
   })
 
@@ -3723,7 +3872,9 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     }
     const driveStore = {
       getVersionMetadata: vi.fn(async () => remoteVersion),
-      loadContent: vi.fn(async () => remoteContent),
+      loadContent: vi.fn(async (uri: string) =>
+        uri === sourceRemoteUri ? sourceDoc : remoteContent
+      ),
       saveContentIfVersion: vi.fn(async (_uri: string, content: string) => {
         remoteContent = content
         remoteVersion = {
@@ -3815,13 +3966,16 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     )
     expect(
       (await store.files.get(conversionUri))?.legacyConversionAttempt
-    ).toBeUndefined()
+    ).toMatchObject({
+      originalGoogleDriveId: 'original-drive-post-create',
+      sourceChecksum: md5(sourceDoc),
+      completedAt: expect.any(String),
+    })
     await expect(store.files.toArray()).resolves.toHaveLength(2)
   })
 
   it('does not reuse an older conversion with an unrelated sync error', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
-    const store = createTestStore({}, { operationLogStorage })
     const sourceUri = 'local://file/source-drive-new-attempt'
     const oldConversionUri = 'local://file/old-drive-conversion'
     const sourceRemoteUri =
@@ -3834,6 +3988,10 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     const parentRemoteUri =
       'https://drive.google.com/drive/folders/drive-new-attempt'
     const sourceDoc = notebookJson('echo new attempt')
+    const store = createTestStore(
+      { loadContent: vi.fn(async () => sourceDoc) },
+      { operationLogStorage }
+    )
     const oldConversion = await convertLegacyNotebookFileToRunme(
       sourceDoc,
       'source.json',
@@ -3867,6 +4025,11 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       lastRemoteChecksum: oldSnapshot.checksum,
       lastSynced: new Date().toISOString(),
       lastSyncError: 'unrelated later failure',
+      legacyConversionAttempt: {
+        originalGoogleDriveId: 'original-drive-new-attempt',
+        sourceChecksum: md5(sourceDoc),
+        completedAt: '2026-09-03T00:00:00.000Z',
+      },
       doc: '',
       md5Checksum: oldSnapshot.checksum,
       operationLogRef: oldSnapshot.ref,
