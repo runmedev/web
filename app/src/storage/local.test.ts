@@ -3537,6 +3537,68 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     })
   })
 
+  it('preserves a fresh Drive conversion across a lagging folder listing', async () => {
+    const sourceUri = 'local://file/source-drive-listing-race'
+    const sourceRemoteUri =
+      'https://drive.google.com/file/d/original-drive-listing-race/view'
+    const destinationRemoteUri =
+      'https://drive.google.com/file/d/converted-drive-listing-race/view'
+    const parentUri = 'local://folder/drive-listing-race'
+    const parentRemoteUri =
+      'https://drive.google.com/drive/folders/drive-listing-race'
+    const sourceDoc = notebookJson('echo listing race')
+    const store = createTestStore({
+      loadContent: vi.fn(async () => sourceDoc),
+      list: vi.fn(async () => []),
+    })
+    await store.folders.put({
+      id: parentUri,
+      name: 'Drive',
+      remoteId: parentRemoteUri,
+      children: [sourceUri],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: sourceUri,
+      name: 'source.json',
+      remoteId: sourceRemoteUri,
+      lastRemoteChecksum: md5(sourceDoc),
+      lastSynced: new Date().toISOString(),
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+
+    let notifyTargetSync!: () => void
+    const targetSyncStarted = new Promise<void>((resolve) => {
+      notifyTargetSync = resolve
+    })
+    let releaseTargetSync!: () => void
+    const targetSyncReleased = new Promise<void>((resolve) => {
+      releaseTargetSync = resolve
+    })
+    vi.spyOn(store, 'syncFile').mockImplementation(async (uri: string) => {
+      if (uri === sourceUri) return
+      await store.files.update(uri, { remoteId: destinationRemoteUri })
+      await store.updateFolder(parentRemoteUri, 'Drive')
+      notifyTargetSync()
+      await targetSyncReleased
+    })
+
+    const first = store.convertLegacyNotebookToRunme(sourceUri, parentUri)
+    await targetSyncStarted
+    const second = store.convertLegacyNotebookToRunme(sourceUri, parentUri)
+    releaseTargetSync()
+    const [firstResult, secondResult] = await Promise.all([first, second])
+
+    expect(secondResult.uri).toBe(firstResult.uri)
+    expect(secondResult.remoteUri).toBe(destinationRemoteUri)
+    await expect(store.files.toArray()).resolves.toHaveLength(2)
+    await expect(store.folders.get(parentUri)).resolves.toMatchObject({
+      children: [firstResult.uri],
+      provisionalChildren: [firstResult.uri],
+    })
+  })
+
   it('deduplicates concurrent Drive conversions across equivalent source URLs and folder mounts', async () => {
     const firstSourceUri = 'local://file/concurrent-drive-source-1'
     const secondSourceUri = 'local://file/concurrent-drive-source-2'

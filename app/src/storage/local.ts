@@ -2461,6 +2461,10 @@ export class LocalNotebooks extends Dexie {
     )
     if (isDriveUri(destinationParent.remoteId)) {
       await this.syncFile(created.uri)
+      await this.attachDriveFileToFolder(
+        destinationParent.remoteId,
+        created.uri
+      )
       await this.files.update(created.uri, {
         legacyConversionAttempt: originalGoogleDriveId
           ? {
