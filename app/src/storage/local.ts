@@ -2364,15 +2364,11 @@ export class LocalNotebooks extends Dexie {
         ) {
           continue
         }
-        try {
-          const pendingNotebook = await this.loadOperationLogSnapshot(childUri)
-          if (
-            pendingNotebook.metadata[RunmeMetadataKey.OriginalGoogleDriveID] !==
-            originalGoogleDriveId
-          ) {
-            continue
-          }
-        } catch {
+        const pendingNotebook = await this.loadOperationLogSnapshot(childUri)
+        if (
+          pendingNotebook.metadata[RunmeMetadataKey.OriginalGoogleDriveID] !==
+          originalGoogleDriveId
+        ) {
           continue
         }
 
@@ -2421,11 +2417,11 @@ export class LocalNotebooks extends Dexie {
           this.notifySync(childUri)
         }
 
-        await this.syncFile(childUri)
         await this.attachDriveFileToFolder(
           destinationParent.remoteId,
           childUri
         )
+        await this.syncFile(childUri)
         await this.files.update(childUri, {
           legacyConversionAttempt: {
             originalGoogleDriveId,
@@ -2460,11 +2456,11 @@ export class LocalNotebooks extends Dexie {
       }
     )
     if (isDriveUri(destinationParent.remoteId)) {
-      await this.syncFile(created.uri)
       await this.attachDriveFileToFolder(
         destinationParent.remoteId,
         created.uri
       )
+      await this.syncFile(created.uri)
       await this.files.update(created.uri, {
         legacyConversionAttempt: originalGoogleDriveId
           ? {

@@ -3578,6 +3578,9 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     })
     vi.spyOn(store, 'syncFile').mockImplementation(async (uri: string) => {
       if (uri === sourceUri) return
+      expect(
+        (await store.folders.get(parentUri))?.provisionalChildren
+      ).toContain(uri)
       await store.files.update(uri, { remoteId: destinationRemoteUri })
       await store.updateFolder(parentRemoteUri, 'Drive')
       notifyTargetSync()
@@ -3975,6 +3978,84 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       name: 'source.runme',
       remoteUri: destinationRemoteUri,
     })
+  })
+
+  it('aborts when an unfinished conversion snapshot cannot be read', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const sourceUri = 'local://file/source-drive-snapshot-retry'
+    const pendingUri = 'local://file/pending-drive-snapshot-retry'
+    const sourceRemoteUri =
+      'https://drive.google.com/file/d/original-drive-snapshot-retry/view'
+    const destinationRemoteUri =
+      'https://drive.google.com/file/d/converted-drive-snapshot-retry/view'
+    const parentUri = 'local://folder/drive-snapshot-retry'
+    const parentRemoteUri =
+      'https://drive.google.com/drive/folders/drive-snapshot-retry'
+    const sourceDoc = notebookJson('echo snapshot retry')
+    const store = createTestStore(
+      { loadContent: vi.fn(async () => sourceDoc) },
+      { operationLogStorage }
+    )
+    const pendingConversion = await convertLegacyNotebookFileToRunme(
+      sourceDoc,
+      'source.json',
+      { originalGoogleDriveId: 'original-drive-snapshot-retry' }
+    )
+    const pendingSnapshot = await operationLogStorage.initialize(
+      pendingUri,
+      pendingConversion.content
+    )
+    await store.folders.put({
+      id: parentUri,
+      name: 'Drive snapshot retry',
+      remoteId: parentRemoteUri,
+      children: [sourceUri, pendingUri],
+      lastSynced: '',
+    })
+    await store.files.put({
+      id: sourceUri,
+      name: 'source.json',
+      remoteId: sourceRemoteUri,
+      lastRemoteChecksum: md5(sourceDoc),
+      lastSynced: new Date().toISOString(),
+      doc: sourceDoc,
+      md5Checksum: md5(sourceDoc),
+    })
+    await store.files.put({
+      id: pendingUri,
+      name: 'source.runme',
+      mimeType: RUNME_OPERATION_LOG_MIME_TYPE,
+      remoteId: destinationRemoteUri,
+      legacyConversionAttempt: {
+        originalGoogleDriveId: 'original-drive-snapshot-retry',
+        sourceChecksum: md5(sourceDoc),
+      },
+      lastRemoteChecksum: pendingSnapshot.checksum,
+      lastSynced: '',
+      doc: '',
+      md5Checksum: pendingSnapshot.checksum,
+      operationLogRef: pendingSnapshot.ref,
+    })
+    const syncFile = vi.spyOn(store, 'syncFile').mockResolvedValue()
+    vi.spyOn(store, 'loadOperationLogSnapshot').mockRejectedValueOnce(
+      new Error('transient snapshot read failure')
+    )
+
+    await expect(
+      store.convertLegacyNotebookToRunme(sourceUri, parentUri)
+    ).rejects.toThrow('transient snapshot read failure')
+    expect(syncFile).not.toHaveBeenCalledWith(pendingUri)
+    await expect(store.files.toArray()).resolves.toHaveLength(2)
+
+    const result = await store.convertLegacyNotebookToRunme(
+      sourceUri,
+      parentUri
+    )
+
+    expect(result.uri).toBe(pendingUri)
+    expect(result.remoteUri).toBe(destinationRemoteUri)
+    expect(syncFile).toHaveBeenCalledWith(pendingUri)
+    await expect(store.files.toArray()).resolves.toHaveLength(2)
   })
 
   it('reuses a pending Drive conversion after a transient sync failure', async () => {
