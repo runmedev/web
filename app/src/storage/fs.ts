@@ -177,6 +177,22 @@ export function isFileSystemAccessSupported(): boolean {
   );
 }
 
+export class FilesystemEntryAlreadyExistsError extends Error {
+  constructor(readonly fileName: string) {
+    super(`A file named "${fileName}" already exists in this folder.`)
+    this.name = 'FilesystemEntryAlreadyExistsError'
+  }
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'name' in error &&
+    error.name === 'NotFoundError'
+  )
+}
+
 // ---------------------------------------------------------------------------
 // FilesystemNotebookStore
 // ---------------------------------------------------------------------------
@@ -484,6 +500,15 @@ export class FilesystemNotebookStore {
       parsed.workspaceId,
       parsed.relativePath,
     );
+
+    try {
+      await dirHandle.getFileHandle(safeName)
+      throw new FilesystemEntryAlreadyExistsError(safeName)
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error
+      }
+    }
 
     const fileHandle = await dirHandle.getFileHandle(safeName, { create: true })
 

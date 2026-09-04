@@ -773,6 +773,20 @@ describe("FilesystemNotebookStore", () => {
       })
     })
 
+    it('refuses to overwrite an existing notebook', async () => {
+      const original = 'original runme content'
+      const existing = createMockFileHandle('shared.runme', original)
+      rootEntries.set('shared.runme', existing)
+
+      await expect(store.create(ROOT_URI, 'shared.runme')).rejects.toThrow(
+        'A file named "shared.runme" already exists in this folder.'
+      )
+      await expect(existing.getFile().then((file) => file.text())).resolves.toBe(
+        original
+      )
+      expect(existing.createWritable).not.toHaveBeenCalled()
+    })
+
     it('calls getFileHandle with create: true', async () => {
       await store.create(ROOT_URI, 'new-notebook.json')
       expect(rootHandle.getFileHandle).toHaveBeenCalledWith(

@@ -44,7 +44,10 @@ import {
   NotebookStoreItemType,
 } from "../../storage/notebook";
 import type { StorageBrowser } from "../../storage/browser";
-import { isFileSystemAccessSupported } from "../../storage/fs";
+import {
+  FilesystemEntryAlreadyExistsError,
+  isFileSystemAccessSupported,
+} from "../../storage/fs";
 import {
   DriveCreateNotCommittedError,
   fetchDriveItemWithParents,
@@ -102,6 +105,9 @@ function createPlaceholderNode(uri: string, label: string): TreeNode {
 }
 
 function driveCreateErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof FilesystemEntryAlreadyExistsError) {
+    return error.message
+  }
   return error instanceof DriveCreateNotCommittedError
     ? error.message
     : fallback;
