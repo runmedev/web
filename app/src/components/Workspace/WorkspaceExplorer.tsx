@@ -113,6 +113,15 @@ function driveCreateErrorMessage(error: unknown, fallback: string): string {
     : fallback;
 }
 
+function isDriveAuthorizationMessage(message: string): boolean {
+  return [
+    'Google Drive authorization is required',
+    'Google Drive service-account authorization is required',
+    'Google service-account authorization opened in a new tab',
+    'Redirecting to Google OAuth for Drive authorization',
+  ].some((prefix) => message.startsWith(prefix))
+}
+
 /** Preserve conversion failures that tell the user how to unblock the action. */
 function legacyConversionErrorMessage(error: unknown): string {
   const fallback =
@@ -122,6 +131,9 @@ function legacyConversionErrorMessage(error: unknown): string {
     return storageMessage
   }
   const message = error instanceof Error ? error.message.trim() : ''
+  if (isDriveAuthorizationMessage(message)) {
+    return `${message} Complete Google Drive authorization, then retry the conversion.`
+  }
   const actionablePrefixes = [
     'Resolve the sync conflict before converting',
     'Legacy .json file is not a Runme notebook',
@@ -142,12 +154,7 @@ function legacyConversionErrorMessage(error: unknown): string {
  */
 function renameErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message.trim() : "";
-  if (
-    message.startsWith("Google Drive authorization is required") ||
-    message.startsWith("Google Drive service-account authorization is required") ||
-    message.startsWith("Google service-account authorization opened in a new tab") ||
-    message.startsWith("Redirecting to Google OAuth for Drive authorization")
-  ) {
+  if (isDriveAuthorizationMessage(message)) {
     return `${message} Complete Google Drive authorization, then retry the rename.`;
   }
   if (

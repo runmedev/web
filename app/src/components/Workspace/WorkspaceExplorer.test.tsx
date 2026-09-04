@@ -730,6 +730,62 @@ describe('WorkspaceExplorer current document handling', () => {
     })
   })
 
+  it.each([
+    'Google Drive authorization is required.',
+    'Google Drive service-account authorization is required.',
+    'Google service-account authorization opened in a new tab.',
+    'Redirecting to Google OAuth for Drive authorization.',
+  ])('shows actionable conversion authorization guidance: %s', async (message) => {
+    const folderUri = 'local://folder/drive'
+    const fileUri = 'local://file/notebook'
+    mocks.workspaceItems = [folderUri]
+    mocks.isDriveItemUri.mockImplementation((uri: string) =>
+      uri.startsWith('https://drive.google.com')
+    )
+    mocks.store.getMetadata.mockImplementation(async (uri: string) => {
+      if (uri === folderUri) {
+        return {
+          uri,
+          name: 'Drive Root',
+          type: NotebookStoreItemType.Folder,
+          children: [fileUri],
+          remoteUri: 'https://drive.google.com/drive/folders/drive-root',
+          parents: [],
+        }
+      }
+      if (uri === fileUri) {
+        return {
+          uri,
+          name: 'direct.ipynb',
+          type: NotebookStoreItemType.File,
+          children: [],
+          remoteUri: 'https://drive.google.com/file/d/direct/view',
+          parents: [folderUri],
+        }
+      }
+      return null
+    })
+    mocks.ensureAccessToken.mockRejectedValueOnce(new Error(message))
+
+    render(<WorkspaceExplorer />)
+
+    await screen.findByText('Drive Root')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Collapse folder' })[0])
+    fireEvent.contextMenu(await screen.findByText('direct.ipynb'))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Save as Runme Notebook (.runme)',
+      })
+    )
+
+    expect(mocks.store.convertLegacyNotebookToRunme).not.toHaveBeenCalled()
+    expect(
+      await screen.findByText(
+        `${message} Complete Google Drive authorization, then retry the conversion.`
+      )
+    ).toBeTruthy()
+  })
+
   it('shows actionable conflict guidance when conversion is blocked', async () => {
     const folderUri = 'local://folder/drive'
     const fileUri = 'local://file/conflicted-notebook'
