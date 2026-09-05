@@ -18,6 +18,9 @@ const notebookDataMocks = vi.hoisted(() => ({
   setNotebookStore: vi.fn(),
   setReviewPending: vi.fn(),
   isReviewPending: vi.fn(() => false),
+  setReviewReloadRequired: vi.fn(),
+  isReviewReloadRequired: vi.fn(() => false),
+  subscribe: vi.fn(() => vi.fn()),
   cancelActiveExecutions: vi.fn(async () => undefined),
   getNotebookData: vi.fn(),
 }))
@@ -103,6 +106,10 @@ describe('OperationLogSuggestionView', () => {
     notebookDataMocks.setReviewPending.mockClear()
     notebookDataMocks.isReviewPending.mockClear()
     notebookDataMocks.isReviewPending.mockReturnValue(false)
+    notebookDataMocks.setReviewReloadRequired.mockClear()
+    notebookDataMocks.isReviewReloadRequired.mockClear()
+    notebookDataMocks.isReviewReloadRequired.mockReturnValue(false)
+    notebookDataMocks.subscribe.mockClear()
     notebookDataMocks.cancelActiveExecutions.mockClear()
     notebookDataMocks.getNotebookData.mockReset()
     notebookDataMocks.getNotebookData.mockReturnValue({
@@ -111,6 +118,9 @@ describe('OperationLogSuggestionView', () => {
       setNotebookStore: notebookDataMocks.setNotebookStore,
       setReviewPending: notebookDataMocks.setReviewPending,
       isReviewPending: notebookDataMocks.isReviewPending,
+      setReviewReloadRequired: notebookDataMocks.setReviewReloadRequired,
+      isReviewReloadRequired: notebookDataMocks.isReviewReloadRequired,
+      subscribe: notebookDataMocks.subscribe,
       cancelActiveExecutions: notebookDataMocks.cancelActiveExecutions,
     })
   })
@@ -235,13 +245,13 @@ describe('OperationLogSuggestionView', () => {
         .fn()
         .mockResolvedValueOnce(operationLogDocument())
         .mockRejectedValueOnce(new Error('reload failed'))
-        .mockResolvedValueOnce(operationLogDocument()),
+        .mockResolvedValue(operationLogDocument()),
       listOperationLogComments: vi.fn().mockResolvedValue([]),
       reviewOperationLogSuggestion: vi.fn().mockResolvedValue(undefined),
       createOperationLogSaveStore: vi.fn().mockResolvedValue({ save: vi.fn() }),
     } as unknown as LocalNotebooks
 
-    render(
+    const view = render(
       <OperationLogSuggestionView
         docUri="local://file/test"
         store={store}
@@ -261,13 +271,31 @@ describe('OperationLogSuggestionView', () => {
     expect(store.reviewOperationLogSuggestion).toHaveBeenCalled()
     expect(notebookDataMocks.setReviewPending).toHaveBeenCalledTimes(1)
     expect(notebookDataMocks.setReviewPending).toHaveBeenCalledWith(true)
+    expect(notebookDataMocks.setReviewReloadRequired).toHaveBeenCalledWith(true)
     expect(
       screen.queryByRole('button', { name: 'Return to notebook' })
     ).toBeNull()
 
+    view.unmount()
+    notebookDataMocks.isReviewReloadRequired.mockReturnValue(true)
+    render(
+      <OperationLogSuggestionView
+        docUri="local://file/test"
+        store={store}
+        readOnly={false}
+        onClose={vi.fn()}
+      />
+    )
+    expect(
+      await screen.findByRole('button', { name: 'Retry reload' })
+    ).toBeTruthy()
+
     fireEvent.click(screen.getByRole('button', { name: 'Retry reload' }))
     await waitFor(() =>
       expect(notebookDataMocks.setReviewPending).toHaveBeenLastCalledWith(false)
+    )
+    expect(notebookDataMocks.setReviewReloadRequired).toHaveBeenLastCalledWith(
+      false
     )
     expect(store.createOperationLogSaveStore).toHaveBeenCalledWith(
       'local://file/test',

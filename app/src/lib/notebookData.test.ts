@@ -580,8 +580,11 @@ describe("NotebookData persistence", () => {
 
     model.appendCell(parser_pb.CellKind.MARKUP, "markdown");
     model.setReviewPending(true);
+    model.setReviewReloadRequired(true);
 
     expect(model.getSnapshot().reviewPending).toBe(true);
+    expect(model.getSnapshot().reviewReloadRequired).toBe(true);
+    expect(model.isReviewReloadRequired()).toBe(true);
     expect(() =>
       model.appendCell(parser_pb.CellKind.MARKUP, "markdown"),
     ).toThrow("is applying a suggestion review");
@@ -593,6 +596,7 @@ describe("NotebookData persistence", () => {
     );
 
     model.setReviewPending(false);
+    model.setReviewReloadRequired(false);
     expect(() =>
       model.appendCell(parser_pb.CellKind.MARKUP, "markdown"),
     ).not.toThrow();

@@ -73,6 +73,7 @@ export type NotebookSnapshot = {
   readonly readOnly?: boolean
   readonly releasePending?: boolean
   readonly reviewPending?: boolean
+  readonly reviewReloadRequired?: boolean
 }
 
 const localTextEncoder = new TextEncoder()
@@ -510,6 +511,7 @@ export class NotebookData {
   private readOnly: boolean
   private releasePending = false
   private reviewPending = false
+  private reviewReloadRequired = false
   private activeStreams: Map<string, StreamsLike> = new Map()
   private activeJupyterSockets = new Map<
     string,
@@ -849,6 +851,20 @@ export class NotebookData {
 
   isReviewPending(): boolean {
     return this.reviewPending
+  }
+
+  /** Persist whether a committed review still needs to rematerialize this model. */
+  setReviewReloadRequired(reviewReloadRequired: boolean): void {
+    if (this.reviewReloadRequired === reviewReloadRequired) {
+      return
+    }
+    this.reviewReloadRequired = reviewReloadRequired
+    this.snapshotCache = this.buildSnapshot()
+    this.emit()
+  }
+
+  isReviewReloadRequired(): boolean {
+    return this.reviewReloadRequired
   }
 
   async cancelActiveExecutions(
@@ -2021,6 +2037,7 @@ export class NotebookData {
       readOnly: this.readOnly,
       releasePending: this.releasePending,
       reviewPending: this.reviewPending,
+      reviewReloadRequired: this.reviewReloadRequired,
       notebook: clone(parser_pb.NotebookSchema, this.notebook),
     }
   }

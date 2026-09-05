@@ -356,6 +356,15 @@ export function OperationLogSuggestionView({
   const [error, setError] = useState<string>()
   const [reloadRequired, setReloadRequired] = useState(false)
 
+  useEffect(() => {
+    const notebookData = getNotebookDataController().getNotebookData(docUri)
+    if (!notebookData) return
+    const syncReloadRequired = () =>
+      setReloadRequired(notebookData.isReviewReloadRequired())
+    syncReloadRequired()
+    return notebookData.subscribe(syncReloadRequired)
+  }, [docUri])
+
   const load = useCallback(async () => {
     const [content, nextComments] = await Promise.all([
       store.loadContent(docUri),
@@ -437,6 +446,7 @@ export function OperationLogSuggestionView({
         )
       }
       reloadComplete = true
+      notebookData?.setReviewReloadRequired(false)
       setReloadRequired(false)
       showToast({
         tone: 'success',
@@ -447,6 +457,7 @@ export function OperationLogSuggestionView({
       })
     } catch (reviewError) {
       if (reviewCommitted) {
+        notebookData?.setReviewReloadRequired(true)
         setReloadRequired(true)
       }
       setError(String(reviewError))
@@ -480,6 +491,7 @@ export function OperationLogSuggestionView({
             ),
             { persist: false }
           )
+          notebookData.setReviewReloadRequired(false)
           notebookData.setReviewPending(false)
         }
         setReloadRequired(false)
@@ -528,13 +540,17 @@ export function OperationLogSuggestionView({
     }
   }
 
-  if (error) {
+  if (error || reloadRequired) {
     return (
       <div
         id="suggestion-load-error"
         className="rounded-nb-sm border border-red-300 bg-red-50 p-4 text-sm text-red-800"
       >
-        <p>Could not load suggestions: {error}</p>
+        <p>
+          {error
+            ? `Could not load suggestions: ${error}`
+            : 'A saved suggestion review still needs to reload.'}
+        </p>
         {reloadRequired && (
           <p className="mt-2">
             The review was saved. Reload it before editing the notebook.
