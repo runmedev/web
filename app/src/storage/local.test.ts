@@ -177,6 +177,38 @@ function notebookJson(value: string): string {
 }
 
 describe('LocalNotebooks operation-log storage', () => {
+  it('queues a debounced export after a journal save without awaiting it', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = createTestStore({})
+      store.syncIpynbFile = vi.fn(async () => {})
+      store.syncMarkdownFile = vi.fn(async () => {})
+      store.syncFile = vi.fn(async () => {})
+      await store.folders.put({
+        id: LOCAL_FOLDER_URI,
+        name: 'Local',
+        remoteId: '',
+        children: [],
+        lastSynced: '',
+      })
+      const created = await store.create(LOCAL_FOLDER_URI, 'queued.runme')
+      const journal = await store.createOperationLogSaveStore(created.uri, {
+        actorId: 'export-test',
+      })
+      const notebook = await store.load(created.uri)
+      notebook.metadata[AUTO_IPYNB_KEY] = 'true'
+      await journal.save(created.uri, notebook)
+      expect(store.syncIpynbFile).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(19_999)
+      expect(store.syncIpynbFile).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(store.syncIpynbFile).toHaveBeenCalledTimes(1)
+      expect(store.syncIpynbFile).toHaveBeenCalledWith(created.uri)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('exports committed .runme changes, reuses its sibling, and stops when disabled', async () => {
     const parent = 'https://drive.google.com/drive/folders/parent'
     const remote = 'https://drive.google.com/file/d/source/view'
