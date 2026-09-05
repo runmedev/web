@@ -568,6 +568,40 @@ describe("NotebookData cell defaults", () => {
 });
 
 describe("NotebookData persistence", () => {
+  it("locks editor mutations while still flushing a suggestion review", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const model = new NotebookData({
+      notebook: create(parser_pb.NotebookSchema, { cells: [] }),
+      uri: "local://file/review-pending.runme",
+      name: "review-pending.runme",
+      notebookStore: { save },
+      loaded: true,
+    });
+
+    model.appendCell(parser_pb.CellKind.MARKUP, "markdown");
+    model.setReviewPending(true);
+    model.setReviewReloadRequired(true);
+
+    expect(model.getSnapshot().reviewPending).toBe(true);
+    expect(model.getSnapshot().reviewReloadRequired).toBe(true);
+    expect(model.isReviewReloadRequired()).toBe(true);
+    expect(() =>
+      model.appendCell(parser_pb.CellKind.MARKUP, "markdown"),
+    ).toThrow("is applying a suggestion review");
+
+    await model.flushPendingPersist();
+    expect(save).toHaveBeenCalledWith(
+      "local://file/review-pending.runme",
+      expect.objectContaining({ cells: [expect.anything()] }),
+    );
+
+    model.setReviewPending(false);
+    model.setReviewReloadRequired(false);
+    expect(() =>
+      model.appendCell(parser_pb.CellKind.MARKUP, "markdown"),
+    ).not.toThrow();
+  });
+
   it("adopts a notebook store after construction and persists later edits", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const notebook = create(parser_pb.NotebookSchema, { cells: [] });
@@ -696,6 +730,39 @@ describe("NotebookData.runCodeCell", () => {
       "130",
     );
     expect(() => model.appendCell()).toThrow("releasing its write lock");
+  });
+
+  it("quiesces active streams while a suggestion review is locked", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-review-cancel",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "bash",
+      outputs: [],
+      metadata: {},
+      value: "sleep 30",
+    });
+    const model = new NotebookData({
+      notebook: create(parser_pb.NotebookSchema, { cells: [cell] }),
+      uri: "local://file/review-cancel.runme",
+      name: "review-cancel.runme",
+      notebookStore: { save },
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    const stream = model.getActiveStream(cell.refId) as
+      | (StreamsLike & { close: ReturnType<typeof vi.fn> })
+      | undefined;
+    model.setReviewPending(true);
+    await model.cancelActiveExecutions("Cancelled for suggestion review.\n");
+    await model.flushPendingPersist();
+
+    expect(stream?.close).toHaveBeenCalledTimes(1);
+    expect(
+      model.getCellSnapshot(cell.refId)?.metadata?.[RunmeMetadataKey.ExitCode],
+    ).toBe("130");
+    expect(save).toHaveBeenCalled();
   });
 
   it("returns empty run id when no runner is available", () => {

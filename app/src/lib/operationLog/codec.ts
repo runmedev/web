@@ -93,6 +93,15 @@ export function validateOperation(value: unknown): RunmeOperation {
     )
   }
   if (
+    operation.suggestion_id !== undefined &&
+    (typeof operation.suggestion_id !== 'string' ||
+      operation.suggestion_id.length === 0)
+  ) {
+    throw new Error(
+      `Operation ${String(operation.op_id)} has invalid suggestion_id`
+    )
+  }
+  if (
     operation.reverts !== undefined &&
     (!Array.isArray(operation.reverts) ||
       operation.reverts.some((item) => typeof item !== 'string'))

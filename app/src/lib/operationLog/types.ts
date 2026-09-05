@@ -131,6 +131,15 @@ export interface ThreadSetStatusPayload {
   status: 'open' | 'resolved'
 }
 
+export type SuggestionDecision = 'accept' | 'reject'
+
+/** Records a durable review decision for a group of authored operations. */
+export interface SuggestionReviewPayload {
+  suggestion_id: string
+  decision: SuggestionDecision
+  operation_ids: string[]
+}
+
 export type KnownOperationKind =
   | 'transaction.commit'
   | 'notebook.update'
@@ -145,6 +154,7 @@ export type KnownOperationKind =
   | 'comment.add'
   | 'comment.reply'
   | 'thread.set_status'
+  | 'suggestion.review'
 
 export interface RunmeOperation<
   Kind extends string = string,
@@ -158,6 +168,8 @@ export interface RunmeOperation<
   lamport: number
   deps: string[]
   transaction_id?: string
+  /** Groups editor operations that should be reviewed as one suggestion. */
+  suggestion_id?: string
   reverts?: string[]
   created_at: string
   kind: Kind

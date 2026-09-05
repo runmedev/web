@@ -72,6 +72,8 @@ export type NotebookSnapshot = {
   readonly loaded: boolean
   readonly readOnly?: boolean
   readonly releasePending?: boolean
+  readonly reviewPending?: boolean
+  readonly reviewReloadRequired?: boolean
 }
 
 const localTextEncoder = new TextEncoder()
@@ -508,6 +510,8 @@ export class NotebookData {
   private loaded: boolean
   private readOnly: boolean
   private releasePending = false
+  private reviewPending = false
+  private reviewReloadRequired = false
   private activeStreams: Map<string, StreamsLike> = new Map()
   private activeJupyterSockets = new Map<
     string,
@@ -833,6 +837,34 @@ export class NotebookData {
 
   isReleasePending(): boolean {
     return this.releasePending
+  }
+
+  /** Prevent editor mutations while an external suggestion review rewrites the view. */
+  setReviewPending(reviewPending: boolean): void {
+    if (this.reviewPending === reviewPending) {
+      return
+    }
+    this.reviewPending = reviewPending
+    this.snapshotCache = this.buildSnapshot()
+    this.emit()
+  }
+
+  isReviewPending(): boolean {
+    return this.reviewPending
+  }
+
+  /** Persist whether a committed review still needs to rematerialize this model. */
+  setReviewReloadRequired(reviewReloadRequired: boolean): void {
+    if (this.reviewReloadRequired === reviewReloadRequired) {
+      return
+    }
+    this.reviewReloadRequired = reviewReloadRequired
+    this.snapshotCache = this.buildSnapshot()
+    this.emit()
+  }
+
+  isReviewReloadRequired(): boolean {
+    return this.reviewReloadRequired
   }
 
   async cancelActiveExecutions(
@@ -1169,6 +1201,9 @@ export class NotebookData {
   }
 
   private assertWritable(): void {
+    if (this.reviewPending) {
+      throw new Error(`Notebook ${this.uri} is applying a suggestion review.`)
+    }
     if (this.releasePending) {
       throw new Error(
         `Notebook ${this.uri} is releasing its write lock for another session.`
@@ -1218,7 +1253,8 @@ export class NotebookData {
     const isCurrentExecution = () =>
       this.activeAppKernelExecutions.get(refId) === execution &&
       this.executionGeneration === generation &&
-      !this.releasePending
+      !this.releasePending &&
+      !this.reviewPending
 
     appLogger.info('Starting AppKernel cell execution', {
       attrs: {
@@ -1491,7 +1527,8 @@ export class NotebookData {
       this.executionGeneration === generation &&
       this.getCellProto(refId)?.metadata?.[RunmeMetadataKey.LastRunID] ===
         runID &&
-      !this.releasePending
+      !this.releasePending &&
+      !this.reviewPending
 
     let channelsURL: string
     try {
@@ -1540,7 +1577,8 @@ export class NotebookData {
     const isCurrentExecution = () =>
       this.executionGeneration === generation &&
       this.activeJupyterSockets.get(refId)?.socket === socket &&
-      !this.releasePending
+      !this.releasePending &&
+      !this.reviewPending
 
     const executeMsgID = crypto.randomUUID().replace(/-/g, '')
     const sessionID = crypto.randomUUID().replace(/-/g, '')
@@ -1947,11 +1985,17 @@ export class NotebookData {
       streams,
       intent,
       getCell: (ref) =>
-        this.executionGeneration === generation && !this.releasePending
+        this.executionGeneration === generation &&
+        !this.releasePending &&
+        !this.reviewPending
           ? this.getCellProto(ref)
           : null,
       updateCell: (next, options) => {
-        if (this.executionGeneration === generation && !this.releasePending) {
+        if (
+          this.executionGeneration === generation &&
+          !this.releasePending &&
+          !this.reviewPending
+        ) {
           this.updateCell(next, options)
         }
       },
@@ -1992,6 +2036,8 @@ export class NotebookData {
       loaded: this.loaded,
       readOnly: this.readOnly,
       releasePending: this.releasePending,
+      reviewPending: this.reviewPending,
+      reviewReloadRequired: this.reviewReloadRequired,
       notebook: clone(parser_pb.NotebookSchema, this.notebook),
     }
   }

@@ -25,6 +25,8 @@ import {
   type JsonValue,
   type ParsedOperationLog,
   type RunmeOperation,
+  type SuggestionDecision,
+  type SuggestionReviewPayload,
   buildOperationLogDiff,
   canonicalJson,
   causalHeads,
@@ -227,6 +229,20 @@ export class NotebookConflictChangedError extends Error {
         `${conflictChecksum} -> ${currentUpstreamChecksum}`
     )
     this.name = 'NotebookConflictChangedError'
+  }
+}
+
+/** A journal mutation produced records, but a later failure obscured commit state. */
+export class OperationLogMutationCommitUncertainError extends Error {
+  constructor(
+    readonly uri: string,
+    readonly operationKind: string,
+    readonly cause: unknown
+  ) {
+    super(
+      `The ${operationKind} operation may already be committed for ${uri}: ${String(cause)}`
+    )
+    this.name = 'OperationLogMutationCommitUncertainError'
   }
 }
 
@@ -1327,7 +1343,7 @@ export class LocalNotebooks extends Dexie {
   /** Create a tab-local snapshot adapter that appends .runme operations. */
   async createOperationLogSaveStore(
     uri: string,
-    options: { actorId?: string } = {}
+    options: { actorId?: string; initialDocument?: string } = {}
   ): Promise<{
     save(saveUri: string, notebook: parser_pb.Notebook): Promise<void>
   }> {
@@ -1339,8 +1355,10 @@ export class LocalNotebooks extends Dexie {
       throw new Error(`Notebook ${uri} is not a .runme operation log`)
     }
 
-    const initial = await this.operationLogStorage.read(record.operationLogRef)
-    let view: ParsedOperationLog = parseOperationLog(initial.document)
+    const initialDocument =
+      options.initialDocument ??
+      (await this.operationLogStorage.read(record.operationLogRef)).document
+    let view: ParsedOperationLog = parseOperationLog(initialDocument)
     let previous = materializedLogToNotebook(
       materializeOperationLog(view.operations)
     )
@@ -1567,6 +1585,31 @@ export class LocalNotebooks extends Dexie {
     )!
   }
 
+  /** Append a durable accept/reject decision for an operation-log suggestion. */
+  async reviewOperationLogSuggestion(
+    uri: string,
+    suggestionId: string,
+    decision: SuggestionDecision,
+    operationIds: string[],
+    options: { actorId?: string } = {}
+  ): Promise<void> {
+    if (operationIds.length === 0) {
+      throw new Error(`Suggestion ${suggestionId} has no operations to review`)
+    }
+    const payload: SuggestionReviewPayload = {
+      suggestion_id: suggestionId,
+      decision,
+      operation_ids: [...new Set(operationIds)],
+    }
+    await this.appendOperationLogMutation(
+      uri,
+      'suggestion.review',
+      payload as unknown as JsonValue,
+      options.actorId,
+      decision === 'reject' ? payload.operation_ids : undefined
+    )
+  }
+
   private async readMaterializedOperationLog(uri: string) {
     const record = await this.files.get(uri)
     if (!record?.operationLogRef) {
@@ -1581,38 +1624,49 @@ export class LocalNotebooks extends Dexie {
     uri: string,
     kind: string,
     payload: JsonValue,
-    suppliedActorId?: string
+    suppliedActorId?: string,
+    reverts?: string[]
   ): Promise<void> {
     const record = await this.files.get(uri)
     if (!record?.operationLogRef) {
       throw new Error(`Operation-log reference missing for ${uri}`)
     }
     const actorId = suppliedActorId ?? (await getNotebookActorId(uri))
-    const stored = await this.operationLogStorage.appendTransaction(
-      record.operationLogRef,
-      (currentDocument) => {
-        const parsed = parseOperationLog(currentDocument)
-        const operation = createRunmeOperation({
-          actorId,
-          actorSequence: highestActorSequence(parsed.operations, actorId) + 1,
-          dependencies: causalHeads(parsed.operations),
-          knownOperations: parsed.operations,
-          kind,
-          payload,
-        })
-        return `${canonicalJson(operation as unknown as JsonValue)}\n`
-      },
-      { validate: (document) => void parseOperationLog(document) }
-    )
-    await this.files.update(uri, {
-      doc: '',
-      md5Checksum: stored.checksum,
-      operationLogRef: stored.ref,
-    })
-    this.notifySync(uri)
-    if (!record.conflict) {
-      this.enqueueSync(uri)
-      this.enqueueMarkdownSync(uri)
+    let mutationCreated = false
+    try {
+      const stored = await this.operationLogStorage.appendTransaction(
+        record.operationLogRef,
+        (currentDocument) => {
+          const parsed = parseOperationLog(currentDocument)
+          const operation = createRunmeOperation({
+            actorId,
+            actorSequence: highestActorSequence(parsed.operations, actorId) + 1,
+            dependencies: causalHeads(parsed.operations),
+            knownOperations: parsed.operations,
+            kind,
+            payload,
+            reverts,
+          })
+          mutationCreated = true
+          return `${canonicalJson(operation as unknown as JsonValue)}\n`
+        },
+        { validate: (document) => void parseOperationLog(document) }
+      )
+      await this.files.update(uri, {
+        doc: '',
+        md5Checksum: stored.checksum,
+        operationLogRef: stored.ref,
+      })
+      this.notifySync(uri)
+      if (!record.conflict) {
+        this.enqueueSync(uri)
+        this.enqueueMarkdownSync(uri)
+      }
+    } catch (error) {
+      if (mutationCreated) {
+        throw new OperationLogMutationCommitUncertainError(uri, kind, error)
+      }
+      throw error
     }
   }
 

@@ -39,6 +39,7 @@ import LocalNotebooks, {
   type LocalFileRecord,
   type LocalFolderRecord,
   NotebookConflictChangedError,
+  OperationLogMutationCommitUncertainError,
 } from './local'
 import { NotebookStoreItemType } from './notebook'
 import { MemoryOperationLogStorage } from './operationLogs'
@@ -397,6 +398,58 @@ describe('LocalNotebooks operation-log storage', () => {
     expect((await store.files.get(created.uri))?.doc).toBe('')
   })
 
+  it('uses the supplied journal revision as the save adapter baseline', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'rebased.runme')
+    const seedStore = await store.createOperationLogSaveStore(created.uri, {
+      actorId: 'actor_seed',
+    })
+    await seedStore.save(
+      created.uri,
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'cell_one',
+            kind: parser_pb.CellKind.MARKUP,
+            languageId: 'markdown',
+            value: 'Original',
+          }),
+        ],
+      })
+    )
+
+    const loadedDocument = await store.loadContent(created.uri)
+    const loadedNotebook = await store.loadOperationLogSnapshot(created.uri)
+    const concurrentStore = await store.createOperationLogSaveStore(
+      created.uri,
+      { actorId: 'actor_concurrent' }
+    )
+    const concurrentNotebook = await store.loadOperationLogSnapshot(created.uri)
+    concurrentNotebook.cells[0].value = 'Concurrent edit'
+    await concurrentStore.save(created.uri, concurrentNotebook)
+
+    const rebasedStore = await store.createOperationLogSaveStore(created.uri, {
+      actorId: 'actor_rebased',
+      initialDocument: loadedDocument,
+    })
+    await rebasedStore.save(created.uri, loadedNotebook)
+
+    expect(
+      (await store.loadOperationLogSnapshot(created.uri)).cells[0].value
+    ).toBe('Concurrent edit')
+    expect(
+      parseOperationLog(await store.loadContent(created.uri)).operations
+    ).toHaveLength(2)
+  })
+
   it('allocates unique actor sequences for concurrent editor and comment writes', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
     const store = createTestStore({}, { operationLogStorage })
@@ -484,6 +537,109 @@ describe('LocalNotebooks operation-log storage', () => {
         (operation) => operation.kind
       )
     ).toEqual(['comment.add', 'comment.reply', 'thread.set_status'])
+  })
+
+  it('persists suggestion decisions and rematerializes rejected operations', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'review.runme')
+    const saveStore = await store.createOperationLogSaveStore(created.uri, {
+      actorId: 'actor_review',
+    })
+    await saveStore.save(
+      created.uri,
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'cell_one',
+            kind: parser_pb.CellKind.MARKUP,
+            languageId: 'markdown',
+            value: 'Suggested',
+          }),
+        ],
+      })
+    )
+
+    const authored = parseOperationLog(await store.loadContent(created.uri))
+      .operations[0]
+    await store.reviewOperationLogSuggestion(
+      created.uri,
+      authored.suggestion_id!,
+      'reject',
+      [authored.op_id],
+      { actorId: 'actor_review' }
+    )
+    expect((await store.load(created.uri)).cells).toHaveLength(0)
+
+    await store.reviewOperationLogSuggestion(
+      created.uri,
+      authored.suggestion_id!,
+      'accept',
+      [authored.op_id],
+      { actorId: 'actor_review' }
+    )
+    expect((await store.load(created.uri)).cells[0].value).toBe('Suggested')
+    const reviews = parseOperationLog(
+      await store.loadContent(created.uri)
+    ).operations.filter((operation) => operation.kind === 'suggestion.review')
+    expect(reviews.map((operation) => operation.reverts)).toEqual([
+      [authored.op_id],
+      undefined,
+    ])
+  })
+
+  it('reports an uncertain commit when bookkeeping fails after a review append', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'review-error.runme')
+    const saveStore = await store.createOperationLogSaveStore(created.uri, {
+      actorId: 'actor_review',
+    })
+    await saveStore.save(
+      created.uri,
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'cell_one',
+            kind: parser_pb.CellKind.MARKUP,
+            languageId: 'markdown',
+            value: 'Suggested',
+          }),
+        ],
+      })
+    )
+    const authored = parseOperationLog(await store.loadContent(created.uri))
+      .operations[0]
+    store.files.update.mockRejectedValueOnce(new Error('IndexedDB unavailable'))
+
+    await expect(
+      store.reviewOperationLogSuggestion(
+        created.uri,
+        authored.suggestion_id!,
+        'reject',
+        [authored.op_id],
+        { actorId: 'actor_review' }
+      )
+    ).rejects.toBeInstanceOf(OperationLogMutationCommitUncertainError)
+
+    const reviews = parseOperationLog(
+      await store.loadContent(created.uri)
+    ).operations.filter((operation) => operation.kind === 'suggestion.review')
+    expect(reviews).toHaveLength(1)
   })
 
   it('loads stale Drive-backed .runme data by merging local and remote operations', async () => {

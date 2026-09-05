@@ -29,6 +29,7 @@ import {
 } from '../../lib/notebookDiff/registry'
 import {
   APP_CONSOLE_DOCUMENT_URI,
+  getOperationLogSuggestionDocumentUri,
   getRunnerKernelsDocumentUri,
   LOGS_DOCUMENT_URI,
   VERSION_INFO_DOCUMENT_URI,
@@ -91,6 +92,7 @@ const contextMocks = vi.hoisted(() => ({
     refreshConflictWithLatestUpstream?: ReturnType<typeof vi.fn>
     resolveConflictWithLocal?: ReturnType<typeof vi.fn>
     sync?: ReturnType<typeof vi.fn>
+    listOperationLogComments?: ReturnType<typeof vi.fn>
     subscribeSync: ReturnType<typeof vi.fn>
   },
 }))
@@ -222,6 +224,22 @@ vi.mock('../../contexts/CommentsPanelContext', () => ({
     setCommentsPanelOpen: vi.fn(),
     openCommentsPanel: vi.fn(),
   }),
+}))
+
+vi.mock('../OperationLogSuggestions/OperationLogSuggestionView', () => ({
+  OperationLogSuggestionView: ({
+    docUri,
+    onClose,
+  }: {
+    docUri: string
+    onClose: () => void
+  }) => (
+    <div data-testid="suggestion-view" data-notebook-uri={docUri}>
+      <button type="button" onClick={onClose}>
+        Edit view
+      </button>
+    </div>
+  ),
 }))
 
 vi.mock('../../lib/notebookDiff/conflict', () => ({
@@ -439,6 +457,89 @@ beforeEach(() => {
 })
 
 describe('Actions tabs', () => {
+  it('opens suggestion review as a separate workspace tab', async () => {
+    const uri = 'local://file/suggestions'
+    const suggestionUri = getOperationLogSuggestionDocumentUri(uri)
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'suggestions.runme', state: 'loaded' },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, { metadata: {}, cells: [] }),
+    })
+    contextMocks.getNotebookData.mockReturnValue({ appendCell: vi.fn() })
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(),
+      getSyncState: vi.fn(async () => null),
+      listOperationLogComments: vi.fn(async () => []),
+      rename: vi.fn(),
+      subscribeSync: vi.fn(() => () => {}),
+    }
+
+    render(<Actions />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Review suggestions' })
+    )
+
+    expect(contextMocks.showDocument).toHaveBeenCalledWith(suggestionUri, {
+      title: 'Suggestions · suggestions.runme',
+    })
+    expect(contextMocks.setCurrentDoc).toHaveBeenCalledWith(suggestionUri)
+  })
+
+  it('keeps the edit and suggestion views mounted in separate tabs', async () => {
+    const uri = 'local://file/suggestions'
+    const suggestionUri = getOperationLogSuggestionDocumentUri(uri)
+    contextMocks.currentDoc = suggestionUri
+    contextMocks.openNotebooks = [
+      {
+        uri,
+        requestedUri: uri,
+        name: 'suggestions.runme',
+        state: 'loaded',
+        operationLog: true,
+      },
+    ]
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'suggestions.runme', state: 'loaded' },
+      {
+        uri: suggestionUri,
+        title: 'Suggestions · suggestions.runme',
+      },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, { metadata: {}, cells: [] }),
+    })
+    contextMocks.getNotebookData.mockReturnValue({ appendCell: vi.fn() })
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(),
+      getSyncState: vi.fn(async () => null),
+      listOperationLogComments: vi.fn(async () => []),
+      rename: vi.fn(),
+      subscribeSync: vi.fn(() => () => {}),
+    }
+    contextMocks.closeWorkspaceDocument.mockReturnValue(uri)
+
+    render(<Actions />)
+
+    expect(await screen.findByTestId('notebook-content')).toBeTruthy()
+    expect(
+      (await screen.findByTestId('suggestion-view')).dataset.notebookUri
+    ).toBe(uri)
+    expect(screen.getByTitle('suggestions.runme')).toBeTruthy()
+    expect(screen.getByTitle('Suggestions · suggestions.runme')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit view' }))
+    expect(contextMocks.closeWorkspaceDocument).toHaveBeenCalledWith(
+      suggestionUri
+    )
+    expect(contextMocks.setCurrentDoc).toHaveBeenCalledWith(uri)
+  })
+
   it('embeds an image selected from the button beside Add cell', async () => {
     const uri = 'local://file/images.json'
     const notebookData = {
