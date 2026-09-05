@@ -1146,6 +1146,37 @@ describe('Actions tabs', () => {
     expect(screen.queryByLabelText('Add first cell')).toBeNull()
   })
 
+  it('explains derived notebooks without offering write access', () => {
+    const uri = 'local://file/derived.ipynb'
+    const source = 'https://drive.google.com/file/d/source/view'
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'derived.ipynb', state: 'loaded', readOnly: true },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      readOnly: true,
+      notebook: create(parser_pb.NotebookSchema, {
+        metadata: {
+          'runme.dev/derivedFrom': JSON.stringify({
+            version: 1,
+            uri: source,
+            notebookId: 'source',
+            generatedAt: '2026-09-05',
+          }),
+        },
+      }),
+    })
+    render(<Actions />)
+    expect(screen.getByRole('note').textContent).toContain('Generated notebook')
+    expect(
+      screen.getByRole('link', { name: 'source notebook' }).getAttribute('href')
+    ).toBe(`?doc=${encodeURIComponent(source)}`)
+    expect(screen.queryByTestId('notebook-readonly-banner')).toBeNull()
+    expect(screen.queryByLabelText('Add first cell')).toBeNull()
+  })
+
   it('requests write access from a read-only notebook banner', () => {
     const uri = 'local://file/reference.runme.md'
     contextMocks.currentDoc = uri

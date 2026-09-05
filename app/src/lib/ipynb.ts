@@ -7,6 +7,7 @@ import {
   assertCanonicalNotebookCellIds,
   uniqueCanonicalCellId,
 } from './cellIdentity'
+import { DERIVED_NOTEBOOK_KEY, parseDerivedSource } from './derivedNotebook'
 
 export const IPYNB_MIME_TYPE = 'application/x-ipynb+json'
 export const IPYNB_RAW_CELL_METADATA_KEY = 'runme.dev/ipynbRawCell'
@@ -430,10 +431,7 @@ function validateNotebook(value: unknown): IpynbNotebook {
   if (!Array.isArray(document.cells)) {
     throw new Error('Jupyter notebook cells must be an array')
   }
-  document.metadata = asObject(
-    document.metadata,
-    'Jupyter notebook metadata'
-  )
+  document.metadata = asObject(document.metadata, 'Jupyter notebook metadata')
   return document as unknown as IpynbNotebook
 }
 
@@ -456,6 +454,9 @@ export function decodeIpynb(text: string): DecodedIpynb {
   const source = validateNotebook(parsed)
   const languageId = languageIdForNotebook(source.metadata)
   const preservedNotebook = embeddedRunmeNotebook(source.metadata)
+  const derivedFrom = parseDerivedSource(
+    optionalObject(source.metadata.runme)?.derivedFrom
+  )
   const usedIds = new Set<string>()
   const jupyterIdByRunmeRefId: Record<string, string> = {}
   const baselineCellHashes: Record<string, string> = {}
@@ -536,6 +537,9 @@ export function decodeIpynb(text: string): DecodedIpynb {
       metadata: {
         ...(preservedNotebook?.metadata ?? {}),
         'runme.dev/ipynb': 'true',
+        ...(derivedFrom
+          ? { [DERIVED_NOTEBOOK_KEY]: JSON.stringify(derivedFrom) }
+          : {}),
       },
       frontmatter: preservedNotebook?.frontmatter,
     }),

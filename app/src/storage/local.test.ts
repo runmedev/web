@@ -4,6 +4,7 @@ import { create, toJsonString } from '@bufbuild/protobuf'
 import md5 from 'md5'
 import { describe, expect, it, vi } from 'vitest'
 
+import { AUTO_IPYNB_KEY } from '../lib/derivedNotebook'
 import {
   clearGoogleDriveRuntime,
   setGoogleDriveBaseUrl,
@@ -144,6 +145,7 @@ function createTestStore(
   localStore.syncListeners = new Map()
   localStore.syncSubjects = new Map()
   localStore.markdownSyncSubjects = new Map()
+  localStore.ipynbSyncSubjects = new Map()
   localStore.conflictDocStorage = new MemoryConflictDocStorage()
   localStore.revisionDocStorage = new MemoryRevisionDocStorage()
   localStore.ipynbShadowStorage =
@@ -175,6 +177,189 @@ function notebookJson(value: string): string {
 }
 
 describe('LocalNotebooks operation-log storage', () => {
+  it('exports committed .runme changes, reuses its sibling, and stops when disabled', async () => {
+    const parent = 'https://drive.google.com/drive/folders/parent'
+    const remote = 'https://drive.google.com/file/d/source/view'
+    const target = {
+      uri: 'https://drive.google.com/file/d/copy/view',
+      name: 'source.ipynb',
+      parents: [parent],
+    }
+    const drive = {
+      getMetadata: vi.fn(async (uri: string) =>
+        uri === remote
+          ? { uri, name: 'source.runme', parents: [parent] }
+          : target
+      ),
+      create: vi.fn(async () => target),
+      saveContent: vi.fn(
+        async (_uri: string, _content: string, _mime: string) => {}
+      ),
+    }
+    const store = createTestStore(drive)
+    const getMetadataIfExists = vi.fn(drive.getMetadata)
+    Object.assign(drive, { getMetadataIfExists })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'source.runme')
+    await store.files.update(created.uri, { remoteId: remote })
+    const journal = await store.createOperationLogSaveStore(created.uri, {
+      actorId: 'export-test',
+    })
+    const notebook = await store.load(created.uri)
+    notebook.metadata[AUTO_IPYNB_KEY] = 'true'
+    await journal.save(created.uri, notebook)
+    expect((await store.load(created.uri)).metadata[AUTO_IPYNB_KEY]).toBe(
+      'true'
+    )
+    expect(drive.saveContent).not.toHaveBeenCalled()
+    await store.syncIpynbFile(created.uri)
+    await store.syncIpynbFile(created.uri)
+    expect(drive.create).toHaveBeenCalledTimes(1)
+    expect(drive.saveContent).toHaveBeenCalledTimes(2)
+    const exported = JSON.parse(drive.saveContent.mock.calls[0][1])
+    expect(exported.metadata.runme.derivedFrom.uri).toBe(remote)
+    expect(exported.cells[0].source).toContain('read-only')
+    // A deleted copy is recreated; a relinked source never reuses the old target.
+    getMetadataIfExists.mockResolvedValueOnce(null as any)
+    await store.syncIpynbFile(created.uri)
+    expect(drive.create).toHaveBeenCalledTimes(2)
+    await store.files.update(created.uri, {
+      remoteId: 'https://drive.google.com/file/d/relinked/view',
+    })
+    drive.getMetadata.mockResolvedValue({ ...target, name: 'source.runme' })
+    const lookupsBeforeRelink = getMetadataIfExists.mock.calls.length
+    await store.syncIpynbFile(created.uri)
+    expect(drive.create).toHaveBeenCalledTimes(3)
+    expect(getMetadataIfExists).toHaveBeenCalledTimes(lookupsBeforeRelink)
+    notebook.metadata[AUTO_IPYNB_KEY] = 'false'
+    await journal.save(created.uri, notebook)
+    await store.syncIpynbFile(created.uri)
+    expect(drive.saveContent).toHaveBeenCalledTimes(4)
+    expect((await store.getIpynbExportState(created.uri)).uri).toBe(target.uri)
+  })
+
+  it.each([true, false])(
+    'rereads committed state before upload (enabled=%s)',
+    async (enabled) => {
+      const remote = 'https://drive.google.com/file/d/latest/view'
+      const parent = 'https://drive.google.com/drive/folders/parent'
+      let releaseMetadata!: () => void
+      const ready = new Promise<void>((resolve) => {
+        releaseMetadata = resolve
+      })
+      const target = {
+        uri: 'https://drive.google.com/file/d/copy/view',
+        name: 'source.ipynb',
+        parents: [parent],
+      }
+      const drive = {
+        getMetadata: vi.fn(async () => {
+          await ready
+          return { name: 'source.runme', parents: [parent] }
+        }),
+        create: vi.fn(async () => target),
+        saveContent: vi.fn(
+          async (_uri: string, _content: string, _mime: string) => {}
+        ),
+      }
+      const store = createTestStore(drive)
+      await store.folders.put({
+        id: LOCAL_FOLDER_URI,
+        name: 'Local',
+        remoteId: '',
+        children: [],
+        lastSynced: '',
+      })
+      const created = await store.create(LOCAL_FOLDER_URI, 'source.runme')
+      await store.files.update(created.uri, { remoteId: remote })
+      const journal = await store.createOperationLogSaveStore(created.uri, {
+        actorId: 'export-test',
+      })
+      const notebook = await store.load(created.uri)
+      notebook.metadata[AUTO_IPYNB_KEY] = 'true'
+      await journal.save(created.uri, notebook)
+      const exporting = store.syncIpynbFile(created.uri)
+      await vi.waitFor(() => expect(drive.getMetadata).toHaveBeenCalled())
+      notebook.metadata[AUTO_IPYNB_KEY] = String(enabled)
+      notebook.metadata.description = 'Latest committed version'
+      await journal.save(created.uri, notebook)
+      releaseMetadata()
+      await exporting
+      expect(drive.saveContent).toHaveBeenCalledTimes(enabled ? 1 : 0)
+      if (enabled)
+        expect(drive.saveContent.mock.calls[0][1]).toContain(
+          'Latest committed version'
+        )
+    }
+  )
+
+  it('keeps source saves independent of slow and failed derived uploads', async () => {
+    const remote = 'https://drive.google.com/file/d/independent/view'
+    const parent = 'https://drive.google.com/drive/folders/parent'
+    let rejectUpload!: (error: Error) => void
+    const upload = new Promise<void>((_, reject) => {
+      rejectUpload = reject
+    })
+    const drive = {
+      getMetadata: vi.fn(async () => ({
+        name: 'source.runme',
+        parents: [parent],
+      })),
+      create: vi.fn(async () => ({
+        uri: 'https://drive.google.com/file/d/copy/view',
+        name: 'source.ipynb',
+        parents: [parent],
+      })),
+      saveContent: vi.fn(() => upload),
+    }
+    const store = createTestStore(drive)
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'source.runme')
+    await store.files.update(created.uri, { remoteId: remote })
+    const journal = await store.createOperationLogSaveStore(created.uri, {
+      actorId: 'export-test',
+    })
+    const notebook = await store.load(created.uri)
+    notebook.metadata[AUTO_IPYNB_KEY] = 'true'
+    await journal.save(created.uri, notebook)
+    const exporting = store.syncIpynbFile(created.uri)
+    const failure = expect(exporting).rejects.toThrow('offline')
+    await vi.waitFor(() => expect(drive.saveContent).toHaveBeenCalled())
+    notebook.metadata.description = 'Saved while upload is pending'
+    await journal.save(created.uri, notebook)
+    expect((await store.load(created.uri)).metadata.description).toBe(
+      notebook.metadata.description
+    )
+    rejectUpload(new Error('offline'))
+    await failure
+    expect((await store.getIpynbExportState(created.uri)).error).toContain(
+      'offline'
+    )
+    Object.assign(drive, {
+      getMetadataIfExists: vi.fn(async () => ({
+        uri: 'https://drive.google.com/file/d/copy/view',
+        name: 'source.ipynb',
+        parents: [parent],
+      })),
+    })
+    drive.saveContent.mockResolvedValue(undefined)
+    await store.syncIpynbFile(created.uri)
+    expect((await store.getIpynbExportState(created.uri)).error).toBeUndefined()
+    expect(drive.create).toHaveBeenCalledTimes(1)
+  })
+
   it('initializes a Drive mirror with authoritative OPFS bytes', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
     const store = createTestStore({}, { operationLogStorage })
@@ -4329,10 +4514,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
     })
     const coordinator: DriveSyncCoordinator = {
       runExclusive: (key, operation) => {
-        if (
-          key ===
-          'legacy-conversion:drive:transitioning-drive-source'
-        ) {
+        if (key === 'legacy-conversion:drive:transitioning-drive-source') {
           canonicalLockRequests += 1
           if (canonicalLockRequests === 2) notifyFirstRekeyRequested()
         }
@@ -4419,10 +4601,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       }
     )
 
-    const first = firstStore.convertLegacyNotebookToRunme(
-      sourceUri,
-      parentUri
-    )
+    const first = firstStore.convertLegacyNotebookToRunme(sourceUri, parentUri)
     await sourceAssigned
     const second = secondStore.convertLegacyNotebookToRunme(
       sourceUri,
@@ -4656,8 +4835,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
       store.convertLegacyNotebookToRunme(sourceUri, parentUri)
     ).rejects.toThrow('transient folder attachment failure')
     expect(
-      (await store.files.get(pendingUri))?.legacyConversionAttempt
-        ?.completedAt
+      (await store.files.get(pendingUri))?.legacyConversionAttempt?.completedAt
     ).toBeUndefined()
 
     const result = await store.convertLegacyNotebookToRunme(

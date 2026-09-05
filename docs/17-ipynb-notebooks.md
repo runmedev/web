@@ -97,6 +97,29 @@ Runme Web instead.
 
 ## Synchronization and concurrent edits
 
+### Automatically publish a Colab copy of a .runme notebook
+
+Right-click a `.runme` notebook tab and choose **Notebook properties**. Enable
+**Automatically save a Colab copy (.ipynb)**. The option is saved in the notebook
+and defaults to off. Once the notebook is linked to Google Drive, Runme creates
+a sibling `.ipynb` in the same folder and updates it in the background after
+source saves. Notebook cells and outputs are included. Use **Open Colab copy**
+in properties once the copy has been created.
+
+The `.runme` save completes independently of the export. Properties shows export
+errors; the next source save or successful Drive sync retries the copy. Keep
+Runme open and signed in while background uploads complete. Turning the option
+off keeps the last copy and stops updating it.
+
+Generated copies contain provenance metadata and a leading notice visible in
+Colab. Runme also shows a source link and renders them read-only. Make durable
+edits in the source `.runme` notebook: any changes made to the generated copy in
+Colab will be overwritten by a later export. Drive permissions still determine
+who can open the copy, and runtime compatibility remains subject to the
+limitations below.
+
+### Editing ordinary .ipynb notebooks
+
 Edits made in Colab update the same Drive file. Runme's Drive synchronization
 will detect the upstream change. If the notebook was also edited locally,
 Runme may report a conflict instead of silently overwriting either version.
