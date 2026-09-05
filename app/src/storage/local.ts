@@ -1313,7 +1313,7 @@ export class LocalNotebooks extends Dexie {
   /** Create a tab-local snapshot adapter that appends .runme operations. */
   async createOperationLogSaveStore(
     uri: string,
-    options: { actorId?: string } = {}
+    options: { actorId?: string; initialDocument?: string } = {}
   ): Promise<{
     save(saveUri: string, notebook: parser_pb.Notebook): Promise<void>
   }> {
@@ -1325,8 +1325,10 @@ export class LocalNotebooks extends Dexie {
       throw new Error(`Notebook ${uri} is not a .runme operation log`)
     }
 
-    const initial = await this.operationLogStorage.read(record.operationLogRef)
-    let view: ParsedOperationLog = parseOperationLog(initial.document)
+    const initialDocument =
+      options.initialDocument ??
+      (await this.operationLogStorage.read(record.operationLogRef)).document
+    let view: ParsedOperationLog = parseOperationLog(initialDocument)
     let previous = materializedLogToNotebook(
       materializeOperationLog(view.operations)
     )

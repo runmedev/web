@@ -217,7 +217,8 @@ describe('OperationLogSuggestionView', () => {
     )
     expect(notebookDataMocks.setReviewPending).toHaveBeenLastCalledWith(false)
     expect(store.createOperationLogSaveStore).toHaveBeenCalledWith(
-      'local://file/test'
+      'local://file/test',
+      { initialDocument: operationLogDocument() }
     )
     expect(notebookDataMocks.setNotebookStore).toHaveBeenCalledWith(
       rebasedSaveStore
@@ -269,7 +270,8 @@ describe('OperationLogSuggestionView', () => {
       expect(notebookDataMocks.setReviewPending).toHaveBeenLastCalledWith(false)
     )
     expect(store.createOperationLogSaveStore).toHaveBeenCalledWith(
-      'local://file/test'
+      'local://file/test',
+      { initialDocument: operationLogDocument() }
     )
   })
 })

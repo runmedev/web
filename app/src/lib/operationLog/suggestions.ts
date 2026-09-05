@@ -17,7 +17,6 @@ const SUGGESTIBLE_KINDS = new Set([
   'cell.move',
   'cell.delete',
   'cell.restore',
-  'cell.clear_outputs',
 ])
 
 export interface OperationLogSuggestion {
@@ -84,13 +83,22 @@ export function buildOperationLogSuggestions(
   }
 
   const current = materializeOperationLog(operations)
+  const orderedById = new Map(
+    ordered.map((operation) => [operation.op_id, operation] as const)
+  )
   const suggestions = [...groups.entries()].map(([id, group]) => {
-    const firstIndex = Math.min(
-      ...group.map((operation) =>
-        ordered.findIndex((candidate) => candidate.op_id === operation.op_id)
-      )
+    const ancestorIds = new Set<string>()
+    const pending = [...group[0].deps]
+    while (pending.length > 0) {
+      const dependencyId = pending.pop()!
+      if (ancestorIds.has(dependencyId)) continue
+      ancestorIds.add(dependencyId)
+      const dependency = orderedById.get(dependencyId)
+      if (dependency) pending.push(...dependency.deps)
+    }
+    const beforeOperations = ordered.filter((operation) =>
+      ancestorIds.has(operation.op_id)
     )
-    const beforeOperations = ordered.slice(0, firstIndex)
     const before = materializedLogToNotebook(
       materializeOperationLog(beforeOperations)
     )

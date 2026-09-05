@@ -369,7 +369,7 @@ export function OperationLogSuggestionView({
       Math.min(current, Math.max(nextSuggestions.length - 1, 0))
     )
     setError(undefined)
-    return parsed
+    return { parsed, content }
   }, [docUri, store])
 
   useEffect(() => {
@@ -422,12 +422,14 @@ export function OperationLogSuggestionView({
         suggestion.operationIds
       )
       reviewCommitted = true
-      const parsed = await load()
+      const { parsed, content } = await load()
       if (notebookData) {
         // A review changes the materialized snapshot without going through the
         // editor save adapter. Replace the adapter so its comparison baseline
         // and observed operation set both match the reviewed journal.
-        const saveStore = await store.createOperationLogSaveStore(docUri)
+        const saveStore = await store.createOperationLogSaveStore(docUri, {
+          initialDocument: content,
+        })
         notebookData.setNotebookStore(saveStore)
         notebookData.loadNotebook(
           materializedLogToNotebook(materializeOperationLog(parsed.operations)),
@@ -464,11 +466,13 @@ export function OperationLogSuggestionView({
   const retryLoad = async () => {
     setBusy(true)
     try {
-      const parsed = await load()
+      const { parsed, content } = await load()
       if (reloadRequired) {
         const notebookData = getNotebookDataController().getNotebookData(docUri)
         if (notebookData) {
-          const saveStore = await store.createOperationLogSaveStore(docUri)
+          const saveStore = await store.createOperationLogSaveStore(docUri, {
+            initialDocument: content,
+          })
           notebookData.setNotebookStore(saveStore)
           notebookData.loadNotebook(
             materializedLogToNotebook(

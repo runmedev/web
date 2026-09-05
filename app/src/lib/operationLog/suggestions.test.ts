@@ -237,6 +237,111 @@ describe('operation-log suggestions', () => {
     ).toEqual(['suggestion:create'])
   })
 
+  it('uses causal ancestors rather than concurrent operations as the baseline', () => {
+    const operations: RunmeOperation[] = []
+    const seed = append(operations, {
+      sequence: 1,
+      kind: 'cell.create',
+      suggestionId: 'suggestion:create',
+      payload: {
+        cell_id: 'one',
+        position: [[100, 'actor_a', 1]],
+        cell: {
+          kind: 'markup',
+          language_id: 'markdown',
+          value: 'Original',
+          metadata: {},
+        },
+      },
+    })
+    operations.push(seed)
+    const left = createRunmeOperation({
+      actorId: 'actor_left',
+      actorSequence: 1,
+      dependencies: [seed.op_id],
+      knownOperations: operations,
+      kind: 'cell.update',
+      payload: {
+        cell_id: 'one',
+        cell: {
+          kind: 'markup',
+          language_id: 'markdown',
+          value: 'Left edit',
+          metadata: {},
+        },
+      },
+      suggestionId: 'suggestion:left',
+      createdAt: '2026-09-03T00:01:00Z',
+    })
+    operations.push(left)
+    const right = createRunmeOperation({
+      actorId: 'actor_right',
+      actorSequence: 1,
+      dependencies: [seed.op_id],
+      knownOperations: operations,
+      kind: 'cell.update',
+      payload: {
+        cell_id: 'one',
+        cell: {
+          kind: 'markup',
+          language_id: 'markdown',
+          value: 'Right edit',
+          metadata: {},
+        },
+      },
+      suggestionId: 'suggestion:right',
+      createdAt: '2026-09-03T00:01:00Z',
+    })
+    operations.push(right)
+
+    const suggestions = buildOperationLogSuggestions(operations)
+    const leftSuggestion = suggestions.find(
+      (suggestion) => suggestion.id === 'suggestion:left'
+    )
+    const rightSuggestion = suggestions.find(
+      (suggestion) => suggestion.id === 'suggestion:right'
+    )
+    expect(leftSuggestion?.before.cells[0]?.value).toBe('Original')
+    expect(leftSuggestion?.proposed.cells[0]?.value).toBe('Left edit')
+    expect(rightSuggestion?.before.cells[0]?.value).toBe('Original')
+    expect(rightSuggestion?.proposed.cells[0]?.value).toBe('Right edit')
+  })
+
+  it('does not expose clear-output operations as suggestions', () => {
+    const operations: RunmeOperation[] = []
+    operations.push(
+      append(operations, {
+        sequence: 1,
+        kind: 'cell.create',
+        suggestionId: 'suggestion:create',
+        payload: {
+          cell_id: 'one',
+          position: [[100, 'actor_a', 1]],
+          cell: {
+            kind: 'code',
+            language_id: 'bash',
+            value: 'echo hello',
+            metadata: {},
+          },
+        },
+      })
+    )
+    operations.push(
+      append(operations, {
+        sequence: 2,
+        kind: 'cell.clear_outputs',
+        suggestionId: 'suggestion:clear',
+        payload: { cell_id: 'one', reason: 'editor-cleared' },
+      })
+    )
+
+    expect(
+      buildOperationLogSuggestions(operations).map(
+        (suggestion) => suggestion.id
+      )
+    ).toEqual(['suggestion:create'])
+  })
+
   it('produces an inline word diff with preserved whitespace', () => {
     expect(diffInlineText('hello world', 'hello brave world')).toEqual([
       { kind: 'equal', value: 'hello ' },

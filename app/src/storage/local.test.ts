@@ -390,6 +390,58 @@ describe('LocalNotebooks operation-log storage', () => {
     expect((await store.files.get(created.uri))?.doc).toBe('')
   })
 
+  it('uses the supplied journal revision as the save adapter baseline', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'rebased.runme')
+    const seedStore = await store.createOperationLogSaveStore(created.uri, {
+      actorId: 'actor_seed',
+    })
+    await seedStore.save(
+      created.uri,
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'cell_one',
+            kind: parser_pb.CellKind.MARKUP,
+            languageId: 'markdown',
+            value: 'Original',
+          }),
+        ],
+      })
+    )
+
+    const loadedDocument = await store.loadContent(created.uri)
+    const loadedNotebook = await store.loadOperationLogSnapshot(created.uri)
+    const concurrentStore = await store.createOperationLogSaveStore(
+      created.uri,
+      { actorId: 'actor_concurrent' }
+    )
+    const concurrentNotebook = await store.loadOperationLogSnapshot(created.uri)
+    concurrentNotebook.cells[0].value = 'Concurrent edit'
+    await concurrentStore.save(created.uri, concurrentNotebook)
+
+    const rebasedStore = await store.createOperationLogSaveStore(created.uri, {
+      actorId: 'actor_rebased',
+      initialDocument: loadedDocument,
+    })
+    await rebasedStore.save(created.uri, loadedNotebook)
+
+    expect(
+      (await store.loadOperationLogSnapshot(created.uri)).cells[0].value
+    ).toBe('Concurrent edit')
+    expect(
+      parseOperationLog(await store.loadContent(created.uri)).operations
+    ).toHaveLength(2)
+  })
+
   it('allocates unique actor sequences for concurrent editor and comment writes', async () => {
     const operationLogStorage = new MemoryOperationLogStorage()
     const store = createTestStore({}, { operationLogStorage })
