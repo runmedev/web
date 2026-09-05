@@ -2818,7 +2818,7 @@ export class DriveNotebookStore {
       mimeType: file.mimeType,
       parents: parentUri
         ? [parentUri]
-        : (file.parents ?? []).map(driveFolderUrl),
+        : (file.parents ?? []).map((id) => driveFolderUrl(id)),
     }
   }
 
