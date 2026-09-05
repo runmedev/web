@@ -18,7 +18,9 @@ export interface WorkspaceDocumentPersistence {
 export type ShowWorkspaceDocumentOptions = Omit<
   Partial<WorkspaceDocument>,
   'uri'
->
+> & {
+  afterUri?: string
+}
 
 export const WORKSPACE_DOCUMENT_FOCUS_EVENT = 'runme:workspace-document-focus'
 
@@ -167,6 +169,11 @@ export class WorkspaceDocumentController {
     const existingIndex = this.documents.findIndex(
       (item) => item.uri === normalizedUri
     )
+    const afterUri = options?.afterUri?.trim()
+    const isPositionedAfter =
+      Boolean(afterUri) &&
+      existingIndex > 0 &&
+      this.documents[existingIndex - 1]?.uri === afterUri
     if (existingIndex >= 0) {
       const existing = this.documents[existingIndex]
       if (
@@ -182,7 +189,8 @@ export class WorkspaceDocumentController {
           nextDocument.writeAccessErrorMessage &&
         existing?.refreshErrorMessage === nextDocument.refreshErrorMessage &&
         existing?.errorMessage === nextDocument.errorMessage &&
-        existing?.owner === nextDocument.owner
+        existing?.owner === nextDocument.owner &&
+        (!afterUri || isPositionedAfter)
       ) {
         return
       }
@@ -191,6 +199,18 @@ export class WorkspaceDocumentController {
       )
     } else {
       this.documents = [...this.documents, nextDocument]
+    }
+    if (afterUri && afterUri !== normalizedUri) {
+      const documentsWithoutTarget = this.documents.filter(
+        (item) => item.uri !== normalizedUri
+      )
+      const afterIndex = documentsWithoutTarget.findIndex(
+        (item) => item.uri === afterUri
+      )
+      if (afterIndex >= 0) {
+        documentsWithoutTarget.splice(afterIndex + 1, 0, nextDocument)
+        this.documents = documentsWithoutTarget
+      }
     }
     this.emit()
     this.persist()
