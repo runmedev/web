@@ -111,6 +111,12 @@ errors; the next source save or successful Drive sync retries the copy. Keep
 Runme open and signed in while background uploads complete. Turning the option
 off keeps the last copy and stops updating it.
 
+If creation in a Shared Drive cannot be confirmed, Runme stops issuing new
+creates to avoid duplicates. Check Drive for an existing copy and sync again.
+If the request never arrived, use **Retry unconfirmed creation** in properties.
+This requires confirmation: an earlier request that is still in flight can
+leave an extra copy. Retrying cannot clear a newer or already-confirmed copy.
+
 Generated copies contain provenance metadata and a leading notice visible in
 Colab. Runme also shows a source link and renders them read-only. Make durable
 edits in the source `.runme` notebook: any changes made to the generated copy in

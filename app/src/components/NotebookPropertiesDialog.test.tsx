@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   setMetadataProperty: vi.fn(),
   flushPendingPersist: vi.fn(async () => {}),
   getIpynbExportState: vi.fn(async () => ({})),
+  retryUnconfirmedIpynbCreation: vi.fn(async () => {}),
 }))
 vi.mock('../contexts/NotebookContext', () => ({
   useNotebookContext: () => ({
@@ -22,6 +23,7 @@ vi.mock('../contexts/NotebookStoreContext', () => ({
   useNotebookStore: () => ({
     store: {
       getIpynbExportState: mocks.getIpynbExportState,
+      retryUnconfirmedIpynbCreation: mocks.retryUnconfirmedIpynbCreation,
       subscribeSync: () => () => {},
     },
   }),
@@ -81,5 +83,28 @@ describe('Notebook properties', () => {
     expect((screen.getByRole('checkbox') as HTMLInputElement).disabled).toBe(
       true
     )
+  })
+  it('requires confirmation before retrying an unconfirmed creation', async () => {
+    mocks.snapshot.notebook.metadata[AUTO_IPYNB_KEY] = 'true'
+    mocks.getIpynbExportState.mockResolvedValue({ needsCreateRecovery: true })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(
+      <Theme>
+        <NotebookPropertiesDialog uri="local://file/test" onClose={() => {}} />
+      </Theme>
+    )
+    const retry = await screen.findByRole('button', {
+      name: 'Retry unconfirmed creation',
+    })
+    fireEvent.click(retry)
+    expect(mocks.retryUnconfirmedIpynbCreation).not.toHaveBeenCalled()
+    confirm.mockReturnValue(true)
+    fireEvent.click(retry)
+    await waitFor(() =>
+      expect(mocks.retryUnconfirmedIpynbCreation).toHaveBeenCalledWith(
+        'local://file/test'
+      )
+    )
+    confirm.mockRestore()
   })
 })

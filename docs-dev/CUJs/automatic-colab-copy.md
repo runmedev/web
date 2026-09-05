@@ -16,8 +16,16 @@
 7. Re-enable export. Simulate an upload failure and verify the source save still
    completes, properties reports the copy error, and a later successful sync
    retries the export.
+8. Open the same source in independent browser profiles and trigger concurrent
+   exports. Verify the shared source property selects one copy identity.
+9. Simulate a Shared Drive create whose response is lost. Verify subsequent
+   sync waits for confirmation. If no file was created, use the warning-gated
+   recovery action in properties and verify export can resume.
 
 Automated coverage: `derivedIpynb.test.ts`, `derivedNotebookModel.test.ts`,
 `NotebookPropertiesDialog.test.tsx`, and the operation-log export integration
 cases in `storage/local.test.ts`. The slow-upload test holds a real promise
 pending while another journal save commits and is read back from storage.
+`storage/derivedCopy.test.ts` exercises independent clients with only shared
+remote CAS state (no shared local lock), and `storage/drive.test.ts` verifies
+the conditional property update for both browser and token transports.

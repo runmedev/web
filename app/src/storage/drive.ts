@@ -23,13 +23,16 @@ const GAPI_SCRIPT_SRC = 'https://apis.google.com/js/api.js'
 
 // VERSION_FIELDS is the fields we want to return when fetching metadata to determine the file content version.
 // https://developers.google.com/workspace/drive/api/guides/fields-parameter
-const VERSION_FIELDS = 'md5Checksum,headRevisionId,version,appProperties'
-const DRIVE_V2_VERSION_FIELDS = 'etag,md5Checksum,headRevisionId,version'
+const VERSION_FIELDS =
+  'md5Checksum,headRevisionId,version,appProperties,properties'
+const DRIVE_V2_VERSION_FIELDS =
+  'etag,md5Checksum,headRevisionId,version,properties'
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
 } as unknown as Parameters<typeof toJsonString>[2]
 const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder'
-const DRIVE_CREATE_OPERATION_PROPERTY = 'runmeCreateOperationId'
+export const DRIVE_CREATE_OPERATION_PROPERTY = 'runmeCreateOperationId'
+const DERIVED_COPY_PROPERTY = 'runmeIpynbCopy'
 export const DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY =
   'runmeCreateExpectedChecksum'
 export const DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY =
@@ -381,6 +384,13 @@ type DriveRevisionListResponse = {
 }
 
 interface DriveFilesClient {
+  setPublicPropertyIfMatch(
+    fileId: string,
+    key: string,
+    value: string | null,
+    etag: string,
+    resourceKey?: string
+  ): Promise<boolean>
   generateFileId(): Promise<string>
   create(
     doc: DriveDoc,
@@ -883,12 +893,7 @@ export class GapiDriveFilesClient implements DriveFilesClient {
     }
 
     if (doc.content !== undefined && file.id) {
-      await this.setContent(
-        file.id,
-        doc.content,
-        doc.mimeType,
-        doc.resourceKey
-      )
+      await this.setContent(file.id, doc.content, doc.mimeType, doc.resourceKey)
     }
 
     return file
@@ -966,8 +971,55 @@ export class GapiDriveFilesClient implements DriveFilesClient {
         | (DriveVersionMetadata & { etag?: string })
         | undefined) ?? null
     return {
-      metadata,
+      metadata: metadata
+        ? {
+            ...metadata,
+            properties: Object.fromEntries(
+              (
+                (
+                  metadata as unknown as {
+                    properties?: {
+                      key: string
+                      value: string
+                      visibility: string
+                    }[]
+                  }
+                ).properties ?? []
+              )
+                .filter((property) => property.visibility === 'PUBLIC')
+                .map((property) => [property.key, property.value])
+            ),
+          }
+        : null,
       etag: metadata?.etag ?? response.etag,
+    }
+  }
+
+  /** CAS one public property without changing media or unrelated properties. */
+  async setPublicPropertyIfMatch(
+    fileId: string,
+    key: string,
+    value: string | null,
+    etag: string,
+    resourceKey?: string
+  ): Promise<boolean> {
+    try {
+      await this.request(
+        'PATCH',
+        `/drive/v3/files/${encodeURIComponent(fileId)}`,
+        {
+          params: { supportsAllDrives: true },
+          body: JSON.stringify({ properties: { [key]: value } }),
+          headers: {
+            ...driveResourceKeyHeaders({ id: fileId, resourceKey }),
+            'If-Match': etag,
+          },
+        }
+      )
+      return true
+    } catch (error) {
+      if (error instanceof DrivePreconditionFailedError) return false
+      throw error
     }
   }
 
@@ -1371,12 +1423,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
     }
 
     if (doc.content !== undefined) {
-      await this.setContent(
-        doc.id,
-        doc.content,
-        doc.mimeType,
-        doc.resourceKey
-      )
+      await this.setContent(doc.id, doc.content, doc.mimeType, doc.resourceKey)
     }
 
     return file.id ? file : { ...doc }
@@ -1441,6 +1488,31 @@ class FetchDriveFilesClient implements DriveFilesClient {
     return {
       metadata: (response.result as DriveVersionMetadata | undefined) ?? null,
       etag: response.etag,
+    }
+  }
+
+  /** Use the same source-file CAS contract as the browser transport. */
+  async setPublicPropertyIfMatch(
+    fileId: string,
+    key: string,
+    value: string | null,
+    etag: string,
+    resourceKey?: string
+  ): Promise<boolean> {
+    try {
+      await this.request(
+        'PATCH',
+        `/drive/v3/files/${encodeURIComponent(fileId)}`,
+        {
+          params: { supportsAllDrives: true, resourceKey },
+          body: JSON.stringify({ properties: { [key]: value } }),
+          headers: { 'If-Match': etag },
+        }
+      )
+      return true
+    } catch (error) {
+      if (error instanceof DrivePreconditionFailedError) return false
+      throw error
     }
   }
 
@@ -1868,6 +1940,7 @@ export interface SharedNotebookPreflight {
 }
 
 export interface DriveVersionMetadata {
+  properties?: Record<string, string>
   md5Checksum?: string
   headRevisionId?: string
   version?: string
@@ -2443,6 +2516,59 @@ export class DriveNotebookStore {
       )
     }
     return driveFolderUrl(folder.id)
+  }
+
+  /** Read the shared copy identity from the source, not a profile-local cache. */
+  async getDerivedCopyClaim(uri: string): Promise<string | undefined> {
+    const { id, resourceKey } = parseDriveItem(uri)
+    const { metadata } = await (
+      await this.getFilesClient()
+    ).getVersionMetadataWithEtag(id, resourceKey)
+    return metadata?.properties?.[DERIVED_COPY_PROPERTY]
+  }
+
+  /** Compare-and-set the source property; media edits also invalidate its ETag. */
+  async compareAndSetDerivedCopyClaim(
+    uri: string,
+    expected: string | undefined,
+    next: string | null
+  ): Promise<boolean> {
+    const { id, resourceKey } = parseDriveItem(uri)
+    const client = await this.getFilesClient()
+    const { metadata, etag } = await client.getVersionMetadataWithEtag(
+      id,
+      resourceKey
+    )
+    if (metadata?.properties?.[DERIVED_COPY_PROPERTY] !== expected) return false
+    if (!etag)
+      throw new Error(
+        'Drive did not expose a validator for Colab copy coordination.'
+      )
+    return client.setPublicPropertyIfMatch(
+      id,
+      DERIVED_COPY_PROPERTY,
+      next,
+      etag,
+      resourceKey
+    )
+  }
+
+  /** A source property alone never authorizes overwriting an unrelated file. */
+  async getDerivedCopyTarget(
+    uri: string,
+    operationId: string
+  ): Promise<NotebookStoreItem | null> {
+    const target = await this.getMetadataIfExists(uri)
+    if (!target) return null
+    const version = await this.getVersionMetadata(uri)
+    if (
+      version?.appProperties?.[DRIVE_CREATE_OPERATION_PROPERTY] !== operationId
+    ) {
+      throw new Error(
+        'The Colab copy does not belong to this source notebook; refusing to overwrite it.'
+      )
+    }
+    return target
   }
 
   /** Reserve a Drive file id so retries can target one stable identity. */

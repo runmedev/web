@@ -20,6 +20,7 @@ export function NotebookPropertiesDialog({
     uri?: string
     error?: string
     exportedAt?: string
+    needsCreateRecovery?: boolean
   }>({})
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -113,6 +114,27 @@ export function NotebookPropertiesDialog({
                   updated: {status.error}. Export retries on the next save or
                   Drive sync.
                 </p>
+              )}
+              {enabled && status.needsCreateRecovery && !snapshot?.readOnly && (
+                <Button
+                  disabled={saving}
+                  onClick={() => {
+                    if (
+                      !window.confirm(
+                        'Check Google Drive for an existing copy first. Retrying an unconfirmed creation can leave an extra copy if the earlier request is still in flight. Retry anyway?'
+                      )
+                    )
+                      return
+                    setSaving(true)
+                    setError('')
+                    void store
+                      ?.retryUnconfirmedIpynbCreation(uri)
+                      .catch((err) => setError(String(err)))
+                      .finally(() => setSaving(false))
+                  }}
+                >
+                  Retry unconfirmed creation
+                </Button>
               )}
               {enabled && !status.uri && (
                 <p className="text-nb-text-muted">

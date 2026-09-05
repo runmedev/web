@@ -143,6 +143,23 @@ function createTestStore(
     drive.waitForCreateOperation ??= drive.findByCreateOperation
     drive.canUsePreGeneratedFileId ??= vi.fn(async () => false)
     drive.createContent ??= drive.create
+    const claims = new Map<string, string>()
+    drive.getDerivedCopyClaim ??= vi.fn(async (uri: string) => claims.get(uri))
+    drive.compareAndSetDerivedCopyClaim ??= vi.fn(
+      async (
+        uri: string,
+        expected: string | undefined,
+        next: string | null
+      ) => {
+        if (claims.get(uri) !== expected) return false
+        if (next === null) claims.delete(uri)
+        else claims.set(uri, next)
+        return true
+      }
+    )
+    drive.getDerivedCopyTarget ??= vi.fn(
+      async (uri: string) => drive.getMetadataIfExists?.(uri) ?? null
+    )
   }
   localStore.driveSyncCoordinator =
     options.driveSyncCoordinator ?? createTestDriveSyncCoordinator()
@@ -183,6 +200,35 @@ function notebookJson(value: string): string {
 }
 
 describe('LocalNotebooks operation-log storage', () => {
+  it('clears only the recorded unconfirmed claim before an explicit retry', async () => {
+    const source = 'https://drive.google.com/file/d/source/view'
+    const compareAndSetDerivedCopyClaim = vi.fn(async () => false)
+    const store = createTestStore({ compareAndSetDerivedCopyClaim })
+    const sync = vi.spyOn(store, 'syncIpynbFile').mockResolvedValue()
+    await store.files.put({
+      id: 'local://file/recover',
+      name: 'source.runme',
+      remoteId: source,
+      doc: '',
+      lastSynced: '',
+      md5Checksum: '',
+      lastRemoteChecksum: '',
+      ipynbExportPendingClaim: 'p:old',
+      ipynbExportError: 'unconfirmed',
+    })
+    await store.retryUnconfirmedIpynbCreation('local://file/recover')
+    expect(compareAndSetDerivedCopyClaim).toHaveBeenCalledWith(
+      source,
+      'p:old',
+      null
+    )
+    expect(sync).toHaveBeenCalledWith('local://file/recover')
+    expect(
+      (await store.getIpynbExportState('local://file/recover'))
+        .needsCreateRecovery
+    ).toBe(false)
+  })
+
   it('queues a debounced export after a journal save without awaiting it', async () => {
     vi.useFakeTimers()
     try {
@@ -352,7 +398,9 @@ describe('LocalNotebooks operation-log storage', () => {
           name: 'source.runme',
           parents: [parent],
         })),
-        getMetadataIfExists: vi.fn(async () => null),
+        getMetadataIfExists: vi.fn(
+          async (): Promise<typeof target | null> => null
+        ),
         waitForCreateOperation: vi.fn(
           async (): Promise<typeof target | null> => null
         ),
@@ -381,11 +429,11 @@ describe('LocalNotebooks operation-log storage', () => {
       notebook.metadata[AUTO_IPYNB_KEY] = 'true'
       await journal.save(created.uri, notebook)
       await expect(store.syncIpynbFile(created.uri)).rejects.toThrow(
-        'response lost'
+        reserved ? 'response lost' : 'awaiting Drive confirmation'
       )
       expect(
-        (await store.files.get(created.uri))?.ipynbExportCreatePending
-      ).toBeDefined()
+        (await store.getIpynbExportState(created.uri)).needsCreateRecovery
+      ).toBe(!reserved)
       if (reserved) {
         await store.syncIpynbFile(created.uri)
         expect(drive.generateFileId).toHaveBeenCalledTimes(1)
@@ -398,12 +446,13 @@ describe('LocalNotebooks operation-log storage', () => {
         )
         expect(drive.createContent).toHaveBeenCalledTimes(1)
         drive.waitForCreateOperation.mockResolvedValue(target)
+        drive.getMetadataIfExists.mockResolvedValue(target)
         await store.syncIpynbFile(created.uri)
         expect(drive.createContent).toHaveBeenCalledTimes(1)
       }
       expect(drive.waitForCreateOperation).toHaveBeenCalled()
       expect(
-        (await store.files.get(created.uri))?.ipynbExportCreatePending
+        (await store.files.get(created.uri))?.ipynbExportPendingClaim
       ).toBeUndefined()
       expect((await store.getIpynbExportState(created.uri)).uri).toBe(
         target.uri
