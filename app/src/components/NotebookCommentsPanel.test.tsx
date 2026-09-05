@@ -20,6 +20,7 @@ const noop = vi.fn()
 
 function renderPanel(overrides = {}) {
   const props = {
+    storage: 'google-drive' as const,
     status: 'available' as const,
     threads: [],
     cellLabels: new Map<string, string>(),
@@ -48,6 +49,18 @@ function renderPanel(overrides = {}) {
 }
 
 describe('NotebookCommentsPanel', () => {
+  it('describes where comments are stored for each notebook format', () => {
+    const view = renderPanel({ storage: 'runme-operation-log' })
+
+    expect(screen.getByText('Stored in this .runme notebook')).toBeTruthy()
+    expect(screen.queryByText('Google Drive comment threads')).toBeNull()
+
+    view.rerender(<NotebookCommentsPanel {...view} storage="google-drive" />)
+
+    expect(screen.getByText('Google Drive comment threads')).toBeTruthy()
+    expect(screen.queryByText('Stored in this .runme notebook')).toBeNull()
+  })
+
   it('calls onHide from the header hide button', () => {
     const onHide = vi.fn()
 
