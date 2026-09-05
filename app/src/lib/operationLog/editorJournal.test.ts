@@ -64,6 +64,10 @@ describe('editor operation-log journal', () => {
     expect(kinds).toContain('cell.delete')
     expect(kinds).toContain('cell.update')
     expect(kinds).toContain('cell.create')
+    expect(
+      new Set(updates.map((operation) => operation.suggestion_id))
+    ).toEqual(new Set(['actor_a:suggestion:3']))
+    expect(created[0].suggestion_id).toBe('actor_a:suggestion:1')
 
     const materialized = materializeOperationLog([...created, ...updates])
     expect(

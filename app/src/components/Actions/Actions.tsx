@@ -83,6 +83,8 @@ import {
   isOnboardingDocumentUri,
   isNotebookDiffUri,
   isNotebookDocumentUri,
+  getOperationLogSuggestionDocumentUri,
+  parseOperationLogSuggestionDocumentUri,
   isVersionInfoUri,
   isRunnerStatusUri,
   parseRunnerKernelsDocumentUri,
@@ -135,6 +137,7 @@ import KernelStatusTab from '../KernelStatusTab'
 import { NotebookDiffContent } from '../NotebookDiff/NotebookDiffView'
 import VersionInfoTab from '../VersionInfoTab'
 import { NotebookCommentsPanel } from '../NotebookCommentsPanel'
+import { OperationLogSuggestionView } from '../OperationLogSuggestions/OperationLogSuggestionView'
 import AppConsole from '../AppConsole/AppConsole'
 import LogsPane from '../Logs/LogsPane'
 import { ActionOutputItems } from './ActionOutputItems'
@@ -352,8 +355,7 @@ function NotebookSyncIndicator({ docUri }: { docUri: string }) {
   const presentation = syncIndicatorPresentation(syncState)
   const canSyncDrive = isDriveItemUri(syncState?.remoteId)
   const clickable =
-    presentation.clickable ||
-    (canSyncDrive && syncState?.status === 'synced')
+    presentation.clickable || (canSyncDrive && syncState?.status === 'synced')
   const label =
     syncState?.status === 'synced' && canSyncDrive
       ? 'Notebook is synced with Google Drive. Click to sync now.'
@@ -2248,6 +2250,8 @@ function NotebookTabContent({
   const operationLogComments = Boolean(
     entry.operationLog && docUri.startsWith('local://')
   )
+  const { showDocument } = useWorkspaceDocumentContext()
+  const { setCurrentDoc } = useCurrentDoc()
   const { commentsPanelOpen, openCommentsPanel, setCommentsPanelOpen } =
     useCommentsPanel()
   const shouldRenderCells = !readOnly || isSelected
@@ -2294,6 +2298,16 @@ function NotebookTabContent({
   const [draftContent, setDraftContent] = useState('')
   const commentsSyncInFlightRef = useRef<Promise<void> | null>(null)
   const commentsSyncRerunRequestedRef = useRef(false)
+  // Suggestion review is a virtual workspace document. Giving it a distinct
+  // URI lets the editor and review projection stay mounted in separate tabs
+  // while both continue to reference the same notebook operation log.
+  const openSuggestionView = useCallback(() => {
+    const suggestionUri = getOperationLogSuggestionDocumentUri(docUri)
+    showDocument(suggestionUri, {
+      title: `Suggestions · ${entry.name}`,
+    })
+    setCurrentDoc(suggestionUri)
+  }, [docUri, entry.name, setCurrentDoc, showDocument])
   const cellLabels = useMemo(() => {
     const labels = new Map<string, string>()
     cellDatas.forEach((cellData, index) => {
@@ -3618,6 +3632,13 @@ function NotebookTabContent({
               </div>
             </div>
           ) : null}
+          {entry.operationLog && store && (
+            <div className="mb-3 flex justify-end">
+              <Button size="1" variant="soft" onClick={openSuggestionView}>
+                Review suggestions
+              </Button>
+            </div>
+          )}
           {cellDatas.length === 0 ? (
             <div
               id="empty-notebook-prompt"
@@ -3830,6 +3851,60 @@ function NotebookDiffTabContent({ diffUri }: { diffUri: string }) {
   )
 }
 
+/** Render a suggestion projection as its own workspace tab. */
+function OperationLogSuggestionTabContent({
+  suggestionUri,
+}: {
+  suggestionUri: string
+}) {
+  const notebookUri = parseOperationLogSuggestionDocumentUri(suggestionUri)
+  const { getOpenNotebooks } = useNotebookContext()
+  const { store } = useNotebookStore()
+  const { closeWorkspaceDocument } = useWorkspaceDocumentContext()
+  const { setCurrentDoc } = useCurrentDoc()
+  const sourceEntry = notebookUri
+    ? getOpenNotebooks().find((entry) => entry.uri === notebookUri)
+    : undefined
+
+  const closeSuggestionView = useCallback(() => {
+    const fallback = closeWorkspaceDocument(suggestionUri)
+    setCurrentDoc(sourceEntry?.uri ?? fallback)
+  }, [closeWorkspaceDocument, setCurrentDoc, sourceEntry?.uri, suggestionUri])
+
+  if (!notebookUri) {
+    return <UnknownDocumentTab uri={suggestionUri} />
+  }
+
+  if (!store) {
+    return (
+      <div
+        id="suggestion-store-unavailable"
+        className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-nb-text-muted"
+      >
+        <Text size="3" weight="bold" as="p" className="text-nb-text">
+          Suggestions unavailable
+        </Text>
+        <Text size="2" as="p">
+          The local notebook store is not available.
+        </Text>
+      </div>
+    )
+  }
+
+  return (
+    <div id="operation-log-suggestion-tab" className="h-full min-w-0">
+      <OperationLogSuggestionView
+        docUri={notebookUri}
+        store={store}
+        readOnly={Boolean(
+          !sourceEntry || sourceEntry.readOnly || sourceEntry.releasePending
+        )}
+        onClose={closeSuggestionView}
+      />
+    </div>
+  )
+}
+
 function UnknownDocumentTab({ uri }: { uri: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-nb-text-muted">
@@ -3898,6 +3973,10 @@ function renderWorkspaceDocument({
 
   if (isNotebookDiffUri(document.uri)) {
     return <NotebookDiffTabContent diffUri={document.uri} />
+  }
+
+  if (parseOperationLogSuggestionDocumentUri(document.uri)) {
+    return <OperationLogSuggestionTabContent suggestionUri={document.uri} />
   }
 
   if (isDocumentationDocumentUri(document.uri)) {

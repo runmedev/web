@@ -24,6 +24,8 @@ import {
   type JsonValue,
   type ParsedOperationLog,
   type RunmeOperation,
+  type SuggestionDecision,
+  type SuggestionReviewPayload,
   buildOperationLogDiff,
   canonicalJson,
   causalHeads,
@@ -1551,6 +1553,31 @@ export class LocalNotebooks extends Dexie {
     )!
   }
 
+  /** Append a durable accept/reject decision for an operation-log suggestion. */
+  async reviewOperationLogSuggestion(
+    uri: string,
+    suggestionId: string,
+    decision: SuggestionDecision,
+    operationIds: string[],
+    options: { actorId?: string } = {}
+  ): Promise<void> {
+    if (operationIds.length === 0) {
+      throw new Error(`Suggestion ${suggestionId} has no operations to review`)
+    }
+    const payload: SuggestionReviewPayload = {
+      suggestion_id: suggestionId,
+      decision,
+      operation_ids: [...new Set(operationIds)],
+    }
+    await this.appendOperationLogMutation(
+      uri,
+      'suggestion.review',
+      payload as unknown as JsonValue,
+      options.actorId,
+      decision === 'reject' ? payload.operation_ids : undefined
+    )
+  }
+
   private async readMaterializedOperationLog(uri: string) {
     const record = await this.files.get(uri)
     if (!record?.operationLogRef) {
@@ -1565,7 +1592,8 @@ export class LocalNotebooks extends Dexie {
     uri: string,
     kind: string,
     payload: JsonValue,
-    suppliedActorId?: string
+    suppliedActorId?: string,
+    reverts?: string[]
   ): Promise<void> {
     const record = await this.files.get(uri)
     if (!record?.operationLogRef) {
@@ -1583,6 +1611,7 @@ export class LocalNotebooks extends Dexie {
           knownOperations: parsed.operations,
           kind,
           payload,
+          reverts,
         })
         return `${canonicalJson(operation as unknown as JsonValue)}\n`
       },

@@ -479,6 +479,62 @@ describe('LocalNotebooks operation-log storage', () => {
     ).toEqual(['comment.add', 'comment.reply', 'thread.set_status'])
   })
 
+  it('persists suggestion decisions and rematerializes rejected operations', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'review.runme')
+    const saveStore = await store.createOperationLogSaveStore(created.uri, {
+      actorId: 'actor_review',
+    })
+    await saveStore.save(
+      created.uri,
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'cell_one',
+            kind: parser_pb.CellKind.MARKUP,
+            languageId: 'markdown',
+            value: 'Suggested',
+          }),
+        ],
+      })
+    )
+
+    const authored = parseOperationLog(await store.loadContent(created.uri))
+      .operations[0]
+    await store.reviewOperationLogSuggestion(
+      created.uri,
+      authored.suggestion_id!,
+      'reject',
+      [authored.op_id],
+      { actorId: 'actor_review' }
+    )
+    expect((await store.load(created.uri)).cells).toHaveLength(0)
+
+    await store.reviewOperationLogSuggestion(
+      created.uri,
+      authored.suggestion_id!,
+      'accept',
+      [authored.op_id],
+      { actorId: 'actor_review' }
+    )
+    expect((await store.load(created.uri)).cells[0].value).toBe('Suggested')
+    const reviews = parseOperationLog(
+      await store.loadContent(created.uri)
+    ).operations.filter((operation) => operation.kind === 'suggestion.review')
+    expect(reviews.map((operation) => operation.reverts)).toEqual([
+      [authored.op_id],
+      undefined,
+    ])
+  })
+
   it('loads stale Drive-backed .runme data by merging local and remote operations', async () => {
     const header: NotebookLogHeader = {
       record_type: 'runme.notebook',

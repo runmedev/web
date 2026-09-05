@@ -120,6 +120,7 @@ export async function buildOperationLogDiff({
   const created: RunmeOperation[] = []
   let actorSequence = firstActorSequence
   let dependencies = causalHeads(observedOperations)
+  const suggestionId = `${actorId}:suggestion:${firstActorSequence}`
 
   const append = (kind: string, payload: JsonValue) => {
     const operation = createRunmeOperation({
@@ -129,6 +130,7 @@ export async function buildOperationLogDiff({
       knownOperations: operations,
       kind,
       payload,
+      suggestionId,
       createdAt: createdAt(),
     })
     actorSequence += 1

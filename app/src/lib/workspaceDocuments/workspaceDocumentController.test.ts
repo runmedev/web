@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceDocumentController } from "./workspaceDocumentController";
 import {
   deriveWorkspaceDocumentTitle,
+  getOperationLogSuggestionDocumentUri,
   getRunnerKernelsDocumentUri,
+  parseOperationLogSuggestionDocumentUri,
   parseRunnerKernelsDocumentUri,
   type WorkspaceDocument,
 } from "./workspaceDocumentTypes";
@@ -126,5 +128,23 @@ describe("WorkspaceDocumentController", () => {
       runnerName: "local runner",
     });
     expect(deriveWorkspaceDocumentTitle(uri)).toBe("Kernels · local runner");
+  });
+
+  it("creates and parses a distinct suggestion tab for a notebook", () => {
+    const notebookUri = "local://file/notebook-1";
+    const suggestionUri = getOperationLogSuggestionDocumentUri(notebookUri);
+
+    expect(suggestionUri).toBe(
+      "suggestion://notebook/local%3A%2F%2Ffile%2Fnotebook-1"
+    );
+    expect(parseOperationLogSuggestionDocumentUri(suggestionUri)).toBe(
+      notebookUri
+    );
+    expect(deriveWorkspaceDocumentTitle(suggestionUri)).toBe(
+      "Notebook suggestions"
+    );
+    expect(
+      parseOperationLogSuggestionDocumentUri("suggestion://notebook/bad")
+    ).toBeNull();
   });
 });

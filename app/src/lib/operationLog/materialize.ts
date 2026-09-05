@@ -15,6 +15,8 @@ import type {
   OperationCell,
   PositionId,
   RunmeOperation,
+  SuggestionDecision,
+  SuggestionReviewPayload,
   ThreadSetStatusPayload,
 } from './types'
 
@@ -67,6 +69,14 @@ export interface MaterializedOperationLog {
   }
   comments: MaterializedComment[]
   threadStatus: Record<string, 'open' | 'resolved'>
+  suggestionReviews: Record<
+    string,
+    {
+      decision: SuggestionDecision
+      operationIds: string[]
+      reviewOperationId: string
+    }
+  >
   executions: MaterializedExecution[]
   orderedOperationIds: string[]
   pendingOperationIds: string[]
@@ -87,6 +97,7 @@ const knownKinds = new Set([
   'comment.add',
   'comment.reply',
   'thread.set_status',
+  'suggestion.review',
 ])
 
 export function materializeOperationLog(
@@ -106,7 +117,66 @@ export function materializeOperationLog(
   const comments: MaterializedComment[] = []
   const threadStatus = new Map<string, Register<'open' | 'resolved'>>()
   const unknownOperationIds: string[] = []
+  const suggestionReviews = new Map<
+    string,
+    {
+      decision: SuggestionDecision
+      operationIds: string[]
+      reviewOperationId: string
+    }
+  >()
+  const operationById = new Map(
+    ordered.ordered.map((operation) => [operation.op_id, operation])
+  )
   let notebookState: Register<NotebookUpdatePayload> | undefined
+
+  // Review decisions are registers: the latest causally ordered decision for
+  // a suggestion wins. Rejected operations remain in the log but are omitted
+  // from notebook materialization.
+  for (const operation of ordered.ordered) {
+    if (
+      !committed.has(operation.op_id) ||
+      operation.kind !== 'suggestion.review'
+    ) {
+      continue
+    }
+    const payload = operation.payload as unknown as SuggestionReviewPayload
+    if (
+      typeof payload.suggestion_id !== 'string' ||
+      (payload.decision !== 'accept' && payload.decision !== 'reject') ||
+      !Array.isArray(payload.operation_ids) ||
+      payload.operation_ids.length === 0 ||
+      payload.operation_ids.some(
+        (operationId) => typeof operationId !== 'string'
+      ) ||
+      new Set(payload.operation_ids).size !== payload.operation_ids.length
+    ) {
+      throw new Error(`Suggestion review ${operation.op_id} is invalid`)
+    }
+    for (const reviewedOperationId of payload.operation_ids) {
+      const reviewed = operationById.get(reviewedOperationId)
+      const reviewedSuggestionId = reviewed
+        ? (reviewed.suggestion_id ??
+          reviewed.transaction_id ??
+          `legacy:${reviewed.op_id}`)
+        : undefined
+      if (reviewedSuggestionId !== payload.suggestion_id) {
+        throw new Error(
+          `Suggestion review ${operation.op_id} targets operation ${reviewedOperationId} outside ${payload.suggestion_id}`
+        )
+      }
+    }
+    suggestionReviews.set(payload.suggestion_id, {
+      decision: payload.decision,
+      operationIds: payload.operation_ids,
+      reviewOperationId: operation.op_id,
+    })
+  }
+  const rejectedOperationIds = new Set(
+    [...suggestionReviews.values()].flatMap((review) =>
+      review.decision === 'reject' ? review.operationIds : []
+    )
+  )
 
   const registersFor = (cellId: string): CellRegisters => {
     const existing = cells.get(cellId)
@@ -118,6 +188,7 @@ export function materializeOperationLog(
 
   for (const operation of ordered.ordered) {
     if (!committed.has(operation.op_id)) continue
+    if (rejectedOperationIds.has(operation.op_id)) continue
     if (!knownKinds.has(operation.kind)) {
       unknownOperationIds.push(operation.op_id)
       continue
@@ -271,6 +342,8 @@ export function materializeOperationLog(
         })
         break
       }
+      case 'suggestion.review':
+        break
     }
   }
 
@@ -335,6 +408,7 @@ export function materializeOperationLog(
         register.value,
       ])
     ),
+    suggestionReviews: Object.fromEntries(suggestionReviews),
     executions,
     orderedOperationIds: ordered.ordered.map((operation) => operation.op_id),
     pendingOperationIds: ordered.pending.map((operation) => operation.op_id),

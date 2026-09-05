@@ -12,6 +12,7 @@ const RUNNER_KERNELS_DOCUMENT_PREFIX = `${RUNNER_STATUS_DOCUMENT_URI}/`
 const RUNNER_KERNELS_DOCUMENT_SUFFIX = '/kernels'
 export const APP_CONSOLE_DOCUMENT_URI = 'app://console'
 export const LOGS_DOCUMENT_URI = 'app://logs'
+const OPERATION_LOG_SUGGESTION_DOCUMENT_PREFIX = 'suggestion://notebook/'
 
 export interface WorkspaceDocument {
   uri: string
@@ -41,6 +42,43 @@ export function isNotebookDocumentUri(
 
 export function isNotebookDiffUri(uri: string | null | undefined): boolean {
   return typeof uri === 'string' && uri.startsWith('diff://notebook/')
+}
+
+/** Build the virtual workspace URI used to review one operation-log notebook. */
+export function getOperationLogSuggestionDocumentUri(
+  notebookUri: string
+): string {
+  if (!isNotebookDocumentUri(notebookUri)) {
+    throw new Error('Suggestion views require a local notebook URI.')
+  }
+  return `${OPERATION_LOG_SUGGESTION_DOCUMENT_PREFIX}${encodeURIComponent(notebookUri)}`
+}
+
+/** Resolve a suggestion workspace tab back to the notebook model it projects. */
+export function parseOperationLogSuggestionDocumentUri(
+  uri: string | null | undefined
+): string | null {
+  if (
+    typeof uri !== 'string' ||
+    !uri.startsWith(OPERATION_LOG_SUGGESTION_DOCUMENT_PREFIX)
+  ) {
+    return null
+  }
+  const encodedNotebookUri = uri.slice(
+    OPERATION_LOG_SUGGESTION_DOCUMENT_PREFIX.length
+  )
+  try {
+    const notebookUri = decodeURIComponent(encodedNotebookUri)
+    return isNotebookDocumentUri(notebookUri) ? notebookUri : null
+  } catch {
+    return null
+  }
+}
+
+export function isOperationLogSuggestionDocumentUri(
+  uri: string | null | undefined
+): boolean {
+  return parseOperationLogSuggestionDocumentUri(uri) !== null
 }
 
 export function isExcalidrawWorkspaceDocument(
@@ -162,6 +200,9 @@ export function deriveWorkspaceDocumentTitle(uri: string): string {
   }
   if (isNotebookDiffUri(documentUri)) {
     return 'Notebook diff'
+  }
+  if (isOperationLogSuggestionDocumentUri(documentUri)) {
+    return 'Notebook suggestions'
   }
   try {
     const url = new URL(documentUri)

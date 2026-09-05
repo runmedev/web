@@ -10,6 +10,7 @@ export interface CreateOperationInput<Payload = JsonValue> {
   kind: string
   payload: Payload
   transactionId?: string
+  suggestionId?: string
   reverts?: string[]
   createdAt?: string
 }
@@ -47,6 +48,7 @@ export function createRunmeOperation<Payload = JsonValue>({
   kind,
   payload,
   transactionId,
+  suggestionId,
   reverts,
   createdAt = new Date().toISOString(),
 }: CreateOperationInput<Payload>): RunmeOperation<string, Payload> {
@@ -80,6 +82,7 @@ export function createRunmeOperation<Payload = JsonValue>({
     lamport,
     deps: [...new Set(dependencies)],
     ...(transactionId ? { transaction_id: transactionId } : {}),
+    ...(suggestionId ? { suggestion_id: suggestionId } : {}),
     ...(reverts?.length ? { reverts: [...new Set(reverts)] } : {}),
     created_at: createdAt,
     kind,
