@@ -10,6 +10,43 @@ import {
 import type { NotebookDataLike } from './runmeConsole'
 
 describe('notebook comments runtime', () => {
+  it.each(['readonly', 'release-pending'])(
+    'blocks all discussion mutations when %s',
+    async (state) => {
+      const localNotebooks = {
+        isOperationLogNotebook: vi.fn(async () => true),
+        replyToOperationLogComment: vi.fn(),
+        setOperationLogCommentResolved: vi.fn(),
+      }
+      const api = createNotebookCommentsRuntimeApi({
+        resolveNotebook: () =>
+          ({
+            getUri: () => 'local://file/locked',
+            isReadOnly: () => state === 'readonly',
+            isReleasePending: () => state === 'release-pending',
+          }) as NotebookDataLike,
+        resolveLocalNotebooks: () => localNotebooks as never,
+        resolveDriveNotebookStore: () => null,
+      })
+      const input = {
+        target: { uri: 'local://file/locked' },
+        commentId: 'thread',
+      }
+      await expect(api.reply({ ...input, content: 'Reply' })).rejects.toThrow(
+        'read-only or busy'
+      )
+      await expect(api.resolve(input)).rejects.toThrow('read-only or busy')
+      await expect(api.reopen(input)).rejects.toThrow('read-only or busy')
+      await expect(
+        api.add({ ...input, cellId: 'one', content: 'New' })
+      ).rejects.toThrow('read-only or busy')
+      expect(localNotebooks.replyToOperationLogComment).not.toHaveBeenCalled()
+      expect(
+        localNotebooks.setOperationLogCommentResolved
+      ).not.toHaveBeenCalled()
+      expect(api.reviews.help()).toContain('reviews.linkThread')
+    }
+  )
   it('returns the reviewed target and editable source for agents', async () => {
     const anchor = JSON.stringify({
       runme: {
@@ -182,7 +219,8 @@ describe('notebook comments runtime', () => {
     expect(localNotebooks.replyToOperationLogComment).toHaveBeenCalledWith(
       uri,
       'comment-1',
-      'Done.'
+      'Done.',
+      { author: { displayName: 'unknown', kind: 'unknown' } }
     )
     expect(
       localNotebooks.setOperationLogCommentResolved

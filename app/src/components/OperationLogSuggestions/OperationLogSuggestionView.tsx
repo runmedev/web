@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { commentAttributionLabel } from '../../lib/commentAttribution'
 
 import {
   CheckIcon,
@@ -28,6 +29,12 @@ import LocalNotebooks, {
   OperationLogMutationCommitUncertainError,
 } from '../../storage/local'
 import { showToast } from '../../lib/toast'
+import { useCommentAuthor } from '../../contexts/GoogleAuthContext'
+import { DiffCommentControls } from './DiffCommentControls'
+import {
+  parseDiffCommentTarget,
+  type DiffCommentTarget,
+} from '../../lib/operationLog/diffCommentAnchor'
 
 function cellLabel(row: CellDiff): string {
   const cell = row.compareCell ?? row.baseCell
@@ -58,15 +65,31 @@ function formatCommentTime(value?: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
-function PlainCell({ value }: { value: string }) {
+function PlainCell({
+  value,
+  side,
+}: {
+  value: string
+  side?: 'base' | 'head' | 'both'
+}) {
   return (
     <pre className="m-0 whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5">
-      {value || <span className="text-nb-text-faint">Empty cell</span>}
+      {value ? (
+        <span
+          data-diff-run={side ? '' : undefined}
+          data-base-offset={side === 'base' || side === 'both' ? 0 : undefined}
+          data-head-offset={side === 'head' || side === 'both' ? 0 : undefined}
+        >
+          {value}
+        </span>
+      ) : (
+        <span className="text-nb-text-faint">Empty cell</span>
+      )}
     </pre>
   )
 }
 
-function ChangedCell({ row }: { row: CellDiff }) {
+export function ChangedCell({ row }: { row: CellDiff }) {
   const before = row.baseCell?.value ?? ''
   const after = row.compareCell?.value ?? ''
   const nonText = Boolean(
@@ -80,7 +103,7 @@ function ChangedCell({ row }: { row: CellDiff }) {
         id={`suggestion-cell-unchanged-${row.id}`}
         className="rounded-nb-sm border border-nb-border bg-white text-nb-text"
       >
-        <PlainCell value={after || before} />
+        <PlainCell value={after || before} side="both" />
       </div>
     )
   }
@@ -92,7 +115,7 @@ function ChangedCell({ row }: { row: CellDiff }) {
         className="rounded-nb-sm border-2 border-emerald-400 bg-emerald-50 text-emerald-950"
         data-testid="suggestion-inserted-cell"
       >
-        <PlainCell value={after} />
+        <PlainCell value={after} side={nonText ? undefined : 'head'} />
       </div>
     )
   }
@@ -103,7 +126,7 @@ function ChangedCell({ row }: { row: CellDiff }) {
         className="rounded-nb-sm border-2 border-red-400 bg-red-50 text-red-900 line-through decoration-red-600"
         data-testid="suggestion-deleted-cell"
       >
-        <PlainCell value={before} />
+        <PlainCell value={before} side={nonText ? undefined : 'base'} />
       </div>
     )
   }
@@ -130,6 +153,17 @@ function ChangedCell({ row }: { row: CellDiff }) {
     )
   }
   const segments = diffInlineText(before, after)
+  let baseOffset = 0
+  let headOffset = 0
+  const runs = segments.map((segment) => {
+    const offsets = {
+      base: segment.kind === 'inserted' ? undefined : baseOffset,
+      head: segment.kind === 'deleted' ? undefined : headOffset,
+    }
+    if (segment.kind !== 'inserted') baseOffset += segment.value.length
+    if (segment.kind !== 'deleted') headOffset += segment.value.length
+    return { ...segment, ...offsets }
+  })
   return (
     <div
       id={`suggestion-cell-modified-${row.id}`}
@@ -137,9 +171,12 @@ function ChangedCell({ row }: { row: CellDiff }) {
       data-testid="suggestion-modified-cell"
     >
       <pre className="m-0 whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5">
-        {segments.map((segment, index) => (
+        {runs.map((segment, index) => (
           <span
             key={`${segment.kind}-${index}`}
+            data-diff-run=""
+            data-base-offset={segment.base}
+            data-head-offset={segment.head}
             className={
               segment.kind === 'inserted'
                 ? 'bg-emerald-100 text-emerald-800'
@@ -156,18 +193,26 @@ function ChangedCell({ row }: { row: CellDiff }) {
   )
 }
 
-function SuggestionComments({
+export function SuggestionComments({
   comments,
   disabled,
   onComment,
   onReply,
+  commentTarget,
+  onClearTarget,
 }: {
   comments: DriveComment[]
   disabled: boolean
   onComment: (content: string) => Promise<void>
   onReply: (commentId: string, content: string) => Promise<void>
+  commentTarget?: DiffCommentTarget
+  onClearTarget?: () => void
 }) {
   const [draft, setDraft] = useState('')
+  const composer = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    if (commentTarget) composer.current?.focus()
+  }, [commentTarget])
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({})
 
   const submitComment = () => {
@@ -220,6 +265,8 @@ function SuggestionComments({
               <div className="mb-1 flex items-start justify-between gap-2">
                 <span className="text-xs font-medium text-nb-text">
                   {comment.author?.displayName ?? 'Commenter'}
+                  {comment.author?.runmeAuthorKind &&
+                    ` · ${commentAttributionLabel(comment.author)}`}
                 </span>
                 <span className="text-[11px] text-nb-text-faint">
                   {formatCommentTime(
@@ -227,6 +274,14 @@ function SuggestionComments({
                   )}
                 </span>
               </div>
+              {parseDiffCommentTarget(comment.anchor) && (
+                <blockquote className="my-2 border-l-2 border-nb-accent pl-2 text-xs">
+                  {parseDiffCommentTarget(comment.anchor)!.side === 'base'
+                    ? 'Previous'
+                    : 'Proposed'}{' '}
+                  cell: {parseDiffCommentTarget(comment.anchor)!.quote}
+                </blockquote>
+              )}
               <p className="whitespace-pre-wrap text-sm text-nb-text">
                 {comment.content}
               </p>
@@ -245,6 +300,8 @@ function SuggestionComments({
                         <div className="flex items-start justify-between gap-2 text-[11px]">
                           <span className="font-medium text-nb-text-muted">
                             {reply.author?.displayName ?? 'Reply'}
+                            {reply.author?.runmeAuthorKind &&
+                              ` · ${commentAttributionLabel(reply.author)}`}
                           </span>
                           <span className="text-nb-text-faint">
                             {formatCommentTime(
@@ -304,8 +361,19 @@ function SuggestionComments({
         )}
       </div>
       <div className="border-t border-nb-border bg-nb-surface-1 p-4">
+        {commentTarget && (
+          <blockquote className="mb-2 max-h-24 overflow-auto border-l-2 border-nb-accent pl-2 text-xs">
+            {commentTarget.side === 'base' ? 'Previous' : 'Proposed'} cell
+            {commentTarget.sourceRange ? ' selection' : ''}:{' '}
+            {commentTarget.quote}
+            <button className="ml-2 underline" onClick={onClearTarget}>
+              Whole suggestion instead
+            </button>
+          </blockquote>
+        )}
         <textarea
           aria-label="New suggestion comment"
+          ref={composer}
           className="h-20 w-full resize-none rounded-nb-sm border border-nb-border bg-white p-2 text-sm text-nb-text outline-none focus:border-nb-accent"
           disabled={disabled}
           placeholder="Comment on this suggestion"
@@ -352,11 +420,16 @@ export function OperationLogSuggestionView({
   onClose: () => void
 }) {
   const [suggestions, setSuggestions] = useState<OperationLogSuggestion[]>([])
+  const getCommentAuthor = useCommentAuthor()
   const [comments, setComments] = useState<DriveComment[]>([])
   const [index, setIndex] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const [reloadRequired, setReloadRequired] = useState(false)
+  const [commentTarget, setCommentTarget] = useState<{
+    suggestionId: string
+    target: DiffCommentTarget
+  }>()
 
   useEffect(() => {
     const notebookData = getNotebookDataController().getNotebookData(docUri)
@@ -397,6 +470,7 @@ export function OperationLogSuggestionView({
   }, [docUri, load])
 
   const suggestion = suggestions[index]
+  useEffect(() => setCommentTarget(undefined), [suggestion?.id, docUri])
   const suggestionComments = useMemo(
     () =>
       suggestion
@@ -510,15 +584,22 @@ export function OperationLogSuggestionView({
   }
 
   const addComment = async (content: string) => {
-    if (!suggestion) return
+    if (!suggestion || busy || readOnly) return
     setBusy(true)
     try {
       await store.addOperationLogComment(docUri, {
         content,
-        anchor: createSuggestionCommentAnchor(suggestion.id),
+        anchor: createSuggestionCommentAnchor(
+          suggestion.id,
+          commentTarget?.suggestionId === suggestion.id
+            ? commentTarget.target
+            : undefined
+        ),
         motivation: 'suggesting',
+        author: await getCommentAuthor(),
       })
       await load()
+      setCommentTarget(undefined)
     } catch (commentError) {
       showToast({
         tone: 'error',
@@ -533,7 +614,9 @@ export function OperationLogSuggestionView({
   const reply = async (commentId: string, content: string) => {
     setBusy(true)
     try {
-      await store.replyToOperationLogComment(docUri, commentId, content)
+      await store.replyToOperationLogComment(docUri, commentId, content, {
+        author: await getCommentAuthor(),
+      })
       await load()
     } catch (replyError) {
       showToast({
@@ -700,6 +783,12 @@ export function OperationLogSuggestionView({
             disabled={busy || readOnly}
             onComment={addComment}
             onReply={reply}
+            commentTarget={
+              commentTarget?.suggestionId === suggestion.id
+                ? commentTarget.target
+                : undefined
+            }
+            onClearTarget={() => setCommentTarget(undefined)}
           />
         )}
       </aside>
@@ -715,7 +804,16 @@ export function OperationLogSuggestionView({
                 <p className="mb-1 text-xs font-medium uppercase tracking-wide text-nb-text-muted">
                   {cellLabel(row)} · {row.kind}
                 </p>
-                <ChangedCell row={row} />
+                <DiffCommentControls
+                  key={`${suggestion.id}-${row.id}`}
+                  row={row}
+                  disabled={busy || readOnly}
+                  onComment={(target) => {
+                    setCommentTarget({ suggestionId: suggestion.id, target })
+                  }}
+                >
+                  <ChangedCell row={row} />
+                </DiffCommentControls>
               </article>
             ))}
             {suggestion.diff.cells.length === 0 && (

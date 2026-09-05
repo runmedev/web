@@ -46,6 +46,7 @@ import type {
 import { appLogger } from '../lib/logging/runtime'
 import { markOnboardingTaskComplete } from '../lib/onboarding'
 import { appState } from '../lib/runtime/AppState'
+import { resolveCommentIdentity } from '../lib/commentIdentity'
 
 // N.B. I couldn't make sharing work with the more restrictive "https://www.googleapis.com/auth/drive.file"
 // scope. In particular, I couldn't quite figure out how to share a link with a user and then have that
@@ -301,6 +302,20 @@ export function useGoogleAuth() {
 }
 
 const REFRESH_MARGIN_MS = 60_000
+/** Resolve UI attribution at submission time; API callers do not use this hook. */
+export function useCommentAuthor() {
+  const ctx = useContext(GoogleAuthContext)
+  const current = useRef(ctx)
+  current.current = ctx
+  return useCallback(() => {
+    const submittingContext = current.current
+    return resolveCommentIdentity(
+      submittingContext ? () => submittingContext.ensureAccessToken({interactive:false}) : undefined,
+      () => current.current === submittingContext
+    )
+  }, [])
+}
+
 const DRIVE_ACCOUNT_DISCOVERY_TIMEOUT_MS = 3_000
 
 // Google accepts an email address as login_hint and uses it to choose the
@@ -803,8 +818,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
           )
         } catch (error) {
           hasDriveCredential = false
-          const cachedCredential =
-            readImpersonatedServiceAccountCredential()
+          const cachedCredential = readImpersonatedServiceAccountCredential()
           const cachedIdentityMatches = Boolean(
             cachedCredential &&
               cachedCredential.serviceAccount.toLowerCase() ===
@@ -819,8 +833,7 @@ export function GoogleAuthProvider({ children }: { children: ReactNode }) {
             clearImpersonatedServiceAccountCredential(['drive'])
           }
           if (
-            tokenInfoRef.current?.authFlow ===
-              'impersonated_service_account' &&
+            tokenInfoRef.current?.authFlow === 'impersonated_service_account' &&
             tokenInfoRef.current.effectivePrincipal?.toLowerCase() ===
               serviceAccount.trim().toLowerCase()
           ) {

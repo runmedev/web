@@ -12,6 +12,8 @@ import {
 } from 'react'
 
 import { create } from '@bufbuild/protobuf'
+import { useCommentAuthor } from '../../contexts/GoogleAuthContext'
+import { NotebookReviewFlow } from '../OperationLogSuggestions/NotebookReviewFlow'
 import { Button, ScrollArea, Tabs, Text, Tooltip } from '@radix-ui/themes'
 
 import { NotebookPropertiesDialog } from '../NotebookPropertiesDialog'
@@ -143,7 +145,6 @@ import KernelStatusTab from '../KernelStatusTab'
 import { NotebookDiffContent } from '../NotebookDiff/NotebookDiffView'
 import VersionInfoTab from '../VersionInfoTab'
 import { NotebookCommentsPanel } from '../NotebookCommentsPanel'
-import { OperationLogSuggestionView } from '../OperationLogSuggestions/OperationLogSuggestionView'
 import AppConsole from '../AppConsole/AppConsole'
 import LogsPane from '../Logs/LogsPane'
 import { ActionOutputItems } from './ActionOutputItems'
@@ -2234,6 +2235,7 @@ function NotebookTabContent({
   } = useNotebookContext()
   const { store } = useNotebookStore()
   const notebookSnapshot = useNotebookSnapshot(docUri)
+  const getCommentAuthor = useCommentAuthor()
   const notebookData = notebookSnapshot
     ? getNotebookData(notebookSnapshot.uri)
     : null
@@ -3128,6 +3130,7 @@ function NotebookTabContent({
             content,
             anchor,
             commentId,
+            author: await getCommentAuthor(),
           })
           setDraftTarget(null)
           setDraftContent('')
@@ -3195,6 +3198,7 @@ function NotebookTabContent({
     },
     [
       cellDatas,
+      getCommentAuthor,
       commentsRemoteUri,
       docUri,
       loadLocalComments,
@@ -3209,7 +3213,9 @@ function NotebookTabContent({
       if (operationLogComments && store) {
         setCommentsBusy(true)
         try {
-          await store.replyToOperationLogComment(docUri, commentId, content)
+          await store.replyToOperationLogComment(docUri, commentId, content, {
+            author: await getCommentAuthor(),
+          })
           await loadLocalComments()
         } finally {
           setCommentsBusy(false)
@@ -3247,6 +3253,7 @@ function NotebookTabContent({
       operationLogComments,
       store,
       syncPendingComments,
+      getCommentAuthor,
     ]
   )
 
@@ -3948,11 +3955,11 @@ function OperationLogSuggestionTabContent({
 
   return (
     <div id="operation-log-suggestion-tab" className="h-full min-w-0">
-      <OperationLogSuggestionView
+      <NotebookReviewFlow
         docUri={notebookUri}
         store={store}
         readOnly={Boolean(
-          !sourceEntry || sourceEntry.readOnly || sourceEntry.releasePending
+          !sourceEntry || sourceEntry.state !== 'loaded' || sourceEntry.readOnly || sourceEntry.releasePending
         )}
         onClose={closeSuggestionView}
       />

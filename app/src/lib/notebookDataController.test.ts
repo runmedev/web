@@ -198,6 +198,23 @@ describe('NotebookDataController', () => {
     )
   })
 
+  it('does not reload an open .runme editor and discard edits before review capture', async () => {
+    const localStore = createFakeLocalNotebooks()
+    const uri = 'local://file/review-capture'
+    localStore.records.set(uri, {id:uri,name:'review.runme',remoteId:uri,notebook:createNotebook('saved')})
+    const controller = getNotebookDataController()
+    controller.configureStores({localNotebooks:localStore as unknown as LocalNotebooks})
+    await controller.openNotebook(uri)
+    const model = controller.getNotebookData(uri)!
+    model.loadNotebook(createNotebook('unsaved edit'))
+    await controller.openNotebook(uri)
+    expect(controller.getNotebookData(uri)).toBe(model)
+    expect(model.getNotebook().cells[0].value).toBe('unsaved edit')
+    expect(localStore.load).toHaveBeenCalledTimes(1)
+    expect(localStore.createOperationLogSaveStore).toHaveBeenCalledTimes(1)
+    await model.flushPendingPersist()
+  })
+
   it('propagates a derived notebook model restriction to the first tab entry', async () => {
     const localStore = createFakeLocalNotebooks()
     const uri = 'local://file/derived'

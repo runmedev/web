@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { commentAttributionLabel } from '../lib/commentAttribution'
 
 import type {
   CellCommentThread,
@@ -614,6 +615,8 @@ function CommentMessage({
         <div>
           <div className="text-xs font-medium text-nb-text">
             {comment.author?.displayName ?? 'Commenter'}
+            {comment.author?.runmeAuthorKind &&
+              ` · ${commentAttributionLabel(comment.author)}`}
           </div>
           <div className="text-[11px] text-nb-text-faint">
             {formatDriveTime(comment.modifiedTime ?? comment.createdTime)}
@@ -667,6 +670,8 @@ function CommentMessage({
               <div key={reply.id ?? `${reply.createdTime}-${reply.content}`}>
                 <div className="text-[11px] font-medium text-nb-text-muted">
                   {reply.author?.displayName ?? 'Reply'}
+                  {reply.author?.runmeAuthorKind &&
+                    ` · ${commentAttributionLabel(reply.author)}`}
                   {reply.action ? ` - ${reply.action}` : ''}
                   {reply.runmeSyncStatus === 'pending'
                     ? ' - Saved locally'
