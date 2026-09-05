@@ -3547,9 +3547,16 @@ export class LocalNotebooks extends Dexie {
         if (!targetVersion)
           throw new Error('Colab copy disappeared; retry sync.')
         const currentTarget = await driveStore.getMetadata(target.uri)
-        const previousCopy = JSON.parse(
-          await driveStore.loadContent(target.uri)
-        )
+        const previousContent = await driveStore.loadContent(target.uri)
+        let previousCopy
+        try {
+          previousCopy = JSON.parse(previousContent)
+        } catch {
+          // A create can commit metadata before its media upload fails. The
+          // source marker was verified by ensureDerivedCopy; repair those bytes
+          // under the captured version rather than strand the owned target.
+          previousCopy = undefined
+        }
         const sourceMetadata = await driveStore.getMetadata(record.remoteId)
         const currentParent = sourceMetadata?.parents?.[0]
         if (!currentParent)
@@ -3580,7 +3587,7 @@ export class LocalNotebooks extends Dexie {
         const operationIds = latestLog.operations.map((op) => op.op_id)
         const covered = new Set(operationIds)
         const previousIds =
-          previousCopy.metadata?.runme?.derivedFrom?.operationIds
+          previousCopy?.metadata?.runme?.derivedFrom?.operationIds
         if (
           Array.isArray(previousIds) &&
           previousIds.some((id: string) => !covered.has(id))

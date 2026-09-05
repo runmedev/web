@@ -280,72 +280,80 @@ describe('LocalNotebooks operation-log storage', () => {
     }
   })
 
-  it('exports committed .runme changes, reuses its sibling, and stops when disabled', async () => {
-    const parent = 'https://drive.google.com/drive/folders/parent'
-    const remote = 'https://drive.google.com/file/d/source/view'
-    const target = {
-      uri: 'https://drive.google.com/file/d/copy/view',
-      name: 'source.ipynb',
-      parents: [parent],
+  it.each(['{}', '', '{', 'null'])(
+    'exports committed .runme changes, repairs/reuses its sibling, and stops when disabled (prior bytes: %s)',
+    async (previousContent) => {
+      const parent = 'https://drive.google.com/drive/folders/parent'
+      const remote = 'https://drive.google.com/file/d/source/view'
+      const target = {
+        uri: 'https://drive.google.com/file/d/copy/view',
+        name: 'source.ipynb',
+        parents: [parent],
+      }
+      const drive = {
+        getMetadata: vi.fn(async (uri: string) =>
+          uri === remote
+            ? { uri, name: 'source.runme', parents: [parent] }
+            : target
+        ),
+        create: vi.fn(async () => target),
+        loadContent: vi.fn(async (uri: string) =>
+          uri === target.uri ? previousContent : ''
+        ),
+        saveContent: vi.fn(
+          async (_uri: string, _content: string, _mime: string) => {}
+        ),
+      }
+      const store = createTestStore(drive)
+      const getMetadataIfExists = vi.fn(drive.getMetadata)
+      Object.assign(drive, { getMetadataIfExists })
+      await store.folders.put({
+        id: LOCAL_FOLDER_URI,
+        name: 'Local',
+        remoteId: '',
+        children: [],
+        lastSynced: '',
+      })
+      const created = await store.create(LOCAL_FOLDER_URI, 'source.runme')
+      await store.files.update(created.uri, { remoteId: remote })
+      const journal = await store.createOperationLogSaveStore(created.uri, {
+        actorId: 'export-test',
+      })
+      const notebook = await store.load(created.uri)
+      notebook.metadata[AUTO_IPYNB_KEY] = 'true'
+      await journal.save(created.uri, notebook)
+      expect((await store.load(created.uri)).metadata[AUTO_IPYNB_KEY]).toBe(
+        'true'
+      )
+      expect(drive.saveContent).not.toHaveBeenCalled()
+      await store.syncIpynbFile(created.uri)
+      await store.syncIpynbFile(created.uri)
+      expect(drive.create).toHaveBeenCalledTimes(1)
+      expect(drive.saveContent).toHaveBeenCalledTimes(2)
+      const exported = JSON.parse(drive.saveContent.mock.calls[0][1])
+      expect(exported.metadata.runme.derivedFrom.uri).toBe(remote)
+      expect(exported.cells[0].source).toContain('read-only')
+      // A deleted copy is recreated; a relinked source never reuses the old target.
+      getMetadataIfExists.mockResolvedValueOnce(null as any)
+      await store.syncIpynbFile(created.uri)
+      expect(drive.create).toHaveBeenCalledTimes(2)
+      await store.files.update(created.uri, {
+        remoteId: 'https://drive.google.com/file/d/relinked/view',
+      })
+      drive.getMetadata.mockResolvedValue({ ...target, name: 'source.runme' })
+      const lookupsBeforeRelink = getMetadataIfExists.mock.calls.length
+      await store.syncIpynbFile(created.uri)
+      expect(drive.create).toHaveBeenCalledTimes(3)
+      expect(getMetadataIfExists).toHaveBeenCalledTimes(lookupsBeforeRelink)
+      notebook.metadata[AUTO_IPYNB_KEY] = 'false'
+      await journal.save(created.uri, notebook)
+      await store.syncIpynbFile(created.uri)
+      expect(drive.saveContent).toHaveBeenCalledTimes(4)
+      expect((await store.getIpynbExportState(created.uri)).uri).toBe(
+        target.uri
+      )
     }
-    const drive = {
-      getMetadata: vi.fn(async (uri: string) =>
-        uri === remote
-          ? { uri, name: 'source.runme', parents: [parent] }
-          : target
-      ),
-      create: vi.fn(async () => target),
-      saveContent: vi.fn(
-        async (_uri: string, _content: string, _mime: string) => {}
-      ),
-    }
-    const store = createTestStore(drive)
-    const getMetadataIfExists = vi.fn(drive.getMetadata)
-    Object.assign(drive, { getMetadataIfExists })
-    await store.folders.put({
-      id: LOCAL_FOLDER_URI,
-      name: 'Local',
-      remoteId: '',
-      children: [],
-      lastSynced: '',
-    })
-    const created = await store.create(LOCAL_FOLDER_URI, 'source.runme')
-    await store.files.update(created.uri, { remoteId: remote })
-    const journal = await store.createOperationLogSaveStore(created.uri, {
-      actorId: 'export-test',
-    })
-    const notebook = await store.load(created.uri)
-    notebook.metadata[AUTO_IPYNB_KEY] = 'true'
-    await journal.save(created.uri, notebook)
-    expect((await store.load(created.uri)).metadata[AUTO_IPYNB_KEY]).toBe(
-      'true'
-    )
-    expect(drive.saveContent).not.toHaveBeenCalled()
-    await store.syncIpynbFile(created.uri)
-    await store.syncIpynbFile(created.uri)
-    expect(drive.create).toHaveBeenCalledTimes(1)
-    expect(drive.saveContent).toHaveBeenCalledTimes(2)
-    const exported = JSON.parse(drive.saveContent.mock.calls[0][1])
-    expect(exported.metadata.runme.derivedFrom.uri).toBe(remote)
-    expect(exported.cells[0].source).toContain('read-only')
-    // A deleted copy is recreated; a relinked source never reuses the old target.
-    getMetadataIfExists.mockResolvedValueOnce(null as any)
-    await store.syncIpynbFile(created.uri)
-    expect(drive.create).toHaveBeenCalledTimes(2)
-    await store.files.update(created.uri, {
-      remoteId: 'https://drive.google.com/file/d/relinked/view',
-    })
-    drive.getMetadata.mockResolvedValue({ ...target, name: 'source.runme' })
-    const lookupsBeforeRelink = getMetadataIfExists.mock.calls.length
-    await store.syncIpynbFile(created.uri)
-    expect(drive.create).toHaveBeenCalledTimes(3)
-    expect(getMetadataIfExists).toHaveBeenCalledTimes(lookupsBeforeRelink)
-    notebook.metadata[AUTO_IPYNB_KEY] = 'false'
-    await journal.save(created.uri, notebook)
-    await store.syncIpynbFile(created.uri)
-    expect(drive.saveContent).toHaveBeenCalledTimes(4)
-    expect((await store.getIpynbExportState(created.uri)).uri).toBe(target.uri)
-  })
+  )
 
   it.each([true, false])(
     'rereads committed state before upload (enabled=%s)',
