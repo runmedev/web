@@ -1534,7 +1534,10 @@ describe('Actions tabs', () => {
       loaded: true,
       notebook: create(parser_pb.NotebookSchema, { metadata: {}, cells: [] }),
     })
-    contextMocks.getNotebookData.mockReturnValue({ appendCell: vi.fn() })
+    contextMocks.getNotebookData.mockReturnValue({
+      appendCell: vi.fn(),
+      getSnapshot: vi.fn(() => ({ loaded: true })),
+    })
 
     render(<Actions />)
 
@@ -1554,6 +1557,42 @@ describe('Actions tabs', () => {
       afterUri: uri,
     })
     expect(contextMocks.setCurrentDoc).toHaveBeenCalledWith(suggestionUri)
+  })
+
+  it('omits suggestion review while a .runme notebook is loading', () => {
+    const uri = 'local://file/loading-review'
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(async () => ({
+        uri,
+        name: 'loading-review.runme',
+        type: 'file',
+        children: [],
+        parents: [],
+      })),
+      getSyncState: vi.fn(async () => null),
+      rename: vi.fn(),
+      subscribeSync: vi.fn(() => () => {}),
+    }
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'loading-review.runme', state: 'loading' },
+    ]
+    contextMocks.getNotebookData.mockReturnValue({
+      getSnapshot: vi.fn(() => ({ loaded: false })),
+    })
+
+    render(<Actions />)
+
+    fireEvent.contextMenu(
+      screen.getByRole('tab', { name: /loading-review\.runme/ })
+    )
+    const contextMenu = document.querySelector<HTMLElement>('.ctx-menu')
+    expect(contextMenu).not.toBeNull()
+    expect(
+      within(contextMenu as HTMLElement).queryByRole('button', {
+        name: 'Review suggestions',
+      })
+    ).toBeNull()
   })
 
   it('omits suggestion review from legacy notebook tab context menus', async () => {

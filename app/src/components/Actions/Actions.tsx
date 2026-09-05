@@ -4400,6 +4400,10 @@ export default function Actions() {
         document?.title?.trim() ||
         getNotebookDisplayName(docUri, document?.title ?? docUri)
       const format = detectNotebookFileFormat(title)
+      const suggestionReviewReady =
+        format === 'runme-operation-log' &&
+        document?.state === 'loaded' &&
+        getNotebookData(docUri)?.getSnapshot().loaded === true
       setTabContextMenu({
         x: event.clientX,
         y: event.clientY,
@@ -4413,8 +4417,7 @@ export default function Actions() {
         ownerSessionId: getNotebookOwnerSessionId(document?.owner),
         canOpenUpstreamDiff:
           docUri.startsWith('local://') && Boolean(requestedDriveUri),
-        canReviewSuggestions:
-          Boolean(store) && format === 'runme-operation-log',
+        canReviewSuggestions: Boolean(store) && suggestionReviewReady,
         readOnly: document?.readOnly,
       })
 
@@ -4443,8 +4446,9 @@ export default function Actions() {
                 docUri.startsWith('local://') &&
                 isGoogleDriveFileUri(remoteUri),
               canReviewSuggestions:
+                suggestionReviewReady &&
                 detectNotebookFileFormat(metadata?.name ?? current.title) ===
-                'runme-operation-log',
+                  'runme-operation-log',
             }
           })
         } catch (error) {
@@ -4459,7 +4463,7 @@ export default function Actions() {
         }
       })()
     },
-    [store, workspaceDocuments]
+    [getNotebookData, store, workspaceDocuments]
   )
 
   const handleRenameTab = useCallback(async () => {
