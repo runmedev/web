@@ -383,6 +383,44 @@ type DriveRevisionListResponse = {
   result?: { revisions?: DriveRevision[]; nextPageToken?: string }
 }
 
+/** Metadata and content are replaced in one conditional Drive request. */
+export interface DerivedCopyPlacement {
+  name: string
+  parentUri: string
+  previousParentUri?: string
+}
+
+function conditionalUpload(
+  content: string,
+  mimeType: string,
+  placement?: DerivedCopyPlacement
+) {
+  if (!placement)
+    return {
+      body: content,
+      contentType: mimeType,
+      params: { uploadType: 'media' },
+    }
+  const boundary = `runme_${crypto.randomUUID()}`
+  return {
+    body: `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: placement.name, mimeType })}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n${content}\r\n--${boundary}--`,
+    contentType: `multipart/related; boundary=${boundary}`,
+    params: {
+      uploadType: 'multipart',
+      ...(placement.parentUri !== placement.previousParentUri
+        ? {
+            addParents: parseDriveItem(placement.parentUri).id,
+            ...(placement.previousParentUri
+              ? {
+                  removeParents: parseDriveItem(placement.previousParentUri).id,
+                }
+              : {}),
+          }
+        : {}),
+    },
+  }
+}
+
 interface DriveFilesClient {
   setPublicPropertyIfMatch(
     fileId: string,
@@ -419,7 +457,8 @@ interface DriveFilesClient {
     content: string,
     mimeType: string,
     etag: string,
-    resourceKey?: string
+    resourceKey?: string,
+    placement?: DerivedCopyPlacement
   ): Promise<boolean>
   getDrive(request: Record<string, unknown>): Promise<DriveGetResponse>
   list(
@@ -1028,8 +1067,10 @@ export class GapiDriveFilesClient implements DriveFilesClient {
     content: string,
     mimeType: string,
     etag: string,
-    resourceKey?: string
+    resourceKey?: string,
+    placement?: DerivedCopyPlacement
   ): Promise<boolean> {
+    const upload = conditionalUpload(content, mimeType, placement)
     try {
       // Read the validator from Drive v2 because its JSON body exposes the
       // ETag to browser JavaScript, but write through Drive v3. The v2 upload
@@ -1042,11 +1083,11 @@ export class GapiDriveFilesClient implements DriveFilesClient {
         `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
         {
           params: {
-            uploadType: 'media',
+            ...upload.params,
             supportsAllDrives: true,
           },
-          body: content,
-          contentType: mimeType,
+          body: upload.body,
+          contentType: upload.contentType,
           headers: {
             ...driveResourceKeyHeaders({ id: fileId, resourceKey }),
             'If-Match': etag,
@@ -1521,20 +1562,22 @@ class FetchDriveFilesClient implements DriveFilesClient {
     content: string,
     mimeType: string,
     etag: string,
-    resourceKey?: string
+    resourceKey?: string,
+    placement?: DerivedCopyPlacement
   ): Promise<boolean> {
+    const upload = conditionalUpload(content, mimeType, placement)
     try {
       await this.request(
         'PATCH',
         `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
         {
           params: {
-            uploadType: 'media',
+            ...upload.params,
             supportsAllDrives: true,
             resourceKey,
           },
-          body: content,
-          contentType: mimeType,
+          body: upload.body,
+          contentType: upload.contentType,
           headers: { 'If-Match': etag },
         }
       )
@@ -3580,7 +3623,8 @@ export class DriveNotebookStore {
     uri: string,
     content: string,
     mimeType: string,
-    expected: { checksum?: string; revisionId?: string; version?: string }
+    expected: { checksum?: string; revisionId?: string; version?: string },
+    placement?: DerivedCopyPlacement
   ): Promise<boolean> {
     const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
@@ -3613,7 +3657,8 @@ export class DriveNotebookStore {
       content,
       mimeType,
       etag,
-      resourceKey
+      resourceKey,
+      placement
     )
     if (saved) {
       this.ipynbState.delete(uri)

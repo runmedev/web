@@ -7,6 +7,8 @@ export interface DerivedNotebookSource {
   uri: string
   notebookId: string
   generatedAt: string
+  /** Causal coverage prevents an older mirror from replacing a newer export. */
+  operationIds?: string[]
 }
 
 /** Accept only supported provenance with a safe, navigable source URI. */

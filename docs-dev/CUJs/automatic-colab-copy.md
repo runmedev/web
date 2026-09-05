@@ -21,6 +21,11 @@
 9. Simulate a Shared Drive create whose response is lost. Verify subsequent
    sync waits for confirmation. If no file was created, use the warning-gated
    recovery action in properties and verify export can resume.
+10. Pause one profile during discovery or upload. In another profile, move and
+    rename the source, add content, and finish exporting. Resume the old profile;
+    verify it cannot revert the copy's name, folder, or newer content. A rejected
+    version check queues fresh work; a mirror missing previously exported
+    operations reports that the source must be synced first.
 
 Automated coverage: `derivedIpynb.test.ts`, `derivedNotebookModel.test.ts`,
 `NotebookPropertiesDialog.test.tsx`, and the operation-log export integration
@@ -29,3 +34,5 @@ pending while another journal save commits and is read back from storage.
 `storage/derivedCopy.test.ts` exercises independent clients with only shared
 remote CAS state (no shared local lock), and `storage/drive.test.ts` verifies
 the conditional property update for both browser and token transports.
+Out-of-order profile tests verify content and placement together. Both transports
+are checked for atomic multipart updates with If-Match and HTTP 412 rejection.

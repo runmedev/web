@@ -262,6 +262,77 @@ describe("DriveNotebookStore", () => {
     ).toBe(true);
   });
 
+  it.each(["gapi", "fetch"])(
+    "conditionally publishes copy placement and content together via %s",
+    async (transport) => {
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async (input, init) => {
+          const url = new URL(String(input));
+          if (init?.method === "GET")
+            return new Response(
+              JSON.stringify({ md5Checksum: "old", version: "1" }),
+              {
+                headers: {
+                  "Content-Type": "application/json",
+                  ETag: '"copy-etag"',
+                },
+              }
+            );
+          expect(init?.method).toBe("PATCH");
+          expect(url.pathname).toBe("/upload/drive/v3/files/copy");
+          expect(url.searchParams.get("uploadType")).toBe("multipart");
+          expect(url.searchParams.get("addParents")).toBe("new");
+          expect(url.searchParams.get("removeParents")).toBe("old");
+          expect(init?.headers).toMatchObject({
+            "If-Match": '"copy-etag"',
+            "Content-Type": expect.stringContaining(
+              "multipart/related; boundary="
+            ),
+          });
+          expect(init?.body).toContain('"name":"new.ipynb"');
+          expect(init?.body).toContain('{"cells":[]}');
+          return new Response("", { status: 412 });
+        });
+      const placement = {
+        name: "new.ipynb",
+        parentUri: "https://drive.google.com/drive/folders/new",
+        previousParentUri: "https://drive.google.com/drive/folders/old",
+      };
+      if (transport === "gapi") {
+        const client = new GapiDriveFilesClient({
+          client: {
+            getToken: () => ({ access_token: "access-token" }),
+            drive: { files: {}, drives: {}, revisions: {} },
+          },
+        } as never);
+        await expect(
+          client.setContentIfMatch(
+            "copy",
+            '{"cells":[]}',
+            "application/x-ipynb+json",
+            '"copy-etag"',
+            undefined,
+            placement
+          )
+        ).resolves.toBe(false);
+      } else {
+        setGoogleDriveBaseUrl("https://drive.example.test");
+        const store = new DriveNotebookStore(async () => "access-token");
+        await expect(
+          store.saveContentIfVersion(
+            "https://drive.google.com/file/d/copy/view",
+            '{"cells":[]}',
+            "application/x-ipynb+json",
+            { checksum: "old", version: "1" },
+            placement
+          )
+        ).resolves.toBe(false);
+      }
+      expect(fetchMock).toHaveBeenCalled();
+    }
+  );
+
   it("reads a Drive v2 ETag and applies it to the CORS-capable v3 upload", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

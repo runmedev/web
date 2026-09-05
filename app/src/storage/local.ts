@@ -3530,6 +3530,7 @@ export class LocalNotebooks extends Dexie {
               uri: record.remoteId,
               notebookId: currentLog.header.notebook_id,
               generatedAt: new Date().toISOString(),
+              operationIds: currentLog.operations.map((op) => op.op_id),
             })
           }
         )
@@ -3539,10 +3540,22 @@ export class LocalNotebooks extends Dexie {
           ipynbExportSourceUri: sourceUri,
           ipynbExportPendingClaim: undefined,
         })
-        if (target.name !== name) await driveStore.rename(target.uri, name)
-        if (target.parents?.[0] && target.parents[0] !== parentUri) {
-          await driveStore.move(target.uri, target.parents[0], parentUri)
-        }
+        // Capture the target version BEFORE reading inputs. Metadata and media
+        // publish atomically with If-Match, so a delayed profile cannot undo a
+        // newer profile's placement or contents. Never retry stale bytes.
+        const targetVersion = await driveStore.getVersionMetadata(target.uri)
+        if (!targetVersion)
+          throw new Error('Colab copy disappeared; retry sync.')
+        const currentTarget = await driveStore.getMetadata(target.uri)
+        const previousCopy = JSON.parse(
+          await driveStore.loadContent(target.uri)
+        )
+        const sourceMetadata = await driveStore.getMetadata(record.remoteId)
+        const currentParent = sourceMetadata?.parents?.[0]
+        if (!currentParent)
+          throw new Error('Source notebook has no Drive parent.')
+        const currentName = `${(sourceMetadata.name || record.name).replace(/\.runme$/i, '')}.ipynb`
+        const upstreamContent = await driveStore.loadContent(record.remoteId)
         // Re-read after network work so a disabled option cancels a queued export
         // and a newer local save supersedes the initially observed snapshot.
         const latest = await this.files.get(uri)
@@ -3555,21 +3568,58 @@ export class LocalNotebooks extends Dexie {
         const latestLog = parseOperationLog(
           (await this.operationLogStorage.read(latest.operationLogRef)).document
         )
+        if (upstreamContent !== '') {
+          const upstreamLog = parseOperationLog(upstreamContent)
+          if (upstreamLog.header.notebook_id !== latestLog.header.notebook_id)
+            throw new Error('Source notebook identity changed during export.')
+          latestLog.operations = mergeOperationSets(
+            latestLog.operations,
+            upstreamLog.operations
+          )
+        }
+        const operationIds = latestLog.operations.map((op) => op.op_id)
+        const covered = new Set(operationIds)
+        const previousIds =
+          previousCopy.metadata?.runme?.derivedFrom?.operationIds
+        if (
+          Array.isArray(previousIds) &&
+          previousIds.some((id: string) => !covered.has(id))
+        )
+          throw new Error(
+            'Colab copy contains newer changes. Sync the source notebook before exporting again.'
+          )
         const latestNotebook = materializedLogToNotebook(
           materializeOperationLog(latestLog.operations)
         )
         if (latestNotebook.metadata[AUTO_IPYNB_KEY] !== 'true') return
         const generatedAt = new Date().toISOString()
-        await driveStore.saveContent(
+        const published = await driveStore.saveContentIfVersion(
           target.uri,
           encodeDerivedIpynb(latestNotebook, {
             version: 1,
             uri: record.remoteId,
             notebookId: latestLog.header.notebook_id,
             generatedAt,
+            operationIds,
           }),
-          'application/x-ipynb+json'
+          'application/x-ipynb+json',
+          {
+            checksum: targetVersion.md5Checksum,
+            revisionId: targetVersion.headRevisionId,
+            version: targetVersion.version,
+          },
+          {
+            name: currentName,
+            parentUri: currentParent,
+            previousParentUri: currentTarget?.parents?.[0],
+          }
         )
+        if (!published) {
+          this.enqueueIpynbSync(uri)
+          throw new Error(
+            'Colab copy changed during export; a fresh export is queued.'
+          )
+        }
         await this.files.update(uri, {
           ipynbExportError: undefined,
           ipynbExportedAt: generatedAt,
@@ -3597,9 +3647,7 @@ export class LocalNotebooks extends Dexie {
   }
 
   /** Read export status separately from the primary notebook sync indicator. */
-  async getIpynbExportState(
-    uri: string
-  ): Promise<{
+  async getIpynbExportState(uri: string): Promise<{
     uri?: string
     error?: string
     exportedAt?: string
