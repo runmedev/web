@@ -15,6 +15,7 @@ import { OperationLogSuggestionView } from './OperationLogSuggestionView'
 const notebookDataMocks = vi.hoisted(() => ({
   flushPendingPersist: vi.fn(async () => undefined),
   loadNotebook: vi.fn(),
+  setNotebookStore: vi.fn(),
   getNotebookData: vi.fn(),
 }))
 
@@ -95,16 +96,19 @@ describe('OperationLogSuggestionView', () => {
   beforeEach(() => {
     notebookDataMocks.flushPendingPersist.mockClear()
     notebookDataMocks.loadNotebook.mockClear()
+    notebookDataMocks.setNotebookStore.mockClear()
     notebookDataMocks.getNotebookData.mockReset()
     notebookDataMocks.getNotebookData.mockReturnValue({
       flushPendingPersist: notebookDataMocks.flushPendingPersist,
       loadNotebook: notebookDataMocks.loadNotebook,
+      setNotebookStore: notebookDataMocks.setNotebookStore,
     })
   })
 
   it('keeps review controls and Drive-style discussion in the left panel', async () => {
     const addOperationLogComment = vi.fn().mockResolvedValue({})
     const replyToOperationLogComment = vi.fn().mockResolvedValue({})
+    const rebasedSaveStore = { save: vi.fn() }
     const store = {
       loadContent: vi.fn().mockResolvedValue(operationLogDocument()),
       listOperationLogComments: vi.fn().mockResolvedValue([
@@ -127,6 +131,7 @@ describe('OperationLogSuggestionView', () => {
       addOperationLogComment,
       replyToOperationLogComment,
       reviewOperationLogSuggestion: vi.fn().mockResolvedValue(undefined),
+      createOperationLogSaveStore: vi.fn().mockResolvedValue(rebasedSaveStore),
     } as unknown as LocalNotebooks
 
     render(
@@ -192,6 +197,15 @@ describe('OperationLogSuggestionView', () => {
       (store.reviewOperationLogSuggestion as ReturnType<typeof vi.fn>).mock
         .invocationCallOrder[0]
     )
+    expect(store.createOperationLogSaveStore).toHaveBeenCalledWith(
+      'local://file/test'
+    )
+    expect(notebookDataMocks.setNotebookStore).toHaveBeenCalledWith(
+      rebasedSaveStore
+    )
     expect(notebookDataMocks.loadNotebook).toHaveBeenCalled()
+    expect(
+      notebookDataMocks.setNotebookStore.mock.invocationCallOrder[0]
+    ).toBeLessThan(notebookDataMocks.loadNotebook.mock.invocationCallOrder[0])
   })
 })

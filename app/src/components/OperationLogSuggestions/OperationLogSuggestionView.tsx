@@ -412,10 +412,17 @@ export function OperationLogSuggestionView({
         suggestion.operationIds
       )
       const parsed = await load()
-      notebookData?.loadNotebook(
-        materializedLogToNotebook(materializeOperationLog(parsed.operations)),
-        { persist: false }
-      )
+      if (notebookData) {
+        // A review changes the materialized snapshot without going through the
+        // editor save adapter. Replace the adapter so its comparison baseline
+        // and observed operation set both match the reviewed journal.
+        const saveStore = await store.createOperationLogSaveStore(docUri)
+        notebookData.setNotebookStore(saveStore)
+        notebookData.loadNotebook(
+          materializedLogToNotebook(materializeOperationLog(parsed.operations)),
+          { persist: false }
+        )
+      }
       showToast({
         tone: 'success',
         message:
