@@ -23,13 +23,16 @@ const GAPI_SCRIPT_SRC = 'https://apis.google.com/js/api.js'
 
 // VERSION_FIELDS is the fields we want to return when fetching metadata to determine the file content version.
 // https://developers.google.com/workspace/drive/api/guides/fields-parameter
-const VERSION_FIELDS = 'md5Checksum,headRevisionId,version,appProperties'
-const DRIVE_V2_VERSION_FIELDS = 'etag,md5Checksum,headRevisionId,version'
+const VERSION_FIELDS =
+  'md5Checksum,headRevisionId,version,appProperties,properties'
+const DRIVE_V2_VERSION_FIELDS =
+  'etag,md5Checksum,headRevisionId,version,properties'
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
 } as unknown as Parameters<typeof toJsonString>[2]
 const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder'
-const DRIVE_CREATE_OPERATION_PROPERTY = 'runmeCreateOperationId'
+export const DRIVE_CREATE_OPERATION_PROPERTY = 'runmeCreateOperationId'
+const DERIVED_COPY_PROPERTY = 'runmeIpynbCopy'
 export const DRIVE_CREATE_EXPECTED_CHECKSUM_PROPERTY =
   'runmeCreateExpectedChecksum'
 export const DRIVE_CREATE_EXPECTED_REQUEST_PROPERTY =
@@ -380,7 +383,52 @@ type DriveRevisionListResponse = {
   result?: { revisions?: DriveRevision[]; nextPageToken?: string }
 }
 
+/** Metadata and content are replaced in one conditional Drive request. */
+export interface DerivedCopyPlacement {
+  name: string
+  parentUri: string
+  previousParentUri?: string
+}
+
+function conditionalUpload(
+  content: string,
+  mimeType: string,
+  placement?: DerivedCopyPlacement
+) {
+  if (!placement)
+    return {
+      body: content,
+      contentType: mimeType,
+      params: { uploadType: 'media' },
+    }
+  const boundary = `runme_${crypto.randomUUID()}`
+  return {
+    body: `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: placement.name, mimeType })}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n${content}\r\n--${boundary}--`,
+    contentType: `multipart/related; boundary=${boundary}`,
+    params: {
+      uploadType: 'multipart',
+      ...(placement.parentUri !== placement.previousParentUri
+        ? {
+            addParents: parseDriveItem(placement.parentUri).id,
+            ...(placement.previousParentUri
+              ? {
+                  removeParents: parseDriveItem(placement.previousParentUri).id,
+                }
+              : {}),
+          }
+        : {}),
+    },
+  }
+}
+
 interface DriveFilesClient {
+  setPublicPropertyIfMatch(
+    fileId: string,
+    key: string,
+    value: string | null,
+    etag: string,
+    resourceKey?: string
+  ): Promise<boolean>
   generateFileId(): Promise<string>
   create(
     doc: DriveDoc,
@@ -409,7 +457,8 @@ interface DriveFilesClient {
     content: string,
     mimeType: string,
     etag: string,
-    resourceKey?: string
+    resourceKey?: string,
+    placement?: DerivedCopyPlacement
   ): Promise<boolean>
   getDrive(request: Record<string, unknown>): Promise<DriveGetResponse>
   list(
@@ -883,12 +932,7 @@ export class GapiDriveFilesClient implements DriveFilesClient {
     }
 
     if (doc.content !== undefined && file.id) {
-      await this.setContent(
-        file.id,
-        doc.content,
-        doc.mimeType,
-        doc.resourceKey
-      )
+      await this.setContent(file.id, doc.content, doc.mimeType, doc.resourceKey)
     }
 
     return file
@@ -966,8 +1010,55 @@ export class GapiDriveFilesClient implements DriveFilesClient {
         | (DriveVersionMetadata & { etag?: string })
         | undefined) ?? null
     return {
-      metadata,
+      metadata: metadata
+        ? {
+            ...metadata,
+            properties: Object.fromEntries(
+              (
+                (
+                  metadata as unknown as {
+                    properties?: {
+                      key: string
+                      value: string
+                      visibility: string
+                    }[]
+                  }
+                ).properties ?? []
+              )
+                .filter((property) => property.visibility === 'PUBLIC')
+                .map((property) => [property.key, property.value])
+            ),
+          }
+        : null,
       etag: metadata?.etag ?? response.etag,
+    }
+  }
+
+  /** CAS one public property without changing media or unrelated properties. */
+  async setPublicPropertyIfMatch(
+    fileId: string,
+    key: string,
+    value: string | null,
+    etag: string,
+    resourceKey?: string
+  ): Promise<boolean> {
+    try {
+      await this.request(
+        'PATCH',
+        `/drive/v3/files/${encodeURIComponent(fileId)}`,
+        {
+          params: { supportsAllDrives: true },
+          body: JSON.stringify({ properties: { [key]: value } }),
+          headers: {
+            ...driveResourceKeyHeaders({ id: fileId, resourceKey }),
+            'If-Match': etag,
+          },
+        }
+      )
+      return true
+    } catch (error) {
+      if (error instanceof DrivePreconditionFailedError) return false
+      throw error
     }
   }
 
@@ -976,8 +1067,10 @@ export class GapiDriveFilesClient implements DriveFilesClient {
     content: string,
     mimeType: string,
     etag: string,
-    resourceKey?: string
+    resourceKey?: string,
+    placement?: DerivedCopyPlacement
   ): Promise<boolean> {
+    const upload = conditionalUpload(content, mimeType, placement)
     try {
       // Read the validator from Drive v2 because its JSON body exposes the
       // ETag to browser JavaScript, but write through Drive v3. The v2 upload
@@ -990,11 +1083,11 @@ export class GapiDriveFilesClient implements DriveFilesClient {
         `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
         {
           params: {
-            uploadType: 'media',
+            ...upload.params,
             supportsAllDrives: true,
           },
-          body: content,
-          contentType: mimeType,
+          body: upload.body,
+          contentType: upload.contentType,
           headers: {
             ...driveResourceKeyHeaders({ id: fileId, resourceKey }),
             'If-Match': etag,
@@ -1371,12 +1464,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
     }
 
     if (doc.content !== undefined) {
-      await this.setContent(
-        doc.id,
-        doc.content,
-        doc.mimeType,
-        doc.resourceKey
-      )
+      await this.setContent(doc.id, doc.content, doc.mimeType, doc.resourceKey)
     }
 
     return file.id ? file : { ...doc }
@@ -1444,25 +1532,52 @@ class FetchDriveFilesClient implements DriveFilesClient {
     }
   }
 
-  async setContentIfMatch(
+  /** Use the same source-file CAS contract as the browser transport. */
+  async setPublicPropertyIfMatch(
     fileId: string,
-    content: string,
-    mimeType: string,
+    key: string,
+    value: string | null,
     etag: string,
     resourceKey?: string
   ): Promise<boolean> {
     try {
       await this.request(
         'PATCH',
+        `/drive/v3/files/${encodeURIComponent(fileId)}`,
+        {
+          params: { supportsAllDrives: true, resourceKey },
+          body: JSON.stringify({ properties: { [key]: value } }),
+          headers: { 'If-Match': etag },
+        }
+      )
+      return true
+    } catch (error) {
+      if (error instanceof DrivePreconditionFailedError) return false
+      throw error
+    }
+  }
+
+  async setContentIfMatch(
+    fileId: string,
+    content: string,
+    mimeType: string,
+    etag: string,
+    resourceKey?: string,
+    placement?: DerivedCopyPlacement
+  ): Promise<boolean> {
+    const upload = conditionalUpload(content, mimeType, placement)
+    try {
+      await this.request(
+        'PATCH',
         `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
         {
           params: {
-            uploadType: 'media',
+            ...upload.params,
             supportsAllDrives: true,
             resourceKey,
           },
-          body: content,
-          contentType: mimeType,
+          body: upload.body,
+          contentType: upload.contentType,
           headers: { 'If-Match': etag },
         }
       )
@@ -1868,6 +1983,7 @@ export interface SharedNotebookPreflight {
 }
 
 export interface DriveVersionMetadata {
+  properties?: Record<string, string>
   md5Checksum?: string
   headRevisionId?: string
   version?: string
@@ -2445,6 +2561,59 @@ export class DriveNotebookStore {
     return driveFolderUrl(folder.id)
   }
 
+  /** Read the shared copy identity from the source, not a profile-local cache. */
+  async getDerivedCopyClaim(uri: string): Promise<string | undefined> {
+    const { id, resourceKey } = parseDriveItem(uri)
+    const { metadata } = await (
+      await this.getFilesClient()
+    ).getVersionMetadataWithEtag(id, resourceKey)
+    return metadata?.properties?.[DERIVED_COPY_PROPERTY]
+  }
+
+  /** Compare-and-set the source property; media edits also invalidate its ETag. */
+  async compareAndSetDerivedCopyClaim(
+    uri: string,
+    expected: string | undefined,
+    next: string | null
+  ): Promise<boolean> {
+    const { id, resourceKey } = parseDriveItem(uri)
+    const client = await this.getFilesClient()
+    const { metadata, etag } = await client.getVersionMetadataWithEtag(
+      id,
+      resourceKey
+    )
+    if (metadata?.properties?.[DERIVED_COPY_PROPERTY] !== expected) return false
+    if (!etag)
+      throw new Error(
+        'Drive did not expose a validator for Colab copy coordination.'
+      )
+    return client.setPublicPropertyIfMatch(
+      id,
+      DERIVED_COPY_PROPERTY,
+      next,
+      etag,
+      resourceKey
+    )
+  }
+
+  /** A source property alone never authorizes overwriting an unrelated file. */
+  async getDerivedCopyTarget(
+    uri: string,
+    operationId: string
+  ): Promise<NotebookStoreItem | null> {
+    const target = await this.getMetadataIfExists(uri)
+    if (!target) return null
+    const version = await this.getVersionMetadata(uri)
+    if (
+      version?.appProperties?.[DRIVE_CREATE_OPERATION_PROPERTY] !== operationId
+    ) {
+      throw new Error(
+        'The Colab copy does not belong to this source notebook; refusing to overwrite it.'
+      )
+    }
+    return target
+  }
+
   /** Reserve a Drive file id so retries can target one stable identity. */
   async generateFileId(): Promise<string> {
     return (await this.getFilesClient()).generateFileId()
@@ -2636,11 +2805,11 @@ export class DriveNotebookStore {
   }
 
   async findByCreateOperation(
-    parentUri: string,
+    parentUri: string | null,
     createOperationId: string
   ): Promise<NotebookStoreItem | null> {
-    const parent = parseDriveItem(parentUri)
-    if (parent.type !== NotebookStoreItemType.Folder) {
+    const parent = parentUri === null ? null : parseDriveItem(parentUri)
+    if (parent && parent.type !== NotebookStoreItemType.Folder) {
       throw new Error(
         'DriveNotebookStore.findByCreateOperation expects a folder URI'
       )
@@ -2651,12 +2820,14 @@ export class DriveNotebookStore {
       )
     }
 
-    const escapedParentId = escapeDriveQueryValue(parent.id)
+    const parentFilter = parent
+      ? `'${escapeDriveQueryValue(parent.id)}' in parents and `
+      : ''
     const escapedOperationId = escapeDriveQueryValue(createOperationId)
     const result = await this.search(
       {
         q:
-          `'${escapedParentId}' in parents and trashed = false and ` +
+          `${parentFilter}trashed = false and ` +
           `appProperties has { key='${DRIVE_CREATE_OPERATION_PROPERTY}' and ` +
           `value='${escapedOperationId}' }`,
         includeItemsFromAllDrives: true,
@@ -2665,7 +2836,7 @@ export class DriveNotebookStore {
         pageSize: 2,
         fields: 'files(id,name,mimeType,parents,createdTime,appProperties)',
       },
-      driveResourceKeyHeaders(parent)
+      parent ? driveResourceKeyHeaders(parent) : {}
     )
 
     if (result.files.length > 1) {
@@ -2688,7 +2859,9 @@ export class DriveNotebookStore {
       children: [],
       remoteUri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
       mimeType: file.mimeType,
-      parents: [parentUri],
+      parents: parentUri
+        ? [parentUri]
+        : (file.parents ?? []).map((id) => driveFolderUrl(id)),
     }
   }
 
@@ -2698,7 +2871,7 @@ export class DriveNotebookStore {
    * browser context has time to become visible.
    */
   async waitForCreateOperation(
-    parentUri: string,
+    parentUri: string | null,
     createOperationId: string,
     initialDelayMs: number = 0
   ): Promise<NotebookStoreItem | null> {
@@ -3450,7 +3623,8 @@ export class DriveNotebookStore {
     uri: string,
     content: string,
     mimeType: string,
-    expected: { checksum?: string; revisionId?: string; version?: string }
+    expected: { checksum?: string; revisionId?: string; version?: string },
+    placement?: DerivedCopyPlacement
   ): Promise<boolean> {
     const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
@@ -3483,7 +3657,8 @@ export class DriveNotebookStore {
       content,
       mimeType,
       etag,
-      resourceKey
+      resourceKey,
+      placement
     )
     if (saved) {
       this.ipynbState.delete(uri)

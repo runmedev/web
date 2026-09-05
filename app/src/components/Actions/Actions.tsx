@@ -14,6 +14,12 @@ import {
 import { create } from '@bufbuild/protobuf'
 import { Button, ScrollArea, Tabs, Text, Tooltip } from '@radix-ui/themes'
 
+import { NotebookPropertiesDialog } from '../NotebookPropertiesDialog'
+import {
+  DERIVED_NOTEBOOK_KEY,
+  parseDerivedSource,
+} from '../../lib/derivedNotebook'
+
 import {
   ArrowPathIcon,
   ChatBubbleLeftIcon,
@@ -469,10 +475,19 @@ function isDriveBackedNotebook(
   )
 }
 
-function ReadOnlyTabIndicator() {
+function ReadOnlyTabIndicator({ uri }: { uri: string }) {
+  const { useNotebookSnapshot } = useNotebookContext()
+  const snapshot = useNotebookSnapshot(uri)
+  const derived = Boolean(
+    parseDerivedSource(snapshot?.notebook.metadata[DERIVED_NOTEBOOK_KEY])
+  )
   return (
     <Tooltip
-      content="Read-only. This notebook is open for editing in another browser tab."
+      content={
+        derived
+          ? 'Read-only generated copy. Edit the source .runme notebook.'
+          : 'Read-only. This notebook is open for editing in another browser tab.'
+      }
       side="bottom"
     >
       <span
@@ -2244,6 +2259,9 @@ function NotebookTabContent({
     entry.releasePending || notebookSnapshot?.releasePending
   )
   const reviewPending = Boolean(notebookSnapshot?.reviewPending)
+  const derivedSource = parseDerivedSource(
+    notebookSnapshot?.notebook.metadata[DERIVED_NOTEBOOK_KEY]
+  )
   const readOnly = Boolean(
     entry.readOnly ||
       notebookSnapshot?.readOnly ||
@@ -3538,6 +3556,27 @@ function NotebookTabContent({
         {/* Full-width notebook column with horizontal padding for breathing room.
             Cells expand to fill the available width of the tab content area. */}
         <div id="notebook-column" className="w-full py-2 px-8">
+          {derivedSource && (
+            <div
+              id="derived-notebook-notice"
+              role="note"
+              className="mb-3 rounded-nb-sm border border-nb-border bg-nb-surface-2 p-3 text-sm"
+            >
+              <strong>Generated notebook · Read-only</strong>
+              <p>
+                This file is derived from a .runme notebook and will be
+                overwritten on the next source save while automatic export is
+                enabled. Make changes in the{' '}
+                <a
+                  className="text-nb-accent underline"
+                  href={`?doc=${encodeURIComponent(derivedSource.uri)}`}
+                >
+                  source notebook
+                </a>
+                .
+              </p>
+            </div>
+          )}
           {entry.operationLog &&
           !readOnly &&
           !releasePending &&
@@ -3549,7 +3588,7 @@ function NotebookTabContent({
             >
               {entry.refreshErrorMessage}
             </div>
-          ) : reviewPending ? (
+          ) : derivedSource ? null : reviewPending ? (
             <div
               className="mb-3 flex items-center gap-2 rounded-nb-sm border border-nb-border bg-nb-surface-2 px-3 py-2 text-xs text-nb-text-muted"
               data-testid="notebook-suggestion-review-pending-banner"
@@ -4089,6 +4128,7 @@ export default function Actions() {
     readOnly?: boolean
   } | null>(null)
   const tabTriggerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const [propertiesUri, setPropertiesUri] = useState<string | null>(null)
   const pendingSelectedTabUriRef = useRef<string | null>(null)
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -4369,7 +4409,7 @@ export default function Actions() {
       return tabContextMenu
     }
     const itemCount =
-      4 +
+      5 +
       (tabContextMenu.googleDriveUri ? 1 : 0) +
       (tabContextMenu.googleDriveUri && tabContextMenu.isIpynb ? 1 : 0) +
       (tabContextMenu.ownerSessionId ? 1 : 0) +
@@ -4712,6 +4752,12 @@ export default function Actions() {
 
   return (
     <div id="documents" className="flex flex-col h-full">
+      {propertiesUri && (
+        <NotebookPropertiesDialog
+          uri={propertiesUri}
+          onClose={() => setPropertiesUri(null)}
+        />
+      )}
       {workspaceDocuments.length === 0 ? (
         <ScrollArea
           type="auto"
@@ -4839,7 +4885,7 @@ export default function Actions() {
                       <span className="max-w-[140px] truncate">
                         {displayName}
                       </span>
-                      {doc.readOnly && <ReadOnlyTabIndicator />}
+                      {doc.readOnly && <ReadOnlyTabIndicator uri={doc.uri} />}
                     </Tabs.Trigger>
                     {isNotebook &&
                       detectNotebookFileFormat(doc.title) ===
@@ -4877,6 +4923,16 @@ export default function Actions() {
               onClick={(event) => event.stopPropagation()}
               onContextMenu={(event) => event.preventDefault()}
             >
+              <button
+                type="button"
+                className="ctx-menu-item"
+                onClick={() => {
+                  setPropertiesUri(adjustedTabContextMenu.docUri)
+                  setTabContextMenu(null)
+                }}
+              >
+                Notebook properties
+              </button>
               <button
                 type="button"
                 className="ctx-menu-item"

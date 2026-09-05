@@ -15,6 +15,7 @@ import {
   parser_pb,
 } from '../contexts/CellContext'
 import { isHtmlLanguageId } from './cellContent'
+import { DERIVED_NOTEBOOK_KEY, parseDerivedSource } from './derivedNotebook'
 import { googleAnalytics } from './googleAnalytics'
 import {
   IOPUB_INCOMPLETE_METADATA_KEY,
@@ -793,6 +794,15 @@ export class NotebookData {
     this.schedulePersist()
   }
 
+  /** Apply portable document properties through the normal journal save path. */
+  setMetadataProperty(key: string, value: string): void {
+    this.assertWritable()
+    this.notebook.metadata[key] = value
+    this.snapshotCache = this.buildSnapshot()
+    this.emit()
+    this.schedulePersist()
+  }
+
   setName(name: string): void {
     this.assertWritable()
     this.name = name
@@ -823,7 +833,10 @@ export class NotebookData {
   }
 
   isReadOnly(): boolean {
-    return this.readOnly
+    return (
+      this.readOnly ||
+      Boolean(parseDerivedSource(this.notebook.metadata[DERIVED_NOTEBOOK_KEY]))
+    )
   }
 
   setReleasePending(releasePending: boolean): void {
@@ -1209,7 +1222,7 @@ export class NotebookData {
         `Notebook ${this.uri} is releasing its write lock for another session.`
       )
     }
-    if (this.readOnly) {
+    if (this.isReadOnly()) {
       throw new Error(
         `Notebook ${this.uri} is open read-only in this browser tab.`
       )
@@ -2034,7 +2047,7 @@ export class NotebookData {
       uri: this.uri,
       name: this.name,
       loaded: this.loaded,
-      readOnly: this.readOnly,
+      readOnly: this.isReadOnly(),
       releasePending: this.releasePending,
       reviewPending: this.reviewPending,
       reviewReloadRequired: this.reviewReloadRequired,
@@ -2055,7 +2068,7 @@ export class NotebookData {
   private async persist({
     throwOnError = false,
   }: { throwOnError?: boolean } = {}): Promise<void> {
-    if (this.readOnly || !this.notebookStore) {
+    if (this.isReadOnly() || !this.notebookStore) {
       return
     }
     const store = this.notebookStore
@@ -2078,7 +2091,7 @@ export class NotebookData {
   }
 
   private schedulePersist(): void {
-    if (this.readOnly || !this.notebookStore) {
+    if (this.isReadOnly() || !this.notebookStore) {
       return
     }
     if (this.persistTimer) {

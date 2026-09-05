@@ -5,6 +5,8 @@ import { Subject, debounceTime } from 'rxjs'
 import { v4 as uuidv4 } from 'uuid'
 
 import { migrateNotebookCellIds } from '../lib/cellIdentity'
+import { encodeDerivedIpynb } from '../lib/derivedIpynb'
+import { AUTO_IPYNB_KEY } from '../lib/derivedNotebook'
 import { IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { appLogger } from '../lib/logging/runtime'
 import { serializeNotebookToMarkdown } from '../lib/markdown/serializeNotebookToMarkdown'
@@ -47,6 +49,7 @@ import {
   type ConflictDocumentRef,
   createDefaultConflictDocStorage,
 } from './conflictDocs'
+import { UnconfirmedDerivedCopyError, ensureDerivedCopy } from './derivedCopy'
 import {
   type DriveComment,
   DriveNotebookStore,
@@ -130,6 +133,13 @@ export interface LocalFileRecord {
   }
   /** Remote Drive URI of the Markdown sidecar (e.g. *.index.md) if present. */
   markdownUri?: string
+  /** Derived Colab copy identity and last export outcome; source option lives in the journal. */
+  ipynbExportUri?: string
+  ipynbExportSourceUri?: string
+  /** The exact upstream claim that an explicit recovery action may clear. */
+  ipynbExportPendingClaim?: string
+  ipynbExportError?: string
+  ipynbExportedAt?: string
   /** Stable idempotency key for creating the Markdown sidecar. */
   markdownCreateOperationId?: string
   /**
@@ -336,6 +346,7 @@ export class LocalNotebooks extends Dexie {
 
   private readonly syncSubjects = new Map<string, Subject<void>>()
   private readonly markdownSyncSubjects = new Map<string, Subject<void>>()
+  private readonly ipynbSyncSubjects = new Map<string, Subject<void>>()
   private readonly inFlightSyncs = new Map<string, Promise<void>>()
   private readonly syncListeners = new Map<string, Set<() => void>>()
 
@@ -2269,15 +2280,13 @@ export class LocalNotebooks extends Dexie {
         ? `drive:${parseDriveItem(sourceRecord.remoteId).id}`
         : sourceUri
     const sourceLockKey = `legacy-conversion:${sourceLockIdentity}`
-    return this.driveSyncCoordinator.runExclusive(
-      sourceLockKey,
-      () =>
-        this.convertLegacyNotebookToRunmeExclusive(
-          sourceUri,
-          parentUri,
-          invokedAt,
-          sourceLockKey
-        )
+    return this.driveSyncCoordinator.runExclusive(sourceLockKey, () =>
+      this.convertLegacyNotebookToRunmeExclusive(
+        sourceUri,
+        parentUri,
+        invokedAt,
+        sourceLockKey
+      )
     )
   }
 
@@ -2439,8 +2448,7 @@ export class LocalNotebooks extends Dexie {
             attempt &&
               (!attempt.completedAt || attempt.completedAt >= invokedAt) &&
               attempt.originalGoogleDriveId === originalGoogleDriveId &&
-              detectNotebookFileFormat(record.name) ===
-                'runme-operation-log'
+              detectNotebookFileFormat(record.name) === 'runme-operation-log'
           )
         })
         .toArray()
@@ -2573,9 +2581,7 @@ export class LocalNotebooks extends Dexie {
         }
 
         if (!isDriveUri(child.remoteId)) {
-          if (
-            child.parentRemoteIdWhenCreated !== destinationParent.remoteId
-          ) {
+          if (child.parentRemoteIdWhenCreated !== destinationParent.remoteId) {
             await this.files.update(childUri, {
               parentRemoteIdWhenCreated: destinationParent.remoteId,
             })
@@ -2600,8 +2606,7 @@ export class LocalNotebooks extends Dexie {
             )
           }
           if (
-            parseDriveItem(currentRemoteParent).id !==
-            destinationDriveFolder.id
+            parseDriveItem(currentRemoteParent).id !== destinationDriveFolder.id
           ) {
             if (currentParent) {
               await this.move(childUri, destinationParentUri)
@@ -2660,10 +2665,7 @@ export class LocalNotebooks extends Dexie {
           this.notifySync(childUri)
         }
 
-        await this.attachDriveFileToFolder(
-          destinationParent.remoteId,
-          childUri
-        )
+        await this.attachDriveFileToFolder(destinationParent.remoteId, childUri)
         await this.syncFile(childUri)
         await this.attachDriveFileToFolder(
           destinationParent.remoteId,
@@ -3033,6 +3035,7 @@ export class LocalNotebooks extends Dexie {
     }
 
     await this.files.update(uri, { name: nextName, remoteId: nextRemoteId })
+    if (record.operationLogRef) this.enqueueIpynbSync(uri)
 
     const parentFolder = await this.findParentFolder(uri)
 
@@ -3152,6 +3155,7 @@ export class LocalNotebooks extends Dexie {
       children.includes(uri) ? children : [...children, uri]
     )
 
+    if (file?.operationLogRef) this.enqueueIpynbSync(uri)
     if (clearMarkdownUri && file) {
       try {
         await this.syncMarkdownFile(uri)
@@ -3437,6 +3441,7 @@ export class LocalNotebooks extends Dexie {
   }
 
   private enqueueMarkdownSync(uri: string): void {
+    this.enqueueIpynbSync(uri)
     let mdSubject = this.markdownSyncSubjects.get(uri)
     if (!mdSubject) {
       mdSubject = new Subject<void>()
@@ -3451,6 +3456,237 @@ export class LocalNotebooks extends Dexie {
       this.markdownSyncSubjects.set(uri, mdSubject)
     }
     mdSubject.next()
+  }
+
+  /** Queue derived work independently: export failure cannot reject a source save. */
+  private enqueueIpynbSync(uri: string): void {
+    let subject = this.ipynbSyncSubjects.get(uri)
+    if (!subject) {
+      subject = new Subject<void>()
+      subject.pipe(debounceTime(20_000)).subscribe(() => {
+        void this.syncIpynbFile(uri).catch(() => undefined)
+      })
+      this.ipynbSyncSubjects.set(uri, subject)
+    }
+    subject.next()
+  }
+
+  /** Publish the latest committed .runme snapshot as an optional Drive sibling. */
+  async syncIpynbFile(uri: string): Promise<void> {
+    await this.driveSyncCoordinator.runExclusive(uri, async () => {
+      try {
+        const record = await this.files.get(uri)
+        if (
+          !record?.operationLogRef ||
+          record.conflict ||
+          !isDriveUri(record.remoteId)
+        )
+          return
+        const document = (
+          await this.operationLogStorage.read(record.operationLogRef)
+        ).document
+        const log = parseOperationLog(document)
+        const notebook = materializedLogToNotebook(
+          materializeOperationLog(log.operations)
+        )
+        if (notebook.metadata[AUTO_IPYNB_KEY] !== 'true') return
+        const driveStore = appState.driveNotebookStore ?? this.driveStore
+        const metadata = await driveStore.getMetadata(record.remoteId)
+        const parentUri = metadata?.parents?.[0]
+        if (!parentUri)
+          throw new Error(
+            'The source notebook needs a Drive parent folder to export a Colab copy.'
+          )
+        const name = `${(metadata.name || record.name).replace(/\.runme$/i, '')}.ipynb`
+        // A source-scoped identity survives retries and independent local mirrors.
+        // Never select an unrelated user file merely because its name matches.
+        const sourceUri = driveFileUrl(parseDriveItem(record.remoteId).id)
+        const target = await ensureDerivedCopy(
+          driveStore,
+          record.remoteId,
+          parentUri,
+          name,
+          async () => {
+            const beforeCreate = await this.files.get(uri)
+            if (
+              !beforeCreate?.operationLogRef ||
+              beforeCreate.conflict ||
+              beforeCreate.remoteId !== record.remoteId
+            )
+              return null
+            const currentLog = parseOperationLog(
+              (
+                await this.operationLogStorage.read(
+                  beforeCreate.operationLogRef
+                )
+              ).document
+            )
+            const currentNotebook = materializedLogToNotebook(
+              materializeOperationLog(currentLog.operations)
+            )
+            if (currentNotebook.metadata[AUTO_IPYNB_KEY] !== 'true') return null
+            return encodeDerivedIpynb(currentNotebook, {
+              version: 1,
+              uri: record.remoteId,
+              notebookId: currentLog.header.notebook_id,
+              generatedAt: new Date().toISOString(),
+              operationIds: currentLog.operations.map((op) => op.op_id),
+            })
+          }
+        )
+        if (!target) return
+        await this.files.update(uri, {
+          ipynbExportUri: target.uri,
+          ipynbExportSourceUri: sourceUri,
+          ipynbExportPendingClaim: undefined,
+        })
+        // Capture the target version BEFORE reading inputs. Metadata and media
+        // publish atomically with If-Match, so a delayed profile cannot undo a
+        // newer profile's placement or contents. Never retry stale bytes.
+        const targetVersion = await driveStore.getVersionMetadata(target.uri)
+        if (!targetVersion)
+          throw new Error('Colab copy disappeared; retry sync.')
+        const currentTarget = await driveStore.getMetadata(target.uri)
+        const previousContent = await driveStore.loadContent(target.uri)
+        let previousCopy
+        try {
+          previousCopy = JSON.parse(previousContent)
+        } catch {
+          // A create can commit metadata before its media upload fails. The
+          // source marker was verified by ensureDerivedCopy; repair those bytes
+          // under the captured version rather than strand the owned target.
+          previousCopy = undefined
+        }
+        const sourceMetadata = await driveStore.getMetadata(record.remoteId)
+        const currentParent = sourceMetadata?.parents?.[0]
+        if (!currentParent)
+          throw new Error('Source notebook has no Drive parent.')
+        const currentName = `${(sourceMetadata.name || record.name).replace(/\.runme$/i, '')}.ipynb`
+        const upstreamContent = await driveStore.loadContent(record.remoteId)
+        // Re-read after network work so a disabled option cancels a queued export
+        // and a newer local save supersedes the initially observed snapshot.
+        const latest = await this.files.get(uri)
+        if (
+          !latest?.operationLogRef ||
+          latest.conflict ||
+          latest.remoteId !== record.remoteId
+        )
+          return
+        const latestLog = parseOperationLog(
+          (await this.operationLogStorage.read(latest.operationLogRef)).document
+        )
+        if (upstreamContent !== '') {
+          const upstreamLog = parseOperationLog(upstreamContent)
+          if (upstreamLog.header.notebook_id !== latestLog.header.notebook_id)
+            throw new Error('Source notebook identity changed during export.')
+          latestLog.operations = mergeOperationSets(
+            latestLog.operations,
+            upstreamLog.operations
+          )
+        }
+        const operationIds = latestLog.operations.map((op) => op.op_id)
+        const covered = new Set(operationIds)
+        const previousIds =
+          previousCopy?.metadata?.runme?.derivedFrom?.operationIds
+        if (
+          Array.isArray(previousIds) &&
+          previousIds.some((id: string) => !covered.has(id))
+        )
+          throw new Error(
+            'Colab copy contains newer changes. Sync the source notebook before exporting again.'
+          )
+        const latestNotebook = materializedLogToNotebook(
+          materializeOperationLog(latestLog.operations)
+        )
+        if (latestNotebook.metadata[AUTO_IPYNB_KEY] !== 'true') return
+        const generatedAt = new Date().toISOString()
+        const published = await driveStore.saveContentIfVersion(
+          target.uri,
+          encodeDerivedIpynb(latestNotebook, {
+            version: 1,
+            uri: record.remoteId,
+            notebookId: latestLog.header.notebook_id,
+            generatedAt,
+            operationIds,
+          }),
+          'application/x-ipynb+json',
+          {
+            checksum: targetVersion.md5Checksum,
+            revisionId: targetVersion.headRevisionId,
+            version: targetVersion.version,
+          },
+          {
+            name: currentName,
+            parentUri: currentParent,
+            previousParentUri: currentTarget?.parents?.[0],
+          }
+        )
+        if (!published) {
+          this.enqueueIpynbSync(uri)
+          throw new Error(
+            'Colab copy changed during export; a fresh export is queued.'
+          )
+        }
+        await this.files.update(uri, {
+          ipynbExportError: undefined,
+          ipynbExportedAt: generatedAt,
+        })
+      } catch (error) {
+        await this.files.update(uri, {
+          ipynbExportError: String(error),
+          ipynbExportPendingClaim:
+            error instanceof UnconfirmedDerivedCopyError
+              ? error.claim
+              : undefined,
+        })
+        appLogger.warn('Could not export Colab copy', {
+          attrs: {
+            scope: 'storage.local.ipynb-export',
+            localUri: uri,
+            error: String(error),
+          },
+        })
+        throw error
+      } finally {
+        this.notifySync(uri)
+      }
+    })
+  }
+
+  /** Read export status separately from the primary notebook sync indicator. */
+  async getIpynbExportState(uri: string): Promise<{
+    uri?: string
+    error?: string
+    exportedAt?: string
+    needsCreateRecovery?: boolean
+  }> {
+    const record = await this.files.get(uri)
+    return {
+      uri: record?.ipynbExportUri,
+      error: record?.ipynbExportError,
+      exportedAt: record?.ipynbExportedAt,
+      needsCreateRecovery: Boolean(record?.ipynbExportPendingClaim),
+    }
+  }
+
+  /** Explicit user recovery: never clear a newer claim or a confirmed copy. */
+  async retryUnconfirmedIpynbCreation(uri: string): Promise<void> {
+    await this.driveSyncCoordinator.runExclusive(uri, async () => {
+      const record = await this.files.get(uri)
+      if (!record?.ipynbExportPendingClaim || !isDriveUri(record.remoteId))
+        return
+      const drive = appState.driveNotebookStore ?? this.driveStore
+      await drive.compareAndSetDerivedCopyClaim(
+        record.remoteId,
+        record.ipynbExportPendingClaim,
+        null
+      )
+      await this.files.update(uri, {
+        ipynbExportPendingClaim: undefined,
+        ipynbExportError: undefined,
+      })
+    })
+    await this.syncIpynbFile(uri)
   }
 
   private async getOrBackfillLocalChecksum(
@@ -3635,6 +3871,7 @@ export class LocalNotebooks extends Dexie {
           // Another tab may have completed the pending create while we waited.
           await this.syncFileInner(localUri)
           await this.files.update(localUri, { lastSyncError: undefined })
+          this.enqueueIpynbSync(localUri)
         } catch (error) {
           await this.files.update(localUri, { lastSyncError: String(error) })
           throw error

@@ -154,6 +154,185 @@ describe("isDriveItemUri", () => {
 });
 
 describe("DriveNotebookStore", () => {
+  it("recovers a source-scoped create across folders without a parent filter", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const query = new URL(String(input)).searchParams.get("q");
+      expect(query).toContain("runmeCreateOperationId");
+      expect(query).toContain("source-operation");
+      expect(query).not.toContain("in parents");
+      return new Response(JSON.stringify({ files: [{ id: "copy", name: "source.ipynb", parents: ["old-parent"] }] }), { headers: { "Content-Type": "application/json" } });
+    });
+    const store = new DriveNotebookStore(async () => "access-token");
+    expect((await store.findByCreateOperation(null, "source-operation"))?.parents).toEqual([driveFolderUrl("old-parent")]);
+  });
+
+  it.each([200, 412])(
+    "conditionally updates only the copy property (HTTP %s)",
+    async (status) => {
+      setGoogleDriveBaseUrl("https://drive.example.test");
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/drive/v3/files/source");
+        if (init?.method === "GET")
+          return new Response(
+            JSON.stringify({
+              properties: { runmeIpynbCopy: "p:claim", unrelated: "keep" },
+            }),
+            {
+              headers: {
+                "Content-Type": "application/json",
+                ETag: '"current"',
+              },
+            }
+          );
+        expect(init?.method).toBe("PATCH");
+        expect(init?.headers).toMatchObject({ "If-Match": '"current"' });
+        expect(JSON.parse(String(init?.body))).toEqual({
+          properties: { runmeIpynbCopy: null },
+        });
+        return new Response("", { status });
+      });
+      const store = new DriveNotebookStore(async () => "access-token");
+      expect(
+        await store.compareAndSetDerivedCopyClaim(
+          driveFileUrl("source"),
+          "p:claim",
+          null
+        )
+      ).toBe(status === 200);
+    }
+  );
+
+  it("rejects a forged copy reference without writing its content", async () => {
+    const store = new DriveNotebookStore(async () => "access-token");
+    vi.spyOn(store, "getMetadataIfExists").mockResolvedValue({
+      uri: driveFileUrl("unrelated"),
+      name: "private.ipynb",
+      type: NotebookStoreItemType.File,
+      children: [],
+      parents: [],
+    });
+    vi.spyOn(store, "getVersionMetadata").mockResolvedValue({
+      appProperties: { runmeCreateOperationId: "different-source" },
+    });
+    await expect(
+      store.getDerivedCopyTarget(driveFileUrl("unrelated"), "intended-source")
+    ).rejects.toThrow("refusing to overwrite");
+  });
+
+  it("normalizes public v2 properties and uses their ETag for a v3 claim update", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (init?.method === "GET") {
+        expect(url.pathname).toBe("/drive/v2/files/source");
+        return new Response(
+          JSON.stringify({
+            etag: '"v2"',
+            properties: [
+              { key: "runmeIpynbCopy", value: "r:copy", visibility: "PUBLIC" },
+              { key: "private", value: "hidden", visibility: "PRIVATE" },
+            ],
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        );
+      }
+      expect(url.pathname).toBe("/drive/v3/files/source");
+      expect(init?.headers).toMatchObject({ "If-Match": '"v2"' });
+      expect(JSON.parse(String(init?.body))).toEqual({
+        properties: { runmeIpynbCopy: "f:copy" },
+      });
+      return new Response("", { status: 200 });
+    });
+    const client = new GapiDriveFilesClient({
+      client: {
+        getToken: () => ({ access_token: "token" }),
+        drive: { files: {}, drives: {}, revisions: {} },
+      },
+    } as never);
+    const version = await client.getVersionMetadataWithEtag("source");
+    expect(version.metadata?.properties).toEqual({ runmeIpynbCopy: "r:copy" });
+    expect(
+      await client.setPublicPropertyIfMatch(
+        "source",
+        "runmeIpynbCopy",
+        "f:copy",
+        version.etag!
+      )
+    ).toBe(true);
+  });
+
+  it.each(["gapi", "fetch"])(
+    "conditionally publishes copy placement and content together via %s",
+    async (transport) => {
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async (input, init) => {
+          const url = new URL(String(input));
+          if (init?.method === "GET")
+            return new Response(
+              JSON.stringify({ md5Checksum: "old", version: "1" }),
+              {
+                headers: {
+                  "Content-Type": "application/json",
+                  ETag: '"copy-etag"',
+                },
+              }
+            );
+          expect(init?.method).toBe("PATCH");
+          expect(url.pathname).toBe("/upload/drive/v3/files/copy");
+          expect(url.searchParams.get("uploadType")).toBe("multipart");
+          expect(url.searchParams.get("addParents")).toBe("new");
+          expect(url.searchParams.get("removeParents")).toBe("old");
+          expect(init?.headers).toMatchObject({
+            "If-Match": '"copy-etag"',
+            "Content-Type": expect.stringContaining(
+              "multipart/related; boundary="
+            ),
+          });
+          expect(init?.body).toContain('"name":"new.ipynb"');
+          expect(init?.body).toContain('{"cells":[]}');
+          return new Response("", { status: 412 });
+        });
+      const placement = {
+        name: "new.ipynb",
+        parentUri: "https://drive.google.com/drive/folders/new",
+        previousParentUri: "https://drive.google.com/drive/folders/old",
+      };
+      if (transport === "gapi") {
+        const client = new GapiDriveFilesClient({
+          client: {
+            getToken: () => ({ access_token: "access-token" }),
+            drive: { files: {}, drives: {}, revisions: {} },
+          },
+        } as never);
+        await expect(
+          client.setContentIfMatch(
+            "copy",
+            '{"cells":[]}',
+            "application/x-ipynb+json",
+            '"copy-etag"',
+            undefined,
+            placement
+          )
+        ).resolves.toBe(false);
+      } else {
+        setGoogleDriveBaseUrl("https://drive.example.test");
+        const store = new DriveNotebookStore(async () => "access-token");
+        await expect(
+          store.saveContentIfVersion(
+            "https://drive.google.com/file/d/copy/view",
+            '{"cells":[]}',
+            "application/x-ipynb+json",
+            { checksum: "old", version: "1" },
+            placement
+          )
+        ).resolves.toBe(false);
+      }
+      expect(fetchMock).toHaveBeenCalled();
+    }
+  );
+
   it("reads a Drive v2 ETag and applies it to the CORS-capable v3 upload", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -163,7 +342,7 @@ describe("DriveNotebookStore", () => {
           expect(url.pathname).toBe("/drive/v2/files/file123");
           expect(url.searchParams.get("supportsAllDrives")).toBe("true");
           expect(url.searchParams.get("fields")).toBe(
-            "etag,md5Checksum,headRevisionId,version",
+            "etag,md5Checksum,headRevisionId,version,properties",
           );
           expect(init?.headers).toMatchObject({
             Authorization: "Bearer access-token",
@@ -213,6 +392,7 @@ describe("DriveNotebookStore", () => {
         md5Checksum: "checksum-1",
         headRevisionId: "revision-1",
         version: "1",
+        properties: {},
       },
       etag: '\"drive-etag-1\"',
     });
