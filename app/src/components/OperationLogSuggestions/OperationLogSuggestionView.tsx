@@ -399,8 +399,12 @@ export function OperationLogSuggestionView({
   const review = async (decision: SuggestionDecision) => {
     if (!suggestion) return
     setBusy(true)
+    const notebookData = getNotebookDataController().getNotebookData(docUri)
+    const wasReviewPending = notebookData?.isReviewPending() ?? false
     try {
-      const notebookData = getNotebookDataController().getNotebookData(docUri)
+      // Lock the neighboring editor synchronously, before the first await, so
+      // no user edit can land between the flush and rematerialization.
+      notebookData?.setReviewPending(true)
       // The editor stays mounted in a neighboring tab. Flush its debounced
       // journal before appending a review so rematerialization cannot replace
       // an edit that has not reached the operation log yet.
@@ -433,6 +437,9 @@ export function OperationLogSuggestionView({
     } catch (reviewError) {
       setError(String(reviewError))
     } finally {
+      if (notebookData && !wasReviewPending) {
+        notebookData.setReviewPending(false)
+      }
       setBusy(false)
     }
   }

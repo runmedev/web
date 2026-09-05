@@ -72,6 +72,7 @@ export type NotebookSnapshot = {
   readonly loaded: boolean
   readonly readOnly?: boolean
   readonly releasePending?: boolean
+  readonly reviewPending?: boolean
 }
 
 const localTextEncoder = new TextEncoder()
@@ -508,6 +509,7 @@ export class NotebookData {
   private loaded: boolean
   private readOnly: boolean
   private releasePending = false
+  private reviewPending = false
   private activeStreams: Map<string, StreamsLike> = new Map()
   private activeJupyterSockets = new Map<
     string,
@@ -833,6 +835,20 @@ export class NotebookData {
 
   isReleasePending(): boolean {
     return this.releasePending
+  }
+
+  /** Prevent editor mutations while an external suggestion review rewrites the view. */
+  setReviewPending(reviewPending: boolean): void {
+    if (this.reviewPending === reviewPending) {
+      return
+    }
+    this.reviewPending = reviewPending
+    this.snapshotCache = this.buildSnapshot()
+    this.emit()
+  }
+
+  isReviewPending(): boolean {
+    return this.reviewPending
   }
 
   async cancelActiveExecutions(
@@ -1169,6 +1185,9 @@ export class NotebookData {
   }
 
   private assertWritable(): void {
+    if (this.reviewPending) {
+      throw new Error(`Notebook ${this.uri} is applying a suggestion review.`)
+    }
     if (this.releasePending) {
       throw new Error(
         `Notebook ${this.uri} is releasing its write lock for another session.`
@@ -1992,6 +2011,7 @@ export class NotebookData {
       loaded: this.loaded,
       readOnly: this.readOnly,
       releasePending: this.releasePending,
+      reviewPending: this.reviewPending,
       notebook: clone(parser_pb.NotebookSchema, this.notebook),
     }
   }

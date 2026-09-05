@@ -2243,8 +2243,12 @@ function NotebookTabContent({
   const releasePending = Boolean(
     entry.releasePending || notebookSnapshot?.releasePending
   )
+  const reviewPending = Boolean(notebookSnapshot?.reviewPending)
   const readOnly = Boolean(
-    entry.readOnly || notebookSnapshot?.readOnly || releasePending
+    entry.readOnly ||
+      notebookSnapshot?.readOnly ||
+      releasePending ||
+      reviewPending
   )
   const isDriveBacked = isDriveBackedNotebook(entry, syncState)
   const operationLogComments = Boolean(
@@ -3543,6 +3547,14 @@ function NotebookTabContent({
               data-testid="notebook-operation-log-refresh-error"
             >
               {entry.refreshErrorMessage}
+            </div>
+          ) : reviewPending ? (
+            <div
+              className="mb-3 flex items-center gap-2 rounded-nb-sm border border-nb-border bg-nb-surface-2 px-3 py-2 text-xs text-nb-text-muted"
+              data-testid="notebook-suggestion-review-pending-banner"
+            >
+              <LockClosedIcon className="h-4 w-4 text-nb-text-muted" />
+              <span>Applying suggestion review…</span>
             </div>
           ) : releasePending ? (
             <div

@@ -568,6 +568,36 @@ describe("NotebookData cell defaults", () => {
 });
 
 describe("NotebookData persistence", () => {
+  it("locks editor mutations while still flushing a suggestion review", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const model = new NotebookData({
+      notebook: create(parser_pb.NotebookSchema, { cells: [] }),
+      uri: "local://file/review-pending.runme",
+      name: "review-pending.runme",
+      notebookStore: { save },
+      loaded: true,
+    });
+
+    model.appendCell(parser_pb.CellKind.MARKUP, "markdown");
+    model.setReviewPending(true);
+
+    expect(model.getSnapshot().reviewPending).toBe(true);
+    expect(() =>
+      model.appendCell(parser_pb.CellKind.MARKUP, "markdown"),
+    ).toThrow("is applying a suggestion review");
+
+    await model.flushPendingPersist();
+    expect(save).toHaveBeenCalledWith(
+      "local://file/review-pending.runme",
+      expect.objectContaining({ cells: [expect.anything()] }),
+    );
+
+    model.setReviewPending(false);
+    expect(() =>
+      model.appendCell(parser_pb.CellKind.MARKUP, "markdown"),
+    ).not.toThrow();
+  });
+
   it("adopts a notebook store after construction and persists later edits", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const notebook = create(parser_pb.NotebookSchema, { cells: [] });

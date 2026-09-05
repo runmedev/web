@@ -16,6 +16,8 @@ const notebookDataMocks = vi.hoisted(() => ({
   flushPendingPersist: vi.fn(async () => undefined),
   loadNotebook: vi.fn(),
   setNotebookStore: vi.fn(),
+  setReviewPending: vi.fn(),
+  isReviewPending: vi.fn(() => false),
   getNotebookData: vi.fn(),
 }))
 
@@ -97,11 +99,16 @@ describe('OperationLogSuggestionView', () => {
     notebookDataMocks.flushPendingPersist.mockClear()
     notebookDataMocks.loadNotebook.mockClear()
     notebookDataMocks.setNotebookStore.mockClear()
+    notebookDataMocks.setReviewPending.mockClear()
+    notebookDataMocks.isReviewPending.mockClear()
+    notebookDataMocks.isReviewPending.mockReturnValue(false)
     notebookDataMocks.getNotebookData.mockReset()
     notebookDataMocks.getNotebookData.mockReturnValue({
       flushPendingPersist: notebookDataMocks.flushPendingPersist,
       loadNotebook: notebookDataMocks.loadNotebook,
       setNotebookStore: notebookDataMocks.setNotebookStore,
+      setReviewPending: notebookDataMocks.setReviewPending,
+      isReviewPending: notebookDataMocks.isReviewPending,
     })
   })
 
@@ -191,12 +198,13 @@ describe('OperationLogSuggestionView', () => {
       expect(store.reviewOperationLogSuggestion).toHaveBeenCalled()
     )
     expect(notebookDataMocks.flushPendingPersist).toHaveBeenCalled()
+    expect(notebookDataMocks.setReviewPending).toHaveBeenNthCalledWith(1, true)
     expect(
-      notebookDataMocks.flushPendingPersist.mock.invocationCallOrder[0]
+      notebookDataMocks.setReviewPending.mock.invocationCallOrder[0]
     ).toBeLessThan(
-      (store.reviewOperationLogSuggestion as ReturnType<typeof vi.fn>).mock
-        .invocationCallOrder[0]
+      notebookDataMocks.flushPendingPersist.mock.invocationCallOrder[0]
     )
+    expect(notebookDataMocks.setReviewPending).toHaveBeenLastCalledWith(false)
     expect(store.createOperationLogSaveStore).toHaveBeenCalledWith(
       'local://file/test'
     )
