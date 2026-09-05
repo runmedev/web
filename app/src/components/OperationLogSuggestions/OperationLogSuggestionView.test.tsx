@@ -18,6 +18,7 @@ const notebookDataMocks = vi.hoisted(() => ({
   setNotebookStore: vi.fn(),
   setReviewPending: vi.fn(),
   isReviewPending: vi.fn(() => false),
+  cancelActiveExecutions: vi.fn(async () => undefined),
   getNotebookData: vi.fn(),
 }))
 
@@ -102,6 +103,7 @@ describe('OperationLogSuggestionView', () => {
     notebookDataMocks.setReviewPending.mockClear()
     notebookDataMocks.isReviewPending.mockClear()
     notebookDataMocks.isReviewPending.mockReturnValue(false)
+    notebookDataMocks.cancelActiveExecutions.mockClear()
     notebookDataMocks.getNotebookData.mockReset()
     notebookDataMocks.getNotebookData.mockReturnValue({
       flushPendingPersist: notebookDataMocks.flushPendingPersist,
@@ -109,6 +111,7 @@ describe('OperationLogSuggestionView', () => {
       setNotebookStore: notebookDataMocks.setNotebookStore,
       setReviewPending: notebookDataMocks.setReviewPending,
       isReviewPending: notebookDataMocks.isReviewPending,
+      cancelActiveExecutions: notebookDataMocks.cancelActiveExecutions,
     })
   })
 
@@ -198,9 +201,17 @@ describe('OperationLogSuggestionView', () => {
       expect(store.reviewOperationLogSuggestion).toHaveBeenCalled()
     )
     expect(notebookDataMocks.flushPendingPersist).toHaveBeenCalled()
+    expect(notebookDataMocks.cancelActiveExecutions).toHaveBeenCalledWith(
+      'Execution cancelled because a suggestion review is being applied.\n'
+    )
     expect(notebookDataMocks.setReviewPending).toHaveBeenNthCalledWith(1, true)
     expect(
       notebookDataMocks.setReviewPending.mock.invocationCallOrder[0]
+    ).toBeLessThan(
+      notebookDataMocks.cancelActiveExecutions.mock.invocationCallOrder[0]
+    )
+    expect(
+      notebookDataMocks.cancelActiveExecutions.mock.invocationCallOrder[0]
     ).toBeLessThan(
       notebookDataMocks.flushPendingPersist.mock.invocationCallOrder[0]
     )
@@ -215,5 +226,50 @@ describe('OperationLogSuggestionView', () => {
     expect(
       notebookDataMocks.setNotebookStore.mock.invocationCallOrder[0]
     ).toBeLessThan(notebookDataMocks.loadNotebook.mock.invocationCallOrder[0])
+  })
+
+  it('keeps the editor locked when a committed review fails to reload', async () => {
+    const store = {
+      loadContent: vi
+        .fn()
+        .mockResolvedValueOnce(operationLogDocument())
+        .mockRejectedValueOnce(new Error('reload failed'))
+        .mockResolvedValueOnce(operationLogDocument()),
+      listOperationLogComments: vi.fn().mockResolvedValue([]),
+      reviewOperationLogSuggestion: vi.fn().mockResolvedValue(undefined),
+      createOperationLogSaveStore: vi.fn().mockResolvedValue({ save: vi.fn() }),
+    } as unknown as LocalNotebooks
+
+    render(
+      <OperationLogSuggestionView
+        docUri="local://file/test"
+        store={store}
+        readOnly={false}
+        onClose={vi.fn()}
+      />
+    )
+
+    await screen.findByText('1 of 2')
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
+
+    await waitFor(() =>
+      expect(
+        document.getElementById('suggestion-load-error')?.textContent
+      ).toContain('Error: reload failed')
+    )
+    expect(store.reviewOperationLogSuggestion).toHaveBeenCalled()
+    expect(notebookDataMocks.setReviewPending).toHaveBeenCalledTimes(1)
+    expect(notebookDataMocks.setReviewPending).toHaveBeenCalledWith(true)
+    expect(
+      screen.queryByRole('button', { name: 'Return to notebook' })
+    ).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry reload' }))
+    await waitFor(() =>
+      expect(notebookDataMocks.setReviewPending).toHaveBeenLastCalledWith(false)
+    )
+    expect(store.createOperationLogSaveStore).toHaveBeenCalledWith(
+      'local://file/test'
+    )
   })
 })

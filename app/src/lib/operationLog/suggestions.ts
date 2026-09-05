@@ -84,7 +84,7 @@ export function buildOperationLogSuggestions(
   }
 
   const current = materializeOperationLog(operations)
-  return [...groups.entries()].map(([id, group]) => {
+  const suggestions = [...groups.entries()].map(([id, group]) => {
     const firstIndex = Math.min(
       ...group.map((operation) =>
         ordered.findIndex((candidate) => candidate.op_id === operation.op_id)
@@ -137,6 +137,16 @@ export function buildOperationLogSuggestions(
       changedCells: diff.cells.filter((cell) => cell.kind !== 'unchanged'),
     }
   })
+  // Execution state is persisted both as execution records and, for editor
+  // resume, as transient cell metadata. A metadata-only cell.update is not an
+  // authored notebook change and would render as an empty suggestion.
+  return suggestions.filter(
+    (suggestion) =>
+      suggestion.changedCells.length > 0 ||
+      !suggestion.operations.every(
+        (operation) => operation.kind === 'cell.update'
+      )
+  )
 }
 
 function tokens(value: string): string[] {

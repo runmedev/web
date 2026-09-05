@@ -728,6 +728,39 @@ describe("NotebookData.runCodeCell", () => {
     expect(() => model.appendCell()).toThrow("releasing its write lock");
   });
 
+  it("quiesces active streams while a suggestion review is locked", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const cell = create(parser_pb.CellSchema, {
+      refId: "cell-review-cancel",
+      kind: parser_pb.CellKind.CODE,
+      languageId: "bash",
+      outputs: [],
+      metadata: {},
+      value: "sleep 30",
+    });
+    const model = new NotebookData({
+      notebook: create(parser_pb.NotebookSchema, { cells: [cell] }),
+      uri: "local://file/review-cancel.runme",
+      name: "review-cancel.runme",
+      notebookStore: { save },
+      loaded: true,
+    });
+
+    model.runCodeCell(cell);
+    const stream = model.getActiveStream(cell.refId) as
+      | (StreamsLike & { close: ReturnType<typeof vi.fn> })
+      | undefined;
+    model.setReviewPending(true);
+    await model.cancelActiveExecutions("Cancelled for suggestion review.\n");
+    await model.flushPendingPersist();
+
+    expect(stream?.close).toHaveBeenCalledTimes(1);
+    expect(
+      model.getCellSnapshot(cell.refId)?.metadata?.[RunmeMetadataKey.ExitCode],
+    ).toBe("130");
+    expect(save).toHaveBeenCalled();
+  });
+
   it("returns empty run id when no runner is available", () => {
     getWithFallback.mockReturnValueOnce(undefined);
     const logError = vi.spyOn(appLogger, "error");

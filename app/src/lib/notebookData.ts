@@ -1237,7 +1237,8 @@ export class NotebookData {
     const isCurrentExecution = () =>
       this.activeAppKernelExecutions.get(refId) === execution &&
       this.executionGeneration === generation &&
-      !this.releasePending
+      !this.releasePending &&
+      !this.reviewPending
 
     appLogger.info('Starting AppKernel cell execution', {
       attrs: {
@@ -1510,7 +1511,8 @@ export class NotebookData {
       this.executionGeneration === generation &&
       this.getCellProto(refId)?.metadata?.[RunmeMetadataKey.LastRunID] ===
         runID &&
-      !this.releasePending
+      !this.releasePending &&
+      !this.reviewPending
 
     let channelsURL: string
     try {
@@ -1559,7 +1561,8 @@ export class NotebookData {
     const isCurrentExecution = () =>
       this.executionGeneration === generation &&
       this.activeJupyterSockets.get(refId)?.socket === socket &&
-      !this.releasePending
+      !this.releasePending &&
+      !this.reviewPending
 
     const executeMsgID = crypto.randomUUID().replace(/-/g, '')
     const sessionID = crypto.randomUUID().replace(/-/g, '')
@@ -1966,11 +1969,17 @@ export class NotebookData {
       streams,
       intent,
       getCell: (ref) =>
-        this.executionGeneration === generation && !this.releasePending
+        this.executionGeneration === generation &&
+        !this.releasePending &&
+        !this.reviewPending
           ? this.getCellProto(ref)
           : null,
       updateCell: (next, options) => {
-        if (this.executionGeneration === generation && !this.releasePending) {
+        if (
+          this.executionGeneration === generation &&
+          !this.releasePending &&
+          !this.reviewPending
+        ) {
           this.updateCell(next, options)
         }
       },

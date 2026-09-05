@@ -191,6 +191,52 @@ describe('operation-log suggestions', () => {
     expect(suggestions[0].proposed.cells[0].value).toBe('Created atomically')
   })
 
+  it('omits execution-metadata-only cell updates', () => {
+    const operations: RunmeOperation[] = []
+    operations.push(
+      append(operations, {
+        sequence: 1,
+        kind: 'cell.create',
+        suggestionId: 'suggestion:create',
+        payload: {
+          cell_id: 'one',
+          position: [[100, 'actor_a', 1]],
+          cell: {
+            kind: 'code',
+            language_id: 'bash',
+            value: 'echo hello',
+            metadata: {},
+          },
+        },
+      })
+    )
+    operations.push(
+      append(operations, {
+        sequence: 2,
+        kind: 'cell.update',
+        suggestionId: 'suggestion:execution',
+        payload: {
+          cell_id: 'one',
+          cell: {
+            kind: 'code',
+            language_id: 'bash',
+            value: 'echo hello',
+            metadata: {
+              'runme.dev/lastRunID': 'run-1',
+              'runme.dev/executionState': 'running',
+            },
+          },
+        },
+      })
+    )
+
+    expect(
+      buildOperationLogSuggestions(operations).map(
+        (suggestion) => suggestion.id
+      )
+    ).toEqual(['suggestion:create'])
+  })
+
   it('produces an inline word diff with preserved whitespace', () => {
     expect(diffInlineText('hello world', 'hello brave world')).toEqual([
       { kind: 'equal', value: 'hello ' },

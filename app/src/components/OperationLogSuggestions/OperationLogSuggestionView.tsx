@@ -354,6 +354,7 @@ export function OperationLogSuggestionView({
   const [index, setIndex] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
+  const [reloadRequired, setReloadRequired] = useState(false)
 
   const load = useCallback(async () => {
     const [content, nextComments] = await Promise.all([
@@ -401,10 +402,15 @@ export function OperationLogSuggestionView({
     setBusy(true)
     const notebookData = getNotebookDataController().getNotebookData(docUri)
     const wasReviewPending = notebookData?.isReviewPending() ?? false
+    let reviewCommitted = false
+    let reloadComplete = false
     try {
       // Lock the neighboring editor synchronously, before the first await, so
       // no user edit can land between the flush and rematerialization.
       notebookData?.setReviewPending(true)
+      await notebookData?.cancelActiveExecutions(
+        'Execution cancelled because a suggestion review is being applied.\n'
+      )
       // The editor stays mounted in a neighboring tab. Flush its debounced
       // journal before appending a review so rematerialization cannot replace
       // an edit that has not reached the operation log yet.
@@ -415,6 +421,7 @@ export function OperationLogSuggestionView({
         decision,
         suggestion.operationIds
       )
+      reviewCommitted = true
       const parsed = await load()
       if (notebookData) {
         // A review changes the materialized snapshot without going through the
@@ -427,6 +434,8 @@ export function OperationLogSuggestionView({
           { persist: false }
         )
       }
+      reloadComplete = true
+      setReloadRequired(false)
       showToast({
         tone: 'success',
         message:
@@ -435,11 +444,45 @@ export function OperationLogSuggestionView({
             : 'Suggestion rejected.',
       })
     } catch (reviewError) {
+      if (reviewCommitted) {
+        setReloadRequired(true)
+      }
       setError(String(reviewError))
     } finally {
-      if (notebookData && !wasReviewPending) {
+      // Once the review append commits, a failed reload leaves the editor's
+      // model stale. Keep it locked so retrying the review can rematerialize
+      // safely; failures before the append do not change the journal.
+      const canUnlock =
+        reloadComplete || (!reviewCommitted && !wasReviewPending)
+      if (notebookData && canUnlock) {
         notebookData.setReviewPending(false)
       }
+      setBusy(false)
+    }
+  }
+
+  const retryLoad = async () => {
+    setBusy(true)
+    try {
+      const parsed = await load()
+      if (reloadRequired) {
+        const notebookData = getNotebookDataController().getNotebookData(docUri)
+        if (notebookData) {
+          const saveStore = await store.createOperationLogSaveStore(docUri)
+          notebookData.setNotebookStore(saveStore)
+          notebookData.loadNotebook(
+            materializedLogToNotebook(
+              materializeOperationLog(parsed.operations)
+            ),
+            { persist: false }
+          )
+          notebookData.setReviewPending(false)
+        }
+        setReloadRequired(false)
+      }
+    } catch (loadError) {
+      setError(String(loadError))
+    } finally {
       setBusy(false)
     }
   }
@@ -488,9 +531,26 @@ export function OperationLogSuggestionView({
         className="rounded-nb-sm border border-red-300 bg-red-50 p-4 text-sm text-red-800"
       >
         <p>Could not load suggestions: {error}</p>
-        <Button className="mt-3" size="1" variant="soft" onClick={onClose}>
-          Return to notebook
-        </Button>
+        {reloadRequired && (
+          <p className="mt-2">
+            The review was saved. Reload it before editing the notebook.
+          </p>
+        )}
+        <div className="mt-3 flex gap-2">
+          <Button
+            size="1"
+            variant="solid"
+            disabled={busy}
+            onClick={() => void retryLoad()}
+          >
+            Retry reload
+          </Button>
+          {!reloadRequired && (
+            <Button size="1" variant="soft" onClick={onClose}>
+              Return to notebook
+            </Button>
+          )}
+        </div>
       </div>
     )
   }
