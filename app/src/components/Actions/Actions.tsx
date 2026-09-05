@@ -3789,6 +3789,9 @@ function NotebookTabContent({
       </ScrollArea>
       {commentsPanelOpen && (
         <NotebookCommentsPanel
+          storage={
+            operationLogComments ? 'runme-operation-log' : 'google-drive'
+          }
           status={commentsStatus}
           errorMessage={commentsErrorMessage}
           threads={commentThreads}

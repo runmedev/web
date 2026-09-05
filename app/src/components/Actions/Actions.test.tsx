@@ -18,6 +18,8 @@ import {
   APPKERNEL_SANDBOX_RUNNER_NAME,
 } from '../../lib/runtime/appKernel'
 import { driveLinkCoordinator } from '../../lib/driveLinkCoordinator'
+import { appState } from '../../lib/runtime/AppState'
+import { createCellCommentAnchor } from '../../lib/notebookComments'
 
 import { parser_pb, RunmeMetadataKey } from '../../runme/client'
 import type { CellData } from '../../lib/notebookData'
@@ -92,8 +94,11 @@ const contextMocks = vi.hoisted(() => ({
     refreshConflictWithLatestUpstream?: ReturnType<typeof vi.fn>
     resolveConflictWithLocal?: ReturnType<typeof vi.fn>
     sync?: ReturnType<typeof vi.fn>
-    listOperationLogComments?: ReturnType<typeof vi.fn>
     subscribeSync: ReturnType<typeof vi.fn>
+    listOperationLogComments?: ReturnType<typeof vi.fn>
+    addOperationLogComment?: ReturnType<typeof vi.fn>
+    replyToOperationLogComment?: ReturnType<typeof vi.fn>
+    setOperationLogCommentResolved?: ReturnType<typeof vi.fn>
   },
 }))
 
@@ -150,6 +155,12 @@ const runnerContextMocks = vi.hoisted(() => ({
     interceptors: []
   }>,
   defaultRunnerName: '<default>' as string | null,
+}))
+
+const commentsPanelMocks = vi.hoisted(() => ({
+  commentsPanelOpen: false,
+  setCommentsPanelOpen: vi.fn(),
+  openCommentsPanel: vi.fn(),
 }))
 
 // Minimal mocks for contexts Action consumes
@@ -220,9 +231,9 @@ vi.mock('../../contexts/CurrentDocContext', () => ({
 
 vi.mock('../../contexts/CommentsPanelContext', () => ({
   useCommentsPanel: () => ({
-    commentsPanelOpen: false,
-    setCommentsPanelOpen: vi.fn(),
-    openCommentsPanel: vi.fn(),
+    commentsPanelOpen: commentsPanelMocks.commentsPanelOpen,
+    setCommentsPanelOpen: commentsPanelMocks.setCommentsPanelOpen,
+    openCommentsPanel: commentsPanelMocks.openCommentsPanel,
   }),
 }))
 
@@ -431,6 +442,11 @@ beforeEach(() => {
   contextMocks.refreshReadOnlyNotebook.mockResolvedValue(undefined)
   contextMocks.notebookSnapshots.clear()
   contextMocks.notebookStore = null
+  commentsPanelMocks.commentsPanelOpen = false
+  commentsPanelMocks.setCommentsPanelOpen.mockReset()
+  commentsPanelMocks.openCommentsPanel.mockReset()
+  appState.setDriveNotebookStore(null)
+  appState.setLocalComments(null)
   conflictMocks.openNotebookConflictDiff.mockReset()
   conflictMocks.openNotebookConflictDiff.mockResolvedValue(undefined)
   conflictMocks.openNotebookUpstreamDiff.mockReset()
@@ -538,6 +554,161 @@ describe('Actions tabs', () => {
       suggestionUri
     )
     expect(contextMocks.setCurrentDoc).toHaveBeenCalledWith(uri)
+  })
+
+  it('keeps the complete .runme comment lifecycle in the operation log', async () => {
+    const uri = 'local://file/comments.runme'
+    const cells = ['cell-open', 'cell-resolved', 'cell-new'].map((refId) =>
+      create(parser_pb.CellSchema, {
+        refId,
+        kind: parser_pb.CellKind.MARKUP,
+        languageId: 'markdown',
+        value: `Content for ${refId}`,
+      })
+    )
+    const cellData = new Map(
+      cells.map((cell) => [cell.refId, new StubCellData(cell)])
+    )
+    const comments = [
+      {
+        id: 'comment-open',
+        content: 'Open operation-log comment',
+        anchor: createCellCommentAnchor('cell-open'),
+        resolved: false,
+        replies: [],
+      },
+      {
+        id: 'comment-resolved',
+        content: 'Resolved operation-log comment',
+        anchor: createCellCommentAnchor('cell-resolved'),
+        resolved: true,
+        replies: [],
+      },
+    ]
+    const store = {
+      getMetadata: vi.fn(async () => ({
+        remoteUri: 'https://drive.google.com/file/d/drive-copy/view',
+      })),
+      getSyncState: vi.fn(async () => ({
+        status: 'synced',
+        localUri: uri,
+        remoteId: 'https://drive.google.com/file/d/drive-copy/view',
+      })),
+      rename: vi.fn(),
+      subscribeSync: vi.fn(() => () => undefined),
+      listOperationLogComments: vi.fn(async () => comments),
+      addOperationLogComment: vi.fn(async () => comments[0]),
+      replyToOperationLogComment: vi.fn(async () => comments[0]),
+      setOperationLogCommentResolved: vi.fn(async () => comments[0]),
+    }
+    const localComments = {
+      list: vi.fn(),
+      listPendingRecords: vi.fn(),
+      saveDesiredComment: vi.fn(),
+      saveDesiredReply: vi.fn(),
+      setThreadIntent: vi.fn(),
+      reconcile: vi.fn(),
+    }
+    const driveStore = { listComments: vi.fn() }
+
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      {
+        uri,
+        title: 'comments.runme',
+        requestedUri:
+          'https://drive.google.com/file/d/drive-copy/view?resourcekey=key',
+        state: 'loaded',
+      },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, { cells }),
+    })
+    contextMocks.getNotebookData.mockReturnValue({
+      getCell: (refId: string) => cellData.get(refId),
+      appendCell: vi.fn(),
+    })
+    contextMocks.notebookStore = store
+    commentsPanelMocks.commentsPanelOpen = true
+    appState.setLocalComments(localComments as never)
+    appState.setDriveNotebookStore(driveStore as never)
+
+    render(<Actions />)
+
+    await waitFor(() => {
+      expect(store.listOperationLogComments).toHaveBeenCalledWith(uri)
+      expect(screen.getByText('Stored in this .runme notebook')).toBeTruthy()
+    })
+    expect(screen.queryByText('Google Drive comment threads')).toBeNull()
+
+    const reply = screen.getByPlaceholderText('Reply or add others with @')
+    fireEvent.change(reply, { target: { value: 'Operation-log reply' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }))
+    await waitFor(() => {
+      expect(store.replyToOperationLogComment).toHaveBeenCalledWith(
+        uri,
+        'comment-open',
+        'Operation-log reply'
+      )
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve' }))
+    await waitFor(() => {
+      expect(store.setOperationLogCommentResolved).toHaveBeenCalledWith(
+        uri,
+        'comment-open',
+        true
+      )
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /resolved 1/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Reopen' })).toBeTruthy()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Reopen' }))
+    await waitFor(() => {
+      expect(store.setOperationLogCommentResolved).toHaveBeenCalledWith(
+        uri,
+        'comment-resolved',
+        false
+      )
+    })
+
+    const newCell = document.querySelector<HTMLElement>(
+      '[data-cell-ref-id="cell-new"]'
+    )
+    expect(newCell).not.toBeNull()
+    fireEvent.click(
+      within(newCell as HTMLElement).getByRole('button', {
+        name: 'Add comment',
+      })
+    )
+    const draft = await screen.findByText('New comment on Cell 3')
+    const draftArticle = draft.closest('article') as HTMLElement
+    fireEvent.change(within(draftArticle).getByRole('textbox'), {
+      target: { value: 'New operation-log comment' },
+    })
+    fireEvent.click(
+      within(draftArticle).getByRole('button', { name: 'Comment' })
+    )
+    await waitFor(() => {
+      expect(store.addOperationLogComment).toHaveBeenCalledWith(
+        uri,
+        expect.objectContaining({
+          content: 'New operation-log comment',
+          anchor: expect.stringContaining('cell-new'),
+        })
+      )
+    })
+
+    expect(localComments.list).not.toHaveBeenCalled()
+    expect(localComments.saveDesiredComment).not.toHaveBeenCalled()
+    expect(localComments.saveDesiredReply).not.toHaveBeenCalled()
+    expect(localComments.setThreadIntent).not.toHaveBeenCalled()
+    expect(localComments.reconcile).not.toHaveBeenCalled()
+    expect(driveStore.listComments).not.toHaveBeenCalled()
   })
 
   it('embeds an image selected from the button beside Add cell', async () => {
@@ -1138,7 +1309,8 @@ describe('Actions tabs', () => {
         title: 'shared.runme',
         requestedUri: remoteId,
         state: 'loaded',
-        refreshErrorMessage: 'Could not refresh operation log: OPFS unavailable',
+        refreshErrorMessage:
+          'Could not refresh operation log: OPFS unavailable',
       },
     ]
     contextMocks.notebookSnapshots.set(uri, {
@@ -1171,7 +1343,8 @@ describe('Actions tabs', () => {
     })
 
     expect(
-      refresh.compareDocumentPosition(driveSync) & Node.DOCUMENT_POSITION_FOLLOWING
+      refresh.compareDocumentPosition(driveSync) &
+        Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
     fireEvent.click(refresh)
     expect(contextMocks.refreshReadOnlyNotebook).toHaveBeenCalledWith(uri)
@@ -1232,9 +1405,7 @@ describe('Actions tabs', () => {
     fireEvent.click(filesystemStatus)
 
     expect(sync).not.toHaveBeenCalled()
-    expect(
-      screen.queryByLabelText(/Click to sync now/)
-    ).toBeNull()
+    expect(screen.queryByLabelText(/Click to sync now/)).toBeNull()
   })
 
   it('defers rendering inactive read-only notebook cells', () => {

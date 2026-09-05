@@ -8,6 +8,7 @@ import type {
 
 type CommentsStatus = 'loading' | 'available' | 'unavailable' | 'error'
 type CommentsFilter = 'open' | 'resolved' | 'all'
+export type CommentsStorage = 'google-drive' | 'runme-operation-log'
 type CommentsPanelItem = {
   type: 'thread'
   key: string
@@ -18,6 +19,7 @@ type CommentsPanelItem = {
 }
 
 export function NotebookCommentsPanel({
+  storage,
   status,
   errorMessage,
   threads,
@@ -40,6 +42,7 @@ export function NotebookCommentsPanel({
   onHide,
   onSelectTarget,
 }: {
+  storage: CommentsStorage
   status: CommentsStatus
   errorMessage?: string
   threads: CellCommentThread[]
@@ -196,7 +199,9 @@ export function NotebookCommentsPanel({
           <div>
             <h2 className="text-sm font-semibold text-nb-text">Comments</h2>
             <p className="text-xs text-nb-text-muted">
-              Google Drive comment threads
+              {storage === 'runme-operation-log'
+                ? 'Stored in this .runme notebook'
+                : 'Google Drive comment threads'}
             </p>
           </div>
           <div className="flex items-center gap-2">
