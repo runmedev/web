@@ -22,7 +22,8 @@ export class UnconfirmedDerivedCopyError extends Error {
 /**
  * All profiles elect one identity using the source file's conditional public
  * property update. r = reserved ID, f = confirmed ID, p = unconfirmed Shared
- * Drive POST. Only the call that wins a p claim may issue that POST.
+ * Drive POST. Claims include the source hash so copied metadata is re-elected.
+ * Only the call that wins a p claim may issue that POST.
  */
 export async function ensureDerivedCopy(
   drive: DriveNotebookStore,
@@ -31,28 +32,37 @@ export async function ensureDerivedCopy(
   name: string,
   content: () => Promise<string | null>
 ): Promise<NotebookStoreItem | null> {
-  const operationId = `runme-ipynb-${md5(driveFileUrl(parseDriveItem(sourceUri).id))}`
+  const sourceHash = md5(driveFileUrl(parseDriveItem(sourceUri).id))
+  const operationId = `runme-ipynb-${sourceHash}`
   let ownedPending: string | undefined
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const claim = await drive.getDerivedCopyClaim(sourceUri)
-    if (claim && !/^[rfp]:[A-Za-z0-9_-]+$/.test(claim)) {
+    if (claim && !/^[rfp]:[a-f0-9]{32}:[A-Za-z0-9_-]+$/.test(claim)) {
       throw new Error(
         'Invalid Colab copy coordination property on the source notebook.'
       )
     }
+    if (claim && claim.split(':')[1] !== sourceHash) {
+      // Drive copies custom properties. Detach the inherited identity without
+      // touching the original notebook's copy (including pending reservations).
+      await drive.compareAndSetDerivedCopyClaim(sourceUri, claim, null)
+      continue
+    }
     let target: NotebookStoreItem | null = null
     if (claim?.startsWith('r:') || claim?.startsWith('f:')) {
       target = await drive.getDerivedCopyTarget(
-        driveFileUrl(claim.slice(2)),
+        driveFileUrl(claim.split(':')[2]),
         operationId
       )
     } else {
-      const found = await drive.waitForCreateOperation(parentUri, operationId)
+      // A source can move while its create is unconfirmed. Search by its
+      // source-scoped identity across folders, then move the recovered target.
+      const found = await drive.waitForCreateOperation(null, operationId)
       if (found)
         target = await drive.getDerivedCopyTarget(found.uri, operationId)
     }
     if (target) {
-      const confirmed = `f:${parseDriveItem(target.uri).id}`
+      const confirmed = `f:${sourceHash}:${parseDriveItem(target.uri).id}`
       if (
         claim === confirmed ||
         (await drive.compareAndSetDerivedCopyClaim(sourceUri, claim, confirmed))
@@ -62,8 +72,8 @@ export async function ensureDerivedCopy(
     }
     if (!claim || claim.startsWith('f:')) {
       const next = (await drive.canUsePreGeneratedFileId(parentUri))
-        ? `r:${await drive.generateFileId()}`
-        : `p:${uuidv4()}`
+        ? `r:${sourceHash}:${await drive.generateFileId()}`
+        : `p:${sourceHash}:${uuidv4()}`
       if (await drive.compareAndSetDerivedCopyClaim(sourceUri, claim, next)) {
         if (next.startsWith('p:')) ownedPending = next
       }
@@ -86,7 +96,7 @@ export async function ensureDerivedCopy(
         IPYNB_MIME_TYPE,
         {
           createOperationId: operationId,
-          ...(claim.startsWith('r:') ? { fileId: claim.slice(2) } : {}),
+          ...(claim.startsWith('r:') ? { fileId: claim.split(':')[2] } : {}),
         }
       )
     } catch (error) {
@@ -97,7 +107,7 @@ export async function ensureDerivedCopy(
       }
       throw error
     }
-    const confirmed = `f:${parseDriveItem(target.uri).id}`
+    const confirmed = `f:${sourceHash}:${parseDriveItem(target.uri).id}`
     if (await drive.compareAndSetDerivedCopyClaim(sourceUri, claim, confirmed))
       return target
     // Another source save can change its ETag. Reread before further actions.

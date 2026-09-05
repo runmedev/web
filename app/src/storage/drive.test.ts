@@ -154,6 +154,19 @@ describe("isDriveItemUri", () => {
 });
 
 describe("DriveNotebookStore", () => {
+  it("recovers a source-scoped create across folders without a parent filter", async () => {
+    setGoogleDriveBaseUrl("https://drive.example.test");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const query = new URL(String(input)).searchParams.get("q");
+      expect(query).toContain("runmeCreateOperationId");
+      expect(query).toContain("source-operation");
+      expect(query).not.toContain("in parents");
+      return new Response(JSON.stringify({ files: [{ id: "copy", name: "source.ipynb", parents: ["old-parent"] }] }), { headers: { "Content-Type": "application/json" } });
+    });
+    const store = new DriveNotebookStore(async () => "access-token");
+    expect((await store.findByCreateOperation(null, "source-operation"))?.parents).toEqual([driveFolderUrl("old-parent")]);
+  });
+
   it.each([200, 412])(
     "conditionally updates only the copy property (HTTP %s)",
     async (status) => {

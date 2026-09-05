@@ -29,7 +29,12 @@ function remote(reserved: boolean) {
         return true
       }
     ),
-    waitForCreateOperation: vi.fn(async () => null), // Deliberately stale index.
+    waitForCreateOperation: vi.fn(
+      async (
+        _parent: string | null,
+        _operation: string
+      ): Promise<NotebookStoreItem | null> => null
+    ), // Deliberately stale index.
     getDerivedCopyTarget: vi.fn(async (uri: string) => files.get(uri) ?? null),
     canUsePreGeneratedFileId: vi.fn(async () => reserved),
     generateFileId: vi.fn(async () => `reserved-${++state.sequence}`),
@@ -62,6 +67,71 @@ function remote(reserved: boolean) {
 }
 
 describe('source-coordinated derived copies', () => {
+  it.each(['f', 'r', 'p'])(
+    're-elects an inherited %s claim for a copied source',
+    async (kind) => {
+      const server = remote(true)
+      const client = server.client()
+      const original = await ensureDerivedCopy(
+        client as unknown as DriveNotebookStore,
+        source,
+        parent,
+        'original.ipynb',
+        async () => '{}'
+      )
+      server.state.claim = kind + server.state.claim!.slice(1)
+      client.getDerivedCopyTarget.mockClear()
+      const copied = await ensureDerivedCopy(
+        client as unknown as DriveNotebookStore,
+        driveFileUrl('copied-source'),
+        parent,
+        'copy.ipynb',
+        async () => '{}'
+      )
+      expect(copied?.uri).not.toBe(original?.uri)
+      expect(server.files.get(original!.uri)?.name).toBe('original.ipynb')
+      expect(client.getDerivedCopyTarget).not.toHaveBeenCalledWith(
+        original!.uri,
+        expect.anything()
+      )
+      expect(server.state.creates).toBe(2)
+    }
+  )
+
+  it('recovers an unconfirmed copy in its old folder after the source moves', async () => {
+    const server = remote(false)
+    const client = server.client()
+    const create = client.createContent.getMockImplementation()!
+    client.createContent.mockImplementationOnce(async (...args) => {
+      await create(...args)
+      throw new Error('response lost')
+    })
+    await expect(
+      ensureDerivedCopy(
+        client as unknown as DriveNotebookStore,
+        source,
+        parent,
+        'source.ipynb',
+        async () => '{}'
+      )
+    ).rejects.toBeInstanceOf(UnconfirmedDerivedCopyError)
+    const original = [...server.files.values()][0]
+    client.waitForCreateOperation.mockResolvedValue(original)
+    const recovered = await ensureDerivedCopy(
+      client as unknown as DriveNotebookStore,
+      source,
+      'https://drive.google.com/drive/folders/new-parent',
+      'source.ipynb',
+      async () => '{}'
+    )
+    expect(recovered?.uri).toBe(original.uri)
+    expect(client.waitForCreateOperation).toHaveBeenLastCalledWith(
+      null,
+      expect.stringMatching(/^runme-ipynb-/)
+    )
+    expect(server.state.creates).toBe(1)
+  })
+
   it.each([true, false])(
     'elects one identity across concurrent profiles (reserved=%s)',
     async (reserved) => {

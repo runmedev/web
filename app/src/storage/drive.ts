@@ -2762,11 +2762,11 @@ export class DriveNotebookStore {
   }
 
   async findByCreateOperation(
-    parentUri: string,
+    parentUri: string | null,
     createOperationId: string
   ): Promise<NotebookStoreItem | null> {
-    const parent = parseDriveItem(parentUri)
-    if (parent.type !== NotebookStoreItemType.Folder) {
+    const parent = parentUri === null ? null : parseDriveItem(parentUri)
+    if (parent && parent.type !== NotebookStoreItemType.Folder) {
       throw new Error(
         'DriveNotebookStore.findByCreateOperation expects a folder URI'
       )
@@ -2777,12 +2777,14 @@ export class DriveNotebookStore {
       )
     }
 
-    const escapedParentId = escapeDriveQueryValue(parent.id)
+    const parentFilter = parent
+      ? `'${escapeDriveQueryValue(parent.id)}' in parents and `
+      : ''
     const escapedOperationId = escapeDriveQueryValue(createOperationId)
     const result = await this.search(
       {
         q:
-          `'${escapedParentId}' in parents and trashed = false and ` +
+          `${parentFilter}trashed = false and ` +
           `appProperties has { key='${DRIVE_CREATE_OPERATION_PROPERTY}' and ` +
           `value='${escapedOperationId}' }`,
         includeItemsFromAllDrives: true,
@@ -2791,7 +2793,7 @@ export class DriveNotebookStore {
         pageSize: 2,
         fields: 'files(id,name,mimeType,parents,createdTime,appProperties)',
       },
-      driveResourceKeyHeaders(parent)
+      parent ? driveResourceKeyHeaders(parent) : {}
     )
 
     if (result.files.length > 1) {
@@ -2814,7 +2816,9 @@ export class DriveNotebookStore {
       children: [],
       remoteUri: isFolder ? driveFolderUrl(file.id) : driveFileUrl(file.id),
       mimeType: file.mimeType,
-      parents: [parentUri],
+      parents: parentUri
+        ? [parentUri]
+        : (file.parents ?? []).map(driveFolderUrl),
     }
   }
 
@@ -2824,7 +2828,7 @@ export class DriveNotebookStore {
    * browser context has time to become visible.
    */
   async waitForCreateOperation(
-    parentUri: string,
+    parentUri: string | null,
     createOperationId: string,
     initialDelayMs: number = 0
   ): Promise<NotebookStoreItem | null> {
