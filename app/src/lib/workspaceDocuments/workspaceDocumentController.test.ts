@@ -26,6 +26,16 @@ describe("WorkspaceDocumentController", () => {
     window.sessionStorage.clear();
   });
 
+  it("restores adjacent editor/review tabs from session persistence", () => {
+    const uri = "local://file/review";
+    const reviewUri = getOperationLogSuggestionDocumentUri(uri);
+    const controller = new WorkspaceDocumentController();
+    controller.showDocument(uri, {title:"review.runme"});
+    controller.showDocument(reviewUri, {title:"Suggestions · review.runme",afterUri:uri});
+    const restored = new WorkspaceDocumentController();
+    expect(restored.getSnapshot().documents.map(d=>d.uri)).toEqual([uri,reviewUri]);
+  });
+
   it("shows and deduplicates workspace documents", () => {
     const persistence = createMemoryPersistence();
     const controller = new WorkspaceDocumentController(persistence);

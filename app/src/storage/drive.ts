@@ -633,6 +633,10 @@ export type DriveUser = {
   displayName?: string
   photoLink?: string
   me?: boolean
+  runmeAuthorKind?: 'human' | 'agent' | 'service-account' | 'unknown'
+  runmeAuthorSource?: 'google-drive'
+  runmeAuthenticatedPrincipal?: string
+  runmeActorId?: string
 }
 
 export type DriveReply = {

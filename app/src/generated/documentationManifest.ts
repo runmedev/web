@@ -154,4 +154,12 @@ export const DOCUMENTATION_MANIFEST = [
     order: 18,
     path: 'docs/18-progressive-web-app.md',
   },
+  {
+    name: 'notebook-review-rounds',
+    title: 'Review notebook revisions',
+    description:
+      'Capture fixed notebook review rounds, discuss changes across revisions, and use the comment and review APIs.',
+    order: 19,
+    path: 'docs/19-notebook-review-rounds.md',
+  },
 ] as const satisfies readonly DocumentationManifestEntry[]

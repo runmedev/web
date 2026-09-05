@@ -237,8 +237,8 @@ vi.mock('../../contexts/CommentsPanelContext', () => ({
   }),
 }))
 
-vi.mock('../OperationLogSuggestions/OperationLogSuggestionView', () => ({
-  OperationLogSuggestionView: ({
+vi.mock('../OperationLogSuggestions/NotebookReviewFlow', () => ({
+  NotebookReviewFlow: ({
     docUri,
     onClose,
   }: {
@@ -651,7 +651,8 @@ describe('Actions tabs', () => {
       expect(store.replyToOperationLogComment).toHaveBeenCalledWith(
         uri,
         'comment-open',
-        'Operation-log reply'
+        'Operation-log reply',
+        { author: { displayName: 'unknown', kind: 'unknown' } }
       )
     })
 

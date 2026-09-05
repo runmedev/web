@@ -10,10 +10,26 @@ import {
 import {
   type CommentAnchor,
   type CommentLocationState,
+  createCellCommentAnchor,
   parseCommentAnchor,
   resolveRenderedTextAnchor,
   toCellCommentThreads,
 } from '../notebookComments'
+import {
+  buildOperationLogSuggestions,
+  createSuggestionCommentAnchor,
+  parseOperationLog,
+} from '../operationLog'
+import {
+  type DiffCommentTarget,
+  createDiffCommentTarget,
+} from '../operationLog/diffCommentAnchor'
+import {
+  type Attribution,
+  type ReviewOutcome,
+  createReviewAnchor,
+  normalizeAttribution,
+} from '../operationLog/reviews'
 import type { NotebookDataLike } from './runmeConsole'
 
 type CommentStatusFilter = 'open' | 'resolved' | 'all'
@@ -30,10 +46,13 @@ export type CommentMutationInput = {
 
 export type CommentReplyInput = CommentMutationInput & {
   content: string
+  author?: Attribution
 }
 
 export type AgentAnnotation = {
   id: string | null
+  rawAnchor?: string
+  author?: unknown
   content: string
   resolved: boolean
   sync: {
@@ -199,6 +218,8 @@ export async function listNotebookComments(
           : []
       return {
         id: thread.comment.id ?? null,
+        rawAnchor: thread.comment.anchor,
+        author: thread.comment.author,
         content: thread.comment.content ?? '',
         resolved: Boolean(thread.comment.resolved),
         sync: {
@@ -276,7 +297,196 @@ export function resolveCommentAnchor(args: {
 export function createNotebookCommentsRuntimeApi(
   dependencies: NotebookCommentsRuntimeDependencies
 ) {
+  // The UI disables these actions too, but agent/API callers must not bypass
+  // notebook ownership or an in-progress release by invoking the runtime.
+  const assertWritable = (notebookData: NotebookDataLike) => {
+    if (notebookData.isReadOnly?.() || notebookData.isReleasePending?.())
+      throw new Error('Notebook is read-only or busy')
+  }
+  const operationContext = async (target: unknown, write = false) => {
+    if (!target) throw new Error('An explicit notebook target is required')
+    const context = await resolveCommentsContext(dependencies, target)
+    if (!context.operationLog)
+      throw new Error('Review APIs require a .runme notebook')
+    if (write) assertWritable(context.notebookData)
+    return { ...context, store: dependencies.resolveLocalNotebooks()! }
+  }
+  const suggestions = {
+    list: async (input: { target: unknown }) => {
+      const context = await operationContext(input.target)
+      return buildOperationLogSuggestions(
+        parseOperationLog(await context.store.loadContent(context.notebookUri))
+          .operations
+      )
+    },
+  }
+  const reviews = {
+    help: () =>
+      [
+        'await reviews.list({ target: { uri } })',
+        'await revisions.list({ target: { uri } })',
+        'await revisions.label({ target: { uri }, revisionId, name, description?, author? })',
+        'await reviews.preview({ target: { uri }, startRevisionId, endRevisionId })',
+        'await reviews.create({ target: { uri }, title?, startRevisionId, endRevisionId, author? }) — returns the existing review for that pair',
+        'await reviews.submit({ target: { uri }, reviewId, outcome, summary?, author? })',
+        'await reviews.linkThread({ target: { uri }, reviewId, commentId })',
+        'outcome: comment|approve|request_changes; review endpoints stay fixed; submission does not change notebook content or resolve threads',
+      ].join('\n'),
+    list: async (input: { target: unknown }) => {
+      const c = await operationContext(input.target)
+      return c.store.listNotebookReviews(c.notebookUri)
+    },
+    create: async (input: {
+      target: unknown
+      title?: string
+      baseReviewId?: string
+      startRevisionId?: string
+      endRevisionId?: string
+      author?: Attribution
+    }) => {
+      const c = await operationContext(input.target, true)
+      await c.notebookData.flushPendingPersist?.()
+      return c.store.createNotebookReview(c.notebookUri, {
+        ...input,
+        author: normalizeAttribution(input.author),
+      })
+    },
+    preview: async (input: {
+      target: unknown
+      startRevisionId: string
+      endRevisionId: string
+    }) => {
+      const c = await operationContext(input.target)
+      return c.store.previewNotebookReview(c.notebookUri, input)
+    },
+    submit: async (input: {
+      target: unknown
+      reviewId: string
+      outcome: ReviewOutcome
+      summary?: string
+      author?: Attribution
+    }) => {
+      const c = await operationContext(input.target, true)
+      return c.store.submitNotebookReview(c.notebookUri, {
+        ...input,
+        author: normalizeAttribution(input.author),
+      })
+    },
+    linkThread: async (input: {
+      target: unknown
+      reviewId: string
+      commentId: string
+    }) => {
+      const c = await operationContext(input.target, true)
+      return c.store.linkNotebookReviewThread(
+        c.notebookUri,
+        input.reviewId,
+        input.commentId
+      )
+    },
+  }
+  const revisions = {
+    help: () =>
+      'revisions.list({target:{uri}}); revisions.label({target:{uri},revisionId,name,description?,author?}); lastChangedAt is the last notebook change, not the label date.',
+    list: async (input: { target: unknown }) => {
+      const c = await operationContext(input.target)
+      await c.notebookData.flushPendingPersist?.()
+      return c.store.listNotebookRevisions(c.notebookUri)
+    },
+    label: async (input: {
+      target: unknown
+      revisionId: string
+      name: string
+      description?: string
+      author?: Attribution
+    }) => {
+      const c = await operationContext(input.target, true)
+      return c.store.labelNotebookRevision(c.notebookUri, {
+        ...input,
+        author: normalizeAttribution(input.author),
+      })
+    },
+  }
   return {
+    reviews,
+    revisions,
+    suggestions,
+    add: async (input: {
+      target: unknown
+      content: string
+      reviewId?: string
+      suggestionId?: string
+      cellId?: string
+      side?: DiffCommentTarget['side']
+      sourceRange?: DiffCommentTarget['sourceRange']
+      author?: Attribution
+    }) => {
+      const c = await operationContext(input.target, true)
+      if (!input.content.trim()) throw new Error('Comment content is required')
+      if (input.reviewId && input.suggestionId)
+        throw new Error('Choose a review or a suggestion target')
+      if (
+        (input.side || input.sourceRange) &&
+        (!input.cellId || (!input.reviewId && !input.suggestionId))
+      )
+        throw new Error(
+          'Diff side/range requires a review or suggestion and cellId'
+        )
+      let anchor: string
+      if (input.suggestionId) {
+        const suggestion = (await suggestions.list(input)).find(
+          (s) => s.id === input.suggestionId
+        )
+        if (!suggestion)
+          throw new Error('Suggestion not found in target notebook')
+        anchor = createSuggestionCommentAnchor(
+          input.suggestionId,
+          input.cellId
+            ? createDiffCommentTarget(
+                suggestion.diff.cells,
+                input.cellId,
+                input.side,
+                input.sourceRange
+              )
+            : undefined
+        )
+      } else if (input.reviewId) {
+        const round = (await reviews.list(input)).find(
+          (r) => r.id === input.reviewId
+        )
+        if (!round) throw new Error('Review not found in target notebook')
+        const target = input.cellId
+          ? createDiffCommentTarget(
+              round.diff.cells,
+              input.cellId,
+              input.side,
+              input.sourceRange
+            )
+          : undefined
+        anchor = createReviewAnchor(
+          input.reviewId,
+          input.cellId,
+          target?.quote,
+          target
+        )
+      } else if (input.cellId) {
+        if (
+          !c.notebookData
+            .getNotebook()
+            .cells.some((cell) => cell.refId === input.cellId)
+        )
+          throw new Error('Cell not found')
+        anchor = createCellCommentAnchor(input.cellId)
+      } else
+        throw new Error(
+          'An explicit review, suggestion, or cell target is required'
+        )
+      return c.store.addOperationLogComment(c.notebookUri, {
+        content: input.content,
+        anchor,
+        author: normalizeAttribution(input.author),
+      })
+    },
     list: (input: ListNotebookCommentsInput = {}) =>
       listNotebookComments(dependencies, input),
     parseAnchor: (anchor: string) => parseCommentAnchor(anchor),
@@ -284,21 +494,28 @@ export function createNotebookCommentsRuntimeApi(
       resolveCommentAnchor(args),
     reply: async (input: CommentReplyInput) => {
       const {
+        notebookData,
         driveNotebookStore,
         remoteUri,
         notebookUri,
         localComments,
         operationLog,
       } = await resolveCommentsContext(dependencies, input.target)
+      assertWritable(notebookData)
       if (operationLog) {
         return dependencies
           .resolveLocalNotebooks()!
           .replyToOperationLogComment(
             notebookUri,
             input.commentId,
-            input.content
+            input.content,
+            { author: normalizeAttribution(input.author) }
           )
       }
+      if (input.author !== undefined)
+        throw new Error(
+          'Native Google Drive comment authors cannot be overridden'
+        )
       if (localComments) {
         const operation = await localComments.saveDesiredReply({
           notebookUri,
@@ -317,12 +534,14 @@ export function createNotebookCommentsRuntimeApi(
     },
     resolve: async (input: CommentMutationInput) => {
       const {
+        notebookData,
         driveNotebookStore,
         remoteUri,
         notebookUri,
         localComments,
         operationLog,
       } = await resolveCommentsContext(dependencies, input.target)
+      assertWritable(notebookData)
       if (operationLog) {
         return dependencies
           .resolveLocalNotebooks()!
@@ -344,12 +563,14 @@ export function createNotebookCommentsRuntimeApi(
     },
     reopen: async (input: CommentMutationInput) => {
       const {
+        notebookData,
         driveNotebookStore,
         remoteUri,
         notebookUri,
         localComments,
         operationLog,
       } = await resolveCommentsContext(dependencies, input.target)
+      assertWritable(notebookData)
       if (operationLog) {
         return dependencies
           .resolveLocalNotebooks()!
@@ -372,9 +593,11 @@ export function createNotebookCommentsRuntimeApi(
     help: () =>
       [
         'await comments.list({ target?, status? })',
+        'await comments.add({ target, content, reviewId?, suggestionId?, cellId?, side?: "base" | "head", sourceRange?: { start, end, unit: "utf-16" }, author? })',
+        'author: { displayName, kind: human|agent|service-account|unknown }; omitted/blank API author is unknown, never the signed-in human',
         'comments.parseAnchor(anchor)',
         'comments.resolveAnchor({ anchor, source })',
-        'await comments.reply({ target?, commentId, content })',
+        'await comments.reply({ target?, commentId, content, author? })',
         'await comments.resolve({ target?, commentId })',
         'await comments.reopen({ target?, commentId })',
         'comments.list includes sync.status; .runme mutations append to the operation log, while Drive mutations persist locally and reconcile asynchronously',

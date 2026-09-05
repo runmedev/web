@@ -1,6 +1,7 @@
 import type { parser_pb } from '../../runme/client'
 import { computeNotebookDiff } from '../notebookDiff/diff'
 import type { CellDiff, NotebookDiff } from '../notebookDiff/model'
+import type { DiffCommentTarget } from './diffCommentAnchor'
 import { materializeOperationLog } from './materialize'
 import { materializedLogToNotebook } from './notebook'
 import { committedOperationIds, orderOperationSet } from './order'
@@ -44,6 +45,7 @@ interface SuggestionAnchor {
     version: 1
     type: 'suggestion'
     suggestionId: string
+    diffTarget?: DiffCommentTarget
   }
 }
 
@@ -222,9 +224,17 @@ export function diffInlineText(
 }
 
 /** Encode a comment target owned by one operation-log suggestion. */
-export function createSuggestionCommentAnchor(suggestionId: string): string {
+export function createSuggestionCommentAnchor(
+  suggestionId: string,
+  diffTarget?: DiffCommentTarget
+): string {
   const anchor: SuggestionAnchor = {
-    runme: { version: 1, type: 'suggestion', suggestionId },
+    runme: {
+      version: 1,
+      type: 'suggestion',
+      suggestionId,
+      ...(diffTarget ? { diffTarget } : {}),
+    },
   }
   return JSON.stringify(anchor)
 }

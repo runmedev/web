@@ -10,6 +10,7 @@ import { AUTO_IPYNB_KEY } from '../lib/derivedNotebook'
 import { IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { appLogger } from '../lib/logging/runtime'
 import { serializeNotebookToMarkdown } from '../lib/markdown/serializeNotebookToMarkdown'
+import { computeNotebookDiff } from '../lib/notebookDiff/diff'
 import {
   RUNME_OPERATION_LOG_MIME_TYPE,
   convertLegacyNotebookFileToRunme,
@@ -42,6 +43,19 @@ import {
   parseOperationLog,
   serializeOperationLog,
 } from '../lib/operationLog'
+import {
+  type Attribution,
+  type ReviewOutcome,
+  buildReviewRounds,
+  captureReviewRevision,
+  normalizeAttribution,
+} from '../lib/operationLog/reviews'
+import {
+  buildNotebookRevisions,
+  materializeRevision,
+  revisionFollows,
+  revisionKey,
+} from '../lib/operationLog/revisions'
 import { appState } from '../lib/runtime/AppState'
 import { RunmeMetadataKey, parser_pb } from '../runme/client'
 import {
@@ -1467,7 +1481,11 @@ export class LocalNotebooks extends Dexie {
         modifiedTime: operation?.created_at,
         author: {
           displayName: comment.payload.author.display_name,
-          me: true,
+          runmeAuthorKind: comment.payload.author.kind,
+          runmeAuthorSource: comment.payload.author.source,
+          runmeAuthenticatedPrincipal:
+            comment.payload.author.authenticated_principal,
+          runmeActorId: operation?.actor_id,
         },
         runmeOperationId: comment.operation_id,
       })
@@ -1494,7 +1512,11 @@ export class LocalNotebooks extends Dexie {
           anchor,
           author: {
             displayName: comment.payload.author.display_name,
-            me: true,
+            runmeAuthorKind: comment.payload.author.kind,
+            runmeAuthorSource: comment.payload.author.source,
+            runmeAuthenticatedPrincipal:
+              comment.payload.author.authenticated_principal,
+            runmeActorId: operation?.actor_id,
           },
           replies: repliesByThread.get(comment.thread_id) ?? [],
           runmeOperationId: comment.operation_id,
@@ -1511,14 +1533,26 @@ export class LocalNotebooks extends Dexie {
       motivation?: CommentAddPayload['annotation']['motivation']
       actorId?: string
       commentId?: string
+      author?: Attribution
     }
   ): Promise<DriveComment> {
     const actorId = input.actorId ?? (await getNotebookActorId(uri))
     const commentId = input.commentId ?? crypto.randomUUID()
+    const author = normalizeAttribution(input.author, true)
     const payload: CommentAddPayload = {
       comment_id: commentId,
       thread_id: commentId,
-      author: { principal_id: actorId, display_name: 'This browser session' },
+      author: {
+        principal_id: actorId,
+        display_name: author.displayName,
+        kind: author.kind,
+        ...(author.source
+          ? {
+              source: author.source,
+              authenticated_principal: author.authenticatedPrincipal,
+            }
+          : {}),
+      },
       body: { format: 'text/markdown', value: input.content },
       annotation: {
         motivation: input.motivation ?? 'commenting',
@@ -1540,7 +1574,7 @@ export class LocalNotebooks extends Dexie {
     uri: string,
     parentCommentId: string,
     content: string,
-    options: { actorId?: string } = {}
+    options: { actorId?: string; author?: Attribution } = {}
   ): Promise<DriveComment> {
     const { materialized } = await this.readMaterializedOperationLog(uri)
     const parent = materialized.comments.find(
@@ -1550,11 +1584,22 @@ export class LocalNotebooks extends Dexie {
       throw new Error(`Operation-log comment ${parentCommentId} was not found`)
     }
     const actorId = options.actorId ?? (await getNotebookActorId(uri))
+    const author = normalizeAttribution(options.author, true)
     const payload: CommentReplyPayload = {
       comment_id: crypto.randomUUID(),
       thread_id: parent.thread_id,
       parent_comment_id: parentCommentId,
-      author: { principal_id: actorId, display_name: 'This browser session' },
+      author: {
+        principal_id: actorId,
+        display_name: author.displayName,
+        kind: author.kind,
+        ...(author.source
+          ? {
+              source: author.source,
+              authenticated_principal: author.authenticatedPrincipal,
+            }
+          : {}),
+      },
       body: { format: 'text/markdown', value: content },
       annotation: { motivation: 'commenting', targets: [] },
     }
@@ -1619,6 +1664,199 @@ export class LocalNotebooks extends Dexie {
       options.actorId,
       decision === 'reject' ? payload.operation_ids : undefined
     )
+  }
+
+  /** Capture a fixed pair after the caller flushes its mounted editor. */
+  async createNotebookReview(
+    uri: string,
+    input: {
+      title?: string
+      baseReviewId?: string
+      startRevisionId?: string
+      endRevisionId?: string
+      author?: Attribution
+    }
+  ) {
+    const { parsed } = await this.readMaterializedOperationLog(uri)
+    const rounds = buildReviewRounds(parsed.operations)
+    const base = input.baseReviewId
+      ? rounds.find((round) => round.id === input.baseReviewId)
+      : undefined
+    if (input.baseReviewId && !base) throw new Error('Base review not found')
+    if (input.baseReviewId && (input.startRevisionId || input.endRevisionId))
+      throw new Error('Choose explicit revisions or baseReviewId, not both')
+    if (Boolean(input.startRevisionId) !== Boolean(input.endRevisionId))
+      throw new Error('Choose both start and end revisions')
+    const revisions = buildNotebookRevisions(parsed.operations)
+    const start = input.startRevisionId
+      ? revisions.find((r) => r.id === input.startRevisionId)
+      : undefined
+    const end = input.endRevisionId
+      ? revisions.find((r) => r.id === input.endRevisionId)
+      : undefined
+    if (input.startRevisionId && (!start || !end))
+      throw new Error('Revision not found')
+    if (start && end && !revisionFollows(start, end))
+      throw new Error('End revision must be after start revision')
+    const baseOperationIds = start?.operationIds ?? base?.headOperationIds ?? []
+    const headOperationIds = end
+      ? [...new Set([...baseOperationIds, ...end.operationIds])]
+      : captureReviewRevision(parsed.operations)
+    const startKey = revisionKey(parsed.operations, baseOperationIds)
+    const endKey = revisionKey(parsed.operations, headOperationIds)
+    if (startKey === endKey)
+      throw new Error('End revision must be after start revision')
+    const existing = rounds.find(
+      (r) =>
+        revisionKey(parsed.operations, r.baseOperationIds) === startKey &&
+        revisionKey(parsed.operations, r.headOperationIds) === endKey
+    )
+    if (existing) return existing
+    // Same pair yields the same ID across tabs and offline replicas. Projection
+    // verifies full endpoints and coalesces concurrent create records.
+    const id = `review:${md5(JSON.stringify([startKey, endKey]))}`
+    await this.appendOperationLogMutation(uri, 'review.create', {
+      id,
+      title: input.title?.trim() || `Round ${rounds.length + 1}`,
+      baseOperationIds,
+      headOperationIds,
+      ...(base ? { previousReviewId: base.id } : {}),
+      author: normalizeAttribution(input.author, true),
+    } as unknown as JsonValue)
+    return (await this.listNotebookReviews(uri)).find(
+      (round) => round.id === id
+    )!
+  }
+
+  async listNotebookReviews(uri: string) {
+    return buildReviewRounds(
+      (await this.readMaterializedOperationLog(uri)).parsed.operations
+    )
+  }
+
+  /** Names annotate existing revisions; they do not change the notebook or its date. */
+  async listNotebookRevisions(uri: string) {
+    return buildNotebookRevisions(
+      (await this.readMaterializedOperationLog(uri)).parsed.operations
+    )
+  }
+
+  async labelNotebookRevision(
+    uri: string,
+    input: {
+      revisionId: string
+      name: string
+      description?: string
+      author?: Attribution
+    }
+  ) {
+    if (
+      typeof input.name !== 'string' ||
+      !input.name.trim() ||
+      input.name.length > 200 ||
+      (input.description !== undefined &&
+        (typeof input.description !== 'string' ||
+          input.description.length > 2000))
+    )
+      throw new Error(
+        'Provide a revision name (up to 200 characters) and description (up to 2000 characters)'
+      )
+    const revision = (await this.listNotebookRevisions(uri)).find(
+      (r) => r.id === input.revisionId
+    )
+    if (!revision) throw new Error('Revision not found')
+    await this.appendOperationLogMutation(uri, 'revision.label', {
+      revisionId: revision.id,
+      operationIds: revision.operationIds,
+      name: input.name.trim(),
+      description: input.description ?? '',
+      author: normalizeAttribution(input.author, true),
+    } as unknown as JsonValue)
+    return (await this.listNotebookRevisions(uri)).find(
+      (r) => r.id === revision.id
+    )!
+  }
+
+  /** Read-only preview uses exactly the selected revisions, never the live head. */
+  async previewNotebookReview(
+    uri: string,
+    input: { startRevisionId: string; endRevisionId: string }
+  ) {
+    const { parsed } = await this.readMaterializedOperationLog(uri)
+    const revisions = buildNotebookRevisions(parsed.operations)
+    const start = revisions.find((r) => r.id === input.startRevisionId)
+    const end = revisions.find((r) => r.id === input.endRevisionId)
+    if (!start || !end) throw new Error('Revision not found')
+    if (!revisionFollows(start, end))
+      throw new Error('End revision must be after start revision')
+    const before = materializeRevision(parsed.operations, start.operationIds)
+    const after = materializeRevision(parsed.operations, end.operationIds)
+    const existing = buildReviewRounds(parsed.operations).find(
+      (r) =>
+        revisionKey(parsed.operations, r.baseOperationIds) ===
+          JSON.stringify(start.changeIds) &&
+        revisionKey(parsed.operations, r.headOperationIds) ===
+          JSON.stringify(end.changeIds)
+    )
+    return {
+      start,
+      end,
+      before,
+      after,
+      diff: computeNotebookDiff(before, after, {
+        includeMetadata: true,
+        includeOutputs: true,
+      }),
+      existingReviewId: existing?.id,
+    }
+  }
+
+  async submitNotebookReview(
+    uri: string,
+    input: {
+      reviewId: string
+      outcome: ReviewOutcome
+      summary?: string
+      author?: Attribution
+    }
+  ) {
+    if (
+      !(await this.listNotebookReviews(uri)).some(
+        (round) => round.id === input.reviewId
+      )
+    )
+      throw new Error('Review not found')
+    if (!['comment', 'approve', 'request_changes'].includes(input.outcome))
+      throw new Error('Invalid review outcome')
+    if (input.summary !== undefined && typeof input.summary !== 'string')
+      throw new Error('Review summary must be text')
+    await this.appendOperationLogMutation(uri, 'review.submit', {
+      ...input,
+      author: normalizeAttribution(input.author, true),
+    } as unknown as JsonValue)
+  }
+
+  async linkNotebookReviewThread(
+    uri: string,
+    reviewId: string,
+    commentId: string
+  ) {
+    if (
+      !(await this.listNotebookReviews(uri)).some(
+        (round) => round.id === reviewId
+      )
+    )
+      throw new Error('Review not found')
+    if (
+      !(await this.listOperationLogComments(uri)).some(
+        (comment) => comment.id === commentId
+      )
+    )
+      throw new Error('Thread not found')
+    await this.appendOperationLogMutation(uri, 'review.link_thread', {
+      reviewId,
+      commentId,
+    })
   }
 
   private async readMaterializedOperationLog(uri: string) {
