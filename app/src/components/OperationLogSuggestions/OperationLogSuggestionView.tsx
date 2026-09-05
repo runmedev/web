@@ -24,7 +24,9 @@ import {
 } from '../../lib/operationLog'
 import type { CellDiff } from '../../lib/notebookDiff/model'
 import type { DriveComment } from '../../storage/drive'
-import type LocalNotebooks from '../../storage/local'
+import LocalNotebooks, {
+  OperationLogMutationCommitUncertainError,
+} from '../../storage/local'
 import { showToast } from '../../lib/toast'
 
 function cellLabel(row: CellDiff): string {
@@ -456,7 +458,11 @@ export function OperationLogSuggestionView({
             : 'Suggestion rejected.',
       })
     } catch (reviewError) {
-      if (reviewCommitted) {
+      if (
+        reviewCommitted ||
+        reviewError instanceof OperationLogMutationCommitUncertainError
+      ) {
+        reviewCommitted = true
         notebookData?.setReviewReloadRequired(true)
         setReloadRequired(true)
       }

@@ -32,6 +32,7 @@ import LocalNotebooks, {
   type LocalFileRecord,
   type LocalFolderRecord,
   NotebookConflictChangedError,
+  OperationLogMutationCommitUncertainError,
 } from './local'
 import { NotebookStoreItemType } from './notebook'
 import { MemoryOperationLogStorage } from './operationLogs'
@@ -585,6 +586,53 @@ describe('LocalNotebooks operation-log storage', () => {
       [authored.op_id],
       undefined,
     ])
+  })
+
+  it('reports an uncertain commit when bookkeeping fails after a review append', async () => {
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local Notebooks',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const created = await store.create(LOCAL_FOLDER_URI, 'review-error.runme')
+    const saveStore = await store.createOperationLogSaveStore(created.uri, {
+      actorId: 'actor_review',
+    })
+    await saveStore.save(
+      created.uri,
+      create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'cell_one',
+            kind: parser_pb.CellKind.MARKUP,
+            languageId: 'markdown',
+            value: 'Suggested',
+          }),
+        ],
+      })
+    )
+    const authored = parseOperationLog(await store.loadContent(created.uri))
+      .operations[0]
+    store.files.update.mockRejectedValueOnce(new Error('IndexedDB unavailable'))
+
+    await expect(
+      store.reviewOperationLogSuggestion(
+        created.uri,
+        authored.suggestion_id!,
+        'reject',
+        [authored.op_id],
+        { actorId: 'actor_review' }
+      )
+    ).rejects.toBeInstanceOf(OperationLogMutationCommitUncertainError)
+
+    const reviews = parseOperationLog(
+      await store.loadContent(created.uri)
+    ).operations.filter((operation) => operation.kind === 'suggestion.review')
+    expect(reviews).toHaveLength(1)
   })
 
   it('loads stale Drive-backed .runme data by merging local and remote operations', async () => {

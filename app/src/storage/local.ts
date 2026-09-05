@@ -221,6 +221,20 @@ export class NotebookConflictChangedError extends Error {
   }
 }
 
+/** A journal mutation produced records, but a later failure obscured commit state. */
+export class OperationLogMutationCommitUncertainError extends Error {
+  constructor(
+    readonly uri: string,
+    readonly operationKind: string,
+    readonly cause: unknown
+  ) {
+    super(
+      `The ${operationKind} operation may already be committed for ${uri}: ${String(cause)}`
+    )
+    this.name = 'OperationLogMutationCommitUncertainError'
+  }
+}
+
 export class DriveSnapshotChangedError extends Error {
   constructor(readonly remoteUri: string) {
     super(`Google Drive changed while importing ${remoteUri}. Please retry.`)
@@ -1602,32 +1616,41 @@ export class LocalNotebooks extends Dexie {
       throw new Error(`Operation-log reference missing for ${uri}`)
     }
     const actorId = suppliedActorId ?? (await getNotebookActorId(uri))
-    const stored = await this.operationLogStorage.appendTransaction(
-      record.operationLogRef,
-      (currentDocument) => {
-        const parsed = parseOperationLog(currentDocument)
-        const operation = createRunmeOperation({
-          actorId,
-          actorSequence: highestActorSequence(parsed.operations, actorId) + 1,
-          dependencies: causalHeads(parsed.operations),
-          knownOperations: parsed.operations,
-          kind,
-          payload,
-          reverts,
-        })
-        return `${canonicalJson(operation as unknown as JsonValue)}\n`
-      },
-      { validate: (document) => void parseOperationLog(document) }
-    )
-    await this.files.update(uri, {
-      doc: '',
-      md5Checksum: stored.checksum,
-      operationLogRef: stored.ref,
-    })
-    this.notifySync(uri)
-    if (!record.conflict) {
-      this.enqueueSync(uri)
-      this.enqueueMarkdownSync(uri)
+    let mutationCreated = false
+    try {
+      const stored = await this.operationLogStorage.appendTransaction(
+        record.operationLogRef,
+        (currentDocument) => {
+          const parsed = parseOperationLog(currentDocument)
+          const operation = createRunmeOperation({
+            actorId,
+            actorSequence: highestActorSequence(parsed.operations, actorId) + 1,
+            dependencies: causalHeads(parsed.operations),
+            knownOperations: parsed.operations,
+            kind,
+            payload,
+            reverts,
+          })
+          mutationCreated = true
+          return `${canonicalJson(operation as unknown as JsonValue)}\n`
+        },
+        { validate: (document) => void parseOperationLog(document) }
+      )
+      await this.files.update(uri, {
+        doc: '',
+        md5Checksum: stored.checksum,
+        operationLogRef: stored.ref,
+      })
+      this.notifySync(uri)
+      if (!record.conflict) {
+        this.enqueueSync(uri)
+        this.enqueueMarkdownSync(uri)
+      }
+    } catch (error) {
+      if (mutationCreated) {
+        throw new OperationLogMutationCommitUncertainError(uri, kind, error)
+      }
+      throw error
     }
   }
 

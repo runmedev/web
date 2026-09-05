@@ -9,7 +9,9 @@ import {
   type NotebookLogHeader,
   type RunmeOperation,
 } from '../../lib/operationLog'
-import type LocalNotebooks from '../../storage/local'
+import LocalNotebooks, {
+  OperationLogMutationCommitUncertainError,
+} from '../../storage/local'
 import { OperationLogSuggestionView } from './OperationLogSuggestionView'
 
 const notebookDataMocks = vi.hoisted(() => ({
@@ -300,6 +302,45 @@ describe('OperationLogSuggestionView', () => {
     expect(store.createOperationLogSaveStore).toHaveBeenCalledWith(
       'local://file/test',
       { initialDocument: operationLogDocument() }
+    )
+  })
+
+  it('keeps the editor locked when the review commit result is uncertain', async () => {
+    const store = {
+      loadContent: vi.fn().mockResolvedValue(operationLogDocument()),
+      listOperationLogComments: vi.fn().mockResolvedValue([]),
+      reviewOperationLogSuggestion: vi
+        .fn()
+        .mockRejectedValue(
+          new OperationLogMutationCommitUncertainError(
+            'local://file/test',
+            'suggestion.review',
+            new Error('post-commit bookkeeping failed')
+          )
+        ),
+      createOperationLogSaveStore: vi.fn().mockResolvedValue({ save: vi.fn() }),
+    } as unknown as LocalNotebooks
+
+    render(
+      <OperationLogSuggestionView
+        docUri="local://file/test"
+        store={store}
+        readOnly={false}
+        onClose={vi.fn()}
+      />
+    )
+
+    await screen.findByText('1 of 2')
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
+    await screen.findByRole('button', { name: 'Retry reload' })
+
+    expect(notebookDataMocks.setReviewReloadRequired).toHaveBeenCalledWith(true)
+    expect(notebookDataMocks.setReviewPending).toHaveBeenCalledTimes(1)
+    expect(notebookDataMocks.setReviewPending).toHaveBeenCalledWith(true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry reload' }))
+    await waitFor(() =>
+      expect(notebookDataMocks.setReviewPending).toHaveBeenLastCalledWith(false)
     )
   })
 })
