@@ -138,6 +138,12 @@ function createTestStore(
     })
   }
   localStore.driveStore = driveStore
+  if (driveStore && typeof driveStore === 'object') {
+    const drive = driveStore as any
+    drive.waitForCreateOperation ??= drive.findByCreateOperation
+    drive.canUsePreGeneratedFileId ??= vi.fn(async () => false)
+    drive.createContent ??= drive.create
+  }
   localStore.driveSyncCoordinator =
     options.driveSyncCoordinator ?? createTestDriveSyncCoordinator()
   localStore.filesystemStore = null
@@ -183,7 +189,7 @@ describe('LocalNotebooks operation-log storage', () => {
       const store = createTestStore({})
       store.syncIpynbFile = vi.fn(async () => {})
       store.syncMarkdownFile = vi.fn(async () => {})
-      store.syncFile = vi.fn(async () => {})
+      Object.assign(store, { syncFile: vi.fn(async () => {}) })
       await store.folders.put({
         id: LOCAL_FOLDER_URI,
         name: 'Local',
@@ -328,6 +334,80 @@ describe('LocalNotebooks operation-log storage', () => {
         expect(drive.saveContent.mock.calls[0][1]).toContain(
           'Latest committed version'
         )
+    }
+  )
+
+  it.each([true, false])(
+    'settles a lost create response before retrying (reserved IDs=%s)',
+    async (reserved) => {
+      const remote = 'https://drive.google.com/file/d/uncertain/view'
+      const parent = 'https://drive.google.com/drive/folders/parent'
+      const target = {
+        uri: 'https://drive.google.com/file/d/reserved-copy/view',
+        name: 'source.ipynb',
+        parents: [parent],
+      }
+      const drive = {
+        getMetadata: vi.fn(async () => ({
+          name: 'source.runme',
+          parents: [parent],
+        })),
+        getMetadataIfExists: vi.fn(async () => null),
+        waitForCreateOperation: vi.fn(
+          async (): Promise<typeof target | null> => null
+        ),
+        canUsePreGeneratedFileId: vi.fn(async () => reserved),
+        generateFileId: vi.fn(async () => 'reserved-copy'),
+        createContent: vi
+          .fn()
+          .mockRejectedValueOnce(new Error('response lost'))
+          .mockResolvedValue(target),
+        saveContent: vi.fn(async () => {}),
+      }
+      const store = createTestStore(drive)
+      await store.folders.put({
+        id: LOCAL_FOLDER_URI,
+        name: 'Local',
+        remoteId: '',
+        children: [],
+        lastSynced: '',
+      })
+      const created = await store.create(LOCAL_FOLDER_URI, 'source.runme')
+      await store.files.update(created.uri, { remoteId: remote })
+      const journal = await store.createOperationLogSaveStore(created.uri, {
+        actorId: 'export-test',
+      })
+      const notebook = await store.load(created.uri)
+      notebook.metadata[AUTO_IPYNB_KEY] = 'true'
+      await journal.save(created.uri, notebook)
+      await expect(store.syncIpynbFile(created.uri)).rejects.toThrow(
+        'response lost'
+      )
+      expect(
+        (await store.files.get(created.uri))?.ipynbExportCreatePending
+      ).toBeDefined()
+      if (reserved) {
+        await store.syncIpynbFile(created.uri)
+        expect(drive.generateFileId).toHaveBeenCalledTimes(1)
+        expect(drive.createContent).toHaveBeenCalledTimes(2)
+        for (const call of drive.createContent.mock.calls)
+          expect(call[4].fileId).toBe('reserved-copy')
+      } else {
+        await expect(store.syncIpynbFile(created.uri)).rejects.toThrow(
+          'awaiting Drive confirmation'
+        )
+        expect(drive.createContent).toHaveBeenCalledTimes(1)
+        drive.waitForCreateOperation.mockResolvedValue(target)
+        await store.syncIpynbFile(created.uri)
+        expect(drive.createContent).toHaveBeenCalledTimes(1)
+      }
+      expect(drive.waitForCreateOperation).toHaveBeenCalled()
+      expect(
+        (await store.files.get(created.uri))?.ipynbExportCreatePending
+      ).toBeUndefined()
+      expect((await store.getIpynbExportState(created.uri)).uri).toBe(
+        target.uri
+      )
     }
   )
 

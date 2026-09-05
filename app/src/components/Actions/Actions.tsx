@@ -475,10 +475,19 @@ function isDriveBackedNotebook(
   )
 }
 
-function ReadOnlyTabIndicator() {
+function ReadOnlyTabIndicator({ uri }: { uri: string }) {
+  const { useNotebookSnapshot } = useNotebookContext()
+  const snapshot = useNotebookSnapshot(uri)
+  const derived = Boolean(
+    parseDerivedSource(snapshot?.notebook.metadata[DERIVED_NOTEBOOK_KEY])
+  )
   return (
     <Tooltip
-      content="Read-only. This notebook is open for editing in another browser tab."
+      content={
+        derived
+          ? 'Read-only generated copy. Edit the source .runme notebook.'
+          : 'Read-only. This notebook is open for editing in another browser tab.'
+      }
       side="bottom"
     >
       <span
@@ -4876,7 +4885,7 @@ export default function Actions() {
                       <span className="max-w-[140px] truncate">
                         {displayName}
                       </span>
-                      {doc.readOnly && <ReadOnlyTabIndicator />}
+                      {doc.readOnly && <ReadOnlyTabIndicator uri={doc.uri} />}
                     </Tabs.Trigger>
                     {isNotebook &&
                       detectNotebookFileFormat(doc.title) ===

@@ -51,6 +51,7 @@ import {
 } from './conflictDocs'
 import {
   type DriveComment,
+  DriveCreateNotCommittedError,
   DriveNotebookStore,
   type DriveRevision,
   type DriveVersionMetadata,
@@ -135,6 +136,12 @@ export interface LocalFileRecord {
   /** Derived Colab copy identity and last export outcome; source option lives in the journal. */
   ipynbExportUri?: string
   ipynbExportSourceUri?: string
+  /** Durable reservation/uncertain-create marker, written before any remote create. */
+  ipynbExportCreatePending?: {
+    sourceUri: string
+    parentUri: string
+    remoteUri?: string
+  }
   ipynbExportError?: string
   ipynbExportedAt?: string
   /** Stable idempotency key for creating the Markdown sidecar. */
@@ -3499,24 +3506,90 @@ export class LocalNotebooks extends Dexie {
         // Never select an unrelated user file merely because its name matches.
         const sourceUri = driveFileUrl(parseDriveItem(record.remoteId).id)
         const createOperationId = `runme-ipynb-${md5(sourceUri)}`
+        let pending =
+          record.ipynbExportCreatePending?.sourceUri === sourceUri
+            ? record.ipynbExportCreatePending
+            : undefined
         let target =
           record.ipynbExportUri && record.ipynbExportSourceUri === sourceUri
             ? await driveStore.getMetadataIfExists(record.ipynbExportUri)
-            : null
+            : pending?.remoteUri
+              ? await driveStore.getMetadataIfExists(pending.remoteUri)
+              : null
         if (!target) {
-          target = await driveStore.findByCreateOperation(
-            parentUri,
+          target = await driveStore.waitForCreateOperation(
+            pending?.parentUri ?? parentUri,
             createOperationId
           )
         }
         if (!target) {
-          target = await driveStore.create(parentUri, name, {
-            createOperationId,
-          })
+          const beforeCreate = await this.files.get(uri)
+          if (
+            !beforeCreate?.operationLogRef ||
+            beforeCreate.conflict ||
+            beforeCreate.remoteId !== record.remoteId
+          )
+            return
+          const creationNotebook = materializedLogToNotebook(
+            materializeOperationLog(
+              parseOperationLog(
+                (
+                  await this.operationLogStorage.read(
+                    beforeCreate.operationLogRef
+                  )
+                ).document
+              ).operations
+            )
+          )
+          if (creationNotebook.metadata[AUTO_IPYNB_KEY] !== 'true') return
+          // Shared Drives cannot reserve IDs. An uncertain request there must
+          // settle in search before retrying; never issue a second blind create.
+          if (pending && !pending.remoteUri) {
+            throw new Error(
+              'Colab copy creation is awaiting Drive confirmation; retry sync later.'
+            )
+          }
+          if (!pending) {
+            pending = {
+              sourceUri,
+              parentUri,
+              ...((await driveStore.canUsePreGeneratedFileId(parentUri))
+                ? { remoteUri: driveFileUrl(await driveStore.generateFileId()) }
+                : {}),
+            }
+            await this.files.update(uri, { ipynbExportCreatePending: pending })
+          }
+          try {
+            target = await driveStore.createContent(
+              parentUri,
+              name,
+              encodeDerivedIpynb(creationNotebook, {
+                version: 1,
+                uri: record.remoteId,
+                notebookId: log.header.notebook_id,
+                generatedAt: new Date().toISOString(),
+              }),
+              IPYNB_MIME_TYPE,
+              {
+                createOperationId,
+                ...(pending.remoteUri
+                  ? { fileId: parseDriveItem(pending.remoteUri).id }
+                  : {}),
+              }
+            )
+          } catch (error) {
+            if (error instanceof DriveCreateNotCommittedError) {
+              await this.files.update(uri, {
+                ipynbExportCreatePending: undefined,
+              })
+            }
+            throw error
+          }
         }
         await this.files.update(uri, {
           ipynbExportUri: target.uri,
           ipynbExportSourceUri: sourceUri,
+          ipynbExportCreatePending: undefined,
         })
         if (target.name !== name) await driveStore.rename(target.uri, name)
         if (target.parents?.[0] && target.parents[0] !== parentUri) {

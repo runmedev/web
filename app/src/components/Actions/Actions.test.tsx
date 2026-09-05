@@ -1175,6 +1175,18 @@ describe('Actions tabs', () => {
     ).toBe(`?doc=${encodeURIComponent(source)}`)
     expect(screen.queryByTestId('notebook-readonly-banner')).toBeNull()
     expect(screen.queryByLabelText('Add first cell')).toBeNull()
+    const derivedTab = screen.getByTitle('derived.ipynb')
+    expect(
+      within(derivedTab).getAllByLabelText('Read-only notebook').length
+    ).toBeGreaterThan(0)
+    fireEvent.contextMenu(derivedTab)
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Rename',
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
   })
 
   it('requests write access from a read-only notebook banner', () => {

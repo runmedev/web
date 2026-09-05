@@ -198,6 +198,34 @@ describe('NotebookDataController', () => {
     )
   })
 
+  it('propagates a derived notebook model restriction to the first tab entry', async () => {
+    const localStore = createFakeLocalNotebooks()
+    const uri = 'local://file/derived'
+    const notebook = createNotebook('Generated content')
+    notebook.metadata['runme.dev/derivedFrom'] = JSON.stringify({
+      version: 1,
+      uri: 'https://drive.google.com/file/d/source/view',
+      notebookId: 'source',
+      generatedAt: '2026-09-05',
+    })
+    localStore.records.set(uri, {
+      id: uri,
+      name: 'derived.ipynb',
+      remoteId: uri,
+      notebook,
+    })
+    const controller = getNotebookDataController()
+    controller.configureOwnershipManager(createFakeOwnershipManager())
+    controller.configureStores({
+      localNotebooks: localStore as unknown as LocalNotebooks,
+    })
+    const result = await controller.openNotebook(uri)
+    expect(result.entry.readOnly).toBe(true)
+    expect(controller.getOpenNotebooks()[0].readOnly).toBe(true)
+    controller.getNotebookData(uri)?.setReadOnly(false)
+    expect(controller.getOpenNotebooks()[0].readOnly).toBe(true)
+  })
+
   it('opens .runme notebooks writable without acquiring a lifetime lease', async () => {
     const localStore = createFakeLocalNotebooks()
     localStore.records.set('local://file/shared', {
@@ -272,10 +300,7 @@ describe('NotebookDataController', () => {
     })
     await controller.openNotebook(uri)
     const notebookData = controller.getNotebookData(uri)!
-    const flushPendingPersist = vi.spyOn(
-      notebookData,
-      'flushPendingPersist'
-    )
+    const flushPendingPersist = vi.spyOn(notebookData, 'flushPendingPersist')
 
     await controller.refreshReadOnlyNotebook(uri)
 

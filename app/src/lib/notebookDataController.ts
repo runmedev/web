@@ -749,6 +749,12 @@ export class NotebookDataController {
     })
     const unsubscribe = data.subscribe(() => {
       this.updateOpenEntryName(data.getUri(), data.getName())
+      // Model-level restrictions (including generated assets) also govern tabs.
+      this.openNotebooks = this.openNotebooks.map((entry) =>
+        entry.uri === data.getUri() && entry.readOnly !== data.isReadOnly()
+          ? { ...entry, readOnly: data.isReadOnly() }
+          : entry
+      )
       this.emit()
     })
     const handle = { data, unsubscribe, loaded }
@@ -824,6 +830,10 @@ export class NotebookDataController {
   }
 
   private upsertOpenEntry(entry: OpenNotebookEntry): OpenNotebookEntry {
+    const model = this.notebooks.get(entry.uri)?.data
+    if (entry.state === 'loaded' && model?.getSnapshot().loaded) {
+      entry = { ...entry, readOnly: model.isReadOnly() }
+    }
     let changed = false
     const next = this.openNotebooks.map((item) => {
       if (item.uri !== entry.uri) {
