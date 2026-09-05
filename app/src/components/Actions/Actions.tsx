@@ -2309,6 +2309,7 @@ function NotebookTabContent({
     const suggestionUri = getOperationLogSuggestionDocumentUri(docUri)
     showDocument(suggestionUri, {
       title: `Suggestions · ${entry.name}`,
+      afterUri: docUri,
     })
     setCurrentDoc(suggestionUri)
   }, [docUri, entry.name, setCurrentDoc, showDocument])
@@ -4084,6 +4085,7 @@ export default function Actions() {
     isIpynb: boolean
     ownerSessionId: string | null
     canOpenUpstreamDiff: boolean
+    canReviewSuggestions: boolean
     readOnly?: boolean
   } | null>(null)
   const tabTriggerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -4371,7 +4373,8 @@ export default function Actions() {
       (tabContextMenu.googleDriveUri ? 1 : 0) +
       (tabContextMenu.googleDriveUri && tabContextMenu.isIpynb ? 1 : 0) +
       (tabContextMenu.ownerSessionId ? 1 : 0) +
-      (tabContextMenu.canOpenUpstreamDiff ? 1 : 0)
+      (tabContextMenu.canOpenUpstreamDiff ? 1 : 0) +
+      (tabContextMenu.canReviewSuggestions ? 1 : 0)
     const menuWidth = 220
     const menuHeight = itemCount * 36 + 8
     return {
@@ -4396,6 +4399,7 @@ export default function Actions() {
       const title =
         document?.title?.trim() ||
         getNotebookDisplayName(docUri, document?.title ?? docUri)
+      const format = detectNotebookFileFormat(title)
       setTabContextMenu({
         x: event.clientX,
         y: event.clientY,
@@ -4405,10 +4409,12 @@ export default function Actions() {
         googleDriveUri: isGoogleDriveFileUri(docUri)
           ? docUri
           : requestedDriveUri,
-        isIpynb: detectNotebookFileFormat(title) === 'ipynb',
+        isIpynb: format === 'ipynb',
         ownerSessionId: getNotebookOwnerSessionId(document?.owner),
         canOpenUpstreamDiff:
           docUri.startsWith('local://') && Boolean(requestedDriveUri),
+        canReviewSuggestions:
+          Boolean(store) && format === 'runme-operation-log',
         readOnly: document?.readOnly,
       })
 
@@ -4436,6 +4442,9 @@ export default function Actions() {
               canOpenUpstreamDiff:
                 docUri.startsWith('local://') &&
                 isGoogleDriveFileUri(remoteUri),
+              canReviewSuggestions:
+                detectNotebookFileFormat(metadata?.name ?? current.title) ===
+                'runme-operation-log',
             }
           })
         } catch (error) {
@@ -4496,6 +4505,22 @@ export default function Actions() {
       setTabContextMenu(null)
     }
   }, [getNotebookData, showDocument, store, tabContextMenu])
+
+  const handleReviewTabSuggestions = useCallback(() => {
+    if (!tabContextMenu?.canReviewSuggestions) {
+      setTabContextMenu(null)
+      return
+    }
+    const suggestionUri = getOperationLogSuggestionDocumentUri(
+      tabContextMenu.docUri
+    )
+    showDocument(suggestionUri, {
+      title: `Suggestions · ${tabContextMenu.title}`,
+      afterUri: tabContextMenu.docUri,
+    })
+    setCurrentDoc(suggestionUri)
+    setTabContextMenu(null)
+  }, [setCurrentDoc, showDocument, tabContextMenu])
 
   const handleCopyTabShareableLink = useCallback(async () => {
     if (!tabContextMenu) {
@@ -4859,6 +4884,18 @@ export default function Actions() {
               >
                 Rename
               </button>
+              {adjustedTabContextMenu.canReviewSuggestions && (
+                <button
+                  type="button"
+                  className="ctx-menu-item"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    handleReviewTabSuggestions()
+                  }}
+                >
+                  Review suggestions
+                </button>
+              )}
               <button
                 type="button"
                 className="ctx-menu-item"

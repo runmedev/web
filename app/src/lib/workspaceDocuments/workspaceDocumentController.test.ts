@@ -40,6 +40,45 @@ describe("WorkspaceDocumentController", () => {
     ]);
   });
 
+  it("keeps a suggestion document immediately after its notebook", () => {
+    const controller = new WorkspaceDocumentController(createMemoryPersistence());
+    const notebookUri = "local://file/a";
+    const suggestionUri = getOperationLogSuggestionDocumentUri(notebookUri);
+
+    controller.showDocument(notebookUri, { title: "a.runme" });
+    controller.showDocument("local://file/b", { title: "b.runme" });
+    controller.showDocument(suggestionUri, {
+      title: "Suggestions · a.runme",
+      afterUri: notebookUri,
+    });
+
+    expect(controller.getSnapshot().documents.map((item) => item.uri)).toEqual([
+      notebookUri,
+      suggestionUri,
+      "local://file/b",
+    ]);
+  });
+
+  it("moves an existing suggestion document next to its notebook", () => {
+    const controller = new WorkspaceDocumentController(createMemoryPersistence());
+    const notebookUri = "local://file/a";
+    const suggestionUri = getOperationLogSuggestionDocumentUri(notebookUri);
+
+    controller.showDocument(notebookUri, { title: "a.runme" });
+    controller.showDocument("local://file/b", { title: "b.runme" });
+    controller.showDocument(suggestionUri, { title: "Notebook suggestions" });
+    controller.showDocument(suggestionUri, {
+      title: "Suggestions · a.runme",
+      afterUri: notebookUri,
+    });
+
+    expect(controller.getSnapshot().documents.map((item) => item.uri)).toEqual([
+      notebookUri,
+      suggestionUri,
+      "local://file/b",
+    ]);
+  });
+
   it("closes a document and returns the neighboring fallback", () => {
     const controller = new WorkspaceDocumentController(createMemoryPersistence());
     controller.showDocument("local://file/a", { title: "a.json" });

@@ -501,6 +501,7 @@ describe('Actions tabs', () => {
 
     expect(contextMocks.showDocument).toHaveBeenCalledWith(suggestionUri, {
       title: 'Suggestions · suggestions.runme',
+      afterUri: uri,
     })
     expect(contextMocks.setCurrentDoc).toHaveBeenCalledWith(suggestionUri)
   })
@@ -1502,6 +1503,97 @@ describe('Actions tabs', () => {
       expect(screen.getByRole('tab', { name: /Getting Started/ })).toBeTruthy()
     })
     expect(contextMocks.setCurrentDoc).not.toHaveBeenCalled()
+  })
+
+  it('opens suggestion review from a .runme tab context menu', async () => {
+    const uri = 'local://file/reviewable'
+    const suggestionUri = getOperationLogSuggestionDocumentUri(uri)
+    contextMocks.notebookStore = {
+      getMetadata: vi.fn(async () => ({
+        uri,
+        name: 'reviewable.runme',
+        type: 'file',
+        children: [],
+        parents: [],
+      })),
+      getSyncState: vi.fn(async () => ({
+        status: 'local-only',
+        localUri: uri,
+        remoteId: uri,
+      })),
+      listOperationLogComments: vi.fn(async () => []),
+      rename: vi.fn(),
+      subscribeSync: vi.fn(() => () => {}),
+    }
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'reviewable.runme', state: 'loaded' },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, { metadata: {}, cells: [] }),
+    })
+    contextMocks.getNotebookData.mockReturnValue({ appendCell: vi.fn() })
+
+    render(<Actions />)
+
+    fireEvent.contextMenu(
+      screen.getByRole('tab', { name: /reviewable\.runme/ })
+    )
+    const contextMenu = document.querySelector<HTMLElement>('.ctx-menu')
+    expect(contextMenu).not.toBeNull()
+    fireEvent.click(
+      within(contextMenu as HTMLElement).getByRole('button', {
+        name: 'Review suggestions',
+      })
+    )
+
+    expect(contextMocks.showDocument).toHaveBeenCalledWith(suggestionUri, {
+      title: 'Suggestions · reviewable.runme',
+      afterUri: uri,
+    })
+    expect(contextMocks.setCurrentDoc).toHaveBeenCalledWith(suggestionUri)
+  })
+
+  it('omits suggestion review from legacy notebook tab context menus', async () => {
+    const uri = 'local://file/legacy'
+    const getMetadata = vi.fn(async () => ({
+      uri,
+      name: 'legacy.json',
+      type: 'file',
+      children: [],
+      parents: [],
+    }))
+    contextMocks.notebookStore = {
+      getMetadata,
+      getSyncState: vi.fn(async () => ({
+        status: 'local-only',
+        localUri: uri,
+        remoteId: uri,
+      })),
+      rename: vi.fn(),
+      subscribeSync: vi.fn(() => () => {}),
+    }
+    contextMocks.currentDoc = uri
+    contextMocks.workspaceDocuments = [
+      { uri, title: 'legacy.json', state: 'loaded' },
+    ]
+    contextMocks.notebookSnapshots.set(uri, {
+      uri,
+      loaded: true,
+      notebook: create(parser_pb.NotebookSchema, { metadata: {}, cells: [] }),
+    })
+    contextMocks.getNotebookData.mockReturnValue({ appendCell: vi.fn() })
+
+    render(<Actions />)
+
+    fireEvent.contextMenu(screen.getByRole('tab', { name: /legacy\.json/ }))
+    await waitFor(() => expect(getMetadata).toHaveBeenCalledWith(uri))
+
+    expect(
+      screen.queryByRole('button', { name: 'Review suggestions' })
+    ).toBeNull()
   })
 
   it('renames the notebook from the tab context menu', async () => {
