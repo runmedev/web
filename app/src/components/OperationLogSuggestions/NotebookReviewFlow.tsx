@@ -306,69 +306,99 @@ export function NotebookReviewFlow({
             <h2 className="mb-4 font-semibold">
               {revisionLabel(preview.start)} → {revisionLabel(preview.end)}
             </h2>
-            {preview.diff.cells.map((row, i) => (
-              <article
-                id={`review-diff-${row.id}`}
-                key={identity + row.id}
-                tabIndex={-1}
-                className="mb-4 focus:outline focus:outline-2 focus:outline-nb-accent"
-              >
-                <p className="mb-1 text-xs">
-                  Cell {i + 1} · {row.kind}
-                </p>
-                <DiffCommentControls
-                  row={row}
-                  disabled={readOnly || busy}
-                  onComment={setDiffTarget}
+            {preview.diff.cells.map((row, i) => {
+              const rowCellId = (row.compareCell ?? row.baseCell)?.refId
+              const threads = cellThreads.filter((c) => cellId(c) === rowCellId)
+              const gutterId = `review-comments-${row.id}`
+              // A shared two-column layout keeps threads beside their cell,
+              // without measuring text or overlapping neighboring discussions.
+              // Preserve the gutter on empty rows so the diff width stays stable.
+              return (
+                <article
+                  id={`review-diff-${row.id}`}
+                  key={identity + row.id}
+                  tabIndex={-1}
+                  className="mb-4 grid min-w-[480px] grid-cols-[minmax(0,1fr)_clamp(220px,40%,320px)] items-start gap-4 focus:outline focus:outline-2 focus:outline-nb-accent"
                 >
-                  <ChangedCell row={row} />
-                </DiffCommentControls>
-                {cellThreads
-                  .filter(
-                    (c) =>
-                      cellId(c) === (row.compareCell ?? row.baseCell)?.refId
-                  )
-                  .map(renderThread)}
-                {diffTarget &&
-                  diffTarget.cellId ===
-                    (row.compareCell ?? row.baseCell)?.refId && (
-                    <DiffCommentComposer
-                      key={identity + diffTarget.cellId}
-                      target={diffTarget}
-                      disabled={busy || readOnly}
-                      onCancel={() => setDiffTarget(undefined)}
-                      onSend={(content) =>
-                        run(async () => {
-                          await commentOnComparison(store, docUri, {
-                            ...selection(preview),
-                            content,
-                            cellId: diffTarget.cellId,
-                            side: diffTarget.side,
-                            sourceRange: diffTarget.sourceRange,
-                            author: await author(),
+                  <div
+                    id={`review-cell-content-${row.id}`}
+                    className="relative min-w-0 pr-4"
+                  >
+                    <p className="mb-1 text-xs">
+                      Cell {i + 1} · {row.kind}
+                    </p>
+                    <DiffCommentControls
+                      row={row}
+                      disabled={readOnly || busy}
+                      onComment={setDiffTarget}
+                    >
+                      <ChangedCell row={row} />
+                    </DiffCommentControls>
+                    {threads.length > 0 && (
+                      <button
+                        type="button"
+                        aria-label={`Show ${threads.length} comment threads for cell ${i + 1}`}
+                        aria-controls={gutterId}
+                        title={`${threads.length} comment threads — view in right gutter`}
+                        className="absolute inset-y-0 right-0 w-3 rounded-r border-r-4 border-nb-accent hover:bg-blue-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nb-accent"
+                        onClick={() => {
+                          const gutter = document.getElementById(gutterId)
+                          gutter?.scrollIntoView({
+                            block: 'nearest',
+                            inline: 'nearest',
                           })
-                        })
-                      }
-                    />
-                  )}
-                {JSON.stringify(row.baseCell?.outputs ?? []) !==
-                  JSON.stringify(row.compareCell?.outputs ?? []) && (
-                  <details>
-                    <summary className="text-xs">Outputs changed</summary>
-                    <pre className="whitespace-pre-wrap text-xs">
-                      {JSON.stringify(
-                        {
-                          before: row.baseCell?.outputs,
-                          after: row.compareCell?.outputs,
-                        },
-                        null,
-                        2
-                      )}
-                    </pre>
-                  </details>
-                )}
-              </article>
-            ))}
+                          gutter?.focus({ preventScroll: true })
+                        }}
+                      />
+                    )}
+                    {JSON.stringify(row.baseCell?.outputs ?? []) !==
+                      JSON.stringify(row.compareCell?.outputs ?? []) && (
+                      <details>
+                        <summary className="text-xs">Outputs changed</summary>
+                        <pre className="whitespace-pre-wrap text-xs">
+                          {JSON.stringify(
+                            {
+                              before: row.baseCell?.outputs,
+                              after: row.compareCell?.outputs,
+                            },
+                            null,
+                            2
+                          )}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                  <aside
+                    id={gutterId}
+                    aria-label={`Comments for cell ${i + 1}`}
+                    tabIndex={-1}
+                    className="min-w-0 space-y-2 break-words rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-nb-accent"
+                  >
+                    {threads.map(renderThread)}
+                    {diffTarget && diffTarget.cellId === rowCellId && (
+                      <DiffCommentComposer
+                        key={identity + diffTarget.cellId}
+                        target={diffTarget}
+                        disabled={busy || readOnly}
+                        onCancel={() => setDiffTarget(undefined)}
+                        onSend={(content) =>
+                          run(async () => {
+                            await commentOnComparison(store, docUri, {
+                              ...selection(preview),
+                              content,
+                              cellId: diffTarget.cellId,
+                              side: diffTarget.side,
+                              sourceRange: diffTarget.sourceRange,
+                              author: await author(),
+                            })
+                          })
+                        }
+                      />
+                    )}
+                  </aside>
+                </article>
+              )
+            })}
             {cellThreads.some(
               (c) =>
                 !preview.diff.cells.some(

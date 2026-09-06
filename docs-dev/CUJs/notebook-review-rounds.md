@@ -19,7 +19,9 @@ authentication or Drive upload.
 4. Select a section or heading range. Include descendant/body cells and exclude
    unrelated cells. The selected pair plus cell-ID scope defines ONE suggestion.
 5. Add a diff-source comment with exact quote, side, and UTF-16 range. Show it
-   beneath its cell, not in the left panel. The left panel has one suggestion-wide
+   in the right gutter beside its cell, not below it or in the left panel. A blue
+   right-edge marker focuses that cell's gutter; unannotated cells have no marker.
+   The composer also opens in the gutter. The left panel has one suggestion-wide
    conversation. Successive messages reply to the same root.
 6. Assess the scope as Good Enough. Return to edit view: the same source comment,
    whole-suggestion conversation, and replies remain visible. Reply and return

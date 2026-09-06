@@ -185,7 +185,20 @@ describe('comment-first comparison flow', () => {
     expect(screen.queryByRole('navigation', { name: 'Changes' })).toBeNull()
     expect(screen.queryByRole('button', { name: /^Change \d+$/ })).toBeNull()
     expect(f.store.createNotebookReview).not.toHaveBeenCalled()
+    const gutter = screen.getByRole('complementary', {
+      name: 'Comments for cell 1',
+    })
+    expect(within(gutter).getByText('Clarify the checks')).toBeTruthy()
+    expect(within(gutter).queryByText('Clarified')).toBeNull()
+    const marker = screen.getByRole('button', {
+      name: 'Show 1 comment threads for cell 1',
+    })
+    expect(marker.getAttribute('aria-controls')).toBe(gutter.id)
+    gutter.scrollIntoView = vi.fn()
+    fireEvent.click(marker)
+    expect(document.activeElement).toBe(gutter)
     fireEvent.click(screen.getByRole('button', { name: 'Comment on cell' }))
+    expect(within(gutter).getByLabelText('New cell comment')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('New cell comment'), {
       target: { value: 'Explain this change' },
     })
@@ -199,6 +212,21 @@ describe('comment-first comparison flow', () => {
       JSON.parse(f.store.addOperationLogComment.mock.calls[0][1].anchor).runme
         .diffTarget
     ).toMatchObject({ cellId: 'cell', side: 'head', quote: 'Clarified' })
+  })
+
+  it('only marks cells with comment threads', async () => {
+    const f = fixture()
+    f.comments.length = 0
+    mount(f)
+    await screen.findByText('Clarified')
+    expect(
+      screen.queryByRole('button', { name: /comment threads for cell/ })
+    ).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Comment on cell' }))
+    const gutter = screen.getByRole('complementary', {
+      name: 'Comments for cell 1',
+    })
+    expect(within(gutter).getByLabelText('New cell comment')).toBeTruthy()
   })
 
   it('filters editor threads to the selected section while retaining unchanged context', async () => {

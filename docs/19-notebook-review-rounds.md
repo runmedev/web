@@ -46,8 +46,11 @@ be nonempty. Duplicate/reordered IDs identify the same suggestion.
 ## Shared comments
 
 The left panel contains one suggestion-wide conversation, with no Whole/Cell
-target dropdown. Cell and selected-source threads appear beneath their cells
-in the diff, including ordinary comments created in the editor. Return to the
+target dropdown. Cell and selected-source threads appear in the right gutter
+beside their cells, including ordinary comments created in the editor. A blue
+bar on the cell's right edge marks attached threads; click it to focus the
+gutter. Selected-text comments retain their quote in the thread; precise text
+underlining is not yet provided. Return to the
 editor to see and reply to those same threads. Replies and resolve/reopen actions
 are shared, not copied into a separate discussion per view.
 

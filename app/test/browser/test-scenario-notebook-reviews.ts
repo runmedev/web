@@ -196,6 +196,33 @@ try {
       exact: true,
     })
     .waitFor()
+  const gutter = canvas.locator('[id^="review-comments-"]').filter({
+    hasText: 'Please explain the setup checks.',
+  })
+  const gutterBounds = await gutter.boundingBox()
+  const cellBounds = await gutter
+    .locator('..')
+    .locator('[id^="review-cell-content-"]')
+    .boundingBox()
+  assert.ok(gutterBounds && cellBounds)
+  assert.ok(
+    gutterBounds.x >= cellBounds.x + cellBounds.width,
+    'Comment threads must render to the right of their cell, not underneath'
+  )
+  const canvasBounds = await canvas.boundingBox()
+  assert.ok(canvasBounds)
+  assert.ok(
+    gutterBounds.x + gutterBounds.width <= canvasBounds.x + canvasBounds.width,
+    'The right gutter must fit within the visible comparison canvas'
+  )
+  const marker = canvas.locator(
+    `button[aria-controls="${await gutter.getAttribute('id')}"]`
+  )
+  await marker.click()
+  assert.equal(
+    await gutter.evaluate((el) => el === document.activeElement),
+    true
+  )
   assert.equal(
     await page
       .getByRole('button', { name: 'Start review', exact: true })
