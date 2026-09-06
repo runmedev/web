@@ -115,6 +115,26 @@ describe('appConfig OIDC Google shorthand', () => {
     expect(getGoogleDriveBaseUrl()).toBe('https://www.googleapis.com')
   })
 
+  it('applies the configured Google Drive base URL', async () => {
+    const { applyAppConfig } = await loadModules()
+    const { getGoogleDriveBaseUrl } = await import('./googleDriveRuntime')
+
+    applyAppConfig(
+      {
+        agent: {
+          endpoint: 'http://localhost:9977',
+        },
+        googleDrive: {
+          clientID: 'client-id.apps.googleusercontent.com',
+          baseUrl: 'https://www.googleapis.com',
+        },
+      },
+      'http://localhost/configs/app-configs.yaml'
+    )
+
+    expect(getGoogleDriveBaseUrl()).toBe('https://www.googleapis.com')
+  })
+
   it('applies Google Drive PKCE auth flow when configured', async () => {
     const { applyAppConfig } = await loadModules()
     const { googleClientManager } = await import('./googleClientManager')

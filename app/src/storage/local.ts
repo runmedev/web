@@ -29,6 +29,7 @@ import {
   type RunmeOperation,
   type SuggestionDecision,
   type SuggestionReviewPayload,
+  allocatePositionBetween,
   buildOperationLogDiff,
   canonicalJson,
   causalHeads,
@@ -42,6 +43,30 @@ import {
   parseOperationLog,
   serializeOperationLog,
 } from '../lib/operationLog'
+import { cellDecisionFor } from '../lib/operationLog/cellReview'
+import {
+  cellStateKey,
+  withCellReviewKeys,
+} from '../lib/operationLog/cellReviewIdentity'
+import {
+  computeReviewDiff,
+  normalizeReviewCellIds,
+  reviewIdentityKey,
+} from '../lib/operationLog/reviewScope'
+import {
+  type Attribution,
+  REVIEW_OUTCOMES,
+  type ReviewOutcome,
+  buildReviewRounds,
+  captureReviewRevision,
+  normalizeAttribution,
+} from '../lib/operationLog/reviews'
+import {
+  buildNotebookRevisions,
+  materializeRevision,
+  revisionFollows,
+  revisionKey,
+} from '../lib/operationLog/revisions'
 import { appState } from '../lib/runtime/AppState'
 import { RunmeMetadataKey, parser_pb } from '../runme/client'
 import {
@@ -1473,7 +1498,11 @@ export class LocalNotebooks extends Dexie {
         modifiedTime: operation?.created_at,
         author: {
           displayName: comment.payload.author.display_name,
-          me: true,
+          runmeAuthorKind: comment.payload.author.kind,
+          runmeAuthorSource: comment.payload.author.source,
+          runmeAuthenticatedPrincipal:
+            comment.payload.author.authenticated_principal,
+          runmeActorId: operation?.actor_id,
         },
         runmeOperationId: comment.operation_id,
       })
@@ -1500,7 +1529,11 @@ export class LocalNotebooks extends Dexie {
           anchor,
           author: {
             displayName: comment.payload.author.display_name,
-            me: true,
+            runmeAuthorKind: comment.payload.author.kind,
+            runmeAuthorSource: comment.payload.author.source,
+            runmeAuthenticatedPrincipal:
+              comment.payload.author.authenticated_principal,
+            runmeActorId: operation?.actor_id,
           },
           replies: repliesByThread.get(comment.thread_id) ?? [],
           runmeOperationId: comment.operation_id,
@@ -1517,14 +1550,26 @@ export class LocalNotebooks extends Dexie {
       motivation?: CommentAddPayload['annotation']['motivation']
       actorId?: string
       commentId?: string
+      author?: Attribution
     }
   ): Promise<DriveComment> {
     const actorId = input.actorId ?? (await getNotebookActorId(uri))
     const commentId = input.commentId ?? crypto.randomUUID()
+    const author = normalizeAttribution(input.author, true)
     const payload: CommentAddPayload = {
       comment_id: commentId,
       thread_id: commentId,
-      author: { principal_id: actorId, display_name: 'This browser session' },
+      author: {
+        principal_id: actorId,
+        display_name: author.displayName,
+        kind: author.kind,
+        ...(author.source
+          ? {
+              source: author.source,
+              authenticated_principal: author.authenticatedPrincipal,
+            }
+          : {}),
+      },
       body: { format: 'text/markdown', value: input.content },
       annotation: {
         motivation: input.motivation ?? 'commenting',
@@ -1546,7 +1591,7 @@ export class LocalNotebooks extends Dexie {
     uri: string,
     parentCommentId: string,
     content: string,
-    options: { actorId?: string } = {}
+    options: { actorId?: string; author?: Attribution } = {}
   ): Promise<DriveComment> {
     const { materialized } = await this.readMaterializedOperationLog(uri)
     const parent = materialized.comments.find(
@@ -1556,11 +1601,22 @@ export class LocalNotebooks extends Dexie {
       throw new Error(`Operation-log comment ${parentCommentId} was not found`)
     }
     const actorId = options.actorId ?? (await getNotebookActorId(uri))
+    const author = normalizeAttribution(options.author, true)
     const payload: CommentReplyPayload = {
       comment_id: crypto.randomUUID(),
       thread_id: parent.thread_id,
       parent_comment_id: parentCommentId,
-      author: { principal_id: actorId, display_name: 'This browser session' },
+      author: {
+        principal_id: actorId,
+        display_name: author.displayName,
+        kind: author.kind,
+        ...(author.source
+          ? {
+              source: author.source,
+              authenticated_principal: author.authenticatedPrincipal,
+            }
+          : {}),
+      },
       body: { format: 'text/markdown', value: content },
       annotation: { motivation: 'commenting', targets: [] },
     }
@@ -1625,6 +1681,419 @@ export class LocalNotebooks extends Dexie {
       options.actorId,
       decision === 'reject' ? payload.operation_ids : undefined
     )
+  }
+
+  /** Capture a fixed pair after the caller flushes its mounted editor. */
+  async createNotebookReview(
+    uri: string,
+    input: {
+      title?: string
+      baseReviewId?: string
+      startRevisionId?: string
+      endRevisionId?: string
+      cellIds?: string[]
+      author?: Attribution
+    }
+  ) {
+    const { parsed } = await this.readMaterializedOperationLog(uri)
+    const rounds = buildReviewRounds(parsed.operations)
+    const base = input.baseReviewId
+      ? rounds.find((round) => round.id === input.baseReviewId)
+      : undefined
+    if (input.baseReviewId && !base) throw new Error('Base review not found')
+    if (input.baseReviewId && (input.startRevisionId || input.endRevisionId))
+      throw new Error('Choose explicit revisions or baseReviewId, not both')
+    if (Boolean(input.startRevisionId) !== Boolean(input.endRevisionId))
+      throw new Error('Choose both start and end revisions')
+    const revisions = buildNotebookRevisions(parsed.operations)
+    const start = input.startRevisionId
+      ? revisions.find((r) => r.id === input.startRevisionId)
+      : undefined
+    const end = input.endRevisionId
+      ? revisions.find((r) => r.id === input.endRevisionId)
+      : undefined
+    if (input.startRevisionId && (!start || !end))
+      throw new Error('Revision not found')
+    if (start && end && !revisionFollows(start, end))
+      throw new Error('End revision must be after start revision')
+    const baseOperationIds = start?.operationIds ?? base?.headOperationIds ?? []
+    const headOperationIds = end
+      ? [...new Set([...baseOperationIds, ...end.operationIds])]
+      : captureReviewRevision(parsed.operations)
+    const startKey = revisionKey(parsed.operations, baseOperationIds)
+    const endKey = revisionKey(parsed.operations, headOperationIds)
+    if (startKey === endKey)
+      throw new Error('End revision must be after start revision')
+    const cellIds = normalizeReviewCellIds(
+      input.cellIds,
+      materializeRevision(parsed.operations, baseOperationIds),
+      materializeRevision(parsed.operations, headOperationIds)
+    )
+    const identity = reviewIdentityKey(startKey, endKey, cellIds)
+    const existing = rounds.find(
+      (r) =>
+        reviewIdentityKey(
+          revisionKey(parsed.operations, r.baseOperationIds),
+          revisionKey(parsed.operations, r.headOperationIds),
+          r.cellIds
+        ) === identity
+    )
+    if (existing) return existing
+    // Same pair yields the same ID across tabs and offline replicas. Projection
+    // verifies full endpoints and coalesces concurrent create records.
+    const id = `review:${md5(identity)}`
+    await this.appendOperationLogMutation(uri, 'review.create', {
+      id,
+      title: input.title?.trim() || `Round ${rounds.length + 1}`,
+      baseOperationIds,
+      headOperationIds,
+      ...(cellIds ? { cellIds } : {}),
+      ...(base ? { previousReviewId: base.id } : {}),
+      author: normalizeAttribution(input.author, true),
+    } as unknown as JsonValue)
+    return (await this.listNotebookReviews(uri)).find(
+      (round) => round.id === id
+    )!
+  }
+
+  async listNotebookReviews(uri: string) {
+    return buildReviewRounds(
+      (await this.readMaterializedOperationLog(uri)).parsed.operations
+    )
+  }
+
+  /** Names annotate existing revisions; they do not change the notebook or its date. */
+  async listNotebookRevisions(uri: string) {
+    return buildNotebookRevisions(
+      (await this.readMaterializedOperationLog(uri)).parsed.operations
+    )
+  }
+
+  async labelNotebookRevision(
+    uri: string,
+    input: {
+      revisionId: string
+      name: string
+      description?: string
+      author?: Attribution
+    }
+  ) {
+    if (
+      typeof input.name !== 'string' ||
+      !input.name.trim() ||
+      input.name.length > 200 ||
+      (input.description !== undefined &&
+        (typeof input.description !== 'string' ||
+          input.description.length > 2000))
+    )
+      throw new Error(
+        'Provide a revision name (up to 200 characters) and description (up to 2000 characters)'
+      )
+    const revision = (await this.listNotebookRevisions(uri)).find(
+      (r) => r.id === input.revisionId
+    )
+    if (!revision) throw new Error('Revision not found')
+    await this.appendOperationLogMutation(uri, 'revision.label', {
+      revisionId: revision.id,
+      operationIds: revision.operationIds,
+      name: input.name.trim(),
+      description: input.description ?? '',
+      author: normalizeAttribution(input.author, true),
+    } as unknown as JsonValue)
+    return (await this.listNotebookRevisions(uri)).find(
+      (r) => r.id === revision.id
+    )!
+  }
+
+  /** Read-only preview uses exactly the selected revisions, never the live head. */
+  async previewNotebookReview(
+    uri: string,
+    input: {
+      startRevisionId: string
+      endRevisionId: string
+      cellIds?: string[]
+    }
+  ) {
+    const { parsed } = await this.readMaterializedOperationLog(uri)
+    const revisions = buildNotebookRevisions(parsed.operations)
+    const start = revisions.find((r) => r.id === input.startRevisionId)
+    const end = revisions.find((r) => r.id === input.endRevisionId)
+    if (!start || !end) throw new Error('Revision not found')
+    if (!revisionFollows(start, end))
+      throw new Error('End revision must be after start revision')
+    const before = materializeRevision(parsed.operations, start.operationIds)
+    const after = materializeRevision(parsed.operations, end.operationIds)
+    const cellIds = normalizeReviewCellIds(input.cellIds, before, after)
+    const identity = reviewIdentityKey(
+      JSON.stringify(start.changeIds),
+      JSON.stringify(end.changeIds),
+      cellIds
+    )
+    const existing = buildReviewRounds(parsed.operations).find(
+      (r) =>
+        reviewIdentityKey(
+          revisionKey(parsed.operations, r.baseOperationIds),
+          revisionKey(parsed.operations, r.headOperationIds),
+          r.cellIds
+        ) === identity
+    )
+    return {
+      start,
+      end,
+      before,
+      after,
+      cellIds,
+      diff: withCellReviewKeys(
+        computeReviewDiff(before, after, cellIds),
+        parsed.operations,
+        start.operationIds,
+        end.operationIds
+      ),
+      existingReviewId: existing?.id,
+    }
+  }
+
+  /** Validate and undo under the same OPFS writer lock. Content operations and
+   * the decision share a commit envelope so replicas never see a partial undo.
+   */
+  async decideNotebookReviewCell(
+    uri: string,
+    input: {
+      reviewId: string
+      cellId: string
+      decision: 'accept' | 'undo'
+      author?: Attribution
+    }
+  ) {
+    if (!['accept', 'undo'].includes(input.decision))
+      throw new Error('Invalid cell decision')
+    const record = await this.files.get(uri)
+    if (!record?.operationLogRef)
+      throw new Error('Operation-log reference missing')
+    const actorId = await getNotebookActorId(uri)
+    let mutationCreated = false
+    try {
+      const stored = await this.operationLogStorage.appendTransaction(
+        record.operationLogRef,
+        async (document) => {
+          const parsed = parseOperationLog(document)
+          const rounds = buildReviewRounds(parsed.operations)
+          const round = rounds.find((r) => r.id === input.reviewId)
+          const row = round?.diff.cells.find(
+            (r) => (r.compareCell ?? r.baseCell)?.refId === input.cellId
+          )
+          if (!round || !row || row.kind === 'unchanged')
+            throw new Error('Changed cell not found in review scope')
+          const prior = cellDecisionFor(row, rounds)
+          if (prior?.decision === input.decision) return ''
+          if (prior?.decision === 'undo')
+            throw new Error(
+              'These cell changes were already undone; select a new comparison'
+            )
+          const operations = [...parsed.operations]
+          const firstSequence = highestActorSequence(operations, actorId) + 1
+          const transactionId = `${actorId}:cell-review:${firstSequence}`
+          const created: RunmeOperation[] = []
+          if (input.decision === 'undo') {
+            const headIds = new Set(round.headOperationIds)
+            const head = materializeOperationLog(
+              operations.filter((op) => headIds.has(op.op_id))
+            )
+            const current = materializeOperationLog(operations)
+            const cellAt = (log: typeof head) =>
+              log.notebook.cells.find((c) => c.cell_id === input.cellId) ?? null
+            if (
+              operations.some(
+                (op) =>
+                  !headIds.has(op.op_id) &&
+                  op.kind.startsWith('cell.') &&
+                  (op.payload as any).cell_id === input.cellId
+              ) ||
+              cellStateKey(cellAt(head)) !== cellStateKey(cellAt(current))
+            )
+              throw new Error(
+                'Cell changed since the reviewed revision. Refresh and compare the latest revision before undoing.'
+              )
+            // Diff one cell only. Other cells, notebook metadata and concurrent
+            // additions are not part of this mutation.
+            const previous = cloneNotebook(round.after)
+            const next = cloneNotebook(round.after)
+            previous.cells = row.compareCell ? [row.compareCell] : []
+            next.cells = row.baseCell ? [row.baseCell] : []
+            const inverse = await buildOperationLogDiff({
+              previous,
+              next,
+              observedOperations: operations,
+              actorId,
+              firstActorSequence: firstSequence,
+            })
+            const baseIds = new Set(round.baseOperationIds)
+            const baseCell = materializeOperationLog(
+              operations.filter((op) => baseIds.has(op.op_id))
+            ).notebook.cells.find((c) => c.cell_id === input.cellId)
+            const baseIndex = round.before.cells.findIndex(
+              (c) => c.refId === input.cellId
+            )
+            const neighbors = current.notebook.cells.filter(
+              (c) => c.cell_id !== input.cellId
+            )
+            const following = round.before.cells
+              .slice(baseIndex + 1)
+              .map((c) => c.refId)
+            const rightId = following.find((id) =>
+              neighbors.some((c) => c.cell_id === id)
+            )
+            const rightIndex = rightId
+              ? neighbors.findIndex((c) => c.cell_id === rightId)
+              : neighbors.length
+            const restoredPosition =
+              baseCell && (row.moved || !row.compareCell)
+                ? allocatePositionBetween({
+                    left: neighbors[rightIndex - 1]?.position ?? null,
+                    right: neighbors[rightIndex]?.position ?? null,
+                    actorId,
+                    actorSequence: firstSequence,
+                  })
+                : baseCell?.position
+            for (const op of inverse) {
+              if (op.kind === 'cell.restore' && baseCell)
+                (op.payload as any).position = restoredPosition
+              op.transaction_id = transactionId
+              created.push(op)
+            }
+            operations.push(...created)
+            // A one-cell snapshot does not encode its surrounding position.
+            if (
+              baseCell &&
+              row.compareCell &&
+              (row.moved ||
+                canonicalJson(baseCell.position as unknown as JsonValue) !==
+                  canonicalJson(cellAt(head)!.position as unknown as JsonValue))
+            ) {
+              const move = createRunmeOperation({
+                actorId,
+                actorSequence: highestActorSequence(operations, actorId) + 1,
+                dependencies: causalHeads(operations),
+                knownOperations: operations,
+                kind: 'cell.move',
+                payload: {
+                  cell_id: input.cellId,
+                  position: restoredPosition,
+                } as unknown as JsonValue,
+                transactionId,
+              })
+              created.push(move)
+              operations.push(move)
+            }
+          }
+          const decision = createRunmeOperation({
+            actorId,
+            actorSequence: highestActorSequence(operations, actorId) + 1,
+            dependencies: causalHeads(operations),
+            knownOperations: operations,
+            kind: 'review.cell_decision',
+            payload: {
+              ...input,
+              author: normalizeAttribution(input.author, true),
+            },
+            transactionId,
+          })
+          created.push(decision)
+          operations.push(decision)
+          const commit = createRunmeOperation({
+            actorId,
+            actorSequence: highestActorSequence(operations, actorId) + 1,
+            dependencies: causalHeads(operations),
+            knownOperations: operations,
+            kind: 'transaction.commit',
+            payload: {
+              transaction_id: transactionId,
+              members: created.map((op) => op.op_id),
+            },
+          })
+          created.push(commit)
+          mutationCreated = true
+          return (
+            created
+              .map((op) => canonicalJson(op as unknown as JsonValue))
+              .join('\n') + '\n'
+          )
+        },
+        {
+          validate: (document) => {
+            const parsed = parseOperationLog(document)
+            materializeOperationLog(parsed.operations)
+            buildReviewRounds(parsed.operations)
+          },
+        }
+      )
+      await this.files.update(uri, {
+        doc: '',
+        md5Checksum: stored.checksum,
+        operationLogRef: stored.ref,
+      })
+      this.notifySync(uri)
+      if (!record.conflict) {
+        this.enqueueSync(uri)
+        this.enqueueMarkdownSync(uri)
+      }
+    } catch (error) {
+      if (mutationCreated)
+        throw new OperationLogMutationCommitUncertainError(
+          uri,
+          'review.cell_decision',
+          error
+        )
+      throw error
+    }
+  }
+
+  async submitNotebookReview(
+    uri: string,
+    input: {
+      reviewId: string
+      outcome: ReviewOutcome
+      summary?: string
+      author?: Attribution
+    }
+  ) {
+    if (
+      !(await this.listNotebookReviews(uri)).some(
+        (round) => round.id === input.reviewId
+      )
+    )
+      throw new Error('Review not found')
+    if (!REVIEW_OUTCOMES.includes(input.outcome))
+      throw new Error('Invalid review outcome')
+    if (input.summary !== undefined && typeof input.summary !== 'string')
+      throw new Error('Review summary must be text')
+    await this.appendOperationLogMutation(uri, 'review.submit', {
+      ...input,
+      author: normalizeAttribution(input.author, true),
+    } as unknown as JsonValue)
+  }
+
+  async linkNotebookReviewThread(
+    uri: string,
+    reviewId: string,
+    commentId: string
+  ) {
+    if (
+      !(await this.listNotebookReviews(uri)).some(
+        (round) => round.id === reviewId
+      )
+    )
+      throw new Error('Review not found')
+    if (
+      !(await this.listOperationLogComments(uri)).some(
+        (comment) => comment.id === commentId
+      )
+    )
+      throw new Error('Thread not found')
+    await this.appendOperationLogMutation(uri, 'review.link_thread', {
+      reviewId,
+      commentId,
+    })
   }
 
   private async readMaterializedOperationLog(uri: string) {

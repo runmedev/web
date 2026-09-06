@@ -581,6 +581,34 @@ async function handleSandboxAppKernelBridgeCall({
       return globals.documentation.get(String(args[0] ?? ''))
     case 'comments.list':
       return globals.comments.list((args[0] as any) ?? {})
+    case 'comments.add':
+      return globals.comments.add(args[0] as any)
+    case 'reviews.list':
+      return globals.reviews.list(args[0] as any)
+    case 'reviews.preview':
+      return globals.reviews.preview(args[0] as any)
+    case 'revisions.list':
+      return globals.revisions.list(args[0] as any)
+    case 'revisions.label':
+      return globals.revisions.label(args[0] as any)
+    case 'revisions.help':
+      return globals.revisions.help()
+    case 'reviews.help':
+      return globals.reviews.help()
+    case 'reviews.create':
+      return globals.reviews.create(args[0] as any)
+    case 'reviews.submit':
+      return globals.reviews.submit(args[0] as any)
+    case 'reviews.comment':
+      return globals.reviews.comment(args[0] as any)
+    case 'reviews.assess':
+      return globals.reviews.assess(args[0] as any)
+    case 'reviews.decideCell':
+      return globals.reviews.decideCell(args[0] as any)
+    case 'reviews.linkThread':
+      return globals.reviews.linkThread(args[0] as any)
+    case 'suggestions.list':
+      return globals.suggestions.list(args[0] as any)
     case 'comments.parseAnchor':
       return globals.comments.parseAnchor(String(args[0] ?? ''))
     case 'comments.resolveAnchor':

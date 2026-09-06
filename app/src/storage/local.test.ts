@@ -25,6 +25,14 @@ import {
   parseOperationLog,
   serializeOperationLog,
 } from '../lib/operationLog'
+import * as actorIdentity from '../lib/operationLog/actorIdentity'
+import { cellDecisionFor } from '../lib/operationLog/cellReview'
+import { decideComparisonCell } from '../lib/operationLog/comparisonFeedback'
+import {
+  buildReviewRounds,
+  createReviewAnchor,
+} from '../lib/operationLog/reviews'
+import { createNotebookCommentsRuntimeApi } from '../lib/runtime/notebookCommentsRuntime'
 import { MimeType, RunmeMetadataKey, parser_pb } from '../runme/client'
 import { MemoryConflictDocStorage } from './conflictDocs'
 import { DriveNotebookStore } from './drive'
@@ -1067,6 +1075,679 @@ describe('LocalNotebooks operation-log storage', () => {
         (operation) => operation.kind
       )
     ).toEqual(['comment.add', 'comment.reply', 'thread.set_status'])
+  })
+
+  it('persists scoped review triples and validates noncontiguous, inserted and deleted cell IDs through the API', async () => {
+    const actor = vi
+      .spyOn(actorIdentity, 'getNotebookActorId')
+      .mockResolvedValue('scoped-review-actor')
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const { uri } = await store.create(LOCAL_FOLDER_URI, 'scope-cuj.runme')
+    const save = await store.createOperationLogSaveStore(uri, {
+      actorId: 'scope-editor',
+    })
+    const cell = (refId: string, value: string) =>
+      create(parser_pb.CellSchema, {
+        refId,
+        value,
+        kind: parser_pb.CellKind.MARKUP,
+        languageId: 'markdown',
+      })
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        cell('gone', 'Same'),
+        cell('unrelated', 'Before'),
+        cell('kept', 'Before'),
+      ],
+    })
+    await save.save(uri, notebook)
+    const startRevisionId = (await store.listNotebookRevisions(uri)).at(-1)!.id
+    notebook.cells = [
+      cell('new', 'Same'),
+      cell('unrelated', 'After'),
+      cell('kept', 'After'),
+    ]
+    await save.save(uri, notebook)
+    const endRevisionId = (await store.listNotebookRevisions(uri)).at(-1)!.id
+    const api = createNotebookCommentsRuntimeApi({
+      resolveNotebook: () =>
+        ({
+          getUri: () => uri,
+          getNotebook: () => notebook,
+          flushPendingPersist: vi.fn(),
+          isReadOnly: () => false,
+        }) as never,
+      resolveLocalNotebooks: () => store,
+      resolveDriveNotebookStore: () => null,
+    })
+    const pair = { target: { uri }, startRevisionId, endRevisionId }
+    const beforePreview = await store.loadContent(uri)
+    const preview = await api.reviews.preview({
+      ...pair,
+      cellIds: ['gone', 'new'],
+    })
+    expect(await store.loadContent(uri)).toBe(beforePreview)
+    expect(preview.diff.cells.map((r) => r.kind).sort()).toEqual([
+      'deleted',
+      'inserted',
+    ])
+    const whole = await api.reviews.create(pair)
+    const scoped = await api.reviews.create({
+      ...pair,
+      cellIds: ['gone', 'new'],
+    })
+    const other = await api.reviews.create({ ...pair, cellIds: ['kept'] })
+    expect(new Set([whole.id, scoped.id, other.id]).size).toBe(3)
+    const saved = await store.loadContent(uri)
+    expect(
+      (await api.reviews.create({ ...pair, cellIds: ['new', 'gone', 'new'] }))
+        .id
+    ).toBe(scoped.id)
+    expect(await store.loadContent(uri)).toBe(saved)
+    expect(
+      (await api.reviews.preview({ ...pair, cellIds: ['new', 'gone'] }))
+        .existingReviewId
+    ).toBe(scoped.id)
+    for (const cellIds of [[], ['absent']]) {
+      await expect(api.reviews.create({ ...pair, cellIds })).rejects.toThrow()
+      await expect(api.reviews.preview({ ...pair, cellIds })).rejects.toThrow()
+    }
+    const comment = await api.add({
+      target: pair.target,
+      reviewId: scoped.id,
+      cellId: 'gone',
+      content: 'Deletion is intentional',
+      side: 'base',
+    })
+    expect(comment).toBeTruthy()
+    await expect(
+      api.add({
+        target: pair.target,
+        reviewId: scoped.id,
+        cellId: 'unrelated',
+        content: 'Outside',
+      })
+    ).rejects.toThrow()
+    await api.reviews.submit({
+      target: pair.target,
+      reviewId: scoped.id,
+      outcome: 'good_enough',
+    })
+    await api.reviews.submit({
+      target: pair.target,
+      reviewId: other.id,
+      outcome: 'needs_more_work',
+    })
+    const reopened = createTestStore({}, { operationLogStorage })
+    reopened.files = store.files
+    reopened.folders = store.folders
+    const rounds = await reopened.listNotebookReviews(uri)
+    expect(rounds.find((r) => r.id === scoped.id)).toMatchObject({
+      cellIds: ['gone', 'new'],
+      outcome: 'good_enough',
+      diff: preview.diff,
+    })
+    expect(rounds.find((r) => r.id === other.id)?.outcome).toBe(
+      'needs_more_work'
+    )
+    expect((await reopened.load(uri)).cells.map((c) => c.refId)).toEqual([
+      'new',
+      'unrelated',
+      'kept',
+    ])
+    actor.mockRestore()
+  })
+
+  it.each(['modified', 'inserted', 'deleted', 'moved'] as const)(
+    'accepts and atomically undoes a %s cell without touching its neighbors',
+    async (kind) => {
+      const actor = vi
+        .spyOn(actorIdentity, 'getNotebookActorId')
+        .mockResolvedValue('cell-reviewer')
+      try {
+        const operationLogStorage = new MemoryOperationLogStorage()
+        const store = createTestStore({}, { operationLogStorage })
+        await store.folders.put({
+          id: LOCAL_FOLDER_URI,
+          name: 'Local',
+          remoteId: '',
+          children: [],
+          lastSynced: '',
+        })
+        const { uri } = await store.create(
+          LOCAL_FOLDER_URI,
+          'cell-review.runme'
+        )
+        const save = await store.createOperationLogSaveStore(uri, {
+          actorId: 'editor',
+        })
+        const cell = (refId: string, value: string) =>
+          create(parser_pb.CellSchema, {
+            refId,
+            value,
+            kind: parser_pb.CellKind.MARKUP,
+            languageId: 'markdown',
+          })
+        const notebook = create(parser_pb.NotebookSchema, {
+          cells: [cell('one', 'Original'), cell('two', 'Neighbor')],
+        })
+        const output = (value: string) =>
+          create(parser_pb.CellOutputSchema, {
+            items: [
+              create(parser_pb.CellOutputItemSchema, {
+                mime: 'text/plain',
+                data: new TextEncoder().encode(value),
+              }),
+            ],
+          })
+        if (kind === 'modified') {
+          notebook.cells[0].metadata = { example: 'before' }
+          notebook.cells[0].outputs = [output('before output')]
+        }
+        if (kind === 'inserted') notebook.cells.shift()
+        await save.save(uri, notebook)
+        const startRevisionId = (await store.listNotebookRevisions(uri)).at(
+          -1
+        )!.id
+        if (kind === 'modified') {
+          notebook.cells[0].value = 'Proposed'
+          notebook.cells[0].metadata = { example: 'after' }
+          notebook.cells[0].outputs = [output('after output')]
+        }
+        if (kind === 'inserted') notebook.cells.unshift(cell('one', 'Proposed'))
+        if (kind === 'deleted') notebook.cells.shift()
+        if (kind === 'moved') notebook.cells.reverse()
+        await save.save(uri, notebook)
+        const endRevisionId = (await store.listNotebookRevisions(uri)).at(
+          -1
+        )!.id
+        const selection = { startRevisionId, endRevisionId, cellId: 'one' }
+        const beforeAccept = await store.load(uri)
+        const versionCount = (await store.listNotebookRevisions(uri)).length
+        await decideComparisonCell(store, uri, {
+          ...selection,
+          decision: 'accept',
+        })
+        expect(await store.load(uri)).toEqual(beforeAccept)
+        expect(await store.listNotebookRevisions(uri)).toHaveLength(
+          versionCount
+        )
+        const acceptedLog = await store.loadContent(uri)
+        await decideComparisonCell(store, uri, {
+          ...selection,
+          decision: 'accept',
+        })
+        expect(await store.loadContent(uri)).toBe(acceptedLog)
+        // r2 changes only a neighbor: c0 -> c1 remains accepted.
+        notebook.cells.find((c) => c.refId === 'two')!.value =
+          'Unrelated later edit'
+        await save.save(uri, notebook)
+        const laterEnd = (await store.listNotebookRevisions(uri)).at(-1)!.id
+        const preview = await store.previewNotebookReview(uri, {
+          startRevisionId,
+          endRevisionId: laterEnd,
+        })
+        const reviewed = preview.diff.cells.find(
+          (r) => (r.compareCell ?? r.baseCell)?.refId === 'one'
+        )!
+        expect(
+          cellDecisionFor(reviewed, await store.listNotebookReviews(uri))
+            ?.decision
+        ).toBe('accept')
+        const beforeUndo = parseOperationLog(
+          await store.loadContent(uri)
+        ).operations
+        const preUndoNotebook = await store.load(uri)
+        await decideComparisonCell(store, uri, {
+          ...selection,
+          decision: 'undo',
+        })
+        const after = await store.load(uri)
+        expect(after.cells.find((c) => c.refId === 'two')!.value).toBe(
+          'Unrelated later edit'
+        )
+        expect(after.cells.find((c) => c.refId === 'one')?.value).toBe(
+          kind === 'inserted' ? undefined : 'Original'
+        )
+        expect(after.cells.map((c) => c.refId)).toEqual(
+          kind === 'inserted' ? ['two'] : ['one', 'two']
+        )
+        if (kind === 'modified') {
+          expect(after.cells[0].metadata.example).toBe('before')
+          expect(after.cells[0].outputs).toEqual([output('before output')])
+        }
+        const log = await store.loadContent(uri)
+        const ops = parseOperationLog(log).operations
+        const added = ops.slice(beforeUndo.length)
+        expect(added.at(-1)!.kind).toBe('transaction.commit')
+        expect(
+          new Set(added.slice(0, -1).map((op) => op.transaction_id)).size
+        ).toBe(1)
+        // A replica that has not received the commit sees neither inverse nor decision.
+        expect(
+          materializedLogToNotebook(materializeOperationLog(ops.slice(0, -1)))
+            .cells
+        ).toEqual(preUndoNotebook.cells)
+        expect(buildReviewRounds([...ops].reverse())).toEqual(
+          buildReviewRounds(ops)
+        )
+        await decideComparisonCell(store, uri, {
+          ...selection,
+          decision: 'undo',
+        })
+        expect(await store.loadContent(uri)).toBe(log)
+        const reopened = createTestStore(
+          {},
+          {
+            operationLogStorage,
+            files: (store as any).files,
+            folders: (store as any).folders,
+          }
+        )
+        expect(await reopened.load(uri)).toEqual(after)
+        expect(
+          cellDecisionFor(reviewed, await reopened.listNotebookReviews(uri))
+            ?.decision
+        ).toBe('undo')
+      } finally {
+        actor.mockRestore()
+      }
+    }
+  )
+
+  it('does not hide or undo a later cell revision and leaves comments open', async () => {
+    const actor = vi
+      .spyOn(actorIdentity, 'getNotebookActorId')
+      .mockResolvedValue('cell-reviewer')
+    try {
+      const store = createTestStore({})
+      await store.folders.put({
+        id: LOCAL_FOLDER_URI,
+        name: 'Local',
+        remoteId: '',
+        children: [],
+        lastSynced: '',
+      })
+      const { uri } = await store.create(LOCAL_FOLDER_URI, 'cell-stale.runme')
+      const save = await store.createOperationLogSaveStore(uri, {
+        actorId: 'editor',
+      })
+      const notebook = create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'one',
+            value: 'c0',
+            kind: parser_pb.CellKind.MARKUP,
+          }),
+        ],
+      })
+      await save.save(uri, notebook)
+      const startRevisionId = (await store.listNotebookRevisions(uri)).at(
+        -1
+      )!.id
+      notebook.cells[0].value = 'c1'
+      await save.save(uri, notebook)
+      const endRevisionId = (await store.listNotebookRevisions(uri)).at(-1)!.id
+      const selection = { startRevisionId, endRevisionId, cellId: 'one' }
+      const comment = await store.addOperationLogComment(uri, {
+        content: 'Explain',
+        anchor: createReviewAnchor('unused', 'one'),
+      })
+      await decideComparisonCell(store, uri, {
+        ...selection,
+        decision: 'accept',
+      })
+      notebook.cells[0].value = 'c2'
+      await save.save(uri, notebook)
+      const preview = await store.previewNotebookReview(uri, {
+        startRevisionId,
+        endRevisionId: (await store.listNotebookRevisions(uri)).at(-1)!.id,
+      })
+      expect(
+        cellDecisionFor(
+          preview.diff.cells[0],
+          await store.listNotebookReviews(uri)
+        )
+      ).toBeUndefined()
+      const before = await store.loadContent(uri)
+      await expect(
+        decideComparisonCell(store, uri, { ...selection, decision: 'undo' })
+      ).rejects.toThrow('Cell changed since')
+      expect(await store.loadContent(uri)).toBe(before)
+      expect(
+        (await store.listOperationLogComments(uri)).find(
+          (c) => c.id === comment.id
+        )?.resolved
+      ).toBe(false)
+      await expect(
+        decideComparisonCell(store, uri, {
+          ...selection,
+          cellId: 'missing',
+          decision: 'accept',
+        })
+      ).rejects.toThrow('Changed cell not found')
+    } finally {
+      actor.mockRestore()
+    }
+  })
+
+  it('round trips the two-round review CUJ and suggestion discussions through the API', async () => {
+    const actor = vi
+      .spyOn(actorIdentity, 'getNotebookActorId')
+      .mockResolvedValue('review-cuj-actor')
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const { uri } = await store.create(LOCAL_FOLDER_URI, 'review-cuj.runme')
+    const target = { uri }
+    const save = await store.createOperationLogSaveStore(uri, {
+      actorId: 'editor',
+    })
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        create(parser_pb.CellSchema, {
+          refId: 'one',
+          kind: parser_pb.CellKind.MARKUP,
+          languageId: 'markdown',
+          value: 'Original',
+        }),
+      ],
+    })
+    await save.save(uri, notebook)
+    const model = {
+      getUri: () => uri,
+      getNotebook: () => notebook,
+      flushPendingPersist: vi.fn(),
+      isReadOnly: () => false,
+    }
+    const api = createNotebookCommentsRuntimeApi({
+      resolveNotebook: () => model as never,
+      resolveLocalNotebooks: () => store,
+      resolveDriveNotebookStore: () => null,
+    })
+    const first = await api.reviews.create({ target, title: 'Round 1' })
+    const beforeInvalidSubmission = await store.loadContent(uri)
+    await expect(
+      api.reviews.submit({
+        target,
+        reviewId: first.id,
+        outcome: 'approve',
+        summary: 42 as never,
+      })
+    ).rejects.toThrow('summary must be text')
+    expect(await store.loadContent(uri)).toBe(beforeInvalidSubmission)
+    const human = await store.addOperationLogComment(uri, {
+      content: 'Clarify this',
+      anchor: createReviewAnchor(first.id, 'one', 'Original'),
+      author: {
+        displayName: 'Ada',
+        kind: 'human',
+        source: 'google-drive',
+        authenticatedPrincipal: 'google:ada',
+      },
+    })
+    await api.reviews.submit({
+      target,
+      reviewId: first.id,
+      outcome: 'request_changes',
+    })
+    notebook.cells[0].value = 'Clarified'
+    await save.save(uri, notebook)
+    await api.reply({
+      target,
+      commentId: human.id!,
+      content: 'Updated',
+      author: { displayName: 'Codex', kind: 'agent' },
+    })
+    const second = await api.reviews.create({
+      target,
+      title: 'Round 2',
+      baseReviewId: first.id,
+    })
+    const versions = await api.revisions.list({ target })
+    expect(versions).toHaveLength(3)
+    const oldDate = versions[1].lastChangedAt
+    await api.revisions.label({
+      target,
+      revisionId: versions[1].id,
+      name: 'Initial',
+      description: 'Before fixes',
+      author: { displayName: 'Codex', kind: 'agent' },
+    })
+    expect((await api.revisions.list({ target }))[1]).toMatchObject({
+      name: 'Initial',
+      description: 'Before fixes',
+      lastChangedAt: oldDate,
+    })
+    const preview = await api.reviews.preview({
+      target,
+      startRevisionId: versions[1].id,
+      endRevisionId: versions[2].id,
+    })
+    expect(preview.existingReviewId).toBe(second.id)
+    expect(preview.before.cells[0].value).toBe('Original')
+    const logBeforeContinue = await store.loadContent(uri)
+    expect(
+      (
+        await api.reviews.create({
+          target,
+          startRevisionId: versions[1].id,
+          endRevisionId: versions[2].id,
+        })
+      ).id
+    ).toBe(second.id)
+    expect(await store.loadContent(uri)).toBe(logBeforeContinue)
+    await expect(
+      api.reviews.preview({
+        target,
+        startRevisionId: versions[2].id,
+        endRevisionId: versions[1].id,
+      })
+    ).rejects.toThrow('after start')
+    await api.reviews.linkThread({
+      target,
+      reviewId: second.id,
+      commentId: human.id!,
+    })
+    await api.reviews.submit({
+      target,
+      reviewId: second.id,
+      outcome: 'approve',
+      author: { displayName: 'Ada', kind: 'human' },
+    })
+    expect(second.before.cells[0].value).toBe('Original')
+    expect(second.after.cells[0].value).toBe('Clarified')
+    const suggestions = await api.suggestions.list({ target })
+    const suggestion = suggestions.at(-1)!
+    const selectionThreads: Array<string | undefined> = []
+    for (const input of [
+      { reviewId: second.id, side: 'base' as const },
+      { reviewId: second.id, side: 'head' as const },
+      { suggestionId: suggestion.id, side: 'base' as const },
+    ]) {
+      const comment = await api.add({
+        target,
+        ...input,
+        cellId: 'one',
+        content: 'Selected source',
+        sourceRange: { start: 1, end: 4, unit: 'utf-16' },
+      })
+      selectionThreads.push(comment.id)
+      expect(JSON.parse(comment.anchor!).runme.diffTarget).toEqual({
+        cellId: 'one',
+        side: input.side,
+        sourceRange: { start: 1, end: 4, unit: 'utf-16' },
+        quote: input.side === 'base' ? 'rig' : 'lar',
+      })
+    }
+    const beforeInvalidRange = await store.loadContent(uri)
+    await expect(
+      api.add({
+        target,
+        reviewId: second.id,
+        cellId: 'one',
+        content: 'bad',
+        sourceRange: { start: 0, end: 999, unit: 'utf-16' },
+      })
+    ).rejects.toThrow('Invalid diff source range')
+    await expect(
+      api.add({ target, reviewId: second.id, content: 'bad', side: 'base' })
+    ).rejects.toThrow('requires')
+    await expect(
+      api.add({
+        target,
+        suggestionId: suggestion.id,
+        cellId: 'missing',
+        content: 'bad',
+      })
+    ).rejects.toThrow('Cell not found')
+    expect(await store.loadContent(uri)).toBe(beforeInvalidRange)
+    const explanation = await api.add({
+      target,
+      suggestionId: suggestion.id,
+      content: 'Rationale',
+      author: {
+        displayName: 'Codex',
+        kind: 'agent',
+        source: 'google-drive',
+        authenticatedPrincipal: 'forged',
+      },
+    })
+    await api.reply({
+      target,
+      commentId: explanation.id!,
+      content: 'More context',
+    })
+    expect(await api.suggestions.list({ target })).toEqual(suggestions)
+    const blank = await api.add({
+      target,
+      cellId: 'one',
+      content: 'Anonymous',
+      author: { displayName: ' ', kind: 'human' },
+    })
+    expect(blank.author?.displayName).toBe('unknown')
+    await expect(
+      api.add({ target, suggestionId: 'another-notebooks-id', content: 'bad' })
+    ).rejects.toThrow('Suggestion not found')
+    await expect(
+      api.add({ target: undefined, cellId: 'one', content: 'bad' })
+    ).rejects.toThrow('explicit notebook')
+    const readback = await api.list({ target, status: 'all' })
+    const root = readback.find((c) => c.id === explanation.id)!
+    expect(root.rawAnchor).toContain(suggestion.id)
+    expect(root.author).toMatchObject({
+      displayName: 'Codex',
+      runmeAuthorKind: 'agent',
+    })
+    expect(root.author).not.toHaveProperty('runmeAuthorSource', 'google-drive')
+    expect(root.replies[0]).toMatchObject({
+      author: { displayName: 'unknown', runmeAuthorKind: 'unknown' },
+    })
+    const reviewer = readback.find((c) => c.id === human.id)!
+    expect(reviewer.author).toMatchObject({
+      displayName: 'Ada',
+      runmeAuthenticatedPrincipal: 'google:ada',
+      runmeAuthorSource: 'google-drive',
+    })
+    expect(reviewer.replies[0]).toMatchObject({
+      author: { displayName: 'Codex', runmeAuthorKind: 'agent' },
+    })
+    // Fresh store facade, same persisted journal: no in-memory review objects reused.
+    const reopened = createTestStore({}, { operationLogStorage })
+    reopened.files = store.files
+    reopened.folders = store.folders
+    const rounds = await reopened.listNotebookReviews(uri)
+    expect(rounds[0].diff).toEqual(first.diff)
+    expect(rounds[1]).toMatchObject({
+      outcome: 'approve',
+      threadIds: [human.id],
+    })
+    expect(await reopened.listOperationLogComments(uri)).toEqual(
+      await store.listOperationLogComments(uri)
+    )
+    expect(
+      (await reopened.listOperationLogComments(uri))
+        .filter((c) => selectionThreads.includes(c.id))
+        .map((c) => JSON.parse(c.anchor!).runme.diffTarget.quote)
+    ).toEqual(['rig', 'lar', 'rig'])
+    expect((await reopened.load(uri)).cells[0].value).toBe('Clarified')
+    // Exercise the actual upstream reconciliation path, then a separate local
+    // replica. The Drive transport is mocked; journal merging is production code.
+    let remoteDocument = ''
+    let remoteVersion = {
+      md5Checksum: md5(''),
+      headRevisionId: '1',
+      version: '1',
+    }
+    const drive = {
+      getMetadata: vi.fn(async () => ({ name: 'review-cuj.runme' })),
+      getVersionMetadata: vi.fn(async () => remoteVersion),
+      loadContent: vi.fn(async () => remoteDocument),
+      saveContentIfVersion: vi.fn(
+        async (
+          _uri: string,
+          content: string,
+          _mime: string,
+          expected: { checksum?: string }
+        ) => {
+          expect(expected.checksum).toBe(remoteVersion.md5Checksum)
+          remoteDocument = content
+          remoteVersion = {
+            md5Checksum: md5(content),
+            headRevisionId: '2',
+            version: '2',
+          }
+          return true
+        }
+      ),
+    }
+    const writer = createTestStore(drive, { operationLogStorage })
+    writer.files = store.files
+    writer.folders = store.folders
+    await writer.files.update(uri, {
+      remoteId: 'https://drive.google.com/file/d/review-cuj/view',
+    })
+    await writer.reconcileDriveNotebook(uri)
+    expect(drive.saveContentIfVersion).toHaveBeenCalledOnce()
+    expect(
+      buildReviewRounds(parseOperationLog(remoteDocument).operations)
+    ).toEqual(rounds)
+    const replicaStorage = new MemoryOperationLogStorage()
+    const empty = await replicaStorage.initialize(
+      uri,
+      serializeOperationLog(parseOperationLog(remoteDocument).header, [])
+    )
+    const replica = createTestStore(drive, {
+      operationLogStorage: replicaStorage,
+    })
+    await replica.files.put({
+      ...(await writer.files.get(uri))!,
+      operationLogRef: empty.ref,
+      md5Checksum: empty.checksum,
+      lastRemoteChecksum: '',
+      lastSynced: '',
+    })
+    await replica.reconcileDriveNotebook(uri)
+    expect(await replica.listNotebookReviews(uri)).toEqual(rounds)
+    expect(await replica.listOperationLogComments(uri)).toEqual(
+      await writer.listOperationLogComments(uri)
+    )
+    expect((await replica.load(uri)).cells[0].value).toBe('Clarified')
+    actor.mockRestore()
   })
 
   it('persists suggestion decisions and rematerializes rejected operations', async () => {

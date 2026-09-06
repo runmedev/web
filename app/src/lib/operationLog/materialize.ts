@@ -98,6 +98,11 @@ const knownKinds = new Set([
   'comment.reply',
   'thread.set_status',
   'suggestion.review',
+  'review.create',
+  'review.submit',
+  'review.link_thread',
+  'review.cell_decision',
+  'revision.label',
 ])
 
 export function materializeOperationLog(

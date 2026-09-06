@@ -10,6 +10,10 @@ import {
   sha256Text,
   sliceByCodePoint,
 } from './markdown/renderedMarkdownProjection'
+import {
+  type DiffCommentTarget,
+  parseDiffCommentTarget,
+} from './operationLog/diffCommentAnchor'
 
 const RUNME_COMMENT_ANCHOR_VERSION = 2
 
@@ -18,6 +22,9 @@ export type CellCommentAnchor = {
   cellId: string
   version: 1 | 2
   clientCommentId?: string
+  /** Historical source context from a diff; never reinterpret as rendered offsets. */
+  quote?: string
+  diffTarget?: DiffCommentTarget
 }
 
 export type CellTextCommentAnchor = {
@@ -67,6 +74,8 @@ type RunmeCommentAnchorPayload = {
     sourceHints?: unknown
     clientCommentId?: unknown
     clientOperationId?: unknown
+    reviewId?: unknown
+    suggestionId?: unknown
   }
 }
 
@@ -245,7 +254,26 @@ export function parseCommentAnchor(
       return null
     }
 
-    if (anchorType === 'cell') {
+    // Diff comments belong to the same durable cell discussion in the editor.
+    // Keep the raw comparison anchor on DriveComment; this is only its UI projection.
+    if (
+      anchorType === 'cell' ||
+      anchorType === 'review' ||
+      anchorType === 'suggestion'
+    ) {
+      const historical = parsed.runme as typeof runme & { quote?: string }
+      if (anchorType !== 'cell') {
+        const comparisonId =
+          anchorType === 'review' ? runme.reviewId : runme.suggestionId
+        if (
+          version !== 1 ||
+          typeof comparisonId !== 'string' ||
+          !comparisonId.trim()
+        )
+          return null
+      }
+      const diffTarget = parseDiffCommentTarget(anchor)
+      if (diffTarget && diffTarget.cellId !== runme.cellId) return null
       const clientCommentId =
         typeof runme.clientCommentId === 'string'
           ? runme.clientCommentId
@@ -257,6 +285,10 @@ export function parseCommentAnchor(
         cellId: runme.cellId,
         version,
         ...(clientCommentId ? { clientCommentId } : {}),
+        ...(typeof historical?.quote === 'string'
+          ? { quote: historical.quote }
+          : {}),
+        ...(diffTarget ? { diffTarget } : {}),
       }
     }
 
@@ -362,12 +394,13 @@ export function toCellCommentThreads(
         anchor,
         cellId: resolution.cellId,
         orphaned: resolution.orphaned,
-        location:
-          anchor.type === 'cell'
-            ? { status: 'cell' }
-            : resolution.orphaned
-              ? { status: 'cell-deleted' }
-              : resolveRenderedTextAnchor(anchor, cell?.value ?? ''),
+        location: resolution.orphaned
+          ? { status: 'cell-deleted' }
+          : anchor.type === 'cell'
+            ? anchor.quote && !cell?.value?.includes(anchor.quote)
+              ? { status: 'outdated' }
+              : { status: 'cell' }
+            : resolveRenderedTextAnchor(anchor, cell?.value ?? ''),
       }
     })
 }

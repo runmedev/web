@@ -105,6 +105,9 @@ export interface CommentBody {
 export interface CommentAuthor {
   principal_id: string
   display_name: string
+  kind?: 'human' | 'agent' | 'service-account' | 'unknown'
+  source?: 'google-drive'
+  authenticated_principal?: string
 }
 
 export interface CommentAnnotation {
@@ -155,6 +158,11 @@ export type KnownOperationKind =
   | 'comment.reply'
   | 'thread.set_status'
   | 'suggestion.review'
+  | 'review.create'
+  | 'review.submit'
+  | 'review.link_thread'
+  | 'review.cell_decision'
+  | 'revision.label'
 
 export interface RunmeOperation<
   Kind extends string = string,

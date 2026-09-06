@@ -880,6 +880,16 @@ export class NotebookData {
     return this.reviewReloadRequired
   }
 
+  /** Review undo must not interrupt unrelated running notebook work. */
+  hasActiveExecutions(): boolean {
+    return (
+      this.activeStreams.size > 0 ||
+      this.activeJupyterSockets.size > 0 ||
+      this.pendingJupyterExecutions.size > 0 ||
+      this.activeAppKernelExecutions.size > 0
+    )
+  }
+
   async cancelActiveExecutions(
     message = 'Execution cancelled because another session requested write access.\n'
   ): Promise<void> {

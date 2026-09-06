@@ -121,6 +121,20 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'documentation.list',
   'documentation.get',
   'comments.list',
+  'comments.add',
+  'reviews.list',
+  'reviews.preview',
+  'revisions.list',
+  'revisions.label',
+  'revisions.help',
+  'reviews.help',
+  'reviews.create',
+  'reviews.submit',
+  'reviews.comment',
+  'reviews.assess',
+  'reviews.decideCell',
+  'reviews.linkThread',
+  'suggestions.list',
   'comments.parseAnchor',
   'comments.resolveAnchor',
   'comments.reply',
@@ -410,6 +424,7 @@ export function buildSandboxSrcDoc(options: {
           },
         };
         const comments = {
+          add: (args) => hostCall("comments.add", [args]),
           list: (args) => hostCall("comments.list", [args]),
           parseAnchor: (anchor) => hostCall("comments.parseAnchor", [anchor]),
           resolveAnchor: (args) => hostCall("comments.resolveAnchor", [args]),
@@ -418,14 +433,33 @@ export function buildSandboxSrcDoc(options: {
           reopen: (args) => hostCall("comments.reopen", [args]),
           help: () => {
             consoleProxy.log("await comments.list({ target?, status? })");
+            consoleProxy.log('await comments.add({ target:{uri}, content, reviewId?, suggestionId?, cellId?, side?: "base" | "head", sourceRange?: { start, end, unit: "utf-16" }, author? })');
+            consoleProxy.log("author: {displayName, kind:human|agent|service-account|unknown}; omitted/blank API author is unknown. Supplied labels are not verified identity. An edit reason is not a discussion comment.");
             consoleProxy.log("await comments.parseAnchor(anchor)");
             consoleProxy.log("await comments.resolveAnchor({ anchor, source })");
-            consoleProxy.log("await comments.reply({ target?, commentId, content })");
+            consoleProxy.log("await comments.reply({ target?, commentId, content, author? })");
             consoleProxy.log("await comments.resolve({ target?, commentId })");
             consoleProxy.log("await comments.reopen({ target?, commentId })");
             consoleProxy.log("comments.list includes sync.status; .runme writes append to the operation log, while Drive writes reconcile asynchronously");
           },
         };
+        const reviews = {
+          list: (args) => hostCall("reviews.list", [args]),
+          preview: (args) => hostCall("reviews.preview", [args]),
+          create: (args) => hostCall("reviews.create", [args]),
+          submit: (args) => hostCall("reviews.submit", [args]),
+          comment: (args) => hostCall("reviews.comment", [args]),
+          assess: (args) => hostCall("reviews.assess", [args]),
+          decideCell: (args) => hostCall("reviews.decideCell", [args]),
+          linkThread: (args) => hostCall("reviews.linkThread", [args]),
+          help: () => hostCall("reviews.help", []),
+        };
+        const revisions = {
+          list: (args) => hostCall("revisions.list", [args]),
+          label: (args) => hostCall("revisions.label", [args]),
+          help: () => hostCall("revisions.help", []),
+        };
+        const suggestions = { list: (args) => hostCall("suggestions.list", [args]) };
         const notebookDiff = {
           listDriveRevisions: (target) => hostCall("notebookDiff.listDriveRevisions", [target]),
           diffDriveRevision: (args) => hostCall("notebookDiff.diffDriveRevision", [args]),
@@ -584,6 +618,9 @@ export function buildSandboxSrcDoc(options: {
               "documents",
               "documentation",
               "comments",
+              "reviews",
+              "revisions",
+              "suggestions",
               "notebookDiff",
               "app",
               "runmeRunners",
@@ -593,7 +630,7 @@ export function buildSandboxSrcDoc(options: {
               "help",
               '"use strict"; return (async () => {\\n' + code + '\\n})();',
             );
-            await runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, notebookDiff, app, runmeRunners, explorer, credentials, drive, help);
+            await runner(consoleProxy, runme, tour, ui, opfs, net, embed, notebooks, documents, documentation, comments, reviews, revisions, suggestions, notebookDiff, app, runmeRunners, explorer, credentials, drive, help);
           } catch (error) {
             exitCode = 1;
             post({ type: "stderr", data: String(error) + "\\n" });

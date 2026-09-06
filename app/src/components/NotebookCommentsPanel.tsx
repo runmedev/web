@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { commentAttributionLabel } from '../lib/commentAttribution'
 
 import type {
   CellCommentThread,
@@ -614,6 +615,8 @@ function CommentMessage({
         <div>
           <div className="text-xs font-medium text-nb-text">
             {comment.author?.displayName ?? 'Commenter'}
+            {comment.author?.runmeAuthorKind &&
+              ` · ${commentAttributionLabel(comment.author)}`}
           </div>
           <div className="text-[11px] text-nb-text-faint">
             {formatDriveTime(comment.modifiedTime ?? comment.createdTime)}
@@ -641,6 +644,15 @@ function CommentMessage({
           </span>
         ) : null}
       </div>
+      {thread.anchor?.type === 'cell' && thread.anchor.quote && (
+        <blockquote className="mb-2 border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
+          {thread.anchor.diffTarget?.side === 'base'
+            ? 'Comparison start: '
+            : 'Commented revision: '}
+          {thread.anchor.quote}
+          {thread.location?.status === 'outdated' && ' (outdated context)'}
+        </blockquote>
+      )}
       {thread.anchor?.type === 'cell-text' && (
         <div className="mb-2 rounded-nb-sm bg-nb-surface-2 px-2 py-1.5">
           <blockquote className="border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
@@ -667,6 +679,8 @@ function CommentMessage({
               <div key={reply.id ?? `${reply.createdTime}-${reply.content}`}>
                 <div className="text-[11px] font-medium text-nb-text-muted">
                   {reply.author?.displayName ?? 'Reply'}
+                  {reply.author?.runmeAuthorKind &&
+                    ` · ${commentAttributionLabel(reply.author)}`}
                   {reply.action ? ` - ${reply.action}` : ''}
                   {reply.runmeSyncStatus === 'pending'
                     ? ' - Saved locally'

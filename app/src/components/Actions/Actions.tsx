@@ -12,6 +12,8 @@ import {
 } from 'react'
 
 import { create } from '@bufbuild/protobuf'
+import { useCommentAuthor } from '../../contexts/GoogleAuthContext'
+import { NotebookReviewFlow } from '../OperationLogSuggestions/NotebookReviewFlow'
 import { Button, ScrollArea, Tabs, Text, Tooltip } from '@radix-ui/themes'
 
 import { NotebookPropertiesDialog } from '../NotebookPropertiesDialog'
@@ -143,7 +145,6 @@ import KernelStatusTab from '../KernelStatusTab'
 import { NotebookDiffContent } from '../NotebookDiff/NotebookDiffView'
 import VersionInfoTab from '../VersionInfoTab'
 import { NotebookCommentsPanel } from '../NotebookCommentsPanel'
-import { OperationLogSuggestionView } from '../OperationLogSuggestions/OperationLogSuggestionView'
 import AppConsole from '../AppConsole/AppConsole'
 import LogsPane from '../Logs/LogsPane'
 import { ActionOutputItems } from './ActionOutputItems'
@@ -2234,6 +2235,7 @@ function NotebookTabContent({
   } = useNotebookContext()
   const { store } = useNotebookStore()
   const notebookSnapshot = useNotebookSnapshot(docUri)
+  const getCommentAuthor = useCommentAuthor()
   const notebookData = notebookSnapshot
     ? getNotebookData(notebookSnapshot.uri)
     : null
@@ -2708,9 +2710,14 @@ function NotebookTabContent({
     [attachFiles, readOnly]
   )
 
+  const operationCommentsRead = useRef(0)
   const loadLocalComments = useCallback(async () => {
     if (operationLogComments && store) {
-      setComments(await store.listOperationLogComments(docUri))
+      const read = ++operationCommentsRead.current
+      const next = await store.listOperationLogComments(docUri)
+      // Several API writes may notify while an older OPFS read is in flight.
+      if (read !== operationCommentsRead.current) return true
+      setComments(next)
       setPendingCommentCount(0)
       setFailedCommentCount(0)
       return true
@@ -2996,6 +3003,20 @@ function NotebookTabContent({
     void refreshCommentsRef.current()
   }, [commentsRemoteUri])
 
+  // The journal is shared by the editor, diff view, and API. Content snapshots
+  // need not change for replies/feedback, so listen to journal notifications
+  // directly instead of waiting for a cell edit or manual Comments refresh.
+  useEffect(() => {
+    if (!operationLogComments) return
+    const changed = (event: Event) => {
+      if ((event as CustomEvent).detail?.uri === docUri)
+        void refreshCommentsRef.current()
+    }
+    window.addEventListener('local-notebook-sync-updated', changed)
+    return () =>
+      window.removeEventListener('local-notebook-sync-updated', changed)
+  }, [docUri, operationLogComments])
+
   useEffect(() => {
     const localComments = appState.localComments
     if (operationLogComments || !commentsRemoteUri || !localComments) {
@@ -3128,6 +3149,7 @@ function NotebookTabContent({
             content,
             anchor,
             commentId,
+            author: await getCommentAuthor(),
           })
           setDraftTarget(null)
           setDraftContent('')
@@ -3195,6 +3217,7 @@ function NotebookTabContent({
     },
     [
       cellDatas,
+      getCommentAuthor,
       commentsRemoteUri,
       docUri,
       loadLocalComments,
@@ -3209,7 +3232,9 @@ function NotebookTabContent({
       if (operationLogComments && store) {
         setCommentsBusy(true)
         try {
-          await store.replyToOperationLogComment(docUri, commentId, content)
+          await store.replyToOperationLogComment(docUri, commentId, content, {
+            author: await getCommentAuthor(),
+          })
           await loadLocalComments()
         } finally {
           setCommentsBusy(false)
@@ -3247,6 +3272,7 @@ function NotebookTabContent({
       operationLogComments,
       store,
       syncPendingComments,
+      getCommentAuthor,
     ]
   )
 
@@ -3922,8 +3948,14 @@ function OperationLogSuggestionTabContent({
     : undefined
 
   const closeSuggestionView = useCallback(() => {
+    // "Edit view" is navigation, not closing the comparison. Keep its selected
+    // revisions, scope and unfinished feedback mounted beside the editor.
+    if (sourceEntry?.uri) {
+      setCurrentDoc(sourceEntry.uri)
+      return
+    }
     const fallback = closeWorkspaceDocument(suggestionUri)
-    setCurrentDoc(sourceEntry?.uri ?? fallback)
+    setCurrentDoc(fallback)
   }, [closeWorkspaceDocument, setCurrentDoc, sourceEntry?.uri, suggestionUri])
 
   if (!notebookUri) {
@@ -3948,11 +3980,14 @@ function OperationLogSuggestionTabContent({
 
   return (
     <div id="operation-log-suggestion-tab" className="h-full min-w-0">
-      <OperationLogSuggestionView
+      <NotebookReviewFlow
         docUri={notebookUri}
         store={store}
         readOnly={Boolean(
-          !sourceEntry || sourceEntry.readOnly || sourceEntry.releasePending
+          !sourceEntry ||
+            sourceEntry.state !== 'loaded' ||
+            sourceEntry.readOnly ||
+            sourceEntry.releasePending
         )}
         onClose={closeSuggestionView}
       />
