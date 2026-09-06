@@ -5,6 +5,7 @@ import {
   type DiffCommentTarget,
 } from '../../lib/operationLog/diffCommentAnchor'
 import { parseReviewAnchor } from '../../lib/operationLog/reviews'
+import { parseCommentAnchor } from '../../lib/notebookComments'
 import type { DriveComment, DriveUser } from '../../storage/drive'
 
 /** Root and reply authorship use the same presentation. */
@@ -60,18 +61,18 @@ export function ReviewConversation({
   return (
     <section
       id="review-conversation"
-      aria-label="Review discussion"
+      aria-label="Suggestion discussion"
       className="my-4 border-t pt-3"
     >
-      <h3 className="font-medium">Review discussion</h3>
+      <h3 className="font-medium">Suggestion discussion</h3>
       <div
         id="review-conversation-messages"
         className="my-2 space-y-3 rounded border bg-white p-3"
       >
         {!messages.length && (
           <p className="text-sm text-nb-text-muted">
-            Discuss the review as a whole here. Comment on individual cells
-            directly in the diff.
+            Discuss this comparison and section here. Comment on individual
+            cells directly in the diff.
           </p>
         )}
         {messages.map((message, index) => (
@@ -81,7 +82,7 @@ export function ReviewConversation({
         ))}
       </div>
       <textarea
-        aria-label="New review comment"
+        aria-label="New suggestion comment"
         disabled={disabled}
         className="min-h-20 w-full rounded border p-2 text-sm"
         value={draft}
@@ -94,7 +95,7 @@ export function ReviewConversation({
           if (await onSend(draft, roots[0]?.id)) setDraft('')
         }}
       >
-        Send review comment
+        Send comment
       </button>
     </section>
   )
@@ -116,6 +117,12 @@ export function CellDiscussion({
 }) {
   const [draft, setDraft] = useState('')
   const anchor = parseReviewAnchor(thread.anchor)
+  const cellAnchor = parseCommentAnchor(thread.anchor)
+  const quote =
+    anchor?.quote ??
+    (cellAnchor?.type === 'cell-text'
+      ? cellAnchor.selectors[1].exact
+      : cellAnchor?.quote)
   const target = parseDiffCommentTarget(thread.anchor)
   return (
     <article
@@ -129,9 +136,9 @@ export function CellDiscussion({
           ? ` · ${target.side === 'base' ? 'Previous' : 'Proposed'} cell${target.sourceRange ? ' selection' : ''}`
           : ''}
       </p>
-      {anchor?.quote && (
+      {quote && (
         <blockquote className="my-2 max-h-24 overflow-auto border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
-          {anchor.quote}
+          {quote}
         </blockquote>
       )}
       <Message {...thread} />

@@ -156,9 +156,9 @@ export const DOCUMENTATION_MANIFEST = [
   },
   {
     name: 'notebook-review-rounds',
-    title: 'Review notebook revisions',
+    title: 'Compare notebook revisions',
     description:
-      'Capture fixed notebook review rounds, discuss changes across revisions, and use the comment and review APIs.',
+      'Comment on notebook changes immediately, select sections, and assess scoped suggestions.',
     order: 19,
     path: 'docs/19-notebook-review-rounds.md',
   },

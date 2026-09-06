@@ -61,6 +61,8 @@ function fixture() {
   })
   const first = round('Round 1', '', 'Original')
   const second = round('Round 2', 'Original', 'Clarified')
+  second.baseOperationIds = ['head']
+  second.headOperationIds = ['head', 'edit']
   const rounds = [first]
   const versions: NotebookRevision[] = [
     { id: 'empty', operationIds: [], changeIds: [] },
@@ -159,193 +161,134 @@ function fixture() {
   return { store, first, second, rounds, comments }
 }
 
-describe('notebook review flow', () => {
-  it('previews a heading range, distinguishes whole-document reviews, and starts the fixed scope', async () => {
-    const f = fixture()
-    f.first.after.cells = [
-      ['intro', '# Guide'],
-      ['setup', '## Setup'],
-      ['body', 'Install this'],
-      ['linux', '### Linux'],
-      ['commands', 'Linux commands'],
-      ['deploy', '## Deploy'],
-    ].map(([refId, value]) =>
-      create(parser_pb.CellSchema, {
-        refId,
-        value,
-        languageId: 'markdown',
-        kind: parser_pb.CellKind.MARKUP,
-      })
-    )
+describe('comment-first comparison flow', () => {
+  const mount = (f: ReturnType<typeof fixture>, readOnly = false) =>
     render(
       <NotebookReviewFlow
         docUri="local://file/test"
         store={f.store as unknown as LocalNotebooks}
-        readOnly={false}
+        readOnly={readOnly}
         onClose={() => {}}
       />
     )
+  it('opens a commentable diff without starting a review and shows ordinary editor comments', async () => {
+    const f = fixture()
+    f.comments[0].anchor = JSON.stringify({
+      runme: { version: 2, type: 'cell', cellId: 'cell' },
+    })
+    mount(f)
     await screen.findByText('Clarify the checks')
-    expect(screen.getByRole('option', { name: 'Good Enough' })).toBeTruthy()
-    expect(screen.getByRole('option', { name: 'Needs More Work' })).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('Review round'), {
-      target: { value: 'new' },
+    expect(screen.getByText('Clarified')).toBeTruthy()
+    expect(screen.queryByLabelText('Review round')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Start review' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Submit review' })).toBeNull()
+    expect(screen.queryByRole('navigation', { name: 'Changes' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Change \d+$/ })).toBeNull()
+    expect(f.store.createNotebookReview).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Comment on cell' }))
+    fireEvent.change(screen.getByLabelText('New cell comment'), {
+      target: { value: 'Explain this change' },
     })
-    fireEvent.change(screen.getByLabelText('End revision'), {
-      target: { value: 'v1' },
+    fireEvent.click(screen.getByRole('button', { name: 'Add cell comment' }))
+    await screen.findByText('Explain this change')
+    expect(f.store.createNotebookReview).toHaveBeenCalledWith(
+      'local://file/test',
+      expect.objectContaining({ startRevisionId: 'v1', endRevisionId: 'v2' })
+    )
+    expect(
+      JSON.parse(f.store.addOperationLogComment.mock.calls[0][1].anchor).runme
+        .diffTarget
+    ).toMatchObject({ cellId: 'cell', side: 'head', quote: 'Clarified' })
+  })
+
+  it('filters editor threads to the selected section while retaining unchanged context', async () => {
+    const f = fixture()
+    f.second.before.cells[0].value = '## Setup\nOriginal'
+    f.second.after.cells[0].value = '## Setup\nClarified'
+    for (const nb of [f.second.before, f.second.after]) {
+      nb.cells.push(
+        create(parser_pb.CellSchema, {
+          refId: 'deploy',
+          kind: parser_pb.CellKind.MARKUP,
+          languageId: 'markdown',
+          value: '## Deploy\nDeploy context',
+        })
+      )
+    }
+    f.comments.push({
+      id: 'outside',
+      content: 'Deploy discussion',
+      anchor: JSON.stringify({
+        runme: { type: 'cell', version: 2, cellId: 'deploy' },
+      }),
     })
-    await screen.findByRole('button', { name: 'Continue review' })
+    mount(f)
+    await screen.findByText('Deploy discussion')
     fireEvent.click(
       screen.getByRole('radio', { name: 'Heading / section range' })
     )
-    fireEvent.change(screen.getByLabelText('From heading'), {
-      target: { value: 'setup:1' },
-    })
     await waitFor(() =>
-      expect(
-        (
-          screen.getByRole('button', {
-            name: 'Start review',
-          }) as HTMLButtonElement
-        ).disabled
-      ).toBe(false)
+      expect(screen.queryByText('Deploy discussion')).toBeNull()
     )
-    const canvas = within(document.getElementById('review-round-canvas')!)
-    expect(canvas.queryByText('# Guide')).toBeNull()
-    expect(canvas.queryByText('## Deploy')).toBeNull()
-    expect(canvas.getByText('### Linux')).toBeTruthy()
-    expect(
-      [
-        ...(screen.getByLabelText('Through section') as HTMLSelectElement)
-          .options,
-      ].map((o) => o.value)
-    ).toEqual(['setup:1', 'linux:1', 'deploy:1'])
-    // Start is a separate creation from the existing whole-document pair.
-    fireEvent.click(screen.getByRole('button', { name: 'Start review' }))
-    await waitFor(() =>
-      expect(f.store.createNotebookReview).toHaveBeenCalledWith(
-        'local://file/test',
-        expect.objectContaining({
-          startRevisionId: 'empty',
-          endRevisionId: 'v1',
-          cellIds: ['setup', 'body', 'linux', 'commands'],
-        })
-      )
+    expect(screen.getByText('Clarify the checks')).toBeTruthy()
+    expect(f.store.previewNotebookReview).toHaveBeenLastCalledWith(
+      'local://file/test',
+      expect.objectContaining({ cellIds: ['cell'] })
     )
-  })
-  it('previews revision choices under the new-review option and continues an existing pair', async () => {
-    const f = fixture()
-    render(
-      <NotebookReviewFlow
-        docUri="local://file/test"
-        store={f.store as unknown as LocalNotebooks}
-        readOnly={false}
-        onClose={() => {}}
-      />
-    )
-    await screen.findByText('Clarify the checks')
-    expect(
-      screen.queryByRole('button', { name: 'Start new review' })
-    ).toBeNull()
-    expect(screen.queryByLabelText('Start revision')).toBeNull()
-    fireEvent.change(screen.getByLabelText('Review round'), {
-      target: { value: 'new' },
-    })
-    await waitFor(() =>
-      expect(
-        (
-          screen.getByRole('button', {
-            name: 'Start review',
-          }) as HTMLButtonElement
-        ).disabled
-      ).toBe(false)
-    )
-    expect(screen.queryByRole('button', { name: 'Submit review' })).toBeNull()
-    expect(screen.queryByLabelText('Review discussion')).toBeNull()
-    expect(screen.getByText('Clarified')).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('Start revision'), {
-      target: { value: 'v1' },
-    })
-    const end = screen.getByLabelText('End revision') as HTMLSelectElement
-    expect([...end.options].map((o) => o.value)).toEqual(['v2'])
-    fireEvent.change(screen.getByLabelText('Start revision'), {
-      target: { value: 'empty' },
-    })
-    fireEvent.change(end, { target: { value: 'v1' } })
-    await screen.findByRole('button', { name: 'Continue review' })
-    expect(screen.getByText('Original')).toBeTruthy()
-    // Native selects may emit change when an existing option is reselected.
-    fireEvent.change(end, { target: { value: 'v1' } })
-    expect(screen.getByRole('button', { name: 'Continue review' })).toBeTruthy()
-    expect(screen.getByText('Original')).toBeTruthy()
-    fireEvent.click(
-      screen.getByRole('checkbox', { name: 'Named revisions only' })
-    )
-    await screen.findByRole('button', { name: 'Continue review' })
-    fireEvent.click(screen.getByRole('button', { name: 'Continue review' }))
-    await screen.findByText('Clarify the checks')
+    fireEvent.click(screen.getByRole('radio', { name: 'Whole document' }))
+    expect(await screen.findByText('Deploy discussion')).toBeTruthy()
     expect(f.store.createNotebookReview).not.toHaveBeenCalled()
-    expect(screen.queryByLabelText('Start revision')).toBeNull()
   })
-  it('keeps a single review-wide conversation in the panel and cell threads in the diff', async () => {
+  it('replies to the same thread and assesses without resolving or editing cells', async () => {
     const f = fixture()
-    f.comments.push(
-      {
-        id: 'whole',
-        anchor: createReviewAnchor(f.first.id),
-        content: 'Review-wide question',
-        replies: [],
-      },
-      {
-        id: 'whole-legacy',
-        anchor: createReviewAnchor(f.first.id),
-        content: 'Another older root',
-        replies: [],
-      }
-    )
-    render(
-      <NotebookReviewFlow
-        docUri="local://file/test"
-        store={f.store as unknown as LocalNotebooks}
-        readOnly={false}
-        onClose={() => {}}
-      />
-    )
-    await screen.findByText('Review-wide question')
-    const panel = within(screen.getByLabelText('Notebook review'))
-    expect(panel.queryByText('Clarify the checks')).toBeNull()
-    expect(panel.getAllByLabelText('Review discussion')).toHaveLength(1)
-    expect(panel.getByText('Another older root')).toBeTruthy()
-    expect(panel.queryByLabelText('Discussion target')).toBeNull()
-    expect(
-      within(document.getElementById('review-round-canvas')!).getByText(
-        'Clarify the checks'
-      )
-    ).toBeTruthy()
-    fireEvent.change(panel.getByLabelText('New review comment'), {
-      target: { value: 'A review-wide reply' },
+    mount(f)
+    await screen.findByText('Clarify the checks')
+    fireEvent.change(screen.getByLabelText('Reply to request'), {
+      target: { value: 'These checks are clear' },
     })
-    fireEvent.click(panel.getByRole('button', { name: 'Send review comment' }))
-    await screen.findByText('A review-wide reply')
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }))
+    await screen.findByText('These checks are clear')
+    expect(f.store.replyToOperationLogComment).toHaveBeenCalledWith(
+      'local://file/test',
+      'request',
+      'These checks are clear',
+      expect.anything()
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Good Enough' }))
+    await waitFor(() => expect(f.second.outcome).toBe('good_enough'))
+    expect(f.store.setOperationLogCommentResolved).not.toHaveBeenCalled()
+    expect(f.second.after.cells[0].value).toBe('Clarified')
+    expect(screen.getByRole('status').textContent).toBe('Good Enough')
+  })
+  it('shares one suggestion conversation without a setup action', async () => {
+    const f = fixture()
+    f.rounds.push(f.second)
+    f.comments.push({
+      id: 'whole',
+      anchor: createReviewAnchor(f.second.id),
+      content: 'Suggestion-wide question',
+      replies: [],
+    })
+    mount(f)
+    await screen.findByText('Suggestion-wide question')
+    const panel = within(screen.getByLabelText('Notebook comparison'))
+    expect(panel.queryByText('Clarify the checks')).toBeNull()
+    fireEvent.change(screen.getByLabelText('New suggestion comment'), {
+      target: { value: 'Same topic' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send comment' }))
+    await screen.findByText('Same topic')
     expect(f.store.addOperationLogComment).not.toHaveBeenCalled()
     expect(f.store.replyToOperationLogComment).toHaveBeenCalledWith(
       'local://file/test',
       'whole',
-      'A review-wide reply',
+      'Same topic',
       expect.anything()
     )
   })
-  it('opens the composer from a diff selection, persists its frozen range, and resets on round changes', async () => {
+  it('keeps frozen text selection and cancels a composer when endpoints change', async () => {
     const f = fixture()
-    f.rounds.push(f.second)
-    render(
-      <NotebookReviewFlow
-        docUri="local://file/test"
-        store={f.store as unknown as LocalNotebooks}
-        readOnly={false}
-        onClose={() => {}}
-      />
-    )
+    mount(f)
     await screen.findByText('Clarified')
     const root = screen.getByLabelText('Selectable cell diff')
     const removed = [...root.querySelectorAll('[data-diff-run]')].find(
@@ -360,127 +303,47 @@ describe('notebook review flow', () => {
     fireEvent.click(
       screen.getByRole('button', { name: 'Comment on selection' })
     )
-    const composer = screen.getByLabelText('New cell comment')
-    expect(document.activeElement).toBe(composer)
-    fireEvent.change(composer, {
-      target: { value: 'Explain this old wording' },
+    fireEvent.change(screen.getByLabelText('New cell comment'), {
+      target: { value: 'Explain old wording' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Add cell comment' }))
-    await screen.findByText('Explain this old wording')
-    const input = f.store.addOperationLogComment.mock.calls[0][1]
-    expect(JSON.parse(input.anchor).runme).toMatchObject({
-      reviewId: 'Round 2',
-      diffTarget: {
-        cellId: 'cell',
-        side: 'base',
-        quote: 'rig',
-        sourceRange: { start: 1, end: 4, unit: 'utf-16' },
-      },
+    await screen.findByText('Explain old wording')
+    expect(
+      JSON.parse(f.store.addOperationLogComment.mock.calls[0][1].anchor).runme
+        .diffTarget
+    ).toMatchObject({
+      side: 'base',
+      quote: 'rig',
+      sourceRange: { start: 1, end: 4, unit: 'utf-16' },
     })
-    expect(screen.queryByText(/Outdated context/)).toBeNull()
     fireEvent.click(
       screen.getByRole('button', { name: 'Comment on previous cell' })
     )
-    fireEvent.change(screen.getByLabelText('Review round'), {
-      target: { value: 'Round 1' },
+    fireEvent.change(screen.getByLabelText('Start revision'), {
+      target: { value: 'empty' },
     })
-    expect(screen.queryByText('Previous cell: Original')).toBeNull()
-    expect(screen.queryByLabelText('Discussion target')).toBeNull()
-    expect(screen.queryByLabelText('New cell comment')).toBeNull()
+    await waitFor(() =>
+      expect(screen.queryByLabelText('New cell comment')).toBeNull()
+    )
     document.getSelection()!.removeAllRanges()
   })
-  it('carries a discussion through two rounds, replies, resolves explicitly, and submits feedback', async () => {
+  it('allows read-only navigation but disables mutations', async () => {
     const f = fixture()
-    render(
-      <NotebookReviewFlow
-        docUri="local://file/test"
-        store={f.store as unknown as LocalNotebooks}
-        readOnly={false}
-        onClose={() => {}}
-      />
-    )
-    await screen.findByText('Clarify the checks')
-    expect(screen.getByText('Ada · human · Google Drive identity')).toBeTruthy()
+    mount(f, true)
+    await screen.findByText('Clarified')
     expect(
-      screen.getByText('Codex · agent · supplied attribution')
-    ).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('Review round'), {
-      target: { value: 'new' },
-    })
-    fireEvent.change(screen.getByLabelText('Start revision'), {
-      target: { value: 'v1' },
-    })
-    await waitFor(() =>
-      expect(
-        (
-          screen.getByRole('button', {
-            name: 'Start review',
-          }) as HTMLButtonElement
-        ).disabled
-      ).toBe(false)
-    )
-    fireEvent.click(screen.getByRole('button', { name: 'Start review' }))
-    await waitFor(() =>
-      expect(f.store.linkNotebookReviewThread).toHaveBeenCalledWith(
-        'local://file/test',
-        'Round 2',
-        'request'
-      )
-    )
-    expect(flush).toHaveBeenCalled()
-    expect(f.store.createNotebookReview).toHaveBeenCalledWith(
-      'local://file/test',
-      expect.objectContaining({ startRevisionId: 'v1', endRevisionId: 'v2' })
-    )
-    await screen.findByText(/Outdated context/)
-    fireEvent.change(screen.getByLabelText('Reply to request'), {
-      target: { value: 'These checks are clear now' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Reply' }))
-    await screen.findByText('These checks are clear now')
-    fireEvent.click(screen.getByRole('button', { name: 'Resolve' }))
-    await waitFor(() => expect(f.comments[0].resolved).toBe(true))
-    fireEvent.change(screen.getByLabelText('New review comment'), {
-      target: { value: 'Who owns the rollout?' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Send review comment' }))
-    await screen.findByText('Who owns the rollout?')
-    fireEvent.change(screen.getByLabelText('Review outcome'), {
-      target: { value: 'good_enough' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Submit review' }))
-    await waitFor(() => expect(f.second.outcome).toBe('good_enough'))
-    expect(f.store.setOperationLogCommentResolved).toHaveBeenCalledTimes(1)
-    expect(f.comments[1].resolved).not.toBe(true)
-    fireEvent.change(screen.getByLabelText('Review round'), {
-      target: { value: 'Round 1' },
-    })
-    expect(f.first.after.cells[0].value).toBe('Original')
-    expect(screen.getByText('These checks are clear now')).toBeTruthy()
-    expect(screen.queryByText('Who owns the rollout?')).toBeNull()
-  })
-
-  it('disables mutations when the source editor is unavailable or read-only', async () => {
-    const f = fixture()
-    render(
-      <NotebookReviewFlow
-        docUri="local://file/test"
-        store={f.store as unknown as LocalNotebooks}
-        readOnly
-        onClose={() => {}}
-      />
-    )
-    await screen.findByText('Clarify the checks')
+      (screen.getByLabelText('Start revision') as HTMLSelectElement).disabled
+    ).toBe(false)
     for (const name of [
       'Resolve',
-      'Send review comment',
-      'Submit review',
+      'Good Enough',
+      'Needs More Work',
+      'Send comment',
       'Comment on cell',
-    ]) {
+    ])
       expect(
         (screen.getByRole('button', { name }) as HTMLButtonElement).disabled
       ).toBe(true)
-    }
     expect(f.store.createNotebookReview).not.toHaveBeenCalled()
   })
 })

@@ -644,6 +644,15 @@ function CommentMessage({
           </span>
         ) : null}
       </div>
+      {thread.anchor?.type === 'cell' && thread.anchor.quote && (
+        <blockquote className="mb-2 border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">
+          {thread.anchor.diffTarget?.side === 'base'
+            ? 'Comparison start: '
+            : 'Commented revision: '}
+          {thread.anchor.quote}
+          {thread.location?.status === 'outdated' && ' (outdated context)'}
+        </blockquote>
+      )}
       {thread.anchor?.type === 'cell-text' && (
         <div className="mb-2 rounded-nb-sm bg-nb-surface-2 px-2 py-1.5">
           <blockquote className="border-l-2 border-nb-accent pl-2 text-xs text-nb-text-muted">

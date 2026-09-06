@@ -1,132 +1,108 @@
 ---
 name: notebook-review-rounds
-title: Review notebook revisions
+title: Compare notebook revisions
 order: 19
-description: Capture fixed notebook review rounds, discuss changes across revisions, and use the comment and review APIs.
+description: Comment on notebook changes immediately, select sections, and assess scoped suggestions.
 ---
 
-# Review notebook revisions
+# Compare notebook revisions
 
-For a `.runme` notebook, right-click its tab and choose **Review suggestions**.
-The review tab sits beside the editor. The left panel contains review rounds,
-change navigation, a single review-wide conversation, and submission controls.
-Cell-specific discussions stay beneath their cells in the diff. There is no
-whole-review/cell target dropdown; use the diff's comment actions for cell feedback.
+Read and comment on a .runme notebook in the editor. Ask your collaborator to
+address the comments, edit the same cells, and reply in the existing threads.
+Then right-click the notebook tab and choose **Review suggestions**.
+The suggestion tab stays beside the editor.
 
-Choose **\<start new review\>** in the Review dropdown. Select a start revision
-and a later end revision; the diff updates as you change either selection.
-This is only a preview: no review or discussion is created yet. **Start review**
-fixes both endpoints and the cell scope, then opens the review-wide conversation. If that pair and scope already
-has a review, the button reads **Continue review** and opens it instead.
-Existing reviews show their fixed endpoints, not editable revision pickers.
+Choose start/end revisions and a scope. That selection defines **one suggestion**.
+The diff updates immediately and is immediately commentable: there is no
+Start review, draft, or Submit review step. Browsing does not create metadata.
+The first comment or assessment records the fixed pair and scope.
 
-Expand **Name a revision** to give any historical revision a name and description.
-The picker shows name, description, and the date of its last notebook change in
-your local time zone. Naming a version does not change that date or create a new
-version. **Named revisions only** filters the pickers; the empty baseline remains
-available. End revisions must strictly extend the start's changes, even if clocks
-disagree. Names and reviews travel with the `.runme` file.
+Use **Good Enough** when that suggestion needs no further edits, or
+**Needs More Work** and leave feedback. These actions do not undo edits, change
+notebook contents, or resolve comments. Select another section to assess it
+independently. For the next iteration compare the previous response with the
+new response; earlier snapshots and feedback remain unchanged.
 
-Later edits and renamed versions never change a started review's diff. Concurrent
-starts of the same pair and cell-ID set converge on one review; different scopes
-can be reviewed independently. Existing whole-document review identities are retained.
+## Pick versions and sections
 
-## Review a section
+Expand **Name a revision** to label a historical snapshot and describe it.
+The selector shows its name, description, and last content-change date in your
+local time zone. Labels and comments do not change that date.
+**Named revisions only** helps select the versions you intended to compare;
+the empty baseline stays available. End revisions must strictly extend the
+start's changes, not merely have a later timestamp.
 
-Select **Heading / section range** under Review scope. Choose **From heading**
-and **Through section** using the indented outline. A section includes its
-subheadings and body through the next heading of equal or lower depth. Choose
-the same heading in both fields to review one section, or extend the range to
-review adjacent sections. The preview immediately filters to those cell IDs.
+Select **Heading / section range** under Suggestion scope. **From heading**
+and **Through section** include descendant headings and body cells through the
+next equal-or-higher-level heading. The same heading in both selects one section.
+Multiple headings in a cell select the whole cell.
 
 **Outline from** chooses the end or start revision; use the start outline for
-deleted sections. Scope consists of the cells in the chosen revision, not an
-automatically expanding region. For a mix of deleted and newly inserted cells,
-the API can supply IDs from both endpoints. Every selected ID must exist in at
-least one endpoint. Multiple headings in one cell select the whole cell; no
-sub-cell scope is implied. Unchanged selected cells remain visible for context.
+deleted sections. Scope is a fixed set of cell IDs, not an expanding region.
+The API supports noncontiguous sets from either endpoint; each ID must exist in
+at least one endpoint. Omit cellIds for the whole document. An explicit set must
+be nonempty. Duplicate/reordered IDs identify the same suggestion.
 
-The persisted definition stores IDs, not heading text or cell indexes. Future
-edits, renames, and moves cannot change the selected scope. Omit `cellIds` for
-the whole document; an explicit list must be nonempty and may be noncontiguous.
+## Shared comments
 
-Comments are shared immediately, including while a round is Draft. Submit
-**Good Enough** or **Needs More Work** to assess just this review’s scope. Old
-Approve/Request changes records display with the equivalent new wording;
-legacy Comment submissions remain readable. Submission does not
-revert edits or resolve discussions. Resolve an addressed discussion explicitly.
-Unresolved cell threads carry forward only inside the next scope. Review-wide
-feedback carries forward only between equal scopes; replies
-and resolution state are shared rather than copied. **Individual suggestions**
-opens the original accept/reject view for explicit undo or restoration.
+The left panel contains one suggestion-wide conversation, with no Whole/Cell
+target dropdown. Cell and selected-source threads appear beneath their cells
+in the diff, including ordinary comments created in the editor. Return to the
+editor to see and reply to those same threads. Replies and resolve/reopen actions
+are shared, not copied into a separate discussion per view.
 
-## Comment on the diff
+Use **Comment on cell** or select source and choose **Comment on selection**
+above the cell or from its right-click menu. Removed text anchors to the start
+snapshot; added text to the end snapshot. Unchanged text defaults to the end.
+Select only one side and one cell at a time. Linked resources support whole-cell
+comments, not selection within the resource.
 
-Both review rounds and individual suggestions support **Comment on cell**.
-Select text in the diff, then choose **Comment on selection** above the cell
-or in its right-click menu. In review rounds, the composer opens under the cell
-and shows the quoted target; individual suggestions use their discussion panel.
-**Comment on previous cell** targets the whole old version.
-
-Removed text anchors to the base revision; added text anchors to the proposed
-head. Unchanged text defaults to the head. Select text from one side at a time:
-a selection containing both removed and added text has no single source range.
-Linked resources support whole-cell comments, not selection within the resource.
-The diff displays source text, so text ranges refer to source, not rendered Markdown.
-Comments remain in the `.runme` operation log, including their frozen revision,
-cell, side, exact quote, and optional UTF-16 source range.
+Quotes, original comparison IDs, and optional UTF-16 source ranges remain in
+the .runme log. They are not rendered-Markdown offsets. Changed or deleted
+context is labeled rather than silently retargeted to today's text. The editor
+shows historical quotes without claiming an exact current source selection.
+Whole-suggestion feedback belongs to its original pair/scope; cell feedback
+remains visible in other comparisons containing that cell.
 
 ## Automation
 
-Use an explicit notebook URI. Discover live signatures with `comments.help()`
-and `reviews.help()` before invoking them.
+Discover live signatures with comments.help() and reviews.help(). Use explicit
+notebook targets. The historical reviews namespace remains for compatibility;
+the direct comment/assess methods do not require a create/submit workflow.
 
 ```javascript
 const target = { uri: "local://file/<notebook-id>" };
 const versions = await revisions.list({ target });
 const start = versions[0];
 const end = versions.at(-1);
-await revisions.label({ target, revisionId: end.id, name: "Version",
-  description: "Codex addressed comments", author: { displayName: "Codex", kind: "agent" } });
-const preview = await reviews.preview({ target, startRevisionId: start.id, endRevisionId: end.id });
-const round = await reviews.create({ target, title: "Review operational checks",
-  startRevisionId: start.id, endRevisionId: end.id });
-// A separate scoped review; IDs may come from either frozen endpoint.
-const cellIds = [preview.after.cells[0]?.refId, preview.before.cells[0]?.refId].filter(Boolean);
-const scoped = await reviews.create({ target, startRevisionId: start.id,
-  endRevisionId: end.id, cellIds });
-await reviews.submit({ target, reviewId: scoped.id, outcome: "good_enough" });
-const changes = await suggestions.list({ target });
-const thread = await comments.add({
-  target,
-  suggestionId: changes[0].id,
-  content: "This change makes the check actionable.",
+const selection = { target, startRevisionId: start.id, endRevisionId: end.id };
+await revisions.label({ target, revisionId: end.id, name: "Codex response",
+  description: "Addressed setup comments", author: { displayName: "Codex", kind: "agent" } });
+const preview = await reviews.preview(selection);
+const thread = await reviews.comment({
+  ...selection, content: "The setup changes are clear.",
   author: { displayName: "Codex", kind: "agent" },
 });
-await comments.reply({
-  target, commentId: thread.id, content: "Added the missing example.",
-  author: { displayName: "Codex", kind: "agent" },
-});
+await comments.reply({ target, commentId: thread.id, content: "Thanks." });
+await reviews.assess({ ...selection, outcome: "good_enough" });
 ```
 
-`comments.add` accepts a `reviewId`, a `suggestionId`, or a `cellId`; a review
-or suggestion may additionally specify a cell. To target part of that cell,
-pass `side: "base"` or `"head"` and
-`sourceRange: { start: 0, end: 10, unit: "utf-16" }`. The end is exclusive;
-the range is validated against that side of the frozen comparison. These are different discussion targets. An
-edit's reason is not a discussion, and a suggestion ID is not a comment ID.
-Read back `comments.list({ target, status: "all" })` and inspect `rawAnchor` to
-verify membership. Use `reviews.linkThread` to share an existing root with
-another round without copying its messages.
+Supply cellIds in selection to scope feedback. Supply cellId and optionally
+side: "base" or "head" plus sourceRange: { start, end, unit: "utf-16" } to
+reviews.comment to discuss part of a cell. The exclusive-end range is validated
+against the frozen snapshot; the quote is derived from it.
 
-API authors are supplied attribution, not authenticated identities. Missing or
-blank labels become unknown. Human UI submissions query the current Drive
-identity and fall back to unknown if unavailable. Replies have their own
-authors; historical authors do not change when accounts change. Native Drive
-comments continue to use provider-controlled authorship.
+Use comments.add with cellId for ordinary editor comments. Read comments.list
+with status: "all" and inspect rawAnchor for the complete historical target.
+An edit's reason is not a discussion message. comments.resolve/reopen acts on
+the root comment ID, not the comparison ID.
 
-If Drive uses an impersonated Google service account, the recorded author is
-that service account, not an inferred human impersonator. The UI labels it
-**service account · Google Drive identity**. API callers can supply
-`kind: "service-account"`, but—as with all caller labels—cannot claim verified
-Google identity through the author argument.
+API author labels are unverified attribution; missing/blank labels become
+unknown. UI submissions resolve the current Drive identity, preserving
+service-account identity rather than inferring an impersonating human.
+Replies retain their own authors. All .runme feedback is stored in the notebook,
+not in Google Drive's separate comments service.
+
+Legacy reviews.create/submit/linkThread and old persisted review records remain
+readable. suggestions.list refers to the earlier per-operation accept/reject
+model, not the scoped comparison described here.

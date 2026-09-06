@@ -551,9 +551,7 @@ describe('Actions tabs', () => {
     expect(screen.getByTitle('Suggestions · suggestions.runme')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit view' }))
-    expect(contextMocks.closeWorkspaceDocument).toHaveBeenCalledWith(
-      suggestionUri
-    )
+    expect(contextMocks.closeWorkspaceDocument).not.toHaveBeenCalled()
     expect(contextMocks.setCurrentDoc).toHaveBeenCalledWith(uri)
   })
 
@@ -711,6 +709,31 @@ describe('Actions tabs', () => {
     expect(localComments.setThreadIntent).not.toHaveBeenCalled()
     expect(localComments.reconcile).not.toHaveBeenCalled()
     expect(driveStore.listComments).not.toHaveBeenCalled()
+    // API/diff feedback can arrive without any notebook content mutation.
+    // It must refresh the editor panel automatically, preserving the raw anchor.
+    fireEvent.click(screen.getByRole('button', { name: /all 2/i }))
+    store.listOperationLogComments.mockResolvedValueOnce([
+      ...comments,
+      {
+        ...comments[0],
+        id: 'api-diff-comment',
+        content: 'Feedback from diff',
+        anchor: JSON.stringify({
+          runme: {
+            version: 1,
+            type: 'review',
+            reviewId: 'comparison',
+            cellId: 'cell-open',
+            quote: 'Historical source',
+          },
+        }),
+      },
+    ])
+    window.dispatchEvent(
+      new CustomEvent('local-notebook-sync-updated', { detail: { uri } })
+    )
+    expect(await screen.findByText('Feedback from diff')).toBeTruthy()
+    expect(screen.getByText(/Historical source/)).toBeTruthy()
   })
 
   it('embeds an image selected from the button beside Add cell', async () => {

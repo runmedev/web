@@ -1,36 +1,36 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCommentAuthor } from '../../contexts/GoogleAuthContext'
+import { getNotebookDataController } from '../../lib/notebookDataController'
+import {
+  parseCommentAnchor,
+  resolveRenderedTextAnchor,
+} from '../../lib/notebookComments'
 import {
   revisionLabel,
   type NotebookRevision,
 } from '../../lib/operationLog/revisions'
 import {
-  ReviewRevisionPicker,
-  type ReviewPreview,
-} from './ReviewRevisionPicker'
-import { useCommentAuthor } from '../../contexts/GoogleAuthContext'
-import { getNotebookDataController } from '../../lib/notebookDataController'
-import {
-  createReviewAnchor,
   parseReviewAnchor,
   type NotebookReviewRound,
-  type ReviewOutcome,
 } from '../../lib/operationLog/reviews'
+import type { DiffCommentTarget } from '../../lib/operationLog/diffCommentAnchor'
+import {
+  assessComparison,
+  commentOnComparison,
+} from '../../lib/operationLog/comparisonFeedback'
 import type { DriveComment } from '../../storage/drive'
 import type LocalNotebooks from '../../storage/local'
 import {
-  parseDiffCommentTarget,
-  type DiffCommentTarget,
-} from '../../lib/operationLog/diffCommentAnchor'
+  ReviewRevisionPicker,
+  type ReviewPreview,
+} from './ReviewRevisionPicker'
 import { DiffCommentControls } from './DiffCommentControls'
 import {
   CellDiscussion,
   DiffCommentComposer,
   ReviewConversation,
 } from './ReviewDiscussion'
-import {
-  ChangedCell,
-  OperationLogSuggestionView,
-} from './OperationLogSuggestionView'
+import { ChangedCell } from './OperationLogSuggestionView'
 
 type Props = {
   docUri: string
@@ -40,61 +40,62 @@ type Props = {
 }
 const button =
   'rounded border border-nb-border px-2 py-1 text-sm disabled:opacity-40'
-const outcomeLabel = (outcome?: ReviewOutcome) =>
-  outcome === 'approve' || outcome === 'good_enough'
-    ? 'Good Enough'
-    : outcome === 'request_changes' || outcome === 'needs_more_work'
-      ? 'Needs More Work'
-      : outcome === 'comment'
-        ? 'Commented'
-        : 'Draft'
 
-/** Fixed review rounds share the journal with the editor; only selection is local UI state. */
-export function NotebookReviewFlow(props: Props) {
-  const { docUri, store, readOnly, onClose } = props
-  const [individual, setIndividual] = useState(false)
-  const [rounds, setRounds] = useState<NotebookReviewRound[]>([])
-  const [selected, setSelected] = useState('')
+/** A comparison is immediately commentable. Legacy review records remain the
+ * journal representation, created lazily when feedback needs durable endpoints.
+ * Browsing the diff never creates a record or a draft review.
+ */
+export function NotebookReviewFlow({
+  docUri,
+  store,
+  readOnly,
+  onClose,
+}: Props) {
   const [revisions, setRevisions] = useState<NotebookRevision[]>([])
-  const [preview, setPreview] = useState<ReviewPreview>()
+  const [records, setRecords] = useState<NotebookReviewRound[]>([])
   const [comments, setComments] = useState<DriveComment[]>([])
+  const [preview, setPreview] = useState<ReviewPreview>()
   const [diffTarget, setDiffTarget] = useState<DiffCommentTarget>()
-  const [outcome, setOutcome] = useState<ReviewOutcome>('good_enough')
-  const [summary, setSummary] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const loadSequence = useRef(0)
+  const sequence = useRef(0)
   const author = useCommentAuthor()
   const load = useCallback(async () => {
-    const sequence = ++loadSequence.current
-    const [next, threads, versions] = await Promise.all([
-      store.listNotebookReviews(docUri),
-      store.listOperationLogComments(docUri),
+    const id = ++sequence.current
+    await getNotebookDataController()
+      .getNotebookData(docUri)
+      ?.flushPendingPersist()
+    const [versions, threads, rounds] = await Promise.all([
       store.listNotebookRevisions(docUri),
+      store.listOperationLogComments(docUri),
+      store.listNotebookReviews(docUri),
     ])
-    if (sequence !== loadSequence.current) return
-    setRounds(next)
-    setComments(threads)
-    setRevisions(versions)
-    setSelected((current) =>
-      current === 'new' || next.some((round) => round.id === current)
-        ? current
-        : (next.at(-1)?.id ?? 'new')
+    if (id !== sequence.current) return
+    // Comment-only writes must not reset the selected diff or its composer.
+    setRevisions((old) =>
+      JSON.stringify(old) === JSON.stringify(versions) ? old : versions
     )
-  }, [store, docUri])
+    setComments(threads)
+    setRecords(rounds)
+  }, [docUri, store])
   useEffect(() => {
     void load().catch((e) => setError(String(e)))
-    const updated = (event: Event) => {
+    const changed = (event: Event) => {
       if ((event as CustomEvent).detail?.uri === docUri)
         void load().catch((e) => setError(String(e)))
     }
-    window.addEventListener('local-notebook-sync-updated', updated)
+    window.addEventListener('local-notebook-sync-updated', changed)
     return () => {
-      loadSequence.current++
-      window.removeEventListener('local-notebook-sync-updated', updated)
+      sequence.current++
+      window.removeEventListener('local-notebook-sync-updated', changed)
     }
   }, [load, docUri])
-  const round = rounds.find((r) => r.id === selected)
+  const identity = preview
+    ? JSON.stringify([preview.start.id, preview.end.id, preview.cellIds])
+    : ''
+  useEffect(() => {
+    setDiffTarget(undefined)
+  }, [identity])
   const run = async (action: () => Promise<void>) => {
     if (readOnly || busy) return false
     setBusy(true)
@@ -110,80 +111,43 @@ export function NotebookReviewFlow(props: Props) {
       setBusy(false)
     }
   }
-  const create = (chosen: ReviewPreview) =>
-    run(async () => {
-      if (chosen.existingReviewId) {
-        setSelected(chosen.existingReviewId)
-        return
-      }
-      const next = await store.createNotebookReview(docUri, {
-        title: `Round ${rounds.length + 1}`,
-        startRevisionId: chosen.start.id,
-        endRevisionId: chosen.end.id,
-        cellIds: chosen.cellIds,
-        author: await author(),
-      })
-      const bases = rounds.filter(
-        (r) => versionFor(r.headOperationIds)?.id === chosen.start.id
-      )
-      for (const thread of comments) {
-        const anchor = parseReviewAnchor(thread.anchor)
-        // Carry cell feedback only inside the new scope. Review-wide feedback
-        // carries only between equal scopes, not from an unrelated section.
-        const relevant = bases.some(
-          (base) =>
-            (anchor?.reviewId === base.id ||
-              base.aliases?.includes(anchor?.reviewId ?? '') ||
-              (thread.id && base.threadIds.includes(thread.id))) &&
-            (anchor?.cellId
-              ? !next.cellIds || next.cellIds.includes(anchor.cellId)
-              : JSON.stringify(base.cellIds) === JSON.stringify(next.cellIds))
-        )
-        if (thread.id && !thread.resolved && relevant)
-          await store.linkNotebookReviewThread(docUri, next.id, thread.id)
-      }
-      setSelected(next.id)
-      setDiffTarget(undefined)
-      setPreview(undefined)
-      setSummary('')
-    })
-  const versionFor = (ids: string[]) => {
-    const knownChanges = new Set(revisions.flatMap((r) => r.changeIds))
-    const changes = ids.filter((id) => knownChanges.has(id))
-    return revisions.find(
+  // Compare content operation IDs rather than names or dates; comment/label
+  // operations may be different while the frozen content is identical.
+  const knownChanges = new Set(revisions.flatMap((r) => r.changeIds))
+  const contentKey = (ids: string[]) =>
+    JSON.stringify(ids.filter((id) => knownChanges.has(id)).sort())
+  const record =
+    preview &&
+    records.find(
       (r) =>
-        r.changeIds.length === changes.length &&
-        r.changeIds.every((id) => changes.includes(id))
+        contentKey(r.baseOperationIds) ===
+          contentKey(preview.start.operationIds) &&
+        contentKey(r.headOperationIds) ===
+          contentKey(preview.end.operationIds) &&
+        JSON.stringify(r.cellIds) ===
+          JSON.stringify(preview.cellIds?.slice().sort())
     )
-  }
-  const comparison = round ?? (selected === 'new' ? preview : undefined)
-  if (individual)
-    return (
-      <div id="individual-suggestion-mode" className="flex h-full flex-col">
-        <button className={button} onClick={() => setIndividual(false)}>
-          Back to review rounds
-        </button>
-        <div className="min-h-0 flex-1">
-          <OperationLogSuggestionView {...props} />
-        </div>
-      </div>
-    )
-  const threads = round
-    ? comments.filter(
-        (c) =>
-          (!round.cellIds ||
-            !parseReviewAnchor(c.anchor)?.cellId ||
-            round.cellIds.includes(parseReviewAnchor(c.anchor)!.cellId!)) &&
-          (parseReviewAnchor(c.anchor)?.reviewId === round.id ||
-            round.aliases?.includes(
-              parseReviewAnchor(c.anchor)?.reviewId ?? ''
-            ) ||
-            (c.id && round.threadIds.includes(c.id)))
-      )
-    : []
-  const cellThreads = threads.filter((c) => parseReviewAnchor(c.anchor)?.cellId)
-  const reviewThreads = threads.filter(
-    (c) => !parseReviewAnchor(c.anchor)?.cellId
+  const selection = (chosen: ReviewPreview) => ({
+    startRevisionId: chosen.start.id,
+    endRevisionId: chosen.end.id,
+    cellIds: chosen.cellIds,
+  })
+  const cellId = (thread: DriveComment) =>
+    parseCommentAnchor(thread.anchor)?.cellId
+  const cellThreads = comments.filter(
+    (c) =>
+      !c.deleted &&
+      cellId(c) &&
+      (!preview?.cellIds || preview.cellIds.includes(cellId(c)!))
+  )
+  const discussion = comments.filter(
+    (c) =>
+      !c.deleted &&
+      !cellId(c) &&
+      record &&
+      (parseReviewAnchor(c.anchor)?.reviewId === record.id ||
+        record.aliases?.includes(parseReviewAnchor(c.anchor)?.reviewId ?? '') ||
+        record.threadIds.includes(c.id!))
   )
   const reply = (id: string, content: string) =>
     run(async () => {
@@ -196,19 +160,17 @@ export function NotebookReviewFlow(props: Props) {
       await store.setOperationLogCommentResolved(docUri, id, resolved)
     })
   const renderThread = (thread: DriveComment) => {
-    const anchor = parseReviewAnchor(thread.anchor)
-    const target = parseDiffCommentTarget(thread.anchor)
-    const origin = rounds.find(
-      (r) =>
-        r.id === anchor?.reviewId || r.aliases?.includes(anchor?.reviewId ?? '')
-    )
-    const original = (
-      target?.side === 'base' ? origin?.before : origin?.after
-    )?.cells.find((c) => c.refId === anchor?.cellId)
-    const current = round?.after.cells.find((c) => c.refId === anchor?.cellId)
+    const anchor = parseCommentAnchor(thread.anchor)
+    const source = preview?.after.cells.find(
+      (c) => c.refId === anchor?.cellId
+    )?.value
     const outdated =
-      origin?.id !== round?.id &&
-      current?.value !== (original?.value ?? anchor?.quote)
+      source === undefined ||
+      (anchor?.type === 'cell-text'
+        ? ['outdated', 'ambiguous'].includes(
+            resolveRenderedTextAnchor(anchor, source).status
+          )
+        : Boolean(anchor?.quote && !source.includes(anchor.quote)))
     return (
       <CellDiscussion
         key={thread.id}
@@ -220,8 +182,6 @@ export function NotebookReviewFlow(props: Props) {
       />
     )
   }
-  const changed =
-    comparison?.diff.cells.filter((row) => row.kind !== 'unchanged') ?? []
   return (
     <div
       id="notebook-review-flow"
@@ -229,56 +189,26 @@ export function NotebookReviewFlow(props: Props) {
     >
       <aside
         id="review-round-panel"
-        aria-label="Notebook review"
+        aria-label="Notebook comparison"
         className="flex w-[380px] max-w-[45%] shrink-0 flex-col overflow-y-auto border-r border-nb-border bg-nb-surface-1 p-4"
       >
         <div
-          id="review-round-heading"
+          id="comparison-heading"
           className="flex items-center justify-between gap-2"
         >
-          <h2 className="font-semibold">Review rounds</h2>
+          <h2 className="font-semibold">Compare changes</h2>
           <button className={button} onClick={onClose}>
             Edit view
           </button>
         </div>
-        <p className="my-2 text-xs text-nb-text-muted">
-          Fixed comparisons. Discussions continue across revisions.
-        </p>
-        <label className="my-2 text-sm">
-          Review
-          <select
-            aria-label="Review round"
-            className="mt-1 w-full rounded border p-2"
-            value={selected}
-            disabled={busy}
-            onChange={(e) => {
-              setSelected(e.target.value)
-              setDiffTarget(undefined)
-              setPreview(undefined)
-              if (e.target.value === 'new')
-                void getNotebookDataController()
-                  .getNotebookData(docUri)
-                  ?.flushPendingPersist()
-                  .then(load)
-                  .catch((error) => setError(String(error)))
-            }}
-          >
-            <option value="new">{'<start new review>'}</option>
-            {rounds.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.title} · {outcomeLabel(r.outcome)}
-              </option>
-            ))}
-          </select>
-        </label>
-        {selected === 'new' && (
+        {revisions.length > 0 && (
           <ReviewRevisionPicker
             revisions={revisions}
             store={store}
             docUri={docUri}
-            disabled={busy || readOnly}
+            disabled={busy}
             onPreview={setPreview}
-            onStart={(chosen) => void create(chosen)}
+            readOnly={readOnly}
             onLabel={(revisionId, name, description) =>
               run(async () => {
                 await store.labelNotebookRevision(docUri, {
@@ -291,126 +221,77 @@ export function NotebookReviewFlow(props: Props) {
             }
           />
         )}
-        <button
-          className={`${button} mt-2`}
-          onClick={() => setIndividual(true)}
-        >
-          Individual suggestions · accept/reject
-        </button>
         {error && (
           <p role="alert" className="my-2 text-sm text-red-700">
             {error}
           </p>
         )}
-        {round && (
+        {preview && (
           <>
-            <p className="mt-4 text-sm font-medium">
-              {round.title} · {outcomeLabel(round.outcome)}
-            </p>
-            <p className="text-xs text-nb-text-muted">Fixed comparison</p>
-            <p className="text-xs" aria-label="Fixed review scope">
-              Scope:{' '}
-              {round.cellIds
-                ? `${round.cellIds.length} selected cells`
-                : 'Whole document'}
-            </p>
-            <p className="text-xs">
-              Start:{' '}
-              {versionFor(round.baseOperationIds)
-                ? revisionLabel(versionFor(round.baseOperationIds)!)
-                : 'Historical revision'}
-            </p>
-            <p className="text-xs">
-              End:{' '}
-              {versionFor(round.headOperationIds)
-                ? revisionLabel(versionFor(round.headOperationIds)!)
-                : 'Historical revision'}
-            </p>
-            <p className="my-2 text-xs">
-              Comments are shared immediately, including in drafts.
-            </p>
-            <nav
-              aria-label="Review changes"
-              className="my-2 flex flex-wrap gap-1"
-            >
-              {changed.map((row, i) => (
-                <button
-                  key={row.id}
-                  className={button}
-                  onClick={() =>
-                    document
-                      .getElementById(`review-diff-${row.id}`)
-                      ?.scrollIntoView({ block: 'center' })
-                  }
-                >
-                  Change {i + 1}
-                </button>
-              ))}
-            </nav>
             <ReviewConversation
-              key={docUri + round.id}
-              comments={reviewThreads}
+              key={identity}
+              comments={discussion}
               disabled={busy || readOnly}
               onSend={(content, rootId) =>
                 rootId
                   ? reply(rootId, content)
                   : run(async () => {
-                      await store.addOperationLogComment(docUri, {
+                      await commentOnComparison(store, docUri, {
+                        ...selection(preview),
                         content,
-                        anchor: createReviewAnchor(round.id),
                         author: await author(),
                       })
                     })
               }
             />
-            <div id="review-submit" className="mt-4 border-t pt-3">
-              <h3 className="font-medium">Submit review</h3>
-              {round.submittedAt && (
-                <p className="my-2 text-xs text-nb-text-muted">
-                  {outcomeLabel(round.outcome)} by{' '}
-                  {round.submittedBy?.displayName ?? 'unknown'} ·{' '}
-                  <time dateTime={round.submittedAt}>
-                    {new Date(round.submittedAt).toLocaleString()}
-                  </time>
+            <section
+              id="comparison-assessment"
+              aria-label="Suggestion assessment"
+              className="border-t pt-3"
+            >
+              <h3 className="font-medium">Is this suggestion good enough?</h3>
+              <p className="my-2 text-xs">
+                Applies to these revisions and{' '}
+                {preview.cellIds
+                  ? `${preview.cellIds.length} selected cells`
+                  : 'the whole document'}
+                . Does not undo edits or resolve comments.
+              </p>
+              {record?.outcome && (
+                <p role="status" className="my-2 text-sm">
+                  {record.outcome === 'good_enough' ||
+                  record.outcome === 'approve'
+                    ? 'Good Enough'
+                    : record.outcome === 'comment'
+                      ? 'Commented'
+                      : 'Needs More Work'}
                 </p>
               )}
-              {round.summary && <p className="my-2 text-sm">{round.summary}</p>}
-              <select
-                aria-label="Review outcome"
-                className="my-2 w-full rounded border p-2 text-sm"
-                value={outcome}
-                onChange={(e) => setOutcome(e.target.value as ReviewOutcome)}
-              >
-                <option value="good_enough">Good Enough</option>
-                <option value="needs_more_work">Needs More Work</option>
-              </select>
-              <textarea
-                aria-label="Review summary"
-                className="w-full rounded border p-2 text-sm"
-                value={summary}
-                onChange={(e) => setSummary(e.target.value)}
-              />
-              <button
-                className={`${button} mt-1`}
-                disabled={busy || readOnly || Boolean(round.outcome)}
-                onClick={() =>
-                  void run(async () => {
-                    await store.submitNotebookReview(docUri, {
-                      reviewId: round.id,
-                      outcome,
-                      summary,
-                      author: await author(),
-                    })
-                  })
-                }
-              >
-                Submit review
-              </button>
-              <p className="mt-2 text-xs text-nb-text-muted">
-                Submission does not change notebook contents or resolve threads.
-                The decision applies only to this review’s fixed scope.
-              </p>
-            </div>
+              <div id="comparison-assessment-actions" className="flex gap-2">
+                {(['good_enough', 'needs_more_work'] as const).map(
+                  (outcome) => (
+                    <button
+                      key={outcome}
+                      className={button}
+                      disabled={busy || readOnly}
+                      onClick={() =>
+                        void run(async () => {
+                          await assessComparison(store, docUri, {
+                            ...selection(preview),
+                            outcome,
+                            author: await author(),
+                          })
+                        })
+                      }
+                    >
+                      {outcome === 'good_enough'
+                        ? 'Good Enough'
+                        : 'Needs More Work'}
+                    </button>
+                  )
+                )}
+              </div>
+            </section>
           </>
         )}
       </aside>
@@ -418,22 +299,17 @@ export function NotebookReviewFlow(props: Props) {
         id="review-round-canvas"
         className="min-w-0 flex-1 overflow-auto p-6"
       >
-        {!comparison ? (
-          <p>Select start and end revisions to preview a comparison.</p>
+        {!preview ? (
+          <p>Select start and end revisions to compare changes.</p>
         ) : (
           <>
             <h2 className="mb-4 font-semibold">
-              {round
-                ? round.title + ' · fixed revision comparison'
-                : 'Preview · ' +
-                  revisionLabel(preview!.start) +
-                  ' → ' +
-                  revisionLabel(preview!.end)}
+              {revisionLabel(preview.start)} → {revisionLabel(preview.end)}
             </h2>
-            {comparison.diff.cells.map((row, i) => (
+            {preview.diff.cells.map((row, i) => (
               <article
                 id={`review-diff-${row.id}`}
-                key={row.id}
+                key={identity + row.id}
                 tabIndex={-1}
                 className="mb-4 focus:outline focus:outline-2 focus:outline-nb-accent"
               >
@@ -441,40 +317,34 @@ export function NotebookReviewFlow(props: Props) {
                   Cell {i + 1} · {row.kind}
                 </p>
                 <DiffCommentControls
-                  key={`${round?.id ?? preview?.start.id + ':' + preview?.end.id}-${row.id}`}
                   row={row}
-                  disabled={readOnly || busy || !round}
-                  onComment={(target) => {
-                    setDiffTarget(target)
-                  }}
+                  disabled={readOnly || busy}
+                  onComment={setDiffTarget}
                 >
                   <ChangedCell row={row} />
                 </DiffCommentControls>
                 {cellThreads
                   .filter(
                     (c) =>
-                      parseReviewAnchor(c.anchor)?.cellId ===
-                      (row.compareCell ?? row.baseCell)?.refId
+                      cellId(c) === (row.compareCell ?? row.baseCell)?.refId
                   )
                   .map(renderThread)}
-                {round &&
-                  diffTarget?.cellId ===
+                {diffTarget &&
+                  diffTarget.cellId ===
                     (row.compareCell ?? row.baseCell)?.refId && (
                     <DiffCommentComposer
-                      key={round.id + diffTarget!.cellId}
-                      target={diffTarget!}
+                      key={identity + diffTarget.cellId}
+                      target={diffTarget}
                       disabled={busy || readOnly}
                       onCancel={() => setDiffTarget(undefined)}
                       onSend={(content) =>
                         run(async () => {
-                          await store.addOperationLogComment(docUri, {
+                          await commentOnComparison(store, docUri, {
+                            ...selection(preview),
                             content,
-                            anchor: createReviewAnchor(
-                              round.id,
-                              diffTarget!.cellId,
-                              diffTarget!.quote,
-                              diffTarget
-                            ),
+                            cellId: diffTarget.cellId,
+                            side: diffTarget.side,
+                            sourceRange: diffTarget.sourceRange,
                             author: await author(),
                           })
                         })
@@ -499,23 +369,21 @@ export function NotebookReviewFlow(props: Props) {
                 )}
               </article>
             ))}
-            {cellThreads.filter(
+            {cellThreads.some(
               (c) =>
-                !comparison.diff.cells.some(
+                !preview.diff.cells.some(
                   (row) =>
-                    (row.compareCell ?? row.baseCell)?.refId ===
-                    parseReviewAnchor(c.anchor)?.cellId
+                    (row.compareCell ?? row.baseCell)?.refId === cellId(c)
                 )
-            ).length > 0 && (
+            ) && (
               <section aria-label="Discussions on earlier cells">
                 <h3>Discussions on cells absent from this comparison</h3>
                 {cellThreads
                   .filter(
                     (c) =>
-                      !comparison.diff.cells.some(
+                      !preview.diff.cells.some(
                         (row) =>
-                          (row.compareCell ?? row.baseCell)?.refId ===
-                          parseReviewAnchor(c.anchor)?.cellId
+                          (row.compareCell ?? row.baseCell)?.refId === cellId(c)
                       )
                   )
                   .map(renderThread)}

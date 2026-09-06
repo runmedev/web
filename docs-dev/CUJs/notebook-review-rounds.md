@@ -1,76 +1,60 @@
-# Fixed notebook review rounds
+# Comment-first notebook collaboration
 
 ## Preconditions
 
-Run the local app on localhost:5173. Use a dedicated `.runme` notebook. The
-recorded journey uses a fresh signed-out profile, so reviewer attribution is
-explicitly unknown. Test the signed-in human path separately; never fabricate
-Google identity to make a recording look authenticated.
+Run localhost:5173 with automatic reload/HMR disabled. Use a dedicated .runme
+notebook, never the user's working document. The automated recording uses an
+isolated signed-out profile and unknown authorship; it does not verify Google
+authentication or Drive upload.
 
 ## Journey and assertions
 
-1. Insert Markdown and code cells, immediately open the notebook, execute the
-   code cell, then name the revision. Open Review suggestions; the editor stays
-   adjacent. Select <start new review> in Review. Filter named revisions, select
-   empty→named head, and verify a live preview including outputs. Start the review;
-   the pickers disappear and the endpoints become fixed. Pending edits survive.
-2. Add a cell-specific discussion and a whole-review discussion. Submit Needs
-   More Work. The left panel shows one review-wide conversation; the cell thread
-   appears under its diff. The shared-draft notice stays visible.
-3. Edit the live cell through WebMCP and reply as Codex to the real root ID.
-   Capture Round 2 from Round 1's head and link both unresolved threads. Assert
-   an incremental text diff, identical thread IDs, and outdated quoted context.
-4. Start a discussion on an existing suggestion, then reply to its returned
-   comment ID. Assert the original suggestions, diffs, and decisions are
-   unchanged. Cell and suggestion discussions remain separate anchors.
-5. Navigate back to Round 1. Its diff is byte-for-byte unchanged. Return to
-   Round 2, resolve only the addressed thread, and submit Good Enough. The other thread
-   stays open and the edited notebook remains applied.
-6. Reload the page. Assert every review endpoint, outcome, thread link, message,
-   author, and status matches the pre-reload data.
-7. Reject then accept an individual suggestion; the live document changes but
-   historical round endpoints remain unchanged.
-8. Manually verify the signed-in Drive identity path and Drive sync/reopen.
-9. In both diff views, use Comment on cell; select part of inserted, removed,
-   and unchanged source and choose Comment on selection (including right-click).
-   Verify the inline cell composer quote, source side, root and reply, and persistence
-   after reopening. Check repeated words and Unicode offsets. A mixed red/green
-   or cross-cell selection must fail closed. Switching rounds must clear the
-   pending target. Read-only mode must disable these actions. Text selection
-   is source-only; linked resources use whole-cell comments.
-10. Verify the review panel has no whole-review/cell target dropdown. Sending
-    successive review-wide messages must reply to one root, not create a new
-    thread each time. Legacy review-wide roots remain visible in the single
-    conversation, while cell threads remain in the diff.
-11. Name an older revision after later edits. Verify its date and content stay
-    unchanged. End choices exclude the start and earlier/unrelated revisions.
-    Switch endpoint choices rapidly; stale preview responses must not win.
-    Pick an already-reviewed pair: Continue review must open it without creating
-    another. Concurrent API starts converge on the same ID. Reload preserves
-    labels, endpoints, and discussions. Preview mode cannot post comments.
-12. Select a heading range with nested subheadings. Verify unrelated sections
-    disappear, descendant cells remain, and the Start/Continue lookup is scoped
-    as well as versioned. Start a different section over the same revisions.
-    Use the start outline to select a deleted heading; use the API for a mixed
-    noncontiguous set of deleted and inserted cells. Verify invalid/empty scopes
-    are rejected, different sets have independent decisions, and reordered IDs
-    continue the same review. Reload preserves the scope, filtered diff, and
-    Good Enough / Needs More Work outcomes. Out-of-scope comments must not leak.
+1. Read the initial document in edit view and leave cell feedback. Name that
+   revision. Edit the same cells as Codex and reply to the original root.
+2. Open the adjacent suggestion tab. Select start/end revisions. The diff shows
+   the original thread and reply immediately, without Start/Submit review or
+   a review-round/target dropdown. Browsing writes no comparison record.
+3. Filter named revisions. Labels do not change the last content-change date;
+   end choices strictly extend the start's operation set.
+4. Select a section or heading range. Include descendant/body cells and exclude
+   unrelated cells. The selected pair plus cell-ID scope defines ONE suggestion.
+5. Add a diff-source comment with exact quote, side, and UTF-16 range. Show it
+   beneath its cell, not in the left panel. The left panel has one suggestion-wide
+   conversation. Successive messages reply to the same root.
+6. Assess the scope as Good Enough. Return to edit view: the same source comment,
+   whole-suggestion conversation, and replies remain visible. Reply and return
+   to diff; verify the same thread ID and message.
+7. Select a deleted section using the start outline. Assess it as Needs More Work.
+   Different scopes have independent feedback. Neither assessment edits content,
+   rejects operations, or resolves comments.
+8. Reload and reselect the desired comparison. Its stored scope, snapshots,
+   comments, replies, authors, and assessments must survive unchanged.
+9. Make a second AI revision. Compare first response to second response. Relevant
+   cell threads retain their identities and original quotes; stale context is
+   marked. The old comparison still reconstructs its original content.
+
+## Additional regression coverage
+
+Component/storage tests cover source selection and composer submission, repeated
+words/Unicode, mixed-side and cross-cell rejection, readonly controls, stale
+preview responses, one-root replies, noncontiguous scopes, invalid/empty scopes,
+canonical duplicate/reordered cell sets, and historical snapshots.
+
+The comparison panel has no numbered Change buttons. Reusing the existing
+document outline to navigate long diffs is deferred; the section-range controls
+continue to select suggestion scope, not provide a separate navigation list.
+
+Manually verify pointer-driven selection/comment submission and the signed-in
+Drive sync/reopen path separately. Do not describe API-driven rendering checks
+as pointer-input or authentication tests.
 
 ## Automated evidence
 
-`app/test/browser/test-scenario-notebook-reviews.ts` records steps 1–7 and the
-named-filter/preview/continue portions of step 11, plus heading selection,
-deleted-section selection, independent decisions, and scoped reload from step 12.
-The latest recording passes 17 checkpoints. It implements a minimal WebMCP host for an isolated browser;
-all notebook mutations invoke the app's registered ExecuteCode tool. UI
-navigation uses browser locators. This is not a fake notebook implementation.
-Selection mapping and composer submission are covered by component tests in
-`diffSelection.test.tsx` and `NotebookReviewFlow.test.tsx`; the integrated
-storage test verifies API ranges survive reopening and upstream reconciliation.
-Step 9's real-browser input interactions still require manual validation.
+`app/test/browser/test-scenario-notebook-reviews.ts` implements the journey with
+the real app. All notebook/comment mutations invoke its registered WebMCP tool;
+browser locators control navigation. No fake notebook backend is used.
 
-Run with Node 24 and an installed `playwright-core` module:
+Run with Node 24 and an installed playwright-core module:
 
 ```sh
 CUJ_PLAYWRIGHT_MODULE=/absolute/path/to/playwright-core \
@@ -78,7 +62,7 @@ CUJ_BROWSER_EXECUTABLE=/absolute/path/to/chromium \
 node app/test/browser/test-scenario-notebook-reviews.ts
 ```
 
-Outputs live under `app/test/browser/test-output/notebook-review-<timestamp>/`:
-`result.json`, per-step screenshots and visible-text snapshots, and an actual
-WebM recording. A failed attempt is labeled failed, not presented as passing
-evidence. Sync and signed-in identity are not claimed by the signed-out run.
+Outputs are under `app/test/browser/test-output/notebook-review-<timestamp>/`:
+result.json, screenshots, visible text, and an actual WebM recording. Only a
+result.json with status passed is passing evidence. Historical recordings of the
+explicit-start/submit workflow do not verify this iteration.

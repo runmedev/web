@@ -599,6 +599,10 @@ async function handleSandboxAppKernelBridgeCall({
       return globals.reviews.create(args[0] as any)
     case 'reviews.submit':
       return globals.reviews.submit(args[0] as any)
+    case 'reviews.comment':
+      return globals.reviews.comment(args[0] as any)
+    case 'reviews.assess':
+      return globals.reviews.assess(args[0] as any)
     case 'reviews.linkThread':
       return globals.reviews.linkThread(args[0] as any)
     case 'suggestions.list':

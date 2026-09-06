@@ -41,7 +41,7 @@ export function ReviewScopePicker({
       disabled={disabled}
       className="space-y-2 border-t pt-3"
     >
-      <legend className="text-sm font-medium">Review scope</legend>
+      <legend className="text-sm font-medium">Suggestion scope</legend>
       <label className="block text-sm">
         <input
           type="radio"

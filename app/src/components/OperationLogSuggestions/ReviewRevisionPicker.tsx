@@ -17,26 +17,25 @@ export function ReviewRevisionPicker({
   store,
   docUri,
   disabled,
+  readOnly = false,
   onPreview,
-  onStart,
   onLabel,
 }: {
   revisions: NotebookRevision[]
   store: LocalNotebooks
   docUri: string
   disabled: boolean
+  readOnly?: boolean
   onPreview: (preview: ReviewPreview | undefined) => void
-  onStart: (preview: ReviewPreview) => void
   onLabel: (
     revisionId: string,
     name: string,
     description: string
   ) => Promise<boolean>
 }) {
-  const [startId, setStartId] = useState('empty')
+  const [startId, setStartId] = useState(revisions.at(-2)?.id ?? 'empty')
   const [endId, setEndId] = useState(revisions.at(-1)?.id ?? '')
   const [namedOnly, setNamedOnly] = useState(false)
-  const [preview, setPreview] = useState<ReviewPreview>()
   const [fullPreview, setFullPreview] = useState<ReviewPreview>()
   const [loading, setLoading] = useState(false)
   const [scope, setScope] = useState<{ pair: string; cellIds?: string[] }>()
@@ -58,7 +57,6 @@ export function ReviewRevisionPicker({
       : undefined
   useEffect(() => {
     let cancelled = false
-    setPreview(undefined)
     onPreview(undefined)
     setError('')
     setLoading(true)
@@ -88,10 +86,9 @@ export function ReviewRevisionPicker({
     }
   }, [docUri, store, start?.id, end?.id, onPreview, namedOnly, revisions])
   // Scope changes are read-only previews. Ignore stale asynchronous responses,
-  // and never let an old whole-document result enable Start for a new scope.
+  // and never let an old whole-document result enable feedback for a new scope.
   useEffect(() => {
     let cancelled = false
-    setPreview(undefined)
     onPreview(undefined)
     if (loading || !currentFullPreview) return
     if (cellIds?.length === 0) {
@@ -101,7 +98,6 @@ export function ReviewRevisionPicker({
     setError('')
     const publish = (next: ReviewPreview) => {
       if (!cancelled) {
-        setPreview(next)
         onPreview(next)
       }
     }
@@ -122,11 +118,10 @@ export function ReviewRevisionPicker({
     }
   }, [currentFullPreview, cellIds, loading, docUri, store, onPreview])
   const selectionChanged = () => {
-    setPreview(undefined)
     onPreview(undefined)
   }
   return (
-    <section aria-label="Choose review revisions" className="space-y-3 py-3">
+    <section aria-label="Compare revisions" className="space-y-3 py-3">
       <label className="block text-sm">
         <input
           type="checkbox"
@@ -180,8 +175,8 @@ export function ReviewRevisionPicker({
         </select>
       </label>
       <p className="text-xs text-nb-text-muted">
-        Preview changes as you select. Starting a review fixes both revisions
-        and the selected cells.
+        Comment directly on the diff. Each discussion and assessment retains
+        these revisions and the selected cells.
       </p>
       {currentFullPreview && (
         <ReviewScopePicker
@@ -200,15 +195,6 @@ export function ReviewRevisionPicker({
           {error}
         </p>
       )}
-      <button
-        className="rounded border px-2 py-1 text-sm disabled:opacity-40"
-        disabled={disabled || !preview}
-        onClick={() => {
-          if (preview) onStart(preview)
-        }}
-      >
-        {preview?.existingReviewId ? 'Continue review' : 'Start review'}
-      </button>
       <details className="border-t pt-2">
         <summary className="cursor-pointer text-sm">Name a revision</summary>
         <label className="block text-sm">
@@ -250,7 +236,7 @@ export function ReviewRevisionPicker({
         />
         <button
           className="rounded border px-2 py-1 text-sm disabled:opacity-40"
-          disabled={disabled || !labelId || !name.trim()}
+          disabled={disabled || readOnly || !labelId || !name.trim()}
           onClick={() => void onLabel(labelId, name, description)}
         >
           Save revision name

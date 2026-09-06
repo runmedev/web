@@ -21,6 +21,12 @@ import {
   parseOperationLog,
 } from '../operationLog'
 import {
+  type ComparisonAssessment,
+  type ComparisonComment,
+  assessComparison,
+  commentOnComparison,
+} from '../operationLog/comparisonFeedback'
+import {
   type DiffCommentTarget,
   createDiffCommentTarget,
 } from '../operationLog/diffCommentAnchor'
@@ -63,7 +69,7 @@ export type AgentAnnotation = {
   anchor: CommentAnchor | null
   originalTarget: {
     cellId: string
-    surface: 'cell' | 'rendered-markdown'
+    surface: 'cell' | 'rendered-markdown' | 'diff-source'
     revision: string | null
     selectors: unknown[]
     reviewedContent: string | null
@@ -233,14 +239,26 @@ export async function listNotebookComments(
         originalTarget: anchor
           ? {
               cellId: anchor.cellId,
-              surface: anchor.type === 'cell' ? 'cell' : 'rendered-markdown',
+              surface:
+                anchor.type === 'cell'
+                  ? anchor.diffTarget
+                    ? 'diff-source'
+                    : 'cell'
+                  : 'rendered-markdown',
               revision:
                 anchor.type === 'cell-text'
                   ? anchor.state.driveRevisionId
                   : null,
-              selectors: anchor.type === 'cell-text' ? anchor.selectors : [],
+              selectors:
+                anchor.type === 'cell-text'
+                  ? anchor.selectors
+                  : anchor.diffTarget
+                    ? [anchor.diffTarget]
+                    : [],
               reviewedContent:
-                anchor.type === 'cell-text' ? anchor.selectors[1].exact : null,
+                anchor.type === 'cell-text'
+                  ? anchor.selectors[1].exact
+                  : (anchor.quote ?? null),
             }
           : null,
         editableSource:
@@ -252,7 +270,7 @@ export async function listNotebookComments(
                 confidence:
                   anchor.type === 'cell-text' && sourceRanges.length > 0
                     ? 'derived'
-                    : anchor.type === 'cell'
+                    : anchor.type === 'cell' && !anchor.quote
                       ? 'exact'
                       : 'unavailable',
               }
@@ -327,6 +345,8 @@ export function createNotebookCommentsRuntimeApi(
         'await revisions.list({ target: { uri } })',
         'await revisions.label({ target: { uri }, revisionId, name, description?, author? })',
         'await reviews.preview({ target: { uri }, startRevisionId, endRevisionId, cellIds? })',
+        'await reviews.comment({ target: { uri }, startRevisionId, endRevisionId, cellIds?, content, cellId?, side?, sourceRange?, author? }) — comment directly; no create step',
+        'await reviews.assess({ target: { uri }, startRevisionId, endRevisionId, cellIds?, outcome, author? }) — Good Enough/Needs More Work without a submit workflow',
         'await reviews.create({ target: { uri }, title?, startRevisionId, endRevisionId, cellIds?, author? }) — returns the existing review for that pair and cell-ID set',
         'await reviews.submit({ target: { uri }, reviewId, outcome, summary?, author? })',
         'await reviews.linkThread({ target: { uri }, reviewId, commentId })',
@@ -335,6 +355,22 @@ export function createNotebookCommentsRuntimeApi(
     list: async (input: { target: unknown }) => {
       const c = await operationContext(input.target)
       return c.store.listNotebookReviews(c.notebookUri)
+    },
+    comment: async (input: ComparisonComment & { target: unknown }) => {
+      const c = await operationContext(input.target, true)
+      await c.notebookData.flushPendingPersist?.()
+      return commentOnComparison(c.store, c.notebookUri, {
+        ...input,
+        author: normalizeAttribution(input.author),
+      })
+    },
+    assess: async (input: ComparisonAssessment & { target: unknown }) => {
+      const c = await operationContext(input.target, true)
+      await c.notebookData.flushPendingPersist?.()
+      return assessComparison(c.store, c.notebookUri, {
+        ...input,
+        author: normalizeAttribution(input.author),
+      })
     },
     create: async (input: {
       target: unknown

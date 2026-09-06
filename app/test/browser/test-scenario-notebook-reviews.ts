@@ -87,386 +87,311 @@ async function checkpoint(name: string) {
   // A short dwell makes the real interaction video legible to a reviewer.
   await page.waitForTimeout(1200)
 }
+/** Read or mutate through a named public AppKernel API with structured input. */
+const api = (method: string, input: unknown) =>
+  code('console.log(await ' + method + '(' + JSON.stringify(input) + '));')
 try {
   await page.goto(process.env.CUJ_FRONTEND_URL || 'http://localhost:5173/')
   const { session } = await code(
     'console.log({session:await app.getSessionID()})'
   )
   assert.equal(new URL(page.url()).searchParams.get('session'), session)
-  const created = await code(
-    'const d=await notebooks.createLocal("review-rounds-recording.runme"); console.log({uri:d.handle.uri});'
-  )
-  const uri = created.uri
-  evidence.uri = uri
-  const cells = [
-    {
-      kind: 'markup',
-      value:
-        '# Release checklist\n\nDeploy the service, then check that it works.',
-      metadata: { name: 'checklist' },
-    },
-    {
-      kind: 'code',
-      languageId: 'javascript',
-      value: 'console.log("Ready: two replicas healthy")',
-      metadata: {
-        name: 'health-check',
-        'runme.dev/runnerName': 'appkernel-js-sandbox',
-      },
-    },
+  const created = await api('notebooks.createLocal', 'comment-first-cuj.runme')
+  const uri = created.handle.uri
+  const target = { uri }
+  const values = [
+    '# Runbook',
+    '## Setup',
+    'Original setup checklist',
+    '### Old credentials',
+    'Retired credential flow',
+    '## Rollout',
+    'Rollout unchanged',
   ]
-  const seeded = await code(
-    `const uri=${JSON.stringify(uri)}; const d=await notebooks.get({uri}); await notebooks.update({target:{uri},expectedRevision:d.handle.revision,operations:[{op:"insert",at:{index:0},cells:${JSON.stringify(cells)}}]}); await notebooks.show(uri); const next=await notebooks.get({uri}); console.log(next.notebook.cells.map(c=>({refId:c.refId,value:c.value})));`
-  )
-  assert.equal(seeded.length, 2)
-  const target = JSON.stringify({ uri })
-  await code(
-    `await notebooks.execute({target:${target},refIds:[${JSON.stringify(seeded[1].refId)}]});`
-  )
-  const initialVersion = await code(
-    `const versions=await revisions.list({target:${target}}); const v=versions.at(-1);console.log(await revisions.label({target:${target},revisionId:v.id,name:"Initial checklist",description:"Before addressing review comments"}));`
-  )
-  await page
-    .getByRole('button', { name: 'Review suggestions', exact: true })
-    .click()
-  await page
-    .getByRole('heading', { name: 'Review rounds', exact: true })
-    .waitFor()
-  await page.getByLabel('Review round', { exact: true }).selectOption('new')
-  await page.getByRole('checkbox', { name: 'Named revisions only' }).check()
-  await page
-    .getByLabel('End revision', { exact: true })
-    .selectOption(initialVersion.id)
-  await page
-    .getByRole('button', { name: 'Start review', exact: true })
-    .waitFor()
-  await page.waitForFunction(() =>
-    document
-      .querySelector('#review-round-canvas')
-      ?.textContent?.includes('Preview')
-  )
-  assert.equal(await page.getByLabel('New review comment').count(), 0)
-  await checkpoint('00-named-revision-live-preview')
-  const first = await code(
-    `console.log(await reviews.create({target:${target},title:"Round 1 · initial checklist",startRevisionId:"empty",endRevisionId:${JSON.stringify(initialVersion.id)}}));`
-  )
-  assert.equal(first.after.cells.length, 2)
+  await api('notebooks.update', {
+    target,
+    expectedRevision: created.handle.revision,
+    operations: [
+      {
+        op: 'insert',
+        at: { index: 0 },
+        cells: values.map((value) => ({
+          kind: 'markup',
+          languageId: 'markdown',
+          value,
+        })),
+      },
+    ],
+  })
+  const initial = await api('notebooks.get', target)
+  const ids = initial.notebook.cells.map((c) => c.refId)
+  const start = (await api('revisions.list', { target })).at(-1)
+  await api('revisions.label', {
+    target,
+    revisionId: start.id,
+    name: 'Original',
+    description: 'Human commented version',
+  })
+  const thread = await api('comments.add', {
+    target,
+    cellId: ids[2],
+    content: 'Please explain the setup checks.',
+  })
+  await api('notebooks.show', uri)
+  const initialComments = await api('comments.list', { target, status: 'all' })
   assert.ok(
-    first.after.cells[1].outputs.length > 0,
-    'Captured review includes output'
+    initialComments.some((c) => c.id === thread.id),
+    JSON.stringify({ thread, initialComments })
   )
-  await page
-    .getByRole('button', { name: 'Continue review', exact: true })
+  await page.getByRole('button', { name: 'Toggle Comments panel' }).click()
+  const editorComments = page.getByRole('complementary', {
+    name: 'Notebook comments',
+  })
+  await editorComments
+    .getByText('Please explain the setup checks.', { exact: true })
     .waitFor()
-  assert.equal(
-    (
-      await code(
-        `console.log(await reviews.create({target:${target},startRevisionId:"empty",endRevisionId:${JSON.stringify(initialVersion.id)}}));`
-      )
-    ).id,
-    first.id
-  )
-  await checkpoint('00a-continue-existing-pair')
-  await page.getByLabel('Review round', { exact: true }).selectOption(first.id)
-  assert.equal(
-    await page.getByLabel('Start revision', { exact: true }).count(),
-    0
-  )
-  await checkpoint('01-fixed-initial-review')
-  const thread = await code(
-    `console.log(await comments.add({target:${target},reviewId:${JSON.stringify(first.id)},cellId:${JSON.stringify(seeded[0].refId)},content:"Please name the health checks and rollback criteria."}));`
-  )
-  const whole = await code(
-    `console.log(await comments.add({target:${target},reviewId:${JSON.stringify(first.id)},content:"Also explain who owns the rollout."}));`
-  )
-  await code(
-    `await reviews.submit({target:${target},reviewId:${JSON.stringify(first.id)},outcome:"needs_more_work",summary:"Clarify the operational checks before the next review."});`
-  )
-  await page
-    .getByText('Please name the health checks and rollback criteria.', {
-      exact: true,
-    })
-    .waitFor()
-  await checkpoint('02-request-changes-and-discussions')
-  const panel = page.getByRole('complementary', { name: 'Notebook review' })
-  assert.equal(await panel.getByLabel('Discussion target').count(), 0)
-  assert.equal(
-    await panel.getByRole('region', { name: 'Review discussion' }).count(),
-    1
-  )
-  assert.equal(
-    await panel
-      .getByText('Please name the health checks and rollback criteria.', {
-        exact: true,
-      })
-      .count(),
-    0
-  )
-  assert.equal(
-    await panel
-      .getByText('Also explain who owns the rollout.', { exact: true })
-      .count(),
-    1
-  )
-  const quoteStart = seeded[0].value.indexOf('service')
-  const selectedComment = await code(
-    `const c=await comments.add({target:${target},reviewId:${JSON.stringify(first.id)},cellId:${JSON.stringify(seeded[0].refId)},side:"head",sourceRange:{start:${quoteStart},end:${quoteStart + 7},unit:"utf-16"},content:"Selected text stays beside this cell.",author:{displayName:"Codex",kind:"agent"}}); console.log(c);`
-  )
-  assert.equal(
-    JSON.parse(selectedComment.anchor).runme.diffTarget.quote,
-    'service'
-  )
-  await page
-    .getByText('Selected text stays beside this cell.', { exact: true })
-    .waitFor()
-  assert.equal(
-    await panel
-      .getByText('Selected text stays beside this cell.', { exact: true })
-      .count(),
-    0
-  )
-  await checkpoint('02a-one-review-conversation-inline-selection')
-  const revised =
-    '# Release checklist\n\nVerify two healthy replicas and no new errors for five minutes. Roll back if either check fails.'
-  await code(
-    `const uri=${JSON.stringify(uri)}; const d=await notebooks.get({uri}); await notebooks.update({target:{uri},expectedRevision:d.handle.revision,operations:[{op:"update",refId:${JSON.stringify(seeded[0].refId)},patch:{value:${JSON.stringify(revised)}}}]}); await comments.reply({target:{uri},commentId:${JSON.stringify(thread.id)},content:"Added replica, error-rate, and rollback checks.",author:{displayName:"Codex",kind:"agent"}});`
-  )
-  const second = await code(
-    `const versions=await revisions.list({target:${target}});const head=versions.at(-1);await revisions.label({target:${target},revisionId:head.id,name:"Version",description:"Codex addressed comments",author:{displayName:"Codex",kind:"agent"}});console.log(await reviews.create({target:${target},title:"Round 2 · operational checks",startRevisionId:${JSON.stringify(initialVersion.id)},endRevisionId:head.id}));`
-  )
-  assert.equal(second.before.cells[0].value, first.after.cells[0].value)
-  assert.equal(second.after.cells[0].value, revised)
-  for (const id of [thread.id, whole.id])
-    await code(
-      `await reviews.linkThread({target:${target},reviewId:${JSON.stringify(second.id)},commentId:${JSON.stringify(id)}});`
-    )
-  await page.getByLabel('Review round', { exact: true }).selectOption(second.id)
-  await page
-    .getByText('Added replica, error-rate, and rollback checks.', {
-      exact: true,
-    })
-    .waitFor()
-  assert.match(
-    await page.locator('#review-round-canvas').innerText(),
-    /Outdated context/
-  )
-  await checkpoint('03-incremental-diff-shared-thread')
-  const suggestions = await code(
-    `console.log(await suggestions.list({target:${target}}));`
-  )
-  const suggestion = suggestions.at(-1)
-  await page
-    .getByRole('button', {
-      name: 'Individual suggestions · accept/reject',
-      exact: true,
-    })
-    .click()
-  await page.getByLabel('Next suggestion', { exact: true }).waitFor()
-  for (let index = 1; index < suggestions.length; index++)
-    await page.getByLabel('Next suggestion', { exact: true }).click()
-  assert.equal(
-    await page.locator('[data-suggestion-comment-thread]').count(),
-    0
-  )
-  await checkpoint('03a-suggestion-without-discussion')
-  const explanation = await code(
-    `console.log(await comments.add({target:${target},suggestionId:${JSON.stringify(suggestion.id)},content:"This edit makes the rollout checks actionable.",author:{displayName:"Codex",kind:"agent"}}));`
-  )
-  await code(
-    `await comments.reply({target:${target},commentId:${JSON.stringify(explanation.id)},content:"The original change and decision remain unchanged.",author:{displayName:"Codex",kind:"agent"}});`
-  )
-  assert.deepEqual(
-    await code(`console.log(await suggestions.list({target:${target}}));`),
-    suggestions
-  )
-  await page
-    .getByText('The original change and decision remain unchanged.', {
-      exact: true,
-    })
-    .waitFor()
-  assert.equal(
-    await page.locator('[data-suggestion-comment-thread]').count(),
-    1
-  )
-  await checkpoint('03b-api-created-suggestion-discussion')
-  await page
-    .getByRole('button', { name: 'Back to review rounds', exact: true })
-    .click()
-  await page.getByLabel('Review round', { exact: true }).selectOption(first.id)
-  const historical = await code(
-    `console.log((await reviews.list({target:${target}})).find(r=>r.id===${JSON.stringify(first.id)}));`
-  )
-  assert.deepEqual(historical.diff, first.diff)
-  await checkpoint('04-original-review-unchanged')
-  await page.getByLabel('Review round', { exact: true }).selectOption(second.id)
-  await code(
-    `await comments.resolve({target:${target},commentId:${JSON.stringify(thread.id)}}); await reviews.submit({target:${target},reviewId:${JSON.stringify(second.id)},outcome:"good_enough",summary:"The checks are clear. Ownership discussion remains open."});`
-  )
-  await page.locator('#review-submit').scrollIntoViewIfNeeded()
-  await checkpoint('05-approved-with-open-followup')
-  const beforeReload = await code(
-    `console.log({rounds:await reviews.list({target:${target}}),comments:await comments.list({target:${target},status:"all"})});`
-  )
-  await page.reload()
-  await page
-    .getByRole('heading', { name: 'Review rounds', exact: true })
-    .waitFor()
-  const afterReload = await code(
-    `console.log({rounds:await reviews.list({target:${target}}),comments:await comments.list({target:${target},status:"all"})});`
-  )
-  assert.deepEqual(afterReload, beforeReload)
-  assert.equal(
-    afterReload.comments.find((c) => c.id === whole.id).resolved,
-    false
-  )
-  await checkpoint('06-reload-preserves-review-and-authors')
-  // Decisions operate on the live journal, never on a frozen review snapshot.
-  await page
-    .getByRole('button', {
-      name: 'Individual suggestions · accept/reject',
-      exact: true,
-    })
-    .click()
-  for (let index = 1; index < suggestions.length; index++)
-    await page.getByLabel('Next suggestion', { exact: true }).click()
-  await page.getByRole('button', { name: 'Reject', exact: true }).click()
-  await page.getByText('Rejected', { exact: true }).waitFor()
-  const rejected = await code(
-    `console.log({doc:await notebooks.get({uri:${JSON.stringify(uri)}}),rounds:await reviews.list({target:${target}})});`
-  )
-  assert.equal(rejected.doc.notebook.cells[0].value, first.after.cells[0].value)
-  assert.deepEqual(rejected.rounds, beforeReload.rounds)
-  await checkpoint('07-reject-leaves-historical-reviews-fixed')
-  await page.getByRole('button', { name: 'Accept', exact: true }).click()
-  await page.getByText('Accepted', { exact: true }).waitFor()
-  const accepted = await code(
-    `console.log({doc:await notebooks.get({uri:${JSON.stringify(uri)}}),rounds:await reviews.list({target:${target}})});`
-  )
-  assert.equal(accepted.doc.notebook.cells[0].value, revised)
-  assert.deepEqual(accepted.rounds, beforeReload.rounds)
-  await checkpoint('08-accept-restores-live-edit-only')
-  // A second dedicated notebook exercises section-scoped reviews, not only the
-  // original whole-document path. All changes still use registered WebMCP.
-  const scopeFixture = await code(`
-    const d=await notebooks.createLocal("section-review-recording.runme"); const uri=d.handle.uri;
-    const values=["# Runbook","## Setup","Original setup checklist","### Old credentials","Retired credential flow","## Rollout","Rollout unchanged"];
-    await notebooks.update({target:{uri},expectedRevision:d.handle.revision,operations:[{op:"insert",at:{index:0},cells:values.map(value=>({kind:"markup",languageId:"markdown",value}))}]});
-    const old=await notebooks.get({uri}); const start=(await revisions.list({target:{uri}})).at(-1);
-    await notebooks.update({target:{uri},expectedRevision:old.handle.revision,operations:[{op:"update",refId:old.notebook.cells[2].refId,patch:{value:"Verify the new setup checklist"}},{op:"remove",refIds:[old.notebook.cells[3].refId,old.notebook.cells[4].refId]}]});
-    const end=(await revisions.list({target:{uri}})).at(-1); await notebooks.show(uri);
-    console.log({uri,start:start.id,end:end.id,ids:old.notebook.cells.map(c=>c.refId)});
-  `)
-  const scopedPair = {
-    target: { uri: scopeFixture.uri },
-    startRevisionId: scopeFixture.start,
-    endRevisionId: scopeFixture.end,
-  }
+  await checkpoint('01-human-comments-in-editor')
+  await api('notebooks.update', {
+    target,
+    expectedRevision: initial.handle.revision,
+    operations: [
+      {
+        op: 'update',
+        refId: ids[2],
+        patch: { value: 'Verify the new setup checklist' },
+      },
+      { op: 'remove', refIds: ids.slice(3, 5) },
+    ],
+  })
+  await api('comments.reply', {
+    target,
+    commentId: thread.id,
+    content: 'Added explicit checks; removed retired credentials.',
+    author: { displayName: 'Codex', kind: 'agent' },
+  })
+  const end = (await api('revisions.list', { target })).at(-1)
+  await api('revisions.label', {
+    target,
+    revisionId: end.id,
+    name: 'Codex addressed comments',
+  })
+  const pair = { target, startRevisionId: start.id, endRevisionId: end.id }
   await page
     .getByRole('button', { name: 'Review suggestions', exact: true })
     .click()
-  await page
-    .getByRole('heading', { name: 'Review rounds', exact: true })
-    .waitFor()
+  const comparison = page.getByRole('complementary', {
+    name: 'Notebook comparison',
+  })
+  const canvas = page.locator('#review-round-canvas')
+  await comparison.getByRole('heading', { name: 'Compare changes' }).waitFor()
   await page
     .getByLabel('Start revision', { exact: true })
-    .selectOption(scopeFixture.start)
-  await page
-    .getByLabel('End revision', { exact: true })
-    .selectOption(scopeFixture.end)
+    .selectOption(start.id)
+  await page.getByLabel('End revision', { exact: true }).selectOption(end.id)
+  await canvas
+    .getByText('Please explain the setup checks.', { exact: true })
+    .waitFor()
+  await canvas
+    .getByText('Added explicit checks; removed retired credentials.', {
+      exact: true,
+    })
+    .waitFor()
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'Start review', exact: true })
+      .count(),
+    0
+  )
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'Submit review', exact: true })
+      .count(),
+    0
+  )
+  assert.equal((await api('reviews.list', { target })).length, 0)
+  await checkpoint('02-commentable-diff-with-original-thread')
+  await page.getByRole('checkbox', { name: 'Named revisions only' }).check()
+  await canvas
+    .getByText('Please explain the setup checks.', { exact: true })
+    .waitFor()
+  assert.equal(
+    (await api('revisions.list', { target })).find((v) => v.id === start.id)
+      .lastChangedAt,
+    start.lastChangedAt
+  )
+  await checkpoint('03-named-revisions-preserve-dates')
   await page
     .getByRole('radio', { name: 'Heading / section range', exact: true })
     .check()
   await page
     .getByLabel('From heading', { exact: true })
-    .selectOption(`${scopeFixture.ids[1]}:1`)
+    .selectOption(ids[1] + ':1')
   await page.waitForFunction(() => {
     const text =
       document.querySelector('#review-round-canvas')?.textContent ?? ''
     return (
-      text.includes('Verify the new setup checklist') &&
-      !text.includes('Rollout unchanged')
+      text.includes('checklist') &&
+      !text.includes('Rollout unchanged') &&
+      !text.includes('Retired credential flow')
     )
   })
-  await checkpoint('09-section-preview-excludes-unrelated-cells')
-  const section = await code(
-    `console.log(await reviews.create(${JSON.stringify({ ...scopedPair, title: 'Setup section', cellIds: scopeFixture.ids.slice(1, 3) })}));`
-  )
-  await page
-    .getByRole('button', { name: 'Continue review', exact: true })
+  await checkpoint('04-setup-section-filter')
+  const scoped = { ...pair, cellIds: ids.slice(1, 3) }
+  const selected = await api('reviews.comment', {
+    ...scoped,
+    cellId: ids[2],
+    side: 'head',
+    sourceRange: { start: 0, end: 6, unit: 'utf-16' },
+    content: 'Which verification command?',
+    author: { displayName: 'Codex', kind: 'agent' },
+  })
+  assert.equal(JSON.parse(selected.anchor).runme.diffTarget.quote, 'Verify')
+  await canvas
+    .getByText('Which verification command?', { exact: true })
     .waitFor()
-  await page
-    .getByLabel('Review round', { exact: true })
-    .selectOption(section.id)
-  await page
-    .getByLabel('Review outcome', { exact: true })
-    .selectOption('good_enough')
-  await code(
-    `await reviews.submit(${JSON.stringify({ target: scopedPair.target, reviewId: section.id, outcome: 'good_enough' })});`
+  const whole = await api('reviews.comment', {
+    ...scoped,
+    content: 'Setup is almost ready.',
+  })
+  await api('comments.reply', {
+    target,
+    commentId: whole.id,
+    content: 'One more concrete example would help.',
+  })
+  await comparison
+    .getByText('Setup is almost ready.', { exact: true })
+    .waitFor()
+  assert.equal(
+    await comparison
+      .getByText('Which verification command?', { exact: true })
+      .count(),
+    0
   )
-  await checkpoint('10-good-enough-fixed-section')
-  await page.getByLabel('Review round', { exact: true }).selectOption('new')
+  assert.equal(
+    await comparison
+      .getByRole('region', { name: 'Suggestion discussion' })
+      .count(),
+    1
+  )
+  await checkpoint('05-inline-source-and-suggestion-conversation')
+  const assessment = await api('reviews.assess', {
+    ...scoped,
+    outcome: 'good_enough',
+  })
+  await comparison
+    .getByRole('status')
+    .getByText('Good Enough', { exact: true })
+    .waitFor()
+  await checkpoint('06-good-enough-selected-scope')
+  await page.getByRole('button', { name: 'Edit view', exact: true }).click()
+  await editorComments
+    .getByText('Which verification command?', { exact: true })
+    .waitFor()
+  await editorComments
+    .getByText('Setup is almost ready.', { exact: true })
+    .waitFor()
+  await api('comments.reply', {
+    target,
+    commentId: selected.id,
+    content: 'Reply from the edit-view context.',
+  })
+  await editorComments
+    .getByText('Reply from the edit-view context.', { exact: true })
+    .waitFor()
+  await checkpoint('07-diff-comments-and-replies-in-editor')
   await page
-    .getByLabel('Start revision', { exact: true })
-    .selectOption(scopeFixture.start)
-  await page
-    .getByRole('radio', { name: 'Heading / section range', exact: true })
-    .check()
+    .getByRole('button', { name: 'Review suggestions', exact: true })
+    .click()
+  await canvas
+    .getByText('Reply from the edit-view context.', { exact: true })
+    .waitFor()
   await page
     .getByLabel('Scope outline revision', { exact: true })
     .selectOption('base')
   await page
     .getByLabel('From heading', { exact: true })
-    .selectOption(`${scopeFixture.ids[3]}:1`)
-  await page.waitForFunction(() => {
-    const text =
-      document.querySelector('#review-round-canvas')?.textContent ?? ''
-    return (
-      text.includes('Retired credential flow') &&
-      !text.includes('Rollout unchanged')
-    )
+    .selectOption(ids[3] + ':1')
+  await canvas.getByText('Retired credential flow', { exact: true }).waitFor()
+  const deletedScope = { ...pair, cellIds: ids.slice(3, 5) }
+  const deletedComment = await api('reviews.comment', {
+    ...deletedScope,
+    cellId: ids[4],
+    side: 'base',
+    content: 'Why remove this section?',
   })
-  await checkpoint('11-start-outline-selects-deleted-section')
-  const deleted = await code(
-    `console.log(await reviews.create(${JSON.stringify({ ...scopedPair, title: 'Deleted credential section', cellIds: scopeFixture.ids.slice(3, 5) })}));`
+  const deletedAssessment = await api('reviews.assess', {
+    ...deletedScope,
+    outcome: 'needs_more_work',
+  })
+  assert.notEqual(deletedAssessment.comparisonId, assessment.comparisonId)
+  await canvas.getByText('Why remove this section?', { exact: true }).waitFor()
+  assert.equal(
+    await canvas
+      .getByText('Which verification command?', { exact: true })
+      .count(),
+    0
   )
-  await page
-    .getByLabel('Review round', { exact: true })
-    .selectOption(deleted.id)
-  await code(
-    `await reviews.submit(${JSON.stringify({ target: scopedPair.target, reviewId: deleted.id, outcome: 'needs_more_work' })});`
+  await checkpoint('08-deleted-section-independent-feedback')
+  const duplicate = await api('reviews.assess', {
+    ...deletedScope,
+    cellIds: [ids[4], ids[3], ids[4]],
+    outcome: 'needs_more_work',
+  })
+  assert.equal(duplicate.comparisonId, deletedAssessment.comparisonId)
+  const snapshot = {
+    records: await api('reviews.list', { target }),
+    comments: await api('comments.list', { target, status: 'all' }),
+    doc: await api('notebooks.get', target),
+  }
+  assert.equal(snapshot.records.length, 2)
+  assert.equal(
+    snapshot.doc.notebook.cells[2].value,
+    'Verify the new setup checklist'
   )
-  const scopeReadback = await code(
-    `const a=await reviews.create(${JSON.stringify({ ...scopedPair, cellIds: [scopeFixture.ids[4], scopeFixture.ids[3], scopeFixture.ids[4]] })}); console.log({duplicate:a.id,rounds:await reviews.list({target:${JSON.stringify(scopedPair.target)}})});`
-  )
-  assert.equal(scopeReadback.duplicate, deleted.id)
-  assert.equal(scopeReadback.rounds.length, 2)
-  assert.deepEqual(scopeReadback.rounds.map((r) => r.outcome).sort(), [
-    'good_enough',
-    'needs_more_work',
-  ])
+  assert.ok(snapshot.comments.every((c) => !c.resolved))
   await page.reload()
-  await page
-    .getByRole('heading', { name: 'Review rounds', exact: true })
+  await comparison.getByRole('heading', { name: 'Compare changes' }).waitFor()
+  assert.deepEqual(await api('reviews.list', { target }), snapshot.records)
+  assert.deepEqual(
+    await api('comments.list', { target, status: 'all' }),
+    snapshot.comments
+  )
+  await checkpoint('09-reload-preserves-threads-and-feedback')
+  // Another AI response changes the live document but not prior comparisons.
+  const current = await api('notebooks.get', target)
+  await api('notebooks.update', {
+    target,
+    expectedRevision: current.handle.revision,
+    operations: [
+      {
+        op: 'update',
+        refId: ids[2],
+        patch: { value: 'Run the health command and confirm two replicas.' },
+      },
+    ],
+  })
+  await api('comments.reply', {
+    target,
+    commentId: selected.id,
+    content: 'Added the concrete health command.',
+    author: { displayName: 'Codex', kind: 'agent' },
+  })
+  const final = (await api('revisions.list', { target })).at(-1)
+  await page.getByLabel('Start revision', { exact: true }).selectOption(end.id)
+  await page.getByLabel('End revision', { exact: true }).selectOption(final.id)
+  await canvas
+    .getByText('Added the concrete health command.', { exact: true })
     .waitFor()
-  const scopeReopened = await code(
-    `console.log(await reviews.list({target:${JSON.stringify(scopedPair.target)}}));`
-  )
-  assert.deepEqual(scopeReopened, scopeReadback.rounds)
-  const scopedCanvas = page
-    .getByRole('tabpanel', {
-      name: 'Suggestions · section-review-recording.runme',
-      exact: true,
-    })
-    .locator('#review-round-canvas')
-  assert.ok(
-    (await scopedCanvas.innerText()).includes('Retired credential flow')
-  )
-  assert.ok(!(await scopedCanvas.innerText()).includes('Rollout unchanged'))
-  await checkpoint('12-scoped-decisions-survive-reload')
-  evidence.scopedReviewIds = [section.id, deleted.id]
+  await canvas
+    .getByText(/Outdated context/)
+    .first()
+    .waitFor()
+  const original = await api('reviews.preview', pair)
+  assert.equal(original.after.cells[2].value, 'Verify the new setup checklist')
+  await checkpoint('10-second-iteration-preserves-history')
   evidence.status = 'passed'
-  evidence.roundIds = [first.id, second.id]
-  evidence.threadIds = [thread.id, whole.id, explanation.id]
+  evidence.uri = uri
+  evidence.threadIds = [thread.id, selected.id, whole.id, deletedComment.id]
 } catch (error) {
   evidence.status = 'failed'
   evidence.error = String(error)

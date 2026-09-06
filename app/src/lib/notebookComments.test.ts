@@ -10,8 +10,52 @@ import {
   resolveRenderedTextAnchor,
   toCellCommentThreads,
 } from './notebookComments'
+import { createReviewAnchor } from './operationLog/reviews'
 
 describe('notebook comment anchors', () => {
+  it('projects diff comments into editor threads without losing source context or raw anchors', () => {
+    const target = {
+      cellId: 'cell-1',
+      side: 'base' as const,
+      quote: 'old text',
+      sourceRange: { start: 0, end: 8, unit: 'utf-16' as const },
+    }
+    const raw = createReviewAnchor(
+      'comparison',
+      target.cellId,
+      target.quote,
+      target
+    )
+    const [thread] = toCellCommentThreads(
+      [{ id: 'same-thread', anchor: raw, content: 'Change this' }],
+      [{ refId: 'cell-1', value: 'new text' }]
+    )
+    expect(thread).toMatchObject({
+      cellId: 'cell-1',
+      anchor: { type: 'cell', diffTarget: target },
+      location: { status: 'outdated' },
+    })
+    expect(thread.comment.anchor).toBe(raw)
+    expect(
+      groupCommentsByCell([thread.comment], [{ refId: 'cell-1' }]).get(
+        'cell-1'
+      )?.[0].id
+    ).toBe('same-thread')
+    expect(toCellCommentThreads([thread.comment], [])[0]).toMatchObject({
+      orphaned: true,
+      location: { status: 'cell-deleted' },
+    })
+  })
+  it('does not project malformed comparison identities or mismatched target cells', () => {
+    expect(
+      parseCommentAnchor(
+        JSON.stringify({ runme: { version: 1, type: 'review', cellId: 'c' } })
+      )
+    ).toBeNull()
+    const anchor = JSON.parse(createReviewAnchor('r', 'c', 'quote'))
+    anchor.runme.diffTarget = { cellId: 'other', quote: 'quote', side: 'head' }
+    expect(parseCommentAnchor(JSON.stringify(anchor))).toBeNull()
+  })
   it('round-trips cell anchors', () => {
     const anchor = createCellCommentAnchor('cell-123')
 
