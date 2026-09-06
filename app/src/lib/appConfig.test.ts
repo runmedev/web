@@ -96,15 +96,22 @@ describe('appConfig OIDC Google shorthand', () => {
     expect(getGoogleDriveBaseUrl()).toBe('http://127.0.0.1:9090')
   })
 
-  it('configures local development to use the fetch-based Drive client', async () => {
+  it('configures local development with secret-free implicit Drive auth', async () => {
     const { setAppConfigFromYaml } = await loadModules()
     const { getGoogleDriveBaseUrl } = await import('./googleDriveRuntime')
 
-    setAppConfigFromYaml(
+    const result = setAppConfigFromYaml(
       localAppConfigYaml,
       'http://localhost/configs/app-configs.yaml'
     )
 
+    expect(result.warnings).toEqual([])
+    expect(result.oidc?.clientId).toBeTruthy()
+    // Keep an accidentally reintroduced credential out of test failure output.
+    expect(Boolean(result.oidc?.clientSecret)).toBe(false)
+    expect(result.googleOAuth?.clientId).toBeTruthy()
+    expect(Boolean(result.googleOAuth?.clientSecret)).toBe(false)
+    expect(result.googleOAuth?.authFlow).toBe('implicit')
     expect(getGoogleDriveBaseUrl()).toBe('https://www.googleapis.com')
   })
 
