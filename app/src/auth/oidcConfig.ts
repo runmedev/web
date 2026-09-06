@@ -21,6 +21,9 @@ type StoredOidcConfig = {
 
 export const OIDC_STORAGE_KEY = "oidcConfig";
 const STORAGE_KEY = OIDC_STORAGE_KEY;
+// This shared development client is now used as a public browser client.
+const PUBLIC_DEVELOPMENT_CLIENT_ID =
+  "554943104515-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com";
 
 function sanitizeString(value?: string): string | undefined {
   const trimmed = value?.trim();
@@ -168,6 +171,18 @@ export class OidcConfigManager {
         return null;
       }
       const parsed = JSON.parse(raw) as StoredOidcConfig | null;
+      if (
+        parsed?.clientId === PUBLIC_DEVELOPMENT_CLIENT_ID &&
+        parsed.discoveryUrl ===
+          "https://accounts.google.com/.well-known/openid-configuration" &&
+        parsed.clientSecret
+      ) {
+        // Migrate before config-precedence logic can preserve the old shipped
+        // credential. Other client IDs and custom OIDC providers are untouched.
+        delete parsed.clientSecret;
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+        window.localStorage.removeItem("oidc-auth");
+      }
       return parsed ?? null;
     } catch (error) {
       console.warn("Failed to read OIDC config from storage", error);

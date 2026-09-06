@@ -258,6 +258,9 @@ importers:
       dexie-react-hooks:
         specifier: 4.2.0
         version: 4.2.0(@types/react@19.2.2)(dexie@3.2.4)(react@19.2.0)
+      jose:
+        specifier: ^6.2.10
+        version: 6.2.10
       jwt-decode:
         specifier: ^4.0.0
         version: 4.0.0
@@ -4001,6 +4004,9 @@ packages:
   jiti@2.6.1:
     resolution: {integrity: sha512-ekilCSN1jwRvIbgeg/57YFh8qQDNbwDb9xT/qu2DAHbFFZUicIl4ygVaAvzveMhMVr3LnpSKTNnwt8PoOfmKhQ==}
     hasBin: true
+
+  jose@6.2.10:
+    resolution: {integrity: sha512-iiW7J9qRFlGxvCOIBDBDxFePQSn7ZMAnrYGhrrOo6siO/MIqwfyilLR27pkfDgUk+raLuzADS8A3S/KLBisc0g==}
 
   jotai-scope@0.7.2:
     resolution: {integrity: sha512-Gwed97f3dDObrO43++2lRcgOqw4O2sdr4JCjP/7eHK1oPACDJ7xKHGScpJX9XaflU+KBHXF+VhwECnzcaQiShg==}
@@ -9233,6 +9239,8 @@ snapshots:
   javascript-natural-sort@0.7.1: {}
 
   jiti@2.6.1: {}
+
+  jose@6.2.10: {}
 
   jotai-scope@0.7.2(jotai@2.11.0(@types/react@19.2.2)(react@19.2.0))(react@19.2.0):
     dependencies:

@@ -96,15 +96,22 @@ describe('appConfig OIDC Google shorthand', () => {
     expect(getGoogleDriveBaseUrl()).toBe('http://127.0.0.1:9090')
   })
 
-  it('configures local development to use the fetch-based Drive client', async () => {
+  it('configures local development with secret-free implicit Drive auth', async () => {
     const { setAppConfigFromYaml } = await loadModules()
     const { getGoogleDriveBaseUrl } = await import('./googleDriveRuntime')
 
-    setAppConfigFromYaml(
+    const result = setAppConfigFromYaml(
       localAppConfigYaml,
       'http://localhost/configs/app-configs.yaml'
     )
 
+    expect(result.warnings).toEqual([])
+    expect(result.oidc?.clientId).toBeTruthy()
+    // Keep an accidentally reintroduced credential out of test failure output.
+    expect(Boolean(result.oidc?.clientSecret)).toBe(false)
+    expect(result.googleOAuth?.clientId).toBeTruthy()
+    expect(Boolean(result.googleOAuth?.clientSecret)).toBe(false)
+    expect(result.googleOAuth?.authFlow).toBe('implicit')
     expect(getGoogleDriveBaseUrl()).toBe('https://www.googleapis.com')
   })
 
@@ -159,6 +166,76 @@ describe('appConfig OIDC Google shorthand', () => {
       authUxMode: 'redirect',
     })
   })
+
+  it.each([true, false])(
+    'migrates the old development OIDC secret with local precedence %s',
+    async (preserveLocalConfiguration) => {
+      window.localStorage.setItem(
+        'oidcConfig',
+        JSON.stringify({
+          clientId:
+            '554943104515-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com',
+          discoveryUrl:
+            'https://accounts.google.com/.well-known/openid-configuration',
+          clientSecret: 'previously-shipped-secret-fixture',
+          scope: 'openid email',
+          redirectUri: `${window.location.origin}/callback`,
+        })
+      )
+      window.localStorage.setItem(
+        'oidc-auth',
+        JSON.stringify({
+          access_token: 'old-access-token',
+          refresh_token: 'old-refresh-token',
+        })
+      )
+      const { setAppConfigFromYaml, getOidcConfig } = await loadModules()
+      setAppConfigFromYaml(
+        localAppConfigYaml,
+        'http://localhost/configs/app-configs.yaml',
+        {
+          preserveLocalConfiguration,
+        }
+      )
+      const { usesGoogleImplicitLogin } = await import(
+        '../auth/googleImplicitLogin'
+      )
+      expect(usesGoogleImplicitLogin(getOidcConfig())).toBe(true)
+      expect(Boolean(getOidcConfig().clientSecret)).toBe(false)
+      expect(
+        Boolean(
+          JSON.parse(window.localStorage.getItem('oidcConfig')!).clientSecret
+        )
+      ).toBe(false)
+      expect(window.localStorage.getItem('oidc-auth')).toBeNull()
+    }
+  )
+
+  it.each([
+    [
+      'custom-client',
+      'https://accounts.google.com/.well-known/openid-configuration',
+    ],
+    [
+      '554943104515-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com',
+      'https://issuer.example/discovery',
+    ],
+  ])(
+    'preserves privately configured credentials for %s at %s',
+    async (clientId, discoveryUrl) => {
+      window.localStorage.setItem(
+        'oidcConfig',
+        JSON.stringify({
+          clientId,
+          discoveryUrl,
+          clientSecret: 'custom-secret-fixture',
+          scope: 'openid email',
+        })
+      )
+      const { getOidcConfig } = await loadModules()
+      expect(getOidcConfig().clientSecret).toBe('custom-secret-fixture')
+    }
+  )
 
   it('defaults Google Drive auth UX mode to new_tab when not configured', async () => {
     const { applyAppConfig } = await loadModules()
@@ -229,7 +306,7 @@ describe('appConfig OIDC Google shorthand', () => {
         googleDrive: {
           clientID: 'client-id.apps.googleusercontent.com',
           clientSecret: 'ignored-client-secret',
-          clientMaterial: ['GOCSPX-3N-', 'FPEy4XWoKz', 'cVwSyt3yDz_Xwzo'],
+          clientMaterial: ['test-', 'client-', 'secret'],
         },
       },
       'http://localhost/configs/app-configs.yaml'
@@ -237,7 +314,7 @@ describe('appConfig OIDC Google shorthand', () => {
 
     expect(googleClientManager.getOAuthClient()).toMatchObject({
       clientId: 'client-id.apps.googleusercontent.com',
-      clientSecret: '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',
+      clientSecret: 'test-client-secret',
     })
   })
 
