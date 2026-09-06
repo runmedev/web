@@ -49,3 +49,30 @@ shared Go fake Drive service. It must observe the Drive revision before and
 after local Refresh to prove Refresh performs no upstream I/O, and it must be
 registered in `app/test/browser/run-cuj-scenarios.ts`; unit tests alone are not
 sufficient because the scenario must exercise browser OPFS and Web Locks.
+
+## Intervening revision recovery
+
+9. Pause A after its v3 version preflight. Write B's different operation as R1,
+   then let A upload R2. R2 must initially contain only A's operations, so a
+   head-only check would miss B's overwritten write.
+10. Verify A lists all revision pages, retains and reads R1, appends B's
+    operation to OPFS, and uploads a union. Sync B and verify both journals and
+    Drive contain both operations. Reload each isolated browser profile and
+    verify the same operation IDs remain durable.
+11. Reject a revision retention/download request, then reload and retry. Verify
+    the checkpoint retains the unfinished revision, local edits survive, and
+    sync does not report success. Also test an upload whose response is lost.
+
+`test-scenario-drive-revision-recovery.ts` is registered in the scenario runner.
+It exercises step 9–10 through production storage modules in two isolated
+browsers, real OPFS/IndexedDB/Web Locks, and the Go fake's one-shot intervening
+write. Its JSON artifact records local/remote operation IDs, checkpoints, and
+network requests proving historical retention and v3-only access. This storage
+scenario does not claim to automate the UI/comment steps above. Failure/reload,
+late-writer, metadata-only version changes, and local-append races have separate
+regression cases in `storage/local.test.ts`; transport pagination and retention
+are tested in `storage/drive.test.ts` and the Go fake tests.
+
+Recovery is best-effort, not an atomic compare-and-swap. Revision IDs are opaque,
+File.version can change without a content revision, retained revisions are
+limited to 200, and unavailable observed history must leave sync pending.

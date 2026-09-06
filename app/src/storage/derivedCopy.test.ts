@@ -8,7 +8,7 @@ import { type NotebookStoreItem, NotebookStoreItemType } from './notebook'
 const source = driveFileUrl('source')
 const parent = 'https://drive.google.com/drive/folders/parent'
 
-/** Separate clients share only remote CAS state, never a local lock or cache. */
+/** Separate clients share remote claim state; these fixtures serialize property updates. */
 function remote(reserved: boolean) {
   const state = {
     claim: undefined as string | undefined,
@@ -18,7 +18,7 @@ function remote(reserved: boolean) {
   const files = new Map<string, NotebookStoreItem>()
   const client = () => ({
     getDerivedCopyClaim: vi.fn(async () => state.claim),
-    compareAndSetDerivedCopyClaim: vi.fn(
+    updateDerivedCopyClaimAfterCheck: vi.fn(
       async (
         _uri: string,
         expected: string | undefined,
@@ -175,7 +175,7 @@ describe('source-coordinated derived copies', () => {
     await expect(run()).rejects.toBeInstanceOf(UnconfirmedDerivedCopyError)
     expect(client.createContent).toHaveBeenCalledTimes(1)
     expect(
-      await client.compareAndSetDerivedCopyClaim(source, pending, null)
+      await client.updateDerivedCopyClaimAfterCheck(source, pending, null)
     ).toBe(true)
     expect((await run())?.uri).toBeDefined()
     expect(server.state.creates).toBe(1)
@@ -186,7 +186,7 @@ describe('source-coordinated derived copies', () => {
     const client = server.client()
     server.state.claim = 'f:already-confirmed'
     expect(
-      await client.compareAndSetDerivedCopyClaim(source, 'p:old', null)
+      await client.updateDerivedCopyClaimAfterCheck(source, 'p:old', null)
     ).toBe(false)
     expect(server.state.claim).toBe('f:already-confirmed')
   })

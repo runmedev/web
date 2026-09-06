@@ -61,6 +61,10 @@ import {
   parseDriveItem,
 } from './drive'
 import {
+  type DriveRecoveryCheckpoint,
+  DriveRevisionRecovery,
+} from './driveRevisionRecovery'
+import {
   type DriveSyncCoordinator,
   browserDriveSyncCoordinator,
 } from './driveSyncCoordinator'
@@ -99,7 +103,7 @@ const NOTEBOOK_MIME_TYPE = 'application/json'
 // let authoritative listings remove files that were moved or trashed elsewhere.
 const PROVISIONAL_DRIVE_CHILD_TTL_MS = 60_000
 
-// A collaborator can win several Drive compare-and-swap races in a row while
+// A collaborator can write several Drive revisions in a row while
 // both sessions are actively editing. Each attempt performs network I/O, so a
 // larger bounded budget improves convergence without creating a tight loop.
 const DRIVE_OPERATION_LOG_MERGE_ATTEMPTS = 8
@@ -169,6 +173,8 @@ export interface LocalFileRecord {
   ipynbPreservation?: IpynbPreservationState
   /** Authoritative .runme document location. IndexedDB never stores its bytes. */
   operationLogRef?: OperationLogRef
+  /** Durable history boundary and unfinished .runme recovery work (no media bytes). */
+  driveRecoveryCheckpoint?: DriveRecoveryCheckpoint
 }
 
 export interface UpstreamVersion {
@@ -534,7 +540,7 @@ export class LocalNotebooks extends Dexie {
       // Preserve the validated trust boundary: claim exactly the Drive
       // revision checked above rather than starting an unconstrained refresh.
       const initialDocument = createInitialNotebookFile(record.name)
-      const saved = await this.driveStore.saveContentIfVersion(
+      const saved = await this.driveStore.saveContentAfterVersionCheck(
         remoteUri,
         initialDocument,
         RUNME_OPERATION_LOG_MIME_TYPE,
@@ -3541,8 +3547,8 @@ export class LocalNotebooks extends Dexie {
           ipynbExportPendingClaim: undefined,
         })
         // Capture the target version BEFORE reading inputs. Metadata and media
-        // publish atomically with If-Match, so a delayed profile cannot undo a
-        // newer profile's placement or contents. Never retry stale bytes.
+        // publish together after a client-side version recheck. The read/write
+        // gap can still race; never retry known-stale bytes.
         const targetVersion = await driveStore.getVersionMetadata(target.uri)
         if (!targetVersion)
           throw new Error('Colab copy disappeared; retry sync.')
@@ -3600,7 +3606,7 @@ export class LocalNotebooks extends Dexie {
         )
         if (latestNotebook.metadata[AUTO_IPYNB_KEY] !== 'true') return
         const generatedAt = new Date().toISOString()
-        const published = await driveStore.saveContentIfVersion(
+        const published = await driveStore.saveContentAfterVersionCheck(
           target.uri,
           encodeDerivedIpynb(latestNotebook, {
             version: 1,
@@ -3676,7 +3682,7 @@ export class LocalNotebooks extends Dexie {
       if (!record?.ipynbExportPendingClaim || !isDriveUri(record.remoteId))
         return
       const drive = appState.driveNotebookStore ?? this.driveStore
-      await drive.compareAndSetDerivedCopyClaim(
+      await drive.updateDerivedCopyClaimAfterCheck(
         record.remoteId,
         record.ipynbExportPendingClaim,
         null
@@ -4350,85 +4356,68 @@ export class LocalNotebooks extends Dexie {
     return { content, version: after }
   }
 
-  /** Merge a raw .runme operation set with Drive using bounded CAS retries. */
+  /** Merge a raw .runme operation set with Drive using bounded client-side reconciliation. */
   private async syncOperationLogDrive(
     localUri: string,
     record: LocalFileRecord
   ): Promise<void> {
     if (!record.operationLogRef) {
-      // An empty Drive file has no operation-log identity yet. Generate one
-      // seed once, then claim the empty revision with CAS so concurrent
-      // initializers cannot create competing notebook IDs.
-      const initialDocument = createInitialNotebookFile(record.name)
+      // Persist the seed before any upload, so a failed initial write does not
+      // invent a second notebook identity on retry or lose its recovery state.
+      let snapshot = null
       for (
         let attempt = 0;
         attempt < DRIVE_OPERATION_LOG_MERGE_ATTEMPTS;
         attempt += 1
       ) {
-        const snapshot = await this.loadConsistentDriveOperationLogSnapshot(
+        snapshot = await this.loadConsistentDriveOperationLogSnapshot(
           record.remoteId
         )
-        if (!snapshot) continue
-
-        let remoteContent = snapshot.content
-        let remoteVersion = snapshot.version
-        if (remoteContent === '') {
-          appLogger.info('Initializing zero-byte Drive operation log', {
-            attrs: {
-              scope: 'storage.drive.sync',
-              code: 'DRIVE_OPERATION_LOG_INITIALIZE_EMPTY',
-              localUri,
-              remoteUri: record.remoteId,
-              source: 'new-mirror',
-            },
-          })
-          const saved = await this.driveStore.saveContentIfVersion(
-            record.remoteId,
-            initialDocument,
-            RUNME_OPERATION_LOG_MIME_TYPE,
-            {
-              checksum: snapshot.version?.md5Checksum,
-              revisionId: snapshot.version?.headRevisionId,
-              version: snapshot.version?.version,
-            }
-          )
-          if (!saved) continue
-          remoteContent = initialDocument
-          remoteVersion = await this.driveStore.getVersionMetadata(
-            record.remoteId
-          )
-        }
-
-        const remote = parseOperationLog(remoteContent)
-        const stored = await this.operationLogStorage.initialize(
-          localUri,
-          serializeOperationLog(remote.header, remote.operations, {
-            canonicalOrder: true,
-          })
-        )
-        const version = driveMetadataToUpstreamVersion(remoteVersion)
-        await this.files.update(localUri, {
-          doc: '',
-          operationLogRef: stored.ref,
-          md5Checksum: stored.checksum,
-          lastRemoteChecksum: version.checksum ?? md5(remoteContent),
-          lastUpstreamVersion: version,
-          lastSynced: nowIsoString(),
-          lastSyncError: undefined,
-        })
-        return
+        if (snapshot) break
       }
-      throw new Error(
-        `Drive operation log changed during ${DRIVE_OPERATION_LOG_MERGE_ATTEMPTS} merge attempts for ${localUri}`
+      if (!snapshot)
+        throw new Error(
+          `Drive operation log changed during ${DRIVE_OPERATION_LOG_MERGE_ATTEMPTS} merge attempts for ${localUri}`
+        )
+      const remote = parseOperationLog(
+        snapshot.content || createInitialNotebookFile(record.name)
       )
+      const stored = await this.operationLogStorage.initialize(
+        localUri,
+        serializeOperationLog(remote.header, remote.operations, {
+          canonicalOrder: true,
+        })
+      )
+      await this.files.update(localUri, {
+        doc: '',
+        operationLogRef: stored.ref,
+        md5Checksum: stored.checksum,
+      })
+      record = { ...record, operationLogRef: stored.ref }
     }
 
+    const recovery = new DriveRevisionRecovery(
+      this.driveStore,
+      record.remoteId,
+      record.driveRecoveryCheckpoint,
+      async (checkpoint) => {
+        await this.files.update(localUri, {
+          driveRecoveryCheckpoint: checkpoint,
+        })
+      }
+    )
     for (
       let attempt = 0;
-      attempt < DRIVE_OPERATION_LOG_MERGE_ATTEMPTS;
+      attempt <= DRIVE_OPERATION_LOG_MERGE_ATTEMPTS;
       attempt += 1
     ) {
-      const local = await this.operationLogStorage.read(record.operationLogRef)
+      if (attempt > 0) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(25 * 2 ** (attempt - 1), 200))
+        )
+      }
+      if (!(await recovery.initialize())) continue
+      const local = await this.operationLogStorage.read(record.operationLogRef!)
       const snapshot = await this.loadConsistentDriveOperationLogSnapshot(
         record.remoteId
       )
@@ -4437,7 +4426,7 @@ export class LocalNotebooks extends Dexie {
 
       const localLog = parseOperationLog(local.document)
       // A zero-byte Drive file is an uninitialized upstream, not a malformed
-      // operation log. Use the local header as its identity and force a CAS
+      // operation log. Use the local header as its identity and force an
       // upload below. Non-empty malformed content remains a hard error.
       const remoteWasEmpty = remoteContent === ''
       const remoteLog: ParsedOperationLog = remoteWasEmpty
@@ -4459,10 +4448,23 @@ export class LocalNotebooks extends Dexie {
           `Cannot merge different operation-log notebooks for ${localUri}`
         )
       }
-      const mergedOperations = mergeOperationSets(
+      const history = await recovery.collect(snapshot)
+      let mergedOperations = mergeOperationSets(
         localLog.operations,
         remoteLog.operations
       )
+      for (const content of history.contents) {
+        const historical = parseOperationLog(content)
+        if (historical.header.notebook_id !== localLog.header.notebook_id) {
+          throw new Error(
+            `Cannot recover a different operation-log notebook for ${localUri}; local operations remain pending.`
+          )
+        }
+        mergedOperations = mergeOperationSets(
+          mergedOperations,
+          historical.operations
+        )
+      }
       const localIds = new Set(
         localLog.operations.map((operation) => operation.op_id)
       )
@@ -4474,20 +4476,34 @@ export class LocalNotebooks extends Dexie {
       )
       let stored = local
       if (missingLocally.length > 0) {
-        try {
-          stored = await this.operationLogStorage.append(
-            local.ref,
-            `${missingLocally
-              .map((operation) =>
-                canonicalJson(operation as unknown as JsonValue)
-              )
-              .join('\n')}\n`,
-            { validate: (document) => void parseOperationLog(document) }
-          )
-        } catch {
-          continue
-        }
+        stored = await this.operationLogStorage.append(
+          local.ref,
+          `${missingLocally
+            .map((operation) =>
+              canonicalJson(operation as unknown as JsonValue)
+            )
+            .join('\n')}\n`,
+          { validate: (document) => void parseOperationLog(document) }
+        )
       }
+
+      await recovery.acknowledge(
+        history.revisions,
+        snapshot.version!.headRevisionId!
+      )
+
+      // append() may include another local writer's edits that arrived after
+      // our read. Do not acknowledge those bytes as synced without uploading
+      // their operations; re-read the durable journal on the next pass.
+      const mergedIds = new Set(
+        mergedOperations.map((operation) => operation.op_id)
+      )
+      if (
+        parseOperationLog(stored.document).operations.some(
+          (operation) => !mergedIds.has(operation.op_id)
+        )
+      )
+        continue
 
       const mergedDocument = serializeOperationLog(
         localLog.header,
@@ -4498,7 +4514,9 @@ export class LocalNotebooks extends Dexie {
         remoteWasEmpty ||
         mergedOperations.some((operation) => !remoteIds.has(operation.op_id))
       ) {
-        const saved = await this.driveStore.saveContentIfVersion(
+        // Reserve the last pass for verification after the eighth upload.
+        if (attempt === DRIVE_OPERATION_LOG_MERGE_ATTEMPTS) break
+        const saved = await this.driveStore.saveContentAfterVersionCheck(
           record.remoteId,
           mergedDocument,
           RUNME_OPERATION_LOG_MIME_TYPE,
@@ -4509,10 +4527,16 @@ export class LocalNotebooks extends Dexie {
           }
         )
         if (!saved) continue
+        await recovery.uploaded(saved)
+        // Always inspect history after a write, even when head equals our
+        // upload: another writer may have been overwritten in the read/write gap.
+        continue
       }
-      const version = driveMetadataToUpstreamVersion(
-        await this.driveStore.getVersionMetadata(record.remoteId)
+      const finalMetadata = await this.driveStore.getVersionMetadata(
+        record.remoteId
       )
+      if (!sameDriveVersion(snapshot.version, finalMetadata)) continue
+      const version = driveMetadataToUpstreamVersion(finalMetadata)
       const latestLocal = await this.operationLogStorage.read(local.ref)
       await this.files.update(localUri, {
         doc: '',

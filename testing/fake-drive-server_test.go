@@ -73,71 +73,91 @@ func TestGeneratedIDCreateAndOperationSearch(t *testing.T) {
 	}
 }
 
-func TestConditionalContentUploadUsesVersionedETag(t *testing.T) {
-	server := httptest.NewServer(newDriveHandler(newDriveStore()))
+func TestV3RecoveryRetainsInterveningRevisionWithoutETag(t *testing.T) {
+	store := newDriveStore()
+	store.intervening[seedFileID] = "collaborator content"
+	server := httptest.NewServer(newDriveHandler(store))
 	defer server.Close()
-
-	response, err := http.Get(server.URL + "/drive/v3/files/" + seedFileID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	etag := response.Header.Get("ETag")
-	response.Body.Close()
-	if etag == "" {
-		t.Fatal("metadata response did not expose an ETag")
-	}
-
-	request, err := http.NewRequest(
-		http.MethodPatch,
-		server.URL+"/upload/drive/v3/files/"+seedFileID+"?uploadType=media",
-		bytes.NewBufferString("updated content"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set("If-Match", "\"stale-version\"")
-	response, err = http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusPreconditionFailed {
-		t.Fatalf("stale upload returned %s", response.Status)
-	}
-
-	request, err = http.NewRequest(
-		http.MethodPatch,
-		server.URL+"/upload/drive/v3/files/"+seedFileID+"?uploadType=media",
-		bytes.NewBufferString("updated content"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set("If-Match", etag)
-	response, err = http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("matching upload returned %s", response.Status)
-	}
-	if response.Header.Get("ETag") == etag {
-		t.Fatal("successful upload did not advance the ETag")
-	}
-
-	response, err = http.Get(
-		server.URL + "/drive/v3/files/" + seedFileID + "?alt=media",
-	)
+	request, _ := http.NewRequest(http.MethodPatch, server.URL+"/upload/drive/v3/files/"+seedFileID, bytes.NewBufferString("our content"))
+	request.Header.Set("If-Match", "unsupported-stale-condition")
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	content, err := io.ReadAll(response.Body)
+	if response.StatusCode != 200 || response.Header.Get("ETag") != "" {
+		t.Fatalf("unexpected upload: %s", response.Status)
+	}
+	var receipt driveFile
+	if err := json.NewDecoder(response.Body).Decode(&receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.HeadRev != store.files[seedFileID].HeadRev {
+		t.Fatal("upload receipt did not identify own revision")
+	}
+	response, err = http.Get(server.URL + "/drive/v3/files/" + seedFileID + "/revisions")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(content) != "updated content" {
-		t.Fatalf("unexpected stored content %q", content)
+	var page struct {
+		Revisions     []driveRevision `json:"revisions"`
+		NextPageToken string          `json:"nextPageToken"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if len(page.Revisions) != 2 || page.NextPageToken == "" {
+		t.Fatalf("expected paginated history: %#v", page)
+	}
+	revisionURL := server.URL + "/drive/v3/files/" + seedFileID + "/revisions/" + page.Revisions[1].ID
+	response, _ = http.Get(revisionURL + "?alt=media")
+	if response.StatusCode != 403 {
+		t.Fatal("unpinned download was accepted")
+	}
+	response.Body.Close()
+	request, _ = http.NewRequest(http.MethodPatch, revisionURL, bytes.NewBufferString(`{"keepForever":true}`))
+	response, _ = http.DefaultClient.Do(request)
+	if response.StatusCode != 200 {
+		t.Fatal("pin failed")
+	}
+	response.Body.Close()
+	response, _ = http.Get(revisionURL + "?alt=media")
+	content, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if string(content) != "collaborator content" {
+		t.Fatalf("lost intervening revision: %q", content)
+	}
+	response, _ = http.Get(server.URL + "/drive/v3/files/" + seedFileID + "/revisions?pageToken=" + page.NextPageToken)
+	if err := json.NewDecoder(response.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if len(page.Revisions) != 1 || page.Revisions[0].ID != receipt.HeadRev {
+		t.Fatal("second page did not contain our head")
+	}
+}
+
+func TestMetadataDoesNotCreateContentRevisionAndRetentionLimit(t *testing.T) {
+	store := newDriveStore()
+	before, _ := store.get(seedFileID)
+	after, _ := store.updateMetadata(seedFileID, map[string]any{"name": "renamed.runme"}, "", "")
+	if after.HeadRev != before.HeadRev || after.Version <= before.Version {
+		t.Fatal("metadata update changed content revision or failed to increment version")
+	}
+	for i := 0; i < 200; i++ {
+		file, _ := store.setContent(seedFileID, "bytes")
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPatch, "/", bytes.NewBufferString(`{"keepForever":true}`))
+		store.serveRevisions(recorder, request, seedFileID, file.HeadRev)
+		if recorder.Code != 200 {
+			t.Fatalf("pin %d failed", i)
+		}
+	}
+	file, _ := store.setContent(seedFileID, "overflow")
+	recorder := httptest.NewRecorder()
+	store.serveRevisions(recorder, httptest.NewRequest(http.MethodPatch, "/", bytes.NewBufferString(`{"keepForever":true}`)), seedFileID, file.HeadRev)
+	if recorder.Code != 403 {
+		t.Fatal("retention limit was not enforced")
 	}
 }
