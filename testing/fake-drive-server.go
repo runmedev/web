@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -55,16 +56,28 @@ type driveCapabilities struct {
 	CanDownload bool `json:"canDownload"`
 }
 
+// driveRevision keeps media separately so historical downloads never read head.
+type driveRevision struct {
+	ID          string `json:"id"`
+	MD5Checksum string `json:"md5Checksum"`
+	KeepForever bool   `json:"keepForever"`
+	Content     string `json:"-"`
+}
+
 type driveStore struct {
-	mu      sync.Mutex
-	files   map[string]*driveFile
-	counter int
+	revisions   map[string][]*driveRevision
+	intervening map[string]string
+	mu          sync.Mutex
+	files       map[string]*driveFile
+	counter     int
 }
 
 func newDriveStore() *driveStore {
 	store := &driveStore{
-		files:   map[string]*driveFile{},
-		counter: 1,
+		files:       map[string]*driveFile{},
+		revisions:   map[string][]*driveRevision{},
+		intervening: map[string]string{},
+		counter:     1,
 	}
 
 	store.files[seedFolderID] = &driveFile{
@@ -101,7 +114,14 @@ func (s *driveStore) refreshChecksum(id string) {
 	}
 	sum := md5.Sum([]byte(file.Content))
 	file.MD5Checksum = hex.EncodeToString(sum[:])
-	file.HeadRev = fmt.Sprintf("rev-%d", file.Version)
+	if file.MimeType != driveFolderMime {
+		for _, revision := range s.revisions[id] {
+			if revision.ID == file.HeadRev {
+				return
+			}
+		}
+		s.revisions[id] = append(s.revisions[id], &driveRevision{ID: file.HeadRev, MD5Checksum: file.MD5Checksum, Content: file.Content})
+	}
 }
 
 func (s *driveStore) nextIDLocked() string {
@@ -179,25 +199,95 @@ func (s *driveStore) updateMetadata(id string, resource map[string]any, addParen
 	return cloneFile(file), true
 }
 
-func (s *driveStore) setContentIfMatch(id, content, expectedETag string) (*driveFile, bool, bool) {
+// Uploads deliberately ignore If-Match: tests must exercise client reconciliation.
+func (s *driveStore) setContent(id, content string) (*driveFile, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	file := s.files[id]
 	if file == nil {
-		return nil, false, false
+		return nil, false
 	}
-	if expectedETag != "" && expectedETag != driveFileETag(file) {
-		return cloneFile(file), true, false
+	write := func(bytes string) {
+		file.Content = bytes
+		file.Version += 7 // File.version is not a content-revision counter.
+		file.HeadRev = fmt.Sprintf("opaque-content-%d", file.Version)
+		s.refreshChecksum(id)
 	}
-	file.Content = content
-	file.Version++
-	s.refreshChecksum(id)
-	return cloneFile(file), true, true
+	if intervening, ok := s.intervening[id]; ok {
+		delete(s.intervening, id)
+		write(intervening)
+	}
+	write(content)
+	return cloneFile(file), true
 }
 
-func driveFileETag(file *driveFile) string {
-	return fmt.Sprintf("\"version-%d\"", file.Version)
+// Revision media follows the documented retained-blob download contract.
+func (s *driveStore) serveRevisions(w http.ResponseWriter, r *http.Request, id, revisionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	revisions, exists := s.revisions[id]
+	if !exists {
+		http.NotFound(w, r)
+		return
+	}
+	if revisionID == "" && r.Method == http.MethodGet {
+		offset, _ := strconv.Atoi(r.URL.Query().Get("pageToken"))
+		if offset < 0 || offset > len(revisions) {
+			http.Error(w, "invalid page", 400)
+			return
+		}
+		end := offset + 2
+		if end > len(revisions) {
+			end = len(revisions)
+		}
+		result := map[string]any{"revisions": revisions[offset:end]}
+		if end < len(revisions) {
+			result["nextPageToken"] = strconv.Itoa(end)
+		}
+		writeJSON(w, result)
+		return
+	}
+	for _, revision := range revisions {
+		if revision.ID != revisionID {
+			continue
+		}
+		switch r.Method {
+		case http.MethodPatch:
+			var request struct {
+				KeepForever bool `json:"keepForever"`
+			}
+			if json.NewDecoder(r.Body).Decode(&request) != nil || !request.KeepForever {
+				http.Error(w, "only permanent retention is supported", 400)
+				return
+			}
+			count := 0
+			for _, entry := range revisions {
+				if entry.KeepForever {
+					count++
+				}
+			}
+			if !revision.KeepForever && count >= 200 {
+				http.Error(w, "200 retained-revision limit", 403)
+				return
+			}
+			revision.KeepForever = true
+			writeJSON(w, revision)
+		case http.MethodGet:
+			if r.URL.Query().Get("alt") == "media" {
+				if !revision.KeepForever {
+					http.Error(w, "revision must be retained", 403)
+					return
+				}
+				_, _ = w.Write([]byte(revision.Content))
+			} else {
+				writeJSON(w, revision)
+			}
+		default:
+			http.Error(w, "method not allowed", 405)
+		}
+		return
+	}
+	http.NotFound(w, r)
 }
 
 func (s *driveStore) get(id string) (*driveFile, bool) {
@@ -349,6 +439,32 @@ func newDriveHandler(store *driveStore) http.Handler {
 			"expires_in":   3600,
 		})
 	})
+	// A one-shot test fault creates B's revision immediately before A's upload.
+	mux.HandleFunc("/__test/intervening-write", func(w http.ResponseWriter, r *http.Request) {
+		if allowCORS(w, r) {
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", 405)
+			return
+		}
+		var request struct {
+			FileID  string `json:"fileId"`
+			Content string `json:"content"`
+		}
+		if json.NewDecoder(r.Body).Decode(&request) != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		if store.files[request.FileID] == nil {
+			http.NotFound(w, r)
+			return
+		}
+		store.intervening[request.FileID] = request.Content
+		writeJSON(w, map[string]bool{"armed": true})
+	})
 	mux.HandleFunc("/drive/v3/files/generateIds", func(w http.ResponseWriter, r *http.Request) {
 		if allowCORS(w, r) {
 			return
@@ -391,6 +507,16 @@ func newDriveHandler(store *driveStore) http.Handler {
 			return
 		}
 		id := strings.TrimPrefix(r.URL.Path, "/drive/v3/files/")
+		parts := strings.Split(id, "/")
+		if len(parts) >= 2 && parts[1] == "revisions" {
+			revisionID := ""
+			if len(parts) == 3 {
+				revisionID = parts[2]
+			}
+			store.serveRevisions(w, r, parts[0], revisionID)
+			return
+		}
+
 		if id == "" {
 			http.NotFound(w, r)
 			return
@@ -405,11 +531,9 @@ func newDriveHandler(store *driveStore) http.Handler {
 			}
 			if r.URL.Query().Get("alt") == "media" {
 				w.Header().Set("Content-Type", "application/octet-stream")
-				w.Header().Set("ETag", driveFileETag(file))
 				_, _ = w.Write([]byte(file.Content))
 				return
 			}
-			w.Header().Set("ETag", driveFileETag(file))
 			writeJSON(w, file)
 		case http.MethodPatch:
 			var resource map[string]any
@@ -444,20 +568,11 @@ func newDriveHandler(store *driveStore) http.Handler {
 			http.Error(w, "failed to read body", http.StatusBadRequest)
 			return
 		}
-		file, ok, matched := store.setContentIfMatch(
-			id,
-			string(body),
-			r.Header.Get("If-Match"),
-		)
+		file, ok := store.setContent(id, string(body))
 		if !ok {
 			http.NotFound(w, r)
 			return
 		}
-		if !matched {
-			http.Error(w, "precondition failed", http.StatusPreconditionFailed)
-			return
-		}
-		w.Header().Set("ETag", driveFileETag(file))
 		writeJSON(w, file)
 	})
 

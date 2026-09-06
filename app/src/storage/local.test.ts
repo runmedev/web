@@ -140,12 +140,47 @@ function createTestStore(
   localStore.driveStore = driveStore
   if (driveStore && typeof driveStore === 'object') {
     const drive = driveStore as any
+    // Existing local-store unit fixtures retain every metadata revision they
+    // expose. Race-specific fixtures below provide explicit historical bytes.
+    if (drive.getVersionMetadata && !drive.listRevisions) {
+      const revisions = new Map<string, any>()
+      const bytes = new Map<string, string>()
+      const getVersion = drive.getVersionMetadata
+      drive.getVersionMetadata = vi.fn(async (...args: any[]) => {
+        const version = await getVersion(...args)
+        if (version?.headRevisionId)
+          revisions.set(version.headRevisionId, {
+            id: version.headRevisionId,
+            md5Checksum: version.md5Checksum,
+          })
+        return version
+      })
+      if (drive.loadContent) {
+        const load = drive.loadContent
+        drive.loadContent = vi.fn(async (...args: any[]) => {
+          const content = await load(...args)
+          bytes.set(md5(content), content)
+          return content
+        })
+      }
+      drive.listRevisions = vi.fn(async () => [...revisions.values()])
+      drive.loadRevisionForRecovery ??= vi.fn(
+        async (_uri: string, revision: any) => {
+          const content = bytes.get(revision.md5Checksum)
+          if (content === undefined)
+            throw new Error(
+              `Test fixture missing historical bytes for ${revision.id}`
+            )
+          return content
+        }
+      )
+    }
     drive.waitForCreateOperation ??= drive.findByCreateOperation
     drive.canUsePreGeneratedFileId ??= vi.fn(async () => false)
     drive.createContent ??= drive.create
     const claims = new Map<string, string>()
     drive.getDerivedCopyClaim ??= vi.fn(async (uri: string) => claims.get(uri))
-    drive.compareAndSetDerivedCopyClaim ??= vi.fn(
+    drive.updateDerivedCopyClaimAfterCheck ??= vi.fn(
       async (
         uri: string,
         expected: string | undefined,
@@ -160,7 +195,7 @@ function createTestStore(
     drive.getDerivedCopyTarget ??= vi.fn(
       async (uri: string) => drive.getMetadataIfExists?.(uri) ?? null
     )
-    if (drive.saveContent && !drive.saveContentIfVersion) {
+    if (drive.saveContent && !drive.saveContentAfterVersionCheck) {
       drive.getVersionMetadata ??= vi.fn(async () => ({
         md5Checksum: 'copy-checksum',
         version: '1',
@@ -172,7 +207,7 @@ function createTestStore(
           ? '{}'
           : ''
       )
-      drive.saveContentIfVersion = vi.fn(
+      drive.saveContentAfterVersionCheck = vi.fn(
         async (uri: string, content: string, mime: string) => {
           await drive.saveContent(uri, content, mime)
           return true
@@ -221,8 +256,8 @@ function notebookJson(value: string): string {
 describe('LocalNotebooks operation-log storage', () => {
   it('clears only the recorded unconfirmed claim before an explicit retry', async () => {
     const source = 'https://drive.google.com/file/d/source/view'
-    const compareAndSetDerivedCopyClaim = vi.fn(async () => false)
-    const store = createTestStore({ compareAndSetDerivedCopyClaim })
+    const updateDerivedCopyClaimAfterCheck = vi.fn(async () => false)
+    const store = createTestStore({ updateDerivedCopyClaimAfterCheck })
     const sync = vi.spyOn(store, 'syncIpynbFile').mockResolvedValue()
     await store.files.put({
       id: 'local://file/recover',
@@ -236,7 +271,7 @@ describe('LocalNotebooks operation-log storage', () => {
       ipynbExportError: 'unconfirmed',
     })
     await store.retryUnconfirmedIpynbCreation('local://file/recover')
-    expect(compareAndSetDerivedCopyClaim).toHaveBeenCalledWith(
+    expect(updateDerivedCopyClaimAfterCheck).toHaveBeenCalledWith(
       source,
       'p:old',
       null
@@ -589,7 +624,7 @@ describe('LocalNotebooks operation-log storage', () => {
         loadContent: vi.fn(async (uri: string) =>
           uri === copy ? content : upstream
         ),
-        saveContentIfVersion: vi.fn(
+        saveContentAfterVersionCheck: vi.fn(
           async (
             _uri: string,
             bytes: string,
@@ -768,7 +803,7 @@ describe('LocalNotebooks operation-log storage', () => {
 
     await store.reconcileDriveNotebook(uri)
 
-    expect(driveStore.loadContent).toHaveBeenCalledTimes(2)
+    expect(driveStore.loadContent).toHaveBeenCalledTimes(3)
     expect(await store.loadContent(uri)).toBe(latestDocument)
     expect(await store.files.get(uri)).toMatchObject({
       md5Checksum: md5(latestDocument),
@@ -1204,7 +1239,7 @@ describe('LocalNotebooks operation-log storage', () => {
       getMetadata: vi.fn(async () => ({ name: 'shared.runme' })),
       getVersionMetadata: vi.fn(async () => remoteVersion),
       loadContent: vi.fn(async () => remoteDocument),
-      saveContentIfVersion: vi.fn(
+      saveContentAfterVersionCheck: vi.fn(
         async (
           _uri: string,
           content: string,
@@ -1272,7 +1307,7 @@ describe('LocalNotebooks operation-log storage', () => {
         )
       )
     ).toEqual(new Set([root.op_id, alice.op_id, bob.op_id]))
-    expect(driveStore.saveContentIfVersion).toHaveBeenCalledTimes(1)
+    expect(driveStore.saveContentAfterVersionCheck).toHaveBeenCalledTimes(1)
     expect((await store.files.get('local://file/shared'))?.doc).toBe('')
     expect(await store.files.get('local://file/shared')).toMatchObject({
       md5Checksum: md5(localAfter),
@@ -1301,7 +1336,7 @@ describe('LocalNotebooks operation-log storage', () => {
       getMetadata: vi.fn(async () => ({ name: 'shared.runme' })),
       getVersionMetadata: vi.fn(async () => remoteVersion),
       loadContent: vi.fn(async () => remoteDocument),
-      saveContentIfVersion: vi.fn(
+      saveContentAfterVersionCheck: vi.fn(
         async (
           _uri: string,
           content: string,
@@ -1348,7 +1383,7 @@ describe('LocalNotebooks operation-log storage', () => {
     await store.reconcileDriveNotebook('local://file/empty-drive')
 
     expect(remoteDocument).toBe(localDocument)
-    expect(driveStore.saveContentIfVersion).toHaveBeenCalledOnce()
+    expect(driveStore.saveContentAfterVersionCheck).toHaveBeenCalledOnce()
     expect(await store.files.get('local://file/empty-drive')).toMatchObject({
       lastRemoteChecksum: md5(localDocument),
       lastUpstreamVersion: {
@@ -1369,7 +1404,7 @@ describe('LocalNotebooks operation-log storage', () => {
     const driveStore = {
       getVersionMetadata: vi.fn(async () => remoteVersion),
       loadContent: vi.fn(async () => remoteDocument),
-      saveContentIfVersion: vi.fn(
+      saveContentAfterVersionCheck: vi.fn(
         async (
           _uri: string,
           content: string,
@@ -1441,7 +1476,7 @@ describe('LocalNotebooks operation-log storage', () => {
     const driveStore = {
       getVersionMetadata: vi.fn(async () => remoteVersion),
       loadContent: vi.fn(async () => remoteDocument),
-      saveContentIfVersion: vi.fn(),
+      saveContentAfterVersionCheck: vi.fn(),
     }
     const operationLogStorage = new MemoryOperationLogStorage()
     const local = await operationLogStorage.initialize(
@@ -1465,7 +1500,7 @@ describe('LocalNotebooks operation-log storage', () => {
     await expect(store.reconcileDriveNotebook(uri)).rejects.toThrow(
       'Operation log must end with LF'
     )
-    expect(driveStore.saveContentIfVersion).not.toHaveBeenCalled()
+    expect(driveStore.saveContentAfterVersionCheck).not.toHaveBeenCalled()
   })
 
   it('rejects stale bytes, then accepts a newer self-consistent Drive snapshot', async () => {
@@ -1513,6 +1548,7 @@ describe('LocalNotebooks operation-log storage', () => {
       getVersionMetadata: vi.fn(async () => remoteVersion),
       loadContent: vi.fn(async () => {
         loadCount += 1
+        if (loadCount > 2) return remoteDocument
         const downloaded = remoteDocument
         const operations =
           loadCount === 1
@@ -1528,7 +1564,7 @@ describe('LocalNotebooks operation-log storage', () => {
         }
         return loadCount === 1 ? downloaded : remoteDocument
       }),
-      saveContentIfVersion: vi.fn(
+      saveContentAfterVersionCheck: vi.fn(
         async (
           _uri: string,
           content: string,
@@ -1554,6 +1590,15 @@ describe('LocalNotebooks operation-log storage', () => {
         }
       ),
     }
+    Object.assign(driveStore, {
+      loadRevisionForRecovery: vi.fn(
+        async (_uri: string, revision: { id?: string }) =>
+          serializeOperationLog(
+            header,
+            revision.id === 'revision-1' ? [] : [remoteOperation]
+          )
+      ),
+    })
     const operationLogStorage = new MemoryOperationLogStorage()
     const local = await operationLogStorage.initialize(
       'local://file/drive-race',
@@ -1580,8 +1625,8 @@ describe('LocalNotebooks operation-log storage', () => {
       remoteOperation.op_id,
       laterRemoteOperation.op_id,
     ])
-    expect(driveStore.loadContent).toHaveBeenCalledTimes(2)
-    expect(driveStore.saveContentIfVersion).toHaveBeenCalledTimes(1)
+    expect(driveStore.loadContent).toHaveBeenCalledTimes(3)
+    expect(driveStore.saveContentAfterVersionCheck).toHaveBeenCalledTimes(1)
     expect(
       new Set(
         parseOperationLog(remoteDocument).operations.map(
@@ -1603,7 +1648,7 @@ describe('LocalNotebooks operation-log storage', () => {
     })
   })
 
-  it('merges every competing operation through the eighth Drive CAS attempt', async () => {
+  it('merges every competing operation through the eighth Drive preflight attempt', async () => {
     const header: NotebookLogHeader = {
       record_type: 'runme.notebook',
       format_version: 1,
@@ -1644,7 +1689,7 @@ describe('LocalNotebooks operation-log storage', () => {
       getMetadata: vi.fn(async () => ({ name: 'shared.runme' })),
       getVersionMetadata: vi.fn(async () => remoteVersion),
       loadContent: vi.fn(async () => remoteDocument),
-      saveContentIfVersion: vi.fn(
+      saveContentAfterVersionCheck: vi.fn(
         async (
           _uri: string,
           content: string,
@@ -1710,8 +1755,8 @@ describe('LocalNotebooks operation-log storage', () => {
       localOperation.op_id,
       ...competingOperations.map((operation) => operation.op_id),
     ])
-    expect(driveStore.loadContent).toHaveBeenCalledTimes(8)
-    expect(driveStore.saveContentIfVersion).toHaveBeenCalledTimes(8)
+    expect(driveStore.loadContent).toHaveBeenCalledTimes(9)
+    expect(driveStore.saveContentAfterVersionCheck).toHaveBeenCalledTimes(8)
     expect(
       new Set(
         parseOperationLog(remoteDocument).operations.map(
@@ -1728,7 +1773,7 @@ describe('LocalNotebooks operation-log storage', () => {
     ).toEqual(expectedOperationIds)
   })
 
-  it('reports contention after all eight Drive CAS attempts are exhausted', async () => {
+  it('reports contention after all eight Drive preflight attempts are exhausted', async () => {
     const header: NotebookLogHeader = {
       record_type: 'runme.notebook',
       format_version: 1,
@@ -1755,7 +1800,7 @@ describe('LocalNotebooks operation-log storage', () => {
         version: String(revision),
       })),
       loadContent: vi.fn(async () => remoteDocument),
-      saveContentIfVersion: vi.fn(async () => {
+      saveContentAfterVersionCheck: vi.fn(async () => {
         revision += 1
         return false
       }),
@@ -1784,8 +1829,8 @@ describe('LocalNotebooks operation-log storage', () => {
       'Drive operation log changed during 8 merge attempts for local://file/drive-exhaustion'
     )
 
-    expect(driveStore.loadContent).toHaveBeenCalledTimes(8)
-    expect(driveStore.saveContentIfVersion).toHaveBeenCalledTimes(8)
+    expect(driveStore.loadContent).toHaveBeenCalledTimes(9)
+    expect(driveStore.saveContentAfterVersionCheck).toHaveBeenCalledTimes(8)
   })
 
   it('unions concurrent local and filesystem operation logs as raw bytes', async () => {
@@ -1963,7 +2008,7 @@ describe('LocalNotebooks trusted Drive snapshot import', () => {
     })
   })
 
-  it('initializes a trusted zero-byte .runme snapshot through Drive CAS', async () => {
+  it('initializes a trusted zero-byte .runme snapshot through Drive preflight', async () => {
     const remoteUri = 'https://drive.google.com/file/d/empty-trusted/view'
     let remoteDocument = ''
     let version = {
@@ -1974,7 +2019,7 @@ describe('LocalNotebooks trusted Drive snapshot import', () => {
     const driveStore = {
       getVersionMetadata: vi.fn(async () => version),
       loadContent: vi.fn(async () => remoteDocument),
-      saveContentIfVersion: vi.fn(
+      saveContentAfterVersionCheck: vi.fn(
         async (
           _uri: string,
           content: string,
@@ -2033,7 +2078,7 @@ describe('LocalNotebooks trusted Drive snapshot import', () => {
     const driveStore = {
       getVersionMetadata: vi.fn(async () => emptyVersion),
       loadContent: vi.fn(async () => ''),
-      saveContentIfVersion: vi.fn(async () => false),
+      saveContentAfterVersionCheck: vi.fn(async () => false),
     }
     const store = createTestStore(driveStore)
 
@@ -2047,7 +2092,7 @@ describe('LocalNotebooks trusted Drive snapshot import', () => {
       })
     ).rejects.toBeInstanceOf(DriveSnapshotChangedError)
 
-    expect(driveStore.saveContentIfVersion).toHaveBeenCalledWith(
+    expect(driveStore.saveContentAfterVersionCheck).toHaveBeenCalledWith(
       remoteUri,
       expect.stringMatching(/\n$/),
       'application/vnd.runme.notebook+jsonl',
@@ -2073,7 +2118,7 @@ describe('LocalNotebooks trusted Drive snapshot import', () => {
     const driveStore = {
       getVersionMetadata: vi.fn(async () => ({ version: remoteVersion })),
       loadContent: vi.fn(async () => ''),
-      saveContentIfVersion: vi.fn(
+      saveContentAfterVersionCheck: vi.fn(
         async (
           _uri: string,
           _content: string,
@@ -2093,7 +2138,7 @@ describe('LocalNotebooks trusted Drive snapshot import', () => {
       })
     ).rejects.toBeInstanceOf(DriveSnapshotChangedError)
 
-    expect(driveStore.saveContentIfVersion).toHaveBeenCalledWith(
+    expect(driveStore.saveContentAfterVersionCheck).toHaveBeenCalledWith(
       remoteUri,
       expect.stringMatching(/\n$/),
       'application/vnd.runme.notebook+jsonl',
@@ -2101,6 +2146,261 @@ describe('LocalNotebooks trusted Drive snapshot import', () => {
     )
     const [record] = await store.files.toArray()
     expect(record?.operationLogRef).toBeUndefined()
+  })
+})
+
+/** In-memory unit fixture; browser integration uses the Go fake Drive service. */
+async function createRecoveryFixture() {
+  const header: NotebookLogHeader = {
+    record_type: 'runme.notebook',
+    format_version: 1,
+    notebook_id: 'notebook_recovery',
+    created_by: 'actor_seed',
+    created_at: '2026-09-05T00:00:00Z',
+  }
+  const operation = (actor: string) =>
+    createRunmeOperation({
+      actorId: `actor_${actor}`,
+      actorSequence: 1,
+      dependencies: [],
+      knownOperations: [],
+      kind: 'notebook.update',
+      payload: { frontmatter: { [actor]: 'true' }, metadata: {} },
+    })
+  const a = operation('alice'),
+    b = operation('bob'),
+    c = operation('carol')
+  const document = (ops: (typeof a)[]) => serializeOperationLog(header, ops)
+  const history = new Map<string, string>([['root-opaque', document([])]])
+  let head = 'root-opaque',
+    generation = 1
+  let beforeUpload: (() => Promise<void>) | undefined
+  let afterUpload: (() => Promise<void>) | undefined
+  const write = (id: string, content: string) => {
+    history.set(id, content)
+    head = id
+    generation += 7
+  }
+  const metadata = () => ({
+    headRevisionId: head,
+    version: String(generation),
+    md5Checksum: md5(history.get(head)!),
+  })
+  const drive = {
+    getVersionMetadata: vi.fn(async () => metadata()),
+    loadContent: vi.fn(async () => history.get(head)!),
+    // Deliberately reverse order; revision IDs and versions have no arithmetic relationship.
+    listRevisions: vi.fn(async () =>
+      [...history]
+        .reverse()
+        .map(([id, content]) => ({ id, md5Checksum: md5(content) }))
+    ),
+    loadRevisionForRecovery: vi.fn(
+      async (_uri: string, revision: { id?: string }) => {
+        const content = history.get(revision.id!)
+        if (content === undefined) throw new Error('missing revision')
+        return content
+      }
+    ),
+    saveContentAfterVersionCheck: vi.fn(
+      async (
+        _uri: string,
+        content: string,
+        _mime: string,
+        expected: { checksum?: string; version?: string }
+      ) => {
+        if (
+          expected.checksum !== metadata().md5Checksum ||
+          expected.version !== metadata().version
+        )
+          return false
+        const before = beforeUpload
+        beforeUpload = undefined
+        await before?.()
+        write(`our-${generation}-opaque`, content)
+        const receipt = metadata()
+        const after = afterUpload
+        afterUpload = undefined
+        await after?.()
+        return receipt
+      }
+    ),
+  }
+  const uri = 'local://file/recovery'
+  const operationLogStorage = new MemoryOperationLogStorage()
+  const local = await operationLogStorage.initialize(uri, document([a]))
+  const store = createTestStore(drive, { operationLogStorage })
+  await store.files.put({
+    id: uri,
+    name: 'recovery.runme',
+    remoteId: 'https://drive.google.com/file/d/recovery/view',
+    lastRemoteChecksum: '',
+    lastSynced: '',
+    doc: '',
+    md5Checksum: local.checksum,
+    operationLogRef: local.ref,
+  })
+  return {
+    store,
+    drive,
+    uri,
+    local,
+    operationLogStorage,
+    a,
+    b,
+    c,
+    document,
+    history,
+    write,
+    head: () => head,
+    metadataOnly: () => {
+      generation += 19
+    },
+    beforeUpload: (callback: () => Promise<void>) => {
+      beforeUpload = callback
+    },
+    afterUpload: (callback: () => Promise<void>) => {
+      afterUpload = callback
+    },
+    ids: (text: string) =>
+      parseOperationLog(text)
+        .operations.map((op) => op.op_id)
+        .sort(),
+  }
+}
+
+describe('Drive v3 operation-log revision recovery', () => {
+  it('recovers multiple overwritten revisions even when head matches our upload', async () => {
+    const f = await createRecoveryFixture()
+    f.beforeUpload(async () => {
+      f.write('z-hidden', f.document([f.b]))
+      f.metadataOnly()
+      f.write('a-hidden', f.document([f.c]))
+    })
+    await f.store.reconcileDriveNotebook(f.uri)
+    const expected = [f.a.op_id, f.b.op_id, f.c.op_id].sort()
+    expect(f.ids(f.history.get(f.head())!)).toEqual(expected)
+    expect(f.ids(await f.store.loadContent(f.uri))).toEqual(expected)
+    expect(
+      f.drive.loadRevisionForRecovery.mock.calls
+        .map((call) => call[1].id)
+        .sort()
+    ).toEqual(['a-hidden', 'z-hidden'])
+    expect(f.drive.saveContentAfterVersionCheck).toHaveBeenCalledTimes(2)
+    expect((await f.store.files.get(f.uri))?.lastSyncError).toBeUndefined()
+  })
+
+  it('merges a write after our upload without treating its metadata as our receipt', async () => {
+    const f = await createRecoveryFixture()
+    f.afterUpload(async () => {
+      f.write('late-writer', f.document([f.b]))
+    })
+    await f.store.reconcileDriveNotebook(f.uri)
+    expect(f.ids(f.history.get(f.head())!)).toEqual(
+      [f.a.op_id, f.b.op_id].sort()
+    )
+    expect(f.drive.saveContentAfterVersionCheck).toHaveBeenCalledTimes(2)
+  })
+
+  it('resumes persisted recovery after a pin failure and a local-store reload', async () => {
+    const f = await createRecoveryFixture()
+    f.beforeUpload(async () => {
+      f.write('hidden', f.document([f.b]))
+    })
+    f.drive.loadRevisionForRecovery.mockRejectedValueOnce(
+      new Error('200 retained-revision limit')
+    )
+    await expect(f.store.reconcileDriveNotebook(f.uri)).rejects.toThrow(
+      '200 retained-revision limit'
+    )
+    expect(await f.store.files.get(f.uri)).toMatchObject({
+      lastSynced: '',
+      driveRecoveryCheckpoint: { pendingRevisionIds: ['hidden'] },
+    })
+    const reloaded = createTestStore(f.drive, {
+      files: f.store.files as any,
+      operationLogStorage: f.operationLogStorage,
+    })
+    await reloaded.reconcileDriveNotebook(f.uri)
+    expect(f.ids(f.history.get(f.head())!)).toEqual(
+      [f.a.op_id, f.b.op_id].sort()
+    )
+    expect((await reloaded.files.get(f.uri))?.lastSyncError).toBeUndefined()
+  })
+
+  it('reconciles an upload with an unknown outcome before retrying the write', async () => {
+    const f = await createRecoveryFixture()
+    f.beforeUpload(async () => {
+      f.write('hidden', f.document([f.b]))
+    })
+    f.afterUpload(async () => {
+      throw new Error('upload response lost')
+    })
+    await expect(f.store.reconcileDriveNotebook(f.uri)).rejects.toThrow(
+      'upload response lost'
+    )
+    const reloaded = createTestStore(f.drive, {
+      files: f.store.files as any,
+      operationLogStorage: f.operationLogStorage,
+    })
+    await reloaded.reconcileDriveNotebook(f.uri)
+    expect(f.ids(f.history.get(f.head())!)).toEqual(
+      [f.a.op_id, f.b.op_id].sort()
+    )
+    expect(f.drive.saveContentAfterVersionCheck).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps an observed but purged revision pending across retries', async () => {
+    const f = await createRecoveryFixture()
+    f.beforeUpload(async () => {
+      f.write('hidden', f.document([f.b]))
+    })
+    f.drive.loadRevisionForRecovery.mockRejectedValueOnce(
+      new Error('download denied')
+    )
+    await expect(f.store.reconcileDriveNotebook(f.uri)).rejects.toThrow(
+      'download denied'
+    )
+    f.history.delete('hidden')
+    await expect(f.store.reconcileDriveNotebook(f.uri)).rejects.toThrow(
+      'hidden is no longer available'
+    )
+    expect((await f.store.files.get(f.uri))?.lastSynced).toBe('')
+    expect(f.drive.saveContentAfterVersionCheck).toHaveBeenCalledTimes(1)
+    expect(f.ids(await f.store.loadContent(f.uri))).toContain(f.a.op_id)
+  })
+
+  it('does not acknowledge a concurrent local append as synced during a download-only merge', async () => {
+    const f = await createRecoveryFixture()
+    f.write('collaborator', f.document([f.a, f.b]))
+    const append = f.operationLogStorage.append.bind(f.operationLogStorage)
+    vi.spyOn(f.operationLogStorage, 'append').mockImplementationOnce(
+      async (ref, records, options) => {
+        await append(ref, JSON.stringify(f.c) + '\n')
+        return append(ref, records, options)
+      }
+    )
+    await f.store.reconcileDriveNotebook(f.uri)
+    expect(f.ids(f.history.get(f.head())!)).toEqual(
+      [f.a.op_id, f.b.op_id, f.c.op_id].sort()
+    )
+  })
+
+  it('retains local edits appended while an upload is in flight', async () => {
+    const f = await createRecoveryFixture()
+    f.afterUpload(async () => {
+      await f.operationLogStorage.append(
+        f.local.ref,
+        JSON.stringify(f.b) + '\n'
+      )
+    })
+    await f.store.reconcileDriveNotebook(f.uri)
+    expect(f.ids(f.history.get(f.head())!)).toEqual(
+      [f.a.op_id, f.b.op_id].sort()
+    )
+    expect(f.ids(await f.store.loadContent(f.uri))).toEqual(
+      [f.a.op_id, f.b.op_id].sort()
+    )
   })
 })
 
@@ -5207,15 +5507,17 @@ describe('LocalNotebooks legacy notebook conversion', () => {
         remoteUri: conversionRemoteUri,
         parents: [parentRemoteUri],
       })),
-      saveContentIfVersion: vi.fn(async (_uri: string, content: string) => {
-        remoteContent = content
-        remoteVersion = {
-          md5Checksum: md5(content),
-          headRevisionId: 'conversion-revision-2',
-          version: '2',
+      saveContentAfterVersionCheck: vi.fn(
+        async (_uri: string, content: string) => {
+          remoteContent = content
+          remoteVersion = {
+            md5Checksum: md5(content),
+            headRevisionId: 'conversion-revision-2',
+            version: '2',
+          }
+          return true
         }
-        return true
-      }),
+      ),
     }
     const store = createTestStore(driveStore, { operationLogStorage })
     const conversionSnapshot = await operationLogStorage.initialize(
@@ -5295,7 +5597,7 @@ describe('LocalNotebooks legacy notebook conversion', () => {
         materializeOperationLog(uploadedAfter.operations)
       ).cells[0]?.value
     ).toBe('echo after post create failure')
-    expect(driveStore.saveContentIfVersion).toHaveBeenCalledOnce()
+    expect(driveStore.saveContentAfterVersionCheck).toHaveBeenCalledOnce()
     expect((await store.load(conversionUri)).cells[0]?.value).toBe(
       'echo after post create failure'
     )

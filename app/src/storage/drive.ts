@@ -25,8 +25,6 @@ const GAPI_SCRIPT_SRC = 'https://apis.google.com/js/api.js'
 // https://developers.google.com/workspace/drive/api/guides/fields-parameter
 const VERSION_FIELDS =
   'md5Checksum,headRevisionId,version,appProperties,properties'
-const DRIVE_V2_VERSION_FIELDS =
-  'etag,md5Checksum,headRevisionId,version,properties'
 const NOTEBOOK_JSON_WRITE_OPTIONS = {
   emitDefaultValues: true,
 } as unknown as Parameters<typeof toJsonString>[2]
@@ -383,14 +381,14 @@ type DriveRevisionListResponse = {
   result?: { revisions?: DriveRevision[]; nextPageToken?: string }
 }
 
-/** Metadata and content are replaced in one conditional Drive request. */
+/** Metadata and content are replaced in one Drive request. */
 export interface DerivedCopyPlacement {
   name: string
   parentUri: string
   previousParentUri?: string
 }
 
-function conditionalUpload(
+function contentUpload(
   content: string,
   mimeType: string,
   placement?: DerivedCopyPlacement
@@ -422,11 +420,15 @@ function conditionalUpload(
 }
 
 interface DriveFilesClient {
-  setPublicPropertyIfMatch(
+  keepRevision(
+    fileId: string,
+    revisionId: string,
+    resourceKey?: string
+  ): Promise<void>
+  setPublicProperty(
     fileId: string,
     key: string,
     value: string | null,
-    etag: string,
     resourceKey?: string
   ): Promise<boolean>
   generateFileId(): Promise<string>
@@ -445,21 +447,19 @@ interface DriveFilesClient {
   get(
     request: Record<string, unknown>
   ): Promise<{ body?: string; result?: unknown }>
-  getVersionMetadataWithEtag(
+  readVersionMetadata(
     fileId: string,
     resourceKey?: string
   ): Promise<{
     metadata: DriveVersionMetadata | null
-    etag?: string
   }>
-  setContentIfMatch(
+  uploadContent(
     fileId: string,
     content: string,
     mimeType: string,
-    etag: string,
     resourceKey?: string,
     placement?: DerivedCopyPlacement
-  ): Promise<boolean>
+  ): Promise<DriveVersionMetadata>
   getDrive(request: Record<string, unknown>): Promise<DriveGetResponse>
   list(
     request: Record<string, unknown>,
@@ -716,7 +716,7 @@ export class GapiDriveFilesClient implements DriveFilesClient {
       expectText?: boolean
       headers?: Record<string, string>
     } = {}
-  ): Promise<{ body?: string; result?: unknown; etag?: string }> {
+  ): Promise<{ body?: string; result?: unknown }> {
     const token = this.gapi.client.getToken?.()?.access_token ?? ''
     if (!token) {
       throw new Error('Google Drive request requires an access token')
@@ -751,7 +751,6 @@ export class GapiDriveFilesClient implements DriveFilesClient {
     if (options.expectText) {
       return {
         body: await response.text(),
-        etag: response.headers.get('etag') ?? undefined,
       }
     }
 
@@ -759,12 +758,10 @@ export class GapiDriveFilesClient implements DriveFilesClient {
     if (!text) {
       return {
         result: undefined,
-        etag: response.headers.get('etag') ?? undefined,
       }
     }
     return {
       result: JSON.parse(text),
-      etag: response.headers.get('etag') ?? undefined,
     }
   }
 
@@ -982,99 +979,85 @@ export class GapiDriveFilesClient implements DriveFilesClient {
     }>
   }
 
-  async getVersionMetadataWithEtag(
+  /** Read v3 metadata; browser sync does not depend on an exposed ETag. */
+  async readVersionMetadata(
     fileId: string,
     resourceKey?: string
   ): Promise<{
     metadata: DriveVersionMetadata | null
-    etag?: string
   }> {
-    // Drive v3 returns the ETag as an HTTP response header, but Google does
-    // not expose that header to cross-origin browser JavaScript. Drive v2
-    // exposes the same file validator in its JSON body, which lets browser
-    // clients keep using a real If-Match precondition instead of weakening
-    // the operation-log CAS.
     const response = await this.request(
       'GET',
-      `/drive/v2/files/${encodeURIComponent(fileId)}`,
+      `/drive/v3/files/${encodeURIComponent(fileId)}`,
       {
-        params: {
-          supportsAllDrives: true,
-          fields: DRIVE_V2_VERSION_FIELDS,
-        },
+        params: { supportsAllDrives: true, fields: VERSION_FIELDS },
         headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
       }
     )
-    return normalizeDriveV2VersionResponse(response)
+    return {
+      metadata: (response.result as DriveVersionMetadata | undefined) ?? null,
+    }
   }
 
-  /** CAS one public property without changing media or unrelated properties. */
-  async setPublicPropertyIfMatch(
+  /** Update a public property. Callers recheck ownership; this is not a lock. */
+  async setPublicProperty(
     fileId: string,
     key: string,
     value: string | null,
-    etag: string,
     resourceKey?: string
   ): Promise<boolean> {
-    try {
-      await this.request(
-        'PATCH',
-        `/drive/v3/files/${encodeURIComponent(fileId)}`,
-        {
-          params: { supportsAllDrives: true },
-          body: JSON.stringify({ properties: { [key]: value } }),
-          headers: {
-            ...driveResourceKeyHeaders({ id: fileId, resourceKey }),
-            'If-Match': etag,
-          },
-        }
-      )
-      return true
-    } catch (error) {
-      if (error instanceof DrivePreconditionFailedError) return false
-      throw error
-    }
+    await this.request(
+      'PATCH',
+      `/drive/v3/files/${encodeURIComponent(fileId)}`,
+      {
+        params: { supportsAllDrives: true },
+        body: JSON.stringify({ properties: { [key]: value } }),
+        headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
+      }
+    )
+    return true
   }
 
-  async setContentIfMatch(
+  /** Return metadata from this upload response, never from a later file read. */
+  async uploadContent(
     fileId: string,
     content: string,
     mimeType: string,
-    etag: string,
     resourceKey?: string,
     placement?: DerivedCopyPlacement
-  ): Promise<boolean> {
-    const upload = conditionalUpload(content, mimeType, placement)
-    try {
-      // Read the validator from Drive v2 because its JSON body exposes the
-      // ETag to browser JavaScript, but write through Drive v3. The v2 upload
-      // endpoint omits Access-Control-Allow-Origin from its actual response,
-      // so a successful preflight still ends as `TypeError: Failed to fetch`
-      // in browsers. Send the v2 file ETag back as the If-Match validator for
-      // the same file through Drive's current v3 media-update endpoint.
-      await this.request(
-        'PATCH',
-        `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
-        {
-          params: {
-            ...upload.params,
-            supportsAllDrives: true,
-          },
-          body: upload.body,
-          contentType: upload.contentType,
-          headers: {
-            ...driveResourceKeyHeaders({ id: fileId, resourceKey }),
-            'If-Match': etag,
-          },
-        }
-      )
-      return true
-    } catch (error) {
-      if (error instanceof DrivePreconditionFailedError) {
-        return false
+  ): Promise<DriveVersionMetadata> {
+    const upload = contentUpload(content, mimeType, placement)
+    const response = await this.request(
+      'PATCH',
+      `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
+      {
+        params: {
+          ...upload.params,
+          supportsAllDrives: true,
+          fields: VERSION_FIELDS,
+        },
+        body: upload.body,
+        contentType: upload.contentType,
+        headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
       }
-      throw error
-    }
+    )
+    return (response.result as DriveVersionMetadata | undefined) ?? {}
+  }
+
+  /** Pin a blob revision before downloading it through the supported v3 API. */
+  async keepRevision(
+    fileId: string,
+    revisionId: string,
+    resourceKey?: string
+  ): Promise<void> {
+    await this.request(
+      'PATCH',
+      `/drive/v3/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revisionId)}`,
+      {
+        body: JSON.stringify({ keepForever: true }),
+        headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
+      }
+    )
   }
 
   list(
@@ -1278,7 +1261,7 @@ class FetchDriveFilesClient implements DriveFilesClient {
       expectText?: boolean
       headers?: Record<string, string>
     } = {}
-  ): Promise<{ body?: string; result?: unknown; etag?: string }> {
+  ): Promise<{ body?: string; result?: unknown }> {
     const response = await fetch(this.buildUrl(path, options.params), {
       method,
       headers: {
@@ -1309,7 +1292,6 @@ class FetchDriveFilesClient implements DriveFilesClient {
     if (options.expectText) {
       return {
         body: await response.text(),
-        etag: response.headers.get('etag') ?? undefined,
       }
     }
 
@@ -1317,12 +1299,10 @@ class FetchDriveFilesClient implements DriveFilesClient {
     if (!text) {
       return {
         result: undefined,
-        etag: response.headers.get('etag') ?? undefined,
       }
     }
     return {
       result: JSON.parse(text),
-      etag: response.headers.get('etag') ?? undefined,
     }
   }
 
@@ -1482,106 +1462,85 @@ class FetchDriveFilesClient implements DriveFilesClient {
     )
   }
 
-  async getVersionMetadataWithEtag(
+  /** Read v3 metadata; browser sync does not depend on an exposed ETag. */
+  async readVersionMetadata(
     fileId: string,
     resourceKey?: string
   ): Promise<{
     metadata: DriveVersionMetadata | null
-    etag?: string
   }> {
-    // Fake/test servers expose the v3 ETag header through CORS, so preserve
-    // their existing v3 contract instead of requiring them to emulate v2.
-    if (!new URL(this.baseUrl).hostname.endsWith('.googleapis.com')) {
-      const response = await this.request(
-        'GET',
-        `/drive/v3/files/${encodeURIComponent(fileId)}`,
-        {
-          params: {
-            supportsAllDrives: true,
-            fields: VERSION_FIELDS,
-            resourceKey,
-          },
-        }
-      )
-      return {
-        metadata: (response.result as DriveVersionMetadata | undefined) ?? null,
-        etag: response.etag,
-      }
-    }
-
-    // Match the GAPI transport's v2 metadata request. Google does not expose
-    // the v3 ETag response header to cross-origin browser JavaScript, while v2
-    // includes the validator in the JSON body.
     const response = await this.request(
       'GET',
-      `/drive/v2/files/${encodeURIComponent(fileId)}`,
+      `/drive/v3/files/${encodeURIComponent(fileId)}`,
       {
-        params: {
-          supportsAllDrives: true,
-          fields: DRIVE_V2_VERSION_FIELDS,
-        },
+        params: { supportsAllDrives: true, fields: VERSION_FIELDS },
         headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
       }
     )
-    return normalizeDriveV2VersionResponse(response)
+    return {
+      metadata: (response.result as DriveVersionMetadata | undefined) ?? null,
+    }
   }
 
-  /** Use the same source-file CAS contract as the browser transport. */
-  async setPublicPropertyIfMatch(
+  /** Update a public property. Callers recheck ownership; this is not a lock. */
+  async setPublicProperty(
     fileId: string,
     key: string,
     value: string | null,
-    etag: string,
     resourceKey?: string
   ): Promise<boolean> {
-    try {
-      await this.request(
-        'PATCH',
-        `/drive/v3/files/${encodeURIComponent(fileId)}`,
-        {
-          params: { supportsAllDrives: true, resourceKey },
-          body: JSON.stringify({ properties: { [key]: value } }),
-          headers: { 'If-Match': etag },
-        }
-      )
-      return true
-    } catch (error) {
-      if (error instanceof DrivePreconditionFailedError) return false
-      throw error
-    }
+    await this.request(
+      'PATCH',
+      `/drive/v3/files/${encodeURIComponent(fileId)}`,
+      {
+        params: { supportsAllDrives: true },
+        body: JSON.stringify({ properties: { [key]: value } }),
+        headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
+      }
+    )
+    return true
   }
 
-  async setContentIfMatch(
+  /** Return metadata from this upload response, never from a later file read. */
+  async uploadContent(
     fileId: string,
     content: string,
     mimeType: string,
-    etag: string,
     resourceKey?: string,
     placement?: DerivedCopyPlacement
-  ): Promise<boolean> {
-    const upload = conditionalUpload(content, mimeType, placement)
-    try {
-      await this.request(
-        'PATCH',
-        `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
-        {
-          params: {
-            ...upload.params,
-            supportsAllDrives: true,
-            resourceKey,
-          },
-          body: upload.body,
-          contentType: upload.contentType,
-          headers: { 'If-Match': etag },
-        }
-      )
-      return true
-    } catch (error) {
-      if (error instanceof DrivePreconditionFailedError) {
-        return false
+  ): Promise<DriveVersionMetadata> {
+    const upload = contentUpload(content, mimeType, placement)
+    const response = await this.request(
+      'PATCH',
+      `/upload/drive/v3/files/${encodeURIComponent(fileId)}`,
+      {
+        params: {
+          ...upload.params,
+          supportsAllDrives: true,
+          fields: VERSION_FIELDS,
+        },
+        body: upload.body,
+        contentType: upload.contentType,
+        headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
       }
-      throw error
-    }
+    )
+    return (response.result as DriveVersionMetadata | undefined) ?? {}
+  }
+
+  /** Pin a blob revision before downloading it through the supported v3 API. */
+  async keepRevision(
+    fileId: string,
+    revisionId: string,
+    resourceKey?: string
+  ): Promise<void> {
+    await this.request(
+      'PATCH',
+      `/drive/v3/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revisionId)}`,
+      {
+        body: JSON.stringify({ keepForever: true }),
+        headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
+      }
+    )
   }
 
   list(
@@ -1982,40 +1941,6 @@ export interface DriveVersionMetadata {
   headRevisionId?: string
   version?: string
   appProperties?: Record<string, string>
-}
-
-type DriveV2VersionMetadata = Omit<DriveVersionMetadata, 'properties'> & {
-  etag?: string
-  properties?: {
-    key: string
-    value: string
-    visibility: string
-  }[]
-}
-
-/** Normalize Drive v2's public-property array and browser-visible JSON ETag. */
-function normalizeDriveV2VersionResponse(response: {
-  result?: unknown
-  etag?: string
-}): {
-  metadata: DriveVersionMetadata | null
-  etag?: string
-} {
-  const metadata =
-    (response.result as DriveV2VersionMetadata | undefined) ?? null
-  return {
-    metadata: metadata
-      ? {
-          ...metadata,
-          properties: Object.fromEntries(
-            (metadata.properties ?? [])
-              .filter((property) => property.visibility === 'PUBLIC')
-              .map((property) => [property.key, property.value])
-          ),
-        }
-      : null,
-    etag: metadata?.etag ?? response.etag,
-  }
 }
 
 export interface DriveRevision {
@@ -2594,34 +2519,23 @@ export class DriveNotebookStore {
     const { id, resourceKey } = parseDriveItem(uri)
     const { metadata } = await (
       await this.getFilesClient()
-    ).getVersionMetadataWithEtag(id, resourceKey)
+    ).readVersionMetadata(id, resourceKey)
     return metadata?.properties?.[DERIVED_COPY_PROPERTY]
   }
 
-  /** Compare-and-set the source property; media edits also invalidate its ETag. */
-  async compareAndSetDerivedCopyClaim(
+  /** Client-side property check and readback; competing writers can still race. */
+  async updateDerivedCopyClaimAfterCheck(
     uri: string,
     expected: string | undefined,
     next: string | null
   ): Promise<boolean> {
     const { id, resourceKey } = parseDriveItem(uri)
     const client = await this.getFilesClient()
-    const { metadata, etag } = await client.getVersionMetadataWithEtag(
-      id,
-      resourceKey
-    )
-    if (metadata?.properties?.[DERIVED_COPY_PROPERTY] !== expected) return false
-    if (!etag)
-      throw new Error(
-        'Drive did not expose a validator for Colab copy coordination.'
-      )
-    return client.setPublicPropertyIfMatch(
-      id,
-      DERIVED_COPY_PROPERTY,
-      next,
-      etag,
-      resourceKey
-    )
+    const { metadata } = await client.readVersionMetadata(id, resourceKey)
+    if (!metadata || metadata.properties?.[DERIVED_COPY_PROPERTY] !== expected)
+      return false
+    await client.setPublicProperty(id, DERIVED_COPY_PROPERTY, next, resourceKey)
+    return (await this.getDerivedCopyClaim(uri)) === (next ?? undefined)
   }
 
   /** A source property alone never authorizes overwriting an unrelated file. */
@@ -3643,55 +3557,75 @@ export class DriveNotebookStore {
   }
 
   /**
-   * Replace file content only while Drive still exposes the exact revision
-   * previously inspected by the caller. The metadata recheck closes the gap
-   * before the request, and If-Match closes the gap during the media upload.
+   * Recheck the observed v3 version immediately before uploading. This is a
+   * client-side preflight, not an atomic condition: .runme callers reconcile
+   * revision history afterward; snapshot callers retain conflict handling.
    */
-  async saveContentIfVersion(
+  async saveContentAfterVersionCheck(
     uri: string,
     content: string,
     mimeType: string,
     expected: { checksum?: string; revisionId?: string; version?: string },
     placement?: DerivedCopyPlacement
-  ): Promise<boolean> {
+  ): Promise<DriveVersionMetadata | false> {
     const { id, type, resourceKey } = parseDriveItem(uri)
     if (type !== NotebookStoreItemType.File) {
       throw new Error(
-        'DriveNotebookStore.saveContentIfVersion expects a file URI'
+        'DriveNotebookStore.saveContentAfterVersionCheck expects a file URI'
       )
     }
     const client = await this.getFilesClient()
-    const { metadata, etag } = await client.getVersionMetadataWithEtag(
-      id,
-      resourceKey
-    )
-    const actualChecksum = metadata?.md5Checksum ?? ''
-    const expectedChecksum = expected.checksum ?? ''
+    const { metadata } = await client.readVersionMetadata(id, resourceKey)
     if (
-      actualChecksum !== expectedChecksum ||
+      !metadata ||
+      (metadata.md5Checksum ?? '') !== (expected.checksum ?? '') ||
       (expected.revisionId !== undefined &&
-        metadata?.headRevisionId !== expected.revisionId) ||
-      (expected.version !== undefined && metadata?.version !== expected.version)
-    ) {
+        metadata.headRevisionId !== expected.revisionId) ||
+      (expected.version !== undefined && metadata.version !== expected.version)
+    )
       return false
-    }
-    if (!etag) {
-      // Refuse an unconditional repair if the transport did not expose the
-      // validator needed to protect a collaborator's concurrent edit.
-      return false
-    }
-    const saved = await client.setContentIfMatch(
+    const receipt = await client.uploadContent(
       id,
       content,
       mimeType,
-      etag,
       resourceKey,
       placement
     )
-    if (saved) {
-      this.ipynbState.delete(uri)
+    this.ipynbState.delete(uri)
+    return receipt
+  }
+
+  /**
+   * Google only supports downloading retained blob revisions. Retention is
+   * permanent and capped at 200 per file; never delete history to free slots.
+   * Failures propagate so reconciliation remains pending with local data safe.
+   */
+  async loadRevisionForRecovery(
+    uri: string,
+    revision: DriveRevision
+  ): Promise<string> {
+    if (!revision.id) throw new Error('Drive revision is missing its ID')
+    const { id, resourceKey } = parseDriveItem(uri)
+    appLogger.info('Recovering intervening Drive revision', {
+      attrs: {
+        scope: 'storage.drive.sync',
+        code: 'DRIVE_REVISION_RECOVERY',
+        fileId: id,
+        revisionId: revision.id,
+      },
+    })
+    if (!revision.keepForever) {
+      try {
+        await (
+          await this.getFilesClient()
+        ).keepRevision(id, revision.id, resourceKey)
+      } catch (error) {
+        throw new Error(
+          `Cannot retain Drive revision ${revision.id} for recovery. Check edit permission and the 200 retained-revision limit. Local operations remain pending. ${String(error)}`
+        )
+      }
     }
-    return saved
+    return this.loadRevisionContent(uri, revision.id)
   }
 
   async loadContent(uri: string): Promise<string> {

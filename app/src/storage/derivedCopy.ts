@@ -20,10 +20,10 @@ export class UnconfirmedDerivedCopyError extends Error {
 }
 
 /**
- * All profiles elect one identity using the source file's conditional public
- * property update. r = reserved ID, f = confirmed ID, p = unconfirmed Shared
- * Drive POST. Claims include the source hash so copied metadata is re-elected.
- * Only the call that wins a p claim may issue that POST.
+ * Profiles coordinate a shared identity with client-side checks of a public
+ * property. This is best-effort coordination, not an atomic election.
+ * r = reserved ID, f = confirmed ID, p = unconfirmed Shared Drive POST. Claims include the source hash so copied metadata is re-elected.
+ * A caller must observe its own p claim before issuing that POST.
  */
 export async function ensureDerivedCopy(
   drive: DriveNotebookStore,
@@ -45,7 +45,7 @@ export async function ensureDerivedCopy(
     if (claim && claim.split(':')[1] !== sourceHash) {
       // Drive copies custom properties. Detach the inherited identity without
       // touching the original notebook's copy (including pending reservations).
-      await drive.compareAndSetDerivedCopyClaim(sourceUri, claim, null)
+      await drive.updateDerivedCopyClaimAfterCheck(sourceUri, claim, null)
       continue
     }
     let target: NotebookStoreItem | null = null
@@ -65,7 +65,11 @@ export async function ensureDerivedCopy(
       const confirmed = `f:${sourceHash}:${parseDriveItem(target.uri).id}`
       if (
         claim === confirmed ||
-        (await drive.compareAndSetDerivedCopyClaim(sourceUri, claim, confirmed))
+        (await drive.updateDerivedCopyClaimAfterCheck(
+          sourceUri,
+          claim,
+          confirmed
+        ))
       )
         return target
       continue
@@ -74,7 +78,9 @@ export async function ensureDerivedCopy(
       const next = (await drive.canUsePreGeneratedFileId(parentUri))
         ? `r:${sourceHash}:${await drive.generateFileId()}`
         : `p:${sourceHash}:${uuidv4()}`
-      if (await drive.compareAndSetDerivedCopyClaim(sourceUri, claim, next)) {
+      if (
+        await drive.updateDerivedCopyClaimAfterCheck(sourceUri, claim, next)
+      ) {
         if (next.startsWith('p:')) ownedPending = next
       }
       continue
@@ -85,9 +91,12 @@ export async function ensureDerivedCopy(
     const bytes = await content()
     if (bytes === null) {
       if (ownedPending === claim)
-        await drive.compareAndSetDerivedCopyClaim(sourceUri, claim, null)
+        await drive.updateDerivedCopyClaimAfterCheck(sourceUri, claim, null)
       return null
     }
+    // Recheck after asynchronous serialization, as another profile can change
+    // the claim while we prepare bytes. The final read/POST gap still exists.
+    if ((await drive.getDerivedCopyClaim(sourceUri)) !== claim) continue
     try {
       target = await drive.createContent(
         parentUri,
@@ -101,16 +110,18 @@ export async function ensureDerivedCopy(
       )
     } catch (error) {
       if (error instanceof DriveCreateNotCommittedError) {
-        await drive.compareAndSetDerivedCopyClaim(sourceUri, claim, null)
+        await drive.updateDerivedCopyClaimAfterCheck(sourceUri, claim, null)
       } else if (claim.startsWith('p:')) {
         throw new UnconfirmedDerivedCopyError(claim)
       }
       throw error
     }
     const confirmed = `f:${sourceHash}:${parseDriveItem(target.uri).id}`
-    if (await drive.compareAndSetDerivedCopyClaim(sourceUri, claim, confirmed))
+    if (
+      await drive.updateDerivedCopyClaimAfterCheck(sourceUri, claim, confirmed)
+    )
       return target
-    // Another source save can change its ETag. Reread before further actions.
+    // Another profile changed the claim. Reread before further actions.
   }
   throw new Error(
     'Colab copy coordination changed repeatedly; retry Drive sync.'
