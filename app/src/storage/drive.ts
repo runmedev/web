@@ -1005,33 +1005,7 @@ export class GapiDriveFilesClient implements DriveFilesClient {
         headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
       }
     )
-    const metadata =
-      (response.result as
-        | (DriveVersionMetadata & { etag?: string })
-        | undefined) ?? null
-    return {
-      metadata: metadata
-        ? {
-            ...metadata,
-            properties: Object.fromEntries(
-              (
-                (
-                  metadata as unknown as {
-                    properties?: {
-                      key: string
-                      value: string
-                      visibility: string
-                    }[]
-                  }
-                ).properties ?? []
-              )
-                .filter((property) => property.visibility === 'PUBLIC')
-                .map((property) => [property.key, property.value])
-            ),
-          }
-        : null,
-      etag: metadata?.etag ?? response.etag,
-    }
+    return normalizeDriveV2VersionResponse(response)
   }
 
   /** CAS one public property without changing media or unrelated properties. */
@@ -1515,21 +1489,41 @@ class FetchDriveFilesClient implements DriveFilesClient {
     metadata: DriveVersionMetadata | null
     etag?: string
   }> {
+    // Fake/test servers expose the v3 ETag header through CORS, so preserve
+    // their existing v3 contract instead of requiring them to emulate v2.
+    if (!new URL(this.baseUrl).hostname.endsWith('.googleapis.com')) {
+      const response = await this.request(
+        'GET',
+        `/drive/v3/files/${encodeURIComponent(fileId)}`,
+        {
+          params: {
+            supportsAllDrives: true,
+            fields: VERSION_FIELDS,
+            resourceKey,
+          },
+        }
+      )
+      return {
+        metadata: (response.result as DriveVersionMetadata | undefined) ?? null,
+        etag: response.etag,
+      }
+    }
+
+    // Match the GAPI transport's v2 metadata request. Google does not expose
+    // the v3 ETag response header to cross-origin browser JavaScript, while v2
+    // includes the validator in the JSON body.
     const response = await this.request(
       'GET',
-      `/drive/v3/files/${encodeURIComponent(fileId)}`,
+      `/drive/v2/files/${encodeURIComponent(fileId)}`,
       {
         params: {
           supportsAllDrives: true,
-          fields: VERSION_FIELDS,
-          resourceKey,
+          fields: DRIVE_V2_VERSION_FIELDS,
         },
+        headers: driveResourceKeyHeaders({ id: fileId, resourceKey }),
       }
     )
-    return {
-      metadata: (response.result as DriveVersionMetadata | undefined) ?? null,
-      etag: response.etag,
-    }
+    return normalizeDriveV2VersionResponse(response)
   }
 
   /** Use the same source-file CAS contract as the browser transport. */
@@ -1988,6 +1982,40 @@ export interface DriveVersionMetadata {
   headRevisionId?: string
   version?: string
   appProperties?: Record<string, string>
+}
+
+type DriveV2VersionMetadata = Omit<DriveVersionMetadata, 'properties'> & {
+  etag?: string
+  properties?: {
+    key: string
+    value: string
+    visibility: string
+  }[]
+}
+
+/** Normalize Drive v2's public-property array and browser-visible JSON ETag. */
+function normalizeDriveV2VersionResponse(response: {
+  result?: unknown
+  etag?: string
+}): {
+  metadata: DriveVersionMetadata | null
+  etag?: string
+} {
+  const metadata =
+    (response.result as DriveV2VersionMetadata | undefined) ?? null
+  return {
+    metadata: metadata
+      ? {
+          ...metadata,
+          properties: Object.fromEntries(
+            (metadata.properties ?? [])
+              .filter((property) => property.visibility === 'PUBLIC')
+              .map((property) => [property.key, property.value])
+          ),
+        }
+      : null,
+    etag: metadata?.etag ?? response.etag,
+  }
 }
 
 export interface DriveRevision {

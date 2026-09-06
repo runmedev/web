@@ -16,6 +16,9 @@ oidc:
 
 googleDrive:
   clientID: '554943104515-bdt3on71kvc489nvi3l37gialolcnk0a.apps.googleusercontent.com'
+  # An explicit base URL selects the fetch-based Drive client, avoiding the GAPI
+  # discovery loader that can remain pending in sandboxed localhost browsers.
+  baseUrl: 'https://www.googleapis.com'
   # Supported values for authFlow: implicit (token), pkce (authorization code).
   authFlow: 'implicit'
   # Supported values for authUxMode: popup, redirect, new_tab.

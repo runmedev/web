@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import localAppConfigYaml from '../../assets/configs/app-configs.yaml?raw'
+
 async function loadModules() {
   vi.resetModules()
   const appConfig = await import('./appConfig')
@@ -92,6 +94,18 @@ describe('appConfig OIDC Google shorthand', () => {
     )
 
     expect(getGoogleDriveBaseUrl()).toBe('http://127.0.0.1:9090')
+  })
+
+  it('configures local development to use the fetch-based Drive client', async () => {
+    const { setAppConfigFromYaml } = await loadModules()
+    const { getGoogleDriveBaseUrl } = await import('./googleDriveRuntime')
+
+    setAppConfigFromYaml(
+      localAppConfigYaml,
+      'http://localhost/configs/app-configs.yaml'
+    )
+
+    expect(getGoogleDriveBaseUrl()).toBe('https://www.googleapis.com')
   })
 
   it('applies Google Drive PKCE auth flow when configured', async () => {

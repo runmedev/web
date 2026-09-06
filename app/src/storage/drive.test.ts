@@ -262,6 +262,48 @@ describe("DriveNotebookStore", () => {
     ).toBe(true);
   });
 
+  it("preserves v2 ETags and public properties through the fetch transport", async () => {
+    setGoogleDriveBaseUrl("https://www.googleapis.com");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        if (init?.method === "GET") {
+          expect(url.pathname).toBe("/drive/v2/files/source");
+          return new Response(
+            JSON.stringify({
+              etag: '"v2"',
+              properties: [
+                {
+                  key: "runmeIpynbCopy",
+                  value: "r:copy",
+                  visibility: "PUBLIC",
+                },
+                { key: "private", value: "hidden", visibility: "PRIVATE" },
+              ],
+            }),
+            { headers: { "Content-Type": "application/json" } }
+          );
+        }
+        expect(url.pathname).toBe("/drive/v3/files/source");
+        expect(init?.headers).toMatchObject({ "If-Match": '"v2"' });
+        expect(JSON.parse(String(init?.body))).toEqual({
+          properties: { runmeIpynbCopy: "f:copy" },
+        });
+        return new Response("", { status: 200 });
+      });
+    const store = new DriveNotebookStore(async () => "access-token");
+
+    await expect(
+      store.compareAndSetDerivedCopyClaim(
+        driveFileUrl("source"),
+        "r:copy",
+        "f:copy"
+      )
+    ).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["gapi", "fetch"])(
     "conditionally publishes copy placement and content together via %s",
     async (transport) => {
