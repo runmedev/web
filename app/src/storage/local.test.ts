@@ -1040,6 +1040,135 @@ describe('LocalNotebooks operation-log storage', () => {
     ).toEqual(['comment.add', 'comment.reply', 'thread.set_status'])
   })
 
+  it('persists scoped review triples and validates noncontiguous, inserted and deleted cell IDs through the API', async () => {
+    const actor = vi
+      .spyOn(actorIdentity, 'getNotebookActorId')
+      .mockResolvedValue('scoped-review-actor')
+    const operationLogStorage = new MemoryOperationLogStorage()
+    const store = createTestStore({}, { operationLogStorage })
+    await store.folders.put({
+      id: LOCAL_FOLDER_URI,
+      name: 'Local',
+      remoteId: '',
+      children: [],
+      lastSynced: '',
+    })
+    const { uri } = await store.create(LOCAL_FOLDER_URI, 'scope-cuj.runme')
+    const save = await store.createOperationLogSaveStore(uri, {
+      actorId: 'scope-editor',
+    })
+    const cell = (refId: string, value: string) =>
+      create(parser_pb.CellSchema, {
+        refId,
+        value,
+        kind: parser_pb.CellKind.MARKUP,
+        languageId: 'markdown',
+      })
+    const notebook = create(parser_pb.NotebookSchema, {
+      cells: [
+        cell('gone', 'Same'),
+        cell('unrelated', 'Before'),
+        cell('kept', 'Before'),
+      ],
+    })
+    await save.save(uri, notebook)
+    const startRevisionId = (await store.listNotebookRevisions(uri)).at(-1)!.id
+    notebook.cells = [
+      cell('new', 'Same'),
+      cell('unrelated', 'After'),
+      cell('kept', 'After'),
+    ]
+    await save.save(uri, notebook)
+    const endRevisionId = (await store.listNotebookRevisions(uri)).at(-1)!.id
+    const api = createNotebookCommentsRuntimeApi({
+      resolveNotebook: () =>
+        ({
+          getUri: () => uri,
+          getNotebook: () => notebook,
+          flushPendingPersist: vi.fn(),
+          isReadOnly: () => false,
+        }) as never,
+      resolveLocalNotebooks: () => store,
+      resolveDriveNotebookStore: () => null,
+    })
+    const pair = { target: { uri }, startRevisionId, endRevisionId }
+    const beforePreview = await store.loadContent(uri)
+    const preview = await api.reviews.preview({
+      ...pair,
+      cellIds: ['gone', 'new'],
+    })
+    expect(await store.loadContent(uri)).toBe(beforePreview)
+    expect(preview.diff.cells.map((r) => r.kind).sort()).toEqual([
+      'deleted',
+      'inserted',
+    ])
+    const whole = await api.reviews.create(pair)
+    const scoped = await api.reviews.create({
+      ...pair,
+      cellIds: ['gone', 'new'],
+    })
+    const other = await api.reviews.create({ ...pair, cellIds: ['kept'] })
+    expect(new Set([whole.id, scoped.id, other.id]).size).toBe(3)
+    const saved = await store.loadContent(uri)
+    expect(
+      (await api.reviews.create({ ...pair, cellIds: ['new', 'gone', 'new'] }))
+        .id
+    ).toBe(scoped.id)
+    expect(await store.loadContent(uri)).toBe(saved)
+    expect(
+      (await api.reviews.preview({ ...pair, cellIds: ['new', 'gone'] }))
+        .existingReviewId
+    ).toBe(scoped.id)
+    for (const cellIds of [[], ['absent']]) {
+      await expect(api.reviews.create({ ...pair, cellIds })).rejects.toThrow()
+      await expect(api.reviews.preview({ ...pair, cellIds })).rejects.toThrow()
+    }
+    const comment = await api.add({
+      target: pair.target,
+      reviewId: scoped.id,
+      cellId: 'gone',
+      content: 'Deletion is intentional',
+      side: 'base',
+    })
+    expect(comment).toBeTruthy()
+    await expect(
+      api.add({
+        target: pair.target,
+        reviewId: scoped.id,
+        cellId: 'unrelated',
+        content: 'Outside',
+      })
+    ).rejects.toThrow()
+    await api.reviews.submit({
+      target: pair.target,
+      reviewId: scoped.id,
+      outcome: 'good_enough',
+    })
+    await api.reviews.submit({
+      target: pair.target,
+      reviewId: other.id,
+      outcome: 'needs_more_work',
+    })
+    const reopened = createTestStore({}, { operationLogStorage })
+    reopened.files = store.files
+    reopened.folders = store.folders
+    const rounds = await reopened.listNotebookReviews(uri)
+    expect(rounds.find((r) => r.id === scoped.id)).toMatchObject({
+      cellIds: ['gone', 'new'],
+      outcome: 'good_enough',
+      diff: preview.diff,
+    })
+    expect(rounds.find((r) => r.id === other.id)?.outcome).toBe(
+      'needs_more_work'
+    )
+    expect((await reopened.load(uri)).cells.map((c) => c.refId)).toEqual([
+      'new',
+      'unrelated',
+      'kept',
+    ])
+    actor.mockRestore()
+  })
+
   it('round trips the two-round review CUJ and suggestion discussions through the API', async () => {
     const actor = vi
       .spyOn(actorIdentity, 'getNotebookActorId')

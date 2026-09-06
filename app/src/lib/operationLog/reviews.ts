@@ -1,12 +1,29 @@
-import { computeNotebookDiff } from '../notebookDiff/diff'
 import type { DiffCommentTarget } from './diffCommentAnchor'
 import { materializeOperationLog } from './materialize'
 import { materializedLogToNotebook } from './notebook'
 import { committedOperationIds, orderOperationSet } from './order'
+import {
+  computeReviewDiff,
+  normalizeReviewCellIds,
+  reviewIdentityKey,
+} from './reviewScope'
 import { revisionKey } from './revisions'
 import type { RunmeOperation } from './types'
 
-export type ReviewOutcome = 'comment' | 'approve' | 'request_changes'
+// Preserve old journal values; new reviews use the scoped assessment wording.
+export type ReviewOutcome =
+  | 'comment'
+  | 'approve'
+  | 'request_changes'
+  | 'good_enough'
+  | 'needs_more_work'
+export const REVIEW_OUTCOMES: ReviewOutcome[] = [
+  'comment',
+  'approve',
+  'request_changes',
+  'good_enough',
+  'needs_more_work',
+]
 export type Attribution = {
   displayName: string
   kind: 'human' | 'agent' | 'service-account' | 'unknown'
@@ -18,6 +35,7 @@ export interface ReviewRoundRecord {
   title: string
   baseOperationIds: string[]
   headOperationIds: string[]
+  cellIds?: string[]
   previousReviewId?: string
   author: Attribution
   aliases?: string[]
@@ -161,17 +179,24 @@ export function buildReviewRounds(operations: RunmeOperation[]) {
         )
       )
         throw new Error('Previous review not found')
-      const pair = JSON.stringify([
+      const cellIds = normalizeReviewCellIds(
+        payload.cellIds,
+        snapshot(payload.baseOperationIds),
+        snapshot(payload.headOperationIds)
+      )
+      const pair = reviewIdentityKey(
         revisionKey(ordered, payload.baseOperationIds),
         revisionKey(ordered, payload.headOperationIds),
-      ])
+        cellIds
+      )
       const sameId = rounds.get(payload.id)
       if (
         sameId &&
-        JSON.stringify([
+        reviewIdentityKey(
           revisionKey(ordered, sameId.baseOperationIds),
           revisionKey(ordered, sameId.headOperationIds),
-        ]) !== pair
+          sameId.cellIds
+        ) !== pair
       )
         throw new Error('Conflicting review ID')
       const existing = rounds.get(pairs.get(pair) ?? '')
@@ -187,6 +212,7 @@ export function buildReviewRounds(operations: RunmeOperation[]) {
           title: payload.title,
           baseOperationIds: [...payload.baseOperationIds],
           headOperationIds: [...payload.headOperationIds],
+          ...(cellIds ? { cellIds } : {}),
           ...(payload.previousReviewId
             ? { previousReviewId: payload.previousReviewId }
             : {}),
@@ -205,7 +231,7 @@ export function buildReviewRounds(operations: RunmeOperation[]) {
         ![...(reviewOperations.get(payload.reviewId) ?? [])].some((id) =>
           ancestors.has(id)
         ) ||
-        !['comment', 'approve', 'request_changes'].includes(payload.outcome) ||
+        !REVIEW_OUTCOMES.includes(payload.outcome) ||
         (payload.summary !== undefined && typeof payload.summary !== 'string')
       )
         throw new Error('Invalid review submission')
@@ -236,10 +262,7 @@ export function buildReviewRounds(operations: RunmeOperation[]) {
       ...round,
       before,
       after,
-      diff: computeNotebookDiff(before, after, {
-        includeMetadata: true,
-        includeOutputs: true,
-      }),
+      diff: computeReviewDiff(before, after, round.cellIds),
     }
   })
 }

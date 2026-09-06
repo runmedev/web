@@ -8,6 +8,7 @@ import {
 } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { computeNotebookDiff } from '../../lib/notebookDiff/diff'
+import { computeReviewDiff } from '../../lib/operationLog/reviewScope'
 import {
   createReviewAnchor,
   type NotebookReviewRound,
@@ -107,8 +108,14 @@ function fixture() {
       end: versions.find((r) => r.id === input.endRevisionId)!,
       before: input.startRevisionId === 'empty' ? first.before : second.before,
       after: input.endRevisionId === 'v1' ? first.after : second.after,
-      diff: input.endRevisionId === 'v1' ? first.diff : second.diff,
-      existingReviewId: input.endRevisionId === 'v1' ? 'Round 1' : undefined,
+      cellIds: input.cellIds,
+      diff: computeReviewDiff(
+        input.startRevisionId === 'empty' ? first.before : second.before,
+        input.endRevisionId === 'v1' ? first.after : second.after,
+        input.cellIds
+      ),
+      existingReviewId:
+        input.endRevisionId === 'v1' && !input.cellIds ? 'Round 1' : undefined,
     })),
     listNotebookReviews: vi.fn(async () => [...rounds]),
     listOperationLogComments: vi.fn(async () => [...comments]),
@@ -153,6 +160,79 @@ function fixture() {
 }
 
 describe('notebook review flow', () => {
+  it('previews a heading range, distinguishes whole-document reviews, and starts the fixed scope', async () => {
+    const f = fixture()
+    f.first.after.cells = [
+      ['intro', '# Guide'],
+      ['setup', '## Setup'],
+      ['body', 'Install this'],
+      ['linux', '### Linux'],
+      ['commands', 'Linux commands'],
+      ['deploy', '## Deploy'],
+    ].map(([refId, value]) =>
+      create(parser_pb.CellSchema, {
+        refId,
+        value,
+        languageId: 'markdown',
+        kind: parser_pb.CellKind.MARKUP,
+      })
+    )
+    render(
+      <NotebookReviewFlow
+        docUri="local://file/test"
+        store={f.store as unknown as LocalNotebooks}
+        readOnly={false}
+        onClose={() => {}}
+      />
+    )
+    await screen.findByText('Clarify the checks')
+    expect(screen.getByRole('option', { name: 'Good Enough' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'Needs More Work' })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Review round'), {
+      target: { value: 'new' },
+    })
+    fireEvent.change(screen.getByLabelText('End revision'), {
+      target: { value: 'v1' },
+    })
+    await screen.findByRole('button', { name: 'Continue review' })
+    fireEvent.click(
+      screen.getByRole('radio', { name: 'Heading / section range' })
+    )
+    fireEvent.change(screen.getByLabelText('From heading'), {
+      target: { value: 'setup:1' },
+    })
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole('button', {
+            name: 'Start review',
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(false)
+    )
+    const canvas = within(document.getElementById('review-round-canvas')!)
+    expect(canvas.queryByText('# Guide')).toBeNull()
+    expect(canvas.queryByText('## Deploy')).toBeNull()
+    expect(canvas.getByText('### Linux')).toBeTruthy()
+    expect(
+      [
+        ...(screen.getByLabelText('Through section') as HTMLSelectElement)
+          .options,
+      ].map((o) => o.value)
+    ).toEqual(['setup:1', 'linux:1', 'deploy:1'])
+    // Start is a separate creation from the existing whole-document pair.
+    fireEvent.click(screen.getByRole('button', { name: 'Start review' }))
+    await waitFor(() =>
+      expect(f.store.createNotebookReview).toHaveBeenCalledWith(
+        'local://file/test',
+        expect.objectContaining({
+          startRevisionId: 'empty',
+          endRevisionId: 'v1',
+          cellIds: ['setup', 'body', 'linux', 'commands'],
+        })
+      )
+    )
+  })
   it('previews revision choices under the new-review option and continues an existing pair', async () => {
     const f = fixture()
     render(
@@ -366,10 +446,10 @@ describe('notebook review flow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send review comment' }))
     await screen.findByText('Who owns the rollout?')
     fireEvent.change(screen.getByLabelText('Review outcome'), {
-      target: { value: 'approve' },
+      target: { value: 'good_enough' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Submit review' }))
-    await waitFor(() => expect(f.second.outcome).toBe('approve'))
+    await waitFor(() => expect(f.second.outcome).toBe('good_enough'))
     expect(f.store.setOperationLogCommentResolved).toHaveBeenCalledTimes(1)
     expect(f.comments[1].resolved).not.toBe(true)
     fireEvent.change(screen.getByLabelText('Review round'), {

@@ -180,7 +180,7 @@ try {
     `console.log(await comments.add({target:${target},reviewId:${JSON.stringify(first.id)},content:"Also explain who owns the rollout."}));`
   )
   await code(
-    `await reviews.submit({target:${target},reviewId:${JSON.stringify(first.id)},outcome:"request_changes",summary:"Clarify the operational checks before the next review."});`
+    `await reviews.submit({target:${target},reviewId:${JSON.stringify(first.id)},outcome:"needs_more_work",summary:"Clarify the operational checks before the next review."});`
   )
   await page
     .getByText('Please name the health checks and rollback criteria.', {
@@ -300,7 +300,7 @@ try {
   await checkpoint('04-original-review-unchanged')
   await page.getByLabel('Review round', { exact: true }).selectOption(second.id)
   await code(
-    `await comments.resolve({target:${target},commentId:${JSON.stringify(thread.id)}}); await reviews.submit({target:${target},reviewId:${JSON.stringify(second.id)},outcome:"approve",summary:"The checks are clear. Ownership discussion remains open."});`
+    `await comments.resolve({target:${target},commentId:${JSON.stringify(thread.id)}}); await reviews.submit({target:${target},reviewId:${JSON.stringify(second.id)},outcome:"good_enough",summary:"The checks are clear. Ownership discussion remains open."});`
   )
   await page.locator('#review-submit').scrollIntoViewIfNeeded()
   await checkpoint('05-approved-with-open-followup')
@@ -345,6 +345,125 @@ try {
   assert.equal(accepted.doc.notebook.cells[0].value, revised)
   assert.deepEqual(accepted.rounds, beforeReload.rounds)
   await checkpoint('08-accept-restores-live-edit-only')
+  // A second dedicated notebook exercises section-scoped reviews, not only the
+  // original whole-document path. All changes still use registered WebMCP.
+  const scopeFixture = await code(`
+    const d=await notebooks.createLocal("section-review-recording.runme"); const uri=d.handle.uri;
+    const values=["# Runbook","## Setup","Original setup checklist","### Old credentials","Retired credential flow","## Rollout","Rollout unchanged"];
+    await notebooks.update({target:{uri},expectedRevision:d.handle.revision,operations:[{op:"insert",at:{index:0},cells:values.map(value=>({kind:"markup",languageId:"markdown",value}))}]});
+    const old=await notebooks.get({uri}); const start=(await revisions.list({target:{uri}})).at(-1);
+    await notebooks.update({target:{uri},expectedRevision:old.handle.revision,operations:[{op:"update",refId:old.notebook.cells[2].refId,patch:{value:"Verify the new setup checklist"}},{op:"remove",refIds:[old.notebook.cells[3].refId,old.notebook.cells[4].refId]}]});
+    const end=(await revisions.list({target:{uri}})).at(-1); await notebooks.show(uri);
+    console.log({uri,start:start.id,end:end.id,ids:old.notebook.cells.map(c=>c.refId)});
+  `)
+  const scopedPair = {
+    target: { uri: scopeFixture.uri },
+    startRevisionId: scopeFixture.start,
+    endRevisionId: scopeFixture.end,
+  }
+  await page
+    .getByRole('button', { name: 'Review suggestions', exact: true })
+    .click()
+  await page
+    .getByRole('heading', { name: 'Review rounds', exact: true })
+    .waitFor()
+  await page
+    .getByLabel('Start revision', { exact: true })
+    .selectOption(scopeFixture.start)
+  await page
+    .getByLabel('End revision', { exact: true })
+    .selectOption(scopeFixture.end)
+  await page
+    .getByRole('radio', { name: 'Heading / section range', exact: true })
+    .check()
+  await page
+    .getByLabel('From heading', { exact: true })
+    .selectOption(`${scopeFixture.ids[1]}:1`)
+  await page.waitForFunction(() => {
+    const text =
+      document.querySelector('#review-round-canvas')?.textContent ?? ''
+    return (
+      text.includes('Verify the new setup checklist') &&
+      !text.includes('Rollout unchanged')
+    )
+  })
+  await checkpoint('09-section-preview-excludes-unrelated-cells')
+  const section = await code(
+    `console.log(await reviews.create(${JSON.stringify({ ...scopedPair, title: 'Setup section', cellIds: scopeFixture.ids.slice(1, 3) })}));`
+  )
+  await page
+    .getByRole('button', { name: 'Continue review', exact: true })
+    .waitFor()
+  await page
+    .getByLabel('Review round', { exact: true })
+    .selectOption(section.id)
+  await page
+    .getByLabel('Review outcome', { exact: true })
+    .selectOption('good_enough')
+  await code(
+    `await reviews.submit(${JSON.stringify({ target: scopedPair.target, reviewId: section.id, outcome: 'good_enough' })});`
+  )
+  await checkpoint('10-good-enough-fixed-section')
+  await page.getByLabel('Review round', { exact: true }).selectOption('new')
+  await page
+    .getByLabel('Start revision', { exact: true })
+    .selectOption(scopeFixture.start)
+  await page
+    .getByRole('radio', { name: 'Heading / section range', exact: true })
+    .check()
+  await page
+    .getByLabel('Scope outline revision', { exact: true })
+    .selectOption('base')
+  await page
+    .getByLabel('From heading', { exact: true })
+    .selectOption(`${scopeFixture.ids[3]}:1`)
+  await page.waitForFunction(() => {
+    const text =
+      document.querySelector('#review-round-canvas')?.textContent ?? ''
+    return (
+      text.includes('Retired credential flow') &&
+      !text.includes('Rollout unchanged')
+    )
+  })
+  await checkpoint('11-start-outline-selects-deleted-section')
+  const deleted = await code(
+    `console.log(await reviews.create(${JSON.stringify({ ...scopedPair, title: 'Deleted credential section', cellIds: scopeFixture.ids.slice(3, 5) })}));`
+  )
+  await page
+    .getByLabel('Review round', { exact: true })
+    .selectOption(deleted.id)
+  await code(
+    `await reviews.submit(${JSON.stringify({ target: scopedPair.target, reviewId: deleted.id, outcome: 'needs_more_work' })});`
+  )
+  const scopeReadback = await code(
+    `const a=await reviews.create(${JSON.stringify({ ...scopedPair, cellIds: [scopeFixture.ids[4], scopeFixture.ids[3], scopeFixture.ids[4]] })}); console.log({duplicate:a.id,rounds:await reviews.list({target:${JSON.stringify(scopedPair.target)}})});`
+  )
+  assert.equal(scopeReadback.duplicate, deleted.id)
+  assert.equal(scopeReadback.rounds.length, 2)
+  assert.deepEqual(scopeReadback.rounds.map((r) => r.outcome).sort(), [
+    'good_enough',
+    'needs_more_work',
+  ])
+  await page.reload()
+  await page
+    .getByRole('heading', { name: 'Review rounds', exact: true })
+    .waitFor()
+  const scopeReopened = await code(
+    `console.log(await reviews.list({target:${JSON.stringify(scopedPair.target)}}));`
+  )
+  assert.deepEqual(scopeReopened, scopeReadback.rounds)
+  const scopedCanvas = page
+    .getByRole('tabpanel', {
+      name: 'Suggestions · section-review-recording.runme',
+      exact: true,
+    })
+    .locator('#review-round-canvas')
+  assert.ok(
+    (await scopedCanvas.innerText()).includes('Retired credential flow')
+  )
+  assert.ok(!(await scopedCanvas.innerText()).includes('Rollout unchanged'))
+  await checkpoint('12-scoped-decisions-survive-reload')
+  evidence.scopedReviewIds = [section.id, deleted.id]
   evidence.status = 'passed'
   evidence.roundIds = [first.id, second.id]
   evidence.threadIds = [thread.id, whole.id, explanation.id]

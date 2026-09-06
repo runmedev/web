@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ReviewScopePicker } from './ReviewScopePicker'
 import {
   revisionFollows,
   revisionLabel,
@@ -36,6 +37,9 @@ export function ReviewRevisionPicker({
   const [endId, setEndId] = useState(revisions.at(-1)?.id ?? '')
   const [namedOnly, setNamedOnly] = useState(false)
   const [preview, setPreview] = useState<ReviewPreview>()
+  const [fullPreview, setFullPreview] = useState<ReviewPreview>()
+  const [loading, setLoading] = useState(false)
+  const [scope, setScope] = useState<{ pair: string; cellIds?: string[] }>()
   const [error, setError] = useState('')
   const [labelId, setLabelId] = useState('')
   const [name, setName] = useState('')
@@ -46,11 +50,18 @@ export function ReviewRevisionPicker({
   const start = choices.find((r) => r.id === startId) ?? choices[0]
   const ends = start ? choices.filter((r) => revisionFollows(start, r)) : []
   const end = ends.find((r) => r.id === endId) ?? ends.at(-1)
+  const pair = JSON.stringify([start?.id, end?.id])
+  const cellIds = scope?.pair === pair ? scope.cellIds : undefined
+  const currentFullPreview =
+    fullPreview?.start.id === start?.id && fullPreview?.end.id === end?.id
+      ? fullPreview
+      : undefined
   useEffect(() => {
     let cancelled = false
     setPreview(undefined)
     onPreview(undefined)
     setError('')
+    setLoading(true)
     if (!start || !end) return
     setStartId(start.id)
     setEndId(end.id)
@@ -61,17 +72,55 @@ export function ReviewRevisionPicker({
       })
       .then((next) => {
         if (!cancelled) {
-          setPreview(next)
-          onPreview(next)
+          setFullPreview(next)
+          setLoading(false)
         }
       })
       .catch((e) => {
-        if (!cancelled) setError(String(e))
+        if (!cancelled) {
+          setError(String(e))
+          setLoading(false)
+          setFullPreview(undefined)
+        }
       })
     return () => {
       cancelled = true
     }
   }, [docUri, store, start?.id, end?.id, onPreview, namedOnly, revisions])
+  // Scope changes are read-only previews. Ignore stale asynchronous responses,
+  // and never let an old whole-document result enable Start for a new scope.
+  useEffect(() => {
+    let cancelled = false
+    setPreview(undefined)
+    onPreview(undefined)
+    if (loading || !currentFullPreview) return
+    if (cellIds?.length === 0) {
+      setError('Choose a section containing at least one cell')
+      return
+    }
+    setError('')
+    const publish = (next: ReviewPreview) => {
+      if (!cancelled) {
+        setPreview(next)
+        onPreview(next)
+      }
+    }
+    if (cellIds === undefined) publish(currentFullPreview)
+    else
+      void store
+        .previewNotebookReview(docUri, {
+          startRevisionId: currentFullPreview.start.id,
+          endRevisionId: currentFullPreview.end.id,
+          cellIds,
+        })
+        .then(publish)
+        .catch((e) => {
+          if (!cancelled) setError(String(e))
+        })
+    return () => {
+      cancelled = true
+    }
+  }, [currentFullPreview, cellIds, loading, docUri, store, onPreview])
   const selectionChanged = () => {
     setPreview(undefined)
     onPreview(undefined)
@@ -131,8 +180,21 @@ export function ReviewRevisionPicker({
         </select>
       </label>
       <p className="text-xs text-nb-text-muted">
-        Preview changes as you select. Starting a review fixes both revisions.
+        Preview changes as you select. Starting a review fixes both revisions
+        and the selected cells.
       </p>
+      {currentFullPreview && (
+        <ReviewScopePicker
+          key={pair}
+          before={currentFullPreview.before}
+          after={currentFullPreview.after}
+          disabled={disabled || loading}
+          onChange={(cellIds) => {
+            selectionChanged()
+            setScope({ pair, cellIds })
+          }}
+        />
+      )}
       {error && (
         <p role="alert" className="text-xs text-red-700">
           {error}

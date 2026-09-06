@@ -10,7 +10,6 @@ import { AUTO_IPYNB_KEY } from '../lib/derivedNotebook'
 import { IPYNB_MIME_TYPE } from '../lib/ipynb'
 import { appLogger } from '../lib/logging/runtime'
 import { serializeNotebookToMarkdown } from '../lib/markdown/serializeNotebookToMarkdown'
-import { computeNotebookDiff } from '../lib/notebookDiff/diff'
 import {
   RUNME_OPERATION_LOG_MIME_TYPE,
   convertLegacyNotebookFileToRunme,
@@ -44,7 +43,13 @@ import {
   serializeOperationLog,
 } from '../lib/operationLog'
 import {
+  computeReviewDiff,
+  normalizeReviewCellIds,
+  reviewIdentityKey,
+} from '../lib/operationLog/reviewScope'
+import {
   type Attribution,
+  REVIEW_OUTCOMES,
   type ReviewOutcome,
   buildReviewRounds,
   captureReviewRevision,
@@ -1674,6 +1679,7 @@ export class LocalNotebooks extends Dexie {
       baseReviewId?: string
       startRevisionId?: string
       endRevisionId?: string
+      cellIds?: string[]
       author?: Attribution
     }
   ) {
@@ -1706,20 +1712,30 @@ export class LocalNotebooks extends Dexie {
     const endKey = revisionKey(parsed.operations, headOperationIds)
     if (startKey === endKey)
       throw new Error('End revision must be after start revision')
+    const cellIds = normalizeReviewCellIds(
+      input.cellIds,
+      materializeRevision(parsed.operations, baseOperationIds),
+      materializeRevision(parsed.operations, headOperationIds)
+    )
+    const identity = reviewIdentityKey(startKey, endKey, cellIds)
     const existing = rounds.find(
       (r) =>
-        revisionKey(parsed.operations, r.baseOperationIds) === startKey &&
-        revisionKey(parsed.operations, r.headOperationIds) === endKey
+        reviewIdentityKey(
+          revisionKey(parsed.operations, r.baseOperationIds),
+          revisionKey(parsed.operations, r.headOperationIds),
+          r.cellIds
+        ) === identity
     )
     if (existing) return existing
     // Same pair yields the same ID across tabs and offline replicas. Projection
     // verifies full endpoints and coalesces concurrent create records.
-    const id = `review:${md5(JSON.stringify([startKey, endKey]))}`
+    const id = `review:${md5(identity)}`
     await this.appendOperationLogMutation(uri, 'review.create', {
       id,
       title: input.title?.trim() || `Round ${rounds.length + 1}`,
       baseOperationIds,
       headOperationIds,
+      ...(cellIds ? { cellIds } : {}),
       ...(base ? { previousReviewId: base.id } : {}),
       author: normalizeAttribution(input.author, true),
     } as unknown as JsonValue)
@@ -1780,7 +1796,11 @@ export class LocalNotebooks extends Dexie {
   /** Read-only preview uses exactly the selected revisions, never the live head. */
   async previewNotebookReview(
     uri: string,
-    input: { startRevisionId: string; endRevisionId: string }
+    input: {
+      startRevisionId: string
+      endRevisionId: string
+      cellIds?: string[]
+    }
   ) {
     const { parsed } = await this.readMaterializedOperationLog(uri)
     const revisions = buildNotebookRevisions(parsed.operations)
@@ -1791,22 +1811,27 @@ export class LocalNotebooks extends Dexie {
       throw new Error('End revision must be after start revision')
     const before = materializeRevision(parsed.operations, start.operationIds)
     const after = materializeRevision(parsed.operations, end.operationIds)
+    const cellIds = normalizeReviewCellIds(input.cellIds, before, after)
+    const identity = reviewIdentityKey(
+      JSON.stringify(start.changeIds),
+      JSON.stringify(end.changeIds),
+      cellIds
+    )
     const existing = buildReviewRounds(parsed.operations).find(
       (r) =>
-        revisionKey(parsed.operations, r.baseOperationIds) ===
-          JSON.stringify(start.changeIds) &&
-        revisionKey(parsed.operations, r.headOperationIds) ===
-          JSON.stringify(end.changeIds)
+        reviewIdentityKey(
+          revisionKey(parsed.operations, r.baseOperationIds),
+          revisionKey(parsed.operations, r.headOperationIds),
+          r.cellIds
+        ) === identity
     )
     return {
       start,
       end,
       before,
       after,
-      diff: computeNotebookDiff(before, after, {
-        includeMetadata: true,
-        includeOutputs: true,
-      }),
+      cellIds,
+      diff: computeReviewDiff(before, after, cellIds),
       existingReviewId: existing?.id,
     }
   }
@@ -1826,7 +1851,7 @@ export class LocalNotebooks extends Dexie {
       )
     )
       throw new Error('Review not found')
-    if (!['comment', 'approve', 'request_changes'].includes(input.outcome))
+    if (!REVIEW_OUTCOMES.includes(input.outcome))
       throw new Error('Invalid review outcome')
     if (input.summary !== undefined && typeof input.summary !== 'string')
       throw new Error('Review summary must be text')

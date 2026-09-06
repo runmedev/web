@@ -14,8 +14,8 @@ Google identity to make a recording look authenticated.
    adjacent. Select <start new review> in Review. Filter named revisions, select
    empty→named head, and verify a live preview including outputs. Start the review;
    the pickers disappear and the endpoints become fixed. Pending edits survive.
-2. Add a cell-specific discussion and a whole-review discussion. Submit Request
-   changes. The left panel shows one review-wide conversation; the cell thread
+2. Add a cell-specific discussion and a whole-review discussion. Submit Needs
+   More Work. The left panel shows one review-wide conversation; the cell thread
    appears under its diff. The shared-draft notice stays visible.
 3. Edit the live cell through WebMCP and reply as Codex to the real root ID.
    Capture Round 2 from Round 1's head and link both unresolved threads. Assert
@@ -24,7 +24,7 @@ Google identity to make a recording look authenticated.
    comment ID. Assert the original suggestions, diffs, and decisions are
    unchanged. Cell and suggestion discussions remain separate anchors.
 5. Navigate back to Round 1. Its diff is byte-for-byte unchanged. Return to
-   Round 2, resolve only the addressed thread, and approve. The other thread
+   Round 2, resolve only the addressed thread, and submit Good Enough. The other thread
    stays open and the edited notebook remains applied.
 6. Reload the page. Assert every review endpoint, outcome, thread link, message,
    author, and status matches the pre-reload data.
@@ -48,12 +48,21 @@ Google identity to make a recording look authenticated.
     Pick an already-reviewed pair: Continue review must open it without creating
     another. Concurrent API starts converge on the same ID. Reload preserves
     labels, endpoints, and discussions. Preview mode cannot post comments.
+12. Select a heading range with nested subheadings. Verify unrelated sections
+    disappear, descendant cells remain, and the Start/Continue lookup is scoped
+    as well as versioned. Start a different section over the same revisions.
+    Use the start outline to select a deleted heading; use the API for a mixed
+    noncontiguous set of deleted and inserted cells. Verify invalid/empty scopes
+    are rejected, different sets have independent decisions, and reordered IDs
+    continue the same review. Reload preserves the scope, filtered diff, and
+    Good Enough / Needs More Work outcomes. Out-of-scope comments must not leak.
 
 ## Automated evidence
 
 `app/test/browser/test-scenario-notebook-reviews.ts` records steps 1–7 and the
-named-filter/preview/continue portions of step 11 against the real local app.
-The latest recording passes 13 checkpoints. It implements a minimal WebMCP host for an isolated browser;
+named-filter/preview/continue portions of step 11, plus heading selection,
+deleted-section selection, independent decisions, and scoped reload from step 12.
+The latest recording passes 17 checkpoints. It implements a minimal WebMCP host for an isolated browser;
 all notebook mutations invoke the app's registered ExecuteCode tool. UI
 navigation uses browser locators. This is not a fake notebook implementation.
 Selection mapping and composer submission are covered by component tests in

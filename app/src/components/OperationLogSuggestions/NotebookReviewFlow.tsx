@@ -41,10 +41,10 @@ type Props = {
 const button =
   'rounded border border-nb-border px-2 py-1 text-sm disabled:opacity-40'
 const outcomeLabel = (outcome?: ReviewOutcome) =>
-  outcome === 'approve'
-    ? 'Approved'
-    : outcome === 'request_changes'
-      ? 'Changes requested'
+  outcome === 'approve' || outcome === 'good_enough'
+    ? 'Good Enough'
+    : outcome === 'request_changes' || outcome === 'needs_more_work'
+      ? 'Needs More Work'
       : outcome === 'comment'
         ? 'Commented'
         : 'Draft'
@@ -59,7 +59,7 @@ export function NotebookReviewFlow(props: Props) {
   const [preview, setPreview] = useState<ReviewPreview>()
   const [comments, setComments] = useState<DriveComment[]>([])
   const [diffTarget, setDiffTarget] = useState<DiffCommentTarget>()
-  const [outcome, setOutcome] = useState<ReviewOutcome>('comment')
+  const [outcome, setOutcome] = useState<ReviewOutcome>('good_enough')
   const [summary, setSummary] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -120,21 +120,28 @@ export function NotebookReviewFlow(props: Props) {
         title: `Round ${rounds.length + 1}`,
         startRevisionId: chosen.start.id,
         endRevisionId: chosen.end.id,
+        cellIds: chosen.cellIds,
         author: await author(),
       })
-      const base = rounds.find(
+      const bases = rounds.filter(
         (r) => versionFor(r.headOperationIds)?.id === chosen.start.id
       )
-      if (base)
-        for (const thread of comments) {
-          if (
-            thread.id &&
-            !thread.resolved &&
-            (parseReviewAnchor(thread.anchor)?.reviewId === base.id ||
-              base.threadIds.includes(thread.id))
-          )
-            await store.linkNotebookReviewThread(docUri, next.id, thread.id)
-        }
+      for (const thread of comments) {
+        const anchor = parseReviewAnchor(thread.anchor)
+        // Carry cell feedback only inside the new scope. Review-wide feedback
+        // carries only between equal scopes, not from an unrelated section.
+        const relevant = bases.some(
+          (base) =>
+            (anchor?.reviewId === base.id ||
+              base.aliases?.includes(anchor?.reviewId ?? '') ||
+              (thread.id && base.threadIds.includes(thread.id))) &&
+            (anchor?.cellId
+              ? !next.cellIds || next.cellIds.includes(anchor.cellId)
+              : JSON.stringify(base.cellIds) === JSON.stringify(next.cellIds))
+        )
+        if (thread.id && !thread.resolved && relevant)
+          await store.linkNotebookReviewThread(docUri, next.id, thread.id)
+      }
       setSelected(next.id)
       setDiffTarget(undefined)
       setPreview(undefined)
@@ -164,11 +171,14 @@ export function NotebookReviewFlow(props: Props) {
   const threads = round
     ? comments.filter(
         (c) =>
-          parseReviewAnchor(c.anchor)?.reviewId === round.id ||
-          round.aliases?.includes(
-            parseReviewAnchor(c.anchor)?.reviewId ?? ''
-          ) ||
-          (c.id && round.threadIds.includes(c.id))
+          (!round.cellIds ||
+            !parseReviewAnchor(c.anchor)?.cellId ||
+            round.cellIds.includes(parseReviewAnchor(c.anchor)!.cellId!)) &&
+          (parseReviewAnchor(c.anchor)?.reviewId === round.id ||
+            round.aliases?.includes(
+              parseReviewAnchor(c.anchor)?.reviewId ?? ''
+            ) ||
+            (c.id && round.threadIds.includes(c.id)))
       )
     : []
   const cellThreads = threads.filter((c) => parseReviewAnchor(c.anchor)?.cellId)
@@ -298,6 +308,12 @@ export function NotebookReviewFlow(props: Props) {
               {round.title} · {outcomeLabel(round.outcome)}
             </p>
             <p className="text-xs text-nb-text-muted">Fixed comparison</p>
+            <p className="text-xs" aria-label="Fixed review scope">
+              Scope:{' '}
+              {round.cellIds
+                ? `${round.cellIds.length} selected cells`
+                : 'Whole document'}
+            </p>
             <p className="text-xs">
               Start:{' '}
               {versionFor(round.baseOperationIds)
@@ -365,9 +381,8 @@ export function NotebookReviewFlow(props: Props) {
                 value={outcome}
                 onChange={(e) => setOutcome(e.target.value as ReviewOutcome)}
               >
-                <option value="comment">Comment</option>
-                <option value="request_changes">Request changes</option>
-                <option value="approve">Approve</option>
+                <option value="good_enough">Good Enough</option>
+                <option value="needs_more_work">Needs More Work</option>
               </select>
               <textarea
                 aria-label="Review summary"
@@ -393,6 +408,7 @@ export function NotebookReviewFlow(props: Props) {
               </button>
               <p className="mt-2 text-xs text-nb-text-muted">
                 Submission does not change notebook contents or resolve threads.
+                The decision applies only to this review’s fixed scope.
               </p>
             </div>
           </>

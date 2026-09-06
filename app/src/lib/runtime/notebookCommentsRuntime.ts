@@ -326,11 +326,11 @@ export function createNotebookCommentsRuntimeApi(
         'await reviews.list({ target: { uri } })',
         'await revisions.list({ target: { uri } })',
         'await revisions.label({ target: { uri }, revisionId, name, description?, author? })',
-        'await reviews.preview({ target: { uri }, startRevisionId, endRevisionId })',
-        'await reviews.create({ target: { uri }, title?, startRevisionId, endRevisionId, author? }) — returns the existing review for that pair',
+        'await reviews.preview({ target: { uri }, startRevisionId, endRevisionId, cellIds? })',
+        'await reviews.create({ target: { uri }, title?, startRevisionId, endRevisionId, cellIds?, author? }) — returns the existing review for that pair and cell-ID set',
         'await reviews.submit({ target: { uri }, reviewId, outcome, summary?, author? })',
         'await reviews.linkThread({ target: { uri }, reviewId, commentId })',
-        'outcome: comment|approve|request_changes; review endpoints stay fixed; submission does not change notebook content or resolve threads',
+        'outcome: good_enough|needs_more_work; legacy comment|approve|request_changes remain readable/accepted. Endpoints and scope stay fixed; submission does not change notebook content or resolve threads. Omit cellIds for the whole document; otherwise supply a nonempty set of IDs present in either endpoint. Noncontiguous sets are supported.',
       ].join('\n'),
     list: async (input: { target: unknown }) => {
       const c = await operationContext(input.target)
@@ -342,6 +342,7 @@ export function createNotebookCommentsRuntimeApi(
       baseReviewId?: string
       startRevisionId?: string
       endRevisionId?: string
+      cellIds?: string[]
       author?: Attribution
     }) => {
       const c = await operationContext(input.target, true)
@@ -355,6 +356,7 @@ export function createNotebookCommentsRuntimeApi(
       target: unknown
       startRevisionId: string
       endRevisionId: string
+      cellIds?: string[]
     }) => {
       const c = await operationContext(input.target)
       return c.store.previewNotebookReview(c.notebookUri, input)

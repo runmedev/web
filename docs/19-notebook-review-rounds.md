@@ -16,7 +16,7 @@ whole-review/cell target dropdown; use the diff's comment actions for cell feedb
 Choose **\<start new review\>** in the Review dropdown. Select a start revision
 and a later end revision; the diff updates as you change either selection.
 This is only a preview: no review or discussion is created yet. **Start review**
-fixes both endpoints and opens the review-wide conversation. If that pair already
+fixes both endpoints and the cell scope, then opens the review-wide conversation. If that pair and scope already
 has a review, the button reads **Continue review** and opens it instead.
 Existing reviews show their fixed endpoints, not editable revision pickers.
 
@@ -28,12 +28,35 @@ available. End revisions must strictly extend the start's changes, even if clock
 disagree. Names and reviews travel with the `.runme` file.
 
 Later edits and renamed versions never change a started review's diff. Concurrent
-starts of the same pair converge on one review; existing discussion IDs are retained.
+starts of the same pair and cell-ID set converge on one review; different scopes
+can be reviewed independently. Existing whole-document review identities are retained.
+
+## Review a section
+
+Select **Heading / section range** under Review scope. Choose **From heading**
+and **Through section** using the indented outline. A section includes its
+subheadings and body through the next heading of equal or lower depth. Choose
+the same heading in both fields to review one section, or extend the range to
+review adjacent sections. The preview immediately filters to those cell IDs.
+
+**Outline from** chooses the end or start revision; use the start outline for
+deleted sections. Scope consists of the cells in the chosen revision, not an
+automatically expanding region. For a mix of deleted and newly inserted cells,
+the API can supply IDs from both endpoints. Every selected ID must exist in at
+least one endpoint. Multiple headings in one cell select the whole cell; no
+sub-cell scope is implied. Unchanged selected cells remain visible for context.
+
+The persisted definition stores IDs, not heading text or cell indexes. Future
+edits, renames, and moves cannot change the selected scope. Omit `cellIds` for
+the whole document; an explicit list must be nonempty and may be noncontiguous.
 
 Comments are shared immediately, including while a round is Draft. Submit
-Comment, Approve, or Request changes to record feedback. Submission does not
+**Good Enough** or **Needs More Work** to assess just this review’s scope. Old
+Approve/Request changes records display with the equivalent new wording;
+legacy Comment submissions remain readable. Submission does not
 revert edits or resolve discussions. Resolve an addressed discussion explicitly.
-Unresolved threads carry forward when starting the next round in the UI; replies
+Unresolved cell threads carry forward only inside the next scope. Review-wide
+feedback carries forward only between equal scopes; replies
 and resolution state are shared rather than copied. **Individual suggestions**
 opens the original accept/reject view for explicit undo or restoration.
 
@@ -68,6 +91,11 @@ await revisions.label({ target, revisionId: end.id, name: "Version",
 const preview = await reviews.preview({ target, startRevisionId: start.id, endRevisionId: end.id });
 const round = await reviews.create({ target, title: "Review operational checks",
   startRevisionId: start.id, endRevisionId: end.id });
+// A separate scoped review; IDs may come from either frozen endpoint.
+const cellIds = [preview.after.cells[0]?.refId, preview.before.cells[0]?.refId].filter(Boolean);
+const scoped = await reviews.create({ target, startRevisionId: start.id,
+  endRevisionId: end.id, cellIds });
+await reviews.submit({ target, reviewId: scoped.id, outcome: "good_enough" });
 const changes = await suggestions.list({ target });
 const thread = await comments.add({
   target,

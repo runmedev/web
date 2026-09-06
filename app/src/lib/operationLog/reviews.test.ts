@@ -58,6 +58,50 @@ function journal() {
 }
 
 describe('fixed notebook review rounds', () => {
+  it('keeps separate scopes over the same pair and coalesces reordered concurrent scope sets', () => {
+    const j = journal()
+    j.seed()
+    j.append('cell.create', {
+      cell_id: 'two',
+      position: [[200, 'reviewer', 2]],
+      cell: j.cell('Second'),
+    })
+    const headOperationIds = captureReviewRevision(j.operations)
+    const input = { title: 'Scoped', baseOperationIds: [], headOperationIds }
+    const whole = j.append('review.create', { ...input, id: 'whole' })
+    j.append('review.create', { ...input, id: 'one', cellIds: ['one'] })
+    j.append('review.create', { ...input, id: 'two', cellIds: ['two'] })
+    const a = j.append(
+      'review.create',
+      { ...input, id: 'both-a', cellIds: ['two', 'one'] },
+      { actorId: 'a', actorSequence: 1, dependencies: [whole.op_id] }
+    )
+    j.append(
+      'review.create',
+      { ...input, id: 'both-b', cellIds: ['one', 'two', 'one'] },
+      { actorId: 'b', actorSequence: 1, dependencies: [whole.op_id] }
+    )
+    j.append(
+      'review.submit',
+      { reviewId: 'both-a', outcome: 'good_enough' },
+      { actorId: 'a', actorSequence: 2, dependencies: [a.op_id] }
+    )
+    const rounds = buildReviewRounds(j.operations)
+    expect(rounds).toHaveLength(4)
+    expect(
+      rounds
+        .find((r) => r.id === 'one')
+        ?.diff.cells.map((r) => r.compareCell?.refId)
+    ).toEqual(['one'])
+    expect(rounds.find((r) => r.cellIds?.length === 2)?.outcome).toBe(
+      'good_enough'
+    )
+    expect(buildReviewRounds([...j.operations].reverse())).toEqual(rounds)
+    j.append('review.create', { ...input, id: 'invalid', cellIds: ['missing'] })
+    expect(() => buildReviewRounds(j.operations)).toThrow(
+      'start or end revision'
+    )
+  })
   it('converges concurrent submissions without changing the frozen comparison', () => {
     const j = journal()
     j.seed()
