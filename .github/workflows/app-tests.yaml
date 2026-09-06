@@ -189,6 +189,17 @@ jobs:
           CUJ_SCENARIO_CMD_LOG_CHARS: "20000"
           CUJ_MOVIE_WAIT_TIMEOUT_MS: "30000"
           CUJ_RUNME_AGENT_BIN: ${{ github.workspace }}/bin/runme
+          # agent-browser truncates encoder errors before ffmpeg's useful diagnostics.
+          FFREPORT: file=${{ github.workspace }}/app/test/browser/test-output/ffmpeg-%p-%t.log:level=32
         run: |
           set -euo pipefail
           pnpm -C app run cuj:run
+
+      - name: Show recorder diagnostics
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for report in app/test/browser/test-output/ffmpeg-*.log; do
+            tail -n 30 "$report"
+          done
