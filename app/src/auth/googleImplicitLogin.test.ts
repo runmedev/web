@@ -34,9 +34,7 @@ describe('secret-free Google OIDC login', () => {
       'http://localhost/configs/app-configs.yaml'
     ).oidc!
     login = await import('./googleImplicitLogin')
-    adapter = new (
-      await import('../browserAdapter.client')
-    ).BrowserAuthAdapter()
+    adapter = (await import('../browserAdapter.client')).getBrowserAdapter()
   })
 
   afterEach(() => {
@@ -190,6 +188,22 @@ describe('secret-free Google OIDC login', () => {
     vi.spyOn(Date, 'now').mockReturnValue(now + 11 * 60_000)
     await expect(adapter.handleCallback()).rejects.toThrow('expired')
     expect(adapter.simpleAuth).toBeNull()
+  })
+
+  it('clears and notifies expired implicit auth before returning request credentials', async () => {
+    await callback()
+    await adapter.handleCallback()
+    const listener = vi.fn()
+    const unsubscribe = adapter.onAuthChange(listener)
+    const expiresAt = adapter.simpleAuth!.expiresAt!
+    vi.spyOn(Date, 'now').mockReturnValue(expiresAt + 1)
+    const { getAuthData } = await import('../token')
+    expect(await getAuthData()).toBeNull()
+    expect(adapter.simpleAuth).toBeNull()
+    expect(window.localStorage.getItem('oidc-auth')).toBeNull()
+    expect(listener).toHaveBeenCalledWith(null)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    unsubscribe()
   })
 
   it('does not restore credentials if the user logs out during verification', async () => {

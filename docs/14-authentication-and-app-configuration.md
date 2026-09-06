@@ -41,6 +41,11 @@ storing credentials. This flow has no refresh token; sign in again when the
 tokens expire. Other OIDC providers and configurations with a client secret
 continue to use authorization code with PKCE.
 
+Returning users of the shared development client are signed out once while
+Runme removes its previously stored client secret and credentials. Sign in
+again to use the browser flow. Custom OIDC providers and other client IDs keep
+their saved configuration.
+
 Google Drive authentication is configured separately. Never put client secrets
 or private keys in an app-config YAML served as a public asset. Deleting a secret
 from the current file does not revoke copies in Git history.

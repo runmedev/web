@@ -563,6 +563,11 @@ export class BrowserAuthAdapter {
   refresh = async () => {
     const tokenResponse = this.getTokenResponse()
     if (!tokenResponse?.refresh_token) {
+      if (tokenResponse && buildSimpleAuth(tokenResponse).isExpired()) {
+        // Implicit credentials cannot renew; notify the UI to offer sign-in again.
+        this.logout()
+        return
+      }
       appLogger.warn(
         'OIDC refresh skipped because no refresh token is available',
         {
