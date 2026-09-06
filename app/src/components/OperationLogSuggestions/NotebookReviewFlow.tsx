@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/20/solid'
 import { useCommentAuthor } from '../../contexts/GoogleAuthContext'
 import { getNotebookDataController } from '../../lib/notebookDataController'
 import {
@@ -58,6 +59,18 @@ export function NotebookReviewFlow({
   const [diffTarget, setDiffTarget] = useState<DiffCommentTarget>()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // Hide, rather than unmount, the controls so comparison selection and drafts
+  // survive collapsing the panel and switching between notebook tabs.
+  const [panelCollapsed, setPanelCollapsed] = useState(false)
+  const [commentsCollapsed, setCommentsCollapsed] = useState(false)
+  const pendingGutterFocus = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    if (commentsCollapsed || !pendingGutterFocus.current) return
+    const gutter = pendingGutterFocus.current
+    pendingGutterFocus.current = null
+    gutter.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    gutter.focus({ preventScroll: true })
+  }, [commentsCollapsed])
   const sequence = useRef(0)
   const author = useCommentAuthor()
   const load = useCallback(async () => {
@@ -190,122 +203,172 @@ export function NotebookReviewFlow({
       <aside
         id="review-round-panel"
         aria-label="Notebook comparison"
-        className="flex w-[380px] max-w-[45%] shrink-0 flex-col overflow-y-auto border-r border-nb-border bg-nb-surface-1 p-4"
+        className={`flex shrink-0 flex-col overflow-y-auto border-r border-nb-border bg-nb-surface-1 ${panelCollapsed ? 'w-12 p-2' : 'w-[380px] max-w-[45%] p-4'}`}
       >
         <div
           id="comparison-heading"
           className="flex items-center justify-between gap-2"
         >
-          <h2 className="font-semibold">Compare changes</h2>
-          <button className={button} onClick={onClose}>
+          <h2 hidden={panelCollapsed} className="font-semibold">
+            Compare changes
+          </h2>
+          <button hidden={panelCollapsed} className={button} onClick={onClose}>
             Edit view
           </button>
-        </div>
-        {revisions.length > 0 && (
-          <ReviewRevisionPicker
-            revisions={revisions}
-            store={store}
-            docUri={docUri}
-            disabled={busy}
-            onPreview={setPreview}
-            readOnly={readOnly}
-            onLabel={(revisionId, name, description) =>
-              run(async () => {
-                await store.labelNotebookRevision(docUri, {
-                  revisionId,
-                  name,
-                  description,
-                  author: await author(),
-                })
-              })
+          <button
+            type="button"
+            aria-label={
+              panelCollapsed
+                ? 'Expand comparison panel'
+                : 'Collapse comparison panel'
             }
-          />
-        )}
-        {error && (
-          <p role="alert" className="my-2 text-sm text-red-700">
-            {error}
-          </p>
-        )}
-        {preview && (
-          <>
-            <ReviewConversation
-              key={identity}
-              comments={discussion}
-              disabled={busy || readOnly}
-              onSend={(content, rootId) =>
-                rootId
-                  ? reply(rootId, content)
-                  : run(async () => {
-                      await commentOnComparison(store, docUri, {
-                        ...selection(preview),
-                        content,
-                        author: await author(),
-                      })
-                    })
+            title={
+              panelCollapsed
+                ? 'Expand comparison panel'
+                : 'Collapse comparison panel'
+            }
+            aria-expanded={!panelCollapsed}
+            aria-controls="comparison-controls"
+            className="shrink-0 rounded p-1 hover:bg-nb-surface-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nb-accent"
+            onClick={() => setPanelCollapsed((collapsed) => !collapsed)}
+          >
+            {panelCollapsed ? (
+              <ChevronRightIcon className="h-5 w-5" aria-hidden="true" />
+            ) : (
+              <ChevronLeftIcon className="h-5 w-5" aria-hidden="true" />
+            )}
+          </button>
+        </div>
+        <div id="comparison-controls" hidden={panelCollapsed}>
+          {revisions.length > 0 && (
+            <ReviewRevisionPicker
+              revisions={revisions}
+              store={store}
+              docUri={docUri}
+              disabled={busy}
+              onPreview={setPreview}
+              readOnly={readOnly}
+              onLabel={(revisionId, name, description) =>
+                run(async () => {
+                  await store.labelNotebookRevision(docUri, {
+                    revisionId,
+                    name,
+                    description,
+                    author: await author(),
+                  })
+                })
               }
             />
-            <section
-              id="comparison-assessment"
-              aria-label="Suggestion assessment"
-              className="border-t pt-3"
-            >
-              <h3 className="font-medium">Is this suggestion good enough?</h3>
-              <p className="my-2 text-xs">
-                Applies to these revisions and{' '}
-                {preview.cellIds
-                  ? `${preview.cellIds.length} selected cells`
-                  : 'the whole document'}
-                . Does not undo edits or resolve comments.
-              </p>
-              {record?.outcome && (
-                <p role="status" className="my-2 text-sm">
-                  {record.outcome === 'good_enough' ||
-                  record.outcome === 'approve'
-                    ? 'Good Enough'
-                    : record.outcome === 'comment'
-                      ? 'Commented'
-                      : 'Needs More Work'}
-                </p>
-              )}
-              <div id="comparison-assessment-actions" className="flex gap-2">
-                {(['good_enough', 'needs_more_work'] as const).map(
-                  (outcome) => (
-                    <button
-                      key={outcome}
-                      className={button}
-                      disabled={busy || readOnly}
-                      onClick={() =>
-                        void run(async () => {
-                          await assessComparison(store, docUri, {
-                            ...selection(preview),
-                            outcome,
-                            author: await author(),
-                          })
+          )}
+          {error && (
+            <p role="alert" className="my-2 text-sm text-red-700">
+              {error}
+            </p>
+          )}
+          {preview && (
+            <>
+              <ReviewConversation
+                key={identity}
+                comments={discussion}
+                disabled={busy || readOnly}
+                onSend={(content, rootId) =>
+                  rootId
+                    ? reply(rootId, content)
+                    : run(async () => {
+                        await commentOnComparison(store, docUri, {
+                          ...selection(preview),
+                          content,
+                          author: await author(),
                         })
-                      }
-                    >
-                      {outcome === 'good_enough'
-                        ? 'Good Enough'
+                      })
+                }
+              />
+              <section
+                id="comparison-assessment"
+                aria-label="Suggestion assessment"
+                className="border-t pt-3"
+              >
+                <h3 className="font-medium">Is this suggestion good enough?</h3>
+                <p className="my-2 text-xs">
+                  Applies to these revisions and{' '}
+                  {preview.cellIds
+                    ? `${preview.cellIds.length} selected cells`
+                    : 'the whole document'}
+                  . Does not undo edits or resolve comments.
+                </p>
+                {record?.outcome && (
+                  <p role="status" className="my-2 text-sm">
+                    {record.outcome === 'good_enough' ||
+                    record.outcome === 'approve'
+                      ? 'Good Enough'
+                      : record.outcome === 'comment'
+                        ? 'Commented'
                         : 'Needs More Work'}
-                    </button>
-                  )
+                  </p>
                 )}
-              </div>
-            </section>
-          </>
-        )}
+                <div id="comparison-assessment-actions" className="flex gap-2">
+                  {(['good_enough', 'needs_more_work'] as const).map(
+                    (outcome) => (
+                      <button
+                        key={outcome}
+                        className={button}
+                        disabled={busy || readOnly}
+                        onClick={() =>
+                          void run(async () => {
+                            await assessComparison(store, docUri, {
+                              ...selection(preview),
+                              outcome,
+                              author: await author(),
+                            })
+                          })
+                        }
+                      >
+                        {outcome === 'good_enough'
+                          ? 'Good Enough'
+                          : 'Needs More Work'}
+                      </button>
+                    )
+                  )}
+                </div>
+              </section>
+            </>
+          )}
+        </div>
       </aside>
       <main
         id="review-round-canvas"
         className="min-w-0 flex-1 overflow-auto p-6"
       >
+        {panelCollapsed && error && (
+          <p role="alert" className="mb-2 text-sm text-red-700">
+            {error}
+          </p>
+        )}
         {!preview ? (
           <p>Select start and end revisions to compare changes.</p>
         ) : (
           <>
-            <h2 className="mb-4 font-semibold">
-              {revisionLabel(preview.start)} → {revisionLabel(preview.end)}
-            </h2>
+            <div
+              id="comparison-canvas-heading"
+              className="mb-4 flex items-start justify-between gap-3"
+            >
+              <h2 className="min-w-0 font-semibold">
+                {revisionLabel(preview.start)} → {revisionLabel(preview.end)}
+              </h2>
+              <button
+                type="button"
+                className={`${button} shrink-0`}
+                aria-expanded={!commentsCollapsed}
+                aria-controls={
+                  preview.diff.cells
+                    .map((row) => `review-comments-${row.id}`)
+                    .join(' ') || undefined
+                }
+                onClick={() => setCommentsCollapsed((collapsed) => !collapsed)}
+              >
+                {commentsCollapsed ? 'Show comments' : 'Hide comments'}
+              </button>
+            </div>
             {preview.diff.cells.map((row, i) => {
               const rowCellId = (row.compareCell ?? row.baseCell)?.refId
               const threads = cellThreads.filter((c) => cellId(c) === rowCellId)
@@ -318,19 +381,20 @@ export function NotebookReviewFlow({
                   id={`review-diff-${row.id}`}
                   key={identity + row.id}
                   tabIndex={-1}
-                  className="mb-4 grid min-w-[480px] grid-cols-[minmax(0,1fr)_clamp(220px,40%,320px)] items-start gap-4 focus:outline focus:outline-2 focus:outline-nb-accent"
+                  aria-label={`Cell ${i + 1} · ${row.kind}`}
+                  className={`mb-4 grid items-start gap-4 focus:outline focus:outline-2 focus:outline-nb-accent ${commentsCollapsed ? 'min-w-0 grid-cols-1' : 'min-w-[480px] grid-cols-[minmax(0,1fr)_clamp(220px,40%,320px)]'}`}
                 >
                   <div
                     id={`review-cell-content-${row.id}`}
                     className="relative min-w-0 pr-4"
                   >
-                    <p className="mb-1 text-xs">
-                      Cell {i + 1} · {row.kind}
-                    </p>
                     <DiffCommentControls
                       row={row}
                       disabled={readOnly || busy}
-                      onComment={setDiffTarget}
+                      onComment={(target) => {
+                        setCommentsCollapsed(false)
+                        setDiffTarget(target)
+                      }}
                     >
                       <ChangedCell row={row} />
                     </DiffCommentControls>
@@ -343,6 +407,11 @@ export function NotebookReviewFlow({
                         className="absolute inset-y-0 right-0 w-3 rounded-r border-r-4 border-nb-accent hover:bg-blue-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nb-accent"
                         onClick={() => {
                           const gutter = document.getElementById(gutterId)
+                          if (commentsCollapsed) {
+                            pendingGutterFocus.current = gutter
+                            setCommentsCollapsed(false)
+                            return
+                          }
                           gutter?.scrollIntoView({
                             block: 'nearest',
                             inline: 'nearest',
@@ -370,6 +439,7 @@ export function NotebookReviewFlow({
                   </div>
                   <aside
                     id={gutterId}
+                    hidden={commentsCollapsed}
                     aria-label={`Comments for cell ${i + 1}`}
                     tabIndex={-1}
                     className="min-w-0 space-y-2 break-words rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-nb-accent"
@@ -406,7 +476,10 @@ export function NotebookReviewFlow({
                     (row.compareCell ?? row.baseCell)?.refId === cellId(c)
                 )
             ) && (
-              <section aria-label="Discussions on earlier cells">
+              <section
+                hidden={commentsCollapsed}
+                aria-label="Discussions on earlier cells"
+              >
                 <h3>Discussions on cells absent from this comparison</h3>
                 {cellThreads
                   .filter(

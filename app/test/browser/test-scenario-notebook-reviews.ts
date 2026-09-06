@@ -263,6 +263,117 @@ try {
     )
   })
   await checkpoint('04-setup-section-filter')
+  const expandedWidth = (await canvas.boundingBox())!.width
+  await comparison
+    .getByLabel('New suggestion comment')
+    .fill('Preserve this draft')
+  await comparison
+    .getByRole('button', { name: 'Collapse comparison panel' })
+    .click()
+  assert.equal(
+    await page
+      .getByRole('combobox', { name: 'Start revision', exact: true })
+      .count(),
+    0
+  )
+  assert.ok((await canvas.boundingBox())!.width > expandedWidth + 250)
+  await canvas
+    .getByText('Please explain the setup checks.', { exact: true })
+    .waitFor()
+  await checkpoint('04b-collapsed-comparison-panel')
+  const visibleCellWidth = (await gutter
+    .locator('..')
+    .locator('[id^="review-cell-content-"]')
+    .boundingBox())!.width
+  await gutter.getByRole('textbox').fill('Preserve this reply')
+  await canvas
+    .getByRole('button', { name: 'Hide comments', exact: true })
+    .click()
+  assert.equal(await gutter.isVisible(), false)
+  assert.ok(
+    (await gutter
+      .locator('..')
+      .locator('[id^="review-cell-content-"]')
+      .boundingBox())!.width >
+      visibleCellWidth + 200
+  )
+  await checkpoint('04c-both-panels-collapsed')
+  await canvas
+    .locator(`button[aria-controls="${await gutter.getAttribute('id')}"]`)
+    .click()
+  assert.equal(await gutter.isVisible(), true)
+  assert.equal(
+    await gutter.getByRole('textbox').inputValue(),
+    'Preserve this reply'
+  )
+  assert.equal(
+    await comparison
+      .getByRole('button', { name: 'Expand comparison panel' })
+      .count(),
+    1
+  )
+  await gutter.getByRole('textbox').fill('')
+  await comparison
+    .getByRole('button', { name: 'Expand comparison panel' })
+    .click()
+  assert.equal(
+    await comparison.getByLabel('New suggestion comment').inputValue(),
+    'Preserve this draft'
+  )
+  assert.equal(
+    await page.getByLabel('Start revision', { exact: true }).inputValue(),
+    start.id
+  )
+  assert.equal(
+    await page.getByLabel('End revision', { exact: true }).inputValue(),
+    end.id
+  )
+  assert.equal(
+    await page.getByLabel('From heading', { exact: true }).inputValue(),
+    ids[1] + ':1'
+  )
+  await comparison.getByLabel('New suggestion comment').fill('')
+  const diffCell = gutter.locator('..').locator('[id^="review-cell-content-"]')
+  const bubble = diffCell.getByRole('button', {
+    name: 'Comment on cell',
+    exact: true,
+  })
+  assert.equal(await bubble.innerText(), '')
+  assert.equal(await canvas.getByText(/^Cell \d+ ·/).count(), 0)
+  await bubble.click()
+  await gutter.getByLabel('New cell comment').waitFor()
+  await gutter.getByRole('button', { name: 'Cancel', exact: true }).click()
+  const sourceRun = diffCell
+    .locator('[data-diff-run][data-head-offset]')
+    .first()
+  await sourceRun.evaluate((element) => {
+    const range = document.createRange()
+    range.selectNodeContents(element)
+    const selection = document.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+  })
+  await sourceRun.click({ button: 'right' })
+  const commentMenu = page.getByRole('menu', { name: 'Diff comments' })
+  await commentMenu.waitFor()
+  assert.equal(
+    await commentMenu
+      .getByRole('menuitem', { name: 'Comment on cell', exact: true })
+      .isEnabled(),
+    true
+  )
+  assert.equal(
+    await commentMenu
+      .getByRole('menuitem', { name: 'Comment on selection', exact: true })
+      .isEnabled(),
+    true
+  )
+  await checkpoint('04d-cell-bubble-and-selection-menu')
+  await commentMenu
+    .getByRole('menuitem', { name: 'Comment on selection', exact: true })
+    .click()
+  await gutter.getByLabel('New cell comment').waitFor()
+  await gutter.getByRole('button', { name: 'Cancel', exact: true }).click()
   const scoped = { ...pair, cellIds: ids.slice(1, 3) }
   const selected = await api('reviews.comment', {
     ...scoped,

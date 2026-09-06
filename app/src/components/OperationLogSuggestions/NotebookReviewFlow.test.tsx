@@ -179,6 +179,7 @@ describe('comment-first comparison flow', () => {
     mount(f)
     await screen.findByText('Clarify the checks')
     expect(screen.getByText('Clarified')).toBeTruthy()
+    expect(screen.queryByText('Cell 1 · modified')).toBeNull()
     expect(screen.queryByLabelText('Review round')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Start review' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Submit review' })).toBeNull()
@@ -222,11 +223,99 @@ describe('comment-first comparison flow', () => {
     expect(
       screen.queryByRole('button', { name: /comment threads for cell/ })
     ).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Hide comments' }))
     fireEvent.click(screen.getByRole('button', { name: 'Comment on cell' }))
     const gutter = screen.getByRole('complementary', {
       name: 'Comments for cell 1',
     })
     expect(within(gutter).getByLabelText('New cell comment')).toBeTruthy()
+  })
+
+  it('collapses the right gutter and reopens it from a marker without losing drafts', async () => {
+    const f = fixture()
+    mount(f)
+    await screen.findByText('Clarified')
+    fireEvent.click(screen.getByRole('button', { name: 'Comment on cell' }))
+    fireEvent.change(screen.getByLabelText('New cell comment'), {
+      target: { value: 'Cell draft' },
+    })
+    fireEvent.change(screen.getByLabelText('Reply to request'), {
+      target: { value: 'Reply draft' },
+    })
+    const gutter = screen.getByRole('complementary', {
+      name: 'Comments for cell 1',
+    })
+    gutter.scrollIntoView = vi.fn()
+    fireEvent.click(screen.getByRole('button', { name: 'Hide comments' }))
+    expect(
+      screen.queryByRole('complementary', { name: 'Comments for cell 1' })
+    ).toBeNull()
+    expect(
+      screen
+        .getByRole('button', { name: 'Show comments' })
+        .getAttribute('aria-expanded')
+    ).toBe('false')
+    expect(screen.getByText('Clarified')).toBeTruthy()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Show 1 comment threads for cell 1' })
+    )
+    expect(document.activeElement).toBe(gutter)
+    expect(
+      (screen.getByLabelText('New cell comment') as HTMLTextAreaElement).value
+    ).toBe('Cell draft')
+    expect(
+      (screen.getByLabelText('Reply to request') as HTMLTextAreaElement).value
+    ).toBe('Reply draft')
+    fireEvent.click(screen.getByRole('button', { name: 'Hide comments' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show comments' }))
+    expect(
+      screen.getByRole('complementary', { name: 'Comments for cell 1' })
+    ).toBe(gutter)
+  })
+
+  it('collapses controls without resetting revisions, scope, or comment drafts', async () => {
+    const f = fixture()
+    mount(f)
+    await screen.findByText('Clarified')
+    const start = screen.getByLabelText('Start revision') as HTMLSelectElement
+    const end = screen.getByLabelText('End revision') as HTMLSelectElement
+    const before = [start.value, end.value]
+    fireEvent.change(screen.getByLabelText('New suggestion comment'), {
+      target: { value: 'Keep this draft' },
+    })
+    const previews = f.store.previewNotebookReview.mock.calls.length
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Collapse comparison panel' })
+    )
+    const expand = screen.getByRole('button', {
+      name: 'Expand comparison panel',
+    })
+    expect(expand.getAttribute('aria-expanded')).toBe('false')
+    expect(
+      screen.queryByRole('combobox', { name: 'Start revision' })
+    ).toBeNull()
+    expect(screen.getByText('Clarified')).toBeTruthy()
+    expect(screen.getByText('Clarify the checks')).toBeTruthy()
+    fireEvent.click(expand)
+    expect(
+      screen
+        .getByRole('button', { name: 'Collapse comparison panel' })
+        .getAttribute('aria-expanded')
+    ).toBe('true')
+    expect([start.value, end.value]).toEqual(before)
+    expect(
+      (screen.getByLabelText('New suggestion comment') as HTMLTextAreaElement)
+        .value
+    ).toBe('Keep this draft')
+    expect(
+      (
+        screen.getByRole('radio', {
+          name: 'Whole document',
+        }) as HTMLInputElement
+      ).checked
+    ).toBe(true)
+    expect(f.store.previewNotebookReview).toHaveBeenCalledTimes(previews)
+    expect(f.store.createNotebookReview).not.toHaveBeenCalled()
   })
 
   it('filters editor threads to the selected section while retaining unchanged context', async () => {
@@ -327,9 +416,9 @@ describe('comment-first comparison flow', () => {
     range.setEnd(removed.firstChild!, 4)
     document.getSelection()!.removeAllRanges()
     document.getSelection()!.addRange(range)
-    fireEvent.mouseUp(root)
+    fireEvent.contextMenu(root)
     fireEvent.click(
-      screen.getByRole('button', { name: 'Comment on selection' })
+      screen.getByRole('menuitem', { name: 'Comment on selection' })
     )
     fireEvent.change(screen.getByLabelText('New cell comment'), {
       target: { value: 'Explain old wording' },
@@ -344,8 +433,9 @@ describe('comment-first comparison flow', () => {
       quote: 'rig',
       sourceRange: { start: 1, end: 4, unit: 'utf-16' },
     })
+    fireEvent.contextMenu(root)
     fireEvent.click(
-      screen.getByRole('button', { name: 'Comment on previous cell' })
+      screen.getByRole('menuitem', { name: 'Comment on previous cell' })
     )
     fireEvent.change(screen.getByLabelText('Start revision'), {
       target: { value: 'empty' },

@@ -45,6 +45,15 @@ canonical duplicate/reordered cell sets, and historical snapshots.
 The comparison panel has no numbered Change buttons. Reusing the existing
 document outline to navigate long diffs is deferred; the section-range controls
 continue to select suggestion scope, not provide a separate navigation list.
+Collapsing the left comparison panel expands the diff canvas. Reopening it must
+preserve revision/scope selections and unsent discussion drafts.
+The right comments gutter collapses independently. Hiding both panels must give
+the diff more room; a blue cell marker must reopen the right gutter without
+discarding unsent cell comments or replies.
+Cell commenting uses a blue upper-right bubble and the right-click menu. The menu
+includes both whole-cell and selection actions; selection is disabled without a
+valid single-side range. No cell-number/status or comment-action text rows appear
+between cells. Verify the icon and a selected-source context-menu composer.
 
 Manually verify pointer-driven selection/comment submission and the signed-in
 Drive sync/reopen path separately. Do not describe API-driven rendering checks

@@ -71,9 +71,9 @@ describe('diff comment selection', () => {
       quote: 'bc',
       sourceRange: { start: 1, end: 3, unit: 'utf-16' },
     })
-    fireEvent.mouseUp(f.root)
+    fireEvent.contextMenu(f.root)
     fireEvent.click(
-      screen.getByRole('button', { name: 'Comment on selection' })
+      screen.getByRole('menuitem', { name: 'Comment on selection' })
     )
     expect(f.onComment).toHaveBeenCalledWith(
       expect.objectContaining({ quote: 'bc', side })
@@ -101,6 +101,20 @@ describe('diff comment selection', () => {
     expect(() => captureDiffSelection(f.root, f.row)).toThrow('not both')
     fireEvent.contextMenu(f.root)
     expect(screen.getByRole('alert').textContent).toContain('not both')
+    expect(
+      (
+        screen.getByRole('menuitem', {
+          name: 'Comment on selection',
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+    expect(
+      (
+        screen.getByRole('menuitem', {
+          name: 'Comment on cell',
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(false)
     expect(f.onComment).not.toHaveBeenCalled()
   })
   it('rejects selections crossing cells and clears a stale selection', () => {
@@ -120,8 +134,12 @@ describe('diff comment selection', () => {
   })
   it('offers whole-cell and previous-cell comments and a context menu', () => {
     const f = fixture('old', 'new')
+    const bubble = screen.getByRole('button', { name: 'Comment on cell' })
+    expect(bubble.querySelector('svg')).toBeTruthy()
+    expect(bubble.textContent).toBe('')
+    fireEvent.contextMenu(f.root, { clientX: 50, clientY: 70 })
     fireEvent.click(
-      screen.getByRole('button', { name: 'Comment on previous cell' })
+      screen.getByRole('menuitem', { name: 'Comment on previous cell' })
     )
     expect(f.onComment).toHaveBeenLastCalledWith({
       cellId: 'cell',
@@ -135,6 +153,27 @@ describe('diff comment selection', () => {
       side: 'head',
       quote: 'new',
     })
+  })
+  it('disables selection without a range and supports keyboard and outside dismissal', () => {
+    const f = fixture('old', 'new')
+    fireEvent.keyDown(f.root, { key: 'F10', shiftKey: true })
+    expect(
+      (
+        screen.getByRole('menuitem', {
+          name: 'Comment on selection',
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(
+      screen.getByRole('menuitem', { name: 'Comment on previous cell' })
+    )
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(document.activeElement).toBe(f.root)
+    fireEvent.contextMenu(f.root)
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByRole('menu')).toBeNull()
   })
   it('round trips both anchor kinds and validates ranges', () => {
     const f = fixture('old', 'new')

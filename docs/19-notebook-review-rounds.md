@@ -17,6 +17,13 @@ The diff updates immediately and is immediately commentable: there is no
 Start review, draft, or Submit review step. Browsing does not create metadata.
 The first comment or assessment records the fixed pair and scope.
 
+Use the chevron beside **Compare changes** to collapse the left panel and give
+the diff more room. The remaining chevron expands it again. Your revision and
+scope selection and unsent comments are preserved while the panel is hidden.
+The independent **Hide comments** / **Show comments** control collapses the right
+gutter. A blue cell marker also reopens it. Unsent cell comments and replies stay
+intact; either panel can be hidden without hiding the other.
+
 Use **Good Enough** when that suggestion needs no further edits, or
 **Needs More Work** and leave feedback. These actions do not undo edits, change
 notebook contents, or resolve comments. Select another section to assess it
@@ -54,8 +61,12 @@ underlining is not yet provided. Return to the
 editor to see and reply to those same threads. Replies and resolve/reopen actions
 are shared, not copied into a separate discussion per view.
 
-Use **Comment on cell** or select source and choose **Comment on selection**
-above the cell or from its right-click menu. Removed text anchors to the start
+Use the blue comment-bubble icon in the cell's upper-right corner, or right-click
+and choose **Comment on cell**. Select source and use **Comment on selection**
+in the right-click menu; it is disabled when there is no valid selection.
+There are no visible cell-number/status captions or comment-action text rows
+between cells. **Comment on previous cell** remains available in the context menu
+for modified cells. Removed text anchors to the start
 snapshot; added text to the end snapshot. Unchanged text defaults to the end.
 Select only one side and one cell at a time. Linked resources support whole-cell
 comments, not selection within the resource.
