@@ -184,10 +184,14 @@ try {
   })
   const canvas = page.locator('#review-round-canvas')
   await comparison.getByRole('heading', { name: 'Compare changes' }).waitFor()
-  await page
-    .getByLabel('Start revision', { exact: true })
-    .selectOption(start.id)
-  await page.getByLabel('End revision', { exact: true }).selectOption(end.id)
+  assert.equal(
+    await page.getByLabel('Start revision', { exact: true }).inputValue(),
+    start.id
+  )
+  assert.equal(
+    await page.getByLabel('End revision', { exact: true }).inputValue(),
+    end.id
+  )
   await canvas
     .getByText('Please explain the setup checks.', { exact: true })
     .waitFor()
@@ -285,7 +289,9 @@ try {
     .locator('..')
     .locator('[id^="review-cell-content-"]')
     .boundingBox())!.width
-  await gutter.getByRole('textbox').fill('Preserve this reply')
+  await gutter
+    .getByRole('textbox', { name: /^Reply to / })
+    .fill('Preserve this reply')
   await canvas
     .getByRole('button', { name: 'Hide comments', exact: true })
     .click()
@@ -303,7 +309,7 @@ try {
     .click()
   assert.equal(await gutter.isVisible(), true)
   assert.equal(
-    await gutter.getByRole('textbox').inputValue(),
+    await gutter.getByRole('textbox', { name: /^Reply to / }).inputValue(),
     'Preserve this reply'
   )
   assert.equal(
@@ -312,7 +318,7 @@ try {
       .count(),
     1
   )
-  await gutter.getByRole('textbox').fill('')
+  await gutter.getByRole('textbox', { name: /^Reply to / }).fill('')
   await comparison
     .getByRole('button', { name: 'Expand comparison panel' })
     .click()
@@ -527,6 +533,96 @@ try {
   const original = await api('reviews.preview', pair)
   assert.equal(original.after.cells[2].value, 'Verify the new setup checklist')
   await checkpoint('10-second-iteration-preserves-history')
+  await page.getByLabel('Whole document', { exact: true }).check()
+  await canvas
+    .getByRole('textbox', { name: 'Comment on changes to cell 3', exact: true })
+    .waitFor()
+  assert.equal(
+    await canvas
+      .getByRole('button', { name: 'Comment on changes', exact: true })
+      .count(),
+    0
+  )
+  const cellRow = canvas.locator('article[id^="review-diff-"]').filter({
+    has: page.getByRole('button', {
+      name: 'Accept changes to cell 3',
+      exact: true,
+    }),
+  })
+  await cellRow
+    .getByRole('button', { name: 'Accept changes to cell 3', exact: true })
+    .click()
+  await cellRow.getByText('Changes accepted', { exact: true }).waitFor()
+  const acceptedRecords = await api('reviews.list', { target })
+  await api('reviews.decideCell', {
+    target,
+    startRevisionId: end.id,
+    endRevisionId: final.id,
+    cellId: ids[2],
+    decision: 'accept',
+  })
+  assert.deepEqual(await api('reviews.list', { target }), acceptedRecords)
+  assert.equal(
+    await cellRow.locator('[id^="suggestion-cell-unchanged-"]').count(),
+    1
+  )
+  assert.equal(
+    (await api('notebooks.get', target)).notebook.cells[2].value,
+    'Run the health command and confirm two replicas.'
+  )
+  await checkpoint('11-cell-accepted-with-discussion')
+  const acceptedDoc = await api('notebooks.get', target)
+  await api('notebooks.update', {
+    target,
+    expectedRevision: acceptedDoc.handle.revision,
+    operations: [
+      {
+        op: 'update',
+        refId: ids[0],
+        patch: { value: '# Collaboration guide — unrelated update' },
+      },
+    ],
+  })
+  const later = (await api('revisions.list', { target })).at(-1)
+  await page.getByLabel('End revision', { exact: true }).selectOption(later.id)
+  await cellRow.getByText('Changes accepted', { exact: true }).waitFor()
+  await page.reload()
+  await page.getByLabel('Start revision', { exact: true }).selectOption(end.id)
+  await page.getByLabel('End revision', { exact: true }).selectOption(later.id)
+  await cellRow.getByText('Changes accepted', { exact: true }).waitFor()
+  await checkpoint('12-acceptance-survives-later-revision-and-reload')
+  await cellRow
+    .getByRole('button', { name: 'Undo changes to cell 3', exact: true })
+    .click()
+  await cellRow.getByText('Changes undone', { exact: true }).waitFor()
+  const undone = await api('notebooks.get', target)
+  assert.equal(undone.notebook.cells[2].value, 'Verify the new setup checklist')
+  assert.equal(
+    undone.notebook.cells[0].value,
+    '# Collaboration guide — unrelated update'
+  )
+  assert.ok(
+    (await api('comments.list', { target, status: 'all' })).every(
+      (c) => !c.resolved
+    )
+  )
+  await checkpoint('13-cell-undo-preserves-neighbors-and-comments')
+  // A subsequent editor write must use the rematerialized baseline, not revive the undone text.
+  await api('notebooks.update', {
+    target,
+    expectedRevision: undone.handle.revision,
+    operations: [
+      {
+        op: 'update',
+        refId: ids[0],
+        patch: { value: '# Collaboration guide — post-undo edit' },
+      },
+    ],
+  })
+  assert.equal(
+    (await api('notebooks.get', target)).notebook.cells[2].value,
+    'Verify the new setup checklist'
+  )
   evidence.status = 'passed'
   evidence.uri = uri
   evidence.threadIds = [thread.id, selected.id, whole.id, deletedComment.id]

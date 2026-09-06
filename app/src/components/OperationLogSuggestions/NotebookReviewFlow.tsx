@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/20/solid'
+import {
+  CheckIcon,
+  XMarkIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+} from '@heroicons/react/20/solid'
+import {
+  acceptedCell,
+  cellDecisionFor,
+} from '../../lib/operationLog/cellReview'
 import { useCommentAuthor } from '../../contexts/GoogleAuthContext'
 import { getNotebookDataController } from '../../lib/notebookDataController'
 import {
@@ -18,6 +27,7 @@ import type { DiffCommentTarget } from '../../lib/operationLog/diffCommentAnchor
 import {
   assessComparison,
   commentOnComparison,
+  decideComparisonCell,
 } from '../../lib/operationLog/comparisonFeedback'
 import type { DriveComment } from '../../storage/drive'
 import type LocalNotebooks from '../../storage/local'
@@ -28,6 +38,7 @@ import {
 import { DiffCommentControls } from './DiffCommentControls'
 import {
   CellDiscussion,
+  CellChangeInput,
   DiffCommentComposer,
   ReviewConversation,
 } from './ReviewDiscussion'
@@ -371,6 +382,14 @@ export function NotebookReviewFlow({
             </div>
             {preview.diff.cells.map((row, i) => {
               const rowCellId = (row.compareCell ?? row.baseCell)?.refId
+              const decision = cellDecisionFor(row, records)
+              const shownRow = decision
+                ? acceptedCell(
+                    decision.decision === 'undo'
+                      ? { ...row, compareCell: row.baseCell }
+                      : row
+                  )
+                : row
               const threads = cellThreads.filter((c) => cellId(c) === rowCellId)
               const gutterId = `review-comments-${row.id}`
               // A shared two-column layout keeps threads beside their cell,
@@ -388,16 +407,30 @@ export function NotebookReviewFlow({
                     id={`review-cell-content-${row.id}`}
                     className="relative min-w-0 pr-4"
                   >
-                    <DiffCommentControls
-                      row={row}
-                      disabled={readOnly || busy}
-                      onComment={(target) => {
-                        setCommentsCollapsed(false)
-                        setDiffTarget(target)
-                      }}
-                    >
-                      <ChangedCell row={row} />
-                    </DiffCommentControls>
+                    {shownRow && (
+                      <DiffCommentControls
+                        row={row}
+                        defaultSide={
+                          decision?.decision === 'undo' ? 'base' : undefined
+                        }
+                        disabled={readOnly || busy}
+                        onComment={(target) => {
+                          setCommentsCollapsed(false)
+                          setDiffTarget(target)
+                        }}
+                      >
+                        <ChangedCell
+                          row={shownRow}
+                          plainSide={
+                            decision?.decision === 'undo'
+                              ? 'base'
+                              : decision
+                                ? 'head'
+                                : 'both'
+                          }
+                        />
+                      </DiffCommentControls>
+                    )}
                     {threads.length > 0 && (
                       <button
                         type="button"
@@ -420,22 +453,23 @@ export function NotebookReviewFlow({
                         }}
                       />
                     )}
-                    {JSON.stringify(row.baseCell?.outputs ?? []) !==
-                      JSON.stringify(row.compareCell?.outputs ?? []) && (
-                      <details>
-                        <summary className="text-xs">Outputs changed</summary>
-                        <pre className="whitespace-pre-wrap text-xs">
-                          {JSON.stringify(
-                            {
-                              before: row.baseCell?.outputs,
-                              after: row.compareCell?.outputs,
-                            },
-                            null,
-                            2
-                          )}
-                        </pre>
-                      </details>
-                    )}
+                    {!decision &&
+                      JSON.stringify(row.baseCell?.outputs ?? []) !==
+                        JSON.stringify(row.compareCell?.outputs ?? []) && (
+                        <details>
+                          <summary className="text-xs">Outputs changed</summary>
+                          <pre className="whitespace-pre-wrap text-xs">
+                            {JSON.stringify(
+                              {
+                                before: row.baseCell?.outputs,
+                                after: row.compareCell?.outputs,
+                              },
+                              null,
+                              2
+                            )}
+                          </pre>
+                        </details>
+                      )}
                   </div>
                   <aside
                     id={gutterId}
@@ -444,6 +478,92 @@ export function NotebookReviewFlow({
                     tabIndex={-1}
                     className="min-w-0 space-y-2 break-words rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-nb-accent"
                   >
+                    {row.kind !== 'unchanged' && (
+                      <section
+                        aria-label={`Changes for cell ${i + 1}`}
+                        className="rounded border border-nb-border bg-white p-3"
+                      >
+                        <div
+                          id={`cell-decision-${row.id}`}
+                          className="flex items-center justify-between gap-2"
+                        >
+                          <p role="status" className="text-sm font-medium">
+                            {decision?.decision === 'accept'
+                              ? 'Changes accepted'
+                              : decision?.decision === 'undo'
+                                ? 'Changes undone'
+                                : 'Suggested changes'}
+                          </p>
+                          <div
+                            id={`cell-decision-actions-${row.id}`}
+                            className="flex gap-1"
+                          >
+                            {(['accept', 'undo'] as const).map((action) => (
+                              <button
+                                key={action}
+                                type="button"
+                                title={
+                                  action === 'accept'
+                                    ? 'Accept changes to this cell'
+                                    : 'Undo changes to this cell'
+                                }
+                                aria-label={`${action === 'accept' ? 'Accept' : 'Undo'} changes to cell ${i + 1}`}
+                                disabled={
+                                  busy ||
+                                  readOnly ||
+                                  decision?.decision === action ||
+                                  decision?.decision === 'undo'
+                                }
+                                className="rounded p-1 text-nb-accent hover:bg-blue-50 disabled:opacity-40"
+                                onClick={() =>
+                                  void run(async () => {
+                                    await decideComparisonCell(
+                                      store,
+                                      docUri,
+                                      {
+                                        ...selection(preview),
+                                        cellId: rowCellId!,
+                                        decision: action,
+                                        author: await author(),
+                                      },
+                                      getNotebookDataController().getNotebookData(
+                                        docUri
+                                      ) ?? undefined
+                                    )
+                                  })
+                                }
+                              >
+                                {action === 'accept' ? (
+                                  <CheckIcon
+                                    className="h-5 w-5"
+                                    aria-hidden="true"
+                                  />
+                                ) : (
+                                  <XMarkIcon
+                                    className="h-5 w-5"
+                                    aria-hidden="true"
+                                  />
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <CellChangeInput
+                          label={`Comment on changes to cell ${i + 1}`}
+                          disabled={busy || readOnly}
+                          onSend={(content) =>
+                            run(async () => {
+                              await commentOnComparison(store, docUri, {
+                                ...selection(preview),
+                                content,
+                                cellId: rowCellId!,
+                                author: await author(),
+                              })
+                            })
+                          }
+                        />
+                      </section>
+                    )}
                     {threads.map(renderThread)}
                     {diffTarget && diffTarget.cellId === rowCellId && (
                       <DiffCommentComposer

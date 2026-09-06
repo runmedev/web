@@ -32,6 +32,10 @@ new response; earlier snapshots and feedback remain unchanged.
 
 ## Pick versions and sections
 
+New comparisons default to the latest named revision before the latest revision,
+or **Empty notebook** when no such named revision exists. The end defaults to
+the latest revision. Existing selections stay fixed when new edits or labels arrive.
+
 Expand **Name a revision** to label a historical snapshot and describe it.
 The selector shows its name, description, and last content-change date in your
 local time zone. Labels and comments do not change that date.
@@ -78,6 +82,27 @@ shows historical quotes without claiming an exact current source selection.
 Whole-suggestion feedback belongs to its original pair/scope; cell feedback
 remains visible in other comparisons containing that cell.
 
+## Accept or undo a cell's changes
+
+Type directly into the comment box in each change card; no extra click is
+needed to open a composer. Enter sends comments and replies; Shift+Enter adds
+a newline. Drafts survive hiding the gutter or a failed send.
+
+Each changed cell has checkmark and X controls in its right-hand discussion
+gutter. **Accept** keeps the content and stops showing that cell's diff. The
+decision follows the exact cell transition: accepting c0 → c1 also hides it
+when a later document revision changes only other cells. A new cell revision
+c2 is not covered by that acceptance. Accepted deletions have no source body;
+their discussion remains accessible.
+
+**Undo** restores only that cell to its start-revision state (including restoring
+a deleted cell or removing an inserted cell). It appends history; it does not
+erase operations. If that cell has changed since the reviewed endpoint, undo
+refuses to overwrite it. Refresh and choose a current comparison instead.
+Wait for running cells to finish before undoing; undo does not interrupt them.
+Accepted changes can still be undone. Neither action resolves comments.
+To request further changes, comment in the cell thread rather than pressing X.
+
 ## Automation
 
 Discover live signatures with comments.help() and reviews.help(). Use explicit
@@ -99,6 +124,9 @@ const thread = await reviews.comment({
 });
 await comments.reply({ target, commentId: thread.id, content: "Thanks." });
 await reviews.assess({ ...selection, outcome: "good_enough" });
+await reviews.decideCell({ ...selection, cellId: "<cell-id>", decision: "accept" });
+// Destructive: restores this cell to the start revision; guarded against later edits.
+// await reviews.decideCell({ ...selection, cellId: "<cell-id>", decision: "undo" });
 ```
 
 Supply cellIds in selection to scope feedback. Supply cellId and optionally

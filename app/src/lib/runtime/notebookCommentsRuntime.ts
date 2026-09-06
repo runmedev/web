@@ -22,9 +22,11 @@ import {
 } from '../operationLog'
 import {
   type ComparisonAssessment,
+  type ComparisonCellDecision,
   type ComparisonComment,
   assessComparison,
   commentOnComparison,
+  decideComparisonCell,
 } from '../operationLog/comparisonFeedback'
 import {
   type DiffCommentTarget,
@@ -347,6 +349,7 @@ export function createNotebookCommentsRuntimeApi(
         'await reviews.preview({ target: { uri }, startRevisionId, endRevisionId, cellIds? })',
         'await reviews.comment({ target: { uri }, startRevisionId, endRevisionId, cellIds?, content, cellId?, side?, sourceRange?, author? }) — comment directly; no create step',
         'await reviews.assess({ target: { uri }, startRevisionId, endRevisionId, cellIds?, outcome, author? }) — Good Enough/Needs More Work without a submit workflow',
+        'await reviews.decideCell({ target: { uri }, startRevisionId, endRevisionId, cellIds?, cellId, decision: "accept" | "undo", author? }) — accept suppresses the identical cell transition across document revisions; undo restores this cell only and refuses stale content. Request changes by commenting.',
         'await reviews.create({ target: { uri }, title?, startRevisionId, endRevisionId, cellIds?, author? }) — returns the existing review for that pair and cell-ID set',
         'await reviews.submit({ target: { uri }, reviewId, outcome, summary?, author? })',
         'await reviews.linkThread({ target: { uri }, reviewId, commentId })',
@@ -371,6 +374,15 @@ export function createNotebookCommentsRuntimeApi(
         ...input,
         author: normalizeAttribution(input.author),
       })
+    },
+    decideCell: async (input: ComparisonCellDecision & { target: unknown }) => {
+      const c = await operationContext(input.target, true)
+      return decideComparisonCell(
+        c.store,
+        c.notebookUri,
+        { ...input, author: normalizeAttribution(input.author) },
+        c.notebookData
+      )
     },
     create: async (input: {
       target: unknown

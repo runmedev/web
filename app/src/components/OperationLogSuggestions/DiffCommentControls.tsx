@@ -16,11 +16,13 @@ export function DiffCommentControls({
   disabled,
   onComment,
   children,
+  defaultSide,
 }: {
   row: CellDiff
   disabled: boolean
   onComment: (target: DiffCommentTarget) => void
   children: ReactNode
+  defaultSide?: 'base' | 'head'
 }) {
   const root = useRef<HTMLDivElement>(null)
   const [selection, setSelection] = useState<DiffCommentTarget>()
@@ -63,7 +65,7 @@ export function DiffCommentControls({
     createDiffCommentTarget(
       [row],
       (row.compareCell ?? row.baseCell)!.refId,
-      side
+      side ?? defaultSide
     )
   return (
     <div

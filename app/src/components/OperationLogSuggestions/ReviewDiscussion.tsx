@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { commentAttributionLabel } from '../../lib/commentAttribution'
 import {
   parseDiffCommentTarget,
@@ -7,6 +7,39 @@ import {
 import { parseReviewAnchor } from '../../lib/operationLog/reviews'
 import { parseCommentAnchor } from '../../lib/notebookComments'
 import type { DriveComment, DriveUser } from '../../storage/drive'
+
+/** Share click/keyboard submission and retain drafts on failure. The ref closes
+ * the gap before the parent's busy state renders, preventing duplicate sends.
+ */
+function useCommentDraft(
+  disabled: boolean,
+  onSend: (text: string) => Promise<boolean>
+) {
+  const [draft, setDraft] = useState('')
+  const sending = useRef(false)
+  const send = async () => {
+    if (disabled || sending.current || !draft.trim()) return
+    sending.current = true
+    try {
+      if (await onSend(draft))
+        setDraft((current) => (current === draft ? '' : current))
+    } finally {
+      sending.current = false
+    }
+  }
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      event.key !== 'Enter' ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing ||
+      event.nativeEvent.keyCode === 229
+    )
+      return
+    event.preventDefault()
+    if (!event.repeat) void send()
+  }
+  return { draft, setDraft, send, onKeyDown }
+}
 
 /** Root and reply authorship use the same presentation. */
 function Message({
@@ -46,11 +79,14 @@ export function ReviewConversation({
   disabled: boolean
   onSend: (content: string, rootId?: string) => Promise<boolean>
 }) {
-  const [draft, setDraft] = useState('')
   const roots = [...comments].sort(
     (a, b) =>
       (a.createdTime ?? '').localeCompare(b.createdTime ?? '') ||
       (a.id ?? '').localeCompare(b.id ?? '')
+  )
+  const { draft, setDraft, send, onKeyDown } = useCommentDraft(
+    disabled,
+    (text) => onSend(text, roots[0]?.id)
   )
   const messages = roots
     .flatMap((root) => [
@@ -87,13 +123,12 @@ export function ReviewConversation({
         className="min-h-20 w-full rounded border p-2 text-sm"
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={onKeyDown}
       />
       <button
         className="mt-1 rounded border px-2 py-1 text-sm disabled:opacity-40"
         disabled={disabled || !draft.trim()}
-        onClick={async () => {
-          if (await onSend(draft, roots[0]?.id)) setDraft('')
-        }}
+        onClick={() => void send()}
       >
         Send comment
       </button>
@@ -115,7 +150,10 @@ export function CellDiscussion({
   onReply: (id: string, content: string) => Promise<boolean>
   onResolve: (id: string, resolved: boolean) => Promise<boolean>
 }) {
-  const [draft, setDraft] = useState('')
+  const { draft, setDraft, send, onKeyDown } = useCommentDraft(
+    disabled,
+    (text) => onReply(thread.id!, text)
+  )
   const anchor = parseReviewAnchor(thread.anchor)
   const cellAnchor = parseCommentAnchor(thread.anchor)
   const quote =
@@ -155,13 +193,12 @@ export function CellDiscussion({
         className="mt-2 w-full rounded border p-2 text-sm"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={onKeyDown}
       />
       <div className="mt-1 flex gap-2 text-sm">
         <button
           disabled={disabled || !draft.trim()}
-          onClick={async () => {
-            if (await onReply(thread.id!, draft)) setDraft('')
-          }}
+          onClick={() => void send()}
         >
           Reply
         </button>
@@ -173,6 +210,52 @@ export function CellDiscussion({
         </button>
       </div>
     </article>
+  )
+}
+
+/** Always available in a change card. Hiding the gutter keeps this mounted,
+ * preserving drafts; only a successful send clears the input. No autofocus:
+ * opening a comparison must not move focus through every changed cell.
+ */
+export function CellChangeInput({
+  label,
+  disabled,
+  onSend,
+}: {
+  label: string
+  disabled: boolean
+  onSend: (content: string) => Promise<boolean>
+}) {
+  const { draft, setDraft, send, onKeyDown } = useCommentDraft(disabled, onSend)
+  return (
+    <form
+      aria-label={label}
+      className="mt-2"
+      onSubmit={(event) => {
+        event.preventDefault()
+        void send()
+      }}
+    >
+      <textarea
+        aria-label={label}
+        placeholder="Add a comment…"
+        rows={2}
+        disabled={disabled}
+        className="w-full resize-y rounded border border-nb-border p-2 text-sm focus:border-nb-accent focus:outline-none disabled:opacity-40"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={onKeyDown}
+      />
+      {draft.length > 0 && (
+        <button
+          type="submit"
+          disabled={disabled || !draft.trim()}
+          className="mt-1 text-sm text-nb-accent disabled:opacity-40"
+        >
+          Send comment
+        </button>
+      )}
+    </form>
   )
 }
 
@@ -188,7 +271,14 @@ export function DiffCommentComposer({
   onSend: (content: string) => Promise<boolean>
   onCancel: () => void
 }) {
-  const [draft, setDraft] = useState('')
+  const { draft, setDraft, send, onKeyDown } = useCommentDraft(
+    disabled,
+    async (text) => {
+      const sent = await onSend(text)
+      if (sent) onCancel()
+      return sent
+    }
+  )
   const input = useRef<HTMLTextAreaElement>(null)
   useEffect(() => {
     input.current?.focus()
@@ -209,16 +299,12 @@ export function DiffCommentComposer({
         className="min-h-20 w-full rounded border p-2 text-sm"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={onKeyDown}
       />
       <button
         disabled={disabled || !draft.trim()}
         className="mr-3 text-sm"
-        onClick={async () => {
-          if (await onSend(draft)) {
-            setDraft('')
-            onCancel()
-          }
-        }}
+        onClick={() => void send()}
       >
         Add cell comment
       </button>

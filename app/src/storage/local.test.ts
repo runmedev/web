@@ -26,6 +26,8 @@ import {
   serializeOperationLog,
 } from '../lib/operationLog'
 import * as actorIdentity from '../lib/operationLog/actorIdentity'
+import { cellDecisionFor } from '../lib/operationLog/cellReview'
+import { decideComparisonCell } from '../lib/operationLog/comparisonFeedback'
 import {
   buildReviewRounds,
   createReviewAnchor,
@@ -1167,6 +1169,239 @@ describe('LocalNotebooks operation-log storage', () => {
       'kept',
     ])
     actor.mockRestore()
+  })
+
+  it.each(['modified', 'inserted', 'deleted', 'moved'] as const)(
+    'accepts and atomically undoes a %s cell without touching its neighbors',
+    async (kind) => {
+      const actor = vi
+        .spyOn(actorIdentity, 'getNotebookActorId')
+        .mockResolvedValue('cell-reviewer')
+      try {
+        const operationLogStorage = new MemoryOperationLogStorage()
+        const store = createTestStore({}, { operationLogStorage })
+        await store.folders.put({
+          id: LOCAL_FOLDER_URI,
+          name: 'Local',
+          remoteId: '',
+          children: [],
+          lastSynced: '',
+        })
+        const { uri } = await store.create(
+          LOCAL_FOLDER_URI,
+          'cell-review.runme'
+        )
+        const save = await store.createOperationLogSaveStore(uri, {
+          actorId: 'editor',
+        })
+        const cell = (refId: string, value: string) =>
+          create(parser_pb.CellSchema, {
+            refId,
+            value,
+            kind: parser_pb.CellKind.MARKUP,
+            languageId: 'markdown',
+          })
+        const notebook = create(parser_pb.NotebookSchema, {
+          cells: [cell('one', 'Original'), cell('two', 'Neighbor')],
+        })
+        const output = (value: string) =>
+          create(parser_pb.CellOutputSchema, {
+            items: [
+              create(parser_pb.CellOutputItemSchema, {
+                mime: 'text/plain',
+                data: new TextEncoder().encode(value),
+              }),
+            ],
+          })
+        if (kind === 'modified') {
+          notebook.cells[0].metadata = { example: 'before' }
+          notebook.cells[0].outputs = [output('before output')]
+        }
+        if (kind === 'inserted') notebook.cells.shift()
+        await save.save(uri, notebook)
+        const startRevisionId = (await store.listNotebookRevisions(uri)).at(
+          -1
+        )!.id
+        if (kind === 'modified') {
+          notebook.cells[0].value = 'Proposed'
+          notebook.cells[0].metadata = { example: 'after' }
+          notebook.cells[0].outputs = [output('after output')]
+        }
+        if (kind === 'inserted') notebook.cells.unshift(cell('one', 'Proposed'))
+        if (kind === 'deleted') notebook.cells.shift()
+        if (kind === 'moved') notebook.cells.reverse()
+        await save.save(uri, notebook)
+        const endRevisionId = (await store.listNotebookRevisions(uri)).at(
+          -1
+        )!.id
+        const selection = { startRevisionId, endRevisionId, cellId: 'one' }
+        const beforeAccept = await store.load(uri)
+        const versionCount = (await store.listNotebookRevisions(uri)).length
+        await decideComparisonCell(store, uri, {
+          ...selection,
+          decision: 'accept',
+        })
+        expect(await store.load(uri)).toEqual(beforeAccept)
+        expect(await store.listNotebookRevisions(uri)).toHaveLength(
+          versionCount
+        )
+        const acceptedLog = await store.loadContent(uri)
+        await decideComparisonCell(store, uri, {
+          ...selection,
+          decision: 'accept',
+        })
+        expect(await store.loadContent(uri)).toBe(acceptedLog)
+        // r2 changes only a neighbor: c0 -> c1 remains accepted.
+        notebook.cells.find((c) => c.refId === 'two')!.value =
+          'Unrelated later edit'
+        await save.save(uri, notebook)
+        const laterEnd = (await store.listNotebookRevisions(uri)).at(-1)!.id
+        const preview = await store.previewNotebookReview(uri, {
+          startRevisionId,
+          endRevisionId: laterEnd,
+        })
+        const reviewed = preview.diff.cells.find(
+          (r) => (r.compareCell ?? r.baseCell)?.refId === 'one'
+        )!
+        expect(
+          cellDecisionFor(reviewed, await store.listNotebookReviews(uri))
+            ?.decision
+        ).toBe('accept')
+        const beforeUndo = parseOperationLog(
+          await store.loadContent(uri)
+        ).operations
+        const preUndoNotebook = await store.load(uri)
+        await decideComparisonCell(store, uri, {
+          ...selection,
+          decision: 'undo',
+        })
+        const after = await store.load(uri)
+        expect(after.cells.find((c) => c.refId === 'two')!.value).toBe(
+          'Unrelated later edit'
+        )
+        expect(after.cells.find((c) => c.refId === 'one')?.value).toBe(
+          kind === 'inserted' ? undefined : 'Original'
+        )
+        expect(after.cells.map((c) => c.refId)).toEqual(
+          kind === 'inserted' ? ['two'] : ['one', 'two']
+        )
+        if (kind === 'modified') {
+          expect(after.cells[0].metadata.example).toBe('before')
+          expect(after.cells[0].outputs).toEqual([output('before output')])
+        }
+        const log = await store.loadContent(uri)
+        const ops = parseOperationLog(log).operations
+        const added = ops.slice(beforeUndo.length)
+        expect(added.at(-1)!.kind).toBe('transaction.commit')
+        expect(
+          new Set(added.slice(0, -1).map((op) => op.transaction_id)).size
+        ).toBe(1)
+        // A replica that has not received the commit sees neither inverse nor decision.
+        expect(
+          materializedLogToNotebook(materializeOperationLog(ops.slice(0, -1)))
+            .cells
+        ).toEqual(preUndoNotebook.cells)
+        expect(buildReviewRounds([...ops].reverse())).toEqual(
+          buildReviewRounds(ops)
+        )
+        await decideComparisonCell(store, uri, {
+          ...selection,
+          decision: 'undo',
+        })
+        expect(await store.loadContent(uri)).toBe(log)
+        const reopened = createTestStore(
+          {},
+          {
+            operationLogStorage,
+            files: (store as any).files,
+            folders: (store as any).folders,
+          }
+        )
+        expect(await reopened.load(uri)).toEqual(after)
+        expect(
+          cellDecisionFor(reviewed, await reopened.listNotebookReviews(uri))
+            ?.decision
+        ).toBe('undo')
+      } finally {
+        actor.mockRestore()
+      }
+    }
+  )
+
+  it('does not hide or undo a later cell revision and leaves comments open', async () => {
+    const actor = vi
+      .spyOn(actorIdentity, 'getNotebookActorId')
+      .mockResolvedValue('cell-reviewer')
+    try {
+      const store = createTestStore({})
+      await store.folders.put({
+        id: LOCAL_FOLDER_URI,
+        name: 'Local',
+        remoteId: '',
+        children: [],
+        lastSynced: '',
+      })
+      const { uri } = await store.create(LOCAL_FOLDER_URI, 'cell-stale.runme')
+      const save = await store.createOperationLogSaveStore(uri, {
+        actorId: 'editor',
+      })
+      const notebook = create(parser_pb.NotebookSchema, {
+        cells: [
+          create(parser_pb.CellSchema, {
+            refId: 'one',
+            value: 'c0',
+            kind: parser_pb.CellKind.MARKUP,
+          }),
+        ],
+      })
+      await save.save(uri, notebook)
+      const startRevisionId = (await store.listNotebookRevisions(uri)).at(
+        -1
+      )!.id
+      notebook.cells[0].value = 'c1'
+      await save.save(uri, notebook)
+      const endRevisionId = (await store.listNotebookRevisions(uri)).at(-1)!.id
+      const selection = { startRevisionId, endRevisionId, cellId: 'one' }
+      const comment = await store.addOperationLogComment(uri, {
+        content: 'Explain',
+        anchor: createReviewAnchor('unused', 'one'),
+      })
+      await decideComparisonCell(store, uri, {
+        ...selection,
+        decision: 'accept',
+      })
+      notebook.cells[0].value = 'c2'
+      await save.save(uri, notebook)
+      const preview = await store.previewNotebookReview(uri, {
+        startRevisionId,
+        endRevisionId: (await store.listNotebookRevisions(uri)).at(-1)!.id,
+      })
+      expect(
+        cellDecisionFor(
+          preview.diff.cells[0],
+          await store.listNotebookReviews(uri)
+        )
+      ).toBeUndefined()
+      const before = await store.loadContent(uri)
+      await expect(
+        decideComparisonCell(store, uri, { ...selection, decision: 'undo' })
+      ).rejects.toThrow('Cell changed since')
+      expect(await store.loadContent(uri)).toBe(before)
+      expect(
+        (await store.listOperationLogComments(uri)).find(
+          (c) => c.id === comment.id
+        )?.resolved
+      ).toBe(false)
+      await expect(
+        decideComparisonCell(store, uri, {
+          ...selection,
+          cellId: 'missing',
+          decision: 'accept',
+        })
+      ).rejects.toThrow('Changed cell not found')
+    } finally {
+      actor.mockRestore()
+    }
   })
 
   it('round trips the two-round review CUJ and suggestion discussions through the API', async () => {

@@ -1,3 +1,4 @@
+import { withCellReviewKeys } from './cellReviewIdentity'
 import type { DiffCommentTarget } from './diffCommentAnchor'
 import { materializeOperationLog } from './materialize'
 import { materializedLogToNotebook } from './notebook'
@@ -30,6 +31,13 @@ export type Attribution = {
   source?: 'google-drive'
   authenticatedPrincipal?: string
 }
+export type CellReviewDecision = {
+  cellId: string
+  decision: 'accept' | 'undo'
+  operationId: string
+  order: number
+  author: Attribution
+}
 export interface ReviewRoundRecord {
   id: string
   title: string
@@ -39,6 +47,7 @@ export interface ReviewRoundRecord {
   previousReviewId?: string
   author: Attribution
   aliases?: string[]
+  cellDecisions?: CellReviewDecision[]
 }
 
 /** Labels are attribution, never authentication or an operation actor override. */
@@ -241,6 +250,33 @@ export function buildReviewRounds(operations: RunmeOperation[]) {
         submittedAt: op.created_at,
         submittedBy: normalizeAttribution(payload.author, true),
       })
+    } else if (op.kind === 'review.cell_decision') {
+      const round = rounds.get(payload.reviewId)
+      if (
+        !round ||
+        ![...(reviewOperations.get(payload.reviewId) ?? [])].some((id) =>
+          ancestors.has(id)
+        ) ||
+        !['accept', 'undo'].includes(payload.decision) ||
+        typeof payload.cellId !== 'string' ||
+        !computeReviewDiff(
+          snapshot(round.baseOperationIds),
+          snapshot(round.headOperationIds),
+          round.cellIds
+        ).cells.some(
+          (row) =>
+            (row.compareCell ?? row.baseCell)?.refId === payload.cellId &&
+            row.kind !== 'unchanged'
+        )
+      )
+        throw new Error('Invalid cell review decision')
+      ;(round.cellDecisions ??= []).push({
+        cellId: payload.cellId,
+        decision: payload.decision,
+        operationId: op.op_id,
+        order: ordered.indexOf(op),
+        author: normalizeAttribution(payload.author, true),
+      })
     } else if (op.kind === 'review.link_thread') {
       const round = rounds.get(payload.reviewId)
       if (
@@ -262,7 +298,12 @@ export function buildReviewRounds(operations: RunmeOperation[]) {
       ...round,
       before,
       after,
-      diff: computeReviewDiff(before, after, round.cellIds),
+      diff: withCellReviewKeys(
+        computeReviewDiff(before, after, round.cellIds),
+        operations,
+        round.baseOperationIds,
+        round.headOperationIds
+      ),
     }
   })
 }

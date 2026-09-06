@@ -21,6 +21,7 @@ describe('notebook comments runtime', () => {
         ...input,
       })),
       submitNotebookReview: vi.fn(async () => undefined),
+      decideNotebookReviewCell: vi.fn(async () => undefined),
     }
     const api = createNotebookCommentsRuntimeApi({
       resolveNotebook: () =>
@@ -58,6 +59,23 @@ describe('notebook comments runtime', () => {
     )
     expect(api.reviews.help()).toContain('reviews.comment')
     expect(api.reviews.help()).toContain('reviews.assess')
+    localNotebooks.previewNotebookReview.mockResolvedValueOnce({
+      diff: { cells: [{ kind: 'modified', compareCell: { refId: 'one' } }] },
+    } as never)
+    expect(
+      await api.reviews.decideCell({
+        ...input,
+        cellId: 'one',
+        decision: 'accept',
+      })
+    ).toMatchObject({ cellId: 'one', decision: 'accept' })
+    expect(localNotebooks.decideNotebookReviewCell).toHaveBeenCalledWith(
+      'local://file/test',
+      expect.objectContaining({
+        author: { displayName: 'unknown', kind: 'unknown' },
+      })
+    )
+    expect(api.reviews.help()).toContain('reviews.decideCell')
   })
   it.each(['readonly', 'release-pending'])(
     'blocks all discussion mutations when %s',
@@ -86,6 +104,15 @@ describe('notebook comments runtime', () => {
       )
       await expect(api.resolve(input)).rejects.toThrow('read-only or busy')
       await expect(api.reopen(input)).rejects.toThrow('read-only or busy')
+      await expect(
+        api.reviews.decideCell({
+          ...input,
+          startRevisionId: 'empty',
+          endRevisionId: 'v1',
+          cellId: 'one',
+          decision: 'undo',
+        })
+      ).rejects.toThrow('read-only or busy')
       await expect(
         api.reviews.comment({
           ...input,

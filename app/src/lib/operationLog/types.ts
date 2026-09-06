@@ -161,6 +161,7 @@ export type KnownOperationKind =
   | 'review.create'
   | 'review.submit'
   | 'review.link_thread'
+  | 'review.cell_decision'
   | 'revision.label'
 
 export interface RunmeOperation<

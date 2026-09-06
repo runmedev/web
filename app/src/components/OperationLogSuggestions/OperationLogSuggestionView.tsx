@@ -89,7 +89,13 @@ function PlainCell({
   )
 }
 
-export function ChangedCell({ row }: { row: CellDiff }) {
+export function ChangedCell({
+  row,
+  plainSide = 'both',
+}: {
+  row: CellDiff
+  plainSide?: 'base' | 'head' | 'both'
+}) {
   const before = row.baseCell?.value ?? ''
   const after = row.compareCell?.value ?? ''
   const nonText = Boolean(
@@ -103,7 +109,7 @@ export function ChangedCell({ row }: { row: CellDiff }) {
         id={`suggestion-cell-unchanged-${row.id}`}
         className="rounded-nb-sm border border-nb-border bg-white text-nb-text"
       >
-        <PlainCell value={after || before} side="both" />
+        <PlainCell value={after || before} side={plainSide} />
       </div>
     )
   }

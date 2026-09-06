@@ -38,6 +38,8 @@ export type CellDiffKind = 'unchanged' | 'inserted' | 'deleted' | 'modified'
 
 export interface CellDiff {
   id: string
+  /** Exact operation-log cell endpoints; independent of the document pair. */
+  reviewKey?: string
   kind: CellDiffKind
   baseIndex?: number
   compareIndex?: number

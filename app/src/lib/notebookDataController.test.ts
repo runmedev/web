@@ -318,8 +318,13 @@ describe('NotebookDataController', () => {
     await controller.openNotebook(uri)
     const notebookData = controller.getNotebookData(uri)!
     const flushPendingPersist = vi.spyOn(notebookData, 'flushPendingPersist')
+    notebookData.setReviewPending(true)
+    notebookData.setReviewReloadRequired(true)
 
     await controller.refreshReadOnlyNotebook(uri)
+
+    expect(notebookData.isReviewPending()).toBe(false)
+    expect(notebookData.isReviewReloadRequired()).toBe(false)
 
     expect(localStore.sync).not.toHaveBeenCalled()
     expect(localStore.loadOperationLogSnapshot).toHaveBeenCalledWith(uri)

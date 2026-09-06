@@ -11,7 +11,9 @@ authentication or Drive upload.
 
 1. Read the initial document in edit view and leave cell feedback. Name that
    revision. Edit the same cells as Codex and reply to the original root.
-2. Open the adjacent suggestion tab. Select start/end revisions. The diff shows
+2. Open the adjacent suggestion tab. Verify start defaults to the newest named
+   ancestor of the latest revision (otherwise Empty notebook), and end to latest.
+   Explicit selections survive incoming revisions and labels. The diff shows
    the original thread and reply immediately, without Start/Submit review or
    a review-round/target dropdown. Browsing writes no comparison record.
 3. Filter named revisions. Labels do not change the last content-change date;
@@ -34,8 +36,20 @@ authentication or Drive upload.
 9. Make a second AI revision. Compare first response to second response. Relevant
    cell threads retain their identities and original quotes; stale context is
    marked. The old comparison still reconstructs its original content.
+10. Click the checkmark in a cell's discussion gutter. Its diff disappears, its
+    proposed content remains, and its comments stay open. Change another cell,
+    select the later end revision, and reload: the accepted transition stays
+    accepted. A new revision of the accepted cell must show a new diff.
+11. Click X for that cell. Only its changes are undone; unrelated later edits
+    and all comments remain. A subsequent editor save must not revive the undone
+    content. Attempting to undo a stale cell must fail without modifying it.
 
 ## Additional regression coverage
+
+Each change card has a visible comment input instead of a "Comment on changes"
+link. Enter sends comments and replies; Shift+Enter preserves a newline. IME
+composition and held Enter must not send. Empty, readonly, and in-flight
+submissions are ignored; failed sends and hiding the gutter preserve drafts.
 
 Component/storage tests cover source selection and composer submission, repeated
 words/Unicode, mixed-side and cross-cell rejection, readonly controls, stale
@@ -62,8 +76,9 @@ as pointer-input or authentication tests.
 ## Automated evidence
 
 `app/test/browser/test-scenario-notebook-reviews.ts` implements the journey with
-the real app. All notebook/comment mutations invoke its registered WebMCP tool;
-browser locators control navigation. No fake notebook backend is used.
+the real app. Notebook/comment mutations invoke its registered WebMCP tool;
+cell accept/undo actions additionally exercise the actual UI buttons. Browser
+locators control navigation. No fake notebook backend is used.
 
 Run with Node 24 and an installed playwright-core module:
 

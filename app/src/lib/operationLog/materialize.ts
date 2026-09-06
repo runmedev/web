@@ -101,6 +101,7 @@ const knownKinds = new Set([
   'review.create',
   'review.submit',
   'review.link_thread',
+  'review.cell_decision',
   'revision.label',
 ])
 

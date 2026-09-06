@@ -132,6 +132,7 @@ const DEFAULT_SANDBOX_ALLOWED_METHODS = [
   'reviews.submit',
   'reviews.comment',
   'reviews.assess',
+  'reviews.decideCell',
   'reviews.linkThread',
   'suggestions.list',
   'comments.parseAnchor',
@@ -449,6 +450,7 @@ export function buildSandboxSrcDoc(options: {
           submit: (args) => hostCall("reviews.submit", [args]),
           comment: (args) => hostCall("reviews.comment", [args]),
           assess: (args) => hostCall("reviews.assess", [args]),
+          decideCell: (args) => hostCall("reviews.decideCell", [args]),
           linkThread: (args) => hostCall("reviews.linkThread", [args]),
           help: () => hostCall("reviews.help", []),
         };

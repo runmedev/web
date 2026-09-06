@@ -33,7 +33,20 @@ export function ReviewRevisionPicker({
     description: string
   ) => Promise<boolean>
 }) {
-  const [startId, setStartId] = useState(revisions.at(-2)?.id ?? 'empty')
+  // Revisions arrive in history order. Choose the newest named ancestor of
+  // the latest revision, not the most recently applied label. Initialize once
+  // so background edits/labels cannot replace a user's comparison selection.
+  const [startId, setStartId] = useState(() => {
+    const latest = revisions.at(-1)
+    return (
+      [...revisions]
+        .reverse()
+        .find(
+          (revision) =>
+            revision.name?.trim() && latest && revisionFollows(revision, latest)
+        )?.id ?? 'empty'
+    )
+  })
   const [endId, setEndId] = useState(revisions.at(-1)?.id ?? '')
   const [namedOnly, setNamedOnly] = useState(false)
   const [fullPreview, setFullPreview] = useState<ReviewPreview>()

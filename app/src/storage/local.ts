@@ -29,6 +29,7 @@ import {
   type RunmeOperation,
   type SuggestionDecision,
   type SuggestionReviewPayload,
+  allocatePositionBetween,
   buildOperationLogDiff,
   canonicalJson,
   causalHeads,
@@ -42,6 +43,11 @@ import {
   parseOperationLog,
   serializeOperationLog,
 } from '../lib/operationLog'
+import { cellDecisionFor } from '../lib/operationLog/cellReview'
+import {
+  cellStateKey,
+  withCellReviewKeys,
+} from '../lib/operationLog/cellReviewIdentity'
 import {
   computeReviewDiff,
   normalizeReviewCellIds,
@@ -1831,8 +1837,208 @@ export class LocalNotebooks extends Dexie {
       before,
       after,
       cellIds,
-      diff: computeReviewDiff(before, after, cellIds),
+      diff: withCellReviewKeys(
+        computeReviewDiff(before, after, cellIds),
+        parsed.operations,
+        start.operationIds,
+        end.operationIds
+      ),
       existingReviewId: existing?.id,
+    }
+  }
+
+  /** Validate and undo under the same OPFS writer lock. Content operations and
+   * the decision share a commit envelope so replicas never see a partial undo.
+   */
+  async decideNotebookReviewCell(
+    uri: string,
+    input: {
+      reviewId: string
+      cellId: string
+      decision: 'accept' | 'undo'
+      author?: Attribution
+    }
+  ) {
+    if (!['accept', 'undo'].includes(input.decision))
+      throw new Error('Invalid cell decision')
+    const record = await this.files.get(uri)
+    if (!record?.operationLogRef)
+      throw new Error('Operation-log reference missing')
+    const actorId = await getNotebookActorId(uri)
+    let mutationCreated = false
+    try {
+      const stored = await this.operationLogStorage.appendTransaction(
+        record.operationLogRef,
+        async (document) => {
+          const parsed = parseOperationLog(document)
+          const rounds = buildReviewRounds(parsed.operations)
+          const round = rounds.find((r) => r.id === input.reviewId)
+          const row = round?.diff.cells.find(
+            (r) => (r.compareCell ?? r.baseCell)?.refId === input.cellId
+          )
+          if (!round || !row || row.kind === 'unchanged')
+            throw new Error('Changed cell not found in review scope')
+          const prior = cellDecisionFor(row, rounds)
+          if (prior?.decision === input.decision) return ''
+          if (prior?.decision === 'undo')
+            throw new Error(
+              'These cell changes were already undone; select a new comparison'
+            )
+          const operations = [...parsed.operations]
+          const firstSequence = highestActorSequence(operations, actorId) + 1
+          const transactionId = `${actorId}:cell-review:${firstSequence}`
+          const created: RunmeOperation[] = []
+          if (input.decision === 'undo') {
+            const headIds = new Set(round.headOperationIds)
+            const head = materializeOperationLog(
+              operations.filter((op) => headIds.has(op.op_id))
+            )
+            const current = materializeOperationLog(operations)
+            const cellAt = (log: typeof head) =>
+              log.notebook.cells.find((c) => c.cell_id === input.cellId) ?? null
+            if (
+              operations.some(
+                (op) =>
+                  !headIds.has(op.op_id) &&
+                  op.kind.startsWith('cell.') &&
+                  (op.payload as any).cell_id === input.cellId
+              ) ||
+              cellStateKey(cellAt(head)) !== cellStateKey(cellAt(current))
+            )
+              throw new Error(
+                'Cell changed since the reviewed revision. Refresh and compare the latest revision before undoing.'
+              )
+            // Diff one cell only. Other cells, notebook metadata and concurrent
+            // additions are not part of this mutation.
+            const previous = cloneNotebook(round.after)
+            const next = cloneNotebook(round.after)
+            previous.cells = row.compareCell ? [row.compareCell] : []
+            next.cells = row.baseCell ? [row.baseCell] : []
+            const inverse = await buildOperationLogDiff({
+              previous,
+              next,
+              observedOperations: operations,
+              actorId,
+              firstActorSequence: firstSequence,
+            })
+            const baseIds = new Set(round.baseOperationIds)
+            const baseCell = materializeOperationLog(
+              operations.filter((op) => baseIds.has(op.op_id))
+            ).notebook.cells.find((c) => c.cell_id === input.cellId)
+            const baseIndex = round.before.cells.findIndex(
+              (c) => c.refId === input.cellId
+            )
+            const neighbors = current.notebook.cells.filter(
+              (c) => c.cell_id !== input.cellId
+            )
+            const following = round.before.cells
+              .slice(baseIndex + 1)
+              .map((c) => c.refId)
+            const rightId = following.find((id) =>
+              neighbors.some((c) => c.cell_id === id)
+            )
+            const rightIndex = rightId
+              ? neighbors.findIndex((c) => c.cell_id === rightId)
+              : neighbors.length
+            const restoredPosition =
+              baseCell && (row.moved || !row.compareCell)
+                ? allocatePositionBetween({
+                    left: neighbors[rightIndex - 1]?.position ?? null,
+                    right: neighbors[rightIndex]?.position ?? null,
+                    actorId,
+                    actorSequence: firstSequence,
+                  })
+                : baseCell?.position
+            for (const op of inverse) {
+              if (op.kind === 'cell.restore' && baseCell)
+                (op.payload as any).position = restoredPosition
+              op.transaction_id = transactionId
+              created.push(op)
+            }
+            operations.push(...created)
+            // A one-cell snapshot does not encode its surrounding position.
+            if (
+              baseCell &&
+              row.compareCell &&
+              (row.moved ||
+                canonicalJson(baseCell.position as unknown as JsonValue) !==
+                  canonicalJson(cellAt(head)!.position as unknown as JsonValue))
+            ) {
+              const move = createRunmeOperation({
+                actorId,
+                actorSequence: highestActorSequence(operations, actorId) + 1,
+                dependencies: causalHeads(operations),
+                knownOperations: operations,
+                kind: 'cell.move',
+                payload: {
+                  cell_id: input.cellId,
+                  position: restoredPosition,
+                } as unknown as JsonValue,
+                transactionId,
+              })
+              created.push(move)
+              operations.push(move)
+            }
+          }
+          const decision = createRunmeOperation({
+            actorId,
+            actorSequence: highestActorSequence(operations, actorId) + 1,
+            dependencies: causalHeads(operations),
+            knownOperations: operations,
+            kind: 'review.cell_decision',
+            payload: {
+              ...input,
+              author: normalizeAttribution(input.author, true),
+            },
+            transactionId,
+          })
+          created.push(decision)
+          operations.push(decision)
+          const commit = createRunmeOperation({
+            actorId,
+            actorSequence: highestActorSequence(operations, actorId) + 1,
+            dependencies: causalHeads(operations),
+            knownOperations: operations,
+            kind: 'transaction.commit',
+            payload: {
+              transaction_id: transactionId,
+              members: created.map((op) => op.op_id),
+            },
+          })
+          created.push(commit)
+          mutationCreated = true
+          return (
+            created
+              .map((op) => canonicalJson(op as unknown as JsonValue))
+              .join('\n') + '\n'
+          )
+        },
+        {
+          validate: (document) => {
+            const parsed = parseOperationLog(document)
+            materializeOperationLog(parsed.operations)
+            buildReviewRounds(parsed.operations)
+          },
+        }
+      )
+      await this.files.update(uri, {
+        doc: '',
+        md5Checksum: stored.checksum,
+        operationLogRef: stored.ref,
+      })
+      this.notifySync(uri)
+      if (!record.conflict) {
+        this.enqueueSync(uri)
+        this.enqueueMarkdownSync(uri)
+      }
+    } catch (error) {
+      if (mutationCreated)
+        throw new OperationLogMutationCommitUncertainError(
+          uri,
+          'review.cell_decision',
+          error
+        )
+      throw error
     }
   }
 

@@ -603,6 +603,8 @@ async function handleSandboxAppKernelBridgeCall({
       return globals.reviews.comment(args[0] as any)
     case 'reviews.assess':
       return globals.reviews.assess(args[0] as any)
+    case 'reviews.decideCell':
+      return globals.reviews.decideCell(args[0] as any)
     case 'reviews.linkThread':
       return globals.reviews.linkThread(args[0] as any)
     case 'suggestions.list':

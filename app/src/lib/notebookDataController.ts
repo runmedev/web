@@ -514,6 +514,9 @@ export class NotebookDataController {
           await this.localNotebooks.createOperationLogSaveStore(localUri)
         handle.data.loadNotebook(notebook, { persist: false })
         handle.data.setNotebookStore(store)
+        // Recover an undo whose append committed but whose editor reload failed.
+        handle.data.setReviewReloadRequired(false)
+        handle.data.setReviewPending(false)
         handle.data.setReadOnly(false)
         handle.loaded = true
         this.upsertOpenEntry({

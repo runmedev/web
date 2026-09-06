@@ -1,5 +1,6 @@
 import { create } from '@bufbuild/protobuf'
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -17,6 +18,7 @@ import { parser_pb } from '../../runme/client'
 import type { DriveComment } from '../../storage/drive'
 import type LocalNotebooks from '../../storage/local'
 import { NotebookReviewFlow } from './NotebookReviewFlow'
+import { ReviewRevisionPicker } from './ReviewRevisionPicker'
 import type { NotebookRevision } from '../../lib/operationLog/revisions'
 
 const flush = vi.hoisted(() => vi.fn(async () => undefined))
@@ -157,9 +159,106 @@ function fixture() {
         summary: input.summary,
       })
     }),
+    decideNotebookReviewCell: vi.fn(async (_uri, input) => {
+      const record = rounds.find((r) => r.id === input.reviewId)!
+      ;(record.cellDecisions ??= []).push({
+        cellId: input.cellId,
+        decision: input.decision,
+        operationId: 'decision',
+        order: 1,
+        author: input.author,
+      })
+    }),
   }
-  return { store, first, second, rounds, comments }
+  return { store, first, second, rounds, comments, versions }
 }
+
+describe('comparison revision defaults', () => {
+  it.each([
+    { names: ['v1'], expected: 'v1' },
+    { names: [], expected: 'empty' },
+    { names: ['v2'], expected: 'v2' },
+    { names: ['v1', 'v2', 'v3'], expected: 'v2' },
+    { names: ['v3'], expected: 'empty' },
+  ])(
+    'starts at $expected with named revisions $names and ends at latest',
+    async ({ names, expected }) => {
+      const f = fixture()
+      f.versions.push({
+        id: 'v3',
+        changeIds: ['head', 'edit', 'new'],
+        operationIds: ['head', 'edit', 'new'],
+      })
+      for (const r of f.versions)
+        r.name = names.includes(r.id) ? r.id : undefined
+      render(
+        <ReviewRevisionPicker
+          revisions={f.versions}
+          store={f.store as unknown as LocalNotebooks}
+          docUri="local://file/test"
+          disabled={false}
+          onPreview={() => {}}
+          onLabel={async () => true}
+        />
+      )
+      expect(
+        (screen.getByLabelText('Start revision') as HTMLSelectElement).value
+      ).toBe(expected)
+      expect(
+        (screen.getByLabelText('End revision') as HTMLSelectElement).value
+      ).toBe('v3')
+      await waitFor(() =>
+        expect(f.store.previewNotebookReview).toHaveBeenCalledWith(
+          'local://file/test',
+          { startRevisionId: expected, endRevisionId: 'v3' }
+        )
+      )
+    }
+  )
+
+  it('preserves explicit choices when new revisions or labels arrive', async () => {
+    const f = fixture()
+    const props = {
+      store: f.store as unknown as LocalNotebooks,
+      docUri: 'local://file/test',
+      disabled: false,
+      onPreview: vi.fn(),
+      onLabel: async () => true,
+    }
+    const view = render(
+      <ReviewRevisionPicker {...props} revisions={f.versions} />
+    )
+    fireEvent.change(screen.getByLabelText('Start revision'), {
+      target: { value: 'empty' },
+    })
+    fireEvent.change(screen.getByLabelText('End revision'), {
+      target: { value: 'v1' },
+    })
+    await waitFor(() =>
+      expect(f.store.previewNotebookReview).toHaveBeenLastCalledWith(
+        'local://file/test',
+        { startRevisionId: 'empty', endRevisionId: 'v1' }
+      )
+    )
+    f.versions.push({
+      id: 'v3',
+      name: 'New label',
+      changeIds: ['head', 'edit', 'new'],
+      operationIds: ['head', 'edit', 'new'],
+    })
+    await act(async () => {
+      view.rerender(
+        <ReviewRevisionPicker {...props} revisions={[...f.versions]} />
+      )
+    })
+    expect(
+      (screen.getByLabelText('Start revision') as HTMLSelectElement).value
+    ).toBe('empty')
+    expect(
+      (screen.getByLabelText('End revision') as HTMLSelectElement).value
+    ).toBe('v1')
+  })
+})
 
 describe('comment-first comparison flow', () => {
   const mount = (f: ReturnType<typeof fixture>, readOnly = false) =>
@@ -171,6 +270,26 @@ describe('comment-first comparison flow', () => {
         onClose={() => {}}
       />
     )
+  it('accepts a cell in the gutter, hides its diff and preserves its discussion', async () => {
+    const f = fixture()
+    mount(f)
+    const accept = await screen.findByRole('button', {
+      name: 'Accept changes to cell 1',
+    })
+    fireEvent.click(accept)
+    await screen.findByText('Changes accepted')
+    expect(f.store.decideNotebookReviewCell).toHaveBeenCalledWith(
+      'local://file/test',
+      expect.objectContaining({ cellId: 'cell', decision: 'accept' })
+    )
+    expect(
+      document.querySelector('[id^="suggestion-cell-unchanged-"]')
+    ).not.toBeNull()
+    expect(screen.getByText('Clarify the checks')).toBeTruthy()
+    expect(f.store.setOperationLogCommentResolved).not.toHaveBeenCalled()
+    expect(f.second.after.cells[0].value).toBe('Clarified')
+    expect((accept as HTMLButtonElement).disabled).toBe(true)
+  })
   it('opens a commentable diff without starting a review and shows ordinary editor comments', async () => {
     const f = fixture()
     f.comments[0].anchor = JSON.stringify({
@@ -213,6 +332,47 @@ describe('comment-first comparison flow', () => {
       JSON.parse(f.store.addOperationLogComment.mock.calls[0][1].anchor).runme
         .diffTarget
     ).toMatchObject({ cellId: 'cell', side: 'head', quote: 'Clarified' })
+  })
+
+  it('offers a direct change-card input and keeps drafts through hiding or failed sends', async () => {
+    const f = fixture()
+    mount(f)
+    const input = await screen.findByRole('textbox', {
+      name: 'Comment on changes to cell 1',
+    })
+    const form = screen.getByRole('form', {
+      name: 'Comment on changes to cell 1',
+    })
+    expect(
+      screen.queryByRole('button', { name: 'Comment on changes', exact: true })
+    ).toBeNull()
+    expect(document.activeElement).not.toBe(input)
+    fireEvent.change(input, { target: { value: 'Please explain the change' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Hide comments' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show comments' }))
+    expect((input as HTMLTextAreaElement).value).toBe(
+      'Please explain the change'
+    )
+    f.store.addOperationLogComment.mockRejectedValueOnce(
+      new Error('Save failed')
+    )
+    fireEvent.submit(form)
+    await screen.findByText('Error: Save failed')
+    expect((input as HTMLTextAreaElement).value).toBe(
+      'Please explain the change'
+    )
+    fireEvent.submit(form)
+    await screen.findByText('Please explain the change')
+    expect((input as HTMLTextAreaElement).value).toBe('')
+    const sent = f.store.addOperationLogComment.mock.calls.at(-1)![1]
+    expect(JSON.parse(sent.anchor).runme.diffTarget).toMatchObject({
+      cellId: 'cell',
+      side: 'head',
+      quote: 'Clarified',
+    })
+    expect(
+      screen.queryByRole('textbox', { name: 'New cell comment' })
+    ).toBeNull()
   })
 
   it('only marks cells with comment threads', async () => {
@@ -375,7 +535,11 @@ describe('comment-first comparison flow', () => {
     await waitFor(() => expect(f.second.outcome).toBe('good_enough'))
     expect(f.store.setOperationLogCommentResolved).not.toHaveBeenCalled()
     expect(f.second.after.cells[0].value).toBe('Clarified')
-    expect(screen.getByRole('status').textContent).toBe('Good Enough')
+    expect(
+      within(document.getElementById('comparison-assessment')!).getByRole(
+        'status'
+      ).textContent
+    ).toBe('Good Enough')
   })
   it('shares one suggestion conversation without a setup action', async () => {
     const f = fixture()
