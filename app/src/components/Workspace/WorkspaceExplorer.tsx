@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -341,63 +342,7 @@ function updateNodeMetadata(
 
 const CONTEXT_MENU_VIEWPORT_PADDING = 8;
 const CONTEXT_MENU_WIDTH = 220;
-const CONTEXT_MENU_VERTICAL_PADDING = 8;
-const CONTEXT_MENU_ITEM_HEIGHT = 38;
 const DEFAULT_DRIVE_FOLDER_NAME = "New Folder";
-
-function getContextMenuItemCount(menu: ContextMenuState): number {
-  if (menu.type === NotebookStoreItemType.File) {
-    return (
-      (menu.uri.startsWith('fs://') ? 0 : 1) +
-      4 +
-      (isConvertibleLegacyNotebookFileName(menu.name) ? 1 : 0) +
-      (menu.remoteUri ? 5 : 0)
-    )
-  }
-
-  if (menu.type === NotebookStoreItemType.Folder) {
-    return (
-      (menu.uri.startsWith('fs://') ? 0 : 1) +
-      3 +
-      (menu.remoteUri ? 1 : 0) +
-      (menu.remoteUri ? 2 : 0) +
-      (menu.uri === LOCAL_FOLDER_URI ? 0 : 1)
-    );
-  }
-
-  return 0;
-}
-
-function adjustContextMenuPosition(
-  menu: ContextMenuState | null,
-): ContextMenuState | null {
-  if (!menu || typeof window === "undefined") {
-    return menu;
-  }
-
-  const menuHeight =
-    CONTEXT_MENU_VERTICAL_PADDING +
-    getContextMenuItemCount(menu) * CONTEXT_MENU_ITEM_HEIGHT;
-  const left = Math.max(
-    CONTEXT_MENU_VIEWPORT_PADDING,
-    Math.min(
-      menu.position.x,
-      window.innerWidth - CONTEXT_MENU_WIDTH - CONTEXT_MENU_VIEWPORT_PADDING,
-    ),
-  );
-  const top = Math.max(
-    CONTEXT_MENU_VIEWPORT_PADDING,
-    Math.min(
-      menu.position.y,
-      window.innerHeight - menuHeight - CONTEXT_MENU_VIEWPORT_PADDING,
-    ),
-  );
-
-  return {
-    ...menu,
-    position: { x: left, y: top },
-  };
-}
 
 function EditableTreeNode({
   node,
@@ -508,15 +453,42 @@ export function WorkspaceExplorer() {
   const { ref: containerRef, width = 0, height = 0 } = useResizeObserver<HTMLDivElement>();
 
   const [treeNodes, setTreeNodes] = useState<TreeNode[]>([]);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pendingEditId, setPendingEditId] = useState<string | null>(null);
 
   const workspaceUris = useMemo(() => getItems(), [getItems]);
-  const adjustedContextMenu = useMemo(
-    () => adjustContextMenuPosition(contextMenu),
-    [contextMenu],
-  );
+  // Menu actions and wrapped labels determine its height. Measure the rendered
+  // menu before paint instead of keeping an estimated item count in sync. Only
+  // coordinates are updated here; React continues to own the menu's contents.
+  useLayoutEffect(() => {
+    const element = contextMenuRef.current;
+    if (!contextMenu || !element) return;
+
+    const updatePosition = () => {
+      const { width, height } = element.getBoundingClientRect();
+      const padding = CONTEXT_MENU_VIEWPORT_PADDING;
+      element.style.left = `${Math.max(
+        padding,
+        Math.min(contextMenu.position.x, window.innerWidth - width - padding),
+      )}px`;
+      element.style.top = `${Math.max(
+        padding,
+        Math.min(contextMenu.position.y, window.innerHeight - height - padding),
+      )}px`;
+    };
+
+    updatePosition();
+    // Reposition when the viewport, labels, or fonts change while it is open.
+    const observer = new ResizeObserver(updatePosition);
+    observer.observe(element);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [contextMenu]);
 
   useEffect(() => {
     if (!workspaceUris.includes(LOCAL_FOLDER_URI)) {
@@ -1778,19 +1750,25 @@ function formatShortTimestamp(date: Date): string {
           />
         </div>
       )}
-      {adjustedContextMenu && (
+      {contextMenu && (
         <div
+          id="workspace-explorer-context-menu"
+          ref={contextMenuRef}
           className="ctx-menu"
           style={{
-            top: adjustedContextMenu.position.y,
-            left: adjustedContextMenu.position.x,
+            top: contextMenu.position.y,
+            left: contextMenu.position.x,
             width: CONTEXT_MENU_WIDTH,
+            minWidth: 0,
+            maxWidth: `calc(100vw - ${2 * CONTEXT_MENU_VIEWPORT_PADDING}px)`,
+            maxHeight: `calc(100vh - ${2 * CONTEXT_MENU_VIEWPORT_PADDING}px)`,
+            overflowY: "auto",
           }}
           onClick={(event) => event.stopPropagation()}
         >
-          {adjustedContextMenu.type === NotebookStoreItemType.File ? (
+          {contextMenu.type === NotebookStoreItemType.File ? (
             <>
-              {!adjustedContextMenu.uri.startsWith("fs://") && (
+              {!contextMenu.uri.startsWith("fs://") && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -1800,7 +1778,7 @@ function formatShortTimestamp(date: Date): string {
                     setContextMenu(null);
                     void (async () => {
                       try {
-                        await store?.sync(adjustedContextMenu.uri);
+                        await store?.sync(contextMenu.uri);
                       } catch (error) {
                         console.error("Failed to sync file", error);
                       }
@@ -1816,13 +1794,13 @@ function formatShortTimestamp(date: Date): string {
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
-                  handleStartRename(adjustedContextMenu.uri);
+                  handleStartRename(contextMenu.uri);
                 }}
               >
                 Rename
               </button>
               {isConvertibleLegacyNotebookFileName(
-                adjustedContextMenu.name
+                contextMenu.name
               ) && (
                 <button
                   type="button"
@@ -1830,7 +1808,7 @@ function formatShortTimestamp(date: Date): string {
                   onMouseDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation()
-                    const menu = adjustedContextMenu
+                    const menu = contextMenu
                     setContextMenu(null)
                     void handleConvertLegacyNotebook(menu)
                   }}
@@ -1845,12 +1823,12 @@ function formatShortTimestamp(date: Date): string {
                 onClick={(event) => {
                   event.stopPropagation();
                   setContextMenu(null);
-                  if (adjustedContextMenu.parentUri) {
-                    void handleCreateDocument(adjustedContextMenu.parentUri)
+                  if (contextMenu.parentUri) {
+                    void handleCreateDocument(contextMenu.parentUri)
                   } else {
                     console.warn(
                       "Cannot create document: no parent folder for",
-                      adjustedContextMenu.uri,
+                      contextMenu.uri,
                     );
                   }
                 }}
@@ -1864,9 +1842,9 @@ function formatShortTimestamp(date: Date): string {
                 onClick={(event) => {
                   event.stopPropagation()
                   setContextMenu(null)
-                  if (adjustedContextMenu.parentUri) {
+                  if (contextMenu.parentUri) {
                     void handleCreateDocument(
-                      adjustedContextMenu.parentUri,
+                      contextMenu.parentUri,
                       'ipynb'
                     )
                   }
@@ -1881,14 +1859,14 @@ function formatShortTimestamp(date: Date): string {
                 onClick={(event) => {
                   event.stopPropagation();
                   setContextMenu(null);
-                  if (adjustedContextMenu.parentUri) {
+                  if (contextMenu.parentUri) {
                     void handleCreateExcalidrawDocument(
-                      adjustedContextMenu.parentUri,
+                      contextMenu.parentUri,
                     );
                   } else {
                     console.warn(
                       "Cannot create Excalidraw diagram: no parent folder for",
-                      adjustedContextMenu.uri,
+                      contextMenu.uri,
                     );
                   }
                 }}
@@ -1902,9 +1880,9 @@ function formatShortTimestamp(date: Date): string {
                 onClick={(event) => {
                   event.stopPropagation()
                   setContextMenu(null)
-                  if (adjustedContextMenu.parentUri) {
+                  if (contextMenu.parentUri) {
                     void handleCreateDocument(
-                      adjustedContextMenu.parentUri,
+                      contextMenu.parentUri,
                       'runme-json'
                     )
                   }
@@ -1912,7 +1890,7 @@ function formatShortTimestamp(date: Date): string {
               >
                 Legacy Runme Notebook (.json)
               </button>
-              {adjustedContextMenu.remoteUri && (
+              {contextMenu.remoteUri && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -1920,13 +1898,13 @@ function formatShortTimestamp(date: Date): string {
                   onClick={(event) => {
                     event.stopPropagation();
                     setContextMenu(null);
-                    void handleOpenUpstreamDiff(adjustedContextMenu.uri);
+                    void handleOpenUpstreamDiff(contextMenu.uri);
                   }}
                 >
                   Compare with upstream
                 </button>
               )}
-              {adjustedContextMenu.remoteUri && (
+              {contextMenu.remoteUri && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -1934,13 +1912,13 @@ function formatShortTimestamp(date: Date): string {
                   onClick={(event) => {
                     event.stopPropagation();
                     setContextMenu(null);
-                    void handleCopyShareLink(adjustedContextMenu.remoteUri);
+                    void handleCopyShareLink(contextMenu.remoteUri);
                   }}
                 >
                   Copy Share Link
                 </button>
               )}
-              {adjustedContextMenu.remoteUri && (
+              {contextMenu.remoteUri && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -1949,22 +1927,22 @@ function formatShortTimestamp(date: Date): string {
                     event.stopPropagation();
                     setContextMenu(null);
                     void handleCopyMarkdownLink(
-                      adjustedContextMenu.name,
-                      adjustedContextMenu.remoteUri,
+                      contextMenu.name,
+                      contextMenu.remoteUri,
                     );
                   }}
                 >
                   Copy Markdown Link
                 </button>
               )}
-              {adjustedContextMenu.remoteUri && (
+              {contextMenu.remoteUri && (
                 <button
                   type="button"
                   className="ctx-menu-item text-red-600"
                   onMouseDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    const menu = adjustedContextMenu;
+                    const menu = contextMenu;
                     setContextMenu(null);
                     void handleMoveDriveFileToTrash(menu);
                   }}
@@ -1972,10 +1950,10 @@ function formatShortTimestamp(date: Date): string {
                   Move to Google Drive Trash
                 </button>
               )}
-              {adjustedContextMenu.remoteUri && (
+              {contextMenu.remoteUri && (
                 <a
                   className="ctx-menu-item"
-                  href={adjustedContextMenu.remoteUri}
+                  href={contextMenu.remoteUri}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(event) => {
@@ -1987,9 +1965,9 @@ function formatShortTimestamp(date: Date): string {
                 </a>
               )}
             </>
-          ) : adjustedContextMenu.type === NotebookStoreItemType.Folder ? (
+          ) : contextMenu.type === NotebookStoreItemType.Folder ? (
             <>
-              {!adjustedContextMenu.uri.startsWith("fs://") && (
+              {!contextMenu.uri.startsWith("fs://") && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -2001,12 +1979,12 @@ function formatShortTimestamp(date: Date): string {
                     void (async () => {
                       try {
                         if (store) {
-                          await store.sync(adjustedContextMenu.uri);
+                          await store.sync(contextMenu.uri);
                         }
                       } catch (error) {
                         console.error("Failed to sync folder", error);
                       } finally {
-                        await fetchChildren(adjustedContextMenu.uri);
+                        await fetchChildren(contextMenu.uri);
                       }
                     })();
                   }}
@@ -2014,14 +1992,14 @@ function formatShortTimestamp(date: Date): string {
                   Sync
                 </button>
               )}
-              {adjustedContextMenu.remoteUri && (
+              {contextMenu.remoteUri && (
                 <button
                   type="button"
                   className="ctx-menu-item"
                   onMouseDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    handleStartRename(adjustedContextMenu.uri);
+                    handleStartRename(contextMenu.uri);
                   }}
                 >
                   Rename
@@ -2034,7 +2012,7 @@ function formatShortTimestamp(date: Date): string {
                 onClick={(event) => {
                   event.stopPropagation()
                   setContextMenu(null)
-                  void handleCreateDocument(adjustedContextMenu.uri)
+                  void handleCreateDocument(contextMenu.uri)
                 }}
               >
                 New Notebook (.runme)
@@ -2047,14 +2025,14 @@ function formatShortTimestamp(date: Date): string {
                   event.stopPropagation()
                   setContextMenu(null)
                   void handleCreateDocument(
-                    adjustedContextMenu.uri,
+                    contextMenu.uri,
                     'ipynb'
                   )
                 }}
               >
                 New Jupyter Notebook (.ipynb)
               </button>
-              {adjustedContextMenu.remoteUri && (
+              {contextMenu.remoteUri && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -2063,14 +2041,14 @@ function formatShortTimestamp(date: Date): string {
                     event.stopPropagation();
                     setContextMenu(null);
                     void handleCreateExcalidrawDocument(
-                      adjustedContextMenu.uri,
+                      contextMenu.uri,
                     );
                   }}
                 >
                   New Excalidraw Diagram
                 </button>
               )}
-              {adjustedContextMenu.remoteUri && (
+              {contextMenu.remoteUri && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -2078,7 +2056,7 @@ function formatShortTimestamp(date: Date): string {
                   onClick={(event) => {
                     event.stopPropagation();
                     setContextMenu(null);
-                    void handleCreateDriveFolder(adjustedContextMenu.uri);
+                    void handleCreateDriveFolder(contextMenu.uri);
                   }}
                 >
                   New Google Drive Folder
@@ -2092,14 +2070,14 @@ function formatShortTimestamp(date: Date): string {
                   event.stopPropagation()
                   setContextMenu(null)
                   void handleCreateDocument(
-                    adjustedContextMenu.uri,
+                    contextMenu.uri,
                     'runme-json'
                   )
                 }}
               >
                 Legacy Runme Notebook (.json)
               </button>
-              {adjustedContextMenu.remoteUri && (
+              {contextMenu.remoteUri && (
                 <button
                   type="button"
                   className="ctx-menu-item"
@@ -2107,30 +2085,30 @@ function formatShortTimestamp(date: Date): string {
                   onClick={(event) => {
                     event.stopPropagation();
                     setContextMenu(null);
-                    void handleCopyShareLink(adjustedContextMenu.remoteUri);
+                    void handleCopyShareLink(contextMenu.remoteUri);
                   }}
                 >
                   Copy Share Link
                 </button>
               )}
-              {adjustedContextMenu.uri !== LOCAL_FOLDER_URI && (
+              {contextMenu.uri !== LOCAL_FOLDER_URI && (
                 <button
                   type="button"
                   className="ctx-menu-item text-red-600"
                   onMouseDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    removeItem(adjustedContextMenu.uri);
+                    removeItem(contextMenu.uri);
                     setContextMenu(null);
                   }}
                 >
-                  Remove "{adjustedContextMenu.name}"
+                  Remove "{contextMenu.name}"
                 </button>
               )}
-              {adjustedContextMenu.remoteUri && (
+              {contextMenu.remoteUri && (
                 <a
                   className="ctx-menu-item"
-                  href={adjustedContextMenu.remoteUri}
+                  href={contextMenu.remoteUri}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(event) => {
