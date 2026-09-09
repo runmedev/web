@@ -12,6 +12,14 @@ export interface OperationLogSnapshot {
   checksum: string
 }
 
+export interface OperationLogAppendOptions {
+  validate?: (document: string) => void
+  /** Transform the current document under the writer lock, before appending.
+   * Validation and record creation must succeed before any bytes are written.
+   */
+  prepareDocument?: (document: string) => string
+}
+
 export interface OperationLogStorage {
   supportsConcurrentWriters(): boolean
   initialize(
@@ -22,12 +30,12 @@ export interface OperationLogStorage {
   append(
     ref: OperationLogRef,
     records: string,
-    options?: { validate?: (document: string) => void }
+    options?: OperationLogAppendOptions
   ): Promise<OperationLogSnapshot>
   appendTransaction(
     ref: OperationLogRef,
     createRecords: (currentDocument: string) => string | Promise<string>,
-    options?: { validate?: (document: string) => void }
+    options?: OperationLogAppendOptions
   ): Promise<OperationLogSnapshot>
   replace(
     ref: OperationLogRef,
@@ -219,38 +227,34 @@ export class OpfsOperationLogStorage implements OperationLogStorage {
   async append(
     ref: OperationLogRef,
     records: string,
-    options: { validate?: (document: string) => void } = {}
+    options: OperationLogAppendOptions = {}
   ): Promise<OperationLogSnapshot> {
     validateFraming(records, 'Appended operation-log records')
-    return this.coordinator.runExclusive(ref.path, async () => {
-      const handle = await getHandle(ref)
-      const file = await handle.getFile()
-      const current = await file.text()
-      options.validate?.(`${current}${records}`)
-      const writable = await handle.createWritable({ keepExistingData: true })
-      await writable.seek(file.size)
-      await writable.write(records)
-      await writable.close()
-      return this.readUnchecked(ref)
-    })
+    return this.appendTransaction(ref, () => records, options)
   }
 
   async appendTransaction(
     ref: OperationLogRef,
     createRecords: (currentDocument: string) => string | Promise<string>,
-    options: { validate?: (document: string) => void } = {}
+    options: OperationLogAppendOptions = {}
   ): Promise<OperationLogSnapshot> {
     return this.coordinator.runExclusive(ref.path, async () => {
       const handle = await getHandle(ref)
       const file = await handle.getFile()
-      const current = await file.text()
+      const original = await file.text()
+      const current = options.prepareDocument?.(original) ?? original
       const records = await createRecords(current)
-      if (!records) return snapshot(ref, current)
-      validateFraming(records, 'Appended operation-log records')
-      options.validate?.(`${current}${records}`)
-      const writable = await handle.createWritable({ keepExistingData: true })
-      await writable.seek(file.size)
-      await writable.write(records)
+      const document = `${current}${records}`
+      if (document === original) return snapshot(ref, original)
+      if (records) validateFraming(records, 'Appended operation-log records')
+      validateFraming(document, 'Updated operation log')
+      options.validate?.(document)
+      const rewritten = current !== original
+      const writable = await handle.createWritable({
+        keepExistingData: !rewritten,
+      })
+      if (!rewritten) await writable.seek(file.size)
+      await writable.write(rewritten ? document : records)
       await writable.close()
       return this.readUnchecked(ref)
     })
@@ -330,35 +334,28 @@ export class MemoryOperationLogStorage implements OperationLogStorage {
   async append(
     ref: OperationLogRef,
     records: string,
-    options: { validate?: (document: string) => void } = {}
+    options: OperationLogAppendOptions = {}
   ): Promise<OperationLogSnapshot> {
     validateFraming(records, 'Appended operation-log records')
-    return this.coordinator.runExclusive(ref.path, async () => {
-      const current = this.documents.get(ref.path)
-      if (current === undefined) {
-        throw new Error(`Operation log not found: ${ref.path}`)
-      }
-      const document = `${current}${records}`
-      options.validate?.(document)
-      this.documents.set(ref.path, document)
-      return snapshot(ref, document)
-    })
+    return this.appendTransaction(ref, () => records, options)
   }
 
   async appendTransaction(
     ref: OperationLogRef,
     createRecords: (currentDocument: string) => string | Promise<string>,
-    options: { validate?: (document: string) => void } = {}
+    options: OperationLogAppendOptions = {}
   ): Promise<OperationLogSnapshot> {
     return this.coordinator.runExclusive(ref.path, async () => {
-      const current = this.documents.get(ref.path)
-      if (current === undefined) {
+      const original = this.documents.get(ref.path)
+      if (original === undefined) {
         throw new Error(`Operation log not found: ${ref.path}`)
       }
+      const current = options.prepareDocument?.(original) ?? original
       const records = await createRecords(current)
-      if (!records) return snapshot(ref, current)
-      validateFraming(records, 'Appended operation-log records')
       const document = `${current}${records}`
+      if (document === original) return snapshot(ref, original)
+      if (records) validateFraming(records, 'Appended operation-log records')
+      validateFraming(document, 'Updated operation log')
       options.validate?.(document)
       this.documents.set(ref.path, document)
       return snapshot(ref, document)

@@ -46,7 +46,10 @@ import {
 import { sourceAnchorsFromLegacy } from '../lib/operationLog/anchorConversion'
 import { cellDecisionFor } from '../lib/operationLog/cellReview'
 import { cellStateKey } from '../lib/operationLog/cellReviewIdentity'
-import { encodeOperation } from '../lib/operationLog/codec'
+import {
+  encodeOperation,
+  upgradeOperationLogToV2,
+} from '../lib/operationLog/codec'
 import {
   type ComparisonSelection,
   buildComparisons,
@@ -1429,6 +1432,7 @@ export class LocalNotebooks extends Dexie {
         const next = cloneNotebook(notebook)
         const operation = queue.then(async () => {
           let created: RunmeOperation[] = []
+          let upgraded = false
           const stored = await this.operationLogStorage.appendTransaction(
             record.operationLogRef!,
             async (currentDocument) => {
@@ -1450,9 +1454,16 @@ export class LocalNotebooks extends Dexie {
                 ? ''
                 : `${created.map((item) => encodeOperation(item)).join('\n')}\n`
             },
-            { validate: (document) => void parseOperationLog(document) }
+            {
+              prepareDocument: (document) => {
+                const prepared = upgradeOperationLogToV2(document)
+                upgraded = prepared !== document
+                return prepared
+              },
+              validate: (document) => void parseOperationLog(document),
+            }
           )
-          if (created.length === 0) {
+          if (created.length === 0 && !upgraded) {
             previous = next
             return
           }
@@ -1651,7 +1662,12 @@ export class LocalNotebooks extends Dexie {
     const actorId = options.actorId ?? (await getNotebookActorId(uri))
     const author = normalizeAttribution(options.author, true)
     const { parsed } = await this.readMaterializedOperationLog(uri)
-    if (parsed.header.format_version === 2) {
+    // Header promotion preserves legacy thread IDs (which are not operation
+    // IDs). Replies to those threads must keep the legacy record shape.
+    if (
+      parsed.operations.find((op) => op.op_id === parent.operation_id)?.kind ===
+      'comment.record'
+    ) {
       await this.appendFirstClassRecord(uri, (_operations, envelope) => {
         const { kind: _kind, payload: _payload, ...causal } = envelope
         return {
@@ -1670,7 +1686,9 @@ export class LocalNotebooks extends Dexie {
       )!
     }
     if (options.anchors)
-      throw new Error('Version-bound reply anchors require a V2 notebook')
+      throw new Error(
+        'Version-bound reply anchors require a native V2 comment thread'
+      )
     const payload: CommentReplyPayload = {
       comment_id: crypto.randomUUID(),
       thread_id: parent.thread_id,
@@ -1767,7 +1785,7 @@ export class LocalNotebooks extends Dexie {
   }
 
   /** Append first-class entities under the same lock that allocates actor IDs.
-   * Existing V1 files are never silently rewritten; migration creates a copy.
+   * Promote V1 headers atomically with the write, preserving all existing records.
    */
   private async appendFirstClassRecord(
     uri: string,
@@ -1786,10 +1804,6 @@ export class LocalNotebooks extends Dexie {
         file.operationLogRef,
         (document) => {
           const parsed = parseOperationLog(document)
-          if (parsed.header.format_version !== 2)
-            throw new Error(
-              'This notebook uses format V1. Create an explicit V2 migration copy before adding revision/comment records.'
-            )
           if (
             captureReviewRevision(parsed.operations).length !==
             parsed.operations.length
@@ -1811,7 +1825,10 @@ export class LocalNotebooks extends Dexie {
           written = candidate
           return line
         },
-        { validate: (document) => void parseOperationLog(document) }
+        {
+          prepareDocument: upgradeOperationLogToV2,
+          validate: (document) => void parseOperationLog(document),
+        }
       )
       await this.files.update(uri, {
         doc: '',
@@ -2053,10 +2070,6 @@ export class LocalNotebooks extends Dexie {
         record.operationLogRef,
         async (document) => {
           const parsed = parseOperationLog(document)
-          if (parsed.header.format_version !== 2)
-            throw new Error(
-              'Create a V2 migration copy before recording decisions'
-            )
           if (
             captureReviewRevision(parsed.operations).length !==
             parsed.operations.length
@@ -2275,6 +2288,7 @@ export class LocalNotebooks extends Dexie {
           return appended
         },
         {
+          prepareDocument: upgradeOperationLogToV2,
           validate: (document) => {
             const parsed = parseOperationLog(document)
             materializeOperationLog(parsed.operations)
@@ -2343,7 +2357,10 @@ export class LocalNotebooks extends Dexie {
           mutationCreated = true
           return `${encodeOperation(operation)}\n`
         },
-        { validate: (document) => void parseOperationLog(document) }
+        {
+          prepareDocument: upgradeOperationLogToV2,
+          validate: (document) => void parseOperationLog(document),
+        }
       )
       await this.files.update(uri, {
         doc: '',
@@ -2506,6 +2523,7 @@ export class LocalNotebooks extends Dexie {
 
     const format = detectNotebookFileFormat(record.name)
     if (format === 'runme-operation-log') {
+      content = upgradeOperationLogToV2(content)
       const decoded = decodeNotebookFile(content, record.name)
       if (!decoded.operationLog) {
         throw new Error(`Expected operation-log content for ${record.name}`)
@@ -5123,12 +5141,20 @@ export class LocalNotebooks extends Dexie {
         )
       }
       const history = await recovery.collect(snapshot)
+      let formatVersion = Math.max(
+        localLog.header.format_version,
+        remoteLog.header.format_version
+      )
       let mergedOperations = mergeOperationSets(
         localLog.operations,
         remoteLog.operations
       )
       for (const content of history.contents) {
         const historical = parseOperationLog(content)
+        formatVersion = Math.max(
+          formatVersion,
+          historical.header.format_version
+        )
         if (historical.header.notebook_id !== localLog.header.notebook_id) {
           throw new Error(
             `Cannot recover a different operation-log notebook for ${localUri}; local operations remain pending.`
@@ -5157,7 +5183,20 @@ export class LocalNotebooks extends Dexie {
           `${missingLocally
             .map((operation) => encodeOperation(operation))
             .join('\n')}\n`,
-          { validate: (document) => void parseOperationLog(document) }
+          {
+            prepareDocument:
+              formatVersion === 2 ? upgradeOperationLogToV2 : undefined,
+            validate: (document) => void parseOperationLog(document),
+          }
+        )
+      } else if (localLog.header.format_version < formatVersion) {
+        stored = await this.operationLogStorage.appendTransaction(
+          local.ref,
+          () => '',
+          {
+            prepareDocument: upgradeOperationLogToV2,
+            validate: (document) => void parseOperationLog(document),
+          }
         )
       }
 
@@ -5172,20 +5211,22 @@ export class LocalNotebooks extends Dexie {
       const mergedIds = new Set(
         mergedOperations.map((operation) => operation.op_id)
       )
+      const persistedLog = parseOperationLog(stored.document)
       if (
-        parseOperationLog(stored.document).operations.some(
+        persistedLog.operations.some(
           (operation) => !mergedIds.has(operation.op_id)
         )
       )
         continue
 
       const mergedDocument = serializeOperationLog(
-        localLog.header,
+        persistedLog.header,
         mergedOperations,
         { canonicalOrder: true }
       )
       if (
         remoteWasEmpty ||
+        remoteLog.header.format_version < persistedLog.header.format_version ||
         mergedOperations.some((operation) => !remoteIds.has(operation.op_id))
       ) {
         // Reserve the last pass for verification after the eighth upload.
@@ -5430,6 +5471,10 @@ export class LocalNotebooks extends Dexie {
     const missingLocally = mergedOperations.filter(
       (operation) => !localIds.has(operation.op_id)
     )
+    const formatVersion = Math.max(
+      localLog.header.format_version,
+      upstreamLog.header.format_version
+    )
     let stored = local
     if (missingLocally.length > 0) {
       stored = await this.operationLogStorage.append(
@@ -5437,16 +5482,35 @@ export class LocalNotebooks extends Dexie {
         `${missingLocally
           .map((operation) => encodeOperation(operation))
           .join('\n')}\n`,
-        { validate: (document) => void parseOperationLog(document) }
+        {
+          prepareDocument:
+            formatVersion === 2 ? upgradeOperationLogToV2 : undefined,
+          validate: (document) => void parseOperationLog(document),
+        }
+      )
+    } else if (localLog.header.format_version < formatVersion) {
+      stored = await this.operationLogStorage.appendTransaction(
+        local.ref,
+        () => '',
+        {
+          prepareDocument: upgradeOperationLogToV2,
+          validate: (document) => void parseOperationLog(document),
+        }
       )
     }
+    // The locked upgrade/append may also observe another tab's edits. Upload
+    // the exact durable snapshot we acknowledge, not the earlier operation set.
+    const persistedLog = parseOperationLog(stored.document)
     const mergedDocument = serializeOperationLog(
-      localLog.header,
-      mergedOperations,
+      persistedLog.header,
+      persistedLog.operations,
       { canonicalOrder: true }
     )
     if (
-      mergedOperations.some((operation) => !upstreamIds.has(operation.op_id))
+      upstreamLog.header.format_version < persistedLog.header.format_version ||
+      persistedLog.operations.some(
+        (operation) => !upstreamIds.has(operation.op_id)
+      )
     ) {
       await upstreamStore.saveContent(record.remoteId, mergedDocument)
     }
